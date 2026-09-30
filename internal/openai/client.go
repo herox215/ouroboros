@@ -5,6 +5,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,18 @@ import (
 
 // DefaultBaseURL is the official OpenAI endpoint.
 const DefaultBaseURL = "https://api.openai.com/v1"
+
+// UserAgent identifies ouro to the API. Some providers (e.g. OpenCode Go)
+// reject generic HTTP-library user agents.
+const UserAgent = "ouroboros"
+
+type sessionKey struct{}
+
+// WithSession returns a context whose requests are sent with the stable
+// session ID id, letting providers route and cache per conversation.
+func WithSession(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, sessionKey{}, id)
+}
 
 // Message is a single chat message.
 type Message struct {
@@ -43,6 +56,7 @@ func (e *APIError) Unauthorized() bool {
 type Client struct {
 	baseURL string
 	apiKey  string
+	session string // fallback session ID for requests without one
 	http    *http.Client
 }
 
@@ -51,6 +65,7 @@ func New(baseURL, apiKey string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
+		session: rand.Text(),
 		http:    &http.Client{Timeout: 5 * time.Minute},
 	}
 }
@@ -110,6 +125,12 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	session, _ := ctx.Value(sessionKey{}).(string)
+	if session == "" {
+		session = c.session
+	}
+	req.Header.Set("X-Opencode-Session", session)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

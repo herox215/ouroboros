@@ -102,3 +102,21 @@ func TestNetworkError(t *testing.T) {
 		t.Fatal("want error")
 	}
 }
+
+func TestSessionAndUserAgentHeaders(t *testing.T) {
+	var sessions []string
+	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if ua := r.Header.Get("User-Agent"); ua != UserAgent {
+			t.Errorf("User-Agent = %q", ua)
+		}
+		sessions = append(sessions, r.Header.Get("X-Opencode-Session"))
+		w.Write([]byte(`{"data":[]}`))
+	})
+	ctx := context.Background()
+	c.Models(ctx)
+	c.Models(ctx)
+	c.Models(WithSession(ctx, "ctx-1"))
+	if sessions[0] == "" || sessions[0] != sessions[1] || sessions[2] != "ctx-1" {
+		t.Fatalf("sessions = %q", sessions)
+	}
+}

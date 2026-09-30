@@ -50,7 +50,7 @@ func New(llm LLM, model, name string) *Agent {
 // Respond answers text within the conversation contextID.
 func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, error) {
 	history := append(a.history(contextID), openai.Message{Role: "user", Content: text})
-	answer, err := a.llm.Chat(ctx, a.model, append([]openai.Message{a.system}, history...))
+	answer, err := a.llm.Chat(openai.WithSession(ctx, contextID), a.model, append([]openai.Message{a.system}, history...))
 	if err != nil {
 		return "", err
 	}
