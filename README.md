@@ -21,7 +21,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 |---|---|
 | LLM | `GET /models` for the picker, `POST /chat/completions` for replies |
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /` (TCP 41337, falls back to a free port) |
-| Discovery | UDP probe to multicast `239.255.41.38`, broadcast and localhost on port 41338 |
+| Discovery | UDP probe to multicast `239.255.41.38`, broadcast and localhost on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
 | Files | `~/.config/ouroboros/` – `config.json` (0600), `ouro.pid`, `ouro.log` |
 

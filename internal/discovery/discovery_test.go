@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +91,39 @@ func TestPreferredChoosesLANOverLoopback(t *testing.T) {
 func TestAddr(t *testing.T) {
 	if got := (Node{Host: "10.0.0.1", Port: 80}).Addr(); got != "10.0.0.1:80" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// A firewall may drop the unicast answer to the prober's ephemeral port;
+// the answer to the group on the discovery port must still arrive.
+func TestServeAnswersToGroup(t *testing.T) {
+	port := serve(t, 0, Node{ID: "abc123"})
+	group, err := listenGroup(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer group.Close()
+	requireMulticast(t, group)
+	conn, _ := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	defer conn.Close()
+	conn.Write([]byte(probe))
+	group.SetReadDeadline(time.Now().Add(wait))
+	buf := make([]byte, 4096)
+	n, err := group.Read(buf)
+	if err != nil || !strings.Contains(string(buf[:n]), `"abc123"`) {
+		t.Fatalf("got %q, %v", buf[:n], err)
+	}
+}
+
+// requireMulticast skips the test if this host drops multicast sent to itself,
+// e.g. because a firewall blocks incoming traffic on the port.
+func requireMulticast(t *testing.T, group *net.UDPConn) {
+	t.Helper()
+	conn, _ := net.ListenUDP("udp4", nil)
+	defer conn.Close()
+	conn.WriteToUDP([]byte("ping"), group.LocalAddr().(*net.UDPAddr))
+	group.SetReadDeadline(time.Now().Add(wait))
+	if _, err := group.Read(make([]byte, 16)); err != nil {
+		t.Skip("multicast is blocked on this host (firewall?)")
 	}
 }
