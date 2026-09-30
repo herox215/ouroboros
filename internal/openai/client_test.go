@@ -48,6 +48,19 @@ func TestChat(t *testing.T) {
 	}
 }
 
+func TestNoKeySendsNoAuthorization(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h := r.Header.Get("Authorization"); h != "" {
+			t.Errorf("unexpected Authorization %q", h)
+		}
+		w.Write([]byte(`{"data":[]}`))
+	}))
+	defer srv.Close()
+	if _, err := New(srv.URL, "").Models(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestChatNoChoices(t *testing.T) {
 	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"choices":[]}`))

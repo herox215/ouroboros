@@ -1,4 +1,4 @@
-// Package openaitest provides a fake OpenAI API for tests.
+// Package openaitest provides a fake OpenAI-compatible API for tests.
 package openaitest
 
 import (
@@ -11,15 +11,21 @@ import (
 	"ouroboros/internal/openai"
 )
 
-// Key is the only API key the fake server accepts.
+// Key is the API key NewServer accepts.
 const Key = "sk-good"
 
 // Models are the models the fake server offers.
 var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 
-// NewServer starts a fake API and returns its base URL. Chat replies have the
-// form "[model] turns=N last=TEXT", where N counts the non-system messages.
+// NewServer starts a fake API that requires Key and returns its base URL.
+// Chat replies have the form "[model] turns=N last=TEXT", where N counts the
+// non-system messages.
 func NewServer(t testing.TB) string {
+	return NewServerWithKey(t, Key)
+}
+
+// NewServerWithKey is like NewServer but requires key; "" disables authentication.
+func NewServerWithKey(t testing.TB, key string) string {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +45,7 @@ func NewServer(t testing.TB) string {
 		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": openai.Message{Role: "assistant", Content: reply}}}})
 	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+Key {
+		if key != "" && r.Header.Get("Authorization") != "Bearer "+key {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
 			return

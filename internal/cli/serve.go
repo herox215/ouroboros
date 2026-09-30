@@ -48,7 +48,7 @@ func (a *App) serve(ctx context.Context) error {
 	go discovery.Serve(udp, discovery.Node{ID: cfg.ID, Name: cfg.Name, Model: cfg.Model, Port: port})
 
 	logger := log.New(a.out, "", log.LstdFlags)
-	bot := agent.New(openai.New(a.settings.OpenAIURL, cfg.APIKey), cfg.Model, cfg.Name)
+	bot := agent.New(openai.New(cfg.BaseURL, cfg.APIKey), cfg.Model, cfg.Name)
 	srv := &http.Server{
 		Handler:           logRequests(logger, a2a.NewHandler(agentCard(cfg), bot.Respond)),
 		ReadHeaderTimeout: 10 * time.Second,

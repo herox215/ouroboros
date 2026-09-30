@@ -15,15 +15,16 @@ const fileName = "config.json"
 
 // Config is the persistent node configuration.
 type Config struct {
-	APIKey string `json:"api_key"`
-	Model  string `json:"model"`
-	Name   string `json:"name"`
-	ID     string `json:"id"`
+	BaseURL string `json:"base_url"` // OpenAI-compatible endpoint
+	APIKey  string `json:"api_key"`  // optional, e.g. not needed for a local Ollama
+	Model   string `json:"model"`
+	Name    string `json:"name"`
+	ID      string `json:"id"`
 }
 
 // Complete reports whether the node can be started with this configuration.
 func (c Config) Complete() bool {
-	return c.APIKey != "" && c.Model != "" && c.Name != "" && c.ID != ""
+	return c.BaseURL != "" && c.Model != "" && c.Name != "" && c.ID != ""
 }
 
 // Load reads the configuration from dir. A missing file yields an empty Config.

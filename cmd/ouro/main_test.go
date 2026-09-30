@@ -57,7 +57,7 @@ func TestEndToEnd(t *testing.T) {
 		}
 	}
 
-	expect(ouro(openaitest.Key+"\n2\ne2e-node\n", "start"), "Available models", "online", "gpt-4o-mini")
+	expect(ouro("\n"+openaitest.Key+"\n2\ne2e-node\n", "start"), "API endpoint", "Available models", "online", "gpt-4o-mini")
 	expect(ouro("", "status"), "● running", "name=e2e-node")
 	expect(ouro("", "list"), "e2e-node", "gpt-4o-mini")
 	expect(ouro("", "chat", "e2e-node", "test"), "[gpt-4o-mini] turns=1 last=test")

@@ -16,7 +16,7 @@ func TestLoadMissingReturnsEmpty(t *testing.T) {
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested")
-	want := Config{APIKey: "sk", Model: "m", Name: "n", ID: "abc123"}
+	want := Config{BaseURL: "http://x/v1", APIKey: "sk", Model: "m", Name: "n", ID: "abc123"}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
@@ -48,9 +48,9 @@ func TestLoadInvalidJSON(t *testing.T) {
 }
 
 func TestComplete(t *testing.T) {
-	full := Config{APIKey: "k", Model: "m", Name: "n", ID: "i"}
+	full := Config{BaseURL: "u", Model: "m", Name: "n", ID: "i"}
 	if !full.Complete() {
-		t.Fatal("full config should be complete")
+		t.Fatal("config without API key should be complete")
 	}
 	partial := full
 	partial.Model = ""

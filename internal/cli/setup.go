@@ -24,9 +24,17 @@ var nonChatModels = []string{
 // preferredModels are default choices, best first (matched as prefix).
 var preferredModels = []string{"gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"}
 
-// setup asks for API key, model and node name and saves the configuration.
+// setup asks for endpoint, API key, model and node name and saves the configuration.
 func (a *App) setup(ctx context.Context, cfg config.Config) (config.Config, error) {
-	key, models, err := a.askAPIKey(ctx, cmp.Or(cfg.APIKey, a.settings.APIKey))
+	prevURL := cfg.BaseURL
+	endpoint := cmp.Or(cfg.BaseURL, a.settings.BaseURL)
+	answer, err := a.ask(fmt.Sprintf("API endpoint (OpenAI-compatible) [%s]: ", endpoint), endpoint)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.BaseURL = strings.TrimRight(answer, "/")
+
+	key, models, err := a.askAPIKey(ctx, cfg.BaseURL, a.knownKey(cfg, prevURL))
 	if err != nil {
 		return cfg, err
 	}
@@ -44,23 +52,39 @@ func (a *App) setup(ctx context.Context, cfg config.Config) (config.Config, erro
 	return cfg, config.Save(a.settings.Home, cfg)
 }
 
-// askAPIKey asks until OpenAI accepts a key and returns it with its models.
-func (a *App) askAPIKey(ctx context.Context, key string) (string, []string, error) {
+// knownKey returns a key that belongs to cfg.BaseURL, so that a key is never
+// sent to an endpoint it was not entered for.
+func (a *App) knownKey(cfg config.Config, prevURL string) string {
+	if cfg.BaseURL == prevURL && cfg.APIKey != "" {
+		return cfg.APIKey
+	}
+	if cfg.BaseURL == strings.TrimRight(a.settings.BaseURL, "/") {
+		return a.settings.APIKey
+	}
+	return ""
+}
+
+// askAPIKey asks until the endpoint accepts a key (possibly none) and returns
+// it with the endpoint's models.
+func (a *App) askAPIKey(ctx context.Context, baseURL, key string) (string, []string, error) {
 	for {
 		if key == "" {
 			var err error
-			if key, err = a.readSecret("OpenAI API key: "); err != nil {
+			if key, err = a.readSecret("API key (Enter for none): "); err != nil {
 				return "", nil, err
 			}
 		}
-		models, err := openai.New(a.settings.OpenAIURL, key).Models(ctx)
+		models, err := openai.New(baseURL, key).Models(ctx)
 		var apiErr *openai.APIError
-		if errors.As(err, &apiErr) && apiErr.Unauthorized() {
+		switch {
+		case errors.As(err, &apiErr) && apiErr.Unauthorized():
 			fmt.Fprintln(a.out, "✗ API key rejected, try again")
 			key = ""
-			continue
+		case err != nil:
+			return "", nil, fmt.Errorf("cannot list models at %s: %w", baseURL, err)
+		default:
+			return key, models, nil
 		}
-		return key, models, err
 	}
 }
 

@@ -1,4 +1,5 @@
-// Package openai is a minimal client for the OpenAI REST API.
+// Package openai is a minimal client for OpenAI-compatible APIs
+// (OpenAI, Ollama, LM Studio, vLLM, OpenRouter, ...).
 package openai
 
 import (
@@ -14,7 +15,7 @@ import (
 	"time"
 )
 
-// DefaultBaseURL is the public OpenAI API endpoint.
+// DefaultBaseURL is the official OpenAI endpoint.
 const DefaultBaseURL = "https://api.openai.com/v1"
 
 // Message is a single chat message.
@@ -45,7 +46,7 @@ type Client struct {
 	http    *http.Client
 }
 
-// New returns a client for baseURL authenticated with apiKey.
+// New returns a client for baseURL. An empty apiKey sends no credentials.
 func New(baseURL, apiKey string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -105,7 +106,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)

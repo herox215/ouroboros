@@ -18,8 +18,6 @@ import (
 	"ouroboros/internal/openai/openaitest"
 )
 
-var testConfig = config.Config{APIKey: openaitest.Key, Model: "gpt-4o", Name: "alpha", ID: "abc123"}
-
 // freeUDPPort returns a UDP port that is currently unused.
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
@@ -37,8 +35,13 @@ func testSettings(t *testing.T) Settings {
 		Home:      t.TempDir(),
 		HTTPPort:  0,
 		DiscoPort: freeUDPPort(t),
-		OpenAIURL: openaitest.NewServer(t),
+		BaseURL:   openaitest.NewServer(t),
 	}
+}
+
+// nodeConfig is a complete configuration for a node using the fake API of s.
+func nodeConfig(s Settings) config.Config {
+	return config.Config{BaseURL: s.BaseURL, APIKey: openaitest.Key, Model: "gpt-4o", Name: "alpha", ID: "abc123"}
 }
 
 func newApp(s Settings, input string) (*App, *bytes.Buffer) {
@@ -100,7 +103,7 @@ func TestSettingsFromEnv(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENAI_API_KEY", "sk-env")
 	s, err := SettingsFromEnv()
-	want := Settings{Home: "/tmp/ouro", HTTPPort: 1234, DiscoPort: 41338, OpenAIURL: "https://api.openai.com/v1", APIKey: "sk-env"}
+	want := Settings{Home: "/tmp/ouro", HTTPPort: 1234, DiscoPort: 41338, BaseURL: "https://api.openai.com/v1", APIKey: "sk-env"}
 	if err != nil || s != want {
 		t.Fatalf("got %+v, %v", s, err)
 	}
@@ -112,12 +115,12 @@ func TestSettingsFromEnv(t *testing.T) {
 
 func TestSetupRetriesKeyAndModel(t *testing.T) {
 	s := testSettings(t)
-	app, out := newApp(s, "sk-bad\n"+openaitest.Key+"\n99\nnope\n2\nmynode\n")
+	app, out := newApp(s, "\nsk-bad\n"+openaitest.Key+"\n99\nnope\n2\nmynode\n")
 	cfg, err := app.setup(context.Background(), config.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.APIKey != openaitest.Key || cfg.Model != "gpt-4o-mini" || cfg.Name != "mynode" || cfg.ID == "" {
+	if cfg.BaseURL != s.BaseURL || cfg.APIKey != openaitest.Key || cfg.Model != "gpt-4o-mini" || cfg.Name != "mynode" || cfg.ID == "" {
 		t.Fatalf("got %+v", cfg)
 	}
 	if strings.Count(out.String(), "rejected") != 1 || strings.Count(out.String(), "unknown model") != 2 {
@@ -131,23 +134,51 @@ func TestSetupRetriesKeyAndModel(t *testing.T) {
 func TestSetupDefaults(t *testing.T) {
 	s := testSettings(t)
 	s.APIKey = openaitest.Key // from OPENAI_API_KEY, no prompt
-	app, _ := newApp(s, "\n\n")
+	app, _ := newApp(s, "\n\n\n")
 	cfg, err := app.setup(context.Background(), config.Config{})
-	if err != nil || cfg.Model != "gpt-4o-mini" || cfg.Name != hostname() {
+	if err != nil || cfg.BaseURL != s.BaseURL || cfg.Model != "gpt-4o-mini" || cfg.Name != hostname() {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }
 
 func TestSetupKeepsExistingValues(t *testing.T) {
-	app, _ := newApp(testSettings(t), "\n\n")
-	cfg, err := app.setup(context.Background(), testConfig)
-	if err != nil || cfg != testConfig {
+	s := testSettings(t)
+	s.BaseURL = "http://other.invalid" // the saved endpoint wins over the default
+	want := nodeConfig(testSettings(t))
+	app, _ := newApp(s, "\n\n\n")
+	cfg, err := app.setup(context.Background(), want)
+	if err != nil || cfg != want {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }
 
+func TestSetupWithoutAPIKey(t *testing.T) {
+	s := testSettings(t)
+	url := openaitest.NewServerWithKey(t, "") // e.g. a local Ollama
+	app, _ := newApp(s, url+"/\n\n1\nlocal\n")
+	cfg, err := app.setup(context.Background(), config.Config{})
+	if err != nil || cfg.BaseURL != url || cfg.APIKey != "" || cfg.Model != "gpt-4o" || !cfg.Complete() {
+		t.Fatalf("got %+v, %v", cfg, err)
+	}
+}
+
+func TestSetupNeverSendsKeyToAnotherEndpoint(t *testing.T) {
+	s := testSettings(t)
+	s.APIKey = openaitest.Key
+	other := openaitest.NewServerWithKey(t, "sk-other")
+	app, out := newApp(s, other+"\nsk-other\n1\nn\n")
+	old := nodeConfig(s) // saved key belongs to s.BaseURL
+	cfg, err := app.setup(context.Background(), old)
+	if err != nil || cfg.BaseURL != other || cfg.APIKey != "sk-other" {
+		t.Fatalf("got %+v, %v", cfg, err)
+	}
+	if strings.Contains(out.String(), "rejected") {
+		t.Fatal("old key must not be tried against the new endpoint")
+	}
+}
+
 func TestSetupUsesReadSecret(t *testing.T) {
-	app, _ := newApp(testSettings(t), "1\nx\n")
+	app, _ := newApp(testSettings(t), "\n1\nx\n")
 	var prompted string
 	app.ReadSecret = func(prompt string) (string, error) {
 		prompted = prompt
@@ -159,7 +190,13 @@ func TestSetupUsesReadSecret(t *testing.T) {
 }
 
 func TestSetupStopsAtEndOfInput(t *testing.T) {
-	for name, input := range map[string]string{"key": "", "model": openaitest.Key + "\n", "name": openaitest.Key + "\n1\n"} {
+	inputs := map[string]string{
+		"endpoint": "",
+		"key":      "\n",
+		"model":    "\n" + openaitest.Key + "\n",
+		"name":     "\n" + openaitest.Key + "\n1\n",
+	}
+	for name, input := range inputs {
 		app, _ := newApp(testSettings(t), input)
 		if _, err := app.setup(context.Background(), config.Config{}); err == nil {
 			t.Errorf("%s: want error", name)
@@ -169,10 +206,9 @@ func TestSetupStopsAtEndOfInput(t *testing.T) {
 
 func TestSetupNetworkError(t *testing.T) {
 	s := testSettings(t)
-	s.OpenAIURL = "http://127.0.0.1:1"
-	app, _ := newApp(s, openaitest.Key+"\n")
-	if _, err := app.setup(context.Background(), config.Config{}); err == nil {
-		t.Fatal("want error")
+	app, _ := newApp(s, "http://127.0.0.1:1\n\n")
+	if _, err := app.setup(context.Background(), config.Config{}); err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Fatalf("got %v", err)
 	}
 }
 
@@ -262,14 +298,14 @@ func TestServeFallsBackToFreePort(t *testing.T) {
 	defer busy.Close()
 	s := testSettings(t)
 	s.HTTPPort = busy.Addr().(*net.TCPAddr).Port
-	if port := startNode(t, s, testConfig); port == s.HTTPPort {
+	if port := startNode(t, s, nodeConfig(s)); port == s.HTTPPort {
 		t.Fatal("expected a different port")
 	}
 }
 
 func TestNodeLifecycle(t *testing.T) {
 	s := testSettings(t)
-	port := startNode(t, s, testConfig)
+	port := startNode(t, s, nodeConfig(s))
 
 	out, _ := run(t, s, "", "status")
 	if !strings.Contains(out, "● running") || !strings.Contains(out, fmt.Sprintf("port=%d", port)) {
@@ -304,7 +340,7 @@ func TestNodeLifecycle(t *testing.T) {
 
 func TestNodeRemovesPIDFileOnShutdown(t *testing.T) {
 	s := testSettings(t)
-	config.Save(s.Home, testConfig)
+	config.Save(s.Home, nodeConfig(s))
 	ctx, cancel := context.WithCancel(context.Background())
 	app, _ := newApp(s, "")
 	done := make(chan error)
@@ -324,7 +360,7 @@ func TestNodeRemovesPIDFileOnShutdown(t *testing.T) {
 
 func TestInteractiveChatReportsErrorsAndContinues(t *testing.T) {
 	s := testSettings(t)
-	cfg := testConfig
+	cfg := nodeConfig(s)
 	cfg.APIKey = "sk-revoked" // node starts, but every LLM call fails
 	startNode(t, s, cfg)
 	out, err := run(t, s, "hi\n", "chat", "alpha")
@@ -335,7 +371,7 @@ func TestInteractiveChatReportsErrorsAndContinues(t *testing.T) {
 
 func TestOneShotChatReturnsError(t *testing.T) {
 	s := testSettings(t)
-	cfg := testConfig
+	cfg := nodeConfig(s)
 	cfg.APIKey = "sk-revoked"
 	startNode(t, s, cfg)
 	if _, err := run(t, s, "", "chat", "alpha", "hi"); err == nil {

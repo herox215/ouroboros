@@ -25,9 +25,9 @@ import (
 // Version is the ouro release version.
 const Version = "0.1.0"
 
-const usage = `ouro – tiny A2A agent node
+const usage = `ouro – tiny A2A agent node for any OpenAI-compatible LLM API
 
-  ouro start [--setup]    start the node (asks for API key + model on first run)
+  ouro start [--setup]    start the node (asks for endpoint, key + model on first run)
   ouro stop               stop the node
   ouro status             show the local node
   ouro list               find ouroboros nodes on the network
@@ -40,8 +40,8 @@ type Settings struct {
 	Home      string // config, PID and log directory
 	HTTPPort  int    // A2A port; falls back to a free port if taken
 	DiscoPort int    // UDP discovery port
-	OpenAIURL string
-	APIKey    string // optional key to use during setup
+	BaseURL   string // default LLM endpoint offered during setup
+	APIKey    string // key for BaseURL offered during setup
 }
 
 // SettingsFromEnv reads OURO_HOME, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL and OPENAI_API_KEY.
@@ -66,7 +66,7 @@ func SettingsFromEnv() (Settings, error) {
 		Home:      home,
 		HTTPPort:  httpPort,
 		DiscoPort: discoPort,
-		OpenAIURL: cmp.Or(os.Getenv("OPENAI_BASE_URL"), openai.DefaultBaseURL),
+		BaseURL:   cmp.Or(os.Getenv("OPENAI_BASE_URL"), openai.DefaultBaseURL),
 		APIKey:    os.Getenv("OPENAI_API_KEY"),
 	}, nil
 }
