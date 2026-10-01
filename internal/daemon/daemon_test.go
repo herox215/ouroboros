@@ -63,7 +63,7 @@ func TestWaitRunning(t *testing.T) {
 
 func TestSpawnDetachesAndLogs(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "ouro.log")
-	if err := Spawn("/bin/sh", log, "-c", "echo spawned; ps -o sid= -p $$"); err != nil {
+	if err := Spawn("/bin/sh", log, "-c", "echo spawned; ps -o pgid= -p $$"); err != nil {
 		t.Fatal(err)
 	}
 	var out string
@@ -78,8 +78,8 @@ func TestSpawnDetachesAndLogs(t *testing.T) {
 	if len(lines) != 2 || lines[0] != "spawned" {
 		t.Fatalf("log = %q", out)
 	}
-	if mySID := fmt.Sprint(mustSID(t)); lines[1] == mySID {
-		t.Fatal("child should run in its own session")
+	if myPGID := fmt.Sprint(mustPGID(t)); lines[1] == myPGID {
+		t.Fatal("child should run in its own session (and thus process group)")
 	}
 }
 
@@ -106,12 +106,12 @@ func TestStopNotRunning(t *testing.T) {
 	}
 }
 
-func mustSID(t *testing.T) int {
-	out, err := exec.Command("ps", "-o", "sid=", "-p", fmt.Sprint(os.Getpid())).Output()
+func mustPGID(t *testing.T) int {
+	out, err := exec.Command("ps", "-o", "pgid=", "-p", fmt.Sprint(os.Getpid())).Output()
 	if err != nil {
 		t.Skip("ps not available")
 	}
-	var sid int
-	fmt.Sscan(string(out), &sid)
-	return sid
+	var pgid int
+	fmt.Sscan(string(out), &pgid)
+	return pgid
 }

@@ -62,7 +62,13 @@ func Listen(port int) (*net.UDPConn, error) {
 // so it cannot steal unicast probes from a node on the same port.
 func listenGroup(port int) (*net.UDPConn, error) {
 	// Built by hand: net.ListenPacket rebinds multicast addresses to the wildcard.
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM|syscall.SOCK_CLOEXEC, 0)
+	// SOCK_CLOEXEC is Linux-only; set close-on-exec under ForkLock like the net package does on BSD/macOS.
+	syscall.ForkLock.RLock()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
+	if err == nil {
+		syscall.CloseOnExec(fd)
+	}
+	syscall.ForkLock.RUnlock()
 	if err != nil {
 		return nil, err
 	}
