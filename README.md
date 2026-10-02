@@ -5,7 +5,7 @@ OpenAI, Ollama, LM Studio, vLLM, OpenRouter, Groq, …
 One static binary; every node on the LAN can find and chat with every other node.
 
 ```sh
-make install              # → ~/.local/bin/ouro
+./install.sh              # bootstraps Go if missing, then builds → ~/.local/bin/ouro
 ouro                      # open the terminal UI (default)
 ouro start                # first run: endpoint, API key, model picker, node name
 ouro list                 # find nodes on the network
