@@ -19,6 +19,7 @@ func main() {
 	}
 	app := cli.New(settings, os.Stdin, os.Stdout)
 	if term.IsTerminal(int(os.Stdin.Fd())) {
+		app.Interactive = true
 		app.ReadSecret = readPassword
 	}
 	if err := app.Run(context.Background(), os.Args[1:]); err != nil {

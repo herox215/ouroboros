@@ -82,11 +82,25 @@ func startNode(t *testing.T, s Settings, cfg config.Config) int {
 }
 
 func TestUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"help"}, {"--help"}} {
+	for _, args := range [][]string{{"help"}, {"--help"}} {
 		out, err := run(t, testSettings(t), "", args...)
 		if err != nil || !strings.Contains(out, "ouro start") {
 			t.Fatalf("%v: got %q, %v", args, out, err)
 		}
+	}
+}
+
+// Without a terminal, ouro with no command prints the usage instead of TUI.
+func TestNoArgsWithoutTerminalShowsUsage(t *testing.T) {
+	out, err := run(t, testSettings(t), "")
+	if err != nil || !strings.Contains(out, "ouro start") {
+		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+func TestTuiWithoutTerminal(t *testing.T) {
+	if _, err := run(t, testSettings(t), "", "tui"); err == nil {
+		t.Fatal("want error")
 	}
 }
 

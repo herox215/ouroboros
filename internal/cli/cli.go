@@ -27,11 +27,13 @@ const Version = "0.1.0"
 
 const usage = `ouro – tiny A2A agent node for any OpenAI-compatible LLM API
 
+  ouro                    open the terminal UI (default)
   ouro start [--setup]    start the node (asks for endpoint, key + model on first run)
   ouro stop               stop the node
   ouro status             show the local node
   ouro list               find ouroboros nodes on the network
   ouro chat ID ["msg"]    chat with a node (interactive without msg)
+  ouro tui                control the node and chat in a terminal UI
   ouro serve              run the node in the foreground
 `
 
@@ -92,6 +94,10 @@ type App struct {
 	// ReadSecret reads a secret without echoing it. If nil, a plain line is read.
 	ReadSecret func(prompt string) (string, error)
 
+	// Interactive reports whether stdin is a terminal. Without it, ouro with no
+	// command prints the usage instead of opening the terminal UI.
+	Interactive bool
+
 	discoverWait time.Duration
 }
 
@@ -103,6 +109,9 @@ func New(s Settings, in io.Reader, out io.Writer) *App {
 // Run executes the command given by args (without the program name).
 func (a *App) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
+		if a.Interactive {
+			return a.tui(ctx)
+		}
 		fmt.Fprint(a.out, usage)
 		return nil
 	}
@@ -123,6 +132,11 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.chat(ctx, rest)
 	case "serve":
 		return a.serve(ctx)
+	case "tui":
+		if !a.Interactive {
+			return errors.New("tui needs a terminal")
+		}
+		return a.tui(ctx)
 	case "help", "-h", "--help":
 		fmt.Fprint(a.out, usage)
 		return nil
@@ -154,33 +168,51 @@ func (a *App) start(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	exe, err := os.Executable()
+	p, err := a.launch()
 	if err != nil {
 		return err
-	}
-	os.Remove(a.pidPath()) // drop a stale PID file
-	if err := daemon.Spawn(exe, a.logPath(), "serve"); err != nil {
-		return err
-	}
-	p, ok := daemon.WaitRunning(a.pidPath(), 5*time.Second)
-	if !ok {
-		return fmt.Errorf("node did not start, see %s", a.logPath())
 	}
 	fmt.Fprintf(a.out, "● ouroboros %s (%s) online on :%d → %s\n", cfg.ID, cfg.Name, p.Port, cfg.Model)
 	return nil
 }
 
-func (a *App) stop() error {
-	p, ok := daemon.Running(a.pidPath())
-	if !ok {
-		fmt.Fprintln(a.out, "○ not running")
-		return nil
+// launch runs the configured node in the background and waits until it is up.
+func (a *App) launch() (daemon.Process, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return daemon.Process{}, err
 	}
-	if err := daemon.Stop(p.PID, 5*time.Second); err != nil {
+	os.Remove(a.pidPath()) // drop a stale PID file
+	if err := daemon.Spawn(exe, a.logPath(), "serve"); err != nil {
+		return daemon.Process{}, err
+	}
+	p, ok := daemon.WaitRunning(a.pidPath(), 5*time.Second)
+	if !ok {
+		return daemon.Process{}, fmt.Errorf("node did not start, see %s", a.logPath())
+	}
+	return p, nil
+}
+
+func (a *App) stop() error {
+	stopped, err := a.stopNode()
+	if err != nil {
 		return err
 	}
-	fmt.Fprintln(a.out, "○ stopped")
+	if stopped {
+		fmt.Fprintln(a.out, "○ stopped")
+	} else {
+		fmt.Fprintln(a.out, "○ not running")
+	}
 	return nil
+}
+
+// stopNode stops the background node and reports whether one was running.
+func (a *App) stopNode() (bool, error) {
+	p, ok := daemon.Running(a.pidPath())
+	if !ok {
+		return false, nil
+	}
+	return true, daemon.Stop(p.PID, 5*time.Second)
 }
 
 func (a *App) status() error {
