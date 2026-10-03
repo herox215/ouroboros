@@ -123,7 +123,7 @@ func TestSplashShowsLogoUntilKey(t *testing.T) {
 	m.showSplash = true
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	view := m.View().Content
-	if !strings.Contains(view, "▄▄██████▄▄") || !strings.Contains(view, "ouroboros") {
+	if !strings.Contains(view, strings.TrimSpace(splashLogo(0)[1])) || !strings.Contains(view, "ouroboros") {
 		t.Fatalf("splash should show the logo and the title:\n%s", view)
 	}
 	if strings.Contains(view, "Nodes") {
@@ -192,7 +192,7 @@ func TestEmptyChatShowsLogo(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m.Update(m.discover()) // no nodes: nothing selected
-	if view := m.View().Content; !strings.Contains(view, "▄▄██████▄▄") {
+	if view := m.View().Content; !strings.Contains(view, strings.TrimSpace(logoLines[1])) {
 		t.Fatalf("empty chat should show the logo:\n%s", view)
 	}
 }

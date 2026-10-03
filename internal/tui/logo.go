@@ -6,50 +6,27 @@ import (
 	"time"
 )
 
-// The ouroboros is drawn with half blocks, so every cell holds two square
-// pixels on top of each other. The head is a fixed sprite. The body is a ring
-// that starts at the neck and runs counterclockwise until the tail ends in the
-// mouth.
+// The ouroboros is drawn with braille dots, so every cell holds two by four
+// square pixels. The snake lies on a ring: the body starts at the neck and
+// runs counterclockwise until the tail ends between the jaws. Its back is
+// filled and its belly is only an outline.
 const (
-	logoPixelsW, logoPixelsH = 36, 34
-	ringX, ringY, ringR      = 18, 18.5, 12.5
-	headX, headY             = 5, 0
+	logoCols, logoRows       = 30, 16
+	logoPixelsW, logoPixelsH = logoCols * 2, logoRows * 4
+	ringX, ringY, ringR      = 30, 34, 25.2
 )
 
 var (
-	neckAngle = 128 * math.Pi / 180
-	bodyArc   = (360 - 128 + 97) * math.Pi / 180 // the tail ends inside the mouth at 97°
+	neckAngle  = 130 * math.Pi / 180
+	snoutAngle = 86 * math.Pi / 180
+	bodyArc    = (360 - 130 + 110) * math.Pi / 180 // the tail ends between the jaws at 110°
 )
 
-// The head sprites: # is filled, o is the eye, m is the mouth where the tail
-// shows through.
-var (
-	headOpen = []string{
-		"...######.......",
-		".##########.....",
-		"###oo#######....",
-		"###oo########...",
-		"##############..",
-		"#######mmmmmmmm.",
-		"######mmmmmmmmm.",
-		"#######mmmmmmm..",
-		"###########.....",
-		".#########......",
-		"..######........",
-	}
-	headShut = []string{
-		"...######.......",
-		".##########.....",
-		"###oo#######....",
-		"###oo########...",
-		"##############..",
-		"##############m.",
-		"######mmmmmmmmm.",
-		"##############..",
-		"############....",
-		".#########......",
-		"..######........",
-	}
+// Head proportions, as shares of the way from the neck to the snout.
+const (
+	jawHinge = 0.4
+	jawEnd   = 0.88 // the lower jaw is shorter than the upper one
+	eyeAt    = 0.47
 )
 
 // Splash timeline: the body grows around the ring, the tail reaches the
@@ -74,53 +51,99 @@ func splashLogo(elapsed time.Duration) []string {
 // drawLogo renders the ouroboros with the given share of the body grown.
 // Every frame has the same size, so the logo does not jump while it animates.
 func drawLogo(grown float64, shut bool) []string {
-	var px [logoPixelsH][logoPixelsW]bool
+	// solid is the silhouette of the snake, px the pixels that are drawn.
+	var solid, px [logoPixelsH][logoPixelsW]bool
 	length := bodyArc * grown
 	for y := range logoPixelsH {
 		for x := range logoPixelsW {
-			dx, dy := float64(x)+0.5-ringX, ringY-float64(y)-0.5
-			t := math.Mod(math.Atan2(dy, dx)-neckAngle+4*math.Pi, 2*math.Pi)
-			if length == 0 || t > length {
-				continue
+			d, angle := ringPoint(x, y)
+			t := math.Mod(angle-neckAngle+4*math.Pi, 2*math.Pi)
+			if length > 0 && t <= length {
+				thickness := 3.4*(1-t/length) + 0.6 // taper from the neck to the tail
+				solid[y][x] = math.Abs(d) <= thickness
 			}
-			thickness := 2.3*(1-t/length) + 0.8 // taper from the neck to the tail
-			px[y][x] = math.Abs(math.Hypot(dx, dy)-ringR) <= thickness
+			if f, ok := headShare(angle); ok && inHead(f, d, shut) {
+				solid[y][x] = true
+			}
 		}
 	}
-	head := headOpen
-	if shut {
-		head = headShut
-	}
-	for j, row := range head {
-		for i, c := range row {
-			switch c {
-			case '#':
-				px[headY+j][headX+i] = true
-			case 'o':
-				px[headY+j][headX+i] = false
+	for y := range logoPixelsH {
+		for x := range logoPixelsW {
+			if !solid[y][x] {
+				continue
+			}
+			d, angle := ringPoint(x, y)
+			edge := x == 0 || y == 0 || x == logoPixelsW-1 || y == logoPixelsH-1 ||
+				!solid[y][x-1] || !solid[y][x+1] || !solid[y-1][x] || !solid[y+1][x]
+			px[y][x] = edge || d > 0.2 // the back is the outer side of the ring
+			if f, ok := headShare(angle); ok {
+				eye := math.Hypot((f-eyeAt)*headLength(), d-4)
+				if eye < 1.9 {
+					px[y][x] = eye < 0.6 // a pupil in a hollow eye
+				}
 			}
 		}
 	}
 
-	// Crop to the finished logo, which is the widest frame.
-	const left, right = 3, 32
-	lines := make([]string, 0, logoPixelsH/2)
-	for y := 0; y < logoPixelsH; y += 2 {
+	// The dots of a braille cell, by row and column.
+	dots := [4][2]rune{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}
+	lines := make([]string, 0, logoRows)
+	for row := range logoRows {
 		var b strings.Builder
-		for x := left; x < right; x++ {
-			top, bottom := px[y][x], px[y+1][x]
-			switch {
-			case top && bottom:
-				b.WriteString("█")
-			case top:
-				b.WriteString("▀")
-			case bottom:
-				b.WriteString("▄")
-			default:
+		for col := range logoCols {
+			var cell rune
+			for j := range 4 {
+				for i := range 2 {
+					if px[row*4+j][col*2+i] {
+						cell |= dots[j][i]
+					}
+				}
+			}
+			if cell == 0 {
 				b.WriteByte(' ')
+			} else {
+				b.WriteRune(0x2800 + cell)
 			}
 		}
 		lines = append(lines, b.String())
 	}
 	return lines
+}
+
+// ringPoint returns where the pixel lies relative to the ring: its distance
+// outward from the ring line and its angle around the center.
+func ringPoint(x, y int) (d, angle float64) {
+	dx, dy := float64(x)+0.5-ringX, ringY-float64(y)-0.5
+	return math.Hypot(dx, dy) - ringR, math.Atan2(dy, dx)
+}
+
+// headLength is the length of the head along the ring in pixels.
+func headLength() float64 {
+	return (neckAngle - snoutAngle) * ringR
+}
+
+// headShare returns how far along the head the angle lies, from 0 at the neck
+// to 1 at the snout. It reports false outside the head.
+func headShare(angle float64) (float64, bool) {
+	f := (neckAngle - angle) / (neckAngle - snoutAngle)
+	return f, f >= 0 && f <= 1
+}
+
+// inHead reports whether the head covers the point at share f and distance d.
+func inHead(f, d float64, shut bool) bool {
+	const center = 0.8 // the head sits slightly outside the ring line
+	if f < jawHinge {
+		// The skull widens from the neck to the jaw hinge.
+		return math.Abs(d-center) <= 4+2.6*math.Sin(f/jawHinge*math.Pi/2)
+	}
+	g := (f - jawHinge) / (1 - jawHinge)
+	width := 6.6 * math.Sqrt(1-g*g) // both jaws narrow toward the snout
+	if shut {
+		return d <= center+width && d >= center-width*0.85 && (d >= -0.2 || f < jawEnd)
+	}
+	// The open jaws leave room for the tail; the lower one swings inward.
+	upper := d >= 1.3 && d <= center+width
+	swung := d + 5*g
+	lower := f < jawEnd && swung <= -1.3 && swung >= center-width*0.85
+	return upper || lower
 }
