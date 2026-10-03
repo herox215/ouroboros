@@ -5,6 +5,7 @@ package a2a
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -13,6 +14,10 @@ const (
 	ProtocolVersion = "0.3.0"
 	CardPath        = "/.well-known/agent-card.json"
 	MethodSend      = "message/send"
+	// MethodAccept and MethodReject are sent back to a node that asked to
+	// connect, once the human on the other side has decided.
+	MethodAccept = "contact/accept"
+	MethodReject = "contact/reject"
 )
 
 // JSON-RPC error codes.
@@ -21,7 +26,16 @@ const (
 	CodeMethodNotFound = -32601
 	CodeInvalidParams  = -32602
 	CodeInternalError  = -32603
+	CodeUnauthorized   = -32001 // missing or bad request signature
+	CodePending        = -32002 // waiting for the peer to approve the request
+	CodeBlocked        = -32003 // the peer refused to connect
 )
+
+// Peer is the identifying information a node sends about itself.
+type Peer struct {
+	Name  string `json:"name,omitempty"`
+	Model string `json:"model,omitempty"`
+}
 
 // AgentCard describes an agent and how to reach it.
 type AgentCard struct {
@@ -96,12 +110,25 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("a2a: %s (%d)", e.Message, e.Code)
 }
 
+// code reports whether err is a JSON-RPC error with the given code.
+func code(err error, want int) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == want
+}
+
+// IsPending reports whether err means the peer is waiting for a human decision.
+func IsPending(err error) bool { return code(err, CodePending) }
+
+// IsBlocked reports whether err means the peer refused to connect.
+func IsBlocked(err error) bool { return code(err, CodeBlocked) }
+
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
 	Params  struct {
 		Message Message `json:"message"`
+		Peer    Peer    `json:"peer"`
 	} `json:"params"`
 }
 

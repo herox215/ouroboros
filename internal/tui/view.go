@@ -67,6 +67,10 @@ func (m *Model) renderHistory(toBottom bool) {
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
 	blocks := make([]string, len(c.entries))
 	for i, e := range c.entries {
+		if e.system {
+			blocks[i] = mutedStyle.Render("· " + e.text)
+			continue
+		}
 		name, color := c.node.Name, peer
 		if e.mine {
 			name, color = "you", accent
@@ -96,9 +100,50 @@ func (m *Model) View() tea.View {
 		v.SetContent(m.splashView())
 		return v
 	}
+	if m.screen == screenRequests {
+		v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.requestsView(), m.footerView()))
+		return v
+	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), m.chatView())
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), body, m.footerView()))
 	return v
+}
+
+// requestsView lists the connection requests that are waiting for a decision.
+func (m *Model) requestsView() string {
+	w, h := m.width, m.bodyHeight()
+	lines := []string{boldStyle.Render("Connection requests"), ""}
+	if len(m.trust.Incoming) == 0 {
+		lines = append(lines, mutedStyle.Render("No pending requests."))
+	}
+	for i, r := range m.trust.Incoming {
+		name := r.Name
+		if name == "" {
+			name = shortKey(r.PublicKey)
+		}
+		marker := "  "
+		if i == m.reqSel {
+			marker = lipgloss.NewStyle().Foreground(accent).Render("› ")
+		}
+		lines = append(lines,
+			marker+boldStyle.Render(name)+"  "+mutedStyle.Render("wants to chat"),
+			"    "+mutedStyle.Render(r.Addr+" · "+r.At.Format("15:04")))
+	}
+	if len(m.trust.Outgoing) > 0 {
+		lines = append(lines, "", mutedStyle.Render("Waiting for the other side:"))
+		for _, r := range m.trust.Outgoing {
+			lines = append(lines, "  "+mutedStyle.Render(r.Name+" ("+shortKey(r.PublicKey)+")"))
+		}
+	}
+	return box(true).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
+}
+
+// shortKey abbreviates a base64 public key for display.
+func shortKey(publicKey string) string {
+	if len(publicKey) <= 10 {
+		return publicKey
+	}
+	return publicKey[:10] + "…"
 }
 
 // splashView shows the ouroboros animation centered on the screen.
@@ -140,6 +185,9 @@ func (m *Model) headerView() string {
 	default:
 		state = lipgloss.NewStyle().Foreground(bad).Render("○ offline") +
 			mutedStyle.Render(fmt.Sprintf("  %s · %s · press s to start", s.ID, s.Name))
+	}
+	if m.unreadReq > 0 {
+		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.unreadReq))
 	}
 	return ansi.Truncate(title+" "+state, m.width, "…")
 }
@@ -190,7 +238,11 @@ func (m *Model) nodeLines(c *conversation, selected bool, width int) []string {
 	room := max(1, width-2-lipgloss.Width(badge)-1)
 	left := marker + nameStyle.Render(ansi.Truncate(name, room, "…"))
 	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(badge))
-	detail := "  " + mutedStyle.Render(ansi.Truncate(c.node.Model+" · "+c.node.ID, width-2, "…"))
+	mark := "?"
+	if _, ok := m.trust.Trusted[c.node.PublicKey]; ok || c.node.ID == m.status.ID {
+		mark = "✓"
+	}
+	detail := "  " + mutedStyle.Render(ansi.Truncate(mark+" "+c.node.Model+" · "+c.node.ID, width-2, "…"))
 	return []string{left + strings.Repeat(" ", gap) + badge, detail}
 }
 
@@ -232,9 +284,12 @@ func (m *Model) footerView() string {
 	if m.status.Running {
 		toggle = "stop"
 	}
-	help := "↑↓ select · enter chat · n new chat · s " + toggle + " node · c setup · r refresh · q quit"
+	help := "↑↓ select · enter chat · n new chat · s " + toggle + " node · c setup · r refresh · R requests · q quit"
 	if m.focus == focusInput {
 		help = "enter send · alt+enter new line · esc nodes · pgup/pgdn scroll · ctrl+c quit"
+	}
+	if m.screen == screenRequests {
+		help = "↑↓ select · a accept · x reject · esc back · ctrl+c quit"
 	}
 	line := mutedStyle.Render(help)
 	if m.notice != "" {

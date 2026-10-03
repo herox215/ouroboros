@@ -12,10 +12,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"ouroboros/internal/a2a"
+	"ouroboros/internal/contacts"
 	"ouroboros/internal/discovery"
 )
 
-type sent struct{ addr, contextID, text string }
+type sent struct {
+	node      discovery.Node
+	contextID string
+	text      string
+}
 
 type fakeBackend struct {
 	status        Status
@@ -26,19 +32,34 @@ type fakeBackend struct {
 	started       int
 	stopped       int
 	setupCommands int
+
+	trust     Contacts
+	accepted  []string
+	rejected  []string
+	acceptErr error
+	rejectErr error
 }
 
 func (f *fakeBackend) Status() (Status, error)             { return f.status, nil }
 func (f *fakeBackend) Start() error                        { f.started++; return nil }
 func (f *fakeBackend) Stop() error                         { f.stopped++; return nil }
 func (f *fakeBackend) Discover() ([]discovery.Node, error) { return f.nodes, nil }
+func (f *fakeBackend) Contacts() (Contacts, error)         { return f.trust, nil }
 func (f *fakeBackend) SetupCommand() (*exec.Cmd, error) {
 	f.setupCommands++
 	return exec.Command("true"), nil
 }
-func (f *fakeBackend) Send(_ context.Context, addr, contextID, text string) (string, error) {
-	f.sent = append(f.sent, sent{addr, contextID, text})
+func (f *fakeBackend) Send(_ context.Context, node discovery.Node, contextID, text string) (string, error) {
+	f.sent = append(f.sent, sent{node, contextID, text})
 	return f.reply, f.sendErr
+}
+func (f *fakeBackend) Accept(publicKey string) error {
+	f.accepted = append(f.accepted, publicKey)
+	return f.acceptErr
+}
+func (f *fakeBackend) Reject(publicKey string) error {
+	f.rejected = append(f.rejected, publicKey)
+	return f.rejectErr
 }
 
 var (
@@ -196,7 +217,7 @@ func TestChat(t *testing.T) {
 
 	m.Update(cmd())
 	c := m.current()
-	if len(b.sent) != 1 || b.sent[0] != (sent{"10.0.0.1:1", c.contextID, "ping"}) {
+	if len(b.sent) != 1 || b.sent[0] != (sent{alpha, c.contextID, "ping"}) {
 		t.Fatalf("sent %+v", b.sent)
 	}
 	if c.pending || len(c.entries) != 2 || c.entries[1].text != "pong" || c.entries[1].mine {
@@ -220,6 +241,62 @@ func TestSendError(t *testing.T) {
 	e := m.current().entries[1]
 	if !e.failed || e.text != "connection refused" {
 		t.Fatalf("entry %+v", e)
+	}
+}
+
+func TestPendingSendShowsNotice(t *testing.T) {
+	m, b := newModel(t, alpha)
+	b.sendErr = &a2a.Error{Code: a2a.CodePending, Message: "waiting"}
+	m.Update(say(t, m, "ping")())
+	e := m.current().entries[1]
+	if !e.system || e.failed || !strings.Contains(e.text, "Waiting for approval") {
+		t.Fatalf("entry %+v", e)
+	}
+}
+
+func TestConnectionRequests(t *testing.T) {
+	m, b := newModel(t, alpha)
+	b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma", Addr: "1.2.3.4:9"}}}
+	m.Update(m.loadContacts())
+	if view := m.View().Content; !strings.Contains(view, "✉ 1") {
+		t.Fatalf("header should show the pending count:\n%s", view)
+	}
+
+	press(m, "R")
+	if m.screen != screenRequests {
+		t.Fatal("R should open the requests screen")
+	}
+	if view := m.View().Content; !strings.Contains(view, "gamma") || !strings.Contains(view, "wants to chat") {
+		t.Fatalf("requests view:\n%s", view)
+	}
+
+	cmd := press(m, "a")
+	if cmd == nil {
+		t.Fatal("accept should return a command")
+	}
+	m.Update(cmd())
+	if len(b.accepted) != 1 || b.accepted[0] != "pk1" {
+		t.Fatalf("accepted %v", b.accepted)
+	}
+
+	press(m, "esc")
+	if m.screen != screenChat {
+		t.Fatal("esc should go back to the chat")
+	}
+}
+
+func TestRejectRequest(t *testing.T) {
+	m, b := newModel(t, alpha)
+	b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma"}}}
+	m.Update(m.loadContacts())
+	press(m, "R")
+	cmd := press(m, "x")
+	if cmd == nil {
+		t.Fatal("reject should return a command")
+	}
+	m.Update(cmd())
+	if len(b.rejected) != 1 || b.rejected[0] != "pk1" {
+		t.Fatalf("rejected %v", b.rejected)
 	}
 }
 

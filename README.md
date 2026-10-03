@@ -33,6 +33,7 @@ Conversations live only as long as the TUI runs.
 | `↑` `↓` / `j` `k` | select a node | – |
 | `s` / `c` | start or stop the node / run the setup | – |
 | `n` / `r` | new conversation / search the network | – |
+| `R` | connection requests (`a` accept, `x` reject, `esc` back) | – |
 | `pgup` `pgdn` | scroll the chat | scroll the chat |
 | `q` / `ctrl+c` | quit (the node keeps running) | `ctrl+c` quits |
 
@@ -47,14 +48,25 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /` (TCP 41337, falls back to a free port) |
 | Discovery | UDP probe to multicast `239.255.41.38`, broadcast and localhost on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `ouro.pid`, `ouro.log` |
+| Trust | signed requests (Ed25519); unknown peers become connection requests a human approves |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log` |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
 `ouro start --setup` reconfigures, `ouro serve` runs in the foreground (e.g. for systemd).
 
 Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
-No authentication yet – anyone on the network can chat with any node.
+## Trust
+
+Every node owns an Ed25519 key pair (generated on first run, stored in `config.json`). Requests
+are signed and the sender's public key is announced with discovery. A node only answers trusted
+peers:
+
+1. Alice writes to Bob: Bob records a **connection request** and answers `pending`; no LLM call happens.
+2. In Bob's terminal UI press `R` to open the requests screen and then `a` to accept (or `x` to reject).
+3. Bob notifies Alice, both sides store each other as trusted and can chat.
+
+Rejected peers are blocked. Trust is mutual: one acceptance connects both sides.
 
 ## Code
 

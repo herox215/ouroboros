@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"ouroboros/internal/a2a"
+	"ouroboros/internal/contacts"
 	"ouroboros/internal/discovery"
 )
 
@@ -33,13 +34,23 @@ type Status struct {
 	Port       int
 }
 
+// Contacts is the local node's contact list.
+type Contacts struct {
+	Trusted  map[string]contacts.Contact
+	Incoming []contacts.Request
+	Outgoing []contacts.Request
+}
+
 // Backend is what the UI controls.
 type Backend interface {
 	Status() (Status, error)
 	Start() error
 	Stop() error
 	Discover() ([]discovery.Node, error)
-	Send(ctx context.Context, addr, contextID, text string) (string, error)
+	Send(ctx context.Context, node discovery.Node, contextID, text string) (string, error)
+	Contacts() (Contacts, error)
+	Accept(publicKey string) error
+	Reject(publicKey string) error
 	// SetupCommand returns the interactive setup, run with the terminal handed over.
 	SetupCommand() (*exec.Cmd, error)
 }
@@ -51,9 +62,18 @@ const (
 	focusInput
 )
 
+// screen is the top-level view: the chat or the connection requests.
+type screen int
+
+const (
+	screenChat screen = iota
+	screenRequests
+)
+
 // entry is one message in a conversation.
 type entry struct {
 	mine   bool
+	system bool // a local notice, not a chat message
 	text   string
 	at     time.Time
 	failed bool
@@ -82,6 +102,12 @@ type Model struct {
 	discovering bool
 	notice      string
 	noticeErr   bool
+
+	trust     Contacts
+	screen    screen
+	reqSel    int
+	unreadReq int
+	seenReq   int
 
 	width, height int
 	showSplash    bool
@@ -125,6 +151,10 @@ type (
 		nodes []discovery.Node
 		err   error
 	}
+	contactsMsg struct {
+		trust Contacts
+		err   error
+	}
 	replyMsg struct {
 		nodeID, contextID, text string
 		err                     error
@@ -143,7 +173,7 @@ type (
 func (m *Model) Init() tea.Cmd {
 	m.discovering = true
 	m.splashStart = m.now()
-	return tea.Batch(m.refreshStatus, m.discover, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
+	return tea.Batch(m.refreshStatus, m.discover, m.loadContacts, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
 }
 
 func splashTick() tea.Cmd {
@@ -164,13 +194,18 @@ func (m *Model) discover() tea.Msg {
 	return nodesMsg{nodes, err}
 }
 
-// rescan refreshes status and nodes unless a scan is already running.
+func (m *Model) loadContacts() tea.Msg {
+	trust, err := m.backend.Contacts()
+	return contactsMsg{trust, err}
+}
+
+// rescan refreshes status, nodes and contacts unless a scan is already running.
 func (m *Model) rescan() tea.Cmd {
 	if m.discovering {
-		return m.refreshStatus
+		return tea.Batch(m.refreshStatus, m.loadContacts)
 	}
 	m.discovering = true
-	return tea.Batch(m.refreshStatus, m.discover)
+	return tea.Batch(m.refreshStatus, m.discover, m.loadContacts)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -204,6 +239,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setNotice("discovery: "+msg.err.Error(), true)
 		} else {
 			m.merge(msg.nodes)
+		}
+	case contactsMsg:
+		if msg.err != nil {
+			m.setNotice("contacts: "+msg.err.Error(), true)
+		} else {
+			m.applyContacts(msg.trust)
 		}
 	case replyMsg:
 		m.receive(msg)
@@ -248,6 +289,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.notice = ""
+	if m.screen == screenRequests {
+		return m.handleRequestKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return tea.Quit
@@ -293,8 +337,80 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.setup()
 	case "n":
 		m.newConversation()
+	case "R":
+		return m.openRequests()
 	}
 	return nil
+}
+
+// handleRequestKey handles keys on the connection requests screen.
+func (m *Model) handleRequestKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+c":
+		return tea.Quit
+	case "esc", "q", "R":
+		m.screen = screenChat
+	case "up", "k":
+		m.selectRequest(m.reqSel - 1)
+	case "down", "j":
+		m.selectRequest(m.reqSel + 1)
+	case "a":
+		return m.decideRequest(true)
+	case "x":
+		return m.decideRequest(false)
+	}
+	return nil
+}
+
+func (m *Model) openRequests() tea.Cmd {
+	m.screen = screenRequests
+	m.reqSel = 0
+	m.unreadReq = 0
+	m.seenReq = len(m.trust.Incoming)
+	return nil
+}
+
+func (m *Model) selectRequest(i int) {
+	if len(m.trust.Incoming) == 0 {
+		m.reqSel = 0
+		return
+	}
+	m.reqSel = min(max(i, 0), len(m.trust.Incoming)-1)
+}
+
+func (m *Model) decideRequest(accept bool) tea.Cmd {
+	if m.reqSel >= len(m.trust.Incoming) {
+		return nil
+	}
+	pub := m.trust.Incoming[m.reqSel].PublicKey
+	verb := "declined"
+	if accept {
+		verb = "accepted"
+	}
+	return func() tea.Msg {
+		var err error
+		if accept {
+			err = m.backend.Accept(pub)
+		} else {
+			err = m.backend.Reject(pub)
+		}
+		if err != nil {
+			return actionMsg{err: err}
+		}
+		return actionMsg{done: "request " + verb}
+	}
+}
+
+func (m *Model) applyContacts(trust Contacts) {
+	m.trust = trust
+	if len(trust.Incoming) > m.seenReq {
+		m.unreadReq += len(trust.Incoming) - m.seenReq
+	}
+	if m.screen == screenRequests {
+		m.unreadReq = 0
+	}
+	m.seenReq = len(trust.Incoming)
+	m.selectRequest(m.reqSel)
 }
 
 func (m *Model) toggleFocus() tea.Cmd {
@@ -357,10 +473,10 @@ func (m *Model) send() tea.Cmd {
 	m.input.Reset()
 	m.renderHistory(true)
 
-	id, addr, contextID := c.node.ID, c.node.Addr(), c.contextID
+	node, contextID := c.node, c.contextID
 	return func() tea.Msg {
-		reply, err := m.backend.Send(context.Background(), addr, contextID, text)
-		return replyMsg{id, contextID, reply, err}
+		reply, err := m.backend.Send(context.Background(), node, contextID, text)
+		return replyMsg{node.ID, contextID, reply, err}
 	}
 }
 
@@ -370,11 +486,19 @@ func (m *Model) receive(msg replyMsg) {
 		return // reply to a conversation that was reset
 	}
 	c.pending = false
-	e := entry{text: msg.text, at: m.now()}
-	if msg.err != nil {
-		e.text, e.failed = msg.err.Error(), true
+	if a2a.IsPending(msg.err) {
+		c.entries = append(c.entries, entry{
+			system: true,
+			text:   "Connection request sent to " + c.node.Name + ". Waiting for approval.",
+			at:     m.now(),
+		})
+	} else {
+		e := entry{text: msg.text, at: m.now()}
+		if msg.err != nil {
+			e.text, e.failed = msg.err.Error(), true
+		}
+		c.entries = append(c.entries, e)
 	}
-	c.entries = append(c.entries, e)
 	if c != m.current() {
 		c.unread++
 		return

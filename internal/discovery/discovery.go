@@ -29,7 +29,9 @@ type Node struct {
 	Name  string `json:"name"`
 	Model string `json:"model"`
 	Port  int    `json:"port"`
-	Host  string `json:"host,omitempty"` // filled in by the discovering side
+	// PublicKey is the base64 Ed25519 key that signs this node's requests.
+	PublicKey string `json:"public_key,omitempty"`
+	Host      string `json:"host,omitempty"` // filled in by the discovering side
 }
 
 // Addr returns the node's A2A address as host:port.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,8 +18,10 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/config"
+	"ouroboros/internal/contacts"
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
+	"ouroboros/internal/identity"
 	"ouroboros/internal/openai"
 )
 
@@ -144,8 +147,43 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	return fmt.Errorf("unknown command %q (see: ouro help)", cmd)
 }
 
-func (a *App) pidPath() string { return filepath.Join(a.settings.Home, "ouro.pid") }
-func (a *App) logPath() string { return filepath.Join(a.settings.Home, "ouro.log") }
+func (a *App) pidPath() string      { return filepath.Join(a.settings.Home, "ouro.pid") }
+func (a *App) logPath() string      { return filepath.Join(a.settings.Home, "ouro.log") }
+func (a *App) contactsPath() string { return filepath.Join(a.settings.Home, "contacts.json") }
+
+// contacts opens this node's contact list.
+func (a *App) contacts() *contacts.Store { return contacts.Open(a.contactsPath()) }
+
+// identity returns the node's signing identity, generating and persisting one
+// on first use.
+func (a *App) identity(cfg *config.Config) (*identity.Identity, error) {
+	if cfg.PrivateKey == "" {
+		id := identity.Generate()
+		cfg.PrivateKey = id.Private()
+		if err := config.Save(a.settings.Home, *cfg); err != nil {
+			return nil, err
+		}
+		return id, nil
+	}
+	return identity.FromPrivate(cfg.PrivateKey)
+}
+
+// localPort is the running node's A2A port, or 0 when it is not running.
+func (a *App) localPort() int {
+	if p, ok := daemon.Running(a.pidPath()); ok {
+		return p.Port
+	}
+	return 0
+}
+
+// client returns a signed client for the local node.
+func (a *App) client(cfg config.Config) (*a2a.Client, error) {
+	id, err := a.identity(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &a2a.Client{Identity: id, Name: cfg.Name, Model: cfg.Model, Port: a.localPort()}, nil
+}
 
 func (a *App) start(ctx context.Context, args []string) error {
 	setup := false
@@ -250,14 +288,27 @@ func (a *App) chat(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New(`usage: ouro chat ID ["message"]`)
 	}
-	addr, err := a.resolve(args[0])
+	node, err := a.resolve(args[0])
+	if err != nil {
+		return err
+	}
+	addr := node.Addr()
+	cfg, err := config.Load(a.settings.Home)
+	if err != nil {
+		return err
+	}
+	client, err := a.client(cfg)
 	if err != nil {
 		return err
 	}
 	url, contextID := "http://"+addr+"/", a2a.NewID()
 
 	if len(args) > 1 {
-		reply, err := a2a.Send(ctx, url, contextID, strings.Join(args[1:], " "))
+		reply, err := client.Send(ctx, url, contextID, strings.Join(args[1:], " "))
+		if a2a.IsPending(err) {
+			a.requestConnection(node)
+			return fmt.Errorf("connection request sent to %s, waiting for approval", cmp.Or(node.Name, addr))
+		}
 		if err != nil {
 			return err
 		}
@@ -279,25 +330,43 @@ func (a *App) chat(ctx context.Context, args []string) error {
 		if line == "" {
 			continue
 		}
-		reply, err := a2a.Send(ctx, url, contextID, line)
-		if err != nil {
+		reply, err := client.Send(ctx, url, contextID, line)
+		if a2a.IsPending(err) {
+			a.requestConnection(node)
+			reply = "connection request sent — waiting for approval"
+		} else if err != nil {
 			reply = "✗ " + err.Error()
 		}
 		fmt.Fprintf(a.out, "%s\n\n", reply)
 	}
 }
 
-// resolve turns a node ID, ID prefix, name or host:port into an address.
-func (a *App) resolve(target string) (string, error) {
+// requestConnection remembers an outgoing connection request so that the
+// peer's acceptance can be recognised later.
+func (a *App) requestConnection(n discovery.Node) {
+	if n.PublicKey != "" {
+		a.contacts().AddOutgoing(n.PublicKey, n.Name, n.Model, n.Addr())
+	}
+}
+
+// resolve turns a node ID, ID prefix, name or host:port into a node.
+func (a *App) resolve(target string) (discovery.Node, error) {
 	if strings.Contains(target, ":") {
-		return target, nil
+		host, port, err := net.SplitHostPort(target)
+		if err != nil {
+			return discovery.Node{}, err
+		}
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			return discovery.Node{}, fmt.Errorf("invalid port in %q", target)
+		}
+		return discovery.Node{Host: host, Port: p}, nil
 	}
 	nodes, err := discovery.Discover(a.settings.DiscoPort, a.discoverWait)
 	if err != nil {
-		return "", err
+		return discovery.Node{}, err
 	}
-	n, err := match(nodes, target)
-	return n.Addr(), err
+	return match(nodes, target)
 }
 
 func match(nodes []discovery.Node, target string) (discovery.Node, error) {
