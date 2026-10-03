@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"ouroboros/internal/a2a"
+	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/daemon"
@@ -72,20 +73,16 @@ func (b tuiBackend) Discover() ([]discovery.Node, error) {
 	return b.a.discover()
 }
 
-func (b tuiBackend) Send(ctx context.Context, node discovery.Node, contextID, text string) (string, error) {
-	cfg, err := config.Load(b.a.settings.Home)
+func (b tuiBackend) Ask(ctx context.Context, contextID, text string, step func(tui.Step)) (string, error) {
+	bot, err := b.a.assistant()
 	if err != nil {
 		return "", err
 	}
-	client, err := b.a.client(cfg)
-	if err != nil {
-		return "", err
-	}
-	reply, err := client.Send(ctx, "http://"+node.Addr()+"/", contextID, text)
-	if a2a.IsPending(err) {
-		b.a.contacts().AddOutgoing(node.PublicKey, node.Name, node.Model, node.Addr())
-	}
-	return reply, err
+	return bot.Run(ctx, contextID, text, func(s agent.Step) {
+		if s, ok := peerStep(s); ok {
+			step(s)
+		}
+	})
 }
 
 func (b tuiBackend) Contacts() (tui.Contacts, error) {

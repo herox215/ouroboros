@@ -12,13 +12,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"ouroboros/internal/a2a"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/discovery"
 )
 
 type sent struct {
-	node      discovery.Node
 	contextID string
 	text      string
 }
@@ -27,6 +25,7 @@ type fakeBackend struct {
 	status        Status
 	nodes         []discovery.Node
 	sent          []sent
+	steps         []Step // reported before the reply
 	reply         string
 	sendErr       error
 	started       int
@@ -55,8 +54,11 @@ func (f *fakeBackend) SetupCommand() (*exec.Cmd, error) {
 	f.setupCommands++
 	return exec.Command("true"), nil
 }
-func (f *fakeBackend) Send(_ context.Context, node discovery.Node, contextID, text string) (string, error) {
-	f.sent = append(f.sent, sent{node, contextID, text})
+func (f *fakeBackend) Ask(_ context.Context, contextID, text string, step func(Step)) (string, error) {
+	f.sent = append(f.sent, sent{contextID, text})
+	for _, s := range f.steps {
+		step(s)
+	}
 	return f.reply, f.sendErr
 }
 func (f *fakeBackend) Accept(publicKey string) error {
@@ -84,6 +86,14 @@ func newModel(t *testing.T, nodes ...discovery.Node) (*Model, *fakeBackend) {
 	return m, b
 }
 
+// commands is a model whose keys are commands rather than text for the input.
+func commands(t *testing.T, nodes ...discovery.Node) (*Model, *fakeBackend) {
+	t.Helper()
+	m, b := newModel(t, nodes...)
+	press(m, "esc")
+	return m, b
+}
+
 func press(m *Model, keys ...string) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, k := range keys {
@@ -104,7 +114,7 @@ func press(m *Model, keys ...string) tea.Cmd {
 	return cmds[len(cmds)-1]
 }
 
-// say types text into the chat with the selected node and sends it.
+// say types text into the chat and sends it.
 func say(t *testing.T, m *Model, text string) tea.Cmd {
 	t.Helper()
 	if m.focus != focusInput {
@@ -116,6 +126,13 @@ func say(t *testing.T, m *Model, text string) tea.Cmd {
 		t.Fatal("sending should return a command")
 	}
 	return cmd
+}
+
+// deliver runs cmd and the commands that follow it until the reply is in.
+func deliver(m *Model, cmd tea.Cmd) {
+	for cmd != nil {
+		_, cmd = m.Update(cmd())
+	}
 }
 
 func TestSplashShowsLogoUntilKey(t *testing.T) {
@@ -188,19 +205,36 @@ func TestSplashCtrlCQuits(t *testing.T) {
 	}
 }
 
-func TestEmptyChatShowsLogo(t *testing.T) {
-	m, _ := newModel(t)
+func TestUnconfiguredNodeShowsLogoAndNoChat(t *testing.T) {
+	m, b := newModel(t)
+	b.status = Status{}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	m.Update(m.discover()) // no nodes: nothing selected
-	if view := m.View().Content; !strings.Contains(view, strings.TrimSpace(logoLines[1])) {
-		t.Fatalf("empty chat should show the logo:\n%s", view)
+	m.Update(m.refreshStatus())
+	view := m.View().Content
+	if !strings.Contains(view, strings.TrimSpace(logoLines[1])) || !strings.Contains(view, "Press c to set up") {
+		t.Fatalf("an unconfigured node should show the logo and the setup hint:\n%s", view)
+	}
+	if press(m, "esc", "enter"); m.focus == focusInput || !m.noticeErr {
+		t.Fatal("without a configured node there is nobody to chat with")
+	}
+}
+
+func TestChatIsFocusedOnStart(t *testing.T) {
+	m, _ := newModel(t)
+	if m.focus != focusInput {
+		t.Fatal("a configured node should open with the chat input focused")
+	}
+	press(m, "esc")
+	m.Update(m.refreshStatus())
+	if m.focus != focusList {
+		t.Fatal("a later status refresh must not steal the focus")
 	}
 }
 
 func TestNodesAreListedByName(t *testing.T) {
 	m, _ := newModel(t, beta, alpha)
-	if got := strings.Join(m.order, ","); got != "aaa111,bbb222" {
-		t.Fatalf("order = %s", got)
+	if len(m.nodes) != 2 || m.nodes[0].ID != alpha.ID || m.nodes[1].ID != beta.ID {
+		t.Fatalf("nodes = %+v", m.nodes)
 	}
 	view := m.View().Content
 	for _, want := range []string{"alpha (you)", "beta", "m2 · bbb222", "● online"} {
@@ -211,19 +245,22 @@ func TestNodesAreListedByName(t *testing.T) {
 }
 
 func TestChat(t *testing.T) {
-	m, b := newModel(t, alpha)
+	m, b := newModel(t) // the agent needs no other node
 	cmd := say(t, m, "  ping  ")
-	if !m.current().pending || m.input.Value() != "" {
+	if !m.chat.pending || m.input.Value() != "" {
 		t.Fatal("message should be pending and the input cleared")
 	}
+	if !strings.Contains(m.View().Content, "alpha is thinking") {
+		t.Fatal("a pending answer should be announced")
+	}
 	m.input.SetValue("again")
-	if press(m, "enter") != nil || len(m.current().entries) != 1 {
+	if press(m, "enter") != nil || len(m.chat.entries) != 1 {
 		t.Fatal("a second message must wait for the reply")
 	}
 
-	m.Update(cmd())
-	c := m.current()
-	if len(b.sent) != 1 || b.sent[0] != (sent{alpha, c.contextID, "ping"}) {
+	deliver(m, cmd)
+	c := m.chat
+	if len(b.sent) != 1 || b.sent[0] != (sent{c.contextID, "ping"}) {
 		t.Fatalf("sent %+v", b.sent)
 	}
 	if c.pending || len(c.entries) != 2 || c.entries[1].text != "pong" || c.entries[1].mine {
@@ -234,34 +271,46 @@ func TestChat(t *testing.T) {
 	}
 
 	// The conversation keeps its context.
-	m.Update(say(t, m, "more")())
+	deliver(m, say(t, m, "more"))
 	if b.sent[1].contextID != c.contextID {
 		t.Fatal("context changed within a conversation")
+	}
+}
+
+func TestChatKeepsTheAgentsTalkToPeersOutOfTheHistory(t *testing.T) {
+	m, b := newModel(t, alpha, beta)
+	b.steps = []Step{{Peer: "beta"}, {Peer: "beta", Done: true}}
+	b.reply = "beta says it is noon"
+	cmd := say(t, m, "ask beta for the time")
+
+	_, cmd = m.Update(cmd()) // the question to beta is on its way
+	if m.chat.asking != "beta" || !m.chat.pending || !strings.Contains(m.View().Content, "asking beta…") {
+		t.Fatalf("the call to beta should be announced: %+v", m.chat)
+	}
+	_, cmd = m.Update(cmd()) // beta answered, the agent thinks again
+	if m.chat.asking != "" || !strings.Contains(m.View().Content, "alpha is thinking") {
+		t.Fatalf("after the peer's answer the agent thinks: %+v", m.chat)
+	}
+	deliver(m, cmd)
+
+	c := m.chat
+	if c.pending || len(c.entries) != 2 || c.entries[1].text != "beta says it is noon" {
+		t.Fatalf("only the user and the agent belong in the history: %+v", c.entries)
 	}
 }
 
 func TestSendError(t *testing.T) {
 	m, b := newModel(t, alpha)
 	b.sendErr = errors.New("connection refused")
-	m.Update(say(t, m, "ping")())
-	e := m.current().entries[1]
+	deliver(m, say(t, m, "ping"))
+	e := m.chat.entries[1]
 	if !e.failed || e.text != "connection refused" {
 		t.Fatalf("entry %+v", e)
 	}
 }
 
-func TestPendingSendShowsNotice(t *testing.T) {
-	m, b := newModel(t, alpha)
-	b.sendErr = &a2a.Error{Code: a2a.CodePending, Message: "waiting"}
-	m.Update(say(t, m, "ping")())
-	e := m.current().entries[1]
-	if !e.system || e.failed || !strings.Contains(e.text, "Waiting for approval") {
-		t.Fatalf("entry %+v", e)
-	}
-}
-
 func TestConnectionRequests(t *testing.T) {
-	m, b := newModel(t, alpha)
+	m, b := commands(t, alpha)
 	b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma", Addr: "1.2.3.4:9"}}}
 	m.Update(m.loadContacts())
 	if view := m.View().Content; !strings.Contains(view, "✉ 1") {
@@ -292,7 +341,7 @@ func TestConnectionRequests(t *testing.T) {
 }
 
 func TestRejectRequest(t *testing.T) {
-	m, b := newModel(t, alpha)
+	m, b := commands(t, alpha)
 	b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma"}}}
 	m.Update(m.loadContacts())
 	press(m, "R")
@@ -306,56 +355,34 @@ func TestRejectRequest(t *testing.T) {
 	}
 }
 
-func TestUnreadRepliesOfOtherConversations(t *testing.T) {
-	m, _ := newModel(t, alpha, beta)
-	cmd := say(t, m, "ping") // to alpha
-	press(m, "esc", "j")     // switch to beta before the reply arrives
-	m.Update(cmd())
-	if c := m.convs[alpha.ID]; c.unread != 1 {
-		t.Fatalf("unread = %d", c.unread)
-	}
-	if !strings.Contains(m.View().Content, "●1") {
-		t.Fatal("view should show the unread count")
-	}
-	press(m, "k")
-	if m.convs[alpha.ID].unread != 0 {
-		t.Fatal("selecting a conversation should mark it read")
-	}
-}
-
 func TestNewConversationDropsLateReply(t *testing.T) {
-	m, _ := newModel(t, alpha)
+	m, b := newModel(t, alpha)
+	b.steps = []Step{{Peer: "beta"}}
 	cmd := say(t, m, "ping")
-	old := m.current().contextID
+	old := m.chat.contextID
 	press(m, "esc", "n")
-	m.Update(cmd())
-	c := m.current()
-	if c.contextID == old || len(c.entries) != 0 || c.pending {
+	deliver(m, cmd)
+	c := m.chat
+	if c.contextID == old || len(c.entries) != 0 || c.pending || c.asking != "" {
 		t.Fatalf("conversation not reset: %+v", c)
 	}
 }
 
-func TestVanishedNodeKeepsConversation(t *testing.T) {
+func TestVanishedNodeIsNoLongerListed(t *testing.T) {
 	m, b := newModel(t, alpha, beta)
-	m.Update(say(t, m, "ping")()) // alpha now has history, beta has none
-	press(m, "esc")
-	b.nodes = nil
-	m.Update(m.discover())
-	if len(m.order) != 1 || m.current() != m.convs[alpha.ID] || m.current().online {
-		t.Fatalf("order %v, selected %v", m.order, m.currentID())
-	}
-	if !strings.Contains(m.View().Content, "offline") {
-		t.Fatal("vanished node should be shown offline")
-	}
+	deliver(m, say(t, m, "ping"))
 	b.nodes = []discovery.Node{alpha}
 	m.Update(m.discover())
-	if !m.current().online || len(m.current().entries) != 2 {
-		t.Fatal("returning node should keep its conversation")
+	if len(m.nodes) != 1 || strings.Contains(m.View().Content, "bbb222") {
+		t.Fatalf("nodes = %+v", m.nodes)
+	}
+	if len(m.chat.entries) != 2 {
+		t.Fatal("the conversation with the agent does not depend on the nodes")
 	}
 }
 
 func TestToggleNode(t *testing.T) {
-	m, b := newModel(t)
+	m, b := commands(t)
 	m.Update(press(m, "s")())
 	if b.stopped != 1 {
 		t.Fatal("s should stop a running node")
@@ -372,7 +399,7 @@ func TestToggleNode(t *testing.T) {
 }
 
 func TestSetupStopsNodeFirst(t *testing.T) {
-	m, b := newModel(t)
+	m, b := commands(t)
 	msg := press(m, "c")()
 	if _, ok := msg.(setupMsg); !ok || b.stopped != 1 || b.setupCommands != 1 {
 		t.Fatalf("got %T, stopped %d", msg, b.stopped)
@@ -391,7 +418,7 @@ func TestTinyWindow(t *testing.T) {
 }
 
 func TestUpdateHintAndRestart(t *testing.T) {
-	m, b := newModel(t, alpha)
+	m, b := commands(t, alpha)
 	if strings.Contains(m.View().Content, "update available") {
 		t.Fatal("no hint without an update")
 	}
@@ -417,7 +444,7 @@ func TestUpdateHintAndRestart(t *testing.T) {
 }
 
 func TestUpdateFailureAndNothingToDo(t *testing.T) {
-	m, b := newModel(t, alpha)
+	m, b := commands(t, alpha)
 	m.Update(press(m, "u")())
 	if m.Restart() || m.updating || !strings.Contains(m.View().Content, "already up to date") {
 		t.Fatalf("without a new version the UI keeps running:\n%s", m.View().Content)

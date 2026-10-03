@@ -35,6 +35,41 @@ func WithSession(ctx context.Context, id string) context.Context {
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls are the tools an assistant message wants to have run.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID names the call a "tool" message answers.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is the model's request to run a tool.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall names a function and its arguments as a JSON object.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// Tool describes a function the model may call.
+type Tool struct {
+	Type     string   `json:"type"`
+	Function Function `json:"function"`
+}
+
+// Function is the signature of a tool; Parameters is a JSON schema.
+type Function struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+// NewTool returns a function tool taking the arguments described by the JSON schema.
+func NewTool(name, description, schema string) Tool {
+	return Tool{Type: "function", Function: Function{name, description, json.RawMessage(schema)}}
 }
 
 // APIError is a non-2xx response from the API.
@@ -90,22 +125,30 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 
 // Chat sends msgs to model and returns the assistant's reply.
 func (c *Client) Chat(ctx context.Context, model string, msgs []Message) (string, error) {
+	msg, err := c.Complete(ctx, model, msgs, nil)
+	return msg.Content, err
+}
+
+// Complete sends msgs to model, which may answer with calls to tools instead
+// of a reply.
+func (c *Client) Complete(ctx context.Context, model string, msgs []Message, tools []Tool) (Message, error) {
 	in := struct {
 		Model    string    `json:"model"`
 		Messages []Message `json:"messages"`
-	}{model, msgs}
+		Tools    []Tool    `json:"tools,omitempty"`
+	}{model, msgs, tools}
 	var out struct {
 		Choices []struct {
 			Message Message `json:"message"`
 		} `json:"choices"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/chat/completions", in, &out); err != nil {
-		return "", err
+		return Message{}, err
 	}
 	if len(out.Choices) == 0 {
-		return "", errors.New("openai: response has no choices")
+		return Message{}, errors.New("openai: response has no choices")
 	}
-	return out.Choices[0].Message.Content, nil
+	return out.Choices[0].Message, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {

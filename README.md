@@ -2,15 +2,16 @@
 
 A tiny [A2A](https://a2a-protocol.org) agent node backed by any **OpenAI-compatible** LLM API –
 OpenAI, Ollama, LM Studio, vLLM, OpenRouter, Groq, …
-One static binary; every node on the LAN can find and chat with every other node.
+One static binary; every node on the LAN can find every other node, and your agent can ask theirs.
 
 ```sh
 ./install.sh              # bootstraps Go if missing, then builds → ~/.local/bin/ouro
-ouro                      # open the terminal UI (default)
+ouro                      # chat with your agent in the terminal UI (default)
 ouro start                # first run: endpoint, API key, model picker, node name
 ouro list                 # find nodes on the network
 ouro peers add <host>     # also look for a node on this host (VPN, other network)
-ouro chat <ID|name> "hi"  # one-shot; without a message → interactive
+ouro chat "ask beta …"    # one answer from your agent, for scripts; without a message → the terminal UI
+ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
 ouro stop
 ouro update               # build and install the newest main
@@ -22,17 +23,17 @@ Running `ouro` without arguments opens the terminal UI. On start it shows the ou
 splash for two seconds: the serpent curls around until it bites its tail. Any key (except `ctrl+c`) skips it. Without a terminal (pipes, CI, redirects)
 `ouro` prints the usage instead, so scripts keep working.
 
-`ouro tui` lists the nodes on the left and the chat with the selected node on the right.
-Every node keeps its own conversation; replies to a conversation you are not looking at are
-counted as unread. Nodes that disappear stay listed as offline as long as their conversation has messages.
-Conversations live only as long as the TUI runs.
+`ouro tui` lists the nodes on the left and the chat with your own agent on the right. You do not
+write to other nodes yourself: the agent does, whenever you ask it to or it thinks a peer knows
+better ("ask Luna how she is" → "Luna says she is fine"). What the two agents say to each other
+stays between them; the UI only shows which peer your agent is waiting for.
+The input is focused on start, so you can type right away. The conversation lives only as long as the TUI runs.
 
-| Keys | Node list | Message input |
+| Keys | Commands | Message input |
 |---|---|---|
 | any key | skip the ouroboros splash (except `ctrl+c`) | – |
-| `tab` | focus the input | focus the node list (also `esc`) |
-| `enter` | chat with the selected node | send (`alt+enter` for a new line) |
-| `↑` `↓` / `j` `k` | select a node | – |
+| `tab` / `esc` | focus the input (`tab`) | back to the commands |
+| `enter` | focus the input | send (`alt+enter` for a new line) |
 | `s` / `c` | start or stop the node / run the setup | – |
 | `n` / `r` | new conversation / search the network | – |
 | `u` | update to the newest version and restart the UI | – |
@@ -57,6 +58,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | LLM | `GET /models` for the picker, `POST /chat/completions` for replies |
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /` (TCP 41337, falls back to a free port) |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and known peers on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
+| Agents | two per node: the one answering peers has no tools; yours (`ouro`, `ouro chat`) runs in the UI process with `list_peers` and `ask_peer`, at most 8 LLM calls per answer |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
 | Trust | signed requests (Ed25519); unknown peers become connection requests a human approves |
 | Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/` |
@@ -84,7 +86,7 @@ Every node owns an Ed25519 key pair (generated on first run, stored in `config.j
 are signed and the sender's public key is announced with discovery. A node only answers trusted
 peers:
 
-1. Alice writes to Bob: Bob records a **connection request** and answers `pending`; no LLM call happens.
+1. Alice's agent writes to Bob (ask it to, or use `ouro ask`): Bob records a **connection request** and answers `pending`; no LLM call happens.
 2. In Bob's terminal UI press `R` to open the requests screen and then `a` to accept (or `x` to reject).
 3. Bob notifies Alice, both sides store each other as trusted and can chat.
 
@@ -97,7 +99,7 @@ cmd/ouro             entry point
 internal/cli         commands, setup dialog, serve
 internal/tui         terminal UI (Bubble Tea)
 internal/a2a         A2A protocol: types, HTTP handler, client
-internal/agent       conversation memory on top of an LLM
+internal/agent       conversation memory and tool loop on top of an LLM
 internal/openai      minimal OpenAI-compatible client (+ openaitest fake)
 internal/discovery   LAN discovery
 internal/daemon      background process + PID file

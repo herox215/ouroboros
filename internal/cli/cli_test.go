@@ -17,6 +17,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/openai/openaitest"
+	"ouroboros/internal/tui"
 	"ouroboros/internal/update/updatetest"
 )
 
@@ -98,6 +99,19 @@ func TestNoArgsWithoutTerminalShowsUsage(t *testing.T) {
 	out, err := run(t, testSettings(t), "")
 	if err != nil || !strings.Contains(out, "ouro start") {
 		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+// Without a message "ouro chat" is the terminal UI; only pipes get the line-by-line chat.
+func TestChatWithTerminalOpensTUI(t *testing.T) {
+	s := testSettings(t)
+	config.Save(s.Home, nodeConfig(s))
+	app, out := newApp(s, "")
+	app.Interactive = true
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the UI has no terminal here: it must give up instead of reading lines
+	if err := app.Run(ctx, []string{"chat"}); err == nil || strings.Contains(out.String(), "chatting with your agent") {
+		t.Fatalf("got %q, %v", out.String(), err)
 	}
 }
 
@@ -334,19 +348,19 @@ func TestNodeLifecycle(t *testing.T) {
 		t.Fatalf("list: %q, %v", out, err)
 	}
 
-	out, err = run(t, s, "", "chat", "abc", "hello", "world")
+	out, err = run(t, s, "", "ask", "abc", "hello", "world")
 	if err != nil || out != "[gpt-4o] turns=1 last=hello world\n" {
-		t.Fatalf("chat by ID prefix: %q, %v", out, err)
+		t.Fatalf("ask by ID prefix: %q, %v", out, err)
 	}
 
-	out, err = run(t, s, "one\n\ntwo\n", "chat", "alpha")
+	out, err = run(t, s, "one\n\ntwo\n", "ask", "alpha")
 	if err != nil || !strings.Contains(out, "turns=1 last=one") || !strings.Contains(out, "turns=3 last=two") {
-		t.Fatalf("interactive chat should keep history: %q, %v", out, err)
+		t.Fatalf("interactive ask should keep history: %q, %v", out, err)
 	}
 
-	out, err = run(t, s, "", "chat", fmt.Sprintf("127.0.0.1:%d", port), "direct")
+	out, err = run(t, s, "", "ask", fmt.Sprintf("127.0.0.1:%d", port), "direct")
 	if err != nil || !strings.Contains(out, "last=direct") {
-		t.Fatalf("chat by address: %q, %v", out, err)
+		t.Fatalf("ask by address: %q, %v", out, err)
 	}
 
 	out, _ = run(t, s, "", "start")
@@ -375,35 +389,175 @@ func TestNodeRemovesPIDFileOnShutdown(t *testing.T) {
 	}
 }
 
-func TestInteractiveChatReportsErrorsAndContinues(t *testing.T) {
+func TestInteractiveAskReportsErrorsAndContinues(t *testing.T) {
 	s := testSettings(t)
 	cfg := nodeConfig(s)
 	cfg.APIKey = "sk-revoked" // node starts, but every LLM call fails
 	startNode(t, s, cfg)
-	out, err := run(t, s, "hi\n", "chat", "alpha")
+	out, err := run(t, s, "hi\n", "ask", "alpha")
 	if err != nil || !strings.Contains(out, "✗") || !strings.Contains(out, "401") {
 		t.Fatalf("got %q, %v", out, err)
 	}
 }
 
-func TestOneShotChatReturnsError(t *testing.T) {
+func TestOneShotAskReturnsError(t *testing.T) {
 	s := testSettings(t)
 	cfg := nodeConfig(s)
 	cfg.APIKey = "sk-revoked"
 	startNode(t, s, cfg)
-	if _, err := run(t, s, "", "chat", "alpha", "hi"); err == nil {
+	if _, err := run(t, s, "", "ask", "alpha", "hi"); err == nil {
 		t.Fatal("want error")
 	}
 }
 
-func TestChatErrors(t *testing.T) {
+func TestAskErrors(t *testing.T) {
 	s := testSettings(t)
-	if _, err := run(t, s, "", "chat"); err == nil || !strings.Contains(err.Error(), "usage") {
+	if _, err := run(t, s, "", "ask"); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Fatalf("no args: %v", err)
 	}
-	if _, err := run(t, s, "", "chat", "nobody", "hi"); err == nil || !strings.Contains(err.Error(), "no node") {
+	if _, err := run(t, s, "", "ask", "nobody", "hi"); err == nil || !strings.Contains(err.Error(), "no node") {
 		t.Fatalf("unknown node: %v", err)
 	}
+}
+
+// The assistant runs in the calling process: it needs a configuration but no running node.
+func TestChatWithAssistant(t *testing.T) {
+	s := testSettings(t)
+	if _, err := run(t, s, "", "chat", "hi"); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("unconfigured: %v", err)
+	}
+	config.Save(s.Home, nodeConfig(s))
+
+	out, err := run(t, s, "", "chat", "hello", "world")
+	if err != nil || out != "[gpt-4o] turns=1 last=hello world\n" {
+		t.Fatalf("one-shot: %q, %v", out, err)
+	}
+	out, err = run(t, s, "one\n\ntwo\n", "chat")
+	if err != nil || !strings.Contains(out, "turns=1 last=one") || !strings.Contains(out, "turns=3 last=two") {
+		t.Fatalf("interactive chat should keep history: %q, %v", out, err)
+	}
+
+	cfg := nodeConfig(s)
+	cfg.APIKey = "sk-revoked"
+	config.Save(s.Home, cfg)
+	if _, err := run(t, s, "", "chat", "hi"); err == nil {
+		t.Fatal("a failing LLM should fail the one-shot chat")
+	}
+	if out, err := run(t, s, "hi\n", "chat"); err != nil || !strings.Contains(out, "✗") || !strings.Contains(out, "401") {
+		t.Fatalf("interactive chat should report the error and continue: %q, %v", out, err)
+	}
+}
+
+// twoNodes starts the node "beta" and returns the settings of "alpha", which
+// finds beta as a configured peer.
+func twoNodes(t *testing.T) (alpha, beta Settings) {
+	t.Helper()
+	beta = testSettings(t)
+	cfg := nodeConfig(beta)
+	cfg.Name, cfg.ID, cfg.Model = "beta", "bbb222", "gpt-4o-mini"
+	startNode(t, beta, cfg)
+
+	alpha = testSettings(t)
+	cfg = nodeConfig(alpha)
+	cfg.Peers = []string{fmt.Sprintf("127.0.0.1:%d", beta.DiscoPort)}
+	if err := config.Save(alpha.Home, cfg); err != nil {
+		t.Fatal(err)
+	}
+	return alpha, beta
+}
+
+func TestAssistantAsksPeers(t *testing.T) {
+	alpha, beta := twoNodes(t)
+	startNode(t, alpha, mustLoad(t, alpha)) // beta's acceptance has to reach alpha
+
+	// "@" makes the fake LLM list the peers.
+	out, err := run(t, alpha, "", "chat", "@")
+	if err != nil || !strings.Contains(out, "last=beta (id bbb222, model gpt-4o-mini, not connected)") || strings.Contains(out, "alpha") {
+		t.Fatalf("list_peers: %q, %v", out, err)
+	}
+
+	// Beta does not know alpha yet: the first message becomes a connection request.
+	out, err = run(t, alpha, "@beta hello\n", "chat")
+	if err != nil || !strings.Contains(out, "last=beta is not connected") {
+		t.Fatalf("first contact: %q, %v", out, err)
+	}
+	if out, _ = run(t, alpha, "", "chat", "@"); !strings.Contains(out, "connection requested") {
+		t.Fatalf("the request should be remembered: %q", out)
+	}
+
+	b, _ := newApp(beta, "")
+	requests, _ := b.contacts().Snapshot()
+	if len(requests.Incoming) != 1 || requests.Incoming[0].Name != "alpha" {
+		t.Fatalf("beta's requests: %+v", requests)
+	}
+	if err := (tuiBackend{b}).Accept(requests.Incoming[0].PublicKey); err != nil {
+		t.Fatal(err)
+	}
+
+	// Connected: beta's agent answers, and remembers the conversation.
+	out, err = run(t, alpha, "@beta one\n@beta two\n", "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"[gpt-4o] turns=3 last=[gpt-4o-mini] turns=1 last=one",
+		"[gpt-4o] turns=7 last=[gpt-4o-mini] turns=3 last=two", // user, call, result, answer, user, call, result
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	// What the agents say to each other is not printed, only the assistant's answers.
+	if strings.Count(out, "last=one") != 1 || strings.Contains(out, "beta:") {
+		t.Errorf("the talk between the agents should stay out of the chat:\n%s", out)
+	}
+	if out, _ = run(t, alpha, "", "chat", "@"); !strings.Contains(out, "model gpt-4o-mini, connected)") {
+		t.Fatalf("beta should be listed as connected: %q", out)
+	}
+
+	// A one-shot chat prints the answer only.
+	out, err = run(t, alpha, "", "chat", "@beta", "ping")
+	if err != nil || out != "[gpt-4o] turns=3 last=[gpt-4o-mini] turns=1 last=ping\n" {
+		t.Fatalf("one-shot: %q, %v", out, err)
+	}
+}
+
+func TestAssistantCannotReachPeer(t *testing.T) {
+	alpha, _ := twoNodes(t)
+	startNode(t, alpha, mustLoad(t, alpha))
+	for peer, want := range map[string]string{"nobody": `no node "nobody" found`, "alpha": "is this node itself"} {
+		out, err := run(t, alpha, "@"+peer+" hi\n", "chat")
+		if err != nil || !strings.Contains(out, "last=error: ") || !strings.Contains(out, want) {
+			t.Errorf("%s: %q, %v", peer, out, err)
+		}
+	}
+}
+
+func TestTUIBackendAsk(t *testing.T) {
+	alpha, _ := twoNodes(t)
+	app, _ := newApp(alpha, "")
+	var steps []tui.Step
+	reply, err := tuiBackend{app}.Ask(context.Background(), "ctx", "@beta hello", func(s tui.Step) { steps = append(steps, s) })
+	if err != nil || !strings.Contains(reply, "not connected") {
+		t.Fatalf("got %q, %v", reply, err)
+	}
+	if len(steps) != 2 || steps[0] != (tui.Step{Peer: "beta"}) || steps[1] != (tui.Step{Peer: "beta", Done: true}) {
+		t.Fatalf("steps %+v", steps)
+	}
+	// Looking up the peers is not worth a line in the chat.
+	steps = nil
+	if _, err := (tuiBackend{app}).Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }); err != nil || len(steps) != 0 {
+		t.Fatalf("steps %+v, %v", steps, err)
+	}
+}
+
+func mustLoad(t *testing.T, s Settings) config.Config {
+	t.Helper()
+	cfg, err := config.Load(s.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 func TestNotRunning(t *testing.T) {

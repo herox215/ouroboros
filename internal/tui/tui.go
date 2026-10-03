@@ -1,5 +1,5 @@
-// Package tui is a terminal UI to control the local node and chat with the
-// nodes on the network.
+// Package tui is a terminal UI to control the local node and chat with its
+// agent, which can ask the nodes on the network.
 package tui
 
 import (
@@ -50,7 +50,9 @@ type Backend interface {
 	Start() error
 	Stop() error
 	Discover() ([]discovery.Node, error)
-	Send(ctx context.Context, node discovery.Node, contextID, text string) (string, error)
+	// Ask lets the agent of this node answer text within the conversation
+	// contextID. On the way it reports which peers it asks.
+	Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error)
 	Contacts() (Contacts, error)
 	Accept(publicKey string) error
 	Reject(publicKey string) error
@@ -62,10 +64,17 @@ type Backend interface {
 	SetupCommand() (*exec.Cmd, error)
 }
 
+// Step reports that the agent asks a peer on the way to its answer and, with
+// Done set, that the peer has answered. What they say stays between them.
+type Step struct {
+	Peer string
+	Done bool
+}
+
 type focus int
 
 const (
-	focusList focus = iota
+	focusList focus = iota // keys are commands
 	focusInput
 )
 
@@ -77,23 +86,20 @@ const (
 	screenRequests
 )
 
-// entry is one message in a conversation.
+// entry is one message in the conversation: from the user or from the agent.
 type entry struct {
 	mine   bool
-	system bool // a local notice, not a chat message
 	text   string
 	at     time.Time
 	failed bool
 }
 
-// conversation is the chat with one node.
+// conversation is the chat with the agent of this node.
 type conversation struct {
-	node      discovery.Node
-	online    bool
 	contextID string
 	entries   []entry
-	pending   bool // waiting for a reply; one message at a time keeps the remote history in order
-	unread    int
+	pending   bool   // waiting for a reply; one message at a time keeps the history in order
+	asking    string // the peer the agent is waiting for
 }
 
 // Model is the UI state.
@@ -102,10 +108,10 @@ type Model struct {
 	now     func() time.Time
 
 	status      Status
-	convs       map[string]*conversation
-	order       []string // node IDs as listed
-	selected    int
+	chat        conversation
+	nodes       []discovery.Node // sorted by name
 	focus       focus
+	greeted     bool // the input was focused once the node turned out to be configured
 	discovering bool
 	notice      string
 	noticeErr   bool
@@ -145,7 +151,7 @@ func New(backend Backend) *Model {
 	return &Model{
 		backend:    backend,
 		now:        time.Now,
-		convs:      map[string]*conversation{},
+		chat:       conversation{contextID: a2a.NewID()},
 		showSplash: true,
 		input:      input,
 		history:    history,
@@ -167,8 +173,14 @@ type (
 		err   error
 	}
 	replyMsg struct {
-		nodeID, contextID, text string
-		err                     error
+		contextID, text string
+		err             error
+	}
+	// stepMsg is a step of the answer that is on its way; next delivers what follows.
+	stepMsg struct {
+		contextID string
+		step      Step
+		next      <-chan tea.Msg
 	}
 	// actionMsg reports the outcome of start, stop or setup.
 	actionMsg struct {
@@ -271,6 +283,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setNotice(msg.err.Error(), true)
 		} else {
 			m.status = msg.status
+			if len(m.chat.entries) == 0 {
+				m.renderHistory(true) // the empty chat names the agent
+			}
+			// The chat is what the UI is opened for: start typing right away.
+			if m.status.Configured && !m.greeted {
+				m.greeted = true
+				if m.focus == focusList {
+					return m, m.toggleFocus()
+				}
+			}
 		}
 	case nodesMsg:
 		m.discovering = false
@@ -285,6 +307,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.applyContacts(msg.trust)
 		}
+	case stepMsg:
+		m.step(msg)
+		return m, func() tea.Msg { return <-msg.next }
 	case replyMsg:
 		m.receive(msg)
 	case updateCheckMsg:
@@ -374,14 +399,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "q":
 		return tea.Quit
-	case "up", "k":
-		m.selectConv(m.selected - 1)
-	case "down", "j":
-		m.selectConv(m.selected + 1)
 	case "enter", "i":
-		if m.current() != nil {
-			return m.toggleFocus()
-		}
+		return m.toggleFocus()
 	case "r":
 		m.setNotice("searching the network…", false)
 		return m.rescan()
@@ -475,7 +494,8 @@ func (m *Model) toggleFocus() tea.Cmd {
 		m.input.Blur()
 		return nil
 	}
-	if m.current() == nil {
+	if !m.status.Configured {
+		m.setNotice("set up the node first: press c", true)
 		return nil
 	}
 	m.focus = focusInput
@@ -515,9 +535,9 @@ func (m *Model) setup() tea.Cmd {
 }
 
 func (m *Model) send() tea.Cmd {
-	c := m.current()
+	c := &m.chat
 	text := strings.TrimSpace(m.input.Value())
-	if c == nil || text == "" {
+	if text == "" {
 		return nil
 	}
 	if c.pending {
@@ -529,101 +549,63 @@ func (m *Model) send() tea.Cmd {
 	m.input.Reset()
 	m.renderHistory(true)
 
-	node, contextID := c.node, c.contextID
+	contextID := c.contextID
 	return func() tea.Msg {
-		reply, err := m.backend.Send(context.Background(), node, contextID, text)
-		return replyMsg{node.ID, contextID, reply, err}
+		events := make(chan tea.Msg)
+		go func() {
+			reply, err := m.backend.Ask(context.Background(), contextID, text, func(s Step) {
+				events <- stepMsg{contextID, s, events}
+			})
+			events <- replyMsg{contextID, reply, err}
+		}()
+		return <-events
+	}
+}
+
+// step notes which peer the agent is waiting for while the answer is pending.
+func (m *Model) step(msg stepMsg) {
+	c := &m.chat
+	if c.contextID != msg.contextID {
+		return // step of a conversation that was reset
+	}
+	c.asking = msg.step.Peer
+	if msg.step.Done {
+		c.asking = ""
 	}
 }
 
 func (m *Model) receive(msg replyMsg) {
-	c := m.convs[msg.nodeID]
-	if c == nil || c.contextID != msg.contextID {
+	c := &m.chat
+	if c.contextID != msg.contextID {
 		return // reply to a conversation that was reset
 	}
-	c.pending = false
-	if a2a.IsPending(msg.err) {
-		c.entries = append(c.entries, entry{
-			system: true,
-			text:   "Connection request sent to " + c.node.Name + ". Waiting for approval.",
-			at:     m.now(),
-		})
-	} else {
-		e := entry{text: msg.text, at: m.now()}
-		if msg.err != nil {
-			e.text, e.failed = msg.err.Error(), true
-		}
-		c.entries = append(c.entries, e)
+	c.pending, c.asking = false, ""
+	e := entry{text: msg.text, at: m.now()}
+	if msg.err != nil {
+		e.text, e.failed = msg.err.Error(), true
 	}
-	if c != m.current() {
-		c.unread++
-		return
-	}
+	c.entries = append(c.entries, e)
 	m.renderHistory(m.history.AtBottom())
 }
 
-// newConversation starts over with the selected node, which then forgets the old context.
+// newConversation starts over; the agent keeps no memory of the old context.
 func (m *Model) newConversation() {
-	c := m.current()
-	if c == nil {
-		return
-	}
-	c.contextID, c.entries, c.pending, c.unread = a2a.NewID(), nil, false, 0
+	m.chat = conversation{contextID: a2a.NewID()}
 	m.renderHistory(true)
-	m.setNotice("new conversation with "+c.node.Name, false)
+	m.setNotice("new conversation", false)
 }
 
-// merge updates the node list with a discovery result. Nodes that went away
-// stay listed as offline so their conversation is kept.
+// merge replaces the node list with a discovery result.
 func (m *Model) merge(nodes []discovery.Node) {
-	selectedID := m.currentID()
-	for _, c := range m.convs {
-		c.online = false
-	}
-	for _, n := range nodes {
-		if c, ok := m.convs[n.ID]; ok {
-			c.node, c.online = n, true
-		} else {
-			m.convs[n.ID] = &conversation{node: n, online: true, contextID: a2a.NewID()}
-		}
-	}
-	m.order = m.order[:0]
-	for id, c := range m.convs {
-		if c.online || len(c.entries) > 0 {
-			m.order = append(m.order, id)
-		}
-	}
-	slices.SortFunc(m.order, func(a, b string) int {
-		ca, cb := m.convs[a], m.convs[b]
-		return cmp.Or(strings.Compare(ca.node.Name, cb.node.Name), strings.Compare(a, b))
+	m.nodes = slices.Clone(nodes)
+	slices.SortFunc(m.nodes, func(a, b discovery.Node) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
 	})
-	m.selected = max(0, slices.Index(m.order, selectedID))
-	if m.currentID() != selectedID {
-		m.selectConv(m.selected)
-	}
-	if m.current() == nil && m.focus == focusInput {
-		m.toggleFocus()
-	}
 }
 
-func (m *Model) selectConv(i int) {
-	if len(m.order) == 0 {
-		return
-	}
-	m.selected = min(max(i, 0), len(m.order)-1)
-	m.current().unread = 0
-	m.renderHistory(true)
-}
-
-func (m *Model) currentID() string {
-	if m.selected < len(m.order) {
-		return m.order[m.selected]
-	}
-	return ""
-}
-
-func (m *Model) current() *conversation {
-	return m.convs[m.currentID()]
+// agentName is how the agent of this node is called in the chat.
+func (m *Model) agentName() string {
+	return cmp.Or(m.status.Name, "your agent")
 }
 
 func (m *Model) setNotice(text string, isErr bool) {

@@ -14,10 +14,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
 	"ouroboros/internal/a2a"
+	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/daemon"
@@ -32,13 +34,14 @@ const Version = "0.1.0"
 
 const usage = `ouro – tiny A2A agent node for any OpenAI-compatible LLM API
 
-  ouro                    open the terminal UI (default)
+  ouro                    chat with your agent in the terminal UI (default)
   ouro start [--setup]    start the node (asks for endpoint, key + model on first run)
   ouro stop               stop the node
   ouro status             show the local node
   ouro list               find ouroboros nodes on the network
   ouro peers [add|rm HOST] hosts to look for nodes on beyond the local network
-  ouro chat ID ["msg"]    chat with a node (interactive without msg)
+  ouro chat ["msg"]       ask your agent, which can ask the other nodes (terminal UI without msg)
+  ouro ask ID ["msg"]     write to a node directly (interactive without msg)
   ouro tui                control the node and chat in a terminal UI
   ouro serve              run the node in the foreground
   ouro update             build and install the newest version
@@ -109,6 +112,10 @@ type App struct {
 	updater      update.Updater
 	// vpnPeers finds hosts that discovery cannot reach by multicast or broadcast.
 	vpnPeers func(context.Context) []string
+
+	botMu  sync.Mutex
+	bot    *agent.Agent // see assistant
+	botKey [4]string    // the configuration bot was built for
 }
 
 // New returns an App reading user input from in and writing to out.
@@ -149,6 +156,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.peers(rest)
 	case "chat":
 		return a.chat(ctx, rest)
+	case "ask":
+		return a.ask(ctx, rest)
 	case "serve":
 		return a.serve(ctx)
 	case "update":
@@ -394,9 +403,10 @@ func (a *App) list() error {
 	return tw.Flush()
 }
 
-func (a *App) chat(ctx context.Context, args []string) error {
+// ask writes to a node directly, without the assistant in between.
+func (a *App) ask(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New(`usage: ouro chat ID ["message"]`)
+		return errors.New(`usage: ouro ask ID ["message"]`)
 	}
 	node, err := a.resolve(args[0])
 	if err != nil {
@@ -511,8 +521,8 @@ func (a *App) readLine() (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-// ask prints prompt and reads an answer, returning def for an empty one.
-func (a *App) ask(prompt, def string) (string, error) {
+// prompt prints prompt and reads an answer, returning def for an empty one.
+func (a *App) prompt(prompt, def string) (string, error) {
 	fmt.Fprint(a.out, prompt)
 	line, err := a.readLine()
 	return cmp.Or(line, def), err

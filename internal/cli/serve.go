@@ -52,7 +52,9 @@ func (a *App) serve(ctx context.Context) error {
 	go discovery.Serve(udp, discovery.Node{ID: cfg.ID, Name: cfg.Name, Model: cfg.Model, PublicKey: id.Public(), Port: port})
 
 	logger := log.New(a.out, "", log.LstdFlags)
-	bot := agent.New(openai.New(cfg.BaseURL, cfg.APIKey), cfg.Model, cfg.Name)
+	// Peers get an agent without tools: it cannot be made to write to others.
+	bot := agent.New(openai.New(cfg.BaseURL, cfg.APIKey), cfg.Model,
+		fmt.Sprintf("You are %q, an Ouroboros agent reachable via A2A. Be helpful and concise.", cfg.Name))
 	server := &a2a.Server{Card: agentCard(cfg), Identity: id, Trust: a.contacts(), Respond: bot.Respond}
 	srv := &http.Server{
 		Handler:           logRequests(logger, server.Handler()),

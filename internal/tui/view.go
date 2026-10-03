@@ -7,6 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/internal/discovery"
 )
 
 const (
@@ -53,25 +55,17 @@ func (m *Model) layout() {
 	m.renderHistory(atBottom)
 }
 
-// renderHistory fills the history viewport with the selected conversation.
+// renderHistory fills the history viewport with the conversation.
 func (m *Model) renderHistory(toBottom bool) {
-	c := m.current()
-	if c == nil {
-		m.history.SetContent("")
-		return
-	}
+	c := &m.chat
 	if len(c.entries) == 0 {
-		m.history.SetContent(mutedStyle.Render("No messages yet. Say hello to " + c.node.Name + "."))
+		m.history.SetContent(mutedStyle.Render("No messages yet. Ask " + m.agentName() + " anything – it can ask the other nodes for you."))
 		return
 	}
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
 	blocks := make([]string, len(c.entries))
 	for i, e := range c.entries {
-		if e.system {
-			blocks[i] = mutedStyle.Render("· " + e.text)
-			continue
-		}
-		name, color := c.node.Name, peer
+		name, color := m.agentName(), peer
 		if e.mine {
 			name, color = "you", accent
 		}
@@ -206,77 +200,60 @@ func (m *Model) sidebarView() string {
 		title += " " + m.spinner.View()
 	}
 	lines := []string{title, ""}
-	if len(m.order) == 0 {
+	if len(m.nodes) == 0 {
 		lines = append(lines, mutedStyle.Render("no nodes found"), mutedStyle.Render("press r to search"))
 	}
-
-	// Each node takes two lines; scroll so the selection stays visible.
-	visible := max(1, (h-4)/2)
-	first := max(0, min(m.selected-visible+1, len(m.order)-visible))
-	for i := first; i < min(len(m.order), first+visible); i++ {
-		lines = append(lines, m.nodeLines(m.convs[m.order[i]], i == m.selected, inner)...)
+	// Each node takes two lines.
+	for _, n := range m.nodes[:min(len(m.nodes), max(1, (h-4)/2))] {
+		lines = append(lines, m.nodeLines(n, inner)...)
 	}
 	content := strings.Join(lines, "\n")
 	return box(m.focus == focusList).Width(w).Height(h).MaxHeight(h).Render(content)
 }
 
-func (m *Model) nodeLines(c *conversation, selected bool, width int) []string {
-	marker, nameStyle := "  ", lipgloss.NewStyle()
-	if selected {
-		marker, nameStyle = lipgloss.NewStyle().Foreground(accent).Render("› "), boldStyle
-	}
-	name := c.node.Name
-	if c.node.ID == m.status.ID {
+func (m *Model) nodeLines(n discovery.Node, width int) []string {
+	name, self := n.Name, n.ID == m.status.ID
+	if self {
 		name += " (you)"
 	}
 	var badge string
-	switch {
-	case c.pending:
+	if m.chat.asking != "" && !self && (m.chat.asking == n.Name || m.chat.asking == n.ID) {
 		badge = m.spinner.View()
-	case c.unread > 0:
-		badge = lipgloss.NewStyle().Foreground(accent).Render(fmt.Sprintf("●%d", c.unread))
-	case !c.online:
-		badge = mutedStyle.Render("offline")
 	}
-	if !c.online {
-		nameStyle = nameStyle.Foreground(muted)
-	}
-	room := max(1, width-2-lipgloss.Width(badge)-1)
-	left := marker + nameStyle.Render(ansi.Truncate(name, room, "…"))
+	room := max(1, width-lipgloss.Width(badge)-1)
+	left := ansi.Truncate(name, room, "…")
 	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(badge))
 	mark := "?"
-	if _, ok := m.trust.Trusted[c.node.PublicKey]; ok || c.node.ID == m.status.ID {
+	if _, ok := m.trust.Trusted[n.PublicKey]; ok || self {
 		mark = "✓"
 	}
-	detail := "  " + mutedStyle.Render(ansi.Truncate(mark+" "+c.node.Model+" · "+c.node.ID, width-2, "…"))
+	detail := "  " + mutedStyle.Render(ansi.Truncate(mark+" "+n.Model+" · "+n.ID, width-2, "…"))
 	return []string{left + strings.Repeat(" ", gap) + badge, detail}
 }
 
 func (m *Model) chatView() string {
 	w, h := m.chatWidth(), m.chatHeight()
 	inner := max(1, w-4)
-	c := m.current()
+	c := &m.chat
 
 	var content string
-	if c == nil {
+	if !m.status.Configured {
+		hint := mutedStyle.Render("Press c to set up your node and chat with its agent.")
 		if inner >= logoWidth() && h-2 >= len(logoLines)+2 { // border, blank line and hint
 			content = lipgloss.JoinVertical(lipgloss.Left,
-				lipgloss.NewStyle().Foreground(accent).Render(logoText(logoLines, inner)),
-				"",
-				mutedStyle.Render("Select a node to chat with it."))
+				lipgloss.NewStyle().Foreground(accent).Render(logoText(logoLines, inner)), "", hint)
 		} else {
-			content = mutedStyle.Render("Select a node to chat with it.")
+			content = hint
 		}
 	} else {
-		title := boldStyle.Foreground(peer).Render(c.node.Name)
-		info := " · " + c.node.Model + " · " + c.node.Addr()
-		if !c.online {
-			info += " · offline"
-		}
-		title = ansi.Truncate(title+mutedStyle.Render(info), inner, "…")
+		title := boldStyle.Foreground(peer).Render(m.agentName())
+		title = ansi.Truncate(title+mutedStyle.Render(" · "+m.status.Model+" · your agent"), inner, "…")
 		var typing string
-		if c.pending {
-			typing = m.spinner.View() + mutedStyle.Render(" "+c.node.Name+" is thinking…")
+		switch {
+		case c.asking != "":
+			typing = m.spinner.View() + mutedStyle.Render(" asking "+c.asking+"…")
+		case c.pending:
+			typing = m.spinner.View() + mutedStyle.Render(" "+m.agentName()+" is thinking…")
 		}
 		content = lipgloss.JoinVertical(lipgloss.Left, title, m.history.View(), typing)
 	}
@@ -290,9 +267,9 @@ func (m *Model) footerView() string {
 	if m.status.Running {
 		toggle = "stop"
 	}
-	help := "↑↓ select · enter chat · n new chat · s " + toggle + " node · c setup · r refresh · R requests · u update · q quit"
+	help := "enter chat · n new chat · s " + toggle + " node · c setup · r refresh · R requests · u update · q quit"
 	if m.focus == focusInput {
-		help = "enter send · alt+enter new line · esc nodes · pgup/pgdn scroll · ctrl+c quit"
+		help = "enter send · alt+enter new line · esc commands · pgup/pgdn scroll · ctrl+c quit"
 	}
 	if m.screen == screenRequests {
 		help = "↑↓ select · a accept · x reject · esc back · ctrl+c quit"

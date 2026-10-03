@@ -28,7 +28,7 @@ var preferredModels = []string{"gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"}
 func (a *App) setup(ctx context.Context, cfg config.Config) (config.Config, error) {
 	prevURL := cfg.BaseURL
 	endpoint := cmp.Or(cfg.BaseURL, a.settings.BaseURL)
-	answer, err := a.ask(fmt.Sprintf("API endpoint (OpenAI-compatible) [%s]: ", endpoint), endpoint)
+	answer, err := a.prompt(fmt.Sprintf("API endpoint (OpenAI-compatible) [%s]: ", endpoint), endpoint)
 	if err != nil {
 		return cfg, err
 	}
@@ -43,7 +43,7 @@ func (a *App) setup(ctx context.Context, cfg config.Config) (config.Config, erro
 		return cfg, err
 	}
 	name := cmp.Or(cfg.Name, hostname())
-	if cfg.Name, err = a.ask(fmt.Sprintf("Node name [%s]: ", name), name); err != nil {
+	if cfg.Name, err = a.prompt(fmt.Sprintf("Node name [%s]: ", name), name); err != nil {
 		return cfg, err
 	}
 	if cfg.ID == "" {
@@ -92,7 +92,7 @@ func (a *App) readSecret(prompt string) (string, error) {
 	if a.ReadSecret != nil {
 		return a.ReadSecret(prompt)
 	}
-	return a.ask(prompt, "")
+	return a.prompt(prompt, "")
 }
 
 // askModel lets the user pick a model by number or name.
@@ -105,7 +105,7 @@ func (a *App) askModel(all []string, current string) (string, error) {
 	printColumns(a.out, models)
 	def := defaultModel(models, current)
 	for {
-		pick, err := a.ask(fmt.Sprintf("\nChoose model [number or name, Enter = %s]: ", def), def)
+		pick, err := a.prompt(fmt.Sprintf("\nChoose model [number or name, Enter = %s]: ", def), def)
 		if err != nil {
 			return "", err
 		}
