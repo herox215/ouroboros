@@ -58,6 +58,10 @@ type Agent struct {
 	tools  map[string]Tool
 	specs  []openai.Tool
 
+	// Soul, if set, is asked before every answer for text to append to the
+	// system prompt. Set it before the agent is used.
+	Soul func() string
+
 	mu            sync.Mutex
 	clock         uint64
 	conversations map[string]*conversation
@@ -94,8 +98,12 @@ func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, er
 func (a *Agent) Run(ctx context.Context, contextID, text string, observe func(Step)) (string, error) {
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	history := append(a.history(contextID), openai.Message{Role: "user", Content: text})
+	system := a.system
+	if a.Soul != nil {
+		system.Content += a.Soul()
+	}
 	for range maxRounds {
-		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{a.system}, history...), a.specs)
+		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{system}, history...), a.specs)
 		if err != nil {
 			return "", err
 		}

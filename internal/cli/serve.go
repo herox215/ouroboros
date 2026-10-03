@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -55,7 +56,8 @@ func (a *App) serve(ctx context.Context) error {
 	// Peers get an agent without tools: it cannot be made to write to others.
 	bot := agent.New(openai.New(cfg.BaseURL, cfg.APIKey), cfg.Model,
 		fmt.Sprintf("You are %q, an Ouroboros agent reachable via A2A. Be helpful and concise.", cfg.Name))
-	server := &a2a.Server{Card: agentCard(cfg), Identity: id, Trust: a.contacts(), Respond: bot.Respond}
+	bot.Soul = a.soul
+	server := &a2a.Server{Card: func() a2a.AgentCard { return a.agentCard(cfg) }, Identity: id, Trust: a.contacts(), Respond: bot.Respond}
 	srv := &http.Server{
 		Handler:           logRequests(logger, server.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -94,11 +96,13 @@ func listen(port int) (net.Listener, error) {
 	return ln, err
 }
 
-func agentCard(cfg config.Config) a2a.AgentCard {
+// agentCard is what this node tells everyone about itself. The description is
+// the one from card.md, if there is one.
+func (a *App) agentCard(cfg config.Config) a2a.AgentCard {
 	return a2a.AgentCard{
 		ProtocolVersion:    a2a.ProtocolVersion,
 		Name:               cfg.Name,
-		Description:        fmt.Sprintf("Ouroboros node %s (%s)", cfg.ID, cfg.Model),
+		Description:        cmp.Or(a.card(), defaultDescription(cfg.ID, cfg.Model)),
 		PreferredTransport: "JSONRPC",
 		Version:            Version,
 		DefaultInputModes:  []string{"text/plain"},

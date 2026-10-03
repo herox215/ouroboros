@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"ouroboros/internal/identity"
@@ -97,6 +99,31 @@ func (c *Client) call(ctx context.Context, baseURL, method string, msg Message) 
 		return nil, fmt.Errorf("a2a: invalid response: %w", err)
 	}
 	return &res, nil
+}
+
+// FetchCard reads the agent card of the node at baseURL. Cards are public:
+// nothing is signed, and what a card says is only what that node claims.
+func FetchCard(ctx context.Context, baseURL string) (AgentCard, error) {
+	var card AgentCard
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(baseURL, "/")+CardPath, nil)
+	if err != nil {
+		return card, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return card, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return card, fmt.Errorf("a2a: HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodyBytes)).Decode(&card); err != nil {
+		return card, fmt.Errorf("a2a: invalid agent card: %w", err)
+	}
+	if card.Name == "" {
+		return card, errors.New("a2a: agent card has no name")
+	}
+	return card, nil
 }
 
 // Send delivers text to baseURL without authentication. It only works against

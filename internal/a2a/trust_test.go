@@ -22,7 +22,7 @@ func newNode(t *testing.T, name string) *node {
 	t.Helper()
 	trust := contacts.Open(filepath.Join(t.TempDir(), "contacts.json"))
 	id := identity.Generate()
-	srv := httptest.NewServer((&Server{Card: testCard, Identity: id, Trust: trust, Respond: echo}).Handler())
+	srv := httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: echo}).Handler())
 	t.Cleanup(srv.Close)
 	return &node{srv: srv, id: id, trust: trust}
 }

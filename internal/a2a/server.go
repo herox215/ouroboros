@@ -18,7 +18,7 @@ type Responder func(ctx context.Context, contextID, text string) (string, error)
 // Only trusted peers may send messages; everyone else becomes a pending
 // connection request that a human has to approve.
 type Server struct {
-	Card     AgentCard
+	Card     func() AgentCard // asked for every request, so that the card can change
 	Identity *identity.Identity
 	Trust    Trust
 	Respond  Responder
@@ -51,7 +51,7 @@ func (s *Server) Handler() http.Handler {
 	verify := newVerifier()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+CardPath, func(w http.ResponseWriter, r *http.Request) {
-		writeCard(w, r, s.Card)
+		writeCard(w, r, s.Card())
 	})
 	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))

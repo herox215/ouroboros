@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,7 +13,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"ouroboros/internal/a2a"
+	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
@@ -36,6 +40,7 @@ func testSettings(t *testing.T) Settings {
 	t.Helper()
 	return Settings{
 		Home:      t.TempDir(),
+		Data:      t.TempDir(),
 		HTTPPort:  0,
 		DiscoPort: freeUDPPort(t),
 		BaseURL:   openaitest.NewServer(t),
@@ -129,14 +134,20 @@ func TestUnknownCommand(t *testing.T) {
 
 func TestSettingsFromEnv(t *testing.T) {
 	t.Setenv("OURO_HOME", "/tmp/ouro")
+	t.Setenv("OURO_DATA", "/tmp/ouro-data")
 	t.Setenv("OURO_PORT", "1234")
 	t.Setenv("OURO_DISCO_PORT", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENAI_API_KEY", "sk-env")
 	s, err := SettingsFromEnv()
-	want := Settings{Home: "/tmp/ouro", HTTPPort: 1234, DiscoPort: 41338, BaseURL: "https://api.openai.com/v1", APIKey: "sk-env"}
+	want := Settings{Home: "/tmp/ouro", Data: "/tmp/ouro-data", HTTPPort: 1234, DiscoPort: 41338, BaseURL: "https://api.openai.com/v1", APIKey: "sk-env"}
 	if err != nil || s != want {
 		t.Fatalf("got %+v, %v", s, err)
+	}
+	t.Setenv("OURO_DATA", "")
+	t.Setenv("HOME", "/home/ouro")
+	if s, err := SettingsFromEnv(); err != nil || s.Data != "/home/ouro/.ouro" {
+		t.Fatalf("default data directory: %+v, %v", s, err)
 	}
 	t.Setenv("OURO_PORT", "abc")
 	if _, err := SettingsFromEnv(); err == nil {
@@ -469,6 +480,10 @@ func twoNodes(t *testing.T) (alpha, beta Settings) {
 func TestAssistantAsksPeers(t *testing.T) {
 	alpha, beta := twoNodes(t)
 	startNode(t, alpha, mustLoad(t, alpha)) // beta's acceptance has to reach alpha
+	b, _ := newApp(beta, "")
+	if _, err := b.updateCard(context.Background(), []byte(`{"description":"Knows\nthe time."}`)); err != nil {
+		t.Fatal(err)
+	}
 
 	// "@" makes the fake LLM list the peers.
 	out, err := run(t, alpha, "", "chat", "@")
@@ -485,7 +500,9 @@ func TestAssistantAsksPeers(t *testing.T) {
 		t.Fatalf("the request should be remembered: %q", out)
 	}
 
-	b, _ := newApp(beta, "")
+	if strings.Contains(out, "Knows") {
+		t.Fatalf("a peer that is not connected should not get a word in: %q", out)
+	}
 	requests, _ := b.contacts().Snapshot()
 	if len(requests.Incoming) != 1 || requests.Incoming[0].Name != "alpha" {
 		t.Fatalf("beta's requests: %+v", requests)
@@ -511,8 +528,8 @@ func TestAssistantAsksPeers(t *testing.T) {
 	if strings.Count(out, "last=one") != 1 || strings.Contains(out, "beta:") {
 		t.Errorf("the talk between the agents should stay out of the chat:\n%s", out)
 	}
-	if out, _ = run(t, alpha, "", "chat", "@"); !strings.Contains(out, "model gpt-4o-mini, connected)") {
-		t.Fatalf("beta should be listed as connected: %q", out)
+	if out, _ = run(t, alpha, "", "chat", "@"); !strings.Contains(out, "model gpt-4o-mini, connected): Knows the time.\n") {
+		t.Fatalf("beta should be listed as connected, with its card: %q", out)
 	}
 
 	// A one-shot chat prints the answer only.
@@ -644,5 +661,137 @@ func TestListFindsNodesOnPeers(t *testing.T) {
 	app.vpnPeers = func(context.Context) []string { return []string{peer} }
 	if err := app.Run(context.Background(), []string{"list"}); err != nil || !strings.Contains(out.String(), "alpha") {
 		t.Fatalf("the VPN peer should be found: %q, %v", out.String(), err)
+	}
+}
+
+// Both agents have the soul: the one the owner chats with and the one peers reach.
+func TestSoul(t *testing.T) {
+	s := testSettings(t)
+	startNode(t, s, nodeConfig(s))
+	for _, args := range [][]string{{"chat", "?system"}, {"ask", "alpha", "?system"}} {
+		if out, err := run(t, s, "", args...); err != nil || strings.Contains(out, "soul") {
+			t.Fatalf("%v without soul.md: %q, %v", args, out, err)
+		}
+	}
+
+	path := filepath.Join(s.Data, "memory", "soul.md")
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	// The node is already running: the file is read for every answer.
+	if err := os.WriteFile(path, []byte("\nYou love snakes.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"chat", "?system"}, {"ask", "alpha", "?system"}} {
+		if out, err := run(t, s, "", args...); err != nil || !strings.HasSuffix(out, "how you behave:\n\nYou love snakes.\n") {
+			t.Fatalf("%v with soul.md: %q, %v", args, out, err)
+		}
+	}
+}
+
+func TestUpdateSoul(t *testing.T) {
+	s := testSettings(t)
+	config.Save(s.Home, nodeConfig(s))
+	app, _ := newApp(s, "")
+	ctx := context.Background()
+
+	if _, err := app.updateSoul(ctx, []byte(`{"content":"  You are calm.  "}`)); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(app.soulPath()); string(b) != "You are calm.\n" {
+		t.Fatalf("soul.md: %q", b)
+	}
+	bot, err := app.assistant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := bot.Respond(ctx, "c1", "?system"); err != nil || !strings.HasSuffix(out, "\n\nYou are calm.") {
+		t.Fatalf("the assistant should have the new soul: %q, %v", out, err)
+	}
+
+	// The assistant's owner is told, and the soul before is kept.
+	app.updateSoul(ctx, []byte(`{"content":"You are wild."}`))
+	if b, _ := os.ReadFile(app.soulPath() + ".bak"); string(b) != "You are calm.\n" {
+		t.Fatalf("soul.md.bak: %q", b)
+	}
+	done := agent.Step{Tool: toolUpdateSoul, Done: true}
+	if s, ok := noteStep(done); !ok || !strings.Contains(s.Note, "soul updated") {
+		t.Fatalf("a changed soul should be noted: %+v", s)
+	}
+	if _, ok := noteStep(agent.Step{Tool: toolAskPeer, Done: true}); ok {
+		t.Fatal("asking a peer is not worth a note")
+	}
+	done.Err = errors.New("boom")
+	if _, ok := noteStep(done); ok {
+		t.Fatal("a failed update is not a change")
+	}
+
+	// An empty soul is none.
+	if _, err := app.updateSoul(ctx, []byte(`{"content":""}`)); err != nil || app.soul() != "" {
+		t.Fatalf("clearing: %q, %v", app.soul(), err)
+	}
+	for name, args := range map[string]string{
+		"missing content": `{}`,
+		"too long":        fmt.Sprintf(`{"content":%q}`, strings.Repeat("x", maxSoul)),
+	} {
+		if _, err := app.updateSoul(ctx, []byte(args)); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	if app.soul() != "" {
+		t.Fatal("a rejected update should leave the soul alone")
+	}
+}
+
+func TestUpdateCard(t *testing.T) {
+	s := testSettings(t)
+	cfg := nodeConfig(s)
+	port := startNode(t, s, cfg)
+	app, _ := newApp(s, "")
+	ctx := context.Background()
+	served := func() string {
+		t.Helper()
+		card, err := a2a.FetchCard(ctx, fmt.Sprintf("http://127.0.0.1:%d/", port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return card.Description
+	}
+	node := discovery.Node{ID: cfg.ID, Model: cfg.Model, Host: "127.0.0.1", Port: port}
+
+	if got := served(); got != "Ouroboros node abc123 (gpt-4o)" || peerDescription(ctx, node) != "" {
+		t.Fatalf("without card.md: %q, %q", got, peerDescription(ctx, node))
+	}
+	// The node is already running: the card is read for every request.
+	if _, err := app.updateCard(ctx, []byte(`{"description":" Agent of Lucas,\n knows Go. "}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := served(); got != "Agent of Lucas, knows Go." || peerDescription(ctx, node) != got {
+		t.Fatalf("with card.md: %q, %q", got, peerDescription(ctx, node))
+	}
+	bot, err := app.assistant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := bot.Respond(ctx, "c1", "?system"); err != nil || !strings.HasSuffix(out, "about yourself:\n\nAgent of Lucas, knows Go.") {
+		t.Fatalf("the assistant should know its card: %q, %v", out, err)
+	}
+	if s, ok := noteStep(agent.Step{Tool: toolUpdateCard, Done: true}); !ok || !strings.Contains(s.Note, "card updated") {
+		t.Fatalf("a changed card should be noted: %+v", s)
+	}
+
+	// A card somebody else wrote is cut to size.
+	os.WriteFile(app.cardPath(), []byte(strings.Repeat("ä", maxCard+50)), 0o600)
+	if got := peerDescription(ctx, node); utf8.RuneCountInString(got) != maxCard || !strings.HasSuffix(got, "ä…") {
+		t.Fatalf("long card: %d characters", utf8.RuneCountInString(got))
+	}
+	for name, args := range map[string]string{
+		"missing description": `{}`,
+		"too long":            fmt.Sprintf(`{"description":%q}`, strings.Repeat("x", maxCard+1)),
+	} {
+		if _, err := app.updateCard(ctx, []byte(args)); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	if _, err := app.updateCard(ctx, []byte(`{"description":""}`)); err != nil || served() != "Ouroboros node abc123 (gpt-4o)" {
+		t.Fatalf("clearing: %q, %v", served(), err)
 	}
 }

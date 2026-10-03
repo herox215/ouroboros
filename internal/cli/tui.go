@@ -82,6 +82,9 @@ func (b tuiBackend) Ask(ctx context.Context, contextID, text string, step func(t
 		if s, ok := peerStep(s); ok {
 			step(s)
 		}
+		if s, ok := noteStep(s); ok {
+			step(s)
+		}
 	})
 }
 

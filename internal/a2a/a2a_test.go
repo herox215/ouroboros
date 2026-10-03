@@ -52,6 +52,14 @@ func TestAgentCardURLFromHost(t *testing.T) {
 	if card.Name != "alpha" || card.URL != srv.URL+"/" {
 		t.Fatalf("got %+v", card)
 	}
+
+	fetched, err := FetchCard(context.Background(), srv.URL+"/")
+	if err != nil || fetched.Name != "alpha" {
+		t.Fatalf("FetchCard: %+v, %v", fetched, err)
+	}
+	if _, err := FetchCard(context.Background(), srv.URL+"/nowhere"); err == nil {
+		t.Fatal("FetchCard should fail without a card")
+	}
 }
 
 func TestSendRoundTrip(t *testing.T) {

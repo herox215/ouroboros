@@ -30,6 +30,7 @@ func TestEndToEnd(t *testing.T) {
 
 	env := append(os.Environ(),
 		"OURO_HOME="+filepath.Join(dir, "home"),
+		"OURO_DATA="+filepath.Join(dir, "data"),
 		"OURO_PORT=0",
 		fmt.Sprintf("OURO_DISCO_PORT=%d", freeUDPPort(t)),
 		"OPENAI_BASE_URL="+openaitest.NewServer(t),

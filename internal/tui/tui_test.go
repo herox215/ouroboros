@@ -456,3 +456,19 @@ func TestUpdateFailureAndNothingToDo(t *testing.T) {
 		t.Fatalf("a failed update should be reported:\n%s", m.View().Content)
 	}
 }
+
+func TestChatNotesWhatTheAgentHasDone(t *testing.T) {
+	m, b := newModel(t, alpha)
+	b.steps = []Step{{Note: "soul updated"}}
+	b.reply = "done"
+	cmd := say(t, m, "be calm")
+
+	_, cmd = m.Update(cmd())
+	if !m.chat.pending || !strings.Contains(m.View().Content, "◆ soul updated") {
+		t.Fatalf("the note should be in the history: %+v", m.chat.entries)
+	}
+	deliver(m, cmd)
+	if c := m.chat; len(c.entries) != 3 || !c.entries[1].note || c.entries[2].text != "done" {
+		t.Fatalf("history: %+v", c.entries)
+	}
+}

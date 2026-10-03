@@ -66,9 +66,11 @@ type Backend interface {
 
 // Step reports that the agent asks a peer on the way to its answer and, with
 // Done set, that the peer has answered. What they say stays between them.
+// A step with a Note instead tells the user what the agent has done.
 type Step struct {
 	Peer string
 	Done bool
+	Note string
 }
 
 type focus int
@@ -86,12 +88,14 @@ const (
 	screenRequests
 )
 
-// entry is one message in the conversation: from the user or from the agent.
+// entry is one message in the conversation: from the user or from the agent,
+// or a note on what the agent has done.
 type entry struct {
 	mine   bool
 	text   string
 	at     time.Time
 	failed bool
+	note   bool
 }
 
 // conversation is the chat with the agent of this node.
@@ -562,11 +566,17 @@ func (m *Model) send() tea.Cmd {
 	}
 }
 
-// step notes which peer the agent is waiting for while the answer is pending.
+// step notes which peer the agent is waiting for while the answer is pending,
+// or puts what the agent has done into the history.
 func (m *Model) step(msg stepMsg) {
 	c := &m.chat
 	if c.contextID != msg.contextID {
 		return // step of a conversation that was reset
+	}
+	if msg.step.Note != "" {
+		c.entries = append(c.entries, entry{note: true, text: msg.step.Note, at: m.now()})
+		m.renderHistory(m.history.AtBottom())
+		return
 	}
 	c.asking = msg.step.Peer
 	if msg.step.Done {

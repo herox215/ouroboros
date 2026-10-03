@@ -50,13 +50,14 @@ const usage = `ouro – tiny A2A agent node for any OpenAI-compatible LLM API
 // Settings come from the environment and are not persisted.
 type Settings struct {
 	Home      string // config, PID and log directory
+	Data      string // what the agents of this node know, see soulPath
 	HTTPPort  int    // A2A port; falls back to a free port if taken
 	DiscoPort int    // UDP discovery port
 	BaseURL   string // default LLM endpoint offered during setup
 	APIKey    string // key for BaseURL offered during setup
 }
 
-// SettingsFromEnv reads OURO_HOME, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL and OPENAI_API_KEY.
+// SettingsFromEnv reads OURO_HOME, OURO_DATA, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL and OPENAI_API_KEY.
 func SettingsFromEnv() (Settings, error) {
 	home := os.Getenv("OURO_HOME")
 	if home == "" {
@@ -65,6 +66,14 @@ func SettingsFromEnv() (Settings, error) {
 			return Settings{}, err
 		}
 		home = filepath.Join(dir, "ouroboros")
+	}
+	data := os.Getenv("OURO_DATA")
+	if data == "" {
+		dir, err := os.UserHomeDir()
+		if err != nil {
+			return Settings{}, err
+		}
+		data = filepath.Join(dir, ".ouro")
 	}
 	httpPort, err := envInt("OURO_PORT", 41337)
 	if err != nil {
@@ -76,6 +85,7 @@ func SettingsFromEnv() (Settings, error) {
 	}
 	return Settings{
 		Home:      home,
+		Data:      data,
 		HTTPPort:  httpPort,
 		DiscoPort: discoPort,
 		BaseURL:   cmp.Or(os.Getenv("OPENAI_BASE_URL"), openai.DefaultBaseURL),

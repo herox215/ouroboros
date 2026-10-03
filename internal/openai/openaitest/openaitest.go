@@ -22,6 +22,7 @@ var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 // Chat replies have the form "[model] turns=N last=TEXT", where N counts the
 // non-system messages. If tools are offered, a message "@PEER TEXT" is
 // answered with a call to ask_peer and "@" alone with a call to list_peers.
+// The message "?system" is answered with the system prompt.
 func NewServer(t testing.TB) string {
 	return NewServerWithKey(t, Key)
 }
@@ -46,6 +47,9 @@ func NewServerWithKey(t testing.TB, key string) string {
 		json.NewDecoder(r.Body).Decode(&in)
 		last := in.Messages[len(in.Messages)-1]
 		msg := openai.Message{Role: "assistant", Content: fmt.Sprintf("[%s] turns=%d last=%s", in.Model, len(in.Messages)-1, last.Content)}
+		if last.Content == "?system" {
+			msg.Content = in.Messages[0].Content
+		}
 		if call, ok := toolCall(last); ok && len(in.Tools) > 0 {
 			msg = openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{call}}
 		}

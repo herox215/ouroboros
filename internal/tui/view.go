@@ -65,6 +65,10 @@ func (m *Model) renderHistory(toBottom bool) {
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
 	blocks := make([]string, len(c.entries))
 	for i, e := range c.entries {
+		if e.note {
+			blocks[i] = mutedStyle.Render("◆ " + e.text + " · " + e.at.Format("15:04"))
+			continue
+		}
 		name, color := m.agentName(), peer
 		if e.mine {
 			name, color = "you", accent

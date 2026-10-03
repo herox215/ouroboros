@@ -58,12 +58,14 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | LLM | `GET /models` for the picker, `POST /chat/completions` for replies |
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /` (TCP 41337, falls back to a free port) |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and known peers on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
-| Agents | two per node: the one answering peers has no tools; yours (`ouro`, `ouro chat`) runs in the UI process with `list_peers` and `ask_peer`, at most 8 LLM calls per answer |
+| Agents | two per node: the one answering peers has no tools; yours (`ouro`, `ouro chat`) runs in the UI process with `list_peers`, `ask_peer`, `update_soul` and `update_card`, at most 8 LLM calls per answer |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
+| Soul | `~/.ouro/memory/soul.md`, if present, is appended to the system prompt of both agents and read anew for every answer; your agent rewrites it with `update_soul` when you ask it to, keeping the one before as `soul.md.bak`; peers talk to an agent that knows it, so keep secrets out |
+| Card | `~/.ouro/memory/card.md`, if present, is the description in the agent card, up to 300 characters; it is public. `list_peers` shows your agent the cards of connected peers, and it rewrites its own with `update_card` |
 | Trust | signed requests (Ed25519); unknown peers become connection requests a human approves |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/` |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/`; `~/.ouro/` – `memory/soul.md`, `memory/card.md` |
 
-Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
+Environment: `OURO_HOME`, `OURO_DATA`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
 `ouro start --setup` reconfigures, `ouro serve` runs in the foreground (e.g. for systemd).
 
 Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
