@@ -24,6 +24,9 @@ import (
 // refreshInterval is how often node status and the network are checked.
 const refreshInterval = 10 * time.Second
 
+// updateInterval is how often the newest version is looked up.
+const updateInterval = time.Hour
+
 // Status describes the local node.
 type Status struct {
 	Configured bool
@@ -51,6 +54,10 @@ type Backend interface {
 	Contacts() (Contacts, error)
 	Accept(publicKey string) error
 	Reject(publicKey string) error
+	// UpdateAvailable reports whether a newer version can be installed.
+	UpdateAvailable() (bool, error)
+	// Update installs the newest version and reports whether anything changed.
+	Update() (bool, error)
 	// SetupCommand returns the interactive setup, run with the terminal handed over.
 	SetupCommand() (*exec.Cmd, error)
 }
@@ -102,6 +109,10 @@ type Model struct {
 	discovering bool
 	notice      string
 	noticeErr   bool
+
+	updateAvailable bool
+	updating        bool
+	restart         bool
 
 	trust     Contacts
 	screen    screen
@@ -165,7 +176,13 @@ type (
 		err  error
 	}
 	setupMsg struct{ cmd *exec.Cmd }
-	tickMsg  struct{}
+	// updateCheckMsg carries the result of looking up the newest version.
+	updateCheckMsg struct{ available bool }
+	updateMsg      struct {
+		updated bool
+		err     error
+	}
+	tickMsg struct{}
 	// splashMsg advances the splash animation.
 	splashMsg struct{ at time.Time }
 )
@@ -173,7 +190,29 @@ type (
 func (m *Model) Init() tea.Cmd {
 	m.discovering = true
 	m.splashStart = m.now()
-	return tea.Batch(m.refreshStatus, m.discover, m.loadContacts, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
+	return tea.Batch(m.refreshStatus, m.discover, m.loadContacts, m.checkUpdate, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
+}
+
+// Restart reports whether the UI quit to continue as the updated binary.
+func (m *Model) Restart() bool { return m.restart }
+
+// checkUpdate looks up the newest version now and again after updateInterval.
+// Failures are ignored: being offline is not worth a notice.
+func (m *Model) checkUpdate() tea.Msg {
+	available, _ := m.backend.UpdateAvailable()
+	return updateCheckMsg{available}
+}
+
+// update installs the newest version; the UI restarts itself afterwards.
+func (m *Model) update() tea.Cmd {
+	if m.updating {
+		return nil
+	}
+	m.updating = true
+	return func() tea.Msg {
+		updated, err := m.backend.Update()
+		return updateMsg{updated, err}
+	}
 }
 
 func splashTick() tea.Cmd {
@@ -248,6 +287,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case replyMsg:
 		m.receive(msg)
+	case updateCheckMsg:
+		m.updateAvailable = msg.available
+		return m, tea.Tick(updateInterval, func(time.Time) tea.Msg { return m.checkUpdate() })
+	case updateMsg:
+		m.updating = false
+		switch {
+		case msg.err != nil:
+			m.setNotice("update: "+msg.err.Error(), true)
+		case msg.updated:
+			m.restart = true
+			return m, tea.Quit
+		default:
+			m.updateAvailable = false
+			m.setNotice("already up to date", false)
+		}
 	case actionMsg:
 		if msg.err != nil {
 			m.setNotice(msg.err.Error(), true)
@@ -337,6 +391,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.setup()
 	case "n":
 		m.newConversation()
+	case "u":
+		return m.update()
 	case "R":
 		return m.openRequests()
 	}

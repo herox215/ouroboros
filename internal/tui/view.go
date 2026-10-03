@@ -189,6 +189,12 @@ func (m *Model) headerView() string {
 	if m.unreadReq > 0 {
 		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.unreadReq))
 	}
+	switch {
+	case m.updating:
+		state += "  " + m.spinner.View() + mutedStyle.Render(" updating…")
+	case m.updateAvailable:
+		state += lipgloss.NewStyle().Foreground(warn).Render("  ↑ update available") + mutedStyle.Render(" · press u")
+	}
 	return ansi.Truncate(title+" "+state, m.width, "…")
 }
 
@@ -284,7 +290,7 @@ func (m *Model) footerView() string {
 	if m.status.Running {
 		toggle = "stop"
 	}
-	help := "↑↓ select · enter chat · n new chat · s " + toggle + " node · c setup · r refresh · R requests · q quit"
+	help := "↑↓ select · enter chat · n new chat · s " + toggle + " node · c setup · r refresh · R requests · u update · q quit"
 	if m.focus == focusInput {
 		help = "enter send · alt+enter new line · esc nodes · pgup/pgdn scroll · ctrl+c quit"
 	}

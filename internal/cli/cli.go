@@ -23,6 +23,7 @@ import (
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/update"
 )
 
 // Version is the ouro release version.
@@ -38,6 +39,7 @@ const usage = `ouro – tiny A2A agent node for any OpenAI-compatible LLM API
   ouro chat ID ["msg"]    chat with a node (interactive without msg)
   ouro tui                control the node and chat in a terminal UI
   ouro serve              run the node in the foreground
+  ouro update             build and install the newest version
 `
 
 // Settings come from the environment and are not persisted.
@@ -102,11 +104,18 @@ type App struct {
 	Interactive bool
 
 	discoverWait time.Duration
+	updater      update.Updater
 }
 
 // New returns an App reading user input from in and writing to out.
 func New(s Settings, in io.Reader, out io.Writer) *App {
-	return &App{settings: s, in: bufio.NewReader(in), out: out, discoverWait: 1500 * time.Millisecond}
+	return &App{
+		settings:     s,
+		in:           bufio.NewReader(in),
+		out:          out,
+		discoverWait: 1500 * time.Millisecond,
+		updater:      update.Updater{Repo: update.Repo, Dir: filepath.Join(s.Home, "update"), Revision: update.Revision()},
+	}
 }
 
 // Run executes the command given by args (without the program name).
@@ -135,6 +144,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.chat(ctx, rest)
 	case "serve":
 		return a.serve(ctx)
+	case "update":
+		return a.update(ctx)
 	case "tui":
 		if !a.Interactive {
 			return errors.New("tui needs a terminal")
@@ -216,10 +227,14 @@ func (a *App) start(ctx context.Context, args []string) error {
 
 // launch runs the configured node in the background and waits until it is up.
 func (a *App) launch() (daemon.Process, error) {
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return daemon.Process{}, err
 	}
+	return a.launchExe(exe)
+}
+
+func (a *App) launchExe(exe string) (daemon.Process, error) {
 	os.Remove(a.pidPath()) // drop a stale PID file
 	if err := daemon.Spawn(exe, a.logPath(), "serve"); err != nil {
 		return daemon.Process{}, err
@@ -229,6 +244,49 @@ func (a *App) launch() (daemon.Process, error) {
 		return daemon.Process{}, fmt.Errorf("node did not start, see %s", a.logPath())
 	}
 	return p, nil
+}
+
+// executable is the path of the running binary with symlinks resolved.
+func executable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
+func (a *App) update(ctx context.Context) error {
+	rev, updated, err := a.selfUpdate(ctx, a.out, false)
+	if err != nil {
+		return err
+	}
+	if updated {
+		fmt.Fprintf(a.out, "● updated to %s\n", update.Short(rev))
+	} else {
+		fmt.Fprintf(a.out, "● already up to date (%s)\n", update.Short(rev))
+	}
+	return nil
+}
+
+// selfUpdate installs the newest version over the running binary and restarts
+// the node if it is running. Build output goes to out.
+func (a *App) selfUpdate(ctx context.Context, out io.Writer, batch bool) (rev string, updated bool, err error) {
+	u := a.updater
+	u.Out, u.Batch = out, batch
+	if u.Exe == "" {
+		// Resolved before the update: afterwards the path of a replaced binary is gone.
+		if u.Exe, err = executable(); err != nil {
+			return "", false, err
+		}
+	}
+	if rev, updated, err = u.Run(ctx); err != nil || !updated {
+		return rev, updated, err
+	}
+	if running, err := a.stopNode(); err != nil || !running {
+		return rev, true, err
+	}
+	_, err = a.launchExe(u.Exe)
+	return rev, true, err
 }
 
 func (a *App) stop() error {

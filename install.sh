@@ -73,6 +73,9 @@ export GOTOOLCHAIN=auto
 cd "$REPO_ROOT"
 make install
 
+# "ouro update" builds into a staging directory and installs the binary itself.
+[ -z "${OURO_UPDATE:-}" ] || exit 0
+
 echo
 echo "Done. Installed into ${PREFIX:-$HOME/.local}/bin/ouro"
 case ":$PATH:" in

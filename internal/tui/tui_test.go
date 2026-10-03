@@ -32,6 +32,10 @@ type fakeBackend struct {
 	started       int
 	stopped       int
 	setupCommands int
+	updates       int
+	updateAvail   bool
+	updated       bool
+	updateErr     error
 
 	trust     Contacts
 	accepted  []string
@@ -45,6 +49,8 @@ func (f *fakeBackend) Start() error                        { f.started++; return
 func (f *fakeBackend) Stop() error                         { f.stopped++; return nil }
 func (f *fakeBackend) Discover() ([]discovery.Node, error) { return f.nodes, nil }
 func (f *fakeBackend) Contacts() (Contacts, error)         { return f.trust, nil }
+func (f *fakeBackend) UpdateAvailable() (bool, error)      { return f.updateAvail, nil }
+func (f *fakeBackend) Update() (bool, error)               { f.updates++; return f.updated, f.updateErr }
 func (f *fakeBackend) SetupCommand() (*exec.Cmd, error) {
 	f.setupCommands++
 	return exec.Command("true"), nil
@@ -381,5 +387,45 @@ func TestTinyWindow(t *testing.T) {
 		m.View() // the splash must survive tiny windows
 		m.showSplash = false
 		m.View()
+	}
+}
+
+func TestUpdateHintAndRestart(t *testing.T) {
+	m, b := newModel(t, alpha)
+	if strings.Contains(m.View().Content, "update available") {
+		t.Fatal("no hint without an update")
+	}
+	b.updateAvail = true
+	if _, cmd := m.Update(m.checkUpdate()); cmd == nil {
+		t.Fatal("the next check should be scheduled")
+	}
+	if !strings.Contains(m.View().Content, "update available") {
+		t.Fatalf("header should announce the update:\n%s", m.View().Content)
+	}
+
+	b.updated = true
+	cmd := press(m, "u")
+	if cmd == nil || !m.updating || !strings.Contains(m.View().Content, "updating…") {
+		t.Fatal("u should start the update")
+	}
+	if press(m, "u") != nil {
+		t.Fatal("a running update should not be started again")
+	}
+	if _, quit := m.Update(cmd()); quit == nil || !m.Restart() || b.updates != 1 {
+		t.Fatalf("after an update the UI should restart (updates: %d)", b.updates)
+	}
+}
+
+func TestUpdateFailureAndNothingToDo(t *testing.T) {
+	m, b := newModel(t, alpha)
+	m.Update(press(m, "u")())
+	if m.Restart() || m.updating || !strings.Contains(m.View().Content, "already up to date") {
+		t.Fatalf("without a new version the UI keeps running:\n%s", m.View().Content)
+	}
+
+	b.updateErr = errors.New("git: offline")
+	m.Update(press(m, "u")())
+	if m.Restart() || !m.noticeErr || !strings.Contains(m.View().Content, "update: git: offline") {
+		t.Fatalf("a failed update should be reported:\n%s", m.View().Content)
 	}
 }

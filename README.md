@@ -12,6 +12,7 @@ ouro list                 # find nodes on the network
 ouro chat <ID|name> "hi"  # one-shot; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
 ouro stop
+ouro update               # build and install the newest main
 ```
 
 ## Terminal UI
@@ -33,9 +34,17 @@ Conversations live only as long as the TUI runs.
 | `↑` `↓` / `j` `k` | select a node | – |
 | `s` / `c` | start or stop the node / run the setup | – |
 | `n` / `r` | new conversation / search the network | – |
+| `u` | update to the newest version and restart the UI | – |
 | `R` | connection requests (`a` accept, `x` reject, `esc` back) | – |
 | `pgup` `pgdn` | scroll the chat | scroll the chat |
 | `q` / `ctrl+c` | quit (the node keeps running) | `ctrl+c` quits |
+
+## Updates
+
+`ouro update` (or `u` in the terminal UI) fetches the newest `main` from the repository the binary
+was built from, builds it with `install.sh` and replaces the running binary. A running node is
+restarted, the terminal UI restarts itself. The UI checks hourly and shows `↑ update available` in the header.
+It needs `git` and `make`; sources and build live in `~/.config/ouroboros/update/`.
 
 Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:11434/v1` (Ollama, no key),
 `http://localhost:1234/v1` (LM Studio), `https://openrouter.ai/api/v1`.
@@ -49,7 +58,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Discovery | UDP probe to multicast `239.255.41.38`, broadcast and localhost on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
 | Trust | signed requests (Ed25519); unknown peers become connection requests a human approves |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log` |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/` |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
 `ouro start --setup` reconfigures, `ouro serve` runs in the foreground (e.g. for systemd).
@@ -80,6 +89,7 @@ internal/openai      minimal OpenAI-compatible client (+ openaitest fake)
 internal/discovery   LAN discovery
 internal/daemon      background process + PID file
 internal/config      persisted configuration
+internal/update      self-update from the newest main
 ```
 
 ```sh

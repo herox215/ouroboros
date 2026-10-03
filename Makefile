@@ -1,10 +1,13 @@
 BIN := ouro
 PREFIX ?= $(HOME)/.local
+# "ouro update" pulls from the repository the binary was built from.
+OURO_REPO ?= $(shell git remote get-url origin 2>/dev/null)
+LDFLAGS := -s -w $(if $(OURO_REPO),-X ouroboros/internal/update.Repo=$(OURO_REPO))
 
 .PHONY: build test cover install clean
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/ouro
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/ouro
 
 test:
 	go vet ./...

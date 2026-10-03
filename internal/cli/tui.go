@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -20,7 +22,14 @@ import (
 
 // tui runs the terminal UI until the user quits.
 func (a *App) tui(ctx context.Context) error {
-	_, err := tea.NewProgram(tui.New(tuiBackend{a}), tea.WithContext(ctx)).Run()
+	exe, err := executable()
+	if err != nil {
+		return err
+	}
+	final, err := tea.NewProgram(tui.New(tuiBackend{a}), tea.WithContext(ctx)).Run()
+	if m, ok := final.(*tui.Model); ok && err == nil && m.Restart() {
+		return syscall.Exec(exe, os.Args, os.Environ()) // continue as the updated binary
+	}
 	return err
 }
 
@@ -131,6 +140,21 @@ func (b tuiBackend) notify(addr string, fn func(*a2a.Client, context.Context, st
 		return fmt.Errorf("decided locally, but %s did not answer: %w", addr, err)
 	}
 	return nil
+}
+
+func (b tuiBackend) UpdateAvailable() (bool, error) {
+	u := b.a.updater
+	u.Batch = true
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	rev, err := u.Latest(ctx)
+	// A build without a known revision cannot tell, so it does not nag.
+	return err == nil && u.Revision != "" && rev != u.Revision, err
+}
+
+func (b tuiBackend) Update() (bool, error) {
+	_, updated, err := b.a.selfUpdate(context.Background(), io.Discard, true)
+	return updated, err
 }
 
 // SetupCommand runs the interactive setup, which starts the node afterwards.

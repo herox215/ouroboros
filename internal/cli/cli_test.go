@@ -16,6 +16,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/openai/openaitest"
+	"ouroboros/internal/update/updatetest"
 )
 
 // freeUDPPort returns a UDP port that is currently unused.
@@ -418,5 +419,26 @@ func TestNotRunning(t *testing.T) {
 func TestStartRejectsUnknownFlag(t *testing.T) {
 	if _, err := run(t, testSettings(t), "", "start", "--force"); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestUpdateInstallsNewestVersion(t *testing.T) {
+	s := testSettings(t)
+	repo, rev := updatetest.NewRepo(t, "v1")
+	exe := filepath.Join(t.TempDir(), "ouro")
+	app, out := newApp(s, "")
+	app.updater.Repo, app.updater.Exe, app.updater.Revision = repo, exe, "old"
+
+	if err := app.Run(context.Background(), []string{"update"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "v1" || !strings.Contains(out.String(), "updated to "+rev[:7]) {
+		t.Fatalf("binary %q, output %q", got, out.String())
+	}
+
+	out.Reset()
+	app.updater.Revision = rev
+	if err := app.Run(context.Background(), []string{"update"}); err != nil || !strings.Contains(out.String(), "already up to date") {
+		t.Fatalf("second update: %v, output %q", err, out.String())
 	}
 }
