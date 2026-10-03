@@ -23,6 +23,8 @@ type Config struct {
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	PrivateKey string `json:"private_key,omitempty"`
+	// Peers are hosts to look for nodes on besides the local network.
+	Peers []string `json:"peers,omitempty"`
 }
 
 // Complete reports whether the node can be started with this configuration.

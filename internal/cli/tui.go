@@ -69,7 +69,7 @@ func (b tuiBackend) Stop() error {
 }
 
 func (b tuiBackend) Discover() ([]discovery.Node, error) {
-	return discovery.Discover(b.a.settings.DiscoPort, b.a.discoverWait)
+	return b.a.discover()
 }
 
 func (b tuiBackend) Send(ctx context.Context, node discovery.Node, contextID, text string) (string, error) {

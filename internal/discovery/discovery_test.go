@@ -2,6 +2,8 @@ package discovery
 
 import (
 	"net"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +127,49 @@ func requireMulticast(t *testing.T, group *net.UDPConn) {
 	group.SetReadDeadline(time.Now().Add(wait))
 	if _, err := group.Read(make([]byte, 16)); err != nil {
 		t.Skip("multicast is blocked on this host (firewall?)")
+	}
+}
+
+func TestDiscoverProbesPeers(t *testing.T) {
+	port := serve(t, 0, Node{ID: "abc123", Name: "alpha"})
+	conn, _ := net.ListenUDP("udp4", nil) // a discovery port nobody answers on
+	other := conn.LocalAddr().(*net.UDPAddr).Port
+	conn.Close()
+
+	nodes, err := Discover(other, wait, "localhost:"+strconv.Itoa(port), "no-such-host.invalid")
+	if err != nil || len(nodes) != 1 || nodes[0].ID != "abc123" {
+		t.Fatalf("got %+v, %v", nodes, err)
+	}
+}
+
+func TestPeerAddr(t *testing.T) {
+	for peer, want := range map[string]string{
+		"10.0.0.7":      "10.0.0.7:41338",
+		"box.example":   "box.example:41338",
+		"10.0.0.7:5000": "10.0.0.7:5000",
+	} {
+		if got := peerAddr(peer, 41338); got != want {
+			t.Errorf("peerAddr(%q) = %q, want %q", peer, got, want)
+		}
+	}
+}
+
+func TestBroadcasts(t *testing.T) {
+	for _, ip := range broadcasts() {
+		if ip.To4() == nil || ip.IsLoopback() {
+			t.Fatalf("unexpected broadcast address %v", ip)
+		}
+	}
+}
+
+func TestTailscalePeers(t *testing.T) {
+	status := `{"Self": {"TailscaleIPs": ["100.64.0.1"], "Online": true}, "Peer": {
+		"a": {"TailscaleIPs": ["100.64.0.2", "fd7a:115c:a1e0::2"], "Online": true},
+		"b": {"TailscaleIPs": ["100.64.0.3"], "Online": false}}}`
+	if got := tailscalePeers([]byte(status)); !slices.Equal(got, []string{"100.64.0.2"}) {
+		t.Fatalf("got %v", got)
+	}
+	if got := tailscalePeers([]byte("not json")); got != nil {
+		t.Fatalf("got %v", got)
 	}
 }

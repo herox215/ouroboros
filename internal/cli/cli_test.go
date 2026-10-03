@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -49,6 +50,7 @@ func newApp(s Settings, input string) (*App, *bytes.Buffer) {
 	var out bytes.Buffer
 	app := New(s, strings.NewReader(input), &out)
 	app.discoverWait = 300 * time.Millisecond
+	app.vpnPeers = nil // tests stay on this host
 	return app, &out
 }
 
@@ -141,7 +143,7 @@ func TestSetupRetriesKeyAndModel(t *testing.T) {
 	if strings.Count(out.String(), "rejected") != 1 || strings.Count(out.String(), "unknown model") != 2 {
 		t.Fatalf("output %q", out.String())
 	}
-	if saved, _ := config.Load(s.Home); saved != cfg {
+	if saved, _ := config.Load(s.Home); !reflect.DeepEqual(saved, cfg) {
 		t.Fatalf("saved %+v", saved)
 	}
 }
@@ -162,7 +164,7 @@ func TestSetupKeepsExistingValues(t *testing.T) {
 	want := nodeConfig(testSettings(t))
 	app, _ := newApp(s, "\n\n\n")
 	cfg, err := app.setup(context.Background(), want)
-	if err != nil || cfg != want {
+	if err != nil || !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }
@@ -440,5 +442,53 @@ func TestUpdateInstallsNewestVersion(t *testing.T) {
 	app.updater.Revision = rev
 	if err := app.Run(context.Background(), []string{"update"}); err != nil || !strings.Contains(out.String(), "already up to date") {
 		t.Fatalf("second update: %v, output %q", err, out.String())
+	}
+}
+
+func TestPeers(t *testing.T) {
+	s := testSettings(t)
+	if out, err := run(t, s, "", "peers"); err != nil || !strings.Contains(out, "no peers") {
+		t.Fatalf("got %q, %v", out, err)
+	}
+	for _, args := range [][]string{{"add", "10.0.0.7"}, {"add", "box.example"}, {"add", "10.0.0.7"}, {"rm", "box.example"}} {
+		if _, err := run(t, s, "", append([]string{"peers"}, args...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, _ := run(t, s, "", "peers"); out != "10.0.0.7\n" {
+		t.Fatalf("peers = %q", out)
+	}
+	if _, err := run(t, s, "", "peers", "rm", "box.example"); err == nil {
+		t.Fatal("removing an unknown peer should fail")
+	}
+	if _, err := run(t, s, "", "peers", "bogus"); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A node outside the local network is found through a configured or VPN peer.
+func TestListFindsNodesOnPeers(t *testing.T) {
+	remote := testSettings(t)
+	startNode(t, remote, nodeConfig(remote))
+
+	s := testSettings(t) // another discovery port: the remote node does not hear its probes
+	if out, _ := run(t, s, "", "list"); !strings.Contains(out, "no ouroboros nodes") {
+		t.Fatalf("without peers nothing should be found: %q", out)
+	}
+	peer := fmt.Sprintf("127.0.0.1:%d", remote.DiscoPort)
+	if _, err := run(t, s, "", "peers", "add", peer); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := run(t, s, "", "list"); !strings.Contains(out, "alpha") {
+		t.Fatalf("the configured peer should be found: %q", out)
+	}
+
+	if _, err := run(t, s, "", "peers", "rm", peer); err != nil {
+		t.Fatal(err)
+	}
+	app, out := newApp(s, "")
+	app.vpnPeers = func(context.Context) []string { return []string{peer} }
+	if err := app.Run(context.Background(), []string{"list"}); err != nil || !strings.Contains(out.String(), "alpha") {
+		t.Fatalf("the VPN peer should be found: %q, %v", out.String(), err)
 	}
 }

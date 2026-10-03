@@ -9,6 +9,7 @@ One static binary; every node on the LAN can find and chat with every other node
 ouro                      # open the terminal UI (default)
 ouro start                # first run: endpoint, API key, model picker, node name
 ouro list                 # find nodes on the network
+ouro peers add <host>     # also look for a node on this host (VPN, other network)
 ouro chat <ID|name> "hi"  # one-shot; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
 ouro stop
@@ -55,7 +56,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 |---|---|
 | LLM | `GET /models` for the picker, `POST /chat/completions` for replies |
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /` (TCP 41337, falls back to a free port) |
-| Discovery | UDP probe to multicast `239.255.41.38`, broadcast and localhost on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
+| Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and known peers on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
 | Trust | signed requests (Ed25519); unknown peers become connection requests a human approves |
 | Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/` |
@@ -64,6 +65,18 @@ Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` 
 `ouro start --setup` reconfigures, `ouro serve` runs in the foreground (e.g. for systemd).
 
 Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
+
+## Beyond the local network
+
+VPNs like Tailscale forward neither multicast nor broadcast, so nodes there are probed directly:
+
+- **Tailscale** (and Headscale): the online peers of the tailnet are probed automatically, as reported by
+  `tailscale status`. Nothing to configure.
+- **Anything else** (WireGuard, NetBird, Nebula, another subnet, …): `ouro peers add <host>` adds an IP or
+  DNS name, `host:port` for a non-default discovery port. `ouro peers` lists them, `ouro peers rm <host>` removes one.
+- Layer 2 VPNs with broadcast such as ZeroTier work like a LAN.
+
+A node reachable on several ways is listed once.
 
 ## Trust
 

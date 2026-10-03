@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -36,6 +37,7 @@ const usage = `ouro – tiny A2A agent node for any OpenAI-compatible LLM API
   ouro stop               stop the node
   ouro status             show the local node
   ouro list               find ouroboros nodes on the network
+  ouro peers [add|rm HOST] hosts to look for nodes on beyond the local network
   ouro chat ID ["msg"]    chat with a node (interactive without msg)
   ouro tui                control the node and chat in a terminal UI
   ouro serve              run the node in the foreground
@@ -105,6 +107,8 @@ type App struct {
 
 	discoverWait time.Duration
 	updater      update.Updater
+	// vpnPeers finds hosts that discovery cannot reach by multicast or broadcast.
+	vpnPeers func(context.Context) []string
 }
 
 // New returns an App reading user input from in and writing to out.
@@ -114,6 +118,7 @@ func New(s Settings, in io.Reader, out io.Writer) *App {
 		in:           bufio.NewReader(in),
 		out:          out,
 		discoverWait: 1500 * time.Millisecond,
+		vpnPeers:     discovery.TailscalePeers,
 		updater:      update.Updater{Repo: update.Repo, Dir: filepath.Join(s.Home, "update"), Revision: update.Revision()},
 	}
 }
@@ -140,6 +145,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.status()
 	case "list":
 		return a.list()
+	case "peers":
+		return a.peers(rest)
 	case "chat":
 		return a.chat(ctx, rest)
 	case "serve":
@@ -325,8 +332,53 @@ func (a *App) status() error {
 	return nil
 }
 
+// discover finds the nodes on the local network, on the configured peers and
+// on the VPN peers of this host.
+func (a *App) discover() ([]discovery.Node, error) {
+	cfg, err := config.Load(a.settings.Home)
+	if err != nil {
+		return nil, err
+	}
+	peers := cfg.Peers
+	if a.vpnPeers != nil {
+		peers = append(peers, a.vpnPeers(context.Background())...)
+	}
+	return discovery.Discover(a.settings.DiscoPort, a.discoverWait, peers...)
+}
+
+// peers lists or changes the hosts that are probed directly.
+func (a *App) peers(args []string) error {
+	cfg, err := config.Load(a.settings.Home)
+	if err != nil {
+		return err
+	}
+	switch {
+	case len(args) == 0:
+		if len(cfg.Peers) == 0 {
+			fmt.Fprintln(a.out, "no peers (add one with: ouro peers add HOST)")
+		}
+		for _, p := range cfg.Peers {
+			fmt.Fprintln(a.out, p)
+		}
+		return nil
+	case len(args) == 2 && args[0] == "add":
+		if !slices.Contains(cfg.Peers, args[1]) {
+			cfg.Peers = append(cfg.Peers, args[1])
+		}
+	case len(args) == 2 && args[0] == "rm":
+		i := slices.Index(cfg.Peers, args[1])
+		if i < 0 {
+			return fmt.Errorf("no peer %q", args[1])
+		}
+		cfg.Peers = slices.Delete(cfg.Peers, i, i+1)
+	default:
+		return errors.New("usage: ouro peers [add|rm HOST]")
+	}
+	return config.Save(a.settings.Home, cfg)
+}
+
 func (a *App) list() error {
-	nodes, err := discovery.Discover(a.settings.DiscoPort, a.discoverWait)
+	nodes, err := a.discover()
 	if err != nil {
 		return err
 	}
@@ -420,7 +472,7 @@ func (a *App) resolve(target string) (discovery.Node, error) {
 		}
 		return discovery.Node{Host: host, Port: p}, nil
 	}
-	nodes, err := discovery.Discover(a.settings.DiscoPort, a.discoverWait)
+	nodes, err := a.discover()
 	if err != nil {
 		return discovery.Node{}, err
 	}

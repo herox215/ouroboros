@@ -1,9 +1,12 @@
 // Package discovery finds Ouroboros nodes on the local network.
 //
-// A client sends a probe to the multicast group, the broadcast address and
+// A client sends a probe to the multicast group, the broadcast addresses and
 // localhost; every node listening on the discovery port answers with its Node,
 // both to the sender and to the multicast group. The group answer arrives on
 // the fixed discovery port, so a firewall only needs to allow that port.
+//
+// Networks that forward neither multicast nor broadcast, such as VPNs, are
+// covered by probing known peers directly.
 package discovery
 
 import (
@@ -115,8 +118,9 @@ func Serve(conn *net.UDPConn, self Node) error {
 }
 
 // Discover probes the network and collects answers for the given duration.
-// Nodes are returned sorted by name, one entry per ID.
-func Discover(port int, wait time.Duration) ([]Node, error) {
+// Peers are hosts to probe directly, as "host" or "host:port" for another
+// discovery port. Nodes are returned sorted by name, one entry per ID.
+func Discover(port int, wait time.Duration, peers ...string) ([]Node, error) {
 	conn, err := net.ListenUDP("udp4", nil)
 	if err != nil {
 		return nil, err
@@ -131,8 +135,16 @@ func Discover(port int, wait time.Duration) ([]Node, error) {
 	}
 
 	// Best effort: a target may be unreachable (e.g. no network), localhost always works.
-	for _, ip := range []net.IP{Group, net.IPv4bcast, net.IPv4(127, 0, 0, 1)} {
+	for _, ip := range append(broadcasts(), Group, net.IPv4bcast, net.IPv4(127, 0, 0, 1)) {
 		conn.WriteToUDP([]byte(probe), &net.UDPAddr{IP: ip, Port: port})
+	}
+	for _, peer := range peers {
+		// Resolving a name may take a while; a probe that is too late is dropped.
+		go func() {
+			if addr, err := net.ResolveUDPAddr("udp4", peerAddr(peer, port)); err == nil {
+				conn.WriteToUDP([]byte(probe), addr)
+			}
+		}()
 	}
 
 	answers := make(chan Node)
@@ -161,6 +173,41 @@ func Discover(port int, wait time.Duration) ([]Node, error) {
 	}
 	slices.SortFunc(nodes, func(a, b Node) int { return strings.Compare(a.Name, b.Name) })
 	return nodes, nil
+}
+
+// peerAddr adds the discovery port to a peer given without one.
+func peerAddr(peer string, port int) string {
+	if _, _, err := net.SplitHostPort(peer); err == nil {
+		return peer
+	}
+	return net.JoinHostPort(strings.Trim(peer, "[]"), strconv.Itoa(port))
+}
+
+// broadcasts returns the broadcast address of every network this host is on.
+// The limited broadcast only leaves through the default interface, which
+// misses further networks such as a second LAN or a layer 2 VPN.
+func broadcasts() []net.IP {
+	ifaces, _ := net.Interfaces()
+	var ips []net.IP
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagBroadcast == 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil || len(ipnet.Mask) != net.IPv4len {
+				continue
+			}
+			ip := ipnet.IP.To4()
+			bcast := make(net.IP, net.IPv4len)
+			for i := range bcast {
+				bcast[i] = ip[i] | ^ipnet.Mask[i]
+			}
+			ips = append(ips, bcast)
+		}
+	}
+	return ips
 }
 
 // collect sends every node answering on conn to answers until deadline.

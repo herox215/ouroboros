@@ -3,25 +3,26 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 )
 
 func TestLoadMissingReturnsEmpty(t *testing.T) {
 	c, err := Load(t.TempDir())
-	if err != nil || c != (Config{}) {
+	if err != nil || !reflect.DeepEqual(c, Config{}) {
 		t.Fatalf("got %+v, %v", c, err)
 	}
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested")
-	want := Config{BaseURL: "http://x/v1", APIKey: "sk", Model: "m", Name: "n", ID: "abc123"}
+	want := Config{BaseURL: "http://x/v1", APIKey: "sk", Model: "m", Name: "n", ID: "abc123", Peers: []string{"10.0.0.7"}}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(dir)
-	if err != nil || got != want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
