@@ -178,33 +178,17 @@ func Discover(ctx context.Context, port int, wait time.Duration, peers ...string
 		}()
 	}
 
-	answers := make(chan Node)
-	errs := make(chan error, len(conns))
 	deadline := time.Now().Add(wait)
 	for _, c := range conns {
 		c.SetReadDeadline(deadline)
-		go func() { errs <- collect(c, answers) }()
 	}
-	// A deadline in the past ends the collecting early.
-	defer context.AfterFunc(ctx, func() {
-		for _, c := range conns {
-			c.SetReadDeadline(time.Now())
-		}
-	})()
+	// A caller that gives up ends the collecting early.
+	defer context.AfterFunc(ctx, func() { expire(conns) })()
 
-	found := map[string]Node{}
-	for pending := len(conns); pending > 0; {
-		select {
-		case node := <-answers:
-			found[node.ID] = preferred(found[node.ID], node)
-		case err := <-errs:
-			if err != nil {
-				return nil, err
-			}
-			pending--
-		}
+	found, err := gather(conns)
+	if err != nil {
+		return nil, err
 	}
-
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -252,8 +236,42 @@ func broadcasts() []net.IP {
 	return ips
 }
 
+// gather collects the answers arriving on conns until their read deadlines,
+// one per ID. It returns only when every collector has finished, so none is
+// left behind sending to a channel nobody reads.
+func gather(conns []*net.UDPConn) (map[string]Node, error) {
+	answers := make(chan Node)
+	errs := make(chan error, len(conns))
+	for _, c := range conns {
+		go func() { errs <- collect(c, answers) }()
+	}
+
+	found := map[string]Node{}
+	var failed error
+	for pending := len(conns); pending > 0; {
+		select {
+		case node := <-answers:
+			found[node.ID] = preferred(found[node.ID], node)
+		case err := <-errs:
+			if err != nil && failed == nil {
+				failed = err
+				expire(conns) // nothing is worth waiting for any more
+			}
+			pending--
+		}
+	}
+	return found, failed
+}
+
+// expire ends the reading on conns: a deadline in the past is over at once.
+func expire(conns []*net.UDPConn) {
+	for _, c := range conns {
+		c.SetReadDeadline(time.Now())
+	}
+}
+
 // collect sends every node answering on conn to answers until the read
-// deadline of conn.
+// deadline of conn. Somebody has to receive from answers until it returns.
 func collect(conn *net.UDPConn, answers chan<- Node) error {
 	buf := make([]byte, 4096)
 	for {

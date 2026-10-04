@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"net"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -182,5 +183,43 @@ func TestDiscoverStopsWhenContextIsDone(t *testing.T) {
 	start := time.Now()
 	if _, err := Discover(ctx, serve(t, 0, Node{ID: "abc123"}), time.Minute); err == nil || time.Since(start) > 5*time.Second {
 		t.Fatalf("got %v after %v", err, time.Since(start))
+	}
+}
+
+// A socket that fails ends the discovery, and the collector of the other
+// socket ends with it: it must neither keep reading nor stay stuck with an
+// answer nobody takes.
+func TestGatherLeavesNoCollectorBehind(t *testing.T) {
+	broken, _ := net.ListenUDP("udp4", nil)
+	broken.Close() // reading from it fails at once
+	busy, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	busy.SetReadDeadline(time.Now().Add(time.Minute))
+
+	// Answers keep coming, so the collector has one to hand over when the other fails.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				busy.WriteToUDP([]byte(`{"id":"abc123"}`), busy.LocalAddr().(*net.UDPAddr))
+			}
+		}
+	}()
+
+	start := time.Now()
+	if _, err := gather([]*net.UDPConn{broken, busy}); err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("got %v after %v", err, time.Since(start))
+	}
+	stacks := make([]byte, 1<<20)
+	stacks = stacks[:runtime.Stack(stacks, true)]
+	if strings.Contains(string(stacks), "discovery.collect(") {
+		t.Fatalf("a collector is still running:\n%s", stacks)
 	}
 }
