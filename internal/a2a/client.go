@@ -132,9 +132,3 @@ func FetchCard(ctx context.Context, baseURL string) (AgentCard, error) {
 	}
 	return card, nil
 }
-
-// Send delivers text to baseURL without authentication. It only works against
-// peers that trust everyone; the node itself always uses Client.
-func Send(ctx context.Context, baseURL, contextID, text string) (string, error) {
-	return new(Client).Send(ctx, baseURL, contextID, text)
-}

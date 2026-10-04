@@ -19,16 +19,24 @@ func echo(_ context.Context, contextID, text string) (string, error) {
 	return contextID + ":" + text, nil
 }
 
-func newServer(t *testing.T, respond Responder) *httptest.Server {
+// newServer runs a node whose agent is respond. A node trusts its own key, so
+// its own client is answered without a handshake.
+func newServer(t *testing.T, respond Responder) *node {
 	t.Helper()
-	srv := httptest.NewServer(NewHandler(testCard, respond))
-	t.Cleanup(srv.Close)
-	return srv
+	n := newNode(t, "alpha")
+	n.respond = respond
+	return n
 }
 
-func post(t *testing.T, url, body string) response {
+// post sends body to n as a request n signed itself.
+func post(t *testing.T, n *node, body string) response {
 	t.Helper()
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	r, err := http.NewRequest(http.MethodPost, n.srv.URL, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign(r, []byte(body), n.id, 0)
+	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +49,7 @@ func post(t *testing.T, url, body string) response {
 }
 
 func TestAgentCardURLFromHost(t *testing.T) {
-	srv := newServer(t, echo)
+	srv := newServer(t, echo).srv
 	resp, err := http.Get(srv.URL + CardPath)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +72,7 @@ func TestAgentCardURLFromHost(t *testing.T) {
 
 func TestSendRoundTrip(t *testing.T) {
 	srv := newServer(t, echo)
-	got, err := Send(context.Background(), srv.URL, "ctx-1", "hello")
+	got, err := srv.client().Send(context.Background(), srv.srv.URL, "ctx-1", "hello")
 	if err != nil || got != "ctx-1:hello" {
 		t.Fatalf("got %q, %v", got, err)
 	}
@@ -72,7 +80,7 @@ func TestSendRoundTrip(t *testing.T) {
 
 func TestMissingContextIDIsGenerated(t *testing.T) {
 	srv := newServer(t, echo)
-	res := post(t, srv.URL, `{"jsonrpc":"2.0","id":7,"method":"message/send",
+	res := post(t, srv, `{"jsonrpc":"2.0","id":7,"method":"message/send",
 		"params":{"message":{"kind":"message","role":"user","parts":[{"kind":"text","text":"hi"}]}}}`)
 	if res.Error != nil || res.Result == nil || string(res.ID) != "7" {
 		t.Fatalf("got %+v", res)
@@ -98,7 +106,7 @@ func TestRPCErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res := post(t, newServer(t, tt.respond).URL, tt.body)
+			res := post(t, newServer(t, tt.respond), tt.body)
 			if res.Error == nil || res.Error.Code != tt.code {
 				t.Fatalf("got %+v", res)
 			}
@@ -110,7 +118,7 @@ func TestSendReturnsRPCError(t *testing.T) {
 	srv := newServer(t, func(context.Context, string, string) (string, error) {
 		return "", errors.New("llm down")
 	})
-	_, err := Send(context.Background(), srv.URL, "c", "x")
+	_, err := srv.client().Send(context.Background(), srv.srv.URL, "c", "x")
 	var rpcErr *Error
 	if !errors.As(err, &rpcErr) || rpcErr.Code != CodeInternalError || !strings.Contains(err.Error(), "llm down") {
 		t.Fatalf("got %v", err)
@@ -127,7 +135,7 @@ func TestSendBadResponses(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			srv := httptest.NewServer(h)
 			defer srv.Close()
-			if _, err := Send(context.Background(), srv.URL, "c", "x"); err == nil {
+			if _, err := new(Client).Send(context.Background(), srv.URL, "c", "x"); err == nil {
 				t.Fatal("want error")
 			}
 		})
@@ -156,7 +164,7 @@ func TestCallErrors(t *testing.T) {
 	gone.Close()
 
 	c := new(Client)
-	if _, err := c.call(ctx, srv.URL, MethodSend, make(chan int)); err == nil {
+	if _, err := c.call(ctx, srv.srv.URL, MethodSend, make(chan int)); err == nil {
 		t.Error("params that are no JSON should fail")
 	}
 	if _, err := c.call(ctx, "://no-url", MethodSend, struct{}{}); err == nil {

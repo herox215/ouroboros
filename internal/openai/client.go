@@ -123,12 +123,6 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// Chat sends msgs to model and returns the assistant's reply.
-func (c *Client) Chat(ctx context.Context, model string, msgs []Message) (string, error) {
-	msg, err := c.Complete(ctx, model, msgs, nil)
-	return msg.Content, err
-}
-
 // Complete sends msgs to model, which may answer with calls to tools instead
 // of a reply.
 func (c *Client) Complete(ctx context.Context, model string, msgs []Message, tools []Tool) (Message, error) {

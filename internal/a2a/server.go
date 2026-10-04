@@ -49,7 +49,10 @@ type Method struct {
 // method handles the JSON-RPC method it is registered for.
 type method func(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error)
 
-// Handler returns the HTTP handler of the server.
+// Handler returns the HTTP handler of the server. It serves the agent card
+// and dispatches JSON-RPC requests to methods. Every request goes the same
+// way: read and parse the body, authenticate the caller, look up the method,
+// answer with its result or its error.
 func (s *Server) Handler() http.Handler {
 	verify := newVerifier()
 	// The built-in methods: JSON-RPC method name to handler.
@@ -58,17 +61,39 @@ func (s *Server) Handler() http.Handler {
 		MethodAccept: s.accept,
 		MethodReject: s.reject,
 	}
-	return handler(s.Card,
-		func(r *http.Request, body []byte) (Caller, error) {
-			publicKey, err := verify.verify(r, body)
-			return Caller{publicKey, callbackAddr(r, r.Header.Get(HeaderPort))}, err
-		},
-		func(name string) (method, bool) {
-			if run, ok := builtin[name]; ok {
-				return run, true
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+CardPath, func(w http.ResponseWriter, r *http.Request) {
+		c := s.Card()
+		c.URL = "http://" + r.Host + "/"
+		writeJSON(w, c)
+	})
+	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
+		res := response{JSONRPC: "2.0"}
+		defer func() { writeJSON(w, res) }()
+
+		var req request
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil || json.Unmarshal(body, &req) != nil {
+			res.Error = &Error{CodeParseError, "parse error"}
+			return
+		}
+		res.ID = req.ID
+		publicKey, err := verify.verify(r, body)
+		if err != nil {
+			res.Error = &Error{CodeUnauthorized, err.Error()}
+			return
+		}
+		run, ok := builtin[req.Method]
+		if !ok {
+			if run, ok = s.added(req.Method); !ok {
+				res.Error = &Error{CodeMethodNotFound, "method not found"}
+				return
 			}
-			return s.added(name)
-		})
+		}
+		from := Caller{publicKey, callbackAddr(r, r.Header.Get(HeaderPort))}
+		res.Result, res.Error = run(r.Context(), from, req.Params)
+	})
+	return mux
 }
 
 // added returns the added method called name, limited to connected peers.
@@ -88,53 +113,6 @@ func (s *Server) added(name string) (method, bool) {
 		}, true
 	}
 	return nil, false
-}
-
-// NewHandler serves the agent card and the JSON-RPC endpoint without
-// authentication: every peer is trusted. Used for tests and raw A2A clients.
-func NewHandler(card AgentCard, respond Responder) http.Handler {
-	return handler(func() AgentCard { return card }, nil, func(name string) (method, bool) {
-		return answer(respond), name == MethodSend
-	})
-}
-
-// handler serves the agent card and dispatches JSON-RPC requests to methods.
-// Every request goes the same way: read and parse the body, authenticate the
-// caller (unless authenticate is nil), look up the method, answer with its
-// result or its error.
-func handler(card func() AgentCard, authenticate func(*http.Request, []byte) (Caller, error), lookup func(name string) (method, bool)) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET "+CardPath, func(w http.ResponseWriter, r *http.Request) {
-		c := card()
-		c.URL = "http://" + r.Host + "/"
-		writeJSON(w, c)
-	})
-	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
-		res := response{JSONRPC: "2.0"}
-		defer func() { writeJSON(w, res) }()
-
-		var req request
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-		if err != nil || json.Unmarshal(body, &req) != nil {
-			res.Error = &Error{CodeParseError, "parse error"}
-			return
-		}
-		res.ID = req.ID
-		var from Caller
-		if authenticate != nil {
-			if from, err = authenticate(r, body); err != nil {
-				res.Error = &Error{CodeUnauthorized, err.Error()}
-				return
-			}
-		}
-		run, ok := lookup(req.Method)
-		if !ok {
-			res.Error = &Error{CodeMethodNotFound, "method not found"}
-			return
-		}
-		res.Result, res.Error = run(r.Context(), from, req.Params)
-	})
-	return mux
 }
 
 // send answers a message of a trusted peer. Anyone else leaves a connection
@@ -183,17 +161,6 @@ func (s *Server) reject(_ context.Context, from Caller, _ json.RawMessage) (*Mes
 }
 
 var errNoText = &Error{CodeInvalidParams, "message needs a text part"}
-
-// answer is MethodSend without a trust check: respond answers the message.
-func answer(respond Responder) method {
-	return func(ctx context.Context, _ Caller, params json.RawMessage) (*Message, *Error) {
-		var p sendParams
-		if json.Unmarshal(params, &p) != nil || p.Message.Text() == "" {
-			return nil, errNoText
-		}
-		return reply(ctx, respond, p.Message)
-	}
-}
 
 // reply lets respond answer msg within its conversation.
 func reply(ctx context.Context, respond Responder, msg Message) (*Message, *Error) {

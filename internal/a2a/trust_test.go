@@ -84,7 +84,7 @@ func TestTrustHandshake(t *testing.T) {
 
 func TestServerRejectsUnsigned(t *testing.T) {
 	alice := newNode(t, "alice")
-	if _, err := Send(context.Background(), alice.srv.URL, "c", "hi"); err == nil {
+	if _, err := new(Client).Send(context.Background(), alice.srv.URL, "c", "hi"); err == nil {
 		t.Fatal("unsigned request must be rejected")
 	} else if !code(err, CodeUnauthorized) {
 		t.Fatalf("got %v, want unauthorized", err)

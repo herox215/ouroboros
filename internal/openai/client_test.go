@@ -30,7 +30,7 @@ func TestModelsSortedAndAuthenticated(t *testing.T) {
 	}
 }
 
-func TestChat(t *testing.T) {
+func TestComplete(t *testing.T) {
 	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Model    string    `json:"model"`
@@ -42,9 +42,9 @@ func TestChat(t *testing.T) {
 		}
 		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
 	})
-	got, err := c.Chat(context.Background(), "gpt", []Message{{Role: "user", Content: "hello"}})
-	if err != nil || got != "hi" {
-		t.Fatalf("got %q, %v", got, err)
+	got, err := c.Complete(context.Background(), "gpt", []Message{{Role: "user", Content: "hello"}}, nil)
+	if err != nil || got.Content != "hi" {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }
 
@@ -61,11 +61,11 @@ func TestNoKeySendsNoAuthorization(t *testing.T) {
 	}
 }
 
-func TestChatNoChoices(t *testing.T) {
+func TestCompleteNoChoices(t *testing.T) {
 	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"choices":[]}`))
 	})
-	if _, err := c.Chat(context.Background(), "gpt", nil); err == nil {
+	if _, err := c.Complete(context.Background(), "gpt", nil, nil); err == nil {
 		t.Fatal("want error")
 	}
 }

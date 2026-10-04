@@ -58,7 +58,7 @@ func TestResolve(t *testing.T) {
 
 func TestDescribe(t *testing.T) {
 	card := a2a.AgentCard{Name: "alpha", Description: "  knows\nthe way "}
-	srv := httptest.NewServer(a2a.NewHandler(card, nil))
+	srv := httptest.NewServer((&a2a.Server{Card: func() a2a.AgentCard { return card }}).Handler())
 	defer srv.Close()
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	node := discovery.Node{Host: host}
