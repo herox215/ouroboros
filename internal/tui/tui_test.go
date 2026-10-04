@@ -35,6 +35,10 @@ type fakeBackend struct {
 	rejected  []string
 	acceptErr error
 	rejectErr error
+	decided   context.Context // what a decision on a request ran with
+
+	// ask, if set, answers instead of steps and reply.
+	ask func(ctx context.Context, step func(Step)) (string, error)
 }
 
 func (f *fakeBackend) Status() (Status, error)     { return f.status, nil }
@@ -45,18 +49,23 @@ func (f *fakeBackend) SetupCommand() (*exec.Cmd, error) {
 	f.setupCommands++
 	return exec.Command("true"), nil
 }
-func (f *fakeBackend) Ask(_ context.Context, contextID, text string, step func(Step)) (string, error) {
+func (f *fakeBackend) Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error) {
 	f.sent = append(f.sent, sent{contextID, text})
+	if f.ask != nil {
+		return f.ask(ctx, step)
+	}
 	for _, s := range f.steps {
 		step(s)
 	}
 	return f.reply, f.sendErr
 }
-func (f *fakeBackend) Accept(publicKey string) error {
+func (f *fakeBackend) Accept(ctx context.Context, publicKey string) error {
+	f.decided = ctx
 	f.accepted = append(f.accepted, publicKey)
 	return f.acceptErr
 }
-func (f *fakeBackend) Reject(publicKey string) error {
+func (f *fakeBackend) Reject(ctx context.Context, publicKey string) error {
+	f.decided = ctx
 	f.rejected = append(f.rejected, publicKey)
 	return f.rejectErr
 }
@@ -350,6 +359,100 @@ func TestNewConversationDropsLateReply(t *testing.T) {
 	c := m.chat
 	if c.contextID == old || len(c.entries) != 0 || c.pending || c.asking != "" {
 		t.Fatalf("conversation not reset: %+v", c)
+	}
+}
+
+// askUntilCancelled makes b answer the way a real backend does when it is
+// stopped: it asks beta, works until its context ends and fails with that.
+// The returned channel is closed once the answer has given up.
+func askUntilCancelled(b *fakeBackend) <-chan struct{} {
+	stopped := make(chan struct{})
+	b.ask = func(ctx context.Context, step func(Step)) (string, error) {
+		step(Step{Peer: "beta"})
+		<-ctx.Done()
+		step(Step{Peer: "beta", Done: true}) // nobody listens any more; must not block
+		close(stopped)
+		return "", ctx.Err()
+	}
+	return stopped
+}
+
+// awaitStop fails the test unless the pending answer gives up soon.
+func awaitStop(t *testing.T, stopped <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pending answer should be cancelled")
+	}
+}
+
+func TestNewConversationCancelsThePendingAnswer(t *testing.T) {
+	m, b := newModel(t)
+	stopped := askUntilCancelled(b)
+	_, cmd := m.Update(say(t, m, "ping")()) // the question to beta is on its way
+	if m.chat.asking != "beta" {
+		t.Fatalf("the answer should be on its way: %+v", m.chat)
+	}
+
+	press(m, "esc", "n")
+	awaitStop(t, stopped)
+	deliver(m, cmd)
+	c := m.chat
+	if len(c.entries) != 0 || c.pending || c.asking != "" {
+		t.Fatalf("a cancelled answer must not land in the new conversation: %+v", c)
+	}
+	if view := m.View().Content; strings.Contains(view, context.Canceled.Error()) {
+		t.Fatalf("a cancelled answer is no error to show:\n%s", view)
+	}
+
+	// The new conversation answers as usual.
+	b.ask = nil
+	deliver(m, say(t, m, "more"))
+	if c := m.chat; c.pending || len(c.entries) != 2 || c.entries[1].text != "pong" || c.entries[1].failed {
+		t.Fatalf("entries %+v", c.entries)
+	}
+}
+
+func TestQuitCancelsThePendingAnswer(t *testing.T) {
+	ctrlC := tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl})
+	for name, quit := range map[string]func(*Model) tea.Cmd{
+		"q":                    func(m *Model) tea.Cmd { return press(m, "esc", "q") },
+		"ctrl+c":               func(m *Model) tea.Cmd { _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on requests":   func(m *Model) tea.Cmd { press(m, "esc", "R"); _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on the splash": func(m *Model) tea.Cmd { m.showSplash = true; _, cmd := m.Update(ctrlC); return cmd },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, b := newModel(t)
+			stopped := askUntilCancelled(b)
+			_, cmd := m.Update(say(t, m, "ping")())
+
+			if _, ok := quit(m)().(tea.QuitMsg); !ok {
+				t.Fatal("the UI should quit")
+			}
+			awaitStop(t, stopped)
+			deliver(m, cmd) // the reply may still arrive before the UI is gone
+			if c := m.chat; len(c.entries) != 1 || !c.entries[0].mine {
+				t.Fatalf("a cancelled answer is no error to show: %+v", c.entries)
+			}
+		})
+	}
+}
+
+func TestQuitCancelsRequestDecisions(t *testing.T) {
+	for _, key := range []string{"a", "x"} {
+		m, b := commands(t)
+		b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma"}}}
+		m.Update(m.loadContacts())
+		press(m, "R")
+		press(m, key)()
+		if b.decided == nil || b.decided.Err() != nil {
+			t.Fatalf("%s: a decision should run with a live context", key)
+		}
+		m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+		if b.decided.Err() == nil {
+			t.Fatalf("%s: quitting should cancel a running decision", key)
+		}
 	}
 }
 

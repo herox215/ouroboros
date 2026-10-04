@@ -47,8 +47,8 @@ type Backend interface {
 	// contextID. On the way it reports which peers it asks.
 	Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error)
 	Contacts() (Contacts, error)
-	Accept(publicKey string) error
-	Reject(publicKey string) error
+	Accept(ctx context.Context, publicKey string) error
+	Reject(ctx context.Context, publicKey string) error
 	// SetupCommand returns the interactive setup, run with the terminal handed over.
 	SetupCommand() (*exec.Cmd, error)
 }
@@ -87,14 +87,18 @@ type entry struct {
 type conversation struct {
 	contextID string
 	entries   []entry
-	pending   bool   // waiting for a reply; one message at a time keeps the history in order
-	asking    string // the peer the agent is waiting for
+	pending   bool               // waiting for a reply; one message at a time keeps the history in order
+	asking    string             // the peer the agent is waiting for
+	cancel    context.CancelFunc // stops the answer that is pending
 }
 
 // Model is the UI state.
 type Model struct {
 	backend Backend
 	now     func() time.Time
+	// ctx ends when the user quits; what the UI asks of the backend stops with it.
+	ctx  context.Context
+	quit context.CancelFunc
 
 	status    Status
 	chat      conversation
@@ -131,8 +135,11 @@ func New(backend Backend) *Model {
 	history.SoftWrap = true
 	history.KeyMap = viewport.KeyMap{} // keys go to the input; scrolling is handled explicitly
 
+	ctx, quit := context.WithCancel(context.Background())
 	return &Model{
 		backend:    backend,
+		ctx:        ctx,
+		quit:       quit,
 		now:        time.Now,
 		chat:       conversation{contextID: a2a.NewID()},
 		showSplash: true,
@@ -154,6 +161,7 @@ type (
 	replyMsg struct {
 		contextID, text string
 		err             error
+		cancelled       bool // the answer was stopped; whatever it returned is dropped
 	}
 	// stepMsg is a step of the answer that is on its way; next delivers what follows.
 	stepMsg struct {
@@ -284,7 +292,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.showSplash {
 			if msg.String() == "ctrl+c" {
-				return m, tea.Quit
+				return m, m.leave()
 			}
 			m.showSplash = false
 			return m, nil
@@ -305,7 +313,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch msg.String() {
 	case "ctrl+c":
-		return tea.Quit
+		return m.leave()
 	case "tab":
 		return m.toggleFocus()
 	case "pgup":
@@ -330,7 +338,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	switch msg.String() {
 	case "q":
-		return tea.Quit
+		return m.leave()
 	case "enter", "i":
 		return m.toggleFocus()
 	case "s":
@@ -349,7 +357,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *Model) handleRequestKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+c":
-		return tea.Quit
+		return m.leave()
 	case "esc", "q", "R":
 		m.screen = screenChat
 	case "up", "k":
@@ -362,6 +370,13 @@ func (m *Model) handleRequestKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.decideRequest(false)
 	}
 	return nil
+}
+
+// leave quits the UI and stops what it still asks of the backend: a pending
+// answer, with the peers it asks, and a decision on a connection request.
+func (m *Model) leave() tea.Cmd {
+	m.quit()
+	return tea.Quit
 }
 
 func (m *Model) openRequests() tea.Cmd {
@@ -392,9 +407,9 @@ func (m *Model) decideRequest(accept bool) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		if accept {
-			err = m.backend.Accept(pub)
+			err = m.backend.Accept(m.ctx, pub)
 		} else {
-			err = m.backend.Reject(pub)
+			err = m.backend.Reject(m.ctx, pub)
 		}
 		if err != nil {
 			return actionMsg{err: err}
@@ -477,13 +492,18 @@ func (m *Model) send() tea.Cmd {
 	m.renderHistory(true)
 
 	contextID := c.contextID
+	ctx, cancel := context.WithCancel(m.ctx)
+	c.cancel = cancel
 	return func() tea.Msg {
 		events := make(chan tea.Msg)
 		go func() {
-			reply, err := m.backend.Ask(context.Background(), contextID, text, func(s Step) {
-				events <- stepMsg{contextID, s, events}
+			reply, err := m.backend.Ask(ctx, contextID, text, func(s Step) {
+				select {
+				case events <- stepMsg{contextID, s, events}:
+				case <-ctx.Done(): // nobody follows the steps of a stopped answer
+				}
 			})
-			events <- replyMsg{contextID, reply, err}
+			events <- replyMsg{contextID, reply, err, ctx.Err() != nil}
 		}()
 		return <-events
 	}
@@ -503,10 +523,11 @@ func (m *Model) step(msg stepMsg) {
 
 func (m *Model) receive(msg replyMsg) {
 	c := &m.chat
-	if c.contextID != msg.contextID {
-		return // reply to a conversation that was reset
+	if c.contextID != msg.contextID || msg.cancelled {
+		return // reply to a conversation that was reset, or stopped by quitting
 	}
-	c.pending, c.asking = false, ""
+	c.cancel() // the answer is in; release its context
+	c.pending, c.asking, c.cancel = false, "", nil
 	e := entry{text: msg.text, at: m.now()}
 	if msg.err != nil {
 		e.text, e.failed = msg.err.Error(), true
@@ -515,8 +536,12 @@ func (m *Model) receive(msg replyMsg) {
 	m.renderHistory(m.history.AtBottom())
 }
 
-// newConversation starts over; the agent keeps no memory of the old context.
+// newConversation starts over; the agent keeps no memory of the old context
+// and stops working on an answer that is still pending.
 func (m *Model) newConversation() {
+	if m.chat.cancel != nil {
+		m.chat.cancel()
+	}
 	m.chat = conversation{contextID: a2a.NewID()}
 	m.renderHistory(true)
 	m.setNotice("new conversation", false)

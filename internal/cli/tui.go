@@ -94,12 +94,12 @@ func (u *ui) Contacts() (tui.Contacts, error) {
 	return tui.Contacts{Incoming: data.Incoming, Outgoing: data.Outgoing}, err
 }
 
-func (u *ui) Accept(publicKey string) error {
-	return u.network.Accept(context.Background(), publicKey)
+func (u *ui) Accept(ctx context.Context, publicKey string) error {
+	return u.network.Accept(ctx, publicKey)
 }
 
-func (u *ui) Reject(publicKey string) error {
-	return u.network.Reject(context.Background(), publicKey)
+func (u *ui) Reject(ctx context.Context, publicKey string) error {
+	return u.network.Reject(ctx, publicKey)
 }
 
 // SetupCommand runs the interactive setup, which starts the node afterwards.
