@@ -2,13 +2,13 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"ouroboros/internal/identity"
 )
 
 const fileName = "config.json"
@@ -19,9 +19,10 @@ type Config struct {
 	APIKey  string `json:"api_key"`  // optional, e.g. not needed for a local Ollama
 	Model   string `json:"model"`
 	Name    string `json:"name"`
-	ID      string `json:"id"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
+	// The ID of the node follows from it, see ID. Older configs also stored
+	// a random "id"; it is ignored and gone when the file is written again.
 	PrivateKey string `json:"private_key,omitempty"`
 	// Tools says which tools the agent may use, by who it is talking to.
 	// Without it the owner gets every tool and peers get none.
@@ -57,12 +58,23 @@ func (c Config) PeerTools() []string {
 	return c.Tools.A2A
 }
 
+// ID is the ID of the node: the fingerprint of its public key. A node
+// without a valid key has none yet.
+func (c Config) ID() string {
+	id, err := identity.FromPrivate(c.PrivateKey)
+	if err != nil {
+		return ""
+	}
+	return id.ID()
+}
+
 // ErrIncomplete means that the node was not set up yet.
 var ErrIncomplete = errors.New("node is not configured")
 
 // Complete reports whether the node can be started with this configuration.
+// The key is not needed for that: a node without one generates it.
 func (c Config) Complete() bool {
-	return c.BaseURL != "" && c.Model != "" && c.Name != "" && c.ID != ""
+	return c.BaseURL != "" && c.Model != "" && c.Name != ""
 }
 
 // Load reads the configuration from dir. A missing file yields an empty Config.
@@ -92,11 +104,4 @@ func Save(dir string, c Config) error {
 		err = os.Chmod(path, 0o600) // WriteFile keeps the mode of existing files
 	}
 	return err
-}
-
-// NewID returns a short random node ID (6 hex chars).
-func NewID() string {
-	b := make([]byte, 3)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }

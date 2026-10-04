@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -57,9 +58,15 @@ func TestEndToEnd(t *testing.T) {
 		}
 	}
 
-	expect(ouro("\n"+openaitest.Key+"\n2\ne2e-node\n", "start"), "API endpoint", "Available models", "online", "gpt-4o-mini")
-	expect(ouro("", "status"), "● running", "name=e2e-node")
-	expect(ouro("", "list"), "e2e-node", "gpt-4o-mini")
+	started := ouro("\n"+openaitest.Key+"\n2\ne2e-node\n", "start")
+	expect(started, "API endpoint", "Available models", "online", "gpt-4o-mini")
+	// The ID is the fingerprint of the node's key: the same wherever it shows.
+	id := regexp.MustCompile(`ouroboros ([0-9a-f]{12}) \(e2e-node\)`).FindStringSubmatch(started)
+	if id == nil {
+		t.Fatalf("no node ID in %q", started)
+	}
+	expect(ouro("", "status"), "● running", "id="+id[1], "name=e2e-node")
+	expect(ouro("", "list"), id[1], "e2e-node", "gpt-4o-mini")
 	expect(ouro("", "ask", "e2e-node", "test"), "[gpt-4o-mini] turns=1 last=test")
 	expect(ouro("", "chat", "hello"), "[gpt-4o-mini] turns=1 last=hello")
 	expect(ouro("", "start"), "already running")
@@ -67,7 +74,7 @@ func TestEndToEnd(t *testing.T) {
 	expect(ouro("", "status"), "not running")
 
 	// Second start reuses the saved configuration without asking.
-	expect(ouro("", "start"), "online")
+	expect(ouro("", "start"), "online", id[1])
 	expect(ouro("", "stop"), "stopped")
 
 	log, _ := os.ReadFile(filepath.Join(dir, "home", "ouro.log"))

@@ -16,6 +16,22 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// Whoever knows the public key can tell the ID, and nobody else has it.
+func TestIDOf(t *testing.T) {
+	id := Generate()
+	if got := IDOf(id.Public()); got != id.ID() {
+		t.Fatalf("IDOf = %q, want %q", got, id.ID())
+	}
+	if IDOf(Generate().Public()) == id.ID() {
+		t.Fatal("another key must not have the same ID")
+	}
+	for _, key := range []string{"", "not-base64", "AAAA"} {
+		if got := IDOf(key); got != "" {
+			t.Fatalf("invalid key %q has the ID %q", key, got)
+		}
+	}
+}
+
 func TestSignVerify(t *testing.T) {
 	id := Generate()
 	msg := []byte("hello")

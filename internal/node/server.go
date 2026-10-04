@@ -67,7 +67,7 @@ func (s Server) Run(ctx context.Context) error {
 		return fmt.Errorf("discovery: %w", err)
 	}
 	defer udp.Close()
-	go discovery.Serve(udp, discovery.Node{ID: cfg.ID, Name: cfg.Name, Model: cfg.Model, PublicKey: id.Public(), Port: port})
+	go discovery.Serve(udp, discovery.Node{ID: id.ID(), Name: cfg.Name, Model: cfg.Model, PublicKey: id.Public(), Port: port})
 
 	logger := log.New(s.Log, "", log.LstdFlags)
 	respond, err := s.Responder(cfg)
@@ -103,7 +103,7 @@ func (s Server) Run(ctx context.Context) error {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	logger.Printf("ouroboros %s (%s) listening on :%d → %s", cfg.ID, cfg.Name, port, cfg.Model)
+	logger.Printf("ouroboros %s (%s) listening on :%d → %s", id.ID(), cfg.Name, port, cfg.Model)
 	if allowed := cfg.PeerTools(); len(allowed) > 0 {
 		logger.Printf("peers may use the tools: %s", strings.Join(allowed, ", "))
 	}

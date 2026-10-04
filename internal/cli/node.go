@@ -79,11 +79,16 @@ func (c *nodeCommands) start(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	// A configuration from before nodes had keys gets its key, and its ID, here.
+	id, err := c.local.Home.Identity()
+	if err != nil {
+		return err
+	}
 	p, err := c.local.Start()
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(c.term.out, "● ouroboros %s (%s) online on :%d → %s\n", cfg.ID, cfg.Name, p.Port, cfg.Model)
+	fmt.Fprintf(c.term.out, "● ouroboros %s (%s) online on :%d → %s\n", id.ID(), cfg.Name, p.Port, cfg.Model)
 	return nil
 }
 

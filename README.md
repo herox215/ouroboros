@@ -107,8 +107,10 @@ A node reachable on several ways is listed once.
 ## Trust
 
 Every node owns an Ed25519 key pair (generated on first run, stored in `config.json`). Requests
-are signed and the sender's public key is announced with discovery. A node only answers trusted
-peers:
+are signed and the sender's public key is announced with discovery. The ID of a node is the
+fingerprint of its public key (12 hex characters), so it stays the same as long as the key does;
+an answer to a discovery probe whose ID does not fit its key is dropped. A node only answers
+trusted peers:
 
 1. Alice's agent writes to Bob (ask it to, or use `ouro ask`): Bob records a **connection request** and answers `pending`; no LLM call happens.
 2. In Bob's terminal UI press `R` to open the requests screen and then `a` to accept (or `x` to reject).

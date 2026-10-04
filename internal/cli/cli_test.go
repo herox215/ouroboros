@@ -20,6 +20,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
+	"ouroboros/internal/identity"
 	"ouroboros/internal/kernel"
 	"ouroboros/internal/openai/openaitest"
 	"ouroboros/internal/peers"
@@ -51,7 +52,13 @@ func testSettings(t *testing.T) Settings {
 
 // nodeConfig is a complete configuration for a node using the fake API of s.
 func nodeConfig(s Settings) config.Config {
-	return config.Config{BaseURL: s.BaseURL, APIKey: openaitest.Key, Model: "gpt-4o", Name: "alpha", ID: "abc123"}
+	return config.Config{BaseURL: s.BaseURL, APIKey: openaitest.Key, Model: "gpt-4o", Name: "alpha"}
+}
+
+// nodeID is the ID of the node of s, which has it once it was started.
+func nodeID(t *testing.T, s Settings) string {
+	t.Helper()
+	return mustLoad(t, s).ID()
 }
 
 // testPeers are the hosts the node with the given home probes directly.
@@ -186,7 +193,7 @@ func TestSetupRetriesKeyAndModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BaseURL != s.BaseURL || cfg.APIKey != openaitest.Key || cfg.Model != "gpt-4o-mini" || cfg.Name != "mynode" || cfg.ID == "" {
+	if cfg.BaseURL != s.BaseURL || cfg.APIKey != openaitest.Key || cfg.Model != "gpt-4o-mini" || cfg.Name != "mynode" || cfg.ID() == "" {
 		t.Fatalf("got %+v", cfg)
 	}
 	if strings.Count(out.String(), "rejected") != 1 || strings.Count(out.String(), "unknown model") != 2 {
@@ -211,6 +218,7 @@ func TestSetupKeepsExistingValues(t *testing.T) {
 	s := testSettings(t)
 	s.BaseURL = "http://other.invalid" // the saved endpoint wins over the default
 	want := nodeConfig(testSettings(t))
+	want.PrivateKey = identity.Generate().Private() // and with it the ID of the node
 	app, _ := newApp(s, "\n\n\n")
 	cfg, err := service[*wizard](app).run(context.Background(), want)
 	if err != nil || !reflect.DeepEqual(cfg, want) {
@@ -356,12 +364,13 @@ func TestNodeLifecycle(t *testing.T) {
 		t.Fatalf("status: %q", out)
 	}
 
+	id := nodeID(t, s)
 	out, err := run(t, s, "", "list")
-	if err != nil || !strings.Contains(out, "abc123") || !strings.Contains(out, "alpha") || !strings.Contains(out, "gpt-4o") {
+	if err != nil || len(id) != 12 || !strings.Contains(out, id) || !strings.Contains(out, "alpha") || !strings.Contains(out, "gpt-4o") {
 		t.Fatalf("list: %q, %v", out, err)
 	}
 
-	out, err = run(t, s, "", "ask", "abc", "hello", "world")
+	out, err = run(t, s, "", "ask", id[:4], "hello", "world")
 	if err != nil || out != "[gpt-4o] turns=1 last=hello world\n" {
 		t.Fatalf("ask by ID prefix: %q, %v", out, err)
 	}
@@ -467,7 +476,7 @@ func twoNodes(t *testing.T) (alpha, beta Settings) {
 	t.Helper()
 	beta = testSettings(t)
 	cfg := nodeConfig(beta)
-	cfg.Name, cfg.ID, cfg.Model = "beta", "bbb222", "gpt-4o-mini"
+	cfg.Name, cfg.Model = "beta", "gpt-4o-mini"
 	startNode(t, beta, cfg)
 
 	alpha = testSettings(t)
@@ -485,7 +494,7 @@ func TestAssistantAsksPeers(t *testing.T) {
 
 	// "@" makes the fake LLM list the peers.
 	out, err := run(t, alpha, "", "chat", "@")
-	if err != nil || !strings.Contains(out, "last=beta (id bbb222, model gpt-4o-mini, not connected)") || strings.Contains(out, "alpha") {
+	if err != nil || !strings.Contains(out, "last=beta (id "+nodeID(t, beta)+", model gpt-4o-mini, not connected)") || strings.Contains(out, "alpha") {
 		t.Fatalf("list_peers: %q, %v", out, err)
 	}
 
@@ -661,13 +670,13 @@ func TestPeerAgentUsesAllowedTools(t *testing.T) {
 	// gamma keeps the default: its agent has no tools for peers.
 	gamma := testSettings(t)
 	cfg := nodeConfig(gamma)
-	cfg.Name, cfg.ID, cfg.Model = "gamma", "ccc333", "o3-mini"
+	cfg.Name, cfg.Model = "gamma", "o3-mini"
 	startNode(t, gamma, cfg)
 
 	// beta lets peers use its tools.
 	beta := testSettings(t)
 	cfg = nodeConfig(beta)
-	cfg.Name, cfg.ID, cfg.Model = "beta", "bbb222", "gpt-4o-mini"
+	cfg.Name, cfg.Model = "beta", "gpt-4o-mini"
 	cfg.Tools = &config.Tools{A2A: []string{"list_peers", "ask_peer"}}
 	startNode(t, beta, cfg)
 
@@ -694,7 +703,7 @@ func TestPeerAgentUsesAllowedTools(t *testing.T) {
 		t.Fatalf("beta should not ask alpha back: %q, %v", out, err)
 	}
 	out, err = run(t, alpha, "", "ask", "beta", "@")
-	if err != nil || !strings.Contains(out, "gamma (id ccc333") || strings.Contains(out, "alpha") {
+	if err != nil || !strings.Contains(out, "gamma (id "+nodeID(t, gamma)) || strings.Contains(out, "alpha") {
 		t.Fatalf("beta should list gamma only: %q, %v", out, err)
 	}
 

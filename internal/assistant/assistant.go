@@ -134,7 +134,7 @@ func (a *Assistant) current() (*agent.Agent, error) {
 	if !cfg.Complete() {
 		return nil, config.ErrIncomplete
 	}
-	want := setup{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID, strings.Join(cfg.OwnerTools(), ",")}
+	want := setup{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), strings.Join(cfg.OwnerTools(), ",")}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.agent == nil || a.built != want {

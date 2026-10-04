@@ -42,9 +42,22 @@ func (id *Identity) Public() string {
 	return base64.StdEncoding.EncodeToString(id.public())
 }
 
-// ID returns a short stable fingerprint of the public key.
-func (id *Identity) ID() string {
-	sum := sha256.Sum256(id.public())
+// ID returns the ID of the node: a short stable fingerprint of the public
+// key (12 hex chars). Nobody can claim it without a key that it fits.
+func (id *Identity) ID() string { return fingerprint(id.public()) }
+
+// IDOf returns the ID that belongs to publicKey (base64), which is what
+// Identity.ID returns for the owner of the key. An invalid key has none: "".
+func IDOf(publicKey string) string {
+	key, ok := decodePublic(publicKey)
+	if !ok {
+		return ""
+	}
+	return fingerprint(key)
+}
+
+func fingerprint(key ed25519.PublicKey) string {
+	sum := sha256.Sum256(key)
 	return hex.EncodeToString(sum[:6])
 }
 
@@ -57,9 +70,11 @@ func (id *Identity) public() ed25519.PublicKey {
 
 // Verify reports whether sig is a valid signature of msg by publicKey (base64).
 func Verify(publicKey string, msg, sig []byte) bool {
+	key, ok := decodePublic(publicKey)
+	return ok && ed25519.Verify(key, msg, sig)
+}
+
+func decodePublic(publicKey string) (ed25519.PublicKey, bool) {
 	b, err := base64.StdEncoding.DecodeString(publicKey)
-	if err != nil || len(b) != ed25519.PublicKeySize {
-		return false
-	}
-	return ed25519.Verify(ed25519.PublicKey(b), msg, sig)
+	return b, err == nil && len(b) == ed25519.PublicKeySize
 }

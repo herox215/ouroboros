@@ -42,7 +42,7 @@ func (l Local) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	s := Status{Configured: cfg.Complete(), ID: cfg.ID, Name: cfg.Name, Model: cfg.Model}
+	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model}
 	if p, ok := l.Running(); ok {
 		s.Running, s.Port = true, p.Port
 	}

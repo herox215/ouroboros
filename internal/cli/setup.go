@@ -13,6 +13,7 @@ import (
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
+	"ouroboros/internal/identity"
 	"ouroboros/internal/openai"
 )
 
@@ -56,8 +57,9 @@ func (w *wizard) run(ctx context.Context, cfg config.Config) (config.Config, err
 	if cfg.Name, err = w.term.prompt(fmt.Sprintf("Node name [%s]: ", name), name); err != nil {
 		return cfg, err
 	}
-	if cfg.ID == "" {
-		cfg.ID = config.NewID()
+	// The key makes the node who it is: its ID is the fingerprint of the key.
+	if cfg.PrivateKey == "" {
+		cfg.PrivateKey = identity.Generate().Private()
 	}
 	return cfg, w.home.SaveConfig(cfg)
 }

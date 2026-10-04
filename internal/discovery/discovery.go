@@ -20,6 +20,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"ouroboros/internal/identity"
 )
 
 const probe = "OURO?"
@@ -29,6 +31,8 @@ var Group = net.IPv4(239, 255, 41, 38)
 
 // Node is what a node announces about itself.
 type Node struct {
+	// ID is the fingerprint of PublicKey (identity.IDOf). An answer whose ID
+	// does not fit its key is dropped, so no node can pass for another.
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Model string `json:"model"`
@@ -272,6 +276,8 @@ func expire(conns []*net.UDPConn) {
 
 // collect sends every node answering on conn to answers until the read
 // deadline of conn. Somebody has to receive from answers until it returns.
+// Answers that are not a node, or that claim an ID their key does not give
+// them, are dropped.
 func collect(conn *net.UDPConn, answers chan<- Node) error {
 	buf := make([]byte, 4096)
 	for {
@@ -283,7 +289,7 @@ func collect(conn *net.UDPConn, answers chan<- Node) error {
 			return err
 		}
 		var node Node
-		if json.Unmarshal(buf[:n], &node) != nil || node.ID == "" {
+		if json.Unmarshal(buf[:n], &node) != nil || node.ID == "" || node.ID != identity.IDOf(node.PublicKey) {
 			continue
 		}
 		node.Host = addr.IP.String()

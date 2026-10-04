@@ -26,7 +26,7 @@ func peersPlugin() kernel.Plugin {
 
 		selfID := func() string {
 			cfg, _ := dir.Config() // without a configuration no node is this one
-			return cfg.ID
+			return cfg.ID()
 		}
 		for _, tool := range assistant.PeerTools(network, selfID) {
 			kernel.Add[agent.Tool](ctx, tool)

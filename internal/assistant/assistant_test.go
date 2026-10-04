@@ -41,7 +41,7 @@ func TestPick(t *testing.T) {
 }
 
 func TestUnknownToolFailsEarly(t *testing.T) {
-	cfg := config.Config{BaseURL: "http://x", Model: "m", Name: "n", ID: "abc123"}
+	cfg := config.Config{BaseURL: "http://x", Model: "m", Name: "n"}
 	b := Builder{Tools: func() []agent.Tool { return nil }}
 	cfg.Tools = &config.Tools{A2A: []string{"nope"}}
 	if _, err := b.ForPeers(cfg); err == nil || !strings.Contains(err.Error(), "tools.a2a") {

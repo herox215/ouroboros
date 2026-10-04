@@ -2,16 +2,27 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"ouroboros/internal/identity"
 )
 
 const wait = 300 * time.Millisecond
+
+// node returns a node as it announces itself: with a key and the ID of that key.
+func node(name string) Node {
+	id := identity.Generate()
+	return Node{ID: id.ID(), Name: name, PublicKey: id.Public()}
+}
 
 func serve(t *testing.T, port int, self Node) int {
 	t.Helper()
@@ -25,7 +36,9 @@ func serve(t *testing.T, port int, self Node) int {
 }
 
 func TestDiscoverFindsNode(t *testing.T) {
-	port := serve(t, 0, Node{ID: "abc123", Name: "alpha", Model: "gpt", Port: 41337})
+	self := node("alpha")
+	self.Model, self.Port = "gpt", 41337
+	port := serve(t, 0, self)
 	nodes, err := Discover(context.Background(), port, wait)
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +47,10 @@ func TestDiscoverFindsNode(t *testing.T) {
 		t.Fatalf("want 1 node, got %+v", nodes)
 	}
 	n := nodes[0]
-	if n.ID != "abc123" || n.Name != "alpha" || n.Model != "gpt" || n.Port != 41337 || n.Host == "" {
+	if n.Host == "" {
+		t.Fatalf("got %+v", n)
+	}
+	if n.Host = ""; n != self {
 		t.Fatalf("got %+v", n)
 	}
 }
@@ -133,13 +149,14 @@ func requireMulticast(t *testing.T, group *net.UDPConn) {
 }
 
 func TestDiscoverProbesPeers(t *testing.T) {
-	port := serve(t, 0, Node{ID: "abc123", Name: "alpha"})
+	self := node("alpha")
+	port := serve(t, 0, self)
 	conn, _ := net.ListenUDP("udp4", nil) // a discovery port nobody answers on
 	other := conn.LocalAddr().(*net.UDPAddr).Port
 	conn.Close()
 
 	nodes, err := Discover(context.Background(), other, wait, "localhost:"+strconv.Itoa(port), "no-such-host.invalid")
-	if err != nil || len(nodes) != 1 || nodes[0].ID != "abc123" {
+	if err != nil || len(nodes) != 1 || nodes[0].ID != self.ID {
 		t.Fatalf("got %+v, %v", nodes, err)
 	}
 }
@@ -181,7 +198,7 @@ func TestDiscoverStopsWhenContextIsDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if _, err := Discover(ctx, serve(t, 0, Node{ID: "abc123"}), time.Minute); err == nil || time.Since(start) > 5*time.Second {
+	if _, err := Discover(ctx, serve(t, 0, node("alpha")), time.Minute); err == nil || time.Since(start) > 5*time.Second {
 		t.Fatalf("got %v after %v", err, time.Since(start))
 	}
 }
@@ -200,6 +217,7 @@ func TestGatherLeavesNoCollectorBehind(t *testing.T) {
 	busy.SetReadDeadline(time.Now().Add(time.Minute))
 
 	// Answers keep coming, so the collector has one to hand over when the other fails.
+	answer, _ := json.Marshal(node("alpha"))
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
@@ -208,7 +226,7 @@ func TestGatherLeavesNoCollectorBehind(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				busy.WriteToUDP([]byte(`{"id":"abc123"}`), busy.LocalAddr().(*net.UDPAddr))
+				busy.WriteToUDP(answer, busy.LocalAddr().(*net.UDPAddr))
 			}
 		}
 	}()
@@ -221,5 +239,104 @@ func TestGatherLeavesNoCollectorBehind(t *testing.T) {
 	stacks = stacks[:runtime.Stack(stacks, true)]
 	if strings.Contains(string(stacks), "discovery.collect(") {
 		t.Fatalf("a collector is still running:\n%s", stacks)
+	}
+}
+
+// An ID is the fingerprint of a key. An answer that claims the ID of another
+// node, or an ID without a key, is not listed, and it cannot take the place
+// of the node it names.
+func TestDiscoverDropsIDsThatDoNotFitTheKey(t *testing.T) {
+	honest := node("alpha")
+	thief := node("mallory")
+	thief.ID = honest.ID // with its own key
+	keyless := Node{ID: honest.ID, Name: "nobody"}
+	garbage := node("garbage")
+	garbage.PublicKey = "not a key"
+
+	// Each on its own port and probed directly, so that every one of them answers.
+	port := serve(t, 0, honest)
+	var liars []string
+	for _, n := range []Node{thief, keyless, garbage} {
+		liars = append(liars, "127.0.0.1:"+strconv.Itoa(serve(t, 0, n)))
+	}
+	nodes, err := Discover(context.Background(), port, wait, liars...)
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("got %+v, %v", nodes, err)
+	}
+	if n := nodes[0]; n.Name != "alpha" || n.ID != honest.ID || n.PublicKey != honest.PublicKey {
+		t.Fatalf("got %+v", n)
+	}
+}
+
+// What is not an answer of a node is skipped, whatever it is.
+func TestCollectSkipsWhatIsNotANode(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	self := node("alpha")
+	valid, _ := json.Marshal(self)
+	for _, packet := range [][]byte{[]byte(probe), []byte("{"), []byte(`{"name":"anonymous"}`), valid} {
+		conn.WriteToUDP(packet, conn.LocalAddr().(*net.UDPAddr))
+	}
+	conn.SetReadDeadline(time.Now().Add(wait))
+	found, err := gather([]*net.UDPConn{conn})
+	if err != nil || len(found) != 1 || found[self.ID].Name != "alpha" || found[self.ID].Host != "127.0.0.1" {
+		t.Fatalf("got %+v, %v", found, err)
+	}
+}
+
+// A scanner also probes the hosts its sources name, asked anew for every scan.
+func TestScannerAsksSources(t *testing.T) {
+	self := node("alpha")
+	port := serve(t, 0, self)
+	conn, _ := net.ListenUDP("udp4", nil) // a discovery port nobody answers on
+	other := conn.LocalAddr().(*net.UDPAddr).Port
+	conn.Close()
+
+	scanner := &Scanner{Port: other, Wait: wait}
+	if nodes, err := scanner.Find(context.Background()); err != nil || len(nodes) != 0 {
+		t.Fatalf("without sources: %+v, %v", nodes, err)
+	}
+	asked := 0
+	scanner.Sources = func() []PeerSource {
+		return []PeerSource{
+			func(context.Context) []string { asked++; return []string{"127.0.0.1:" + strconv.Itoa(port)} },
+			func(context.Context) []string { return nil },
+		}
+	}
+	nodes, err := scanner.Find(context.Background())
+	if err != nil || len(nodes) != 1 || nodes[0].ID != self.ID || asked != 1 {
+		t.Fatalf("got %+v, %v after asking %d times", nodes, err, asked)
+	}
+}
+
+// The tailnet is asked through the tailscale CLI; without it, or when it
+// fails, there are no peers to probe.
+func TestTailscalePeersAsksTheCLI(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if _, err := os.Stat(tailscaleApp); err == nil {
+		t.Skip("Tailscale is installed as an app")
+	}
+	if got := TailscalePeers(context.Background()); got != nil {
+		t.Fatalf("without tailscale: %v", got)
+	}
+
+	cli := filepath.Join(dir, "tailscale")
+	script := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(cli, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script(`[ "$1 $2" = "status --json" ] && echo '{"Peer": {"a": {"TailscaleIPs": ["100.64.0.2"], "Online": true}}}'`)
+	if got := TailscalePeers(context.Background()); !slices.Equal(got, []string{"100.64.0.2"}) {
+		t.Fatalf("got %v", got)
+	}
+	script("exit 1") // e.g. tailscaled is not running
+	if got := TailscalePeers(context.Background()); got != nil {
+		t.Fatalf("failing tailscale: %v", got)
 	}
 }
