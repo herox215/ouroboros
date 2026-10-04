@@ -11,15 +11,15 @@ import (
 func TestApproveTrustsAndClearsRequests(t *testing.T) {
 	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
 	s.AddIncoming("pk", "gamma", "m", "10.0.0.9:41337")
-	if trusted, blocked := s.State("pk"); trusted || blocked {
+	if trusted, blocked, _ := s.State("pk"); trusted || blocked {
 		t.Fatal("new peer should be neither trusted nor blocked")
 	}
 
-	r, ok := s.Approve("pk")
+	r, ok, _ := s.Approve("pk")
 	if !ok || r.Name != "gamma" || r.Addr != "10.0.0.9:41337" {
 		t.Fatalf("approved %+v, %v", r, ok)
 	}
-	if trusted, _ := s.State("pk"); !trusted {
+	if trusted, _, _ := s.State("pk"); !trusted {
 		t.Fatal("approved peer should be trusted")
 	}
 	if d, _ := s.Snapshot(); len(d.Incoming) != 0 {
@@ -28,7 +28,7 @@ func TestApproveTrustsAndClearsRequests(t *testing.T) {
 
 	// Persisted across a fresh open.
 	again := Open(s.path)
-	if trusted, _ := again.State("pk"); !trusted {
+	if trusted, _, _ := again.State("pk"); !trusted {
 		t.Fatal("trust should persist")
 	}
 }
@@ -36,10 +36,10 @@ func TestApproveTrustsAndClearsRequests(t *testing.T) {
 func TestRejectBlocks(t *testing.T) {
 	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
 	s.AddIncoming("pk", "gamma", "", "")
-	if r, ok := s.Reject("pk"); !ok || r.Name != "gamma" {
+	if r, ok, _ := s.Reject("pk"); !ok || r.Name != "gamma" {
 		t.Fatalf("rejected %+v, %v", r, ok)
 	}
-	if trusted, blocked := s.State("pk"); !blocked || trusted {
+	if trusted, blocked, _ := s.State("pk"); !blocked || trusted {
 		t.Fatalf("rejected peer should be blocked: trusted=%v blocked=%v", trusted, blocked)
 	}
 	// A blocked peer is not recorded again.
@@ -62,7 +62,7 @@ func TestIncomingIsUpserted(t *testing.T) {
 func TestOutgoing(t *testing.T) {
 	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
 	s.AddOutgoing("pk", "beta", "m", "1.2.3.4:5")
-	if !s.HadOutgoing("pk") {
+	if !hadOutgoing(s, "pk") {
 		t.Fatal("should have an outgoing request")
 	}
 	s.AddOutgoing("pk", "beta", "m", "1.2.3.4:5") // no duplicate
@@ -70,10 +70,10 @@ func TestOutgoing(t *testing.T) {
 		t.Fatalf("got %+v", d.Outgoing)
 	}
 	s.AddTrusted("pk", "beta", "m")
-	if s.HadOutgoing("pk") {
+	if hadOutgoing(s, "pk") {
 		t.Fatal("accepting should clear the outgoing request")
 	}
-	if trusted, _ := s.State("pk"); !trusted {
+	if trusted, _, _ := s.State("pk"); !trusted {
 		t.Fatal("should be trusted")
 	}
 }
@@ -84,7 +84,7 @@ func TestTrustedReplacesOtherStates(t *testing.T) {
 	s.AddIncoming("pk", "gamma", "", "")
 	s.Reject("pk")
 	s.AddTrusted("pk", "gamma", "")
-	if trusted, blocked := s.State("pk"); !trusted || blocked {
+	if trusted, blocked, _ := s.State("pk"); !trusted || blocked {
 		t.Fatalf("trusted=%v blocked=%v", trusted, blocked)
 	}
 	// A trusted peer leaves no request, and trusting it twice no second entry.
@@ -100,10 +100,10 @@ func TestRemoveOutgoing(t *testing.T) {
 	s.AddOutgoing("pk", "beta", "", "")
 	s.AddOutgoing("other", "gamma", "", "")
 	s.RemoveOutgoing("pk")
-	if s.HadOutgoing("pk") || !s.HadOutgoing("other") {
+	if hadOutgoing(s, "pk") || !hadOutgoing(s, "other") {
 		t.Fatal("only the request to pk should be gone")
 	}
-	if trusted, _ := s.State("pk"); trusted {
+	if trusted, _, _ := s.State("pk"); trusted {
 		t.Fatal("a dropped request must not leave trust behind")
 	}
 }
@@ -111,10 +111,10 @@ func TestRemoveOutgoing(t *testing.T) {
 // Nobody is trusted or blocked without a request to decide about.
 func TestDecisionNeedsRequest(t *testing.T) {
 	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
-	if _, ok := s.Approve("pk"); ok {
+	if _, ok, _ := s.Approve("pk"); ok {
 		t.Fatal("approved a peer that never asked")
 	}
-	if _, ok := s.Reject("pk"); ok {
+	if _, ok, _ := s.Reject("pk"); ok {
 		t.Fatal("rejected a peer that never asked")
 	}
 	if d, _ := s.Snapshot(); len(d.Trusted) != 0 || len(d.Blocked) != 0 {
@@ -129,9 +129,28 @@ func TestBrokenStoreTrustsNobody(t *testing.T) {
 		if err := s.update(func(*Data) error { return nil }); err == nil {
 			t.Errorf("%s: update should fail", name)
 		}
-		s.AddTrusted("pk", "gamma", "")
-		if trusted, blocked := s.State("pk"); trusted || blocked {
-			t.Errorf("%s: trusted=%v blocked=%v", name, trusted, blocked)
+		// Every change says that it failed, and so does every question.
+		for what, err := range map[string]error{
+			"AddTrusted":     s.AddTrusted("pk", "gamma", ""),
+			"AddIncoming":    s.AddIncoming("pk", "gamma", "", ""),
+			"AddOutgoing":    s.AddOutgoing("pk", "gamma", "", ""),
+			"RemoveOutgoing": s.RemoveOutgoing("pk"),
+		} {
+			if err == nil {
+				t.Errorf("%s: %s should fail", name, what)
+			}
+		}
+		if r, ok, err := s.Approve("req"); err == nil || ok || r != (Request{}) {
+			t.Errorf("%s: Approve = %+v, %v, %v", name, r, ok, err)
+		}
+		if r, ok, err := s.Reject("req"); err == nil || ok || r != (Request{}) {
+			t.Errorf("%s: Reject = %+v, %v, %v", name, r, ok, err)
+		}
+		if asked, err := s.HadOutgoing("pk"); err == nil || asked {
+			t.Errorf("%s: HadOutgoing = %v, %v", name, asked, err)
+		}
+		if trusted, blocked, err := s.State("pk"); err == nil || trusted || blocked {
+			t.Errorf("%s: trusted=%v blocked=%v, %v", name, trusted, blocked, err)
 		}
 	}
 
@@ -156,13 +175,27 @@ func TestBrokenStoreTrustsNobody(t *testing.T) {
 	readOnly := t.TempDir()
 	unwritable := Open(filepath.Join(readOnly, "contacts.json"))
 	unwritable.AddTrusted("other", "beta", "")
+	unwritable.AddIncoming("req", "delta", "", "")
 	os.Chmod(readOnly, 0o500)
 	defer os.Chmod(readOnly, 0o700)
 	if os.Getuid() != 0 { // root writes anywhere
-		check("read-only directory", unwritable)
+		// Reading works here; only the changes fail.
+		if err := unwritable.update(func(*Data) error { return nil }); err == nil {
+			t.Error("read-only directory: update should fail")
+		}
+		if _, ok, err := unwritable.Approve("req"); err == nil || ok {
+			t.Errorf("read-only directory: Approve = %v, %v", ok, err)
+		}
+		if _, ok, err := unwritable.Reject("req"); err == nil || ok {
+			t.Errorf("read-only directory: Reject = %v, %v", ok, err)
+		}
 	}
-	if trusted, _ := unwritable.State("other"); !trusted {
-		t.Error("a change that failed should leave the list as it was")
+	if trusted, _, err := unwritable.State("other"); !trusted || err != nil {
+		t.Errorf("a change that failed should leave the list as it was: %v", err)
+	}
+	// A decision that was not stored was not made: the request still waits.
+	if d, _ := unwritable.Snapshot(); len(d.Incoming) != 1 || len(d.Trusted) != 1 || len(d.Blocked) != 0 {
+		t.Errorf("a decision that failed changed the list: %+v", d)
 	}
 
 	// A directory in the place of the lock.
@@ -218,7 +251,7 @@ func TestUpdateUnencodableChange(t *testing.T) {
 	if err == nil {
 		t.Fatal("a year JSON cannot hold should fail")
 	}
-	if trusted, _ := s.State("pk"); !trusted {
+	if trusted, _, _ := s.State("pk"); !trusted {
 		t.Fatal("a failed change must not be written")
 	}
 }
@@ -235,7 +268,13 @@ func TestUpdateFailedChange(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("got %v", err)
 	}
-	if trusted, _ := s.State("pk"); !trusted {
+	if trusted, _, _ := s.State("pk"); !trusted {
 		t.Fatal("a failed change must not be written")
 	}
+}
+
+// hadOutgoing reports whether the list says that this node asked publicKey.
+func hadOutgoing(s *Store, publicKey string) bool {
+	asked, _ := s.HadOutgoing(publicKey)
+	return asked
 }

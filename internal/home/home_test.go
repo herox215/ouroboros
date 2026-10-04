@@ -3,6 +3,7 @@ package home
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -132,10 +133,27 @@ func TestFiles(t *testing.T) {
 	}
 
 	d.Contacts().AddTrusted("key", "beta", "gpt")
-	if trusted, _ := d.Contacts().State("key"); !trusted {
+	if trusted, _, _ := d.Contacts().State("key"); !trusted {
 		t.Error("a contact should be kept")
 	}
 	if _, err := os.Stat(filepath.Join(string(d), "contacts.json")); err != nil {
 		t.Errorf("contacts: %v", err)
 	}
+}
+
+// Another process than the node adds to the log of the node.
+func TestLog(t *testing.T) {
+	d := Dir(t.TempDir())
+	d.Log("accept %s: %v", "key", "disk full")
+	d.Log("second")
+	b, _ := os.ReadFile(d.Service().LogFile)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 || !strings.HasSuffix(lines[0], " accept key: disk full") || !strings.HasSuffix(lines[1], " second") {
+		t.Fatalf("log %q", b)
+	}
+	if info, _ := os.Stat(d.Service().LogFile); info.Mode().Perm() != 0o600 {
+		t.Errorf("perm = %o, want 600", info.Mode().Perm())
+	}
+	// A log that cannot be written is given up on.
+	Dir(filepath.Join(string(d), "missing")).Log("lost")
 }

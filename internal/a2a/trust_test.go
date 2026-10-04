@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -29,6 +30,60 @@ type node struct {
 	methods []Method
 	// log is what the server logged.
 	log []string
+	// fail makes the contacts of the node fail, see faulty.
+	fail faults
+}
+
+// faults are the errors the contacts of a node fail with, by what is asked
+// of them. Without one, they work.
+type faults struct{ state, hadOutgoing, addIncoming, addTrusted, removeOutgoing error }
+
+// faulty is a contact list that fails on demand.
+type faulty struct {
+	*contacts.Store
+	fail *faults
+}
+
+func (f faulty) State(publicKey string) (bool, bool, error) {
+	if f.fail.state != nil {
+		return false, false, f.fail.state
+	}
+	return f.Store.State(publicKey)
+}
+
+func (f faulty) HadOutgoing(publicKey string) (bool, error) {
+	if f.fail.hadOutgoing != nil {
+		return false, f.fail.hadOutgoing
+	}
+	return f.Store.HadOutgoing(publicKey)
+}
+
+func (f faulty) AddIncoming(publicKey, name, model, addr string) error {
+	if f.fail.addIncoming != nil {
+		return f.fail.addIncoming
+	}
+	return f.Store.AddIncoming(publicKey, name, model, addr)
+}
+
+func (f faulty) AddTrusted(publicKey, name, model string) error {
+	if f.fail.addTrusted != nil {
+		return f.fail.addTrusted
+	}
+	return f.Store.AddTrusted(publicKey, name, model)
+}
+
+func (f faulty) RemoveOutgoing(publicKey string) error {
+	if f.fail.removeOutgoing != nil {
+		return f.fail.removeOutgoing
+	}
+	return f.Store.RemoveOutgoing(publicKey)
+}
+
+// hadOutgoing reports whether the node with the contacts trust asked
+// publicKey to connect.
+func hadOutgoing(trust *contacts.Store, publicKey string) bool {
+	asked, _ := trust.HadOutgoing(publicKey)
+	return asked
 }
 
 func newNode(t *testing.T, name string) *node {
@@ -42,7 +97,7 @@ func newNode(t *testing.T, name string) *node {
 		}
 		return echo(ctx, contextID, text)
 	}
-	n.srv = serve(t, id, (&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: respond, Methods: func() []Method { return n.methods },
+	n.srv = serve(t, id, (&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: faulty{trust, &n.fail}, Respond: respond, Methods: func() []Method { return n.methods },
 		Log: func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) }}).Handler())
 	return n
 }
@@ -87,14 +142,14 @@ func TestTrustHandshake(t *testing.T) {
 		t.Fatal("alice should know how to reach bob")
 	}
 
-	req, ok := alice.trust.Approve(bob.id.Public())
+	req, ok, _ := alice.trust.Approve(bob.id.Public())
 	if !ok {
 		t.Fatal("approve failed")
 	}
 	if err := alice.client().Accept(ctx, "https://"+req.Addr+"/", bob.id.Public()); err != nil {
 		t.Fatalf("accept callback: %v", err)
 	}
-	if trusted, _ := bob.trust.State(alice.id.Public()); !trusted {
+	if trusted, _, _ := bob.trust.State(alice.id.Public()); !trusted {
 		t.Fatal("bob should trust alice after the callback")
 	}
 
@@ -209,14 +264,14 @@ func TestRejectCallback(t *testing.T) {
 		t.Fatalf("want pending, got %v", err)
 	}
 	bob.trust.AddOutgoing(alice.id.Public(), "alice", "", "")
-	req, ok := alice.trust.Reject(bob.id.Public())
+	req, ok, _ := alice.trust.Reject(bob.id.Public())
 	if !ok {
 		t.Fatal("reject failed")
 	}
 	if err := alice.client().Reject(ctx, "https://"+req.Addr+"/", bob.id.Public()); err != nil {
 		t.Fatalf("reject callback: %v", err)
 	}
-	if trusted, _ := bob.trust.State(alice.id.Public()); trusted || bob.trust.HadOutgoing(alice.id.Public()) {
+	if trusted, _, _ := bob.trust.State(alice.id.Public()); trusted || hadOutgoing(bob.trust, alice.id.Public()) {
 		t.Fatal("bob should have dropped his request without trusting alice")
 	}
 }
@@ -234,10 +289,10 @@ func TestCallbacksNeedOutgoingRequest(t *testing.T) {
 	if err := mallory.client().Reject(ctx, alice.srv.URL, alice.id.Public()); err != nil {
 		t.Fatal(err)
 	}
-	if trusted, _ := alice.trust.State(mallory.id.Public()); trusted {
+	if trusted, _, _ := alice.trust.State(mallory.id.Public()); trusted {
 		t.Fatal("mallory accepted a request nobody made and is trusted")
 	}
-	if !alice.trust.HadOutgoing("someone else") {
+	if !hadOutgoing(alice.trust, "someone else") {
 		t.Fatal("mallory's rejection dropped the request to another peer")
 	}
 	if _, err := mallory.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi"); !IsPending(err) {
@@ -252,7 +307,7 @@ func TestSignedRequestsWithBadParams(t *testing.T) {
 	if _, err := bob.client().call(ctx, alice.srv.URL, alice.id.Public(), MethodAccept, "no object"); !code(err, CodeInvalidParams) {
 		t.Fatalf("accept: %v", err)
 	}
-	if trusted, _ := alice.trust.State(bob.id.Public()); trusted {
+	if trusted, _, _ := alice.trust.State(bob.id.Public()); trusted {
 		t.Fatal("an acceptance that cannot be read must not connect")
 	}
 	if _, err := bob.client().call(ctx, alice.srv.URL, alice.id.Public(), MethodSend, sendParams{}); !code(err, CodeInvalidParams) {
@@ -275,5 +330,78 @@ func TestServerWithoutAddedMethods(t *testing.T) {
 	// The node trusts its own key.
 	if got, err := client.Send(context.Background(), srv.URL, id.Public(), "c", "hi"); err != nil || got != "c:hi" {
 		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// Contacts that cannot be read or changed are an internal error for the peer
+// and a line in the log: nobody is trusted, connected or left waiting by a
+// change that did not happen.
+func TestBrokenContactsAreAnInternalError(t *testing.T) {
+	boom := errors.New("open /home/alice/contacts.json: disk on fire")
+	ctx := context.Background()
+	ping := Method{Name: "ping", Handle: func(context.Context, Caller, json.RawMessage) (*Message, *Error) {
+		t.Error("an added method ran without knowing who is trusted")
+		return nil, nil
+	}}
+	tests := map[string]struct {
+		fail    faults
+		trusted bool // alice trusts bob
+		call    func(alice, bob *node) error
+	}{
+		"send, reading": {faults{state: boom}, true, func(alice, bob *node) error {
+			_, err := bob.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi")
+			return err
+		}},
+		"send, recording the request": {faults{addIncoming: boom}, false, func(alice, bob *node) error {
+			_, err := bob.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi")
+			return err
+		}},
+		"accept, reading": {faults{hadOutgoing: boom}, false, func(alice, bob *node) error {
+			return bob.client().Accept(ctx, alice.srv.URL, alice.id.Public())
+		}},
+		"accept, trusting": {faults{addTrusted: boom}, false, func(alice, bob *node) error {
+			return bob.client().Accept(ctx, alice.srv.URL, alice.id.Public())
+		}},
+		"reject, reading": {faults{hadOutgoing: boom}, false, func(alice, bob *node) error {
+			return bob.client().Reject(ctx, alice.srv.URL, alice.id.Public())
+		}},
+		"reject, dropping the request": {faults{removeOutgoing: boom}, false, func(alice, bob *node) error {
+			return bob.client().Reject(ctx, alice.srv.URL, alice.id.Public())
+		}},
+		"added method": {faults{state: boom}, true, func(alice, bob *node) error {
+			_, err := bob.client().call(ctx, alice.srv.URL, alice.id.Public(), "ping", struct{}{})
+			return err
+		}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			alice, bob := newNode(t, "alice"), newNode(t, "bob")
+			alice.methods = []Method{ping}
+			alice.trust.AddOutgoing(bob.id.Public(), "bob", "", "")
+			if tt.trusted {
+				alice.trust.AddTrusted(bob.id.Public(), "bob", "")
+			}
+			before, _ := alice.trust.Snapshot()
+			alice.fail = tt.fail
+			err := tt.call(alice, bob)
+			var rpcErr *Error
+			if !errors.As(err, &rpcErr) || rpcErr.Code != CodeInternalError || rpcErr.Message != "internal error" {
+				t.Fatalf("the peer was told %v", err)
+			}
+			if len(alice.log) != 1 || !strings.Contains(alice.log[0], boom.Error()) || !strings.Contains(alice.log[0], bob.id.Public()) {
+				t.Fatalf("log %q should say what failed for whom", alice.log)
+			}
+			alice.fail = faults{}
+			if d, _ := alice.trust.Snapshot(); !reflect.DeepEqual(d, before) {
+				t.Fatalf("a failure changed the contacts: %+v", d)
+			}
+		})
+	}
+
+	// The owner asks with the key of the node, which needs no contacts.
+	alice := newNode(t, "alice")
+	alice.fail = faults{state: boom}
+	if got, err := alice.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi"); err != nil || got != "c:hi" {
+		t.Fatalf("the owner got %q, %v", got, err)
 	}
 }

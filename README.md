@@ -121,6 +121,12 @@ trusted peers:
 
 Rejected peers are blocked. Trust is mutual: one acceptance connects both sides.
 
+A decision that cannot be stored (full disk, `contacts.json` not writable) is not made: the UI says that
+accepting or rejecting failed, the request stays in the list for another try, and the cause is in `ouro.log`.
+The same goes for the node: a peer whose message, acceptance or rejection could not be recorded is answered
+with an internal error instead of being left to believe it worked, and the cause is logged. Contacts that
+cannot be read trust nobody.
+
 Everything between nodes is encrypted, and both directions are authenticated with these keys:
 
 - The **connection** is TLS 1.3; plain HTTP is refused. A node presents a self-signed certificate made

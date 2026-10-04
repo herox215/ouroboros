@@ -98,29 +98,30 @@ func (s *Store) Snapshot() (Data, error) {
 // errUnchanged makes update skip writing when only reading.
 var errUnchanged = errors.New("unchanged")
 
-// State reports whether publicKey is trusted and/or blocked.
-func (s *Store) State(publicKey string) (trusted, blocked bool) {
-	s.update(func(d *Data) error {
+// State reports whether publicKey is trusted and/or blocked. A list that
+// cannot be read trusts nobody and says why.
+func (s *Store) State(publicKey string) (trusted, blocked bool, err error) {
+	err = s.update(func(d *Data) error {
 		trusted = slices.ContainsFunc(d.Trusted, func(c Contact) bool { return c.PublicKey == publicKey })
 		blocked = slices.Contains(d.Blocked, publicKey)
 		return errUnchanged
 	})
-	return trusted, blocked
+	return trusted, blocked, err
 }
 
 // HadOutgoing reports whether this node asked publicKey to connect.
-func (s *Store) HadOutgoing(publicKey string) bool {
+func (s *Store) HadOutgoing(publicKey string) (bool, error) {
 	var found bool
-	s.update(func(d *Data) error {
+	err := s.update(func(d *Data) error {
 		found = slices.ContainsFunc(d.Outgoing, func(r Request) bool { return r.PublicKey == publicKey })
 		return errUnchanged
 	})
-	return found
+	return found, err
 }
 
 // AddIncoming records (or refreshes) a pending request from publicKey.
-func (s *Store) AddIncoming(publicKey, name, model, addr string) {
-	s.update(func(d *Data) error {
+func (s *Store) AddIncoming(publicKey, name, model, addr string) error {
+	return s.update(func(d *Data) error {
 		if slices.Contains(d.Blocked, publicKey) || slices.ContainsFunc(d.Trusted, trusted(publicKey)) {
 			return nil
 		}
@@ -137,8 +138,8 @@ func (s *Store) AddIncoming(publicKey, name, model, addr string) {
 }
 
 // AddOutgoing records that this node asked publicKey to connect.
-func (s *Store) AddOutgoing(publicKey, name, model, addr string) {
-	s.update(func(d *Data) error {
+func (s *Store) AddOutgoing(publicKey, name, model, addr string) error {
+	return s.update(func(d *Data) error {
 		if slices.ContainsFunc(d.Outgoing, match(publicKey)) {
 			return nil
 		}
@@ -148,8 +149,8 @@ func (s *Store) AddOutgoing(publicKey, name, model, addr string) {
 }
 
 // AddTrusted marks publicKey as trusted and drops any pending request for it.
-func (s *Store) AddTrusted(publicKey, name, model string) {
-	s.update(func(d *Data) error {
+func (s *Store) AddTrusted(publicKey, name, model string) error {
+	return s.update(func(d *Data) error {
 		d.Incoming = slices.DeleteFunc(d.Incoming, match(publicKey))
 		d.Outgoing = slices.DeleteFunc(d.Outgoing, match(publicKey))
 		d.Blocked = slices.DeleteFunc(d.Blocked, func(k string) bool { return k == publicKey })
@@ -161,18 +162,20 @@ func (s *Store) AddTrusted(publicKey, name, model string) {
 }
 
 // RemoveOutgoing drops a pending outgoing request, e.g. after a rejection.
-func (s *Store) RemoveOutgoing(publicKey string) {
-	s.update(func(d *Data) error {
+func (s *Store) RemoveOutgoing(publicKey string) error {
+	return s.update(func(d *Data) error {
 		d.Outgoing = slices.DeleteFunc(d.Outgoing, match(publicKey))
 		return nil
 	})
 }
 
-// Approve accepts a pending incoming request and returns it.
-func (s *Store) Approve(publicKey string) (Request, bool) {
+// Approve accepts a pending incoming request and returns it. It reports false
+// if there is no such request, and an error if the decision could not be
+// stored: then nothing has changed and the request is still pending.
+func (s *Store) Approve(publicKey string) (Request, bool, error) {
 	var r Request
 	var ok bool
-	s.update(func(d *Data) error {
+	err := s.update(func(d *Data) error {
 		i := slices.IndexFunc(d.Incoming, match(publicKey))
 		if i < 0 {
 			return nil
@@ -185,14 +188,19 @@ func (s *Store) Approve(publicKey string) (Request, bool) {
 		}
 		return nil
 	})
-	return r, ok
+	if err != nil {
+		return Request{}, false, err
+	}
+	return r, ok, nil
 }
 
 // Reject refuses a pending incoming request, blocks the peer and returns it.
-func (s *Store) Reject(publicKey string) (Request, bool) {
+// Like Approve it reports false without such a request and an error if the
+// decision could not be stored.
+func (s *Store) Reject(publicKey string) (Request, bool, error) {
 	var r Request
 	var ok bool
-	s.update(func(d *Data) error {
+	err := s.update(func(d *Data) error {
 		i := slices.IndexFunc(d.Incoming, match(publicKey))
 		if i < 0 {
 			return nil
@@ -204,7 +212,10 @@ func (s *Store) Reject(publicKey string) (Request, bool) {
 		}
 		return nil
 	})
-	return r, ok
+	if err != nil {
+		return Request{}, false, err
+	}
+	return r, ok, nil
 }
 
 func match(publicKey string) func(Request) bool {

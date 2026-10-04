@@ -6,6 +6,7 @@
 package home
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 
@@ -48,6 +49,18 @@ func (d Dir) Contacts() *contacts.Store { return contacts.Open(d.path("contacts.
 // Service is the background process of the node.
 func (d Dir) Service() daemon.Service {
 	return daemon.Service{PIDFile: d.path("ouro.pid"), LogFile: d.path("ouro.log")}
+}
+
+// Log adds a line to the log of the node. It is for a process that is not the
+// node itself, such as the terminal UI: the node writes its log on its own. A
+// log that cannot be written is nothing to fail for.
+func (d Dir) Log(format string, args ...any) {
+	f, err := os.OpenFile(d.Service().LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	log.New(f, "", log.LstdFlags).Printf(format, args...)
 }
 
 // Identity returns the signing identity of the node, generating and

@@ -28,7 +28,8 @@ type Server struct {
 	// Methods returns the methods added to the built-in ones, read anew for
 	// every request. May be nil.
 	Methods func() []Method
-	// Log records what peers are not told, such as why the Responder failed.
+	// Log records what peers are not told, such as why the Responder failed
+	// or why the contacts could not be read or changed.
 	// It is called like log.Printf. May be nil.
 	Log func(format string, args ...any)
 }
@@ -112,7 +113,11 @@ func (s *Server) added(name string) (method, bool) {
 			continue
 		}
 		return func(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error) {
-			if trusted, _ := s.Trust.State(from.PublicKey); !trusted {
+			trusted, _, err := s.Trust.State(from.PublicKey)
+			if err != nil {
+				return nil, s.trustFailed(from, err)
+			}
+			if !trusted {
 				return nil, &Error{CodeUnauthorized, "not connected"}
 			}
 			return m.Handle(ctx, from, params)
@@ -131,18 +136,24 @@ func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) 
 	if p.Hops > MaxHops {
 		return nil, &Error{CodeTooManyHops, "too many agents have passed this message on"}
 	}
-	trusted, blocked := s.Trust.State(from.PublicKey)
+	// Contacts that cannot be read trust nobody but the node itself.
+	trusted, blocked, err := s.Trust.State(from.PublicKey)
 	if from.PublicKey == s.Identity.Public() {
-		trusted = true
+		trusted, err = true, nil
 	}
 	switch {
+	case err != nil:
+		return nil, s.trustFailed(from, err)
 	case trusted:
 		// The Responder learns who asks: what it does for a peer is limited.
 		return s.reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), from, p.Message)
 	case blocked:
 		return nil, &Error{CodeBlocked, "connection refused"}
 	}
-	s.Trust.AddIncoming(from.PublicKey, p.Peer.Name, p.Peer.Model, from.Addr)
+	// A request that was not recorded is not pending: nobody would decide on it.
+	if err := s.Trust.AddIncoming(from.PublicKey, p.Peer.Name, p.Peer.Model, from.Addr); err != nil {
+		return nil, s.trustFailed(from, err)
+	}
 	return nil, &Error{CodePending, "connection request is waiting for approval"}
 }
 
@@ -152,18 +163,40 @@ func (s *Server) accept(_ context.Context, from Caller, params json.RawMessage) 
 	if json.Unmarshal(params, &p) != nil {
 		return nil, &Error{CodeInvalidParams, "invalid params"}
 	}
-	if s.Trust.HadOutgoing(from.PublicKey) {
-		s.Trust.AddTrusted(from.PublicKey, p.Peer.Name, p.Peer.Model)
+	asked, err := s.Trust.HadOutgoing(from.PublicKey)
+	if err == nil && asked {
+		err = s.Trust.AddTrusted(from.PublicKey, p.Peer.Name, p.Peer.Model)
+	}
+	if err != nil {
+		return nil, s.trustFailed(from, err)
 	}
 	return nil, nil
 }
 
 // reject notes that a peer this node asked to connect has refused.
 func (s *Server) reject(_ context.Context, from Caller, _ json.RawMessage) (*Message, *Error) {
-	if s.Trust.HadOutgoing(from.PublicKey) {
-		s.Trust.RemoveOutgoing(from.PublicKey)
+	asked, err := s.Trust.HadOutgoing(from.PublicKey)
+	if err == nil && asked {
+		err = s.Trust.RemoveOutgoing(from.PublicKey)
+	}
+	if err != nil {
+		return nil, s.trustFailed(from, err)
 	}
 	return nil, nil
+}
+
+// trustFailed is the answer to a peer when the contacts could not be read or
+// changed. The peer is only told that it failed; why goes to the log.
+func (s *Server) trustFailed(from Caller, err error) *Error {
+	s.logf("contacts failed for %s (%s): %v", from.Addr, from.PublicKey, err)
+	return &Error{CodeInternalError, "internal error"}
+}
+
+// logf records what peers are not told, if there is a log.
+func (s *Server) logf(format string, args ...any) {
+	if s.Log != nil {
+		s.Log(format, args...)
+	}
 }
 
 var errNoText = &Error{CodeInvalidParams, "message needs a text part"}
@@ -182,9 +215,7 @@ func (s *Server) reply(ctx context.Context, from Caller, msg Message) (*Message,
 	text, err := s.Respond(ctx, contextID, msg.Text())
 	if err != nil {
 		id := rand.Text()[:8]
-		if s.Log != nil {
-			s.Log("error %s answering %s (%s): %v", id, from.Addr, from.PublicKey, err)
-		}
+		s.logf("error %s answering %s (%s): %v", id, from.Addr, from.PublicKey, err)
 		if from.PublicKey == s.Identity.Public() {
 			return nil, &Error{CodeInternalError, err.Error()}
 		}

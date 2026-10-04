@@ -38,6 +38,9 @@ var (
 	ErrSender = errors.New("is the peer you are answering, reply to it instead of asking it")
 	// ErrNoRequest means there is no such connection request to decide on.
 	ErrNoRequest = errors.New("request is gone")
+	// ErrNotSaved means a decision on a connection request could not be
+	// stored. Nothing has changed: the request is still waiting.
+	ErrNotSaved = errors.New("contact could not be saved")
 )
 
 // Finder finds the nodes that are online. discovery.Scanner is one; tests
@@ -198,7 +201,9 @@ func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text
 	case a2a.IsPending(err):
 		// Remembered, so that the acceptance of the peer is recognised later.
 		if node.PublicKey != "" {
-			n.Contacts.AddOutgoing(node.PublicKey, node.Name, node.Model, node.Addr())
+			if err := n.Contacts.AddOutgoing(node.PublicKey, node.Name, node.Model, node.Addr()); err != nil {
+				return "", fmt.Errorf("%w, but it could not be remembered here: %w", ErrPending, err)
+			}
 		}
 		return "", ErrPending
 	case a2a.IsBlocked(err):
@@ -208,17 +213,26 @@ func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text
 }
 
 // Accept trusts the peer that sent the connection request and tells it so.
+// A decision that could not be stored fails with ErrNotSaved and is not told
+// to the peer.
 func (n *Network) Accept(ctx context.Context, publicKey string) error {
-	req, ok := n.Contacts.Approve(publicKey)
+	req, ok, err := n.Contacts.Approve(publicKey)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrNotSaved, err)
+	}
 	if !ok {
 		return ErrNoRequest
 	}
 	return n.notify(ctx, req.Addr, publicKey, (*a2a.Client).Accept)
 }
 
-// Reject refuses the connection request of a peer and tells it so.
+// Reject refuses the connection request of a peer and tells it so. Like
+// Accept it fails with ErrNotSaved if the decision could not be stored.
 func (n *Network) Reject(ctx context.Context, publicKey string) error {
-	req, ok := n.Contacts.Reject(publicKey)
+	req, ok, err := n.Contacts.Reject(publicKey)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrNotSaved, err)
+	}
 	if !ok {
 		return ErrNoRequest
 	}

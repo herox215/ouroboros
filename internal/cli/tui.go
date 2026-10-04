@@ -10,6 +10,7 @@ import (
 
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
+	"ouroboros/internal/home"
 	"ouroboros/internal/kernel"
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
@@ -27,6 +28,7 @@ func tuiPlugin() kernel.Plugin {
 		var err error
 		t := use[Terminal](ctx, &err)
 		u := &ui{
+			home:      use[home.Dir](ctx, &err),
 			local:     use[node.Local](ctx, &err),
 			assistant: use[*assistant.Assistant](ctx, &err),
 			network:   use[*peers.Network](ctx, &err),
@@ -48,6 +50,7 @@ func tuiPlugin() kernel.Plugin {
 // ui is the terminal UI and what it controls: it implements tui.Backend by
 // handing every request to the part that is responsible for it.
 type ui struct {
+	home      home.Dir
 	local     node.Local
 	assistant *assistant.Assistant
 	network   *peers.Network
@@ -95,11 +98,22 @@ func (u *ui) Contacts() (tui.Contacts, error) {
 }
 
 func (u *ui) Accept(ctx context.Context, publicKey string) error {
-	return u.network.Accept(ctx, publicKey)
+	return u.decided("accept", publicKey, u.network.Accept(ctx, publicKey))
 }
 
 func (u *ui) Reject(ctx context.Context, publicKey string) error {
-	return u.network.Reject(ctx, publicKey)
+	return u.decided("reject", publicKey, u.network.Reject(ctx, publicKey))
+}
+
+// decided hands on the outcome of a decision on the connection request of
+// publicKey. Of one that could not be stored the UI only says that it failed:
+// the cause goes to the log of the node.
+func (u *ui) decided(action, publicKey string, err error) error {
+	if errors.Is(err, peers.ErrNotSaved) {
+		u.home.Log("%s the connection request of %s: %v", action, publicKey, err)
+		return tui.ErrNotSaved
+	}
+	return err
 }
 
 // SetupCommand runs the interactive setup, which starts the node afterwards.

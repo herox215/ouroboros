@@ -5,6 +5,7 @@ package tui
 import (
 	"cmp"
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"time"
@@ -38,6 +39,10 @@ type Contacts struct {
 	Outgoing []contacts.Request
 }
 
+// ErrNotSaved is the error of Backend.Accept and Backend.Reject for a decision
+// that could not be stored. Nothing was decided: the request is still pending.
+var ErrNotSaved = errors.New("contact could not be saved")
+
 // Backend is what the UI controls.
 type Backend interface {
 	Status() (Status, error)
@@ -47,6 +52,8 @@ type Backend interface {
 	// contextID. On the way it reports which peers it asks.
 	Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error)
 	Contacts() (Contacts, error)
+	// Accept and Reject decide on a connection request. They fail with
+	// ErrNotSaved if the decision could not be stored.
 	Accept(ctx context.Context, publicKey string) error
 	Reject(ctx context.Context, publicKey string) error
 	// SetupCommand returns the interactive setup, run with the terminal handed over.
@@ -400,9 +407,9 @@ func (m *Model) decideRequest(accept bool) tea.Cmd {
 		return nil
 	}
 	pub := m.trust.Incoming[m.reqSel].PublicKey
-	verb := "declined"
+	verb, failed := "declined", "rejecting failed"
 	if accept {
-		verb = "accepted"
+		verb, failed = "accepted", "accepting failed"
 	}
 	return func() tea.Msg {
 		var err error
@@ -410,6 +417,11 @@ func (m *Model) decideRequest(accept bool) tea.Cmd {
 			err = m.backend.Accept(m.ctx, pub)
 		} else {
 			err = m.backend.Reject(m.ctx, pub)
+		}
+		if errors.Is(err, ErrNotSaved) {
+			// Nothing was decided. The request stays in the list, to be tried
+			// again; why it failed is in the log.
+			return actionMsg{err: errors.New(failed + " – the contact could not be saved")}
 		}
 		if err != nil {
 			return actionMsg{err: err}

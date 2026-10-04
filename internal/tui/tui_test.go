@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -504,5 +505,45 @@ func TestOpeningTheUIStartsTheNode(t *testing.T) {
 	b.status.Configured = false
 	if m.Update(m.goOnline()); b.started != 1 || m.noticeErr {
 		t.Fatal("a node that is not configured cannot be started and is no error")
+	}
+}
+
+// A decision that could not be stored is shown as failed, not as done, and
+// the request stays where it is, to be decided again.
+func TestDecisionThatIsNotSaved(t *testing.T) {
+	for key, want := range map[string]string{
+		"a": "accepting failed – the contact could not be saved",
+		"x": "rejecting failed – the contact could not be saved",
+	} {
+		m, b := commands(t)
+		b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma"}}}
+		b.acceptErr = fmt.Errorf("%w: open contacts.json.lock: permission denied", ErrNotSaved)
+		b.rejectErr = b.acceptErr
+		m.Update(m.loadContacts())
+		press(m, "R")
+
+		_, refresh := m.Update(press(m, key)())
+		if m.notice != want || !m.noticeErr {
+			t.Fatalf("%s: notice %q (error %v)", key, m.notice, m.noticeErr)
+		}
+		view := ansi.Strip(m.View().Content)
+		if !strings.Contains(view, want) || strings.Contains(view, "request accepted") || strings.Contains(view, "request declined") || strings.Contains(view, "permission denied") {
+			t.Fatalf("%s: view:\n%s", key, view)
+		}
+		// The list is read anew and still holds the request.
+		if refresh == nil {
+			t.Fatalf("%s: a failed decision should reload the requests", key)
+		}
+		m.Update(m.loadContacts())
+		if m.screen != screenRequests || len(m.trust.Incoming) != 1 || !strings.Contains(ansi.Strip(m.View().Content), "gamma") {
+			t.Fatalf("%s: the request is gone:\n%s", key, ansi.Strip(m.View().Content))
+		}
+
+		// The second try goes through.
+		b.acceptErr, b.rejectErr = nil, nil
+		m.Update(press(m, key)())
+		if len(b.accepted)+len(b.rejected) != 2 || m.noticeErr || !strings.HasPrefix(m.notice, "request ") {
+			t.Fatalf("%s: retry: accepted %v, rejected %v, notice %q", key, b.accepted, b.rejected, m.notice)
+		}
 	}
 }

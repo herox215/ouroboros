@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -66,6 +67,7 @@ type testNode struct {
 	discovery.Node // how the others find it
 	id             *identity.Identity
 	contacts       *contacts.Store
+	contactsPath   string
 	srv            *httptest.Server
 	asked          int // messages its agent answered
 }
@@ -73,7 +75,8 @@ type testNode struct {
 // serve runs a node called name whose agent answers "name: text".
 func serve(t *testing.T, name string) *testNode {
 	t.Helper()
-	n := &testNode{id: identity.Generate(), contacts: contacts.Open(filepath.Join(t.TempDir(), "contacts.json"))}
+	path := filepath.Join(t.TempDir(), "contacts.json")
+	n := &testNode{id: identity.Generate(), contacts: contacts.Open(path), contactsPath: path}
 	n.srv = httptest.NewUnstartedServer((&a2a.Server{
 		Card:     func() a2a.AgentCard { return a2a.AgentCard{Name: name, Description: "  knows\nthe way "} },
 		Identity: n.id,
@@ -211,7 +214,7 @@ func TestDecisionsReachOnlyTheNodeThatAsked(t *testing.T) {
 	if err := alice.network().Accept(ctx, bob.PublicKey); err != nil {
 		t.Fatal(err)
 	}
-	if trusted, _ := bob.contacts.State(alice.PublicKey); !trusted {
+	if trusted, _, _ := bob.contacts.State(alice.PublicKey); !trusted {
 		t.Fatal("bob should have heard that alice accepted")
 	}
 
@@ -244,4 +247,65 @@ func TestStateAndLabel(t *testing.T) {
 	if got := Label(discovery.Node{Host: "h", Port: 1}); got != "h:1" {
 		t.Fatalf("a node without a name is called by its address: %q", got)
 	}
+}
+
+// breakContacts makes every read and change of the contacts of n fail until
+// the returned function is called: a directory is in the place of their lock.
+func breakContacts(t *testing.T, n *testNode) (repair func()) {
+	t.Helper()
+	lock := n.contactsPath + ".lock"
+	os.Remove(lock)
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return func() { os.Remove(lock) }
+}
+
+// A decision that cannot be stored is not made and not told to the peer: the
+// request stays, to be decided again.
+func TestDecisionThatIsNotSaved(t *testing.T) {
+	alice, bob := serve(t, "alice"), serve(t, "bob")
+	ctx := context.Background()
+	if _, err := bob.network().Send(ctx, alice.Node, "c", "hi"); !errors.Is(err, ErrPending) {
+		t.Fatalf("first contact: %v", err)
+	}
+
+	repair := breakContacts(t, alice)
+	for name, decide := range map[string]func(context.Context, string) error{"accept": alice.network().Accept, "reject": alice.network().Reject} {
+		if err := decide(ctx, bob.PublicKey); !errors.Is(err, ErrNotSaved) || errors.Is(err, ErrNoRequest) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	repair()
+	if d, _ := alice.contacts.Snapshot(); len(d.Incoming) != 1 || len(d.Trusted) != 0 || len(d.Blocked) != 0 {
+		t.Fatalf("a decision that failed changed the contacts: %+v", d)
+	}
+	if trusted, _, _ := bob.contacts.State(alice.PublicKey); trusted || !hadOutgoing(bob, alice.PublicKey) {
+		t.Fatal("bob heard of a decision that was not made")
+	}
+
+	// The second try works.
+	if err := alice.network().Accept(ctx, bob.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	if trusted, _, _ := bob.contacts.State(alice.PublicKey); !trusted {
+		t.Fatal("bob should have heard that alice accepted")
+	}
+}
+
+// A request that this node cannot remember is reported: the acceptance of
+// the peer would not be recognised.
+func TestRequestThatIsNotRemembered(t *testing.T) {
+	alice, bob := serve(t, "alice"), serve(t, "bob")
+	defer breakContacts(t, bob)()
+	_, err := bob.network().Send(context.Background(), alice.Node, "c", "hi")
+	if !errors.Is(err, ErrPending) || !strings.Contains(err.Error(), "could not be remembered") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// hadOutgoing reports whether n asked publicKey to connect.
+func hadOutgoing(n *testNode, publicKey string) bool {
+	asked, _ := n.contacts.HadOutgoing(publicKey)
+	return asked
 }

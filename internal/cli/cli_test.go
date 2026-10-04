@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -648,6 +649,46 @@ func TestTUIBackendAsk(t *testing.T) {
 	steps = nil
 	if _, err := service[*ui](app).Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }); err != nil || len(steps) != 0 {
 		t.Fatalf("steps %+v, %v", steps, err)
+	}
+}
+
+// A decision on a connection request that cannot be stored reaches the UI as
+// tui.ErrNotSaved, without the cause, which is put down in the log instead.
+func TestTUIBackendDecisionThatIsNotSaved(t *testing.T) {
+	s := testSettings(t)
+	app, _ := newApp(s, "")
+	u, dir := service[*ui](app), home.Dir(s.Home)
+	ctx := context.Background()
+	if err := dir.Contacts().AddIncoming("pk-gamma", "gamma", "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// A directory in the place of the lock: the contacts cannot be changed.
+	lock := filepath.Join(s.Home, "contacts.json.lock")
+	os.Remove(lock)
+	os.Mkdir(lock, 0o700)
+	for action, decide := range map[string]func(context.Context, string) error{"accept": u.Accept, "reject": u.Reject} {
+		if err := decide(ctx, "pk-gamma"); err != tui.ErrNotSaved {
+			t.Fatalf("%s: %v", action, err)
+		}
+	}
+	logged, _ := os.ReadFile(dir.Service().LogFile)
+	for _, want := range []string{"accept the connection request of pk-gamma", "reject the connection request of pk-gamma", "contacts.json.lock"} {
+		if !strings.Contains(string(logged), want) {
+			t.Fatalf("log %q should contain %q", logged, want)
+		}
+	}
+
+	// Nothing was decided: once the contacts can be written, it is.
+	os.Remove(lock)
+	if d, _ := dir.Contacts().Snapshot(); len(d.Incoming) != 1 || len(d.Trusted) != 0 || len(d.Blocked) != 0 {
+		t.Fatalf("a decision that failed changed the contacts: %+v", d)
+	}
+	if err := u.Accept(ctx, "pk-gamma"); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Reject(ctx, "pk-gamma"); !errors.Is(err, peers.ErrNoRequest) {
+		t.Fatalf("a request that is decided: %v", err)
 	}
 }
 
