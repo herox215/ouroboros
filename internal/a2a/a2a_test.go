@@ -237,7 +237,8 @@ func TestSendBadResponses(t *testing.T) {
 }
 
 func TestMessageTextJoinsTextParts(t *testing.T) {
-	m := Message{Parts: []Part{{Kind: "text", Text: "a"}, {Kind: "file"}, {Kind: "text", Text: "b"}}}
+	// What is no text is left out, whatever it carries, and so is a text that is empty.
+	m := Message{Parts: []Part{{Kind: "text", Text: "a"}, {Kind: "file", Text: "f"}, {Kind: "text"}, {Kind: "text", Text: "b"}}}
 	if got := m.Text(); got != "a\nb" {
 		t.Fatalf("got %q", got)
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,26 @@ func signed(id *identity.Identity, body string) *http.Request {
 	return r
 }
 
+// sentAt is the time r says it was signed at.
+func sentAt(r *http.Request) time.Time {
+	sec, _ := strconv.ParseInt(r.Header.Get(HeaderTime), 10, 64)
+	return time.Unix(sec, 0)
+}
+
+// A sender whose node does not run has no port to be called back on, and
+// names none: not the port 0.
+func TestSignWithoutPort(t *testing.T) {
+	id := identity.Generate()
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}"))
+	sign(r, []byte("{}"), id, 0, testSelf, MethodSend)
+	if port := r.Header.Get(HeaderPort); port != "" {
+		t.Fatalf("port %q", port)
+	}
+	if key, err := newVerifier(testSelf).verify(r, []byte("{}"), MethodSend); err != nil || key != id.Public() {
+		t.Fatalf("got %q, %v", key, err)
+	}
+}
+
 // Only a request that is signed, fresh and new is taken for its sender's.
 func TestVerify(t *testing.T) {
 	id := identity.Generate()
@@ -41,6 +62,12 @@ func TestVerify(t *testing.T) {
 		{"no timestamp", func(r *http.Request, _ *verifier) { r.Header.Del(HeaderTime) }, body, "missing signature"},
 		{"no nonce", func(r *http.Request, _ *verifier) { r.Header.Del(HeaderNonce) }, body, "missing signature"},
 		{"timestamp is no number", func(r *http.Request, _ *verifier) { r.Header.Set(HeaderTime, "now") }, body, "stale request"},
+		{"as old as it may be", func(r *http.Request, v *verifier) {
+			v.now = func() time.Time { return sentAt(r).Add(clockSkew) }
+		}, body, ""},
+		{"as far ahead as it may be", func(r *http.Request, v *verifier) {
+			v.now = func() time.Time { return sentAt(r).Add(-clockSkew) }
+		}, body, ""},
 		{"too old", func(_ *http.Request, v *verifier) {
 			v.now = func() time.Time { return time.Now().Add(clockSkew + time.Minute) }
 		}, body, "stale request"},

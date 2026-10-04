@@ -41,6 +41,13 @@ func TestWriteReplacesContentAndMode(t *testing.T) {
 	if left := leftovers(t, path); len(left) != 0 {
 		t.Fatalf("temporary files left behind: %v", left)
 	}
+	// Also a mode that a temporary file does not have anyway.
+	if err := Write(path, []byte("shared"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o640 {
+		t.Fatalf("perm = %o, want 640", info.Mode().Perm())
+	}
 }
 
 // A file that is open keeps its old content: the new one is another file.

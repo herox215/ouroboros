@@ -63,7 +63,9 @@ func TestOrderFollowsDependencies(t *testing.T) {
 		s.note("free")
 		return none{}, nil
 	})
-	if err := k.Start(top, free, middle, bottom); err != nil {
+	// middle is in the order by the time its turn in the list comes: the
+	// ones listed after it still get theirs.
+	if err := k.Start(top, middle, free, bottom); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"bottom", "middle", "top", "free"}
@@ -81,6 +83,39 @@ func TestOrderFollowsDependencies(t *testing.T) {
 	}
 	if g, ok := Service[greeter](k); !ok || g.Greet() != "hello" {
 		t.Fatalf("service %v, %v", g, ok)
+	}
+}
+
+// A plugin that needs several services waits for all of them, also when one
+// of them is there already.
+func TestOrderWithSeveralNeeds(t *testing.T) {
+	greets := NewPlugin("greets", func(*Context, none) (struct{ Greeter greeter }, error) {
+		return struct{ Greeter greeter }{english{}}, nil
+	})
+	words := NewPlugin("words", func(*Context, none) (struct{ Word word }, error) {
+		return struct{ Word word }{"world"}, nil
+	})
+	type both struct {
+		Greeter greeter
+		Word    word
+	}
+	user := NewPlugin("user", func(ctx *Context, n both) (none, error) {
+		Add(ctx, word(n.Greeter.Greet())+" "+n.Word)
+		return none{}, nil
+	})
+	// Whichever of the two services is looked at first: one is in the order
+	// before user is, the other one is listed after it.
+	for _, list := range [][]Plugin{{greets, user, words}, {words, user, greets}} {
+		k := New()
+		if err := k.Start(list...); err != nil {
+			t.Fatal(err)
+		}
+		if got := k.Plugins(); len(got) != 3 || got[2] != "user" {
+			t.Fatalf("started %v, user should be last", got)
+		}
+		if got := All[word](k.Context()); !slices.Equal(got, []word{"hello world"}) {
+			t.Fatalf("items %v", got)
+		}
 	}
 }
 

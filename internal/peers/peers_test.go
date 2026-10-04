@@ -238,6 +238,10 @@ func TestDecisionsReachOnlyTheNodeThatAsked(t *testing.T) {
 
 // A card somebody else wrote is cut to size.
 func TestOneLine(t *testing.T) {
+	// One that just fits stays whole.
+	if fits := strings.Repeat("ä", maxCard); oneLine(fits) != fits {
+		t.Fatalf("a card of %d characters was cut", maxCard)
+	}
 	got := oneLine(strings.Repeat("ä", maxCard+50))
 	if utf8.RuneCountInString(got) != maxCard || !strings.HasSuffix(got, "ä…") {
 		t.Fatalf("long card: %d characters", utf8.RuneCountInString(got))

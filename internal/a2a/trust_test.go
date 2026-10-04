@@ -241,12 +241,12 @@ func TestOriginAndHops(t *testing.T) {
 func TestAddedMethods(t *testing.T) {
 	alice, bob := newNode(t, "alice"), newNode(t, "bob")
 	bob.methods = []Method{
+		{Name: MethodSend, Handle: func(context.Context, Caller, json.RawMessage) (*Message, *Error) {
+			return nil, &Error{CodeInternalError, "must not be called"}
+		}},
 		{Name: "ping", Handle: func(_ context.Context, from Caller, _ json.RawMessage) (*Message, *Error) {
 			msg := NewMessage("agent", "", "pong "+from.PublicKey)
 			return &msg, nil
-		}},
-		{Name: MethodSend, Handle: func(context.Context, Caller, json.RawMessage) (*Message, *Error) {
-			return nil, &Error{CodeInternalError, "must not be called"}
 		}},
 	}
 	ctx := context.Background()
@@ -298,9 +298,13 @@ func TestCallbacksNeedOutgoingRequest(t *testing.T) {
 	if err := mallory.client().Accept(ctx, alice.srv.URL, alice.id.Public()); err != nil {
 		t.Fatal(err)
 	}
+	// The rejection of a request nobody made changes nothing in the contacts:
+	// it does not even try.
+	alice.fail.removeOutgoing = errors.New("must not be called")
 	if err := mallory.client().Reject(ctx, alice.srv.URL, alice.id.Public()); err != nil {
 		t.Fatal(err)
 	}
+	alice.fail.removeOutgoing = nil
 	if trusted, _, _ := alice.trust.State(mallory.id.Public()); trusted {
 		t.Fatal("mallory accepted a request nobody made and is trusted")
 	}

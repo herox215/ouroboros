@@ -89,13 +89,18 @@ for dir in $packages; do
 	coefficient=$((mutant_time / took))
 	[ "$coefficient" -ge 3 ] || coefficient=3
 
+	# gremlins would go on into the directories below $dir. They are packages
+	# of their own, with their own turn or left out on purpose: test code, and
+	# the ones that send signals, which the look at $dir above did not see.
+	# The files are matched by their path below $dir, so "/" is every file
+	# that is not in $dir itself.
 	status=0
 	if [ "$limit" -gt 0 ]; then
 		left=$((limit - ($(date +%s) - start)))
 		[ "$left" -ge 1 ] || left=1
-		timeout "$left" "$gremlins" unleash --config "$ROOT/.gremlins.yaml" --timeout-coefficient "$coefficient" "./$dir" >"$log" 2>&1 || status=$?
+		timeout "$left" "$gremlins" unleash --config "$ROOT/.gremlins.yaml" --timeout-coefficient "$coefficient" --exclude-files / "./$dir" >"$log" 2>&1 || status=$?
 	else
-		"$gremlins" unleash --config "$ROOT/.gremlins.yaml" --timeout-coefficient "$coefficient" "./$dir" >"$log" 2>&1 || status=$?
+		"$gremlins" unleash --config "$ROOT/.gremlins.yaml" --timeout-coefficient "$coefficient" --exclude-files / "./$dir" >"$log" 2>&1 || status=$?
 	fi
 	# Lines of gremlins: "  STATUS MUTATOR at file.go:line:column", the file relative to the package.
 	# When it is stopped it reports the mutants it was still testing as LIVED;
