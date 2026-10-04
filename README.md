@@ -80,7 +80,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
-| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 8 LLM calls per answer, of which one can run a [script](#scripts) that calls many tools |
+| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 50 LLM calls per answer, of which one can run a [script](#scripts) that calls many tools |
 | Memory | last 40 messages per conversation, up to 256 conversations; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
@@ -193,7 +193,7 @@ file), and files your agent reaches in other ways, of which there are none today
 
 ### Scripts
 
-An answer has at most 8 calls of the LLM, every call sends the whole conversation again, and every result of
+An answer has at most 50 calls of the LLM, every call sends the whole conversation again, and every result of
 a tool stays in it. `run(script)` is for what is known in advance: the same call for many peers or files,
 results that are filtered or passed on unchanged. The agent writes a script in JavaScript, and inside it
 every other tool it has is a function of its name. Every tool stays callable on its own.

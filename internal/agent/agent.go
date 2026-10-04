@@ -15,7 +15,7 @@ import (
 const (
 	maxContexts = 256 // conversations kept in memory
 	maxHistory  = 40  // messages kept per conversation
-	maxRounds   = 8   // LLM calls per answer; stops an agent that keeps calling tools
+	maxRounds   = 50  // LLM calls per answer; stops an agent that keeps calling tools
 )
 
 // ErrTooManyToolCalls is the error of an answer that was given up because the
