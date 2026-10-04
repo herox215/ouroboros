@@ -33,6 +33,12 @@ type Request struct {
 	At        time.Time `json:"at"`
 }
 
+// MaxIncoming is how many connection requests wait for a decision at most.
+// Anyone can send one, so without a limit anyone could fill the list and the
+// file. When it is full, the request that waited longest makes room for a new
+// one. Trusted peers are not requests and are never dropped.
+const MaxIncoming = 64
+
 // Data is the whole contact list.
 type Data struct {
 	Trusted  []Contact `json:"trusted,omitempty"`
@@ -119,7 +125,8 @@ func (s *Store) HadOutgoing(publicKey string) (bool, error) {
 	return found, err
 }
 
-// AddIncoming records (or refreshes) a pending request from publicKey.
+// AddIncoming records (or refreshes) a pending request from publicKey. With
+// MaxIncoming requests waiting, the oldest of them is dropped for it.
 func (s *Store) AddIncoming(publicKey, name, model, addr string) error {
 	return s.update(func(d *Data) error {
 		if slices.Contains(d.Blocked, publicKey) || slices.ContainsFunc(d.Trusted, trusted(publicKey)) {
@@ -131,6 +138,15 @@ func (s *Store) AddIncoming(publicKey, name, model, addr string) error {
 			r.At = d.Incoming[i].At
 			d.Incoming[i] = r
 			return nil
+		}
+		for len(d.Incoming) >= MaxIncoming {
+			oldest := 0
+			for i, waiting := range d.Incoming {
+				if waiting.At.Before(d.Incoming[oldest].At) {
+					oldest = i
+				}
+			}
+			d.Incoming = slices.Delete(d.Incoming, oldest, oldest+1)
 		}
 		d.Incoming = append(d.Incoming, r)
 		return nil

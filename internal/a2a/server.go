@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"ouroboros/internal/identity"
 )
@@ -17,7 +18,8 @@ type Responder func(ctx context.Context, contextID, text string) (string, error)
 
 // Server serves the agent card and the authenticated JSON-RPC endpoint.
 // Only trusted peers may send messages; everyone else becomes a pending
-// connection request that a human has to approve. Requests have to be signed
+// connection request that a human has to approve, as long as its address does
+// not send too many of them (see limiter). Requests have to be signed
 // for this node. Serve the Handler over TLS with TLSConfig(Identity): that is
 // how peers know that it is this node that answers, and what encrypts it.
 type Server struct {
@@ -32,12 +34,15 @@ type Server struct {
 	// or why the contacts could not be read or changed.
 	// It is called like log.Printf. May be nil.
 	Log func(format string, args ...any)
+
+	strangers limiter // limits the connection requests per address
 }
 
 // Caller is who sent a request.
 type Caller struct {
 	PublicKey string // authenticated by the request signature
 	Addr      string // where to reach the caller again
+	host      string // IP the request came from
 }
 
 // Method is a JSON-RPC method added to the server. It is only called for
@@ -97,7 +102,7 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 		}
-		from := Caller{publicKey, callbackAddr(r, r.Header.Get(HeaderPort))}
+		from := Caller{publicKey, callbackAddr(r, r.Header.Get(HeaderPort)), remoteHost(r)}
 		res.Result, res.Error = run(r.Context(), from, req.Params)
 	})
 	return mux
@@ -149,6 +154,10 @@ func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) 
 		return s.reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), from, p.Message)
 	case blocked:
 		return nil, &Error{CodeBlocked, "connection refused"}
+	}
+	// A key costs nothing to make up, so a stranger is limited by its address.
+	if !s.strangers.allow(from.host, time.Now()) {
+		return nil, &Error{CodeTooManyRequests, "too many connection requests from your address, try again later"}
 	}
 	// A request that was not recorded is not pending: nobody would decide on it.
 	if err := s.Trust.AddIncoming(from.PublicKey, p.Peer.Name, p.Peer.Model, from.Addr); err != nil {

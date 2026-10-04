@@ -136,26 +136,73 @@ func TestVerifyRejectsReplay(t *testing.T) {
 	}
 }
 
-// Nonces are forgotten only when their request is too old to be accepted
-// anyway, so that forgetting opens no way for a replay.
+// A nonce is remembered for as long as its request could be sent again, and
+// forgotten after that without looking at the others.
 func TestVerifierForgetsOnlyStaleNonces(t *testing.T) {
 	v := newVerifier(testSelf)
 	now := time.Now()
 	v.now = func() time.Time { return now }
-	if !v.remember("key", "fresh") {
-		t.Fatal("a new nonce should be remembered")
+	replayed := func(nonce string) bool {
+		err := v.remember("key", nonce)
+		return err != nil && err.Error() == "replayed request"
 	}
-	for i := range 4097 {
-		v.seen[fmt.Sprint("old|", i)] = now.Add(-clockSkew - time.Second)
+	if err := v.remember("key", "first"); err != nil {
+		t.Fatal(err)
 	}
-	if !v.remember("key", "next") {
-		t.Fatal("a new nonce should be remembered")
+	// A new generation of nonces begins; the one before is still known.
+	now = now.Add(nonceLife)
+	if err := v.remember("key", "second"); err != nil {
+		t.Fatal(err)
 	}
-	if len(v.seen) != 2 {
-		t.Fatalf("%d nonces left, want the two fresh ones", len(v.seen))
+	now = now.Add(nonceLife - time.Second)
+	if !replayed("first") || !replayed("second") {
+		t.Fatal("a nonce was forgotten while its request could still be sent again")
 	}
-	if v.remember("key", "fresh") || v.remember("key", "next") {
-		t.Fatal("a fresh nonce was forgotten")
+	// By now a request with the first nonce is too old to be accepted anyway.
+	now = now.Add(time.Second)
+	if !replayed("second") || len(v.old) != 1 {
+		t.Fatalf("second should be the generation before: %v", v.old)
+	}
+	if err := v.remember("key", "first"); err != nil {
+		t.Fatalf("a stale nonce should be forgotten: %v", err)
+	}
+}
+
+// The nonces a node remembers are bounded. At the bound it refuses requests
+// rather than forgetting nonces that could be replayed.
+func TestVerifierBoundsNonces(t *testing.T) {
+	v := newVerifier(testSelf)
+	now := time.Now()
+	v.now = func() time.Time { return now }
+	for i := range maxNonces {
+		if err := v.remember("key", fmt.Sprint(i)); err != nil {
+			t.Fatalf("nonce %d: %v", i, err)
+		}
+	}
+	if err := v.remember("key", "one more"); err == nil || err.Error() != "too many requests" {
+		t.Fatalf("beyond the bound: %v", err)
+	}
+	if err := v.remember("key", "0"); err == nil || err.Error() != "replayed request" {
+		t.Fatalf("a replay at the bound: %v", err)
+	}
+	if len(v.seen) != maxNonces {
+		t.Fatalf("%d nonces remembered, want %d", len(v.seen), maxNonces)
+	}
+	// The refusal reaches whoever sent the request.
+	if _, err := v.verify(signed(identity.Generate(), "{}"), []byte("{}"), MethodSend); err == nil || err.Error() != "too many requests" {
+		t.Fatalf("verify at the bound: %v", err)
+	}
+
+	// Later there is room again, and what was seen is still refused.
+	now = now.Add(nonceLife)
+	if err := v.remember("key", "one more"); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.remember("key", "0"); err == nil {
+		t.Fatal("making room forgot a nonce that could be replayed")
+	}
+	if len(v.seen)+len(v.old) > 2*maxNonces {
+		t.Fatalf("%d nonces remembered", len(v.seen)+len(v.old))
 	}
 }
 

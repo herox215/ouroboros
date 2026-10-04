@@ -2,8 +2,10 @@ package contacts
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -56,6 +58,61 @@ func TestIncomingIsUpserted(t *testing.T) {
 	d, _ := s.Snapshot()
 	if len(d.Incoming) != 1 || d.Incoming[0].Name != "new" || d.Incoming[0].Addr != "b" {
 		t.Fatalf("got %+v", d.Incoming)
+	}
+}
+
+// The requests that wait are limited: when the list is full, the one that
+// waited longest makes room. Peers that are trusted are not touched.
+func TestIncomingIsCapped(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
+	s.AddTrusted("friend", "beta", "")
+	for i := range MaxIncoming {
+		s.AddIncoming(fmt.Sprint("pk", i), "gamma", "", "")
+	}
+	has := func(publicKey string) bool {
+		t.Helper()
+		d, _ := s.Snapshot()
+		if len(d.Incoming) != MaxIncoming || len(d.Trusted) != 1 || d.Trusted[0].PublicKey != "friend" {
+			t.Fatalf("%d requests, trusted %+v", len(d.Incoming), d.Trusted)
+		}
+		return slices.ContainsFunc(d.Incoming, match(publicKey))
+	}
+	// The oldest is the one that waited longest, wherever it is in the list.
+	s.update(func(d *Data) error {
+		d.Incoming[5].At = d.Incoming[0].At.Add(-time.Hour)
+		return nil
+	})
+
+	// A request that is there already needs no room.
+	s.AddIncoming("pk0", "renamed", "", "")
+	if !has("pk5") || !has("pk0") {
+		t.Fatal("refreshing a request dropped one")
+	}
+	s.AddIncoming("new", "delta", "", "")
+	if has("pk5") || !has("pk0") || !has("new") {
+		t.Fatal("the oldest request should have made room for the new one")
+	}
+	s.AddIncoming("newer", "delta", "", "")
+	if has("pk0") || !has("pk1") || !has("new") || !has("newer") {
+		t.Fatal("the next oldest request should have made room")
+	}
+
+	// A trusted peer that asks again takes nobody's place.
+	s.AddIncoming("friend", "beta", "", "")
+	if !has("pk1") {
+		t.Fatal("a trusted peer dropped a request")
+	}
+
+	// A list from before there was a limit is cut down to it.
+	s.update(func(d *Data) error {
+		for i := range 3 {
+			d.Incoming = append(d.Incoming, Request{PublicKey: fmt.Sprint("extra", i), At: time.Now()})
+		}
+		return nil
+	})
+	s.AddIncoming("last", "delta", "", "")
+	if !has("last") || !has("extra2") {
+		t.Fatal("the newest requests should be kept")
 	}
 }
 

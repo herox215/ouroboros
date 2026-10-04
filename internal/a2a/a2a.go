@@ -30,6 +30,9 @@ const (
 	CodePending        = -32002 // waiting for the peer to approve the request
 	CodeBlocked        = -32003 // the peer refused to connect
 	CodeTooManyHops    = -32004 // the message was passed on by too many agents
+	// CodeTooManyRequests answers a node that is not connected and comes from
+	// an address that sent too many messages of such nodes.
+	CodeTooManyRequests = -32005
 )
 
 // MaxHops is how many agents may pass a message on before it is refused.
