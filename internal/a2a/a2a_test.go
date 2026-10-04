@@ -164,7 +164,9 @@ func TestRPCErrors(t *testing.T) {
 }
 
 // Why the agent failed stays on the node: the peer learns that it failed and
-// under which ID the node logged the cause, nothing of the cause itself.
+// under which ID the node logged the cause, nothing of the cause itself and
+// nothing that promises an explanation. The node keeps the failure under
+// that ID with the peer and the message it belongs to.
 func TestResponderErrorIsNotSentToPeers(t *testing.T) {
 	const cause = `Post "http://10.0.0.5:11434/v1/chat/completions": connection refused`
 	failing := func(context.Context, string, string) (string, error) { return "", errors.New(cause) }
@@ -184,9 +186,19 @@ func TestResponderErrorIsNotSentToPeers(t *testing.T) {
 		t.Fatalf("log %q should explain error %s", srv.log, said[1])
 	}
 
+	if len(srv.failed) != 1 {
+		t.Fatalf("failures reported: %+v", srv.failed)
+	}
+	if f := srv.failed[0]; f.ID != said[1] || f.Peer != peer.id.Public() || f.ContextID != "c" || f.MessageID == "" || f.Err.Error() != cause {
+		t.Fatalf("failure %+v", f)
+	}
+
 	// The owner asks with the key of the node and reads the cause.
 	if _, err := srv.client().Send(ctx, srv.srv.URL, srv.id.Public(), "c", "x"); !code(err, CodeInternalError) || !strings.Contains(err.Error(), cause) {
 		t.Fatalf("the owner was told %v", err)
+	}
+	if len(srv.failed) != 1 {
+		t.Fatalf("what the owner read is nothing to keep for a peer: %+v", srv.failed)
 	}
 
 	// A server without a log keeps the cause from peers just the same.

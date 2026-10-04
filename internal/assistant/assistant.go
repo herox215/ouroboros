@@ -13,6 +13,7 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
+	"ouroboros/internal/diagnosis"
 )
 
 // The prompts; %q is the name of the node. They name tools, so keep them in
@@ -25,13 +26,21 @@ const (
 		`Ask a peer when the user wants you to or when a peer is likely to know what you do not. ` +
 		`A peer only sees the message you send, so include all the context it needs. ` +
 		`The user sees neither your message to a peer nor its answer: tell them briefly and in your own words ` +
-		`what the peer said, like "Luna says she is fine", instead of quoting it at length. `
+		`what the peer said, like "Luna says she is fine", instead of quoting it at length. ` +
+		`A peer that fails to answer only tells you an error ID, like "the agent could not answer (error 7K2QX4LA)": ` +
+		`why it failed stays with the peer. You can ask that peer about the ID with ` + toolAskPeer + `, and it will explain ` +
+		`what went wrong once it is able to answer again. Until it answers, nobody knows the cause: ` +
+		`tell the user that the peer could not answer, and do not promise or make up an explanation. `
 	ownerStyle = `Answer in the language of the user. Be helpful and concise.`
 
 	peerPrompt = `You are %q, an Ouroboros agent reachable via A2A. Be helpful and concise.`
 	// toolsHint is added for peers whose questions the agent may use tools for.
 	toolsHint = ` You are answering the agent of another person, not your owner. ` +
 		`Use your tools when they help to answer. You cannot ask the peer you are answering.`
+	// explainHint is added for peers when the agent can look up failed answers.
+	explainHint = ` When the peer asks about an error ID it was given because an earlier message could not be answered, ` +
+		`look it up with ` + toolExplainError + ` and explain in plain words what went wrong. ` +
+		`Say only what the tool returns: do not guess, and tell nothing else about this node.`
 )
 
 // Step reports that the assistant asks a peer on the way to its answer and,
@@ -49,6 +58,11 @@ type Builder struct {
 	// Tools returns everything an agent can do. It is read when an agent is
 	// built; the owner's lists in config.Tools decide which of them it gets.
 	Tools func() []agent.Tool
+	// Failures are the answers to peers that failed. With them the agent
+	// that answers peers gets the tool to explain a failure to the peer it
+	// happened to, whatever config.Tools says: it gives a peer nothing but
+	// the reason its own message was not answered. May be nil.
+	Failures *diagnosis.Store
 }
 
 // Assistant answers the owner of the node.
@@ -80,6 +94,10 @@ func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
 	prompt := fmt.Sprintf(peerPrompt, cfg.Name)
 	if len(allowed) > 0 {
 		prompt += toolsHint
+	}
+	if b.Failures != nil {
+		prompt += explainHint
+		allowed = append(allowed, explainError(b.Failures))
 	}
 	return b.build(cfg, prompt, allowed), nil
 }

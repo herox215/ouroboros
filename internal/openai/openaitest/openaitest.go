@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,8 +21,9 @@ var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 
 // NewServer starts a fake API that requires Key and returns its base URL.
 // Chat replies have the form "[model] turns=N last=TEXT", where N counts the
-// non-system messages. If tools are offered, a message "@PEER TEXT" is
-// answered with a call to ask_peer and "@" alone with a call to list_peers.
+// non-system messages. A message "@PEER TEXT" is answered with a call to
+// ask_peer, "@" alone with a call to list_peers and "#ID" with a call to
+// explain_error, each if that tool is offered.
 // The message "?system" is answered with the system prompt.
 func NewServer(t testing.TB) string {
 	return NewServerWithKey(t, Key)
@@ -50,7 +52,9 @@ func NewServerWithKey(t testing.TB, key string) string {
 		if last.Content == "?system" {
 			msg.Content = in.Messages[0].Content
 		}
-		if call, ok := toolCall(last); ok && len(in.Tools) > 0 {
+		call, ok := toolCall(last)
+		offered := func(t openai.Tool) bool { return t.Function.Name == call.Function.Name }
+		if ok && slices.ContainsFunc(in.Tools, offered) {
 			msg = openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{call}}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": msg}}})
@@ -67,13 +71,19 @@ func NewServerWithKey(t testing.TB, key string) string {
 	return srv.URL
 }
 
-// toolCall is the tool call a user message of the form "@PEER TEXT" or "@" asks for.
+// toolCall is the tool call a user message of the form "@PEER TEXT", "@" or
+// "#ID" asks for.
 func toolCall(msg openai.Message) (openai.ToolCall, bool) {
+	call := openai.ToolCall{ID: "call-1", Type: "function", Function: openai.FunctionCall{Name: "list_peers", Arguments: "{}"}}
+	if id, ok := strings.CutPrefix(msg.Content, "#"); ok && msg.Role == "user" {
+		args, _ := json.Marshal(map[string]string{"id": id})
+		call.Function = openai.FunctionCall{Name: "explain_error", Arguments: string(args)}
+		return call, true
+	}
 	rest, ok := strings.CutPrefix(msg.Content, "@")
 	if !ok || msg.Role != "user" {
 		return openai.ToolCall{}, false
 	}
-	call := openai.ToolCall{ID: "call-1", Type: "function", Function: openai.FunctionCall{Name: "list_peers", Arguments: "{}"}}
 	if peer, text, _ := strings.Cut(rest, " "); peer != "" {
 		args, _ := json.Marshal(map[string]string{"peer": peer, "message": text})
 		call.Function = openai.FunctionCall{Name: "ask_peer", Arguments: string(args)}

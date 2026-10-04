@@ -15,6 +15,7 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
+	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
 )
@@ -85,6 +86,7 @@ func (s Server) Run(ctx context.Context) error {
 		Respond:  respond,
 		Methods:  s.Methods,
 		Log:      logger.Printf,
+		Failed:   keep(s.Home.Failures(), logger),
 	}
 	srv := &http.Server{
 		Handler:           logRequests(logger, server.Handler()),
@@ -122,6 +124,21 @@ func (s Server) Run(ctx context.Context) error {
 	<-stopped
 	logger.Print("stopped")
 	return nil
+}
+
+// keep returns what records the answers to peers that failed, for the agent
+// to explain them to the peer that asks. Of the error only its category is
+// kept: the error itself is in the log.
+func keep(failures *diagnosis.Store, logger *log.Logger) func(a2a.Failure) {
+	return func(f a2a.Failure) {
+		err := failures.Record(diagnosis.Entry{
+			ID: f.ID, Peer: f.Peer, ContextID: f.ContextID, MessageID: f.MessageID,
+			At: time.Now(), Cause: diagnosis.Classify(f.Err),
+		})
+		if err != nil {
+			logger.Printf("error %s is not kept for the peer to ask about: %v", f.ID, err)
+		}
+	}
 }
 
 // listen opens the A2A port, falling back to a free port if it is taken.

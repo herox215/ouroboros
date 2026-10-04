@@ -34,8 +34,20 @@ type Server struct {
 	// or why the contacts could not be read or changed.
 	// It is called like log.Printf. May be nil.
 	Log func(format string, args ...any)
+	// Failed is told about every answer to a peer that failed, so that it
+	// can be explained to the peer when it asks about it. May be nil.
+	Failed func(Failure)
 
 	strangers limiter // limits the connection requests per address
+}
+
+// Failure is an answer to a peer that the Responder failed to give.
+type Failure struct {
+	ID        string // what the peer was told in place of the cause
+	Peer      string // public key of the peer that asked
+	ContextID string // conversation of the message
+	MessageID string // the message that was not answered
+	Err       error  // the cause, which is not for the peer to read
 }
 
 // Caller is who sent a request.
@@ -214,7 +226,9 @@ var errNoText = &Error{CodeInvalidParams, "message needs a text part"}
 //
 // Why the Responder failed is nothing a peer gets to read: the error of an
 // LLM or a tool names endpoints and whatever else its text contains. The peer
-// is told that it failed, with an ID; the cause goes to the log under that ID.
+// is told that it failed, with an ID; the cause goes to the log under that ID
+// and to Failed, which keeps it for the peer to ask about later. The answer
+// promises no explanation: whoever would give it may be what failed.
 // Only the owner, who asks with the key of this node, reads the cause itself.
 func (s *Server) reply(ctx context.Context, from Caller, msg Message) (*Message, *Error) {
 	contextID := msg.ContextID
@@ -227,6 +241,9 @@ func (s *Server) reply(ctx context.Context, from Caller, msg Message) (*Message,
 		s.logf("error %s answering %s (%s): %v", id, from.Addr, from.PublicKey, err)
 		if from.PublicKey == s.Identity.Public() {
 			return nil, &Error{CodeInternalError, err.Error()}
+		}
+		if s.Failed != nil {
+			s.Failed(Failure{ID: id, Peer: from.PublicKey, ContextID: contextID, MessageID: msg.MessageID, Err: err})
 		}
 		return nil, &Error{CodeInternalError, "the agent could not answer (error " + id + ")"}
 	}

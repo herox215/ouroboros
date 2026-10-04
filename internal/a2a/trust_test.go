@@ -32,6 +32,8 @@ type node struct {
 	log []string
 	// fail makes the contacts of the node fail, see faulty.
 	fail faults
+	// failed are the failed answers the server reported.
+	failed []Failure
 }
 
 // faults are the errors the contacts of a node fail with, by what is asked
@@ -98,7 +100,8 @@ func newNode(t *testing.T, name string) *node {
 		return echo(ctx, contextID, text)
 	}
 	n.srv = serve(t, id, (&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: faulty{trust, &n.fail}, Respond: respond, Methods: func() []Method { return n.methods },
-		Log: func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) }}).Handler())
+		Log:    func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) },
+		Failed: func(f Failure) { n.failed = append(n.failed, f) }}).Handler())
 	return n
 }
 

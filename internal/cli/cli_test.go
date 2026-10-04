@@ -5,13 +5,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +27,7 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
+	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
@@ -545,6 +553,112 @@ func TestChatWithAssistant(t *testing.T) {
 	if out, err := run(t, s, "hi\n", "chat"); err != nil || !strings.Contains(out, "✗") || !strings.Contains(out, "401") {
 		t.Fatalf("interactive chat should report the error and continue: %q, %v", out, err)
 	}
+}
+
+// flakyLLM is the fake API behind a switch: while down is set it fails every
+// request the way a provider out of order does, with a text that names what
+// no peer should learn.
+func flakyLLM(t *testing.T) (baseURL string, down *atomic.Bool) {
+	t.Helper()
+	target, err := url.Parse(openaitest.NewServer(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	working := httputil.NewSingleHostReverseProxy(target)
+	down = new(atomic.Bool)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(w, `{"error":{"message":"upstream llm-7.internal rejected key sk-good"}}`)
+			return
+		}
+		working.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, down
+}
+
+// A peer whose message was not answered asks later what went wrong, with the
+// error ID it was given. The agent of the node looks it up and explains it,
+// to that peer only, in general terms, and only once it can answer again.
+func TestPeerAsksWhatWentWrong(t *testing.T) {
+	llm, down := flakyLLM(t)
+	beta := testSettings(t)
+	beta.BaseURL = llm
+	cfg := nodeConfig(beta)
+	cfg.Name = "beta"
+	startNode(t, beta, cfg)
+	alpha, gamma := testSettings(t), testSettings(t)
+	for name, s := range map[string]Settings{"alpha": alpha, "gamma": gamma} {
+		testPeers[s.Home] = []string{fmt.Sprintf("127.0.0.1:%d", beta.DiscoPort)}
+		cfg := nodeConfig(s)
+		cfg.Name = name
+		if err := config.Save(s.Home, cfg); err != nil {
+			t.Fatal(err)
+		}
+		trust(t, beta, s, name)
+	}
+	// What only beta knows about its failure.
+	internals := []string{"503", "llm-7", "sk-good", "upstream", strings.TrimPrefix(llm, "http://"), "openai", beta.Home}
+	clean := func(what, text string) {
+		t.Helper()
+		for _, internal := range internals {
+			if strings.Contains(text, internal) {
+				t.Fatalf("%s tells %q: %s", what, internal, text)
+			}
+		}
+	}
+	// refused returns the error ID of an answer that failed. Such an answer
+	// says that it failed and nothing more: no explanation is at hand.
+	told := regexp.MustCompile(`^a2a: the agent could not answer \(error ([A-Z2-7]{8})\) \(-32603\)$`)
+	refused := func(err error) string {
+		t.Helper()
+		if err == nil || told.FindStringSubmatch(err.Error()) == nil {
+			t.Fatalf("got %v", err)
+		}
+		return told.FindStringSubmatch(err.Error())[1]
+	}
+
+	down.Store(true)
+	_, err := run(t, alpha, "", "ask", "beta", "hi")
+	id := refused(err)
+	// As long as beta's agent cannot answer, it cannot explain either.
+	_, err = run(t, alpha, "", "ask", "beta", "#"+id)
+	if again := refused(err); again == id {
+		t.Fatalf("the question about error %s failed under the same ID", id)
+	}
+	// The agent of alpha's owner is told the ID as well.
+	out, err := run(t, alpha, "", "chat", "@beta hi")
+	if err != nil || !strings.Contains(out, "last=error: a2a: the agent could not answer (error ") {
+		t.Fatalf("alpha's agent: %q, %v", out, err)
+	}
+	clean("the failed answer", out)
+
+	down.Store(false)
+	explained := "Error " + id + ": on "
+	out, err = run(t, alpha, "", "ask", "beta", "#"+id)
+	if err != nil || !strings.Contains(out, explained) || !strings.Contains(out, diagnosis.CauseLLMFailed.Explain()) {
+		t.Fatalf("beta should explain error %s: %q, %v", id, out, err)
+	}
+	clean("the explanation", out)
+	// Alpha's agent asks for its owner the same way.
+	out, err = run(t, alpha, "", "chat", "@beta #"+id)
+	if err != nil || !strings.Contains(out, explained) {
+		t.Fatalf("alpha's agent should get the explanation: %q, %v", out, err)
+	}
+
+	// Gamma is connected to beta too, and learns nothing with alpha's ID.
+	out, err = run(t, gamma, "", "ask", "beta", "#"+id)
+	if err != nil || !strings.Contains(out, "No failed answer with the error ID "+id) || strings.Contains(out, explained) {
+		t.Fatalf("gamma asked about alpha's error: %q, %v", out, err)
+	}
+
+	// What beta keeps is the category of the cause, not the cause.
+	kept, err := os.ReadFile(filepath.Join(beta.Home, "failures.json"))
+	if err != nil || !strings.Contains(string(kept), id) || !strings.Contains(string(kept), string(diagnosis.CauseLLMFailed)) {
+		t.Fatalf("failures of beta: %s, %v", kept, err)
+	}
+	clean("the list of failures", string(kept))
 }
 
 // twoNodes starts the node "beta" and returns the settings of "alpha", which

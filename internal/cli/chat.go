@@ -36,8 +36,9 @@ func assistantPlugin() kernel.Plugin {
 			return err
 		}
 		builder := assistant.Builder{
-			LLM:   model,
-			Tools: func() []agent.Tool { return kernel.All[agent.Tool](ctx) },
+			LLM:      model,
+			Tools:    func() []agent.Tool { return kernel.All[agent.Tool](ctx) },
+			Failures: dir.Failures(),
 		}
 		kernel.Provide(ctx, builder)
 		kernel.Provide(ctx, assistant.New(dir.Config, builder))

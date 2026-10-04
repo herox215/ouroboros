@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -16,8 +17,10 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
+	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
+	"ouroboros/internal/openai"
 )
 
 // patience is how long a node may take to come up.
@@ -348,5 +351,33 @@ func TestCard(t *testing.T) {
 	}
 	if len(got.Skills) != 1 || got.Skills[0].ID != "chat" || got.Skills[0].Description != "Chat with gpt" {
 		t.Errorf("skills %+v", got.Skills)
+	}
+}
+
+// A failed answer is kept for the peer to ask about: who, which message and
+// the category of the cause. The cause itself is not kept.
+func TestKeepFailures(t *testing.T) {
+	dir := configured(t)
+	var logged bytes.Buffer
+	failed := keep(dir.Failures(), log.New(&logged, "", 0))
+	const secret = "Incorrect API key provided: sk-live-123"
+	failed(a2a.Failure{ID: "AAAA", Peer: "alice", ContextID: "ctx", MessageID: "msg", Err: &openai.APIError{Status: 401, Message: secret}})
+
+	e, ok, err := dir.Failures().Lookup("alice", "AAAA")
+	if err != nil || !ok || e.Cause != diagnosis.CauseLLMAuth || e.ContextID != "ctx" || e.MessageID != "msg" || time.Since(e.At) > time.Minute {
+		t.Fatalf("kept %+v, %v, %v", e, ok, err)
+	}
+	if file, _ := os.ReadFile(string(dir) + "/failures.json"); len(file) == 0 || strings.Contains(string(file), "sk-live-123") || strings.Contains(string(file), "API key") {
+		t.Fatalf("the cause was written down:\n%s", file)
+	}
+	if logged.Len() != 0 {
+		t.Fatalf("logged %q", logged.String())
+	}
+
+	// A failure that cannot be kept is one more line in the log.
+	failed = keep(unreadable(t).Failures(), log.New(&logged, "", 0))
+	failed(a2a.Failure{ID: "BBBB", Peer: "alice", Err: errTest})
+	if !strings.Contains(logged.String(), "error BBBB is not kept") {
+		t.Fatalf("logged %q", logged.String())
 	}
 }

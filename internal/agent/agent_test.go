@@ -152,7 +152,7 @@ func (l *loopLLM) Complete(context.Context, string, []openai.Message, []openai.T
 func TestEndlessToolCallsAreStopped(t *testing.T) {
 	llm := &loopLLM{}
 	a := New(llm, "gpt", "sys", Tool{Name: "noop", Run: func(context.Context, json.RawMessage) (string, error) { return "", nil }})
-	if _, err := a.Respond(context.Background(), "c1", "go"); err == nil || llm.calls != maxRounds {
+	if _, err := a.Respond(context.Background(), "c1", "go"); !errors.Is(err, ErrTooManyToolCalls) || llm.calls != maxRounds {
 		t.Fatalf("err %v after %d calls", err, llm.calls)
 	}
 	if a.history("c1") != nil {

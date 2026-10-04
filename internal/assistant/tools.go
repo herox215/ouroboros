@@ -12,12 +12,16 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
+	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/peers"
 )
 
 const (
 	toolListPeers = "list_peers"
 	toolAskPeer   = "ask_peer"
+	// toolExplainError is not among the tools the owner picks from: see
+	// Builder.Failures.
+	toolExplainError = "explain_error"
 )
 
 // PeerTools are the tools with which an agent reaches other nodes. selfID
@@ -106,7 +110,9 @@ type askPeerArgs struct {
 func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 	return agent.NewTool(toolAskPeer,
 		"Send a message to the agent of a peer and return its answer. "+
-			"A peer that is not connected yet gets a connection request instead, which a human there has to accept.",
+			"A peer that is not connected yet gets a connection request instead, which a human there has to accept. "+
+			"A peer that fails to answer returns an error with an ID instead of the cause: ask the same peer about that ID "+
+			"to learn what went wrong, which it can only tell once it is able to answer again.",
 		[]agent.Param{
 			{Name: "peer", Description: "name or ID of the peer, as listed by " + toolListPeers},
 			{Name: "message", Description: "what to tell or ask the peer"},
@@ -134,6 +140,43 @@ func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 				return "", fmt.Errorf("%s %w", name, err)
 			}
 			return reply, err
+		})
+}
+
+type explainErrorArgs struct {
+	ID string `json:"id"`
+}
+
+// explainError is the tool with which the agent that answers peers looks up
+// why an earlier answer failed. It finds the failures of the peer it is
+// answering and no others, and returns the category of the cause in general
+// terms: the error itself never left the log of the node.
+func explainError(failures *diagnosis.Store) agent.Tool {
+	return agent.NewTool(toolExplainError,
+		"Look up why an earlier message of the peer you are answering could not be answered, by the error ID the peer was given. "+
+			"Returns when it happened and what went wrong, in general terms.",
+		[]agent.Param{{Name: "id", Description: `the error ID the peer was given, like "7K2QX4LA"`}},
+		func(ctx context.Context, args explainErrorArgs) (string, error) {
+			origin, ok := a2a.OriginFrom(ctx)
+			if !ok {
+				return "", errors.New(toolExplainError + " is for the peer whose message was not answered")
+			}
+			id := strings.ToUpper(strings.TrimSpace(args.ID))
+			if id == "" {
+				return "", errors.New(toolExplainError + ` needs "id"`)
+			}
+			entry, found, err := failures.Lookup(origin.PublicKey, id)
+			if err != nil {
+				// Why it cannot be read is nothing for the peer either.
+				return "", errors.New("the record of failed answers cannot be read right now")
+			}
+			if !found {
+				return fmt.Sprintf("No failed answer with the error ID %s is on record for this peer. "+
+					"Only the latest failures are kept, and only for the peer they happened to.", id), nil
+			}
+			return fmt.Sprintf("Error %s: on %s a message of this peer could not be answered. %s "+
+				"That is all that is on record about it.",
+				id, entry.At.UTC().Format("2006-01-02 15:04 UTC"), entry.Cause.Explain()), nil
 		})
 }
 

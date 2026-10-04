@@ -64,8 +64,8 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; unknown peers become connection requests a human approves |
 | Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early |
-| Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
+| Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
@@ -88,7 +88,7 @@ talking to, and is set in `config.json`:
 | List | Applies when | Without it |
 |---|---|---|
 | `h2a` (human to agent) | you ask your agent | every tool |
-| `a2a` (agent to agent) | a connected peer asks your agent | no tool |
+| `a2a` (agent to agent) | a connected peer asks your agent | no tool, except `explain_error` (see [below](#when-a-peer-could-not-answer)) |
 
 `"*"` stands for every tool, `[]` for none. A name that is not a tool is an error: the node does not start,
 the chat does not answer. Restart the node after changing `a2a`.
@@ -96,6 +96,26 @@ the chat does not answer. Restart the node after changing `a2a`.
 With `ask_peer` in `a2a`, a peer you connected to can make your agent ask the peers you are connected to,
 in your name. Two rules keep that from running in circles: the agent never asks the peer it is answering,
 and a message is passed on by at most 3 agents.
+
+### When a peer could not answer
+
+If the agent of a peer fails on your message (its LLM is down, its key was revoked, …), your agent only gets
+`the agent could not answer (error <ID>)`. Why is nothing the peer's node sends along: an error text names
+endpoints and whatever else a provider put into it.
+
+The ID is there to ask about. Your agent can send the peer a message like "what went wrong with error `<ID>`?"
+(`ask_peer`, or you with `ouro ask`), and the peer's agent looks the ID up and explains it in plain words:
+
+- The node keeps the last 256 failed answers in `failures.json`: the ID, the peer, the conversation and
+  message, the time and a **category** of the cause (LLM unreachable, credentials refused, rate limit,
+  request refused, LLM failure, timeout, cancelled, too many tool calls, internal error). The error itself is
+  only in `ouro.log`; neither the file nor the explanation contains its text, an endpoint or a key.
+- The agent that answers peers looks an ID up with the tool `explain_error`. It always has this tool, whatever
+  `a2a` lists, and it is not a tool you can list. It finds only failures of the peer that is asking: with the
+  ID of somebody else's error a peer gets the same "nothing on record" as with a made-up one.
+- The explanation comes from the peer's agent, so it is there once that agent can answer again. While its LLM
+  is still down, asking about the ID fails like any other message, with a new ID. Your agent knows this and
+  does not promise you an explanation it does not have.
 
 ## Beyond the local network
 
@@ -163,15 +183,16 @@ internal/cli         the plugins that make up ouro: commands, setup dialog, wiri
 internal/kernel      plugin kernel: services, contributions, start order
 internal/tui         terminal UI (Bubble Tea)
 internal/node        the local node: Server runs it, Local controls the background one
-internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer
+internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
-internal/home        the node's directory: config, identity, contacts, PID and log file
+internal/home        the node's directory: config, identity, contacts, failed answers, PID and log file
 internal/a2a         A2A protocol: types, HTTP handler, client
 internal/agent       conversation memory and tool loop on top of an LLM
 internal/openai      minimal OpenAI-compatible client (+ openaitest fake)
 internal/discovery   LAN discovery, plus sources of hosts to probe directly (Tailscale)
 internal/daemon      background process + PID file
 internal/contacts    trusted peers and connection requests
+internal/diagnosis   why answers to peers failed, by category, for the agent to explain
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
 internal/update      self-update from the newest main

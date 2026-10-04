@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"ouroboros/internal/config"
+	"ouroboros/internal/diagnosis"
 )
 
 func TestIdentityIsGeneratedOnce(t *testing.T) {
@@ -138,6 +139,14 @@ func TestFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(string(d), "contacts.json")); err != nil {
 		t.Errorf("contacts: %v", err)
+	}
+
+	d.Failures().Record(diagnosis.Entry{ID: "AAAA", Peer: "key"})
+	if _, ok, _ := d.Failures().Lookup("key", "AAAA"); !ok {
+		t.Error("a failed answer should be kept")
+	}
+	if _, err := os.Stat(filepath.Join(string(d), "failures.json")); err != nil {
+		t.Errorf("failures: %v", err)
 	}
 }
 

@@ -18,6 +18,10 @@ const (
 	maxRounds   = 8   // LLM calls per answer; stops an agent that keeps calling tools
 )
 
+// ErrTooManyToolCalls is the error of an answer that was given up because the
+// LLM kept asking for tools.
+var ErrTooManyToolCalls = errors.New("agent: gave up after too many tool calls")
+
 // LLM generates a reply for a conversation or asks for tools to be run.
 // openai.Client implements it; another provider has to translate to and from
 // the OpenAI message types.
@@ -102,7 +106,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe func(St
 			history = append(history, a.call(ctx, call, observe))
 		}
 	}
-	return "", errors.New("agent: gave up after too many tool calls")
+	return "", ErrTooManyToolCalls
 }
 
 // call runs one tool call and returns its result as a message for the LLM.
