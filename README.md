@@ -80,7 +80,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
-| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 8 LLM calls per answer |
+| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 8 LLM calls per answer, of which one can run a [script](#scripts) that calls many tools |
 | Memory | last 40 messages per conversation, up to 256 conversations; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
@@ -96,8 +96,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 ## Tools
 
-The agent has tools for peers (`list_peers`, `ask_peer`) and for files (`read`, `write`, `edit`, `list`,
-`delete`). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
+The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
+`delete`) and one that runs a script calling the others (`run`). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
 what the setup writes:
 
 ```json
@@ -186,6 +186,68 @@ conversation that read something sends to a peer, which is not built yet.
 
 What these tools do not protect: the running binary (it is replaced by `ouro update`, but nothing locks the
 file), and files your agent reaches in other ways, of which there are none today.
+
+### Scripts
+
+An answer has at most 8 calls of the LLM, every call sends the whole conversation again, and every result of
+a tool stays in it. `run(script)` is for what is known in advance: the same call for many peers or files,
+results that are filtered or passed on unchanged. The agent writes a script in JavaScript, and inside it
+every other tool it has is a function of its name. Every tool stays callable on its own.
+
+```js
+// "which of my peers knows the way to the station?", in one call of the LLM
+return list_peers().split("\n")
+  .filter(line => line.includes(", connected)"))
+  .map(line => line.split(" ")[0])
+  .map(peer => {
+    try { return peer + ": " + ask_peer({peer: peer, message: "Do you know the way to the station?"}) }
+    catch (e) { return peer + " could not answer: " + e.message }
+  })
+```
+
+- The script is the body of a function. What it returns goes to the LLM: a string as it is, everything else
+  as JSON.
+- A tool takes one object with its parameters and returns the text the LLM would get. A tool that fails
+  throws an `Error` with the text of its error: not caught, it ends the script, and the LLM gets the error
+  with the line of the script; with `try`/`catch` the script goes on.
+- The functions are also in the object `tools`. A tool whose name is a word of JavaScript has to be called
+  there: `tools.delete({path: "…"})`. `delete({…})` would be the operator, which does nothing, so a script
+  that says so is not run and the LLM is told how to write it.
+- **A script can do nothing the agent could not do with single calls.** It sees exactly the tools this
+  agent has, with their settings, and `run` itself is not among them. For a peer these are the tools of
+  `a2a` (and `explain_error`), and `run` is off for peers unless `a2a` lists it. A tool runs under the
+  conversation the script was started in: for the same peer, as many hops away, so every rule a tool
+  enforces holds inside a script. In the terminal UI the calls of a script show like single ones
+  (`asking beta…`, `writing notes.md…`).
+- The environment is the language (ES2015 and most of what came after, interpreted by
+  [goja](https://github.com/dop251/goja), which is part of the binary) with its standard objects (`JSON`,
+  `Math`, `String`, `Array`, …) and the tools. No network, no files, no processes, no `require` or
+  `import`, no timers, no `console`.
+- Every script starts in a fresh interpreter. Nothing is kept between two calls; what is to stay is written
+  to a file with `write`.
+
+| Limit of a script | Value | Beyond it |
+|---|---|---|
+| time | 60 s | the script is stopped, and so are the tools it is waiting for; a tool that does not end is waited for 2 s longer and then left behind |
+| calls of tools | 64 | the script is stopped at the next call |
+| size of the script | 64 KiB | it is not run |
+| size of the result | 64 KiB | the LLM gets an error instead |
+| calls of functions within each other | 1024 | the script is stopped |
+| memory | 256 MiB, see below | the script is stopped |
+
+A script that is stopped cannot catch that. The limits are fixed in the code (`internal/script`), the same
+for you and for peers.
+
+**The limit of memory is approximate.** The interpreter has none of its own. While a script runs, the node
+looks at the heap of the whole process every 5 ms and stops the script once the heap has grown by more than
+256 MiB since the script started. That catches a script that keeps collecting data. It does not catch a
+single step that allocates more than that at once, like `"x".repeat(2 ** 30)`: the interpreter cannot be
+stopped inside a step, and the process may run out of memory. The same holds for the time: a regular
+expression that takes minutes to fail is one step. The script is then given up after 60 s and the answer goes
+on, but the step keeps a processor busy until it ends. As the heap is the one of the process, two scripts
+that run at the same time count against each other, and so does everything else the node allocates
+meanwhile. Whoever may run scripts on your node may therefore slow it down or bring it down: list `run` in
+`a2a` only for peers you would let do that.
 
 ### Peers
 
@@ -302,8 +364,9 @@ internal/plugins     the standard plugins, one package each: commands, setup dia
 internal/kernel      plugin kernel: services, contributions, start order by declared dependencies
 internal/tui         terminal UI (Bubble Tea)
 internal/node        the local node: Server runs it, Local controls the background one
-internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error
+internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error, run
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
+internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
 internal/home        the node's directory: config, identity, contacts, failed answers, PID and log file
 internal/a2a         A2A protocol: types, HTTP handler, client; channels between nodes
@@ -759,5 +822,5 @@ module is left to `make mutation` and `make check`. A mutant that makes its test
 ## License
 
 Ouroboros is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`); the copyright notice is in
-[NOTICE](NOTICE). The binary links third-party modules under the MIT and BSD-3-Clause licenses, listed with
+[NOTICE](NOTICE). The binary links third-party modules under the MIT, BSD-2-Clause, BSD-3-Clause and Apache-2.0 licenses, listed with
 their license texts in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Pass all three files on with the binary.

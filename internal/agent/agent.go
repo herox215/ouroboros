@@ -46,7 +46,10 @@ type Step struct {
 	Err    error
 }
 
-type contextKey struct{}
+type (
+	contextKey  struct{}
+	observerKey struct{}
+)
 
 // ContextID returns the conversation a tool is run for.
 func ContextID(ctx context.Context) string {
@@ -97,6 +100,7 @@ func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, er
 // Run is like Respond and reports every tool call to observe, which may be nil.
 func (a *Agent) Run(ctx context.Context, contextID, text string, observe func(Step)) (string, error) {
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
+	ctx = context.WithValue(ctx, observerKey{}, observe)
 	history := append(a.history(contextID), openai.Message{Role: "user", Content: text})
 	for range maxRounds {
 		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{a.system}, history...), a.specs)
@@ -110,32 +114,42 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe func(St
 			return msg.Content, nil
 		}
 		for _, call := range msg.ToolCalls {
-			history = append(history, a.call(ctx, call, observe))
+			history = append(history, a.call(ctx, call))
 		}
 	}
 	return "", ErrTooManyToolCalls
 }
 
 // call runs one tool call and returns its result as a message for the LLM.
-func (a *Agent) call(ctx context.Context, call openai.ToolCall, observe func(Step)) openai.Message {
-	step := Step{Tool: call.Function.Name, Args: json.RawMessage(call.Function.Arguments)}
+func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
+	tool, ok := a.tools[call.Function.Name]
+	if !ok {
+		tool = Tool{Name: call.Function.Name, Run: func(context.Context, json.RawMessage) (string, error) {
+			return "", errors.New("unknown tool " + call.Function.Name)
+		}}
+	}
+	content, err := Invoke(ctx, tool, json.RawMessage(call.Function.Arguments))
+	if err != nil {
+		content = "error: " + err.Error()
+	}
+	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content}
+}
+
+// Invoke runs tool with args within the conversation of ctx and reports the
+// call to whoever observes that conversation, like a call the LLM asked for.
+// It is for a tool that runs other tools of its agent, such as a script.
+func Invoke(ctx context.Context, tool Tool, args json.RawMessage) (string, error) {
+	observe, _ := ctx.Value(observerKey{}).(func(Step))
+	step := Step{Tool: tool.Name, Args: args}
 	if observe != nil {
 		observe(step)
 	}
-	if tool, ok := a.tools[step.Tool]; ok {
-		step.Result, step.Err = tool.Run(ctx, step.Args)
-	} else {
-		step.Err = errors.New("unknown tool " + step.Tool)
-	}
+	step.Result, step.Err = tool.Run(ctx, args)
 	step.Done = true
 	if observe != nil {
 		observe(step)
 	}
-	content := step.Result
-	if step.Err != nil {
-		content = "error: " + step.Err.Error()
-	}
-	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content}
+	return step.Result, step.Err
 }
 
 func (a *Agent) history(contextID string) []openai.Message {

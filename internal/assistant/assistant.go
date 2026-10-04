@@ -97,7 +97,7 @@ func New(config func() (config.Config, error), b Builder) *Assistant {
 // ForPeers returns the agent that answers the peers of the node configured by
 // cfg, with the tools its owner allows for them.
 func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
-	allowed, err := pick(b.Tools(), cfg.PeerTools())
+	allowed, err := pick(b.all(), cfg.PeerTools())
 	if err != nil {
 		return nil, fmt.Errorf("tools.a2a: %w", err)
 	}
@@ -109,12 +109,12 @@ func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
 		prompt += explainHint
 		allowed = append(allowed, explainError(b.Failures))
 	}
-	return b.build(cfg, prompt, allowed), nil
+	return b.build(cfg, prompt, withRun(allowed)), nil
 }
 
 // forOwner returns the agent that answers the owner of the node.
 func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
-	allowed, err := pick(b.Tools(), cfg.OwnerTools())
+	allowed, err := pick(b.all(), cfg.OwnerTools())
 	if err != nil {
 		return nil, fmt.Errorf("tools.h2a: %w", err)
 	}
@@ -130,7 +130,14 @@ func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 	if asks && files {
 		prompt += claimHint
 	}
-	return b.build(cfg, prompt+ownerStyle, allowed), nil
+	return b.build(cfg, prompt+ownerStyle, withRun(allowed)), nil
+}
+
+// all are the tools the owner picks from: what the plugins contributed, and
+// run, which the blueprint adds because it needs the tools of the agent it is
+// for.
+func (b Builder) all() []agent.Tool {
+	return append(slices.Clone(b.Tools()), runSlot())
 }
 
 // build makes an agent on the LLM of cfg.

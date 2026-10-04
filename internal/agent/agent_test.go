@@ -171,3 +171,48 @@ func TestTrimmedHistoryStartsWithUserMessage(t *testing.T) {
 		t.Fatalf("history of %d messages starts with %q", len(h), h[0].Role)
 	}
 }
+
+// A tool that runs other tools of its agent reports their calls like the LLM's
+// own, to whoever observes the conversation.
+func TestInvoke(t *testing.T) {
+	shout := Tool{Name: "shout", Run: func(ctx context.Context, args json.RawMessage) (string, error) {
+		return "LOUD " + ContextID(ctx) + " " + string(args), nil
+	}}
+	fail := Tool{Name: "fail", Run: func(context.Context, json.RawMessage) (string, error) { return "", errTest }}
+	both := Tool{Name: "both", Schema: `{"type":"object"}`, Run: func(ctx context.Context, args json.RawMessage) (string, error) {
+		first, err := Invoke(ctx, shout, json.RawMessage(`{"n":1}`))
+		if err != nil {
+			return "", err
+		}
+		_, err = Invoke(ctx, fail, args)
+		return first, err
+	}}
+
+	var steps []string
+	observe := func(s Step) {
+		steps = append(steps, fmt.Sprint(s.Tool, " ", string(s.Args), " ", s.Done, " ", s.Result, " ", s.Err))
+	}
+	got, err := New(&fakeLLM{}, "gpt", "sys", both).Run(context.Background(), "c1", "call both", observe)
+	if err != nil || got != "echo error: test error" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	want := []string{
+		`both {"x":1} false  <nil>`,
+		`shout {"n":1} false  <nil>`,
+		`shout {"n":1} true LOUD c1 {"n":1} <nil>`,
+		`fail {"x":1} false  <nil>`,
+		`fail {"x":1} true  test error`,
+		`both {"x":1} true LOUD c1 {"n":1} test error`,
+	}
+	if strings.Join(steps, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("steps:\n%s\nwant:\n%s", strings.Join(steps, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Nobody has to observe: not the conversation, and not a call outside of one.
+	if got, err := New(&fakeLLM{}, "gpt", "sys", both).Respond(context.Background(), "c1", "call both"); err != nil || got != "echo error: test error" {
+		t.Fatalf("not observed: %q, %v", got, err)
+	}
+	if got, err := Invoke(context.Background(), shout, json.RawMessage(`{}`)); err != nil || got != "LOUD  {}" {
+		t.Fatalf("outside of a conversation: %q, %v", got, err)
+	}
+}

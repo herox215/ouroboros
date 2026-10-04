@@ -119,7 +119,7 @@ func TestPeerAgentExplainsErrors(t *testing.T) {
 		t.Fatalf("no tools for peers: %q", got)
 	}
 	cfg.Tools = &config.Tools{A2A: config.Named(config.AllTools)}
-	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: list_peers,ask_peer,"+toolExplainError) {
+	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: list_peers,ask_peer,run,"+toolExplainError) {
 		t.Fatalf("all tools for peers: %q", got)
 	}
 
@@ -134,7 +134,7 @@ func TestPeerAgentExplainsErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := owner.Respond(context.Background(), "c", "hi")
-	if !strings.HasSuffix(got, "tools: list_peers,ask_peer") {
+	if !strings.HasSuffix(got, "tools: list_peers,ask_peer,run") {
 		t.Fatalf("the owner's agent: %q", got)
 	}
 	// It knows that an error ID can be asked about, and that nothing is known
