@@ -186,7 +186,7 @@ func TestServe(t *testing.T) {
 
 	typo := clitest.Settings(t)
 	cfg := clitest.NodeConfig(typo)
-	cfg.Tools = &config.Tools{A2A: []string{"ask_peers"}}
+	cfg.Tools = &config.Tools{A2A: config.Named("ask_peers")}
 	config.Save(typo.Home, cfg)
 	if _, err := clitest.Run(t, typo, "", "serve"); err == nil || !strings.Contains(err.Error(), "tools.a2a") {
 		t.Fatalf("a node with a typo should not start: %v", err)

@@ -7,6 +7,7 @@
 //	discovery  finding nodes
 //	tailscale  finding the nodes on the tailnet
 //	peers      the network of nodes and the tools to reach it
+//	files      the tools for files
 //	openai     the LLM
 //	assistant  the agents
 //	node       start, stop, status, serve and the setup dialog
@@ -44,6 +45,7 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
+	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/kernel"
@@ -53,6 +55,7 @@ import (
 	"ouroboros/internal/plugins/assistant"
 	"ouroboros/internal/plugins/base"
 	"ouroboros/internal/plugins/discovery"
+	filesplugin "ouroboros/internal/plugins/files"
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
 	peersplugin "ouroboros/internal/plugins/peers"
@@ -128,11 +131,17 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 	// The frame, see the package comment.
 	dir := home.Dir(s.Home)
 	network := &peers.Network{Contacts: dir.Contacts(), Client: node.Local{Home: dir}.Client}
+	// What no tool for files does, whatever the configuration says.
+	files := &guard.Guard{Home: s.Home, Secrets: dir.Secrets(), Protected: func() ([]string, error) {
+		cfg, err := dir.Config()
+		return cfg.Protected(), err
+	}}
 	return []plugin.Plugin{
 		base.Plugin(dir, t),
 		discovery.Plugin(s.DiscoPort),
 		tailscale.Plugin(),
 		peersplugin.Plugin(dir, network),
+		filesplugin.Plugin(files),
 		openaiplugin.Plugin(),
 		assistant.Plugin(dir),
 		nodeplugin.Plugin(dir, nodeplugin.Options{
@@ -164,6 +173,7 @@ func seal(k *kernel.Kernel) {
 	kernel.Seal[node.Server](k)
 	kernel.Seal[peers.Network](k) // holds the contacts and the client
 	kernel.Seal[plugin.Owner](k)  // decides whom the node trusts: handed to a front end in Plugins
+	kernel.Seal[guard.Guard](k)   // decides which files a tool touches
 }
 
 // App runs ouro commands. It is a kernel with plugins and has no logic of its

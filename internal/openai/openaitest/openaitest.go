@@ -23,7 +23,8 @@ var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 // Chat replies have the form "[model] turns=N last=TEXT", where N counts the
 // non-system messages. A message "@PEER TEXT" is answered with a call to
 // ask_peer, "@" alone with a call to list_peers and "#ID" with a call to
-// explain_error, each if that tool is offered.
+// explain_error, and "!TOOL ARGS" with a call to TOOL with the arguments ARGS
+// (JSON, "{}" if missing), each if that tool is offered.
 // The message "?system" is answered with the system prompt.
 func NewServer(t testing.TB) string {
 	return NewServerWithKey(t, Key)
@@ -71,13 +72,21 @@ func NewServerWithKey(t testing.TB, key string) string {
 	return srv.URL
 }
 
-// toolCall is the tool call a user message of the form "@PEER TEXT", "@" or
-// "#ID" asks for.
+// toolCall is the tool call a user message of the form "@PEER TEXT", "@",
+// "#ID" or "!TOOL ARGS" asks for.
 func toolCall(msg openai.Message) (openai.ToolCall, bool) {
 	call := openai.ToolCall{ID: "call-1", Type: "function", Function: openai.FunctionCall{Name: "list_peers", Arguments: "{}"}}
 	if id, ok := strings.CutPrefix(msg.Content, "#"); ok && msg.Role == "user" {
 		args, _ := json.Marshal(map[string]string{"id": id})
 		call.Function = openai.FunctionCall{Name: "explain_error", Arguments: string(args)}
+		return call, true
+	}
+	if rest, ok := strings.CutPrefix(msg.Content, "!"); ok && msg.Role == "user" {
+		name, args, _ := strings.Cut(rest, " ")
+		if args == "" {
+			args = "{}"
+		}
+		call.Function = openai.FunctionCall{Name: name, Arguments: args}
 		return call, true
 	}
 	rest, ok := strings.CutPrefix(msg.Content, "@")

@@ -131,7 +131,11 @@ func (s Server) Run(ctx context.Context) error {
 
 	logger.Printf("ouroboros %s (%s) listening on :%d → %s", id.ID(), cfg.Name, port, cfg.Model)
 	if allowed := cfg.PeerTools(); len(allowed) > 0 {
-		logger.Printf("peers may use the tools: %s", strings.Join(allowed, ", "))
+		names := make([]string, len(allowed))
+		for i, e := range allowed {
+			names[i] = e.Tool
+		}
+		logger.Printf("peers may use the tools: %s", strings.Join(names, ", "))
 	}
 	// TLS only, with the certificate of the node's key: peers pin it, and
 	// nobody on the way reads along.

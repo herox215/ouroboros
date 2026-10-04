@@ -158,7 +158,7 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 	turns(1)
 	turns(3)
 	// What does not concern the agent leaves it alone.
-	cfg.Tools = &config.Tools{A2A: []string{config.AllTools}}
+	cfg.Tools = &config.Tools{A2A: config.Named(config.AllTools)}
 	if err := a.Ready(); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,10 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 		{"model", func(c *config.Config) { c.Model = "gpt-4o-mini" }},
 		{"name", func(c *config.Config) { c.Name = "you" }},
 		{"key of the node", func(c *config.Config) { c.PrivateKey = identity.Generate().Private() }},
-		{"tools of the owner", func(c *config.Config) { c.Tools = &config.Tools{H2A: []string{toolListPeers}} }},
+		{"settings of a tool", func(c *config.Config) {
+			c.Tools = &config.Tools{H2A: []config.Entry{{Tool: toolListPeers, Settings: json.RawMessage(`{}`)}}}
+		}},
+		{"tools of the owner", func(c *config.Config) { c.Tools = &config.Tools{H2A: config.Named(toolListPeers)} }},
 	}
 	for i, tt := range changes {
 		tt.change(&cfg)
@@ -206,13 +209,43 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 	}
 
 	// A configuration that is wrong does not replace the agent by nothing...
-	cfg.Tools = &config.Tools{H2A: []string{"nope"}}
+	cfg.Tools = &config.Tools{H2A: config.Named("nope")}
 	if got, err := a.Ask(ctx, "chat", "hello", nil); err == nil || got != "" || !strings.Contains(err.Error(), `tools.h2a: unknown tool "nope"`) {
 		t.Fatalf("unknown tool: %q, %v", got, err)
 	}
 	// ...so that it still knows the conversation when the mistake is undone.
-	cfg.Tools = &config.Tools{H2A: []string{toolListPeers}}
+	cfg.Tools = &config.Tools{H2A: config.Named(toolListPeers)}
 	turns(5)
+}
+
+// The prompt of the owner's agent says how to use the tools it has, and what
+// to make of a peer that asks for a file.
+func TestOwnerPromptFollowsTheTools(t *testing.T) {
+	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	file := agent.NewTool("edit", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
+		LLM:   overHTTP,
+		Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file) },
+	})
+	start := `You are "me", the personal agent of the owner of this Ouroboros node. `
+	for _, tt := range []struct {
+		tools []config.Entry
+		want  string
+	}{
+		{config.Named(), start + ownerStyle},
+		{config.Named(toolListPeers), start + ownerStyle},
+		{config.Named(toolAskPeer), start + askHint + ownerStyle},
+		{config.Named("edit"), start + filesHint + ownerStyle},
+		{config.Named("*"), start + askHint + filesHint + claimHint + ownerStyle},
+	} {
+		cfg.Tools = &config.Tools{H2A: tt.tools}
+		if got, err := a.Ask(context.Background(), "chat", "?system", nil); err != nil || got != tt.want {
+			t.Errorf("with %s: %v\n got %q\nwant %q", tt.tools, err, got, tt.want)
+		}
+	}
+	if strings.Join(fileTools, ",") != "read,write,edit,list,delete" {
+		t.Errorf("the tools for files: %v", fileTools)
+	}
 }
 
 // The owner is shown which peer the assistant waits for, and nothing of what

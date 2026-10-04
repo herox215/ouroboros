@@ -72,11 +72,38 @@ func TestSetupDefaults(t *testing.T) {
 	}
 }
 
+// The setup writes out what the agent may do, for the owner to see and
+// change, and keeps what the owner wrote.
+func TestSetupWritesTheTools(t *testing.T) {
+	s := testSettings(t)
+	s.APIKey = openaitest.Key
+	w, _ := newWizard(s, "\n\n\n")
+	if _, err := w.run(context.Background(), config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := config.Load(s.Home)
+	if err != nil || !reflect.DeepEqual(saved.Tools, config.DefaultTools()) {
+		t.Fatalf("a new node: %+v, %v", saved.Tools, err)
+	}
+
+	// A node from before there were tools for files keeps its lists and
+	// gets what is protected.
+	old := nodeConfig(s)
+	old.Tools = &config.Tools{A2A: config.Named("list_peers")}
+	w, _ = newWizard(s, "\n\n\n")
+	cfg, err := w.run(context.Background(), old)
+	want := &config.Tools{A2A: config.Named("list_peers"), Protected: config.DefaultTools().Protected}
+	if err != nil || !reflect.DeepEqual(cfg.Tools, want) {
+		t.Fatalf("a node from before: %+v, %v", cfg.Tools, err)
+	}
+}
+
 func TestSetupKeepsExistingValues(t *testing.T) {
 	s := testSettings(t)
 	s.BaseURL = "http://other.invalid" // the saved endpoint wins over the default
 	want := nodeConfig(testSettings(t))
-	want.PrivateKey = identity.Generate().Private() // and with it the ID of the node
+	want.PrivateKey = identity.Generate().Private()                         // and with it the ID of the node
+	want.Tools = &config.Tools{H2A: config.Named(), Protected: &[]string{}} // the owner's decision to protect nothing
 	w, _ := newWizard(s, "\n\n\n")
 	cfg, err := w.run(context.Background(), want)
 	if err != nil || !reflect.DeepEqual(cfg, want) {

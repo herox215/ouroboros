@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,42 @@ type Tool struct {
 	Schema      string // JSON schema of the arguments
 	// Run executes the tool. Its result, or its error, is handed to the LLM.
 	Run func(ctx context.Context, args json.RawMessage) (string, error)
+	// Configure returns the tool as it runs with settings: the JSON object
+	// the owner wrote next to its name in the configuration, "{}" for a tool
+	// that is listed by its name alone. It is called when an agent is built,
+	// once per kind of conversation, and fails for settings the tool does not
+	// take. Nil for a tool without settings; see Configurable.
+	Configure func(settings json.RawMessage) (Tool, error)
+}
+
+// RunFunc is what runs a tool.
+type RunFunc = func(ctx context.Context, args json.RawMessage) (string, error)
+
+// Configurable returns t as a tool the owner can give settings in the
+// configuration. S is a struct with a JSON field for every setting the tool
+// takes: a setting it does not have, or one of the wrong type, is an error
+// when the agent is built. with returns what runs the tool with the settings
+// it is handed, or an error for settings it cannot run with. It has to take
+// the zero S, which is what a tool listed by its name alone gets.
+func Configurable[S any](t Tool, with func(settings S) (RunFunc, error)) Tool {
+	t.Configure = func(raw json.RawMessage) (Tool, error) {
+		var settings S
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&settings); err != nil {
+			return Tool{}, fmt.Errorf("settings of the tool %s: %w", t.Name, err)
+		}
+		run, err := with(settings)
+		if err != nil {
+			return Tool{}, fmt.Errorf("settings of the tool %s: %w", t.Name, err)
+		}
+		configured := t
+		configured.Run = run
+		return configured, nil
+	}
+	var none S
+	t.Run, _ = with(none)
+	return t
 }
 
 // Param is a text argument of a tool. Only text is supported: a tool that

@@ -118,13 +118,13 @@ func TestPeerAgentExplainsErrors(t *testing.T) {
 	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: "+toolExplainError) {
 		t.Fatalf("no tools for peers: %q", got)
 	}
-	cfg.Tools = &config.Tools{A2A: []string{config.AllTools}}
+	cfg.Tools = &config.Tools{A2A: config.Named(config.AllTools)}
 	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: list_peers,ask_peer,"+toolExplainError) {
 		t.Fatalf("all tools for peers: %q", got)
 	}
 
 	// It is not a tool the owner lists, and not one of the owner's agent.
-	cfg.Tools = &config.Tools{A2A: []string{toolExplainError}}
+	cfg.Tools = &config.Tools{A2A: config.Named(toolExplainError)}
 	if _, err := b.ForPeers(cfg); err == nil {
 		t.Fatal("explain_error is not among the tools to pick from")
 	}

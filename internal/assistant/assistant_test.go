@@ -1,11 +1,14 @@
 package assistant
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
+	"ouroboros/internal/openai/openaitest"
 )
 
 func names(tools []agent.Tool) string {
@@ -19,14 +22,15 @@ func names(tools []agent.Tool) string {
 func TestPick(t *testing.T) {
 	all := PeerTools(nil, func() string { return "abc123" })
 	tests := []struct {
-		allowed []string
+		allowed []config.Entry
 		want    string
 	}{
 		{nil, ""},
-		{[]string{}, ""},
-		{[]string{config.AllTools}, "list_peers,ask_peer"},
-		{[]string{"ask_peer"}, "ask_peer"},
-		{[]string{"ask_peer", "list_peers"}, "list_peers,ask_peer"},
+		{config.Named(), ""},
+		{config.Named(config.AllTools), "list_peers,ask_peer"},
+		{config.Named("ask_peer"), "ask_peer"},
+		{config.Named("ask_peer", "list_peers"), "list_peers,ask_peer"},
+		{config.Named(config.AllTools, "ask_peer"), "list_peers,ask_peer"},
 	}
 	for _, tt := range tests {
 		got, err := pick(all, tt.allowed)
@@ -35,19 +39,103 @@ func TestPick(t *testing.T) {
 		}
 	}
 	// A typo must not silently take a tool away.
-	if _, err := pick(all, []string{"ask_peers"}); err == nil || !strings.Contains(err.Error(), `"ask_peers"`) {
+	if _, err := pick(all, config.Named("ask_peers")); err == nil || !strings.Contains(err.Error(), `"ask_peers"`) {
 		t.Fatalf("unknown tool: %v", err)
+	}
+}
+
+// An entry with settings configures its tool, next to "*" as well. A tool
+// that takes none, a tool that is listed twice and settings for every tool at
+// once are errors.
+func TestPickWithSettings(t *testing.T) {
+	type settings struct {
+		Greeting string `json:"greeting"`
+	}
+	greet := agent.Configurable(agent.Tool{Name: "greet"}, func(s settings) (agent.RunFunc, error) {
+		return func(context.Context, json.RawMessage) (string, error) { return s.Greeting + "!", nil }, nil
+	})
+	plain := agent.NewTool("plain", "", nil, func(context.Context, struct{}) (string, error) { return "plain", nil })
+	all := []agent.Tool{plain, greet}
+	with := func(tool, settings string) config.Entry {
+		return config.Entry{Tool: tool, Settings: json.RawMessage(settings)}
+	}
+
+	for _, tt := range []struct {
+		allowed []config.Entry
+		names   string
+		says    string
+	}{
+		{config.Named("*"), "plain,greet", "!"},
+		{config.Named("greet"), "greet", "!"},
+		{[]config.Entry{with("greet", `{"greeting": "hi"}`)}, "greet", "hi!"},
+		{[]config.Entry{{Tool: "*"}, with("greet", `{"greeting": "hi"}`)}, "plain,greet", "hi!"},
+		{[]config.Entry{with("greet", `{"greeting": "hi"}`), {Tool: "*"}}, "plain,greet", "hi!"},
+		{[]config.Entry{with("greet", `{}`), with("plain", `{}`)}, "plain,greet", "!"},
+		{[]config.Entry{with("plain", ``)}, "plain", ""},
+	} {
+		got, err := pick(all, tt.allowed)
+		if err != nil || names(got) != tt.names {
+			t.Errorf("pick(%s) = %q, %v", tt.allowed, names(got), err)
+			continue
+		}
+		last := got[len(got)-1]
+		if says, _ := last.Run(context.Background(), nil); last.Name == "greet" && says != tt.says {
+			t.Errorf("pick(%s): greet says %q, want %q", tt.allowed, says, tt.says)
+		}
+	}
+
+	for _, tt := range []struct {
+		allowed []config.Entry
+		want    string
+	}{
+		{[]config.Entry{with("plain", `{"greeting": "hi"}`)}, "the tool plain takes no settings"},
+		{[]config.Entry{{Tool: "*"}, with("plain", `{"x": 1}`)}, "the tool plain takes no settings"},
+		{[]config.Entry{with("greet", `{"greting": "hi"}`)}, `settings of the tool greet: json: unknown field "greting"`},
+		{[]config.Entry{with("greet", `{"greeting": 1}`)}, "settings of the tool greet: json: cannot unmarshal number into Go struct field settings.greeting of type string"},
+		{config.Named("greet", "greet"), `the tool "greet" is listed twice`},
+		{[]config.Entry{{Tool: "greet"}, with("greet", `{}`)}, `the tool "greet" is listed twice`},
+		{config.Named("*", "plain", "*"), `the tool "*" is listed twice`},
+		{[]config.Entry{with("*", `{"greeting": "hi"}`)}, `"*" stands for every tool and takes no settings: list the tool they are for`},
+		{[]config.Entry{with("*", `{}`)}, `"*" stands for every tool and takes no settings: list the tool they are for`},
+		{[]config.Entry{with("nope", `{}`)}, `unknown tool "nope" (there are: plain, greet)`},
+		{config.Named(""), `unknown tool "" (there are: plain, greet)`},
+	} {
+		if got, err := pick(all, tt.allowed); err == nil || err.Error() != tt.want || got != nil {
+			t.Errorf("pick(%s) = %q, %v; want %q", tt.allowed, names(got), err, tt.want)
+		}
+	}
+}
+
+// The agent that answers peers is told about its tools when it has some.
+func TestPeerPromptFollowsTheTools(t *testing.T) {
+	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) }}
+	for _, tt := range []struct {
+		tools []config.Entry
+		want  string
+	}{
+		{nil, `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.`},
+		{config.Named(toolListPeers), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint},
+	} {
+		cfg.Tools = &config.Tools{A2A: tt.tools}
+		bot, err := b.ForPeers(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := bot.Respond(context.Background(), "chat", "?system"); err != nil || got != tt.want {
+			t.Errorf("with %s: %v\n got %q\nwant %q", tt.tools, err, got, tt.want)
+		}
 	}
 }
 
 func TestUnknownToolFailsEarly(t *testing.T) {
 	cfg := config.Config{BaseURL: "http://x", Model: "m", Name: "n"}
 	b := Builder{Tools: func() []agent.Tool { return nil }}
-	cfg.Tools = &config.Tools{A2A: []string{"nope"}}
+	cfg.Tools = &config.Tools{A2A: config.Named("nope")}
 	if _, err := b.ForPeers(cfg); err == nil || !strings.Contains(err.Error(), "tools.a2a") {
 		t.Fatalf("ForPeers: %v", err)
 	}
-	cfg.Tools = &config.Tools{H2A: []string{"nope"}}
+	cfg.Tools = &config.Tools{H2A: config.Named("nope")}
 	a := New(func() (config.Config, error) { return cfg, nil }, b)
 	if err := a.Ready(); err == nil || !strings.Contains(err.Error(), "tools.h2a") {
 		t.Fatalf("Ready: %v", err)

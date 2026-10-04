@@ -45,6 +45,10 @@ func (d Dir) SaveConfig(c config.Config) error {
 	})
 }
 
+// Secrets are the files that hold the secrets of the node, which no tool of
+// an agent reads: the configuration and the file it is locked with.
+func (d Dir) Secrets() []string { return config.Files(string(d)) }
+
 // Contacts opens the contact list of the node.
 func (d Dir) Contacts() *contacts.Store { return contacts.Open(d.path("contacts.json")) }
 

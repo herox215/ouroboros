@@ -23,6 +23,10 @@ const (
 	toolExplainError = "explain_error"
 )
 
+// fileTools are the tools for files, which the files plugin contributes: the
+// prompt of the owner's agent says how to use them.
+var fileTools = []string{"read", "write", "edit", "list", "delete"}
+
 // PeerTools are the tools with which an agent reaches other nodes. selfID
 // returns the ID of this node, which is not a peer of itself.
 //
@@ -44,6 +48,8 @@ const (
 //     a2a.OriginFrom(ctx) who the conversation comes from.
 //  6. To show the owner what the agent is waiting for while the tool runs,
 //     contribute a plugin.ToolView for it, like AskingPeer for ask_peer.
+//  7. A tool the owner should be able to limit takes settings: wrap it in
+//     agent.Configurable, like the tools for files in internal/plugins/files.
 func PeerTools(network *peers.Network, selfID func() string) []agent.Tool {
 	return []agent.Tool{
 		listPeers(network, selfID),
@@ -51,26 +57,62 @@ func PeerTools(network *peers.Network, selfID func() string) []agent.Tool {
 	}
 }
 
-// pick returns the tools whose names are in allowed, which is a list from the
-// configuration: config.AllTools stands for every tool. A name that is not a
-// tool is an error, so that a typo does not silently take a tool away.
-func pick(all []agent.Tool, allowed []string) ([]agent.Tool, error) {
-	var picked []agent.Tool
-	for _, t := range all {
-		if slices.Contains(allowed, config.AllTools) || slices.Contains(allowed, t.Name) {
-			picked = append(picked, t)
+// pick returns the tools the entries of allowed name, which is a list from the
+// configuration: config.AllTools stands for every tool, and an entry with
+// settings configures its tool. What is not a tool, a tool that is listed
+// twice and settings a tool does not take are errors, so that a typo neither
+// takes a tool away nor leaves one wider open than the owner meant.
+func pick(all []agent.Tool, allowed []config.Entry) ([]agent.Tool, error) {
+	every := false
+	entries := map[string]config.Entry{}
+	for _, e := range allowed {
+		if _, twice := entries[e.Tool]; twice {
+			return nil, fmt.Errorf("the tool %q is listed twice", e.Tool)
 		}
-	}
-	for _, name := range allowed {
-		if name != config.AllTools && !slices.ContainsFunc(all, func(t agent.Tool) bool { return t.Name == name }) {
+		entries[e.Tool] = e
+		if e.Tool == config.AllTools {
+			if e.Settings != nil {
+				return nil, fmt.Errorf("%q stands for every tool and takes no settings: list the tool they are for", config.AllTools)
+			}
+			every = true
+			continue
+		}
+		if !slices.ContainsFunc(all, func(t agent.Tool) bool { return t.Name == e.Tool }) {
 			known := make([]string, len(all))
 			for i, t := range all {
 				known[i] = t.Name
 			}
-			return nil, fmt.Errorf("unknown tool %q (there are: %s)", name, strings.Join(known, ", "))
+			return nil, fmt.Errorf("unknown tool %q (there are: %s)", e.Tool, strings.Join(known, ", "))
 		}
 	}
+	var picked []agent.Tool
+	for _, t := range all {
+		e, listed := entries[t.Name]
+		if !listed && !every {
+			continue
+		}
+		t, err := configure(t, e.Settings)
+		if err != nil {
+			return nil, err
+		}
+		picked = append(picked, t)
+	}
 	return picked, nil
+}
+
+// configure returns t as it runs with the settings of its entry in the
+// configuration, nil for a tool that is listed without any.
+func configure(t agent.Tool, settings json.RawMessage) (agent.Tool, error) {
+	if t.Configure == nil {
+		if len(settings) > 0 && string(settings) != "{}" {
+			return t, fmt.Errorf("the tool %s takes no settings", t.Name)
+		}
+		return t, nil
+	}
+	if settings == nil {
+		settings = json.RawMessage("{}")
+	}
+	return t.Configure(settings)
 }
 
 func listPeers(network *peers.Network, selfID func() string) agent.Tool {

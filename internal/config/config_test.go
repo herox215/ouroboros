@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -224,13 +225,13 @@ func TestToolLists(t *testing.T) {
 	tests := []struct {
 		name      string
 		tools     *Tools
-		owner     []string
-		peerTools []string
+		owner     []Entry
+		peerTools []Entry
 	}{
-		{"default", nil, []string{AllTools}, nil},
-		{"only a2a set", &Tools{A2A: []string{"list_peers"}}, []string{AllTools}, []string{"list_peers"}},
-		{"owner without tools", &Tools{H2A: []string{}}, []string{}, nil},
-		{"both set", &Tools{H2A: []string{"ask_peer"}, A2A: []string{AllTools}}, []string{"ask_peer"}, []string{AllTools}},
+		{"default", nil, Named(AllTools), nil},
+		{"only a2a set", &Tools{A2A: Named("list_peers")}, Named(AllTools), Named("list_peers")},
+		{"owner without tools", &Tools{H2A: Named()}, Named(), nil},
+		{"both set", &Tools{H2A: Named("ask_peer"), A2A: Named(AllTools)}, Named("ask_peer"), Named(AllTools)},
 	}
 	for _, tt := range tests {
 		c := Config{Tools: tt.tools}
@@ -246,12 +247,12 @@ func TestToolLists(t *testing.T) {
 // An owner who took all tools away keeps that choice when the file is rewritten.
 func TestToolListsSurviveSaving(t *testing.T) {
 	dir := t.TempDir()
-	want := Config{Name: "n", Tools: &Tools{H2A: []string{}, A2A: []string{"list_peers"}}}
+	want := Config{Name: "n", Tools: &Tools{H2A: Named(), A2A: Named("list_peers")}}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(dir)
-	if err != nil || len(got.OwnerTools()) != 0 || !reflect.DeepEqual(got.PeerTools(), []string{"list_peers"}) {
+	if err != nil || len(got.OwnerTools()) != 0 || !reflect.DeepEqual(got.PeerTools(), Named("list_peers")) {
 		t.Fatalf("got %+v, %v", got.Tools, err)
 	}
 }
@@ -275,5 +276,113 @@ func TestLoadAndSaveReportErrors(t *testing.T) {
 	os.WriteFile(file, nil, 0o600)
 	if err := Save(filepath.Join(file, "sub"), Config{}); err == nil {
 		t.Fatal("Save should report a directory it cannot create")
+	}
+}
+
+// An entry of a list is a name, or an object with the name and settings for
+// the tool, and is written the way it was read.
+func TestEntries(t *testing.T) {
+	dir := t.TempDir()
+	written := `{"name": "n", "tools": {
+		"h2a": ["*", {"tool": "read", "deny": ["~/tax"]}, {"tool": "list"}],
+		"a2a": ["list_peers", {"allow": ["~/share"], "tool": "read", "limit": 3}],
+		"protected": ["~/.ssh"]}}`
+	os.WriteFile(filepath.Join(dir, fileName), []byte(written), 0o600)
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := []Entry{{Tool: "*"}, {Tool: "read", Settings: json.RawMessage(`{"deny":["~/tax"]}`)}, {Tool: "list", Settings: json.RawMessage(`{}`)}}
+	peer := []Entry{{Tool: "list_peers"}, {Tool: "read", Settings: json.RawMessage(`{"allow":["~/share"],"limit":3}`)}}
+	if !reflect.DeepEqual(c.OwnerTools(), owner) || !reflect.DeepEqual(c.PeerTools(), peer) || !reflect.DeepEqual(c.Protected(), []string{"~/.ssh"}) {
+		t.Fatalf("got %s / %s / %v", c.OwnerTools(), c.PeerTools(), c.Protected())
+	}
+	if err := Save(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(dir)
+	if err != nil || !reflect.DeepEqual(again, c) {
+		t.Fatalf("after saving: %+v, %v", again.Tools, err)
+	}
+	b, _ := json.Marshal(c.Tools)
+	want := `{"h2a":["*",{"deny":["~/tax"],"tool":"read"},{"tool":"list"}],"a2a":["list_peers",{"allow":["~/share"],"limit":3,"tool":"read"}],"protected":["~/.ssh"]}`
+	if string(b) != want {
+		t.Fatalf("written as %s", b)
+	}
+
+	for entry, want := range map[string]string{
+		`3`:                         `a tool is a name or an object like {"tool": name, …}`,
+		`["read"]`:                  `a tool is a name or an object like {"tool": name, …}`,
+		`{"allow": []}`:             `a tool with settings needs its name as "tool"`,
+		`{"tool": 3, "allow": []}`:  `a tool with settings needs its name as "tool"`,
+		`{"tool": "", "allow": []}`: `a tool with settings needs its name as "tool"`,
+	} {
+		os.WriteFile(filepath.Join(dir, fileName), []byte(`{"tools": {"a2a": [`+entry+`]}}`), 0o600)
+		if _, err := Load(dir); err == nil || err.Error() != want {
+			t.Errorf("%s: %v", entry, err)
+		}
+	}
+	// An entry that is read anew forgets the settings it had.
+	e := Entry{Tool: "read", Settings: json.RawMessage(`{}`)}
+	if err := json.Unmarshal([]byte(`"list"`), &e); err != nil || !reflect.DeepEqual(e, Entry{Tool: "list"}) {
+		t.Errorf("got %+v, %v", e, err)
+	}
+	// Settings that are no object are not written.
+	if _, err := json.Marshal(Entry{Tool: "read", Settings: json.RawMessage(`[`)}); err == nil || !strings.Contains(err.Error(), "settings of the tool read: ") {
+		t.Errorf("broken settings: %v", err)
+	}
+	if got := Named(); got == nil || len(got) != 0 {
+		t.Errorf("Named() = %#v: no tools is not the same as no list", got)
+	}
+}
+
+// What is protected is the default list until the owner writes one, also an
+// empty one.
+func TestProtected(t *testing.T) {
+	def := DefaultProtected()
+	if len(def) != 9 || def[0] != "~/.ssh" || def[8] != "~/.local/share/keyrings" {
+		t.Fatalf("the default: %v", def)
+	}
+	if got := (Config{}).Protected(); !reflect.DeepEqual(got, def) {
+		t.Errorf("without tools: %v", got)
+	}
+	if got := (Config{Tools: &Tools{A2A: Named("read")}}).Protected(); !reflect.DeepEqual(got, def) {
+		t.Errorf("a configuration from before: %v", got)
+	}
+	dir := t.TempDir()
+	if err := Save(dir, Config{Tools: &Tools{Protected: &[]string{}}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(dir)
+	if err != nil || c.Tools.Protected == nil || len(c.Protected()) != 0 {
+		t.Errorf("the owner's decision to protect nothing is lost: %+v, %v", c.Tools, err)
+	}
+	mine := []string{"~/x"}
+	if got := (Config{Tools: &Tools{Protected: &mine}}).Protected(); !reflect.DeepEqual(got, mine) {
+		t.Errorf("the owner's list: %v", got)
+	}
+	// A list of the wrong type is an error, not the default.
+	os.WriteFile(filepath.Join(dir, fileName), []byte(`{"tools": {"protected": "~/.ssh"}}`), 0o600)
+	if _, err := Load(dir); err == nil {
+		t.Error("a protected that is no list was read")
+	}
+
+	// What the setup writes.
+	tools := DefaultTools()
+	b, _ := json.Marshal(tools)
+	want := `{"h2a":["*"],"a2a":[],"protected":["~/.ssh","~/.gnupg","~/.aws","~/.kube","~/.config/gcloud","~/.docker/config.json","~/.netrc","~/.password-store","~/.local/share/keyrings"]}`
+	if string(b) != want {
+		t.Errorf("the default tools: %s", b)
+	}
+	(*tools.Protected)[0] = "changed"
+	if DefaultProtected()[0] != "~/.ssh" {
+		t.Error("the default list can be changed")
+	}
+}
+
+// The secrets of the node are its configuration and the lock of it.
+func TestFiles(t *testing.T) {
+	if got := Files("/node"); !reflect.DeepEqual(got, []string{"/node/config.json", "/node/config.json.lock"}) {
+		t.Fatalf("got %v", got)
 	}
 }

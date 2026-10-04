@@ -37,7 +37,7 @@
 // In its start function a plugin contributes with Add:
 //
 //	Command     a command of ouro
-//	Tool        something the agents can do
+//	Tool        something the agents can do; with Configurable, one the owner gives settings
 //	Method      a JSON-RPC method for connected peers, run with Network.Call
 //	ChannelHandler  a channel to connected peers, opened with Network.Open
 //	PeerSource  hosts to look for nodes on

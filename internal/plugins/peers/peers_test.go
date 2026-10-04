@@ -104,7 +104,7 @@ func TestPeerAgentUsesAllowedTools(t *testing.T) {
 	beta := clitest.Settings(t)
 	cfg = clitest.NodeConfig(beta)
 	cfg.Name, cfg.Model = "beta", "gpt-4o-mini"
-	cfg.Tools = &config.Tools{A2A: []string{"list_peers", "ask_peer"}}
+	cfg.Tools = &config.Tools{A2A: config.Named("list_peers", "ask_peer")}
 	clitest.StartNode(t, beta, cfg)
 
 	alpha := clitest.Settings(t)

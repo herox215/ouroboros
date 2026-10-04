@@ -127,7 +127,7 @@ func shout() plugin.Plugin {
 func TestPluginExtendsOuro(t *testing.T) {
 	s := clitest.Settings(t)
 	cfg := clitest.NodeConfig(s)
-	cfg.Tools = &config.Tools{H2A: []string{"shout"}}
+	cfg.Tools = &config.Tools{H2A: config.Named("shout")}
 	config.Save(s.Home, cfg)
 
 	var out bytes.Buffer

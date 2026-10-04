@@ -57,6 +57,21 @@ func NewTool[T any](name, description string, params []Param, run func(ctx conte
 	return agent.NewTool(name, description, params, run)
 }
 
+// RunFunc is what runs a Tool: it gets the arguments of a call as JSON.
+type RunFunc = agent.RunFunc
+
+// Configurable returns t as a tool the owner can give settings in the
+// configuration, next to its name: {"tool": "read", "allow": ["~/share"]}. S
+// is a struct with a JSON field for every setting the tool takes. A setting
+// it does not have, or one of the wrong type, keeps the node from starting.
+// with returns what runs the tool with the settings it is handed, once for
+// the conversations of the owner and once for those of peers, or an error for
+// settings it cannot run with. A tool that is listed by its name alone gets
+// the zero S, which with has to take.
+func Configurable[S any](t Tool, with func(settings S) (RunFunc, error)) Tool {
+	return agent.Configurable(t, with)
+}
+
 // Reply returns the message a Method answers text with.
 func Reply(text string) *Message {
 	m := a2a.NewMessage("agent", "", text)

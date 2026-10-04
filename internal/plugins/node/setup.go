@@ -62,6 +62,15 @@ func (w *wizard) run(ctx context.Context, cfg config.Config) (config.Config, err
 	if cfg.PrivateKey == "" {
 		cfg.PrivateKey = identity.Generate().Private()
 	}
+	// What the agent may do is written out, for the owner to see and change:
+	// all of it for a new node, and what is protected for one from before
+	// there were tools for files.
+	if cfg.Tools == nil {
+		cfg.Tools = config.DefaultTools()
+	}
+	if cfg.Tools.Protected == nil {
+		cfg.Tools.Protected = config.DefaultTools().Protected
+	}
 	return cfg, w.home.SaveConfig(cfg)
 }
 

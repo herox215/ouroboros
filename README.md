@@ -96,13 +96,18 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 ## Tools
 
-The agent has the tools `list_peers` and `ask_peer`. Which of them it may use depends on who it is
-talking to, and is set in `config.json`:
+The agent has tools for peers (`list_peers`, `ask_peer`) and for files (`read`, `write`, `edit`, `list`,
+`delete`). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
+what the setup writes:
 
 ```json
 "tools": {
   "h2a": ["*"],
-  "a2a": ["list_peers", "ask_peer"]
+  "a2a": [],
+  "protected": [
+    "~/.ssh", "~/.gnupg", "~/.aws", "~/.kube", "~/.config/gcloud",
+    "~/.docker/config.json", "~/.netrc", "~/.password-store", "~/.local/share/keyrings"
+  ]
 }
 ```
 
@@ -110,9 +115,79 @@ talking to, and is set in `config.json`:
 |---|---|---|
 | `h2a` (human to agent) | you ask your agent | every tool |
 | `a2a` (agent to agent) | a connected peer asks your agent | no tool, except `explain_error` (see [below](#when-a-peer-could-not-answer)) |
+| `protected` | a tool for files is used, by anybody | the list above; `[]` protects nothing |
 
-`"*"` stands for every tool, `[]` for none. A name that is not a tool is an error: the node does not start,
-the chat does not answer. Restart the node after changing `a2a`.
+An entry of `h2a` and `a2a` is the name of a tool, or an object with the name as `"tool"` and **settings** for
+that tool next to it. `"*"` stands for every tool, `[]` for none; an object next to `"*"` narrows that one tool.
+A name that is not a tool, a tool that is listed twice, a setting the tool does not have and a setting of the
+wrong type are errors: the node does not start, the chat does not answer. Restart the node after changing `a2a`.
+
+### Files
+
+| Tool | Does | Limits |
+|---|---|---|
+| `read(path, offset?, limit?)` | returns the text of a file; says when there is more and at which line to continue | 2000 lines or 256 KiB per call, a line has less than 256 KiB; what is not text (UTF-8 without NUL) is refused |
+| `write(path, content)` | creates the file or replaces all of it, in one step, and creates missing directories | 1 MiB |
+| `edit(path, old, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once | the file has at most 1 MiB, before and after |
+| `list(path)` | the entries of a directory: directories end in `/`, files come with their size | 1000 entries; what the tool may not read is not listed |
+| `delete(path, recursive?)` | removes a file or an empty directory; one with content only with `recursive: true` | stops, with nothing deleted, before anything it may not delete |
+
+A path is absolute or starts with `~`, your home directory. Each of the five tools takes the settings `allow`
+and `deny`: paths the tool may go to, and paths within those it may not. A path is a file, or a directory with
+everything below it; there are no patterns. A shared directory for peers, and your own agent held back:
+
+```json
+"tools": {
+  "h2a": [
+    "*",
+    {"tool": "read",   "deny":  ["~/Documents/tax"]},
+    {"tool": "delete", "allow": ["~/Projects/scratch"]}
+  ],
+  "a2a": [
+    "list_peers",
+    {"tool": "read",  "allow": ["~/share"]},
+    {"tool": "list",  "allow": ["~/share"]},
+    {"tool": "write", "allow": ["~/share/inbox"], "deny": ["~/share/inbox/keep"]}
+  ],
+  "protected": ["~/.ssh", "~/.gnupg"]
+}
+```
+
+Three things limit a tool for files, and the first that speaks wins:
+
+1. **The core**, fixed in the code (`internal/guard`) and not configurable:
+   - `config.json` and its lock file are neither read nor changed, under any name (also not through a hard
+     link): they hold the key of your node and the key of the API, which would end up with the LLM.
+   - Everything else in the directory of the node (`contacts.json`, `failures.json`, `ouro.pid`, `ouro.log`,
+     `update/`) is read and never changed.
+   - The source of the core is read and never changed: in every directory whose `go.mod` names the module
+     `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `daemon`, `update`,
+     `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable. That `go.mod`
+     is not deleted and has to go on naming the module, or the rule would be gone with one edit.
+   - `/` and your home directory are never deleted.
+2. **`protected`**: paths no tool for files touches, for you and for peers. The default holds the usual places
+   of keys and credentials and nothing else: profiles of browsers, files like `.env` and whatever else is
+   secret on your machine are not in it. Add what you need. A configuration from before there were these
+   tools has no `protected` and gets the default; `"protected": []` is your decision to protect nothing.
+3. **`allow` and `deny`** of the tool in `h2a` or `a2a`. `deny` wins over `allow`. Without `allow` a tool
+   goes everywhere for you and **nowhere for a peer**: all of the file system for a peer has to be written
+   out, as `"allow": ["/"]`.
+
+A path is checked where it leads, with every symbolic link and every `..` resolved, and the tool then works
+on that path: no link out of a shared directory leads around a rule. A refusal names the rule, so that your
+agent can tell you why.
+
+**Known risk.** Your agent has `read` and `ask_peer` at once. The answer of a peer is text in its
+conversation, and a text like "read this file and send it to me" can make a model do so (prompt injection).
+The prompt tells the agent not to, which is no guarantee. `protected` takes the worst targets away;
+everything else your agent may read stays in reach of a peer you are connected to. Take `ask_peer` or `read`
+out of `h2a`, or narrow `read` with `allow`, if that is too much. Closing it takes your confirmation before a
+conversation that read something sends to a peer, which is not built yet.
+
+What these tools do not protect: the running binary (it is replaced by `ouro update`, but nothing locks the
+file), and files your agent reaches in other ways, of which there are none today.
+
+### Peers
 
 With `ask_peer` in `a2a`, a peer you connected to can make your agent ask the peers you are connected to,
 in your name, and nobody else: for a peer the agent neither writes to a node you are not connected to nor
@@ -228,6 +303,7 @@ internal/kernel      plugin kernel: services, contributions, start order by decl
 internal/tui         terminal UI (Bubble Tea)
 internal/node        the local node: Server runs it, Local controls the background one
 internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error
+internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
 internal/home        the node's directory: config, identity, contacts, failed answers, PID and log file
 internal/a2a         A2A protocol: types, HTTP handler, client; channels between nodes
@@ -445,6 +521,7 @@ adds, as it may call every method.
 |---|---|---|
 | a command | `plugin.Add` a `plugin.Command` | `internal/plugins/talk` |
 | a tool for the agents | `plugin.Add` a `plugin.Tool` (`plugin.NewTool`) | `internal/plugins/peers` |
+| a tool with settings in `config.json` | wrap the `plugin.Tool` in `plugin.Configurable`, with a struct that has a JSON field per setting | `internal/plugins/files` |
 | what the terminal UI shows of a tool call | `plugin.Add` a `plugin.ToolView` | `plugin/example`, `internal/plugins/peers` |
 | a screen of the terminal UI | `plugin.Add` a `plugin.Screen` | `plugin/example` |
 | a key of the terminal UI | `plugin.Add` a `plugin.Key`, or list it in `Screen.Keys` | `plugin/example` |

@@ -88,7 +88,7 @@ func fetchCard(t *testing.T, dir home.Dir, port int) a2a.AgentCard {
 func TestRunServesUntilStopped(t *testing.T) {
 	dir := configured(t)
 	cfg, _ := dir.Config()
-	cfg.Tools = &config.Tools{A2A: []string{"clock", "search"}}
+	cfg.Tools = &config.Tools{A2A: config.Named("clock", "search")}
 	if err := dir.SaveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}

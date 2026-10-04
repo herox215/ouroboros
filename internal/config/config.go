@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -31,38 +32,130 @@ type Config struct {
 	// The ID of the node follows from it, see ID. Older configs also stored
 	// a random "id"; it is ignored and gone when the file is written again.
 	PrivateKey string `json:"private_key,omitempty"`
-	// Tools says which tools the agent may use, by who it is talking to.
-	// Without it the owner gets every tool and peers get none.
+	// Tools says which tools the agent may use, by who it is talking to, and
+	// how far they go. Without it the owner gets every tool and peers get none.
 	Tools *Tools `json:"tools,omitempty"`
 }
 
 // AllTools in a list of tools allows every tool.
 const AllTools = "*"
 
-// Tools lists the tools of the agent by name, one list per kind of
+// Tools says what the agent may do, one list of tools per kind of
 // conversation. The names are those the tools are registered with.
 type Tools struct {
 	// H2A (human to agent) applies when the owner asks. Missing or null
 	// allows every tool.
-	H2A []string `json:"h2a"`
+	H2A []Entry `json:"h2a"`
 	// A2A (agent to agent) applies when a peer asks. Missing allows none.
-	A2A []string `json:"a2a"`
+	A2A []Entry `json:"a2a"`
+	// Protected are paths no tool for files touches, for anybody. Missing (a
+	// configuration from before there were such tools) stands for
+	// DefaultProtected; an empty list is the owner's decision to protect
+	// nothing.
+	Protected *[]string `json:"protected,omitempty"`
 }
 
-// OwnerTools are the names of the tools the agent may use for its owner.
-func (c Config) OwnerTools() []string {
+// Entry is one tool in a list of Tools: its name alone, or an object with
+// the name as "tool" and settings for that tool next to it.
+//
+//	"read"
+//	{"tool": "read", "allow": ["~/share"]}
+type Entry struct {
+	Tool string // the name of the tool, or AllTools
+	// Settings are the settings of the tool as a JSON object, nil for an
+	// entry that is a name alone. What they mean is for the tool to say.
+	Settings json.RawMessage
+}
+
+// Named returns the entries for tools that are listed by their name alone.
+func Named(names ...string) []Entry {
+	entries := make([]Entry, len(names))
+	for i, name := range names {
+		entries[i] = Entry{Tool: name}
+	}
+	return entries
+}
+
+// entryTool is the key that names the tool in an entry with settings.
+const entryTool = "tool"
+
+// UnmarshalJSON reads a name or an object with settings.
+func (e *Entry) UnmarshalJSON(b []byte) error {
+	if json.Unmarshal(b, &e.Tool) == nil {
+		e.Settings = nil
+		return nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(b, &object); err != nil {
+		return errors.New(`a tool is a name or an object like {"tool": name, …}`)
+	}
+	if json.Unmarshal(object[entryTool], &e.Tool) != nil || e.Tool == "" {
+		return errors.New(`a tool with settings needs its name as "tool"`)
+	}
+	delete(object, entryTool)
+	e.Settings, _ = json.Marshal(object) // values that were just read: cannot fail
+	return nil
+}
+
+// MarshalJSON writes the entry the way it is read.
+func (e Entry) MarshalJSON() ([]byte, error) {
+	if e.Settings == nil {
+		return json.Marshal(e.Tool)
+	}
+	object := map[string]any{}
+	if err := json.Unmarshal(e.Settings, &object); err != nil {
+		return nil, fmt.Errorf("settings of the tool %s: %w", e.Tool, err)
+	}
+	object[entryTool] = e.Tool
+	return json.Marshal(object)
+}
+
+// DefaultProtected are the paths no tool for files touches unless the owner
+// says otherwise: the usual places of keys and credentials, and nothing
+// else. "~" is the home directory of the user.
+func DefaultProtected() []string {
+	return []string{
+		"~/.ssh", "~/.gnupg", "~/.aws", "~/.kube", "~/.config/gcloud",
+		"~/.docker/config.json", "~/.netrc", "~/.password-store", "~/.local/share/keyrings",
+	}
+}
+
+// DefaultTools is what the setup writes: every tool for the owner, none for
+// peers, and the paths that are protected, for the owner to see and change.
+func DefaultTools() *Tools {
+	protected := DefaultProtected()
+	return &Tools{H2A: Named(AllTools), A2A: []Entry{}, Protected: &protected}
+}
+
+// OwnerTools are the tools the agent may use for its owner.
+func (c Config) OwnerTools() []Entry {
 	if c.Tools == nil || c.Tools.H2A == nil {
-		return []string{AllTools}
+		return Named(AllTools)
 	}
 	return c.Tools.H2A
 }
 
-// PeerTools are the names of the tools the agent may use for a peer.
-func (c Config) PeerTools() []string {
+// PeerTools are the tools the agent may use for a peer.
+func (c Config) PeerTools() []Entry {
 	if c.Tools == nil {
 		return nil
 	}
 	return c.Tools.A2A
+}
+
+// Protected are the paths no tool for files touches.
+func (c Config) Protected() []string {
+	if c.Tools == nil || c.Tools.Protected == nil {
+		return DefaultProtected()
+	}
+	return *c.Tools.Protected
+}
+
+// Files are the files in dir that hold the secrets of the node: the
+// configuration, with the key of the node and the key of the API, and the
+// file that is locked while it is changed.
+func Files(dir string) []string {
+	return []string{filepath.Join(dir, fileName), filepath.Join(dir, lockName)}
 }
 
 // ID is the ID of the node: the fingerprint of its public key. A node
