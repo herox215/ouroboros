@@ -29,6 +29,14 @@ const probe = "OURO?"
 // Group is the multicast group nodes join.
 var Group = net.IPv4(239, 255, 41, 38)
 
+// What the sockets are made with; tests replace them to make them fail.
+var (
+	netListenUDP      = net.ListenUDP
+	netFilePacketConn = net.FilePacketConn
+	syscallSocket     = syscall.Socket
+	setsockoptInt     = syscall.SetsockoptInt
+)
+
 // Node is what a node announces about itself.
 type Node struct {
 	// ID is the fingerprint of PublicKey (identity.IDOf). An answer whose ID
@@ -57,7 +65,7 @@ func Listen(port int) (*net.UDPConn, error) {
 	raw, err := conn.SyscallConn()
 	if err == nil {
 		raw.Control(func(fd uintptr) {
-			err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_LOOP, 1)
+			err = setsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_MULTICAST_LOOP, 1)
 		})
 	}
 	if err != nil {
@@ -74,7 +82,7 @@ func listenGroup(port int) (*net.UDPConn, error) {
 	// Built by hand: net.ListenPacket rebinds multicast addresses to the wildcard.
 	// SOCK_CLOEXEC is Linux-only; set close-on-exec under ForkLock like the net package does on BSD/macOS.
 	syscall.ForkLock.RLock()
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
+	fd, err := syscallSocket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
 	if err == nil {
 		syscall.CloseOnExec(fd)
 	}
@@ -92,7 +100,7 @@ func listenGroup(port int) (*net.UDPConn, error) {
 	); err != nil {
 		return nil, err
 	}
-	conn, err := net.FilePacketConn(f)
+	conn, err := netFilePacketConn(f)
 	if err != nil {
 		return nil, err
 	}
@@ -101,10 +109,7 @@ func listenGroup(port int) (*net.UDPConn, error) {
 
 // Serve answers probes on conn with self until conn is closed.
 func Serve(conn *net.UDPConn, self Node) error {
-	reply, err := json.Marshal(self)
-	if err != nil {
-		return err
-	}
+	reply, _ := json.Marshal(self) // strings and a number: cannot fail
 	group := &net.UDPAddr{IP: Group, Port: conn.LocalAddr().(*net.UDPAddr).Port}
 	buf := make([]byte, len(probe)+1)
 	for {
@@ -156,7 +161,7 @@ func (s *Scanner) Find(ctx context.Context) ([]Node, error) {
 // "host:port" for another discovery port. Nodes are returned sorted by name,
 // one entry per ID.
 func Discover(ctx context.Context, port int, wait time.Duration, peers ...string) ([]Node, error) {
-	conn, err := net.ListenUDP("udp4", nil)
+	conn, err := netListenUDP("udp4", nil)
 	if err != nil {
 		return nil, err
 	}
