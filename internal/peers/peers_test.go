@@ -2,15 +2,19 @@ package peers
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"ouroboros/internal/a2a"
+	"ouroboros/internal/contacts"
 	"ouroboros/internal/discovery"
+	"ouroboros/internal/identity"
 )
 
 // finder finds the nodes it consists of.
@@ -56,20 +60,150 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestDescribe(t *testing.T) {
-	card := a2a.AgentCard{Name: "alpha", Description: "  knows\nthe way "}
-	srv := httptest.NewServer((&a2a.Server{Card: func() a2a.AgentCard { return card }}).Handler())
-	defer srv.Close()
-	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
-	node := discovery.Node{Host: host}
-	node.Port, _ = strconv.Atoi(port)
+// testNode is a running node with its own key and contacts.
+type testNode struct {
+	discovery.Node // how the others find it
+	id             *identity.Identity
+	contacts       *contacts.Store
+	srv            *httptest.Server
+	asked          int // messages its agent answered
+}
 
-	if got := describe(context.Background(), node); got != "knows the way" {
-		t.Fatalf("describe = %q", got)
+// serve runs a node called name whose agent answers "name: text".
+func serve(t *testing.T, name string) *testNode {
+	t.Helper()
+	n := &testNode{id: identity.Generate(), contacts: contacts.Open(filepath.Join(t.TempDir(), "contacts.json"))}
+	n.srv = httptest.NewServer((&a2a.Server{
+		Card:     func() a2a.AgentCard { return a2a.AgentCard{Name: name, Description: "  knows\nthe way "} },
+		Identity: n.id,
+		Trust:    n.contacts,
+		Respond: func(_ context.Context, _, text string) (string, error) {
+			n.asked++
+			return name + ": " + text, nil
+		},
+	}).Handler())
+	t.Cleanup(n.srv.Close)
+	host, port, _ := net.SplitHostPort(strings.TrimPrefix(n.srv.URL, "http://"))
+	n.Node = discovery.Node{ID: name, Name: name, PublicKey: n.id.Public(), Host: host}
+	n.Port, _ = strconv.Atoi(port)
+	return n
+}
+
+// network is how n reaches the nodes found.
+func (n *testNode) network(found ...discovery.Node) *Network {
+	return &Network{Finder: finder(found), Contacts: n.contacts, Client: func() (*a2a.Client, error) {
+		return &a2a.Client{Identity: n.id, Name: n.Name, Port: n.Port}, nil
+	}}
+}
+
+// trust connects the nodes a and b.
+func trust(a, b *testNode) {
+	a.contacts.AddTrusted(b.PublicKey, b.Name, "")
+	b.contacts.AddTrusted(a.PublicKey, a.Name, "")
+}
+
+func TestDescribe(t *testing.T) {
+	alpha := serve(t, "alpha")
+	ctx := context.Background()
+	if got, ok := describe(ctx, alpha.Node); !ok || got != "knows the way" {
+		t.Fatalf("describe = %q, %v", got, ok)
 	}
-	srv.Close()
-	if got := describe(context.Background(), node); got != "" {
-		t.Fatalf("a node that does not answer has no description: %q", got)
+	other := alpha.Node
+	other.PublicKey = identity.Generate().Public()
+	if got, ok := describe(ctx, other); ok || got != "" {
+		t.Fatalf("a node that holds another key is not asked: %q, %v", got, ok)
+	}
+	alpha.srv.Close()
+	if got, ok := describe(ctx, alpha.Node); ok || got != "" {
+		t.Fatalf("a node that does not answer has no description: %q, %v", got, ok)
+	}
+}
+
+// impostor is mallory as it announces itself: with the ID, name and public
+// key of victim, at its own address.
+func impostor(mallory, victim *testNode) discovery.Node {
+	node := victim.Node
+	node.Host, node.Port = mallory.Host, mallory.Port
+	return node
+}
+
+// Announcing the key of a peer the owner trusts connects nobody: connected is
+// the node that proves to hold the key.
+func TestPeersConnectsOnlyTheHolderOfTheKey(t *testing.T) {
+	alice, bob, carol, mallory := serve(t, "alice"), serve(t, "bob"), serve(t, "carol"), serve(t, "mallory")
+	trust(alice, bob)
+	alice.contacts.AddOutgoing(carol.PublicKey, "carol", "", "")
+
+	got, err := alice.network(bob.Node, impostor(mallory, bob), carol.Node, mallory.Node).Peers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		state State
+		about string
+	}{{Connected, "knows the way"}, {NotConnected, ""}, {Requested, ""}, {NotConnected, ""}}
+	for i, w := range want {
+		if got[i].State != w.state || got[i].About != w.about {
+			t.Errorf("peer %d: %v %q, want %v %q", i, got[i].State, got[i].About, w.state, w.about)
+		}
+	}
+}
+
+// A message goes to the node it is meant for, and only that node's answer
+// counts.
+func TestSendAcceptsOnlyTheAnswerOfTheNode(t *testing.T) {
+	alice, bob, mallory := serve(t, "alice"), serve(t, "bob"), serve(t, "mallory")
+	trust(alice, bob)
+	trust(alice, mallory)
+	network := alice.network()
+	ctx := context.Background()
+
+	if got, err := network.Send(ctx, bob.Node, "c", "hi"); err != nil || got != "bob: hi" {
+		t.Fatalf("bob: %q, %v", got, err)
+	}
+	// Mallory trusts alice too, but what alice signed for bob is not for it,
+	// and what it answers is not bob's answer.
+	if got, err := network.Send(ctx, impostor(mallory, bob), "c", "hi"); !errors.Is(err, a2a.ErrUnverified) || got != "" {
+		t.Fatalf("impostor: %q, %v", got, err)
+	}
+	if mallory.asked != 0 {
+		t.Fatal("the impostor got to read a message for bob")
+	}
+
+	// A node given by its address is whoever answers there.
+	if got, err := network.Send(ctx, discovery.Node{Host: bob.Host, Port: bob.Port}, "c", "hi"); err != nil || got != "bob: hi" {
+		t.Fatalf("by address: %q, %v", got, err)
+	}
+	bob.srv.Close()
+	if _, err := network.Send(ctx, discovery.Node{Host: bob.Host, Port: bob.Port}, "c", "hi"); err == nil {
+		t.Fatal("a node that is gone has no key")
+	}
+}
+
+// The decision on a request is told to the node that asked, nobody else.
+func TestDecisionsReachOnlyTheNodeThatAsked(t *testing.T) {
+	alice, bob, mallory := serve(t, "alice"), serve(t, "bob"), serve(t, "mallory")
+	ctx := context.Background()
+
+	if _, err := bob.network().Send(ctx, alice.Node, "c", "hi"); !errors.Is(err, ErrPending) {
+		t.Fatalf("first contact: %v", err)
+	}
+	if err := alice.network().Accept(ctx, bob.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	if trusted, _ := bob.contacts.State(alice.PublicKey); !trusted {
+		t.Fatal("bob should have heard that alice accepted")
+	}
+
+	// A request that claims to come from where mallory listens.
+	alice.contacts.AddIncoming(identity.Generate().Public(), "carol", "", mallory.Addr())
+	requests, _ := alice.contacts.Snapshot()
+	err := alice.network().Reject(ctx, requests.Incoming[0].PublicKey)
+	if !errors.Is(err, a2a.ErrUnverified) {
+		t.Fatalf("a decision answered by another node: %v", err)
+	}
+	if err := alice.network().Reject(ctx, "nobody"); !errors.Is(err, ErrNoRequest) {
+		t.Fatalf("no request: %v", err)
 	}
 }
 

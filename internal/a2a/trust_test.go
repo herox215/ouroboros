@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/contacts"
@@ -52,7 +55,7 @@ func TestTrustHandshake(t *testing.T) {
 	alice, bob := newNode(t, "alice"), newNode(t, "bob")
 	ctx := context.Background()
 
-	if _, err := bob.client().Send(ctx, alice.srv.URL, "c1", "hi"); !IsPending(err) {
+	if _, err := bob.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c1", "hi"); !IsPending(err) {
 		t.Fatalf("want pending, got %v", err)
 	}
 	// The caller records the outgoing request when its message is pending.
@@ -69,14 +72,14 @@ func TestTrustHandshake(t *testing.T) {
 	if !ok {
 		t.Fatal("approve failed")
 	}
-	if err := alice.client().Accept(ctx, "http://"+req.Addr+"/"); err != nil {
+	if err := alice.client().Accept(ctx, "http://"+req.Addr+"/", bob.id.Public()); err != nil {
 		t.Fatalf("accept callback: %v", err)
 	}
 	if trusted, _ := bob.trust.State(alice.id.Public()); !trusted {
 		t.Fatal("bob should trust alice after the callback")
 	}
 
-	got, err := bob.client().Send(ctx, alice.srv.URL, "c1", "again")
+	got, err := bob.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c1", "again")
 	if err != nil || got != "c1:again" {
 		t.Fatalf("trusted chat: %q, %v", got, err)
 	}
@@ -84,10 +87,20 @@ func TestTrustHandshake(t *testing.T) {
 
 func TestServerRejectsUnsigned(t *testing.T) {
 	alice := newNode(t, "alice")
-	if _, err := new(Client).Send(context.Background(), alice.srv.URL, "c", "hi"); err == nil {
-		t.Fatal("unsigned request must be rejected")
-	} else if !code(err, CodeUnauthorized) {
-		t.Fatalf("got %v, want unauthorized", err)
+	body := `{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"parts":[{"kind":"text","text":"hi"}]}}}`
+	resp, err := http.Post(alice.srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	answer, _ := io.ReadAll(resp.Body)
+	var res response
+	if json.Unmarshal(answer, &res) != nil || res.Error == nil || res.Error.Code != CodeUnauthorized {
+		t.Fatalf("unsigned request must be rejected: %s", answer)
+	}
+	// The refusal is signed like every response.
+	if key, err := answeredBy(resp.Header, responseMessage("", "", answer)); err != nil || key != alice.id.Public() {
+		t.Fatalf("refusal signed by %q, %v", key, err)
 	}
 }
 
@@ -95,11 +108,11 @@ func TestRejectedPeerIsBlocked(t *testing.T) {
 	alice, bob := newNode(t, "alice"), newNode(t, "bob")
 	ctx := context.Background()
 
-	if _, err := bob.client().Send(ctx, alice.srv.URL, "c", "hi"); !IsPending(err) {
+	if _, err := bob.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi"); !IsPending(err) {
 		t.Fatalf("want pending, got %v", err)
 	}
 	alice.trust.Reject(bob.id.Public())
-	if _, err := bob.client().Send(ctx, alice.srv.URL, "c", "hi"); !IsBlocked(err) {
+	if _, err := bob.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi"); !IsBlocked(err) {
 		t.Fatalf("want blocked, got %v", err)
 	}
 }
@@ -114,14 +127,14 @@ func TestOriginAndHops(t *testing.T) {
 	bob.respond = func(ctx context.Context, _, text string) (string, error) {
 		got, _ = OriginFrom(ctx)
 		// Bob's agent passes every message on, here back to itself: a circle.
-		if _, err := bob.client().Send(ctx, bob.srv.URL, "ctx-2", "onward"); errors.Is(err, ErrTooManyHops) {
+		if _, err := bob.client().Send(ctx, bob.srv.URL, bob.id.Public(), "ctx-2", "onward"); errors.Is(err, ErrTooManyHops) {
 			stopped = true
 		}
 		return text, nil
 	}
 
 	ctx := context.Background()
-	if _, err := alice.client().Send(ctx, bob.srv.URL, "ctx-1", "hi"); err != nil {
+	if _, err := alice.client().Send(ctx, bob.srv.URL, bob.id.Public(), "ctx-1", "hi"); err != nil {
 		t.Fatal(err)
 	}
 	if got.PublicKey != bob.id.Public() || got.Hops != MaxHops || !stopped {
@@ -130,10 +143,10 @@ func TestOriginAndHops(t *testing.T) {
 
 	// A message that claims more hops than allowed is not answered at all.
 	late := WithOrigin(ctx, Origin{Hops: MaxHops})
-	if _, err := alice.client().Send(late, bob.srv.URL, "ctx-3", "hi"); !errors.Is(err, ErrTooManyHops) {
+	if _, err := alice.client().Send(late, bob.srv.URL, bob.id.Public(), "ctx-3", "hi"); !errors.Is(err, ErrTooManyHops) {
 		t.Fatalf("client should refuse: %v", err)
 	}
-	if _, err := alice.client().call(ctx, bob.srv.URL, MethodSend, sendParams{NewMessage("user", "c", "hi"), Peer{}, MaxHops + 1}); !code(err, CodeTooManyHops) {
+	if _, err := alice.client().call(ctx, bob.srv.URL, bob.id.Public(), MethodSend, sendParams{NewMessage("user", "c", "hi"), Peer{}, MaxHops + 1}); !code(err, CodeTooManyHops) {
 		t.Fatalf("server should refuse: %v", err)
 	}
 	if _, ok := OriginFrom(ctx); ok {
@@ -155,18 +168,18 @@ func TestAddedMethods(t *testing.T) {
 		}},
 	}
 	ctx := context.Background()
-	if _, err := alice.client().call(ctx, bob.srv.URL, "ping", struct{}{}); !code(err, CodeUnauthorized) {
+	if _, err := alice.client().call(ctx, bob.srv.URL, bob.id.Public(), "ping", struct{}{}); !code(err, CodeUnauthorized) {
 		t.Fatalf("a stranger should not reach an added method: %v", err)
 	}
 	bob.trust.AddTrusted(alice.id.Public(), "alice", "")
-	res, err := alice.client().call(ctx, bob.srv.URL, "ping", struct{}{})
+	res, err := alice.client().call(ctx, bob.srv.URL, bob.id.Public(), "ping", struct{}{})
 	if err != nil || res.Result.Text() != "pong "+alice.id.Public() {
 		t.Fatalf("got %+v, %v", res, err)
 	}
-	if got, err := alice.client().Send(ctx, bob.srv.URL, "ctx", "hi"); err != nil || got != "ctx:hi" {
+	if got, err := alice.client().Send(ctx, bob.srv.URL, bob.id.Public(), "ctx", "hi"); err != nil || got != "ctx:hi" {
 		t.Fatalf("message/send should stay built in: %q, %v", got, err)
 	}
-	if _, err := alice.client().call(ctx, bob.srv.URL, "nope", struct{}{}); !code(err, CodeMethodNotFound) {
+	if _, err := alice.client().call(ctx, bob.srv.URL, bob.id.Public(), "nope", struct{}{}); !code(err, CodeMethodNotFound) {
 		t.Fatalf("unknown method: %v", err)
 	}
 }
@@ -177,7 +190,7 @@ func TestRejectCallback(t *testing.T) {
 	alice, bob := newNode(t, "alice"), newNode(t, "bob")
 	ctx := context.Background()
 
-	if _, err := bob.client().Send(ctx, alice.srv.URL, "c", "hi"); !IsPending(err) {
+	if _, err := bob.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi"); !IsPending(err) {
 		t.Fatalf("want pending, got %v", err)
 	}
 	bob.trust.AddOutgoing(alice.id.Public(), "alice", "", "")
@@ -185,7 +198,7 @@ func TestRejectCallback(t *testing.T) {
 	if !ok {
 		t.Fatal("reject failed")
 	}
-	if err := alice.client().Reject(ctx, "http://"+req.Addr+"/"); err != nil {
+	if err := alice.client().Reject(ctx, "http://"+req.Addr+"/", bob.id.Public()); err != nil {
 		t.Fatalf("reject callback: %v", err)
 	}
 	if trusted, _ := bob.trust.State(alice.id.Public()); trusted || bob.trust.HadOutgoing(alice.id.Public()) {
@@ -200,10 +213,10 @@ func TestCallbacksNeedOutgoingRequest(t *testing.T) {
 	ctx := context.Background()
 	alice.trust.AddOutgoing("someone else", "carol", "", "")
 
-	if err := mallory.client().Accept(ctx, alice.srv.URL); err != nil {
+	if err := mallory.client().Accept(ctx, alice.srv.URL, alice.id.Public()); err != nil {
 		t.Fatal(err)
 	}
-	if err := mallory.client().Reject(ctx, alice.srv.URL); err != nil {
+	if err := mallory.client().Reject(ctx, alice.srv.URL, alice.id.Public()); err != nil {
 		t.Fatal(err)
 	}
 	if trusted, _ := alice.trust.State(mallory.id.Public()); trusted {
@@ -212,7 +225,7 @@ func TestCallbacksNeedOutgoingRequest(t *testing.T) {
 	if !alice.trust.HadOutgoing("someone else") {
 		t.Fatal("mallory's rejection dropped the request to another peer")
 	}
-	if _, err := mallory.client().Send(ctx, alice.srv.URL, "c", "hi"); !IsPending(err) {
+	if _, err := mallory.client().Send(ctx, alice.srv.URL, alice.id.Public(), "c", "hi"); !IsPending(err) {
 		t.Fatalf("mallory should still wait for a decision, got %v", err)
 	}
 }
@@ -221,13 +234,13 @@ func TestSignedRequestsWithBadParams(t *testing.T) {
 	alice, bob := newNode(t, "alice"), newNode(t, "bob")
 	ctx := context.Background()
 	alice.trust.AddOutgoing(bob.id.Public(), "bob", "", "")
-	if _, err := bob.client().call(ctx, alice.srv.URL, MethodAccept, "no object"); !code(err, CodeInvalidParams) {
+	if _, err := bob.client().call(ctx, alice.srv.URL, alice.id.Public(), MethodAccept, "no object"); !code(err, CodeInvalidParams) {
 		t.Fatalf("accept: %v", err)
 	}
 	if trusted, _ := alice.trust.State(bob.id.Public()); trusted {
 		t.Fatal("an acceptance that cannot be read must not connect")
 	}
-	if _, err := bob.client().call(ctx, alice.srv.URL, MethodSend, sendParams{}); !code(err, CodeInvalidParams) {
+	if _, err := bob.client().call(ctx, alice.srv.URL, alice.id.Public(), MethodSend, sendParams{}); !code(err, CodeInvalidParams) {
 		t.Fatalf("send without text: %v", err)
 	}
 	if d, _ := alice.trust.Snapshot(); len(d.Incoming) != 0 {
@@ -242,11 +255,11 @@ func TestServerWithoutAddedMethods(t *testing.T) {
 	srv := httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: echo}).Handler())
 	defer srv.Close()
 	client := &Client{Identity: id}
-	if _, err := client.call(context.Background(), srv.URL, "ping", struct{}{}); !code(err, CodeMethodNotFound) {
+	if _, err := client.call(context.Background(), srv.URL, id.Public(), "ping", struct{}{}); !code(err, CodeMethodNotFound) {
 		t.Fatalf("got %v", err)
 	}
 	// The node trusts its own key.
-	if got, err := client.Send(context.Background(), srv.URL, "c", "hi"); err != nil || got != "c:hi" {
+	if got, err := client.Send(context.Background(), srv.URL, id.Public(), "c", "hi"); err != nil || got != "c:hi" {
 		t.Fatalf("got %q, %v", got, err)
 	}
 }

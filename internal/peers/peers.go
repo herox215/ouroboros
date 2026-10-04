@@ -106,9 +106,13 @@ func (n *Network) Peers(ctx context.Context) ([]Peer, error) {
 		p.Node = node
 		switch {
 		case slices.ContainsFunc(known.Trusted, func(c contacts.Contact) bool { return c.PublicKey == node.PublicKey }):
-			p.State = Connected
-			// Only peers the owner trusts get a word in.
-			wg.Go(func() { p.About = describe(ctx, node) })
+			// Anyone can announce the key of a trusted peer. Connected is only
+			// the node that proves to hold it, and only that gets a word in.
+			wg.Go(func() {
+				if about, ok := describe(ctx, node); ok {
+					p.State, p.About = Connected, about
+				}
+			})
 		case slices.ContainsFunc(known.Outgoing, func(r contacts.Request) bool { return r.PublicKey == node.PublicKey }):
 			p.State = Requested
 		}
@@ -166,6 +170,10 @@ func match(nodes []discovery.Node, target string) (discovery.Node, error) {
 //
 // While a peer is being answered (see a2a.Origin), that peer cannot be the
 // target: two agents asking each other would never finish.
+//
+// The message is signed for the public key of node and only an answer signed
+// by that key is accepted: whoever else answers at its address fails with
+// a2a.ErrUnverified.
 func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text string) (string, error) {
 	if origin, ok := a2a.OriginFrom(ctx); ok {
 		// A node without a key cannot be told apart from the sender.
@@ -177,7 +185,14 @@ func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text
 	if err != nil {
 		return "", err
 	}
-	reply, err := client.Send(ctx, url(node.Addr()), contextID, text)
+	publicKey := node.PublicKey
+	if publicKey == "" {
+		// A node given by its address: the key of whoever answers there.
+		if publicKey, err = key(ctx, node); err != nil {
+			return "", err
+		}
+	}
+	reply, err := client.Send(ctx, url(node.Addr()), publicKey, contextID, text)
 	switch {
 	case a2a.IsPending(err):
 		// Remembered, so that the acceptance of the peer is recognised later.
@@ -197,7 +212,7 @@ func (n *Network) Accept(ctx context.Context, publicKey string) error {
 	if !ok {
 		return ErrNoRequest
 	}
-	return n.notify(ctx, req.Addr, (*a2a.Client).Accept)
+	return n.notify(ctx, req.Addr, publicKey, (*a2a.Client).Accept)
 }
 
 // Reject refuses the connection request of a peer and tells it so.
@@ -206,12 +221,12 @@ func (n *Network) Reject(ctx context.Context, publicKey string) error {
 	if !ok {
 		return ErrNoRequest
 	}
-	return n.notify(ctx, req.Addr, (*a2a.Client).Reject)
+	return n.notify(ctx, req.Addr, publicKey, (*a2a.Client).Reject)
 }
 
-// notify tells the peer at addr about a decision. The local decision already
-// stands; a failed callback is reported but not rolled back.
-func (n *Network) notify(ctx context.Context, addr string, tell func(*a2a.Client, context.Context, string) error) error {
+// notify tells the peer with publicKey at addr about a decision. The local
+// decision already stands; a failed callback is reported but not rolled back.
+func (n *Network) notify(ctx context.Context, addr, publicKey string, tell func(*a2a.Client, context.Context, string, string) error) error {
 	if addr == "" {
 		return nil
 	}
@@ -221,7 +236,7 @@ func (n *Network) notify(ctx context.Context, addr string, tell func(*a2a.Client
 	}
 	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
 	defer cancel()
-	if err := tell(client, ctx, url(addr)); err != nil {
+	if err := tell(client, ctx, url(addr), publicKey); err != nil {
 		return fmt.Errorf("decided locally, but %s did not answer: %w", addr, err)
 	}
 	return nil

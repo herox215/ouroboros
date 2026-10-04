@@ -16,7 +16,8 @@ type Responder func(ctx context.Context, contextID, text string) (string, error)
 
 // Server serves the agent card and the authenticated JSON-RPC endpoint.
 // Only trusted peers may send messages; everyone else becomes a pending
-// connection request that a human has to approve.
+// connection request that a human has to approve. Requests have to be signed
+// for this node, and everything it answers is signed with Identity.
 type Server struct {
 	Card     func() AgentCard // asked for every request, so that the card can change
 	Identity *identity.Identity
@@ -54,7 +55,7 @@ type method func(ctx context.Context, from Caller, params json.RawMessage) (*Mes
 // way: read and parse the body, authenticate the caller, look up the method,
 // answer with its result or its error.
 func (s *Server) Handler() http.Handler {
-	verify := newVerifier()
+	verify := newVerifier(s.Identity.Public())
 	// The built-in methods: JSON-RPC method name to handler.
 	builtin := map[string]method{
 		MethodSend:   s.send,
@@ -65,11 +66,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+CardPath, func(w http.ResponseWriter, r *http.Request) {
 		c := s.Card()
 		c.URL = "http://" + r.Host + "/"
-		writeJSON(w, c)
+		// The card is public, but signed: who asks with a nonce learns that
+		// the node holding the key answered just now.
+		s.write(w, c, func(body []byte) []byte { return cardMessage(r.Header.Get(HeaderNonce), body) })
 	})
 	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
 		res := response{JSONRPC: "2.0"}
-		defer func() { writeJSON(w, res) }()
+		// Every response is signed for the request it answers, errors too.
+		defer func() {
+			s.write(w, res, func(body []byte) []byte {
+				return responseMessage(r.Header.Get(HeaderNonce), r.Header.Get(HeaderSig), body)
+			})
+		}()
 
 		var req request
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -78,7 +86,7 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		res.ID = req.ID
-		publicKey, err := verify.verify(r, body)
+		publicKey, err := verify.verify(r, body, req.Method)
 		if err != nil {
 			res.Error = &Error{CodeUnauthorized, err.Error()}
 			return
@@ -126,7 +134,7 @@ func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) 
 		return nil, &Error{CodeTooManyHops, "too many agents have passed this message on"}
 	}
 	trusted, blocked := s.Trust.State(from.PublicKey)
-	if s.Identity != nil && from.PublicKey == s.Identity.Public() {
+	if from.PublicKey == s.Identity.Public() {
 		trusted = true
 	}
 	switch {
@@ -176,7 +184,12 @@ func reply(ctx context.Context, respond Responder, msg Message) (*Message, *Erro
 	return &answer, nil
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+// write answers with v as JSON, signed by this node. message returns the
+// string the signature covers for the body that is sent.
+func (s *Server) write(w http.ResponseWriter, v any, message func(body []byte) []byte) {
+	// Cannot fail: cards and responses consist of strings and numbers.
+	body, _ := json.Marshal(v)
+	signAnswer(w.Header(), s.Identity, message(body))
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	w.Write(body)
 }

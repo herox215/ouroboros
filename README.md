@@ -62,7 +62,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 8 LLM calls per answer |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers |
-| Trust | signed requests (Ed25519); unknown peers become connection requests a human approves |
+| Trust | requests and responses are signed (Ed25519); unknown peers become connection requests a human approves |
 | Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
@@ -119,6 +119,19 @@ trusted peers:
 3. Bob notifies Alice, both sides store each other as trusted and can chat.
 
 Rejected peers are blocked. Trust is mutual: one acceptance connects both sides.
+
+Both directions are authenticated with these keys:
+
+- A **request** is signed for one node and one method: the signature covers the recipient's public key,
+  the JSON-RPC method, the body, a timestamp and a nonce. A node refuses what was signed for another
+  node, so a recorded request cannot be sent to someone else who trusts the sender.
+- A **response** is signed by the node that answers, for the one request it answers. Your node only
+  accepts an answer signed by the key the peer was stored with. Whoever announces the ID and key of a
+  peer of yours without holding the key is not listed as connected and cannot answer for it.
+- The **agent card** is signed the same way, which is how a discovered node proves to hold its key.
+
+A node you address as `host:port` has no stored key: it is whoever answers at that address.
+Messages are signed, not encrypted. Anyone on the path can read them; use a VPN on networks you do not trust.
 
 ## Code
 

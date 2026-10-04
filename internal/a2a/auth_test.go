@@ -15,10 +15,14 @@ import (
 	"ouroboros/internal/identity"
 )
 
-// signed returns a request with body that id signed just now.
+// testSelf is the public key of the node the requests of signed are for.
+const testSelf = "key of the node that is asked"
+
+// signed returns a request with body that id signed just now, for
+// MethodSend of the node testSelf.
 func signed(id *identity.Identity, body string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
-	sign(r, []byte(body), id, 41337)
+	sign(r, []byte(body), id, 41337, testSelf, MethodSend)
 	return r
 }
 
@@ -61,9 +65,9 @@ func TestVerify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, v := signed(id, body), newVerifier()
+			r, v := signed(id, body), newVerifier(testSelf)
 			tt.change(r, v)
-			key, err := v.verify(r, []byte(tt.body))
+			key, err := v.verify(r, []byte(tt.body), MethodSend)
 			switch {
 			case tt.want == "" && (err != nil || key != id.Public()):
 				t.Fatalf("got %q, %v", key, err)
@@ -74,26 +78,60 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+// A request is valid at the node and for the method it was signed for only:
+// what one node accepted cannot be sent to another that trusts the sender too.
+func TestVerifyBindsRecipientAndMethod(t *testing.T) {
+	id := identity.Generate()
+	body := []byte("{}")
+	verify := func(self, method string, change func(*http.Request)) string {
+		r := signed(id, "{}")
+		change(r)
+		if _, err := newVerifier(self).verify(r, body, method); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	unchanged := func(*http.Request) {}
+	if got := verify(testSelf, MethodSend, unchanged); got != "" {
+		t.Fatalf("at the node it is for: %q", got)
+	}
+	if got := verify("another node", MethodSend, unchanged); got != "request is for another node" {
+		t.Fatalf("at another node: %q", got)
+	}
+	// Naming the other node does not help: the signature covers the name.
+	if got := verify("another node", MethodSend, func(r *http.Request) {
+		r.Header.Set(HeaderRecipient, "another node")
+	}); got != "bad signature" {
+		t.Fatalf("readdressed: %q", got)
+	}
+	if got := verify(testSelf, MethodSend, func(r *http.Request) { r.Header.Del(HeaderRecipient) }); got != "request is for another node" {
+		t.Fatalf("for nobody: %q", got)
+	}
+	if got := verify(testSelf, MethodAccept, unchanged); got != "bad signature" {
+		t.Fatalf("for another method: %q", got)
+	}
+}
+
 // A request is accepted once: what was recorded on the wire cannot be sent again.
 func TestVerifyRejectsReplay(t *testing.T) {
-	id, v := identity.Generate(), newVerifier()
+	id, v := identity.Generate(), newVerifier(testSelf)
 	r := signed(id, "{}")
-	if _, err := v.verify(r, []byte("{}")); err != nil {
+	if _, err := v.verify(r, []byte("{}"), MethodSend); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.verify(r, []byte("{}")); err == nil || err.Error() != "replayed request" {
+	if _, err := v.verify(r, []byte("{}"), MethodSend); err == nil || err.Error() != "replayed request" {
 		t.Fatalf("got %v", err)
 	}
 	// Another request of the same node has its own nonce.
-	if _, err := v.verify(signed(id, "{}"), []byte("{}")); err != nil {
+	if _, err := v.verify(signed(id, "{}"), []byte("{}"), MethodSend); err != nil {
 		t.Fatal(err)
 	}
 	// A request that failed does not use up its nonce.
 	late := signed(id, "{}")
-	if _, err := v.verify(late, []byte("other")); err == nil {
+	if _, err := v.verify(late, []byte("other"), MethodSend); err == nil {
 		t.Fatal("a changed body should fail")
 	}
-	if _, err := v.verify(late, []byte("{}")); err != nil {
+	if _, err := v.verify(late, []byte("{}"), MethodSend); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -101,7 +139,7 @@ func TestVerifyRejectsReplay(t *testing.T) {
 // Nonces are forgotten only when their request is too old to be accepted
 // anyway, so that forgetting opens no way for a replay.
 func TestVerifierForgetsOnlyStaleNonces(t *testing.T) {
-	v := newVerifier()
+	v := newVerifier(testSelf)
 	now := time.Now()
 	v.now = func() time.Time { return now }
 	if !v.remember("key", "fresh") {
@@ -153,7 +191,7 @@ func TestServerRejectsReplayAndForgery(t *testing.T) {
 
 	var recorded http.Header
 	if err := send(func(r *http.Request) {
-		sign(r, []byte(body), bob.id, 0)
+		sign(r, []byte(body), bob.id, 0, alice.id.Public(), MethodSend)
 		recorded = r.Header.Clone()
 	}); err != nil || answered != 1 {
 		t.Fatalf("a signed request should be answered: %v, answered %d", err, answered)
@@ -162,17 +200,30 @@ func TestServerRejectsReplayAndForgery(t *testing.T) {
 		t.Fatalf("replay: %+v", err)
 	}
 	if err := send(func(r *http.Request) {
-		sign(r, []byte(body), bob.id, 0)
+		sign(r, []byte(body), bob.id, 0, alice.id.Public(), MethodSend)
 		r.Header.Set(HeaderSig, base64.StdEncoding.EncodeToString(make([]byte, 64)))
 	}); err == nil || err.Code != CodeUnauthorized || err.Message != "bad signature" {
 		t.Fatalf("forged signature: %+v", err)
 	}
 	// A stranger who claims the key of a trusted peer.
 	if err := send(func(r *http.Request) {
-		sign(r, []byte(body), identity.Generate(), 0)
+		sign(r, []byte(body), identity.Generate(), 0, alice.id.Public(), MethodSend)
 		r.Header.Set(HeaderPublic, bob.id.Public())
 	}); err == nil || err.Code != CodeUnauthorized {
 		t.Fatalf("claimed key: %+v", err)
+	}
+	// What bob sent to carol, who trusts him as well, is nothing alice answers.
+	carol := newNode(t, "carol")
+	if err := send(func(r *http.Request) {
+		sign(r, []byte(body), bob.id, 0, carol.id.Public(), MethodSend)
+	}); err == nil || err.Code != CodeUnauthorized || err.Message != "request is for another node" {
+		t.Fatalf("request for another node: %+v", err)
+	}
+	// Nor a request that bob signed for another method.
+	if err := send(func(r *http.Request) {
+		sign(r, []byte(body), bob.id, 0, alice.id.Public(), MethodAccept)
+	}); err == nil || err.Code != CodeUnauthorized || err.Message != "bad signature" {
+		t.Fatalf("request for another method: %+v", err)
 	}
 	if answered != 1 {
 		t.Fatalf("refused requests were answered %d times", answered-1)
