@@ -139,7 +139,7 @@ func flowNode(t *testing.T, name string) (s cli.Settings, f *flow, stop func()) 
 		}
 	}
 	t.Cleanup(stop)
-	if _, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), 2*time.Second); !ok {
+	if _, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), clitest.Patience); !ok {
 		t.Fatal("node did not start")
 	}
 	return s, f, stop

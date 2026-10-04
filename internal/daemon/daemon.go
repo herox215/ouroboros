@@ -17,8 +17,11 @@ import (
 
 const (
 	pollInterval = 50 * time.Millisecond
-	// patience is how long a node may take to come up or to go down.
-	patience = 5 * time.Second
+	// patience is how long a node may take to come up or to go down. It is
+	// far more than a node needs: on a busy machine it takes many times as
+	// long as usual, and a wait that ends when the node is up costs nothing.
+	// A node that ends instead of coming up is noticed at once.
+	patience = time.Minute
 	// A process that looks whether a node is running has the lock for a
 	// moment; a node that starts tries this often before it gives up.
 	lockAttempts = 10
@@ -30,6 +33,9 @@ var ErrRunning = errors.New("node is already running")
 
 // flock locks a file; tests replace it to get in the way.
 var flock = syscall.Flock
+
+// kill sends a signal to a process; tests replace it to see what is sent.
+var kill = syscall.Kill
 
 // Service is a node that runs in the background. Its PID file holds
 // "PID PORT" and is locked while it runs; that is how other processes find it.
@@ -43,10 +49,11 @@ func (s Service) Running() (Process, bool) { return Running(s.PIDFile) }
 
 // Start runs exe with args in the background and waits until it is up.
 func (s Service) Start(exe string, args ...string) (Process, error) {
-	if err := Spawn(exe, s.LogFile, args...); err != nil {
+	exited, err := Spawn(exe, s.LogFile, args...)
+	if err != nil {
 		return Process{}, err
 	}
-	p, ok := WaitRunning(s.PIDFile, patience)
+	p, ok := waitRunning(s.PIDFile, patience, exited)
 	if !ok {
 		return Process{}, fmt.Errorf("node did not start, see %s", s.LogFile)
 	}
@@ -133,27 +140,46 @@ func Running(path string) (Process, bool) {
 }
 
 // Spawn starts exe with args in a new session, detached from the terminal,
-// with stdout and stderr appended to logPath.
-func Spawn(exe, logPath string, args ...string) error {
+// with stdout and stderr appended to logPath. exited is closed when the
+// process ends, should this one live to see it.
+func Spawn(exe, logPath string, args ...string) (exited <-chan struct{}, err error) {
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer log.Close()
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout, cmd.Stderr = log, log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
-	return cmd.Process.Release()
+	done := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(done)
+	}()
+	return done, nil
 }
 
 // WaitRunning waits until a node holds path.
 func WaitRunning(path string, timeout time.Duration) (Process, bool) {
-	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); time.Sleep(pollInterval) {
+	return waitRunning(path, timeout, nil)
+}
+
+// waitRunning waits until a node holds path, but no longer than the process
+// that should become that node lives: exited is closed when it ends.
+func waitRunning(path string, timeout time.Duration, exited <-chan struct{}) (Process, bool) {
+	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); {
 		if p, ok := Running(path); ok {
 			return p, true
+		}
+		select {
+		case <-exited:
+			// It is not the node. Another one may be by now: one that was
+			// started at the same time and got the file first.
+			return Running(path)
+		case <-time.After(pollInterval):
 		}
 	}
 	return Process{}, false
@@ -167,7 +193,7 @@ func Stop(path string, timeout time.Duration) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if err := syscall.Kill(p.PID, syscall.SIGTERM); err != nil {
+	if err := terminate(p.PID); err != nil {
 		return true, err
 	}
 	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); time.Sleep(pollInterval) {
@@ -176,4 +202,16 @@ func Stop(path string, timeout time.Duration) (bool, error) {
 		}
 	}
 	return true, errors.New("node did not stop in time")
+}
+
+// terminate asks the process pid to end. It is the only place that signals a
+// process, and it signals nothing but one process: the PID 0 is the process
+// group of the caller, a negative one a group or every process the user may
+// signal, and 1 is what the whole system or container hangs on. Whatever a
+// caller took for a node, those are never signalled.
+func terminate(pid int) error {
+	if pid <= 1 {
+		return fmt.Errorf("refusing to signal PID %d: that is no node", pid)
+	}
+	return kill(pid, syscall.SIGTERM)
 }

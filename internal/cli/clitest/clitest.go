@@ -28,6 +28,10 @@ import (
 	"ouroboros/plugin"
 )
 
+// Patience is how long a test waits for a node to come up. On a busy machine
+// that takes many times as long as usual; the wait ends when the node is up.
+const Patience = time.Minute
+
 // Main runs the tests of a package whose test binary is also ouro: called
 // with a command, as node.Local starts the real binary, it runs that command
 // for the node the environment describes. Call it from TestMain.
@@ -233,7 +237,7 @@ func StartNode(t *testing.T, s cli.Settings, cfg config.Config, extra ...plugin.
 			t.Errorf("serve: %v", err)
 		}
 	})
-	p, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), 2*time.Second)
+	p, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), Patience)
 	if !ok {
 		t.Fatal("node did not start")
 	}

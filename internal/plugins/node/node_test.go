@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/cli"
@@ -49,7 +48,7 @@ func TestNodeRemovesPIDFileOnShutdown(t *testing.T) {
 	done := make(chan error)
 	go func() { done <- app.Run(ctx, []string{"serve"}) }()
 	pidPath := filepath.Join(s.Home, "ouro.pid")
-	if _, ok := daemon.WaitRunning(pidPath, 2*time.Second); !ok {
+	if _, ok := daemon.WaitRunning(pidPath, clitest.Patience); !ok {
 		t.Fatal("node did not start")
 	}
 	cancel()

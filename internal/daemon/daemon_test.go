@@ -268,8 +268,14 @@ func TestWaitRunning(t *testing.T) {
 
 func TestSpawnDetachesAndLogs(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "ouro.log")
-	if err := Spawn("/bin/sh", log, "-c", "echo spawned; ps -o pgid= -p $$"); err != nil {
+	exited, err := Spawn("/bin/sh", log, "-c", "echo spawned; ps -o pgid= -p $$")
+	if err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the end of the process should be noticed")
 	}
 	var out string
 	for range 40 {
@@ -289,7 +295,7 @@ func TestSpawnDetachesAndLogs(t *testing.T) {
 }
 
 func TestSpawnMissingExecutable(t *testing.T) {
-	if err := Spawn("/does/not/exist", filepath.Join(t.TempDir(), "log")); err == nil {
+	if _, err := Spawn("/does/not/exist", filepath.Join(t.TempDir(), "log")); err == nil {
 		t.Fatal("want error")
 	}
 }
@@ -392,20 +398,85 @@ func TestServiceSurvivesKilledNode(t *testing.T) {
 }
 
 func TestServiceStartFails(t *testing.T) {
-	t.Parallel() // waits as long as a node may take to come up
 	s := service(t)
 	if _, err := s.Start("/does/not/exist"); err == nil {
 		t.Fatal("a missing executable should fail")
 	}
-	// A stale PID file is not taken for the new node.
+	// A stale PID file is not taken for the new node. A node that ends
+	// instead of coming up is not waited for.
 	writeStale(t, s.PIDFile)
+	start := time.Now()
 	if _, err := s.Start("/bin/sh", "-c", "exit 0"); err == nil || !strings.Contains(err.Error(), s.LogFile) {
 		t.Fatalf("a node that never comes up: %v", err)
+	}
+	if time.Since(start) >= patience {
+		t.Fatal("a node that ended was waited for")
+	}
+}
+
+// Two nodes started at once: one gets the file, the other one ends. Whoever
+// started the one that ended finds the node that runs.
+func TestServiceStartFindsTheOtherNode(t *testing.T) {
+	s := service(t)
+	release, err := Hold(s.PIDFile, 41337)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	exited := make(chan struct{})
+	close(exited)
+	// Looked at through another path, the file is not held on the first
+	// look: only the look after the end of the process finds the node.
+	looks := 0
+	held := flock
+	flock = func(fd, how int) error {
+		if looks++; looks == 1 {
+			return nil
+		}
+		return held(fd, how)
+	}
+	defer func() { flock = held }()
+	if p, ok := waitRunning(s.PIDFile, patience, exited); !ok || p.PID != os.Getpid() || looks != 2 {
+		t.Fatalf("got %+v, %v after %d looks", p, ok, looks)
+	}
+}
+
+// Only a single process is ever signalled: not the process group of the
+// caller (0), not every process of the user (-1), not a group, not init.
+func TestNothingButOneProcessIsSignalled(t *testing.T) {
+	var signalled []int
+	kill = func(pid int, _ syscall.Signal) error {
+		signalled = append(signalled, pid)
+		return nil
+	}
+	defer func() { kill = syscall.Kill }()
+
+	for _, pid := range []int{1, 0, -1, -2, -os.Getpid()} {
+		if err := terminate(pid); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("refusing to signal PID %d", pid)) {
+			t.Errorf("PID %d: got %v", pid, err)
+		}
+	}
+	// Also when a file that is held names it: Running believes a PID of 1.
+	path := pidFile(t)
+	release, err := Hold(path, 41337)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	os.WriteFile(path, []byte("1 41337\n"), 0o600)
+	if stopped, err := Stop(path, time.Second); !stopped || err == nil || !strings.Contains(err.Error(), "refusing to signal PID 1") {
+		t.Fatalf("Stop = %v, %v", stopped, err)
+	}
+	if len(signalled) != 0 {
+		t.Fatalf("signalled %v", signalled)
+	}
+	if err := terminate(2); err != nil || len(signalled) != 1 || signalled[0] != 2 {
+		t.Fatalf("a single process should be signalled: %v, %v", signalled, err)
 	}
 }
 
 func TestSpawnWithoutLog(t *testing.T) {
-	if err := Spawn("/bin/sh", filepath.Join(t.TempDir(), "missing", "log"), "-c", "exit 0"); err == nil {
+	if _, err := Spawn("/bin/sh", filepath.Join(t.TempDir(), "missing", "log"), "-c", "exit 0"); err == nil {
 		t.Fatal("want error")
 	}
 }
