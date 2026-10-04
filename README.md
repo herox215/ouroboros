@@ -495,6 +495,8 @@ make hooks   # once per clone: run the checks before every commit
   with it.
 - **make**, **git** and a POSIX shell with `awk`, `sed`, `grep`. `timeout` (coreutils) is used to limit the
   mutation tests in the hook; without it they run to the end.
+- **Linux or macOS**, with pseudo-terminals (`/dev/ptmx`): the end-to-end test runs `ouro` at one. The macOS
+  half of that test is written but was never run; the checks were set up and measured on Linux.
 - **Network on the first run**: `staticcheck` and `gremlins` are built from source with `go install pkg@version`
   into `.tools/` of the checkout. Their versions are pinned in [scripts/tool-versions](scripts/tool-versions),
   the only place. They are not dependencies of the module: `go.mod`, `go.sum` and the binary stay as they are,
@@ -509,14 +511,18 @@ uncovered statement fails the check. Every uncovered block is printed as `file:l
 package.
 
 - **What counts as covered**: a statement that ran in the unit tests of any package, or in the binary the
-  end-to-end test (`cmd/ouro/main_test.go`) builds and drives. Both write into one profile.
+  end-to-end test (`cmd/ouro/main_test.go`) builds and drives: with piped input, at a pseudo-terminal, where
+  the API key is typed without being shown, and with an environment it cannot use. Both write into one profile.
 - **What is measured**: every package of the module, also one without tests (it then counts as uncovered) and
   `cmd/ouro/main.go`. A package that is missing from the profile fails the check.
 - **What is left out**: only the packages listed in [coverage-exclusions.txt](coverage-exclusions.txt), each with
-  its reason. Today these are `internal/openai/openaitest` and `internal/update/updatetest`, the fakes that the
-  tests of several packages share: test code, not production code. Only packages that the `ouro` binary does not
-  link can be listed; the check refuses any other line. `_test.go` files are never measured, Go does not
-  instrument them.
+  its reason. Today these are `internal/openai/openaitest`, `internal/update/updatetest` and
+  `internal/cli/clitest`: the fakes and the helpers that the tests of several packages share (224 statements),
+  test code, not production code. Only packages that the `ouro` binary does not link can be listed; the check
+  refuses any other line. `_test.go` files are never measured, Go does not instrument them.
+- **What 100% does not say**: it counts statements, not branches. In `cmd/ouro/main.go` the error of putting
+  ouro together and the error of the command leave through the same statement. Only the second one happens in
+  the end-to-end test: the plugins ouro is made of never fail to start.
 
 ### Mutation tests
 
@@ -536,19 +542,22 @@ in. A mutant the tests fail on is *killed*; one they pass with *survived* and is
 Scope and limits:
 
 - Mutated is the production code: every package except the ones in `coverage-exclusions.txt`.
-  `make mutation PKGS="internal/a2a internal/agent"` limits the run to some packages.
+  `make mutation PKGS="internal/a2a internal/agent"` limits the run to some packages. A package is the Go files
+  in its directory; the packages below it have their own turn.
 - A mutant is tried against the tests **of its own package** only. Code that only the tests of another package
-  or the end-to-end test reach is listed as *not covered* and not tried; that is all of `cmd/ouro/main.go`.
-  Statement coverage counts those runs, mutation testing does not.
+  or the end-to-end test reach is listed as *not covered* and not tried. Statement coverage counts those runs,
+  mutation testing does not.
 - Statements are not removed, constants and strings are not changed, and the bitwise and assignment mutations
   of gremlins are off: operators only.
 - A mutant whose tests do not finish in time is *timed out* and counts as noticed.
-- **Packages that send signals to process IDs are not mutated**, today `internal/daemon` (and the tests of
-  `cmd/ouro`). A mutant there lets a PID of 0 or -1 through, and the code under test then signals its own
-  process group (that happened when the checks were set up: the run terminated itself) or every process you
-  own. `scripts/mutation.sh`
-  finds these packages by the calls (`syscall.Kill`, `unix.Kill`, `os.FindProcess`), in code and tests, and
-  names them in the report. Such code needs its assertions reviewed by hand.
+- **Packages that send signals to process IDs are not mutated**, today `internal/daemon` and `cmd/ouro` (its
+  test kills the node). A mutant there lets a PID of 0 or -1 through, and the code under test then signals its
+  own process group (that happened when the checks were set up: the run terminated itself) or every process
+  you own. `scripts/mutation.sh` finds these packages by the calls (`syscall.Kill`, `unix.Kill`,
+  `os.FindProcess`), in code and tests, and names them in the report. Such code needs its assertions reviewed
+  by hand.
+- The mutants of other packages reach that code unchanged, through `daemon.Stop`. Whatever they hand it, one
+  function sends the signal, and it refuses a PID of 1 or less (`terminate` in `internal/daemon`, with a test).
 
 **Survivors do not fail the run**; no threshold is agreed on. They are for review, and each is one of two things:
 
@@ -558,7 +567,23 @@ Scope and limits:
   `file:line:column MUTATION  # reason`, and it is reported as accepted instead of as a survivor. When the
   line moves, the entry no longer matches and the mutant comes back for another look.
 
-The report is in `.mutation/report.txt`, with the output of gremlins for each package next to it.
+The report is in `.mutation/report.txt`, written anew by every run, with the output of gremlins for each
+package next to it. How to read it:
+
+| Part of the report | Meaning | What to do |
+|---|---|---|
+| first line | the counts of the run | nothing: there is no score to reach |
+| `Survived` | the tests pass with this operator changed | decide: missing assertion, or equivalent (see above) |
+| `Not covered` | no test of the package itself runs this line | nothing, if another package or the end-to-end test does: `make cover-check` proves that |
+| `Timed out` | the tests did not finish with the change | nothing: it was noticed |
+| `Accepted as equivalent` | survivors listed in `mutation-equivalents.txt` | nothing; a line that no longer matches is named |
+| `Not mutated` | the packages left out because they signal processes | review their tests by hand |
+
+The whole module today: 1019 mutants, 734 killed, 180 survived, 4 accepted as equivalent, 11 timed out, 90 not
+covered; 2 packages not mutated. Of the survivors, 153 are in the drawing of `internal/tui` (most in the
+arithmetic of the logo), 12 in the parts of `internal/discovery` that depend on the network interfaces of the
+machine, and 4 in `internal/safefile`, where what the mutant leaves out only shows after a power failure or
+a write that fails. None is left in `internal/a2a`, `contacts`, `identity`, `kernel`, `peers` and `diagnosis`.
 
 ### Git hook
 
@@ -593,22 +618,26 @@ that run it, so it changes along with the branch you are on.
 
 ### How long it takes
 
-Measured on 8 cores with a warm Go build cache; expect the order of magnitude, not the second.
+Measured on 8 cores with a warm Go build cache and nothing else running; expect the order of magnitude, not
+the second. With every core busy, `make test` takes 75 to 105 s instead of 34 s.
 
 | Step | Time |
 |---|---|
-| building the tools, first run only | staticcheck 35 s, gremlins 11 s |
+| building the tools, first run only | staticcheck 14 s, gremlins 11 s, plus the download of their sources |
 | `make fmt-check` | under 1 s |
-| `make lint` | 1 s (13 s the first time) |
-| `make test` | 20 s |
-| `make cover-check` | 15 s |
-| `make mutation`, whole module | 13 min |
-| `make mutation PKGS=…`, one package | 4 to 35 s for most; `internal/config` 50 s, `internal/a2a` 77 s, `internal/discovery` 86 s, `internal/cli` 160 s, `internal/tui` 200 s |
-| `make check` | 14 min |
-| the hook, without the mutation tests | 55 s |
-| the hook, with them | 1 min for a small package, 4.5 min for `internal/tui`, never more than about 6 min |
+| `make lint` | 2 s |
+| `make test` | 34 s (1 s when nothing changed since the last run: Go keeps the results) |
+| `make cover-check` | 20 s |
+| `make mutation`, whole module | 24 min |
+| `make mutation PKGS=…`, one package | under 1 min for the small ones; `internal/config` 75 s, `internal/discovery` 90 s, `internal/a2a` 3.5 min; `internal/tui` more than 3 min |
+| `make check` | 25 min |
+| the hook, without the mutation tests | 1.5 min |
+| the hook, with them | 5 s more for a small package, never more than 5 min more |
 
-Mutation tests are slow by nature: every mutant is compiled and tested on its own, about 800 of them. That
+The hook takes longer than `make test` and `make cover-check` together because it runs them on a copy of the
+staged files, where no earlier test result can be reused.
+
+Mutation tests are slow by nature: every mutant is compiled and tested on its own, about 1000 of them. That
 is why the hook only mutates the packages a commit changes and stops after 5 minutes, and why the whole
 module is left to `make mutation` and `make check`. A mutant that makes its tests hang costs up to 90 s.
 
@@ -616,7 +645,8 @@ module is left to `make mutation` and `make check`. A mutant that makes its test
 
 | Problem | What to do |
 |---|---|
-| `go not found` | run `./install.sh` once (it puts Go into `~/.local/go`), or set `OURO_GO_DIR` |
+| `go not found` | Go is neither in `PATH` nor in `~/.local/go/bin` nor in `/usr/local/go/bin`: run `./install.sh` once (it puts Go into `~/.local/go`), or set `OURO_GO_DIR` to where it is |
+| `make check` works, plain `go test` says `command not found` | `make` and the hook find a Go outside `PATH` themselves, your shell does not: `export PATH="$HOME/.local/go/bin:$PATH"` |
 | `could not build staticcheck` / `gremlins` | the first run downloads them: check the network, then `make tools` |
 | a tool behaves oddly after an update of Go | `rm -rf .tools && make tools` |
 | the hook does not run | `make hooks` in this clone; `git config core.hooksPath` has to be empty |
@@ -624,7 +654,10 @@ module is left to `make mutation` and `make check`. A mutant that makes its test
 | the hook passes or fails, `make check` does the opposite | the hook checks the staged files, `make check` the working tree: `git status` shows the difference |
 | a path in the hook's output starts with `/tmp/ouro-pre-commit.` | that is the copy of the staged files; the same path is in your checkout |
 | the end-to-end test fails with ports or a node already running | it starts a real node on free ports; run it alone with `go test ./cmd/ouro` |
-| mutants are all `TIMED OUT` | the machine is busy; raise `timeout-coefficient` in `.gremlins.yaml` |
+| the end-to-end test fails at `/dev/ptmx` or `/dev/pts` | it runs `ouro` at a pseudo-terminal; a container without `devpts` has none |
+| a test fails with `node did not start` | should not happen any more: a node built with the race detector needs 0.7 s to come up and several seconds on a busy machine, so starting waits up to a minute, and ends at once when the process dies. If it does, the log named in the message says why the node ended |
+| a test fails only while the machine is busy | a wait in that test is too short; say which one. The checks were run with every core busy without a failure, but only a few times |
+| mutants are all `TIMED OUT` | the machine is busy: run them again when it is not. A mutant gets 90 s, or three times what the unchanged tests take (`mutant_time` in `scripts/mutation.sh`) |
 | the mutation tests take too long before a commit | `OURO_HOOK_MUTATION=off git commit …`, then `make mutation PKGS=…` later |
 | it has to go in now | `git commit --no-verify`, and run `make check` afterwards |
 
