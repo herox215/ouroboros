@@ -2,7 +2,11 @@ BIN := ouro
 PREFIX ?= $(HOME)/.local
 # "ouro update" pulls from the repository the binary was built from.
 OURO_REPO ?= $(shell git remote get-url origin 2>/dev/null)
-LDFLAGS := -s -w $(if $(OURO_REPO),-X ouroboros/internal/update.Repo=$(OURO_REPO))
+# The tool "rebuild" builds the checkout the binary was built from. "ouro update"
+# builds in a directory of its own and passes on the checkout of the old binary.
+OURO_SOURCE ?= $(CURDIR)
+LDFLAGS := -s -w $(if $(OURO_REPO),-X ouroboros/internal/update.Repo=$(OURO_REPO)) \
+	$(if $(OURO_SOURCE),-X 'ouroboros/internal/update.Source=$(OURO_SOURCE)')
 
 # Go is often installed outside PATH (install.sh puts it into ~/.local/go).
 # A go that is already in PATH wins.

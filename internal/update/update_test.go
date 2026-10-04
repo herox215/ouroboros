@@ -120,3 +120,57 @@ func TestRunWithoutWorkingDirectory(t *testing.T) {
 	}
 	expectFile(t, exe, "v0")
 }
+
+// Rebuild builds the checkout as its files are now, and installs the build
+// once the tests of the checkout pass.
+func TestRebuildInstallsTheWorkingTree(t *testing.T) {
+	src, _ := updatetest.NewRepo(t, "v1")
+	updatetest.Change(t, src, "v2") // not committed
+	updatetest.Tests(t, src, `test "$$OURO_SOURCE" = "`+src+`"`)
+	exe := filepath.Join(t.TempDir(), "ouro")
+	u := update.Updater{Source: src, Dir: t.TempDir(), Exe: exe}
+	if err := u.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, exe, "v2")
+}
+
+func TestRebuildThatFails(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "ouro")
+	if err := os.WriteFile(exe, []byte("v0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	u := update.Updater{Dir: t.TempDir(), Exe: exe}
+	if err := u.Rebuild(context.Background()); err != update.ErrNoSource {
+		t.Fatalf("without a source: %v", err)
+	}
+
+	// A failing test leaves the binary alone and shows its output.
+	var out bytes.Buffer
+	u.Source, _ = updatetest.NewRepo(t, "v1")
+	u.Out = &out
+	updatetest.Tests(t, u.Source, "echo a test failed; exit 1")
+	if err := u.Rebuild(context.Background()); err == nil || !strings.HasPrefix(err.Error(), "make: ") || !strings.Contains(out.String(), "a test failed") {
+		t.Fatalf("failing tests: %v, output %q", err, out.String())
+	}
+	expectFile(t, exe, "v0")
+
+	// So does a failing build, and the tests are not run.
+	out.Reset()
+	updatetest.Change(t, u.Source, "'; echo broken build; exit 1; echo '")
+	if err := u.Rebuild(context.Background()); err == nil || err.Error() != "sh: broken build" || strings.Contains(out.String(), "a test failed") {
+		t.Fatalf("failing build: %v, output %q", err, out.String())
+	}
+	expectFile(t, exe, "v0")
+}
+
+// A build of the newest main keeps the checkout of the binary it replaces.
+func TestRunPassesOnTheSource(t *testing.T) {
+	repo, _ := updatetest.NewRepo(t, `'"$OURO_SOURCE"'`) // the fake binary is what the build is told
+	exe := filepath.Join(t.TempDir(), "ouro")
+	u := update.Updater{Repo: repo, Source: "/the/checkout", Dir: t.TempDir(), Exe: exe}
+	if _, _, err := u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, exe, "/the/checkout")
+}

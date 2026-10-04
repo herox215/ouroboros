@@ -1,4 +1,5 @@
-// Package update replaces the running binary with a fresh build of the newest main.
+// Package update replaces the running binary with a fresh build: of the newest
+// main, or of the checkout it was built from as it is now.
 package update
 
 import (
@@ -17,6 +18,10 @@ import (
 // Repo is the git repository updates come from. The Makefile sets it to the
 // origin of the checkout the binary was built from.
 var Repo = "https://github.com/herox215/ouroboros.git"
+
+// Source is the checkout the binary was built from, "" if unknown. The
+// Makefile sets it; a build by Run keeps the one of the binary it replaces.
+var Source string
 
 const branch = "main"
 
@@ -47,9 +52,11 @@ func Short(rev string) string {
 	return rev
 }
 
-// Updater builds the newest main and installs it over Exe.
+// Updater builds the newest main, or the checkout at Source, and installs it
+// over Exe.
 type Updater struct {
 	Repo     string    // git URL or path
+	Source   string    // checkout Rebuild builds
 	Dir      string    // working directory kept between updates
 	Exe      string    // binary to replace
 	Revision string    // commit Exe was built from
@@ -96,6 +103,29 @@ func (u Updater) Run(ctx context.Context) (rev string, updated bool, err error) 
 	return rev, true, replace(filepath.Join(stage, "bin", "ouro"), u.Exe)
 }
 
+// ErrNoSource means that the binary does not know the checkout it was built
+// from.
+var ErrNoSource = errors.New("this ouro does not know its source: build it with \"make install\" in a checkout")
+
+// Rebuild installs a build of the checkout at Source over Exe: of its files
+// as they are now, committed or not. Nothing is installed unless the build
+// and the tests of the checkout pass.
+func (u Updater) Rebuild(ctx context.Context) error {
+	if u.Source == "" {
+		return ErrNoSource
+	}
+	steps := [][]string{
+		{"sh", "install.sh"},
+		{"make", "test"},
+	}
+	for _, step := range steps {
+		if _, err := u.run(ctx, u.Source, step[0], step[1:]...); err != nil {
+			return err
+		}
+	}
+	return replace(filepath.Join(u.Dir, "stage", "bin", "ouro"), u.Exe)
+}
+
 // run executes a command in dir and returns its output, which also goes to
 // Out. Its error carries the reason found in the output.
 func (u Updater) run(ctx context.Context, dir, name string, args ...string) (string, error) {
@@ -108,7 +138,7 @@ func (u Updater) run(ctx context.Context, dir, name string, args ...string) (str
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = out, out
 	// The build is staged next to the sources and installed by replace.
-	cmd.Env = append(os.Environ(), "PREFIX="+filepath.Join(u.Dir, "stage"), "OURO_REPO="+u.Repo, "OURO_UPDATE=1")
+	cmd.Env = append(os.Environ(), "PREFIX="+filepath.Join(u.Dir, "stage"), "OURO_REPO="+u.Repo, "OURO_SOURCE="+u.Source, "OURO_UPDATE=1")
 	if err := cmd.Run(); err != nil {
 		if line := reason(buf.String()); line != "" {
 			return "", fmt.Errorf("%s: %s", name, line)

@@ -21,13 +21,31 @@ func NewRepo(t *testing.T, content string) (dir, rev string) {
 // Commit publishes a new version of the binary on main and returns its commit.
 func Commit(t *testing.T, dir, content string) string {
 	t.Helper()
-	script := "mkdir -p \"$PREFIX/bin\" && printf '%s' '" + content + "' > \"$PREFIX/bin/ouro\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "install.sh"), []byte(script), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	Change(t, dir, content)
 	git(t, dir, "add", "install.sh")
 	git(t, dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", content)
 	return git(t, dir, "rev-parse", "HEAD")
+}
+
+// Change makes the working tree of dir build a binary with the given
+// content, without a commit.
+func Change(t *testing.T, dir, content string) {
+	t.Helper()
+	script := "mkdir -p \"$PREFIX/bin\" && printf '%s' '" + content + "' > \"$PREFIX/bin/ouro\"\n"
+	write(t, filepath.Join(dir, "install.sh"), script)
+}
+
+// Tests gives dir the tests that "make test" runs: the shell command recipe.
+func Tests(t *testing.T, dir, recipe string) {
+	t.Helper()
+	write(t, filepath.Join(dir, "Makefile"), "test:\n\t@"+recipe+"\n")
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func git(t *testing.T, dir string, args ...string) string {

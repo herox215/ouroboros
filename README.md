@@ -69,6 +69,14 @@ was built from, builds it with `install.sh` and replaces the running binary. A r
 restarted.
 It needs `git` and `make`; sources and build live in `~/.config/ouroboros/update/`.
 
+Your agent has the tool `rebuild` for the other direction: it builds the checkout the binary was built from
+(`make install` records it) with its files as they are now, committed or not, and runs `make test` there. Only
+when the build and every test pass, the binary is replaced and a running node restarted; otherwise nothing is
+installed and the agent gets the end of the output. That is how a change your agent made to the plugins of ouro
+with its tools for files takes effect. The tool is for you only: a peer is refused even if `a2a` lists it. Take
+`rebuild` out of `h2a` if your agent should not build what it wrote. A binary installed by `ouro update` keeps
+the checkout of the one it replaced.
+
 Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:11434/v1` (Ollama, no key),
 `http://localhost:1234/v1` (LM Studio), `https://openrouter.ai/api/v1`.
 
@@ -98,7 +106,7 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`), one that runs a script calling the others (`run`) and, for you alone, two for the configuration
-(`get_config`, `propose_config`). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
+(`get_config`, `propose_config`) and one that builds and installs its own source ([`rebuild`](#updates)). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
 what the setup writes:
 
 ```json
@@ -190,6 +198,11 @@ conversation that read something sends to a peer, which is not built yet.
 
 What these tools do not protect: the running binary (it is replaced by `ouro update`, but nothing locks the
 file), and files your agent reaches in other ways, of which there are none today.
+
+**Known risk.** The rules above hold for the tools for files of the binary that runs. With `write` and
+[`rebuild`](#updates) your agent can change a plugin and install the result, and that build runs as you, with
+whatever the changed plugin does: the core it could not edit no longer limits it. The tests are a check that
+the build works, not that it is harmless.
 
 ### Scripts
 
@@ -419,7 +432,7 @@ internal/proposal    changes of the configuration the agent proposed, waiting fo
 internal/diagnosis   why answers to peers failed, by category, for the agent to explain
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
-internal/update      self-update from the newest main
+internal/update      self-update: from the newest main, or from the checkout as it is
 scripts, hooks       the local quality checks and the pre-commit hook, see [Checks](#checks)
 ```
 

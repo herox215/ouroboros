@@ -25,3 +25,15 @@ func Command(dir home.Dir, out io.Writer, updater *update.Updater, exe func() (s
 func Restart(dir home.Dir, exe string) error {
 	return (&updateCommand{local: node.Local{Home: dir}}).restart(exe)
 }
+
+// Tool returns what runs the tool rebuild of the node in dir, which builds
+// with updater and takes exe for the binary of the node.
+func Tool(dir home.Dir, updater *update.Updater, exe func() (string, error)) func(context.Context) (string, error) {
+	c := &updateCommand{local: node.Local{Home: dir, Exe: exe}, updater: updater}
+	return func(ctx context.Context) (string, error) { return c.rebuild(ctx, struct{}{}) }
+}
+
+// MaxOutput and Tail are what an agent gets of a failed build.
+const MaxOutput = maxOutput
+
+func Tail(output string) string { return tail([]byte(output)) }
