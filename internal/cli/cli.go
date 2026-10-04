@@ -138,6 +138,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		nodeplugin.Plugin(dir, nodeplugin.Options{
 			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,
 			BaseURL: s.BaseURL, APIKey: s.APIKey,
+			OnStop: network.Close, // the channels the node opened to peers
 		}),
 		talk.Plugin(),
 		tui.Plugin(plugin.OwnerOf(dir, network)),
@@ -156,8 +157,9 @@ func seal(k *kernel.Kernel) {
 	kernel.Seal[contacts.Store](k)    // whom the node trusts
 	kernel.Seal[contacts.Data](k)
 	kernel.Seal[a2a.Trust](k)
-	kernel.Seal[a2a.Client](k) // signs as the node
-	kernel.Seal[a2a.Server](k) // checks signatures and trust, runs the built-in methods
+	kernel.Seal[a2a.Client](k)     // signs as the node
+	kernel.Seal[a2a.Server](k)     // checks signatures and trust, runs the built-in methods
+	kernel.Seal[a2a.ChannelSet](k) // keeps the limits of the channels
 	kernel.Seal[node.Local](k)
 	kernel.Seal[node.Server](k)
 	kernel.Seal[peers.Network](k) // holds the contacts and the client

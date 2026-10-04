@@ -181,6 +181,9 @@ func TestServe(t *testing.T) {
 	if _, err := client.Call(context.Background(), url, id.Public(), "nobody/added", nil); !errors.As(err, &failed) || failed.Code != a2a.CodeMethodNotFound {
 		t.Fatalf("a method no plugin added: %v", err)
 	}
+	if _, err := client.Open(context.Background(), url, id.Public(), "nobody/added"); !errors.As(err, &failed) || failed.Code != a2a.CodeMethodNotFound {
+		t.Fatalf("a channel no plugin added: %v", err)
+	}
 
 	typo := clitest.Settings(t)
 	cfg := clitest.NodeConfig(typo)

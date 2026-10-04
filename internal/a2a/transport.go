@@ -1,6 +1,8 @@
 package a2a
 
 import (
+	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ const (
 	timeout          = 5 * time.Minute  // for a whole exchange: an agent may think for a while
 	dialTimeout      = 30 * time.Second // to reach the node
 	handshakeTimeout = 10 * time.Second // to learn who it is
+	openTimeout      = 30 * time.Second // to open a channel: reach the node and be let in
 )
 
 // maxAnswerBytes is how much of an answer is read. A longer one is cut off
@@ -52,6 +55,23 @@ func holder(publicKey string) func(key string) bool {
 // anyone accepts whatever node answers: for the first contact with an address.
 func anyone(string) bool { return true }
 
+// pinned is how a node connects to another: TLS 1.3, and the handshake fails
+// with ErrUnverified unless accept takes the key of the certificate.
+func pinned(accept func(key string) bool) *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		// No authority signs the certificate of a node and its name is not
+		// what counts: its key is, checked right below.
+		InsecureSkipVerify: true,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if key := identity.CertificateKey(cs.PeerCertificates[0]); key == "" || !accept(key) {
+				return ErrUnverified
+			}
+			return nil
+		},
+	}
+}
+
 // exchange sends req to a node and returns the body of its answer with the
 // public key the node proved to hold in the TLS handshake. accept decides
 // whether that key is the node req is meant for; if not, the handshake fails
@@ -70,18 +90,7 @@ func exchange(req *http.Request, accept func(key string) bool) (answer []byte, k
 			DialContext:         (&net.Dialer{Timeout: dialTimeout}).DialContext,
 			TLSHandshakeTimeout: handshakeTimeout,
 			DisableKeepAlives:   true,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS13,
-				// No authority signs the certificate of a node and its name
-				// is not what counts: its key is, checked right below.
-				InsecureSkipVerify: true,
-				VerifyConnection: func(cs tls.ConnectionState) error {
-					if key := identity.CertificateKey(cs.PeerCertificates[0]); key == "" || !accept(key) {
-						return ErrUnverified
-					}
-					return nil
-				},
-			},
+			TLSClientConfig:     pinned(accept),
 		},
 	}
 	resp, err := client.Do(req)
@@ -96,4 +105,50 @@ func exchange(req *http.Request, accept func(key string) bool) (answer []byte, k
 		return nil, "", err
 	}
 	return answer, identity.CertificateKey(resp.TLS.PeerCertificates[0]), nil
+}
+
+// upgrade sends req to a node over a connection of its own and, if the node
+// answers with "101 Switching Protocols", returns that connection, with r to
+// read it through: what the node sent after its answer may be in r already.
+// Any other answer is returned as answer, like exchange does, and the
+// connection is closed.
+//
+// The connection is pinned like every other: accept decides whether the key
+// the node proved to hold is the node req is meant for, and if not, the
+// handshake fails with ErrUnverified before anything of req is sent. The
+// node has openTimeout, and no longer than the context of req, to answer.
+func upgrade(req *http.Request, accept func(key string) bool) (conn net.Conn, r *bufio.Reader, answer []byte, err error) {
+	if req.URL.Scheme != "https" {
+		return nil, nil, nil, errPlain
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), openTimeout)
+	defer cancel()
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: pinned(accept)}
+	if conn, err = dialer.DialContext(ctx, "tcp", req.URL.Host); err != nil {
+		return nil, nil, nil, err
+	}
+	// Waiting for the answer ends with ctx: the connection is cut.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	r = bufio.NewReader(conn)
+	var resp *http.Response
+	if err = req.Write(conn); err == nil {
+		resp, err = http.ReadResponse(r, req)
+	}
+	if !stop() {
+		return nil, nil, nil, ctx.Err()
+	}
+	if err != nil {
+		conn.Close()
+		return nil, nil, nil, err
+	}
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		return conn, r, nil, nil
+	}
+	defer conn.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, nil, fmt.Errorf("a2a: HTTP %d", resp.StatusCode)
+	}
+	answer, err = io.ReadAll(io.LimitReader(resp.Body, maxAnswerBytes))
+	return nil, nil, answer, err
 }

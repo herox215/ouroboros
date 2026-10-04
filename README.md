@@ -78,12 +78,13 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 |---|---|
 | LLM | `GET /models` for the picker, `POST /chat/completions` for replies |
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
+| Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 8 LLM calls per answer |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
-| Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers |
+| Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; unknown peers become connection requests a human approves |
-| Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early |
+| Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
 | Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
@@ -183,6 +184,9 @@ Everything between nodes is encrypted, and both directions are authenticated wit
   the sender. This is how the node that is asked knows who asks.
 - A **response** and the **agent card** carry no signature of their own: they come over the connection
   that proved who answers.
+- A **channel** is opened by such a request, signed for the node, and is the connection that request came
+  over: pinned and encrypted like every other, and only opened for a peer you are connected to. It is
+  closed as soon as you are not any more.
 
 | What | Pinned to |
 |---|---|
@@ -208,7 +212,7 @@ internal/node        the local node: Server runs it, Local controls the backgrou
 internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
 internal/home        the node's directory: config, identity, contacts, failed answers, PID and log file
-internal/a2a         A2A protocol: types, HTTP handler, client
+internal/a2a         A2A protocol: types, HTTP handler, client; channels between nodes
 internal/agent       conversation memory and tool loop on top of an LLM
 internal/openai      minimal OpenAI-compatible client (+ openaitest fake)
 internal/discovery   LAN discovery, plus sources of hosts to probe directly (Tailscale)
@@ -231,9 +235,10 @@ A plugin says what it needs in the struct its start function takes, one field pe
 plugin once, after the plugins that provide what it needs. If a service is missing, provided twice, or plugins
 need each other in a circle, ouro does not start at all and says which plugins and services are in the way.
 
-This plugin lets two nodes greet each other. It adds a method to the node, and three ways to run that
-method on a peer: a command, a tool for the agents, and a screen in the terminal UI. The part that wires it
-up, from `plugin/example/example.go`:
+Two nodes work together in two ways: a **method** is a question with one answer, a
+[**channel**](#channels) carries what flows in both directions. This plugin lets two nodes greet each other.
+It adds a method to the node, and three ways to run that method on a peer: a command, a tool for the agents,
+and a screen in the terminal UI. The part that wires it up, from `plugin/example/example.go`:
 
 ```go
 package example
@@ -314,6 +319,110 @@ only to a peer the owner is connected to (`plugin.ErrNotConnected` otherwise, wi
 side `greet` runs only after the same checks as the built-in methods: a request that is unsigned, replayed,
 signed for another node or another method, or from a node the owner is not connected to never reaches it.
 
+#### Channels
+
+A method is one request with one answer, as JSON, of at most 1 MiB. What flows goes over a **channel**: audio,
+a terminal, events, a file of any size. One plugin adds a `plugin.ChannelHandler`, the plugin of a connected
+peer opens it by name with `Network.Open`, and both hold a `*plugin.Channel` until one of them closes it. The
+same plugin (`plugin/example`) sends a file to a peer and hears after every piece how much has arrived:
+
+```go
+const Channel = "example/checksum"
+
+// In the start function, next to the method:
+plugin.Add(ctx, plugin.ChannelHandler{Name: Channel, Handle: checksum})
+
+// The receiving side. When it returns, ouro closes the channel.
+func checksum(_ context.Context, ch *plugin.Channel) {
+	sum, arrived := sha256.New(), 0
+	for {
+		piece, err := ch.Receive()
+		if err != nil {
+			return // the peer closed the channel, or ouro did
+		}
+		if len(piece) == 0 { // the end of the file
+			ch.Send(fmt.Appendf(nil, "sha256 %x", sum.Sum(nil)))
+			return
+		}
+		sum.Write(piece)
+		arrived += len(piece)
+		ch.Send(fmt.Appendf(nil, "%d bytes arrived", arrived))
+	}
+}
+
+// The opening side, in the command "ouro checksum NODE FILE".
+ch, err := n.Network.Open(c, node, Channel)
+if err != nil {
+	return err
+}
+defer ch.Close()
+piece := make([]byte, 256<<10)
+for {
+	read, err := file.Read(piece)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	ch.Send(piece[:read]) // at the end of the file: the empty message
+	reply, err := ch.Receive()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(n.Console.Out, "%s: %s\n", plugin.Label(node), reply)
+	if read == 0 {
+		return nil
+	}
+}
+```
+
+Both ends have the same six calls, and may use them from several goroutines:
+
+| Call | What it does |
+|---|---|
+| `Send(msg []byte) error` | sends one message of at most `plugin.MaxMessage` bytes (`plugin.ErrTooLarge` beyond; send what is larger in pieces). It waits while the peer does not receive, so nothing piles up |
+| `Receive() ([]byte, error)` | the next message of the peer, whole and in the order it was sent |
+| `Close() error` | closes the channel: the peer still gets what was sent, then `io.EOF` |
+| `CloseWith(reason string) error` | the same, but the peer gets a `*plugin.ChannelClosed` with the reason (256 bytes of it) |
+| `Context() context.Context` | done as soon as the channel is closed by anyone; `context.Cause` says why. It is the context `Handle` gets |
+| `Peer() string` | the public key of the node on the other side |
+
+Once a channel is closed, `Send` and `Receive` return why: `io.EOF` if the peer closed it,
+`plugin.ErrChannelClosed` if this side did, a `*plugin.ChannelClosed` if a reason was given, or the error of
+the connection that broke. A channel opened with `Network.Open` lives no longer than the context it was opened
+with.
+
+A plugin never signs and never decides whom to trust; the channel is part of the frame:
+
+- **Opening** is the built-in method `channel/open`, a request like every other: signed with the key of the
+  node for the peer, with a timestamp and a nonce, the name of the channel in the signed body, over TLS pinned
+  to the key of the peer, and only sent to a peer the owner is connected to. The peer checks it like a call of
+  a method and then looks whether its owner is connected to the caller. Whoever is unsigned, replayed, signed
+  for another node or another channel, unknown or refused gets a JSON-RPC error, and no handler runs. Whoever
+  passes gets `101 Switching Protocols`, and the connection of the request is the channel. A built-in name is
+  never a channel, and `Network.Call` does not run `channel/open`.
+- **The limits** are kept by ouro, whatever the plugins at the two ends do:
+
+  | Limit | Value | Then |
+  |---|---|---|
+  | channels one peer has open to a node (`plugin.MaxChannelsPerPeer`) | 8 | one more is refused with `plugin.CodeTooManyChannels` (`-32006`) |
+  | time without a message in either direction (`plugin.ChannelIdleTimeout`) | 5 minutes | closed with `plugin.ErrIdle` |
+  | size of one message (`plugin.MaxMessage`) | 1 MiB | `Send` fails with `plugin.ErrTooLarge`; a peer that sends more breaks the channel |
+  | the peer is no longer connected: removed from `contacts.json` or refused | checked every second, as the UI changes the contacts in another process; at once in the process that rejects | every channel with that peer is closed with `plugin.ErrDisconnected`, on the node that was asked and on the one that opened |
+  | the node stops | – | every channel is closed with `plugin.ErrStopped`: the ones peers opened and the ones its plugins opened |
+  | time to open a channel | 30 seconds | `Network.Open` fails |
+  | time a closed channel waits for the peer to take what was sent | 2 seconds | the connection is cut |
+
+- **The transport** is the connection of the opening request, taken over with the `Upgrade` of HTTP/1.1
+  (`Upgrade: ouro-channel/1`), from the standard library and without a further dependency. A2A has
+  `message/stream` for what flows, but that is server-sent events: text from the node that was asked to the
+  node that asked, as the answer to one message. A channel needs both directions at once, and bytes. So
+  `message/stream` is not implemented and the agent card does not claim `streaming`; channels are listed there
+  as an extension. On the connection each side sends frames: one byte for the kind (`0` a message, `1` the end
+  of the channel), four bytes for the length (big endian, at most 1 MiB), then the message, or for the end
+  the reason as text (empty for none).
+
+Which peer may open which channel is not decided yet: every connected peer may open every channel a plugin
+adds, as it may call every method.
+
 | To add | In the start function | Example |
 |---|---|---|
 | a command | `plugin.Add` a `plugin.Command` | `internal/plugins/talk` |
@@ -322,6 +431,7 @@ signed for another node or another method, or from a node the owner is not conne
 | a screen of the terminal UI | `plugin.Add` a `plugin.Screen` | `plugin/example` |
 | a key of the terminal UI | `plugin.Add` a `plugin.Key`, or list it in `Screen.Keys` | `plugin/example` |
 | an A2A method for connected peers | `plugin.Add` a `plugin.Method`; peers run it with `Network.Call` | `plugin/example` |
+| a channel to connected peers, for what flows | `plugin.Add` a `plugin.ChannelHandler`; peers open it with `Network.Open` | `plugin/example` |
 | a way to find nodes | `plugin.Add` a `plugin.PeerSource` | `internal/plugins/tailscale` |
 | another front end | `plugin.Add` a `plugin.FrontEnd` and the command that opens it, instead of the tui plugin | `internal/plugins/tui` |
 | another LLM API | return a `plugin.LLM` from `plugin.NewService`, instead of the openai plugin | `internal/plugins/openai` |
@@ -348,9 +458,10 @@ cannot ask the kernel for it: `plugin.Owner` is sealed like the contacts, so tha
 that list by hand, such as one an agent wrote, never decides whom the node trusts.
 
 Not plugins, and out of their reach: the identity of the node, request signatures, trust and contacts, the
-built-in A2A methods, the wire format, update and start/stop. They are the fixed frame, wired up in `Plugins`
-and never handed to the kernel (a front end starts and stops the node through the `plugin.Owner` it is given
-there): a plugin that needs or provides one of their types, or a type through which
+built-in A2A methods, opening a channel and its limits, the wire format, update and start/stop. They are the
+fixed frame, wired up in `Plugins` and never handed to the kernel (a front end starts and stops the node
+through the `plugin.Owner` it is given there): a plugin that needs or provides one of their types, or a type
+through which
 one can be had, stops ouro from starting, as does a second plugin that provides a service that exists. A
 method added under a built-in name is never called, and `Network.Call` does not run the built-in ones.
 

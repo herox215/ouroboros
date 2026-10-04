@@ -27,6 +27,7 @@ type Options struct {
 	Log       io.Writer // of the node that runs in the foreground
 	BaseURL   string    // default LLM endpoint offered during setup
 	APIKey    string    // key for BaseURL offered during setup
+	OnStop    func()    // called when the node in the foreground stops; may be nil
 }
 
 // needs are the services the plugin uses.
@@ -36,8 +37,9 @@ type needs struct {
 }
 
 // Plugin contributes the commands that start, stop and run the node in dir.
-// The node it runs answers peers with the agent of the assistant plugin and
-// serves every plugin.Method a plugin contributed.
+// The node it runs answers peers with the agent of the assistant plugin,
+// serves every plugin.Method a plugin contributed and opens every
+// plugin.ChannelHandler.
 //
 // Who the node is and whom it trusts is read from dir by the node itself (see
 // node.Server): no plugin provides it, and none can put something in its
@@ -57,7 +59,9 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 					}
 					return bot.Respond, nil
 				},
-				Methods: func() []a2a.Method { return plugin.All[plugin.Method](ctx) },
+				Methods:  func() []a2a.Method { return plugin.All[plugin.Method](ctx) },
+				Channels: func() []a2a.ChannelHandler { return plugin.All[plugin.ChannelHandler](ctx) },
+				OnStop:   o.OnStop,
 			},
 		}
 		plugin.Add(ctx, plugin.Command{Name: "start", Args: "[--setup]", Help: "start the node (asks for endpoint, key + model on first run)", Run: c.start})

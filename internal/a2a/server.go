@@ -30,6 +30,9 @@ type Server struct {
 	// Methods returns the methods added to the built-in ones, read anew for
 	// every request. May be nil.
 	Methods func() []Method
+	// Channels returns the channels peers can open, read anew for every
+	// request. May be nil.
+	Channels func() []ChannelHandler
 	// Log records what peers are not told, such as why the Responder failed
 	// or why the contacts could not be read or changed.
 	// It is called like log.Printf. May be nil.
@@ -38,7 +41,8 @@ type Server struct {
 	// can be explained to the peer when it asks about it. May be nil.
 	Failed func(Failure)
 
-	strangers limiter // limits the connection requests per address
+	strangers limiter    // limits the connection requests per address
+	channels  ChannelSet // the channels peers have open, and their limits
 }
 
 // Failure is an answer to a peer that the Responder failed to give.
@@ -74,9 +78,9 @@ type Method struct {
 
 // Builtin reports whether name is a method every node has. Such a method is
 // never an added one: it is neither replaced by a Method nor run with
-// Client.Call.
+// Client.Call, and no channel is opened under its name.
 func Builtin(name string) bool {
-	return name == MethodSend || name == MethodAccept || name == MethodReject
+	return name == MethodSend || name == MethodAccept || name == MethodReject || name == MethodOpen
 }
 
 // method handles the JSON-RPC method it is registered for.
@@ -85,11 +89,12 @@ type method func(ctx context.Context, from Caller, params json.RawMessage) (*Mes
 // Handler returns the HTTP handler of the server. It serves the agent card
 // and dispatches JSON-RPC requests to methods. Every request goes the same
 // way: read and parse the body, authenticate the caller, look up the method,
-// answer with its result or its error.
+// answer with its result or its error. Only MethodOpen ends differently: once
+// the caller is authenticated, the connection becomes a channel (see open).
 func (s *Server) Handler() http.Handler {
 	verify := newVerifier(s.Identity.Public())
 	// The built-in methods: JSON-RPC method name to handler. Keep Builtin in
-	// step with them.
+	// step with them and MethodOpen.
 	builtin := map[string]method{
 		MethodSend:   s.send,
 		MethodAccept: s.accept,
@@ -103,7 +108,12 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
 		res := response{JSONRPC: "2.0"}
-		defer func() { writeJSON(w, res) }()
+		opened := false // the connection is a channel now: there is nothing to answer
+		defer func() {
+			if !opened {
+				writeJSON(w, res)
+			}
+		}()
 
 		var req request
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -117,6 +127,12 @@ func (s *Server) Handler() http.Handler {
 			res.Error = &Error{CodeUnauthorized, err.Error()}
 			return
 		}
+		from := Caller{publicKey, callbackAddr(r, r.Header.Get(HeaderPort)), remoteHost(r)}
+		if req.Method == MethodOpen {
+			res.Error = s.open(w, from, req.Params)
+			opened = res.Error == nil
+			return
+		}
 		run, ok := builtin[req.Method]
 		if !ok {
 			if run, ok = s.added(req.Method); !ok {
@@ -124,7 +140,6 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 		}
-		from := Caller{publicKey, callbackAddr(r, r.Header.Get(HeaderPort)), remoteHost(r)}
 		res.Result, res.Error = run(r.Context(), from, req.Params)
 	})
 	return mux
@@ -152,6 +167,74 @@ func (s *Server) added(name string) (method, bool) {
 	}
 	return nil, false
 }
+
+// open turns the connection of a request into the channel its params name
+// and runs the handler of that channel on it, until the handler returns or
+// the channel is closed. It is the only method that takes the connection
+// away from HTTP: the caller is answered with "101 Switching Protocols" and
+// then with frames, see Channel.
+//
+// What comes before is the same as for an added method: the request was
+// signed by from for this node, and only a peer the owner is connected to
+// gets a channel. A peer the owner refused gets none, whatever else the
+// contacts say about it: it is what the channels of a peer are closed for,
+// see ChannelSet. A caller that is refused is answered like any other, with
+// the error that is returned, and no code of a plugin has run.
+func (s *Server) open(w http.ResponseWriter, from Caller, params json.RawMessage) *Error {
+	var p channelParams
+	if json.Unmarshal(params, &p) != nil || p.Name == "" {
+		return &Error{CodeInvalidParams, "invalid params"}
+	}
+	handler, ok := s.channel(p.Name)
+	if !ok {
+		return &Error{CodeMethodNotFound, "channel not found"}
+	}
+	trusted, blocked, err := s.Trust.State(from.PublicKey)
+	if err != nil {
+		return s.trustFailed(from, err)
+	}
+	if !trusted || blocked {
+		return &Error{CodeUnauthorized, "not connected"}
+	}
+	if err := s.channels.reserve(from.PublicKey, s.Trust, true); err != nil {
+		return err
+	}
+	conn, buf, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		s.channels.release(from.PublicKey)
+		s.logf("no channel %s for %s (%s): %v", p.Name, from.Addr, from.PublicKey, err)
+		return &Error{CodeInternalError, "internal error"}
+	}
+	// The time a request may take does not apply to a channel. If the caller
+	// is gone already, the channel finds out when it is used.
+	conn.SetDeadline(time.Time{})
+	io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: "+ChannelProtocol+"\r\n\r\n")
+
+	// What the caller sent after the request is in buf already.
+	ch := newChannel(conn, buf.Reader, from.PublicKey, s.channels.idleTimeout(), s.channels.closeWait())
+	s.channels.add(ch)
+	defer ch.Close()
+	handler.Handle(ch.Context(), ch)
+	return nil
+}
+
+// channel returns the channel handler called name.
+func (s *Server) channel(name string) (ChannelHandler, bool) {
+	if s.Channels == nil || Builtin(name) {
+		return ChannelHandler{}, false
+	}
+	for _, h := range s.Channels() {
+		if h.Name == name {
+			return h, true
+		}
+	}
+	return ChannelHandler{}, false
+}
+
+// Close closes every channel peers have open to the server, and from then on
+// no further one is opened. Shutting down the HTTP server does not: a channel
+// is no request that ends by itself.
+func (s *Server) Close() { s.channels.Close() }
 
 // send answers a message of a trusted peer. Anyone else leaves a connection
 // request instead.

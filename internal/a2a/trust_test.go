@@ -21,13 +21,17 @@ import (
 
 // node is a running server with its own identity and contact list.
 type node struct {
-	srv   *httptest.Server
-	id    *identity.Identity
-	trust *contacts.Store
+	srv    *httptest.Server
+	server *Server
+	id     *identity.Identity
+	trust  *contacts.Store
+	path   string // of the file the contacts are in
 	// respond answers the messages of trusted peers; echo if nil.
 	respond Responder
 	// methods are added to the built-in ones.
 	methods []Method
+	// channels are what peers can open.
+	channels []ChannelHandler
 	// log is what the server logged.
 	log []string
 	// fail makes the contacts of the node fail, see faulty.
@@ -90,18 +94,23 @@ func hadOutgoing(trust *contacts.Store, publicKey string) bool {
 
 func newNode(t *testing.T, name string) *node {
 	t.Helper()
-	trust := contacts.Open(filepath.Join(t.TempDir(), "contacts.json"))
+	path := filepath.Join(t.TempDir(), "contacts.json")
+	trust := contacts.Open(path)
 	id := identity.Generate()
-	n := &node{id: id, trust: trust}
+	n := &node{id: id, trust: trust, path: path}
 	respond := func(ctx context.Context, contextID, text string) (string, error) {
 		if n.respond != nil {
 			return n.respond(ctx, contextID, text)
 		}
 		return echo(ctx, contextID, text)
 	}
-	n.srv = serve(t, id, (&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: faulty{trust, &n.fail}, Respond: respond, Methods: func() []Method { return n.methods },
-		Log:    func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) },
-		Failed: func(f Failure) { n.failed = append(n.failed, f) }}).Handler())
+	n.server = &Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: faulty{trust, &n.fail}, Respond: respond, Methods: func() []Method { return n.methods },
+		Channels: func() []ChannelHandler { return n.channels },
+		Log:      func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) },
+		Failed:   func(f Failure) { n.failed = append(n.failed, f) }}
+	n.srv = serve(t, id, n.server.Handler())
+	// The channels go before the server, which waits for nothing of theirs.
+	t.Cleanup(n.server.Close)
 	return n
 }
 

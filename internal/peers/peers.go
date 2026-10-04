@@ -3,8 +3,9 @@
 //
 // Everything that reaches another node goes through Network: Find and Peers
 // list them, Resolve picks one, Send talks to it, Call runs a method a plugin
-// added to it, Accept and Reject decide on its connection request. Front ends and tools call these and never use
-// discovery, a2a or contacts directly.
+// added to it, Open opens a channel a plugin added to it, Accept and Reject
+// decide on its connection request. Front ends and tools call these and never
+// use discovery, a2a or contacts directly.
 package peers
 
 import (
@@ -58,6 +59,8 @@ type Network struct {
 	Contacts *contacts.Store
 	// Client returns the client that signs requests as this node.
 	Client func() (*a2a.Client, error)
+
+	channels a2a.ChannelSet // the channels this node opened to peers
 }
 
 // State is how far the connection to a peer has come.
@@ -227,27 +230,66 @@ func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text
 // The call is signed and pinned like Send: for the public key of node and
 // the method, over a connection only the holder of that key can answer.
 func (n *Network) Call(ctx context.Context, node discovery.Node, method string, params any) (*a2a.Message, error) {
-	publicKey := node.PublicKey
-	if publicKey == "" {
-		// A node given by its address is whoever answers there. It is called
-		// only if that is a peer, and only that peer gets the call.
-		var err error
-		if publicKey, err = key(ctx, node); err != nil {
-			return nil, err
-		}
-	}
-	trusted, _, err := n.Contacts.State(publicKey)
-	if err != nil {
-		return nil, err
-	}
-	if !trusted {
-		return nil, fmt.Errorf("%s %w", Label(node), ErrNotConnected)
-	}
-	client, err := n.Client()
+	publicKey, client, err := n.connected(ctx, node)
 	if err != nil {
 		return nil, err
 	}
 	return client.Call(ctx, url(node.Addr()), publicKey, method, params)
+}
+
+// Open opens the channel name on node, a channel a plugin added there (see
+// a2a.ChannelHandler), and returns this end of it: both sides send and
+// receive messages until one of them closes it. An error the node answers
+// with instead is an *a2a.Error.
+//
+// Like Call it is for connected peers only and fails with ErrNotConnected
+// for any other node, with nothing sent; and it is signed and pinned like
+// Call: the opening request for the public key of node, over a connection
+// only the holder of that key can answer, which then is the channel.
+//
+// The channel lives no longer than ctx. Whatever the plugin does with it, it
+// is closed when the owner is no longer connected to the peer, when nothing
+// was sent over it for a2a.ChannelIdleTimeout, and by Close.
+func (n *Network) Open(ctx context.Context, node discovery.Node, name string) (*a2a.Channel, error) {
+	publicKey, client, err := n.connected(ctx, node)
+	if err != nil {
+		return nil, err
+	}
+	ch, err := client.Open(ctx, url(node.Addr()), publicKey, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.channels.Hold(ch, n.Contacts); err != nil {
+		return nil, err
+	}
+	return ch, nil
+}
+
+// Close closes every channel this node opened to a peer, and from then on
+// Open fails. It is for the node that stops.
+func (n *Network) Close() { n.channels.Close() }
+
+// connected returns the public key of node and the client to reach it with,
+// if node is a peer this node is connected to, and ErrNotConnected if not.
+func (n *Network) connected(ctx context.Context, node discovery.Node) (publicKey string, client *a2a.Client, err error) {
+	if publicKey = node.PublicKey; publicKey == "" {
+		// A node given by its address is whoever answers there. It is reached
+		// only if that is a peer, and only that peer is.
+		if publicKey, err = key(ctx, node); err != nil {
+			return "", nil, err
+		}
+	}
+	trusted, _, err := n.Contacts.State(publicKey)
+	if err != nil {
+		return "", nil, err
+	}
+	if !trusted {
+		return "", nil, fmt.Errorf("%s %w", Label(node), ErrNotConnected)
+	}
+	if client, err = n.Client(); err != nil {
+		return "", nil, err
+	}
+	return publicKey, client, nil
 }
 
 // Accept trusts the peer that sent the connection request and tells it so.
@@ -265,7 +307,8 @@ func (n *Network) Accept(ctx context.Context, publicKey string) error {
 }
 
 // Reject refuses the connection request of a peer and tells it so. Like
-// Accept it fails with ErrNotSaved if the decision could not be stored.
+// Accept it fails with ErrNotSaved if the decision could not be stored. With
+// the decision every channel this node opened to the peer is closed.
 func (n *Network) Reject(ctx context.Context, publicKey string) error {
 	req, ok, err := n.Contacts.Reject(publicKey)
 	if err != nil {
@@ -274,6 +317,7 @@ func (n *Network) Reject(ctx context.Context, publicKey string) error {
 	if !ok {
 		return ErrNoRequest
 	}
+	n.channels.ClosePeer(publicKey)
 	return n.notify(ctx, req.Addr, publicKey, (*a2a.Client).Reject)
 }
 

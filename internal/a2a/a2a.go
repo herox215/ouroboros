@@ -1,5 +1,7 @@
 // Package a2a implements the subset of the Agent2Agent (A2A) protocol v0.3
 // that Ouroboros needs: the agent card and the JSON-RPC method message/send.
+// On top of it nodes run the methods their plugins add (Method) and open
+// channels for what flows in both directions (Channel), which A2A has not.
 package a2a
 
 import (
@@ -18,6 +20,9 @@ const (
 	// connect, once the human on the other side has decided.
 	MethodAccept = "contact/accept"
 	MethodReject = "contact/reject"
+	// MethodOpen opens a channel: the request names it, and the connection
+	// it came over becomes the channel. See Channel.
+	MethodOpen = "channel/open"
 )
 
 // JSON-RPC error codes.
@@ -33,6 +38,9 @@ const (
 	// CodeTooManyRequests answers a node that is not connected and comes from
 	// an address that sent too many messages of such nodes.
 	CodeTooManyRequests = -32005
+	// CodeTooManyChannels answers a peer that has MaxChannelsPerPeer channels
+	// open and asks for one more.
+	CodeTooManyChannels = -32006
 )
 
 // MaxHops is how many agents may pass a message on before it is refused.
@@ -60,8 +68,30 @@ type AgentCard struct {
 }
 
 type Capabilities struct {
-	Streaming         bool `json:"streaming"`
-	PushNotifications bool `json:"pushNotifications"`
+	// Streaming is what A2A means by it: the method message/stream, which
+	// sends the answer to a message piece by piece as server-sent events. A
+	// node does not have that method, so this is false. What flows between
+	// nodes goes over a channel, which flows both ways and is no part of A2A:
+	// it is announced under Extensions.
+	Streaming         bool        `json:"streaming"`
+	PushNotifications bool        `json:"pushNotifications"`
+	Extensions        []Extension `json:"extensions,omitempty"`
+}
+
+// Extension is something a node can do beyond A2A.
+type Extension struct {
+	URI         string `json:"uri"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required"`
+}
+
+// ChannelExtension announces that connected peers can open channels to the
+// node. Which ones is not said: the card is for everyone to read.
+func ChannelExtension() Extension {
+	return Extension{
+		URI:         ChannelExtensionURI,
+		Description: "Connected peers open channels in both directions with the JSON-RPC method " + MethodOpen + ", which upgrades the connection to " + ChannelProtocol + ".",
+	}
 }
 
 type Skill struct {

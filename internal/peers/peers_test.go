@@ -71,6 +71,7 @@ type testNode struct {
 	srv            *httptest.Server
 	asked          int // messages its agent answered
 	methods        []a2a.Method
+	channels       []a2a.ChannelHandler
 }
 
 // serve runs a node called name whose agent answers "name: text".
@@ -78,7 +79,7 @@ func serve(t *testing.T, name string) *testNode {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "contacts.json")
 	n := &testNode{id: identity.Generate(), contacts: contacts.Open(path), contactsPath: path}
-	n.srv = httptest.NewUnstartedServer((&a2a.Server{
+	server := &a2a.Server{
 		Card:     func() a2a.AgentCard { return a2a.AgentCard{Name: name, Description: "  knows\nthe way "} },
 		Identity: n.id,
 		Trust:    n.contacts,
@@ -86,12 +87,15 @@ func serve(t *testing.T, name string) *testNode {
 			n.asked++
 			return name + ": " + text, nil
 		},
-		Methods: func() []a2a.Method { return n.methods },
-	}).Handler())
+		Methods:  func() []a2a.Method { return n.methods },
+		Channels: func() []a2a.ChannelHandler { return n.channels },
+	}
+	n.srv = httptest.NewUnstartedServer(server.Handler())
 	// Like a node: over TLS, with the certificate of its key.
 	n.srv.TLS = a2a.TLSConfig(n.id)
 	n.srv.StartTLS()
 	t.Cleanup(n.srv.Close)
+	t.Cleanup(server.Close) // first: its channels do not end by themselves
 	host, port, _ := net.SplitHostPort(n.srv.Listener.Addr().String())
 	n.Node = discovery.Node{ID: name, Name: name, PublicKey: n.id.Public(), Host: host}
 	n.Port, _ = strconv.Atoi(port)

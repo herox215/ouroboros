@@ -1,7 +1,10 @@
 // Package example is a complete plugin, to copy for a new one: it lets a node
-// greet the nodes it is connected to. It adds a method to the node, which
-// connected peers can run, and three ways to run that method on a peer: a
-// command, a tool for the agents and a screen in the terminal UI.
+// greet the nodes it is connected to and send them a file to check. It adds
+// a method and a channel to the node, which connected peers can use: the two
+// ways nodes work together. A method is a question with one answer, a channel
+// carries what flows, here a file of any size with word of how much has
+// arrived. The method is run on a peer in three ways, by a command, a tool
+// for the agents and a screen in the terminal UI; the channel by a command.
 //
 // Like every plugin it imports ouroboros/plugin and nothing else of ouro. It
 // is not part of the standard ouro: to try it, add example.Plugin() to the
@@ -10,9 +13,12 @@ package example
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -25,6 +31,15 @@ const Method = "example/greet"
 
 // Tool is the tool with which an agent greets a peer.
 const Tool = "greet_peer"
+
+// Channel is the channel the plugin adds: a peer sends a file through it in
+// pieces and hears after each piece how much has arrived. An empty message
+// ends the file, and is answered with the checksum of what arrived.
+const Channel = "example/checksum"
+
+// pieceSize is how much of the file goes into one message. A message may
+// have plugin.MaxMessage bytes; smaller pieces report more often.
+const pieceSize = 256 << 10
 
 // greeting are the params of Method.
 type greeting struct {
@@ -44,8 +59,9 @@ type needs struct {
 	Network *plugin.Network
 }
 
-// Plugin adds the method "example/greet", the command "ouro greet", the tool
-// "greet_peer" and the screen "Greetings" of the terminal UI.
+// Plugin adds the method "example/greet" with the command "ouro greet", the
+// tool "greet_peer" and the screen "Greetings" of the terminal UI, and the
+// channel "example/checksum" with the command "ouro checksum".
 func Plugin() plugin.Plugin {
 	return plugin.New("example", func(ctx *plugin.Context, n needs) error {
 		g := &greeter{network: n.Network, answers: map[string]string{}}
@@ -78,6 +94,47 @@ func Plugin() plugin.Plugin {
 		// For the terminal UI: g opens the screen, on which a greets everyone.
 		plugin.Add(ctx, plugin.Screen{Key: "g", Title: "Greetings", Body: g.screen,
 			Keys: []plugin.Key{{Key: "a", Help: "greet all", Run: g.greetAll}}})
+
+		plugin.Add(ctx, plugin.ChannelHandler{Name: Channel, Handle: checksum})
+		plugin.Add(ctx, plugin.Command{Name: "checksum", Args: "NODE FILE", Help: "send FILE to a connected node and print the checksum it arrived with", Run: func(c context.Context, args []string) error {
+			if len(args) != 2 {
+				return errors.New("usage: ouro checksum NODE FILE")
+			}
+			node, err := n.Network.Resolve(c, args[0])
+			if err != nil {
+				return err
+			}
+			file, err := os.Open(args[1])
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			// Opened like a method is called: signed as this node, and only
+			// to a connected peer. From here on both sides send and receive.
+			ch, err := n.Network.Open(c, node, Channel)
+			if err != nil {
+				return err
+			}
+			defer ch.Close()
+			piece := make([]byte, pieceSize)
+			for {
+				read, err := file.Read(piece)
+				if err != nil && err != io.EOF {
+					return err
+				}
+				// At the end of the file nothing was read: the empty message.
+				// A Send that fails has closed the channel, and Receive says why.
+				ch.Send(piece[:read])
+				reply, err := ch.Receive()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(n.Console.Out, "%s: %s\n", plugin.Label(node), reply)
+				if read == 0 {
+					return nil
+				}
+			}
+		}})
 		return nil
 	})
 }
@@ -166,4 +223,25 @@ func greet(_ context.Context, from plugin.Caller, params json.RawMessage) (*plug
 		return nil, &plugin.Error{Code: plugin.CodeInvalidParams, Message: `needs "from"`}
 	}
 	return plugin.Reply(fmt.Sprintf("hello %s, I know you by the key %.8s", g.From, from.PublicKey)), nil
+}
+
+// checksum takes a file from the peer that opened the channel and tells it
+// what arrived. Like greet it only runs for a connected peer whose request
+// was signed for this node; ch.Peer is who that is. When it returns, ouro
+// closes the channel.
+func checksum(_ context.Context, ch *plugin.Channel) {
+	sum, arrived := sha256.New(), 0
+	for {
+		piece, err := ch.Receive()
+		if err != nil {
+			return // the peer closed the channel, or ouro did
+		}
+		if len(piece) == 0 {
+			ch.Send(fmt.Appendf(nil, "sha256 %x", sum.Sum(nil)))
+			return
+		}
+		sum.Write(piece)
+		arrived += len(piece)
+		ch.Send(fmt.Appendf(nil, "%d bytes arrived", arrived))
+	}
 }

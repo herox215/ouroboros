@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"ouroboros/internal/a2a"
@@ -40,12 +41,18 @@ type Server struct {
 	Responder func(cfg config.Config) (a2a.Responder, error)
 	// Methods returns the A2A methods added to the built-in ones. May be nil.
 	Methods func() []a2a.Method
+	// Channels returns the channels peers can open. May be nil.
+	Channels func() []a2a.ChannelHandler
+	// OnStop is called when the node stops, before it has stopped: for what
+	// would not end by itself, such as the channels the node opened to peers.
+	// May be nil.
+	OnStop func()
 }
 
 // Run serves until ctx is done. It opens the A2A port for TLS, answers discovery
 // probes, holds the PID file and hands the messages of trusted peers to an
 // Responder. What the node offers over A2A is defined in a2a.Server plus
-// Methods.
+// Methods and Channels.
 func (s Server) Run(ctx context.Context) error {
 	cfg, err := s.Home.Config()
 	if err != nil {
@@ -85,6 +92,7 @@ func (s Server) Run(ctx context.Context) error {
 		Trust:    s.Home.Contacts(),
 		Respond:  respond,
 		Methods:  s.Methods,
+		Channels: s.Channels,
 		Log:      logger.Printf,
 		Failed:   keep(s.Home.Failures(), logger),
 	}
@@ -107,9 +115,18 @@ func (s Server) Run(ctx context.Context) error {
 	go func() {
 		defer close(stopped)
 		<-ctx.Done()
+		// A channel is no request that the shutdown waits for: the ones peers
+		// opened are closed here, and no further one is opened. That goes
+		// along with the shutdown, so that stopping takes no longer for it.
+		var closing sync.WaitGroup
+		closing.Go(server.Close)
+		if s.OnStop != nil {
+			closing.Go(s.OnStop)
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		srv.Shutdown(shutdownCtx)
+		closing.Wait()
 	}()
 
 	logger.Printf("ouroboros %s (%s) listening on :%d → %s", id.ID(), cfg.Name, port, cfg.Model)
@@ -160,6 +177,9 @@ func card(cfg config.Config, version string) a2a.AgentCard {
 		Description:        "Ouroboros instance named " + cfg.Name,
 		PreferredTransport: "JSONRPC",
 		Version:            version,
+		// No streaming: that is A2A's message/stream, which the node does not
+		// have. What it has for data that flows is announced as an extension.
+		Capabilities:       a2a.Capabilities{Streaming: false, Extensions: []a2a.Extension{a2a.ChannelExtension()}},
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
 		Skills: []a2a.Skill{{

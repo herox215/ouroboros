@@ -71,7 +71,7 @@ var ErrBuiltin = errors.New("a2a: a built-in method cannot be called by its name
 // returned as *Error.
 //
 // The built-in methods are not reached this way: they decide about trust and
-// have their own calls, Send, Accept and Reject.
+// have their own calls, Send, Accept, Reject and Open.
 func (c *Client) Call(ctx context.Context, baseURL, publicKey, method string, params any) (*Message, error) {
 	if Builtin(method) {
 		return nil, ErrBuiltin
@@ -91,12 +91,66 @@ func (c *Client) notify(ctx context.Context, baseURL, publicKey, method string) 
 // peer is what this node tells the other side about itself.
 func (c *Client) peer() Peer { return Peer{Name: c.Name, Model: c.Model} }
 
+// Open opens the channel name, which a plugin added to the node with
+// publicKey at baseURL (see ChannelHandler), and returns this end of it. The
+// opening request is signed for that node like every request and sent over a
+// connection pinned to its key, which then is the channel. The node only
+// opens it for a peer its owner is connected to; an error it answers with is
+// returned as *Error.
+//
+// The channel lives no longer than ctx: when ctx is done, it is closed. It is
+// also closed by Close on either side and after ChannelIdleTimeout without a
+// message. Whoever calls Open hands the channel to a ChannelSet (Hold), which
+// closes it with the trust in the peer.
+func (c *Client) Open(ctx context.Context, baseURL, publicKey, name string) (*Channel, error) {
+	if Builtin(name) {
+		return nil, ErrBuiltin
+	}
+	req, err := c.request(ctx, baseURL, publicKey, MethodOpen, channelParams{name})
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", ChannelProtocol)
+	conn, r, answer, err := upgrade(req, holder(publicKey))
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil {
+		// The node answered instead of opening the channel: with why not.
+		if _, err := decode(answer); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("a2a: the node did not open the channel")
+	}
+	ch := newChannel(conn, r, publicKey, ChannelIdleTimeout, closeWait)
+	stop := context.AfterFunc(ctx, func() { ch.shut(context.Cause(ctx)) })
+	ch.onClose(func() { stop() })
+	return ch, nil
+}
+
 // call runs a JSON-RPC method of the node with publicKey at baseURL: it wraps
 // params in a request, signs it for that node, sends it over a connection
 // pinned to the same key and decodes the response. An error the peer answers
-// with is returned as *Error. Every method of Client is a thin wrapper around
-// call, and so every request is signed and pinned the same way.
+// with is returned as *Error. Every method of Client but Open is a thin
+// wrapper around call, and Open sends the same request: so every request is
+// signed and pinned the same way.
 func (c *Client) call(ctx context.Context, baseURL, publicKey, method string, params any) (*response, error) {
+	httpReq, err := c.request(ctx, baseURL, publicKey, method, params)
+	if err != nil {
+		return nil, err
+	}
+	// Whoever answers in place of the node that was asked gets nothing to read.
+	answer, _, err := exchange(httpReq, holder(publicKey))
+	if err != nil {
+		return nil, err
+	}
+	return decode(answer)
+}
+
+// request is the signed JSON-RPC request that runs method with params on the
+// node with publicKey at baseURL.
+func (c *Client) request(ctx context.Context, baseURL, publicKey, method string, params any) (*http.Request, error) {
 	rawParams, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
@@ -110,12 +164,12 @@ func (c *Client) call(ctx context.Context, baseURL, publicKey, method string, pa
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("User-Agent", "ouroboros")
 	sign(httpReq, body, c.Identity, c.Port, publicKey, method)
+	return httpReq, nil
+}
 
-	// Whoever answers in place of the node that was asked gets nothing to read.
-	answer, _, err := exchange(httpReq, holder(publicKey))
-	if err != nil {
-		return nil, err
-	}
+// decode reads the JSON-RPC response a node answered with. An error in it is
+// returned as *Error.
+func decode(answer []byte) (*response, error) {
 	var res response
 	if err := json.Unmarshal(answer, &res); err != nil {
 		return nil, fmt.Errorf("a2a: invalid response: %w", err)
