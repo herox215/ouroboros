@@ -13,3 +13,7 @@ internal/openai/openaitest
 # Fake source repository for the tests of "ouro update". Test code, shared the
 # same way.
 internal/update/updatetest
+
+# Whole nodes on this host, with a fake LLM, for the tests of ouro and of its
+# plugins. Test code, shared the same way.
+internal/cli/clitest

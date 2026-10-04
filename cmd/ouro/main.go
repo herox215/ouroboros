@@ -23,10 +23,10 @@ func main() {
 		terminal.ReadSecret = readPassword
 	}
 	app, err := cli.New(settings, terminal)
-	if err != nil {
-		fail(err)
+	if err == nil {
+		err = app.Run(context.Background(), os.Args[1:])
 	}
-	if err := app.Run(context.Background(), os.Args[1:]); err != nil {
+	if err != nil {
 		fail(err)
 	}
 }

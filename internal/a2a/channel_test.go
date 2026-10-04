@@ -1150,9 +1150,9 @@ func TestChannelSetHoldsOpenedChannels(t *testing.T) {
 	expect(t, toCarol, "CAROL")
 	opened.Close()
 	closedWith(t, toCarol, ErrStopped)
-	if len(opened.snapshot()) != 0 {
-		t.Fatalf("left: %v", opened.snapshot())
-	}
+	// The channel to bob is still on its way out: the check that closes it
+	// runs beside the test, which only waited for bob to be told.
+	eventually(t, "no channel should be left", func() bool { return len(opened.snapshot()) == 0 })
 
 	// A set that is closed takes no channel.
 	late := open(t, alice, carol, "talk")

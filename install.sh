@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 GO_DIR="${OURO_GO_DIR:-$HOME/.local/go}"
 
 required_version() {

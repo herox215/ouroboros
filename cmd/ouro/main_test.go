@@ -9,10 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"ouroboros/internal/openai/openaitest"
 )
@@ -87,7 +90,8 @@ func TestEndToEnd(t *testing.T) {
 	expect(ouro("", "start"), "online")
 	var pid, port int
 	record, _ := os.ReadFile(pidFile)
-	if _, err := fmt.Sscan(string(record), &pid, &port); err != nil {
+	// Only a single process is killed below: a PID of 0 or less is a group.
+	if _, err := fmt.Sscan(string(record), &pid, &port); err != nil || pid <= 1 {
 		t.Fatalf("PID file %q: %v", record, err)
 	}
 	// What "ask" got its answer over is TLS 1.3; the node speaks nothing else.
@@ -135,13 +139,145 @@ func TestEndToEnd(t *testing.T) {
 	log, _ := os.ReadFile(filepath.Join(dir, "home", "ouro.log"))
 	expect(string(log), "listening on", "POST /", "stopped")
 
-	cmd := exec.Command(bin, "fly")
-	cmd.Env = env
-	out, err := cmd.CombinedOutput()
-	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
-		t.Fatalf("unknown command should exit with 1, got %v", err)
+	// What fails says why and exits with 1: a command, and the environment.
+	for want, c := range map[string]struct{ env, arg string }{
+		"✗ unknown command":                   {"OURO_PORT=0", "fly"},
+		`✗ OURO_PORT: "http" is not a number`: {"OURO_PORT=http", "status"},
+	} {
+		cmd := exec.Command(bin, c.arg)
+		cmd.Env = append(slices.Clone(env), c.env)
+		out, err := cmd.CombinedOutput()
+		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+			t.Fatalf("ouro %s with %s should exit with 1, got %v", c.arg, c.env, err)
+		}
+		expect(string(out), want)
 	}
-	expect(string(out), "✗ unknown command")
+
+	// At a terminal the API key is asked for without showing it.
+	tty := newTerminal(t)
+	env = append(env, "OURO_HOME="+filepath.Join(dir, "typed"))
+	cmd := exec.Command(bin, "start")
+	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = env, tty.user, tty.user, tty.user
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	tty.await("API endpoint")
+	tty.typeLine("")
+	tty.await("API key (Enter for none): ")
+	// Typed before the echo is off, the key would show like on any terminal:
+	// a user is slower than that, the test waits.
+	tty.awaitEcho(false)
+	tty.typeLine(openaitest.Key)
+	tty.await("Choose model")
+	tty.typeLine("2")
+	tty.await("Node name")
+	tty.typeLine("typed-node")
+	tty.await("online")
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("ouro start at a terminal: %v\n%s", err, tty.shown())
+	}
+	expect(ouro("", "stop"), "stopped")
+	expect(tty.shown(), "Available models", "gpt-4o-mini", "typed-node")
+	if strings.Contains(tty.shown(), openaitest.Key) {
+		t.Fatalf("the API key was shown on the terminal: %q", tty.shown())
+	}
+	tty.awaitEcho(true) // the terminal is left as it was found
+}
+
+// terminal is a pseudo-terminal: ouro runs at the user's end, the test types
+// and reads at the other one.
+type terminal struct {
+	t        *testing.T
+	keyboard *os.File // the end of the test
+	user     *os.File // the end a program at the terminal has
+
+	mu     sync.Mutex
+	screen []byte
+}
+
+// patience is how long ouro may take for a step at the terminal on a busy machine.
+const patience = 2 * time.Minute
+
+func newTerminal(t *testing.T) *terminal {
+	t.Helper()
+	keyboard, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { keyboard.Close() })
+	name, err := unlockTerminal(keyboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := os.OpenFile(name, os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { user.Close() })
+	tty := &terminal{t: t, keyboard: keyboard, user: user}
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := keyboard.Read(buf)
+			tty.mu.Lock()
+			tty.screen = append(tty.screen, buf[:n]...)
+			tty.mu.Unlock()
+			if err != nil {
+				return // closed when the test ends
+			}
+		}
+	}()
+	return tty
+}
+
+// shown is everything the terminal showed so far.
+func (tty *terminal) shown() string {
+	tty.mu.Lock()
+	defer tty.mu.Unlock()
+	return string(tty.screen)
+}
+
+// await waits until the terminal shows text.
+func (tty *terminal) await(text string) {
+	tty.t.Helper()
+	for deadline := time.Now().Add(patience); !strings.Contains(tty.shown(), text); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			tty.t.Fatalf("the terminal does not show %q: %q", text, tty.shown())
+		}
+	}
+}
+
+// awaitEcho waits until the terminal shows what is typed, or no longer does.
+func (tty *terminal) awaitEcho(on bool) {
+	tty.t.Helper()
+	for deadline := time.Now().Add(patience); ; time.Sleep(10 * time.Millisecond) {
+		var state syscall.Termios
+		if err := ioctl(tty.user, getTermios, unsafe.Pointer(&state)); err != nil {
+			tty.t.Fatal(err)
+		}
+		if (state.Lflag&syscall.ECHO != 0) == on {
+			return
+		}
+		if time.Now().After(deadline) {
+			tty.t.Fatalf("the echo of the terminal should be on: %v", on)
+		}
+	}
+}
+
+// typeLine types a line as the user.
+func (tty *terminal) typeLine(line string) {
+	tty.t.Helper()
+	if _, err := tty.keyboard.WriteString(line + "\n"); err != nil {
+		tty.t.Fatal(err)
+	}
+}
+
+// ioctl controls the device behind f.
+func ioctl(f *os.File, request uintptr, arg unsafe.Pointer) error {
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), request, uintptr(arg)); errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func freeUDPPort(t *testing.T) int {

@@ -267,7 +267,7 @@ func TestDeclarations(t *testing.T) {
 	type twice struct{ A, B word }
 	for want, p := range map[string]Plugin{
 		"kernel.word is not a struct":                      NewPlugin("p", func(*Context, word) (none, error) { return none{}, nil }),
-		"field word of kernel.hidden is not exported":      NewPlugin("p", func(*Context, hidden) (none, error) { return none{}, nil }),
+		"field word of kernel.hidden is not exported":      NewPlugin("p", func(_ *Context, h hidden) (none, error) { return none{}, errors.New(string(h.word)) }),
 		"kernel.twice lists the service kernel.word twice": NewPlugin("p", func(*Context, none) (twice, error) { return twice{}, nil }),
 	} {
 		if err := New().Start(p); err == nil || !strings.Contains(err.Error(), "plugin p: ") || !strings.Contains(err.Error(), want) {
@@ -345,7 +345,7 @@ type (
 
 func (giver) Secret() (string, secret)        { return "", secret{} }
 func (*ptrGiver) Secret() *secret             { return nil }
-func (*keeper) Use(secret) string             { return "" }
+func (k *keeper) Use(secret) string           { return k.secret.key }
 func (user) Use(*secret, vault) (word, error) { return "", nil }
 
 // provides returns a plugin that provides a T.
