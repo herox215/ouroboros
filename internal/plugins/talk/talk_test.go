@@ -1,6 +1,7 @@
 package talk_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -38,6 +40,45 @@ func TestChatWithTerminalOpensTUI(t *testing.T) {
 	cancel() // the UI has no terminal here: it must give up instead of reading lines
 	if err := app.Run(ctx, []string{"chat"}); err == nil || strings.Contains(out.String(), "chatting with your agent") {
 		t.Fatalf("got %q, %v", out.String(), err)
+	}
+}
+
+// frontEnd is a plugin that contributes a front end called name.
+func frontEnd(name string) plugin.Plugin {
+	return plugin.New(name, func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.FrontEnd{Name: name, Run: func(context.Context) error { return errors.New(name + " opened") }})
+		return nil
+	})
+}
+
+// "ouro chat" asks for the front end like ouro without a command does: the
+// one a plugin contributed opens, and none is picked out of several. Without
+// one the chat goes line by line, also at a terminal.
+func TestChatOpensTheFrontEndThatIsThere(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	chat := func(plugins ...plugin.Plugin) (string, error) {
+		t.Helper()
+		var out bytes.Buffer
+		term := cli.Terminal{In: strings.NewReader("one\n"), Out: &out, Interactive: true}
+		list := slices.DeleteFunc(clitest.Plugins(s, term, plugins...), func(p plugin.Plugin) bool { return p.Name == "tui" })
+		app, err := cli.NewWith(list...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = app.Run(context.Background(), []string{"chat"})
+		return out.String(), err
+	}
+
+	if out, err := chat(); err != nil || !strings.Contains(out, "chatting with your agent") || !strings.Contains(out, "turns=1 last=one") {
+		t.Fatalf("without a front end: %q, %v", out, err)
+	}
+	if out, err := chat(frontEnd("web")); err == nil || err.Error() != "web opened" || out != "" {
+		t.Fatalf("with a front end: %q, %v", out, err)
+	}
+	out, err := chat(frontEnd("web"), frontEnd("gui"))
+	if !errors.Is(err, plugin.ErrFrontEnds) || !strings.Contains(err.Error(), "ouro web, ouro gui") || out != "" {
+		t.Fatalf("with two front ends: %q, %v", out, err)
 	}
 }
 

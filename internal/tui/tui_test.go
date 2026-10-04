@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"ouroboros/internal/contacts"
+	"ouroboros/plugin"
 )
 
 type sent struct {
@@ -38,17 +38,20 @@ type fakeBackend struct {
 	rejectErr error
 	decided   context.Context // what a decision on a request ran with
 
+	// fail is what fails, by the name of the request.
+	fail map[string]error
+
 	// ask, if set, answers instead of steps and reply.
 	ask func(ctx context.Context, step func(Step)) (string, error)
 }
 
-func (f *fakeBackend) Status() (Status, error)     { return f.status, nil }
-func (f *fakeBackend) Start() error                { f.started++; return nil }
-func (f *fakeBackend) Stop() error                 { f.stopped++; return nil }
-func (f *fakeBackend) Contacts() (Contacts, error) { return f.trust, nil }
+func (f *fakeBackend) Status() (Status, error)     { return f.status, f.fail["status"] }
+func (f *fakeBackend) Start() error                { f.started++; return f.fail["start"] }
+func (f *fakeBackend) Stop() error                 { f.stopped++; return f.fail["stop"] }
+func (f *fakeBackend) Contacts() (Contacts, error) { return f.trust, f.fail["contacts"] }
 func (f *fakeBackend) SetupCommand() (*exec.Cmd, error) {
 	f.setupCommands++
-	return exec.Command("true"), nil
+	return exec.Command("true"), f.fail["setup"]
 }
 func (f *fakeBackend) Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error) {
 	f.sent = append(f.sent, sent{contextID, text})
@@ -74,7 +77,7 @@ func (f *fakeBackend) Reject(ctx context.Context, publicKey string) error {
 func newModel(t *testing.T) (*Model, *fakeBackend) {
 	t.Helper()
 	b := &fakeBackend{status: Status{Configured: true, Running: true, ID: "aaa111", Name: "alpha"}, reply: "pong"}
-	m := New(b)
+	m := New(b, nil, nil)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.showSplash = false // dismiss the start screen; its own test is below
 	m.Update(m.refreshStatus())
@@ -100,6 +103,14 @@ func press(m *Model, keys ...string) tea.Cmd {
 			msg.Code = tea.KeyEscape
 		case "tab":
 			msg.Code = tea.KeyTab
+		case "pgup":
+			msg.Code = tea.KeyPgUp
+		case "pgdown":
+			msg.Code = tea.KeyPgDown
+		case "up":
+			msg.Code = tea.KeyUp
+		case "down":
+			msg.Code = tea.KeyDown
 		default:
 			msg.Code, msg.Text = rune(k[0]), k
 		}
@@ -274,16 +285,16 @@ func TestChat(t *testing.T) {
 
 func TestChatKeepsTheAgentsTalkToPeersOutOfTheHistory(t *testing.T) {
 	m, b := newModel(t)
-	b.steps = []Step{{Peer: "beta"}, {Peer: "beta", Done: true}}
+	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta", Done: true}}
 	b.reply = "beta says it is noon"
 	cmd := say(t, m, "ask beta for the time")
 
 	_, cmd = m.Update(cmd()) // the question to beta is on its way
-	if m.chat.asking != "beta" || !m.chat.pending || !strings.Contains(m.View().Content, "asking beta…") {
+	if m.chat.doing != "asking beta" || !m.chat.pending || !strings.Contains(m.View().Content, "asking beta…") {
 		t.Fatalf("the call to beta should be announced: %+v", m.chat)
 	}
 	_, cmd = m.Update(cmd()) // beta answered, the agent thinks again
-	if m.chat.asking != "" || !strings.Contains(m.View().Content, "alpha is thinking") {
+	if m.chat.doing != "" || !strings.Contains(m.View().Content, "alpha is thinking") {
 		t.Fatalf("after the peer's answer the agent thinks: %+v", m.chat)
 	}
 	deliver(m, cmd)
@@ -306,7 +317,7 @@ func TestSendError(t *testing.T) {
 
 func TestConnectionRequests(t *testing.T) {
 	m, b := commands(t)
-	b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma", Addr: "1.2.3.4:9"}}}
+	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma", Addr: "1.2.3.4:9"}}}
 	m.Update(m.loadContacts())
 	if view := m.View().Content; !strings.Contains(view, "✉ 1") {
 		t.Fatalf("header should show the pending count:\n%s", view)
@@ -337,7 +348,7 @@ func TestConnectionRequests(t *testing.T) {
 
 func TestRejectRequest(t *testing.T) {
 	m, b := commands(t)
-	b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma"}}}
+	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
 	m.Update(m.loadContacts())
 	press(m, "R")
 	cmd := press(m, "x")
@@ -352,13 +363,13 @@ func TestRejectRequest(t *testing.T) {
 
 func TestNewConversationDropsLateReply(t *testing.T) {
 	m, b := newModel(t)
-	b.steps = []Step{{Peer: "beta"}}
+	b.steps = []Step{{Text: "asking beta"}}
 	cmd := say(t, m, "ping")
 	old := m.chat.contextID
 	press(m, "esc", "n")
 	deliver(m, cmd)
 	c := m.chat
-	if c.contextID == old || len(c.entries) != 0 || c.pending || c.asking != "" {
+	if c.contextID == old || len(c.entries) != 0 || c.pending || c.doing != "" {
 		t.Fatalf("conversation not reset: %+v", c)
 	}
 }
@@ -369,9 +380,9 @@ func TestNewConversationDropsLateReply(t *testing.T) {
 func askUntilCancelled(b *fakeBackend) <-chan struct{} {
 	stopped := make(chan struct{})
 	b.ask = func(ctx context.Context, step func(Step)) (string, error) {
-		step(Step{Peer: "beta"})
+		step(Step{Text: "asking beta"})
 		<-ctx.Done()
-		step(Step{Peer: "beta", Done: true}) // nobody listens any more; must not block
+		step(Step{Text: "asking beta", Done: true}) // nobody listens any more; must not block
 		close(stopped)
 		return "", ctx.Err()
 	}
@@ -392,7 +403,7 @@ func TestNewConversationCancelsThePendingAnswer(t *testing.T) {
 	m, b := newModel(t)
 	stopped := askUntilCancelled(b)
 	_, cmd := m.Update(say(t, m, "ping")()) // the question to beta is on its way
-	if m.chat.asking != "beta" {
+	if m.chat.doing != "asking beta" {
 		t.Fatalf("the answer should be on its way: %+v", m.chat)
 	}
 
@@ -400,7 +411,7 @@ func TestNewConversationCancelsThePendingAnswer(t *testing.T) {
 	awaitStop(t, stopped)
 	deliver(m, cmd)
 	c := m.chat
-	if len(c.entries) != 0 || c.pending || c.asking != "" {
+	if len(c.entries) != 0 || c.pending || c.doing != "" {
 		t.Fatalf("a cancelled answer must not land in the new conversation: %+v", c)
 	}
 	if view := m.View().Content; strings.Contains(view, context.Canceled.Error()) {
@@ -443,7 +454,7 @@ func TestQuitCancelsThePendingAnswer(t *testing.T) {
 func TestQuitCancelsRequestDecisions(t *testing.T) {
 	for _, key := range []string{"a", "x"} {
 		m, b := commands(t)
-		b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma"}}}
+		b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
 		m.Update(m.loadContacts())
 		press(m, "R")
 		press(m, key)()
@@ -516,8 +527,8 @@ func TestDecisionThatIsNotSaved(t *testing.T) {
 		"x": "rejecting failed – the contact could not be saved",
 	} {
 		m, b := commands(t)
-		b.trust = Contacts{Incoming: []contacts.Request{{PublicKey: "pk1", Name: "gamma"}}}
-		b.acceptErr = fmt.Errorf("%w: open contacts.json.lock: permission denied", ErrNotSaved)
+		b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
+		b.acceptErr = fmt.Errorf("%w: open contacts.json.lock: permission denied", plugin.ErrNotSaved)
 		b.rejectErr = b.acceptErr
 		m.Update(m.loadContacts())
 		press(m, "R")

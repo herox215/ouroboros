@@ -223,6 +223,11 @@ func TestFrameIsOutOfReach(t *testing.T) {
 		"a home of its own":            providing("p", dir),
 		"a network of its own":         providing("p", &peers.Network{}),
 		"a client of its own":          providing("p", func() (*a2a.Client, error) { return nil, nil }),
+		// What the owner does is handed to a front end in the list of
+		// plugins, and to nobody who asks the kernel for it.
+		"what the owner does":          needing[*plugin.Owner]("p"),
+		"an owner of its own":          providing("p", plugin.OwnerOf(dir, &peers.Network{})),
+		"a way to what the owner does": needing[func() *plugin.Owner]("p"),
 		// An LLM that is handed the configuration would be handed the key.
 		"an LLM that reads the configuration": providing("p", func(config.Config) plugin.Model { return nil }),
 	} {
@@ -247,12 +252,12 @@ func TestServicesCannotBeReplaced(t *testing.T) {
 	}
 }
 
-// A plugin is written against package plugin and nothing else of ouro: the
-// example plugin, which is the one to copy, keeps to that.
-func TestExamplePluginImportsOnlyThePluginPackage(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", "plugin", "example", "*.go"))
-	if err != nil {
-		t.Fatal(err)
+// imports returns what the Go files in dir import, tests left aside.
+func imports(t *testing.T, dir ...string) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(append(append([]string{"..", ".."}, dir...), "*.go")...))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("files in %v: %v, %v", dir, files, err)
 	}
 	var imports []string
 	for _, file := range files {
@@ -268,12 +273,83 @@ func TestExamplePluginImportsOnlyThePluginPackage(t *testing.T) {
 			imports = append(imports, path)
 		}
 	}
-	if !slices.Contains(imports, "ouroboros/plugin") {
-		t.Fatalf("imports %v", imports)
-	}
-	for _, path := range imports {
-		if strings.HasPrefix(path, "ouroboros/") && path != "ouroboros/plugin" {
-			t.Errorf("the example plugin imports %s", path)
+	return imports
+}
+
+// A plugin is written against package plugin and nothing else of ouro: the
+// example plugin, which is the one to copy, keeps to that, also where it
+// adds to the terminal UI. So does the terminal UI: the plugin and the UI it
+// opens know ouro by package plugin alone.
+func TestPluginsImportOnlyThePluginPackage(t *testing.T) {
+	for name, test := range map[string]struct {
+		dir     []string
+		allowed []string
+	}{
+		"the example plugin": {[]string{"plugin", "example"}, []string{"ouroboros/plugin"}},
+		"the tui plugin":     {[]string{"internal", "plugins", "tui"}, []string{"ouroboros/plugin", "ouroboros/internal/tui"}},
+		"the terminal UI":    {[]string{"internal", "tui"}, []string{"ouroboros/plugin"}},
+	} {
+		found := imports(t, test.dir...)
+		if !slices.Contains(found, "ouroboros/plugin") {
+			t.Fatalf("%s imports %v", name, found)
 		}
+		for _, path := range found {
+			if strings.HasPrefix(path, "ouroboros/") && !slices.Contains(test.allowed, path) {
+				t.Errorf("%s imports %s", name, path)
+			}
+		}
+	}
+}
+
+// The terminal UI is a plugin like any other: nothing but the list of plugins
+// knows it, so ouro builds without it once it is taken out of the list.
+func TestOnlyTheListKnowsTheTerminalUI(t *testing.T) {
+	for _, dir := range [][]string{
+		{"cmd", "ouro"}, {"plugin"}, {"plugin", "example"}, {"internal", "kernel"}, {"internal", "assistant"}, {"internal", "node"},
+		{"internal", "plugins", "assistant"}, {"internal", "plugins", "base"}, {"internal", "plugins", "discovery"},
+		{"internal", "plugins", "node"}, {"internal", "plugins", "openai"}, {"internal", "plugins", "peers"},
+		{"internal", "plugins", "tailscale"}, {"internal", "plugins", "talk"}, {"internal", "plugins", "update"},
+	} {
+		for _, path := range imports(t, dir...) {
+			if path == "ouroboros/internal/plugins/tui" || path == "ouroboros/internal/tui" {
+				t.Errorf("%s imports %s", filepath.Join(dir...), path)
+			}
+		}
+	}
+	if !slices.Contains(imports(t, "internal", "cli"), "ouroboros/internal/plugins/tui") {
+		t.Fatal("the list of plugins should name the terminal UI")
+	}
+}
+
+// ouro without the tui plugin runs: without a command it prints the usage,
+// also for a user at a terminal, and the chat goes line by line.
+func TestOuroWithoutTheTerminalUI(t *testing.T) {
+	s := clitest.Settings(t)
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	term := cli.Terminal{In: strings.NewReader("hello\n"), Out: &out, Interactive: true}
+	list := slices.DeleteFunc(cli.Plugins(s, term), func(p plugin.Plugin) bool { return p.Name == "tui" })
+	if len(list) != len(cli.Plugins(s, term))-1 {
+		t.Fatal("the standard ouro should have the tui plugin")
+	}
+	app, err := cli.NewWith(list...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	usage := out.String()
+	if !strings.Contains(usage, "ouro start") || !strings.Contains(usage, "ouro chat") || strings.Contains(usage, "(default)") || strings.Contains(usage, "ouro tui") {
+		t.Fatalf("usage:\n%s", usage)
+	}
+	if err := app.Run(context.Background(), []string{"tui"}); err == nil || !strings.Contains(err.Error(), `unknown command "tui"`) {
+		t.Fatalf("got %v", err)
+	}
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"chat"}); err != nil || !strings.Contains(out.String(), "turns=1 last=hello") {
+		t.Fatalf("chat: %q, %v", out.String(), err)
 	}
 }

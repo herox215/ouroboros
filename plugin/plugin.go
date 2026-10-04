@@ -43,6 +43,17 @@
 //
 // and offers services of its own with NewService: a plugin that provides an
 // LLM replaces the openai plugin.
+//
+// What a plugin adds it can show in the terminal UI, with Add as well:
+//
+//	Screen    a view of its own, opened with a key
+//	Key       a key that runs something
+//	ToolView  what is shown of a call of its tool while the agent waits
+//
+// The terminal UI is a plugin itself. It contributes a FrontEnd, which is
+// what ouro opens without a command, and talks to the *Assistant, the agent
+// of the owner. What only the owner does there, like accepting a connection
+// request, is no service: see Owner.
 package plugin
 
 import "ouroboros/internal/kernel"

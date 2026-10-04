@@ -87,11 +87,14 @@ func (m *Model) View() tea.View {
 		v.SetContent(m.splashView())
 		return v
 	}
-	if m.screen == screenRequests {
-		v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.requestsView(), m.footerView()))
-		return v
+	body := m.chatView()
+	switch m.screen {
+	case screenRequests:
+		body = m.requestsView()
+	case screenPlugin:
+		body = m.screenView()
 	}
-	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.chatView(), m.footerView()))
+	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), body, m.footerView()))
 	return v
 }
 
@@ -197,8 +200,8 @@ func (m *Model) chatView() string {
 		title = ansi.Truncate(title+mutedStyle.Render(" · "+m.status.Model+" · your agent"), inner, "…")
 		var typing string
 		switch {
-		case c.asking != "":
-			typing = m.spinner.View() + mutedStyle.Render(" asking "+c.asking+"…")
+		case c.doing != "":
+			typing = m.spinner.View() + mutedStyle.Render(" "+c.doing+"…")
 		case c.pending:
 			typing = m.spinner.View() + mutedStyle.Render(" "+m.agentName()+" is thinking…")
 		}
@@ -214,12 +217,15 @@ func (m *Model) footerView() string {
 	if m.status.Running {
 		toggle = "stop"
 	}
-	help := "enter chat · n new chat · s " + toggle + " node · c setup · R requests · q quit"
+	help := "enter chat · n new chat · s " + toggle + " node · c setup · R requests · " + m.contributedHelp() + "q quit"
 	if m.focus == focusInput {
 		help = "enter send · alt+enter new line · esc commands · pgup/pgdn scroll · ctrl+c quit"
 	}
-	if m.screen == screenRequests {
+	switch m.screen {
+	case screenRequests:
 		help = "↑↓ select · a accept · x reject · esc back · ctrl+c quit"
+	case screenPlugin:
+		help = keysHelp(m.screens[m.open].Keys) + "esc back · ctrl+c quit"
 	}
 	line := mutedStyle.Render(help)
 	if m.notice != "" {

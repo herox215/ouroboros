@@ -24,6 +24,12 @@
 // built in Plugins and handed to the plugins that are part of it as plain
 // values. It never becomes a service: the kernel refuses a plugin that
 // declares one of its types, see seal.
+//
+// The terminal UI is no part of the frame, but it is where the owner starts
+// and stops the node and decides on connection requests. For that it is
+// handed a plugin.Owner in Plugins, which does these things and nothing else.
+// Leave tui.Plugin out and ouro runs without a front end; put another plugin
+// in its place and give it the Owner to replace it.
 package cli
 
 import (
@@ -134,7 +140,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 			BaseURL: s.BaseURL, APIKey: s.APIKey,
 		}),
 		talk.Plugin(),
-		tui.Plugin(dir, network),
+		tui.Plugin(plugin.OwnerOf(dir, network)),
 		update.Plugin(dir),
 	}
 }
@@ -155,6 +161,7 @@ func seal(k *kernel.Kernel) {
 	kernel.Seal[node.Local](k)
 	kernel.Seal[node.Server](k)
 	kernel.Seal[peers.Network](k) // holds the contacts and the client
+	kernel.Seal[plugin.Owner](k)  // decides whom the node trusts: handed to a front end in Plugins
 }
 
 // App runs ouro commands. It is a kernel with plugins and has no logic of its

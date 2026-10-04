@@ -22,11 +22,30 @@ Running `ouro` without arguments opens the terminal UI. On start it shows the ou
 splash for two seconds: the serpent curls around until it bites its tail. Any key (except `ctrl+c`) skips it. Without a terminal (pipes, CI, redirects)
 `ouro` prints the usage instead, so scripts keep working.
 
-The UI is the chat with your own agent and nothing else. You do not
+The UI is the chat with your own agent. You do not
 write to other nodes yourself: the agent does, whenever you ask it to or it thinks a peer knows
 better ("ask Luna how she is" → "Luna says she is fine"). What the two agents say to each other
 stays between them; the UI only shows which peer your agent is waiting for.
 The input is focused on start, so you can type right away. The conversation lives only as long as the TUI runs.
+
+The UI is a plugin like any other (`internal/plugins/tui`), and it is the front end of the standard ouro: the
+plugin says so itself, nothing else names it. An ouro built without it prints the usage when it is started
+without a command, and `ouro chat` talks line by line. If the list of plugins holds more than one front end,
+ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that open them (`ouro tui`, …),
+which keep working.
+
+Other plugins add to the UI, see [Extending](#extending):
+
+- a **screen** next to the chat, opened with its key where the commands are and left with `esc`, `q` or the
+  same key. It may have keys of its own. The footer lists what the plugins added.
+- a **key** where the commands are, which runs something and reports in the footer.
+- what is shown of a **tool call** while the agent waits for it. `asking beta…` is what the plugin of
+  `ask_peer` shows; a tool without such a line shows as the agent thinking.
+
+A key has one meaning. The UI keeps its own keys (the table below), and of two plugins that claim the same
+key the one that was started first gets it, a screen before a plain key. What loses its key is left out, and the UI says so in red in its
+footer when it opens, until the first key is pressed: `key s is taken by the terminal UI: the screen "Stats"
+is left out`. The UI opens all the same, and so does everything else of that plugin.
 
 While the UI is open your node is online: opening it starts the node, and closing it stops the node
 again unless it was already running before (`ouro start`).
@@ -39,6 +58,7 @@ again unless it was already running before (`ouro start`).
 | `s` / `c` | start or stop the node / run the setup | – |
 | `n` | new conversation | – |
 | `R` | connection requests (`a` accept, `x` reject, `esc` back) | – |
+| keys of plugins | open a screen (`esc` back) or run what the plugin added | – |
 | `pgup` `pgdn` | scroll the chat | scroll the chat |
 | `q` / `ctrl+c` | quit | `ctrl+c` quits |
 
@@ -211,26 +231,15 @@ A plugin says what it needs in the struct its start function takes, one field pe
 plugin once, after the plugins that provide what it needs. If a service is missing, provided twice, or plugins
 need each other in a circle, ouro does not start at all and says which plugins and services are in the way.
 
-This plugin lets two nodes greet each other. It adds a method to the node, and a command that runs that
-method on a peer:
+This plugin lets two nodes greet each other. It adds a method to the node, and three ways to run that
+method on a peer: a command, a tool for the agents, and a screen in the terminal UI. The part that wires it
+up, from `plugin/example/example.go`:
 
 ```go
 package example
 
-import (
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-
-	"ouroboros/plugin"
-)
-
 const Method = "example/greet"
-
-type greeting struct {
-	From string `json:"from"`
-}
+const Tool = "greet_peer"
 
 // What the plugin needs: services of other plugins.
 type needs struct {
@@ -240,6 +249,7 @@ type needs struct {
 
 func Plugin() plugin.Plugin {
 	return plugin.New("example", func(ctx *plugin.Context, n needs) error {
+		g := &greeter{network: n.Network, answers: map[string]string{}}
 		// The receiving side: a method connected peers can run.
 		plugin.Add(ctx, plugin.Method{Name: Method, Handle: greet})
 		// The calling side: ouro greet NODE NAME
@@ -248,21 +258,47 @@ func Plugin() plugin.Plugin {
 				if len(args) != 2 {
 					return errors.New("usage: ouro greet NODE NAME")
 				}
-				node, err := n.Network.Resolve(c, args[0])
+				reply, err := g.greet(c, args[0], args[1])
 				if err != nil {
 					return err
 				}
-				reply, err := n.Network.Call(c, node, Method, greeting{From: args[1]})
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(n.Console.Out, reply.Text())
+				fmt.Fprintln(n.Console.Out, reply)
 				return nil
 			}})
+
+		// For the agents: the tool, and what the owner is shown while the agent waits for its result.
+		plugin.Add(ctx, plugin.NewTool(Tool, "Greet a connected peer and return its answer.",
+			[]plugin.Param{{Name: "peer", Description: "name or ID of the peer"}, {Name: "from", Description: "who greets"}},
+			func(c context.Context, args toolArgs) (string, error) { return g.greet(c, args.Peer, args.From) }))
+		plugin.Add(ctx, plugin.ToolView{Tool: Tool, Show: func(args json.RawMessage) string {
+			var call toolArgs
+			if json.Unmarshal(args, &call) != nil || call.Peer == "" {
+				return ""
+			}
+			return "greeting " + call.Peer
+		}})
+
+		// For the terminal UI: g opens the screen, on which a greets everyone.
+		plugin.Add(ctx, plugin.Screen{Key: "g", Title: "Greetings", Body: g.screen,
+			Keys: []plugin.Key{{Key: "a", Help: "greet all", Run: g.greetAll}}})
 		return nil
 	})
 }
 
+// greet runs Method on the node target as from and returns its answer.
+func (g *greeter) greet(ctx context.Context, target, from string) (string, error) {
+	node, err := g.network.Resolve(ctx, target)
+	if err != nil {
+		return "", err
+	}
+	reply, err := g.network.Call(ctx, node, Method, greeting{From: from})
+	if err != nil {
+		return "", err
+	}
+	return reply.Text(), nil
+}
+
+// greet answers a greeting: the method, on the node that is greeted.
 func greet(_ context.Context, from plugin.Caller, params json.RawMessage) (*plugin.Message, *plugin.Error) {
 	var g greeting
 	if json.Unmarshal(params, &g) != nil || g.From == "" {
@@ -282,15 +318,39 @@ signed for another node or another method, or from a node the owner is not conne
 |---|---|---|
 | a command | `plugin.Add` a `plugin.Command` | `internal/plugins/talk` |
 | a tool for the agents | `plugin.Add` a `plugin.Tool` (`plugin.NewTool`) | `internal/plugins/peers` |
+| what the terminal UI shows of a tool call | `plugin.Add` a `plugin.ToolView` | `plugin/example`, `internal/plugins/peers` |
+| a screen of the terminal UI | `plugin.Add` a `plugin.Screen` | `plugin/example` |
+| a key of the terminal UI | `plugin.Add` a `plugin.Key`, or list it in `Screen.Keys` | `plugin/example` |
 | an A2A method for connected peers | `plugin.Add` a `plugin.Method`; peers run it with `Network.Call` | `plugin/example` |
 | a way to find nodes | `plugin.Add` a `plugin.PeerSource` | `internal/plugins/tailscale` |
-| another front end | `plugin.Add` a command that runs it | `internal/plugins/tui` |
+| another front end | `plugin.Add` a `plugin.FrontEnd` and the command that opens it, instead of the tui plugin | `internal/plugins/tui` |
 | another LLM API | return a `plugin.LLM` from `plugin.NewService`, instead of the openai plugin | `internal/plugins/openai` |
 | a service for other plugins | return it from `plugin.NewService`; they name its type in their needs | `internal/plugins/discovery` |
 
+What a plugin hands to the terminal UI is text and functions, nothing of how the UI is drawn. A screen is a
+key, a title and `Body`, which returns the text to show; a key is `Run`, which returns the line for the
+footer. Both run off the UI, so they may ask the network, and with a context that ends when the user quits.
+`Body` is called when the screen opens, after one of its keys ran and every ten seconds while it is open. A
+key is named as the terminal reports it: `g`, `G`, `ctrl+g`. See [Terminal UI](#terminal-ui) for what happens
+when two plugins want the same key.
+
+A front end is what opens when `ouro` runs without a command, and what `ouro chat` opens without a message.
+It talks to the agent of the owner through the service `*plugin.Assistant`, and shows a tool call as
+`plugin.ToolLine` says. ouro opens a front end only if the list of plugins holds exactly one: with none it
+prints the usage, with several it fails and names them.
+
+The terminal UI is also where the owner starts and stops the node and accepts or rejects connection
+requests. Those are operations of the frame, so no service offers them. They are in `plugin.Owner`, and that
+is all that is in it: the status of the node, start, stop, the setup, the requests that are waiting, accept
+and reject. The contacts, the key and the configuration cannot be had from it. A front end takes the `Owner`
+as an argument of its `Plugin` function and gets it in `Plugins`, where the tui plugin gets it today. A plugin
+cannot ask the kernel for it: `plugin.Owner` is sealed like the contacts, so that a plugin nobody put into
+that list by hand, such as one an agent wrote, never decides whom the node trusts.
+
 Not plugins, and out of their reach: the identity of the node, request signatures, trust and contacts, the
 built-in A2A methods, the wire format, update and start/stop. They are the fixed frame, wired up in `Plugins`
-and never handed to the kernel: a plugin that needs or provides one of their types, or a type through which
+and never handed to the kernel (a front end starts and stops the node through the `plugin.Owner` it is given
+there): a plugin that needs or provides one of their types, or a type through which
 one can be had, stops ouro from starting, as does a second plugin that provides a service that exists. A
 method added under a built-in name is never called, and `Network.Call` does not run the built-in ones.
 

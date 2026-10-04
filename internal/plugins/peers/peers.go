@@ -21,7 +21,8 @@ type services struct {
 }
 
 // Plugin provides network, the other nodes as the node in dir reaches them,
-// and contributes the tools list_peers and ask_peer.
+// and contributes the tools list_peers and ask_peer, and what a front end
+// shows of a call of ask_peer: which peer the agent is waiting for.
 //
 // network is part of the frame of ouro: it holds the contacts and signs as
 // the node. The plugin tells it how nodes are found and hands it on as a
@@ -37,6 +38,7 @@ func Plugin(dir home.Dir, network *peers.Network) plugin.Plugin {
 		for _, tool := range assistant.PeerTools(network, selfID) {
 			plugin.Add(ctx, tool)
 		}
+		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolAskPeer, Show: assistant.AskingPeer})
 		return services{plugin.NetworkOf(network)}, nil
 	})
 }

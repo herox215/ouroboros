@@ -9,36 +9,34 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"ouroboros/internal/assistant"
 	"ouroboros/internal/plugins/base"
 	"ouroboros/plugin"
 )
 
 // needs are the services the plugin uses.
 type needs struct {
-	Console    *plugin.Console
-	Network    *plugin.Network
-	Assistant  *assistant.Assistant
-	Dispatcher *base.Dispatcher
+	Console   *plugin.Console
+	Network   *plugin.Network
+	Assistant *plugin.Assistant
 }
 
 // Plugin contributes the commands that find the nodes on the network and
 // talk to them: directly, or through the assistant of this node.
 func Plugin() plugin.Plugin {
 	return plugin.New("talk", func(ctx *plugin.Context, n needs) error {
-		c := &talkCommands{term: n.Console, network: n.Network, assistant: n.Assistant, dispatch: n.Dispatcher}
+		c := &talkCommands{ctx: ctx, term: n.Console, network: n.Network, assistant: n.Assistant}
 		plugin.Add(ctx, plugin.Command{Name: "list", Help: "find ouroboros nodes on the network", Run: c.list})
-		plugin.Add(ctx, plugin.Command{Name: "chat", Args: `["msg"]`, Help: "ask your agent, which can ask the other nodes (terminal UI without msg)", Run: c.chat})
+		plugin.Add(ctx, plugin.Command{Name: "chat", Args: `["msg"]`, Help: "ask your agent, which can ask the other nodes (interactive without msg)", Run: c.chat})
 		plugin.Add(ctx, plugin.Command{Name: "ask", Args: `ID ["msg"]`, Help: "write to a node directly (interactive without msg)", Run: c.ask})
 		return nil
 	})
 }
 
 type talkCommands struct {
+	ctx       *plugin.Context // to find the front end
 	term      *plugin.Console
 	network   *plugin.Network
-	assistant *assistant.Assistant
-	dispatch  *base.Dispatcher
+	assistant *plugin.Assistant
 }
 
 func (c *talkCommands) list(ctx context.Context, _ []string) error {
@@ -87,10 +85,17 @@ func (c *talkCommands) ask(ctx context.Context, args []string) error {
 }
 
 // chat talks to the assistant: once with the given message, otherwise in the
-// terminal UI or, without a terminal, line by line.
+// front end a plugin contributed, which is what ouro without a command opens,
+// or line by line if there is none or no terminal.
 func (c *talkCommands) chat(ctx context.Context, args []string) error {
-	if len(args) == 0 && c.dispatch.HasDefault() {
-		return c.dispatch.Run(ctx, nil)
+	if len(args) == 0 {
+		front, err := plugin.FrontEndFor(c.ctx, c.term)
+		if !errors.Is(err, plugin.ErrNoFrontEnd) {
+			if err != nil {
+				return err
+			}
+			return front.Run(ctx)
+		}
 	}
 	if err := base.WithHint(c.assistant.Ready()); err != nil {
 		return err

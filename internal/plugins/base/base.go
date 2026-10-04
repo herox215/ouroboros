@@ -14,9 +14,6 @@ import (
 	"ouroboros/plugin"
 )
 
-// DefaultCommand runs when ouro is started in a terminal without a command.
-const DefaultCommand = "tui"
-
 // services are what the plugin provides.
 type services struct {
 	Console    *plugin.Console
@@ -42,10 +39,7 @@ type Dispatcher struct {
 // Run executes the command given by args (without the program name).
 func (d *Dispatcher) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		if !d.HasDefault() {
-			return d.usage()
-		}
-		args = []string{DefaultCommand}
+		return d.open(ctx)
 	}
 	name, rest := args[0], args[1:]
 	switch name {
@@ -62,11 +56,21 @@ func (d *Dispatcher) Run(ctx context.Context, args []string) error {
 	return c.Run(ctx, rest)
 }
 
-// HasDefault reports whether ouro without a command runs DefaultCommand: a
-// plugin contributed it, and the user sits at a terminal.
-func (d *Dispatcher) HasDefault() bool {
-	_, ok := d.find(DefaultCommand)
-	return ok && d.term.Interactive
+// open runs ouro without a command: it opens the front end a plugin
+// contributed. Without one, or without a terminal, it prints the usage; with
+// more than one it fails, see plugin.FrontEndFor.
+func (d *Dispatcher) open(ctx context.Context) error {
+	front, err := plugin.FrontEndFor(d.ctx, d.term)
+	if errors.Is(err, plugin.ErrNoFrontEnd) {
+		return d.usage()
+	}
+	if err != nil {
+		return err
+	}
+	if err := d.home.Create(); err != nil {
+		return err
+	}
+	return front.Run(ctx)
 }
 
 func (d *Dispatcher) find(name string) (plugin.Command, bool) {
@@ -83,8 +87,8 @@ func (d *Dispatcher) usage() error {
 	var b strings.Builder
 	b.WriteString("ouro – tiny A2A agent node for any OpenAI-compatible LLM API\n\n")
 	line := func(synopsis, help string) { fmt.Fprintf(&b, "  ouro %-19s%s\n", synopsis, help) }
-	if c, ok := d.find(DefaultCommand); ok {
-		line("", c.Help+" (default)")
+	if fronts := plugin.All[plugin.FrontEnd](d.ctx); len(fronts) == 1 {
+		line("", fronts[0].Help+" (default)")
 	}
 	for _, c := range plugin.All[plugin.Command](d.ctx) {
 		line(strings.TrimSpace(c.Name+" "+c.Args), c.Help)

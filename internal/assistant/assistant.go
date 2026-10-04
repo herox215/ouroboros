@@ -6,6 +6,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -43,11 +44,12 @@ const (
 		`Say only what the tool returns: do not guess, and tell nothing else about this node.`
 )
 
-// Step reports that the assistant asks a peer on the way to its answer and,
-// with Done set, that the peer has answered. What the two agents say to each
-// other stays between them.
+// Step reports a tool call of the assistant on the way to its answer and,
+// with Done set, that its result is in. The result is not part of it: what a
+// front end shows of a call is for the plugin of the tool to say.
 type Step struct {
-	Peer string
+	Tool string
+	Args json.RawMessage
 	Done bool
 }
 
@@ -130,15 +132,15 @@ func (a *Assistant) Ready() error {
 }
 
 // Ask answers text within the conversation contextID and reports to observe,
-// which may be nil, which peers are asked on the way.
+// which may be nil, the tools it calls on the way.
 func (a *Assistant) Ask(ctx context.Context, contextID, text string, observe func(Step)) (string, error) {
 	bot, err := a.current()
 	if err != nil {
 		return "", err
 	}
 	return bot.Run(ctx, contextID, text, func(s agent.Step) {
-		if step, ok := peerStep(s); ok && observe != nil {
-			observe(step)
+		if observe != nil {
+			observe(Step{Tool: s.Tool, Args: s.Args, Done: s.Done})
 		}
 	})
 }

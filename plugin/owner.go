@@ -1,0 +1,119 @@
+package plugin
+
+import (
+	"context"
+	"errors"
+	"os/exec"
+
+	"ouroboros/internal/config"
+	"ouroboros/internal/contacts"
+	"ouroboros/internal/home"
+	"ouroboros/internal/node"
+	"ouroboros/internal/peers"
+)
+
+// Owner is what the owner of the node does at a front end and nowhere else:
+// start and stop the node, set it up, and decide whom it trusts.
+//
+// These are operations of the frame of ouro, so Owner is no service. A plugin
+// cannot declare it as a need: the kernel refuses that like it refuses the
+// contacts themselves, and a plugin that an agent wrote can therefore never
+// accept a connection request on its own. A front end takes the Owner as an
+// argument of the function that returns the plugin, and gets it where the
+// plugins are listed (Plugins in internal/cli): whoever adds a front end to
+// that list is the one who lets it act for the owner.
+//
+// It is narrow on purpose. It decides on the requests that are waiting and
+// shows who sent them; the contacts, the key of the node and its
+// configuration are not to be had from it.
+type Owner struct {
+	home  home.Dir
+	local node.Local
+	net   *peers.Network
+}
+
+// OwnerOf returns what the owner of the node in dir does, on its network. It
+// is for the list of plugins.
+func OwnerOf(dir home.Dir, network *peers.Network) *Owner {
+	return &Owner{home: dir, local: node.Local{Home: dir}, net: network}
+}
+
+type (
+	// NodeStatus describes the node of this host.
+	NodeStatus = node.Status
+	// Request is a connection request that waits for a decision.
+	Request = contacts.Request
+)
+
+var (
+	// ErrNotSetUp means the node was not set up yet: Owner.SetupCommand is
+	// what does it.
+	ErrNotSetUp = config.ErrIncomplete
+	// ErrNotSaved means a decision on a connection request could not be
+	// stored. Nothing was decided: the request is still waiting.
+	ErrNotSaved = peers.ErrNotSaved
+	// ErrNoRequest means there is no such connection request to decide on.
+	ErrNoRequest = peers.ErrNoRequest
+)
+
+// Status reports how the node is configured and whether it is running.
+func (o *Owner) Status() (NodeStatus, error) { return o.local.Status() }
+
+// Running reports whether the node is running.
+func (o *Owner) Running() bool {
+	_, running := o.local.Running()
+	return running
+}
+
+// Start runs the node in the background unless it is running already. A node
+// that was not set up yet fails with ErrNotSetUp.
+func (o *Owner) Start() error {
+	_, err := o.local.Start()
+	return err
+}
+
+// Stop stops the node, which may not have been running.
+func (o *Owner) Stop() error {
+	_, err := o.local.Stop()
+	return err
+}
+
+// SetupCommand returns the interactive setup, to be run with the terminal
+// handed over. It starts the node afterwards.
+func (o *Owner) SetupCommand() (*exec.Cmd, error) {
+	exe, err := o.local.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return exec.Command(exe, "start", "--setup"), nil
+}
+
+// Requests returns the connection requests that wait for a decision: those
+// of other nodes, which the owner decides on, and those this node sent.
+func (o *Owner) Requests() (incoming, outgoing []Request, err error) {
+	data, err := o.net.Contacts.Snapshot()
+	return data.Incoming, data.Outgoing, err
+}
+
+// Accept trusts the peer with publicKey, which sent a connection request, and
+// tells it so. It fails with ErrNotSaved if the decision could not be stored.
+func (o *Owner) Accept(ctx context.Context, publicKey string) error {
+	return o.decided("accept", publicKey, o.net.Accept(ctx, publicKey))
+}
+
+// Reject refuses the connection request of the peer with publicKey and tells
+// it so. Like Accept it fails with ErrNotSaved.
+func (o *Owner) Reject(ctx context.Context, publicKey string) error {
+	return o.decided("reject", publicKey, o.net.Reject(ctx, publicKey))
+}
+
+// decided hands on the outcome of a decision on the connection request of
+// publicKey. Of one that could not be stored the front end only learns that
+// it failed: the cause goes to the log of the node.
+func (o *Owner) decided(action, publicKey string, err error) error {
+	if errors.Is(err, ErrNotSaved) {
+		o.home.Log("%s the connection request of %s: %v", action, publicKey, err)
+		return ErrNotSaved
+	}
+	return err
+}

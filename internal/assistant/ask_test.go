@@ -18,8 +18,22 @@ import (
 // overHTTP is the LLM of a node as it runs: the API at the endpoint.
 func overHTTP(at agent.Endpoint) agent.LLM { return openai.New(at.BaseURL, at.APIKey) }
 
+// shown is what the owner is shown of steps: of a call of ask_peer which peer
+// the assistant is waiting for, as the peers plugin contributes it, and
+// nothing of any other tool.
+func shown(steps []Step) []string {
+	var lines []string
+	for _, s := range steps {
+		if s.Tool == ToolAskPeer {
+			lines = append(lines, AskingPeer(s.Args))
+		}
+	}
+	return lines
+}
+
 // The assistant answers its owner with the LLM the node is configured for,
-// asks peers on the way and reports which of them it is waiting for.
+// asks peers on the way and reports the tools it calls: of a peer it asks,
+// the owner is shown which one it is waiting for.
 func TestAsk(t *testing.T) {
 	luna := serveNode(t, "luna")
 	s := newSelf(t, luna.Node)
@@ -47,8 +61,15 @@ func TestAsk(t *testing.T) {
 	if err != nil || got != "[gpt-4o] turns=5 last=luna: how are you?" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if !slices.Equal(steps, []Step{{Peer: "luna"}, {Peer: "luna", Done: true}}) {
+	// The call is reported when it starts and when its result is in, with
+	// its arguments and without the answer of the peer.
+	asking := `{"message":"how are you?","peer":"luna"}`
+	if len(steps) != 2 || steps[0].Tool != toolAskPeer || string(steps[0].Args) != asking || steps[0].Done ||
+		steps[1].Tool != toolAskPeer || string(steps[1].Args) != asking || !steps[1].Done {
 		t.Fatalf("steps %+v", steps)
+	}
+	if !slices.Equal(shown(steps), []string{"asking luna", "asking luna"}) {
+		t.Fatalf("shown %q", shown(steps))
 	}
 	// The peer has one conversation per conversation of the owner.
 	if got, want := luna.messages(), "chat-1/"+luna.ID+": how are you?"; got != want {
@@ -58,8 +79,11 @@ func TestAsk(t *testing.T) {
 	// Other tools are used without a word to the owner.
 	steps = nil
 	got, err = a.Ask(ctx, "chat-2", "@", observe)
-	if err != nil || got != "[gpt-4o] turns=3 last=luna (id "+luna.ID+", model gpt-luna, connected): knows the way" || len(steps) != 0 {
-		t.Fatalf("got %q, %v with steps %+v", got, err, steps)
+	if err != nil || got != "[gpt-4o] turns=3 last=luna (id "+luna.ID+", model gpt-luna, connected): knows the way" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if len(steps) != 2 || steps[0].Tool != toolListPeers || steps[0].Done || steps[1].Tool != toolListPeers || !steps[1].Done || len(shown(steps)) != 0 {
+		t.Fatalf("steps %+v, shown %q", steps, shown(steps))
 	}
 
 	// Nobody has to watch.
@@ -192,30 +216,28 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 }
 
 // The owner is shown which peer the assistant waits for, and nothing of what
-// else it does.
-func TestPeerStep(t *testing.T) {
+// it says to the peer.
+func TestAskingPeer(t *testing.T) {
 	args := func(v any) json.RawMessage {
 		b, _ := json.Marshal(v)
 		return b
 	}
-	asking := args(askPeerArgs{Peer: "luna", Message: "how are you?"})
+	if ToolAskPeer != "ask_peer" {
+		t.Fatalf("the tool that asks a peer is called %q", ToolAskPeer)
+	}
 	tests := []struct {
 		name string
-		step agent.Step
-		want Step
-		ok   bool
+		args json.RawMessage
+		want string
 	}{
-		{"asking", agent.Step{Tool: toolAskPeer, Args: asking}, Step{Peer: "luna"}, true},
-		{"answered", agent.Step{Tool: toolAskPeer, Args: asking, Done: true, Result: "fine"}, Step{Peer: "luna", Done: true}, true},
-		{"failed", agent.Step{Tool: toolAskPeer, Args: asking, Done: true, Err: errTest}, Step{Peer: "luna", Done: true}, true},
-		{"another tool", agent.Step{Tool: toolListPeers, Args: asking}, Step{}, false},
-		{"no peer", agent.Step{Tool: toolAskPeer, Args: args(askPeerArgs{Message: "anyone?"})}, Step{}, false},
-		{"no arguments", agent.Step{Tool: toolAskPeer}, Step{}, false},
-		{"arguments that are no text", agent.Step{Tool: toolAskPeer, Args: json.RawMessage(`{"peer": 1}`)}, Step{}, false},
+		{"asking", args(askPeerArgs{Peer: "luna", Message: "how are you?"}), "asking luna"},
+		{"no peer", args(askPeerArgs{Message: "anyone?"}), ""},
+		{"no arguments", nil, ""},
+		{"arguments that are no text", json.RawMessage(`{"peer": 1}`), ""},
 	}
 	for _, tt := range tests {
-		if got, ok := peerStep(tt.step); got != tt.want || ok != tt.ok {
-			t.Errorf("%s: peerStep = %+v, %v, want %+v, %v", tt.name, got, ok, tt.want, tt.ok)
+		if got := AskingPeer(tt.args); got != tt.want {
+			t.Errorf("%s: AskingPeer = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

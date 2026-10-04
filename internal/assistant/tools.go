@@ -43,6 +43,8 @@ const (
 //     prompts (assistant.go) if the LLM needs to know when to use it.
 //  5. A tool may run for a peer. If it must behave differently then, ask
 //     a2a.OriginFrom(ctx) who the conversation comes from.
+//  6. To show the owner what the agent is waiting for while the tool runs,
+//     contribute a plugin.ToolView for it, like AskingPeer for ask_peer.
 func PeerTools(network *peers.Network, selfID func() string) []agent.Tool {
 	return []agent.Tool{
 		listPeers(network, selfID),
@@ -180,13 +182,16 @@ func explainError(failures *diagnosis.Store) agent.Tool {
 		})
 }
 
-// peerStep translates a tool call of the assistant into what its owner is
-// shown of it: which peer the assistant is waiting for. Calls of other tools
-// are not shown; to show them, report them here as a Step.
-func peerStep(s agent.Step) (Step, bool) {
-	var args askPeerArgs
-	if s.Tool != toolAskPeer || json.Unmarshal(s.Args, &args) != nil || args.Peer == "" {
-		return Step{}, false
+// ToolAskPeer is the name of the tool that asks a peer.
+const ToolAskPeer = toolAskPeer
+
+// AskingPeer is what the owner is shown of a call of ToolAskPeer with the
+// arguments args: which peer the assistant is waiting for. What the two
+// agents say to each other stays between them.
+func AskingPeer(args json.RawMessage) string {
+	var call askPeerArgs
+	if json.Unmarshal(args, &call) != nil || call.Peer == "" {
+		return ""
 	}
-	return Step{Peer: args.Peer, Done: s.Done}, true
+	return "asking " + call.Peer
 }

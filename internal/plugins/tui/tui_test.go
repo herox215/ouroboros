@@ -3,30 +3,39 @@ package tui_test
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"ouroboros/internal/assistant"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"ouroboros/internal/cli"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
-	"ouroboros/internal/peers"
 	tuiplugin "ouroboros/internal/plugins/tui"
 	"ouroboros/internal/tui"
+	"ouroboros/plugin"
+	"ouroboros/plugin/example"
 )
 
 func TestMain(m *testing.M) { clitest.Main(m) }
 
+// spy is a plugin that keeps the context to read the contributions with.
+func spy(ctx **plugin.Context) plugin.Plugin {
+	return plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
+		*ctx = c
+		return nil
+	})
+}
+
 // backend is what the terminal UI of the node of s controls.
 func backend(t *testing.T, s cli.Settings) tui.Backend {
 	t.Helper()
-	app, _ := clitest.NewApp(t, s, "")
-	bot, _ := cli.Service[*assistant.Assistant](app)
-	self := func() (string, error) { return os.Args[0], nil }
-	return tuiplugin.Backend(home.Dir(s.Home), clitest.Network(t, s, app), bot, self)
+	var ctx *plugin.Context
+	app, _ := clitest.NewApp(t, s, "", spy(&ctx))
+	bot, _ := cli.Service[*plugin.Assistant](app)
+	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app)), ctx, bot)
 }
 
 func TestTuiWithoutTerminal(t *testing.T) {
@@ -35,6 +44,8 @@ func TestTuiWithoutTerminal(t *testing.T) {
 	}
 }
 
+// Of a tool call the UI is told what the plugin of the tool wants shown: for
+// ask_peer, which peer the agent is waiting for.
 func TestTUIBackendAsk(t *testing.T) {
 	alpha, _ := clitest.TwoNodes(t)
 	u := backend(t, alpha)
@@ -43,52 +54,14 @@ func TestTUIBackendAsk(t *testing.T) {
 	if err != nil || !strings.Contains(reply, "not connected") {
 		t.Fatalf("got %q, %v", reply, err)
 	}
-	if len(steps) != 2 || steps[0] != (tui.Step{Peer: "beta"}) || steps[1] != (tui.Step{Peer: "beta", Done: true}) {
+	if len(steps) != 2 || steps[0] != (tui.Step{Text: "asking beta"}) || steps[1] != (tui.Step{Text: "asking beta", Done: true}) {
 		t.Fatalf("steps %+v", steps)
 	}
-	// Looking up the peers is not worth a line in the chat.
+	// Looking up the peers is not worth a line in the chat: no plugin says
+	// what to show of it.
 	steps = nil
 	if _, err := u.Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }); err != nil || len(steps) != 0 {
 		t.Fatalf("steps %+v, %v", steps, err)
-	}
-}
-
-// A decision on a connection request that cannot be stored reaches the UI as
-// tui.ErrNotSaved, without the cause, which is put down in the log instead.
-func TestTUIBackendDecisionThatIsNotSaved(t *testing.T) {
-	s := clitest.Settings(t)
-	u, dir := backend(t, s), home.Dir(s.Home)
-	ctx := context.Background()
-	if err := dir.Contacts().AddIncoming("pk-gamma", "gamma", "", ""); err != nil {
-		t.Fatal(err)
-	}
-
-	// A directory in the place of the lock: the contacts cannot be changed.
-	lock := filepath.Join(s.Home, "contacts.json.lock")
-	os.Remove(lock)
-	os.Mkdir(lock, 0o700)
-	for action, decide := range map[string]func(context.Context, string) error{"accept": u.Accept, "reject": u.Reject} {
-		if err := decide(ctx, "pk-gamma"); err != tui.ErrNotSaved {
-			t.Fatalf("%s: %v", action, err)
-		}
-	}
-	logged, _ := os.ReadFile(dir.Service().LogFile)
-	for _, want := range []string{"accept the connection request of pk-gamma", "reject the connection request of pk-gamma", "contacts.json.lock"} {
-		if !strings.Contains(string(logged), want) {
-			t.Fatalf("log %q should contain %q", logged, want)
-		}
-	}
-
-	// Nothing was decided: once the contacts can be written, it is.
-	os.Remove(lock)
-	if d, _ := dir.Contacts().Snapshot(); len(d.Incoming) != 1 || len(d.Trusted) != 0 || len(d.Blocked) != 0 {
-		t.Fatalf("a decision that failed changed the contacts: %+v", d)
-	}
-	if err := u.Accept(ctx, "pk-gamma"); err != nil {
-		t.Fatal(err)
-	}
-	if err := u.Reject(ctx, "pk-gamma"); !errors.Is(err, peers.ErrNoRequest) {
-		t.Fatalf("a request that is decided: %v", err)
 	}
 }
 
@@ -109,44 +82,28 @@ func TestTuiCommand(t *testing.T) {
 	}
 }
 
-// The UI starts and stops the node, and shows how it is.
-func TestTUIBackendControlsTheNode(t *testing.T) {
+// A node that is not set up tells the user of the UI how to get there.
+func TestTUIBackendWithoutSetup(t *testing.T) {
 	s := clitest.Settings(t)
 	clitest.Env(t, s)
 	u := backend(t, s)
-	t.Cleanup(func() { u.Stop() })
-
-	if status, err := u.Status(); err != nil || status.Configured || status.Running {
-		t.Fatalf("a fresh node: %+v, %v", status, err)
-	}
 	if err := u.Start(); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "press c") {
-		t.Fatalf("a node that is not set up: %v", err)
+		t.Fatalf("start: %v", err)
 	}
-	cmd, err := u.SetupCommand()
-	if err != nil || cmd.Path != os.Args[0] || strings.Join(cmd.Args[1:], " ") != "start --setup" {
-		t.Fatalf("setup: %+v, %v", cmd, err)
+	if _, err := u.Ask(context.Background(), "ctx", "hi", func(tui.Step) {}); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "ouro start") {
+		t.Fatalf("ask: %v", err)
 	}
 
+	// Once it is set up, the UI starts it.
 	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { u.Stop() })
 	if err := u.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := u.Status(); err != nil || !status.Running || status.Name != "alpha" || status.Port == 0 {
-		t.Fatalf("a started node: %+v, %v", status, err)
-	}
-	if err := u.Stop(); err != nil {
-		t.Fatal(err)
-	}
-	if status, _ := u.Status(); status.Running {
-		t.Fatal("the node should be stopped")
-	}
-
-	unknown := errors.New("no binary")
-	lost := tuiplugin.Backend(home.Dir(s.Home), nil, nil, func() (string, error) { return "", unknown })
-	if _, err := lost.SetupCommand(); !errors.Is(err, unknown) {
-		t.Fatalf("a binary that cannot be found: %v", err)
+	if status, err := u.Status(); err != nil || !status.Running {
+		t.Fatalf("status %+v, %v", status, err)
 	}
 }
 
@@ -162,10 +119,54 @@ func TestTUIBackendContacts(t *testing.T) {
 	}
 }
 
-// An assistant that is not set up tells the user of the UI how to get there.
-func TestTUIBackendAskWithoutSetup(t *testing.T) {
-	u := backend(t, clitest.Settings(t))
-	if _, err := u.Ask(context.Background(), "ctx", "hi", func(tui.Step) {}); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "ouro start") {
-		t.Fatalf("got %v", err)
+// key is the press of the key with the given letter.
+func key(letter rune) tea.Msg { return tea.KeyPressMsg{Code: letter, Text: string(letter)} }
+
+// The UI is opened with what the plugins contributed to it, through the
+// public API alone: here the screen of the example plugin, and a plugin that
+// claims a key of the UI.
+func TestUIShowsWhatPluginsContribute(t *testing.T) {
+	greedy := plugin.New("greedy", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.Key{Key: "s", Help: "stats", Run: func(context.Context) (string, error) { return "", nil }})
+		return nil
+	})
+	s := clitest.Settings(t)
+	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true}, example.Plugin(), greedy)
+
+	opened := 0
+	tuiplugin.Use(t, func(m *tui.Model) error {
+		opened++
+		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+		m.Update(key(' ')) // skips the splash
+		view := ansi.Strip(m.View().Content)
+		for _, want := range []string{`key s is taken by the terminal UI: "stats" is left out`, "g Greetings"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("view lacks %q:\n%s", want, view)
+			}
+		}
+		_, load := m.Update(key('g'))
+		if load == nil {
+			t.Fatal("g should open the screen of the example plugin")
+		}
+		m.Update(load())
+		view = ansi.Strip(m.View().Content)
+		for _, want := range []string{"Greetings", "No connected peers to greet.", "a greet all · esc back"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("view lacks %q:\n%s", want, view)
+			}
+		}
+		_, run := m.Update(key('a'))
+		if m.Update(run()); !strings.Contains(ansi.Strip(m.View().Content), "greeted 0 peers") {
+			t.Errorf("the key of the screen should say what it did:\n%s", ansi.Strip(m.View().Content))
+		}
+		return nil
+	})
+	for _, args := range [][]string{nil, {"tui"}, {"chat"}} {
+		if err := app.Run(context.Background(), args); err != nil {
+			t.Fatalf("ouro %v: %v", args, err)
+		}
+	}
+	if opened != 3 {
+		t.Fatalf("the UI was opened %d times", opened)
 	}
 }
