@@ -181,3 +181,9 @@ Plugins are compiled in. There is no loading at runtime.
 make test    # vet + tests with race detector
 make cover   # coverage including the end-to-end test
 ```
+
+## License
+
+Ouroboros is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`); the copyright notice is in
+[NOTICE](NOTICE). The binary links third-party modules under the MIT and BSD-3-Clause licenses, listed with
+their license texts in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Pass all three files on with the binary.
