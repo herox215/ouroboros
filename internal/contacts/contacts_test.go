@@ -4,8 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
+	"time"
 )
 
 func TestApproveTrustsAndClearsRequests(t *testing.T) {
@@ -147,34 +147,80 @@ func TestBrokenStoreTrustsNobody(t *testing.T) {
 		t.Errorf("an unreadable file should be left alone, got %q", b)
 	}
 
-	// Reads and writes of a pipe work, going back to its start does not.
-	fifo := filepath.Join(t.TempDir(), "contacts.json")
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
-		t.Skip(err)
+	// A directory in the place of the list cannot be read.
+	dir := filepath.Join(t.TempDir(), "contacts.json")
+	os.Mkdir(dir, 0o700)
+	check("directory", Open(dir))
+
+	// A list that cannot be replaced: its directory takes no new files.
+	readOnly := t.TempDir()
+	unwritable := Open(filepath.Join(readOnly, "contacts.json"))
+	unwritable.AddTrusted("other", "beta", "")
+	os.Chmod(readOnly, 0o500)
+	defer os.Chmod(readOnly, 0o700)
+	if os.Getuid() != 0 { // root writes anywhere
+		check("read-only directory", unwritable)
 	}
-	pipe, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if trusted, _ := unwritable.State("other"); !trusted {
+		t.Error("a change that failed should leave the list as it was")
+	}
+
+	// A directory in the place of the lock.
+	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
+	os.Mkdir(s.path+".lock", 0o700)
+	if _, err := s.Snapshot(); err == nil {
+		t.Error("without a lock: Snapshot should fail")
+	}
+	check("without a lock", s)
+}
+
+// A change replaces the list instead of writing into it, so that a crash in
+// between cannot leave a list that is empty or cut off.
+func TestChangeReplacesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	s := Open(filepath.Join(dir, "contacts.json"))
+	s.AddTrusted("pk", "gamma", "")
+	old, err := os.Open(s.path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pipe.Close()
-	pipe.WriteString("{}\n")
-	if err := Open(fifo).update(func(*Data) error { return nil }); !errors.Is(err, syscall.ESPIPE) {
-		t.Errorf("pipe: got %v", err)
-	}
+	defer old.Close()
+	before, _ := old.Stat()
 
-	// The null device reads as an empty list and cannot be truncated.
-	if err := Open(os.DevNull).update(func(*Data) error { return nil }); err == nil {
-		t.Error("null device: update should fail")
+	s.AddTrusted("other", "beta", "")
+	after, _ := os.Stat(s.path)
+	if os.SameFile(before, after) {
+		t.Fatal("the list was written in place")
 	}
+	if after.Mode().Perm() != 0o600 {
+		t.Fatalf("perm = %o, want 600", after.Mode().Perm())
+	}
+	if d, err := s.Snapshot(); err != nil || len(d.Trusted) != 2 {
+		t.Fatalf("got %+v, %v", d, err)
+	}
+	// Besides the list there is only its lock: reading writes nothing.
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Fatalf("%d files in the directory, want the list and its lock", len(entries))
+	}
+	if now, _ := os.Stat(s.path); !os.SameFile(after, now) {
+		t.Fatal("reading the list rewrote it")
+	}
+}
 
-	locked := errors.New("no lock")
-	flock = func(int, int) error { return locked }
-	defer func() { flock = syscall.Flock }()
+// A list that cannot be encoded is not written.
+func TestUpdateUnencodableChange(t *testing.T) {
 	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
-	if _, err := s.Snapshot(); !errors.Is(err, locked) {
-		t.Errorf("without a lock: got %v", err)
+	s.AddTrusted("pk", "gamma", "")
+	err := s.update(func(d *Data) error {
+		d.Trusted = []Contact{{PublicKey: "other", Added: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)}}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("a year JSON cannot hold should fail")
 	}
-	check("without a lock", s)
+	if trusted, _ := s.State("pk"); !trusted {
+		t.Fatal("a failed change must not be written")
+	}
 }
 
 // update hands on the error of a change that failed and writes nothing.

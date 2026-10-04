@@ -1,10 +1,12 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"ouroboros/internal/identity"
@@ -39,6 +41,130 @@ func TestSaveRestrictsPermissions(t *testing.T) {
 	info, _ := os.Stat(path)
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("perm = %o, want 600", perm)
+	}
+}
+
+// Saving replaces the file instead of writing into it: whoever reads it sees
+// a whole configuration, and a crash cannot leave half of one.
+func TestSaveReplacesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, Config{Name: "old", PrivateKey: "key"}); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Open(filepath.Join(dir, fileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	before, _ := old.Stat()
+	if err := Save(dir, Config{Name: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(filepath.Join(dir, fileName))
+	if os.SameFile(before, after) {
+		t.Fatal("the file was written in place")
+	}
+	if after.Mode().Perm() != 0o600 {
+		t.Fatalf("perm = %o, want 600", after.Mode().Perm())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("saving left %d files behind", len(entries)-1)
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested")
+	rename := func(name string) func(*Config) error {
+		return func(c *Config) error {
+			c.Name = name
+			return nil
+		}
+	}
+	if err := Update(dir, rename("alpha")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(dir, func(c *Config) error {
+		if c.Name != "alpha" {
+			t.Errorf("update of %+v", c)
+		}
+		c.Model = "m"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Load(dir); err != nil || !reflect.DeepEqual(got, Config{Name: "alpha", Model: "m"}) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+
+	// A change that changes nothing or fails writes nothing.
+	saved, _ := os.Stat(filepath.Join(dir, fileName))
+	boom := errors.New("boom")
+	if err := Update(dir, func(c *Config) error {
+		c.Name = "beta"
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("failed change: %v", err)
+	}
+	if err := Update(dir, rename("alpha")); err != nil {
+		t.Fatal(err)
+	}
+	if now, _ := os.Stat(filepath.Join(dir, fileName)); !os.SameFile(saved, now) {
+		t.Fatal("the file was written without a change")
+	}
+	if got, _ := Load(dir); got.Name != "alpha" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// Changes made at the same time do not overwrite each other.
+func TestUpdateIsExclusive(t *testing.T) {
+	dir := t.TempDir()
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := Update(dir, func(c *Config) error {
+				c.Name += "x"
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got, _ := Load(dir); len(got.Name) != 20 {
+		t.Fatalf("%d of 20 changes survived", len(got.Name))
+	}
+}
+
+func TestUpdateReportsErrors(t *testing.T) {
+	untouched := func(*Config) error {
+		t.Error("a configuration that cannot be read must not be changed")
+		return nil
+	}
+
+	// A file in the place of the directory.
+	file := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(file, nil, 0o600)
+	if err := Update(filepath.Join(file, "sub"), untouched); err == nil {
+		t.Error("Update should report a directory it cannot create")
+	}
+
+	// A directory in the place of the lock.
+	dir := t.TempDir()
+	os.Mkdir(filepath.Join(dir, lockName), 0o700)
+	if err := Update(dir, untouched); err == nil {
+		t.Error("Update should report a lock it cannot take")
+	}
+
+	dir = t.TempDir()
+	os.WriteFile(filepath.Join(dir, fileName), []byte("{"), 0o600)
+	if err := Update(dir, untouched); err == nil {
+		t.Error("Update should report a configuration it cannot read")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, fileName)); string(b) != "{" {
+		t.Errorf("an unreadable configuration should be left alone, got %q", b)
 	}
 }
 

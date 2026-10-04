@@ -63,7 +63,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers |
 | Trust | signed requests (Ed25519); unknown peers become connection requests a human approves |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/` |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
@@ -107,7 +107,8 @@ A node reachable on several ways is listed once.
 
 ## Trust
 
-Every node owns an Ed25519 key pair (generated on first run, stored in `config.json`). Requests
+Every node owns an Ed25519 key pair (generated once on first run, also when the node and the UI
+start at the same time, and stored in `config.json`). Requests
 are signed and the sender's public key is announced with discovery. The ID of a node is the
 fingerprint of its public key (12 hex characters), so it stays the same as long as the key does;
 an answer to a discovery probe whose ID does not fit its key is dropped. A node only answers

@@ -29,8 +29,18 @@ func (d Dir) UpdateDir() string { return d.path("update") }
 // Config reads the configuration. A node that was never set up has an empty one.
 func (d Dir) Config() (config.Config, error) { return config.Load(string(d)) }
 
-// SaveConfig writes the configuration.
-func (d Dir) SaveConfig(c config.Config) error { return config.Save(string(d), c) }
+// SaveConfig writes the configuration. The identity of the node is not given
+// up by it: a configuration without a key, read before the key was generated,
+// keeps the one that was persisted since.
+func (d Dir) SaveConfig(c config.Config) error {
+	return config.Update(string(d), func(cur *config.Config) error {
+		if c.PrivateKey == "" {
+			c.PrivateKey = cur.PrivateKey
+		}
+		*cur = c
+		return nil
+	})
+}
 
 // Contacts opens the contact list of the node.
 func (d Dir) Contacts() *contacts.Store { return contacts.Open(d.path("contacts.json")) }
@@ -41,16 +51,25 @@ func (d Dir) Service() daemon.Service {
 }
 
 // Identity returns the signing identity of the node, generating and
-// persisting one on first use.
+// persisting one on first use. Processes that ask at the same time get the
+// same one: the first generates it under the lock on the configuration, the
+// others find it there.
 func (d Dir) Identity() (*identity.Identity, error) {
 	cfg, err := d.Config()
 	if err != nil {
 		return nil, err
 	}
-	if cfg.PrivateKey != "" {
-		return identity.FromPrivate(cfg.PrivateKey)
+	if cfg.PrivateKey == "" {
+		err = config.Update(string(d), func(c *config.Config) error {
+			if c.PrivateKey == "" {
+				c.PrivateKey = identity.Generate().Private()
+			}
+			cfg = *c
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
-	id := identity.Generate()
-	cfg.PrivateKey = id.Private()
-	return id, d.SaveConfig(cfg)
+	return identity.FromPrivate(cfg.PrivateKey)
 }

@@ -7,11 +7,18 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"ouroboros/internal/identity"
+	"ouroboros/internal/safefile"
 )
 
-const fileName = "config.json"
+const (
+	fileName = "config.json"
+	// lockName is the file that is locked while the configuration is changed.
+	// The configuration itself cannot be: saving replaces the file.
+	lockName = fileName + ".lock"
+)
 
 // Config is the persistent node configuration.
 type Config struct {
@@ -90,18 +97,39 @@ func Load(dir string) (Config, error) {
 	return c, json.Unmarshal(b, &c)
 }
 
-// Save writes the configuration to dir, readable only by the owner.
+// Save writes the configuration to dir, readable only by the owner. The file
+// is replaced in one step: a crash leaves the old configuration or the new,
+// never a part of one.
 func Save(dir string, c Config) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, fileName)
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err == nil {
-		err = os.WriteFile(path, b, 0o600)
-	}
-	if err == nil {
-		err = os.Chmod(path, 0o600) // WriteFile keeps the mode of existing files
+		err = safefile.Write(filepath.Join(dir, fileName), b, 0o600)
 	}
 	return err
+}
+
+// Update loads the configuration from dir, lets change alter it and saves
+// the result, all under a lock that keeps other processes from changing it in
+// between. Nothing is written if change fails or leaves it as it was.
+func Update(dir string, change func(*Config) error) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	unlock, err := safefile.Lock(filepath.Join(dir, lockName))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	old, err := Load(dir)
+	if err != nil {
+		return err
+	}
+	c := old
+	if err := change(&c); err != nil || reflect.DeepEqual(c, old) {
+		return err
+	}
+	return Save(dir, c)
 }

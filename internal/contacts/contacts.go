@@ -3,14 +3,17 @@
 package contacts
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
+
+	"ouroboros/internal/safefile"
 )
 
 // Contact is a trusted peer.
@@ -39,7 +42,8 @@ type Data struct {
 }
 
 // Store is a file-backed contact list. Several processes (the node and the UI)
-// may use the same file; every change takes an exclusive file lock.
+// may use the same file; every change takes an exclusive lock on a file next
+// to it, and replaces the list in one step.
 type Store struct {
 	path string
 	mu   sync.Mutex
@@ -48,25 +52,25 @@ type Store struct {
 // Open returns the store at path. The file is created on the first change.
 func Open(path string) *Store { return &Store{path: path} }
 
-// flock locks a file; tests replace it to make locking fail.
-var flock = syscall.Flock
-
-// update loads the file, applies fn and writes it back under an exclusive lock.
+// update loads the file, applies fn and writes it back under an exclusive
+// lock. The list is never written in place: a crash leaves the old list or
+// the new, not a part of one.
 func (s *Store) update(fn func(*Data) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f, err := os.OpenFile(s.path, os.O_RDWR|os.O_CREATE, 0o600)
+	// The list itself cannot be locked: writing replaces the file.
+	unlock, err := safefile.Lock(s.path + ".lock")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	defer unlock()
+
+	b, err := os.ReadFile(s.path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	defer flock(int(f.Fd()), syscall.LOCK_UN)
-
 	var d Data
-	if err := json.NewDecoder(f).Decode(&d); err != nil && !errors.Is(err, io.EOF) {
+	if err := json.NewDecoder(bytes.NewReader(b)).Decode(&d); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	if err := fn(&d); err != nil {
@@ -75,15 +79,10 @@ func (s *Store) update(fn func(*Data) error) error {
 		}
 		return err
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
+	if b, err = json.MarshalIndent(&d, "", "  "); err != nil {
 		return err
 	}
-	if err := f.Truncate(0); err != nil {
-		return err
-	}
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(&d)
+	return safefile.Write(s.path, append(b, '\n'), 0o600)
 }
 
 // Snapshot returns a copy of the whole contact list.
