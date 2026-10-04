@@ -437,6 +437,9 @@ func (m *Model) decideRequest(accept bool) tea.Cmd {
 	verb, failed := "declined", "rejecting failed"
 	if accept {
 		verb, failed = "accepted", "accepting failed"
+		if m.trust.Incoming[m.reqSel].Proposed {
+			verb = "sent" // to the peer, where a human decides
+		}
 	}
 	return func() tea.Msg {
 		var err error

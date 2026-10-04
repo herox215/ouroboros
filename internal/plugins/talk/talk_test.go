@@ -23,6 +23,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/discovery"
+	"ouroboros/internal/home"
 	"ouroboros/internal/openai/openaitest"
 	"ouroboros/internal/peers"
 	"ouroboros/internal/plugins/talk"
@@ -142,6 +143,7 @@ func TestPeerIsNotToldWhyTheAgentFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	clitest.Trust(t, beta, alpha, "alpha")
+	clitest.Trust(t, alpha, beta, "beta")
 
 	_, err := clitest.Run(t, alpha, "", "ask", "beta", "hi")
 	if err == nil || !strings.Contains(err.Error(), "the agent could not answer (error ") || strings.Contains(err.Error(), "401") {
@@ -239,6 +241,7 @@ func TestPeerAsksWhatWentWrong(t *testing.T) {
 			t.Fatal(err)
 		}
 		clitest.Trust(t, beta, s, name)
+		clitest.Trust(t, s, beta, "beta")
 	}
 	// What only beta knows about its failure.
 	internals := []string{"503", "llm-7", "sk-good", "upstream", strings.TrimPrefix(llm, "http://"), "openai", beta.Home}
@@ -318,10 +321,24 @@ func TestListFindsNodesOnPeers(t *testing.T) {
 	}
 }
 
-// A node that does not know this one yet gets a connection request instead
-// of the message, and the user is told so.
+// A node the owner is not connected to gets nothing of the message. The
+// owner confirms the connection where requests are decided; then the node
+// gets a connection request, and the user is told so.
 func TestAskLeavesAConnectionRequest(t *testing.T) {
-	alpha, _ := clitest.TwoNodes(t)
+	alpha, beta := clitest.TwoNodes(t)
+	if _, err := clitest.Run(t, alpha, "", "ask", "beta", "hi"); !errors.Is(err, plugin.ErrUnconfirmed) || !strings.HasPrefix(err.Error(), "beta is not connected") {
+		t.Fatalf("before the owner decided: %v", err)
+	}
+	if requests, _ := home.Dir(beta.Home).Contacts().Snapshot(); len(requests.Incoming) != 0 {
+		t.Fatalf("beta was asked before the owner of alpha decided: %+v", requests)
+	}
+	a, _ := clitest.NewApp(t, alpha, "")
+	if err := clitest.Network(t, alpha, a).Accept(context.Background(), clitest.PublicKey(t, beta)); err != nil {
+		t.Fatal(err)
+	}
+	if requests, _ := home.Dir(beta.Home).Contacts().Snapshot(); len(requests.Incoming) != 1 || requests.Incoming[0].Name != "alpha" {
+		t.Fatalf("beta's requests: %+v", requests)
+	}
 	if _, err := clitest.Run(t, alpha, "", "ask", "beta", "hi"); err == nil || !strings.Contains(err.Error(), "connection request sent to beta, waiting for approval") {
 		t.Fatalf("one-shot: %v", err)
 	}

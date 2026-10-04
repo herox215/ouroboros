@@ -80,7 +80,7 @@ type Method struct {
 // never an added one: it is neither replaced by a Method nor run with
 // Client.Call, and no channel is opened under its name.
 func Builtin(name string) bool {
-	return name == MethodSend || name == MethodAccept || name == MethodReject || name == MethodOpen
+	return name == MethodSend || name == MethodRequest || name == MethodAccept || name == MethodReject || name == MethodOpen
 }
 
 // method handles the JSON-RPC method it is registered for.
@@ -96,9 +96,10 @@ func (s *Server) Handler() http.Handler {
 	// The built-in methods: JSON-RPC method name to handler. Keep Builtin in
 	// step with them and MethodOpen.
 	builtin := map[string]method{
-		MethodSend:   s.send,
-		MethodAccept: s.accept,
-		MethodReject: s.reject,
+		MethodSend:    s.send,
+		MethodRequest: s.request,
+		MethodAccept:  s.accept,
+		MethodReject:  s.reject,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+CardPath, func(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +247,28 @@ func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) 
 	if p.Hops > MaxHops {
 		return nil, &Error{CodeTooManyHops, "too many agents have passed this message on"}
 	}
+	if err := s.admit(from, p.Peer); err != nil {
+		return nil, err
+	}
+	// The Responder learns who asks: what it does for a peer is limited.
+	return s.reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), from, p.Message)
+}
+
+// request answers a node that asks to connect: nothing if the owner is
+// connected to it already, and what send answers a stranger otherwise. It is
+// how a node asks without a message, which a stranger would get to read.
+func (s *Server) request(_ context.Context, from Caller, params json.RawMessage) (*Message, *Error) {
+	var p contactParams
+	if json.Unmarshal(params, &p) != nil {
+		return nil, &Error{CodeInvalidParams, "invalid params"}
+	}
+	return nil, s.admit(from, p.Peer)
+}
+
+// admit lets a peer the owner is connected to through: nil. Anyone else is
+// told why not, and a stranger, who calls itself peer, leaves a connection
+// request on the way.
+func (s *Server) admit(from Caller, peer Peer) *Error {
 	// Contacts that cannot be read trust nobody but the node itself.
 	trusted, blocked, err := s.Trust.State(from.PublicKey)
 	if from.PublicKey == s.Identity.Public() {
@@ -253,22 +276,21 @@ func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) 
 	}
 	switch {
 	case err != nil:
-		return nil, s.trustFailed(from, err)
+		return s.trustFailed(from, err)
 	case trusted:
-		// The Responder learns who asks: what it does for a peer is limited.
-		return s.reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), from, p.Message)
+		return nil
 	case blocked:
-		return nil, &Error{CodeBlocked, "connection refused"}
+		return &Error{CodeBlocked, "connection refused"}
 	}
 	// A key costs nothing to make up, so a stranger is limited by its address.
 	if !s.strangers.allow(from.host, time.Now()) {
-		return nil, &Error{CodeTooManyRequests, "too many connection requests from your address, try again later"}
+		return &Error{CodeTooManyRequests, "too many connection requests from your address, try again later"}
 	}
 	// A request that was not recorded is not pending: nobody would decide on it.
-	if err := s.Trust.AddIncoming(from.PublicKey, p.Peer.Name, p.Peer.Model, from.Addr); err != nil {
-		return nil, s.trustFailed(from, err)
+	if err := s.Trust.AddIncoming(from.PublicKey, peer.Name, peer.Model, from.Addr); err != nil {
+		return s.trustFailed(from, err)
 	}
-	return nil, &Error{CodePending, "connection request is waiting for approval"}
+	return &Error{CodePending, "connection request is waiting for approval"}
 }
 
 // accept notes that a peer this node asked to connect has agreed.

@@ -240,58 +240,75 @@ func TestAskPeerWhoIsNoPeer(t *testing.T) {
 	}
 }
 
-// A node given by its address has no ID to compare. It is asked even by a
-// node that has no ID itself yet, and called by its address.
+// An agent is not sent to an address: it asks the nodes that are found, by
+// their name or ID, and nobody is contacted for anything else.
 func TestAskPeerByAddress(t *testing.T) {
 	luna := serveNode(t, "luna")
-	s := newSelf(t)
-	tool := askPeer(s.network, func() string { return "" })
-	args, _ := json.Marshal(askPeerArgs{Peer: luna.Addr(), Message: "hello"})
-
-	got, err := tool.Run(context.Background(), args)
-	want := luna.Addr() + " is not connected to this node yet. A connection request was sent; " +
-		"a human there has to accept it before " + luna.Addr() + " answers."
-	if err != nil || got != want {
-		t.Fatalf("not connected: %v\n got %q\nwant %q", err, got, want)
-	}
-
+	s := newSelf(t, luna.Node)
 	s.connect(t, luna)
-	if got, err := tool.Run(context.Background(), args); err != nil || got != "luna: hello" {
-		t.Fatalf("connected: %q, %v", got, err)
+	got, err := s.ask(context.Background(), luna.Addr(), "hello")
+	if err == nil || got != "" || !strings.Contains(err.Error(), `no node "`+luna.Addr()+`" found`) {
+		t.Fatalf("got %q, %v", got, err)
 	}
-	if got, want := luna.messages(), "/"+luna.Addr()+": hello"; got != want {
+	if got := luna.messages(); got != "" {
+		t.Fatalf("luna got %q", got)
+	}
+	// By its ID it is the peer it is.
+	if got, err := s.ask(context.Background(), luna.ID, "hello"); err != nil || got != "luna: hello" {
+		t.Fatalf("by ID: %q, %v", got, err)
+	}
+	if got, want := luna.messages(), "/"+luna.ID+": hello"; got != want {
 		t.Fatalf("luna got %q, want %q", got, want)
 	}
 }
 
-// A peer that does not know this node yet gets a connection request, which
-// the agent is told like an answer: there is nothing wrong with it.
+// A node the owner is not connected to gets nothing of the message, and the
+// agent cannot connect to it: it is told to hand the decision to its owner,
+// like an answer, for there is nothing wrong with it.
 func TestAskPeerThatIsNotConnected(t *testing.T) {
 	luna := serveNode(t, "luna")
 	s := newSelf(t, luna.Node)
-	got, err := s.ask(context.Background(), "luna", "hello")
-	want := "luna is not connected to this node yet. A connection request was sent; " +
-		"a human there has to accept it before luna answers."
+	ctx := context.Background()
+	got, err := s.ask(ctx, "luna", "hello")
+	want := "luna (id " + luna.ID + ") is not connected to this node, and nothing was sent to it. " +
+		"Only your owner can connect: the node now waits among the connection requests (R in the terminal UI) " +
+		"for them to confirm. Tell them that, with the ID, so that they can check it is the node they mean."
+	if err != nil || got != want {
+		t.Fatalf("%v\n got %q\nwant %q", err, got, want)
+	}
+	theirs, err := luna.contacts.Snapshot()
+	if err != nil || len(theirs.Incoming) != 0 {
+		t.Fatalf("the agent asked luna to connect: %+v, %v", theirs.Incoming, err)
+	}
+	ours, err := s.contacts.Snapshot()
+	if err != nil || len(ours.Outgoing) != 0 || len(ours.Incoming) != 1 || !ours.Incoming[0].Proposed || ours.Incoming[0].PublicKey != luna.PublicKey {
+		t.Fatalf("requests of this node: %+v, %v", ours, err)
+	}
+
+	// The owner agrees: luna is asked, and until a human there decides the
+	// agent is told to wait.
+	if err := s.network.Accept(ctx, luna.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ask(ctx, "luna", "hello")
+	want = "luna was asked to connect, but nothing of your message was sent: " +
+		"a human there has to accept the connection request before luna answers."
 	if err != nil || got != want {
 		t.Fatalf("%v\n got %q\nwant %q", err, got, want)
 	}
 	if got := luna.messages(); got != "" {
 		t.Fatalf("luna got %q", got)
 	}
-	theirs, err := luna.contacts.Snapshot()
+	theirs, err = luna.contacts.Snapshot()
 	if err != nil || len(theirs.Incoming) != 1 || theirs.Incoming[0].PublicKey != s.id.Public() {
 		t.Fatalf("requests at luna: %+v, %v", theirs.Incoming, err)
-	}
-	ours, err := s.contacts.Snapshot()
-	if err != nil || len(ours.Outgoing) != 1 || ours.Outgoing[0].PublicKey != luna.PublicKey {
-		t.Fatalf("requests of this node: %+v, %v", ours.Outgoing, err)
 	}
 
 	// A peer that refused is an error, and one that names the peer.
 	if _, ok, err := luna.contacts.Reject(s.id.Public()); err != nil || !ok {
 		t.Fatalf("reject: %v, %v", ok, err)
 	}
-	got, err = s.ask(context.Background(), "luna", "hello")
+	got, err = s.ask(ctx, "luna", "hello")
 	if !errors.Is(err, peers.ErrRefused) || got != "" || err.Error() != "luna refused to connect" {
 		t.Fatalf("refused: %q, %v", got, err)
 	}

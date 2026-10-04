@@ -192,3 +192,51 @@ func TestServe(t *testing.T) {
 		t.Fatalf("a node with a typo should not start: %v", err)
 	}
 }
+
+// A conversation belongs to the peer whose key signed its messages: a peer
+// that uses the context ID of another one starts a conversation of its own,
+// and reads nothing of what the other said.
+func TestPeersDoNotShareAConversation(t *testing.T) {
+	beta := clitest.Settings(t)
+	cfg := clitest.NodeConfig(beta)
+	cfg.Name = "beta"
+	clitest.StartNode(t, beta, cfg)
+
+	ctx := context.Background()
+	ask := map[string]func(text string) string{}
+	for _, name := range []string{"alpha", "gamma"} {
+		s := clitest.Settings(t)
+		cfg := clitest.NodeConfig(s)
+		cfg.Name = name
+		if err := config.Save(s.Home, cfg); err != nil {
+			t.Fatal(err)
+		}
+		clitest.Finds(s, beta)
+		clitest.Trust(t, beta, s, name)
+		clitest.Trust(t, s, beta, "beta")
+		app, _ := clitest.NewApp(t, s, "")
+		network := clitest.Network(t, s, app)
+		ask[name] = func(text string) string {
+			t.Helper()
+			node, err := network.Resolve(ctx, "beta")
+			if err != nil {
+				t.Fatal(err)
+			}
+			reply, err := network.Send(ctx, node, "the same context", text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return reply
+		}
+	}
+
+	if got := ask["alpha"]("a secret"); !strings.Contains(got, "turns=1 last=a secret") {
+		t.Fatalf("alpha: %q", got)
+	}
+	if got := ask["gamma"]("what was said?"); !strings.Contains(got, "turns=1 last=what was said?") {
+		t.Fatalf("gamma continued the conversation of alpha: %q", got)
+	}
+	if got := ask["alpha"]("again"); !strings.Contains(got, "turns=3 last=again") {
+		t.Fatalf("alpha lost its conversation: %q", got)
+	}
+}

@@ -330,6 +330,85 @@ func TestUpdateFailedChange(t *testing.T) {
 	}
 }
 
+// What the agent of the node proposes waits for the owner like a request, but
+// is none of a peer: accepting it asks the peer, declining it drops it.
+func TestProposal(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
+	if err := s.Propose("pk", "gamma", "m", "10.0.0.9:41337"); err != nil {
+		t.Fatal(err)
+	}
+	at := func() time.Time { d, _ := s.Snapshot(); return d.Incoming[0].At }
+	first := at()
+	// Proposed again, it stays the one that waits.
+	if err := s.Propose("pk", "another name", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.Snapshot(); len(d.Incoming) != 1 || !d.Incoming[0].Proposed || d.Incoming[0].Name != "gamma" || !at().Equal(first) {
+		t.Fatalf("incoming: %+v", d.Incoming)
+	}
+
+	r, ok, err := s.Approve("pk")
+	if err != nil || !ok || !r.Proposed || r.Addr != "10.0.0.9:41337" {
+		t.Fatalf("approved %+v, %v, %v", r, ok, err)
+	}
+	d, _ := s.Snapshot()
+	if len(d.Incoming) != 0 || len(d.Trusted) != 0 || len(d.Outgoing) != 1 {
+		t.Fatalf("an accepted proposal is a request to the peer, nothing else: %+v", d)
+	}
+	if out := d.Outgoing[0]; out.PublicKey != "pk" || out.Name != "gamma" || out.Model != "m" || out.Addr != "10.0.0.9:41337" || out.Proposed || out.At.IsZero() {
+		t.Fatalf("outgoing: %+v", out)
+	}
+
+	// Declined, it leaves nothing: the peer is not blocked.
+	s.Propose("pk2", "delta", "", "")
+	if r, ok, err := s.Reject("pk2"); err != nil || !ok || !r.Proposed {
+		t.Fatalf("rejected %+v, %v, %v", r, ok, err)
+	}
+	if d, _ := s.Snapshot(); len(d.Incoming) != 0 || len(d.Blocked) != 0 {
+		t.Fatalf("a declined proposal left something: %+v", d)
+	}
+}
+
+// A peer that asks itself is a request of that peer, whatever was proposed,
+// and a request of a peer is never replaced by a proposal.
+func TestProposalAndRequestOfTheSamePeer(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
+	s.Propose("pk", "gamma", "", "10.0.0.9:41337")
+	s.AddIncoming("pk", "gamma", "", "10.0.0.9:5")
+	s.Propose("pk", "gamma", "", "10.0.0.9:41337")
+	d, _ := s.Snapshot()
+	if len(d.Incoming) != 1 || d.Incoming[0].Proposed || d.Incoming[0].Addr != "10.0.0.9:5" {
+		t.Fatalf("incoming: %+v", d.Incoming)
+	}
+	if _, ok, _ := s.Approve("pk"); !ok {
+		t.Fatal("no request to approve")
+	}
+	if trusted, _, _ := s.State("pk"); !trusted {
+		t.Fatal("the request of a peer that is approved makes it trusted")
+	}
+}
+
+// A proposal makes no room for itself: the requests of peers stay.
+func TestProposalsDoNotDropRequests(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
+	for i := range MaxIncoming - 1 {
+		s.AddIncoming(fmt.Sprintf("pk%d", i), "peer", "", "")
+	}
+	if err := s.Propose("last", "gamma", "", ""); err != nil {
+		t.Fatalf("the last free place: %v", err)
+	}
+	if err := s.Propose("one too many", "delta", "", ""); !errors.Is(err, ErrFull) {
+		t.Fatalf("got %v", err)
+	}
+	// One that waits already is no further one.
+	if err := s.Propose("last", "gamma", "", ""); err != nil {
+		t.Fatalf("proposed again: %v", err)
+	}
+	if d, _ := s.Snapshot(); len(d.Incoming) != MaxIncoming || d.Incoming[0].PublicKey != "pk0" {
+		t.Fatalf("%d requests, the first is %+v", len(d.Incoming), d.Incoming[0])
+	}
+}
+
 // hadOutgoing reports whether the list says that this node asked publicKey.
 func hadOutgoing(s *Store, publicKey string) bool {
 	asked, _ := s.HadOutgoing(publicKey)

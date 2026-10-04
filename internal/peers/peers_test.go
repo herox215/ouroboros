@@ -69,7 +69,9 @@ type testNode struct {
 	contacts       *contacts.Store
 	contactsPath   string
 	srv            *httptest.Server
-	asked          int // messages its agent answered
+	asked          int    // messages its agent answered
+	hits           int    // requests that reached it, of whatever kind
+	before         func() // runs before it handles a request, if set
 	methods        []a2a.Method
 	channels       []a2a.ChannelHandler
 }
@@ -90,7 +92,14 @@ func serve(t *testing.T, name string) *testNode {
 		Methods:  func() []a2a.Method { return n.methods },
 		Channels: func() []a2a.ChannelHandler { return n.channels },
 	}
-	n.srv = httptest.NewUnstartedServer(server.Handler())
+	handler := server.Handler()
+	n.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.hits++
+		if n.before != nil {
+			n.before()
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	// Like a node: over TLS, with the certificate of its key.
 	n.srv.TLS = a2a.TLSConfig(n.id)
 	n.srv.StartTLS()
@@ -107,6 +116,19 @@ func (n *testNode) network(found ...discovery.Node) *Network {
 	return &Network{Finder: finder(found), Contacts: n.contacts, Client: func() (*a2a.Client, error) {
 		return &a2a.Client{Identity: n.id, Name: n.Name, Port: n.Port}, nil
 	}}
+}
+
+// request makes a ask b to connect, the way it takes: the agent of a proposes
+// b, and the owner of a agrees.
+func request(t *testing.T, a, b *testNode) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := a.network().Send(ctx, b.Node, "c", "hi"); !errors.Is(err, ErrUnconfirmed) {
+		t.Fatalf("first contact: %v", err)
+	}
+	if err := a.network().Accept(ctx, b.PublicKey); err != nil {
+		t.Fatalf("the owner agrees: %v", err)
+	}
 }
 
 // trust connects the nodes a and b.
@@ -214,9 +236,7 @@ func TestDecisionsReachOnlyTheNodeThatAsked(t *testing.T) {
 	alice, bob, mallory := serve(t, "alice"), serve(t, "bob"), serve(t, "mallory")
 	ctx := context.Background()
 
-	if _, err := bob.network().Send(ctx, alice.Node, "c", "hi"); !errors.Is(err, ErrPending) {
-		t.Fatalf("first contact: %v", err)
-	}
+	request(t, bob, alice)
 	if err := alice.network().Accept(ctx, bob.PublicKey); err != nil {
 		t.Fatal(err)
 	}
@@ -276,9 +296,7 @@ func breakContacts(t *testing.T, n *testNode) (repair func()) {
 func TestDecisionThatIsNotSaved(t *testing.T) {
 	alice, bob := serve(t, "alice"), serve(t, "bob")
 	ctx := context.Background()
-	if _, err := bob.network().Send(ctx, alice.Node, "c", "hi"); !errors.Is(err, ErrPending) {
-		t.Fatalf("first contact: %v", err)
-	}
+	request(t, bob, alice)
 
 	repair := breakContacts(t, alice)
 	for name, decide := range map[string]func(context.Context, string) error{"accept": alice.network().Accept, "reject": alice.network().Reject} {
@@ -307,7 +325,9 @@ func TestDecisionThatIsNotSaved(t *testing.T) {
 // the peer would not be recognised.
 func TestRequestThatIsNotRemembered(t *testing.T) {
 	alice, bob := serve(t, "alice"), serve(t, "bob")
-	defer breakContacts(t, bob)()
+	// Bob trusts alice, who does not know bob any more.
+	bob.contacts.AddTrusted(alice.PublicKey, "alice", "")
+	alice.before = func() { t.Cleanup(breakContacts(t, bob)) }
 	_, err := bob.network().Send(context.Background(), alice.Node, "c", "hi")
 	if !errors.Is(err, ErrPending) || !strings.Contains(err.Error(), "could not be remembered") {
 		t.Fatalf("got %v", err)

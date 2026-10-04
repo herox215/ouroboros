@@ -74,8 +74,21 @@ func TestSendThatIsRefused(t *testing.T) {
 	beta.contacts.AddIncoming(alpha.PublicKey, "alpha", "", "")
 	beta.contacts.Reject(alpha.PublicKey)
 	network := alpha.network(beta.Node)
+	// The owner asked beta to connect: it is asked again, and no longer after that.
+	alpha.contacts.AddOutgoing(beta.PublicKey, "beta", "", "")
 	if got, err := network.Send(ctx, beta.Node, "c", "hi"); !errors.Is(err, ErrRefused) || got != "" {
 		t.Fatalf("got %q, %v", got, err)
+	}
+	if hadOutgoing(alpha, beta.PublicKey) {
+		t.Fatal("a request that was refused is still waiting")
+	}
+	// A peer of alpha that refuses it says so to a message as well.
+	alpha.contacts.AddTrusted(beta.PublicKey, "beta", "")
+	if got, err := network.Send(ctx, beta.Node, "c", "hi"); !errors.Is(err, ErrRefused) || got != "" {
+		t.Fatalf("a peer that refuses: %q, %v", got, err)
+	}
+	if beta.asked != 0 {
+		t.Fatal("beta answered a node it refused")
 	}
 
 	noClient := errors.New("no client")
@@ -90,9 +103,7 @@ func TestSendThatIsRefused(t *testing.T) {
 func TestDecisionThatIsNotTold(t *testing.T) {
 	alpha, beta := serve(t, "alpha"), serve(t, "beta")
 	ctx := context.Background()
-	if _, err := beta.network().Send(ctx, alpha.Node, "c", "hi"); !errors.Is(err, ErrPending) {
-		t.Fatalf("first contact: %v", err)
-	}
+	request(t, beta, alpha)
 	noClient := errors.New("no client")
 	network := alpha.network()
 	network.Client = func() (*a2a.Client, error) { return nil, noClient }

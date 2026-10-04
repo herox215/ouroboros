@@ -114,8 +114,13 @@ func (m *Model) requestsView() string {
 		if i == m.reqSel {
 			marker = lipgloss.NewStyle().Foreground(accent).Render("› ")
 		}
+		what := "wants to chat"
+		if r.Proposed {
+			// Nobody asked yet: accepting sends the request, with this key.
+			what = "· your agent wants to connect (" + shortKey(r.PublicKey) + ")"
+		}
 		lines = append(lines,
-			marker+boldStyle.Render(name)+"  "+mutedStyle.Render("wants to chat"),
+			marker+boldStyle.Render(name)+"  "+mutedStyle.Render(what),
 			"    "+mutedStyle.Render(r.Addr+" · "+r.At.Format("15:04")))
 	}
 	if len(m.trust.Outgoing) > 0 {

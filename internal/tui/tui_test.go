@@ -558,3 +558,37 @@ func TestDecisionThatIsNotSaved(t *testing.T) {
 		}
 	}
 }
+
+// What the agent proposes is shown as that, with the key that would be
+// asked, and accepting it sends the request: it accepts nobody.
+func TestProposedConnection(t *testing.T) {
+	m, b := commands(t)
+	b.trust = Contacts{Incoming: []plugin.Request{
+		{PublicKey: "0123456789abcdef", Name: "luna", Addr: "1.2.3.4:9", Proposed: true},
+		{PublicKey: "pk2", Name: "gamma"},
+	}}
+	m.Update(m.loadContacts())
+	press(m, "R")
+	view := m.View().Content
+	if !strings.Contains(view, "your agent wants to connect (0123456789…)") || strings.Count(view, "wants to chat") != 1 {
+		t.Fatalf("requests view:\n%s", view)
+	}
+	m.Update(press(m, "a")())
+	if len(b.accepted) != 1 || b.accepted[0] != "0123456789abcdef" {
+		t.Fatalf("accepted %v", b.accepted)
+	}
+	if view := m.View().Content; !strings.Contains(view, "request sent") || strings.Contains(view, "request accepted") {
+		t.Fatalf("after agreeing to a proposal:\n%s", view)
+	}
+	// Declined, it is a request that was declined like any other.
+	m.Update(press(m, "x")())
+	if view := m.View().Content; !strings.Contains(view, "request declined") {
+		t.Fatalf("after declining a proposal:\n%s", view)
+	}
+	// The request of a peer is accepted, not sent.
+	press(m, "down")
+	m.Update(press(m, "a")())
+	if view := m.View().Content; !strings.Contains(view, "request accepted") {
+		t.Fatalf("after accepting a request:\n%s", view)
+	}
+}

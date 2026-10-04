@@ -21,10 +21,21 @@ func TestAssistantAsksPeers(t *testing.T) {
 		t.Fatalf("list_peers: %q, %v", out, err)
 	}
 
-	// Beta does not know alpha yet: the first message becomes a connection request.
+	// Alpha is not connected to beta: its agent sends nothing and proposes
+	// beta to the owner, who agrees. Only then beta is asked to connect.
 	out, err = clitest.Run(t, alpha, "@beta hello\n", "chat")
-	if err != nil || !strings.Contains(out, "last=beta is not connected") {
+	if err != nil || !strings.Contains(out, "last=beta (id "+clitest.NodeID(t, beta)+") is not connected") {
 		t.Fatalf("first contact: %q, %v", out, err)
+	}
+	if requests, _ := home.Dir(beta.Home).Contacts().Snapshot(); len(requests.Incoming) != 0 {
+		t.Fatalf("the agent of alpha asked beta to connect by itself: %+v", requests)
+	}
+	a, _ := clitest.NewApp(t, alpha, "")
+	if err := clitest.Network(t, alpha, a).Accept(context.Background(), clitest.PublicKey(t, beta)); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = clitest.Run(t, alpha, "@beta hello\n", "chat"); err != nil || !strings.Contains(out, "last=beta was asked to connect, but nothing of your message was sent") {
+		t.Fatalf("while beta has not decided: %q, %v", out, err)
 	}
 	if out, _ = clitest.Run(t, alpha, "", "chat", "@"); !strings.Contains(out, "connection requested") {
 		t.Fatalf("the request should be remembered: %q", out)
@@ -103,6 +114,7 @@ func TestPeerAgentUsesAllowedTools(t *testing.T) {
 	clitest.Finds(beta, alpha, gamma)
 	clitest.Finds(gamma, beta)
 	clitest.Trust(t, beta, alpha, "alpha")
+	clitest.Trust(t, alpha, beta, "beta")
 	clitest.Trust(t, gamma, beta, "beta")
 	clitest.Trust(t, beta, gamma, "gamma")
 

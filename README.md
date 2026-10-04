@@ -57,7 +57,7 @@ again unless it was already running before (`ouro start`).
 | `enter` | focus the input | send (`alt+enter` for a new line) |
 | `s` / `c` | start or stop the node / run the setup | – |
 | `n` | new conversation | – |
-| `R` | connection requests (`a` accept, `x` reject, `esc` back) | – |
+| `R` | connection requests, of peers and what your agent proposes (`a` accept, `x` reject, `esc` back) | – |
 | keys of plugins | open a screen (`esc` back) or run what the plugin added | – |
 | `pgup` `pgdn` | scroll the chat | scroll the chat |
 | `q` / `ctrl+c` | quit | `ctrl+c` quits |
@@ -81,10 +81,10 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 8 LLM calls per answer |
-| Memory | last 40 messages per `contextId`, up to 256 conversations |
+| Memory | last 40 messages per conversation, up to 256 conversations; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
-| Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; unknown peers become connection requests a human approves |
-| Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
+| Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
+| Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
 | Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
@@ -115,8 +115,13 @@ talking to, and is set in `config.json`:
 the chat does not answer. Restart the node after changing `a2a`.
 
 With `ask_peer` in `a2a`, a peer you connected to can make your agent ask the peers you are connected to,
-in your name. Two rules keep that from running in circles: the agent never asks the peer it is answering,
-and a message is passed on by at most 3 agents.
+in your name, and nobody else: for a peer the agent neither writes to a node you are not connected to nor
+proposes a connection. Two rules keep that from running in circles: the agent never asks the peer it is
+answering, and a message is passed on by at most 3 agents.
+
+`ask_peer` takes the name or ID of a node that is online, as `list_peers` shows it, and no address: an
+agent cannot be sent to a `host:port` somebody put into its head. Only you address a node that way, with
+`ouro ask`.
 
 ### When a peer could not answer
 
@@ -157,11 +162,24 @@ fingerprint of its public key (12 hex characters), so it stays the same as long 
 an answer to a discovery probe whose ID does not fit its key is dropped. A node only answers
 trusted peers:
 
-1. Alice's agent writes to Bob (ask it to, or use `ouro ask`): Bob records a **connection request** and answers `pending`; no LLM call happens.
-2. In Bob's terminal UI press `R` to open the requests screen and then `a` to accept (or `x` to reject).
-3. Bob notifies Alice, both sides store each other as trusted and can chat.
+1. Alice's agent wants to write to Bob (she asks it to, or uses `ouro ask`). Bob is not connected, so
+   **nothing is sent**, not even a request: Bob is proposed to Alice, with his ID and key.
+2. In Alice's terminal UI `R` shows `bob · your agent wants to connect`. With `a` she agrees, and only
+   then Bob gets a **connection request** (`contact/request`). It carries no message; Bob records it and
+   answers `pending`, no LLM call happens. With `x` the proposal is dropped and Bob never hears of it.
+3. In Bob's terminal UI press `R` and then `a` to accept (or `x` to reject).
+4. Bob notifies Alice, both sides store each other as trusted and can chat. Until then Alice's agent is
+   told that Bob has not decided, and what she wanted to say stays with her.
 
-Rejected peers are blocked. Trust is mutual: one acceptance connects both sides.
+So a connection takes one decision of each owner, and no message reaches a node before both are made. A
+name is only what a node calls itself: whoever shows up as `bob` while the Bob you know is away is a
+stranger, gets nothing, and waits in your requests under his own key for you to notice. Neither your agent
+nor a plugin can connect on its own, whatever a peer talks it into. A node that says it is connected to
+you already (its acceptance got lost on the way) is trusted when it is asked again, but only if you asked
+it before.
+
+Rejected peers are blocked. Trust is mutual: one acceptance connects both sides. Nodes from before
+`contact/request` do not know the method: update both sides.
 
 A decision that cannot be stored (full disk, `contacts.json` not writable) is not made: the UI says that
 accepting or rejecting failed, the request stays in the list for another try, and the cause is in `ouro.log`.
@@ -192,7 +210,7 @@ Everything between nodes is encrypted, and both directions are authenticated wit
 |---|---|
 | a connected peer | the public key stored in `contacts.json` when you connected; the node announcing it has to pass the handshake to count as connected |
 | a discovered node you are not connected to | the public key it announced (its ID is the fingerprint of that key) |
-| a node addressed as `host:port` | the key of the certificate presented on first contact; the message that follows only goes to the holder of that key |
+| a node addressed as `host:port` | the key of the certificate presented on first contact; what follows only goes to the holder of that key, and a message only if that key is a peer of yours. Otherwise the holder is proposed to you like any stranger |
 | the answer to a connection request | the public key of the node that asked |
 
 A node you address as `host:port` has no stored key: it is whoever answers at that address.

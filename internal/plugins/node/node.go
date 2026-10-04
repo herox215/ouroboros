@@ -4,6 +4,8 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -57,7 +59,9 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 					if err != nil {
 						return nil, err
 					}
-					return bot.Respond, nil
+					return func(ctx context.Context, contextID, text string) (string, error) {
+						return bot.Respond(ctx, conversation(ctx, contextID), text)
+					}, nil
 				},
 				Methods:  func() []a2a.Method { return plugin.All[plugin.Method](ctx) },
 				Channels: func() []a2a.ChannelHandler { return plugin.All[plugin.ChannelHandler](ctx) },
@@ -70,6 +74,16 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 		plugin.Add(ctx, plugin.Command{Name: node.ServeCommand, Help: "run the node in the foreground", Run: c.serve})
 		return nil
 	})
+}
+
+// conversation is what the agent remembers the conversation contextID of the
+// peer it answers by. The peer picks contextID, so that alone would let it
+// continue, and read, what another peer said: a conversation is one of the
+// peer whose key signed the message.
+func conversation(ctx context.Context, contextID string) string {
+	origin, _ := a2a.OriginFrom(ctx)
+	sum := sha256.Sum256([]byte(origin.PublicKey + "\n" + contextID))
+	return hex.EncodeToString(sum[:])
 }
 
 type nodeCommands struct {

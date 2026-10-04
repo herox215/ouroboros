@@ -32,6 +32,9 @@ var (
 	ErrSender = peers.ErrSender
 	// ErrNotConnected means the node is not a peer this node is connected to.
 	ErrNotConnected = peers.ErrNotConnected
+	// ErrUnconfirmed means the owner has not decided to connect to the node:
+	// nothing was sent to it, and it waits among the connection requests.
+	ErrUnconfirmed = peers.ErrUnconfirmed
 	// ErrUnverified means the node that answers does not hold the key of the
 	// node that was asked. Nothing was sent to it.
 	ErrUnverified = a2a.ErrUnverified
@@ -67,8 +70,10 @@ func (n *Network) Resolve(ctx context.Context, target string) (Node, error) {
 }
 
 // Send delivers text to the agent of node within the conversation contextID
-// and returns its answer. A node that does not trust this one yet gets a
-// connection request instead, reported as ErrPending.
+// and returns its answer. The text only goes to a connected peer. A node the
+// owner never decided on is proposed to the owner instead (ErrUnconfirmed):
+// no plugin makes this node trust another one. A node the owner asked to
+// connect, where no human has decided yet, is reported as ErrPending.
 func (n *Network) Send(ctx context.Context, node Node, contextID, text string) (string, error) {
 	return n.net.Send(ctx, node, contextID, text)
 }

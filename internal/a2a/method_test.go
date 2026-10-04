@@ -62,7 +62,7 @@ func TestCallRunsAnAddedMethod(t *testing.T) {
 func TestCallRefusesBuiltinMethods(t *testing.T) {
 	alice, bob := newNode(t, "alice"), newNode(t, "bob")
 	bob.trust.AddOutgoing(alice.id.Public(), "alice", "", "")
-	for _, name := range []string{MethodSend, MethodAccept, MethodReject} {
+	for _, name := range []string{MethodSend, MethodRequest, MethodAccept, MethodReject} {
 		if !Builtin(name) {
 			t.Errorf("%s is built in", name)
 		}

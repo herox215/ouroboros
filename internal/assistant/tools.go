@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -112,7 +111,8 @@ type askPeerArgs struct {
 func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 	return agent.NewTool(toolAskPeer,
 		"Send a message to the agent of a peer and return its answer. "+
-			"A peer that is not connected yet gets a connection request instead, which a human there has to accept. "+
+			"A peer that is not connected gets nothing of the message: first your owner has to confirm the connection, "+
+			"then a human at the peer has to accept it. "+
 			"A peer that fails to answer returns an error with an ID instead of the cause: ask the same peer about that ID "+
 			"to learn what went wrong, which it can only tell once it is able to answer again.",
 		[]agent.Param{
@@ -123,21 +123,27 @@ func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 			if args.Peer == "" || args.Message == "" {
 				return "", errors.New(toolAskPeer + ` needs "peer" and "message"`)
 			}
-			node, err := network.Resolve(ctx, args.Peer)
+			// Only a node that is online, by its name or ID: an agent does not
+			// send this node to an address.
+			node, err := network.Online(ctx, args.Peer)
 			if err != nil {
 				return "", err
 			}
-			if node.ID != "" && node.ID == selfID() {
+			if node.ID == selfID() {
 				return "", fmt.Errorf("%s is this node itself, not a peer", args.Peer)
 			}
 			name := peers.Label(node)
 			// One context per peer and conversation: the peer remembers what was said before.
-			contextID := agent.ContextID(ctx) + "/" + cmp.Or(node.ID, node.Addr())
+			contextID := agent.ContextID(ctx) + "/" + node.ID
 			reply, err := network.Send(ctx, node, contextID, args.Message)
 			switch {
+			case errors.Is(err, peers.ErrUnconfirmed):
+				return fmt.Sprintf("%s (id %s) is not connected to this node, and nothing was sent to it. "+
+					"Only your owner can connect: the node now waits among the connection requests (R in the terminal UI) "+
+					"for them to confirm. Tell them that, with the ID, so that they can check it is the node they mean.", name, node.ID), nil
 			case errors.Is(err, peers.ErrPending):
-				return fmt.Sprintf("%s is not connected to this node yet. A connection request was sent; "+
-					"a human there has to accept it before %s answers.", name, name), nil
+				return fmt.Sprintf("%s was asked to connect, but nothing of your message was sent: "+
+					"a human there has to accept the connection request before %s answers.", name, name), nil
 			case errors.Is(err, peers.ErrRefused), errors.Is(err, peers.ErrSender):
 				return "", fmt.Errorf("%s %w", name, err)
 			}

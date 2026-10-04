@@ -89,7 +89,8 @@ func (o *Owner) SetupCommand() (*exec.Cmd, error) {
 }
 
 // Requests returns the connection requests that wait for a decision: those
-// of other nodes, which the owner decides on, and those this node sent.
+// of other nodes and those the agent of this node proposed (Request.Proposed),
+// which the owner decides on, and those this node sent.
 func (o *Owner) Requests() (incoming, outgoing []Request, err error) {
 	data, err := o.net.Contacts.Snapshot()
 	return data.Incoming, data.Outgoing, err
@@ -97,6 +98,10 @@ func (o *Owner) Requests() (incoming, outgoing []Request, err error) {
 
 // Accept trusts the peer with publicKey, which sent a connection request, and
 // tells it so. It fails with ErrNotSaved if the decision could not be stored.
+//
+// A request the agent proposed is none of the peer: accepting it asks the
+// peer to connect, and rejecting it drops it. This is the only way the node
+// asks another one to connect.
 func (o *Owner) Accept(ctx context.Context, publicKey string) error {
 	return o.decided("accept", publicKey, o.net.Accept(ctx, publicKey))
 }

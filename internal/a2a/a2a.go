@@ -16,6 +16,9 @@ const (
 	ProtocolVersion = "0.3.0"
 	CardPath        = "/.well-known/agent-card.json"
 	MethodSend      = "message/send"
+	// MethodRequest asks a node to connect, without a message: what the owner
+	// has to say only goes to a node that is connected.
+	MethodRequest = "contact/request"
 	// MethodAccept and MethodReject are sent back to a node that asked to
 	// connect, once the human on the other side has decided.
 	MethodAccept = "contact/accept"
@@ -180,7 +183,8 @@ type sendParams struct {
 	Hops int `json:"hops,omitempty"`
 }
 
-// contactParams are the parameters of MethodAccept and MethodReject.
+// contactParams are the parameters of MethodRequest, MethodAccept and
+// MethodReject.
 type contactParams struct {
 	Peer Peer `json:"peer"`
 }

@@ -48,6 +48,13 @@ func (c *Client) Send(ctx context.Context, baseURL, publicKey, contextID, text s
 	return res.Result.Text(), nil
 }
 
+// Request asks the node with publicKey at baseURL to connect, and tells it
+// nothing else. It returns nil if that node is connected to this one already,
+// and an error for which IsPending holds if a human there has to decide.
+func (c *Client) Request(ctx context.Context, baseURL, publicKey string) error {
+	return c.notify(ctx, baseURL, publicKey, MethodRequest)
+}
+
 // Accept tells the peer with publicKey at baseURL (which asked to connect)
 // that this node trusts it now.
 func (c *Client) Accept(ctx context.Context, baseURL, publicKey string) error {
@@ -71,7 +78,7 @@ var ErrBuiltin = errors.New("a2a: a built-in method cannot be called by its name
 // returned as *Error.
 //
 // The built-in methods are not reached this way: they decide about trust and
-// have their own calls, Send, Accept, Reject and Open.
+// have their own calls, Send, Request, Accept, Reject and Open.
 func (c *Client) Call(ctx context.Context, baseURL, publicKey, method string, params any) (*Message, error) {
 	if Builtin(method) {
 		return nil, ErrBuiltin

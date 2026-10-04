@@ -31,6 +31,10 @@ type Request struct {
 	Model     string    `json:"model,omitempty"`
 	Addr      string    `json:"addr,omitempty"` // host:port to call back
 	At        time.Time `json:"at"`
+	// Proposed marks a request among the incoming ones that no peer sent: the
+	// agent of this node wants to talk to the peer, and the owner decides
+	// whether the peer is asked to connect. See Propose.
+	Proposed bool `json:"proposed,omitempty"`
 }
 
 // MaxIncoming is how many connection requests wait for a decision at most.
@@ -153,6 +157,28 @@ func (s *Store) AddIncoming(publicKey, name, model, addr string) error {
 	})
 }
 
+// ErrFull is the error of Propose when MaxIncoming requests are waiting.
+var ErrFull = errors.New("too many connection requests are waiting for a decision")
+
+// Propose records that the agent of this node wants to talk to publicKey,
+// which the owner is not connected to. It waits among the incoming requests
+// for the owner to decide: Approve asks the peer to connect, Reject drops it.
+// Nothing is recorded for a peer that waits there already, and unlike a
+// request of a peer a proposal never takes the place of another request: with
+// MaxIncoming requests waiting it fails with ErrFull.
+func (s *Store) Propose(publicKey, name, model, addr string) error {
+	return s.update(func(d *Data) error {
+		if slices.ContainsFunc(d.Incoming, match(publicKey)) {
+			return errUnchanged
+		}
+		if len(d.Incoming) >= MaxIncoming {
+			return ErrFull
+		}
+		d.Incoming = append(d.Incoming, Request{PublicKey: publicKey, Name: name, Model: model, Addr: addr, At: time.Now(), Proposed: true})
+		return nil
+	})
+}
+
 // AddOutgoing records that this node asked publicKey to connect.
 func (s *Store) AddOutgoing(publicKey, name, model, addr string) error {
 	return s.update(func(d *Data) error {
@@ -188,6 +214,10 @@ func (s *Store) RemoveOutgoing(publicKey string) error {
 // Approve accepts a pending incoming request and returns it. It reports false
 // if there is no such request, and an error if the decision could not be
 // stored: then nothing has changed and the request is still pending.
+//
+// The request of a peer makes the peer trusted. A proposal (see Propose)
+// does not: it becomes an outgoing request, for the caller to send to the
+// peer, whose owner then decides.
 func (s *Store) Approve(publicKey string) (Request, bool, error) {
 	var r Request
 	var ok bool
@@ -199,6 +229,10 @@ func (s *Store) Approve(publicKey string) (Request, bool, error) {
 		r, ok = d.Incoming[i], true
 		d.Incoming = slices.Delete(d.Incoming, i, i+1)
 		d.Outgoing = slices.DeleteFunc(d.Outgoing, match(publicKey))
+		if r.Proposed {
+			d.Outgoing = append(d.Outgoing, Request{PublicKey: publicKey, Name: r.Name, Model: r.Model, Addr: r.Addr, At: time.Now()})
+			return nil
+		}
 		if !slices.ContainsFunc(d.Trusted, trusted(publicKey)) {
 			d.Trusted = append(d.Trusted, Contact{PublicKey: publicKey, Name: r.Name, Model: r.Model, Added: time.Now()})
 		}
@@ -212,7 +246,8 @@ func (s *Store) Approve(publicKey string) (Request, bool, error) {
 
 // Reject refuses a pending incoming request, blocks the peer and returns it.
 // Like Approve it reports false without such a request and an error if the
-// decision could not be stored.
+// decision could not be stored. A proposal (see Propose) is only dropped: the
+// peer did nothing to be blocked for.
 func (s *Store) Reject(publicKey string) (Request, bool, error) {
 	var r Request
 	var ok bool
@@ -223,7 +258,7 @@ func (s *Store) Reject(publicKey string) (Request, bool, error) {
 		}
 		r, ok = d.Incoming[i], true
 		d.Incoming = slices.Delete(d.Incoming, i, i+1)
-		if !slices.Contains(d.Blocked, publicKey) {
+		if !r.Proposed && !slices.Contains(d.Blocked, publicKey) {
 			d.Blocked = append(d.Blocked, publicKey)
 		}
 		return nil

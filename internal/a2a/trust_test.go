@@ -171,6 +171,44 @@ func TestTrustHandshake(t *testing.T) {
 	}
 }
 
+// A node asks to connect without a message: the request is recorded like the
+// message of a stranger, and the Responder never runs for it.
+func TestRequestWithoutMessage(t *testing.T) {
+	alice, bob := newNode(t, "alice"), newNode(t, "bob")
+	ctx := context.Background()
+	alice.respond = func(context.Context, string, string) (string, error) {
+		t.Error("a request to connect reached the agent")
+		return "", nil
+	}
+
+	if err := bob.client().Request(ctx, alice.srv.URL, alice.id.Public()); !IsPending(err) {
+		t.Fatalf("a stranger: %v", err)
+	}
+	d, _ := alice.trust.Snapshot()
+	if len(d.Incoming) != 1 || d.Incoming[0].PublicKey != bob.id.Public() || d.Incoming[0].Name != "node" || d.Incoming[0].Addr == "" {
+		t.Fatalf("alice incoming: %+v", d.Incoming)
+	}
+
+	// Once alice trusts bob, it says so, and nothing waits any more.
+	alice.trust.Approve(bob.id.Public())
+	if err := bob.client().Request(ctx, alice.srv.URL, alice.id.Public()); err != nil {
+		t.Fatalf("a peer: %v", err)
+	}
+	if d, _ := alice.trust.Snapshot(); len(d.Incoming) != 0 {
+		t.Fatalf("a peer left a request: %+v", d.Incoming)
+	}
+
+	carol := newNode(t, "carol")
+	alice.trust.AddIncoming(carol.id.Public(), "carol", "", "")
+	alice.trust.Reject(carol.id.Public())
+	if err := carol.client().Request(ctx, alice.srv.URL, alice.id.Public()); !IsBlocked(err) {
+		t.Fatalf("a node alice refused: %v", err)
+	}
+	if _, err := bob.client().call(ctx, alice.srv.URL, alice.id.Public(), MethodRequest, "no object"); !code(err, CodeInvalidParams) {
+		t.Fatalf("params that cannot be read: %v", err)
+	}
+}
+
 func TestServerRejectsUnsigned(t *testing.T) {
 	alice := newNode(t, "alice")
 	body := `{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"parts":[{"kind":"text","text":"hi"}]}}}`

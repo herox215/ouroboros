@@ -767,7 +767,7 @@ func TestOpenReachesOnlyTheHolderOfTheKey(t *testing.T) {
 	if _, err := alice.client().Open(ctx, plain(bob.srv), bob.id.Public(), "talk"); !errors.Is(err, errPlain) {
 		t.Fatalf("without TLS: %v", err)
 	}
-	for _, name := range []string{MethodSend, MethodAccept, MethodReject, MethodOpen} {
+	for _, name := range []string{MethodSend, MethodRequest, MethodAccept, MethodReject, MethodOpen} {
 		if _, err := alice.client().Open(ctx, bob.srv.URL, bob.id.Public(), name); !errors.Is(err, ErrBuiltin) {
 			t.Errorf("%s: %v", name, err)
 		}
