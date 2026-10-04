@@ -105,3 +105,37 @@ func TestIdentityReportsErrors(t *testing.T) {
 		t.Error("an identity was persisted without the lock")
 	}
 }
+
+func TestCreate(t *testing.T) {
+	d := Dir(filepath.Join(t.TempDir(), "a", "home"))
+	if err := d.Create(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(string(d))
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("home %v, %v", info, err)
+	}
+	if err := d.Create(); err != nil {
+		t.Fatalf("a home that exists: %v", err)
+	}
+}
+
+// Everything a node keeps is below its home.
+func TestFiles(t *testing.T) {
+	d := Dir(t.TempDir())
+	if got := d.UpdateDir(); got != filepath.Join(string(d), "update") {
+		t.Errorf("update dir %q", got)
+	}
+	s := d.Service()
+	if s.PIDFile != filepath.Join(string(d), "ouro.pid") || s.LogFile != filepath.Join(string(d), "ouro.log") {
+		t.Errorf("service %+v", s)
+	}
+
+	d.Contacts().AddTrusted("key", "beta", "gpt")
+	if trusted, _ := d.Contacts().State("key"); !trusted {
+		t.Error("a contact should be kept")
+	}
+	if _, err := os.Stat(filepath.Join(string(d), "contacts.json")); err != nil {
+		t.Errorf("contacts: %v", err)
+	}
+}

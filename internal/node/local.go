@@ -78,11 +78,11 @@ func (l Local) Stop() (bool, error) { return l.Home.Service().Stop() }
 // Client returns the client that signs requests as this node. While the node
 // is running, peers learn its port from it and can call back.
 func (l Local) Client() (*a2a.Client, error) {
-	id, err := l.Home.Identity()
+	cfg, err := l.Home.Config()
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := l.Home.Config()
+	id, err := l.Home.Identity()
 	if err != nil {
 		return nil, err
 	}
@@ -90,9 +90,12 @@ func (l Local) Client() (*a2a.Client, error) {
 	return &a2a.Client{Identity: id, Name: cfg.Name, Model: cfg.Model, Port: p.Port}, nil
 }
 
+// osExecutable finds the running binary; tests replace it to get in the way.
+var osExecutable = os.Executable
+
 // Executable is the path of the running binary with symlinks resolved.
 func Executable() (string, error) {
-	exe, err := os.Executable()
+	exe, err := osExecutable()
 	if err != nil {
 		return "", err
 	}

@@ -22,6 +22,9 @@ import (
 // the node stops.
 const shutdownTimeout = 5 * time.Second
 
+// netListen opens a port; tests replace it to get in the way.
+var netListen = net.Listen
+
 // Server is a node: it answers discovery probes and the messages of the
 // peers its owner trusts.
 type Server struct {
@@ -119,9 +122,9 @@ func (s Server) Run(ctx context.Context) error {
 
 // listen opens the A2A port, falling back to a free port if it is taken.
 func listen(port int) (net.Listener, error) {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	ln, err := netListen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil && port != 0 {
-		return net.Listen("tcp", ":0")
+		return netListen("tcp", ":0")
 	}
 	return ln, err
 }
