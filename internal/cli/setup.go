@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"ouroboros/internal/config"
+	"ouroboros/internal/home"
 	"ouroboros/internal/openai"
 )
 
@@ -24,53 +25,62 @@ var nonChatModels = []string{
 // preferredModels are default choices, best first (matched as prefix).
 var preferredModels = []string{"gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"}
 
-// setup asks for endpoint, API key, model and node name and saves the configuration.
-func (a *App) setup(ctx context.Context, cfg config.Config) (config.Config, error) {
+// wizard is the interactive setup of the node.
+type wizard struct {
+	term *console
+	home home.Dir
+	// Offered as defaults: the endpoint, and the key that belongs to it.
+	baseURL string
+	apiKey  string
+}
+
+// run asks for endpoint, API key, model and node name and saves the configuration.
+func (w *wizard) run(ctx context.Context, cfg config.Config) (config.Config, error) {
 	prevURL := cfg.BaseURL
-	endpoint := cmp.Or(cfg.BaseURL, a.settings.BaseURL)
-	answer, err := a.prompt(fmt.Sprintf("API endpoint (OpenAI-compatible) [%s]: ", endpoint), endpoint)
+	endpoint := cmp.Or(cfg.BaseURL, w.baseURL)
+	answer, err := w.term.prompt(fmt.Sprintf("API endpoint (OpenAI-compatible) [%s]: ", endpoint), endpoint)
 	if err != nil {
 		return cfg, err
 	}
 	cfg.BaseURL = strings.TrimRight(answer, "/")
 
-	key, models, err := a.askAPIKey(ctx, cfg.BaseURL, a.knownKey(cfg, prevURL))
+	key, models, err := w.askAPIKey(ctx, cfg.BaseURL, w.knownKey(cfg, prevURL))
 	if err != nil {
 		return cfg, err
 	}
 	cfg.APIKey = key
-	if cfg.Model, err = a.askModel(models, cfg.Model); err != nil {
+	if cfg.Model, err = w.askModel(models, cfg.Model); err != nil {
 		return cfg, err
 	}
 	name := cmp.Or(cfg.Name, hostname())
-	if cfg.Name, err = a.prompt(fmt.Sprintf("Node name [%s]: ", name), name); err != nil {
+	if cfg.Name, err = w.term.prompt(fmt.Sprintf("Node name [%s]: ", name), name); err != nil {
 		return cfg, err
 	}
 	if cfg.ID == "" {
 		cfg.ID = config.NewID()
 	}
-	return cfg, config.Save(a.settings.Home, cfg)
+	return cfg, w.home.SaveConfig(cfg)
 }
 
 // knownKey returns a key that belongs to cfg.BaseURL, so that a key is never
 // sent to an endpoint it was not entered for.
-func (a *App) knownKey(cfg config.Config, prevURL string) string {
+func (w *wizard) knownKey(cfg config.Config, prevURL string) string {
 	if cfg.BaseURL == prevURL && cfg.APIKey != "" {
 		return cfg.APIKey
 	}
-	if cfg.BaseURL == strings.TrimRight(a.settings.BaseURL, "/") {
-		return a.settings.APIKey
+	if cfg.BaseURL == strings.TrimRight(w.baseURL, "/") {
+		return w.apiKey
 	}
 	return ""
 }
 
 // askAPIKey asks until the endpoint accepts a key (possibly none) and returns
 // it with the endpoint's models.
-func (a *App) askAPIKey(ctx context.Context, baseURL, key string) (string, []string, error) {
+func (w *wizard) askAPIKey(ctx context.Context, baseURL, key string) (string, []string, error) {
 	for {
 		if key == "" {
 			var err error
-			if key, err = a.readSecret("API key (Enter for none): "); err != nil {
+			if key, err = w.term.readSecret("API key (Enter for none): "); err != nil {
 				return "", nil, err
 			}
 		}
@@ -78,7 +88,7 @@ func (a *App) askAPIKey(ctx context.Context, baseURL, key string) (string, []str
 		var apiErr *openai.APIError
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Unauthorized():
-			fmt.Fprintln(a.out, "✗ API key rejected, try again")
+			fmt.Fprintln(w.term.out, "✗ API key rejected, try again")
 			key = ""
 		case err != nil:
 			return "", nil, fmt.Errorf("cannot list models at %s: %w", baseURL, err)
@@ -88,31 +98,24 @@ func (a *App) askAPIKey(ctx context.Context, baseURL, key string) (string, []str
 	}
 }
 
-func (a *App) readSecret(prompt string) (string, error) {
-	if a.ReadSecret != nil {
-		return a.ReadSecret(prompt)
-	}
-	return a.prompt(prompt, "")
-}
-
 // askModel lets the user pick a model by number or name.
-func (a *App) askModel(all []string, current string) (string, error) {
+func (w *wizard) askModel(all []string, current string) (string, error) {
 	models := chatModels(all)
 	if len(models) == 0 {
 		return "", errors.New("no models available for this API key")
 	}
-	fmt.Fprintf(a.out, "\nAvailable models:\n\n")
-	printColumns(a.out, models)
+	fmt.Fprintf(w.term.out, "\nAvailable models:\n\n")
+	printColumns(w.term.out, models)
 	def := defaultModel(models, current)
 	for {
-		pick, err := a.prompt(fmt.Sprintf("\nChoose model [number or name, Enter = %s]: ", def), def)
+		pick, err := w.term.prompt(fmt.Sprintf("\nChoose model [number or name, Enter = %s]: ", def), def)
 		if err != nil {
 			return "", err
 		}
 		if m, ok := resolveModel(models, all, pick); ok {
 			return m, nil
 		}
-		fmt.Fprintln(a.out, "✗ unknown model")
+		fmt.Fprintln(w.term.out, "✗ unknown model")
 	}
 }
 

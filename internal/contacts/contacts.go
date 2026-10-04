@@ -48,6 +48,9 @@ type Store struct {
 // Open returns the store at path. The file is created on the first change.
 func Open(path string) *Store { return &Store{path: path} }
 
+// flock locks a file; tests replace it to make locking fail.
+var flock = syscall.Flock
+
 // update loads the file, applies fn and writes it back under an exclusive lock.
 func (s *Store) update(fn func(*Data) error) error {
 	s.mu.Lock()
@@ -57,10 +60,10 @@ func (s *Store) update(fn func(*Data) error) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer flock(int(f.Fd()), syscall.LOCK_UN)
 
 	var d Data
 	if err := json.NewDecoder(f).Decode(&d); err != nil && !errors.Is(err, io.EOF) {

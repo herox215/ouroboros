@@ -22,134 +22,191 @@ type Server struct {
 	Identity *identity.Identity
 	Trust    Trust
 	Respond  Responder
+	// Methods returns the methods added to the built-in ones, read anew for
+	// every request. May be nil.
+	Methods func() []Method
+}
+
+// Caller is who sent a request.
+type Caller struct {
+	PublicKey string // authenticated by the request signature
+	Addr      string // where to reach the caller again
+}
+
+// Method is a JSON-RPC method added to the server. It is only called for
+// peers the owner is connected to. Handle decodes params itself and returns
+// the Message to answer with (nil for none) or an *Error with one of the Code
+// constants.
+//
+// To add a method: contribute a Method from a plugin with kernel.Add. A name
+// that is built in (MethodSend, MethodAccept, MethodReject) is never handed
+// to an added method: what decides about trust cannot be replaced.
+type Method struct {
+	Name   string
+	Handle func(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error)
+}
+
+// method handles the JSON-RPC method it is registered for.
+type method func(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error)
+
+// Handler returns the HTTP handler of the server.
+func (s *Server) Handler() http.Handler {
+	verify := newVerifier()
+	// The built-in methods: JSON-RPC method name to handler.
+	builtin := map[string]method{
+		MethodSend:   s.send,
+		MethodAccept: s.accept,
+		MethodReject: s.reject,
+	}
+	return handler(s.Card,
+		func(r *http.Request, body []byte) (Caller, error) {
+			publicKey, err := verify.verify(r, body)
+			return Caller{publicKey, callbackAddr(r, r.Header.Get(HeaderPort))}, err
+		},
+		func(name string) (method, bool) {
+			if run, ok := builtin[name]; ok {
+				return run, true
+			}
+			return s.added(name)
+		})
+}
+
+// added returns the added method called name, limited to connected peers.
+func (s *Server) added(name string) (method, bool) {
+	if s.Methods == nil {
+		return nil, false
+	}
+	for _, m := range s.Methods() {
+		if m.Name != name {
+			continue
+		}
+		return func(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error) {
+			if trusted, _ := s.Trust.State(from.PublicKey); !trusted {
+				return nil, &Error{CodeUnauthorized, "not connected"}
+			}
+			return m.Handle(ctx, from, params)
+		}, true
+	}
+	return nil, false
 }
 
 // NewHandler serves the agent card and the JSON-RPC endpoint without
 // authentication: every peer is trusted. Used for tests and raw A2A clients.
 func NewHandler(card AgentCard, respond Responder) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == CardPath {
-			writeCard(w, r, card)
-			return
-		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-		if err != nil {
-			writeJSON(w, response{JSONRPC: "2.0", Error: &Error{CodeParseError, "parse error"}})
-			return
-		}
-		var req request
-		if json.Unmarshal(body, &req) != nil {
-			writeJSON(w, response{JSONRPC: "2.0", Error: &Error{CodeParseError, "parse error"}})
-			return
-		}
-		writeJSON(w, dispatch(r.Context(), req, respond))
+	return handler(func() AgentCard { return card }, nil, func(name string) (method, bool) {
+		return answer(respond), name == MethodSend
 	})
 }
 
-// Handler returns the HTTP handler of the server.
-func (s *Server) Handler() http.Handler {
-	verify := newVerifier()
+// handler serves the agent card and dispatches JSON-RPC requests to methods.
+// Every request goes the same way: read and parse the body, authenticate the
+// caller (unless authenticate is nil), look up the method, answer with its
+// result or its error.
+func handler(card func() AgentCard, authenticate func(*http.Request, []byte) (Caller, error), lookup func(name string) (method, bool)) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+CardPath, func(w http.ResponseWriter, r *http.Request) {
-		writeCard(w, r, s.Card())
+		c := card()
+		c.URL = "http://" + r.Host + "/"
+		writeJSON(w, c)
 	})
 	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-		if err != nil {
-			writeJSON(w, response{JSONRPC: "2.0", Error: &Error{CodeParseError, "parse error"}})
-			return
-		}
+		res := response{JSONRPC: "2.0"}
+		defer func() { writeJSON(w, res) }()
+
 		var req request
-		if json.Unmarshal(body, &req) != nil {
-			writeJSON(w, response{JSONRPC: "2.0", Error: &Error{CodeParseError, "parse error"}})
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil || json.Unmarshal(body, &req) != nil {
+			res.Error = &Error{CodeParseError, "parse error"}
 			return
 		}
-		publicKey, err := verify.verify(r, body)
-		if err != nil {
-			writeJSON(w, response{JSONRPC: "2.0", ID: req.ID, Error: &Error{CodeUnauthorized, err.Error()}})
+		res.ID = req.ID
+		var from Caller
+		if authenticate != nil {
+			if from, err = authenticate(r, body); err != nil {
+				res.Error = &Error{CodeUnauthorized, err.Error()}
+				return
+			}
+		}
+		run, ok := lookup(req.Method)
+		if !ok {
+			res.Error = &Error{CodeMethodNotFound, "method not found"}
 			return
 		}
-		writeJSON(w, s.dispatch(r, publicKey, req))
+		res.Result, res.Error = run(r.Context(), from, req.Params)
 	})
 	return mux
 }
 
-func (s *Server) dispatch(r *http.Request, publicKey string, req request) response {
-	res := response{JSONRPC: "2.0", ID: req.ID}
-	switch req.Method {
-	case MethodSend:
-		text := req.Params.Message.Text()
-		if text == "" {
-			res.Error = &Error{CodeInvalidParams, "message needs a text part"}
-			return res
-		}
-		trusted, blocked := s.Trust.State(publicKey)
-		if s.Identity != nil && publicKey == s.Identity.Public() {
-			trusted = true
-		}
-		if !trusted {
-			if blocked {
-				res.Error = &Error{CodeBlocked, "connection refused"}
-				return res
-			}
-			s.Trust.AddIncoming(publicKey, req.Params.Peer.Name, req.Params.Peer.Model, callbackAddr(r, r.Header.Get(HeaderPort)))
-			res.Error = &Error{CodePending, "connection request is waiting for approval"}
-			return res
-		}
-		contextID := req.Params.Message.ContextID
-		if contextID == "" {
-			contextID = NewID()
-		}
-		answer, err := s.Respond(r.Context(), contextID, text)
-		if err != nil {
-			res.Error = &Error{CodeInternalError, err.Error()}
-			return res
-		}
-		reply := NewMessage("agent", contextID, answer)
-		res.Result = &reply
-	case MethodAccept:
-		if s.Trust.HadOutgoing(publicKey) {
-			s.Trust.AddTrusted(publicKey, req.Params.Peer.Name, req.Params.Peer.Model)
-		}
-	case MethodReject:
-		if s.Trust.HadOutgoing(publicKey) {
-			s.Trust.RemoveOutgoing(publicKey)
-		}
-	default:
-		res.Error = &Error{CodeMethodNotFound, "method not found"}
+// send answers a message of a trusted peer. Anyone else leaves a connection
+// request instead.
+func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error) {
+	var p sendParams
+	if json.Unmarshal(params, &p) != nil || p.Message.Text() == "" {
+		return nil, errNoText
 	}
-	return res
+	if p.Hops > MaxHops {
+		return nil, &Error{CodeTooManyHops, "too many agents have passed this message on"}
+	}
+	trusted, blocked := s.Trust.State(from.PublicKey)
+	if s.Identity != nil && from.PublicKey == s.Identity.Public() {
+		trusted = true
+	}
+	switch {
+	case trusted:
+		// The Responder learns who asks: what it does for a peer is limited.
+		return reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), s.Respond, p.Message)
+	case blocked:
+		return nil, &Error{CodeBlocked, "connection refused"}
+	}
+	s.Trust.AddIncoming(from.PublicKey, p.Peer.Name, p.Peer.Model, from.Addr)
+	return nil, &Error{CodePending, "connection request is waiting for approval"}
 }
 
-// dispatch answers a request from an already trusted peer (raw handler).
-func dispatch(ctx context.Context, req request, respond Responder) response {
-	res := response{JSONRPC: "2.0", ID: req.ID}
-	if req.Method != MethodSend {
-		res.Error = &Error{CodeMethodNotFound, "method not found"}
-		return res
+// accept notes that a peer this node asked to connect has agreed.
+func (s *Server) accept(_ context.Context, from Caller, params json.RawMessage) (*Message, *Error) {
+	var p contactParams
+	if json.Unmarshal(params, &p) != nil {
+		return nil, &Error{CodeInvalidParams, "invalid params"}
 	}
-	text := req.Params.Message.Text()
-	if text == "" {
-		res.Error = &Error{CodeInvalidParams, "message needs a text part"}
-		return res
+	if s.Trust.HadOutgoing(from.PublicKey) {
+		s.Trust.AddTrusted(from.PublicKey, p.Peer.Name, p.Peer.Model)
 	}
-	contextID := req.Params.Message.ContextID
+	return nil, nil
+}
+
+// reject notes that a peer this node asked to connect has refused.
+func (s *Server) reject(_ context.Context, from Caller, _ json.RawMessage) (*Message, *Error) {
+	if s.Trust.HadOutgoing(from.PublicKey) {
+		s.Trust.RemoveOutgoing(from.PublicKey)
+	}
+	return nil, nil
+}
+
+var errNoText = &Error{CodeInvalidParams, "message needs a text part"}
+
+// answer is MethodSend without a trust check: respond answers the message.
+func answer(respond Responder) method {
+	return func(ctx context.Context, _ Caller, params json.RawMessage) (*Message, *Error) {
+		var p sendParams
+		if json.Unmarshal(params, &p) != nil || p.Message.Text() == "" {
+			return nil, errNoText
+		}
+		return reply(ctx, respond, p.Message)
+	}
+}
+
+// reply lets respond answer msg within its conversation.
+func reply(ctx context.Context, respond Responder, msg Message) (*Message, *Error) {
+	contextID := msg.ContextID
 	if contextID == "" {
 		contextID = NewID()
 	}
-	answer, err := respond(ctx, contextID, text)
+	text, err := respond(ctx, contextID, msg.Text())
 	if err != nil {
-		res.Error = &Error{CodeInternalError, err.Error()}
-		return res
+		return nil, &Error{CodeInternalError, err.Error()}
 	}
-	reply := NewMessage("agent", contextID, answer)
-	res.Result = &reply
-	return res
-}
-
-func writeCard(w http.ResponseWriter, r *http.Request, card AgentCard) {
-	card.URL = "http://" + r.Host + "/"
-	writeJSON(w, card)
+	answer := NewMessage("agent", contextID, text)
+	return &answer, nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

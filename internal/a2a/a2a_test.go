@@ -147,3 +147,59 @@ func TestNewIDIsUUIDv4(t *testing.T) {
 		t.Fatalf("bad uuid %q", id)
 	}
 }
+
+// What cannot be sent is an error, never a silent success.
+func TestCallErrors(t *testing.T) {
+	ctx := context.Background()
+	srv := newServer(t, echo)
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+
+	c := new(Client)
+	if _, err := c.call(ctx, srv.URL, MethodSend, make(chan int)); err == nil {
+		t.Error("params that are no JSON should fail")
+	}
+	if _, err := c.call(ctx, "://no-url", MethodSend, struct{}{}); err == nil {
+		t.Error("an invalid URL should fail")
+	}
+	if _, err := c.call(ctx, gone.URL, MethodSend, struct{}{}); err == nil {
+		t.Error("a node that is gone should fail")
+	}
+	if err := c.Accept(ctx, gone.URL); err == nil {
+		t.Error("Accept should report a node that is gone")
+	}
+	if err := c.Reject(ctx, gone.URL); err == nil {
+		t.Error("Reject should report a node that is gone")
+	}
+}
+
+func TestFetchCardErrors(t *testing.T) {
+	ctx := context.Background()
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	serve := func(body string) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, body) }))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	for name, url := range map[string]string{
+		"invalid url":  "://no-url",
+		"node is gone": gone.URL,
+		"invalid json": serve("nope"),
+		"no name":      serve(`{"protocolVersion":"0.3.0"}`),
+	} {
+		if _, err := FetchCard(ctx, url); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}
+
+func TestErrorKinds(t *testing.T) {
+	pending, blocked := &Error{CodePending, "wait"}, &Error{CodeBlocked, "no"}
+	if !IsPending(pending) || IsPending(blocked) || !IsBlocked(blocked) || IsBlocked(pending) || IsPending(errors.New("other")) {
+		t.Fatal("IsPending and IsBlocked should tell the codes apart")
+	}
+	if got := pending.Error(); got != "a2a: wait (-32002)" {
+		t.Fatalf("Error = %q", got)
+	}
+}

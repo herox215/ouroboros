@@ -29,7 +29,12 @@ const (
 	CodeUnauthorized   = -32001 // missing or bad request signature
 	CodePending        = -32002 // waiting for the peer to approve the request
 	CodeBlocked        = -32003 // the peer refused to connect
+	CodeTooManyHops    = -32004 // the message was passed on by too many agents
 )
+
+// MaxHops is how many agents may pass a message on before it is refused.
+// It ends a question that goes round in a circle of nodes.
+const MaxHops = 3
 
 // Peer is the identifying information a node sends about itself.
 type Peer struct {
@@ -119,6 +124,10 @@ func code(err error, want int) bool {
 // IsPending reports whether err means the peer is waiting for a human decision.
 func IsPending(err error) bool { return code(err, CodePending) }
 
+// ErrTooManyHops is returned instead of sending a message that MaxHops agents
+// have passed on already.
+var ErrTooManyHops = errors.New("a2a: too many agents have passed this message on")
+
 // IsBlocked reports whether err means the peer refused to connect.
 func IsBlocked(err error) bool { return code(err, CodeBlocked) }
 
@@ -126,10 +135,21 @@ type request struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
-	Params  struct {
-		Message Message `json:"message"`
-		Peer    Peer    `json:"peer"`
-	} `json:"params"`
+	Params  json.RawMessage `json:"params"` // decoded by the method they are for
+}
+
+// sendParams are the parameters of MethodSend.
+type sendParams struct {
+	Message Message `json:"message"`
+	Peer    Peer    `json:"peer"`
+	// Hops counts the agents that passed the message on: 0 when the owner of
+	// the sending node asked for it.
+	Hops int `json:"hops,omitempty"`
+}
+
+// contactParams are the parameters of MethodAccept and MethodReject.
+type contactParams struct {
+	Peer Peer `json:"peer"`
 }
 
 type response struct {

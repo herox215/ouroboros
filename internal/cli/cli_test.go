@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,15 +12,19 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
+	"ouroboros/internal/home"
+	"ouroboros/internal/kernel"
 	"ouroboros/internal/openai/openaitest"
+	"ouroboros/internal/peers"
 	"ouroboros/internal/tui"
+	"ouroboros/internal/update"
 	"ouroboros/internal/update/updatetest"
 )
 
@@ -40,7 +43,6 @@ func testSettings(t *testing.T) Settings {
 	t.Helper()
 	return Settings{
 		Home:      t.TempDir(),
-		Data:      t.TempDir(),
 		HTTPPort:  0,
 		DiscoPort: freeUDPPort(t),
 		BaseURL:   openaitest.NewServer(t),
@@ -52,12 +54,41 @@ func nodeConfig(s Settings) config.Config {
 	return config.Config{BaseURL: s.BaseURL, APIKey: openaitest.Key, Model: "gpt-4o", Name: "alpha", ID: "abc123"}
 }
 
+// testPeers are the hosts the node with the given home probes directly.
+var testPeers = map[string][]string{}
+
 func newApp(s Settings, input string) (*App, *bytes.Buffer) {
+	return newAppOn(s, Terminal{In: strings.NewReader(input)})
+}
+
+// newAppOn returns the standard ouro with one plugin swapped: instead of the
+// tailnet, the hosts in testPeers are asked, so that tests stay on this host.
+func newAppOn(s Settings, term Terminal) (*App, *bytes.Buffer) {
 	var out bytes.Buffer
-	app := New(s, strings.NewReader(input), &out)
-	app.discoverWait = 300 * time.Millisecond
-	app.vpnPeers = nil // tests stay on this host
+	term.Out = &out
+	if term.In == nil {
+		term.In = strings.NewReader("")
+	}
+	list := slices.DeleteFunc(plugins(s, term), func(p kernel.Plugin) bool { return p.Name == "tailscale" })
+	list = append(list, kernel.Plugin{Name: "testpeers", Start: func(ctx *kernel.Context) error {
+		kernel.Add(ctx, discovery.PeerSource(func(context.Context) []string { return testPeers[s.Home] }))
+		return nil
+	}})
+	app, err := newAppWith(list...)
+	if err != nil {
+		panic(err)
+	}
+	service[*discovery.Scanner](app).Wait = 300 * time.Millisecond
 	return app, &out
+}
+
+// service returns the service of type T of app.
+func service[T any](app *App) T {
+	v, err := kernel.Use[T](app.ctx)
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func run(t *testing.T, s Settings, input string, args ...string) (string, error) {
@@ -111,8 +142,7 @@ func TestNoArgsWithoutTerminalShowsUsage(t *testing.T) {
 func TestChatWithTerminalOpensTUI(t *testing.T) {
 	s := testSettings(t)
 	config.Save(s.Home, nodeConfig(s))
-	app, out := newApp(s, "")
-	app.Interactive = true
+	app, out := newAppOn(s, Terminal{Interactive: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the UI has no terminal here: it must give up instead of reading lines
 	if err := app.Run(ctx, []string{"chat"}); err == nil || strings.Contains(out.String(), "chatting with your agent") {
@@ -134,20 +164,14 @@ func TestUnknownCommand(t *testing.T) {
 
 func TestSettingsFromEnv(t *testing.T) {
 	t.Setenv("OURO_HOME", "/tmp/ouro")
-	t.Setenv("OURO_DATA", "/tmp/ouro-data")
 	t.Setenv("OURO_PORT", "1234")
 	t.Setenv("OURO_DISCO_PORT", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENAI_API_KEY", "sk-env")
 	s, err := SettingsFromEnv()
-	want := Settings{Home: "/tmp/ouro", Data: "/tmp/ouro-data", HTTPPort: 1234, DiscoPort: 41338, BaseURL: "https://api.openai.com/v1", APIKey: "sk-env"}
+	want := Settings{Home: "/tmp/ouro", HTTPPort: 1234, DiscoPort: 41338, BaseURL: "https://api.openai.com/v1", APIKey: "sk-env"}
 	if err != nil || s != want {
 		t.Fatalf("got %+v, %v", s, err)
-	}
-	t.Setenv("OURO_DATA", "")
-	t.Setenv("HOME", "/home/ouro")
-	if s, err := SettingsFromEnv(); err != nil || s.Data != "/home/ouro/.ouro" {
-		t.Fatalf("default data directory: %+v, %v", s, err)
 	}
 	t.Setenv("OURO_PORT", "abc")
 	if _, err := SettingsFromEnv(); err == nil {
@@ -158,7 +182,7 @@ func TestSettingsFromEnv(t *testing.T) {
 func TestSetupRetriesKeyAndModel(t *testing.T) {
 	s := testSettings(t)
 	app, out := newApp(s, "\nsk-bad\n"+openaitest.Key+"\n99\nnope\n2\nmynode\n")
-	cfg, err := app.setup(context.Background(), config.Config{})
+	cfg, err := service[*wizard](app).run(context.Background(), config.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +201,7 @@ func TestSetupDefaults(t *testing.T) {
 	s := testSettings(t)
 	s.APIKey = openaitest.Key // from OPENAI_API_KEY, no prompt
 	app, _ := newApp(s, "\n\n\n")
-	cfg, err := app.setup(context.Background(), config.Config{})
+	cfg, err := service[*wizard](app).run(context.Background(), config.Config{})
 	if err != nil || cfg.BaseURL != s.BaseURL || cfg.Model != "gpt-4o-mini" || cfg.Name != hostname() {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
@@ -188,7 +212,7 @@ func TestSetupKeepsExistingValues(t *testing.T) {
 	s.BaseURL = "http://other.invalid" // the saved endpoint wins over the default
 	want := nodeConfig(testSettings(t))
 	app, _ := newApp(s, "\n\n\n")
-	cfg, err := app.setup(context.Background(), want)
+	cfg, err := service[*wizard](app).run(context.Background(), want)
 	if err != nil || !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
@@ -198,7 +222,7 @@ func TestSetupWithoutAPIKey(t *testing.T) {
 	s := testSettings(t)
 	url := openaitest.NewServerWithKey(t, "") // e.g. a local Ollama
 	app, _ := newApp(s, url+"/\n\n1\nlocal\n")
-	cfg, err := app.setup(context.Background(), config.Config{})
+	cfg, err := service[*wizard](app).run(context.Background(), config.Config{})
 	if err != nil || cfg.BaseURL != url || cfg.APIKey != "" || cfg.Model != "gpt-4o" || !cfg.Complete() {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
@@ -210,7 +234,7 @@ func TestSetupNeverSendsKeyToAnotherEndpoint(t *testing.T) {
 	other := openaitest.NewServerWithKey(t, "sk-other")
 	app, out := newApp(s, other+"\nsk-other\n1\nn\n")
 	old := nodeConfig(s) // saved key belongs to s.BaseURL
-	cfg, err := app.setup(context.Background(), old)
+	cfg, err := service[*wizard](app).run(context.Background(), old)
 	if err != nil || cfg.BaseURL != other || cfg.APIKey != "sk-other" {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
@@ -220,13 +244,12 @@ func TestSetupNeverSendsKeyToAnotherEndpoint(t *testing.T) {
 }
 
 func TestSetupUsesReadSecret(t *testing.T) {
-	app, _ := newApp(testSettings(t), "\n1\nx\n")
 	var prompted string
-	app.ReadSecret = func(prompt string) (string, error) {
+	app, _ := newAppOn(testSettings(t), Terminal{In: strings.NewReader("\n1\nx\n"), ReadSecret: func(prompt string) (string, error) {
 		prompted = prompt
 		return openaitest.Key, nil
-	}
-	if _, err := app.setup(context.Background(), config.Config{}); err != nil || prompted == "" {
+	}})
+	if _, err := service[*wizard](app).run(context.Background(), config.Config{}); err != nil || prompted == "" {
 		t.Fatalf("prompt %q, err %v", prompted, err)
 	}
 }
@@ -240,7 +263,7 @@ func TestSetupStopsAtEndOfInput(t *testing.T) {
 	}
 	for name, input := range inputs {
 		app, _ := newApp(testSettings(t), input)
-		if _, err := app.setup(context.Background(), config.Config{}); err == nil {
+		if _, err := service[*wizard](app).run(context.Background(), config.Config{}); err == nil {
 			t.Errorf("%s: want error", name)
 		}
 	}
@@ -249,7 +272,7 @@ func TestSetupStopsAtEndOfInput(t *testing.T) {
 func TestSetupNetworkError(t *testing.T) {
 	s := testSettings(t)
 	app, _ := newApp(s, "http://127.0.0.1:1\n\n")
-	if _, err := app.setup(context.Background(), config.Config{}); err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") {
+	if _, err := service[*wizard](app).run(context.Background(), config.Config{}); err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -302,27 +325,6 @@ func TestPrintColumns(t *testing.T) {
 	printColumns(&b, []string{"a", "bb", "ccc"})
 	if got := b.String(); got != "    1) a      2) bb     3) ccc\n" {
 		t.Fatalf("got %q", got)
-	}
-}
-
-func TestMatch(t *testing.T) {
-	nodes := []discovery.Node{{ID: "abc123", Name: "alpha"}, {ID: "abd456", Name: "beta"}, {ID: "ab", Name: "gamma"}}
-	tests := []struct {
-		target, want string
-		ok           bool
-	}{
-		{"abc123", "abc123", true}, // full ID
-		{"abc", "abc123", true},    // unique prefix
-		{"beta", "abd456", true},   // name
-		{"ab", "ab", true},         // exact ID wins over prefix matches
-		{"a", "", false},           // ambiguous
-		{"zzz", "", false},         // unknown
-	}
-	for _, tt := range tests {
-		n, err := match(nodes, tt.target)
-		if (err == nil) != tt.ok || n.ID != tt.want {
-			t.Errorf("match(%q) = %+v, %v", tt.target, n, err)
-		}
 	}
 }
 
@@ -460,7 +462,7 @@ func TestChatWithAssistant(t *testing.T) {
 }
 
 // twoNodes starts the node "beta" and returns the settings of "alpha", which
-// finds beta as a configured peer.
+// finds beta as a VPN peer.
 func twoNodes(t *testing.T) (alpha, beta Settings) {
 	t.Helper()
 	beta = testSettings(t)
@@ -469,9 +471,8 @@ func twoNodes(t *testing.T) (alpha, beta Settings) {
 	startNode(t, beta, cfg)
 
 	alpha = testSettings(t)
-	cfg = nodeConfig(alpha)
-	cfg.Peers = []string{fmt.Sprintf("127.0.0.1:%d", beta.DiscoPort)}
-	if err := config.Save(alpha.Home, cfg); err != nil {
+	testPeers[alpha.Home] = []string{fmt.Sprintf("127.0.0.1:%d", beta.DiscoPort)}
+	if err := config.Save(alpha.Home, nodeConfig(alpha)); err != nil {
 		t.Fatal(err)
 	}
 	return alpha, beta
@@ -481,9 +482,6 @@ func TestAssistantAsksPeers(t *testing.T) {
 	alpha, beta := twoNodes(t)
 	startNode(t, alpha, mustLoad(t, alpha)) // beta's acceptance has to reach alpha
 	b, _ := newApp(beta, "")
-	if _, err := b.updateCard(context.Background(), []byte(`{"description":"Knows\nthe time."}`)); err != nil {
-		t.Fatal(err)
-	}
 
 	// "@" makes the fake LLM list the peers.
 	out, err := run(t, alpha, "", "chat", "@")
@@ -500,14 +498,14 @@ func TestAssistantAsksPeers(t *testing.T) {
 		t.Fatalf("the request should be remembered: %q", out)
 	}
 
-	if strings.Contains(out, "Knows") {
+	if strings.Contains(out, "instance named") {
 		t.Fatalf("a peer that is not connected should not get a word in: %q", out)
 	}
-	requests, _ := b.contacts().Snapshot()
+	requests, _ := home.Dir(beta.Home).Contacts().Snapshot()
 	if len(requests.Incoming) != 1 || requests.Incoming[0].Name != "alpha" {
 		t.Fatalf("beta's requests: %+v", requests)
 	}
-	if err := (tuiBackend{b}).Accept(requests.Incoming[0].PublicKey); err != nil {
+	if err := service[*peers.Network](b).Accept(context.Background(), requests.Incoming[0].PublicKey); err != nil {
 		t.Fatal(err)
 	}
 
@@ -528,7 +526,7 @@ func TestAssistantAsksPeers(t *testing.T) {
 	if strings.Count(out, "last=one") != 1 || strings.Contains(out, "beta:") {
 		t.Errorf("the talk between the agents should stay out of the chat:\n%s", out)
 	}
-	if out, _ = run(t, alpha, "", "chat", "@"); !strings.Contains(out, "model gpt-4o-mini, connected): Knows the time.\n") {
+	if out, _ = run(t, alpha, "", "chat", "@"); !strings.Contains(out, "model gpt-4o-mini, connected): Ouroboros instance named beta\n") {
 		t.Fatalf("beta should be listed as connected, with its card: %q", out)
 	}
 
@@ -554,7 +552,7 @@ func TestTUIBackendAsk(t *testing.T) {
 	alpha, _ := twoNodes(t)
 	app, _ := newApp(alpha, "")
 	var steps []tui.Step
-	reply, err := tuiBackend{app}.Ask(context.Background(), "ctx", "@beta hello", func(s tui.Step) { steps = append(steps, s) })
+	reply, err := service[*ui](app).Ask(context.Background(), "ctx", "@beta hello", func(s tui.Step) { steps = append(steps, s) })
 	if err != nil || !strings.Contains(reply, "not connected") {
 		t.Fatalf("got %q, %v", reply, err)
 	}
@@ -563,7 +561,7 @@ func TestTUIBackendAsk(t *testing.T) {
 	}
 	// Looking up the peers is not worth a line in the chat.
 	steps = nil
-	if _, err := (tuiBackend{app}).Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }); err != nil || len(steps) != 0 {
+	if _, err := service[*ui](app).Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }); err != nil || len(steps) != 0 {
 		t.Fatalf("steps %+v, %v", steps, err)
 	}
 }
@@ -600,7 +598,8 @@ func TestUpdateInstallsNewestVersion(t *testing.T) {
 	repo, rev := updatetest.NewRepo(t, "v1")
 	exe := filepath.Join(t.TempDir(), "ouro")
 	app, out := newApp(s, "")
-	app.updater.Repo, app.updater.Exe, app.updater.Revision = repo, exe, "old"
+	updater := service[*update.Updater](app)
+	updater.Repo, updater.Exe, updater.Revision = repo, exe, "old"
 
 	if err := app.Run(context.Background(), []string{"update"}); err != nil {
 		t.Fatal(err)
@@ -610,34 +609,13 @@ func TestUpdateInstallsNewestVersion(t *testing.T) {
 	}
 
 	out.Reset()
-	app.updater.Revision = rev
+	updater.Revision = rev
 	if err := app.Run(context.Background(), []string{"update"}); err != nil || !strings.Contains(out.String(), "already up to date") {
 		t.Fatalf("second update: %v, output %q", err, out.String())
 	}
 }
 
-func TestPeers(t *testing.T) {
-	s := testSettings(t)
-	if out, err := run(t, s, "", "peers"); err != nil || !strings.Contains(out, "no peers") {
-		t.Fatalf("got %q, %v", out, err)
-	}
-	for _, args := range [][]string{{"add", "10.0.0.7"}, {"add", "box.example"}, {"add", "10.0.0.7"}, {"rm", "box.example"}} {
-		if _, err := run(t, s, "", append([]string{"peers"}, args...)...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if out, _ := run(t, s, "", "peers"); out != "10.0.0.7\n" {
-		t.Fatalf("peers = %q", out)
-	}
-	if _, err := run(t, s, "", "peers", "rm", "box.example"); err == nil {
-		t.Fatal("removing an unknown peer should fail")
-	}
-	if _, err := run(t, s, "", "peers", "bogus"); err == nil || !strings.Contains(err.Error(), "usage") {
-		t.Fatalf("got %v", err)
-	}
-}
-
-// A node outside the local network is found through a configured or VPN peer.
+// A node outside the local network is found through a VPN peer.
 func TestListFindsNodesOnPeers(t *testing.T) {
 	remote := testSettings(t)
 	startNode(t, remote, nodeConfig(remote))
@@ -646,152 +624,172 @@ func TestListFindsNodesOnPeers(t *testing.T) {
 	if out, _ := run(t, s, "", "list"); !strings.Contains(out, "no ouroboros nodes") {
 		t.Fatalf("without peers nothing should be found: %q", out)
 	}
-	peer := fmt.Sprintf("127.0.0.1:%d", remote.DiscoPort)
-	if _, err := run(t, s, "", "peers", "add", peer); err != nil {
-		t.Fatal(err)
-	}
-	if out, _ := run(t, s, "", "list"); !strings.Contains(out, "alpha") {
-		t.Fatalf("the configured peer should be found: %q", out)
-	}
-
-	if _, err := run(t, s, "", "peers", "rm", peer); err != nil {
-		t.Fatal(err)
-	}
-	app, out := newApp(s, "")
-	app.vpnPeers = func(context.Context) []string { return []string{peer} }
-	if err := app.Run(context.Background(), []string{"list"}); err != nil || !strings.Contains(out.String(), "alpha") {
-		t.Fatalf("the VPN peer should be found: %q, %v", out.String(), err)
+	testPeers[s.Home] = []string{fmt.Sprintf("127.0.0.1:%d", remote.DiscoPort)}
+	if out, err := run(t, s, "", "list"); err != nil || !strings.Contains(out, "alpha") {
+		t.Fatalf("the VPN peer should be found: %q, %v", out, err)
 	}
 }
 
-// Both agents have the soul: the one the owner chats with and the one peers reach.
-func TestSoul(t *testing.T) {
+func TestCard(t *testing.T) {
 	s := testSettings(t)
-	startNode(t, s, nodeConfig(s))
-	for _, args := range [][]string{{"chat", "?system"}, {"ask", "alpha", "?system"}} {
-		if out, err := run(t, s, "", args...); err != nil || strings.Contains(out, "soul") {
-			t.Fatalf("%v without soul.md: %q, %v", args, out, err)
-		}
-	}
-
-	path := filepath.Join(s.Data, "memory", "soul.md")
-	os.MkdirAll(filepath.Dir(path), 0o700)
-	// The node is already running: the file is read for every answer.
-	if err := os.WriteFile(path, []byte("\nYou love snakes.\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"chat", "?system"}, {"ask", "alpha", "?system"}} {
-		if out, err := run(t, s, "", args...); err != nil || !strings.HasSuffix(out, "how you behave:\n\nYou love snakes.\n") {
-			t.Fatalf("%v with soul.md: %q, %v", args, out, err)
-		}
+	port := startNode(t, s, nodeConfig(s))
+	card, err := a2a.FetchCard(context.Background(), fmt.Sprintf("http://127.0.0.1:%d/", port))
+	if err != nil || card.Description != "Ouroboros instance named alpha" || card.Version != Version {
+		t.Fatalf("card: %+v, %v", card, err)
 	}
 }
 
-func TestUpdateSoul(t *testing.T) {
-	s := testSettings(t)
-	config.Save(s.Home, nodeConfig(s))
-	app, _ := newApp(s, "")
-	ctx := context.Background()
-
-	if _, err := app.updateSoul(ctx, []byte(`{"content":"  You are calm.  "}`)); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(app.soulPath()); string(b) != "You are calm.\n" {
-		t.Fatalf("soul.md: %q", b)
-	}
-	bot, err := app.assistant()
+// publicKey is the key the node of s signs with.
+func publicKey(t *testing.T, s Settings) string {
+	t.Helper()
+	id, err := home.Dir(s.Home).Identity()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, err := bot.Respond(ctx, "c1", "?system"); err != nil || !strings.HasSuffix(out, "\n\nYou are calm.") {
-		t.Fatalf("the assistant should have the new soul: %q, %v", out, err)
+	return id.Public()
+}
+
+// trust makes the node of s trust the node of peer.
+func trust(t *testing.T, s, peer Settings, name string) {
+	t.Helper()
+	home.Dir(s.Home).Contacts().AddTrusted(publicKey(t, peer), name, "")
+}
+
+// A peer's question may make the agent use the tools its owner allows for
+// peers, and no others.
+func TestPeerAgentUsesAllowedTools(t *testing.T) {
+	// gamma keeps the default: its agent has no tools for peers.
+	gamma := testSettings(t)
+	cfg := nodeConfig(gamma)
+	cfg.Name, cfg.ID, cfg.Model = "gamma", "ccc333", "o3-mini"
+	startNode(t, gamma, cfg)
+
+	// beta lets peers use its tools.
+	beta := testSettings(t)
+	cfg = nodeConfig(beta)
+	cfg.Name, cfg.ID, cfg.Model = "beta", "bbb222", "gpt-4o-mini"
+	cfg.Tools = &config.Tools{A2A: []string{"list_peers", "ask_peer"}}
+	startNode(t, beta, cfg)
+
+	alpha := testSettings(t)
+	startNode(t, alpha, nodeConfig(alpha))
+
+	disco := func(s Settings) string { return fmt.Sprintf("127.0.0.1:%d", s.DiscoPort) }
+	testPeers[alpha.Home] = []string{disco(beta)}
+	testPeers[beta.Home] = []string{disco(alpha), disco(gamma)}
+	testPeers[gamma.Home] = []string{disco(beta)}
+	trust(t, beta, alpha, "alpha")
+	trust(t, gamma, beta, "beta")
+	trust(t, beta, gamma, "gamma")
+
+	// alpha asks beta, whose agent asks gamma on the way.
+	out, err := run(t, alpha, "", "ask", "beta", "@gamma hello")
+	if err != nil || out != "[gpt-4o-mini] turns=3 last=[o3-mini] turns=1 last=hello\n" {
+		t.Fatalf("beta should ask gamma: %q, %v", out, err)
 	}
 
-	// The assistant's owner is told, and the soul before is kept.
-	app.updateSoul(ctx, []byte(`{"content":"You are wild."}`))
-	if b, _ := os.ReadFile(app.soulPath() + ".bak"); string(b) != "You are calm.\n" {
-		t.Fatalf("soul.md.bak: %q", b)
+	// The peer that asks is not asked in turn, and not offered either.
+	out, err = run(t, alpha, "", "ask", "beta", "@alpha hello")
+	if err != nil || !strings.Contains(out, "last=error: alpha is the peer you are answering") {
+		t.Fatalf("beta should not ask alpha back: %q, %v", out, err)
 	}
-	done := agent.Step{Tool: toolUpdateSoul, Done: true}
-	if s, ok := noteStep(done); !ok || !strings.Contains(s.Note, "soul updated") {
-		t.Fatalf("a changed soul should be noted: %+v", s)
-	}
-	if _, ok := noteStep(agent.Step{Tool: toolAskPeer, Done: true}); ok {
-		t.Fatal("asking a peer is not worth a note")
-	}
-	done.Err = errors.New("boom")
-	if _, ok := noteStep(done); ok {
-		t.Fatal("a failed update is not a change")
+	out, err = run(t, alpha, "", "ask", "beta", "@")
+	if err != nil || !strings.Contains(out, "gamma (id ccc333") || strings.Contains(out, "alpha") {
+		t.Fatalf("beta should list gamma only: %q, %v", out, err)
 	}
 
-	// An empty soul is none.
-	if _, err := app.updateSoul(ctx, []byte(`{"content":""}`)); err != nil || app.soul() != "" {
-		t.Fatalf("clearing: %q, %v", app.soul(), err)
-	}
-	for name, args := range map[string]string{
-		"missing content": `{}`,
-		"too long":        fmt.Sprintf(`{"content":%q}`, strings.Repeat("x", maxSoul)),
-	} {
-		if _, err := app.updateSoul(ctx, []byte(args)); err == nil {
-			t.Errorf("%s: want error", name)
-		}
-	}
-	if app.soul() != "" {
-		t.Fatal("a rejected update should leave the soul alone")
+	// gamma allows peers no tools: the same message is just a message.
+	out, err = run(t, beta, "", "ask", "gamma", "@beta hello")
+	if err != nil || out != "[o3-mini] turns=1 last=@beta hello\n" {
+		t.Fatalf("gamma should not use tools: %q, %v", out, err)
 	}
 }
 
-func TestUpdateCard(t *testing.T) {
+// The owner can take tools away from the own agent, too.
+func TestOwnerToolsCanBeRestricted(t *testing.T) {
 	s := testSettings(t)
 	cfg := nodeConfig(s)
-	port := startNode(t, s, cfg)
-	app, _ := newApp(s, "")
-	ctx := context.Background()
-	served := func() string {
-		t.Helper()
-		card, err := a2a.FetchCard(ctx, fmt.Sprintf("http://127.0.0.1:%d/", port))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return card.Description
+	cfg.Tools = &config.Tools{H2A: []string{}}
+	config.Save(s.Home, cfg)
+	out, err := run(t, s, "", "chat", "@beta hello")
+	if err != nil || out != "[gpt-4o] turns=1 last=@beta hello\n" {
+		t.Fatalf("without tools the message is just a message: %q, %v", out, err)
 	}
-	node := discovery.Node{ID: cfg.ID, Model: cfg.Model, Host: "127.0.0.1", Port: port}
 
-	if got := served(); got != "Ouroboros node abc123 (gpt-4o)" || peerDescription(ctx, node) != "" {
-		t.Fatalf("without card.md: %q, %q", got, peerDescription(ctx, node))
+	cfg.Tools = &config.Tools{H2A: []string{"ask_peers"}}
+	config.Save(s.Home, cfg)
+	if _, err := run(t, s, "", "chat", "hi"); err == nil || !strings.Contains(err.Error(), "tools.h2a") {
+		t.Fatalf("a typo should be reported: %v", err)
 	}
-	// The node is already running: the card is read for every request.
-	if _, err := app.updateCard(ctx, []byte(`{"description":" Agent of Lucas,\n knows Go. "}`)); err != nil {
-		t.Fatal(err)
+	cfg.Tools = &config.Tools{A2A: []string{"ask_peers"}}
+	config.Save(s.Home, cfg)
+	if _, err := run(t, s, "", "serve"); err == nil || !strings.Contains(err.Error(), "tools.a2a") {
+		t.Fatalf("a node with a typo should not start: %v", err)
 	}
-	if got := served(); got != "Agent of Lucas, knows Go." || peerDescription(ctx, node) != got {
-		t.Fatalf("with card.md: %q, %q", got, peerDescription(ctx, node))
-	}
-	bot, err := app.assistant()
+}
+
+// A plugin adds to ouro without a change anywhere else: here a command and a
+// tool the owner can allow.
+func TestPluginExtendsOuro(t *testing.T) {
+	s := testSettings(t)
+	cfg := nodeConfig(s)
+	cfg.Tools = &config.Tools{H2A: []string{"shout"}}
+	config.Save(s.Home, cfg)
+
+	var out bytes.Buffer
+	term := Terminal{In: strings.NewReader(""), Out: &out}
+	shout := kernel.Plugin{Name: "shout", Start: func(ctx *kernel.Context) error {
+		term, err := kernel.Use[*console](ctx)
+		if err != nil {
+			return err
+		}
+		kernel.Add(ctx, command{"shout", "TEXT", "print TEXT in capitals", func(_ context.Context, args []string) error {
+			fmt.Fprintln(term.out, strings.ToUpper(strings.Join(args, " ")))
+			return nil
+		}})
+		kernel.Add(ctx, agent.NewTool("shout", "Returns the text in capitals.",
+			[]agent.Param{{Name: "text"}},
+			func(_ context.Context, args struct {
+				Text string `json:"text"`
+			}) (string, error) {
+				return strings.ToUpper(args.Text), nil
+			}))
+		return nil
+	}}
+
+	// Listed first, although it needs the console of the base plugin.
+	app, err := newAppWith(append([]kernel.Plugin{shout}, plugins(s, term)...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out, err := bot.Respond(ctx, "c1", "?system"); err != nil || !strings.HasSuffix(out, "about yourself:\n\nAgent of Lucas, knows Go.") {
-		t.Fatalf("the assistant should know its card: %q, %v", out, err)
+	if err := app.Run(context.Background(), []string{"shout", "hello", "ouro"}); err != nil || out.String() != "HELLO OURO\n" {
+		t.Fatalf("command: %q, %v", out.String(), err)
 	}
-	if s, ok := noteStep(agent.Step{Tool: toolUpdateCard, Done: true}); !ok || !strings.Contains(s.Note, "card updated") {
-		t.Fatalf("a changed card should be noted: %+v", s)
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"help"}); err != nil || !strings.Contains(out.String(), "ouro shout TEXT") {
+		t.Fatalf("usage: %q, %v", out.String(), err)
+	}
+	// The owner allowed the tool "shout": the assistant is built with it.
+	if err := service[*assistant.Assistant](app).Ready(); err != nil {
+		t.Fatalf("the tool of the plugin should be known: %v", err)
 	}
 
-	// A card somebody else wrote is cut to size.
-	os.WriteFile(app.cardPath(), []byte(strings.Repeat("ä", maxCard+50)), 0o600)
-	if got := peerDescription(ctx, node); utf8.RuneCountInString(got) != maxCard || !strings.HasSuffix(got, "ä…") {
-		t.Fatalf("long card: %d characters", utf8.RuneCountInString(got))
+	// Without the plugin the same configuration names a tool that is not there.
+	plain, _ := newApp(s, "")
+	if err := service[*assistant.Assistant](plain).Ready(); err == nil || !strings.Contains(err.Error(), `unknown tool "shout"`) {
+		t.Fatalf("got %v", err)
 	}
-	for name, args := range map[string]string{
-		"missing description": `{}`,
-		"too long":            fmt.Sprintf(`{"description":%q}`, strings.Repeat("x", maxCard+1)),
-	} {
-		if _, err := app.updateCard(ctx, []byte(args)); err == nil {
-			t.Errorf("%s: want error", name)
-		}
-	}
-	if _, err := app.updateCard(ctx, []byte(`{"description":""}`)); err != nil || served() != "Ouroboros node abc123 (gpt-4o)" {
-		t.Fatalf("clearing: %q, %v", served(), err)
+}
+
+// A plugin that needs something nobody provides stops ouro from starting.
+func TestPluginWithMissingService(t *testing.T) {
+	s := testSettings(t)
+	lonely := kernel.Plugin{Name: "lonely", Start: func(ctx *kernel.Context) error {
+		_, err := kernel.Use[*testing.T](ctx)
+		return err
+	}}
+	_, err := newAppWith(append(plugins(s, Terminal{In: strings.NewReader(""), Out: &bytes.Buffer{}}), lonely)...)
+	if err == nil || !strings.Contains(err.Error(), "plugin lonely needs *testing.T") {
+		t.Fatalf("got %v", err)
 	}
 }

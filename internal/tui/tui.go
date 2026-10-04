@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -18,14 +17,10 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/contacts"
-	"ouroboros/internal/discovery"
 )
 
-// refreshInterval is how often node status and the network are checked.
+// refreshInterval is how often node status and connection requests are checked.
 const refreshInterval = 10 * time.Second
-
-// updateInterval is how often the newest version is looked up.
-const updateInterval = time.Hour
 
 // Status describes the local node.
 type Status struct {
@@ -37,9 +32,8 @@ type Status struct {
 	Port       int
 }
 
-// Contacts is the local node's contact list.
+// Contacts are the connection requests of the local node.
 type Contacts struct {
-	Trusted  map[string]contacts.Contact
 	Incoming []contacts.Request
 	Outgoing []contacts.Request
 }
@@ -49,34 +43,27 @@ type Backend interface {
 	Status() (Status, error)
 	Start() error
 	Stop() error
-	Discover() ([]discovery.Node, error)
 	// Ask lets the agent of this node answer text within the conversation
 	// contextID. On the way it reports which peers it asks.
 	Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error)
 	Contacts() (Contacts, error)
 	Accept(publicKey string) error
 	Reject(publicKey string) error
-	// UpdateAvailable reports whether a newer version can be installed.
-	UpdateAvailable() (bool, error)
-	// Update installs the newest version and reports whether anything changed.
-	Update() (bool, error)
 	// SetupCommand returns the interactive setup, run with the terminal handed over.
 	SetupCommand() (*exec.Cmd, error)
 }
 
 // Step reports that the agent asks a peer on the way to its answer and, with
 // Done set, that the peer has answered. What they say stays between them.
-// A step with a Note instead tells the user what the agent has done.
 type Step struct {
 	Peer string
 	Done bool
-	Note string
 }
 
 type focus int
 
 const (
-	focusList focus = iota // keys are commands
+	focusCommands focus = iota // keys are commands
 	focusInput
 )
 
@@ -88,14 +75,12 @@ const (
 	screenRequests
 )
 
-// entry is one message in the conversation: from the user or from the agent,
-// or a note on what the agent has done.
+// entry is one message in the conversation: from the user or from the agent.
 type entry struct {
 	mine   bool
 	text   string
 	at     time.Time
 	failed bool
-	note   bool
 }
 
 // conversation is the chat with the agent of this node.
@@ -111,18 +96,12 @@ type Model struct {
 	backend Backend
 	now     func() time.Time
 
-	status      Status
-	chat        conversation
-	nodes       []discovery.Node // sorted by name
-	focus       focus
-	greeted     bool // the input was focused once the node turned out to be configured
-	discovering bool
-	notice      string
-	noticeErr   bool
-
-	updateAvailable bool
-	updating        bool
-	restart         bool
+	status    Status
+	chat      conversation
+	focus     focus
+	greeted   bool // the input was focused once the node turned out to be configured
+	notice    string
+	noticeErr bool
 
 	trust     Contacts
 	screen    screen
@@ -168,10 +147,6 @@ type (
 		status Status
 		err    error
 	}
-	nodesMsg struct {
-		nodes []discovery.Node
-		err   error
-	}
 	contactsMsg struct {
 		trust Contacts
 		err   error
@@ -192,43 +167,14 @@ type (
 		err  error
 	}
 	setupMsg struct{ cmd *exec.Cmd }
-	// updateCheckMsg carries the result of looking up the newest version.
-	updateCheckMsg struct{ available bool }
-	updateMsg      struct {
-		updated bool
-		err     error
-	}
-	tickMsg struct{}
+	tickMsg  struct{}
 	// splashMsg advances the splash animation.
 	splashMsg struct{ at time.Time }
 )
 
 func (m *Model) Init() tea.Cmd {
-	m.discovering = true
 	m.splashStart = m.now()
-	return tea.Batch(m.refreshStatus, m.discover, m.loadContacts, m.checkUpdate, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
-}
-
-// Restart reports whether the UI quit to continue as the updated binary.
-func (m *Model) Restart() bool { return m.restart }
-
-// checkUpdate looks up the newest version now and again after updateInterval.
-// Failures are ignored: being offline is not worth a notice.
-func (m *Model) checkUpdate() tea.Msg {
-	available, _ := m.backend.UpdateAvailable()
-	return updateCheckMsg{available}
-}
-
-// update installs the newest version; the UI restarts itself afterwards.
-func (m *Model) update() tea.Cmd {
-	if m.updating {
-		return nil
-	}
-	m.updating = true
-	return func() tea.Msg {
-		updated, err := m.backend.Update()
-		return updateMsg{updated, err}
-	}
+	return tea.Batch(m.goOnline, m.loadContacts, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
 }
 
 func splashTick() tea.Cmd {
@@ -244,9 +190,17 @@ func (m *Model) refreshStatus() tea.Msg {
 	return statusMsg{s, err}
 }
 
-func (m *Model) discover() tea.Msg {
-	nodes, err := m.backend.Discover()
-	return nodesMsg{nodes, err}
+// goOnline starts the node unless it is running or not configured yet: while
+// the UI is open, the node is online.
+func (m *Model) goOnline() tea.Msg {
+	s, err := m.backend.Status()
+	if err != nil || s.Running || !s.Configured {
+		return statusMsg{s, err}
+	}
+	if err := m.backend.Start(); err != nil {
+		return actionMsg{err: err}
+	}
+	return m.refreshStatus()
 }
 
 func (m *Model) loadContacts() tea.Msg {
@@ -254,13 +208,9 @@ func (m *Model) loadContacts() tea.Msg {
 	return contactsMsg{trust, err}
 }
 
-// rescan refreshes status, nodes and contacts unless a scan is already running.
-func (m *Model) rescan() tea.Cmd {
-	if m.discovering {
-		return tea.Batch(m.refreshStatus, m.loadContacts)
-	}
-	m.discovering = true
-	return tea.Batch(m.refreshStatus, m.discover, m.loadContacts)
+// refresh reloads the node status and the connection requests.
+func (m *Model) refresh() tea.Cmd {
+	return tea.Batch(m.refreshStatus, m.loadContacts)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -271,7 +221,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.input.SetStyles(textarea.DefaultStyles(msg.IsDark()))
 	case tickMsg:
-		return m, tea.Batch(m.rescan(), tick())
+		return m, tea.Batch(m.refresh(), tick())
 	case splashMsg:
 		if !m.showSplash {
 			return m, nil
@@ -293,17 +243,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The chat is what the UI is opened for: start typing right away.
 			if m.status.Configured && !m.greeted {
 				m.greeted = true
-				if m.focus == focusList {
+				if m.focus == focusCommands {
 					return m, m.toggleFocus()
 				}
 			}
-		}
-	case nodesMsg:
-		m.discovering = false
-		if msg.err != nil {
-			m.setNotice("discovery: "+msg.err.Error(), true)
-		} else {
-			m.merge(msg.nodes)
 		}
 	case contactsMsg:
 		if msg.err != nil {
@@ -316,28 +259,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return <-msg.next }
 	case replyMsg:
 		m.receive(msg)
-	case updateCheckMsg:
-		m.updateAvailable = msg.available
-		return m, tea.Tick(updateInterval, func(time.Time) tea.Msg { return m.checkUpdate() })
-	case updateMsg:
-		m.updating = false
-		switch {
-		case msg.err != nil:
-			m.setNotice("update: "+msg.err.Error(), true)
-		case msg.updated:
-			m.restart = true
-			return m, tea.Quit
-		default:
-			m.updateAvailable = false
-			m.setNotice("already up to date", false)
-		}
 	case actionMsg:
 		if msg.err != nil {
 			m.setNotice(msg.err.Error(), true)
 		} else {
 			m.setNotice(msg.done, false)
 		}
-		return m, m.rescan()
+		return m, m.refresh()
 	case setupMsg:
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
 			if err != nil {
@@ -405,17 +333,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	case "enter", "i":
 		return m.toggleFocus()
-	case "r":
-		m.setNotice("searching the network…", false)
-		return m.rescan()
 	case "s":
 		return m.toggleNode()
 	case "c":
 		return m.setup()
 	case "n":
 		m.newConversation()
-	case "u":
-		return m.update()
 	case "R":
 		return m.openRequests()
 	}
@@ -494,7 +417,7 @@ func (m *Model) applyContacts(trust Contacts) {
 
 func (m *Model) toggleFocus() tea.Cmd {
 	if m.focus == focusInput {
-		m.focus = focusList
+		m.focus = focusCommands
 		m.input.Blur()
 		return nil
 	}
@@ -566,17 +489,11 @@ func (m *Model) send() tea.Cmd {
 	}
 }
 
-// step notes which peer the agent is waiting for while the answer is pending,
-// or puts what the agent has done into the history.
+// step notes which peer the agent is waiting for while the answer is pending.
 func (m *Model) step(msg stepMsg) {
 	c := &m.chat
 	if c.contextID != msg.contextID {
 		return // step of a conversation that was reset
-	}
-	if msg.step.Note != "" {
-		c.entries = append(c.entries, entry{note: true, text: msg.step.Note, at: m.now()})
-		m.renderHistory(m.history.AtBottom())
-		return
 	}
 	c.asking = msg.step.Peer
 	if msg.step.Done {
@@ -603,14 +520,6 @@ func (m *Model) newConversation() {
 	m.chat = conversation{contextID: a2a.NewID()}
 	m.renderHistory(true)
 	m.setNotice("new conversation", false)
-}
-
-// merge replaces the node list with a discovery result.
-func (m *Model) merge(nodes []discovery.Node) {
-	m.nodes = slices.Clone(nodes)
-	slices.SortFunc(m.nodes, func(a, b discovery.Node) int {
-		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
-	})
 }
 
 // agentName is how the agent of this node is called in the chat.

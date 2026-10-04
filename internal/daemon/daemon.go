@@ -10,7 +10,43 @@ import (
 	"time"
 )
 
-const pollInterval = 50 * time.Millisecond
+const (
+	pollInterval = 50 * time.Millisecond
+	// patience is how long a node may take to come up or to go down.
+	patience = 5 * time.Second
+)
+
+// Service is a node that runs in the background. Its PID file holds
+// "PID PORT" while it runs; that is how other processes find it.
+type Service struct {
+	PIDFile string
+	LogFile string
+}
+
+// Running returns the process of the service if it is alive.
+func (s Service) Running() (Process, bool) { return Running(s.PIDFile) }
+
+// Start runs exe with args in the background and waits until it is up.
+func (s Service) Start(exe string, args ...string) (Process, error) {
+	os.Remove(s.PIDFile) // drop a stale PID file
+	if err := Spawn(exe, s.LogFile, args...); err != nil {
+		return Process{}, err
+	}
+	p, ok := WaitRunning(s.PIDFile, patience)
+	if !ok {
+		return Process{}, fmt.Errorf("node did not start, see %s", s.LogFile)
+	}
+	return p, nil
+}
+
+// Stop stops the service and reports whether it was running.
+func (s Service) Stop() (bool, error) {
+	p, ok := s.Running()
+	if !ok {
+		return false, nil
+	}
+	return true, Stop(p.PID, patience)
+}
 
 // Process is a running node as recorded in its PID file.
 type Process struct {

@@ -29,12 +29,17 @@ type Client struct {
 // Send delivers text to the agent at baseURL and returns its reply.
 // Messages with the same contextID belong to the same conversation.
 func (c *Client) Send(ctx context.Context, baseURL, contextID, text string) (string, error) {
-	res, err := c.call(ctx, baseURL, MethodSend, NewMessage("user", contextID, text))
+	// A message sent while answering a peer is that peer's message passed on.
+	hops := 0
+	if origin, ok := OriginFrom(ctx); ok {
+		hops = origin.Hops + 1
+	}
+	if hops > MaxHops {
+		return "", ErrTooManyHops
+	}
+	res, err := c.call(ctx, baseURL, MethodSend, sendParams{NewMessage("user", contextID, text), c.peer(), hops})
 	if err != nil {
 		return "", err
-	}
-	if res.Error != nil {
-		return "", res.Error
 	}
 	if res.Result == nil {
 		return "", errors.New("a2a: response has no message")
@@ -54,24 +59,23 @@ func (c *Client) Reject(ctx context.Context, baseURL string) error {
 }
 
 func (c *Client) notify(ctx context.Context, baseURL, method string) error {
-	res, err := c.call(ctx, baseURL, method, Message{})
-	if err != nil {
-		return err
-	}
-	if res.Error != nil {
-		return res.Error
-	}
-	return nil
+	_, err := c.call(ctx, baseURL, method, contactParams{c.peer()})
+	return err
 }
 
-func (c *Client) call(ctx context.Context, baseURL, method string, msg Message) (*response, error) {
-	req := request{JSONRPC: "2.0", ID: json.RawMessage(`"` + NewID() + `"`), Method: method}
-	req.Params.Message = msg
-	req.Params.Peer = Peer{Name: c.Name, Model: c.Model}
-	body, err := json.Marshal(req)
+// peer is what this node tells the other side about itself.
+func (c *Client) peer() Peer { return Peer{Name: c.Name, Model: c.Model} }
+
+// call runs a JSON-RPC method at baseURL: it wraps params in a request, signs
+// it and decodes the response. An error the peer answers with is returned as
+// *Error. Every method of Client is a thin wrapper around call.
+func (c *Client) call(ctx context.Context, baseURL, method string, params any) (*response, error) {
+	rawParams, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
 	}
+	// Cannot fail: the ID and the params are valid JSON already.
+	body, _ := json.Marshal(request{JSONRPC: "2.0", ID: json.RawMessage(`"` + NewID() + `"`), Method: method, Params: rawParams})
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -97,6 +101,9 @@ func (c *Client) call(ctx context.Context, baseURL, method string, msg Message) 
 	var res response
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, fmt.Errorf("a2a: invalid response: %w", err)
+	}
+	if res.Error != nil {
+		return nil, res.Error
 	}
 	return &res, nil
 }
@@ -129,35 +136,5 @@ func FetchCard(ctx context.Context, baseURL string) (AgentCard, error) {
 // Send delivers text to baseURL without authentication. It only works against
 // peers that trust everyone; the node itself always uses Client.
 func Send(ctx context.Context, baseURL, contextID, text string) (string, error) {
-	req := request{JSONRPC: "2.0", ID: json.RawMessage(`"` + NewID() + `"`), Method: MethodSend}
-	req.Params.Message = NewMessage("user", contextID, text)
-	body, err := json.Marshal(req)
-	if err != nil {
-		return "", err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(httpReq)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("a2a: HTTP %d", resp.StatusCode)
-	}
-	var res response
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return "", fmt.Errorf("a2a: invalid response: %w", err)
-	}
-	switch {
-	case res.Error != nil:
-		return "", res.Error
-	case res.Result == nil:
-		return "", errors.New("a2a: response has no message")
-	}
-	return res.Result.Text(), nil
+	return new(Client).Send(ctx, baseURL, contextID, text)
 }

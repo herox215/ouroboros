@@ -115,3 +115,75 @@ func mustPGID(t *testing.T) int {
 	fmt.Sscan(string(out), &pgid)
 	return pgid
 }
+
+// service returns a service whose files are in a fresh directory.
+func service(t *testing.T) Service {
+	dir := t.TempDir()
+	return Service{PIDFile: filepath.Join(dir, "ouro.pid"), LogFile: filepath.Join(dir, "ouro.log")}
+}
+
+// A started service is found by its PID file and can always be stopped.
+func TestServiceStartAndStop(t *testing.T) {
+	s := service(t)
+	if _, ok := s.Running(); ok {
+		t.Fatal("nothing should be running yet")
+	}
+	if stopped, err := s.Stop(); stopped || err != nil {
+		t.Fatalf("Stop without a node = %v, %v", stopped, err)
+	}
+
+	// The node is a sleep that sh leaves behind, as a real node outlives
+	// the command that started it.
+	p, err := s.Start("/bin/sh", "-c", `sleep 30 & echo "$! 41337" > "$0"`, s.PIDFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running, ok := s.Running(); !ok || running != p || p.Port != 41337 {
+		t.Fatalf("Running = %+v, %v; started %+v", running, ok, p)
+	}
+	if stopped, err := s.Stop(); !stopped || err != nil {
+		t.Fatalf("Stop = %v, %v", stopped, err)
+	}
+	if _, ok := s.Running(); ok {
+		t.Fatal("the node should be gone")
+	}
+}
+
+func TestServiceStartFails(t *testing.T) {
+	t.Parallel() // waits as long as a node may take to come up
+	s := service(t)
+	if _, err := s.Start("/does/not/exist"); err == nil {
+		t.Fatal("a missing executable should fail")
+	}
+	// A stale PID file is not taken for the new node.
+	WritePIDFile(s.PIDFile, 1)
+	if _, err := s.Start("/bin/sh", "-c", "exit 0"); err == nil || !strings.Contains(err.Error(), s.LogFile) {
+		t.Fatalf("a node that never comes up: %v", err)
+	}
+}
+
+func TestSpawnWithoutLog(t *testing.T) {
+	if err := Spawn("/bin/sh", filepath.Join(t.TempDir(), "missing", "log"), "-c", "exit 0"); err == nil {
+		t.Fatal("want error")
+	}
+}
+
+// A process that ignores the request to stop is reported, not waited for.
+func TestStopStubbornProcess(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", `trap "" TERM; echo ready; exec sleep 30`)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	defer cmd.Process.Kill()
+	if _, err := out.Read(make([]byte, 16)); err != nil { // the trap is set
+		t.Fatal(err)
+	}
+	if err := Stop(cmd.Process.Pid, 200*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not exit in time") {
+		t.Fatalf("got %v", err)
+	}
+}

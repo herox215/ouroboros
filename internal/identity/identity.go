@@ -18,11 +18,9 @@ type Identity struct {
 
 // Generate returns a fresh identity.
 func Generate() *Identity {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err) // crypto/rand cannot fail on supported platforms
-	}
-	return &Identity{private: priv}
+	seed := make([]byte, ed25519.SeedSize)
+	rand.Read(seed) // never fails
+	return &Identity{private: ed25519.NewKeyFromSeed(seed)}
 }
 
 // FromPrivate restores an identity from its base64 private key.

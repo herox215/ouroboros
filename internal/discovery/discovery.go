@@ -10,6 +10,7 @@
 package discovery
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -117,10 +118,40 @@ func Serve(conn *net.UDPConn, self Node) error {
 	}
 }
 
-// Discover probes the network and collects answers for the given duration.
-// Peers are hosts to probe directly, as "host" or "host:port" for another
-// discovery port. Nodes are returned sorted by name, one entry per ID.
-func Discover(port int, wait time.Duration, peers ...string) ([]Node, error) {
+// PeerSource names hosts to probe directly, as "host" or "host:port" for
+// another discovery port: the way to nodes that no probe to the network reaches.
+//
+// To add a source (another VPN, a list from a file): write a func like
+// TailscalePeers and contribute it from a plugin with kernel.Add, like the
+// tailscale plugin in internal/cli/discover.go does. It must not block for
+// long and returns nil if it has nothing.
+type PeerSource func(ctx context.Context) []string
+
+// Scanner finds the nodes that are online: it broadcasts a probe and also
+// sends it to every host its sources name.
+type Scanner struct {
+	Port int           // discovery port
+	Wait time.Duration // how long answers are collected
+	// Sources returns the sources to ask, read anew for every scan. May be nil.
+	Sources func() []PeerSource
+}
+
+// Find returns the nodes on the network and on the hosts named by the sources.
+func (s *Scanner) Find(ctx context.Context) ([]Node, error) {
+	var peers []string
+	if s.Sources != nil {
+		for _, source := range s.Sources() {
+			peers = append(peers, source(ctx)...)
+		}
+	}
+	return Discover(ctx, s.Port, s.Wait, peers...)
+}
+
+// Discover probes the network and collects answers for the given duration, or
+// until ctx is done. Peers are hosts to probe directly, as "host" or
+// "host:port" for another discovery port. Nodes are returned sorted by name,
+// one entry per ID.
+func Discover(ctx context.Context, port int, wait time.Duration, peers ...string) ([]Node, error) {
 	conn, err := net.ListenUDP("udp4", nil)
 	if err != nil {
 		return nil, err
@@ -151,8 +182,15 @@ func Discover(port int, wait time.Duration, peers ...string) ([]Node, error) {
 	errs := make(chan error, len(conns))
 	deadline := time.Now().Add(wait)
 	for _, c := range conns {
-		go func() { errs <- collect(c, deadline, answers) }()
+		c.SetReadDeadline(deadline)
+		go func() { errs <- collect(c, answers) }()
 	}
+	// A deadline in the past ends the collecting early.
+	defer context.AfterFunc(ctx, func() {
+		for _, c := range conns {
+			c.SetReadDeadline(time.Now())
+		}
+	})()
 
 	found := map[string]Node{}
 	for pending := len(conns); pending > 0; {
@@ -165,6 +203,10 @@ func Discover(port int, wait time.Duration, peers ...string) ([]Node, error) {
 			}
 			pending--
 		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	nodes := make([]Node, 0, len(found))
@@ -210,9 +252,9 @@ func broadcasts() []net.IP {
 	return ips
 }
 
-// collect sends every node answering on conn to answers until deadline.
-func collect(conn *net.UDPConn, deadline time.Time, answers chan<- Node) error {
-	conn.SetReadDeadline(deadline)
+// collect sends every node answering on conn to answers until the read
+// deadline of conn.
+func collect(conn *net.UDPConn, answers chan<- Node) error {
 	buf := make([]byte, 4096)
 	for {
 		n, addr, err := conn.ReadFromUDP(buf)

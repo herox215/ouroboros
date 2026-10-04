@@ -23,9 +23,42 @@ type Config struct {
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	PrivateKey string `json:"private_key,omitempty"`
-	// Peers are hosts to look for nodes on besides the local network.
-	Peers []string `json:"peers,omitempty"`
+	// Tools says which tools the agent may use, by who it is talking to.
+	// Without it the owner gets every tool and peers get none.
+	Tools *Tools `json:"tools,omitempty"`
 }
+
+// AllTools in a list of tools allows every tool.
+const AllTools = "*"
+
+// Tools lists the tools of the agent by name, one list per kind of
+// conversation. The names are those the tools are registered with.
+type Tools struct {
+	// H2A (human to agent) applies when the owner asks. Missing or null
+	// allows every tool.
+	H2A []string `json:"h2a"`
+	// A2A (agent to agent) applies when a peer asks. Missing allows none.
+	A2A []string `json:"a2a"`
+}
+
+// OwnerTools are the names of the tools the agent may use for its owner.
+func (c Config) OwnerTools() []string {
+	if c.Tools == nil || c.Tools.H2A == nil {
+		return []string{AllTools}
+	}
+	return c.Tools.H2A
+}
+
+// PeerTools are the names of the tools the agent may use for a peer.
+func (c Config) PeerTools() []string {
+	if c.Tools == nil {
+		return nil
+	}
+	return c.Tools.A2A
+}
+
+// ErrIncomplete means that the node was not set up yet.
+var ErrIncomplete = errors.New("node is not configured")
 
 // Complete reports whether the node can be started with this configuration.
 func (c Config) Complete() bool {
@@ -50,15 +83,15 @@ func Save(dir string, c Config) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
 	path := filepath.Join(dir, fileName)
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return err
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err == nil {
+		err = os.WriteFile(path, b, 0o600)
 	}
-	return os.Chmod(path, 0o600) // WriteFile keeps the mode of existing files
+	if err == nil {
+		err = os.Chmod(path, 0o600) // WriteFile keeps the mode of existing files
+	}
+	return err
 }
 
 // NewID returns a short random node ID (6 hex chars).

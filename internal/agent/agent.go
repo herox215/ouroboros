@@ -19,17 +19,10 @@ const (
 )
 
 // LLM generates a reply for a conversation or asks for tools to be run.
+// openai.Client implements it; another provider has to translate to and from
+// the OpenAI message types.
 type LLM interface {
 	Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error)
-}
-
-// Tool is something the agent can do while it answers.
-type Tool struct {
-	Name        string
-	Description string
-	Schema      string // JSON schema of the arguments
-	// Run executes the tool. Its result, or its error, is handed to the LLM.
-	Run func(ctx context.Context, args json.RawMessage) (string, error)
 }
 
 // Step reports a tool call: once when it starts and again, with Done set,
@@ -57,10 +50,6 @@ type Agent struct {
 	system openai.Message
 	tools  map[string]Tool
 	specs  []openai.Tool
-
-	// Soul, if set, is asked before every answer for text to append to the
-	// system prompt. Set it before the agent is used.
-	Soul func() string
 
 	mu            sync.Mutex
 	clock         uint64
@@ -98,12 +87,8 @@ func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, er
 func (a *Agent) Run(ctx context.Context, contextID, text string, observe func(Step)) (string, error) {
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	history := append(a.history(contextID), openai.Message{Role: "user", Content: text})
-	system := a.system
-	if a.Soul != nil {
-		system.Content += a.Soul()
-	}
 	for range maxRounds {
-		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{system}, history...), a.specs)
+		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{a.system}, history...), a.specs)
 		if err != nil {
 			return "", err
 		}

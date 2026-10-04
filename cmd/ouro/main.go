@@ -17,10 +17,14 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	app := cli.New(settings, os.Stdin, os.Stdout)
+	terminal := cli.Terminal{In: os.Stdin, Out: os.Stdout}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
-		app.Interactive = true
-		app.ReadSecret = readPassword
+		terminal.Interactive = true
+		terminal.ReadSecret = readPassword
+	}
+	app, err := cli.New(settings, terminal)
+	if err != nil {
+		fail(err)
 	}
 	if err := app.Run(context.Background(), os.Args[1:]); err != nil {
 		fail(err)

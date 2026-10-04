@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"net"
 	"slices"
 	"strconv"
@@ -24,7 +25,7 @@ func serve(t *testing.T, port int, self Node) int {
 
 func TestDiscoverFindsNode(t *testing.T) {
 	port := serve(t, 0, Node{ID: "abc123", Name: "alpha", Model: "gpt", Port: 41337})
-	nodes, err := Discover(port, wait)
+	nodes, err := Discover(context.Background(), port, wait)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +42,7 @@ func TestDiscoverNothing(t *testing.T) {
 	conn, _ := net.ListenUDP("udp4", nil) // reserve a port nobody answers on
 	port := conn.LocalAddr().(*net.UDPAddr).Port
 	conn.Close()
-	nodes, err := Discover(port, wait)
+	nodes, err := Discover(context.Background(), port, wait)
 	if err != nil || len(nodes) != 0 {
 		t.Fatalf("got %+v, %v", nodes, err)
 	}
@@ -136,7 +137,7 @@ func TestDiscoverProbesPeers(t *testing.T) {
 	other := conn.LocalAddr().(*net.UDPAddr).Port
 	conn.Close()
 
-	nodes, err := Discover(other, wait, "localhost:"+strconv.Itoa(port), "no-such-host.invalid")
+	nodes, err := Discover(context.Background(), other, wait, "localhost:"+strconv.Itoa(port), "no-such-host.invalid")
 	if err != nil || len(nodes) != 1 || nodes[0].ID != "abc123" {
 		t.Fatalf("got %+v, %v", nodes, err)
 	}
@@ -171,5 +172,15 @@ func TestTailscalePeers(t *testing.T) {
 	}
 	if got := tailscalePeers([]byte("not json")); got != nil {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// A caller that gives up does not have to wait for the answers.
+func TestDiscoverStopsWhenContextIsDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if _, err := Discover(ctx, serve(t, 0, Node{ID: "abc123"}), time.Minute); err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("got %v after %v", err, time.Since(start))
 	}
 }

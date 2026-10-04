@@ -38,3 +38,9 @@ func TestFromPrivateRejectsBadKey(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateIsRandom(t *testing.T) {
+	if a, b := Generate(), Generate(); a.Private() == b.Private() || a.Public() == b.Public() {
+		t.Fatal("two generated identities should differ")
+	}
+}

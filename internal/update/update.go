@@ -22,8 +22,13 @@ const branch = "main"
 
 // Revision is the commit the running binary was built from, or "" if unknown.
 func Revision() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
+	info, _ := debug.ReadBuildInfo()
+	return revision(info)
+}
+
+// revision reads the commit from the build information, nil if there is none.
+func revision(info *debug.BuildInfo) string {
+	if info == nil {
 		return ""
 	}
 	for _, s := range info.Settings {
@@ -49,14 +54,13 @@ type Updater struct {
 	Exe      string    // binary to replace
 	Revision string    // commit Exe was built from
 	Out      io.Writer // git and build output
-	Batch    bool      // never prompt for credentials, e.g. while a UI owns the terminal
 }
 
 // Latest returns the newest commit on main.
 func (u Updater) Latest(ctx context.Context) (string, error) {
 	ref := "refs/heads/" + branch
 	// Without Out: the answer is not worth showing.
-	out, err := Updater{Batch: u.Batch}.run(ctx, "", "git", "ls-remote", u.Repo, ref)
+	out, err := Updater{}.run(ctx, "", "git", "ls-remote", u.Repo, ref)
 	if err != nil {
 		return "", err
 	}
@@ -105,9 +109,6 @@ func (u Updater) run(ctx context.Context, dir, name string, args ...string) (str
 	cmd.Stdout, cmd.Stderr = out, out
 	// The build is staged next to the sources and installed by replace.
 	cmd.Env = append(os.Environ(), "PREFIX="+filepath.Join(u.Dir, "stage"), "OURO_REPO="+u.Repo, "OURO_UPDATE=1")
-	if u.Batch {
-		cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
-	}
 	if err := cmd.Run(); err != nil {
 		if line := reason(buf.String()); line != "" {
 			return "", fmt.Errorf("%s: %s", name, line)

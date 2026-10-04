@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func TestRunKeepsCurrentBinary(t *testing.T) {
 }
 
 func TestRunReportsFailures(t *testing.T) {
-	u := update.Updater{Repo: filepath.Join(t.TempDir(), "missing"), Dir: t.TempDir(), Batch: true}
+	u := update.Updater{Repo: filepath.Join(t.TempDir(), "missing"), Dir: t.TempDir()}
 	_, updated, err := u.Run(context.Background())
 	if err == nil || updated {
 		t.Fatalf("Run = %v, %v; want an error", updated, err)
@@ -89,4 +90,33 @@ func expectFile(t *testing.T, path, want string) {
 	if err != nil || string(got) != want {
 		t.Fatalf("%s = %q, %v; want %q", path, got, err, want)
 	}
+}
+
+func TestRunWithoutMainBranch(t *testing.T) {
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	exe := filepath.Join(t.TempDir(), "ouro")
+	_, updated, err := update.Updater{Repo: repo, Dir: t.TempDir(), Exe: exe}.Run(context.Background())
+	if err == nil || updated || !strings.HasSuffix(err.Error(), "has no main branch") {
+		t.Fatalf("Run = %v, %v; want a missing branch", updated, err)
+	}
+}
+
+// Without a working directory nothing is built and the binary stays.
+func TestRunWithoutWorkingDirectory(t *testing.T) {
+	repo, rev := updatetest.NewRepo(t, "v1")
+	file := filepath.Join(t.TempDir(), "file")
+	exe := filepath.Join(t.TempDir(), "ouro")
+	for _, path := range []string{file, exe} {
+		if err := os.WriteFile(path, []byte("v0"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, updated, err := update.Updater{Repo: repo, Dir: file, Exe: exe}.Run(context.Background())
+	if err == nil || updated || got != rev {
+		t.Fatalf("Run = %q, %v, %v; want %q and an error", got, updated, err, rev)
+	}
+	expectFile(t, exe, "v0")
 }
