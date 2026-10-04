@@ -33,13 +33,13 @@ func TestPick(t *testing.T) {
 		{config.Named(config.AllTools, "ask_peer"), "list_peers,ask_peer"},
 	}
 	for _, tt := range tests {
-		got, err := pick(all, tt.allowed)
+		got, err := pick(all, tt.allowed, false)
 		if err != nil || names(got) != tt.want {
 			t.Errorf("pick(%v) = %q, %v", tt.allowed, names(got), err)
 		}
 	}
 	// A typo must not silently take a tool away.
-	if _, err := pick(all, config.Named("ask_peers")); err == nil || !strings.Contains(err.Error(), `"ask_peers"`) {
+	if _, err := pick(all, config.Named("ask_peers"), false); err == nil || !strings.Contains(err.Error(), `"ask_peers"`) {
 		t.Fatalf("unknown tool: %v", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestPickWithSettings(t *testing.T) {
 		{[]config.Entry{with("greet", `{}`), with("plain", `{}`)}, "plain,greet", "!"},
 		{[]config.Entry{with("plain", ``)}, "plain", ""},
 	} {
-		got, err := pick(all, tt.allowed)
+		got, err := pick(all, tt.allowed, false)
 		if err != nil || names(got) != tt.names {
 			t.Errorf("pick(%s) = %q, %v", tt.allowed, names(got), err)
 			continue
@@ -100,7 +100,7 @@ func TestPickWithSettings(t *testing.T) {
 		{[]config.Entry{with("nope", `{}`)}, `unknown tool "nope" (there are: plain, greet)`},
 		{config.Named(""), `unknown tool "" (there are: plain, greet)`},
 	} {
-		if got, err := pick(all, tt.allowed); err == nil || err.Error() != tt.want || got != nil {
+		if got, err := pick(all, tt.allowed, false); err == nil || err.Error() != tt.want || got != nil {
 			t.Errorf("pick(%s) = %q, %v; want %q", tt.allowed, names(got), err, tt.want)
 		}
 	}

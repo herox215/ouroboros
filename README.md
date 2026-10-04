@@ -57,7 +57,7 @@ again unless it was already running before (`ouro start`).
 | `enter` | focus the input | send (`alt+enter` for a new line) |
 | `s` / `c` | start or stop the node / run the setup | – |
 | `n` | new conversation | – |
-| `R` | connection requests, of peers and what your agent proposes (`a` accept, `x` reject, `esc` back) | – |
+| `R` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes (`↑` `↓` select, `a` accept, `x` reject, `esc` back) | – |
 | keys of plugins | open a screen (`esc` back) or run what the plugin added | – |
 | `pgup` `pgdn` | scroll the chat | scroll the chat |
 | `q` / `ctrl+c` | quit | `ctrl+c` quits |
@@ -84,9 +84,9 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Memory | last 40 messages per conversation, up to 256 conversations; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
-| Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
+| Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. At most 16 changes of the configuration your agent proposed wait for a decision. The tools for files and a script have limits of their own, see [Files](#files) and [Scripts](#scripts). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` / `proposals.json.lock` |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
@@ -97,7 +97,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 ## Tools
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
-`delete`) and one that runs a script calling the others (`run`). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
+`delete`), one that runs a script calling the others (`run`) and, for you alone, two for the configuration
+(`get_config`, `propose_config`). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
 what the setup writes:
 
 ```json
@@ -120,7 +121,10 @@ what the setup writes:
 An entry of `h2a` and `a2a` is the name of a tool, or an object with the name as `"tool"` and **settings** for
 that tool next to it. `"*"` stands for every tool, `[]` for none; an object next to `"*"` narrows that one tool.
 A name that is not a tool, a tool that is listed twice, a setting the tool does not have and a setting of the
-wrong type are errors: the node does not start, the chat does not answer. Restart the node after changing `a2a`.
+wrong type are errors: the node does not start, the chat does not answer. A change holds at once: your agent
+and the node read `config.json` with every message and build their agents anew when it changed, without a
+restart. A node that runs keeps answering peers as before while the file cannot be used, and says why in
+`ouro.log`.
 
 ### Files
 
@@ -158,8 +162,8 @@ Three things limit a tool for files, and the first that speaks wins:
 1. **The core**, fixed in the code (`internal/guard`) and not configurable:
    - `config.json` and its lock file are neither read nor changed, under any name (also not through a hard
      link): they hold the key of your node and the key of the API, which would end up with the LLM.
-   - Everything else in the directory of the node (`contacts.json`, `failures.json`, `ouro.pid`, `ouro.log`,
-     `update/`) is read and never changed.
+   - Everything else in the directory of the node (`contacts.json`, `proposals.json`, `failures.json`,
+     `ouro.pid`, `ouro.log`, `update/`) is read and never changed.
    - The source of the core is read and never changed: in every directory whose `go.mod` names the module
      `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `daemon`, `update`,
      `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable. That `go.mod`
@@ -248,6 +252,42 @@ on, but the step keeps a processor busy until it ends. As the heap is the one of
 that run at the same time count against each other, and so does everything else the node allocates
 meanwhile. Whoever may run scripts on your node may therefore slow it down or bring it down: list `run` in
 `a2a` only for peers you would let do that.
+
+### Configuration
+
+You can see and change the configuration by talking to your agent: "which tools do peers have?", "let beta
+read `~/share`". The agent has two tools for that, and neither changes anything.
+
+| Tool | Does |
+|---|---|
+| `get_config()` | returns the configuration as JSON: ID, name, model, endpoint and `tools`. The key of the node and the key of the API are not in it. What is not set shows with the default that holds (`h2a`, `a2a`, `protected`) |
+| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you |
+
+**Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a
+proposal changes nothing: it waits among the requests in the terminal UI (`R`), where you see the field, what
+it is **now** and what it would be **then**, and accept (`a`) or refuse (`x`). Now and then come from the
+node: now is read from `config.json` when the list is shown, then is the value the node checked and would
+write. Only the line "your agent says" is the text of the agent.
+
+- The value is checked the way the node checks its configuration when it starts: an unknown tool, a tool that
+  is listed twice, a setting a tool does not have, a value of the wrong type or a protected path that is none
+  is an error the agent gets at once, and no proposal.
+- The key of the node, the key of the API and the endpoint of the LLM cannot be proposed. A proposal that a
+  peer talked your agent into must not send your conversations to another server. You change them alone, with
+  `ouro start --setup`.
+- A proposal is made for the configuration as it was. If the field was changed since (by hand, or by another
+  proposal you accepted), the list says so, and accepting applies nothing and drops the proposal.
+- At most 16 proposals wait; a further one is not recorded, and the agent is told. The same change is
+  recorded once.
+- Proposals are decided in the terminal UI only. `ouro chat "…"` opens none: the agent says that the proposal
+  waits there. `ouro ask` writes to another node without your agent, so no proposal comes from it.
+- An accepted change is in `config.json` and holds at once, see above; `ouro.log` records it.
+- **Both tools are for you alone.** For a conversation of a peer they refuse, `"*"` in `a2a` does not include
+  them, and their names in `a2a` are an error: the node does not start and says that these tools are not for
+  peers. A peer that makes your agent propose something for it (it can, with a persuasive answer to
+  `ask_peer`) gets a line in your list, which says what would change, and nothing more.
+
+The file tools cannot do any of this: `config.json` is locked for them, see [Files](#files).
 
 ### Peers
 
@@ -364,7 +404,7 @@ internal/plugins     the standard plugins, one package each: commands, setup dia
 internal/kernel      plugin kernel: services, contributions, start order by declared dependencies
 internal/tui         terminal UI (Bubble Tea)
 internal/node        the local node: Server runs it, Local controls the background one
-internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error, run
+internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error, run, get_config, propose_config
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
@@ -375,6 +415,7 @@ internal/openai      minimal OpenAI-compatible client (+ openaitest fake)
 internal/discovery   LAN discovery, plus sources of hosts to probe directly (Tailscale)
 internal/daemon      background process + PID file
 internal/contacts    trusted peers and connection requests
+internal/proposal    changes of the configuration the agent proposed, waiting for the owner
 internal/diagnosis   why answers to peers failed, by category, for the agent to explain
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
@@ -737,11 +778,10 @@ package next to it. How to read it:
 | `Accepted as equivalent` | survivors listed in `mutation-equivalents.txt` | nothing; a line that no longer matches is named |
 | `Not mutated` | the packages left out because they signal processes | review their tests by hand |
 
-The whole module today: 1019 mutants, 734 killed, 180 survived, 4 accepted as equivalent, 11 timed out, 90 not
-covered; 2 packages not mutated. Of the survivors, 153 are in the drawing of `internal/tui` (most in the
-arithmetic of the logo), 12 in the parts of `internal/discovery` that depend on the network interfaces of the
-machine, and 4 in `internal/safefile`, where what the mutant leaves out only shows after a power failure or
-a write that fails. None is left in `internal/a2a`, `contacts`, `identity`, `kernel`, `peers` and `diagnosis`.
+Most survivors are in the drawing of `internal/tui` (the arithmetic of the logo), some in the parts of
+`internal/discovery` that depend on the network interfaces of the machine, and some in `internal/safefile`,
+where what the mutant leaves out only shows after a power failure or a write that fails. The counts change
+with every commit and are not kept here: the first line of the report has them.
 
 ### Git hook
 

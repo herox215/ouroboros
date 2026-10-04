@@ -20,6 +20,10 @@ type Tool struct {
 	// once per kind of conversation, and fails for settings the tool does not
 	// take. Nil for a tool without settings; see Configurable.
 	Configure func(settings json.RawMessage) (Tool, error)
+	// OwnerOnly says that the tool is for the owner of the node alone: the
+	// agent that answers peers never gets it, and listing it for peers is an
+	// error.
+	OwnerOnly bool
 }
 
 // RunFunc is what runs a tool.

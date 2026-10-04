@@ -386,3 +386,132 @@ func TestFiles(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// A field is read as it applies, with the default that holds for what is not
+// set, and written from JSON of its type.
+func TestFields(t *testing.T) {
+	if got := Fields(); !reflect.DeepEqual(got, []string{"name", "model", "tools.h2a", "tools.a2a", "tools.protected"}) {
+		t.Fatalf("the fields: %v", got)
+	}
+	c := Config{Name: "alpha", Model: "gpt", BaseURL: "http://x", APIKey: "sk", PrivateKey: "key"}
+	protected, _ := json.Marshal(DefaultProtected())
+	for path, want := range map[string]string{
+		"name": `"alpha"`, "model": `"gpt"`, "tools.h2a": `["*"]`, "tools.a2a": `[]`, "tools.protected": string(protected),
+	} {
+		if got, err := c.Field(path); err != nil || string(got) != want {
+			t.Errorf("%s = %s, %v; want %s", path, got, err, want)
+		}
+	}
+	// What is set is what applies, an empty list too.
+	set := Config{Tools: &Tools{H2A: Named(), A2A: []Entry{{Tool: "read", Settings: json.RawMessage(`{"allow": ["~/share"]}`)}}, Protected: &[]string{}}}
+	for path, want := range map[string]string{"tools.h2a": `[]`, "tools.a2a": `[{"allow":["~/share"],"tool":"read"}]`, "tools.protected": `[]`} {
+		if got, err := set.Field(path); err != nil || string(got) != want {
+			t.Errorf("%s = %s, %v; want %s", path, got, err, want)
+		}
+	}
+
+	for _, tt := range []struct{ path, value, want string }{
+		{"name", `"beta"`, `"beta"`},
+		{"model", `"gpt-5"`, `"gpt-5"`},
+		{"tools.h2a", `["list_peers", {"tool": "read", "deny": ["~/tax"]}]`, `["list_peers",{"deny":["~/tax"],"tool":"read"}]`},
+		{"tools.a2a", `["*"]`, `["*"]`},
+		{"tools.a2a", `[]`, `[]`},
+		{"tools.protected", `["~/x"]`, `["~/x"]`},
+		{"tools.protected", `[]`, `[]`},
+	} {
+		changed := c
+		if err := changed.SetField(tt.path, json.RawMessage(tt.value)); err != nil {
+			t.Errorf("%s = %s: %v", tt.path, tt.value, err)
+			continue
+		}
+		if got, _ := changed.Field(tt.path); string(got) != tt.want {
+			t.Errorf("%s = %s reads as %s", tt.path, tt.value, got)
+		}
+		// Nothing else changes, and the one it was copied from stays as it was.
+		for _, other := range Fields() {
+			was, _ := c.Field(other)
+			if now, _ := changed.Field(other); other != tt.path && string(now) != string(was) {
+				t.Errorf("%s = %s changed %s to %s", tt.path, tt.value, other, now)
+			}
+		}
+		if changed.BaseURL != "http://x" || changed.APIKey != "sk" || changed.PrivateKey != "key" || c.Tools != nil || c.Name != "alpha" {
+			t.Errorf("%s = %s changed %+v, or %+v", tt.path, tt.value, changed, c)
+		}
+	}
+	// Setting one list of a copy leaves the lists of the original alone.
+	changed := set
+	if err := changed.SetField("tools.a2a", json.RawMessage(`[]`)); err != nil || len(set.Tools.A2A) != 1 || len(changed.Tools.A2A) != 0 {
+		t.Errorf("the original was changed: %+v, %v", set.Tools, err)
+	}
+	if err := changed.SetField("name", json.RawMessage(`"x"`)); err != nil || changed.Tools == nil || len(*changed.Tools.Protected) != 0 {
+		t.Errorf("the tools are gone: %+v, %v", changed.Tools, err)
+	}
+	// A node without tools gets none for a new name.
+	plain := c
+	if err := plain.SetField("name", json.RawMessage(`"x"`)); err != nil || plain.Tools != nil {
+		t.Errorf("got %+v, %v", plain.Tools, err)
+	}
+
+	for _, tt := range []struct{ path, value, want string }{
+		{"name", `""`, "name cannot be empty"},
+		{"model", `""`, "model cannot be empty"},
+		{"name", `["beta"]`, "name: json: cannot unmarshal array into Go value of type string"},
+		{"name", `nope`, "name: invalid character 'o' in literal null (expecting 'u')"},
+		{"tools.h2a", `"*"`, "tools.h2a: json: cannot unmarshal string into Go value of type []config.Entry"},
+		{"tools.a2a", `[3]`, `tools.a2a: a tool is a name or an object like {"tool": name, …}`},
+		{"tools.a2a", `null`, "tools.a2a has to be a list"},
+		{"tools.h2a", `null`, "tools.h2a has to be a list"},
+		{"tools.protected", `null`, "tools.protected has to be a list"},
+		{"tools.protected", `[1]`, "tools.protected: json: cannot unmarshal number into "},
+		{"private_key", `"mine"`, "private_key is changed by the owner alone, with ouro start --setup: no proposal changes it"},
+		{"api_key", `"mine"`, "api_key is changed by the owner alone, with ouro start --setup: no proposal changes it"},
+		{"base_url", `"http://evil"`, "base_url is changed by the owner alone, with ouro start --setup: no proposal changes it"},
+		{"tools", `{}`, `the configuration has no field "tools" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
+		{"", `1`, `the configuration has no field "" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
+	} {
+		changed := c
+		if err := changed.SetField(tt.path, json.RawMessage(tt.value)); err == nil || !strings.HasPrefix(err.Error(), tt.want) || !reflect.DeepEqual(changed, c) {
+			t.Errorf("%s = %s: %v, %+v", tt.path, tt.value, err, changed)
+		}
+	}
+	// What cannot be proposed cannot be read as a field either: not the keys.
+	for _, path := range []string{"private_key", "api_key", "base_url", "tools", "nope"} {
+		if got, err := c.Field(path); err == nil || got != nil {
+			t.Errorf("reading %s: %s, %v", path, got, err)
+		}
+	}
+}
+
+// What the agent gets to see of the configuration: no key, and the defaults
+// that hold.
+func TestPublic(t *testing.T) {
+	id := identity.Generate()
+	c := Config{Name: "alpha", Model: "gpt", BaseURL: "http://x/v1", APIKey: "sk-secret", PrivateKey: id.Private()}
+	got := string(c.Public())
+	if strings.Contains(got, "sk-secret") || strings.Contains(got, id.Private()) || strings.Contains(got, "key") && !strings.Contains(got, "keyrings") {
+		t.Fatalf("a secret is shown: %s", got)
+	}
+	var shown struct {
+		ID, Name, Model string
+		BaseURL         string `json:"base_url"`
+		Tools           struct {
+			H2A, A2A  []string
+			Protected []string
+		}
+	}
+	if err := json.Unmarshal([]byte(got), &shown); err != nil {
+		t.Fatalf("%v: %s", err, got)
+	}
+	if shown.ID != id.ID() || shown.Name != "alpha" || shown.Model != "gpt" || shown.BaseURL != "http://x/v1" ||
+		!reflect.DeepEqual(shown.Tools.H2A, []string{"*"}) || shown.Tools.A2A == nil || len(shown.Tools.A2A) != 0 ||
+		!reflect.DeepEqual(shown.Tools.Protected, DefaultProtected()) {
+		t.Fatalf("shown: %s", got)
+	}
+	if !strings.Contains(got, "\n  \"tools\": {\n    \"h2a\": [\n") {
+		t.Fatalf("not written for reading: %s", got)
+	}
+	c.Tools = &Tools{H2A: Named("read"), A2A: Named("list_peers"), Protected: &[]string{"~/x"}}
+	if got := string(c.Public()); !strings.Contains(got, `"read"`) || !strings.Contains(got, `"list_peers"`) || !strings.Contains(got, `"~/x"`) || strings.Contains(got, ".ssh") {
+		t.Fatalf("what is set: %s", got)
+	}
+}

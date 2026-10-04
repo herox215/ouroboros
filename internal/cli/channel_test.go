@@ -366,9 +366,11 @@ func TestPluginChannelReachesOnlyTheHolderOfTheKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer udp.Close()
-	go discovery.Serve(udp, discovery.Node{
-		ID: clitest.NodeID(t, beta), Name: "beta", Model: "gpt-4o",
-		PublicKey: clitest.PublicKey(t, beta), Port: clitest.Port(t, mallory),
+	go discovery.Serve(udp, func() discovery.Node {
+		return discovery.Node{
+			ID: clitest.NodeID(t, beta), Name: "beta", Model: "gpt-4o",
+			PublicKey: clitest.PublicKey(t, beta), Port: clitest.Port(t, mallory),
+		}
 	})
 	clitest.Finds(alpha, impostor)
 

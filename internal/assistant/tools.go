@@ -62,7 +62,12 @@ func PeerTools(network *peers.Network, selfID func() string) []agent.Tool {
 // settings configures its tool. What is not a tool, a tool that is listed
 // twice and settings a tool does not take are errors, so that a typo neither
 // takes a tool away nor leaves one wider open than the owner meant.
-func pick(all []agent.Tool, allowed []config.Entry) ([]agent.Tool, error) {
+//
+// With peer set the tools are for the agent that answers peers. A tool that
+// is for the owner alone is none of them: every tool does not include it, and
+// its name in the list is an error, so that nobody believes to have allowed
+// it.
+func pick(all []agent.Tool, allowed []config.Entry, peer bool) ([]agent.Tool, error) {
 	every := false
 	entries := map[string]config.Entry{}
 	for _, e := range allowed {
@@ -77,18 +82,24 @@ func pick(all []agent.Tool, allowed []config.Entry) ([]agent.Tool, error) {
 			every = true
 			continue
 		}
-		if !slices.ContainsFunc(all, func(t agent.Tool) bool { return t.Name == e.Tool }) {
-			known := make([]string, len(all))
-			for i, t := range all {
-				known[i] = t.Name
+		at := slices.IndexFunc(all, func(t agent.Tool) bool { return t.Name == e.Tool })
+		if at < 0 {
+			var known []string
+			for _, t := range all {
+				if !peer || !t.OwnerOnly {
+					known = append(known, t.Name)
+				}
 			}
 			return nil, fmt.Errorf("unknown tool %q (there are: %s)", e.Tool, strings.Join(known, ", "))
+		}
+		if peer && all[at].OwnerOnly {
+			return nil, fmt.Errorf("the tool %s is for the owner of the node only: it is no tool for peers", e.Tool)
 		}
 	}
 	var picked []agent.Tool
 	for _, t := range all {
 		e, listed := entries[t.Name]
-		if !listed && !every {
+		if (!listed && !every) || (peer && t.OwnerOnly) {
 			continue
 		}
 		t, err := configure(t, e.Settings)

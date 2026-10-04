@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 
 	"ouroboros/internal/identity"
 	"ouroboros/internal/safefile"
@@ -225,4 +227,115 @@ func Update(dir string, change func(*Config) error) error {
 		return err
 	}
 	return Save(dir, c)
+}
+
+// The fields of the configuration by the names a proposal of the agent uses
+// for them, see Field.
+const (
+	FieldName      = "name"
+	FieldModel     = "model"
+	FieldOwner     = "tools.h2a"
+	FieldPeers     = "tools.a2a"
+	FieldProtected = "tools.protected"
+)
+
+// Fields are the fields the agent of the owner may propose a change of.
+func Fields() []string {
+	return []string{FieldName, FieldModel, FieldOwner, FieldPeers, FieldProtected}
+}
+
+// reserved are the fields no proposal changes: who the node is, and where the
+// conversations of the owner go. A proposal a peer slipped in must not send
+// them to another server.
+var reserved = []string{"private_key", "api_key", "base_url"}
+
+// field returns the value of the field path as it applies: one that is not
+// set has the default that holds for it.
+func (c Config) field(path string) (any, error) {
+	switch path {
+	case FieldName:
+		return c.Name, nil
+	case FieldModel:
+		return c.Model, nil
+	case FieldOwner:
+		return c.OwnerTools(), nil
+	case FieldPeers:
+		return append([]Entry{}, c.PeerTools()...), nil // none is an empty list, not null
+	case FieldProtected:
+		return c.Protected(), nil
+	}
+	if slices.Contains(reserved, path) {
+		return nil, fmt.Errorf("%s is changed by the owner alone, with ouro start --setup: no proposal changes it", path)
+	}
+	return nil, fmt.Errorf("the configuration has no field %q that can be proposed: there are %s", path, strings.Join(Fields(), ", "))
+}
+
+// Field returns the value of the field path as JSON, as it applies: a field
+// that is not set has the default that holds for it. Two values are the same
+// if what Field returns for them is.
+func (c Config) Field(path string) (json.RawMessage, error) {
+	value, err := c.field(path)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
+}
+
+// SetField sets the field path to value, which is JSON. A value of the wrong
+// type is an error and changes nothing. Whether the tools a list names exist
+// is not for the configuration to know.
+func (c *Config) SetField(path string, value json.RawMessage) error {
+	if _, err := c.field(path); err != nil {
+		return err
+	}
+	var (
+		text  string
+		tools []Entry
+		paths []string
+	)
+	into := map[string]any{FieldName: &text, FieldModel: &text, FieldOwner: &tools, FieldPeers: &tools, FieldProtected: &paths}[path]
+	if err := json.Unmarshal(value, into); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if into == &text && text == "" {
+		return fmt.Errorf("%s cannot be empty", path)
+	}
+	// Null is no list: the default it would stand for is written out instead.
+	if (into == &tools && tools == nil) || (into == &paths && paths == nil) {
+		return fmt.Errorf("%s has to be a list", path)
+	}
+	if c.Tools == nil && into != &text {
+		c.Tools = &Tools{}
+	} else if c.Tools != nil {
+		copied := *c.Tools // the Tools of the caller's copy are not changed
+		c.Tools = &copied
+	}
+	switch path {
+	case FieldName:
+		c.Name = text
+	case FieldModel:
+		c.Model = text
+	case FieldOwner:
+		c.Tools.H2A = tools
+	case FieldPeers:
+		c.Tools.A2A = tools
+	case FieldProtected:
+		c.Tools.Protected = &paths
+	}
+	return nil
+}
+
+// Public is the configuration as the agent of the owner gets to see it:
+// without the key of the node and the key of the API, and with the defaults
+// that hold for what is not set.
+func (c Config) Public() json.RawMessage {
+	protected := c.Protected()
+	b, _ := json.MarshalIndent(struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Model   string `json:"model"`
+		BaseURL string `json:"base_url"`
+		Tools   Tools  `json:"tools"`
+	}{c.ID(), c.Name, c.Model, c.BaseURL, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}}, "", "  ")
+	return b
 }

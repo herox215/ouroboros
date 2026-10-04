@@ -63,6 +63,7 @@ import (
 	"ouroboros/internal/plugins/talk"
 	"ouroboros/internal/plugins/tui"
 	"ouroboros/internal/plugins/update"
+	"ouroboros/internal/proposal"
 	"ouroboros/plugin"
 )
 
@@ -171,9 +172,10 @@ func seal(k *kernel.Kernel) {
 	kernel.Seal[a2a.ChannelSet](k) // keeps the limits of the channels
 	kernel.Seal[node.Local](k)
 	kernel.Seal[node.Server](k)
-	kernel.Seal[peers.Network](k) // holds the contacts and the client
-	kernel.Seal[plugin.Owner](k)  // decides whom the node trusts: handed to a front end in Plugins
-	kernel.Seal[guard.Guard](k)   // decides which files a tool touches
+	kernel.Seal[peers.Network](k)  // holds the contacts and the client
+	kernel.Seal[plugin.Owner](k)   // decides whom the node trusts: handed to a front end in Plugins
+	kernel.Seal[guard.Guard](k)    // decides which files a tool touches
+	kernel.Seal[proposal.Store](k) // what the agent proposed; accepting it changes the configuration
 }
 
 // App runs ouro commands. It is a kernel with plugins and has no logic of its

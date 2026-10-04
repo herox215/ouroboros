@@ -102,5 +102,12 @@ func (u *ui) Ask(ctx context.Context, contextID, text string, step func(tui.Step
 
 func (u *ui) Contacts() (tui.Contacts, error) {
 	incoming, outgoing, err := u.Requests()
-	return tui.Contacts{Incoming: incoming, Outgoing: outgoing}, err
+	if err != nil {
+		return tui.Contacts{}, err
+	}
+	proposals, err := u.Proposals()
+	if err != nil {
+		return tui.Contacts{}, err
+	}
+	return tui.Contacts{Incoming: incoming, Outgoing: outgoing, Proposals: proposals}, nil
 }

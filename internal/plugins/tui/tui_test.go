@@ -3,6 +3,8 @@ package tui_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -114,8 +116,31 @@ func TestTUIBackendContacts(t *testing.T) {
 	store.AddIncoming("pk-in", "in", "", "")
 	store.AddOutgoing("pk-out", "out", "", "")
 	got, err := u.Contacts()
-	if err != nil || len(got.Incoming) != 1 || got.Incoming[0].Name != "in" || len(got.Outgoing) != 1 || got.Outgoing[0].Name != "out" {
+	if err != nil || len(got.Incoming) != 1 || got.Incoming[0].Name != "in" || len(got.Outgoing) != 1 || got.Outgoing[0].Name != "out" || len(got.Proposals) != 0 {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+
+	// With them it shows what the agent proposed for the configuration.
+	cfg := clitest.NodeConfig(s)
+	if err := config.Save(s.Home, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := home.Dir(s.Home).Proposals().Add(cfg, "name", []byte(`"omega"`), "a better name"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = u.Contacts()
+	if err != nil || len(got.Incoming) != 1 || len(got.Proposals) != 1 || got.Proposals[0].Field != "name" || got.Proposals[0].Then != `"omega"` {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	// What cannot be read is an error, not an empty list.
+	os.WriteFile(filepath.Join(s.Home, "proposals.json"), []byte("nope"), 0o600)
+	if got, err := u.Contacts(); err == nil || len(got.Incoming) != 0 {
+		t.Fatalf("unreadable proposals: %+v, %v", got, err)
+	}
+	os.Remove(filepath.Join(s.Home, "proposals.json"))
+	os.WriteFile(filepath.Join(s.Home, "contacts.json"), []byte("nope"), 0o600)
+	if got, err := u.Contacts(); err == nil || len(got.Proposals) != 0 {
+		t.Fatalf("unreadable contacts: %+v, %v", got, err)
 	}
 }
 

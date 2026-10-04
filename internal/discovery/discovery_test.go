@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,8 +32,43 @@ func serve(t *testing.T, port int, self Node) int {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	go Serve(conn, self)
+	go Serve(conn, func() Node { return self })
 	return conn.LocalAddr().(*net.UDPAddr).Port
+}
+
+// A node answers a probe with what it is called then, not with what it was
+// called when it started.
+func TestServeAnswersAsTheNodeIsNow(t *testing.T) {
+	conn, err := Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	var mu sync.Mutex
+	self := node("alpha")
+	go Serve(conn, func() Node {
+		mu.Lock()
+		defer mu.Unlock()
+		return self
+	})
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	found := func() string {
+		t.Helper()
+		nodes, err := Discover(context.Background(), port, 300*time.Millisecond)
+		if err != nil || len(nodes) != 1 {
+			t.Fatalf("found %+v, %v", nodes, err)
+		}
+		return nodes[0].Name
+	}
+	if got := found(); got != "alpha" {
+		t.Fatalf("found %q", got)
+	}
+	mu.Lock()
+	self.Name = "omega"
+	mu.Unlock()
+	if got := found(); got != "omega" {
+		t.Fatalf("after a new name: found %q", got)
+	}
 }
 
 func TestDiscoverFindsNode(t *testing.T) {
@@ -82,7 +118,7 @@ func TestServeStopsOnClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error)
-	go func() { done <- Serve(conn, Node{ID: "x"}) }()
+	go func() { done <- Serve(conn, func() Node { return Node{ID: "x"} }) }()
 	conn.Close()
 	select {
 	case err := <-done:

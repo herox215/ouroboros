@@ -14,7 +14,6 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/assistant"
-	"ouroboros/internal/config"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	"ouroboros/internal/plugins/base"
@@ -54,13 +53,15 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 			wizard: &wizard{term: n.Console, home: dir, baseURL: o.BaseURL, apiKey: o.APIKey},
 			server: node.Server{
 				Home: dir, HTTPPort: o.HTTPPort, DiscoPort: o.DiscoPort, Version: o.Version, Log: o.Log,
-				Responder: func(cfg config.Config) (a2a.Responder, error) {
-					bot, err := n.Builder.ForPeers(cfg)
-					if err != nil {
+				Responder: func(logf func(format string, args ...any)) (a2a.Responder, error) {
+					// The agent for the configuration as it is with every
+					// message: what the owner changes holds without a restart.
+					peers := n.Builder.Peers(dir.Config, logf)
+					if err := peers.Ready(); err != nil {
 						return nil, err
 					}
 					return func(ctx context.Context, contextID, text string) (string, error) {
-						return bot.Respond(ctx, conversation(ctx, contextID), text)
+						return peers.Respond(ctx, conversation(ctx, contextID), text)
 					}, nil
 				},
 				Methods:  func() []a2a.Method { return plugin.All[plugin.Method](ctx) },

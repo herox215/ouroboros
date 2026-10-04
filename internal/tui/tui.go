@@ -28,11 +28,17 @@ var refreshInterval = 10 * time.Second
 // Status describes the local node.
 type Status = plugin.NodeStatus
 
-// Contacts are the connection requests of the local node.
+// Contacts is what waits for the owner of the local node: the connection
+// requests, and the changes of the configuration its agent proposed.
 type Contacts struct {
 	Incoming []plugin.Request
 	Outgoing []plugin.Request
+	// Proposals are listed after Incoming, and selected like them.
+	Proposals []plugin.Proposal
 }
+
+// waiting is how many entries wait for a decision.
+func (c Contacts) waiting() int { return len(c.Incoming) + len(c.Proposals) }
 
 // Backend is what the UI controls.
 type Backend interface {
@@ -47,6 +53,11 @@ type Backend interface {
 	// plugin.ErrNotSaved if the decision could not be stored.
 	Accept(ctx context.Context, publicKey string) error
 	Reject(ctx context.Context, publicKey string) error
+	// AcceptProposal and RefuseProposal decide on a change of the
+	// configuration the agent proposed. Accepting fails with plugin.ErrStale
+	// if the configuration changed since it was proposed.
+	AcceptProposal(id string) error
+	RefuseProposal(id string) error
 	// SetupCommand returns the interactive setup, run with the terminal handed over.
 	SetupCommand() (*exec.Cmd, error)
 }
@@ -417,21 +428,24 @@ func (m *Model) openRequests() tea.Cmd {
 	m.screen = screenRequests
 	m.reqSel = 0
 	m.unreadReq = 0
-	m.seenReq = len(m.trust.Incoming)
+	m.seenReq = m.trust.waiting()
 	return nil
 }
 
 func (m *Model) selectRequest(i int) {
-	if len(m.trust.Incoming) == 0 {
+	if m.trust.waiting() == 0 {
 		m.reqSel = 0
 		return
 	}
-	m.reqSel = min(max(i, 0), len(m.trust.Incoming)-1)
+	m.reqSel = min(max(i, 0), m.trust.waiting()-1)
 }
 
 func (m *Model) decideRequest(accept bool) tea.Cmd {
-	if m.reqSel >= len(m.trust.Incoming) {
+	if m.reqSel >= m.trust.waiting() {
 		return nil
+	}
+	if m.reqSel >= len(m.trust.Incoming) {
+		return m.decideProposal(m.trust.Proposals[m.reqSel-len(m.trust.Incoming)], accept)
 	}
 	pub := m.trust.Incoming[m.reqSel].PublicKey
 	verb, failed := "declined", "rejecting failed"
@@ -460,15 +474,32 @@ func (m *Model) decideRequest(accept bool) tea.Cmd {
 	}
 }
 
+// decideProposal accepts or refuses a change of the configuration the agent
+// proposed.
+func (m *Model) decideProposal(p plugin.Proposal, accept bool) tea.Cmd {
+	return func() tea.Msg {
+		if !accept {
+			if err := m.backend.RefuseProposal(p.ID); err != nil {
+				return actionMsg{err: err}
+			}
+			return actionMsg{done: "proposal refused, " + p.Field + " stays as it is"}
+		}
+		if err := m.backend.AcceptProposal(p.ID); err != nil {
+			return actionMsg{err: err}
+		}
+		return actionMsg{done: p.Field + " changed"}
+	}
+}
+
 func (m *Model) applyContacts(trust Contacts) {
 	m.trust = trust
-	if len(trust.Incoming) > m.seenReq {
-		m.unreadReq += len(trust.Incoming) - m.seenReq
+	if trust.waiting() > m.seenReq {
+		m.unreadReq += trust.waiting() - m.seenReq
 	}
 	if m.screen == screenRequests {
 		m.unreadReq = 0
 	}
-	m.seenReq = len(trust.Incoming)
+	m.seenReq = trust.waiting()
 	m.selectRequest(m.reqSel)
 }
 

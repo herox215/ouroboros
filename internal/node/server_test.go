@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -105,6 +106,41 @@ func TestRunServesUntilStopped(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("card %+v, want %+v", got, want)
 	}
+	// The node is called what the configuration says now: a new name and
+	// model hold without a restart, and a configuration that cannot be used
+	// leaves the node what it was.
+	cfg.Name, cfg.Model = "omega", "gpt-5"
+	if err := dir.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := fetchCard(t, dir, p.Port); got.Name != "omega" || got.Description != "Ouroboros instance named omega" || got.Skills[0].Description != "Chat with gpt-5" {
+		t.Fatalf("the card after a change: %+v", got)
+	}
+	incomplete := cfg
+	incomplete.Name = ""
+	if err := dir.SaveConfig(incomplete); err != nil {
+		t.Fatal(err)
+	}
+	if got := fetchCard(t, dir, p.Port); got.Name != "omega" {
+		t.Fatalf("the card with an incomplete configuration: %+v", got)
+	}
+	key, _ := dir.Identity()
+	public := key.Public()
+	saved, _ := os.ReadFile(filepath.Join(string(dir), "config.json"))
+	if err := os.WriteFile(filepath.Join(string(dir), "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := a2a.FetchCard(context.Background(), fmt.Sprintf("https://127.0.0.1:%d/", p.Port), public); err != nil || got.Name != "omega" {
+		t.Fatalf("the card with a broken configuration: %+v, %v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(string(dir), "config.json"), saved, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Name, cfg.Model = "alpha", "gpt"
+	if err := dir.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
 	// The port speaks TLS only, and only as the node of this home: plain HTTP
 	// gets no card, and nobody takes it for a node with another key.
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", p.Port, a2a.CardPath))
@@ -255,7 +291,7 @@ func TestRunReportsErrors(t *testing.T) {
 	})
 	t.Run("no responder", func(t *testing.T) {
 		s, port := reserved(t)
-		s.Responder = func(config.Config) (a2a.Responder, error) { return nil, errTest }
+		s.Responder = func(func(string, ...any)) (a2a.Responder, error) { return nil, errTest }
 		if err := s.Run(context.Background()); !errors.Is(err, errTest) {
 			t.Fatalf("got %v", err)
 		}

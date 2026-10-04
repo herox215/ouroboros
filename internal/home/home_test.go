@@ -141,6 +141,19 @@ func TestFiles(t *testing.T) {
 		t.Errorf("contacts: %v", err)
 	}
 
+	if got := d.Secrets(); len(got) != 2 || got[0] != filepath.Join(string(d), "config.json") || got[1] != filepath.Join(string(d), "config.json.lock") {
+		t.Errorf("secrets %v", got)
+	}
+	if _, err := d.Proposals().Add(config.Config{Name: "alpha"}, "name", []byte(`"beta"`), "why"); err != nil {
+		t.Errorf("a proposal should be kept: %v", err)
+	}
+	if list, _ := d.Proposals().List(); len(list) != 1 {
+		t.Errorf("proposals %v", list)
+	}
+	if _, err := os.Stat(filepath.Join(string(d), "proposals.json")); err != nil {
+		t.Errorf("proposals: %v", err)
+	}
+
 	d.Failures().Record(diagnosis.Entry{ID: "AAAA", Peer: "key"})
 	if _, ok, _ := d.Failures().Lookup("key", "AAAA"); !ok {
 		t.Error("a failed answer should be kept")

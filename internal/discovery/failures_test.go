@@ -99,7 +99,7 @@ func TestServeReportsFailedRead(t *testing.T) {
 	}
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(-time.Second))
-	if err := Serve(conn, Node{ID: "x"}); !errors.Is(err, os.ErrDeadlineExceeded) {
+	if err := Serve(conn, func() Node { return Node{ID: "x"} }); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("got %v", err)
 	}
 }

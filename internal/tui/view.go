@@ -98,22 +98,26 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// requestsView lists the connection requests that are waiting for a decision.
+// requestsView lists what is waiting for a decision: the connection requests,
+// and the changes of the configuration the agent proposed.
 func (m *Model) requestsView() string {
 	w, h := m.width, m.bodyHeight()
 	lines := []string{boldStyle.Render("Connection requests"), ""}
 	if len(m.trust.Incoming) == 0 {
 		lines = append(lines, mutedStyle.Render("No pending requests."))
 	}
+	selected := func(i int) string {
+		if i == m.reqSel {
+			return lipgloss.NewStyle().Foreground(accent).Render("› ")
+		}
+		return "  "
+	}
 	for i, r := range m.trust.Incoming {
 		name := r.Name
 		if name == "" {
 			name = shortKey(r.PublicKey)
 		}
-		marker := "  "
-		if i == m.reqSel {
-			marker = lipgloss.NewStyle().Foreground(accent).Render("› ")
-		}
+		marker := selected(i)
 		what := "wants to chat"
 		if r.Proposed {
 			// Nobody asked yet: accepting sends the request, with this key.
@@ -127,6 +131,21 @@ func (m *Model) requestsView() string {
 		lines = append(lines, "", mutedStyle.Render("Waiting for the other side:"))
 		for _, r := range m.trust.Outgoing {
 			lines = append(lines, "  "+mutedStyle.Render(r.Name+" ("+shortKey(r.PublicKey)+")"))
+		}
+	}
+	if len(m.trust.Proposals) > 0 {
+		lines = append(lines, "", boldStyle.Render("Changes of the configuration your agent proposes"), "")
+	}
+	for i, p := range m.trust.Proposals {
+		// Now and then are what the node says. The reason is what the agent
+		// says, and it is shown as that.
+		lines = append(lines,
+			selected(len(m.trust.Incoming)+i)+boldStyle.Render(p.Field)+"  "+mutedStyle.Render("· "+p.At.Format("15:04")),
+			"    "+mutedStyle.Render("now:  ")+p.Now,
+			"    "+mutedStyle.Render("then: ")+p.Then,
+			"    "+mutedStyle.Render("your agent says: "+p.Reason))
+		if p.Stale {
+			lines = append(lines, "    "+errStyle.Render("the configuration was changed since: accepting drops this without applying it"))
 		}
 	}
 	return box(true).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))

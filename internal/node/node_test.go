@@ -50,7 +50,7 @@ func testServer(dir home.Dir) Server {
 		Home:      dir,
 		Version:   "test",
 		Log:       io.Discard,
-		Responder: func(config.Config) (a2a.Responder, error) { return nil, nil },
+		Responder: func(func(string, ...any)) (a2a.Responder, error) { return nil, nil },
 	}
 }
 

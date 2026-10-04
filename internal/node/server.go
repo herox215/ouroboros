@@ -36,9 +36,10 @@ type Server struct {
 	DiscoPort int // UDP discovery port
 	Version   string
 	Log       io.Writer
-	// Responder returns what answers the messages of trusted peers for the
-	// node configured by cfg.
-	Responder func(cfg config.Config) (a2a.Responder, error)
+	// Responder returns what answers the messages of trusted peers, or the
+	// error of a configuration it cannot answer with. It is told what goes
+	// wrong later with logf.
+	Responder func(logf func(format string, args ...any)) (a2a.Responder, error)
 	// Methods returns the A2A methods added to the built-in ones. May be nil.
 	Methods func() []a2a.Method
 	// Channels returns the channels peers can open. May be nil.
@@ -78,16 +79,22 @@ func (s Server) Run(ctx context.Context) error {
 		return fmt.Errorf("discovery: %w", err)
 	}
 	defer udp.Close()
-	go discovery.Serve(udp, discovery.Node{ID: id.ID(), Name: cfg.Name, Model: cfg.Model, PublicKey: id.Public(), Port: port})
+	// How the node is called and what it answers with may change while it
+	// runs: both are read when they are told.
+	now := s.current(cfg)
+	go discovery.Serve(udp, func() discovery.Node {
+		cfg := now()
+		return discovery.Node{ID: id.ID(), Name: cfg.Name, Model: cfg.Model, PublicKey: id.Public(), Port: port}
+	})
 
 	logger := log.New(s.Log, "", log.LstdFlags)
-	respond, err := s.Responder(cfg)
+	respond, err := s.Responder(logger.Printf)
 	if err != nil {
 		ln.Close()
 		return err
 	}
 	server := &a2a.Server{
-		Card:     func() a2a.AgentCard { return card(cfg, s.Version) },
+		Card:     func() a2a.AgentCard { return card(now(), s.Version) },
 		Identity: id,
 		Trust:    s.Home.Contacts(),
 		Respond:  respond,
@@ -145,6 +152,21 @@ func (s Server) Run(ctx context.Context) error {
 	<-stopped
 	logger.Print("stopped")
 	return nil
+}
+
+// current returns what reads the configuration of the node as it is now.
+// One that cannot be read or is not complete does not rename a node that
+// runs: the last one that was stays, at first cfg.
+func (s Server) current(cfg config.Config) func() config.Config {
+	var mu sync.Mutex
+	return func() config.Config {
+		mu.Lock()
+		defer mu.Unlock()
+		if now, err := s.Home.Config(); err == nil && now.Complete() {
+			cfg = now
+		}
+		return cfg
+	}
 }
 
 // keep returns what records the answers to peers that failed, for the agent

@@ -73,6 +73,14 @@ func (f *fakeBackend) Reject(ctx context.Context, publicKey string) error {
 	f.rejected = append(f.rejected, publicKey)
 	return f.rejectErr
 }
+func (f *fakeBackend) AcceptProposal(id string) error {
+	f.accepted = append(f.accepted, "proposal "+id)
+	return f.acceptErr
+}
+func (f *fakeBackend) RefuseProposal(id string) error {
+	f.rejected = append(f.rejected, "proposal "+id)
+	return f.rejectErr
+}
 
 func newModel(t *testing.T) (*Model, *fakeBackend) {
 	t.Helper()
@@ -590,5 +598,105 @@ func TestProposedConnection(t *testing.T) {
 	m.Update(press(m, "a")())
 	if view := m.View().Content; !strings.Contains(view, "request accepted") {
 		t.Fatalf("after accepting a request:\n%s", view)
+	}
+}
+
+// What the agent proposes for the configuration waits with the connection
+// requests, and is decided like them: the owner sees what the field is and
+// what it would be, as the node says, and what the agent says about it.
+func TestProposals(t *testing.T) {
+	m, b := commands(t)
+	at := time.Date(2026, 10, 4, 15, 4, 0, 0, time.Local)
+	b.trust = Contacts{
+		Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}},
+		Proposals: []plugin.Proposal{
+			{ID: "p1", Field: "tools.a2a", Now: `[]`, Then: `["list_peers"]`, Reason: "peers should see who is online", At: at},
+			{ID: "p2", Field: "name", Now: `"alpha"`, Then: `"omega"`, Reason: "a better name", At: at, Stale: true},
+		},
+	}
+	m.Update(m.loadContacts())
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✉ 3") {
+		t.Fatalf("the header should count requests and proposals:\n%s", view)
+	}
+	press(m, "R")
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{
+		"› gamma", "Changes of the configuration your agent proposes",
+		"  tools.a2a  · 15:04", "now:  []", `then: ["list_peers"]`, "your agent says: peers should see who is online",
+		`now:  "alpha"`, `then: "omega"`, "the configuration was changed since: accepting drops this without applying it",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the view lacks %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "✉") || strings.Count(view, "the configuration was changed since") != 1 || strings.Contains(view, "No pending requests") {
+		t.Fatalf("the view:\n%s", view)
+	}
+
+	// Down to the first proposal, and accept it.
+	press(m, "j")
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› tools.a2a") || strings.Contains(view, "› gamma") {
+		t.Fatalf("the first proposal should be selected:\n%s", view)
+	}
+	m.Update(press(m, "a")())
+	if len(b.accepted) != 1 || b.accepted[0] != "proposal p1" || m.notice != "tools.a2a changed" || m.noticeErr {
+		t.Fatalf("accepted %v, notice %q", b.accepted, m.notice)
+	}
+	// Further down to the second, which is the last, and refuse it.
+	press(m, "j", "j", "j")
+	if m.reqSel != 2 {
+		t.Fatalf("selected %d", m.reqSel)
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› name") || strings.Contains(view, "› tools.a2a") {
+		t.Fatalf("the second proposal should be selected:\n%s", view)
+	}
+	m.Update(press(m, "x")())
+	if len(b.rejected) != 1 || b.rejected[0] != "proposal p2" || m.notice != "proposal refused, name stays as it is" || m.noticeErr {
+		t.Fatalf("refused %v, notice %q", b.rejected, m.notice)
+	}
+	// The request above them is still a request.
+	press(m, "k", "k", "k")
+	m.Update(press(m, "a")())
+	if len(b.accepted) != 2 || b.accepted[1] != "pk1" {
+		t.Fatalf("accepted %v", b.accepted)
+	}
+
+	// A decision that fails says why, and changes nothing here.
+	press(m, "j")
+	b.acceptErr = plugin.ErrStale
+	m.Update(press(m, "a")())
+	if m.notice != plugin.ErrStale.Error() || !m.noticeErr {
+		t.Fatalf("a stale proposal: %q", m.notice)
+	}
+	b.rejectErr = errors.New("disk full")
+	m.Update(press(m, "x")())
+	if m.notice != "disk full" || !m.noticeErr {
+		t.Fatalf("a refusal that fails: %q", m.notice)
+	}
+
+	// Proposals alone: nothing but them to select, and a new one is counted.
+	b.trust = Contacts{Proposals: b.trust.Proposals[:1]}
+	m.Update(m.loadContacts())
+	if m.reqSel != 0 {
+		t.Fatalf("selected %d of one entry", m.reqSel)
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "No pending requests.") || !strings.Contains(view, "› tools.a2a") {
+		t.Fatalf("proposals alone:\n%s", view)
+	}
+	press(m, "esc")
+	b.trust = Contacts{Proposals: []plugin.Proposal{{ID: "p1"}, {ID: "p3"}, {ID: "p4"}}}
+	m.Update(m.loadContacts())
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✉ 2") {
+		t.Fatalf("new proposals should be counted:\n%s", view)
+	}
+	// With nothing waiting there is nothing to decide.
+	b.trust = Contacts{}
+	m.Update(m.loadContacts())
+	press(m, "R")
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Changes of the configuration") {
+		t.Fatalf("nothing is proposed:\n%s", view)
+	}
+	if cmd := press(m, "a"); cmd != nil {
+		t.Fatal("accepting nothing should do nothing")
 	}
 }

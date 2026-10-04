@@ -1,0 +1,279 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"ouroboros/internal/agent"
+	"ouroboros/internal/config"
+	"ouroboros/internal/identity"
+	"ouroboros/internal/openai/openaitest"
+	"ouroboros/internal/proposal"
+)
+
+// configured is a node whose owner's agent sees the configuration and
+// proposes changes of it.
+type configured struct {
+	t         *testing.T
+	dir       string
+	failing   error // what reading the configuration fails with
+	proposals *proposal.Store
+	builder   Builder
+	assistant *Assistant
+}
+
+func newConfigured(t *testing.T) *configured {
+	t.Helper()
+	c := &configured{t: t, dir: t.TempDir()}
+	c.proposals = proposal.Open(filepath.Join(c.dir, "proposals.json"))
+	read := func() (config.Config, error) {
+		cfg, err := config.Load(c.dir)
+		if c.failing != nil {
+			err = c.failing
+		}
+		return cfg, err
+	}
+	type settings struct {
+		Allow []string `json:"allow"`
+	}
+	read1 := agent.Configurable(agent.Tool{Name: "read", Schema: `{"type":"object"}`}, func(settings) (agent.RunFunc, error) {
+		return func(context.Context, json.RawMessage) (string, error) { return "content", nil }, nil
+	})
+	c.builder = Builder{LLM: overHTTP, Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), read1) }}.
+		WithConfig(read, c.proposals)
+	c.assistant = New(read, c.builder)
+	c.save(config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), APIKey: "sk-secret", Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()})
+	return c
+}
+
+func (c *configured) save(cfg config.Config) {
+	c.t.Helper()
+	if err := config.Save(c.dir, cfg); err != nil {
+		c.t.Fatal(err)
+	}
+}
+
+func (c *configured) config() config.Config {
+	c.t.Helper()
+	cfg, err := config.Load(c.dir)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return cfg
+}
+
+// tool makes the owner's agent call a tool, and returns what the LLM got.
+func (c *configured) tool(name string, args any) string {
+	c.t.Helper()
+	raw, _ := json.Marshal(args)
+	got, err := c.assistant.Ask(context.Background(), "chat", "!"+name+" "+string(raw), nil)
+	return result(c.t, got, err)
+}
+
+// waiting are the proposals that wait.
+func (c *configured) waiting() []proposal.Proposal {
+	c.t.Helper()
+	list, err := c.proposals.List()
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return list
+}
+
+type propose struct {
+	Path   string `json:"path,omitempty"`
+	Value  any    `json:"value,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// The agent of the owner sees the configuration without its secrets.
+func TestGetConfig(t *testing.T) {
+	c := newConfigured(t)
+	got := c.tool(toolGetConfig, struct{}{})
+	cfg := c.config()
+	if got != string(cfg.Public()) || strings.Contains(got, "sk-secret") || strings.Contains(got, cfg.PrivateKey) || !strings.Contains(got, `"name": "me"`) {
+		t.Fatalf("got %s", got)
+	}
+	// As it is now, not as it was when the agent was built.
+	cfg.Tools = &config.Tools{A2A: config.Named("list_peers")}
+	c.save(cfg)
+	if got := c.tool(toolGetConfig, struct{}{}); !strings.Contains(got, `"list_peers"`) {
+		t.Fatalf("after a change: %s", got)
+	}
+	c.failing = errTest
+	if _, err := c.builder.getConfig().Run(context.Background(), json.RawMessage(`{}`)); err != errTest {
+		t.Fatalf("a configuration that cannot be read: %v", err)
+	}
+}
+
+// A proposal changes nothing: it waits for the owner, and the agent is told
+// so.
+func TestProposeConfig(t *testing.T) {
+	c := newConfigured(t)
+	got := c.tool(toolProposeConfig, propose{"tools.a2a", []any{"list_peers", map[string]any{"tool": "read", "allow": []string{"~/share"}}}, "so that peers can read the share"})
+	want := `Proposed, and nothing is changed yet: tools.a2a is to become ["list_peers",{"allow":["~/share"],"tool":"read"}] instead of []. ` +
+		"The proposal waits for your owner among the requests in the terminal UI (ouro, then R), where they accept or refuse it. " +
+		"Tell them that, and do not say that the change is made."
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+	if c.config().Tools != nil {
+		t.Fatal("the proposal changed the configuration")
+	}
+	list := c.waiting()
+	if len(list) != 1 || list[0].Path != "tools.a2a" || string(list[0].Value) != `["list_peers",{"allow":["~/share"],"tool":"read"}]` ||
+		string(list[0].Before) != `[]` || list[0].Reason != "so that peers can read the share" {
+		t.Fatalf("waiting: %+v", list)
+	}
+
+	// A list that is handed over as a text is the list.
+	got = c.tool(toolProposeConfig, propose{"tools.protected", `["~/.ssh", "~/secret"]`, "more"})
+	if !strings.HasPrefix(got, `Proposed, and nothing is changed yet: tools.protected is to become ["~/.ssh","~/secret"] instead of ["~/.ssh",`) {
+		t.Fatalf("a list as text: %q", got)
+	}
+	got = c.tool(toolProposeConfig, propose{"name", "you", "a better name"})
+	if !strings.HasPrefix(got, `Proposed, and nothing is changed yet: name is to become "you" instead of "me".`) {
+		t.Fatalf("a name: %q", got)
+	}
+	if len(c.waiting()) != 3 || c.config().Name != "me" {
+		t.Fatalf("waiting: %+v", c.waiting())
+	}
+}
+
+// What the node would not start with is an error at once, and no proposal.
+func TestProposeConfigChecksTheValue(t *testing.T) {
+	c := newConfigured(t)
+	for _, tt := range []struct {
+		args propose
+		want string
+	}{
+		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, read, run)`},
+		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, read, run, get_config, propose_config)`},
+		{propose{"tools.a2a", []any{map[string]any{"tool": "read", "alow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: settings of the tool read: json: unknown field "alow"`},
+		{propose{"tools.a2a", []any{map[string]any{"tool": "list_peers", "allow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: the tool list_peers takes no settings`},
+		{propose{"tools.a2a", []string{"read", "read"}, "r"}, `error: nothing was proposed: tools.a2a: the tool "read" is listed twice`},
+		{propose{"tools.a2a", []string{toolGetConfig}, "r"}, `error: nothing was proposed: tools.a2a: the tool get_config is for the owner of the node only: it is no tool for peers`},
+		{propose{"tools.a2a", []string{toolProposeConfig}, "r"}, `error: nothing was proposed: tools.a2a: the tool propose_config is for the owner of the node only: it is no tool for peers`},
+		{propose{"tools.a2a", "read", "r"}, `error: nothing was proposed: tools.a2a: json: cannot unmarshal string into Go value of type []config.Entry`},
+		{propose{"tools.a2a", `["read"`, "r"}, `error: nothing was proposed: tools.a2a: json: cannot unmarshal string into Go value of type []config.Entry`},
+		{propose{"tools.protected", []string{"secrets"}, "r"}, `error: nothing was proposed: tools.protected: the path "secrets" has to be absolute or start with ~`},
+		{propose{"name", 3, "r"}, `error: nothing was proposed: name: json: cannot unmarshal number into Go value of type string`},
+		{propose{"name", "me", "r"}, `error: nothing was proposed: name is that already: there is nothing to change`},
+		{propose{"api_key", "sk-mine", "r"}, `error: nothing was proposed: api_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
+		{propose{"private_key", "mine", "r"}, `error: nothing was proposed: private_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
+		{propose{"base_url", "http://evil.example/v1", "r"}, `error: nothing was proposed: base_url is changed by the owner alone, with ouro start --setup: no proposal changes it`},
+		{propose{"tools", map[string]any{}, "r"}, `error: nothing was proposed: the configuration has no field "tools" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
+		{propose{"", "x", "r"}, `error: propose_config needs "path", "value" and "reason"`},
+		{propose{"name", nil, "r"}, `error: propose_config needs "path", "value" and "reason"`},
+		{propose{"name", "x", ""}, `error: propose_config needs "path", "value" and "reason"`},
+	} {
+		if got := c.tool(toolProposeConfig, tt.args); got != tt.want {
+			t.Errorf("%+v:\n got %q\nwant %q", tt.args, got, tt.want)
+		}
+	}
+	got, err := c.assistant.Ask(context.Background(), "chat", "!"+toolProposeConfig+` "name"`, nil)
+	if got := result(t, got, err); got != `error: propose_config needs "path", "value" and "reason"` {
+		t.Errorf("arguments that are no object: %q", got)
+	}
+	if list := c.waiting(); len(list) != 0 {
+		t.Fatalf("waiting: %+v", list)
+	}
+
+	// What is allowed for the owner is a proposal: every tool, and "*" for peers.
+	for _, args := range []propose{
+		{"tools.h2a", []string{"read", toolGetConfig, toolProposeConfig, toolRun}, "r"},
+		{"tools.a2a", []string{"*"}, "r"},
+		{"tools.protected", []string{}, "r"},
+		{"model", "gpt-4o-mini", "r"},
+	} {
+		if got := c.tool(toolProposeConfig, args); !strings.HasPrefix(got, "Proposed, and nothing is changed yet: ") {
+			t.Errorf("%+v: %q", args, got)
+		}
+	}
+
+	// No more wait than fit, and the agent is told to whom to turn.
+	for i := len(c.waiting()); i < proposal.Max; i++ {
+		c.tool(toolProposeConfig, propose{"name", strings.Repeat("n", i+3), "r"})
+	}
+	if got := c.tool(toolProposeConfig, propose{"name", "one more", "r"}); got != "error: 16 proposals are waiting for your owner already, and no more are kept: "+
+		"they decide on them among the requests in the terminal UI (R)" {
+		t.Errorf("a full list: %q", got)
+	}
+	if len(c.waiting()) != proposal.Max {
+		t.Fatalf("%d waiting", len(c.waiting()))
+	}
+
+	c.failing = errTest
+	if _, err := c.builder.proposeConfig().Run(context.Background(), json.RawMessage(`{"path": "name", "value": "x", "reason": "r"}`)); err == nil || err.Error() != "nothing was proposed: test error" {
+		t.Fatalf("a configuration that cannot be read: %v", err)
+	}
+}
+
+// Both tools are for the owner alone: a peer has neither, whatever a2a
+// lists, and listing them there is an error.
+func TestConfigToolsAreForTheOwner(t *testing.T) {
+	c := newConfigured(t)
+	for _, tool := range c.builder.configTools() {
+		got, err := tool.Run(from("luna"), json.RawMessage(`{"path": "name", "value": "luna's", "reason": "because"}`))
+		if err == nil || got != "" || err.Error() != tool.Name+" is for the owner of this node only" || !tool.OwnerOnly {
+			t.Errorf("%s for a peer: %q, %v", tool.Name, got, err)
+		}
+	}
+	if len(c.waiting()) != 0 {
+		t.Fatal("a peer proposed a change")
+	}
+
+	cfg := c.config()
+	for _, name := range []string{toolGetConfig, toolProposeConfig} {
+		cfg.Tools = &config.Tools{A2A: config.Named("read", name)}
+		if _, err := c.builder.ForPeers(cfg); err == nil || err.Error() != "tools.a2a: the tool "+name+" is for the owner of the node only: it is no tool for peers" {
+			t.Errorf("%s in a2a: %v", name, err)
+		}
+		if err := c.builder.Check(cfg); err == nil || !strings.HasPrefix(err.Error(), "tools.a2a: ") {
+			t.Errorf("%s in a2a: %v", name, err)
+		}
+		// For the owner it is a tool like any other.
+		cfg.Tools = &config.Tools{H2A: config.Named(name)}
+		if err := c.builder.Check(cfg); err != nil {
+			t.Errorf("%s in h2a: %v", name, err)
+		}
+	}
+	// Every tool for peers is every tool there is for peers.
+	cfg.Tools = &config.Tools{A2A: config.Named("*")}
+	tools, err := c.builder.peerTools(cfg)
+	if err != nil || names(tools) != "list_peers,ask_peer,read,run" {
+		t.Fatalf("every tool for peers: %q, %v", names(tools), err)
+	}
+	tools, err = c.builder.ownerTools(cfg)
+	if err != nil || names(tools) != "list_peers,ask_peer,read,run,get_config,propose_config" {
+		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
+	}
+	// A script of a peer has neither.
+	bot, err := c.builder.ForPeers(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := bot.Respond(from("luna"), "c", runs(`return typeof get_config + " " + typeof propose_config + " " + typeof read`))
+	if got := result(t, got, err); got != "undefined undefined function" {
+		t.Fatalf("a script of a peer: %q", got)
+	}
+
+	// The owner's agent is told what a proposal is.
+	prompt, err := c.assistant.Ask(context.Background(), "p", "?system", nil)
+	if err != nil || !strings.Contains(prompt, configHint) {
+		t.Fatalf("the prompt: %q, %v", prompt, err)
+	}
+	cfg.Tools = &config.Tools{H2A: config.Named(toolGetConfig)}
+	c.save(cfg)
+	if prompt, err := c.assistant.Ask(context.Background(), "p", "?system", nil); err != nil || strings.Contains(prompt, configHint) {
+		t.Fatalf("the prompt without the tool: %q, %v", prompt, err)
+	}
+
+	// A blueprint without a node has neither tool.
+	if got := names((Builder{Tools: func() []agent.Tool { return nil }}).all()); got != "run" {
+		t.Fatalf("without a node: %q", got)
+	}
+}

@@ -1,6 +1,6 @@
 // Package home is the directory a node keeps its state in: its configuration,
-// its identity, its contacts, the answers that failed and the files of its
-// background process.
+// its identity, its contacts, the proposals of its agent, the answers that
+// failed and the files of its background process.
 //
 // Every file of a node is named here and nowhere else. To keep more state,
 // add a method to Dir that returns its path or opens it.
@@ -16,6 +16,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/identity"
+	"ouroboros/internal/proposal"
 )
 
 // Dir is the path of the directory.
@@ -51,6 +52,10 @@ func (d Dir) Secrets() []string { return config.Files(string(d)) }
 
 // Contacts opens the contact list of the node.
 func (d Dir) Contacts() *contacts.Store { return contacts.Open(d.path("contacts.json")) }
+
+// Proposals opens the list of the changes of the configuration the agent of
+// the owner proposed, which wait for the owner to decide.
+func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposals.json")) }
 
 // Failures opens the list of the answers to peers that failed.
 func (d Dir) Failures() *diagnosis.Store { return diagnosis.Open(d.path("failures.json")) }
