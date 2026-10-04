@@ -80,6 +80,7 @@ func (s Server) Run(ctx context.Context) error {
 		Trust:    s.Home.Contacts(),
 		Respond:  respond,
 		Methods:  s.Methods,
+		Log:      logger.Printf,
 	}
 	srv := &http.Server{
 		Handler:           logRequests(logger, server.Handler()),

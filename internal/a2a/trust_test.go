@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -25,6 +26,8 @@ type node struct {
 	respond Responder
 	// methods are added to the built-in ones.
 	methods []Method
+	// log is what the server logged.
+	log []string
 }
 
 func newNode(t *testing.T, name string) *node {
@@ -38,7 +41,8 @@ func newNode(t *testing.T, name string) *node {
 		}
 		return echo(ctx, contextID, text)
 	}
-	n.srv = httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: respond, Methods: func() []Method { return n.methods }}).Handler())
+	n.srv = httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: respond, Methods: func() []Method { return n.methods },
+		Log: func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) }}).Handler())
 	t.Cleanup(n.srv.Close)
 	return n
 }

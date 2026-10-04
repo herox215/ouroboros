@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -26,6 +27,9 @@ type Server struct {
 	// Methods returns the methods added to the built-in ones, read anew for
 	// every request. May be nil.
 	Methods func() []Method
+	// Log records what peers are not told, such as why the Responder failed.
+	// It is called like log.Printf. May be nil.
+	Log func(format string, args ...any)
 }
 
 // Caller is who sent a request.
@@ -140,7 +144,7 @@ func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) 
 	switch {
 	case trusted:
 		// The Responder learns who asks: what it does for a peer is limited.
-		return reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), s.Respond, p.Message)
+		return s.reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), from, p.Message)
 	case blocked:
 		return nil, &Error{CodeBlocked, "connection refused"}
 	}
@@ -170,15 +174,27 @@ func (s *Server) reject(_ context.Context, from Caller, _ json.RawMessage) (*Mes
 
 var errNoText = &Error{CodeInvalidParams, "message needs a text part"}
 
-// reply lets respond answer msg within its conversation.
-func reply(ctx context.Context, respond Responder, msg Message) (*Message, *Error) {
+// reply lets the Responder answer msg within its conversation.
+//
+// Why the Responder failed is nothing a peer gets to read: the error of an
+// LLM or a tool names endpoints and whatever else its text contains. The peer
+// is told that it failed, with an ID; the cause goes to the log under that ID.
+// Only the owner, who asks with the key of this node, reads the cause itself.
+func (s *Server) reply(ctx context.Context, from Caller, msg Message) (*Message, *Error) {
 	contextID := msg.ContextID
 	if contextID == "" {
 		contextID = NewID()
 	}
-	text, err := respond(ctx, contextID, msg.Text())
+	text, err := s.Respond(ctx, contextID, msg.Text())
 	if err != nil {
-		return nil, &Error{CodeInternalError, err.Error()}
+		id := rand.Text()[:8]
+		if s.Log != nil {
+			s.Log("error %s answering %s (%s): %v", id, from.Addr, from.PublicKey, err)
+		}
+		if from.PublicKey == s.Identity.Public() {
+			return nil, &Error{CodeInternalError, err.Error()}
+		}
+		return nil, &Error{CodeInternalError, "the agent could not answer (error " + id + ")"}
 	}
 	answer := NewMessage("agent", contextID, text)
 	return &answer, nil

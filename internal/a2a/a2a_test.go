@@ -171,13 +171,36 @@ func TestRPCErrors(t *testing.T) {
 	}
 }
 
-func TestSendReturnsRPCError(t *testing.T) {
-	srv := newServer(t, func(context.Context, string, string) (string, error) {
-		return "", errors.New("llm down")
-	})
-	_, err := srv.client().Send(context.Background(), srv.srv.URL, srv.id.Public(), "c", "x")
+// Why the agent failed stays on the node: the peer learns that it failed and
+// under which ID the node logged the cause, nothing of the cause itself.
+func TestResponderErrorIsNotSentToPeers(t *testing.T) {
+	const cause = `Post "http://10.0.0.5:11434/v1/chat/completions": connection refused`
+	failing := func(context.Context, string, string) (string, error) { return "", errors.New(cause) }
+	srv, peer := newServer(t, failing), newNode(t, "peer")
+	srv.trust.AddTrusted(peer.id.Public(), "peer", "")
+	ctx := context.Background()
+	_, err := peer.client().Send(ctx, srv.srv.URL, srv.id.Public(), "c", "x")
 	var rpcErr *Error
-	if !errors.As(err, &rpcErr) || rpcErr.Code != CodeInternalError || !strings.Contains(err.Error(), "llm down") {
+	if !errors.As(err, &rpcErr) || rpcErr.Code != CodeInternalError {
+		t.Fatalf("got %v", err)
+	}
+	said := regexp.MustCompile(`^the agent could not answer \(error ([A-Z2-7]{8})\)$`).FindStringSubmatch(rpcErr.Message)
+	if said == nil {
+		t.Fatalf("the peer was told %q", rpcErr.Message)
+	}
+	if len(srv.log) != 1 || !strings.Contains(srv.log[0], "error "+said[1]) || !strings.Contains(srv.log[0], cause) || !strings.Contains(srv.log[0], peer.id.Public()) {
+		t.Fatalf("log %q should explain error %s", srv.log, said[1])
+	}
+
+	// The owner asks with the key of the node and reads the cause.
+	if _, err := srv.client().Send(ctx, srv.srv.URL, srv.id.Public(), "c", "x"); !code(err, CodeInternalError) || !strings.Contains(err.Error(), cause) {
+		t.Fatalf("the owner was told %v", err)
+	}
+
+	// A server without a log keeps the cause from peers just the same.
+	quiet := httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: srv.id, Trust: srv.trust, Respond: failing}).Handler())
+	defer quiet.Close()
+	if _, err := peer.client().Send(ctx, quiet.URL, srv.id.Public(), "c", "x"); !code(err, CodeInternalError) || strings.Contains(err.Error(), "10.0.0.5") {
 		t.Fatalf("got %v", err)
 	}
 }

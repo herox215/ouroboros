@@ -478,6 +478,26 @@ func TestInteractiveAskReportsErrorsAndContinues(t *testing.T) {
 	}
 }
 
+// A peer learns that the agent failed, not why: the cause stays in the log of
+// the node that failed.
+func TestPeerIsNotToldWhyTheAgentFailed(t *testing.T) {
+	beta := testSettings(t)
+	cfg := nodeConfig(beta)
+	cfg.Name, cfg.APIKey = "beta", "sk-revoked"
+	startNode(t, beta, cfg)
+	alpha := testSettings(t)
+	testPeers[alpha.Home] = []string{fmt.Sprintf("127.0.0.1:%d", beta.DiscoPort)}
+	if err := config.Save(alpha.Home, nodeConfig(alpha)); err != nil {
+		t.Fatal(err)
+	}
+	trust(t, beta, alpha, "alpha")
+
+	_, err := run(t, alpha, "", "ask", "beta", "hi")
+	if err == nil || !strings.Contains(err.Error(), "the agent could not answer (error ") || strings.Contains(err.Error(), "401") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestOneShotAskReturnsError(t *testing.T) {
 	s := testSettings(t)
 	cfg := nodeConfig(s)
