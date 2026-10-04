@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -39,7 +38,7 @@ type Server struct {
 }
 
 // Run serves until ctx is done. It opens the A2A port, answers discovery
-// probes, writes the PID file and hands the messages of trusted peers to an
+// probes, holds the PID file and hands the messages of trusted peers to an
 // Responder. What the node offers over A2A is defined in a2a.Server plus
 // Methods.
 func (s Server) Run(ctx context.Context) error {
@@ -87,12 +86,14 @@ func (s Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	pidFile := s.Home.Service().PIDFile
-	if err := daemon.WritePIDFile(pidFile, port); err != nil {
+	// Held until the node is gone: the lock on the file is what tells other
+	// processes that it runs.
+	release, err := daemon.Hold(s.Home.Service().PIDFile, port)
+	if err != nil {
 		ln.Close()
 		return err
 	}
-	defer os.Remove(pidFile)
+	defer release()
 
 	stopped := make(chan struct{})
 	go func() {

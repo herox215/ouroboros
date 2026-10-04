@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"ouroboros/internal/openai/openaitest"
 )
@@ -75,6 +77,46 @@ func TestEndToEnd(t *testing.T) {
 
 	// Second start reuses the saved configuration without asking.
 	expect(ouro("", "start"), "online", id[1])
+	expect(ouro("", "stop"), "stopped")
+
+	// A node that is killed leaves its PID file behind. That is no node, even
+	// when the PID belongs to another process by now, which is left alone.
+	pidFile := filepath.Join(dir, "home", "ouro.pid")
+	expect(ouro("", "start"), "online")
+	var pid, port int
+	record, _ := os.ReadFile(pidFile)
+	if _, err := fmt.Sscan(string(record), &pid, &port); err != nil {
+		t.Fatalf("PID file %q: %v", record, err)
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		if syscall.Kill(pid, 0) != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	bystander := exec.Command("sleep", "30")
+	if err := bystander.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() {
+		bystander.Wait()
+		close(exited)
+	}()
+	defer bystander.Process.Kill()
+	os.WriteFile(pidFile, fmt.Appendf(nil, "%d %d\n", bystander.Process.Pid, port), 0o600)
+	expect(ouro("", "status"), "not running")
+	expect(ouro("", "stop"), "not running")
+	select {
+	case <-exited:
+		t.Fatal("stop signalled an unrelated process")
+	case <-time.After(200 * time.Millisecond): // more than a signal needs
+	}
+	expect(ouro("", "start"), "online")
+	expect(ouro("", "status"), "● running")
 	expect(ouro("", "stop"), "stopped")
 
 	log, _ := os.ReadFile(filepath.Join(dir, "home", "ouro.log"))

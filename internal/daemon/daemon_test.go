@@ -1,14 +1,47 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// The test binary is also the node of these tests: called as "node" or
+// "stubborn" with a PID file, it holds the file like a node does.
+func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && (os.Args[1] == "node" || os.Args[1] == "stubborn") {
+		os.Exit(fakeNode(os.Args[2], os.Args[1] == "stubborn"))
+	}
+	os.Exit(m.Run())
+}
+
+// fakeNode holds path until it is asked to stop; a stubborn one does not listen.
+func fakeNode(path string, stubborn bool) int {
+	term := make(chan os.Signal, 1)
+	if stubborn {
+		signal.Ignore(syscall.SIGTERM)
+	} else {
+		signal.Notify(term, syscall.SIGTERM)
+	}
+	release, err := Hold(path, 41337)
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	defer release()
+	select {
+	case <-term:
+	case <-time.After(30 * time.Second):
+	}
+	return 0
+}
 
 func pidFile(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "ouro.pid")
@@ -23,14 +56,61 @@ func exitedPID(t *testing.T) int {
 	return cmd.Process.Pid
 }
 
-func TestWriteAndReadPIDFile(t *testing.T) {
+// bystander starts a process that has nothing to do with a node and returns
+// its PID and a function that reports whether it is still running.
+func bystander(t *testing.T) (pid int, alive func() bool) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(exited)
+	}()
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		<-exited
+	})
+	return cmd.Process.Pid, func() bool {
+		select {
+		case <-exited:
+			return false
+		case <-time.After(200 * time.Millisecond): // more than a signal needs
+			return true
+		}
+	}
+}
+
+func TestHoldAndRunning(t *testing.T) {
 	path := pidFile(t)
-	if err := WritePIDFile(path, 41337); err != nil {
+	os.WriteFile(path, []byte("1 2 and what a dead node left behind"), 0o600)
+	release, err := Hold(path, 41337)
+	if err != nil {
 		t.Fatal(err)
 	}
 	p, ok := Running(path)
 	if !ok || p.PID != os.Getpid() || p.Port != 41337 {
 		t.Fatalf("got %+v, %v", p, ok)
+	}
+	if b, _ := os.ReadFile(path); string(b) != fmt.Sprintf("%d 41337\n", os.Getpid()) {
+		t.Fatalf("PID file = %q", b)
+	}
+
+	// The file belongs to one node at a time.
+	if _, err := Hold(path, 1); !errors.Is(err, ErrRunning) {
+		t.Fatalf("second node: got %v", err)
+	}
+	if p, ok := Running(path); !ok || p.Port != 41337 {
+		t.Fatalf("the node lost its file: %+v, %v", p, ok)
+	}
+
+	release()
+	if _, ok := Running(path); ok {
+		t.Fatal("a released file should not count as running")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("a released file should be removed")
 	}
 }
 
@@ -47,15 +127,140 @@ func TestRunningRejectsMissingGarbageAndStale(t *testing.T) {
 	}
 }
 
+// What a locked file says is only believed if it names a process.
+func TestRunningRejectsHeldGarbage(t *testing.T) {
+	path := pidFile(t)
+	release, err := Hold(path, 41337)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	for _, content := range []string{"", "nope", "0 41337", "-1 41337"} {
+		os.WriteFile(path, []byte(content), 0o600)
+		if p, ok := Running(path); ok {
+			t.Errorf("%q: got %+v", content, p)
+		}
+		if stopped, err := Stop(path, time.Second); stopped || err != nil {
+			t.Errorf("%q: Stop = %v, %v", content, stopped, err)
+		}
+	}
+}
+
+// A PID file that outlived its node is not a node, even if the PID belongs
+// to a process again: that process is never signalled.
+func TestStalePIDFileOfLiveProcess(t *testing.T) {
+	pid, alive := bystander(t)
+	path := pidFile(t)
+	os.WriteFile(path, fmt.Appendf(nil, "%d 41337\n", pid), 0o600)
+
+	if p, ok := Running(path); ok {
+		t.Fatalf("Running = %+v", p)
+	}
+	if stopped, err := Stop(path, time.Second); stopped || err != nil {
+		t.Fatalf("Stop = %v, %v", stopped, err)
+	}
+	if !alive() {
+		t.Fatal("an unrelated process was stopped")
+	}
+
+	// A node takes the file over.
+	release, err := Hold(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if p, ok := Running(path); !ok || p.PID != os.Getpid() || p.Port != 1 {
+		t.Fatalf("got %+v, %v", p, ok)
+	}
+}
+
+func TestHoldReportsErrors(t *testing.T) {
+	if _, err := Hold(filepath.Join(t.TempDir(), "missing", "ouro.pid"), 1); err == nil {
+		t.Error("a missing directory should fail")
+	}
+	// The null device can be locked, but holds no content.
+	if _, err := Hold(os.DevNull, 1); err == nil {
+		t.Error("a file that cannot be written should fail")
+	}
+
+	refused := errors.New("no lock")
+	flock = func(int, int) error { return refused }
+	defer func() { flock = syscall.Flock }()
+	path := pidFile(t)
+	if _, err := Hold(path, 1); !errors.Is(err, refused) {
+		t.Errorf("without a lock: got %v", err)
+	}
+	writeStale(t, path)
+	if p, ok := Running(path); ok {
+		t.Errorf("without a lock: Running = %+v", p)
+	}
+}
+
+// writeStale leaves a PID file behind as a node does that was killed.
+func writeStale(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, fmt.Appendf(nil, "%d 41337\n", os.Getpid()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A process that only looks whether a node is running does not keep a node
+// from starting.
+func TestHoldWaitsForALook(t *testing.T) {
+	looks := 0
+	flock = func(fd, how int) error {
+		if looks++; looks <= 2 {
+			return syscall.EWOULDBLOCK
+		}
+		return syscall.Flock(fd, how)
+	}
+	defer func() { flock = syscall.Flock }()
+	release, err := Hold(pidFile(t), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if looks != 3 {
+		t.Fatalf("locked %d times", looks)
+	}
+}
+
+// A node that gets the lock of a file its predecessor just removed does not
+// end up with a file nobody finds.
+func TestHoldFileRemovedMeanwhile(t *testing.T) {
+	path := pidFile(t)
+	removed := false
+	flock = func(fd, how int) error {
+		if !removed {
+			removed = true
+			os.Remove(path) // the predecessor stops between open and lock
+		}
+		return syscall.Flock(fd, how)
+	}
+	defer func() { flock = syscall.Flock }()
+	release, err := Hold(path, 41337)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	flock = syscall.Flock
+	if p, ok := Running(path); !ok || p.Port != 41337 {
+		t.Fatalf("got %+v, %v", p, ok)
+	}
+}
+
 func TestWaitRunning(t *testing.T) {
 	path := pidFile(t)
 	if _, ok := WaitRunning(path, 100*time.Millisecond); ok {
 		t.Fatal("nothing should be running")
 	}
+	released := make(chan func(), 1)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		WritePIDFile(path, 1)
+		release, _ := Hold(path, 1)
+		released <- release
 	}()
+	defer func() { (<-released)() }()
 	if p, ok := WaitRunning(path, 2*time.Second); !ok || p.Port != 1 {
 		t.Fatalf("got %+v, %v", p, ok)
 	}
@@ -89,20 +294,23 @@ func TestSpawnMissingExecutable(t *testing.T) {
 	}
 }
 
-func TestStop(t *testing.T) {
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	go cmd.Wait() // reap, otherwise the zombie counts as alive
-	if err := Stop(cmd.Process.Pid, 2*time.Second); err != nil {
-		t.Fatal(err)
+func TestStopNotRunning(t *testing.T) {
+	if stopped, err := Stop(pidFile(t), time.Second); stopped || err != nil {
+		t.Fatalf("Stop = %v, %v", stopped, err)
 	}
 }
 
-func TestStopNotRunning(t *testing.T) {
-	if err := Stop(exitedPID(t), time.Second); err == nil {
-		t.Fatal("want error")
+// A node whose process cannot be signalled is reported.
+func TestStopUnreachableProcess(t *testing.T) {
+	path := pidFile(t)
+	release, err := Hold(path, 41337)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	os.WriteFile(path, fmt.Appendf(nil, "%d 41337\n", exitedPID(t)), 0o600)
+	if stopped, err := Stop(path, time.Second); !stopped || !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("Stop = %v, %v", stopped, err)
 	}
 }
 
@@ -132,13 +340,11 @@ func TestServiceStartAndStop(t *testing.T) {
 		t.Fatalf("Stop without a node = %v, %v", stopped, err)
 	}
 
-	// The node is a sleep that sh leaves behind, as a real node outlives
-	// the command that started it.
-	p, err := s.Start("/bin/sh", "-c", `sleep 30 & echo "$! 41337" > "$0"`, s.PIDFile)
+	p, err := s.Start(os.Args[0], "node", s.PIDFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if running, ok := s.Running(); !ok || running != p || p.Port != 41337 {
+	if running, ok := s.Running(); !ok || running != p || p.Port != 41337 || p.PID == os.Getpid() {
 		t.Fatalf("Running = %+v, %v; started %+v", running, ok, p)
 	}
 	if stopped, err := s.Stop(); !stopped || err != nil {
@@ -149,6 +355,42 @@ func TestServiceStartAndStop(t *testing.T) {
 	}
 }
 
+// A node that was killed leaves its PID file behind. It counts as stopped at
+// once, and the next node starts over the file.
+func TestServiceSurvivesKilledNode(t *testing.T) {
+	s := service(t)
+	p, err := s.Start(os.Args[0], "node", s.PIDFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(p.PID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	for range 40 {
+		if _, ok := s.Running(); !ok {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if running, ok := s.Running(); ok {
+		t.Fatalf("a killed node counts as running: %+v", running)
+	}
+	if _, err := os.Stat(s.PIDFile); err != nil {
+		t.Fatalf("the killed node should leave its PID file behind: %v", err)
+	}
+	if stopped, err := s.Stop(); stopped || err != nil {
+		t.Fatalf("Stop after a kill = %v, %v", stopped, err)
+	}
+
+	again, err := s.Start(os.Args[0], "node", s.PIDFile)
+	if err != nil || again.PID == p.PID {
+		t.Fatalf("restart: %+v, %v", again, err)
+	}
+	if stopped, err := s.Stop(); !stopped || err != nil {
+		t.Fatalf("Stop = %v, %v", stopped, err)
+	}
+}
+
 func TestServiceStartFails(t *testing.T) {
 	t.Parallel() // waits as long as a node may take to come up
 	s := service(t)
@@ -156,7 +398,7 @@ func TestServiceStartFails(t *testing.T) {
 		t.Fatal("a missing executable should fail")
 	}
 	// A stale PID file is not taken for the new node.
-	WritePIDFile(s.PIDFile, 1)
+	writeStale(t, s.PIDFile)
 	if _, err := s.Start("/bin/sh", "-c", "exit 0"); err == nil || !strings.Contains(err.Error(), s.LogFile) {
 		t.Fatalf("a node that never comes up: %v", err)
 	}
@@ -168,22 +410,15 @@ func TestSpawnWithoutLog(t *testing.T) {
 	}
 }
 
-// A process that ignores the request to stop is reported, not waited for.
-func TestStopStubbornProcess(t *testing.T) {
-	cmd := exec.Command("/bin/sh", "-c", `trap "" TERM; echo ready; exec sleep 30`)
-	out, err := cmd.StdoutPipe()
+// A node that ignores the request to stop is reported, not waited for.
+func TestStopStubbornNode(t *testing.T) {
+	s := service(t)
+	p, err := s.Start(os.Args[0], "stubborn", s.PIDFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer cmd.Wait()
-	defer cmd.Process.Kill()
-	if _, err := out.Read(make([]byte, 16)); err != nil { // the trap is set
-		t.Fatal(err)
-	}
-	if err := Stop(cmd.Process.Pid, 200*time.Millisecond); err == nil || !strings.Contains(err.Error(), "did not exit in time") {
-		t.Fatalf("got %v", err)
+	defer syscall.Kill(p.PID, syscall.SIGKILL)
+	if stopped, err := Stop(s.PIDFile, 200*time.Millisecond); !stopped || err == nil || !strings.Contains(err.Error(), "did not stop in time") {
+		t.Fatalf("Stop = %v, %v", stopped, err)
 	}
 }

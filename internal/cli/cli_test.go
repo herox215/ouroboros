@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -411,6 +412,61 @@ func TestNodeRemovesPIDFileOnShutdown(t *testing.T) {
 	}
 }
 
+// bystander starts a process that is no node, records it in the PID file of
+// s as a node that crashed would have left it, and returns a function that
+// reports whether the process is still running.
+func bystander(t *testing.T, s Settings) (alive func() bool) {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(exited)
+	}()
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		<-exited
+	})
+	stale := fmt.Appendf(nil, "%d 41337\n", cmd.Process.Pid)
+	if err := os.WriteFile(filepath.Join(s.Home, "ouro.pid"), stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return func() bool {
+		select {
+		case <-exited:
+			return false
+		case <-time.After(200 * time.Millisecond): // more than a signal needs
+			return true
+		}
+	}
+}
+
+// A PID file left behind is not a node: the process that got its PID since
+// is neither shown as the node nor stopped, and a node starts over the file.
+func TestStalePIDFileIsNotANode(t *testing.T) {
+	s := testSettings(t)
+	config.Save(s.Home, nodeConfig(s))
+	alive := bystander(t, s)
+
+	if out, err := run(t, s, "", "status"); err != nil || !strings.Contains(out, "not running") {
+		t.Fatalf("status: %q, %v", out, err)
+	}
+	if out, err := run(t, s, "", "stop"); err != nil || !strings.Contains(out, "not running") {
+		t.Fatalf("stop: %q, %v", out, err)
+	}
+	if !alive() {
+		t.Fatal("stop signalled an unrelated process")
+	}
+
+	port := startNode(t, s, nodeConfig(s))
+	if out, _ := run(t, s, "", "status"); !strings.Contains(out, fmt.Sprintf("port=%d", port)) {
+		t.Fatalf("status of the node that took the file over: %q", out)
+	}
+}
+
 func TestInteractiveAskReportsErrorsAndContinues(t *testing.T) {
 	s := testSettings(t)
 	cfg := nodeConfig(s)
@@ -609,12 +665,16 @@ func TestUpdateInstallsNewestVersion(t *testing.T) {
 	app, out := newApp(s, "")
 	updater := service[*update.Updater](app)
 	updater.Repo, updater.Exe, updater.Revision = repo, exe, "old"
+	alive := bystander(t, s) // no node runs: there is nothing to restart
 
 	if err := app.Run(context.Background(), []string{"update"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(exe); string(got) != "v1" || !strings.Contains(out.String(), "updated to "+rev[:7]) {
 		t.Fatalf("binary %q, output %q", got, out.String())
+	}
+	if !alive() {
+		t.Fatal("the update signalled an unrelated process")
 	}
 
 	out.Reset()
