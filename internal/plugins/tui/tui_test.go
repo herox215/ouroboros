@@ -195,3 +195,42 @@ func TestUIShowsWhatPluginsContribute(t *testing.T) {
 		t.Fatalf("the UI was opened %d times", opened)
 	}
 }
+
+// An answer still on its way when the owner quits the UI is stopped, and the
+// log says what it was waiting for before the UI is gone.
+func TestQuitLogsThePendingAnswer(t *testing.T) {
+	started := make(chan struct{})
+	block := plugin.New("block", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.NewTool("block", "waits until it is stopped", nil, func(ctx context.Context, _ struct{}) (string, error) {
+			close(started)
+			<-ctx.Done()
+			return "", ctx.Err()
+		}))
+		return nil
+	})
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true}, block)
+	bot, _ := cli.Service[*plugin.Assistant](app)
+	answered := make(chan error, 1)
+	tuiplugin.Use(t, func(*tui.Model) error {
+		go func() {
+			_, err := bot.Ask(context.Background(), "c1", "!block", nil)
+			answered <- err
+		}()
+		<-started
+		return nil // the owner quits
+	})
+	if err := app.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
+	lines := strings.Split(strings.TrimSpace(string(logged)), "\n")
+	if n := len(lines); n < 2 || !strings.Contains(lines[n-2], "chat c1: tool block {} took ") || !strings.HasSuffix(lines[n-2], ": canceled") ||
+		!strings.Contains(lines[n-1], "chat c1: canceled after ") {
+		t.Fatalf("log:\n%s", logged)
+	}
+	if err := <-answered; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}

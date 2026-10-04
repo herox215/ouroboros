@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"time"
 
 	"ouroboros/internal/openai"
 )
@@ -37,13 +38,31 @@ type Endpoint struct {
 }
 
 // Step reports a tool call: once when it starts and again, with Done set,
-// when its result is in.
+// when its result is in, together with how long the call took.
 type Step struct {
 	Tool   string
 	Args   json.RawMessage
 	Done   bool
 	Result string
 	Err    error
+	Took   time.Duration
+}
+
+// Call reports a call of the LLM: once when it starts and again, with Done
+// set, when it has ended, with how long it took and whether it ended in a
+// text, in calls of tools or in an error.
+type Call struct {
+	Done      bool
+	Took      time.Duration
+	ToolCalls int
+	Err       error
+}
+
+// Observer is told what an agent does on the way to an answer. Either field
+// may be nil.
+type Observer struct {
+	Step func(Step) // every tool call, also those of a script
+	Call func(Call) // every call of the LLM
 }
 
 type (
@@ -94,16 +113,28 @@ func New(llm LLM, model, system string, tools ...Tool) *Agent {
 
 // Respond answers text within the conversation contextID.
 func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, error) {
-	return a.Run(ctx, contextID, text, nil)
+	return a.Run(ctx, contextID, text, Observer{})
 }
 
-// Run is like Respond and reports every tool call to observe, which may be nil.
-func (a *Agent) Run(ctx context.Context, contextID, text string, observe func(Step)) (string, error) {
+// Run is like Respond and reports every call of the LLM and every tool call
+// to observe.
+func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observer) (string, error) {
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
 	history := append(a.history(contextID), openai.Message{Role: "user", Content: text})
 	for range maxRounds {
+		// An answer that was stopped while a tool ran asks the LLM no more.
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if observe.Call != nil {
+			observe.Call(Call{})
+		}
+		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{a.system}, history...), a.specs)
+		if observe.Call != nil {
+			observe.Call(Call{Done: true, Took: time.Since(start), ToolCalls: len(msg.ToolCalls), Err: err})
+		}
 		if err != nil {
 			return "", err
 		}
@@ -139,15 +170,16 @@ func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
 // call to whoever observes that conversation, like a call the LLM asked for.
 // It is for a tool that runs other tools of its agent, such as a script.
 func Invoke(ctx context.Context, tool Tool, args json.RawMessage) (string, error) {
-	observe, _ := ctx.Value(observerKey{}).(func(Step))
+	observe, _ := ctx.Value(observerKey{}).(Observer)
 	step := Step{Tool: tool.Name, Args: args}
-	if observe != nil {
-		observe(step)
+	if observe.Step != nil {
+		observe.Step(step)
 	}
+	start := time.Now()
 	step.Result, step.Err = tool.Run(ctx, args)
-	step.Done = true
-	if observe != nil {
-		observe(step)
+	step.Done, step.Took = true, time.Since(start)
+	if observe.Step != nil {
+		observe.Step(step)
 	}
 	return step.Result, step.Err
 }

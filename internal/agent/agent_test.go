@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/openai"
 )
@@ -109,7 +110,7 @@ func TestToolCall(t *testing.T) {
 	a := New(llm, "gpt", "sys", shout)
 
 	var steps []Step
-	got, err := a.Run(context.Background(), "c1", "call shout", func(s Step) { steps = append(steps, s) })
+	got, err := a.Run(context.Background(), "c1", "call shout", Observer{Step: func(s Step) { steps = append(steps, s) }})
 	if err != nil || got != `echo LOUD c1 {"x":1}` {
 		t.Fatalf("got %q, %v", got, err)
 	}
@@ -134,7 +135,7 @@ func TestToolErrorsAreToldToTheLLM(t *testing.T) {
 	}}
 	for name, want := range map[string]string{"fail": "echo error: boom", "nope": "echo error: unknown tool nope"} {
 		var last Step
-		got, err := New(&fakeLLM{}, "gpt", "sys", fail).Run(context.Background(), "c1", "call "+name, func(s Step) { last = s })
+		got, err := New(&fakeLLM{}, "gpt", "sys", fail).Run(context.Background(), "c1", "call "+name, Observer{Step: func(s Step) { last = s }})
 		if err != nil || got != want || last.Err == nil {
 			t.Errorf("%s: got %q, %v, step %+v", name, got, err, last)
 		}
@@ -192,7 +193,7 @@ func TestInvoke(t *testing.T) {
 	observe := func(s Step) {
 		steps = append(steps, fmt.Sprint(s.Tool, " ", string(s.Args), " ", s.Done, " ", s.Result, " ", s.Err))
 	}
-	got, err := New(&fakeLLM{}, "gpt", "sys", both).Run(context.Background(), "c1", "call both", observe)
+	got, err := New(&fakeLLM{}, "gpt", "sys", both).Run(context.Background(), "c1", "call both", Observer{Step: observe})
 	if err != nil || got != "echo error: test error" {
 		t.Fatalf("got %q, %v", got, err)
 	}
@@ -214,5 +215,54 @@ func TestInvoke(t *testing.T) {
 	}
 	if got, err := Invoke(context.Background(), shout, json.RawMessage(`{}`)); err != nil || got != "LOUD  {}" {
 		t.Fatalf("outside of a conversation: %q, %v", got, err)
+	}
+}
+
+// Every call of the LLM is reported when it starts and when it has ended,
+// with how long it took and how it ended; every tool call with how long it
+// took.
+func TestRunReportsTheCallsOfTheLLM(t *testing.T) {
+	slow := Tool{Name: "slow", Run: func(context.Context, json.RawMessage) (string, error) {
+		time.Sleep(5 * time.Millisecond)
+		return "done", nil
+	}}
+	var calls []Call
+	var steps []Step
+	observe := Observer{Call: func(c Call) { calls = append(calls, c) }, Step: func(s Step) { steps = append(steps, s) }}
+	if _, err := New(&fakeLLM{}, "gpt", "sys", slow).Run(context.Background(), "c1", "call slow", observe); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 4 || calls[0] != (Call{}) || !calls[1].Done || calls[1].ToolCalls != 1 || calls[1].Err != nil ||
+		calls[2] != (Call{}) || !calls[3].Done || calls[3].ToolCalls != 0 || calls[3].Err != nil {
+		t.Fatalf("calls %+v", calls)
+	}
+	if len(steps) != 2 || steps[0].Took != 0 || steps[1].Took < 5*time.Millisecond {
+		t.Fatalf("steps %+v", steps)
+	}
+
+	calls = nil
+	if _, err := New(&fakeLLM{err: errTest}, "gpt", "sys").Run(context.Background(), "c1", "hi", observe); err != errTest {
+		t.Fatalf("err %v", err)
+	}
+	if len(calls) != 2 || !calls[1].Done || calls[1].Err != errTest {
+		t.Fatalf("a call that failed: %+v", calls)
+	}
+}
+
+// An answer that was stopped while a tool ran does not ask the LLM again.
+func TestRunStopsWhenTheContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := Tool{Name: "stop", Run: func(context.Context, json.RawMessage) (string, error) {
+		cancel()
+		return "", nil
+	}}
+	calls := 0
+	observe := Observer{Call: func(c Call) {
+		if !c.Done {
+			calls++
+		}
+	}}
+	if _, err := New(&fakeLLM{}, "gpt", "sys", stop).Run(ctx, "c1", "call stop", observe); !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("err %v after %d calls", err, calls)
 	}
 }

@@ -295,11 +295,16 @@ func TestStateOfTheNode(t *testing.T) {
 		w.refused(a, op, "~/.config/ouroboros", ruleState)
 		w.refused(a, op, "~/.config/ouroboros/contacts.json", ruleState)
 		w.refused(a, op, "~/.config/ouroboros/update/main.go", ruleState)
+		// The log, also the part of it that was rotated, and its lock.
+		w.refused(a, op, "~/.config/ouroboros/ouro.log", ruleState)
+		w.refused(a, op, "~/.config/ouroboros/ouro.log.1", ruleState)
+		w.refused(a, op, "~/.config/ouroboros/ouro.log.lock", ruleState)
 		w.refused(a, op, "~/share/node/contacts.json", ruleState)
 		w.allowed(a, op, "~/.config/ouroborosx", w.home+"/.config/ouroborosx")
 		w.allowed(a, op, "~/.config", w.home+"/.config")
 	}
 	w.allowed(a, Read, "~/.config/ouroboros", w.node)
+	w.allowed(a, Read, "~/.config/ouroboros/ouro.log.1", w.node+"/ouro.log.1")
 	w.refused(a, Write, "~/share/node", ruleState)
 	w.allowed(a, Delete, "~/share/node", w.home+"/share/node") // the link, not the node
 

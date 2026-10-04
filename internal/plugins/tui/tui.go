@@ -65,10 +65,13 @@ var show = func(ctx context.Context, m *tui.Model) error {
 
 // run shows the terminal UI until the user quits, with the screens and keys
 // the plugins contributed. While it is open the node is online: the UI starts
-// it, and a node that was not running before is stopped again afterwards.
+// it, and a node that was not running before is stopped again afterwards. An
+// answer still on its way when the user quits is stopped, and the log says
+// so before the UI is gone.
 func (u *ui) run(ctx context.Context) error {
 	wasRunning := u.Running()
 	err := show(ctx, tui.New(u, plugin.All[plugin.Screen](u.ctx), plugin.All[plugin.Key](u.ctx)))
+	u.assistant.Stop()
 	if !wasRunning {
 		err = errors.Join(err, u.Stop())
 	}

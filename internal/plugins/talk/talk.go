@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"ouroboros/internal/plugins/base"
@@ -84,6 +87,12 @@ func (c *talkCommands) ask(ctx context.Context, args []string) error {
 	})
 }
 
+// interrupted returns ctx, ended by Ctrl-C or a request to terminate the
+// process; tests replace it.
+var interrupted = func(ctx context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+}
+
 // chat talks to the assistant: once with the given message, otherwise in the
 // front end a plugin contributed, which is what ouro without a command opens,
 // or line by line if there is none or no terminal.
@@ -101,7 +110,12 @@ func (c *talkCommands) chat(ctx context.Context, args []string) error {
 		return err
 	}
 	contextID := plugin.NewID()
-	answer := func(text string) (string, error) { return c.assistant.Ask(ctx, contextID, text, nil) }
+	answer := func(text string) (string, error) {
+		// Ctrl-C stops the answer, and the log says what it was waiting for.
+		ctx, stop := interrupted(ctx)
+		defer stop()
+		return c.assistant.Ask(ctx, contextID, text, nil)
+	}
 	if len(args) > 0 {
 		return c.print(answer(strings.Join(args, " ")))
 	}

@@ -44,7 +44,7 @@ func newConfigured(t *testing.T) *configured {
 	})
 	c.builder = Builder{LLM: overHTTP, Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), read1) }}.
 		WithConfig(read, c.proposals)
-	c.assistant = New(read, c.builder)
+	c.assistant = New(read, c.builder, discard)
 	c.save(config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), APIKey: "sk-secret", Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()})
 	return c
 }

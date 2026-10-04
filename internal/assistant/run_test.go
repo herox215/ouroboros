@@ -69,7 +69,7 @@ func result(t *testing.T, got string, err error) string {
 // the script makes like one the LLM made itself.
 func TestRunForTheOwner(t *testing.T) {
 	cfg, b := scripted(t)
-	a := New(func() (config.Config, error) { return cfg, nil }, b)
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
 	ctx := context.WithValue(context.Background(), asker{}, "the owner")
 	var steps []string
 	observe := func(s Step) { steps = append(steps, fmt.Sprintf("%s %s %v", s.Tool, s.Args, s.Done)) }

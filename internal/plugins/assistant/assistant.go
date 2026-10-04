@@ -23,7 +23,8 @@ type services struct {
 // assistant of its owner. The agents get every plugin.Tool a plugin
 // contributed, as far as the owner allows it in the configuration, and the
 // agent of the owner the tools to see that configuration and to propose
-// changes of it, which wait in dir for the owner to decide.
+// changes of it, which wait in dir for the owner to decide. What the assistant
+// does on the way to an answer is written to the log in dir.
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("assistant", func(ctx *plugin.Context, n needs) (services, error) {
 		builder := assistant.Builder{
@@ -31,6 +32,6 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Tools:    func() []agent.Tool { return plugin.All[plugin.Tool](ctx) },
 			Failures: dir.Failures(),
 		}.WithConfig(dir.Config, dir.Proposals())
-		return services{builder, assistant.New(dir.Config, builder)}, nil
+		return services{builder, assistant.New(dir.Config, builder, dir.Log)}, nil
 	})
 }

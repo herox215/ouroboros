@@ -43,7 +43,7 @@ func TestAsk(t *testing.T) {
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
 		LLM:   overHTTP,
 		Tools: func() []agent.Tool { return PeerTools(s.network, s.id.ID) },
-	})
+	}, discard)
 	if err := a.Ready(); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestAskUnconfigured(t *testing.T) {
 	a := New(func() (config.Config, error) { return cfg, failed }, Builder{
 		LLM:   func(at agent.Endpoint) agent.LLM { built++; return overHTTP(at) },
 		Tools: func() []agent.Tool { return nil },
-	})
+	}, discard)
 	ctx := context.Background()
 
 	failed = errTest
@@ -145,7 +145,7 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
 		LLM:   func(at agent.Endpoint) agent.LLM { built++; endpoint = at; return overHTTP(at) },
 		Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
-	})
+	}, discard)
 	ctx := context.Background()
 	turns := func(want int) {
 		t.Helper()
@@ -226,7 +226,7 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
 		LLM:   overHTTP,
 		Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file) },
-	})
+	}, discard)
 	start := `You are "me", the personal agent of the owner of this Ouroboros node. `
 	for _, tt := range []struct {
 		tools []config.Entry
@@ -274,3 +274,6 @@ func TestAskingPeer(t *testing.T) {
 		}
 	}
 }
+
+// discard is a log that is not kept.
+func discard(string, ...any) {}

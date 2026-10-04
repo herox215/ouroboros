@@ -1,6 +1,7 @@
 package home
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,4 +179,111 @@ func TestLog(t *testing.T) {
 	}
 	// A log that cannot be written is given up on.
 	Dir(filepath.Join(string(d), "missing")).Log("lost")
+}
+
+// The log does not grow beyond its limit: what is in it then moves to
+// ouro.log.1, which keeps one generation. The node writes through LogTo, the
+// other processes through Log, and both keep the limit.
+func TestLogIsRotated(t *testing.T) {
+	d := Dir(t.TempDir())
+	old := maxLog
+	maxLog = 64
+	t.Cleanup(func() { maxLog = old })
+	logFile, rotated := d.Service().LogFile, filepath.Join(string(d), "ouro.log.1")
+	read := func(path string) string {
+		b, _ := os.ReadFile(path)
+		return string(b)
+	}
+
+	// The node logs to the file it was started with, opened for appending.
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	node := d.LogTo(f)
+	if n, err := node.Write([]byte(strings.Repeat("a", 63) + "\n")); n != 64 || err != nil {
+		t.Fatalf("write: %d, %v", n, err)
+	}
+	if read(logFile) != strings.Repeat("a", 63)+"\n" {
+		t.Fatalf("below the limit nothing moves: %q", read(logFile))
+	}
+	d.Log("first")
+	if !strings.HasSuffix(read(logFile), " first\n") || strings.Count(read(logFile), "\n") != 1 || read(rotated) != strings.Repeat("a", 63)+"\n" {
+		t.Fatalf("at the limit the log moves: %q, %q", read(logFile), read(rotated))
+	}
+	node.Write([]byte(strings.Repeat("b", 64)))
+	node.Write([]byte("c\n"))
+	if read(logFile) != "c\n" || !strings.HasSuffix(read(rotated), " first\n"+strings.Repeat("b", 64)) {
+		t.Fatalf("the node's file goes on at its new end: %q, %q", read(logFile), read(rotated))
+	}
+	for _, path := range []string{logFile, rotated} {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %v, %v", path, info, err)
+		}
+	}
+
+	// What cannot be moved stays where it is, and the line is added.
+	os.Remove(rotated)
+	os.Mkdir(rotated, 0o700)
+	os.WriteFile(logFile, []byte(strings.Repeat("d", 64)), 0o600)
+	d.Log("kept")
+	if !strings.HasPrefix(read(logFile), strings.Repeat("d", 64)) || !strings.HasSuffix(read(logFile), " kept\n") {
+		t.Fatalf("a log that cannot be rotated: %q", read(logFile))
+	}
+	// A log that cannot be read is not rotated, and not written.
+	maxLog = 0
+	os.Remove(logFile)
+	os.Mkdir(logFile, 0o700)
+	d.Log("lost")
+	// Without the lock the line is written all the same.
+	other := Dir(t.TempDir())
+	os.Mkdir(filepath.Join(string(other), "ouro.log.lock"), 0o700)
+	os.Chmod(filepath.Join(string(other), "ouro.log.lock"), 0)
+	other.Log("unlocked")
+	if !strings.HasSuffix(read(other.Service().LogFile), " unlocked\n") {
+		t.Fatalf("without the lock: %q", read(other.Service().LogFile))
+	}
+}
+
+// The node and another process log at the same time, and the log rotates in
+// between: no line is lost or torn.
+func TestLogFromTwoWriters(t *testing.T) {
+	d := Dir(t.TempDir())
+	old := maxLog
+	maxLog = 4 << 10
+	t.Cleanup(func() { maxLog = old })
+	f, err := os.OpenFile(d.Service().LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	node := log.New(d.LogTo(f), "", 0)
+	var wg sync.WaitGroup
+	const lines = 200
+	wg.Go(func() {
+		for i := range lines {
+			node.Printf("node %03d %s", i, strings.Repeat("n", 40))
+		}
+	})
+	wg.Go(func() {
+		for i := range lines {
+			d.Log("ui %03d %s", i, strings.Repeat("u", 40))
+		}
+	})
+	wg.Wait()
+	var all []string
+	for _, name := range []string{"ouro.log.1", "ouro.log"} {
+		b, _ := os.ReadFile(filepath.Join(string(d), name))
+		all = append(all, strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")...)
+	}
+	last := all[len(all)-1]
+	if !strings.Contains(last, " 199 ") {
+		t.Fatalf("the last line is the last written: %q", last)
+	}
+	for _, line := range all {
+		if !strings.HasSuffix(line, strings.Repeat("n", 40)) && !strings.HasSuffix(line, strings.Repeat("u", 40)) {
+			t.Fatalf("torn line %q", line)
+		}
+	}
 }

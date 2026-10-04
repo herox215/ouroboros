@@ -136,7 +136,7 @@ func TestUnknownToolFailsEarly(t *testing.T) {
 		t.Fatalf("ForPeers: %v", err)
 	}
 	cfg.Tools = &config.Tools{H2A: config.Named("nope")}
-	a := New(func() (config.Config, error) { return cfg, nil }, b)
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
 	if err := a.Ready(); err == nil || !strings.Contains(err.Error(), "tools.h2a") {
 		t.Fatalf("Ready: %v", err)
 	}

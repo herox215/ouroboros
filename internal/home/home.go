@@ -7,6 +7,8 @@
 package home
 
 import (
+	"bytes"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/proposal"
+	"ouroboros/internal/safefile"
 )
 
 // Dir is the path of the directory.
@@ -65,16 +68,71 @@ func (d Dir) Service() daemon.Service {
 	return daemon.Service{PIDFile: d.path("ouro.pid"), LogFile: d.path("ouro.log")}
 }
 
+// maxLog is the size from which the log is rotated; tests make it smaller.
+var maxLog int64 = 10 << 20
+
 // Log adds a line to the log of the node. It is for a process that is not the
-// node itself, such as the terminal UI: the node writes its log on its own. A
-// log that cannot be written is nothing to fail for.
+// node itself, such as the terminal UI: the node writes its log through
+// LogTo. A log that cannot be written is nothing to fail for.
 func (d Dir) Log(format string, args ...any) {
-	f, err := os.OpenFile(d.Service().LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	var line bytes.Buffer
+	log.New(&line, "", log.LstdFlags).Printf(format, args...)
+	d.logging(func() {
+		f, err := os.OpenFile(d.Service().LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		f.Write(line.Bytes())
+	})
+}
+
+// LogTo returns what writes to w, which is where the node in this directory
+// logs to: ouro.log, when it runs in the background. Every write keeps the
+// log from growing beyond its limit, like Log does.
+func (d Dir) LogTo(w io.Writer) io.Writer { return logWriter{d, w} }
+
+type logWriter struct {
+	dir Dir
+	w   io.Writer
+}
+
+func (l logWriter) Write(p []byte) (n int, err error) {
+	l.dir.logging(func() { n, err = l.w.Write(p) })
+	return n, err
+}
+
+// logging runs write, which adds to the log, after the log was rotated if it
+// has reached its limit: then it is copied to ouro.log.1, which is replaced,
+// and emptied. The node and the processes that log beside it take turns by a
+// lock on ouro.log.lock, so that no line is lost between copying and
+// emptying. A writer that appends to the log without the lock, such as what
+// the runtime prints when the node crashes, can lose a line written in that
+// moment, but never leaves a gap: the log is opened for appending, so it goes
+// on at its end.
+func (d Dir) logging(write func()) {
+	if unlock, err := safefile.Lock(d.path("ouro.log.lock")); err == nil {
+		defer unlock()
+	}
+	d.rotate()
+	write()
+}
+
+// rotate moves the content of the log to ouro.log.1 if it has reached its
+// limit.
+func (d Dir) rotate() {
+	path := d.Service().LogFile
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < maxLog {
+		return
+	}
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	log.New(f, "", log.LstdFlags).Printf(format, args...)
+	if safefile.Write(d.path("ouro.log.1"), content, 0o600) == nil {
+		os.Truncate(path, 0)
+	}
 }
 
 // Identity returns the signing identity of the node, generating and

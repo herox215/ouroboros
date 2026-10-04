@@ -52,7 +52,7 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 			local:  node.Local{Home: dir},
 			wizard: &wizard{term: n.Console, home: dir, baseURL: o.BaseURL, apiKey: o.APIKey},
 			server: node.Server{
-				Home: dir, HTTPPort: o.HTTPPort, DiscoPort: o.DiscoPort, Version: o.Version, Log: o.Log,
+				Home: dir, HTTPPort: o.HTTPPort, DiscoPort: o.DiscoPort, Version: o.Version, Log: dir.LogTo(o.Log),
 				Responder: func(logf func(format string, args ...any)) (a2a.Responder, error) {
 					// The agent for the configuration as it is with every
 					// message: what the owner changes holds without a restart.

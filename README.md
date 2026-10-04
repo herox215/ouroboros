@@ -26,7 +26,8 @@ The UI is the chat with your own agent. You do not
 write to other nodes yourself: the agent does, whenever you ask it to or it thinks a peer knows
 better ("ask Luna how she is" → "Luna says she is fine"). What the two agents say to each other
 stays between them; the UI only shows which peer your agent is waiting for.
-The input is focused on start, so you can type right away. The conversation lives only as long as the TUI runs.
+The input is focused on start, so you can type right away. The conversation lives only as long as the TUI runs;
+what your agent did for it is recorded in [`ouro.log`](#the-log).
 
 The UI is a plugin like any other (`internal/plugins/tui`), and it is the front end of the standard ouro: the
 plugin says so itself, nothing else names it. An ouro built without it prints the usage when it is started
@@ -94,7 +95,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
 | Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. At most 16 changes of the configuration your agent proposed wait for a decision. The tools for files and a script have limits of their own, see [Files](#files) and [Scripts](#scripts). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` / `proposals.json.lock` |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`. `config.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
@@ -171,7 +172,7 @@ Three things limit a tool for files, and the first that speaks wins:
    - `config.json` and its lock file are neither read nor changed, under any name (also not through a hard
      link): they hold the key of your node and the key of the API, which would end up with the LLM.
    - Everything else in the directory of the node (`contacts.json`, `proposals.json`, `failures.json`,
-     `ouro.pid`, `ouro.log`, `update/`) is read and never changed.
+     `ouro.pid`, `ouro.log`, `ouro.log.1`, `update/`) is read and never changed.
    - The source of the core is read and never changed: in every directory whose `go.mod` names the module
      `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `daemon`, `update`,
      `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable. That `go.mod`
@@ -333,6 +334,52 @@ The ID is there to ask about. Your agent can send the peer a message like "what 
   is still down, asking about the ID fails like any other message, with a new ID. Your agent knows this and
   does not promise you an explanation it does not have.
 
+## The log
+
+`ouro.log` is where the node writes what it does, and where the chat with your agent is recorded: in the
+terminal UI and with `ouro chat`, which run your agent in their own process and add to the same file. After
+a conversation that went wrong, the log says what the agent did and where the time went:
+
+```
+2026/10/04 14:02:11 chat 3f6c…: message from the owner: "ask beta for the time"
+2026/10/04 14:02:12 chat 3f6c…: llm call 1 took 1.204s: tool calls: 1
+2026/10/04 14:02:15 chat 3f6c…: tool ask_peer {"message":"What time is it?","peer":"beta"} took 2.871s: ok (24 bytes)
+2026/10/04 14:02:16 chat 3f6c…: llm call 2 took 0.912s: text
+2026/10/04 14:02:16 chat 3f6c…: answered after 4.991s (llm calls: 2): "Beta says it is noon."
+```
+
+- **A line per step**: the message of the owner with its conversation, every call of the LLM when it has
+  ended (with `text`, `tool calls: N` or `failed` and the error), every tool call when it has ended (the tool,
+  its arguments, `ok` or `error` and the error), and the end of the answer: `answered`, `failed` with the error
+  or `canceled`, each with the time it took and the number of calls of the LLM. The calls of a
+  [script](#scripts) are recorded like the others, before the line of `run`.
+- **Canceled**: when you quit the UI, press `n` for a new conversation or interrupt `ouro chat` with Ctrl-C,
+  the call the agent was waiting for is recorded as `canceled` with the time it had run, and then the answer.
+  Ctrl-C while `ouro chat` waits for an answer stops that answer; in the chat line by line you can then go on.
+  The UI writes these lines before it is gone, so the last line of a conversation says what the agent was
+  waiting for.
+- **How much text**: the message and the answer are cut after 300 bytes, at the start of a character, with
+  `… (+N bytes)` for the rest; a line break is written as `\n`, so every entry is one line. The arguments of a
+  tool are cut the same way, but the content of `write` and `old` and `new` of `edit` are only given by their
+  size, as in `{"content":"(1532 bytes)","path":"~/notes.md"}`. Of the result of a tool the log has only its
+  size, never its text.
+- **No secrets**: the key of the API and the key of the node are replaced by `[redacted]` wherever they would
+  appear, in a message, an argument, an error or an answer, also in the other usual encodings of the key of
+  the node (base64 with or without padding, URL-safe, hex, also of its seed). What the agent read from a file
+  or heard from a peer is not in the log, except what it quotes in its answer, cut as above.
+- **Peers**: what a peer writes to your agent and what it answers is not recorded, as before: the log has the
+  request (`POST /`) and, for an answer that failed, the error with its ID, but no text of a peer.
+- **Size**: `ouro.log` is kept below 10 MiB. Before a line is written to a log that reached that size, its
+  content is moved to `ouro.log.1`, which is replaced, and `ouro.log` starts empty. One older generation is
+  kept, at most 20 MiB in all. The node and the processes that log beside it take turns by a lock on
+  `ouro.log.lock`, so no line of theirs is lost in a rotation. What reaches the log of a node in the background
+  without passing through the node, such as what the runtime prints when it crashes, can be lost if it is
+  written in the moment the log is rotated; it never overwrites a line.
+
+Both files are 0600, and the tools for files read them and never change them, like everything in the
+directory of the node (see [Files](#files)). A line is shortened, but what the agent was told to do is in it:
+whoever may read `ouro.log` may read your conversations with your agent.
+
 ## Beyond the local network
 
 VPNs like Tailscale forward neither multicast nor broadcast, so nodes there are probed directly:
@@ -417,11 +464,11 @@ internal/plugins     the standard plugins, one package each: commands, setup dia
 internal/kernel      plugin kernel: services, contributions, start order by declared dependencies
 internal/tui         terminal UI (Bubble Tea)
 internal/node        the local node: Server runs it, Local controls the background one
-internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error, run, get_config, propose_config
+internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error, run, get_config, propose_config; what the owner's agent does goes to the log
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
-internal/home        the node's directory: config, identity, contacts, failed answers, PID and log file
+internal/home        the node's directory: config, identity, contacts, failed answers, PID and log file, which it rotates
 internal/a2a         A2A protocol: types, HTTP handler, client; channels between nodes
 internal/agent       conversation memory and tool loop on top of an LLM
 internal/openai      minimal OpenAI-compatible client (+ openaitest fake)

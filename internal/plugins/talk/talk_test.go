@@ -199,6 +199,37 @@ func TestChatWithAssistant(t *testing.T) {
 	}
 }
 
+// The chat is in the log of the node: the message, the calls and the answer,
+// and an answer stopped by Ctrl-C as canceled. The key of the API is not.
+func TestChatIsLogged(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	logged := func() string {
+		b, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
+		return string(b)
+	}
+	if _, err := clitest.Run(t, s, "", "chat", "hello", openaitest.Key); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`: message from the owner: "hello [redacted]"`, ": llm call 1 took ", ": text\n",
+		`: answered after `, ` (llm calls: 1): "[gpt-4o] turns=1 last=hello [redacted]"`} {
+		if !strings.Contains(logged(), want) {
+			t.Fatalf("the log lacks %q:\n%s", want, logged())
+		}
+	}
+	if strings.Contains(logged(), openaitest.Key) {
+		t.Fatalf("the key is in the log:\n%s", logged())
+	}
+
+	talk.Interrupt(t)
+	if _, err := clitest.Run(t, s, "", "chat", "stop"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted: %v", err)
+	}
+	if !regexp.MustCompile(`: message from the owner: "stop"\n.*: canceled after [^ ]+ \(llm calls: 0\)\n$`).MatchString(logged()) {
+		t.Fatalf("the last line says the answer was canceled:\n%s", logged())
+	}
+}
+
 // flakyLLM is the fake API behind a switch: while down is set it fails every
 // request the way a provider out of order does, with a text that names what
 // no peer should learn.

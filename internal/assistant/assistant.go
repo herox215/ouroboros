@@ -86,19 +86,25 @@ type Builder struct {
 type Assistant struct {
 	config  func() (config.Config, error)
 	builder Builder
+	log     func(format string, args ...any)
 
 	mu    sync.Mutex
 	agent *agent.Agent
 	built setup // what agent was built for
+
+	answering sync.Mutex
+	answers   map[*record]context.CancelFunc // that are on their way
+	open      sync.WaitGroup                 // of answers whose last line is not written
 }
 
 // setup is the part of the configuration an agent is built from.
 type setup struct{ baseURL, apiKey, model, name, id, tools string }
 
 // New returns the assistant of the node with the given configuration, which
-// is read anew for every question.
-func New(config func() (config.Config, error), b Builder) *Assistant {
-	return &Assistant{config: config, builder: b}
+// is read anew for every question. What it does on the way to an answer is
+// told to log, see Ask.
+func New(config func() (config.Config, error), b Builder, log func(format string, args ...any)) *Assistant {
+	return &Assistant{config: config, builder: b, log: log, answers: map[*record]context.CancelFunc{}}
 }
 
 // ForPeers returns the agent that answers the peers of the node configured by
@@ -177,34 +183,76 @@ func (b Builder) build(cfg config.Config, prompt string, tools []agent.Tool) *ag
 // Ready reports whether the assistant can answer: config.ErrIncomplete if the
 // node was not set up yet.
 func (a *Assistant) Ready() error {
-	_, err := a.current()
+	_, _, err := a.current()
 	return err
 }
 
 // Ask answers text within the conversation contextID and reports to observe,
 // which may be nil, the tools it calls on the way.
+//
+// The log is told the message, every call of the LLM, every tool call when
+// it has ended and how the answer ended, with how long each took: see record
+// for what of a text it gets. An answer that is stopped, because ctx ends or
+// by Stop, is written as canceled with the call it was waiting for.
 func (a *Assistant) Ask(ctx context.Context, contextID, text string, observe func(Step)) (string, error) {
-	bot, err := a.current()
+	bot, cfg, err := a.current()
 	if err != nil {
 		return "", err
 	}
-	return bot.Run(ctx, contextID, text, func(s agent.Step) {
-		if observe != nil {
-			observe(Step{Tool: s.Tool, Args: s.Args, Done: s.Done})
-		}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	r := a.begin(ctx, cancel, contextID, cfg, text)
+	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
+		Call: r.call,
+		Step: func(s agent.Step) {
+			r.step(s)
+			if observe != nil {
+				observe(Step{Tool: s.Tool, Args: s.Args, Done: s.Done})
+			}
+		},
 	})
+	r.end(reply, err)
+	return reply, err
+}
+
+// begin starts the record of an answer, which cancel stops.
+func (a *Assistant) begin(ctx context.Context, cancel context.CancelFunc, contextID string, cfg config.Config, text string) *record {
+	a.answering.Lock()
+	defer a.answering.Unlock()
+	a.open.Add(1)
+	var r *record
+	r = newRecord(ctx, a.log, contextID, cfg, text, func() {
+		a.answering.Lock()
+		delete(a.answers, r)
+		a.answering.Unlock()
+		a.open.Done()
+	})
+	a.answers[r] = cancel
+	return r
+}
+
+// Stop stops the answers that are on their way and returns once the log
+// says so. It is for a front end that quits: what the agent was waiting for
+// is in the log before the process ends.
+func (a *Assistant) Stop() {
+	a.answering.Lock()
+	for _, cancel := range a.answers {
+		cancel()
+	}
+	a.answering.Unlock()
+	a.open.Wait()
 }
 
 // current returns the agent for the configuration as it is now. The agent is
 // kept between questions so that it remembers its conversations, and rebuilt
 // when the node is configured anew.
-func (a *Assistant) current() (*agent.Agent, error) {
+func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 	cfg, err := a.config()
 	if err != nil {
-		return nil, err
+		return nil, cfg, err
 	}
 	if !cfg.Complete() {
-		return nil, config.ErrIncomplete
+		return nil, cfg, config.ErrIncomplete
 	}
 	tools, _ := json.Marshal(cfg.OwnerTools()) // an entry that cannot be written is reported by forOwner
 	want := setup{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), string(tools)}
@@ -213,9 +261,9 @@ func (a *Assistant) current() (*agent.Agent, error) {
 	if a.agent == nil || a.built != want {
 		bot, err := a.builder.forOwner(cfg)
 		if err != nil {
-			return nil, err
+			return nil, cfg, err
 		}
 		a.agent, a.built = bot, want
 	}
-	return a.agent, nil
+	return a.agent, cfg, nil
 }
