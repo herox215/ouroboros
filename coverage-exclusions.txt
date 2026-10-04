@@ -1,0 +1,15 @@
+# Packages that "make cover-check" leaves out of the 100% statement coverage.
+#
+# This file is the only place where code is taken out of the measurement.
+# One package directory per line, with the reason above it. Only packages the
+# ouro binary does not link can be listed; scripts/cover-check.sh refuses any
+# other. Files ending in _test.go are never measured: Go does not instrument
+# them.
+
+# Fake OpenAI-compatible server for tests. Test code that lives in a package of
+# its own only because several packages' tests share it.
+internal/openai/openaitest
+
+# Fake source repository for the tests of "ouro update". Test code, shared the
+# same way.
+internal/update/updatetest

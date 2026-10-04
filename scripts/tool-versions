@@ -1,0 +1,12 @@
+# The one place where the versions of the check tools are pinned.
+# Read by scripts/tool.sh; plain NAME=VALUE lines, valid as shell.
+#
+# The tools are built from source with "go install pkg@version" into .tools/
+# of the checkout. They are not dependencies of the ouroboros module: go.mod,
+# go.sum and the ouro binary do not change with them.
+
+STATICCHECK_PKG=honnef.co/go/tools/cmd/staticcheck
+STATICCHECK_VERSION=v0.8.1
+
+GREMLINS_PKG=github.com/go-gremlins/gremlins/cmd/gremlins
+GREMLINS_VERSION=v0.6.0

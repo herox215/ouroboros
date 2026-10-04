@@ -1,0 +1,38 @@
+# Configuration of the mutation tests (gremlins, pinned in scripts/tool-versions).
+# Run through scripts/mutation.sh: "make mutation".
+
+unleash:
+  # A mutant is tested with the tests of its own package, not with the whole
+  # suite: integration mode would multiply the run time by the number of packages.
+  integration: false
+  # timeout-coefficient is not set here: scripts/mutation.sh works it out for
+  # each package from how long its tests take.
+  # No thresholds: survivors are reported for review, they fail nothing.
+  threshold:
+    efficacy: 0
+    mutant-coverage: 0
+
+# The supported mutations. See "Mutation tests" in the README for what each does.
+mutants:
+  arithmetic-base:
+    enabled: true
+  conditionals-boundary:
+    enabled: true
+  conditionals-negation:
+    enabled: true
+  increment-decrement:
+    enabled: true
+  invert-negatives:
+    enabled: true
+  invert-logical:
+    enabled: true
+  invert-loopctrl:
+    enabled: true
+  invert-assignments:
+    enabled: false
+  invert-bitwise:
+    enabled: false
+  invert-bwassign:
+    enabled: false
+  remove-self-assignments:
+    enabled: false

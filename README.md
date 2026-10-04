@@ -198,6 +198,7 @@ internal/diagnosis   why answers to peers failed, by category, for the agent to 
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
 internal/update      self-update from the newest main
+scripts, hooks       the local quality checks and the pre-commit hook, see [Checks](#checks)
 ```
 
 ### Extending
@@ -295,10 +296,166 @@ method added under a built-in name is never called, and `Network.Call` does not 
 
 Plugins are compiled in. There is no loading at runtime.
 
+## Checks
+
+The quality checks run on your machine: there is no CI. One command runs all of them, and a Git hook
+runs them before every commit.
+
 ```sh
-make test    # vet + tests with race detector
-make cover   # coverage including the end-to-end test
+make check   # everything below, on the working tree
+make hooks   # once per clone: run the checks before every commit
 ```
+
+| Command | Checks | Fails when |
+|---|---|---|
+| `make fmt-check` | formatting with `gofmt`; lists files, changes none | a Go file is not formatted |
+| `make lint` | `staticcheck` with every check on ([staticcheck.conf](staticcheck.conf)) | it reports anything |
+| `make test` | `go vet`, then the tests with the race detector | vet reports anything, a test fails, a race is seen |
+| `make cover-check` | statement coverage of the production code | one statement is not covered |
+| `make mutation` | mutation tests with `gremlins` ([.gremlins.yaml](.gremlins.yaml)) | never because of survivors; they are reported |
+| `make check` | all of the above, in this order | any of them fails |
+
+`make cover` only measures and prints the percentages; `make tools` builds the two tools ahead of time.
+
+### Prerequisites
+
+- **Go** as named in `go.mod`. It is found in `PATH`, in `~/.local/go/bin` (where `./install.sh` puts it; set
+  `OURO_GO_DIR` for another place) and in `/usr/local/go/bin`. `gofmt`, `go vet` and the coverage tools come
+  with it.
+- **make**, **git** and a POSIX shell with `awk`, `sed`, `grep`. `timeout` (coreutils) is used to limit the
+  mutation tests in the hook; without it they run to the end.
+- **Network on the first run**: `staticcheck` and `gremlins` are built from source with `go install pkg@version`
+  into `.tools/` of the checkout. Their versions are pinned in [scripts/tool-versions](scripts/tool-versions),
+  the only place. They are not dependencies of the module: `go.mod`, `go.sum` and the binary stay as they are,
+  and nothing is installed outside the checkout (the downloaded sources go to the Go module cache).
+  Changing a version there, or updating Go, builds the tool anew.
+
+### Coverage
+
+`make cover-check` requires that **every statement of the production code is covered**, which is 100% counted
+from the blocks of the coverage profile (`cover.out`): statements are added up, nothing is rounded, and one
+uncovered statement fails the check. Every uncovered block is printed as `file:line`, followed by the count per
+package.
+
+- **What counts as covered**: a statement that ran in the unit tests of any package, or in the binary the
+  end-to-end test (`cmd/ouro/main_test.go`) builds and drives. Both write into one profile.
+- **What is measured**: every package of the module, also one without tests (it then counts as uncovered) and
+  `cmd/ouro/main.go`. A package that is missing from the profile fails the check.
+- **What is left out**: only the packages listed in [coverage-exclusions.txt](coverage-exclusions.txt), each with
+  its reason. Today these are `internal/openai/openaitest` and `internal/update/updatetest`, the fakes that the
+  tests of several packages share: test code, not production code. Only packages that the `ouro` binary does not
+  link can be listed; the check refuses any other line. `_test.go` files are never measured, Go does not
+  instrument them.
+
+### Mutation tests
+
+[gremlins](https://gremlins.dev) changes one operator at a time and runs the tests of the package the change is
+in. A mutant the tests fail on is *killed*; one they pass with *survived* and is reported as `file:line:column`.
+
+| Mutation | Example |
+|---|---|
+| `CONDITIONALS_NEGATION` | `==` ↔ `!=`, `<` ↔ `>=`, `>` ↔ `<=` |
+| `CONDITIONALS_BOUNDARY` | `<` ↔ `<=`, `>` ↔ `>=` |
+| `ARITHMETIC_BASE` | `+` ↔ `-`, `*` ↔ `/`, `%` → `*` |
+| `INCREMENT_DECREMENT` | `++` ↔ `--` |
+| `INVERT_NEGATIVES` | `-x` → `+x` |
+| `INVERT_LOGICAL` | `&&` ↔ `\|\|` |
+| `INVERT_LOOPCTRL` | `break` ↔ `continue` |
+
+Scope and limits:
+
+- Mutated is the production code: every package except the ones in `coverage-exclusions.txt`.
+  `make mutation PKGS="internal/a2a internal/agent"` limits the run to some packages.
+- A mutant is tried against the tests **of its own package** only. Code that only the tests of another package
+  or the end-to-end test reach is listed as *not covered* and not tried; that is all of `cmd/ouro/main.go`.
+  Statement coverage counts those runs, mutation testing does not.
+- Statements are not removed, constants and strings are not changed, and the bitwise and assignment mutations
+  of gremlins are off: operators only.
+- A mutant whose tests do not finish in time is *timed out* and counts as noticed.
+- **Packages that send signals to process IDs are not mutated**, today `internal/daemon` (and the tests of
+  `cmd/ouro`). A mutant there lets a PID of 0 or -1 through, and the code under test then signals its own
+  process group (that happened when the checks were set up: the run terminated itself) or every process you
+  own. `scripts/mutation.sh`
+  finds these packages by the calls (`syscall.Kill`, `unix.Kill`, `os.FindProcess`), in code and tests, and
+  names them in the report. Such code needs its assertions reviewed by hand.
+
+**Survivors do not fail the run**; no threshold is agreed on. They are for review, and each is one of two things:
+
+- a **gap in the assertions**: the change alters what the code does and no test notices. Add the assertion.
+- an **equivalent mutant**: the change cannot alter what the code does (for example `<` ↔ `<=` where both
+  sides are never equal). Nothing to test. List it in `mutation-equivalents.txt` as
+  `file:line:column MUTATION  # reason`, and it is reported as accepted instead of as a survivor. When the
+  line moves, the entry no longer matches and the mutant comes back for another look.
+
+The report is in `.mutation/report.txt`, with the output of gremlins for each package next to it.
+
+### Git hook
+
+```sh
+make hooks           # install the pre-commit hook into this clone
+make hooks CHAIN=1   # the same, keeping a pre-commit hook that is already there
+make unhooks         # remove it again
+```
+
+The hook is `hooks/pre-commit`, versioned with the code. `make hooks` writes a few lines to `.git/hooks/pre-commit`
+that run it, so it changes along with the branch you are on.
+
+- **It is local.** Every clone needs its own `make hooks` (the worktrees of a clone share it).
+  `git commit --no-verify` skips it. Nothing on the server enforces it: it is not merge protection, and a
+  commit that never saw the checks can be pushed.
+- **An existing setup is kept.** If there already is a pre-commit hook, or `core.hooksPath` points somewhere
+  else, `make hooks` installs nothing and says how to run both. With `CHAIN=1` the existing hook is moved to
+  `pre-commit.local` and runs first; `make unhooks` moves it back. Other hooks are not touched.
+- **It checks what you commit.** The staged files are copied to a temporary directory and the checks run
+  there: unstaged changes and untracked files play no part, and neither your working tree nor the index is
+  changed. Nothing is formatted, fixed or staged for you.
+- **It runs** `fmt-check`, `lint`, `test` and `cover-check`, and rejects the commit when one fails, with the
+  findings and the command to run that check alone. Then it runs the mutation tests **for the packages whose
+  Go files are staged**, for at most 5 minutes, and prints the survivors without rejecting the commit.
+- A commit that stages no Go code and nothing of the checks themselves (only `README.md`, say) is not checked.
+
+| Variable | Effect |
+|---|---|
+| `OURO_HOOK_MUTATION=off` | no mutation tests in the hook |
+| `OURO_HOOK_MUTATION_TIME=600` | stop them after that many seconds instead of 300; the packages left over are named |
+| `OURO_GO_DIR=/opt/go` | where Go is, if not in `PATH` or `~/.local/go` |
+
+### How long it takes
+
+Measured on 8 cores with a warm Go build cache; expect the order of magnitude, not the second.
+
+| Step | Time |
+|---|---|
+| building the tools, first run only | staticcheck 35 s, gremlins 11 s |
+| `make fmt-check` | under 1 s |
+| `make lint` | 1 s (13 s the first time) |
+| `make test` | 20 s |
+| `make cover-check` | 15 s |
+| `make mutation`, whole module | 13 min |
+| `make mutation PKGS=…`, one package | 4 to 35 s for most; `internal/config` 50 s, `internal/a2a` 77 s, `internal/discovery` 86 s, `internal/cli` 160 s, `internal/tui` 200 s |
+| `make check` | 14 min |
+| the hook, without the mutation tests | 55 s |
+| the hook, with them | 1 min for a small package, 4.5 min for `internal/tui`, never more than about 6 min |
+
+Mutation tests are slow by nature: every mutant is compiled and tested on its own, about 800 of them. That
+is why the hook only mutates the packages a commit changes and stops after 5 minutes, and why the whole
+module is left to `make mutation` and `make check`. A mutant that makes its tests hang costs up to 90 s.
+
+### Troubleshooting
+
+| Problem | What to do |
+|---|---|
+| `go not found` | run `./install.sh` once (it puts Go into `~/.local/go`), or set `OURO_GO_DIR` |
+| `could not build staticcheck` / `gremlins` | the first run downloads them: check the network, then `make tools` |
+| a tool behaves oddly after an update of Go | `rm -rf .tools && make tools` |
+| the hook does not run | `make hooks` in this clone; `git config core.hooksPath` has to be empty |
+| `make hooks` refuses | a hook setup is already there; the message names it and the two ways to keep both |
+| the hook passes or fails, `make check` does the opposite | the hook checks the staged files, `make check` the working tree: `git status` shows the difference |
+| a path in the hook's output starts with `/tmp/ouro-pre-commit.` | that is the copy of the staged files; the same path is in your checkout |
+| the end-to-end test fails with ports or a node already running | it starts a real node on free ports; run it alone with `go test ./cmd/ouro` |
+| mutants are all `TIMED OUT` | the machine is busy; raise `timeout-coefficient` in `.gremlins.yaml` |
+| the mutation tests take too long before a commit | `OURO_HOOK_MUTATION=off git commit …`, then `make mutation PKGS=…` later |
+| it has to go in now | `git commit --no-verify`, and run `make check` afterwards |
 
 ## License
 
