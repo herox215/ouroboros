@@ -1,14 +1,20 @@
 // Package identity is a node's cryptographic identity: an Ed25519 key pair
-// used to sign requests and to verify the peers that contact this node.
+// used to sign requests, to verify the peers that contact this node and to
+// prove over TLS that this node is the one that answers.
 package identity
 
 import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"math/big"
+	"time"
 )
 
 // Identity is a node's Ed25519 key pair.
@@ -63,6 +69,34 @@ func fingerprint(key ed25519.PublicKey) string {
 
 // Sign returns the signature of msg.
 func (id *Identity) Sign(msg []byte) []byte { return ed25519.Sign(id.private, msg) }
+
+// Certificate returns the TLS certificate of the node: self-signed, for the
+// key of the node and nothing else. No authority vouches for it and its dates
+// mean nothing: a peer compares its key (see CertificateKey) with the key it
+// knows the node by. It is made from the key whenever it is asked for, so
+// nothing but the key is ever stored.
+func (id *Identity) Certificate() tls.Certificate {
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: id.ID()},
+		NotBefore:    time.Unix(0, 0),
+		NotAfter:     time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC), // "never" in X.509
+	}
+	// Cannot fail: the template is fixed and an Ed25519 key signs anything.
+	der, _ := x509.CreateCertificate(rand.Reader, template, template, id.public(), id.private)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: id.private}
+}
+
+// CertificateKey returns the public key (base64) that cert was made for, which
+// is what Identity.Public returns for the node that presents it in a TLS
+// handshake. A certificate for any other kind of key is not a node's: "".
+func CertificateKey(cert *x509.Certificate) string {
+	key, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(key)
+}
 
 func (id *Identity) public() ed25519.PublicKey {
 	return id.private.Public().(ed25519.PublicKey)

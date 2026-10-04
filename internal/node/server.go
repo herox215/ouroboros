@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ type Server struct {
 	Methods func() []a2a.Method
 }
 
-// Run serves until ctx is done. It opens the A2A port, answers discovery
+// Run serves until ctx is done. It opens the A2A port for TLS, answers discovery
 // probes, holds the PID file and hands the messages of trusted peers to an
 // Responder. What the node offers over A2A is defined in a2a.Server plus
 // Methods.
@@ -88,6 +89,7 @@ func (s Server) Run(ctx context.Context) error {
 	srv := &http.Server{
 		Handler:           logRequests(logger, server.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          logger, // failed handshakes, such as plain HTTP
 	}
 
 	// Held until the node is gone: the lock on the file is what tells other
@@ -112,7 +114,9 @@ func (s Server) Run(ctx context.Context) error {
 	if allowed := cfg.PeerTools(); len(allowed) > 0 {
 		logger.Printf("peers may use the tools: %s", strings.Join(allowed, ", "))
 	}
-	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+	// TLS only, with the certificate of the node's key: peers pin it, and
+	// nobody on the way reads along.
+	if err := srv.Serve(tls.NewListener(ln, a2a.TLSConfig(id))); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	<-stopped

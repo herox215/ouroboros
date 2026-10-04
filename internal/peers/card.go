@@ -16,8 +16,9 @@ const (
 )
 
 // describe is what the node n says about itself in its agent card. It reports
-// false if n cannot be asked or does not prove to hold its public key: what
-// was found at its address is then not the node the owner knows.
+// false if n cannot be asked or does not prove to hold its public key in the
+// TLS handshake: what was found at its address is then not the node the owner
+// knows.
 func describe(ctx context.Context, n discovery.Node) (string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, cardTimeout)
 	defer cancel()
@@ -29,7 +30,8 @@ func describe(ctx context.Context, n discovery.Node) (string, bool) {
 }
 
 // key is the public key of a node that is known by its address only. Nothing
-// vouches for it: it is the key of whoever answers at that address.
+// vouches for it: it is the key of the certificate that whoever answers at
+// that address presents.
 func key(ctx context.Context, n discovery.Node) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cardTimeout)
 	defer cancel()

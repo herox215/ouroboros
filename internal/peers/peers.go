@@ -171,9 +171,9 @@ func match(nodes []discovery.Node, target string) (discovery.Node, error) {
 // While a peer is being answered (see a2a.Origin), that peer cannot be the
 // target: two agents asking each other would never finish.
 //
-// The message is signed for the public key of node and only an answer signed
-// by that key is accepted: whoever else answers at its address fails with
-// a2a.ErrUnverified.
+// The message is signed for the public key of node and sent over a connection
+// pinned to that key: whoever else answers at its address gets nothing to
+// read, and Send fails with a2a.ErrUnverified.
 func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text string) (string, error) {
 	if origin, ok := a2a.OriginFrom(ctx); ok {
 		// A node without a key cannot be told apart from the sender.
@@ -187,7 +187,8 @@ func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text
 	}
 	publicKey := node.PublicKey
 	if publicKey == "" {
-		// A node given by its address: the key of whoever answers there.
+		// A node given by its address: the key of whoever answers there, and
+		// only the holder of that key gets the message.
 		if publicKey, err = key(ctx, node); err != nil {
 			return "", err
 		}
@@ -242,5 +243,6 @@ func (n *Network) notify(ctx context.Context, addr, publicKey string, tell func(
 	return nil
 }
 
-// url is the A2A endpoint of the node at addr (host:port).
-func url(addr string) string { return "http://" + addr + "/" }
+// url is the A2A endpoint of the node at addr (host:port). Nodes are reached
+// over TLS only.
+func url(addr string) string { return "https://" + addr + "/" }

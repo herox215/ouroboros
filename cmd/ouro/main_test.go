@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,6 +90,17 @@ func TestEndToEnd(t *testing.T) {
 	if _, err := fmt.Sscan(string(record), &pid, &port); err != nil {
 		t.Fatalf("PID file %q: %v", record, err)
 	}
+	// What "ask" got its answer over is TLS 1.3; the node speaks nothing else.
+	conn, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port), &tls.Config{InsecureSkipVerify: true})
+	if err != nil || conn.ConnectionState().Version != tls.VersionTLS13 {
+		t.Fatalf("the node should speak TLS 1.3: %v", err)
+	}
+	conn.Close()
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/.well-known/agent-card.json", port))
+	if err != nil || resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("plain HTTP should be refused: %v, %v", resp, err)
+	}
+	resp.Body.Close()
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}

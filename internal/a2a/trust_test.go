@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,11 +42,25 @@ func newNode(t *testing.T, name string) *node {
 		}
 		return echo(ctx, contextID, text)
 	}
-	n.srv = httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: respond, Methods: func() []Method { return n.methods },
+	n.srv = serve(t, id, (&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: respond, Methods: func() []Method { return n.methods },
 		Log: func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) }}).Handler())
-	t.Cleanup(n.srv.Close)
 	return n
 }
+
+// serve runs h the way the node with id listens: over TLS, with the
+// certificate of its key.
+func serve(t *testing.T, id *identity.Identity, h http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(h)
+	srv.TLS = TLSConfig(id)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// unpinned talks TLS to whatever answers. It is for requests that are made by
+// hand to see what a node says to them.
+var unpinned = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 
 func (n *node) client() *Client {
 	port := n.srv.Listener.Addr().(*net.TCPAddr).Port
@@ -76,7 +91,7 @@ func TestTrustHandshake(t *testing.T) {
 	if !ok {
 		t.Fatal("approve failed")
 	}
-	if err := alice.client().Accept(ctx, "http://"+req.Addr+"/", bob.id.Public()); err != nil {
+	if err := alice.client().Accept(ctx, "https://"+req.Addr+"/", bob.id.Public()); err != nil {
 		t.Fatalf("accept callback: %v", err)
 	}
 	if trusted, _ := bob.trust.State(alice.id.Public()); !trusted {
@@ -92,7 +107,7 @@ func TestTrustHandshake(t *testing.T) {
 func TestServerRejectsUnsigned(t *testing.T) {
 	alice := newNode(t, "alice")
 	body := `{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"parts":[{"kind":"text","text":"hi"}]}}}`
-	resp, err := http.Post(alice.srv.URL, "application/json", strings.NewReader(body))
+	resp, err := unpinned.Post(alice.srv.URL, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,10 +116,6 @@ func TestServerRejectsUnsigned(t *testing.T) {
 	var res response
 	if json.Unmarshal(answer, &res) != nil || res.Error == nil || res.Error.Code != CodeUnauthorized {
 		t.Fatalf("unsigned request must be rejected: %s", answer)
-	}
-	// The refusal is signed like every response.
-	if key, err := answeredBy(resp.Header, responseMessage("", "", answer)); err != nil || key != alice.id.Public() {
-		t.Fatalf("refusal signed by %q, %v", key, err)
 	}
 }
 
@@ -202,7 +213,7 @@ func TestRejectCallback(t *testing.T) {
 	if !ok {
 		t.Fatal("reject failed")
 	}
-	if err := alice.client().Reject(ctx, "http://"+req.Addr+"/", bob.id.Public()); err != nil {
+	if err := alice.client().Reject(ctx, "https://"+req.Addr+"/", bob.id.Public()); err != nil {
 		t.Fatalf("reject callback: %v", err)
 	}
 	if trusted, _ := bob.trust.State(alice.id.Public()); trusted || bob.trust.HadOutgoing(alice.id.Public()) {
@@ -256,8 +267,7 @@ func TestSignedRequestsWithBadParams(t *testing.T) {
 func TestServerWithoutAddedMethods(t *testing.T) {
 	id := identity.Generate()
 	trust := contacts.Open(filepath.Join(t.TempDir(), "contacts.json"))
-	srv := httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: echo}).Handler())
-	defer srv.Close()
+	srv := serve(t, id, (&Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: trust, Respond: echo}).Handler())
 	client := &Client{Identity: id}
 	if _, err := client.call(context.Background(), srv.URL, id.Public(), "ping", struct{}{}); !code(err, CodeMethodNotFound) {
 		t.Fatalf("got %v", err)

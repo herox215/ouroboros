@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
@@ -73,7 +74,7 @@ type testNode struct {
 func serve(t *testing.T, name string) *testNode {
 	t.Helper()
 	n := &testNode{id: identity.Generate(), contacts: contacts.Open(filepath.Join(t.TempDir(), "contacts.json"))}
-	n.srv = httptest.NewServer((&a2a.Server{
+	n.srv = httptest.NewUnstartedServer((&a2a.Server{
 		Card:     func() a2a.AgentCard { return a2a.AgentCard{Name: name, Description: "  knows\nthe way "} },
 		Identity: n.id,
 		Trust:    n.contacts,
@@ -82,8 +83,11 @@ func serve(t *testing.T, name string) *testNode {
 			return name + ": " + text, nil
 		},
 	}).Handler())
+	// Like a node: over TLS, with the certificate of its key.
+	n.srv.TLS = a2a.TLSConfig(n.id)
+	n.srv.StartTLS()
 	t.Cleanup(n.srv.Close)
-	host, port, _ := net.SplitHostPort(strings.TrimPrefix(n.srv.URL, "http://"))
+	host, port, _ := net.SplitHostPort(n.srv.Listener.Addr().String())
 	n.Node = discovery.Node{ID: name, Name: name, PublicKey: n.id.Public(), Host: host}
 	n.Port, _ = strconv.Atoi(port)
 	return n
@@ -128,24 +132,40 @@ func impostor(mallory, victim *testNode) discovery.Node {
 }
 
 // Announcing the key of a peer the owner trusts connects nobody: connected is
-// the node that proves to hold the key.
+// the node that proves to hold the key in the TLS handshake.
 func TestPeersConnectsOnlyTheHolderOfTheKey(t *testing.T) {
 	alice, bob, carol, mallory := serve(t, "alice"), serve(t, "bob"), serve(t, "carol"), serve(t, "mallory")
 	trust(alice, bob)
 	alice.contacts.AddOutgoing(carol.PublicKey, "carol", "", "")
+	// A trusted peer whose address answers without TLS, as a node used to.
+	dave := discovery.Node{ID: "dave", Name: "dave", PublicKey: identity.Generate().Public()}
+	alice.contacts.AddTrusted(dave.PublicKey, "dave", "")
+	open := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a node without TLS was asked")
+	}))
+	defer open.Close()
+	host, port, _ := net.SplitHostPort(open.Listener.Addr().String())
+	dave.Host = host
+	dave.Port, _ = strconv.Atoi(port)
 
-	got, err := alice.network(bob.Node, impostor(mallory, bob), carol.Node, mallory.Node).Peers(context.Background())
+	got, err := alice.network(bob.Node, impostor(mallory, bob), carol.Node, mallory.Node, dave).Peers(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []struct {
 		state State
 		about string
-	}{{Connected, "knows the way"}, {NotConnected, ""}, {Requested, ""}, {NotConnected, ""}}
+	}{{Connected, "knows the way"}, {NotConnected, ""}, {Requested, ""}, {NotConnected, ""}, {NotConnected, ""}}
 	for i, w := range want {
 		if got[i].State != w.state || got[i].About != w.about {
 			t.Errorf("peer %d: %v %q, want %v %q", i, got[i].State, got[i].About, w.state, w.about)
 		}
+	}
+
+	// A peer that is trusted and holds its key, but is gone, is not connected.
+	bob.srv.Close()
+	if got, err := alice.network(bob.Node).Peers(context.Background()); err != nil || got[0].State != NotConnected {
+		t.Fatalf("a node that is gone: %+v, %v", got, err)
 	}
 }
 
@@ -161,8 +181,8 @@ func TestSendAcceptsOnlyTheAnswerOfTheNode(t *testing.T) {
 	if got, err := network.Send(ctx, bob.Node, "c", "hi"); err != nil || got != "bob: hi" {
 		t.Fatalf("bob: %q, %v", got, err)
 	}
-	// Mallory trusts alice too, but what alice signed for bob is not for it,
-	// and what it answers is not bob's answer.
+	// Mallory trusts alice too, but does not hold bob's key: the handshake
+	// fails and it never sees what alice wrote to bob.
 	if got, err := network.Send(ctx, impostor(mallory, bob), "c", "hi"); !errors.Is(err, a2a.ErrUnverified) || got != "" {
 		t.Fatalf("impostor: %q, %v", got, err)
 	}

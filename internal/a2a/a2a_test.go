@@ -30,20 +30,11 @@ func newServer(t *testing.T, respond Responder) *node {
 	return n
 }
 
-// answering runs a server that answers every request with body, signed by id
-// the way a node signs: as its card for GET, as a response for POST.
+// answering runs a server that holds the key of id and answers every request
+// with body.
 func answering(t *testing.T, id *identity.Identity, body string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		msg := responseMessage(r.Header.Get(HeaderNonce), r.Header.Get(HeaderSig), []byte(body))
-		if r.Method == http.MethodGet {
-			msg = cardMessage(r.Header.Get(HeaderNonce), []byte(body))
-		}
-		signAnswer(w.Header(), id, msg)
-		io.WriteString(w, body)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	return serve(t, id, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, body) }))
 }
 
 // post sends body to n as a request n signed itself.
@@ -56,7 +47,7 @@ func post(t *testing.T, n *node, body string) response {
 	var req request
 	json.Unmarshal([]byte(body), &req) // what cannot be parsed has no method
 	sign(r, []byte(body), n.id, 0, n.id.Public(), req.Method)
-	resp, err := http.DefaultClient.Do(r)
+	resp, err := unpinned.Do(r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,15 +62,21 @@ func post(t *testing.T, n *node, body string) response {
 func TestAgentCardURLFromHost(t *testing.T) {
 	n := newServer(t, echo)
 	srv := n.srv
-	resp, err := http.Get(srv.URL + CardPath)
+	resp, err := unpinned.Get(srv.URL + CardPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	var card AgentCard
 	json.NewDecoder(resp.Body).Decode(&card)
-	if card.Name != "alpha" || card.URL != srv.URL+"/" {
+	if card.Name != "alpha" || card.URL != srv.URL+"/" || !strings.HasPrefix(card.URL, "https://") {
 		t.Fatalf("got %+v", card)
+	}
+	// Nothing in the answer vouches for the node: the connection does.
+	for _, header := range []string{HeaderPublic, HeaderSig} {
+		if got := resp.Header.Get(header); got != "" {
+			t.Errorf("the card is answered with %s: %q", header, got)
+		}
 	}
 
 	fetched, err := FetchCard(context.Background(), srv.URL+"/", n.id.Public())
@@ -103,27 +100,22 @@ func TestCardProvesKey(t *testing.T) {
 		t.Fatalf("a card of another node: %v", err)
 	}
 
-	// A card alice signed for someone else's nonce proves nothing later on.
-	var recorded *http.Response
-	var body []byte
-	replay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if recorded == nil {
-			fresh, _ := http.NewRequest(http.MethodGet, alice.srv.URL+CardPath, nil)
-			fresh.Header.Set(HeaderNonce, r.Header.Get(HeaderNonce))
-			recorded, _ = http.DefaultClient.Do(fresh)
-			body, _ = io.ReadAll(recorded.Body)
-			recorded.Body.Close()
+	// Alice's own card, word for word, proves nothing when another node hands
+	// it out: that node does not hold her key.
+	relay := serve(t, mallory.id, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp, err := unpinned.Get(alice.srv.URL + CardPath)
+		if err != nil {
+			t.Error(err)
+			return
 		}
-		w.Header().Set(HeaderPublic, recorded.Header.Get(HeaderPublic))
-		w.Header().Set(HeaderSig, recorded.Header.Get(HeaderSig))
-		w.Write(body)
+		defer resp.Body.Close()
+		io.Copy(w, resp.Body)
 	}))
-	defer replay.Close()
-	if _, err := FetchCard(ctx, replay.URL, alice.id.Public()); err != nil {
-		t.Fatalf("a card passed on unchanged should verify: %v", err)
+	if key, err := FetchKey(ctx, relay.URL); err != nil || key != mallory.id.Public() {
+		t.Fatalf("the key of a relay is its own: %q, %v", key, err)
 	}
-	if _, err := FetchCard(ctx, replay.URL, alice.id.Public()); !errors.Is(err, ErrUnverified) {
-		t.Fatalf("a replayed card: %v", err)
+	if _, err := FetchCard(ctx, relay.URL, alice.id.Public()); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a card passed on by another node: %v", err)
 	}
 }
 
@@ -198,112 +190,35 @@ func TestResponderErrorIsNotSentToPeers(t *testing.T) {
 	}
 
 	// A server without a log keeps the cause from peers just the same.
-	quiet := httptest.NewServer((&Server{Card: func() AgentCard { return testCard }, Identity: srv.id, Trust: srv.trust, Respond: failing}).Handler())
-	defer quiet.Close()
+	quiet := serve(t, srv.id, (&Server{Card: func() AgentCard { return testCard }, Identity: srv.id, Trust: srv.trust, Respond: failing}).Handler())
 	if _, err := peer.client().Send(ctx, quiet.URL, srv.id.Public(), "c", "x"); !code(err, CodeInternalError) || strings.Contains(err.Error(), "10.0.0.5") {
 		t.Fatalf("got %v", err)
 	}
 }
 
+// What the right node answers wrongly is an error of its own, not a doubt
+// about who answered.
 func TestSendBadResponses(t *testing.T) {
 	id := identity.Generate()
-	serve := func(h http.HandlerFunc) *httptest.Server {
-		srv := httptest.NewServer(h)
-		t.Cleanup(srv.Close)
-		return srv
-	}
+	elsewhere := answering(t, id, `{"jsonrpc":"2.0","id":1,"result":{"parts":[{"kind":"text","text":"from elsewhere"}]}}`)
 	tests := map[string]*httptest.Server{
-		"http status": serve(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }),
-		"cut off": serve(func(w http.ResponseWriter, _ *http.Request) {
+		"http status": serve(t, id, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) })),
+		"cut off": serve(t, id, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Length", "100")
 			io.WriteString(w, "{")
-		}),
+		})),
+		// A node answers itself, even when it points to one with the same key.
+		"redirect": serve(t, id, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, elsewhere.URL, http.StatusTemporaryRedirect)
+		})),
 		"invalid json": answering(t, id, "nope"),
 		"no result":    answering(t, id, `{"jsonrpc":"2.0","id":1}`),
 	}
 	for name, srv := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := (&Client{Identity: id}).Send(context.Background(), srv.URL, id.Public(), "c", "x")
+			got, err := (&Client{Identity: id}).Send(context.Background(), srv.URL, id.Public(), "c", "x")
 			if err == nil || errors.Is(err, ErrUnverified) {
-				t.Fatalf("got %v", err)
-			}
-		})
-	}
-}
-
-// An answer counts only if the node that was asked signed it for this very
-// request. Anything else is ErrUnverified, whatever it says.
-func TestSendRejectsUnverifiedAnswers(t *testing.T) {
-	ctx := context.Background()
-	alice, bob, mallory := newNode(t, "alice"), newNode(t, "bob"), newNode(t, "mallory")
-	bob.trust.AddTrusted(alice.id.Public(), "alice", "")
-	mallory.trust.AddTrusted(alice.id.Public(), "alice", "")
-	const answer = `{"jsonrpc":"2.0","id":1,"result":{"kind":"message","role":"agent","parts":[{"kind":"text","text":"forged"}]}}`
-
-	// relay passes a request on to bob and hands his answer to change.
-	relay := func(change func(w http.ResponseWriter, signed http.Header, body []byte)) *httptest.Server {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fresh, _ := http.NewRequest(http.MethodPost, bob.srv.URL, r.Body)
-			fresh.Header = r.Header.Clone()
-			resp, err := http.DefaultClient.Do(fresh)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			defer resp.Body.Close()
-			body, _ := io.ReadAll(resp.Body)
-			change(w, resp.Header, body)
-		}))
-		t.Cleanup(srv.Close)
-		return srv
-	}
-	pass := func(w http.ResponseWriter, signed http.Header, body []byte) {
-		w.Header().Set(HeaderPublic, signed.Get(HeaderPublic))
-		w.Header().Set(HeaderSig, signed.Get(HeaderSig))
-		w.Write(body)
-	}
-	var first http.Header
-	var firstBody []byte
-
-	tests := []struct {
-		name string
-		srv  *httptest.Server
-		ok   bool
-	}{
-		{"passed on unchanged", relay(pass), true},
-		{"not signed", relay(func(w http.ResponseWriter, _ http.Header, body []byte) { w.Write(body) }), false},
-		{"signed by another node", answering(t, mallory.id, answer), false},
-		// Mallory is a real node that announces bob's key at its own address.
-		{"answered by another node", mallory.srv, false},
-		{"claims the key of the node", relay(func(w http.ResponseWriter, _ http.Header, _ []byte) {
-			signAnswer(w.Header(), mallory.id, responseMessage("", "", []byte(answer)))
-			w.Header().Set(HeaderPublic, bob.id.Public())
-			io.WriteString(w, answer)
-		}), false},
-		{"changed on the way", relay(func(w http.ResponseWriter, signed http.Header, body []byte) {
-			pass(w, signed, []byte(strings.Replace(string(body), "hi", "ho", 1)))
-		}), false},
-		{"answer to an earlier request", relay(func(w http.ResponseWriter, signed http.Header, body []byte) {
-			if first == nil {
-				first, firstBody = signed, body
-			}
-			pass(w, first, firstBody)
-		}), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.name == "answer to an earlier request" {
-				// The first answer is bob's own and verifies; it is replayed after.
-				if _, err := alice.client().Send(ctx, tt.srv.URL, bob.id.Public(), "c", "hi"); err != nil {
-					t.Fatal(err)
-				}
-			}
-			got, err := alice.client().Send(ctx, tt.srv.URL, bob.id.Public(), "c", "hi")
-			switch {
-			case tt.ok && (err != nil || got != "c:hi"):
 				t.Fatalf("got %q, %v", got, err)
-			case !tt.ok && !errors.Is(err, ErrUnverified):
-				t.Fatalf("got %q, %v; want ErrUnverified", got, err)
 			}
 		})
 	}
@@ -327,7 +242,7 @@ func TestNewIDIsUUIDv4(t *testing.T) {
 func TestCallErrors(t *testing.T) {
 	ctx := context.Background()
 	srv := newServer(t, echo)
-	gone := httptest.NewServer(http.NotFoundHandler())
+	gone := answering(t, srv.id, "")
 	gone.Close()
 
 	c := &Client{Identity: identity.Generate()}
@@ -350,27 +265,22 @@ func TestCallErrors(t *testing.T) {
 
 func TestFetchCardErrors(t *testing.T) {
 	ctx := context.Background()
-	gone := httptest.NewServer(http.NotFoundHandler())
-	gone.Close()
 	id := identity.Generate()
-	unsigned := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, `{"name":"alpha"}`) }))
-	defer unsigned.Close()
+	gone := answering(t, id, "")
+	gone.Close()
 	for name, url := range map[string]string{
 		"invalid url":  "://no-url",
 		"node is gone": gone.URL,
-		"not signed":   unsigned.URL,
+		"no card":      serve(t, id, http.NotFoundHandler()).URL,
 		"invalid json": answering(t, id, "nope").URL,
 		"no name":      answering(t, id, `{"protocolVersion":"0.3.0"}`).URL,
 	} {
-		if _, err := FetchCard(ctx, url, id.Public()); err == nil {
-			t.Errorf("%s: want error", name)
+		if _, err := FetchCard(ctx, url, id.Public()); err == nil || errors.Is(err, ErrUnverified) {
+			t.Errorf("%s: FetchCard = %v", name, err)
 		}
 		if key, err := FetchKey(ctx, url); err == nil || key != "" {
 			t.Errorf("%s: FetchKey = %q, %v", name, key, err)
 		}
-	}
-	if _, err := FetchCard(ctx, unsigned.URL, id.Public()); !errors.Is(err, ErrUnverified) {
-		t.Errorf("a card that is not signed: %v", err)
 	}
 }
 

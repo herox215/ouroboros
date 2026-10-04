@@ -16,8 +16,8 @@ import (
 	"ouroboros/internal/identity"
 )
 
-// Headers that carry a signed request. A response is signed as well: it
-// carries HeaderPublic and HeaderSig of the node that answers.
+// Headers that carry a signed request. Nothing of the kind comes back: the
+// node that answers is authenticated by the TLS handshake (see exchange).
 const (
 	HeaderPublic    = "X-Ouro-Public-Key"
 	HeaderTime      = "X-Ouro-Time"
@@ -27,51 +27,24 @@ const (
 	HeaderRecipient = "X-Ouro-Recipient" // public key of the node the request is for
 )
 
-// What a signature is for. It is the first line of the signed string, so that
-// a signature made for one purpose is never valid for another.
-const (
-	signedRequest  = "ouro-request"
-	signedResponse = "ouro-response"
-	signedCard     = "ouro-card"
-)
+// signedRequest is the first line of the string a request signature covers,
+// so that a signature made for anything else is never valid as a request.
+const signedRequest = "ouro-request"
 
 // clockSkew is how far a request timestamp may deviate from local time.
 const clockSkew = 2 * time.Minute
-
-// ErrUnverified means the answer does not come from the node that was asked:
-// it is not signed, or not by the public key the request was addressed to.
-var ErrUnverified = errors.New("a2a: the answer is not signed by the node that was asked")
 
 // authMessage is the canonical byte string a request signature covers. It
 // binds the body to the timestamp, the nonce, the sender's A2A port, the
 // public key of the node the request is for and the JSON-RPC method.
 func authMessage(timestamp, nonce, port, recipient, method string, body []byte) []byte {
-	return signedMessage(signedRequest, body, timestamp, nonce, port, recipient, method)
-}
-
-// responseMessage is the canonical byte string the signature of a response
-// covers. It binds the body to the one request it answers, named by its nonce
-// and its signature: the response to another request does not verify.
-func responseMessage(nonce, requestSig string, body []byte) []byte {
-	return signedMessage(signedResponse, body, nonce, requestSig)
-}
-
-// cardMessage is the canonical byte string the signature of an agent card
-// covers. It binds the card to the nonce of whoever asked for it.
-func cardMessage(nonce string, body []byte) []byte {
-	return signedMessage(signedCard, body, nonce)
-}
-
-// signedMessage joins what a signature is for, the fields it binds and the
-// hash of the body, one per line.
-func signedMessage(purpose string, body []byte, fields ...string) []byte {
 	sum := sha256.Sum256(body)
-	lines := append(append([]string{purpose}, fields...), hex.EncodeToString(sum[:]))
-	return []byte(strings.Join(lines, "\n"))
+	return []byte(strings.Join([]string{signedRequest, timestamp, nonce, port, recipient, method, hex.EncodeToString(sum[:])}, "\n"))
 }
 
 // sign sets the authentication headers on req for the given body: a request
-// of id for the method of the node with the public key recipient.
+// of id for the method of the node with the public key recipient. That is the
+// key the connection is pinned to, see Client.call.
 func sign(req *http.Request, body []byte, id *identity.Identity, port int, recipient, method string) {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	nonce := rand.Text()
@@ -86,24 +59,6 @@ func sign(req *http.Request, body []byte, id *identity.Identity, port int, recip
 	req.Header.Set(HeaderPort, portStr)
 	req.Header.Set(HeaderRecipient, recipient)
 	req.Header.Set(HeaderSig, base64.StdEncoding.EncodeToString(sig))
-}
-
-// signAnswer sets the headers that prove id wrote the answer, where msg is
-// the responseMessage or cardMessage of its body.
-func signAnswer(h http.Header, id *identity.Identity, msg []byte) {
-	h.Set(HeaderPublic, id.Public())
-	h.Set(HeaderSig, base64.StdEncoding.EncodeToString(id.Sign(msg)))
-}
-
-// answeredBy returns the public key of the node that signed an answer with
-// the headers h, where msg is the responseMessage or cardMessage of its body.
-func answeredBy(h http.Header, msg []byte) (string, error) {
-	publicKey := h.Get(HeaderPublic)
-	sig, err := base64.StdEncoding.DecodeString(h.Get(HeaderSig))
-	if err != nil || !identity.Verify(publicKey, msg, sig) {
-		return "", ErrUnverified
-	}
-	return publicKey, nil
 }
 
 // verifier checks request signatures and remembers nonces to stop replays.

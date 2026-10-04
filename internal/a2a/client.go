@@ -3,36 +3,27 @@ package a2a
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"ouroboros/internal/identity"
 )
 
-var httpClient = &http.Client{Timeout: 5 * time.Minute}
-
-// maxAnswerBytes is how much of an answer is read. A longer one is cut off
-// and fails the signature check.
-const maxAnswerBytes = 16 << 20
-
 // Client talks to another node. Requests are signed with Identity so the peer
 // can authenticate this node; Port is advertised for callbacks.
 //
-// Every request is addressed to a node by its public key: it is signed for
-// that key, so no other node accepts it, and the answer has to be signed by
-// that key, or the call fails with ErrUnverified.
+// Every request is addressed to a node by its public key. The TLS connection
+// is pinned to that key: unless the node that answers holds it, the call
+// fails with ErrUnverified and nothing is sent. The request is signed for the
+// same key, so no other node accepts it either.
 type Client struct {
 	Identity *identity.Identity
 	Name     string
 	Model    string
 	Port     int
-	HTTP     *http.Client
 }
 
 // Send delivers text to the agent of the node with publicKey at baseURL and
@@ -78,9 +69,10 @@ func (c *Client) notify(ctx context.Context, baseURL, publicKey, method string) 
 func (c *Client) peer() Peer { return Peer{Name: c.Name, Model: c.Model} }
 
 // call runs a JSON-RPC method of the node with publicKey at baseURL: it wraps
-// params in a request, signs it for that node, checks that the response is
-// signed by it and decodes the response. An error the peer answers with is
-// returned as *Error. Every method of Client is a thin wrapper around call.
+// params in a request, signs it for that node, sends it over a connection
+// pinned to the same key and decodes the response. An error the peer answers
+// with is returned as *Error. Every method of Client is a thin wrapper around
+// call.
 func (c *Client) call(ctx context.Context, baseURL, publicKey, method string, params any) (*response, error) {
 	rawParams, err := json.Marshal(params)
 	if err != nil {
@@ -96,19 +88,10 @@ func (c *Client) call(ctx context.Context, baseURL, publicKey, method string, pa
 	httpReq.Header.Set("User-Agent", "ouroboros")
 	sign(httpReq, body, c.Identity, c.Port, publicKey, method)
 
-	client := c.HTTP
-	if client == nil {
-		client = httpClient
-	}
-	answer, signer, err := fetch(client, httpReq, func(answer []byte) []byte {
-		return responseMessage(httpReq.Header.Get(HeaderNonce), httpReq.Header.Get(HeaderSig), answer)
-	})
+	// Whoever answers in place of the node that was asked gets nothing to read.
+	answer, _, err := exchange(httpReq, holder(publicKey))
 	if err != nil {
 		return nil, err
-	}
-	// Whoever answers in place of the node that was asked is not believed.
-	if signer != publicKey {
-		return nil, ErrUnverified
 	}
 	var res response
 	if err := json.Unmarshal(answer, &res); err != nil {
@@ -120,58 +103,33 @@ func (c *Client) call(ctx context.Context, baseURL, publicKey, method string, pa
 	return &res, nil
 }
 
-// fetch sends req and returns the body of the answer together with the public
-// key of the node that signed it. message returns the string the signature
-// has to cover for that body. An answer without a valid signature fails with
-// ErrUnverified.
-func fetch(client *http.Client, req *http.Request, message func(answer []byte) []byte) (answer []byte, signer string, err error) {
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("a2a: HTTP %d", resp.StatusCode)
-	}
-	if answer, err = io.ReadAll(io.LimitReader(resp.Body, maxAnswerBytes)); err != nil {
-		return nil, "", err
-	}
-	signer, err = answeredBy(resp.Header, message(answer))
-	return answer, signer, err
-}
-
 // FetchCard reads the agent card of the node with publicKey at baseURL. The
-// card has to be signed by that key just now, which proves that the node
-// holding the key is the one that answers at baseURL; otherwise FetchCard
-// fails with ErrUnverified. What the card says is still only what that node
-// claims.
+// connection is pinned to that key, which proves that the node holding it is
+// the one that answers at baseURL; otherwise FetchCard fails with
+// ErrUnverified. What the card says is still only what that node claims.
 func FetchCard(ctx context.Context, baseURL, publicKey string) (AgentCard, error) {
-	card, signer, err := fetchCard(ctx, baseURL)
-	if err == nil && signer != publicKey {
-		err = ErrUnverified
-	}
+	card, _, err := fetchCard(ctx, baseURL, holder(publicKey))
 	return card, err
 }
 
-// FetchKey returns the public key of the node at baseURL, which proves that
-// it holds the key by signing its agent card. It is for a node known by its
-// address only: whoever answers there is taken for the node.
+// FetchKey returns the public key of the node at baseURL: the key of the
+// certificate it presents, which the handshake proves it to hold. It is for a
+// node known by its address only: whoever answers there is taken for the
+// node. Pin what follows to the key that is returned.
 func FetchKey(ctx context.Context, baseURL string) (string, error) {
-	_, signer, err := fetchCard(ctx, baseURL)
-	return signer, err
+	_, key, err := fetchCard(ctx, baseURL, anyone)
+	return key, err
 }
 
-// fetchCard reads the agent card of the node at baseURL and returns it with
-// the public key that signed it.
-func fetchCard(ctx context.Context, baseURL string) (AgentCard, string, error) {
+// fetchCard reads the agent card of the node at baseURL, if accept takes its
+// public key, and returns the card with that key.
+func fetchCard(ctx context.Context, baseURL string, accept func(key string) bool) (AgentCard, string, error) {
 	var card AgentCard
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(baseURL, "/")+CardPath, nil)
 	if err != nil {
 		return card, "", err
 	}
-	nonce := rand.Text()
-	req.Header.Set(HeaderNonce, nonce)
-	body, signer, err := fetch(httpClient, req, func(body []byte) []byte { return cardMessage(nonce, body) })
+	body, key, err := exchange(req, accept)
 	if err != nil {
 		return card, "", err
 	}
@@ -181,5 +139,5 @@ func fetchCard(ctx context.Context, baseURL string) (AgentCard, string, error) {
 	if card.Name == "" {
 		return card, "", errors.New("a2a: agent card has no name")
 	}
-	return card, signer, nil
+	return card, key, nil
 }

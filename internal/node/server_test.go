@@ -3,7 +3,6 @@ package node
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -18,6 +17,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
+	"ouroboros/internal/home"
 )
 
 // patience is how long a node may take to come up.
@@ -65,20 +65,17 @@ func freeUDPPort(t *testing.T) int {
 	return conn.LocalAddr().(*net.UDPAddr).Port
 }
 
-// fetchCard reads the agent card of the node on port.
-func fetchCard(t *testing.T, port int) a2a.AgentCard {
+// fetchCard reads the agent card of the node of dir on port, which has to
+// prove that it holds the key of dir.
+func fetchCard(t *testing.T, dir home.Dir, port int) a2a.AgentCard {
 	t.Helper()
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, a2a.CardPath))
+	id, err := dir.Identity()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("agent card: status %d", resp.StatusCode)
-	}
-	var card a2a.AgentCard
-	if err := json.NewDecoder(resp.Body).Decode(&card); err != nil {
-		t.Fatal(err)
+	card, err := a2a.FetchCard(context.Background(), fmt.Sprintf("https://127.0.0.1:%d/", port), id.Public())
+	if err != nil {
+		t.Fatalf("agent card: %v", err)
 	}
 	return card
 }
@@ -100,10 +97,24 @@ func TestRunServesUntilStopped(t *testing.T) {
 	if p.PID != os.Getpid() || p.Port == 0 {
 		t.Fatalf("process %+v", p)
 	}
-	got, want := fetchCard(t, p.Port), card(cfg, "test")
-	want.URL = got.URL // where it was asked, filled in by the handler
+	got, want := fetchCard(t, dir, p.Port), card(cfg, "test")
+	want.URL = fmt.Sprintf("https://127.0.0.1:%d/", p.Port) // where it was asked, filled in by the handler
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("card %+v, want %+v", got, want)
+	}
+	// The port speaks TLS only, and only as the node of this home: plain HTTP
+	// gets no card, and nobody takes it for a node with another key.
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", p.Port, a2a.CardPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("plain HTTP was answered with status %d", resp.StatusCode)
+	}
+	other, _ := configured(t).Identity()
+	if _, err := a2a.FetchCard(context.Background(), fmt.Sprintf("https://127.0.0.1:%d/", p.Port), other.Public()); !errors.Is(err, a2a.ErrUnverified) {
+		t.Fatalf("asked for a node with another key: %v", err)
 	}
 
 	if err := stop(); err != nil {
@@ -124,6 +135,7 @@ func TestRunServesUntilStopped(t *testing.T) {
 		fmt.Sprintf("ouroboros %s (alpha) listening on :%d → gpt", id.ID(), p.Port),
 		"peers may use the tools: clock, search",
 		"GET " + a2a.CardPath,
+		"TLS handshake error", // the other key: the client broke off
 		"stopped",
 	} {
 		if !strings.Contains(log.String(), want) {
@@ -149,7 +161,7 @@ func TestRunFallsBackToFreePort(t *testing.T) {
 	if p.Port == 0 || p.Port == s.HTTPPort {
 		t.Fatalf("port %d, taken is %d", p.Port, s.HTTPPort)
 	}
-	if got := fetchCard(t, p.Port); got.Name != "alpha" || got.Version != "test" {
+	if got := fetchCard(t, dir, p.Port); got.Name != "alpha" || got.Version != "test" {
 		t.Fatalf("card %+v", got)
 	}
 

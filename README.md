@@ -57,12 +57,12 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Part | Details |
 |---|---|
 | LLM | `GET /models` for the picker, `POST /chat/completions` for replies |
-| A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /` (TCP 41337, falls back to a free port) |
+| A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 8 LLM calls per answer |
 | Memory | last 40 messages per `contextId`, up to 256 conversations |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers |
-| Trust | requests and responses are signed (Ed25519); unknown peers become connection requests a human approves |
+| Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; unknown peers become connection requests a human approves |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly |
 | Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `ouro.pid`, `ouro.log`, `update/`. `config.json` and `contacts.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
@@ -121,18 +121,32 @@ trusted peers:
 
 Rejected peers are blocked. Trust is mutual: one acceptance connects both sides.
 
-Both directions are authenticated with these keys:
+Everything between nodes is encrypted, and both directions are authenticated with these keys:
 
-- A **request** is signed for one node and one method: the signature covers the recipient's public key,
-  the JSON-RPC method, the body, a timestamp and a nonce. A node refuses what was signed for another
-  node, so a recorded request cannot be sent to someone else who trusts the sender.
-- A **response** is signed by the node that answers, for the one request it answers. Your node only
-  accepts an answer signed by the key the peer was stored with. Whoever announces the ID and key of a
-  peer of yours without holding the key is not listed as connected and cannot answer for it.
-- The **agent card** is signed the same way, which is how a discovered node proves to hold its key.
+- The **connection** is TLS 1.3; plain HTTP is refused. A node presents a self-signed certificate made
+  from its key each time it starts (no certificate authority, nothing but the key is stored). Whoever
+  connects pins it: the handshake fails unless the certificate is for the public key the node is known
+  by, which is the key a peer was stored with or the one a discovered node announced. Nothing of the
+  request is sent before that. Whoever announces the ID and key of a peer of yours without holding the
+  key is not listed as connected, gets no message and cannot answer for it. This covers messages,
+  decisions on connection requests, the agent card, and your own `ouro` talking to your node.
+- A **request** is signed for one node and one method: the signature covers the recipient's public key
+  (the key the connection is pinned to), the JSON-RPC method, the body, a timestamp and a nonce. A node
+  refuses what was signed for another node, so a request cannot be passed on to someone else who trusts
+  the sender. This is how the node that is asked knows who asks.
+- A **response** and the **agent card** carry no signature of their own: they come over the connection
+  that proved who answers.
+
+| What | Pinned to |
+|---|---|
+| a connected peer | the public key stored in `contacts.json` when you connected; the node announcing it has to pass the handshake to count as connected |
+| a discovered node you are not connected to | the public key it announced (its ID is the fingerprint of that key) |
+| a node addressed as `host:port` | the key of the certificate presented on first contact; the message that follows only goes to the holder of that key |
+| the answer to a connection request | the public key of the node that asked |
 
 A node you address as `host:port` has no stored key: it is whoever answers at that address.
-Messages are signed, not encrypted. Anyone on the path can read them; use a VPN on networks you do not trust.
+Discovery itself is neither encrypted nor signed: names, models, public keys and ports of the nodes on a
+network are visible to everyone on it, and an announcement only counts for what the handshake confirms.
 
 ## Code
 

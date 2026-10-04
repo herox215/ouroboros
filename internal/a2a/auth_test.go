@@ -177,7 +177,7 @@ func TestServerRejectsReplayAndForgery(t *testing.T) {
 		}
 		change(r)
 		r.Body = io.NopCloser(strings.NewReader(body))
-		resp, err := http.DefaultClient.Do(r)
+		resp, err := unpinned.Do(r)
 		if err != nil {
 			t.Fatal(err)
 		}

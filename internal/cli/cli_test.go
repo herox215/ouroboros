@@ -722,7 +722,7 @@ func TestListFindsNodesOnPeers(t *testing.T) {
 func TestCard(t *testing.T) {
 	s := testSettings(t)
 	port := startNode(t, s, nodeConfig(s))
-	card, err := a2a.FetchCard(context.Background(), fmt.Sprintf("http://127.0.0.1:%d/", port), publicKey(t, s))
+	card, err := a2a.FetchCard(context.Background(), fmt.Sprintf("https://127.0.0.1:%d/", port), publicKey(t, s))
 	if err != nil || card.Description != "Ouroboros instance named alpha" || card.Version != Version {
 		t.Fatalf("card: %+v, %v", card, err)
 	}

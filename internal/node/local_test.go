@@ -46,7 +46,7 @@ func TestStartAndStop(t *testing.T) {
 	if got, ok := l.Running(); !ok || got != p {
 		t.Fatalf("running: %+v, %v, started %+v", got, ok, p)
 	}
-	if got := fetchCard(t, p.Port); got.Name != "alpha" {
+	if got := fetchCard(t, dir, p.Port); got.Name != "alpha" {
 		t.Fatalf("card %+v", got)
 	}
 
