@@ -1,4 +1,5 @@
-package cli
+// Package tui is the plugin that contributes the terminal UI.
+package tui
 
 import (
 	"context"
@@ -11,40 +12,37 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
-	"ouroboros/internal/kernel"
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
+	"ouroboros/internal/plugins/base"
 	"ouroboros/internal/tui"
+	"ouroboros/plugin"
 )
 
-// tuiPlugin contributes the terminal UI as the command "tui", which is also
-// what ouro without a command opens.
+// needs are the services the plugin uses.
+type needs struct {
+	Console   *plugin.Console
+	Assistant *assistant.Assistant
+}
+
+// Plugin contributes the terminal UI as the command "tui", which is also what
+// ouro without a command opens (base.DefaultCommand).
 //
-// Another front end (a web UI, an API) is a plugin like this one: a small
-// adapter over node.Local, assistant.Assistant and peers.Network, plus the
-// command that runs it. It needs no logic of its own.
-func tuiPlugin() kernel.Plugin {
-	return kernel.Plugin{Name: "tui", Start: func(ctx *kernel.Context) error {
-		var err error
-		t := use[Terminal](ctx, &err)
-		u := &ui{
-			home:      use[home.Dir](ctx, &err),
-			local:     use[node.Local](ctx, &err),
-			assistant: use[*assistant.Assistant](ctx, &err),
-			network:   use[*peers.Network](ctx, &err),
-		}
-		if err != nil {
-			return err
-		}
-		kernel.Provide(ctx, u)
-		kernel.Add(ctx, command{defaultCommand, "", "chat with your agent in the terminal UI", func(c context.Context, _ []string) error {
-			if !t.Interactive {
+// The UI is where the owner decides whom the node trusts. For that it is
+// given what no service offers: dir, the home of the node, and network with
+// the contacts in it. They are part of the frame of ouro, handed to this
+// plugin where the plugins are listed.
+func Plugin(dir home.Dir, network *peers.Network) plugin.Plugin {
+	return plugin.New("tui", func(ctx *plugin.Context, n needs) error {
+		u := &ui{home: dir, local: node.Local{Home: dir}, assistant: n.Assistant, network: network}
+		plugin.Add(ctx, plugin.Command{Name: base.DefaultCommand, Help: "chat with your agent in the terminal UI", Run: func(c context.Context, _ []string) error {
+			if !n.Console.Interactive {
 				return errors.New("tui needs a terminal")
 			}
 			return u.run(c)
 		}})
 		return nil
-	}}
+	})
 }
 
 // ui is the terminal UI and what it controls: it implements tui.Backend by
@@ -89,7 +87,7 @@ func (u *ui) Stop() error {
 
 func (u *ui) Ask(ctx context.Context, contextID, text string, step func(tui.Step)) (string, error) {
 	reply, err := u.assistant.Ask(ctx, contextID, text, func(s assistant.Step) { step(tui.Step(s)) })
-	return reply, withHint(err)
+	return reply, base.WithHint(err)
 }
 
 func (u *ui) Contacts() (tui.Contacts, error) {
@@ -118,7 +116,7 @@ func (u *ui) decided(action, publicKey string, err error) error {
 
 // SetupCommand runs the interactive setup, which starts the node afterwards.
 func (u *ui) SetupCommand() (*exec.Cmd, error) {
-	exe, err := node.Executable()
+	exe, err := u.local.Executable()
 	if err != nil {
 		return nil, err
 	}

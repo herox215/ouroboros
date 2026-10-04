@@ -1,0 +1,42 @@
+// Package peers is the plugin that connects the node to the others: it
+// provides the network and the tools with which an agent reaches it.
+package peers
+
+import (
+	"ouroboros/internal/assistant"
+	"ouroboros/internal/discovery"
+	"ouroboros/internal/home"
+	"ouroboros/internal/peers"
+	"ouroboros/plugin"
+)
+
+// needs are the services the plugin uses.
+type needs struct {
+	Scanner *discovery.Scanner
+}
+
+// services are what the plugin provides.
+type services struct {
+	Network *plugin.Network
+}
+
+// Plugin provides network, the other nodes as the node in dir reaches them,
+// and contributes the tools list_peers and ask_peer.
+//
+// network is part of the frame of ouro: it holds the contacts and signs as
+// the node. The plugin tells it how nodes are found and hands it on as a
+// plugin.Network, through which neither can be had.
+func Plugin(dir home.Dir, network *peers.Network) plugin.Plugin {
+	return plugin.NewService("peers", func(ctx *plugin.Context, n needs) (services, error) {
+		network.Finder = n.Scanner
+
+		selfID := func() string {
+			cfg, _ := dir.Config() // without a configuration no node is this one
+			return cfg.ID()
+		}
+		for _, tool := range assistant.PeerTools(network, selfID) {
+			plugin.Add(ctx, tool)
+		}
+		return services{plugin.NetworkOf(network)}, nil
+	})
+}

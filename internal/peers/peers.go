@@ -2,8 +2,8 @@
 // who is connected, and how to talk to them.
 //
 // Everything that reaches another node goes through Network: Find and Peers
-// list them, Resolve picks one, Send talks to it, Accept and Reject decide
-// on its connection request. Front ends and tools call these and never use
+// list them, Resolve picks one, Send talks to it, Call runs a method a plugin
+// added to it, Accept and Reject decide on its connection request. Front ends and tools call these and never use
 // discovery, a2a or contacts directly.
 package peers
 
@@ -36,6 +36,9 @@ var (
 	// ErrSender means the node is the peer whose message is being answered:
 	// it gets the answer, it is not asked in turn.
 	ErrSender = errors.New("is the peer you are answering, reply to it instead of asking it")
+	// ErrNotConnected means the node is not a peer this node is connected
+	// to: nothing was sent to it.
+	ErrNotConnected = errors.New("is not connected to this node")
 	// ErrNoRequest means there is no such connection request to decide on.
 	ErrNoRequest = errors.New("request is gone")
 	// ErrNotSaved means a decision on a connection request could not be
@@ -210,6 +213,41 @@ func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text
 		return "", ErrRefused
 	}
 	return reply, err
+}
+
+// Call runs method on node, a method a plugin added there (see a2a.Method),
+// and returns the message it answers with: nil if it answers with none.
+// params is sent as JSON; an error the method answers with is an *a2a.Error.
+//
+// It is for connected peers only: for a node this node does not trust nothing
+// is sent, and Call fails with ErrNotConnected. To connect, the owners talk
+// first (Send, Accept). The other side checks the same: it runs added methods
+// for peers its owner trusts, and for nobody else.
+//
+// The call is signed and pinned like Send: for the public key of node and
+// the method, over a connection only the holder of that key can answer.
+func (n *Network) Call(ctx context.Context, node discovery.Node, method string, params any) (*a2a.Message, error) {
+	publicKey := node.PublicKey
+	if publicKey == "" {
+		// A node given by its address is whoever answers there. It is called
+		// only if that is a peer, and only that peer gets the call.
+		var err error
+		if publicKey, err = key(ctx, node); err != nil {
+			return nil, err
+		}
+	}
+	trusted, _, err := n.Contacts.State(publicKey)
+	if err != nil {
+		return nil, err
+	}
+	if !trusted {
+		return nil, fmt.Errorf("%s %w", Label(node), ErrNotConnected)
+	}
+	client, err := n.Client()
+	if err != nil {
+		return nil, err
+	}
+	return client.Call(ctx, url(node.Addr()), publicKey, method, params)
 }
 
 // Accept trusts the peer that sent the connection request and tells it so.

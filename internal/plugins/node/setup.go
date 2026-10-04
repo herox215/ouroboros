@@ -1,4 +1,4 @@
-package cli
+package node
 
 import (
 	"cmp"
@@ -15,6 +15,7 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/openai"
+	"ouroboros/plugin"
 )
 
 // nonChatModels are substrings of model IDs that cannot be used for chat.
@@ -28,7 +29,7 @@ var preferredModels = []string{"gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"}
 
 // wizard is the interactive setup of the node.
 type wizard struct {
-	term *console
+	term *plugin.Console
 	home home.Dir
 	// Offered as defaults: the endpoint, and the key that belongs to it.
 	baseURL string
@@ -39,7 +40,7 @@ type wizard struct {
 func (w *wizard) run(ctx context.Context, cfg config.Config) (config.Config, error) {
 	prevURL := cfg.BaseURL
 	endpoint := cmp.Or(cfg.BaseURL, w.baseURL)
-	answer, err := w.term.prompt(fmt.Sprintf("API endpoint (OpenAI-compatible) [%s]: ", endpoint), endpoint)
+	answer, err := w.term.Prompt(fmt.Sprintf("API endpoint (OpenAI-compatible) [%s]: ", endpoint), endpoint)
 	if err != nil {
 		return cfg, err
 	}
@@ -54,7 +55,7 @@ func (w *wizard) run(ctx context.Context, cfg config.Config) (config.Config, err
 		return cfg, err
 	}
 	name := cmp.Or(cfg.Name, hostname())
-	if cfg.Name, err = w.term.prompt(fmt.Sprintf("Node name [%s]: ", name), name); err != nil {
+	if cfg.Name, err = w.term.Prompt(fmt.Sprintf("Node name [%s]: ", name), name); err != nil {
 		return cfg, err
 	}
 	// The key makes the node who it is: its ID is the fingerprint of the key.
@@ -82,7 +83,7 @@ func (w *wizard) askAPIKey(ctx context.Context, baseURL, key string) (string, []
 	for {
 		if key == "" {
 			var err error
-			if key, err = w.term.readSecret("API key (Enter for none): "); err != nil {
+			if key, err = w.term.ReadSecret("API key (Enter for none): "); err != nil {
 				return "", nil, err
 			}
 		}
@@ -90,7 +91,7 @@ func (w *wizard) askAPIKey(ctx context.Context, baseURL, key string) (string, []
 		var apiErr *openai.APIError
 		switch {
 		case errors.As(err, &apiErr) && apiErr.Unauthorized():
-			fmt.Fprintln(w.term.out, "✗ API key rejected, try again")
+			fmt.Fprintln(w.term.Out, "✗ API key rejected, try again")
 			key = ""
 		case err != nil:
 			return "", nil, fmt.Errorf("cannot list models at %s: %w", baseURL, err)
@@ -106,18 +107,18 @@ func (w *wizard) askModel(all []string, current string) (string, error) {
 	if len(models) == 0 {
 		return "", errors.New("no models available for this API key")
 	}
-	fmt.Fprintf(w.term.out, "\nAvailable models:\n\n")
-	printColumns(w.term.out, models)
+	fmt.Fprintf(w.term.Out, "\nAvailable models:\n\n")
+	printColumns(w.term.Out, models)
 	def := defaultModel(models, current)
 	for {
-		pick, err := w.term.prompt(fmt.Sprintf("\nChoose model [number or name, Enter = %s]: ", def), def)
+		pick, err := w.term.Prompt(fmt.Sprintf("\nChoose model [number or name, Enter = %s]: ", def), def)
 		if err != nil {
 			return "", err
 		}
 		if m, ok := resolveModel(models, all, pick); ok {
 			return m, nil
 		}
-		fmt.Fprintln(w.term.out, "✗ unknown model")
+		fmt.Fprintln(w.term.Out, "✗ unknown model")
 	}
 }
 
@@ -166,8 +167,11 @@ func printColumns(w io.Writer, items []string) {
 	}
 }
 
+// osHostname names this host; tests replace it to get in the way.
+var osHostname = os.Hostname
+
 func hostname() string {
-	if h, err := os.Hostname(); err == nil && h != "" {
+	if h, err := osHostname(); err == nil && h != "" {
 		return h
 	}
 	return "ouroboros"

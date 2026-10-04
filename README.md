@@ -179,8 +179,10 @@ network are visible to everyone on it, and an announcement only counts for what 
 
 ```
 cmd/ouro             entry point
-internal/cli         the plugins that make up ouro: commands, setup dialog, wiring
-internal/kernel      plugin kernel: services, contributions, start order
+plugin               what a plugin is written against: the one package it imports (+ example, a plugin to copy)
+internal/cli         the list of plugins that make up ouro, and the frame they do not get
+internal/plugins     the standard plugins, one package each: commands, setup dialog, wiring
+internal/kernel      plugin kernel: services, contributions, start order by declared dependencies
 internal/tui         terminal UI (Bubble Tea)
 internal/node        the local node: Server runs it, Local controls the background one
 internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error
@@ -200,38 +202,96 @@ internal/update      self-update from the newest main
 
 ### Extending
 
-ouro is a small kernel (`internal/kernel`) and a list of plugins (`plugins()` in `internal/cli/cli.go`).
-A plugin is a named `Start` function. In it, it gets the services it needs, offers its own and contributes
-items; the kernel starts every plugin after those it depends on.
+ouro is a small kernel (`internal/kernel`) and a list of plugins (`Plugins` in `internal/cli/cli.go`). A plugin
+is a package of its own, written against one package, `ouroboros/plugin`: that is all it imports of ouro. The
+standard plugins are in `internal/plugins`; `plugin/example` is a complete one to copy.
+
+A plugin says what it needs in the struct its start function takes, one field per service. ouro starts every
+plugin once, after the plugins that provide what it needs. If a service is missing, provided twice, or plugins
+need each other in a circle, ouro does not start at all and says which plugins and services are in the way.
+
+This plugin lets two nodes greet each other. It adds a method to the node, and a command that runs that
+method on a peer:
 
 ```go
-func shoutPlugin() kernel.Plugin {
-	return kernel.Plugin{Name: "shout", Start: func(ctx *kernel.Context) error {
-		term, err := kernel.Use[*console](ctx) // a service of another plugin
-		if err != nil {
-			return err
-		}
-		kernel.Add(ctx, command{"shout", "TEXT", "print TEXT in capitals", func(_ context.Context, args []string) error {
-			fmt.Fprintln(term.out, strings.ToUpper(strings.Join(args, " ")))
-			return nil
-		}})
+package example
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"ouroboros/plugin"
+)
+
+const Method = "example/greet"
+
+type greeting struct {
+	From string `json:"from"`
+}
+
+// What the plugin needs: services of other plugins.
+type needs struct {
+	Console *plugin.Console
+	Network *plugin.Network
+}
+
+func Plugin() plugin.Plugin {
+	return plugin.New("example", func(ctx *plugin.Context, n needs) error {
+		// The receiving side: a method connected peers can run.
+		plugin.Add(ctx, plugin.Method{Name: Method, Handle: greet})
+		// The calling side: ouro greet NODE NAME
+		plugin.Add(ctx, plugin.Command{Name: "greet", Args: "NODE NAME", Help: "greet a connected node as NAME",
+			Run: func(c context.Context, args []string) error {
+				if len(args) != 2 {
+					return errors.New("usage: ouro greet NODE NAME")
+				}
+				node, err := n.Network.Resolve(c, args[0])
+				if err != nil {
+					return err
+				}
+				reply, err := n.Network.Call(c, node, Method, greeting{From: args[1]})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(n.Console.Out, reply.Text())
+				return nil
+			}})
 		return nil
-	}}
+	})
+}
+
+func greet(_ context.Context, from plugin.Caller, params json.RawMessage) (*plugin.Message, *plugin.Error) {
+	var g greeting
+	if json.Unmarshal(params, &g) != nil || g.From == "" {
+		return nil, &plugin.Error{Code: plugin.CodeInvalidParams, Message: `needs "from"`}
+	}
+	return plugin.Reply(fmt.Sprintf("hello %s, I know you by the key %.8s", g.From, from.PublicKey)), nil
 }
 ```
 
-| To add | Contribute with `kernel.Add` | Example |
-|---|---|---|
-| a command | a `command` | `talkPlugin` in `internal/cli/talk.go` |
-| a tool for the agents | an `agent.Tool` | `peersPlugin` in `internal/cli/peers.go` |
-| an A2A method for connected peers | an `a2a.Method` | `Method` in `internal/a2a/server.go` |
-| a way to find nodes | a `discovery.PeerSource` | `tailscalePlugin` in `internal/cli/discover.go` |
-| another front end | a command that runs it | `tuiPlugin` in `internal/cli/tui.go` |
-| another LLM API | provide an `llm` instead of `openaiPlugin` | `internal/cli/chat.go` |
+Add `example.Plugin()` to `Plugins` on both nodes and rebuild. `Network.Call` goes the way every message
+goes: signed with the key of the node for the peer and the method, over TLS pinned to the key of the peer, and
+only to a peer the owner is connected to (`plugin.ErrNotConnected` otherwise, with nothing sent). On the other
+side `greet` runs only after the same checks as the built-in methods: a request that is unsigned, replayed,
+signed for another node or another method, or from a node the owner is not connected to never reaches it.
 
-Not plugins, and not replaceable by one: identity, request signatures, trust and contacts, the built-in A2A
-methods, the wire format, update and start/stop. A service can be provided once; a second plugin that
-provides the same type stops ouro from starting.
+| To add | In the start function | Example |
+|---|---|---|
+| a command | `plugin.Add` a `plugin.Command` | `internal/plugins/talk` |
+| a tool for the agents | `plugin.Add` a `plugin.Tool` (`plugin.NewTool`) | `internal/plugins/peers` |
+| an A2A method for connected peers | `plugin.Add` a `plugin.Method`; peers run it with `Network.Call` | `plugin/example` |
+| a way to find nodes | `plugin.Add` a `plugin.PeerSource` | `internal/plugins/tailscale` |
+| another front end | `plugin.Add` a command that runs it | `internal/plugins/tui` |
+| another LLM API | return a `plugin.LLM` from `plugin.NewService`, instead of the openai plugin | `internal/plugins/openai` |
+| a service for other plugins | return it from `plugin.NewService`; they name its type in their needs | `internal/plugins/discovery` |
+
+Not plugins, and out of their reach: the identity of the node, request signatures, trust and contacts, the
+built-in A2A methods, the wire format, update and start/stop. They are the fixed frame, wired up in `Plugins`
+and never handed to the kernel: a plugin that needs or provides one of their types, or a type through which
+one can be had, stops ouro from starting, as does a second plugin that provides a service that exists. A
+method added under a built-in name is never called, and `Network.Call` does not run the built-in ones.
 
 Plugins are compiled in. There is no loading at runtime.
 

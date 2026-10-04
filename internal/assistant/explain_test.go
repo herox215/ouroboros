@@ -95,7 +95,7 @@ func (promptLLM) Complete(_ context.Context, _ string, msgs []openai.Message, to
 func TestPeerAgentExplainsErrors(t *testing.T) {
 	cfg := config.Config{BaseURL: "http://x", Model: "m", Name: "n"}
 	b := Builder{
-		LLM:   func(config.Config) agent.LLM { return promptLLM{} },
+		LLM:   func(agent.Endpoint) agent.LLM { return promptLLM{} },
 		Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
 	}
 	ask := func() string {

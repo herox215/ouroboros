@@ -38,8 +38,8 @@ const (
 //     names of the params. NewTool builds the JSON schema and decodes them.
 //  3. Return the text the LLM should see. A returned error is handed to the
 //     LLM as "error: ..."; it does not end the conversation.
-//  4. Contribute it from a plugin with kernel.Add, like the peers plugin in
-//     internal/cli/peers.go does with these, and mention the tool in the
+//  4. Contribute it from a plugin with plugin.Add, like the peers plugin in
+//     internal/plugins/peers does with these, and mention the tool in the
 //     prompts (assistant.go) if the LLM needs to know when to use it.
 //  5. A tool may run for a peer. If it must behave differently then, ask
 //     a2a.OriginFrom(ctx) who the conversation comes from.

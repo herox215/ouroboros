@@ -53,8 +53,10 @@ type Step struct {
 
 // Builder is the blueprint of the agents of a node.
 type Builder struct {
-	// LLM returns the model that the node configured by cfg talks to.
-	LLM func(cfg config.Config) agent.LLM
+	// LLM returns the model that is reached at the endpoint the node is
+	// configured for. It is told the endpoint and nothing else of the
+	// configuration, which holds the key of the node.
+	LLM func(at agent.Endpoint) agent.LLM
 	// Tools returns everything an agent can do. It is read when an agent is
 	// built; the owner's lists in config.Tools decide which of them it gets.
 	Tools func() []agent.Tool
@@ -117,7 +119,7 @@ func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 
 // build makes an agent on the LLM of cfg.
 func (b Builder) build(cfg config.Config, prompt string, tools []agent.Tool) *agent.Agent {
-	return agent.New(b.LLM(cfg), cfg.Model, prompt, tools...)
+	return agent.New(b.LLM(agent.Endpoint{BaseURL: cfg.BaseURL, APIKey: cfg.APIKey}), cfg.Model, prompt, tools...)
 }
 
 // Ready reports whether the assistant can answer: config.ErrIncomplete if the

@@ -65,7 +65,7 @@ func (l Local) Start() (daemon.Process, error) {
 	if !cfg.Complete() {
 		return daemon.Process{}, config.ErrIncomplete
 	}
-	exe, err := l.executable()
+	exe, err := l.Executable()
 	if err != nil {
 		return daemon.Process{}, err
 	}
@@ -102,7 +102,8 @@ func Executable() (string, error) {
 	return filepath.EvalSymlinks(exe)
 }
 
-func (l Local) executable() (string, error) {
+// Executable is the binary Start runs: Exe, or the running one.
+func (l Local) Executable() (string, error) {
 	if l.Exe != nil {
 		return l.Exe()
 	}

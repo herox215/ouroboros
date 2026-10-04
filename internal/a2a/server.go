@@ -58,16 +58,25 @@ type Caller struct {
 }
 
 // Method is a JSON-RPC method added to the server. It is only called for
-// peers the owner is connected to. Handle decodes params itself and returns
-// the Message to answer with (nil for none) or an *Error with one of the Code
-// constants.
+// peers the owner is connected to, and like every request only for one that
+// was signed by the caller for this node and this method: Handle never runs
+// for anyone else. It decodes params itself and returns the Message to answer
+// with (nil for none) or an *Error with one of the Code constants.
 //
-// To add a method: contribute a Method from a plugin with kernel.Add. A name
-// that is built in (MethodSend, MethodAccept, MethodReject) is never handed
-// to an added method: what decides about trust cannot be replaced.
+// To add a method: contribute a Method from a plugin with plugin.Add; a peer
+// runs it with Call of the network (peers.Network, Client.Call). A name
+// that is built in (see Builtin) is never handed to an added method: what
+// decides about trust cannot be replaced.
 type Method struct {
 	Name   string
 	Handle func(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error)
+}
+
+// Builtin reports whether name is a method every node has. Such a method is
+// never an added one: it is neither replaced by a Method nor run with
+// Client.Call.
+func Builtin(name string) bool {
+	return name == MethodSend || name == MethodAccept || name == MethodReject
 }
 
 // method handles the JSON-RPC method it is registered for.
@@ -79,7 +88,8 @@ type method func(ctx context.Context, from Caller, params json.RawMessage) (*Mes
 // answer with its result or its error.
 func (s *Server) Handler() http.Handler {
 	verify := newVerifier(s.Identity.Public())
-	// The built-in methods: JSON-RPC method name to handler.
+	// The built-in methods: JSON-RPC method name to handler. Keep Builtin in
+	// step with them.
 	builtin := map[string]method{
 		MethodSend:   s.send,
 		MethodAccept: s.accept,

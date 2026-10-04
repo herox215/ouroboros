@@ -160,7 +160,7 @@ func TestExecutable(t *testing.T) {
 		t.Fatalf("got %q, %v, want %q", got, err, want)
 	}
 	// Without Exe the binary that is started is the running one.
-	if got, err := (Local{}).executable(); err != nil || got != want {
+	if got, err := (Local{}).Executable(); err != nil || got != want {
 		t.Fatalf("local: got %q, %v, want %q", got, err, want)
 	}
 

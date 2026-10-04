@@ -60,6 +60,29 @@ func (c *Client) Reject(ctx context.Context, baseURL, publicKey string) error {
 	return c.notify(ctx, baseURL, publicKey, MethodReject)
 }
 
+// ErrBuiltin is the error of Call for a method that is built in.
+var ErrBuiltin = errors.New("a2a: a built-in method cannot be called by its name")
+
+// Call runs method, which a plugin added to the node with publicKey at
+// baseURL (see Method), and returns the message it answers with: nil if it
+// answers with none. Like every request it is signed for that node and that
+// method and sent over a connection pinned to its key. The node only runs the
+// method for a peer its owner is connected to; an error it answers with is
+// returned as *Error.
+//
+// The built-in methods are not reached this way: they decide about trust and
+// have their own calls, Send, Accept and Reject.
+func (c *Client) Call(ctx context.Context, baseURL, publicKey, method string, params any) (*Message, error) {
+	if Builtin(method) {
+		return nil, ErrBuiltin
+	}
+	res, err := c.call(ctx, baseURL, publicKey, method, params)
+	if err != nil {
+		return nil, err
+	}
+	return res.Result, nil
+}
+
 func (c *Client) notify(ctx context.Context, baseURL, publicKey, method string) error {
 	_, err := c.call(ctx, baseURL, publicKey, method, contactParams{c.peer()})
 	return err
@@ -72,7 +95,7 @@ func (c *Client) peer() Peer { return Peer{Name: c.Name, Model: c.Model} }
 // params in a request, signs it for that node, sends it over a connection
 // pinned to the same key and decodes the response. An error the peer answers
 // with is returned as *Error. Every method of Client is a thin wrapper around
-// call.
+// call, and so every request is signed and pinned the same way.
 func (c *Client) call(ctx context.Context, baseURL, publicKey, method string, params any) (*response, error) {
 	rawParams, err := json.Marshal(params)
 	if err != nil {

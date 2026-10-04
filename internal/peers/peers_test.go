@@ -70,6 +70,7 @@ type testNode struct {
 	contactsPath   string
 	srv            *httptest.Server
 	asked          int // messages its agent answered
+	methods        []a2a.Method
 }
 
 // serve runs a node called name whose agent answers "name: text".
@@ -85,6 +86,7 @@ func serve(t *testing.T, name string) *testNode {
 			n.asked++
 			return name + ": " + text, nil
 		},
+		Methods: func() []a2a.Method { return n.methods },
 	}).Handler())
 	// Like a node: over TLS, with the certificate of its key.
 	n.srv.TLS = a2a.TLSConfig(n.id)

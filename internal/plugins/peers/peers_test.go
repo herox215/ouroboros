@@ -1,0 +1,130 @@
+package peers_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"ouroboros/internal/cli/clitest"
+	"ouroboros/internal/config"
+	"ouroboros/internal/home"
+)
+
+func TestAssistantAsksPeers(t *testing.T) {
+	alpha, beta := clitest.TwoNodes(t)
+	clitest.StartNode(t, alpha, clitest.MustLoad(t, alpha)) // beta's acceptance has to reach alpha
+	b, _ := clitest.NewApp(t, beta, "")
+
+	// "@" makes the fake LLM list the peers.
+	out, err := clitest.Run(t, alpha, "", "chat", "@")
+	if err != nil || !strings.Contains(out, "last=beta (id "+clitest.NodeID(t, beta)+", model gpt-4o-mini, not connected)") || strings.Contains(out, "alpha") {
+		t.Fatalf("list_peers: %q, %v", out, err)
+	}
+
+	// Beta does not know alpha yet: the first message becomes a connection request.
+	out, err = clitest.Run(t, alpha, "@beta hello\n", "chat")
+	if err != nil || !strings.Contains(out, "last=beta is not connected") {
+		t.Fatalf("first contact: %q, %v", out, err)
+	}
+	if out, _ = clitest.Run(t, alpha, "", "chat", "@"); !strings.Contains(out, "connection requested") {
+		t.Fatalf("the request should be remembered: %q", out)
+	}
+
+	if strings.Contains(out, "instance named") {
+		t.Fatalf("a peer that is not connected should not get a word in: %q", out)
+	}
+	requests, _ := home.Dir(beta.Home).Contacts().Snapshot()
+	if len(requests.Incoming) != 1 || requests.Incoming[0].Name != "alpha" {
+		t.Fatalf("beta's requests: %+v", requests)
+	}
+	if err := clitest.Network(t, beta, b).Accept(context.Background(), requests.Incoming[0].PublicKey); err != nil {
+		t.Fatal(err)
+	}
+
+	// Connected: beta's agent answers, and remembers the conversation.
+	out, err = clitest.Run(t, alpha, "@beta one\n@beta two\n", "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"[gpt-4o] turns=3 last=[gpt-4o-mini] turns=1 last=one",
+		"[gpt-4o] turns=7 last=[gpt-4o-mini] turns=3 last=two", // user, call, result, answer, user, call, result
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	// What the agents say to each other is not printed, only the assistant's answers.
+	if strings.Count(out, "last=one") != 1 || strings.Contains(out, "beta:") {
+		t.Errorf("the talk between the agents should stay out of the chat:\n%s", out)
+	}
+	if out, _ = clitest.Run(t, alpha, "", "chat", "@"); !strings.Contains(out, "model gpt-4o-mini, connected): Ouroboros instance named beta\n") {
+		t.Fatalf("beta should be listed as connected, with its card: %q", out)
+	}
+
+	// A one-shot chat prints the answer only.
+	out, err = clitest.Run(t, alpha, "", "chat", "@beta", "ping")
+	if err != nil || out != "[gpt-4o] turns=3 last=[gpt-4o-mini] turns=1 last=ping\n" {
+		t.Fatalf("one-shot: %q, %v", out, err)
+	}
+}
+
+func TestAssistantCannotReachPeer(t *testing.T) {
+	alpha, _ := clitest.TwoNodes(t)
+	clitest.StartNode(t, alpha, clitest.MustLoad(t, alpha))
+	for peer, want := range map[string]string{"nobody": `no node "nobody" found`, "alpha": "is this node itself"} {
+		out, err := clitest.Run(t, alpha, "@"+peer+" hi\n", "chat")
+		if err != nil || !strings.Contains(out, "last=error: ") || !strings.Contains(out, want) {
+			t.Errorf("%s: %q, %v", peer, out, err)
+		}
+	}
+}
+
+// A peer's question may make the agent use the tools its owner allows for
+// peers, and no others.
+func TestPeerAgentUsesAllowedTools(t *testing.T) {
+	// gamma keeps the default: its agent has no tools for peers.
+	gamma := clitest.Settings(t)
+	cfg := clitest.NodeConfig(gamma)
+	cfg.Name, cfg.Model = "gamma", "o3-mini"
+	clitest.StartNode(t, gamma, cfg)
+
+	// beta lets peers use its tools.
+	beta := clitest.Settings(t)
+	cfg = clitest.NodeConfig(beta)
+	cfg.Name, cfg.Model = "beta", "gpt-4o-mini"
+	cfg.Tools = &config.Tools{A2A: []string{"list_peers", "ask_peer"}}
+	clitest.StartNode(t, beta, cfg)
+
+	alpha := clitest.Settings(t)
+	clitest.StartNode(t, alpha, clitest.NodeConfig(alpha))
+
+	clitest.Finds(alpha, beta)
+	clitest.Finds(beta, alpha, gamma)
+	clitest.Finds(gamma, beta)
+	clitest.Trust(t, beta, alpha, "alpha")
+	clitest.Trust(t, gamma, beta, "beta")
+	clitest.Trust(t, beta, gamma, "gamma")
+
+	// alpha asks beta, whose agent asks gamma on the way.
+	out, err := clitest.Run(t, alpha, "", "ask", "beta", "@gamma hello")
+	if err != nil || out != "[gpt-4o-mini] turns=3 last=[o3-mini] turns=1 last=hello\n" {
+		t.Fatalf("beta should ask gamma: %q, %v", out, err)
+	}
+
+	// The peer that asks is not asked in turn, and not offered either.
+	out, err = clitest.Run(t, alpha, "", "ask", "beta", "@alpha hello")
+	if err != nil || !strings.Contains(out, "last=error: alpha is the peer you are answering") {
+		t.Fatalf("beta should not ask alpha back: %q, %v", out, err)
+	}
+	out, err = clitest.Run(t, alpha, "", "ask", "beta", "@")
+	if err != nil || !strings.Contains(out, "gamma (id "+clitest.NodeID(t, gamma)) || strings.Contains(out, "alpha") {
+		t.Fatalf("beta should list gamma only: %q, %v", out, err)
+	}
+
+	// gamma allows peers no tools: the same message is just a message.
+	out, err = clitest.Run(t, beta, "", "ask", "gamma", "@beta hello")
+	if err != nil || out != "[o3-mini] turns=1 last=@beta hello\n" {
+		t.Fatalf("gamma should not use tools: %q, %v", out, err)
+	}
+}

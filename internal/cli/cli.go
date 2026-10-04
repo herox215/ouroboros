@@ -1,30 +1,29 @@
-// Package cli is the ouro command line: a kernel and the plugins that make up
-// the standard ouro. What a node does lives in the packages the plugins use;
-// a plugin only wires them up and presents them.
+// Package cli is the ouro command line: a kernel and the list of plugins that
+// make up the standard ouro. It has no logic of its own. What a node does
+// lives in the packages the plugins use; a plugin only wires them up and
+// presents them, each in a package of its own below internal/plugins:
 //
-// Where things are:
+//	base       the console and the dispatcher that runs commands
+//	discovery  finding nodes
+//	tailscale  finding the nodes on the tailnet
+//	peers      the network of nodes and the tools to reach it
+//	openai     the LLM
+//	assistant  the agents
+//	node       start, stop, status, serve and the setup dialog
+//	talk       list, ask, chat
+//	tui        the terminal UI
+//	update     update
 //
-//	cli.go       App, and the list of plugins in plugins()
-//	base.go      plugin base: home directory, console, local node, dispatcher
-//	discover.go  plugins discovery and tailscale: finding nodes
-//	peers.go     plugin peers: the network of nodes and the tools to reach it
-//	chat.go      plugins openai and assistant: the LLM and the agents
-//	node.go      plugin node: start, stop, status, serve
-//	talk.go      plugin talk: list, ask, chat
-//	tui.go       plugin tui: the terminal UI
-//	update.go    plugin update
-//	setup.go     the setup dialog
-//	console.go   line-based input and output
+// To add a plugin: write a package with a func that returns a plugin.Plugin,
+// against the package ouroboros/plugin and nothing else, and add it to
+// Plugins. Package plugin says what a plugin can need, provide and
+// contribute.
 //
-// To add a plugin: write a func that returns a kernel.Plugin, like the ones
-// in these files, and add it to plugins(). In its Start it gets the services
-// it needs with use, offers its own with kernel.Provide, and contributes with
-// kernel.Add:
-//
-//	command              a command of ouro (this package)
-//	agent.Tool           something the agents can do
-//	discovery.PeerSource hosts to look for nodes on
-//	a2a.Method           a JSON-RPC method for connected peers
+// What a plugin cannot get is the frame of ouro: the home of the node with
+// its key and its contacts, and the network that holds them. The frame is
+// built in Plugins and handed to the plugins that are part of it as plain
+// values. It never becomes a service: the kernel refuses a plugin that
+// declares one of its types, see seal.
 package cli
 
 import (
@@ -32,14 +31,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 
+	"ouroboros/internal/a2a"
 	"ouroboros/internal/config"
+	"ouroboros/internal/contacts"
+	"ouroboros/internal/home"
+	"ouroboros/internal/identity"
 	"ouroboros/internal/kernel"
+	"ouroboros/internal/node"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/peers"
+	"ouroboros/internal/plugins/assistant"
+	"ouroboros/internal/plugins/base"
+	"ouroboros/internal/plugins/discovery"
+	nodeplugin "ouroboros/internal/plugins/node"
+	openaiplugin "ouroboros/internal/plugins/openai"
+	peersplugin "ouroboros/internal/plugins/peers"
+	"ouroboros/internal/plugins/tailscale"
+	"ouroboros/internal/plugins/talk"
+	"ouroboros/internal/plugins/tui"
+	"ouroboros/internal/plugins/update"
+	"ouroboros/plugin"
 )
 
 // Version is the ouro release version.
@@ -58,7 +73,7 @@ type Settings struct {
 func SettingsFromEnv() (Settings, error) {
 	home := os.Getenv("OURO_HOME")
 	if home == "" {
-		dir, err := os.UserConfigDir()
+		dir, err := userConfigDir()
 		if err != nil {
 			return Settings{}, err
 		}
@@ -81,6 +96,10 @@ func SettingsFromEnv() (Settings, error) {
 	}, nil
 }
 
+// userConfigDir finds where configurations are kept; tests replace it to get
+// in the way.
+var userConfigDir = os.UserConfigDir
+
 func envInt(key string, def int) (int, error) {
 	v := os.Getenv(key)
 	if v == "" {
@@ -94,88 +113,82 @@ func envInt(key string, def int) (int, error) {
 }
 
 // Terminal is how ouro talks to its user.
-type Terminal struct {
-	In  io.Reader
-	Out io.Writer
-	// ReadSecret reads a secret without echoing it. If nil, a plain line is read.
-	ReadSecret func(prompt string) (string, error)
-	// Interactive reports whether In is a terminal. Without it, ouro with no
-	// command prints the usage instead of opening the terminal UI.
-	Interactive bool
-}
+type Terminal = plugin.Terminal
 
-// command is one ouro command. Plugins contribute commands with kernel.Add;
-// the usage text is generated from them.
-type command struct {
-	name string // what the user types: ouro NAME
-	args string // its arguments, as shown in the usage
-	help string // one line for the usage
-	// run gets the arguments after the name. It prints to the console and
-	// returns an error to fail with exit code 1.
-	run func(ctx context.Context, args []string) error
-}
-
-// plugins is the standard ouro. The order is only the order of the commands
-// in the usage: the kernel starts each plugin after those it depends on.
-func plugins(s Settings, t Terminal) []kernel.Plugin {
-	return []kernel.Plugin{
-		basePlugin(s, t),
-		discoveryPlugin(),
-		tailscalePlugin(),
-		peersPlugin(),
-		openaiPlugin(),
-		assistantPlugin(),
-		nodePlugin(),
-		talkPlugin(),
-		tuiPlugin(),
-		updatePlugin(),
+// Plugins is the standard ouro for the node described by s, talking to its
+// user through t. The order is only the order of the commands in the usage:
+// the kernel starts each plugin after those it depends on.
+func Plugins(s Settings, t Terminal) []plugin.Plugin {
+	// The frame, see the package comment.
+	dir := home.Dir(s.Home)
+	network := &peers.Network{Contacts: dir.Contacts(), Client: node.Local{Home: dir}.Client}
+	return []plugin.Plugin{
+		base.Plugin(dir, t),
+		discovery.Plugin(s.DiscoPort),
+		tailscale.Plugin(),
+		peersplugin.Plugin(dir, network),
+		openaiplugin.Plugin(),
+		assistant.Plugin(dir),
+		nodeplugin.Plugin(dir, nodeplugin.Options{
+			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,
+			BaseURL: s.BaseURL, APIKey: s.APIKey,
+		}),
+		talk.Plugin(),
+		tui.Plugin(dir, network),
+		update.Plugin(dir),
 	}
+}
+
+// seal keeps the frame of ouro out of the kernel: who the node is, how it
+// signs, whom it trusts, and what holds any of it. A plugin that needs or
+// provides one of these types, or a type through which one can be had, stops
+// ouro from starting.
+func seal(k *kernel.Kernel) {
+	kernel.Seal[identity.Identity](k) // the key of the node, which signs
+	kernel.Seal[config.Config](k)     // holds the key
+	kernel.Seal[home.Dir](k)          // opens the configuration, the identity and the contacts
+	kernel.Seal[contacts.Store](k)    // whom the node trusts
+	kernel.Seal[contacts.Data](k)
+	kernel.Seal[a2a.Trust](k)
+	kernel.Seal[a2a.Client](k) // signs as the node
+	kernel.Seal[a2a.Server](k) // checks signatures and trust, runs the built-in methods
+	kernel.Seal[node.Local](k)
+	kernel.Seal[node.Server](k)
+	kernel.Seal[peers.Network](k) // holds the contacts and the client
 }
 
 // App runs ouro commands. It is a kernel with plugins and has no logic of its
 // own: a command belongs to the plugin that contributes it.
 type App struct {
 	kernel *kernel.Kernel
-	ctx    *kernel.Context
 }
 
 // New returns the standard ouro for the node described by s, talking to its
 // user through t.
 func New(s Settings, t Terminal) (*App, error) {
-	return newAppWith(plugins(s, t)...)
+	return NewWith(Plugins(s, t)...)
 }
 
-func newAppWith(plugins ...kernel.Plugin) (*App, error) {
+// NewWith returns an ouro made of plugins. It fails, with nothing started, if
+// they cannot all be started: see kernel.Kernel.Start.
+func NewWith(plugins ...plugin.Plugin) (*App, error) {
 	k := kernel.New()
+	seal(k)
 	if err := k.Start(plugins...); err != nil {
 		return nil, err
 	}
-	return &App{kernel: k, ctx: k.Context()}, nil
+	return &App{kernel: k}, nil
 }
 
 // Run executes the command given by args (without the program name).
 func (a *App) Run(ctx context.Context, args []string) error {
-	d, err := kernel.Use[*dispatcher](a.ctx)
-	if err != nil {
-		return err
+	d, ok := Service[*base.Dispatcher](a)
+	if !ok {
+		return errors.New("no plugin runs commands: the base plugin is missing")
 	}
-	return d.run(ctx, args)
+	return d.Run(ctx, args)
 }
 
-// use gets the service of type T for a plugin that needs several: the first
-// failure is kept in err, to be returned by Start after the last use.
-func use[T any](ctx *kernel.Context, err *error) T {
-	service, e := kernel.Use[T](ctx)
-	if *err == nil {
-		*err = e
-	}
-	return service
-}
-
-// withHint tells how to get past a node that was not set up yet.
-func withHint(err error) error {
-	if errors.Is(err, config.ErrIncomplete) {
-		return fmt.Errorf("%w, run: ouro start", err)
-	}
-	return err
-}
+// Service returns the service of type T of the plugins of a, for whoever
+// runs the app.
+func Service[T any](a *App) (T, bool) { return kernel.Service[T](a.kernel) }

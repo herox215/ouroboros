@@ -126,8 +126,8 @@ func Serve(conn *net.UDPConn, self Node) error {
 // another discovery port: the way to nodes that no probe to the network reaches.
 //
 // To add a source (another VPN, a list from a file): write a func like
-// TailscalePeers and contribute it from a plugin with kernel.Add, like the
-// tailscale plugin in internal/cli/discover.go does. It must not block for
+// TailscalePeers and contribute it from a plugin with plugin.Add, like the
+// tailscale plugin in internal/plugins/tailscale does. It must not block for
 // long and returns nil if it has nothing.
 type PeerSource func(ctx context.Context) []string
 

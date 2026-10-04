@@ -29,6 +29,13 @@ type LLM interface {
 	Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error)
 }
 
+// Endpoint is where the LLM of a node is reached: all that whoever provides
+// the LLM gets to know of the configuration of the node.
+type Endpoint struct {
+	BaseURL string
+	APIKey  string
+}
+
 // Step reports a tool call: once when it starts and again, with Done set,
 // when its result is in.
 type Step struct {
