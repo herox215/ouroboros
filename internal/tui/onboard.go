@@ -395,7 +395,7 @@ func (o *onboarding) dialog(spin string) string {
 	switch o.step {
 	case stepWelcome:
 		text("Your own agent runs as a node here.", "Other nodes find it; it can ask them.",
-			"", "Four questions, then you can chat.", "Change the answers later with c.")
+			"", "Four questions, then you can chat.", "Change the answers later with /setup.")
 		hint = "enter start · esc quit"
 		if !o.first {
 			hint = "enter start · esc back to the chat"

@@ -95,6 +95,8 @@ func (m *Model) View() tea.View {
 	switch m.screen {
 	case screenRequests:
 		body = m.requestsView()
+	case screenHelp:
+		body = m.helpView()
 	case screenPlugin:
 		body = m.screenView()
 	}
@@ -116,6 +118,13 @@ func (m *Model) requestsView() string {
 		}
 		return "  "
 	}
+	// decide is what can be done with the entry i, if it is selected.
+	decide := func(i int) []string {
+		if i != m.reqSel {
+			return nil
+		}
+		return []string{"    " + choices([]string{"accept", "reject"}, m.choice)}
+	}
 	for i, r := range m.trust.Incoming {
 		name := r.Name
 		if name == "" {
@@ -130,6 +139,7 @@ func (m *Model) requestsView() string {
 		lines = append(lines,
 			marker+boldStyle.Render(name)+"  "+mutedStyle.Render(what),
 			"    "+mutedStyle.Render(r.Addr+" · "+r.At.Format("15:04")))
+		lines = append(lines, decide(i)...)
 	}
 	if len(m.trust.Outgoing) > 0 {
 		lines = append(lines, "", mutedStyle.Render("Waiting for the other side:"))
@@ -151,6 +161,7 @@ func (m *Model) requestsView() string {
 		if p.Stale {
 			lines = append(lines, "    "+errStyle.Render("the configuration was changed since: accepting drops this without applying it"))
 		}
+		lines = append(lines, decide(len(m.trust.Incoming)+i)...)
 	}
 	return box(true).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
 }
@@ -195,10 +206,10 @@ func (m *Model) headerView() string {
 		state = lipgloss.NewStyle().Foreground(good).Render("● online") +
 			mutedStyle.Render(fmt.Sprintf("  %s · %s · :%d · %s", s.ID, s.Name, s.Port, s.Model))
 	case !s.Configured:
-		state = lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  press c to set up")
+		state = lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  type /setup")
 	default:
 		state = lipgloss.NewStyle().Foreground(bad).Render("○ offline") +
-			mutedStyle.Render(fmt.Sprintf("  %s · %s · press s to start", s.ID, s.Name))
+			mutedStyle.Render(fmt.Sprintf("  %s · %s · type /start", s.ID, s.Name))
 	}
 	if m.unreadReq > 0 {
 		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.unreadReq))
@@ -213,7 +224,7 @@ func (m *Model) chatView() string {
 
 	var content string
 	if !m.status.Configured {
-		hint := mutedStyle.Render("Press c to set up your node and chat with its agent.")
+		hint := mutedStyle.Render("Type /setup to set up your node and chat with its agent.")
 		if inner >= logoWidth() && h-2 >= len(logoLines)+2 { // border, blank line and hint
 			content = lipgloss.JoinVertical(lipgloss.Left,
 				lipgloss.NewStyle().Foreground(accent).Render(logoText(logoLines, inner)), "", hint)
@@ -233,24 +244,29 @@ func (m *Model) chatView() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, title, m.history.View(), typing)
 	}
 	chat := box(false).Width(w).Height(h).MaxHeight(h).Render(content)
-	input := box(m.focus == focusInput).Width(w).Render(m.input.View())
+	input := box(true).Width(w).Render(m.input.View())
 	return lipgloss.JoinVertical(lipgloss.Left, chat, input)
 }
 
 func (m *Model) footerView() string {
-	toggle := "start"
-	if m.status.Running {
-		toggle = "stop"
-	}
-	help := "enter chat · n new chat · s " + toggle + " node · c setup · R requests · " + m.contributedHelp() + "q quit"
-	if m.focus == focusInput {
-		help = "enter send · alt+enter new line · esc commands · pgup/pgdn scroll · ctrl+c quit"
+	help := "enter send · alt+enter new line · /help commands · pgup/pgdn scroll · ctrl+c quit"
+	if found := m.matching(m.input.Value()); len(found) > 0 {
+		parts := make([]string, len(found))
+		for i, c := range found {
+			parts[i] = "/" + c.name + " " + c.help
+		}
+		help = strings.Join(parts, " · ")
 	}
 	switch m.screen {
 	case screenRequests:
-		help = "↑↓ select · a accept · x reject · esc back · ctrl+c quit"
+		help = "↑↓ select · ←→ accept or reject · enter decide · esc back · ctrl+c quit"
+	case screenHelp:
+		help = "esc back · ctrl+c quit"
 	case screenPlugin:
-		help = keysHelp(m.screens[m.open].Keys) + "esc back · ctrl+c quit"
+		help = "esc back · ctrl+c quit"
+		if len(m.screens[m.open].Actions) > 0 {
+			help = "←→ select · enter run · " + help
+		}
 	}
 	line := mutedStyle.Render(help)
 	if m.notice != "" {

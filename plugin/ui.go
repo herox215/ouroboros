@@ -11,37 +11,46 @@ import (
 // how the UI is drawn: a plugin hands over text and functions, and the UI
 // decides where they go.
 type (
-	// Screen is a view of its own in the terminal UI, next to the chat. Key
-	// opens it where the commands are, and Key, esc or q lead back.
+	// Screen is a view of its own in the terminal UI, next to the chat. The
+	// owner opens it with its Command and leaves it with esc.
 	Screen struct {
-		Key   string // the key that opens it, see Key
-		Title string // its heading, and its name next to the key in the footer
+		Command string // what opens it: "greetings" for /greetings, see Slash
+		Title   string // its heading
 		// Body returns the text the screen shows; what does not fit the
 		// window is cut off. It runs when the screen is opened, after one of
-		// its Keys ran, and every few seconds while the screen is open. It
+		// its Actions ran, and every few seconds while the screen is open. It
 		// does not hold up the UI, so it may ask the network. ctx ends when
 		// the user quits. An error is shown in place of the text.
 		Body func(ctx context.Context) (string, error)
-		// Keys work while the screen is open.
-		Keys []Key
+		// Actions are offered below the text: the arrow keys select one,
+		// enter runs it.
+		Actions []Action
 	}
 
-	// Key is a key of the terminal UI that runs something. Contributed as it
-	// is, it works where the commands are (esc leaves the message input);
-	// listed in Screen.Keys, it works on that screen.
+	// Action is something a Screen offers to run.
+	Action struct {
+		Name string // what it does, in a word or two
+		// Run is what the action does. It does not hold up the UI. The text
+		// it returns is shown in the footer until the next key, an error in
+		// red.
+		Run func(ctx context.Context) (string, error)
+	}
+
+	// Slash is a command of the terminal UI: the owner types it into the
+	// message input with a slash in front, /Name, and it runs instead of
+	// going to the agent. Only the owner runs it: the agents never see it.
 	//
-	// A key belongs to one contribution. The UI keeps the keys it uses
-	// itself, and of two contributions that claim the same key the one that
-	// was contributed first gets it, a Screen before a Key. The other is
-	// left out, and the UI says so when it opens: ouro still starts, and
+	// A name belongs to one contribution. The UI keeps the names it uses
+	// itself, and of two contributions that claim the same name the one
+	// that was contributed first gets it, a Screen before a Slash. The other
+	// is left out, and the UI says so when it opens: ouro still starts, and
 	// whatever else its plugin contributed still works.
-	Key struct {
-		// Key is the key as the terminal reports it: a character like "g",
-		// where "G" is a key of its own, or a combination like "ctrl+g".
-		Key  string
-		Help string // what it does, in a word or two, for the footer
-		// Run is what the key does. It does not hold up the UI. The text it
-		// returns is shown in the footer until the next key, an error in red.
+	Slash struct {
+		Name string // one word, without the slash: "greet" for /greet
+		Help string // what it does, in a few words, for /help
+		// Run is what the command does. It does not hold up the UI. The text
+		// it returns is shown in the footer until the next key, an error in
+		// red.
 		Run func(ctx context.Context) (string, error)
 	}
 

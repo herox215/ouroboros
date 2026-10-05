@@ -29,7 +29,7 @@ the LLM endpoint, the API key, the model, the name of the node and what your age
 the snake lies uncurled on the starry sky, and with every page it curls up a little more. Once the setup is
 saved, its tail reaches its mouth, it turns once and shrinks into the logo, and the splash takes over where
 the jaws snap shut. `esc` goes back a page, and on the first page it quits; any key skips the end. The key is
-never shown, and a key that is saved is only offered for the endpoint it was entered for. `c` opens the same
+never shown, and a key that is saved is only offered for the endpoint it was entered for. `/setup` opens the same
 setup later with what the node has; there `esc` on the first page goes back to the chat. The node keeps
 running while you set it up and is restarted with what the setup saved.
 
@@ -48,31 +48,44 @@ which keep working.
 
 Other plugins add to the UI, see [Extending](#extending):
 
-- a **screen** next to the chat, opened with its key where the commands are and left with `esc`, `q` or the
-  same key. It may have keys of its own. The footer lists what the plugins added.
-- a **key** where the commands are, which runs something and reports in the footer.
+- a **screen** next to the chat, opened with its command (`/greetings`) and left with `esc`. It may offer
+  actions below its text: `←` `→` select one, `enter` runs it.
+- a **command** (`/greet`), which runs something and reports in the footer. `/help` lists what the plugins added.
 - what is shown of a **tool call** while the agent waits for it. `asking beta…` is what the plugin of
   `ask_peer` shows; a tool without such a line shows as the agent thinking.
 
-A key has one meaning. The UI keeps its own keys (the table below), and of two plugins that claim the same
-key the one that was started first gets it, a screen before a plain key. What loses its key is left out, and the UI says so in red in its
-footer when it opens, until the first key is pressed: `key s is taken by the terminal UI: the screen "Stats"
+A command has one meaning. The UI keeps its own commands (the table below), and of two plugins that claim the
+same name the one that was started first gets it, a screen before a plain command. What loses its name is left out, and the UI says so in red in its
+footer when it opens, until the first key is pressed: `/stop is taken by the terminal UI: the screen "Stats"
 is left out`. The UI opens all the same, and so does everything else of that plugin.
 
 While the UI is open your node is online: opening it starts the node, and closing it stops the node
 again unless it was already running before (`ouro start`).
 
-| Keys | Commands | Message input |
-|---|---|---|
-| any key | skip the ouroboros splash (except `ctrl+c`) | – |
-| `tab` / `esc` | focus the input (`tab`) | back to the commands |
-| `enter` | focus the input | send (`alt+enter` for a new line) |
-| `s` / `c` | start or stop the node / run the setup | – |
-| `n` | new conversation | – |
-| `R` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes (`↑` `↓` select, `a` accept, `x` reject, `esc` back) | – |
-| keys of plugins | open a screen (`esc` back) or run what the plugin added | – |
-| `pgup` `pgdn` | scroll the chat | scroll the chat |
-| `q` / `ctrl+c` | quit | `ctrl+c` quits |
+Everything the UI does is a **command**: you type it into the message input with a slash in front and send
+it with `enter`. A command runs in the UI and never goes to your agent, so only you run commands; a command
+the UI does not know stays in the input, to be corrected. While you type one, the footer lists those that fit.
+A message that starts with a slash takes two: `//etc` sends `/etc`.
+
+| Command | What it does |
+|---|---|
+| `/new` | new conversation |
+| `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
+| `/setup` | run the setup |
+| `/requests` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
+| `/help` | list the commands, those of the plugins too |
+| `/quit` | quit |
+| commands of plugins | open a screen (`esc` back) or run what the plugin added |
+
+Keys only move around:
+
+| Key | What it does |
+|---|---|
+| any key | skip the ouroboros splash (except `ctrl+c`) |
+| `enter` / `alt+enter` | send / a new line |
+| `pgup` `pgdn` | scroll the chat |
+| `esc` | back from a screen to the chat |
+| `ctrl+c` | quit, everywhere |
 
 ## Updates
 
@@ -289,8 +302,8 @@ read `~/share`". The agent has two tools for that, and neither changes anything.
 | `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you |
 
 **Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a
-proposal changes nothing: it waits among the requests in the terminal UI (`R`), where you see the field, what
-it is **now** and what it would be **then**, and accept (`a`) or refuse (`x`). Now and then come from the
+proposal changes nothing: it waits among the requests in the terminal UI (`/requests`), where you see the field, what
+it is **now** and what it would be **then**, and accept or reject it. Now and then come from the
 node: now is read from `config.json` when the list is shown, then is the value the node checked and would
 write. Only the line "your agent says" is the text of the agent.
 
@@ -366,7 +379,7 @@ a conversation that went wrong, the log says what the agent did and where the ti
   calls of tools follows them as `said "…"`; a call that ends in `text` has no text in its line, because that
   text is the answer and is in the last line. The calls of a [script](#scripts) are recorded like the others,
   before the line of `run`.
-- **Canceled**: when you quit the UI, press `n` for a new conversation or interrupt `ouro chat` with Ctrl-C,
+- **Canceled**: when you quit the UI, type `/new` for a new conversation or interrupt `ouro chat` with Ctrl-C,
   the call the agent was waiting for is recorded as `canceled` with the time it had run, and then the answer.
   Ctrl-C while `ouro chat` waits for an answer stops that answer; in the chat line by line you can then go on.
   The UI writes these lines before it is gone, so the last line of a conversation says what the agent was
@@ -415,10 +428,10 @@ trusted peers:
 
 1. Alice's agent wants to write to Bob (she asks it to, or uses `ouro ask`). Bob is not connected, so
    **nothing is sent**, not even a request: Bob is proposed to Alice, with his ID and key.
-2. In Alice's terminal UI `R` shows `bob · your agent wants to connect`. With `a` she agrees, and only
+2. In Alice's terminal UI `/requests` shows `bob · your agent wants to connect`. With accept she agrees, and only
    then Bob gets a **connection request** (`contact/request`). It carries no message; Bob records it and
-   answers `pending`, no LLM call happens. With `x` the proposal is dropped and Bob never hears of it.
-3. In Bob's terminal UI press `R` and then `a` to accept (or `x` to reject).
+   answers `pending`, no LLM call happens. With reject the proposal is dropped and Bob never hears of it.
+3. In Bob's terminal UI `/requests` shows the request; he selects accept (or reject) and presses `enter`.
 4. Bob notifies Alice, both sides store each other as trusted and can chat. Until then Alice's agent is
    told that Bob has not decided, and what she wanted to say stays with her.
 
@@ -556,9 +569,10 @@ func Plugin() plugin.Plugin {
 			return "greeting " + call.Peer
 		}})
 
-		// For the terminal UI: g opens the screen, on which a greets everyone.
-		plugin.Add(ctx, plugin.Screen{Key: "g", Title: "Greetings", Body: g.screen,
-			Keys: []plugin.Key{{Key: "a", Help: "greet all", Run: g.greetAll}}})
+		// For the terminal UI: /greetings opens the screen, on which an action
+		// greets everyone.
+		plugin.Add(ctx, plugin.Screen{Command: "greetings", Title: "Greetings", Body: g.screen,
+			Actions: []plugin.Action{{Name: "greet all", Run: g.greetAll}}})
 		return nil
 	})
 }
@@ -703,7 +717,7 @@ adds, as it may call every method.
 | a tool with settings in `config.json` | wrap the `plugin.Tool` in `plugin.Configurable`, with a struct that has a JSON field per setting | `internal/plugins/files` |
 | what the terminal UI shows of a tool call | `plugin.Add` a `plugin.ToolView` | `plugin/example`, `internal/plugins/peers` |
 | a screen of the terminal UI | `plugin.Add` a `plugin.Screen` | `plugin/example` |
-| a key of the terminal UI | `plugin.Add` a `plugin.Key`, or list it in `Screen.Keys` | `plugin/example` |
+| a command of the terminal UI | `plugin.Add` a `plugin.Slash`, or list a `plugin.Action` in `Screen.Actions` | `plugin/example` |
 | an A2A method for connected peers | `plugin.Add` a `plugin.Method`; peers run it with `Network.Call` | `plugin/example` |
 | a channel to connected peers, for what flows | `plugin.Add` a `plugin.ChannelHandler`; peers open it with `Network.Open` | `plugin/example` |
 | a way to find nodes | `plugin.Add` a `plugin.PeerSource` | `internal/plugins/tailscale` |
@@ -712,11 +726,12 @@ adds, as it may call every method.
 | a service for other plugins | return it from `plugin.NewService`; they name its type in their needs | `internal/plugins/discovery` |
 
 What a plugin hands to the terminal UI is text and functions, nothing of how the UI is drawn. A screen is a
-key, a title and `Body`, which returns the text to show; a key is `Run`, which returns the line for the
-footer. Both run off the UI, so they may ask the network, and with a context that ends when the user quits.
-`Body` is called when the screen opens, after one of its keys ran and every ten seconds while it is open. A
-key is named as the terminal reports it: `g`, `G`, `ctrl+g`. See [Terminal UI](#terminal-ui) for what happens
-when two plugins want the same key.
+command, a title, `Body`, which returns the text to show, and the actions it offers; a command (`plugin.Slash`)
+and an action are `Run`, which returns the line for the footer. They run off the UI, so they may ask the
+network, and with a context that ends when the user quits. `Body` is called when the screen opens, after one
+of its actions ran and every ten seconds while it is open. A command is named by one word without the slash:
+`greetings` for `/greetings`. See [Terminal UI](#terminal-ui) for what happens when two plugins want the same
+name.
 
 A front end is what opens when `ouro` runs without a command, and what `ouro chat` opens without a message.
 It talks to the agent of the owner through the service `*plugin.Assistant`, and shows a tool call as

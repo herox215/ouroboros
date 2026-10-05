@@ -1,7 +1,8 @@
 // Package tui is a terminal UI to control the local node and chat with its
-// agent, which can ask the nodes on the network. Plugins add screens and keys
-// to it: see plugin.Screen and plugin.Key, and extend.go for how they are
-// bound.
+// agent, which can ask the nodes on the network. The owner controls it with
+// commands like /new, typed into the message input: see commands.go. Plugins
+// add screens and commands to it: see plugin.Screen and plugin.Slash, and
+// extend.go for how they are bound.
 package tui
 
 import (
@@ -69,20 +70,14 @@ type Step struct {
 	Done bool
 }
 
-type focus int
-
-const (
-	focusCommands focus = iota // keys are commands
-	focusInput
-)
-
-// screen is the top-level view: the chat, the connection requests or a screen
-// a plugin contributed.
+// screen is the top-level view: the chat, the connection requests, the list
+// of the commands or a screen a plugin contributed.
 type screen int
 
 const (
 	screenChat screen = iota
 	screenRequests
+	screenHelp
 	screenPlugin // the one of Model.screens that is open
 )
 
@@ -113,18 +108,17 @@ type Model struct {
 
 	status    Status
 	chat      conversation
-	focus     focus
-	greeted   bool // the input was focused once the node turned out to be configured
 	notice    string
 	noticeErr bool
 
 	trust     Contacts
 	screen    screen
-	screens   []plugin.Screen // of the plugins, as far as they got their key
-	keys      []plugin.Key    // of the plugins, for where the commands are
+	commands  []command       // of the UI, then of the plugins
+	screens   []plugin.Screen // of the plugins, as far as they got their command
 	open      int             // the screen of a plugin that is shown
 	body      body            // what it shows
 	reqSel    int
+	choice    int // the action selected: accept or reject, or one of a screen
 	unreadReq int
 	seenReq   int
 
@@ -141,12 +135,12 @@ type Model struct {
 	spinner       spinner.Model
 }
 
-// New returns the UI for backend, with the screens and keys the plugins
-// contributed. A contribution whose key is taken is left out, which the UI
+// New returns the UI for backend, with the screens and commands the plugins
+// contributed. A contribution whose name is taken is left out, which the UI
 // says in its footer when it opens: see bind.
-func New(backend Backend, screens []plugin.Screen, keys []plugin.Key) *Model {
+func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Model {
 	input := textarea.New()
-	input.Placeholder = "Message… (Enter sends, Alt+Enter new line)"
+	input.Placeholder = "Message, or /help for the commands… (Enter sends, Alt+Enter new line)"
 	input.ShowLineNumbers = false
 	input.Prompt = ""
 	input.SetHeight(inputHeight)
@@ -168,8 +162,16 @@ func New(backend Backend, screens []plugin.Screen, keys []plugin.Key) *Model {
 		history:    history,
 		spinner:    spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
+	m.input.Focus() // the input is where everything is typed, commands too
 	var problems []string
-	m.screens, m.keys, problems = bind(screens, keys)
+	m.screens, slashes, problems = bind(ownNames(), screens, slashes)
+	m.commands = append(m.commands, own...)
+	for i, s := range m.screens {
+		m.commands = append(m.commands, command{s.Command, "open " + s.Title, func(m *Model) tea.Cmd { return m.openScreen(i) }})
+	}
+	for _, c := range slashes {
+		m.commands = append(m.commands, command{c.Name, c.Help, func(m *Model) tea.Cmd { return m.run(c.Run) }})
+	}
 	if len(problems) > 0 {
 		m.setNotice(strings.Join(problems, "; "), true)
 	}
@@ -201,8 +203,8 @@ type (
 		screen int
 		body   body
 	}
-	// actionMsg reports the outcome of start, stop or setup, or of a key a
-	// plugin contributed.
+	// actionMsg reports the outcome of start, stop or setup, or of a command
+	// or an action a plugin contributed.
 	actionMsg struct {
 		done string
 		err  error
@@ -313,13 +315,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.chat.entries) == 0 {
 				m.renderHistory(true) // the empty chat names the agent
 			}
-			// The chat is what the UI is opened for: start typing right away.
-			if m.status.Configured && !m.greeted {
-				m.greeted = true
-				if m.focus == focusCommands {
-					return m, m.toggleFocus()
-				}
-			}
 		}
 	case contactsMsg:
 		if msg.err != nil {
@@ -377,74 +372,63 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.notice = ""
+	if msg.String() == "ctrl+c" {
+		return m.leave()
+	}
 	switch m.screen {
 	case screenRequests:
 		return m.handleRequestKey(msg)
 	case screenPlugin:
 		return m.handleScreenKey(msg)
+	case screenHelp:
+		if msg.String() == "esc" {
+			m.screen = screenChat
+		}
+		return nil
 	}
 	switch msg.String() {
-	case "ctrl+c":
-		return m.leave()
-	case "tab":
-		return m.toggleFocus()
 	case "pgup":
 		m.history.PageUp()
 		return nil
 	case "pgdown":
 		m.history.PageDown()
 		return nil
+	case "esc":
+		return nil
+	case "enter":
+		return m.send()
 	}
-
-	if m.focus == focusInput {
-		switch msg.String() {
-		case "esc":
-			return m.toggleFocus()
-		case "enter":
-			return m.send()
-		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return cmd
-	}
-
-	switch msg.String() {
-	case "q":
-		return m.leave()
-	case "enter", "i":
-		return m.toggleFocus()
-	case "s":
-		return m.toggleNode()
-	case "c":
-		return m.setup()
-	case "n":
-		m.newConversation()
-	case "R":
-		return m.openRequests()
-	default:
-		return m.contributed(msg.String())
-	}
-	return nil
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
 }
 
-// handleRequestKey handles keys on the connection requests screen.
+// handleRequestKey handles keys on the connection requests screen: up and
+// down select an entry, left and right whether to accept or reject it, and
+// enter decides.
 func (m *Model) handleRequestKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
-	case "ctrl+c":
-		return m.leave()
-	case "esc", "q", "R":
+	case "esc":
 		m.screen = screenChat
 	case "up", "k":
 		m.selectRequest(m.reqSel - 1)
 	case "down", "j":
 		m.selectRequest(m.reqSel + 1)
-	case "a":
-		return m.decideRequest(true)
-	case "x":
-		return m.decideRequest(false)
+	case "left", "h":
+		m.choice = accept
+	case "right", "l":
+		m.choice = reject
+	case "enter":
+		return m.decideRequest(m.choice == accept)
 	}
 	return nil
 }
+
+// The choices for an entry on the connection requests screen.
+const (
+	accept = iota
+	reject
+)
 
 // leave quits the UI and stops what it still asks of the backend: a pending
 // answer, with the peers it asks, and a decision on a connection request.
@@ -455,13 +439,16 @@ func (m *Model) leave() tea.Cmd {
 
 func (m *Model) openRequests() tea.Cmd {
 	m.screen = screenRequests
-	m.reqSel = 0
+	m.reqSel, m.choice = 0, accept
 	m.unreadReq = 0
 	m.seenReq = m.trust.waiting()
 	return nil
 }
 
 func (m *Model) selectRequest(i int) {
+	if i != m.reqSel {
+		m.choice = accept // what is decided is chosen anew for each entry
+	}
 	if m.trust.waiting() == 0 {
 		m.reqSel = 0
 		return
@@ -532,38 +519,6 @@ func (m *Model) applyContacts(trust Contacts) {
 	m.selectRequest(m.reqSel)
 }
 
-func (m *Model) toggleFocus() tea.Cmd {
-	if m.focus == focusInput {
-		m.focus = focusCommands
-		m.input.Blur()
-		return nil
-	}
-	if !m.status.Configured {
-		m.setNotice("set up the node first: press c", true)
-		return nil
-	}
-	m.focus = focusInput
-	return m.input.Focus()
-}
-
-func (m *Model) toggleNode() tea.Cmd {
-	running, configured := m.status.Running, m.status.Configured
-	if !running && !configured {
-		return m.setup()
-	}
-	if running {
-		m.setNotice("stopping node…", false)
-	} else {
-		m.setNotice("starting node…", false)
-	}
-	return func() tea.Msg {
-		if running {
-			return actionMsg{"node stopped", m.backend.Stop()}
-		}
-		return actionMsg{"node started", m.backend.Start()}
-	}
-}
-
 // setup opens the setup of the node. The node keeps running until what the
 // setup saved is there to start it with.
 func (m *Model) setup() tea.Cmd {
@@ -578,6 +533,14 @@ func (m *Model) send() tea.Cmd {
 	c := &m.chat
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
+		return nil
+	}
+	if isCommandLine(text) {
+		return m.runCommand(text)
+	}
+	text = strings.TrimPrefix(text, "/") // of the two a message starts with
+	if !m.status.Configured {
+		m.setNotice("set up the node first: /setup", true)
 		return nil
 	}
 	if c.pending {

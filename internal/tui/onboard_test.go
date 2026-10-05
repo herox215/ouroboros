@@ -207,9 +207,9 @@ func TestSetupGoesBack(t *testing.T) {
 
 // Set up again from the chat, the setup goes back to it.
 func TestSetupFromTheChat(t *testing.T) {
-	m, b := commands(t)
-	if press(m, "c"); m.onboard == nil || m.onboard.first {
-		t.Fatal("c should open the setup")
+	m, b := newModel(t)
+	if run(m, "/setup"); m.onboard == nil || m.onboard.first {
+		t.Fatal("/setup should open the setup")
 	}
 	if v := dialog(m); !strings.Contains(v, "esc back to the chat") {
 		t.Fatalf("welcome:\n%s", v)
@@ -220,7 +220,7 @@ func TestSetupFromTheChat(t *testing.T) {
 	}
 
 	b.fail = map[string]error{"setup": errors.New("boom")}
-	if cmd := press(m, "c"); cmd != nil || m.onboard != nil || m.notice != "setup: boom" || !m.noticeErr {
+	if cmd := run(m, "/setup"); cmd != nil || m.onboard != nil || m.notice != "setup: boom" || !m.noticeErr {
 		t.Fatalf("notice %q", m.notice)
 	}
 }

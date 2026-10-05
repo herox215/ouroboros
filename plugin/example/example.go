@@ -91,9 +91,10 @@ func Plugin() plugin.Plugin {
 			return "greeting " + call.Peer
 		}})
 
-		// For the terminal UI: g opens the screen, on which a greets everyone.
-		plugin.Add(ctx, plugin.Screen{Key: "g", Title: "Greetings", Body: g.screen,
-			Keys: []plugin.Key{{Key: "a", Help: "greet all", Run: g.greetAll}}})
+		// For the terminal UI: /greetings opens the screen, on which an action
+		// greets everyone.
+		plugin.Add(ctx, plugin.Screen{Command: "greetings", Title: "Greetings", Body: g.screen,
+			Actions: []plugin.Action{{Name: "greet all", Run: g.greetAll}}})
 
 		plugin.Add(ctx, plugin.ChannelHandler{Name: Channel, Handle: checksum})
 		plugin.Add(ctx, plugin.Command{Name: "checksum", Args: "NODE FILE", Help: "send FILE to a connected node and print the checksum it arrived with", Run: func(c context.Context, args []string) error {

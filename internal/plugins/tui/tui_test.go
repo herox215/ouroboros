@@ -107,7 +107,7 @@ func TestTUIBackendWithoutSetup(t *testing.T) {
 	s := clitest.Settings(t)
 	clitest.Env(t, s)
 	u := backend(t, s)
-	if err := u.Start(); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "press c") {
+	if err := u.Start(); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("start: %v", err)
 	}
 	if _, err := u.Ask(context.Background(), "ctx", "hi", func(tui.Step) {}); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "ouro start") {
@@ -165,12 +165,24 @@ func TestTUIBackendContacts(t *testing.T) {
 // key is the press of the key with the given letter.
 func key(letter rune) tea.Msg { return tea.KeyPressMsg{Code: letter, Text: string(letter)} }
 
+// enter is the press of enter.
+var enter = tea.KeyPressMsg{Code: tea.KeyEnter}
+
+// command types the command line into m and sends it.
+func command(m *tui.Model, line string) tea.Cmd {
+	for _, letter := range line {
+		m.Update(key(letter))
+	}
+	_, cmd := m.Update(enter)
+	return cmd
+}
+
 // The UI is opened with what the plugins contributed to it, through the
 // public API alone: here the screen of the example plugin, and a plugin that
-// claims a key of the UI.
+// claims a command of the UI.
 func TestUIShowsWhatPluginsContribute(t *testing.T) {
 	greedy := plugin.New("greedy", func(ctx *plugin.Context, _ struct{}) error {
-		plugin.Add(ctx, plugin.Key{Key: "s", Help: "stats", Run: func(context.Context) (string, error) { return "", nil }})
+		plugin.Add(ctx, plugin.Slash{Name: "stop", Help: "stats", Run: func(context.Context) (string, error) { return "", nil }})
 		return nil
 	})
 	s := clitest.Settings(t)
@@ -182,25 +194,23 @@ func TestUIShowsWhatPluginsContribute(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 		m.Update(key(' ')) // skips the splash
 		view := ansi.Strip(m.View().Content)
-		for _, want := range []string{`key s is taken by the terminal UI: "stats" is left out`, "g Greetings"} {
-			if !strings.Contains(view, want) {
-				t.Errorf("view lacks %q:\n%s", want, view)
-			}
+		if want := `/stop is taken by the terminal UI: "stats" is left out`; !strings.Contains(view, want) {
+			t.Errorf("view lacks %q:\n%s", want, view)
 		}
-		_, load := m.Update(key('g'))
+		load := command(m, "/greetings")
 		if load == nil {
-			t.Fatal("g should open the screen of the example plugin")
+			t.Fatal("/greetings should open the screen of the example plugin")
 		}
 		m.Update(load())
 		view = ansi.Strip(m.View().Content)
-		for _, want := range []string{"Greetings", "No connected peers to greet.", "a greet all · esc back"} {
+		for _, want := range []string{"Greetings", "No connected peers to greet.", "[greet all]", "enter run · esc back"} {
 			if !strings.Contains(view, want) {
 				t.Errorf("view lacks %q:\n%s", want, view)
 			}
 		}
-		_, run := m.Update(key('a'))
+		_, run := m.Update(enter)
 		if m.Update(run()); !strings.Contains(ansi.Strip(m.View().Content), "greeted 0 peers") {
-			t.Errorf("the key of the screen should say what it did:\n%s", ansi.Strip(m.View().Content))
+			t.Errorf("the action of the screen should say what it did:\n%s", ansi.Strip(m.View().Content))
 		}
 		return nil
 	})

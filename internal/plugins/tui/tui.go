@@ -3,7 +3,7 @@
 //
 // It is written against ouroboros/plugin like any other plugin. What it shows
 // besides the chat is what the plugins contributed: their screens
-// (plugin.Screen), their keys (plugin.Key) and what is shown of a tool call
+// (plugin.Screen), their commands (plugin.Slash) and what is shown of a tool call
 // (plugin.ToolView).
 package tui
 
@@ -63,14 +63,14 @@ var show = func(ctx context.Context, m *tui.Model) error {
 	return err
 }
 
-// run shows the terminal UI until the user quits, with the screens and keys
+// run shows the terminal UI until the user quits, with the screens and commands
 // the plugins contributed. While it is open the node is online: the UI starts
 // it, and a node that was not running before is stopped again afterwards. An
 // answer still on its way when the user quits is stopped, and the log says
 // so before the UI is gone.
 func (u *ui) run(ctx context.Context) error {
 	wasRunning := u.Running()
-	err := show(ctx, tui.New(u, plugin.All[plugin.Screen](u.ctx), plugin.All[plugin.Key](u.ctx)))
+	err := show(ctx, tui.New(u, plugin.All[plugin.Screen](u.ctx), plugin.All[plugin.Slash](u.ctx)))
 	u.assistant.Stop()
 	if !wasRunning {
 		err = errors.Join(err, u.Stop())
@@ -83,7 +83,7 @@ func (u *ui) run(ctx context.Context) error {
 func (u *ui) Start() error {
 	err := u.Owner.Start()
 	if errors.Is(err, plugin.ErrNotSetUp) {
-		return fmt.Errorf("%w, press c", err)
+		return fmt.Errorf("%w, type /setup", err)
 	}
 	return err
 }

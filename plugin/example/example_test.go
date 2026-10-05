@@ -124,10 +124,10 @@ func TestGreetingsScreen(t *testing.T) {
 	ctx := contributions(t, alpha)
 
 	screens := plugin.All[plugin.Screen](ctx)
-	if len(screens) != 1 || screens[0].Key != "g" || screens[0].Title != "Greetings" || len(screens[0].Keys) != 1 {
+	if len(screens) != 1 || screens[0].Command != "greetings" || screens[0].Title != "Greetings" || len(screens[0].Actions) != 1 {
 		t.Fatalf("screens %+v", screens)
 	}
-	screen, greetAll := screens[0].Body, screens[0].Keys[0].Run
+	screen, greetAll := screens[0].Body, screens[0].Actions[0].Run
 	shows := func(want string) {
 		t.Helper()
 		if got, err := screen(context.Background()); err != nil || got != want {
@@ -162,7 +162,7 @@ func TestGreetingsScreen(t *testing.T) {
 		t.Fatal("the screen should say that the peers cannot be read")
 	}
 	if _, err := greetAll(context.Background()); err == nil {
-		t.Fatal("the key should say that the peers cannot be read")
+		t.Fatal("the action should say that the peers cannot be read")
 	}
 }
 

@@ -98,12 +98,10 @@ func newModel(t *testing.T) (*Model, *fakeBackend) {
 	return m, b
 }
 
-// commands is a model whose keys are commands rather than text for the input.
-func commands(t *testing.T) (*Model, *fakeBackend) {
-	t.Helper()
-	m, b := newModel(t)
-	press(m, "esc")
-	return m, b
+// run types the command line into the input and sends it.
+func run(m *Model, line string) tea.Cmd {
+	m.input.SetValue(line)
+	return press(m, "enter")
 }
 
 func press(m *Model, keys ...string) tea.Cmd {
@@ -125,6 +123,10 @@ func press(m *Model, keys ...string) tea.Cmd {
 			msg.Code = tea.KeyUp
 		case "down":
 			msg.Code = tea.KeyDown
+		case "left":
+			msg.Code = tea.KeyLeft
+		case "right":
+			msg.Code = tea.KeyRight
 		default:
 			msg.Code, msg.Text = rune(k[0]), k
 		}
@@ -137,9 +139,6 @@ func press(m *Model, keys ...string) tea.Cmd {
 // say types text into the chat and sends it.
 func say(t *testing.T, m *Model, text string) tea.Cmd {
 	t.Helper()
-	if m.focus != focusInput {
-		press(m, "enter")
-	}
 	m.input.SetValue(text)
 	cmd := press(m, "enter")
 	if cmd == nil {
@@ -277,23 +276,25 @@ func TestUnconfiguredNodeShowsLogoAndNoChat(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m.Update(m.refreshStatus())
 	view := m.View().Content
-	if !strings.Contains(view, strings.TrimSpace(logoLines[1])) || !strings.Contains(view, "Press c to set up") {
+	if !strings.Contains(view, strings.TrimSpace(logoLines[1])) || !strings.Contains(view, "Type /setup to set up") {
 		t.Fatalf("an unconfigured node should show the logo and the setup hint:\n%s", view)
 	}
-	if press(m, "esc", "enter"); m.focus == focusInput || !m.noticeErr {
+	if run(m, "ping"); len(m.chat.entries) != 0 || m.notice != "set up the node first: /setup" || !m.noticeErr {
 		t.Fatal("without a configured node there is nobody to chat with")
+	}
+	// Commands work all the same.
+	if run(m, "/setup"); m.onboard == nil || !m.onboard.first {
+		t.Fatal("/setup should open the setup")
 	}
 }
 
 func TestChatIsFocusedOnStart(t *testing.T) {
 	m, _ := newModel(t)
-	if m.focus != focusInput {
-		t.Fatal("a configured node should open with the chat input focused")
+	if !m.input.Focused() {
+		t.Fatal("the UI should open with the chat input focused")
 	}
-	press(m, "esc")
-	m.Update(m.refreshStatus())
-	if m.focus != focusCommands {
-		t.Fatal("a later status refresh must not steal the focus")
+	if press(m, "h", "i"); m.input.Value() != "hi" {
+		t.Fatalf("typed %q", m.input.Value())
 	}
 }
 
@@ -376,22 +377,22 @@ func TestSendError(t *testing.T) {
 }
 
 func TestConnectionRequests(t *testing.T) {
-	m, b := commands(t)
+	m, b := newModel(t)
 	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma", Addr: "1.2.3.4:9"}}}
 	m.Update(m.loadContacts())
 	if view := m.View().Content; !strings.Contains(view, "✉ 1") {
 		t.Fatalf("header should show the pending count:\n%s", view)
 	}
 
-	press(m, "R")
-	if m.screen != screenRequests {
-		t.Fatal("R should open the requests screen")
+	run(m, "/requests")
+	if m.screen != screenRequests || m.input.Value() != "" {
+		t.Fatal("/requests should open the requests screen")
 	}
-	if view := m.View().Content; !strings.Contains(view, "gamma") || !strings.Contains(view, "wants to chat") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "gamma") || !strings.Contains(view, "wants to chat") || !strings.Contains(view, "[accept]  reject") {
 		t.Fatalf("requests view:\n%s", view)
 	}
 
-	cmd := press(m, "a")
+	cmd := press(m, "enter")
 	if cmd == nil {
 		t.Fatal("accept should return a command")
 	}
@@ -407,11 +408,15 @@ func TestConnectionRequests(t *testing.T) {
 }
 
 func TestRejectRequest(t *testing.T) {
-	m, b := commands(t)
+	m, b := newModel(t)
 	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
 	m.Update(m.loadContacts())
-	press(m, "R")
-	cmd := press(m, "x")
+	run(m, "/requests")
+	press(m, "right")
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, " accept  [reject]") {
+		t.Fatalf("reject should be selected:\n%s", view)
+	}
+	cmd := press(m, "enter")
 	if cmd == nil {
 		t.Fatal("reject should return a command")
 	}
@@ -426,7 +431,7 @@ func TestNewConversationDropsLateReply(t *testing.T) {
 	b.steps = []Step{{Text: "asking beta"}}
 	cmd := say(t, m, "ping")
 	old := m.chat.contextID
-	press(m, "esc", "n")
+	run(m, "/new")
 	deliver(m, cmd)
 	c := m.chat
 	if c.contextID == old || len(c.entries) != 0 || c.pending || c.doing != "" {
@@ -467,7 +472,7 @@ func TestNewConversationCancelsThePendingAnswer(t *testing.T) {
 		t.Fatalf("the answer should be on its way: %+v", m.chat)
 	}
 
-	press(m, "esc", "n")
+	run(m, "/new")
 	awaitStop(t, stopped)
 	deliver(m, cmd)
 	c := m.chat
@@ -489,9 +494,10 @@ func TestNewConversationCancelsThePendingAnswer(t *testing.T) {
 func TestQuitCancelsThePendingAnswer(t *testing.T) {
 	ctrlC := tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl})
 	for name, quit := range map[string]func(*Model) tea.Cmd{
-		"q":                    func(m *Model) tea.Cmd { return press(m, "esc", "q") },
+		"/quit":                func(m *Model) tea.Cmd { return run(m, "/quit") },
 		"ctrl+c":               func(m *Model) tea.Cmd { _, cmd := m.Update(ctrlC); return cmd },
-		"ctrl+c on requests":   func(m *Model) tea.Cmd { press(m, "esc", "R"); _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on requests":   func(m *Model) tea.Cmd { run(m, "/requests"); _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on the help":   func(m *Model) tea.Cmd { run(m, "/help"); _, cmd := m.Update(ctrlC); return cmd },
 		"ctrl+c on the splash": func(m *Model) tea.Cmd { m.showSplash = true; _, cmd := m.Update(ctrlC); return cmd },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -512,12 +518,12 @@ func TestQuitCancelsThePendingAnswer(t *testing.T) {
 }
 
 func TestQuitCancelsRequestDecisions(t *testing.T) {
-	for _, key := range []string{"a", "x"} {
-		m, b := commands(t)
+	for _, key := range []string{"left", "right"} {
+		m, b := newModel(t)
 		b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
 		m.Update(m.loadContacts())
-		press(m, "R")
-		press(m, key)()
+		run(m, "/requests")
+		press(m, key, "enter")()
 		if b.decided == nil || b.decided.Err() != nil {
 			t.Fatalf("%s: a decision should run with a live context", key)
 		}
@@ -528,28 +534,34 @@ func TestQuitCancelsRequestDecisions(t *testing.T) {
 	}
 }
 
-func TestToggleNode(t *testing.T) {
-	m, b := commands(t)
-	m.Update(press(m, "s")())
-	if b.stopped != 1 {
-		t.Fatal("s should stop a running node")
+func TestStartAndStop(t *testing.T) {
+	m, b := newModel(t)
+	if run(m, "/start"); b.started != 0 || m.notice != "the node is running" {
+		t.Fatalf("a running node is not started again: %q", m.notice)
+	}
+	m.Update(run(m, "/stop")())
+	if b.stopped != 1 || m.notice != "node stopped" {
+		t.Fatal("/stop should stop a running node")
 	}
 	m.status.Running = false
-	m.Update(press(m, "s")())
-	if b.started != 1 {
-		t.Fatal("s should start a stopped node")
+	if run(m, "/stop"); b.stopped != 1 || m.notice != "the node is not running" {
+		t.Fatalf("a stopped node is not stopped again: %q", m.notice)
+	}
+	m.Update(run(m, "/start")())
+	if b.started != 1 || m.notice != "node started" {
+		t.Fatal("/start should start a stopped node")
 	}
 	m.status.Configured = false
-	if press(m, "s"); b.setups != 1 || m.onboard == nil || !m.onboard.first {
-		t.Fatal("s should open the setup for an unconfigured node")
+	if run(m, "/start"); b.setups != 1 || m.onboard == nil || !m.onboard.first {
+		t.Fatal("/start should open the setup for an unconfigured node")
 	}
 }
 
 // The node keeps running while it is set up again: it is restarted with
 // what the setup saved.
 func TestSetupKeepsTheNodeRunning(t *testing.T) {
-	m, b := commands(t)
-	if press(m, "c"); b.setups != 1 || m.onboard == nil || m.onboard.first || b.stopped != 0 {
+	m, b := newModel(t)
+	if run(m, "/setup"); b.setups != 1 || m.onboard == nil || m.onboard.first || b.stopped != 0 {
 		t.Fatalf("setups %d, stopped %d", b.setups, b.stopped)
 	}
 }
@@ -587,17 +599,17 @@ func TestOpeningTheUIStartsTheNode(t *testing.T) {
 // the request stays where it is, to be decided again.
 func TestDecisionThatIsNotSaved(t *testing.T) {
 	for key, want := range map[string]string{
-		"a": "accepting failed – the contact could not be saved",
-		"x": "rejecting failed – the contact could not be saved",
+		"left":  "accepting failed – the contact could not be saved",
+		"right": "rejecting failed – the contact could not be saved",
 	} {
-		m, b := commands(t)
+		m, b := newModel(t)
 		b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
 		b.acceptErr = fmt.Errorf("%w: open contacts.json.lock: permission denied", plugin.ErrNotSaved)
 		b.rejectErr = b.acceptErr
 		m.Update(m.loadContacts())
-		press(m, "R")
+		run(m, "/requests")
 
-		_, refresh := m.Update(press(m, key)())
+		_, refresh := m.Update(press(m, key, "enter")())
 		if m.notice != want || !m.noticeErr {
 			t.Fatalf("%s: notice %q (error %v)", key, m.notice, m.noticeErr)
 		}
@@ -616,7 +628,7 @@ func TestDecisionThatIsNotSaved(t *testing.T) {
 
 		// The second try goes through.
 		b.acceptErr, b.rejectErr = nil, nil
-		m.Update(press(m, key)())
+		m.Update(press(m, "enter")())
 		if len(b.accepted)+len(b.rejected) != 2 || m.noticeErr || !strings.HasPrefix(m.notice, "request ") {
 			t.Fatalf("%s: retry: accepted %v, rejected %v, notice %q", key, b.accepted, b.rejected, m.notice)
 		}
@@ -626,18 +638,18 @@ func TestDecisionThatIsNotSaved(t *testing.T) {
 // What the agent proposes is shown as that, with the key that would be
 // asked, and accepting it sends the request: it accepts nobody.
 func TestProposedConnection(t *testing.T) {
-	m, b := commands(t)
+	m, b := newModel(t)
 	b.trust = Contacts{Incoming: []plugin.Request{
 		{PublicKey: "0123456789abcdef", Name: "luna", Addr: "1.2.3.4:9", Proposed: true},
 		{PublicKey: "pk2", Name: "gamma"},
 	}}
 	m.Update(m.loadContacts())
-	press(m, "R")
+	run(m, "/requests")
 	view := m.View().Content
 	if !strings.Contains(view, "your agent wants to connect (0123456789…)") || strings.Count(view, "wants to chat") != 1 {
 		t.Fatalf("requests view:\n%s", view)
 	}
-	m.Update(press(m, "a")())
+	m.Update(press(m, "enter")())
 	if len(b.accepted) != 1 || b.accepted[0] != "0123456789abcdef" {
 		t.Fatalf("accepted %v", b.accepted)
 	}
@@ -645,13 +657,16 @@ func TestProposedConnection(t *testing.T) {
 		t.Fatalf("after agreeing to a proposal:\n%s", view)
 	}
 	// Declined, it is a request that was declined like any other.
-	m.Update(press(m, "x")())
+	m.Update(press(m, "right", "enter")())
 	if view := m.View().Content; !strings.Contains(view, "request declined") {
 		t.Fatalf("after declining a proposal:\n%s", view)
 	}
 	// The request of a peer is accepted, not sent.
 	press(m, "down")
-	m.Update(press(m, "a")())
+	if m.choice != accept {
+		t.Fatal("another entry is accepted unless reject is selected for it")
+	}
+	m.Update(press(m, "enter")())
 	if view := m.View().Content; !strings.Contains(view, "request accepted") {
 		t.Fatalf("after accepting a request:\n%s", view)
 	}
@@ -661,7 +676,7 @@ func TestProposedConnection(t *testing.T) {
 // requests, and is decided like them: the owner sees what the field is and
 // what it would be, as the node says, and what the agent says about it.
 func TestProposals(t *testing.T) {
-	m, b := commands(t)
+	m, b := newModel(t)
 	at := time.Date(2026, 10, 4, 15, 4, 0, 0, time.Local)
 	b.trust = Contacts{
 		Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}},
@@ -674,7 +689,7 @@ func TestProposals(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✉ 3") {
 		t.Fatalf("the header should count requests and proposals:\n%s", view)
 	}
-	press(m, "R")
+	run(m, "/requests")
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
 		"› gamma", "Changes of the configuration your agent proposes",
@@ -694,7 +709,7 @@ func TestProposals(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› tools.a2a") || strings.Contains(view, "› gamma") {
 		t.Fatalf("the first proposal should be selected:\n%s", view)
 	}
-	m.Update(press(m, "a")())
+	m.Update(press(m, "enter")())
 	if len(b.accepted) != 1 || b.accepted[0] != "proposal p1" || m.notice != "tools.a2a changed" || m.noticeErr {
 		t.Fatalf("accepted %v, notice %q", b.accepted, m.notice)
 	}
@@ -706,13 +721,13 @@ func TestProposals(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› name") || strings.Contains(view, "› tools.a2a") {
 		t.Fatalf("the second proposal should be selected:\n%s", view)
 	}
-	m.Update(press(m, "x")())
+	m.Update(press(m, "right", "enter")())
 	if len(b.rejected) != 1 || b.rejected[0] != "proposal p2" || m.notice != "proposal refused, name stays as it is" || m.noticeErr {
 		t.Fatalf("refused %v, notice %q", b.rejected, m.notice)
 	}
 	// The request above them is still a request.
 	press(m, "k", "k", "k")
-	m.Update(press(m, "a")())
+	m.Update(press(m, "enter")())
 	if len(b.accepted) != 2 || b.accepted[1] != "pk1" {
 		t.Fatalf("accepted %v", b.accepted)
 	}
@@ -720,12 +735,12 @@ func TestProposals(t *testing.T) {
 	// A decision that fails says why, and changes nothing here.
 	press(m, "j")
 	b.acceptErr = plugin.ErrStale
-	m.Update(press(m, "a")())
+	m.Update(press(m, "enter")())
 	if m.notice != plugin.ErrStale.Error() || !m.noticeErr {
 		t.Fatalf("a stale proposal: %q", m.notice)
 	}
 	b.rejectErr = errors.New("disk full")
-	m.Update(press(m, "x")())
+	m.Update(press(m, "right", "enter")())
 	if m.notice != "disk full" || !m.noticeErr {
 		t.Fatalf("a refusal that fails: %q", m.notice)
 	}
@@ -748,11 +763,11 @@ func TestProposals(t *testing.T) {
 	// With nothing waiting there is nothing to decide.
 	b.trust = Contacts{}
 	m.Update(m.loadContacts())
-	press(m, "R")
-	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Changes of the configuration") {
+	run(m, "/requests")
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Changes of the configuration") || strings.Contains(view, "[accept]") {
 		t.Fatalf("nothing is proposed:\n%s", view)
 	}
-	if cmd := press(m, "a"); cmd != nil {
+	if cmd := press(m, "enter"); cmd != nil {
 		t.Fatal("accepting nothing should do nothing")
 	}
 }

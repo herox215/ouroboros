@@ -47,8 +47,8 @@
 //
 // What a plugin adds it can show in the terminal UI, with Add as well:
 //
-//	Screen    a view of its own, opened with a key
-//	Key       a key that runs something
+//	Screen    a view of its own, opened with a command like /greetings
+//	Slash     a command like /greet that runs something
 //	ToolView  what is shown of a call of its tool while the agent waits
 //
 // The terminal UI is a plugin itself. It contributes a FrontEnd, which is

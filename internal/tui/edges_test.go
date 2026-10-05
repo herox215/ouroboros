@@ -88,7 +88,7 @@ func TestBackendErrors(t *testing.T) {
 		}, "boom"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			m, b := commands(t)
+			m, b := newModel(t)
 			b.fail = map[string]error{test.fail: boom}
 			m.Update(test.do(m, b)())
 			notice(t, m, test.want)
@@ -96,12 +96,12 @@ func TestBackendErrors(t *testing.T) {
 	}
 
 	// A decision that fails for another reason than the contacts says why.
-	m, b := commands(t)
+	m, b := newModel(t)
 	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1"}}}
 	b.acceptErr = boom
 	m.Update(m.loadContacts())
-	press(m, "R")
-	m.Update(press(m, "a")())
+	run(m, "/requests")
+	m.Update(press(m, "enter")())
 	notice(t, m, "boom")
 }
 
@@ -143,24 +143,18 @@ func TestChatKeys(t *testing.T) {
 	if press(m, "enter") != nil || len(m.chat.entries) != 0 {
 		t.Fatal("nothing is not a message")
 	}
-	if press(m, "tab"); m.focus != focusCommands {
-		t.Fatal("tab should leave the input")
-	}
-	if press(m, "tab"); m.focus != focusInput {
-		t.Fatal("tab should focus the input")
-	}
-	if press(m, "pgup", "pgdown") != nil {
-		t.Fatal("scrolling runs nothing")
+	if press(m, "pgup", "pgdown", "esc") != nil || m.input.Value() != "   " {
+		t.Fatal("scrolling and esc run nothing")
 	}
 }
 
 func TestRequestsScreen(t *testing.T) {
-	m, b := commands(t)
-	press(m, "R")
+	m, b := newModel(t)
+	run(m, "/requests")
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "No pending requests.") {
 		t.Fatalf("view:\n%s", view)
 	}
-	if press(m, "down"); m.reqSel != 0 || press(m, "a") != nil || press(m, "x") != nil {
+	if press(m, "down"); m.reqSel != 0 || press(m, "enter") != nil || press(m, "right", "enter") != nil {
 		t.Fatal("without a request there is nothing to select or decide")
 	}
 
@@ -183,7 +177,15 @@ func TestRequestsScreen(t *testing.T) {
 			t.Fatalf("after %s: selected %d, want %d", step.key, m.reqSel, step.want)
 		}
 	}
-	press(m, "a")()
+	for _, step := range []struct {
+		key  string
+		want int
+	}{{"right", reject}, {"l", reject}, {"left", accept}, {"h", accept}} {
+		if press(m, step.key); m.choice != step.want {
+			t.Fatalf("after %s: chose %d, want %d", step.key, m.choice, step.want)
+		}
+	}
+	press(m, "enter")()
 	if len(b.accepted) != 1 || b.accepted[0] != "pk-short" {
 		t.Fatalf("accepted %v", b.accepted)
 	}
@@ -193,14 +195,14 @@ func TestHeaderAndSmallWindows(t *testing.T) {
 	m, b := newModel(t)
 	b.status.Running = false
 	m.Update(m.refreshStatus())
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "○ offline") || !strings.Contains(view, "press s to start") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "○ offline") || !strings.Contains(view, "type /start") {
 		t.Fatalf("view:\n%s", view)
 	}
 	// A window too small for the logo shows the hint alone.
 	b.status = Status{}
 	m.Update(m.refreshStatus())
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 10})
-	if view := m.View().Content; !strings.Contains(view, "Press c to set up") || strings.Contains(view, strings.TrimSpace(logoLines[1])) {
+	if view := m.View().Content; !strings.Contains(view, "Type /setup to set up") || strings.Contains(view, strings.TrimSpace(logoLines[1])) {
 		t.Fatalf("view:\n%s", view)
 	}
 }
