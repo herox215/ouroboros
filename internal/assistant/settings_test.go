@@ -115,7 +115,7 @@ func TestProposeConfig(t *testing.T) {
 	c := newConfigured(t)
 	got := c.tool(toolProposeConfig, propose{"tools.a2a", []any{"list_peers", map[string]any{"tool": "read", "allow": []string{"~/share"}}}, "so that peers can read the share"})
 	want := `Proposed, and nothing is changed yet: tools.a2a is to become ["list_peers",{"allow":["~/share"],"tool":"read"}] instead of []. ` +
-		"The proposal waits for your owner among the requests in the terminal UI (ouro, then R), where they accept or refuse it. " +
+		"The proposal waits for your owner among the requests in the terminal UI (the command /requests), where they accept or refuse it. " +
 		"Tell them that, and do not say that the change is made."
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
@@ -199,7 +199,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		c.tool(toolProposeConfig, propose{"name", strings.Repeat("n", i+3), "r"})
 	}
 	if got := c.tool(toolProposeConfig, propose{"name", "one more", "r"}); got != "error: 16 proposals are waiting for your owner already, and no more are kept: "+
-		"they decide on them among the requests in the terminal UI (R)" {
+		"they decide on them among the requests in the terminal UI (/requests)" {
 		t.Errorf("a full list: %q", got)
 	}
 	if len(c.waiting()) != proposal.Max {

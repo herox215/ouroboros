@@ -105,13 +105,13 @@ func (b Builder) proposeConfig() agent.Tool {
 			p, err := b.propose(args)
 			if errors.Is(err, proposal.ErrFull) {
 				return "", fmt.Errorf("%d proposals are waiting for your owner already, and no more are kept: "+
-					"they decide on them among the requests in the terminal UI (R)", proposal.Max)
+					"they decide on them among the requests in the terminal UI (/requests)", proposal.Max)
 			}
 			if err != nil {
 				return "", fmt.Errorf("nothing was proposed: %w", err)
 			}
 			return fmt.Sprintf("Proposed, and nothing is changed yet: %s is to become %s instead of %s. "+
-				"The proposal waits for your owner among the requests in the terminal UI (ouro, then R), where they accept or refuse it. "+
+				"The proposal waits for your owner among the requests in the terminal UI (the command /requests), where they accept or refuse it. "+
 				"Tell them that, and do not say that the change is made.", p.Path, p.Value, p.Before), nil
 		},
 	}

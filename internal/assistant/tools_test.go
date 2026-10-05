@@ -271,7 +271,7 @@ func TestAskPeerThatIsNotConnected(t *testing.T) {
 	ctx := context.Background()
 	got, err := s.ask(ctx, "luna", "hello")
 	want := "luna (id " + luna.ID + ") is not connected to this node, and nothing was sent to it. " +
-		"Only your owner can connect: the node now waits among the connection requests (R in the terminal UI) " +
+		"Only your owner can connect: the node now waits among the connection requests (/requests in the terminal UI) " +
 		"for them to confirm. Tell them that, with the ID, so that they can check it is the node they mean."
 	if err != nil || got != want {
 		t.Fatalf("%v\n got %q\nwant %q", err, got, want)
