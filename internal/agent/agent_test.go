@@ -62,16 +62,48 @@ func TestRespondKeepsHistoryPerContext(t *testing.T) {
 	}
 }
 
-func TestRespondErrorIsNotRemembered(t *testing.T) {
+// An answer that failed is remembered as far as it got, closed by a note
+// that does not tell why.
+func TestRespondErrorIsRememberedWithoutItsCause(t *testing.T) {
 	llm := &fakeLLM{err: errors.New("boom")}
 	a := New(llm, "gpt", "alpha")
-	if _, err := a.Respond(context.Background(), "c1", "lost"); err == nil {
+	if _, err := a.Respond(context.Background(), "c1", "kept"); err == nil {
 		t.Fatal("want error")
 	}
 	llm.err = nil
 	a.Respond(context.Background(), "c1", "next")
-	if len(llm.msgs) != 2 {
-		t.Fatalf("failed message must not be kept, got %+v", llm.msgs)
+	// system, kept, the note, next
+	if len(llm.msgs) != 4 || llm.msgs[1].Content != "kept" ||
+		llm.msgs[2].Role != "assistant" || llm.msgs[2].Content != abandoned || llm.msgs[3].Content != "next" {
+		t.Fatalf("request %+v", llm.msgs)
+	}
+	if strings.Contains(llm.msgs[2].Content, "boom") {
+		t.Fatal("the cause must not be remembered")
+	}
+}
+
+// failLLM asks for a tool on its first rounds turns and then fails.
+type failLLM struct{ rounds, calls int }
+
+func (l *failLLM) Complete(context.Context, string, []openai.Message, []openai.Tool) (openai.Message, error) {
+	l.calls++
+	if l.calls > l.rounds {
+		return openai.Message{}, errors.New("HTTP 504")
+	}
+	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "c", Function: openai.FunctionCall{Name: "noop"}}}}, nil
+}
+
+// The tool calls of an answer that failed are kept: asked again, the LLM
+// goes on from their results.
+func TestFailedAnswerKeepsItsToolCalls(t *testing.T) {
+	a := New(&failLLM{rounds: 2}, "gpt", "sys", Tool{Name: "noop", Run: func(context.Context, json.RawMessage) (string, error) { return "result", nil }})
+	if _, err := a.Respond(context.Background(), "c1", "go"); err == nil {
+		t.Fatal("want error")
+	}
+	h := a.memory.history("c1")
+	// go, call, result, call, result, the note
+	if len(h) != 6 || h[0].Content != "go" || h[2].Role != "tool" || h[4].Content != "result" || h[5].Content != abandoned {
+		t.Fatalf("history %+v", h)
 	}
 }
 
@@ -157,8 +189,9 @@ func TestEndlessToolCallsAreStopped(t *testing.T) {
 	if _, err := a.Respond(context.Background(), "c1", "go"); !errors.Is(err, ErrTooManyToolCalls) || llm.calls != maxRounds {
 		t.Fatalf("err %v after %d calls", err, llm.calls)
 	}
-	if a.memory.history("c1") != nil {
-		t.Fatal("an abandoned answer must not be remembered")
+	h := a.memory.history("c1")
+	if len(h) != 2+2*maxRounds || h[0].Content != "go" || h[len(h)-1].Content != abandoned {
+		t.Fatalf("an abandoned answer is remembered as far as it got: %d messages", len(h))
 	}
 }
 
@@ -185,15 +218,26 @@ func (l *roundsLLM) Complete(context.Context, string, []openai.Message, []openai
 	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "c", Function: openai.FunctionCall{Name: "noop"}}}}, nil
 }
 
-// An answer that took so many tool calls that none of the messages kept is
-// the user's is remembered as no history at all.
-func TestHistoryWithoutUserMessageIsEmpty(t *testing.T) {
+// An answer that took more tool calls than the history keeps messages is
+// kept as a whole, from the user's message on, and what came before is not.
+func TestLongAnswerIsKeptWhole(t *testing.T) {
 	llm := &roundsLLM{rounds: maxHistory / 2}
 	a := New(llm, "gpt", "sys", Tool{Name: "noop", Run: func(context.Context, json.RawMessage) (string, error) { return "", nil }})
+	a.memory.remember("c1", []openai.Message{{Role: "user", Content: "before"}, {Role: "assistant", Content: "earlier"}})
 	if got, err := a.Respond(context.Background(), "c1", "go"); err != nil || got != "done" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if h := a.memory.history("c1"); len(h) != 0 {
+	h := a.memory.history("c1")
+	if len(h) != 2+2*(maxHistory/2) || h[0].Content != "go" || h[len(h)-1].Content != "done" {
+		t.Fatalf("history of %d messages starts with %q", len(h), h[0].Content)
+	}
+}
+
+// A history without a message of the user is remembered as none.
+func TestHistoryWithoutUserMessageIsEmpty(t *testing.T) {
+	m := NewMemory()
+	m.remember("c1", []openai.Message{{Role: "assistant", Content: "x"}, {Role: "tool", Content: "y"}})
+	if h := m.history("c1"); len(h) != 0 {
 		t.Fatalf("history %+v", h)
 	}
 }
@@ -288,7 +332,12 @@ func TestRunStopsWhenTheContextEnds(t *testing.T) {
 			calls++
 		}
 	}}
-	if _, err := New(&fakeLLM{}, "gpt", "sys", stop).Run(ctx, "c1", "call stop", observe); !errors.Is(err, context.Canceled) || calls != 1 {
+	a := New(&fakeLLM{}, "gpt", "sys", stop)
+	if _, err := a.Run(ctx, "c1", "call stop", observe); !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("err %v after %d calls", err, calls)
+	}
+	// call stop, the call, its result, the note
+	if h := a.memory.history("c1"); len(h) != 4 || h[2].Role != "tool" || h[3].Content != abandoned {
+		t.Fatalf("history %+v", h)
 	}
 }

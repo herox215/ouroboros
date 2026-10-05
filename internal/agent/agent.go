@@ -17,6 +17,11 @@ const (
 	maxContexts = 256 // conversations kept in memory
 	maxHistory  = 40  // messages kept per conversation
 	maxRounds   = 50  // LLM calls per answer; stops an agent that keeps calling tools
+
+	// abandoned ends an answer that failed or was stopped in the history, so
+	// that the next message does not follow tool results.
+	abandoned = "[This answer broke off here, before it was given. " +
+		"The work above is done: go on from it when you are asked again.]"
 )
 
 // ErrTooManyToolCalls is the error of an answer that was given up because the
@@ -142,10 +147,17 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
 	history := append(a.memory.history(contextID), openai.Message{Role: "user", Content: text})
+	// An answer that fails is remembered as far as it got: asked again, the
+	// LLM goes on from there instead of starting over. Why it failed is not
+	// part of it: a peer must not learn the cause from a later answer.
+	abandon := func(err error) (string, error) {
+		a.memory.remember(contextID, append(history, openai.Message{Role: "assistant", Content: abandoned}))
+		return "", err
+	}
 	for range maxRounds {
 		// An answer that was stopped while a tool ran asks the LLM no more.
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return abandon(err)
 		}
 		if observe.Call != nil {
 			observe.Call(Call{})
@@ -156,7 +168,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			observe.Call(Call{Done: true, Took: time.Since(start), ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
 		if err != nil {
-			return "", err
+			return abandon(err)
 		}
 		msg.Role = "assistant"
 		history = append(history, msg)
@@ -168,7 +180,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			history = append(history, a.call(ctx, call))
 		}
 	}
-	return "", ErrTooManyToolCalls
+	return abandon(ErrTooManyToolCalls)
 }
 
 // call runs one tool call and returns its result as a message for the LLM.
@@ -218,10 +230,18 @@ func (m *Memory) remember(contextID string, msgs []openai.Message) {
 	defer m.mu.Unlock()
 	m.clock++
 	// Start at a user message: a tool result without its call is rejected by the API.
-	msgs = msgs[max(0, len(msgs)-maxHistory):]
-	for len(msgs) > 0 && msgs[0].Role != "user" {
-		msgs = msgs[1:]
+	// The last one stays, with all that followed it, even beyond maxHistory:
+	// an answer that took many tool calls is not forgotten as a whole.
+	cut := max(0, len(msgs)-maxHistory)
+	for cut < len(msgs) && msgs[cut].Role != "user" {
+		cut++
 	}
+	for i := len(msgs) - 1; cut == len(msgs) && i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			cut = i
+		}
+	}
+	msgs = msgs[cut:]
 	m.conversations[contextID] = &conversation{lastUsed: m.clock, msgs: msgs}
 	if len(m.conversations) > maxContexts {
 		m.evictOldest()
