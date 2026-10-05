@@ -64,7 +64,8 @@ unhooks:
 	@scripts/install-hooks.sh --uninstall
 
 install: build
-	install -Dm755 $(BIN) $(PREFIX)/bin/$(BIN)
+	mkdir -p "$(PREFIX)/bin"
+	install -m755 $(BIN) "$(PREFIX)/bin/$(BIN)"
 
 clean:
 	rm -rf $(BIN) .cover cover.out .mutation
