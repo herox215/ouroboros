@@ -103,6 +103,16 @@ func (u *ui) Ask(ctx context.Context, contextID, text string, step func(tui.Step
 	return reply, err
 }
 
+// Setup starts the setup of the node, which the UI goes through in a dialog
+// of its own.
+func (u *ui) Setup() (tui.Setup, error) {
+	s, err := u.Owner.Setup()
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 func (u *ui) Contacts() (tui.Contacts, error) {
 	incoming, outgoing, err := u.Requests()
 	if err != nil {

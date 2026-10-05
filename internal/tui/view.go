@@ -83,6 +83,10 @@ func (m *Model) View() tea.View {
 	if m.width == 0 {
 		return v
 	}
+	if m.onboard != nil {
+		v.SetContent(m.onboardView())
+		return v
+	}
 	if m.showSplash {
 		v.SetContent(m.splashView())
 		return v
@@ -161,7 +165,7 @@ func shortKey(publicKey string) string {
 
 // splashView shows the ouroboros animation centered on the screen.
 func (m *Model) splashView() string {
-	return drawSplash(m.width, m.height, m.splashElapsed, m.light)
+	return drawSplash(m.width, m.height, m.splashElapsed, m.splashElapsed+m.skyShift, m.light)
 }
 
 // logoText joins the logo lines, each truncated to width.

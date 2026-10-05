@@ -23,6 +23,7 @@ import (
 	"ouroboros/internal/identity"
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
+	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -225,9 +226,10 @@ func TestFrameIsOutOfReach(t *testing.T) {
 		"a client of its own":          providing("p", func() (*a2a.Client, error) { return nil, nil }),
 		// What the owner does is handed to a front end in the list of
 		// plugins, and to nobody who asks the kernel for it.
-		"what the owner does":          needing[*plugin.Owner]("p"),
-		"an owner of its own":          providing("p", plugin.OwnerOf(dir, &peers.Network{})),
-		"a way to what the owner does": needing[func() *plugin.Owner]("p"),
+		"what the owner does":            needing[*plugin.Owner]("p"),
+		"an owner of its own":            providing("p", plugin.OwnerOf(dir, &peers.Network{}, setup.Offer{})),
+		"a way to what the owner does":   needing[func() *plugin.Owner]("p"),
+		"the setup, which saves the key": needing[*plugin.Setup]("p"),
 		// An LLM that is handed the configuration would be handed the key.
 		"an LLM that reads the configuration": providing("p", func(config.Config) plugin.Model { return nil }),
 	} {

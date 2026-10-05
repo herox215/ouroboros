@@ -2,7 +2,6 @@ package tui
 
 import (
 	"errors"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -87,8 +86,6 @@ func TestBackendErrors(t *testing.T) {
 			b.status.Running = false
 			return m.goOnline
 		}, "boom"},
-		"stop for the setup": {"stop", func(m *Model, _ *fakeBackend) tea.Cmd { return press(m, "c") }, "boom"},
-		"setup":              {"setup", func(m *Model, _ *fakeBackend) tea.Cmd { return press(m, "c") }, "boom"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, b := commands(t)
@@ -106,20 +103,6 @@ func TestBackendErrors(t *testing.T) {
 	press(m, "R")
 	m.Update(press(m, "a")())
 	notice(t, m, "boom")
-}
-
-func TestSetup(t *testing.T) {
-	m, _ := commands(t)
-	if _, cmd := m.Update(setupMsg{exec.Command("true")}); cmd == nil {
-		t.Fatal("the setup should be run with the terminal handed over")
-	}
-	failed := errors.New("exit status 1")
-	if msg := setupDone(failed).(actionMsg); msg.err != failed {
-		t.Fatalf("got %+v", msg)
-	}
-	if _, refresh := m.Update(setupDone(nil)); refresh == nil || m.notice != "node configured and started" || m.noticeErr {
-		t.Fatalf("notice %q", m.notice)
-	}
 }
 
 // What is neither a key nor an answer goes where it belongs.

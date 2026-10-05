@@ -13,6 +13,7 @@ import (
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
 	"ouroboros/internal/proposal"
+	"ouroboros/internal/setup"
 )
 
 // Owner is what the owner of the node does at a front end and nowhere else:
@@ -30,17 +31,20 @@ import (
 // It is narrow on purpose. It decides on the requests and proposals that are
 // waiting and shows them; the contacts, the key of the node and its
 // configuration are not to be had from it, and no change of the
-// configuration but one that was proposed.
+// configuration but one that was proposed or one the owner makes in the
+// setup.
 type Owner struct {
 	home  home.Dir
 	local node.Local
 	net   *peers.Network
+	offer setup.Offer
 }
 
-// OwnerOf returns what the owner of the node in dir does, on its network. It
-// is for the list of plugins.
-func OwnerOf(dir home.Dir, network *peers.Network) *Owner {
-	return &Owner{home: dir, local: node.Local{Home: dir}, net: network}
+// OwnerOf returns what the owner of the node in dir does, on its network. The
+// setup offers what offer says until the node has its own. It is for the
+// list of plugins.
+func OwnerOf(dir home.Dir, network *peers.Network, offer setup.Offer) *Owner {
+	return &Owner{home: dir, local: node.Local{Home: dir}, net: network, offer: offer}
 }
 
 type (
@@ -48,6 +52,10 @@ type (
 	NodeStatus = node.Status
 	// Request is a connection request that waits for a decision.
 	Request = contacts.Request
+	// Setup is one run of the setup of the node, see Owner.Setup.
+	Setup = setup.Session
+	// SetupModels are the models an endpoint offers, as Setup.Connect lists them.
+	SetupModels = setup.Models
 )
 
 var (
@@ -64,6 +72,8 @@ var (
 	ErrStale = proposal.ErrStale
 	// ErrNoProposal means there is no such proposal to decide on.
 	ErrNoProposal = proposal.ErrGone
+	// ErrKeyRejected means the endpoint refused the API key the setup tried.
+	ErrKeyRejected = setup.ErrKeyRejected
 )
 
 // Proposal is a change of the configuration that the agent of the owner
@@ -82,6 +92,9 @@ type Proposal struct {
 	// Such a proposal is not applied: accepting it drops it.
 	Stale bool
 }
+
+// AllTools in the tools Setup.Rights names stands for every tool.
+const AllTools = config.AllTools
 
 // Proposals returns the changes of the configuration that wait for a
 // decision, the oldest first.
@@ -155,6 +168,12 @@ func (o *Owner) SetupCommand() (*exec.Cmd, error) {
 	}
 	return exec.Command(exe, "start", "--setup"), nil
 }
+
+// Setup starts the setup of the node, for a front end that asks for it in a
+// dialog of its own: SetupCommand is the one on the terminal. What the setup
+// saves holds for the node once it is started again. The key for the
+// endpoint stays in the Setup: it tells whether there is one, never which.
+func (o *Owner) Setup() (*Setup, error) { return setup.Open(o.home, o.offer) }
 
 // Requests returns the connection requests that wait for a decision: those
 // of other nodes and those the agent of this node proposed (Request.Proposed),

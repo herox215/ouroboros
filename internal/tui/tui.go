@@ -8,13 +8,13 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"os/exec"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
@@ -58,8 +58,8 @@ type Backend interface {
 	// if the configuration changed since it was proposed.
 	AcceptProposal(id string) error
 	RefuseProposal(id string) error
-	// SetupCommand returns the interactive setup, run with the terminal handed over.
-	SetupCommand() (*exec.Cmd, error)
+	// Setup starts the setup of the node.
+	Setup() (Setup, error)
 }
 
 // Step reports what the agent is waiting for on the way to its answer, like
@@ -132,7 +132,10 @@ type Model struct {
 	showSplash    bool
 	splashStart   time.Time
 	splashElapsed time.Duration
-	light         bool // the background of the terminal is light
+	skyShift      time.Duration // how much farther the stars are than the splash: see frame
+	animating     bool          // frames are coming, for the splash or the setup
+	onboard       *onboarding   // the setup, while it is open
+	light         bool          // the background of the terminal is light
 	input         textarea.Model
 	history       viewport.Model
 	spinner       spinner.Model
@@ -204,15 +207,30 @@ type (
 		done string
 		err  error
 	}
-	setupMsg struct{ cmd *exec.Cmd }
-	tickMsg  struct{}
-	// splashMsg advances the splash animation.
+	tickMsg struct{}
+	// splashMsg advances the animation of the splash or of the setup.
 	splashMsg struct{ at time.Time }
 )
 
+// Init starts the UI with the splash, or with the setup for a node that was
+// not set up yet.
 func (m *Model) Init() tea.Cmd {
 	m.splashStart = m.now()
+	if s, err := m.backend.Status(); err == nil && !s.Configured {
+		m.showSplash = false
+		m.openSetup(true)
+	}
+	m.animating = true
 	return tea.Batch(m.goOnline, m.loadContacts, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
+}
+
+// animate makes the frames come unless they do already.
+func (m *Model) animate() tea.Cmd {
+	if m.animating {
+		return nil
+	}
+	m.animating = true
+	return splashTick()
 }
 
 func splashTick() tea.Cmd {
@@ -263,18 +281,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		m.light = !msg.IsDark()
 		m.input.SetStyles(textarea.DefaultStyles(msg.IsDark()))
+		if m.onboard != nil {
+			m.onboard.input.SetStyles(textinput.DefaultStyles(msg.IsDark()))
+		}
 	case tickMsg:
 		return m, tea.Batch(m.refresh(), tick())
 	case splashMsg:
+		if m.onboard != nil {
+			m.frame(msg.at)
+			return m, splashTick()
+		}
 		if !m.showSplash {
+			m.animating = false
 			return m, nil
 		}
 		m.splashElapsed = msg.at.Sub(m.splashStart)
 		if m.splashElapsed >= splashDuration {
-			m.showSplash = false
+			m.showSplash, m.animating = false, false
 			return m, nil
 		}
 		return m, splashTick()
+	case connectedMsg:
+		return m, m.connected(msg)
+	case savedMsg:
+		return m, m.setupSaved(msg)
 	case statusMsg:
 		if msg.err != nil {
 			m.setNotice(msg.err.Error(), true)
@@ -313,8 +343,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setNotice(msg.done, false)
 		}
 		return m, m.refresh()
-	case setupMsg:
-		return m, tea.ExecProcess(msg.cmd, setupDone)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -324,6 +352,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.history, cmd = m.history.Update(msg)
 		return m, cmd
 	case tea.KeyPressMsg:
+		if m.onboard != nil {
+			return m, m.onboardKey(msg)
+		}
 		if m.showSplash {
 			if msg.String() == "ctrl+c" {
 				return m, m.leave()
@@ -334,18 +365,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 	default:
 		var cmd tea.Cmd
+		if m.onboard != nil {
+			m.onboard.input, cmd = m.onboard.input.Update(msg)
+			return m, cmd
+		}
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
 	return m, nil
-}
-
-// setupDone reports how the interactive setup ended.
-func setupDone(err error) tea.Msg {
-	if err != nil {
-		return actionMsg{err: err}
-	}
-	return actionMsg{done: "node configured and started"}
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -537,18 +564,14 @@ func (m *Model) toggleNode() tea.Cmd {
 	}
 }
 
-// setup stops the node and hands the terminal to the interactive setup.
+// setup opens the setup of the node. The node keeps running until what the
+// setup saved is there to start it with.
 func (m *Model) setup() tea.Cmd {
-	return func() tea.Msg {
-		if err := m.backend.Stop(); err != nil {
-			return actionMsg{err: err}
-		}
-		cmd, err := m.backend.SetupCommand()
-		if err != nil {
-			return actionMsg{err: err}
-		}
-		return setupMsg{cmd}
+	m.openSetup(!m.status.Configured)
+	if m.onboard == nil {
+		return nil
 	}
+	return m.animate()
 }
 
 func (m *Model) send() tea.Cmd {

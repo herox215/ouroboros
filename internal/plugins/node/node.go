@@ -17,6 +17,7 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	"ouroboros/internal/plugins/base"
+	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -50,7 +51,7 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 		c := &nodeCommands{
 			term:   n.Console,
 			local:  node.Local{Home: dir},
-			wizard: &wizard{term: n.Console, home: dir, baseURL: o.BaseURL, apiKey: o.APIKey},
+			wizard: &wizard{term: n.Console, home: dir, offer: setup.Offer{BaseURL: o.BaseURL, APIKey: o.APIKey}},
 			server: node.Server{
 				Home: dir, HTTPPort: o.HTTPPort, DiscoPort: o.DiscoPort, Version: o.Version, Log: dir.LogTo(o.Log),
 				Responder: func(logf func(format string, args ...any)) (a2a.Responder, error) {

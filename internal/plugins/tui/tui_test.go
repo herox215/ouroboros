@@ -16,6 +16,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
 	tuiplugin "ouroboros/internal/plugins/tui"
+	"ouroboros/internal/setup"
 	"ouroboros/internal/tui"
 	"ouroboros/plugin"
 	"ouroboros/plugin/example"
@@ -37,7 +38,24 @@ func backend(t *testing.T, s cli.Settings) tui.Backend {
 	var ctx *plugin.Context
 	app, _ := clitest.NewApp(t, s, "", spy(&ctx))
 	bot, _ := cli.Service[*plugin.Assistant](app)
-	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app)), ctx, bot)
+	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), ctx, bot)
+}
+
+// The UI sets the node up with what the owner does: the setup offers the
+// endpoint of the settings, and one whose configuration cannot be read is
+// none.
+func TestTUIBackendSetup(t *testing.T) {
+	s := clitest.Settings(t)
+	set, err := backend(t, s).Setup()
+	if err != nil || set.Endpoint() != s.BaseURL {
+		t.Fatalf("got %v, %v", set, err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := backend(t, s).Setup(); err == nil || set != nil {
+		t.Fatalf("got %v, %v", set, err)
+	}
 }
 
 func TestTuiWithoutTerminal(t *testing.T) {

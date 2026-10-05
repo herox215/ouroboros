@@ -3,8 +3,9 @@ package node
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/openai/openaitest"
+	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -41,7 +43,7 @@ func newWizard(s settings, input string) (*wizard, *bytes.Buffer) {
 func newWizardOn(s settings, term plugin.Terminal) (*wizard, *bytes.Buffer) {
 	var out bytes.Buffer
 	term.Out = &out
-	return &wizard{term: plugin.NewConsole(term), home: home.Dir(s.Home), baseURL: s.BaseURL, apiKey: s.APIKey}, &out
+	return &wizard{term: plugin.NewConsole(term), home: home.Dir(s.Home), offer: setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}}, &out
 }
 
 func TestSetupRetriesKeyAndModel(t *testing.T) {
@@ -67,7 +69,7 @@ func TestSetupDefaults(t *testing.T) {
 	s.APIKey = openaitest.Key // from OPENAI_API_KEY, no prompt
 	w, _ := newWizard(s, "\n\n\n")
 	cfg, err := w.run(context.Background(), config.Config{})
-	if err != nil || cfg.BaseURL != s.BaseURL || cfg.Model != "gpt-4o-mini" || cfg.Name != hostname() {
+	if err != nil || cfg.BaseURL != s.BaseURL || cfg.Model != "gpt-4o-mini" || cfg.Name != host(t) {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }
@@ -136,6 +138,32 @@ func TestSetupNeverSendsKeyToAnotherEndpoint(t *testing.T) {
 	}
 }
 
+// A saved key the endpoint no longer takes is asked for again.
+func TestSetupAsksAgainForARejectedKey(t *testing.T) {
+	s := testSettings(t)
+	old := nodeConfig(s)
+	old.APIKey = "sk-revoked"
+	w, out := newWizard(s, "\n"+openaitest.Key+"\n\n\n")
+	cfg, err := w.run(context.Background(), old)
+	if err != nil || cfg.APIKey != openaitest.Key || strings.Count(out.String(), "rejected") != 1 {
+		t.Fatalf("got %+v, %v, output %q", cfg, err, out.String())
+	}
+}
+
+func TestSetupCannotSave(t *testing.T) {
+	s := testSettings(t)
+	s.APIKey = openaitest.Key
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Home = filepath.Join(file, "home")
+	w, _ := newWizard(s, "\n\n\n")
+	if _, err := w.run(context.Background(), config.Config{}); err == nil {
+		t.Fatal("want error")
+	}
+}
+
 func TestSetupUsesReadSecret(t *testing.T) {
 	var prompted string
 	w, _ := newWizardOn(testSettings(t), plugin.Terminal{In: strings.NewReader("\n1\nx\n"), ReadSecret: func(prompt string) (string, error) {
@@ -170,53 +198,20 @@ func TestSetupNetworkError(t *testing.T) {
 	}
 }
 
-func TestChatModels(t *testing.T) {
-	got := chatModels([]string{"gpt-4o", "tts-1", "text-embedding-3", "o3"})
-	if !slices.Equal(got, []string{"gpt-4o", "o3"}) {
-		t.Fatalf("got %v", got)
-	}
-	if got := chatModels([]string{"tts-1"}); !slices.Equal(got, []string{"tts-1"}) {
-		t.Fatalf("fallback: got %v", got)
-	}
-}
-
-func TestDefaultModel(t *testing.T) {
-	tests := []struct {
-		models  []string
-		current string
-		want    string
-	}{
-		{[]string{"a", "gpt-4o-mini", "gpt-5-mini-2026"}, "", "gpt-5-mini-2026"},
-		{[]string{"a", "gpt-4o-mini"}, "a", "a"},
-		{[]string{"a", "b"}, "gone", "a"},
-	}
-	for _, tt := range tests {
-		if got := defaultModel(tt.models, tt.current); got != tt.want {
-			t.Errorf("defaultModel(%v, %q) = %q, want %q", tt.models, tt.current, got, tt.want)
-		}
-	}
-}
-
-func TestResolveModel(t *testing.T) {
-	listed, all := []string{"a", "b"}, []string{"a", "b", "tts"}
-	tests := []struct {
-		pick string
-		want string
-		ok   bool
-	}{
-		{"2", "b", true}, {"0", "", false}, {"3", "", false}, {"tts", "tts", true}, {"x", "x", false},
-	}
-	for _, tt := range tests {
-		if got, ok := resolveModel(listed, all, tt.pick); got != tt.want || ok != tt.ok {
-			t.Errorf("resolveModel(%q) = %q, %v", tt.pick, got, ok)
-		}
-	}
-}
-
 func TestPrintColumns(t *testing.T) {
 	var b bytes.Buffer
 	printColumns(&b, []string{"a", "bb", "ccc"})
 	if got := b.String(); got != "    1) a      2) bb     3) ccc\n" {
 		t.Fatalf("got %q", got)
 	}
+}
+
+// host is the name of this host, which the setup offers as the name of the node.
+func host(t *testing.T) string {
+	t.Helper()
+	h, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }

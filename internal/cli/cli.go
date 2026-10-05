@@ -64,6 +64,7 @@ import (
 	"ouroboros/internal/plugins/tui"
 	"ouroboros/internal/plugins/update"
 	"ouroboros/internal/proposal"
+	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -151,7 +152,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 			OnStop: network.Close, // the channels the node opened to peers
 		}),
 		talk.Plugin(),
-		tui.Plugin(plugin.OwnerOf(dir, network)),
+		tui.Plugin(plugin.OwnerOf(dir, network, setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey})),
 		update.Plugin(dir),
 	}
 }
@@ -174,6 +175,7 @@ func seal(k *kernel.Kernel) {
 	kernel.Seal[node.Server](k)
 	kernel.Seal[peers.Network](k)  // holds the contacts and the client
 	kernel.Seal[plugin.Owner](k)   // decides whom the node trusts: handed to a front end in Plugins
+	kernel.Seal[setup.Session](k)  // saves the configuration, and holds the key for the LLM
 	kernel.Seal[guard.Guard](k)    // decides which files a tool touches
 	kernel.Seal[proposal.Store](k) // what the agent proposed; accepting it changes the configuration
 }

@@ -65,34 +65,102 @@ type logoCell struct {
 	along float64
 }
 
-// logoCells draws the ouroboros into braille cells.
-func logoCells(grown float64, shut bool) [logoRows][logoCols]logoCell {
+// pose is how the snake lies. Its body always has the same length: curled up
+// less, it lies on a wider ring that is open at the top, with the gap between
+// the snout and the tip of the tail where the jaws close on it.
+type pose struct {
+	curl  float64 // the angle the body sweeps: bodyArc when the tail is in the mouth
+	turn  float64 // how far the snake is turned counterclockwise
+	scale float64 // pixels per pixel of the logo
+	// x, y is where the center of the ring is once the snake is curled up,
+	// in pixels from the top left. Uncurled, the ring keeps its bottom there.
+	x, y float64
+}
+
+// logoPose is the snake of the logo: curled up, at the size of the logo.
+var logoPose = pose{curl: bodyArc, scale: 1, x: ringX, y: ringY}
+
+// logoCells draws the ouroboros of the logo into braille cells.
+func logoCells(grown float64, shut bool) [][]logoCell {
+	return poseCells(logoPose, grown, shut, logoCols, logoRows)
+}
+
+// ring is where the snake lies in a pose, in pixels of the logo.
+type ring struct {
+	r      float64 // radius
+	cx, cy float64 // center, in pixels of the screen
+	neck   float64 // angle of the neck; the body runs counterclockwise from it
+	head   float64 // angle the head takes, clockwise from the neck
+	scale  float64
+}
+
+// headArc is the angle the head takes on the ring of the logo.
+var headArc = neckAngle - snoutAngle
+
+func (p pose) ring() ring {
+	r := ringR * bodyArc / p.curl
+	head := headArc * ringR / r // the head keeps its length too
+	// The gap stays centered where it is when the snake is curled up.
+	gap := neckAngle - headArc + (headArc+bodyArc)/2
+	return ring{
+		r:     r,
+		cx:    p.x,
+		cy:    p.y - (r-ringR)*p.scale,
+		neck:  gap - (head+p.curl)/2 + head + p.turn,
+		head:  head,
+		scale: p.scale,
+	}
+}
+
+// point returns where the pixel lies on the ring: its distance d outward
+// from the ring line, how far u along the body from the neck in radians of
+// the logo's ring, and how far f along the head, from 0 at the neck to 1 at
+// the snout.
+func (g ring) point(x, y int) (d, u, f float64) {
+	dx, dy := (float64(x)+0.5-g.cx)/g.scale, (g.cy-float64(y)-0.5)/g.scale
+	angle := math.Atan2(dy, dx)
+	return math.Hypot(dx, dy) - g.r, wrap(angle-g.neck) * g.r / ringR, wrap(g.neck-angle) / g.head
+}
+
+// wrap returns the angle a in [0, 2π).
+func wrap(a float64) float64 { return a - 2*math.Pi*math.Floor(a/(2*math.Pi)) }
+
+// reach is how far from the ring line the snake ever lies, in pixels of the logo.
+const reach = 8
+
+// poseCells draws the snake in pose p, with the given share of the body
+// grown, into cols by rows braille cells.
+func poseCells(p pose, grown float64, shut bool, cols, rows int) [][]logoCell {
+	g := p.ring()
+	w, h := cols*2, rows*4
 	// solid is the silhouette of the snake, px the pixels that are drawn.
-	var solid, px [logoPixelsH][logoPixelsW]bool
+	solid, px := grid(w, h), grid(w, h)
 	length := bodyArc * grown
-	for y := range logoPixelsH {
-		for x := range logoPixelsW {
-			d, angle := ringPoint(x, y)
-			t := bodyShare(angle)
-			if length > 0 && t <= length {
-				thickness := 3.4*(1-t/length) + 0.6 // taper from the neck to the tail
+	for y := range h {
+		for x := range w {
+			d, u, f := g.point(x, y)
+			if math.Abs(d) > reach {
+				continue
+			}
+			if length > 0 && u <= length {
+				thickness := 3.4*(1-u/length) + 0.6 // taper from the neck to the tail
 				solid[y][x] = math.Abs(d) <= thickness
 			}
-			if f, ok := headShare(angle); ok && inHead(f, d, shut) {
+			if f <= 1 && inHead(f, d, shut) {
 				solid[y][x] = true
 			}
 		}
 	}
-	for y := range logoPixelsH {
-		for x := range logoPixelsW {
+	for y := range h {
+		for x := range w {
 			if !solid[y][x] {
 				continue
 			}
-			d, angle := ringPoint(x, y)
-			edge := x == 0 || y == 0 || x == logoPixelsW-1 || y == logoPixelsH-1 ||
+			d, _, f := g.point(x, y)
+			edge := x == 0 || y == 0 || x == w-1 || y == h-1 ||
 				!solid[y][x-1] || !solid[y][x+1] || !solid[y-1][x] || !solid[y+1][x]
 			px[y][x] = edge || d > 0.2 // the back is the outer side of the ring
-			if f, ok := headShare(angle); ok {
+			if f <= 1 {
 				eye := math.Hypot((f-eyeAt)*headLength(), d-4)
 				if eye < 1.9 {
 					px[y][x] = eye < 0.6 // a pupil in a hollow eye
@@ -103,9 +171,10 @@ func logoCells(grown float64, shut bool) [logoRows][logoCols]logoCell {
 
 	// The dots of a braille cell, by row and column.
 	dots := [4][2]rune{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}
-	var cells [logoRows][logoCols]logoCell
-	for row := range logoRows {
-		for col := range logoCols {
+	cells := make([][]logoCell, rows)
+	for row := range rows {
+		cells[row] = make([]logoCell, cols)
+		for col := range cols {
 			c := &cells[row][col]
 			n := 0
 			for j := range 4 {
@@ -115,8 +184,8 @@ func logoCells(grown float64, shut bool) [logoRows][logoCols]logoCell {
 						continue
 					}
 					c.dots |= dots[j][i]
-					if _, angle := ringPoint(x, y); !isHead(angle) {
-						c.along += bodyShare(angle) / bodyArc
+					if _, u, f := g.point(x, y); f > 1 {
+						c.along += u / bodyArc
 					}
 					n++
 				}
@@ -129,35 +198,17 @@ func logoCells(grown float64, shut bool) [logoRows][logoCols]logoCell {
 	return cells
 }
 
-// bodyShare returns how far the angle lies along the body from the neck, in
-// radians counterclockwise.
-func bodyShare(angle float64) float64 {
-	return math.Mod(angle-neckAngle+4*math.Pi, 2*math.Pi)
-}
-
-// isHead reports whether the angle lies on the head.
-func isHead(angle float64) bool {
-	_, ok := headShare(angle)
-	return ok
-}
-
-// ringPoint returns where the pixel lies relative to the ring: its distance
-// outward from the ring line and its angle around the center.
-func ringPoint(x, y int) (d, angle float64) {
-	dx, dy := float64(x)+0.5-ringX, ringY-float64(y)-0.5
-	return math.Hypot(dx, dy) - ringR, math.Atan2(dy, dx)
+func grid(w, h int) [][]bool {
+	g := make([][]bool, h)
+	for y := range g {
+		g[y] = make([]bool, w)
+	}
+	return g
 }
 
 // headLength is the length of the head along the ring in pixels.
 func headLength() float64 {
-	return (neckAngle - snoutAngle) * ringR
-}
-
-// headShare returns how far along the head the angle lies, from 0 at the neck
-// to 1 at the snout. It reports false outside the head.
-func headShare(angle float64) (float64, bool) {
-	f := (neckAngle - angle) / (neckAngle - snoutAngle)
-	return f, f >= 0 && f <= 1
+	return headArc * ringR
 }
 
 // inHead reports whether the head covers the point at share f and distance d.

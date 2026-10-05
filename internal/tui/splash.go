@@ -205,24 +205,36 @@ func (c *canvas) String() string {
 	return b.String()
 }
 
-// drawSplash renders the splash for a screen of w by h at the time elapsed
-// after its start.
-func drawSplash(w, h int, at time.Duration, light bool) string {
-	p := darkPalette
+// colors returns the palette for a light or a dark background.
+func colors(light bool) palette {
 	if light {
-		p = lightPalette
+		return lightPalette
 	}
-	c := &canvas{w: w, h: h, cells: make([]cell, w*h), back: p.back}
-	c.alpha = min(ramp(at, 0, fadeIn), ramp(splashDuration-at, 0, fadeOut))
+	return darkPalette
+}
 
-	title, letter := bigTitle, bigLetter
+// splashLayout returns the title the splash shows on a screen of w by h,
+// the columns of one of its letters, and where the logo goes: its left and
+// top cell, and the rows of the logo, the title and the tagline together.
+func splashLayout(w, h int) (title []string, letter, left, top, block int) {
+	title, letter = bigTitle, bigLetter
 	if w < len([]rune(bigTitle[0]))+4 || h < logoRows+len(bigTitle)+5 {
 		title, letter = []string{titleText}, 1
 	}
-	block := logoRows + 1 + len(title) + 2 // logo, gap, title, gap, tagline
-	top, left := (h-block)/2, (w-logoCols)/2
+	block = logoRows + 1 + len(title) + 2 // logo, gap, title, gap, tagline
+	return title, letter, (w - logoCols) / 2, (h - block) / 2, block
+}
 
-	drawStars(c, p, at)
+// drawSplash renders the splash for a screen of w by h at the time elapsed
+// after its start. The stars are where they are at the time sky: a splash
+// that follows the setup keeps the sky of the setup.
+func drawSplash(w, h int, at, sky time.Duration, light bool) string {
+	p := colors(light)
+	c := &canvas{w: w, h: h, cells: make([]cell, w*h), back: p.back}
+	c.alpha = min(ramp(at, 0, fadeIn), ramp(splashDuration-at, 0, fadeOut))
+	title, letter, left, top, block := splashLayout(w, h)
+
+	drawStars(c, p, sky)
 	// The jaws close at the left of the snout.
 	biteX := float64(left) + (ringX+ringR*math.Cos(110*math.Pi/180))/2
 	biteY := float64(top) + (ringY-ringR*math.Sin(110*math.Pi/180))/4

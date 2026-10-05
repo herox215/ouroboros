@@ -13,6 +13,8 @@ import (
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
+	"ouroboros/internal/openai/openaitest"
+	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -23,7 +25,7 @@ func TestMain(m *testing.M) { clitest.Main(m) }
 func owner(t *testing.T, s cli.Settings) *plugin.Owner {
 	t.Helper()
 	app, _ := clitest.NewApp(t, s, "")
-	return plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app))
+	return plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey})
 }
 
 // The owner starts and stops the node, and sees how it is.
@@ -64,6 +66,39 @@ func TestOwnerControlsTheNode(t *testing.T) {
 	}
 	if o.Running() {
 		t.Fatal("the node should be stopped")
+	}
+}
+
+// The owner sets the node up in a dialog of a front end, with what the
+// settings offer: the setup saves what the node is started with.
+func TestOwnerSetsUpTheNode(t *testing.T) {
+	s := clitest.Settings(t)
+	s.APIKey = openaitest.Key
+	o := owner(t, s)
+	set, err := o.Setup()
+	if err != nil || set.Endpoint() != s.BaseURL || !set.HasKey(s.BaseURL) {
+		t.Fatalf("got %+v, %v", set, err)
+	}
+	models, err := set.Saved(context.Background(), set.Endpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.Save(models.Default, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := o.Status(); err != nil || !status.Configured || status.Name != "alpha" {
+		t.Fatalf("a node that was set up: %+v, %v", status, err)
+	}
+	if _, err := set.Connect(context.Background(), s.BaseURL, "sk-bad"); !errors.Is(err, plugin.ErrKeyRejected) {
+		t.Fatalf("a bad key: %v", err)
+	}
+
+	broken := clitest.Settings(t)
+	if err := os.WriteFile(filepath.Join(broken.Home, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner(t, broken).Setup(); err == nil {
+		t.Fatal("a configuration that cannot be read: want error")
 	}
 }
 

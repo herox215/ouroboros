@@ -6,8 +6,8 @@ One static binary; every node on the LAN can find every other node, and your age
 
 ```sh
 ./install.sh              # bootstraps Go if missing, then builds → ~/.local/bin/ouro
-ouro                      # chat with your agent in the terminal UI (default)
-ouro start                # first run: endpoint, API key, model picker, node name
+ouro                      # chat with your agent in the terminal UI (default); the first run sets the node up
+ouro start                # the same setup on the terminal on the first run, then the node in the background
 ouro list                 # find nodes on the network
 ouro chat "ask beta …"    # one answer from your agent, for scripts; without a message → the terminal UI
 ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
@@ -23,6 +23,15 @@ splash for about three seconds: stars drift by, the serpent curls around in a gr
 tail with a burst of sparks, a glow runs along its body, and the name decodes itself letter by letter. On a light
 background it takes darker colors. Any key (except `ctrl+c`) skips it. Without a terminal (pipes, CI, redirects)
 `ouro` prints the usage instead, so scripts keep working.
+
+On the first run there is no node to chat with yet, and the UI opens with the setup instead: five pages for
+the LLM endpoint, the API key, the model, the name of the node and what your agent may do. Behind the dialog
+the snake lies uncurled on the starry sky, and with every page it curls up a little more. Once the setup is
+saved, its tail reaches its mouth, it turns once and shrinks into the logo, and the splash takes over where
+the jaws snap shut. `esc` goes back a page, and on the first page it quits; any key skips the end. The key is
+never shown, and a key that is saved is only offered for the endpoint it was entered for. `c` opens the same
+setup later with what the node has; there `esc` on the first page goes back to the chat. The node keeps
+running while you set it up and is restarted with what the setup saved.
 
 The UI is the chat with your own agent. You do not
 write to other nodes yourself: the agent does, whenever you ask it to or it thinks a peer knows
@@ -467,7 +476,8 @@ plugin               what a plugin is written against: the one package it import
 internal/cli         the list of plugins that make up ouro, and the frame they do not get
 internal/plugins     the standard plugins, one package each: commands, setup dialog, wiring
 internal/kernel      plugin kernel: services, contributions, start order by declared dependencies
-internal/tui         terminal UI (Bubble Tea)
+internal/tui         terminal UI (Bubble Tea), with the splash and the setup
+internal/setup       the setup of the node: endpoint, key, model, name; the terminal and the UI both use it
 internal/node        the local node: Server runs it, Local controls the background one
 internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error, run, get_config, propose_config; what the owner's agent does goes to the log
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
@@ -716,7 +726,9 @@ prints the usage, with several it fails and names them.
 The terminal UI is also where the owner starts and stops the node and accepts or rejects connection
 requests. Those are operations of the frame, so no service offers them. They are in `plugin.Owner`, and that
 is all that is in it: the status of the node, start, stop, the setup, the requests that are waiting, accept
-and reject. The contacts, the key and the configuration cannot be had from it. A front end takes the `Owner`
+and reject. The contacts, the key and the configuration cannot be had from it. The setup (`Owner.Setup`)
+saves the endpoint, the key, the model and the name, and keeps the key to itself: it tells the front end
+whether there is one, never which. A front end takes the `Owner`
 as an argument of its `Plugin` function and gets it in `Plugins`, where the tui plugin gets it today. A plugin
 cannot ask the kernel for it: `plugin.Owner` is sealed like the contacts, so that a plugin nobody put into
 that list by hand, such as one an agent wrote, never decides whom the node trusts.

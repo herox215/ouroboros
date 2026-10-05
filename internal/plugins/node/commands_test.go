@@ -61,13 +61,3 @@ func TestSetupWithoutModels(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
-
-// A host without a name still gives the node one.
-func TestHostname(t *testing.T) {
-	old := osHostname
-	t.Cleanup(func() { osHostname = old })
-	osHostname = func() (string, error) { return "", errors.New("no name") }
-	if got := hostname(); got != "ouroboros" {
-		t.Fatalf("got %q", got)
-	}
-}

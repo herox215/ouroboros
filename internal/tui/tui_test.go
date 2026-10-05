@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -22,14 +21,15 @@ type sent struct {
 }
 
 type fakeBackend struct {
-	status        Status
-	sent          []sent
-	steps         []Step // reported before the reply
-	reply         string
-	sendErr       error
-	started       int
-	stopped       int
-	setupCommands int
+	status  Status
+	sent    []sent
+	steps   []Step // reported before the reply
+	reply   string
+	sendErr error
+	started int
+	stopped int
+	setups  int        // how often the setup was opened
+	setup   *fakeSetup // what it opens; one that knows the fake endpoint if nil
 
 	trust     Contacts
 	accepted  []string
@@ -49,9 +49,15 @@ func (f *fakeBackend) Status() (Status, error)     { return f.status, f.fail["st
 func (f *fakeBackend) Start() error                { f.started++; return f.fail["start"] }
 func (f *fakeBackend) Stop() error                 { f.stopped++; return f.fail["stop"] }
 func (f *fakeBackend) Contacts() (Contacts, error) { return f.trust, f.fail["contacts"] }
-func (f *fakeBackend) SetupCommand() (*exec.Cmd, error) {
-	f.setupCommands++
-	return exec.Command("true"), f.fail["setup"]
+func (f *fakeBackend) Setup() (Setup, error) {
+	f.setups++
+	if err := f.fail["setup"]; err != nil {
+		return nil, err
+	}
+	if f.setup == nil {
+		f.setup = newFakeSetup()
+	}
+	return f.setup, nil
 }
 func (f *fakeBackend) Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error) {
 	f.sent = append(f.sent, sent{contextID, text})
@@ -216,7 +222,7 @@ func TestSplashSceneFillsTheScreen(t *testing.T) {
 			w, h := size[0], size[1]
 			seen := map[string]bool{}
 			for at := time.Duration(0); at <= splashDuration; at += splashFrame {
-				frame := drawSplash(w, h, at, light)
+				frame := drawSplash(w, h, at, at, light)
 				seen[frame] = true
 				lines := strings.Split(frame, "\n")
 				if len(lines) != h {
@@ -234,21 +240,21 @@ func TestSplashSceneFillsTheScreen(t *testing.T) {
 		}
 	}
 	// A narrow screen gets the title in plain letters.
-	if end := ansi.Strip(drawSplash(40, 24, splashDuration-fadeOut, false)); !strings.Contains(end, titleText) || strings.Contains(end, bigTitle[0]) {
+	if end := ansi.Strip(drawSplash(40, 24, splashDuration-fadeOut, splashDuration-fadeOut, false)); !strings.Contains(end, titleText) || strings.Contains(end, bigTitle[0]) {
 		t.Fatalf("narrow splash:\n%s", end)
 	}
 	// The colors follow the background.
-	if drawSplash(100, 30, biteAt, false) == drawSplash(100, 30, biteAt, true) {
+	if drawSplash(100, 30, biteAt, biteAt, false) == drawSplash(100, 30, biteAt, biteAt, true) {
 		t.Fatal("a light background should get other colors")
 	}
 }
 
 func TestSplashTagIsTyped(t *testing.T) {
-	half := ansi.Strip(drawSplash(100, 30, taglineAt+typeSpeed*6, false))
+	half := ansi.Strip(drawSplash(100, 30, taglineAt+typeSpeed*6, taglineAt+typeSpeed*6, false))
 	if !strings.Contains(half, "a tiny▌") || strings.Contains(half, tagline) {
 		t.Fatalf("the tagline should be typed letter by letter:\n%s", half)
 	}
-	if early := ansi.Strip(drawSplash(100, 30, titleAt-scrambleFor, false)); strings.Contains(early, "▀▄▄▀") {
+	if early := ansi.Strip(drawSplash(100, 30, titleAt-scrambleFor, titleAt-scrambleFor, false)); strings.Contains(early, "▀▄▄▀") {
 		t.Fatalf("the title should not be there before it decodes:\n%s", early)
 	}
 }
@@ -534,16 +540,17 @@ func TestToggleNode(t *testing.T) {
 		t.Fatal("s should start a stopped node")
 	}
 	m.status.Configured = false
-	if msg := press(m, "s")(); b.setupCommands != 1 {
-		t.Fatalf("s should run the setup for an unconfigured node, got %T", msg)
+	if press(m, "s"); b.setups != 1 || m.onboard == nil || !m.onboard.first {
+		t.Fatal("s should open the setup for an unconfigured node")
 	}
 }
 
-func TestSetupStopsNodeFirst(t *testing.T) {
+// The node keeps running while it is set up again: it is restarted with
+// what the setup saved.
+func TestSetupKeepsTheNodeRunning(t *testing.T) {
 	m, b := commands(t)
-	msg := press(m, "c")()
-	if _, ok := msg.(setupMsg); !ok || b.stopped != 1 || b.setupCommands != 1 {
-		t.Fatalf("got %T, stopped %d", msg, b.stopped)
+	if press(m, "c"); b.setups != 1 || m.onboard == nil || m.onboard.first || b.stopped != 0 {
+		t.Fatalf("setups %d, stopped %d", b.setups, b.stopped)
 	}
 }
 
@@ -555,6 +562,9 @@ func TestTinyWindow(t *testing.T) {
 		m.View() // the splash must survive tiny windows
 		m.showSplash = false
 		m.View()
+		m.setup() // and so must the setup
+		m.View()
+		m.closeSetup()
 	}
 }
 
