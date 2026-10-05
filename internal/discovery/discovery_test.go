@@ -351,6 +351,8 @@ func TestScannerAsksSources(t *testing.T) {
 // The tailnet is asked through the tailscale CLI; without it, or when it
 // fails, there are no peers to probe.
 func TestTailscalePeersAsksTheCLI(t *testing.T) {
+	defer func(d time.Duration) { tailscaleTimeout = d }(tailscaleTimeout)
+	tailscaleTimeout = time.Minute
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
 	if _, err := os.Stat(tailscaleApp); err == nil {

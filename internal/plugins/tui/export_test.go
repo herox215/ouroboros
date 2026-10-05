@@ -31,3 +31,6 @@ func HandOver(exe string, chat tui.Chat, memory json.RawMessage, wasRunning bool
 
 // ResumeEnv names the file the UI of a new process goes on from.
 const ResumeEnv = resumeEnv
+
+// Show runs m on the terminal as the plugin does.
+func Show(ctx context.Context, m *tui.Model) error { return show(ctx, m) }

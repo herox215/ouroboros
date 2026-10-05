@@ -500,6 +500,10 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		t.Fatalf("the script still runs: %q", m.chat.doing)
 	}
 	m.step(stepMsg{m.chat.contextID, Step{Text: "running a script ✓ 9ms", Done: true}, nil})
+	// A call that ended without having started, and words of a conversation
+	// that was reset, change nothing.
+	m.step(stepMsg{m.chat.contextID, Step{Text: "listing ~ ✓ 1ms", Done: true}, nil})
+	m.say(sayMsg{"another conversation", "I was reset", nil})
 	deliver(m, cmd)
 
 	want := []entry{{mine: true, text: "fix it"},

@@ -103,3 +103,32 @@ func TestToolLine(t *testing.T) {
 		t.Fatalf("a tool without a view: %q", got)
 	}
 }
+
+// What became of a tool call is told by the first view of that tool that has
+// a Detail, after the line of the call; that view alone decides.
+func TestToolDetail(t *testing.T) {
+	ctx := started(t,
+		func(ctx *plugin.Context) {
+			plugin.Add(ctx, plugin.ToolView{Tool: "other", Detail: func(plugin.Step) string { return "of something else" }})
+			plugin.Add(ctx, plugin.ToolView{Tool: "greet"}) // tells nothing
+			plugin.Add(ctx, plugin.ToolView{Tool: "greet", Detail: func(s plugin.Step) string {
+				if !s.Done {
+					return ""
+				}
+				return "✓"
+			}})
+		},
+		func(ctx *plugin.Context) {
+			plugin.Add(ctx, plugin.ToolView{Tool: "greet", Detail: func(plugin.Step) string { return "never asked" }})
+		})
+
+	if got := plugin.ToolDetail(ctx, plugin.Step{Tool: "greet", Done: true}, "greeting beta"); got != "greeting beta ✓" {
+		t.Errorf("ended: %q", got)
+	}
+	if got := plugin.ToolDetail(ctx, plugin.Step{Tool: "greet"}, "greeting beta"); got != "greeting beta" {
+		t.Errorf("a view with nothing to tell: %q", got)
+	}
+	if got := plugin.ToolDetail(ctx, plugin.Step{Tool: "list", Done: true}, "listing"); got != "listing" {
+		t.Errorf("a tool without a Detail: %q", got)
+	}
+}

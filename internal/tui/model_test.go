@@ -30,7 +30,13 @@ func TestModelScreenChoosesAModel(t *testing.T) {
 		t.Fatalf("the model in use should be marked:\n%s", view)
 	}
 
-	// Down to the second model, enter saves it.
+	// Down to the second model, enter saves it. Up does not go past the first.
+	press(m, "up")
+	press(m, "down")
+	press(m, "up")
+	if m.modelSel != 0 {
+		t.Fatalf("up should select the first model: %d", m.modelSel)
+	}
 	press(m, "down")
 	m.Update(press(m, "enter")())
 	if len(b.set) != 1 || b.set[0] != "gpt-4o-mini" || m.notice != "model changed to gpt-4o-mini" || m.noticeErr {

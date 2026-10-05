@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
@@ -295,6 +296,30 @@ func TestAskingPeer(t *testing.T) {
 	}
 	if got := AskingPeerAs(nameOf)(nil); got != "" {
 		t.Errorf("no arguments: AskingPeerAs = %q", got)
+	}
+}
+
+// Once a call ended, the owner is shown how long it took, or the first line
+// of why it failed, cut where a character begins.
+func TestHowItEnded(t *testing.T) {
+	long := strings.Repeat("a", 119) + "äb"
+	tests := []struct {
+		name string
+		step Step
+		want string
+	}{
+		{"running", Step{Took: time.Second}, ""},
+		{"done", Step{Done: true, Took: 1234567 * time.Microsecond}, "✓ 1.235s"},
+		{"failed", Step{Done: true, Err: errors.New("no node \"luna\"\nsee: ouro list")}, `✗ no node "luna"`},
+		{"carriage return", Step{Done: true, Err: errors.New("a\rb")}, `✗ a\rb`},
+		{"120 bytes", Step{Done: true, Err: errors.New(strings.Repeat("a", 120))}, "✗ " + strings.Repeat("a", 120)},
+		{"cut in a character", Step{Done: true, Err: errors.New(long)}, "✗ " + strings.Repeat("a", 119) + "…"},
+		{"cut after a character", Step{Done: true, Err: errors.New("ä" + long)}, "✗ ä" + strings.Repeat("a", 118) + "…"},
+	}
+	for _, tt := range tests {
+		if got := HowItEnded(tt.step); got != tt.want {
+			t.Errorf("%s: HowItEnded = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 

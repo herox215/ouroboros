@@ -11,6 +11,10 @@ import (
 // tailscaleApp is where the macOS app keeps the CLI when it is not on the PATH.
 const tailscaleApp = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 
+// tailscaleTimeout is how long the CLI may take to tell the peers. Tests
+// raise it: macOS checks a program that was just written before it runs it.
+var tailscaleTimeout = 2 * time.Second
+
 // TailscalePeers returns the addresses of the peers that are online in the
 // tailnet of this host. Tailscale forwards neither multicast nor broadcast, so
 // they have to be probed one by one. Without Tailscale the result is empty.
@@ -21,7 +25,7 @@ func TailscalePeers(ctx context.Context) []string {
 			return nil
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, tailscaleTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, cli, "status", "--json").Output()
 	if err != nil {

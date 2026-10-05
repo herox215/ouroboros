@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -64,6 +65,22 @@ func TestTUIBackendSetup(t *testing.T) {
 func TestTuiWithoutTerminal(t *testing.T) {
 	if _, err := clitest.Run(t, clitest.Settings(t), "", "tui"); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+// The UI on the terminal ends with its context; one whose context is given
+// up already is not started.
+func TestShowEndsWithItsContext(t *testing.T) {
+	m := tui.New(backend(t, clitest.Settings(t)), nil, nil)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := tuiplugin.Show(gone, m); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a context given up: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := tuiplugin.Show(ctx, m); err == nil {
+		t.Fatal("a context that ends: want error")
 	}
 }
 

@@ -839,6 +839,7 @@ func TestSearchLeavesOutWhatCannotBeRead(t *testing.T) {
 	w.file("~/src/c.txt", "x\n")
 	w.file("~/src/locked/d.txt", "x\n")
 	w.mode("~/src/locked", 0)
+	os.Symlink("nowhere", w.path("~/src/broken.txt")) // a link to nothing has no lines
 	defer func(o func(string) (io.ReadCloser, error)) { open = o }(open)
 	open = func(path string) (io.ReadCloser, error) {
 		switch filepath.Base(path) {

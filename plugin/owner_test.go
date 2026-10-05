@@ -101,6 +101,9 @@ func TestOwnerSetsUpTheNode(t *testing.T) {
 	if _, err := owner(t, broken).Setup(); err == nil {
 		t.Fatal("a configuration that cannot be read: want error")
 	}
+	if _, err := owner(t, broken).Models(context.Background()); err == nil {
+		t.Fatal("models of a configuration that cannot be read: want error")
+	}
 }
 
 // The owner sees the connection requests in both directions.
