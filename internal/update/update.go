@@ -139,6 +139,10 @@ func (u Updater) run(ctx context.Context, dir, name string, args ...string) (str
 	cmd.Stdout, cmd.Stderr = out, out
 	// The build is staged next to the sources and installed by replace.
 	cmd.Env = append(os.Environ(), "PREFIX="+filepath.Join(u.Dir, "stage"), "OURO_REPO="+u.Repo, "OURO_SOURCE="+u.Source, "OURO_UPDATE=1")
+	// reason reads what git says in English, whatever language it speaks.
+	if name == "git" {
+		cmd.Env = append(cmd.Env, "LC_ALL=C")
+	}
 	if err := cmd.Run(); err != nil {
 		if line := reason(buf.String()); line != "" {
 			return "", fmt.Errorf("%s: %s", name, line)

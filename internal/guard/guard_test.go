@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -386,7 +387,7 @@ func TestLinksAndDots(t *testing.T) {
 	// As many links as the kernel follows are followed.
 	prev := "hello.txt"
 	for i := range maxLinks {
-		name := "l" + string(rune('A'+i))
+		name := "l" + strconv.Itoa(i) // not letters: some file systems ignore their case
 		w.link(prev, w.home+"/share/"+name)
 		prev = name
 	}

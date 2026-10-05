@@ -178,10 +178,13 @@ func TestHoldReportsErrors(t *testing.T) {
 	if _, err := Hold(filepath.Join(t.TempDir(), "missing", "ouro.pid"), 1); err == nil {
 		t.Error("a missing directory should fail")
 	}
-	// The null device can be locked, but holds no content.
-	if _, err := Hold(os.DevNull, 1); err == nil {
-		t.Error("a file that cannot be written should fail")
+	// A file that is locked but cannot be written fails.
+	full := errors.New("full")
+	truncate = func(*os.File, int64) error { return full }
+	if _, err := Hold(pidFile(t), 1); !errors.Is(err, full) {
+		t.Errorf("a file that cannot be written: got %v", err)
 	}
+	truncate = (*os.File).Truncate
 
 	refused := errors.New("no lock")
 	flock = func(int, int) error { return refused }

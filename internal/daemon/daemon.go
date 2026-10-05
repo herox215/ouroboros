@@ -34,6 +34,10 @@ var ErrRunning = errors.New("node is already running")
 // flock locks a file; tests replace it to get in the way.
 var flock = syscall.Flock
 
+// truncate empties a file; tests replace it, since not every system refuses
+// to empty the files that cannot hold content.
+var truncate = (*os.File).Truncate
+
 // kill sends a signal to a process; tests replace it to see what is sent.
 var kill = syscall.Kill
 
@@ -88,7 +92,7 @@ func Hold(path string, port int) (release func(), err error) {
 			f.Close()
 			continue
 		}
-		if err = f.Truncate(0); err == nil { // drop what a dead node left behind
+		if err = truncate(f, 0); err == nil { // drop what a dead node left behind
 			_, err = fmt.Fprintf(f, "%d %d\n", os.Getpid(), port)
 		}
 		if err != nil {
