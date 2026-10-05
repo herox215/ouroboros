@@ -38,7 +38,8 @@ func Plugin(dir home.Dir, network *peers.Network) plugin.Plugin {
 		for _, tool := range assistant.PeerTools(network, selfID) {
 			plugin.Add(ctx, tool)
 		}
-		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolAskPeer, Show: assistant.AskingPeer})
+		// The agent may name the peer by its ID: the owner is shown its name.
+		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolAskPeer, Show: assistant.AskingPeerAs(network.NameOf)})
 		return services{plugin.NetworkOf(network)}, nil
 	})
 }

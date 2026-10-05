@@ -23,6 +23,7 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/discovery"
+	"ouroboros/internal/identity"
 )
 
 // notifyTimeout is how long a peer may take to hear about a decision.
@@ -182,6 +183,27 @@ func match(nodes []discovery.Node, target string) (discovery.Node, error) {
 		ids[i] = n.ID
 	}
 	return discovery.Node{}, fmt.Errorf("%q is ambiguous: %s", target, strings.Join(ids, ", "))
+}
+
+// NameOf returns the name of the trusted peer that target names by its ID
+// or the start of it, as an agent may name a peer. It is "" for a target
+// that names no trusted peer, or more than one, and when the contacts cannot
+// be read. It asks nobody on the network.
+func (n *Network) NameOf(target string) string {
+	known, err := n.Contacts.Snapshot()
+	if err != nil || target == "" {
+		return ""
+	}
+	var names []string
+	for _, c := range known.Trusted {
+		if strings.HasPrefix(identity.IDOf(c.PublicKey), target) {
+			names = append(names, c.Name)
+		}
+	}
+	if len(names) != 1 {
+		return ""
+	}
+	return names[0]
 }
 
 // Send delivers text to the agent of node within the conversation contextID

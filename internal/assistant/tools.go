@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -248,9 +249,18 @@ const ToolAskPeer = toolAskPeer
 // arguments args: which peer the assistant is waiting for. What the two
 // agents say to each other stays between them.
 func AskingPeer(args json.RawMessage) string {
-	var call askPeerArgs
-	if json.Unmarshal(args, &call) != nil || call.Peer == "" {
-		return ""
+	return AskingPeerAs(func(string) string { return "" })(args)
+}
+
+// AskingPeerAs is AskingPeer with the peer called as nameOf calls it: an
+// agent may name a peer by its ID, and the owner knows it by its name. A peer
+// nameOf returns "" for is shown as the agent named it.
+func AskingPeerAs(nameOf func(peer string) string) func(args json.RawMessage) string {
+	return func(args json.RawMessage) string {
+		var call askPeerArgs
+		if json.Unmarshal(args, &call) != nil || call.Peer == "" {
+			return ""
+		}
+		return "asking " + cmp.Or(nameOf(call.Peer), call.Peer)
 	}
-	return "asking " + call.Peer
 }

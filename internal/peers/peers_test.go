@@ -339,3 +339,36 @@ func hadOutgoing(n *testNode, publicKey string) bool {
 	asked, _ := n.contacts.HadOutgoing(publicKey)
 	return asked
 }
+
+// A peer an agent names by its ID, or the start of it, is called by the name
+// it is trusted as.
+func TestNameOf(t *testing.T) {
+	alice, bob, carol := serve(t, "alice"), serve(t, "bob"), serve(t, "carol")
+	n := alice.network()
+	alice.contacts.AddTrusted(bob.PublicKey, "bob", "")
+	alice.contacts.AddTrusted(carol.PublicKey, "carol", "")
+	bobID, carolID := identity.IDOf(bob.PublicKey), identity.IDOf(carol.PublicKey)
+	// A start of the ID that fits only bob's, and one that fits both, if there is one.
+	common := 0
+	for common < len(bobID) && bobID[common] == carolID[common] {
+		common++
+	}
+	for target, want := range map[string]string{
+		bobID:                          "bob",
+		bobID[:common+1]:               "bob",
+		carolID:                        "carol",
+		bobID[:common]:                 "", // carol's too, or every ID
+		"bob":                          "", // a name is not an ID
+		identity.IDOf(alice.PublicKey): "",
+		"ffffffffffffff":               "",
+	} {
+		if got := n.NameOf(target); got != want {
+			t.Errorf("NameOf(%q) = %q, want %q", target, got, want)
+		}
+	}
+	os.Remove(alice.contactsPath)
+	os.Mkdir(alice.contactsPath, 0o700)
+	if got := n.NameOf(bobID); got != "" {
+		t.Errorf("contacts that cannot be read: NameOf = %q", got)
+	}
+}

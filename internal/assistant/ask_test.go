@@ -278,6 +278,22 @@ func TestAskingPeer(t *testing.T) {
 			t.Errorf("%s: AskingPeer = %q, want %q", tt.name, got, tt.want)
 		}
 	}
+
+	// A peer named by its ID is shown by the name the owner knows it by.
+	nameOf := func(peer string) string {
+		if peer == "f0217e5a032d" {
+			return "luna"
+		}
+		return ""
+	}
+	for peer, want := range map[string]string{"f0217e5a032d": "asking luna", "beta": "asking beta"} {
+		if got := AskingPeerAs(nameOf)(args(askPeerArgs{Peer: peer})); got != want {
+			t.Errorf("%s: AskingPeerAs = %q, want %q", peer, got, want)
+		}
+	}
+	if got := AskingPeerAs(nameOf)(nil); got != "" {
+		t.Errorf("no arguments: AskingPeerAs = %q", got)
+	}
 }
 
 // discard is a log that is not kept.
