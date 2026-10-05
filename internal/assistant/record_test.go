@@ -20,11 +20,12 @@ import (
 	"ouroboros/internal/openai"
 )
 
-// scriptLLM answers a user message "!TOOL ARGS" with a call to TOOL, every
-// other message with "said: TEXT". A message "wait" makes it wait until its
-// context ends. It fails with failing, if set.
+// scriptLLM answers a user message "!TOOL ARGS" with a call to TOOL and the
+// text saying, every other message with "said: TEXT". A message "wait" makes
+// it wait until its context ends. It fails with failing, if set.
 type scriptLLM struct {
 	failing error
+	saying  string
 	waiting chan struct{} // closed once it waits
 }
 
@@ -41,7 +42,7 @@ func (l *scriptLLM) Complete(ctx context.Context, _ string, msgs []openai.Messag
 	if rest, ok := strings.CutPrefix(last.Content, "!"); ok && last.Role == "user" {
 		name, args, _ := strings.Cut(rest, " ")
 		call := openai.ToolCall{ID: "1", Type: "function", Function: openai.FunctionCall{Name: name, Arguments: args}}
-		return openai.Message{ToolCalls: []openai.ToolCall{call}}, nil
+		return openai.Message{Content: l.saying, ToolCalls: []openai.ToolCall{call}}, nil
 	}
 	return openai.Message{Content: "said: " + last.Content}, nil
 }
@@ -175,6 +176,28 @@ func TestAskIsLogged(t *testing.T) {
 	if _, err := b.Ask(ctx, "c3", "hi", nil); !errors.Is(err, config.ErrIncomplete) || len(log.take()) != 0 {
 		t.Fatalf("not set up: %v", err)
 	}
+}
+
+// What the LLM says along with calls of tools is logged with its call,
+// shortened and without secrets; when it says nothing, the line has only the
+// number of calls (see TestAskIsLogged). The text of a call that ends in text
+// is the answer and is logged once, as such.
+func TestWhatTheLLMSaysIsLogged(t *testing.T) {
+	cfg := ownerConfig()
+	llm := &scriptLLM{saying: "I will look\nfirst, with " + cfg.APIKey + " " + strings.Repeat("a", maxLogged)}
+	a, log := recorded(t, cfg, llm)
+	if _, err := a.Ask(context.Background(), "c1", `!echo {"text":"hi"}`, nil); err != nil {
+		t.Fatal(err)
+	}
+	head := "I will look\nfirst, with [redacted] " // what is left of the text before the a's
+	said := strconv.Quote(head+strings.Repeat("a", maxLogged-len(head))) + "… (+" + strconv.Itoa(len(head)) + " bytes)"
+	equal(t, "said along with a tool call", log.take(), []string{
+		`chat c1: message from the owner: "!echo {\"text\":\"hi\"}"`,
+		`chat c1: llm call 1 took D: tool calls: 1, said ` + said,
+		`chat c1: tool echo {"text":"hi"} took D: ok (2 bytes)`,
+		`chat c1: llm call 2 took D: text`,
+		`chat c1: answered after D (llm calls: 2): "said: hi"`,
+	})
 }
 
 // The tools a script calls are logged like the others, before the script.
@@ -323,8 +346,8 @@ func TestHowMuchTextIsLogged(t *testing.T) {
 }
 
 // Neither the key of the API nor the key of the node is in the log, in any of
-// the ways it is written, also not as part of an argument, an error or an
-// answer.
+// the ways it is written, also not as part of an argument, an error, what the
+// LLM says along with a tool call or an answer.
 func TestNoSecretIsLogged(t *testing.T) {
 	cfg := ownerConfig()
 	key, _ := base64.StdEncoding.DecodeString(cfg.PrivateKey)
@@ -338,6 +361,7 @@ func TestNoSecretIsLogged(t *testing.T) {
 	a, log := recorded(t, cfg, llm)
 	var all []string
 	for _, leak := range leaks {
+		llm.saying = "using " + leak
 		args, _ := json.Marshal(map[string]string{"text": "key " + leak, "why": "key " + leak})
 		for _, msg := range []string{"tell " + leak, "!echo " + string(args), "!fail " + string(args)} {
 			if _, err := a.Ask(context.Background(), "c", msg, nil); err != nil {
@@ -356,7 +380,7 @@ func TestNoSecretIsLogged(t *testing.T) {
 		}
 	}
 	// What is redacted is still in the log, as such.
-	if strings.Count(text, redacted) < 7*len(leaks) || !strings.Contains(text, `tool echo {"text":"key [redacted]","why":"key [redacted]"}`) {
+	if strings.Count(text, redacted) < 9*len(leaks) || !strings.Contains(text, `tool echo {"text":"key [redacted]","why":"key [redacted]"}`) {
 		t.Fatalf("log:\n%s", text)
 	}
 

@@ -50,11 +50,13 @@ type Step struct {
 
 // Call reports a call of the LLM: once when it starts and again, with Done
 // set, when it has ended, with how long it took and whether it ended in a
-// text, in calls of tools or in an error.
+// text, in calls of tools or in an error. Content is the text the LLM sent,
+// also along with calls of tools.
 type Call struct {
 	Done      bool
 	Took      time.Duration
 	ToolCalls int
+	Content   string
 	Err       error
 }
 
@@ -133,7 +135,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{a.system}, history...), a.specs)
 		if observe.Call != nil {
-			observe.Call(Call{Done: true, Took: time.Since(start), ToolCalls: len(msg.ToolCalls), Err: err})
+			observe.Call(Call{Done: true, Took: time.Since(start), ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
 		if err != nil {
 			return "", err

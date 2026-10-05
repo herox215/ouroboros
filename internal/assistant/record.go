@@ -20,7 +20,8 @@ import (
 )
 
 // maxLogged is how many bytes of a text the log takes: of the message of the
-// owner, of the answer, of the arguments of a tool and of an error.
+// owner, of what the LLM says along with calls of tools, of the answer, of the
+// arguments of a tool and of an error.
 const maxLogged = 300
 
 // redacted is what the log has in place of a secret.
@@ -34,8 +35,8 @@ var sizeOnly = map[string][]string{"write": {"content"}, "edit": {"old", "new"}}
 var oneLine = strings.NewReplacer("\n", `\n`, "\r", `\r`)
 
 // record writes what the agent does on the way to one answer into the log:
-// the message, every call of the LLM, every tool call and how the answer
-// ended. A call that is under way when the answer is stopped is written as
+// the message, every call of the LLM with what it said, every tool call and
+// how the answer ended. A call that is under way when the answer is stopped is written as
 // canceled, at once, also when it never returns.
 type record struct {
 	log     func(format string, args ...any)
@@ -131,7 +132,8 @@ func (r *record) close(format string, args ...any) {
 	r.done()
 }
 
-// call notes a call of the LLM, and writes it when it has ended.
+// call notes a call of the LLM, and writes it when it has ended: how long it
+// took, how it ended and, along with calls of tools, what the LLM said.
 func (r *record) call(c agent.Call) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -149,7 +151,13 @@ func (r *record) call(c agent.Call) {
 	case c.Err != nil:
 		outcome = "failed " + r.text(c.Err.Error())
 	case c.ToolCalls > 0:
+		// What the LLM says along with calls of tools is in no other line.
+		// The text of a call that ends in text is the answer, and that has a
+		// line of its own.
 		outcome = "tool calls: " + strconv.Itoa(c.ToolCalls)
+		if c.Content != "" {
+			outcome += ", said " + r.text(c.Content)
+		}
 	}
 	r.line("llm call %d took %s: %s", r.calls, took(c.Took), outcome)
 }

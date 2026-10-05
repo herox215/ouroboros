@@ -13,7 +13,8 @@ import (
 )
 
 // fakeLLM records the last request and echoes the last message. A user
-// message "call NAME" is answered with a call to the tool NAME.
+// message "call NAME" is answered with a call to the tool NAME and the text
+// "calling NAME".
 type fakeLLM struct {
 	model string
 	msgs  []openai.Message
@@ -29,7 +30,7 @@ func (f *fakeLLM) Complete(_ context.Context, model string, msgs []openai.Messag
 	last := msgs[len(msgs)-1]
 	if name, ok := strings.CutPrefix(last.Content, "call "); ok && last.Role == "user" {
 		call := openai.ToolCall{ID: "c1", Type: "function", Function: openai.FunctionCall{Name: name, Arguments: `{"x":1}`}}
-		return openai.Message{ToolCalls: []openai.ToolCall{call}}, nil
+		return openai.Message{Content: "calling " + name, ToolCalls: []openai.ToolCall{call}}, nil
 	}
 	return openai.Message{Role: "assistant", Content: "echo " + last.Content}, nil
 }
@@ -173,6 +174,30 @@ func TestTrimmedHistoryStartsWithUserMessage(t *testing.T) {
 	}
 }
 
+// roundsLLM asks for a tool on its first rounds turns and then answers.
+type roundsLLM struct{ rounds, calls int }
+
+func (l *roundsLLM) Complete(context.Context, string, []openai.Message, []openai.Tool) (openai.Message, error) {
+	l.calls++
+	if l.calls > l.rounds {
+		return openai.Message{Content: "done"}, nil
+	}
+	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "c", Function: openai.FunctionCall{Name: "noop"}}}}, nil
+}
+
+// An answer that took so many tool calls that none of the messages kept is
+// the user's is remembered as no history at all.
+func TestHistoryWithoutUserMessageIsEmpty(t *testing.T) {
+	llm := &roundsLLM{rounds: maxHistory / 2}
+	a := New(llm, "gpt", "sys", Tool{Name: "noop", Run: func(context.Context, json.RawMessage) (string, error) { return "", nil }})
+	if got, err := a.Respond(context.Background(), "c1", "go"); err != nil || got != "done" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if h := a.history("c1"); len(h) != 0 {
+		t.Fatalf("history %+v", h)
+	}
+}
+
 // A tool that runs other tools of its agent reports their calls like the LLM's
 // own, to whoever observes the conversation.
 func TestInvoke(t *testing.T) {
@@ -219,8 +244,8 @@ func TestInvoke(t *testing.T) {
 }
 
 // Every call of the LLM is reported when it starts and when it has ended,
-// with how long it took and how it ended; every tool call with how long it
-// took.
+// with how long it took, how it ended and the text the LLM sent, also along
+// with calls of tools; every tool call with how long it took.
 func TestRunReportsTheCallsOfTheLLM(t *testing.T) {
 	slow := Tool{Name: "slow", Run: func(context.Context, json.RawMessage) (string, error) {
 		time.Sleep(5 * time.Millisecond)
@@ -233,7 +258,8 @@ func TestRunReportsTheCallsOfTheLLM(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(calls) != 4 || calls[0] != (Call{}) || !calls[1].Done || calls[1].ToolCalls != 1 || calls[1].Err != nil ||
-		calls[2] != (Call{}) || !calls[3].Done || calls[3].ToolCalls != 0 || calls[3].Err != nil {
+		calls[1].Content != "calling slow" || calls[2] != (Call{}) || !calls[3].Done || calls[3].ToolCalls != 0 ||
+		calls[3].Err != nil || calls[3].Content != "echo done" {
 		t.Fatalf("calls %+v", calls)
 	}
 	if len(steps) != 2 || steps[0].Took != 0 || steps[1].Took < 5*time.Millisecond {

@@ -13,7 +13,7 @@
 # behaviour does not belong here: it needs a test.
 
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
-internal/agent/agent.go:214:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
+internal/agent/agent.go:216:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
 internal/kernel/kernel.go:419:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
 internal/update/update.go:49:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
 internal/plugins/files/files.go:200:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit

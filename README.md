@@ -342,7 +342,7 @@ a conversation that went wrong, the log says what the agent did and where the ti
 
 ```
 2026/10/04 14:02:11 chat 3f6c…: message from the owner: "ask beta for the time"
-2026/10/04 14:02:12 chat 3f6c…: llm call 1 took 1.204s: tool calls: 1
+2026/10/04 14:02:12 chat 3f6c…: llm call 1 took 1.204s: tool calls: 1, said "I will ask beta."
 2026/10/04 14:02:15 chat 3f6c…: tool ask_peer {"message":"What time is it?","peer":"beta"} took 2.871s: ok (24 bytes)
 2026/10/04 14:02:16 chat 3f6c…: llm call 2 took 0.912s: text
 2026/10/04 14:02:16 chat 3f6c…: answered after 4.991s (llm calls: 2): "Beta says it is noon."
@@ -351,22 +351,25 @@ a conversation that went wrong, the log says what the agent did and where the ti
 - **A line per step**: the message of the owner with its conversation, every call of the LLM when it has
   ended (with `text`, `tool calls: N` or `failed` and the error), every tool call when it has ended (the tool,
   its arguments, `ok` or `error` and the error), and the end of the answer: `answered`, `failed` with the error
-  or `canceled`, each with the time it took and the number of calls of the LLM. The calls of a
-  [script](#scripts) are recorded like the others, before the line of `run`.
+  or `canceled`, each with the time it took and the number of calls of the LLM. What the LLM says along with
+  calls of tools follows them as `said "…"`; a call that ends in `text` has no text in its line, because that
+  text is the answer and is in the last line. The calls of a [script](#scripts) are recorded like the others,
+  before the line of `run`.
 - **Canceled**: when you quit the UI, press `n` for a new conversation or interrupt `ouro chat` with Ctrl-C,
   the call the agent was waiting for is recorded as `canceled` with the time it had run, and then the answer.
   Ctrl-C while `ouro chat` waits for an answer stops that answer; in the chat line by line you can then go on.
   The UI writes these lines before it is gone, so the last line of a conversation says what the agent was
   waiting for.
-- **How much text**: the message and the answer are cut after 300 bytes, at the start of a character, with
-  `… (+N bytes)` for the rest; a line break is written as `\n`, so every entry is one line. The arguments of a
-  tool are cut the same way, but the content of `write` and `old` and `new` of `edit` are only given by their
-  size, as in `{"content":"(1532 bytes)","path":"~/notes.md"}`. Of the result of a tool the log has only its
-  size, never its text.
+- **How much text**: the message, what the LLM says and the answer are cut after 300 bytes, at the start of a
+  character, with `… (+N bytes)` for the rest; a line break is written as `\n`, so every entry is one line.
+  The arguments of a tool are cut the same way, but the content of `write` and `old` and `new` of `edit` are
+  only given by their size, as in `{"content":"(1532 bytes)","path":"~/notes.md"}`. Of the result of a tool
+  the log has only its size, never its text.
 - **No secrets**: the key of the API and the key of the node are replaced by `[redacted]` wherever they would
-  appear, in a message, an argument, an error or an answer, also in the other usual encodings of the key of
-  the node (base64 with or without padding, URL-safe, hex, also of its seed). What the agent read from a file
-  or heard from a peer is not in the log, except what it quotes in its answer, cut as above.
+  appear, in a message, an argument, an error, what the LLM says or an answer, also in the other usual
+  encodings of the key of the node (base64 with or without padding, URL-safe, hex, also of its seed). What the
+  agent read from a file or heard from a peer is not in the log, except what the LLM quotes of it in what it
+  says, cut as above.
 - **Peers**: what a peer writes to your agent and what it answers is not recorded, as before: the log has the
   request (`POST /`) and, for an answer that failed, the error with its ID, but no text of a peer.
 - **Size**: `ouro.log` is kept below 10 MiB. Before a line is written to a log that reached that size, its
