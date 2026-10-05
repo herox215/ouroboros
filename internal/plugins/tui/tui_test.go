@@ -2,9 +2,12 @@ package tui_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,17 +73,25 @@ func TestTUIBackendAsk(t *testing.T) {
 	alpha, _ := clitest.TwoNodes(t)
 	u := backend(t, alpha)
 	var steps []tui.Step
-	reply, err := u.Ask(context.Background(), "ctx", "@beta hello", func(s tui.Step) { steps = append(steps, s) })
+	var says []string
+	reply, err := u.Ask(context.Background(), "ctx", "@beta hello", func(s tui.Step) { steps = append(steps, s) },
+		func(s string) { says = append(says, s) })
 	if err != nil || !strings.Contains(reply, "not connected") {
 		t.Fatalf("got %q, %v", reply, err)
 	}
-	if len(steps) != 2 || steps[0] != (tui.Step{Text: "asking beta"}) || steps[1] != (tui.Step{Text: "asking beta", Done: true}) {
+	// The round that asks beta is told of although the agent said nothing
+	// along with it: that is how the UI tells the rounds apart.
+	if len(says) != 1 || says[0] != "" {
+		t.Fatalf("says %q", says)
+	}
+	if len(steps) != 2 || steps[0] != (tui.Step{Text: "asking beta"}) ||
+		!steps[1].Done || !strings.HasPrefix(steps[1].Text, "asking beta ✓ ") {
 		t.Fatalf("steps %+v", steps)
 	}
 	// Looking up the peers is not worth a line in the chat: no plugin says
 	// what to show of it.
 	steps = nil
-	if _, err := u.Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }); err != nil || len(steps) != 0 {
+	if _, err := u.Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }, nil); err != nil || len(steps) != 0 {
 		t.Fatalf("steps %+v, %v", steps, err)
 	}
 }
@@ -110,7 +121,7 @@ func TestTUIBackendWithoutSetup(t *testing.T) {
 	if err := u.Start(); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("start: %v", err)
 	}
-	if _, err := u.Ask(context.Background(), "ctx", "hi", func(tui.Step) {}); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "ouro start") {
+	if _, err := u.Ask(context.Background(), "ctx", "hi", func(tui.Step) {}, nil); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "ouro start") {
 		t.Fatalf("ask: %v", err)
 	}
 
@@ -124,6 +135,33 @@ func TestTUIBackendWithoutSetup(t *testing.T) {
 	}
 	if status, err := u.Status(); err != nil || !status.Running {
 		t.Fatalf("status %+v, %v", status, err)
+	}
+}
+
+// The model screen of the UI lists the models of the provider the node is
+// set up with, and saves the model the owner picked: without the rest of the
+// configuration changing.
+func TestTUIBackendModels(t *testing.T) {
+	s := clitest.Settings(t)
+	u := backend(t, s)
+	if _, err := u.Models(context.Background()); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
+	if err := u.SetModel("gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+		t.Fatal(err)
+	}
+	models, err := u.Models(context.Background())
+	if err != nil || !slices.Contains(models.Chat, "gpt-4o") {
+		t.Fatalf("models %+v, %v", models, err)
+	}
+	if err := u.SetModel("gpt-4o-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := clitest.MustLoad(t, s); cfg.Model != "gpt-4o-mini" || cfg.BaseURL != s.BaseURL {
+		t.Fatalf("the configuration after saving: %+v", cfg)
 	}
 }
 
@@ -260,5 +298,147 @@ func TestQuitLogsThePendingAnswer(t *testing.T) {
 	}
 	if err := <-answered; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+// again is a plugin with a tool that asks for ouro to start anew from exe.
+func again(exe string) plugin.Plugin {
+	return plugin.New("again", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.NewTool("again", "starts ouro anew", nil, func(ctx context.Context, _ struct{}) (string, error) {
+			if !plugin.Restart(ctx, exe) {
+				return "", errors.New("nobody starts ouro anew")
+			}
+			return "starting anew", nil
+		}))
+		return nil
+	})
+}
+
+// A tool the owner's agent calls in the UI can ask for ouro to start anew;
+// the assistant alone has nobody who does.
+func TestTUIBackendRestart(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	var ctx *plugin.Context
+	app, _ := clitest.NewApp(t, s, "", again("/new/ouro"), spy(&ctx))
+	bot, _ := cli.Service[*plugin.Assistant](app)
+	if _, err := bot.Ask(context.Background(), "c0", "!again", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := bot.Conversation("c0"); !strings.Contains(string(got), "nobody starts ouro anew") {
+		t.Fatalf("without the UI: %s", got)
+	}
+	u := tuiplugin.Backend(nil, ctx, bot)
+	if u.Restarting() {
+		t.Fatal("nothing asked for a restart yet")
+	}
+	if _, err := u.Ask(context.Background(), "c1", "!again", func(tui.Step) {}, nil); err != nil || !u.Restarting() {
+		t.Fatalf("the tool should have asked for a restart: %v", err)
+	}
+}
+
+// When a tool asks for ouro to start anew, the UI quits once the answer is
+// in, and ouro ends with plugin.Restarting. The UI of the new process goes
+// on from what it hands over: the chat, what the agent remembers of it, and
+// a node that ran before stays running. The file is read once.
+func TestRestartGoesOnWithTheConversation(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.StartNode(t, s, clitest.NodeConfig(s))
+	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true}, again("/new/ouro"))
+
+	var before tui.Chat
+	tuiplugin.Use(t, func(m *tui.Model) error {
+		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+		m.Update(m.Init()().(tea.BatchMsg)[0]()) // the status of the node, which runs
+		m.Update(key(' '))                       // skips the splash
+		for _, r := range "!again" {
+			m.Update(key(r))
+		}
+		_, cmd := m.Update(enter)
+		for cmd != nil {
+			msg := cmd()
+			if _, quit := msg.(tea.QuitMsg); quit {
+				break
+			}
+			_, cmd = m.Update(msg)
+		}
+		if !m.Restarts() {
+			t.Fatal("the UI should quit to start anew")
+		}
+		before = m.Chat()
+		return nil
+	})
+	err := app.Run(context.Background(), nil)
+	var r *plugin.Restarting
+	if !errors.As(err, &r) || r.Exe != "/new/ouro" || err.Error() != "ouro is to be started anew from /new/ouro" {
+		t.Fatalf("got %v", err)
+	}
+	if len(before.Entries) != 2 || !strings.Contains(before.Entries[1].Text, "starting anew") {
+		t.Fatalf("the chat %+v", before)
+	}
+	var file string
+	for _, kv := range r.Env {
+		if v, ok := strings.CutPrefix(kv, tuiplugin.ResumeEnv+"="); ok {
+			file = v
+		}
+	}
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the file to go on from: %v, %v", info, err)
+	}
+
+	// The new process.
+	t.Setenv(tuiplugin.ResumeEnv, file)
+	app, _ = clitest.NewAppOn(t, s, cli.Terminal{Interactive: true})
+	bot, _ := cli.Service[*plugin.Assistant](app)
+	var after tui.Chat
+	tuiplugin.Use(t, func(m *tui.Model) error {
+		after = m.Chat()
+		return nil
+	})
+	if err := app.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if after.ContextID != before.ContextID || !reflect.DeepEqual(after.Entries, before.Entries) {
+		t.Fatalf("resumed %+v, want %+v", after, before)
+	}
+	if got := bot.Conversation(after.ContextID); !strings.Contains(string(got), "starting anew") {
+		t.Fatalf("the agent remembers %s", got)
+	}
+	if status, _ := (plugin.OwnerOf(home.Dir(s.Home), nil, setup.Offer{})).Status(); !status.Running {
+		t.Fatal("the node ran before the restart and should run on")
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("the file should be gone")
+	}
+	if _, ok := os.LookupEnv(tuiplugin.ResumeEnv); ok {
+		t.Fatal("the node started later should not see the variable")
+	}
+
+	// A file that cannot be read, or not as a conversation, is said so.
+	dir := t.TempDir()
+	for name, content := range map[string]string{"not JSON": "{", "no memory": `{"memory": 5}`} {
+		os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600)
+	}
+	for _, name := range []string{"gone", "not JSON", "no memory"} {
+		t.Setenv(tuiplugin.ResumeEnv, filepath.Join(dir, name))
+		if err := app.Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "the conversation to go on with") {
+			t.Fatalf("%s: got %v", name, err)
+		}
+	}
+}
+
+// What cannot be handed over leaves no file behind.
+func TestHandOverFails(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	if err := tuiplugin.HandOver("/new/ouro", tui.Chat{}, json.RawMessage("{"), false); err == nil {
+		t.Fatal("a memory that is no JSON should fail")
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("left behind: %v", left)
+	}
+	t.Setenv("TMPDIR", filepath.Join(tmp, "gone"))
+	if err := tuiplugin.HandOver("/new/ouro", tui.Chat{}, nil, false); err == nil {
+		t.Fatal("without a directory for the file it should fail")
 	}
 }

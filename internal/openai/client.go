@@ -73,10 +73,72 @@ func WithSession(ctx context.Context, id string) context.Context {
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Reasoning is what the model thought before it wrote an assistant
+	// message, and ReasoningField the field of the API it came in. Sent back
+	// in that field ("reasoning" if none), the model goes on from what it
+	// thought between calls of tools instead of thinking it all anew.
+	Reasoning      string `json:"-"`
+	ReasoningField string `json:"-"`
 	// ToolCalls are the tools an assistant message wants to have run.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolCallID names the call a "tool" message answers.
 	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// reasoning is what a model thought, in the fields APIs send it in: vLLM and
+// OpenRouter in "reasoning", llama.cpp and DeepSeek in "reasoning_content".
+type reasoning struct {
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Reasoning        string `json:"reasoning,omitempty"`
+	ReasoningText    string `json:"reasoning_text,omitempty"`
+}
+
+// first returns the first field that is not empty, with its name. An API
+// may send the same text in two of them, and it counts once.
+func (r reasoning) first() (text, field string) {
+	if r.ReasoningContent != "" {
+		return r.ReasoningContent, "reasoning_content"
+	}
+	if r.Reasoning != "" {
+		return r.Reasoning, "reasoning"
+	}
+	if r.ReasoningText != "" {
+		return r.ReasoningText, "reasoning_text"
+	}
+	return "", ""
+}
+
+// MarshalJSON writes the reasoning of m into the field it came in.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type plain Message
+	out := struct {
+		plain
+		reasoning
+	}{plain: plain(m)}
+	switch m.ReasoningField {
+	case "reasoning_content":
+		out.ReasoningContent = m.Reasoning
+	case "reasoning_text":
+		out.ReasoningText = m.Reasoning
+	default:
+		out.reasoning.Reasoning = m.Reasoning
+	}
+	return json.Marshal(out)
+}
+
+// UnmarshalJSON reads a message with its reasoning from any of the fields.
+func (m *Message) UnmarshalJSON(b []byte) error {
+	type plain Message
+	var in struct {
+		plain
+		reasoning
+	}
+	if err := json.Unmarshal(b, &in); err != nil {
+		return err
+	}
+	*m = Message(in.plain)
+	m.Reasoning, m.ReasoningField = in.first()
+	return nil
 }
 
 // ToolCall is the model's request to run a tool.
@@ -225,7 +287,7 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 func readStream(body io.Reader, alive func()) (Message, error) {
 	var msg Message
 	var calls []ToolCall
-	var content strings.Builder
+	var content, thought strings.Builder
 	chosen, done := false, false
 	lines := bufio.NewScanner(body)
 	lines.Buffer(make([]byte, 0, 64<<10), maxEvent)
@@ -242,8 +304,9 @@ func readStream(body io.Reader, alive func()) (Message, error) {
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Role      string `json:"role"`
-					Content   string `json:"content"`
+					Role    string `json:"role"`
+					Content string `json:"content"`
+					reasoning
 					ToolCalls []struct {
 						Index    *int   `json:"index"`
 						ID       string `json:"id"`
@@ -272,6 +335,9 @@ func readStream(body io.Reader, alive func()) (Message, error) {
 			d := choice.Delta
 			msg.Role = cmp.Or(d.Role, msg.Role)
 			content.WriteString(d.Content)
+			text, field := d.first()
+			thought.WriteString(text)
+			msg.ReasoningField = cmp.Or(msg.ReasoningField, field)
 			for _, part := range d.ToolCalls {
 				// Without an index, a part with an ID starts a call and one
 				// without goes on with the last.
@@ -306,7 +372,7 @@ func readStream(body io.Reader, alive func()) (Message, error) {
 	for i := range calls {
 		calls[i].Type = cmp.Or(calls[i].Type, "function")
 	}
-	msg.Content, msg.ToolCalls = content.String(), calls
+	msg.Content, msg.Reasoning, msg.ToolCalls = content.String(), thought.String(), calls
 	return msg, nil
 }
 

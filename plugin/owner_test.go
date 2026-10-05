@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -111,6 +112,63 @@ func TestOwnerRequests(t *testing.T) {
 	incoming, outgoing, err := o.Requests()
 	if err != nil || len(incoming) != 1 || incoming[0].Name != "in" || len(outgoing) != 1 || outgoing[0].Name != "out" {
 		t.Fatalf("got %+v, %+v, %v", incoming, outgoing, err)
+	}
+}
+
+// The owner changes the model of the node in the model screen of a front
+// end: Models lists what the provider offers, with the model of the node to
+// offer first, and SetModel saves one of them, with the endpoint and the key
+// the node has.
+func TestOwnerChangesTheModel(t *testing.T) {
+	s := clitest.Settings(t)
+	o := owner(t, s)
+
+	// A node that is not set up has no models, and no model to save.
+	if _, err := o.Models(context.Background()); !errors.Is(err, plugin.ErrNotSetUp) {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
+	if err := o.SetModel("gpt-4o-mini"); !errors.Is(err, plugin.ErrNotSetUp) {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := o.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The models that cannot chat are not listed, and the model of the node
+	// is the one offered first.
+	if !slices.Equal(models.Chat, []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}) || models.Default != "gpt-4o" ||
+		len(models.All) != len(openaitest.Models) {
+		t.Fatalf("got %+v", models)
+	}
+	if err := o.SetModel("  gpt-4o-mini  "); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := clitest.MustLoad(t, s); cfg.Model != "gpt-4o-mini" || cfg.BaseURL != s.BaseURL ||
+		cfg.APIKey != openaitest.Key || cfg.Name != "alpha" {
+		t.Fatalf("the configuration after saving: %+v", cfg)
+	}
+	// An empty model changes nothing.
+	if err := o.SetModel("   "); err == nil {
+		t.Fatal("an empty model: want error")
+	}
+	if cfg := clitest.MustLoad(t, s); cfg.Model != "gpt-4o-mini" {
+		t.Fatalf("an empty model changed the configuration: %+v", cfg)
+	}
+
+	// The models are listed with the key of the node: one the provider
+	// refuses is an error that says so.
+	bad := clitest.Settings(t)
+	cfg := clitest.NodeConfig(bad)
+	cfg.APIKey = "sk-bad"
+	if err := config.Save(bad.Home, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner(t, bad).Models(context.Background()); !errors.Is(err, plugin.ErrKeyRejected) {
+		t.Fatalf("a key the provider refuses: %v", err)
 	}
 }
 

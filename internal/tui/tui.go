@@ -29,6 +29,10 @@ var refreshInterval = 10 * time.Second
 // Status describes the local node.
 type Status = plugin.NodeStatus
 
+// Models is what the provider of the node offers, as Models of a Backend
+// lists them for the model screen (/model).
+type Models = plugin.SetupModels
+
 // Contacts is what waits for the owner of the local node: the connection
 // requests, and the changes of the configuration its agent proposed.
 type Contacts struct {
@@ -47,8 +51,11 @@ type Backend interface {
 	Start() error
 	Stop() error
 	// Ask lets the agent of this node answer text within the conversation
-	// contextID. On the way it reports what it is waiting for.
-	Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error)
+	// contextID. On the way it reports what it is waiting for, in step, and
+	// what the agent says along with the tools it asks for, in say: the whole
+	// loop, not only its end. say comes once for every round of the loop that
+	// asks for tools, with "" if the agent said nothing, before its steps.
+	Ask(ctx context.Context, contextID, text string, step func(Step), say func(string)) (string, error)
 	Contacts() (Contacts, error)
 	// Accept and Reject decide on a connection request. They fail with
 	// plugin.ErrNotSaved if the decision could not be stored.
@@ -61,10 +68,23 @@ type Backend interface {
 	RefuseProposal(id string) error
 	// Setup starts the setup of the node.
 	Setup() (Setup, error)
+	// Models lists the models the configured provider offers, for the model
+	// screen (/model). It fails with plugin.ErrNotSetUp for a node that is
+	// not set up, and with plugin.ErrKeyRejected if the provider refuses the
+	// key of the node.
+	Models(ctx context.Context) (Models, error)
+	// SetModel saves model as the model of the node: the agents answer with
+	// it from the next message on.
+	SetModel(model string) error
+	// Restarting reports whether ouro is to be started anew, as a tool asked
+	// on the way to the answer that came in: the UI then quits, see Restarts.
+	Restarting() bool
 }
 
 // Step reports what the agent is waiting for on the way to its answer, like
-// "asking beta", and with Done set, that it is no longer waiting for it.
+// "asking beta". It is reported twice: once on its own, when the agent starts
+// to wait, and again with Done set, when it no longer does. Text may say more
+// the second time, like how long the call took.
 type Step struct {
 	Text string
 	Done bool
@@ -79,14 +99,24 @@ const (
 	screenRequests
 	screenHelp
 	screenPlugin // the one of Model.screens that is open
+	screenModel  // the models of the provider, for /model
 )
 
-// entry is one message in the conversation: from the user or from the agent.
+// entry is one message in the conversation: from the user, from the agent, or
+// one round of the loop to its answer: what the agent said, if anything, and
+// the tool calls it asked for.
 type entry struct {
 	mine   bool
 	text   string
 	at     time.Time
 	failed bool
+	calls  []call // of a round of the loop; none for a message
+}
+
+// call is a tool call of the loop as the history shows it.
+type call struct {
+	text string // like "asking beta"; once done, with what became of it: "asking beta ✓ 1.2s"
+	done bool
 }
 
 // conversation is the chat with the agent of this node.
@@ -95,6 +125,7 @@ type conversation struct {
 	entries   []entry
 	pending   bool               // waiting for a reply; one message at a time keeps the history in order
 	doing     string             // what the agent is waiting for, like "asking beta"
+	round     int                // the entry of the round of the loop that is on, counted from 1; 0 for none yet
 	cancel    context.CancelFunc // stops the answer that is pending
 }
 
@@ -111,6 +142,8 @@ type Model struct {
 	notice    string
 	noticeErr bool
 
+	restarts bool // the UI quit for ouro to start anew
+
 	trust     Contacts
 	screen    screen
 	commands  []command       // of the UI, then of the plugins
@@ -121,6 +154,11 @@ type Model struct {
 	choice    int // the action selected: accept or reject, or one of a screen
 	unreadReq int
 	seenReq   int
+
+	models    Models // what the provider offers, once /model asked for them
+	modelSel  int    // the model selected of models.Chat
+	modelBusy string // what the model screen waits for, like "listing models"
+	modelErr  error  // why the models are not there
 
 	width, height int
 	showSplash    bool
@@ -192,6 +230,12 @@ type (
 		contextID, text string
 		err             error
 		cancelled       bool // the answer was stopped; whatever it returned is dropped
+	}
+	// sayMsg is what the agent says along with the tools it asks for; next
+	// delivers what follows.
+	sayMsg struct {
+		contextID, text string
+		next            <-chan tea.Msg
 	}
 	// stepMsg is a step of the answer that is on its way; next delivers what follows.
 	stepMsg struct {
@@ -323,11 +367,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.applyContacts(msg.trust)
 		}
+	case modelsMsg:
+		m.modelsLoaded(msg.models, msg.err)
 	case stepMsg:
 		m.step(msg)
 		return m, func() tea.Msg { return <-msg.next }
+	case sayMsg:
+		m.say(msg)
+		return m, func() tea.Msg { return <-msg.next }
 	case replyMsg:
-		m.receive(msg)
+		return m, m.receive(msg)
 	case bodyMsg:
 		if m.screen == screenPlugin && m.open == msg.screen {
 			m.body = msg.body
@@ -381,6 +430,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.handleRequestKey(msg)
 	case screenPlugin:
 		return m.handleScreenKey(msg)
+	case screenModel:
+		return m.handleModelKey(msg)
 	case screenHelp:
 		if msg.String() == "esc" {
 			m.screen = screenChat
@@ -549,7 +600,7 @@ func (m *Model) send() tea.Cmd {
 		return nil
 	}
 	c.entries = append(c.entries, entry{mine: true, text: text, at: m.now()})
-	c.pending = true
+	c.pending, c.round = true, 0
 	m.input.Reset()
 	m.renderHistory(true)
 
@@ -564,6 +615,11 @@ func (m *Model) send() tea.Cmd {
 				case events <- stepMsg{contextID, s, events}:
 				case <-ctx.Done(): // nobody follows the steps of a stopped answer
 				}
+			}, func(what string) {
+				select {
+				case events <- sayMsg{contextID, what, events}:
+				case <-ctx.Done():
+				}
 			})
 			events <- replyMsg{contextID, reply, err, ctx.Err() != nil}
 		}()
@@ -571,31 +627,144 @@ func (m *Model) send() tea.Cmd {
 	}
 }
 
-// step notes what the agent is waiting for while the answer is pending.
+// step notes what the agent is waiting for while the answer is pending. A
+// call that starts goes into the entry of its round, which a round the agent
+// said nothing of gets now; one that ended takes the place of its start,
+// with what became of it.
 func (m *Model) step(msg stepMsg) {
 	c := &m.chat
 	if c.contextID != msg.contextID {
 		return // step of a conversation that was reset
 	}
-	c.doing = msg.step.Text
-	if msg.step.Done {
-		c.doing = ""
+	if c.round == 0 {
+		c.add(entry{at: m.now()})
+		c.round = len(c.entries)
 	}
+	e := &c.entries[c.round-1]
+	if !msg.step.Done {
+		e.calls = append(e.calls, call{text: msg.step.Text})
+	} else if i := e.started(msg.step.Text); i >= 0 {
+		e.calls[i] = call{text: msg.step.Text, done: true}
+	}
+	c.doing = e.waitingFor()
+	m.renderHistory(m.history.AtBottom())
 }
 
-func (m *Model) receive(msg replyMsg) {
+// started returns the call of e that the call ended, which done tells of,
+// started as: the last that is not done and whose text done begins with. A
+// script runs calls within its own, which end before it does.
+func (e *entry) started(done string) int {
+	for i := len(e.calls) - 1; i >= 0; i-- {
+		c := e.calls[i]
+		if !c.done && (done == c.text || strings.HasPrefix(done, c.text+" ")) {
+			return i
+		}
+	}
+	return -1
+}
+
+// waitingFor is what the last call of e that has not ended is, "" if all have.
+func (e *entry) waitingFor() string {
+	for i := len(e.calls) - 1; i >= 0; i-- {
+		if !e.calls[i].done {
+			return e.calls[i].text
+		}
+	}
+	return ""
+}
+
+// say begins a round of the loop: what the agent says along with the tools
+// it asks for, which is not the answer, becomes part of the conversation, and
+// the calls of those tools go below these words. A round the agent said
+// nothing of gets its entry with its first call that is shown.
+func (m *Model) say(msg sayMsg) {
+	c := &m.chat
+	if c.contextID != msg.contextID {
+		return
+	}
+	c.round, c.doing = 0, ""
+	if msg.text != "" {
+		c.add(entry{text: msg.text, at: m.now()})
+		c.round = len(c.entries)
+	}
+	m.renderHistory(m.history.AtBottom())
+}
+
+// add appends an entry to the conversation.
+func (c *conversation) add(e entry) {
+	c.entries = append(c.entries, e)
+}
+
+// receive shows the reply that came in. When a tool asked on the way for
+// ouro to start anew, the UI quits for it.
+func (m *Model) receive(msg replyMsg) tea.Cmd {
 	c := &m.chat
 	if c.contextID != msg.contextID || msg.cancelled {
-		return // reply to a conversation that was reset, or stopped by quitting
+		return nil // reply to a conversation that was reset, or stopped by quitting
 	}
 	c.cancel() // the answer is in; release its context
 	c.pending, c.doing, c.cancel = false, "", nil
+	c.round = 0 // the loop of this answer is over
 	e := entry{text: msg.text, at: m.now()}
 	if msg.err != nil {
 		e.text, e.failed = msg.err.Error(), true
 	}
-	c.entries = append(c.entries, e)
+	c.add(e)
 	m.renderHistory(m.history.AtBottom())
+	if m.backend.Restarting() {
+		m.restarts = true
+		return m.leave()
+	}
+	return nil
+}
+
+// Restarts reports whether the UI quit for ouro to start anew: what it
+// showed is in Chat, to go on with by Resume.
+func (m *Model) Restarts() bool { return m.restarts }
+
+// Chat is the conversation of a UI, to go on with in another one.
+type Chat struct {
+	ContextID string  `json:"context_id"`
+	Entries   []Entry `json:"entries"`
+}
+
+// Entry is a message of a Chat: from the owner, or from the agent. Calls are
+// the tool calls of a round of the loop to an answer, as they ended; such an
+// entry carries no text when the agent had nothing to say along with them.
+type Entry struct {
+	Mine   bool      `json:"mine,omitempty"`
+	Text   string    `json:"text"`
+	At     time.Time `json:"at"`
+	Failed bool      `json:"failed,omitempty"`
+	Calls  []string  `json:"calls,omitempty"`
+}
+
+// Chat returns the conversation the UI shows.
+func (m *Model) Chat() Chat {
+	c := Chat{ContextID: m.chat.contextID, Entries: make([]Entry, len(m.chat.entries))}
+	for i, e := range m.chat.entries {
+		c.Entries[i] = Entry{e.mine, e.text, e.at.Round(0), e.failed, nil} // the reading of the clock is of this process
+		for _, call := range e.calls {
+			c.Entries[i].Calls = append(c.Entries[i].Calls, call.text)
+		}
+	}
+	return c
+}
+
+// Resume makes the UI go on with the conversation c of another one, without
+// the splash: it is to be called before the UI is shown.
+func (m *Model) Resume(c Chat) {
+	m.chat = conversation{contextID: c.ContextID}
+	for _, e := range c.Entries {
+		resumed := entry{e.Mine, e.Text, e.At, e.Failed, nil}
+		for _, text := range e.Calls {
+			resumed.calls = append(resumed.calls, call{text: text, done: true}) // a call that had not ended is not waited for any more
+		}
+		m.chat.entries = append(m.chat.entries, resumed)
+	}
+	m.showSplash = false
+	m.renderHistory(true)
+	m.setNotice("restarted with the new build", false)
 }
 
 // newConversation starts over; the agent keeps no memory of the old context

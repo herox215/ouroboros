@@ -24,6 +24,7 @@ type fakeBackend struct {
 	status  Status
 	sent    []sent
 	steps   []Step // reported before the reply
+	says    []string
 	reply   string
 	sendErr error
 	started int
@@ -38,11 +39,20 @@ type fakeBackend struct {
 	rejectErr error
 	decided   context.Context // what a decision on a request ran with
 
+	// offers are what the provider answers with, for /model; modelsErr is
+	// why not. set are the models the owner saved.
+	offers    Models
+	modelsErr error
+	set       []string
+
 	// fail is what fails, by the name of the request.
 	fail map[string]error
 
-	// ask, if set, answers instead of steps and reply.
-	ask func(ctx context.Context, step func(Step)) (string, error)
+	// ask, if set, answers instead of steps, says and reply.
+	ask func(ctx context.Context, step func(Step), say func(string)) (string, error)
+
+	// restarting is whether a tool asked for ouro to start anew.
+	restarting bool
 }
 
 func (f *fakeBackend) Status() (Status, error)     { return f.status, f.fail["status"] }
@@ -59,10 +69,13 @@ func (f *fakeBackend) Setup() (Setup, error) {
 	}
 	return f.setup, nil
 }
-func (f *fakeBackend) Ask(ctx context.Context, contextID, text string, step func(Step)) (string, error) {
+func (f *fakeBackend) Ask(ctx context.Context, contextID, text string, step func(Step), say func(string)) (string, error) {
 	f.sent = append(f.sent, sent{contextID, text})
 	if f.ask != nil {
-		return f.ask(ctx, step)
+		return f.ask(ctx, step, say)
+	}
+	for _, s := range f.says {
+		say(s)
 	}
 	for _, s := range f.steps {
 		step(s)
@@ -86,6 +99,12 @@ func (f *fakeBackend) AcceptProposal(id string) error {
 func (f *fakeBackend) RefuseProposal(id string) error {
 	f.rejected = append(f.rejected, "proposal "+id)
 	return f.rejectErr
+}
+func (f *fakeBackend) Models(ctx context.Context) (Models, error) { return f.offers, f.modelsErr }
+func (f *fakeBackend) Restarting() bool                           { return f.restarting }
+func (f *fakeBackend) SetModel(model string) error {
+	f.set = append(f.set, model)
+	return f.fail["setmodel"]
 }
 
 func newModel(t *testing.T) (*Model, *fakeBackend) {
@@ -361,25 +380,35 @@ func TestChat(t *testing.T) {
 	}
 }
 
-func TestChatKeepsTheAgentsTalkToPeersOutOfTheHistory(t *testing.T) {
+func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	m, b := newModel(t)
+	b.says = []string{"I will ask beta"}
 	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta", Done: true}}
 	b.reply = "beta says it is noon"
 	cmd := say(t, m, "ask beta for the time")
 
-	_, cmd = m.Update(cmd()) // the question to beta is on its way
-	if m.chat.doing != "asking beta" || !m.chat.pending || !strings.Contains(m.View().Content, "asking beta…") {
+	_, cmd = m.Update(cmd()) // the words of the agent are in the chat
+	if !strings.Contains(m.View().Content, "I will ask beta") {
+		t.Fatalf("what the agent says on the way belongs in the chat:\n%s", m.View().Content)
+	}
+	_, cmd = m.Update(cmd()) // the call to beta is announced and still running
+	if m.chat.doing != "asking beta" || !m.chat.pending || !strings.Contains(m.View().Content, "asking beta") {
 		t.Fatalf("the call to beta should be announced: %+v", m.chat)
 	}
-	_, cmd = m.Update(cmd()) // beta answered, the agent thinks again
-	if m.chat.doing != "" || !strings.Contains(m.View().Content, "alpha is thinking") {
-		t.Fatalf("after the peer's answer the agent thinks: %+v", m.chat)
-	}
-	deliver(m, cmd)
+	deliver(m, cmd) // beta answered, the agent thinks again and answers
 
 	c := m.chat
-	if c.pending || len(c.entries) != 2 || c.entries[1].text != "beta says it is noon" {
-		t.Fatalf("only the user and the agent belong in the history: %+v", c.entries)
+	// The call these words belong to goes below them.
+	want := []entry{{mine: true, text: "ask beta for the time"},
+		{text: "I will ask beta", calls: []call{{"asking beta", true}}}, {text: "beta says it is noon"}}
+	if c.pending || !sameEntries(c.entries, want) {
+		t.Fatalf("the loop belongs in the history: %+v", c.entries)
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{"I will ask beta", "· asking beta", "beta says it is noon"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the history should show %q:\n%s", want, view)
+		}
 	}
 }
 
@@ -443,6 +472,69 @@ func TestRejectRequest(t *testing.T) {
 	}
 }
 
+// Every round of the loop has its entry, a round the agent said nothing of
+// too, and every call of a round its line, which says once the call ended
+// what became of it. The calls a script runs end before the script does.
+func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
+	m, b := newModel(t)
+	b.ask = func(_ context.Context, step func(Step), say func(string)) (string, error) {
+		say("I read both")
+		step(Step{Text: "reading a.go"})
+		step(Step{Text: "reading a.go ✓ 3ms", Done: true})
+		step(Step{Text: "reading b.go"})
+		step(Step{Text: "reading b.go ✗ no such file", Done: true})
+		say("")
+		step(Step{Text: "running a script"})
+		step(Step{Text: "writing c.go"})
+		return "", nil
+	}
+	cmd := say(t, m, "fix it")
+	for range 8 { // up to the call within the script
+		_, cmd = m.Update(cmd())
+	}
+	if m.chat.doing != "writing c.go" || !strings.Contains(ansi.Strip(m.View().Content), "· writing c.go …") {
+		t.Fatalf("the call the agent waits for should be marked: %+v\n%s", m.chat, ansi.Strip(m.View().Content))
+	}
+	m.step(stepMsg{m.chat.contextID, Step{Text: "writing c.go ✓ 1ms", Done: true}, nil})
+	if m.chat.doing != "running a script" {
+		t.Fatalf("the script still runs: %q", m.chat.doing)
+	}
+	m.step(stepMsg{m.chat.contextID, Step{Text: "running a script ✓ 9ms", Done: true}, nil})
+	deliver(m, cmd)
+
+	want := []entry{{mine: true, text: "fix it"},
+		{text: "I read both", calls: []call{{"reading a.go ✓ 3ms", true}, {"reading b.go ✗ no such file", true}}},
+		{calls: []call{{"running a script ✓ 9ms", true}, {"writing c.go ✓ 1ms", true}}},
+		{text: ""}}
+	if !sameEntries(m.chat.entries, want) {
+		t.Fatalf("the loop in the history: %+v", m.chat.entries)
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{"I read both", "↳ · reading a.go ✓ 3ms", "↳ · reading b.go ✗ no such file",
+		"↳ · running a script ✓ 9ms", "↳ · writing c.go ✓ 1ms"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the history should show %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, " …") {
+		t.Fatalf("no call is waited for any more:\n%s", view)
+	}
+
+	// What ended is what goes on in another UI.
+	other, _ := newModel(t)
+	other.Resume(m.Chat())
+	if !sameEntries(other.chat.entries, want) {
+		t.Fatalf("resumed %+v", other.chat.entries)
+	}
+}
+
+// sameEntries reports whether got are the entries of want, the time aside.
+func sameEntries(got, want []entry) bool {
+	return slices.EqualFunc(got, want, func(g, w entry) bool {
+		return g.mine == w.mine && g.text == w.text && g.failed == w.failed && slices.Equal(g.calls, w.calls)
+	})
+}
+
 func TestNewConversationDropsLateReply(t *testing.T) {
 	m, b := newModel(t)
 	b.steps = []Step{{Text: "asking beta"}}
@@ -461,7 +553,7 @@ func TestNewConversationDropsLateReply(t *testing.T) {
 // The returned channel is closed once the answer has given up.
 func askUntilCancelled(b *fakeBackend) <-chan struct{} {
 	stopped := make(chan struct{})
-	b.ask = func(ctx context.Context, step func(Step)) (string, error) {
+	b.ask = func(ctx context.Context, step func(Step), _ func(string)) (string, error) {
 		step(Step{Text: "asking beta"})
 		<-ctx.Done()
 		step(Step{Text: "asking beta", Done: true}) // nobody listens any more; must not block
@@ -527,8 +619,12 @@ func TestQuitCancelsThePendingAnswer(t *testing.T) {
 			}
 			awaitStop(t, stopped)
 			deliver(m, cmd) // the reply may still arrive before the UI is gone
-			if c := m.chat; len(c.entries) != 1 || !c.entries[0].mine {
-				t.Fatalf("a cancelled answer is no error to show: %+v", c.entries)
+			c := m.chat
+			if len(c.entries) != 2 || !c.entries[0].mine || c.entries[1].text != "" || c.entries[1].failed {
+				t.Fatalf("a cancelled answer is no error to show, and its step stays: %+v", c.entries)
+			}
+			if view := m.View().Content; strings.Contains(view, context.Canceled.Error()) {
+				t.Fatalf("a cancelled answer is no error to show:\n%s", view)
 			}
 		})
 	}
@@ -786,5 +882,32 @@ func TestProposals(t *testing.T) {
 	}
 	if cmd := press(m, "enter"); cmd != nil {
 		t.Fatal("accepting nothing should do nothing")
+	}
+}
+
+// A tool that asked for ouro to start anew makes the UI quit once the answer
+// is in; what it showed goes on in another UI, without the splash.
+func TestRestartGoesOnInAnotherUI(t *testing.T) {
+	m, b := newModel(t)
+	b.reply = "built and installed"
+	deliver(m, say(t, m, "ping"))
+	if m.Restarts() {
+		t.Fatal("no tool asked for a restart")
+	}
+	b.restarting = true
+	_, cmd := m.Update(say(t, m, "rebuild")())
+	if _, ok := cmd().(tea.QuitMsg); !ok || !m.Restarts() {
+		t.Fatal("the UI should quit to start anew")
+	}
+
+	chat := m.Chat()
+	other, _ := newModel(t)
+	other.showSplash = true
+	other.Resume(chat)
+	if other.showSplash || !sameEntries(other.chat.entries, m.chat.entries) || other.Chat().ContextID != m.chat.contextID {
+		t.Fatalf("resumed %+v, want %+v", other.chat, m.chat)
+	}
+	if view := ansi.Strip(other.View().Content); !strings.Contains(view, "built and installed") {
+		t.Fatalf("the resumed chat should be shown:\n%s", view)
 	}
 }

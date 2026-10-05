@@ -37,6 +37,10 @@ The UI is the chat with your own agent. You do not
 write to other nodes yourself: the agent does, whenever you ask it to or it thinks a peer knows
 better ("ask Luna how she is" → "Luna says she is fine"). What the two agents say to each other
 stays between them; the UI only shows which peer your agent is waiting for.
+The whole **loop** of an answer is in the history, not only its end: what the agent says along with
+the tools it asks for, and below those words one muted line per tool call (`· asking beta ✓ 1.2s`,
+`· writing notes.md ✓ 3ms`, a failed one with `✗` and its reason). A call the agent said nothing of
+is only that line. Lines of calls whose tool is still running are marked with `…`.
 The input is focused on start, so you can type right away. The conversation lives only as long as the TUI runs;
 what your agent did for it is recorded in [`ouro.log`](#the-log).
 
@@ -51,8 +55,10 @@ Other plugins add to the UI, see [Extending](#extending):
 - a **screen** next to the chat, opened with its command (`/greetings`) and left with `esc`. It may offer
   actions below its text: `←` `→` select one, `enter` runs it.
 - a **command** (`/greet`), which runs something and reports in the footer. `/help` lists what the plugins added.
-- what is shown of a **tool call** while the agent waits for it. `asking beta…` is what the plugin of
-  `ask_peer` shows; a tool without such a line shows as the agent thinking.
+- what is shown of a **tool call** in the loop of an answer. `asking beta` is what the plugin of
+  `ask_peer` shows; a tool without such a line shows as nothing, and the agent as thinking. With
+  `Detail` the plugin can add what became of the call, which the UI puts after that line once the
+  call ended (`assistant.HowItEnded` gives `✓ 1.2s`, or `✗` with the reason).
 
 A command has one meaning. The UI keeps its own commands (the table below), and of two plugins that claim the
 same name the one that was started first gets it, a screen before a plain command. What loses its name is left out, and the UI says so in red in its
@@ -72,6 +78,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/new` | new conversation |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup |
+| `/model` | the models the provider of the node offers, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on), `esc` back |
 | `/requests` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
 | `/quit` | quit |
@@ -98,7 +105,10 @@ Your agent has the tool `rebuild` for the other direction: it builds the checkou
 (`make install` records it) with its files as they are now, committed or not, and runs `make test` there. Only
 when the build and every test pass, the binary is replaced and a running node restarted; otherwise nothing is
 installed and the agent gets the end of the output. That is how a change your agent made to the plugins of ouro
-with its tools for files takes effect. The tool is for you only: a peer is refused even if `a2a` lists it. Take
+with its tools for files takes effect. In the terminal UI, ouro then starts anew with the new build once the
+agent has answered, on the same terminal and without the splash, and the chat goes on where it was: what it
+showed and what the agent remembers of it are handed to the new process in a file only you can read, which it
+removes. The tool is for you only: a peer is refused even if `a2a` lists it. Take
 `rebuild` out of `h2a` if your agent should not build what it wrote. A binary installed by `ouro update` keeps
 the checkout of the one it replaced.
 
@@ -113,7 +123,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
-| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 50 LLM calls per answer, of which one can run a [script](#scripts) that calls many tools |
+| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left, of which one can run a [script](#scripts) that calls many tools |
 | Memory | last 40 messages per conversation, but always the whole of the last answer, however many tool calls it took; up to 256 conversations. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
@@ -164,9 +174,9 @@ restart. A node that runs keeps answering peers as before while the file cannot 
 
 | Tool | Does | Limits |
 |---|---|---|
-| `read(path, offset?, limit?)` | returns the text of a file; says when there is more and at which line to continue | 2000 lines or 256 KiB per call, a line has less than 256 KiB; what is not text (UTF-8 without NUL) is refused |
+| `read(path, offset?, limit?)` | returns the text of a file; the whole file comes as it is, a part with a note that says which lines of how many it is and, when there is more, at which line to continue | 2000 lines or 256 KiB per call, a line has less than 256 KiB; what is not text (UTF-8 without NUL) is refused |
 | `write(path, content)` | creates the file or replaces all of it, in one step, and creates missing directories | 1 MiB |
-| `edit(path, old, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once | the file has at most 1 MiB, before and after |
+| `edit(path, old, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once; returns the changed lines with 3 lines around them, at most 50 | the file has at most 1 MiB, before and after |
 | `list(path)` | the entries of a directory: directories end in `/`, files come with their size | 1000 entries; what the tool may not read is not listed |
 | `delete(path, recursive?)` | removes a file or an empty directory; one with content only with `recursive: true` | stops, with nothing deleted, before anything it may not delete |
 | `search(path, pattern, glob?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go` | 200 lines of at most 300 bytes, 10000 files; hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out |
@@ -233,7 +243,7 @@ the build works, not that it is harmless.
 
 ### Scripts
 
-An answer has at most 50 calls of the LLM, every call sends the whole conversation again, and every result of
+An answer has at most 100 calls of the LLM, every call sends the whole conversation again, and every result of
 a tool stays in it. `run(script)` is for what is known in advance: the same call for many peers or files,
 results that are filtered or passed on unchanged. The agent writes a script in JavaScript, and inside it
 every other tool it has is a function of its name. Every tool stays callable on its own.
@@ -297,6 +307,9 @@ meanwhile. Whoever may run scripts on your node may therefore slow it down or br
 
 You can see and change the configuration by talking to your agent: "which tools do peers have?", "let beta
 read `~/share`". The agent has two tools for that, and neither changes anything.
+
+You can change the model yourself, without the setup and without a proposal: `/model` in the terminal UI
+lists what the provider of the node offers, and the one you pick holds from the next message on.
 
 | Tool | Does |
 |---|---|

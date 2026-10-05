@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
+	"ouroboros/internal/openai"
 )
 
 // The prompts; %q is the name of the node. They name tools, so keep them in
@@ -60,11 +62,14 @@ const (
 
 // Step reports a tool call of the assistant on the way to its answer and,
 // with Done set, that its result is in. The result is not part of it: what a
-// front end shows of a call is for the plugin of the tool to say.
+// front end shows of a call is for the plugin of the tool to say. With Done
+// come Took, how long the call took, and Err, why it failed, if it did.
 type Step struct {
 	Tool string
 	Args json.RawMessage
 	Done bool
+	Took time.Duration
+	Err  error
 }
 
 // Builder is the blueprint of the agents of a node.
@@ -202,6 +207,16 @@ func (a *Assistant) Ready() error {
 // for what of a text it gets. An answer that is stopped, because ctx ends or
 // by Stop, is written as canceled with the call it was waiting for.
 func (a *Assistant) Ask(ctx context.Context, contextID, text string, observe func(Step)) (string, error) {
+	return a.Run(ctx, contextID, text, observe, nil)
+}
+
+// Run is like Ask and also reports to say, which may be nil, what the LLM
+// says along with the calls of tools it asks for: what a front end shows of
+// the loop between the message of its owner and the answer. say is called
+// once for every call of the LLM that asks for tools, with "" if it said
+// nothing along with them, and before the Steps of those tools: a front end
+// tells the rounds of the loop apart by it.
+func (a *Assistant) Run(ctx context.Context, contextID, text string, observe func(Step), say func(string)) (string, error) {
 	bot, cfg, err := a.current()
 	if err != nil {
 		return "", err
@@ -210,11 +225,16 @@ func (a *Assistant) Ask(ctx context.Context, contextID, text string, observe fun
 	defer cancel()
 	r := a.begin(ctx, cancel, contextID, cfg, text)
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
-		Call: r.call,
+		Call: func(c agent.Call) {
+			r.call(c)
+			if say != nil && c.Done && c.Err == nil && c.ToolCalls > 0 {
+				say(c.Content)
+			}
+		},
 		Step: func(s agent.Step) {
 			r.step(s)
 			if observe != nil {
-				observe(Step{Tool: s.Tool, Args: s.Args, Done: s.Done})
+				observe(Step{Tool: s.Tool, Args: s.Args, Done: s.Done, Took: s.Took, Err: s.Err})
 			}
 		},
 	})
@@ -248,6 +268,25 @@ func (a *Assistant) Stop() {
 	}
 	a.answering.Unlock()
 	a.open.Wait()
+}
+
+// Conversation returns what the agent remembers of the conversation
+// contextID, as JSON, for a front end that goes on with it in a new process:
+// see Resume.
+func (a *Assistant) Conversation(contextID string) json.RawMessage {
+	b, _ := json.Marshal(a.memory.Conversation(contextID)) // messages are always written
+	return b
+}
+
+// Resume makes the agent remember the conversation contextID as
+// Conversation returned it in another process.
+func (a *Assistant) Resume(contextID string, conversation json.RawMessage) error {
+	var msgs []openai.Message
+	if err := json.Unmarshal(conversation, &msgs); err != nil {
+		return err
+	}
+	a.memory.Restore(contextID, msgs)
+	return nil
 }
 
 // current returns the agent for the configuration as it is now. The agent is

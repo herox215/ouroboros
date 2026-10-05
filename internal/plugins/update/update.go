@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	"ouroboros/internal/update"
@@ -48,11 +49,12 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				"Its tests are run first (make test), which takes a minute or more. "+
 				"Only when the build and every test pass, the running binary is replaced and a running node restarted. "+
 				"When one fails nothing is installed, and the error carries the end of the output: fix the source and call the tool again. "+
-				"This conversation goes on with the old build until ouro is started again. Only the owner of the node can use the tool.",
+				"In the terminal UI, ouro starts anew with the new build once your answer is given, and this conversation goes on there; "+
+				"elsewhere it goes on with the old build until ouro is started again. Only the owner of the node can use the tool.",
 			nil, c.rebuild))
 		plugin.Add(ctx, plugin.ToolView{Tool: Rebuild, Show: func(json.RawMessage) string {
 			return "building and testing " + sourceName(update.Source)
-		}})
+		}, Detail: assistant.HowItEnded})
 		return services{c.updater}, nil
 	})
 }
@@ -123,8 +125,11 @@ func (c *updateCommand) rebuild(ctx context.Context, _ struct{}) (string, error)
 	if err := c.restart(u.Exe); err != nil {
 		return "", fmt.Errorf("the build is installed, but the node did not restart: %w", err)
 	}
-	return "built " + u.Source + ", its tests pass, and the build is installed as " + u.Exe + ". " +
-		"A running node was restarted with it; this conversation uses the old build until ouro is started again.", nil
+	done := "built " + u.Source + ", its tests pass, and the build is installed as " + u.Exe + ". A running node was restarted with it; "
+	if plugin.Restart(ctx, u.Exe) {
+		return done + "ouro starts anew with it once you have answered, and this conversation goes on there.", nil
+	}
+	return done + "this conversation uses the old build until ouro is started again.", nil
 }
 
 // tail is the end of output, from the start of a line.

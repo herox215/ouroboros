@@ -63,6 +63,11 @@ type (
 		// "asking beta" for the tool that asks a peer. Nothing is shown of a
 		// call it returns "" for.
 		Show func(args json.RawMessage) string
+		// Detail returns what the owner is shown of a call once it ended,
+		// after the line of Show: how long it took, the end of an error. It
+		// is only asked for a call whose line Show gives. May be nil, which
+		// leaves the line as it is.
+		Detail func(s Step) string
 	}
 )
 
@@ -72,7 +77,7 @@ type (
 	Assistant = assistant.Assistant
 	// Step is a tool call the Assistant reports on the way to its answer
 	// and, with Done set, that its result is in. ToolLine turns it into what
-	// the owner is shown.
+	// the owner is shown, ToolDetail adds what became of the call.
 	Step = assistant.Step
 )
 
@@ -89,4 +94,20 @@ func ToolLine(ctx *Context, s Step) string {
 		}
 	}
 	return ""
+}
+
+// ToolDetail returns what the owner is shown of the tool call s once it
+// ended: line, as ToolLine gives it, with what the first ToolView of its tool
+// has to add. Without a Detail for that tool, line comes back as it is.
+func ToolDetail(ctx *Context, s Step, line string) string {
+	for _, v := range All[ToolView](ctx) {
+		if v.Tool != s.Tool || v.Detail == nil {
+			continue
+		}
+		if more := v.Detail(s); more != "" {
+			return line + " " + more
+		}
+		return line
+	}
+	return line
 }

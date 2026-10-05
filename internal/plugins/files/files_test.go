@@ -160,18 +160,20 @@ func TestRead(t *testing.T) {
 		{readArgs{Path: "~/empty", Offset: 7}, "(the file is empty)"},
 		{readArgs{Path: "~/notes.md", Offset: 1}, "one\ntwo\nthree\n"},
 		{readArgs{Path: "~/notes.md", Offset: -3}, "one\ntwo\nthree\n"},
-		{readArgs{Path: "~/notes.md", Offset: 2}, "two\nthree\n"},
-		{readArgs{Path: "~/notes.md", Offset: 3}, "three\n"},
+		{readArgs{Path: "~/notes.md", Offset: 2}, "two\nthree\n[these were the lines 2 to 3 of 3, the end of the file]"},
+		{readArgs{Path: "~/notes.md", Offset: 3}, "three\n[these were the lines 3 to 3 of 3, the end of the file]"},
 		{readArgs{Path: "~/notes.md", Limit: 3}, "one\ntwo\nthree\n"},
 		{readArgs{Path: "~/notes.md", Limit: -1}, "one\ntwo\nthree\n"},
-		{readArgs{Path: "~/notes.md", Limit: 2}, "one\ntwo\n[these were the lines 1 to 2, and there are more: continue with offset 3]"},
-		{readArgs{Path: "~/notes.md", Limit: 1}, "one\n[these were the lines 1 to 1, and there are more: continue with offset 2]"},
-		{readArgs{Path: "~/notes.md", Offset: 2, Limit: 1}, "two\n[these were the lines 2 to 2, and there are more: continue with offset 3]"},
-		{readArgs{Path: "~/open.txt", Offset: 2, Limit: 1}, "two"},
-		{readArgs{Path: "~/long"}, lines(1, maxReadLines) + "[these were the lines 1 to 2000, and there are more: continue with offset 2001]"},
-		{readArgs{Path: "~/long", Limit: maxReadLines + 5}, lines(1, maxReadLines) + "[these were the lines 1 to 2000, and there are more: continue with offset 2001]"},
-		{readArgs{Path: "~/long", Offset: 2, Limit: maxReadLines}, lines(2, maxReadLines+1)},
-		{readArgs{Path: "~/long", Offset: 2001}, "line 2001\n"},
+		{readArgs{Path: "~/notes.md", Limit: 2}, "one\ntwo\n[these were the lines 1 to 2 of 3: continue with offset 3]"},
+		{readArgs{Path: "~/notes.md", Limit: 1}, "one\n[these were the lines 1 to 1 of 3: continue with offset 2]"},
+		{readArgs{Path: "~/notes.md", Offset: 2, Limit: 1}, "two\n[these were the lines 2 to 2 of 3: continue with offset 3]"},
+		{readArgs{Path: "~/open.txt", Offset: 2, Limit: 1}, "two\n[these were the lines 2 to 2 of 2, the end of the file]"},
+		{readArgs{Path: "~/open.txt", Limit: 1}, "one\n[these were the lines 1 to 1 of 2: continue with offset 2]"},
+		{readArgs{Path: "~/long"}, lines(1, maxReadLines) + "[these were the lines 1 to 2000 of 2001: continue with offset 2001]"},
+		{readArgs{Path: "~/long", Limit: maxReadLines + 5}, lines(1, maxReadLines) + "[these were the lines 1 to 2000 of 2001: continue with offset 2001]"},
+		{readArgs{Path: "~/long", Offset: 2, Limit: maxReadLines}, lines(2, maxReadLines+1) + "[these were the lines 2 to 2001 of 2001, the end of the file]"},
+		{readArgs{Path: "~/long", Offset: 2001}, "line 2001\n[these were the lines 2001 to 2001 of 2001, the end of the file]"},
+		{readArgs{Path: "~/long", Limit: 1}, "line 1\n[these were the lines 1 to 1 of 2001: continue with offset 2]"},
 	} {
 		if got, err := w.run(owner, Read, tt.args); err != nil || got != tt.want {
 			t.Errorf("read(%+v) = %q, %v; want %q", tt.args, got, err, tt.want)
@@ -212,11 +214,11 @@ func TestReadInPieces(t *testing.T) {
 		t.Errorf("a file of exactly the limit: %d bytes, %v", len(got), err)
 	}
 	w.file("~/more", fits+"last\nvery last\n")
-	note := "[these were the lines 1 to 256, and there are more: continue with offset 257]"
+	note := "[these were the lines 1 to 256 of 258: continue with offset 257]"
 	if got, err := w.run(owner, Read, readArgs{Path: "~/more"}); err != nil || got != fits+note {
 		t.Errorf("a file of more than the limit: %d bytes, %v", len(got), err)
 	}
-	if got, err := w.run(owner, Read, readArgs{Path: "~/more", Offset: 257}); err != nil || got != "last\nvery last\n" {
+	if got, err := w.run(owner, Read, readArgs{Path: "~/more", Offset: 257}); err != nil || got != "last\nvery last\n[these were the lines 257 to 258 of 258, the end of the file]" {
 		t.Errorf("the rest: %q, %v", got, err)
 	}
 
@@ -224,6 +226,11 @@ func TestReadInPieces(t *testing.T) {
 	w.file("~/wide", "short\n"+strings.Repeat("x", maxReadBytes)+"\nshort\n")
 	got, err := w.run(owner, Read, readArgs{Path: "~/wide", Offset: 3})
 	fails(t, got, err, "line 2 of ~/wide has 256 KiB or more: too long to read")
+	// After the lines returned a long line is only counted.
+	w.file("~/widelater", "short\n"+strings.Repeat("x", 2*maxReadBytes)+"\nshort")
+	if got, err := w.run(owner, Read, readArgs{Path: "~/widelater", Limit: 1}); err != nil || got != "short\n[these were the lines 1 to 1 of 3: continue with offset 2]" {
+		t.Errorf("a long line after those returned: %q, %v", got, err)
+	}
 	w.file("~/justfits", "short\n"+strings.Repeat("x", maxReadBytes-1)+"\nshort\n")
 	if got, err := w.run(owner, Read, readArgs{Path: "~/justfits", Offset: 2, Limit: 1}); err != nil || len(got) < maxReadBytes {
 		t.Errorf("a line that just fits: %d bytes, %v", len(got), err)
@@ -252,6 +259,13 @@ func TestReadWhatIsNoText(t *testing.T) {
 	defer func() { open = func(path string) (io.ReadCloser, error) { return os.Open(path) } }()
 	if got, err := w.run(owner, Read, readArgs{Path: "~/utf8"}); !errors.Is(err, errTest) || got != "" {
 		t.Errorf("a failing file: %q, %v", got, err)
+	}
+	// Also when it fails only after the lines returned, which are counted for the note.
+	open = func(string) (io.ReadCloser, error) {
+		return io.NopCloser(io.MultiReader(strings.NewReader("one\ntwo\n"), iotest.ErrReader(errTest))), nil
+	}
+	if got, err := w.run(owner, Read, readArgs{Path: "~/utf8", Limit: 1}); !errors.Is(err, errTest) || got != "" {
+		t.Errorf("a file failing after the lines returned: %q, %v", got, err)
 	}
 }
 
@@ -368,7 +382,7 @@ func TestEdit(t *testing.T) {
 	before, _ := os.Stat(w.path("~/notes.md"))
 
 	got, err := w.run(owner, Edit, editArgs{Path: "~/notes.md", Old: "three two", New: "3 2"})
-	if err != nil || got != "edited ~/notes.md" || w.content("~/notes.md") != "one two\n3 2\n" {
+	if err != nil || got != "edited ~/notes.md; lines 1 to 2 of 2 are now:\none two\n3 2" || w.content("~/notes.md") != "one two\n3 2\n" {
 		t.Fatalf("got %q, %v: %q", got, err, w.content("~/notes.md"))
 	}
 	after, _ := os.Stat(w.path("~/notes.md"))
@@ -394,6 +408,29 @@ func TestEdit(t *testing.T) {
 	fails(t, got, err, "~ is not a file")
 	if w.content("~/notes.md") != "two\n3 2\n" {
 		t.Errorf("a failed edit changed the file: %q", w.content("~/notes.md"))
+	}
+
+	// What an edit left behind is shown with the lines around it, and no more.
+	w.file("~/lines", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")
+	got, err = w.run(owner, Edit, editArgs{Path: "~/lines", Old: "5\n6\n", New: "five\nsix\nseven\n"})
+	if want := "edited ~/lines; lines 2 to 10 of 11 are now:\n2\n3\n4\nfive\nsix\nseven\n7\n8\n9"; err != nil || got != want {
+		t.Errorf("got %q, %v, want %q", got, err, want)
+	}
+	// What was taken out leaves the line it was in, and the end of a file is the end.
+	got, err = w.run(owner, Edit, editArgs{Path: "~/lines", Old: "9\n10\n"})
+	if want := "edited ~/lines; lines 6 to 9 of 9 are now:\nsix\nseven\n7\n8"; err != nil || got != want {
+		t.Errorf("got %q, %v, want %q", got, err, want)
+	}
+	got, err = w.run(owner, Edit, editArgs{Path: "~/lines", Old: "1\n2\n3\n4\nfive\nsix\nseven\n7\n8\n"})
+	if err != nil || got != "edited ~/lines, which is empty now" {
+		t.Errorf("got %q, %v", got, err)
+	}
+	// A long change is cut, with where to go on reading.
+	w.file("~/long", "start\n")
+	got, err = w.run(owner, Edit, editArgs{Path: "~/long", Old: "start\n", New: strings.Repeat("x\n", maxEditLines+10)})
+	if err != nil || !strings.HasPrefix(got, fmt.Sprintf("edited ~/long; lines 1 to %d of %d are now:\n", maxEditLines, maxEditLines+10)) ||
+		!strings.HasSuffix(got, fmt.Sprintf("x\n[and more: continue with read at offset %d]", maxEditLines+1)) {
+		t.Errorf("got %q, %v", got, err)
 	}
 
 	// The limit holds for what is edited and for what comes of it.
@@ -661,7 +698,7 @@ func TestSchemas(t *testing.T) {
 	if strings.Join(names, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools: %v", names)
 	}
-	want := `{"type":"object","properties":{"limit":{"type":"integer","description":"how many lines to return at most"},` +
+	want := `{"type":"object","properties":{"limit":{"type":"integer","description":"how many lines to return at most; leave it out to get as many as one call returns"},` +
 		`"offset":{"type":"integer","description":"the line to start at, counted from 1; the first one if missing"},` +
 		`"path":{"type":"string","description":"the file"}},"required":["path"]}`
 	if all[0].Schema != want {

@@ -69,7 +69,8 @@ func (m *Model) layout() {
 	m.renderHistory(atBottom)
 }
 
-// renderHistory fills the history viewport with the conversation.
+// renderHistory fills the history viewport with the conversation, the loop of
+// every answer included.
 func (m *Model) renderHistory(toBottom bool) {
 	c := &m.chat
 	if len(c.entries) == 0 {
@@ -79,11 +80,13 @@ func (m *Model) renderHistory(toBottom bool) {
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
 	blocks := make([]string, len(c.entries))
 	for i, e := range c.entries {
-		name, color := m.agentName(), peer
-		if e.mine {
-			name, color = "you", accent
+		// A round of the loop is its words and a muted line per call; a
+		// message is a head and text.
+		if len(e.calls) > 0 {
+			blocks[i] = m.roundLines(e, i == c.round-1, func(s string) string { return body.Render(s) })
+			continue
 		}
-		head := boldStyle.Foreground(color).Render(name) + mutedStyle.Render(" · "+e.at.Format("15:04"))
+		head := m.entryHead(e)
 		text := body.Render(e.text)
 		if e.failed {
 			text = body.Foreground(bad).Render("✗ " + e.text)
@@ -94,6 +97,33 @@ func (m *Model) renderHistory(toBottom bool) {
 	if toBottom {
 		m.history.GotoBottom()
 	}
+}
+
+// entryHead is the line above the text of a message: who wrote it and when.
+func (m *Model) entryHead(e entry) string {
+	name, color := m.agentName(), peer
+	if e.mine {
+		name, color = "you", accent
+	}
+	return boldStyle.Foreground(color).Render(name) + mutedStyle.Render(" · "+e.at.Format("15:04"))
+}
+
+// roundLines is a round of the loop as the history shows it: what the agent
+// said along with its calls, if it said anything, and below one line per
+// call. Of the round that is on, the calls not yet ended are marked.
+func (m *Model) roundLines(e entry, on bool, render func(string) string) string {
+	var lines []string
+	if e.text != "" {
+		lines = append(lines, render(e.text))
+	}
+	for _, c := range e.calls {
+		what := mutedStyle.Render("· " + c.text)
+		if !c.done && on && m.chat.pending {
+			what = lipgloss.NewStyle().Foreground(accent).Render("· " + c.text + " …")
+		}
+		lines = append(lines, mutedStyle.Render("  ↳ ")+what)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) View() tea.View {
@@ -120,6 +150,8 @@ func (m *Model) View() tea.View {
 		body = m.helpView()
 	case screenPlugin:
 		body = m.screenView()
+	case screenModel:
+		body = m.modelView()
 	}
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), body, m.footerView()))
 	return v
@@ -262,8 +294,7 @@ func (m *Model) chatView() string {
 			content = hint
 		}
 	} else {
-		title := boldStyle.Foreground(peer).Render(m.agentName())
-		title = ansi.Truncate(title+mutedStyle.Render(" · "+m.modelText()+" · your agent"), inner, "…")
+		title := ansi.Truncate(boldStyle.Foreground(peer).Render(m.agentName()), inner, "…")
 		var typing string
 		switch {
 		case c.doing != "":
@@ -292,6 +323,8 @@ func (m *Model) footerView() string {
 		help = "↑↓ select · ←→ accept or reject · enter decide · esc back · ctrl+c quit"
 	case screenHelp:
 		help = "esc back · ctrl+c quit"
+	case screenModel:
+		help = "↑↓ choose · enter set · esc back · ctrl+c quit"
 	case screenPlugin:
 		help = "esc back · ctrl+c quit"
 		if len(m.screens[m.open].Actions) > 0 {

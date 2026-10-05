@@ -49,3 +49,34 @@ func FrontEndFor(ctx *Context, term *Console) (FrontEnd, error) {
 	}
 	return all[0], nil
 }
+
+type restartKey struct{}
+
+// WithRestart returns ctx in which a tool can ask the front end that waits
+// for the answer to start ouro anew: restart is told the binary to start,
+// see Restart. A front end hands such a ctx to the Assistant.
+func WithRestart(ctx context.Context, restart func(exe string)) context.Context {
+	return context.WithValue(ctx, restartKey{}, restart)
+}
+
+// Restart asks the front end of the conversation of ctx to start exe in
+// place of the running ouro once the answer is given, and to go on with the
+// conversation there. It reports false if no front end does that, like
+// "ouro chat" or a peer.
+func Restart(ctx context.Context, exe string) bool {
+	restart, ok := ctx.Value(restartKey{}).(func(string))
+	if ok {
+		restart(exe)
+	}
+	return ok
+}
+
+// Restarting is the error a front end ends with that is to be started anew:
+// the process runs Exe in its place, with its arguments and Env as its
+// environment, see cmd/ouro.
+type Restarting struct {
+	Exe string
+	Env []string
+}
+
+func (r *Restarting) Error() string { return "ouro is to be started anew from " + r.Exe }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"time"
 
 	"ouroboros/internal/config"
@@ -31,8 +32,8 @@ import (
 // It is narrow on purpose. It decides on the requests and proposals that are
 // waiting and shows them; the contacts, the key of the node and its
 // configuration are not to be had from it, and no change of the
-// configuration but one that was proposed or one the owner makes in the
-// setup.
+// configuration but the model the owner picks in the model screen (/model),
+// one that was proposed, or one the owner makes in the setup.
 type Owner struct {
 	home  home.Dir
 	local node.Local
@@ -174,6 +175,35 @@ func (o *Owner) SetupCommand() (*exec.Cmd, error) {
 // saves holds for the node once it is started again. The key for the
 // endpoint stays in the Setup: it tells whether there is one, never which.
 func (o *Owner) Setup() (*Setup, error) { return setup.Open(o.home, o.offer) }
+
+// Models lists the models the provider of the node offers, to choose from
+// with /model in a front end: they are listed at the endpoint of the node,
+// with the key it has. It fails with ErrNotSetUp for a node that is not set
+// up, and with ErrKeyRejected if the provider refuses the key.
+func (o *Owner) Models(ctx context.Context) (SetupModels, error) {
+	s, err := setup.Open(o.home, o.offer)
+	if err != nil {
+		return SetupModels{}, err
+	}
+	return s.Configured(ctx)
+}
+
+// SetModel saves model as the model of the node, with the endpoint and the
+// key it has. The agents of the node answer with it from the next message
+// they get: no restart is needed.
+func (o *Owner) SetModel(model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return errors.New("the model cannot be empty")
+	}
+	return config.Update(string(o.home), func(c *config.Config) error {
+		if !c.Complete() {
+			return ErrNotSetUp
+		}
+		c.Model = model
+		return nil
+	})
+}
 
 // Requests returns the connection requests that wait for a decision: those
 // of other nodes and those the agent of this node proposed (Request.Proposed),

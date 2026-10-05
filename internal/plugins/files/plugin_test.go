@@ -59,10 +59,10 @@ func TestOwnerWorksWithFiles(t *testing.T) {
 	if got := chat("write", map[string]any{"path": "~/new/todo.md", "content": "one\ntwo\n"}); got != "created ~/new/todo.md (8 bytes)" {
 		t.Errorf("write: %q", got)
 	}
-	if got := chat("edit", map[string]any{"path": "~/new/todo.md", "old": "two", "new": "three"}); got != "edited ~/new/todo.md" {
+	if got := chat("edit", map[string]any{"path": "~/new/todo.md", "old": "two", "new": "three"}); got != "edited ~/new/todo.md; lines 1 to 2 of 2 are now:\none\nthree" {
 		t.Errorf("edit: %q", got)
 	}
-	if got := chat("read", map[string]any{"path": "~/new/todo.md", "offset": 2, "limit": 1}); got != "three\n" {
+	if got := chat("read", map[string]any{"path": "~/new/todo.md", "offset": 2, "limit": 1}); got != "three\n[these were the lines 2 to 2 of 2, the end of the file]" {
 		t.Errorf("read: %q", got)
 	}
 	// The default protects the keys of the user.

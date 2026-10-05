@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -14,9 +15,10 @@ import (
 )
 
 const (
-	maxContexts = 256 // conversations kept in memory
-	maxHistory  = 40  // messages kept per conversation
-	maxRounds   = 50  // LLM calls per answer; stops an agent that keeps calling tools
+	maxContexts = 256               // conversations kept in memory
+	maxHistory  = 40                // messages kept per conversation
+	maxRounds   = 100               // LLM calls per answer; stops an agent that keeps calling tools
+	warnRounds  = maxRounds * 4 / 5 // LLM calls after which the LLM is told how many it has left
 
 	// abandoned ends an answer that failed or was stopped in the history, so
 	// that the next message does not follow tool results.
@@ -154,7 +156,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		a.memory.remember(contextID, append(history, openai.Message{Role: "assistant", Content: abandoned}))
 		return "", err
 	}
-	for range maxRounds {
+	for round := range maxRounds {
 		// An answer that was stopped while a tool ran asks the LLM no more.
 		if err := ctx.Err(); err != nil {
 			return abandon(err)
@@ -163,7 +165,11 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			observe.Call(Call{})
 		}
 		start := time.Now()
-		msg, err := a.llm.Complete(ctx, a.model, append([]openai.Message{a.system}, history...), a.specs)
+		msgs := append([]openai.Message{a.system}, history...)
+		if round >= warnRounds {
+			msgs[len(msgs)-1].Content += remaining(round)
+		}
+		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
 		if observe.Call != nil {
 			observe.Call(Call{Done: true, Took: time.Since(start), ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
@@ -181,6 +187,16 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 	}
 	return abandon(ErrTooManyToolCalls)
+}
+
+// remaining is what the LLM is told after the last result of a tool when
+// round, counted from 0, is one of the last calls of the LLM for an answer.
+// It is only sent, not remembered: the next call tells the next number.
+func remaining(round int) string {
+	return fmt.Sprintf("\n\n[Not from the tool: this is call %d of at most %d of the LLM for this answer. "+
+		"Without an answer by then, it breaks off. Finish the work that is begun, "+
+		"and answer with what is done and what is still open: asked again, you go on from there.]",
+		round+1, maxRounds)
 }
 
 // call runs one tool call and returns its result as a message for the LLM.
@@ -214,6 +230,18 @@ func Invoke(ctx context.Context, tool Tool, args json.RawMessage) (string, error
 		observe.Step(step)
 	}
 	return step.Result, step.Err
+}
+
+// Conversation returns what m remembers of the conversation contextID, to go
+// on with in another memory: see Restore.
+func (m *Memory) Conversation(contextID string) []openai.Message { return m.history(contextID) }
+
+// Restore makes m remember msgs as the conversation contextID, as far as it
+// keeps of one.
+func (m *Memory) Restore(contextID string, msgs []openai.Message) {
+	if len(msgs) > 0 {
+		m.remember(contextID, slices.Clone(msgs))
+	}
 }
 
 func (m *Memory) history(contextID string) []openai.Message {

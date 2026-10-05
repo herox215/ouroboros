@@ -175,11 +175,16 @@ func TestToolErrorsAreToldToTheLLM(t *testing.T) {
 	}
 }
 
-// loopLLM asks for a tool on every turn.
-type loopLLM struct{ calls int }
+// loopLLM asks for a tool on every turn and records the last message of
+// every request.
+type loopLLM struct {
+	calls int
+	lasts []string
+}
 
-func (l *loopLLM) Complete(context.Context, string, []openai.Message, []openai.Tool) (openai.Message, error) {
+func (l *loopLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
 	l.calls++
+	l.lasts = append(l.lasts, msgs[len(msgs)-1].Content)
 	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "c", Function: openai.FunctionCall{Name: "noop"}}}}, nil
 }
 
@@ -192,6 +197,18 @@ func TestEndlessToolCallsAreStopped(t *testing.T) {
 	h := a.memory.history("c1")
 	if len(h) != 2+2*maxRounds || h[0].Content != "go" || h[len(h)-1].Content != abandoned {
 		t.Fatalf("an abandoned answer is remembered as far as it got: %d messages", len(h))
+	}
+	// The last calls are told how many there are, after the result of the tool.
+	for i, last := range llm.lasts {
+		told := strings.Contains(last, fmt.Sprintf("this is call %d of at most %d", i+1, maxRounds))
+		if told != (i >= warnRounds) || strings.Contains(last, "Not from the tool") != told {
+			t.Fatalf("call %d: %q", i+1, last)
+		}
+	}
+	for _, m := range h {
+		if strings.Contains(m.Content, "Not from the tool") {
+			t.Fatalf("the count is remembered: %q", m.Content)
+		}
 	}
 }
 
@@ -339,5 +356,21 @@ func TestRunStopsWhenTheContextEnds(t *testing.T) {
 	// call stop, the call, its result, the note
 	if h := a.memory.history("c1"); len(h) != 4 || h[2].Role != "tool" || h[3].Content != abandoned {
 		t.Fatalf("history %+v", h)
+	}
+}
+
+// What a memory remembers of a conversation goes on in another one.
+func TestMemoryRestore(t *testing.T) {
+	m := NewMemory()
+	msgs := []openai.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "hello"}}
+	m.remember("c", msgs)
+	other := NewMemory()
+	other.Restore("c", m.Conversation("c"))
+	other.Restore("empty", nil)
+	if got := other.Conversation("c"); len(got) != 2 || got[0].Content != "hi" || got[1].Content != "hello" {
+		t.Fatalf("got %+v", got)
+	}
+	if len(other.conversations) != 1 {
+		t.Fatal("an empty conversation should not be remembered")
 	}
 }

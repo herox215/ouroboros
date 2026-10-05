@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
@@ -266,4 +268,34 @@ func AskingPeerAs(nameOf func(peer string) string) func(args json.RawMessage) st
 		}
 		return "asking " + cmp.Or(nameOf(call.Peer), call.Peer)
 	}
+}
+
+// HowItEnded is what a front end shows of a tool call once it ended, after
+// the line of the tool: how long it took, or why it failed. It is for the
+// Detail of a plugin.ToolView.
+func HowItEnded(s Step) string {
+	if !s.Done {
+		return ""
+	}
+	if s.Err != nil {
+		return "✗ " + oneLine.Replace(firstLine(s.Err.Error()))
+	}
+	return "✓ " + s.Took.Round(time.Millisecond).String()
+}
+
+// firstLine is the first line of a text, at most 120 bytes of it where a
+// character begins: what a front end has room for next to the line of a tool
+// call.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) <= 120 {
+		return s
+	}
+	cut := 120
+	for !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }

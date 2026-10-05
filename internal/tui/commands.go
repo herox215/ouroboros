@@ -23,6 +23,7 @@ var own = []command{
 	{"start", "start the node", (*Model).start},
 	{"stop", "stop the node", (*Model).stop},
 	{"setup", "set up the node", (*Model).setup},
+	{"model", "choose the model of the provider", (*Model).openModel},
 	{"requests", "decide on connection requests and proposals", (*Model).openRequests},
 	{"help", "list the commands", func(m *Model) tea.Cmd { m.screen = screenHelp; return nil }},
 	{"quit", "quit (ctrl+c does too)", (*Model).leave},

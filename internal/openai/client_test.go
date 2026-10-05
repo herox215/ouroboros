@@ -243,8 +243,85 @@ func TestCompleteStreams(t *testing.T) {
 			"data: [DONE]\n\n"))
 	})
 	got, err := c.Complete(context.Background(), "gpt", []Message{{Role: "user", Content: "hello"}}, nil)
-	if err != nil || got.Role != "assistant" || got.Content != "Hallo" || got.ToolCalls != nil {
+	if err != nil || got.Role != "assistant" || got.Content != "Hallo" || got.Reasoning != "thinking" || got.ReasoningField != "reasoning" || got.ToolCalls != nil {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// What the model thought comes in pieces in one of several fields, and an API
+// that sends it in two of them at once has it counted once.
+func TestCompleteStreamsReasoning(t *testing.T) {
+	for _, tt := range []struct {
+		name, field string
+		h           http.HandlerFunc
+	}{
+		{"reasoning_content", "reasoning_content", sse(
+			`{"choices":[{"delta":{"reasoning_content":"I will ","reasoning":"I will "}}]}`,
+			`{"choices":[{"delta":{"reasoning_content":"read it."}}]}`,
+			`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`)},
+		{"reasoning", "reasoning", sse(
+			`{"choices":[{"delta":{"reasoning":"I will "}}]}`,
+			`{"choices":[{"delta":{"reasoning":"read it."}}]}`,
+			`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`)},
+		{"reasoning_text", "reasoning_text", sse(
+			`{"choices":[{"delta":{"reasoning_text":"I will "}}]}`,
+			`{"choices":[{"delta":{"reasoning_text":"read it."}}]}`,
+			`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`)},
+	} {
+		got, err := newServer(t, tt.h).Complete(context.Background(), "gpt", nil, nil)
+		if err != nil || got.Content != "ok" || got.Reasoning != "I will read it." || got.ReasoningField != tt.field {
+			t.Errorf("%s: got %+v, %v", tt.name, got, err)
+		}
+	}
+}
+
+// An answer in one piece has its reasoning too.
+func TestCompleteReasoningInOnePiece(t *testing.T) {
+	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi","reasoning_text":"greet"}}]}`))
+	})
+	got, err := c.Complete(context.Background(), "gpt", nil, nil)
+	if err != nil || got.Content != "hi" || got.Reasoning != "greet" || got.ReasoningField != "reasoning_text" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// A message in an answer in one piece that does not fit is an error.
+func TestCompleteMessageThatIsNoMessage(t *testing.T) {
+	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"choices":[{"message":{"role":1}}]}`))
+	})
+	if got, err := c.Complete(context.Background(), "gpt", nil, nil); err == nil {
+		t.Fatalf("got %+v, want error", got)
+	}
+}
+
+// What the model thought goes back to the API in the field it came in, and a
+// message without reasoning has none of the fields.
+func TestReasoningIsSentBack(t *testing.T) {
+	for _, tt := range []struct {
+		msg  Message
+		want string
+	}{
+		{Message{Role: "user", Content: "hi"}, `{"role":"user","content":"hi"}`},
+		{Message{Role: "assistant", Reasoning: "r", ReasoningField: "reasoning_content"}, `{"role":"assistant","content":"","reasoning_content":"r"}`},
+		{Message{Role: "assistant", Reasoning: "r", ReasoningField: "reasoning"}, `{"role":"assistant","content":"","reasoning":"r"}`},
+		{Message{Role: "assistant", Reasoning: "r", ReasoningField: "reasoning_text"}, `{"role":"assistant","content":"","reasoning_text":"r"}`},
+		{Message{Role: "assistant", Reasoning: "r"}, `{"role":"assistant","content":"","reasoning":"r"}`},
+		{Message{Role: "assistant", Reasoning: "r", ReasoningField: "thoughts"}, `{"role":"assistant","content":"","reasoning":"r"}`},
+	} {
+		var sent string
+		c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+			var in struct {
+				Messages []json.RawMessage `json:"messages"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			sent = string(in.Messages[0])
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		})
+		if _, err := c.Complete(context.Background(), "gpt", []Message{tt.msg}, nil); err != nil || sent != tt.want {
+			t.Errorf("%+v: sent %s, %v; want %s", tt.msg, sent, err, tt.want)
+		}
 	}
 }
 

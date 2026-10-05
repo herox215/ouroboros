@@ -3,13 +3,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 
 	"ouroboros/internal/cli"
+	"ouroboros/plugin"
 )
 
 func main() {
@@ -26,9 +29,22 @@ func main() {
 	if err == nil {
 		err = app.Run(context.Background(), os.Args[1:])
 	}
-	if err != nil {
+	if err = restart(err); err != nil {
 		fail(err)
 	}
+}
+
+// execute replaces the process by the program at path; tests replace it.
+var execute = syscall.Exec
+
+// restart runs the binary in place of this process, with its arguments,
+// when err is the front end asking to be started anew from a new build: it
+// goes on on this terminal. Any other err is returned as it is.
+func restart(err error) error {
+	if r, ok := errors.AsType[*plugin.Restarting](err); ok {
+		return execute(r.Exe, os.Args, r.Env)
+	}
+	return err
 }
 
 func readPassword(prompt string) (string, error) {

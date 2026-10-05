@@ -132,6 +132,18 @@ func (s *Session) Saved(ctx context.Context, endpoint string) (Models, error) {
 	return s.Connect(ctx, endpoint, s.savedKey(clean(endpoint)))
 }
 
+// Configured lists the models of the endpoint the node is configured for,
+// with the key it has: what the owner picks from when only the model is
+// changed, in the model screen of the terminal UI. It fails with
+// config.ErrIncomplete for a node that is not set up, and with
+// ErrKeyRejected if the endpoint refuses the key.
+func (s *Session) Configured(ctx context.Context) (Models, error) {
+	if !s.cfg.Complete() {
+		return Models{}, config.ErrIncomplete
+	}
+	return s.Connect(ctx, clean(s.cfg.BaseURL), s.cfg.APIKey)
+}
+
 // Rights are what the agent may do once the setup is saved: the names of the
 // tools for the owner and for peers (config.AllTools for every tool), and the
 // paths no tool for files touches.

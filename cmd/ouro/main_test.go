@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"unsafe"
 
 	"ouroboros/internal/openai/openaitest"
+	"ouroboros/plugin"
 )
 
 // TestEndToEnd builds the real binary and drives it like a user would.
@@ -287,4 +289,25 @@ func freeUDPPort(t *testing.T) int {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).Port
+}
+
+// The front end that asks to be started anew is: the binary it names runs
+// in place of ouro, with its arguments and the environment it hands over.
+func TestRestart(t *testing.T) {
+	var ran []string
+	old := execute
+	execute = func(path string, args, env []string) error {
+		ran = append(append([]string{path}, args...), env...)
+		return errors.New("exec failed")
+	}
+	t.Cleanup(func() { execute = old })
+
+	other := errors.New("other")
+	if err := restart(other); err != other || ran != nil {
+		t.Fatalf("got %v, ran %v", err, ran)
+	}
+	err := restart(fmt.Errorf("tui: %w", &plugin.Restarting{Exe: "/new/ouro", Env: []string{"A=1"}}))
+	if want := append(append([]string{"/new/ouro"}, os.Args...), "A=1"); err == nil || err.Error() != "exec failed" || !slices.Equal(ran, want) {
+		t.Fatalf("got %v, ran %v", err, ran)
+	}
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/guard"
 	"ouroboros/internal/safefile"
 	"ouroboros/plugin"
@@ -40,6 +41,8 @@ const (
 	maxReadLines  = 2000      // lines one call of read returns
 	maxReadBytes  = 256 << 10 // bytes one call of read returns
 	maxWriteBytes = 1 << 20   // bytes of a file that write or edit leave behind
+	editContext   = 3         // lines edit shows before and after what it changed
+	maxEditLines  = 50        // lines edit shows at most
 	maxListed     = 1000      // entries one call of list returns
 	maxMatches    = 200       // lines one call of search returns
 	maxMatchBytes = 300       // bytes of a line search shows
@@ -71,7 +74,7 @@ func Plugin(g *guard.Guard) plugin.Plugin {
 					return ""
 				}
 				return doing + " " + call.Path
-			}})
+			}, Detail: assistant.HowItEnded})
 		}
 		return nil
 	})
@@ -83,10 +86,13 @@ func tools(g *guard.Guard) []plugin.Tool {
 	return []plugin.Tool{
 		tool(g, Read,
 			fmt.Sprintf("Read a text file and return its content: at most %d lines or %d KiB per call. ", maxReadLines, maxReadBytes>>10)+
-				"When there is more, the result ends with a note that says at which line to continue. "+pathHint,
+				"A result without a note at its end is the whole file. Otherwise the note says which lines of how many it returned, "+
+				"and at which line to continue when there is more. "+
+				"Leave out limit unless only a part of the file you know is wanted: a file read in small pieces costs a call each. "+
+				"To know a whole file, continue with offset until the note says the file ends. "+pathHint,
 			[]param{path,
 				{"offset", "integer", "the line to start at, counted from 1; the first one if missing", true},
-				{"limit", "integer", "how many lines to return at most", true}},
+				{"limit", "integer", "how many lines to return at most; leave it out to get as many as one call returns", true}},
 			read),
 		tool(g, Write,
 			fmt.Sprintf("Create a file with the given content, or replace all of its content. Missing directories are created. At most %d MiB. ", maxWriteBytes>>20)+
@@ -95,7 +101,8 @@ func tools(g *guard.Guard) []plugin.Tool {
 			write),
 		tool(g, Edit,
 			`Replace the text "old" in a file by "new". "old" has to match the text of the file exactly, and exactly once: `+
-				"take enough of the text around the change to make it so. "+pathHint,
+				"take enough of the text around the change to make it so. "+
+				"Returns the changed lines as they are now, with a few lines around them: check them before the next edit. "+pathHint,
 			[]param{path,
 				{"old", "string", "the text to replace, exactly as it is in the file", false},
 				{"new", "string", "the text to put in its place", false}},
@@ -219,7 +226,15 @@ func read(c *guard.Checker, args readArgs) (string, error) {
 	}
 	var text strings.Builder
 	lines, taken, more := 0, 0, false
-	for r := bufio.NewReaderSize(f, maxReadBytes); !more; {
+	r := bufio.NewReaderSize(f, maxReadBytes)
+	for !more {
+		// The lines after those returned are left to countLines: one of
+		// them may be too long, or no text, and is not returned anyway.
+		if taken == limit {
+			_, err := r.Peek(1)
+			more = !errors.Is(err, io.EOF)
+			break
+		}
 		line, err := r.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) {
 			return "", fmt.Errorf("line %d of %s has %d KiB or more: too long to read", lines+1, args.Path, maxReadBytes>>10)
@@ -230,7 +245,7 @@ func read(c *guard.Checker, args readArgs) (string, error) {
 				return "", fmt.Errorf("%s is not a text file", args.Path)
 			}
 			if lines >= first {
-				if taken == limit || text.Len()+len(line) > maxReadBytes {
+				if text.Len()+len(line) > maxReadBytes {
 					more = true
 				} else {
 					text.Write(line)
@@ -251,12 +266,45 @@ func read(c *guard.Checker, args readArgs) (string, error) {
 	if taken == 0 {
 		return "", fmt.Errorf("%s has only %d lines", args.Path, lines)
 	}
+	content, last := strings.TrimSuffix(text.String(), "\n"), first+taken-1
 	if more {
-		last := first + taken - 1
-		return fmt.Sprintf("%s\n[these were the lines %d to %d, and there are more: continue with offset %d]",
-			strings.TrimSuffix(text.String(), "\n"), first, last, last+1), nil
+		// The lines after those returned are only counted, for the note.
+		rest, err := countLines(r)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s\n[these were the lines %d to %d of %d: continue with offset %d]",
+			content, first, last, lines+rest, last+1), nil
 	}
-	return text.String(), nil
+	// The whole file comes as it is: a script of run may take it for data.
+	if first == 1 {
+		return text.String(), nil
+	}
+	return fmt.Sprintf("%s\n[these were the lines %d to %d of %d, the end of the file]", content, first, last, lines), nil
+}
+
+// countLines counts the lines r has left, the last one also without a line
+// break at its end.
+func countLines(r io.Reader) (int, error) {
+	buf := make([]byte, 32<<10)
+	n, last := 0, byte('\n')
+	for {
+		k, err := r.Read(buf)
+		if k > 0 {
+			n += bytes.Count(buf[:k], []byte{'\n'})
+			last = buf[k-1]
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	if last != '\n' {
+		n++
+	}
+	return n, nil
 }
 
 type writeArgs struct {
@@ -324,7 +372,8 @@ func edit(c *guard.Checker, args editArgs) (string, error) {
 	if n > 1 {
 		return "", fmt.Errorf(`"old" occurs %d times in %s: it has to match exactly once, so take more of the text around it`, n, args.Path)
 	}
-	edited := strings.Replace(string(content), args.Old, args.New, 1)
+	at := strings.Index(string(content), args.Old)
+	edited := string(content[:at]) + args.New + string(content[at+len(args.Old):])
 	if len(edited) > maxWriteBytes {
 		return "", fmt.Errorf("%s would have %d bytes: a file is written with at most %d", args.Path, len(edited), maxWriteBytes)
 	}
@@ -334,7 +383,30 @@ func edit(c *guard.Checker, args editArgs) (string, error) {
 	if err := safefile.Write(real, []byte(edited), info.Mode().Perm()); err != nil {
 		return "", err
 	}
-	return "edited " + args.Path, nil
+	return changed(args.Path, edited, at, args.New), nil
+}
+
+// changed tells what an edit left behind: the lines of edited that put, put
+// in at the byte at, takes now, with editContext lines around them, so that
+// the LLM sees what it did without reading the file again.
+func changed(path, edited string, at int, put string) string {
+	lines := strings.SplitAfter(edited, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return "edited " + path + ", which is empty now"
+	}
+	first := min(strings.Count(edited[:at], "\n"), len(lines)-1)
+	last := min(first+strings.Count(strings.TrimSuffix(put, "\n"), "\n"), len(lines)-1)
+	from, to := max(0, first-editContext), min(len(lines)-1, last+editContext)
+	more := ""
+	if to-from >= maxEditLines {
+		to = from + maxEditLines - 1
+		more = fmt.Sprintf("\n[and more: continue with %s at offset %d]", Read, to+2)
+	}
+	return fmt.Sprintf("edited %s; lines %d to %d of %d are now:\n%s%s", path, from+1, to+1, len(lines),
+		strings.TrimSuffix(strings.Join(lines[from:to+1], ""), "\n"), more)
 }
 
 type listArgs struct {
