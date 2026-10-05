@@ -200,7 +200,7 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 		t.Fatalf("nothing proposed: %+v, %v", list, err)
 	}
 	out := propose(t, alpha, "tools.a2a", []any{map[string]any{"tool": "read", "allow": []string{"~/share"}}}, "beta wants to read the share")
-	if !strings.Contains(out, "last=Proposed, and nothing is changed yet: tools.a2a is to become") || !strings.Contains(out, "R") {
+	if !strings.Contains(out, "last=Proposed, and nothing is changed yet: tools.a2a is to become") || !strings.Contains(out, "/requests") {
 		t.Fatalf("the agent was told: %q", out)
 	}
 	list, err := o.Proposals()
