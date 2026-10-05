@@ -131,7 +131,7 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 ## Tools
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
-`delete`), one that runs a script calling the others (`run`) and, for you alone, two for the configuration
+`delete`, `search`), one that runs a script calling the others (`run`) and, for you alone, two for the configuration
 (`get_config`, `propose_config`) and one that builds and installs its own source ([`rebuild`](#updates)). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
 what the setup writes:
 
@@ -169,8 +169,9 @@ restart. A node that runs keeps answering peers as before while the file cannot 
 | `edit(path, old, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once | the file has at most 1 MiB, before and after |
 | `list(path)` | the entries of a directory: directories end in `/`, files come with their size | 1000 entries; what the tool may not read is not listed |
 | `delete(path, recursive?)` | removes a file or an empty directory; one with content only with `recursive: true` | stops, with nothing deleted, before anything it may not delete |
+| `search(path, pattern, glob?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go` | 200 lines of at most 300 bytes, 10000 files; hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out |
 
-A path is absolute or starts with `~`, your home directory. Each of the five tools takes the settings `allow`
+A path is absolute or starts with `~`, your home directory. Each of the six tools takes the settings `allow`
 and `deny`: paths the tool may go to, and paths within those it may not. A path is a file, or a directory with
 everything below it; there are no patterns. A shared directory for peers, and your own agent held back:
 

@@ -26,7 +26,10 @@ const (
 
 // fileTools are the tools for files, which the files plugin contributes: the
 // prompt of the owner's agent says how to use them.
-var fileTools = []string{"read", "write", "edit", "list", "delete"}
+var fileTools = []string{"read", "write", "edit", "list", "delete", toolSearch}
+
+// toolSearch is the tool for files the prompt points to for finding text.
+const toolSearch = "search"
 
 // PeerTools are the tools with which an agent reaches other nodes. selfID
 // returns the ID of this node, which is not a peer of itself.

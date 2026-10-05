@@ -207,7 +207,7 @@ func TestToolViews(t *testing.T) {
 	}))
 	for tool, want := range map[string]string{
 		"read": "reading ~/notes.md", "write": "writing ~/notes.md", "edit": "editing ~/notes.md",
-		"list": "listing ~/notes.md", "delete": "deleting ~/notes.md",
+		"list": "listing ~/notes.md", "delete": "deleting ~/notes.md", "search": "searching ~/notes.md",
 	} {
 		if got := plugin.ToolLine(ctx, plugin.Step{Tool: tool, Args: json.RawMessage(`{"path": "~/notes.md", "content": "x"}`)}); got != want {
 			t.Errorf("%s: %q, want %q", tool, got, want)

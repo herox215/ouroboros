@@ -1,5 +1,5 @@
 // Package files is the plugin with the tools for files: read, write, edit,
-// list and delete. Where each of them may go is for the owner to say, per
+// list, delete and search. Where each of them may go is for the owner to say, per
 // tool and per kind of conversation, with the settings "allow" and "deny" in
 // the configuration; what no tool does, whatever is configured, is decided by
 // package guard.
@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -31,6 +32,7 @@ const (
 	Edit   = "edit"
 	List   = "list"
 	Delete = "delete"
+	Search = "search"
 )
 
 // The limits of the tools.
@@ -39,7 +41,12 @@ const (
 	maxReadBytes  = 256 << 10 // bytes one call of read returns
 	maxWriteBytes = 1 << 20   // bytes of a file that write or edit leave behind
 	maxListed     = 1000      // entries one call of list returns
+	maxMatches    = 200       // lines one call of search returns
+	maxMatchBytes = 300       // bytes of a line search shows
 )
+
+// maxSearched is how many files one call of search looks into; tests lower it.
+var maxSearched = 10000
 
 // open opens a file for reading; tests replace it to get in the way.
 var open = func(path string) (io.ReadCloser, error) { return os.Open(path) }
@@ -55,7 +62,7 @@ func Plugin(g *guard.Guard) plugin.Plugin {
 		for _, tool := range tools(g) {
 			plugin.Add(ctx, tool)
 		}
-		for name, doing := range map[string]string{Read: "reading", Write: "writing", Edit: "editing", List: "listing", Delete: "deleting"} {
+		for name, doing := range map[string]string{Read: "reading", Write: "writing", Edit: "editing", List: "listing", Delete: "deleting", Search: "searching"} {
 			plugin.Add(ctx, plugin.ToolView{Tool: name, Show: func(args json.RawMessage) string {
 				var call struct {
 					Path string `json:"path"`
@@ -70,7 +77,7 @@ func Plugin(g *guard.Guard) plugin.Plugin {
 	})
 }
 
-// tools are the five tools.
+// tools are the six tools.
 func tools(g *guard.Guard) []plugin.Tool {
 	path := param{"path", "string", "the file", false}
 	return []plugin.Tool{
@@ -103,6 +110,16 @@ func tools(g *guard.Guard) []plugin.Tool {
 			[]param{{"path", "string", "the file or directory", false},
 				{"recursive", "boolean", "delete a directory together with its content", true}},
 			remove),
+		tool(g, Search,
+			"Find the lines of text files that match a regular expression (RE2 syntax; (?i) at its start ignores case): "+
+				"in one file, or in every file below a directory, hidden directories left out. "+
+				fmt.Sprintf("A file of more than %d MiB is not searched. ", maxWriteBytes>>20)+
+				fmt.Sprintf("Returns path:line: text for every matching line, at most %d lines, and looks into at most %d files. ", maxMatches, maxSearched)+
+				"Search first to find where something is, then read only the lines around it. "+pathHint,
+			[]param{{"path", "string", "the file or directory", false},
+				{"pattern", "string", "the regular expression a line has to match", false},
+				{"glob", "string", `only files whose name matches this, like "*.go"`, true}},
+			search),
 	}
 }
 
@@ -395,4 +412,132 @@ func remove(c *guard.Checker, args deleteArgs) (string, error) {
 		return "", err
 	}
 	return "deleted " + args.Path, nil
+}
+
+type searchArgs struct {
+	Path    string `json:"path"`
+	Pattern string `json:"pattern"`
+	Glob    string `json:"glob"`
+}
+
+// errSearched ends a search that looked into maxSearched files.
+var errSearched = errors.New("searched enough")
+
+func search(c *guard.Checker, args searchArgs) (string, error) {
+	if args.Pattern == "" {
+		return "", errors.New(Search + ` needs "pattern", the regular expression to find`)
+	}
+	re, err := regexp.Compile(args.Pattern)
+	if err != nil {
+		return "", fmt.Errorf("the pattern is no regular expression: %w", err)
+	}
+	if _, err := filepath.Match(args.Glob, ""); err != nil {
+		return "", fmt.Errorf("the glob %q is no pattern of file names", args.Glob)
+	}
+	root, err := c.Check(guard.Read, args.Path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(root); err != nil {
+		return "", err
+	}
+	var lines []string
+	searched, more := 0, false
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == root {
+				return err
+			}
+			return nil // what cannot be looked into is not searched
+		}
+		// What the tool may not read is not there for it.
+		real, err := c.Check(guard.Read, path)
+		if d.IsDir() {
+			if path != root && (err != nil || strings.HasPrefix(d.Name(), ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if err != nil || (args.Glob != "" && !matches(args.Glob, d.Name())) {
+			return nil
+		}
+		if searched == maxSearched {
+			more = true
+			return errSearched
+		}
+		searched++
+		shown, _ := filepath.Rel(root, path)
+		found, err := searchFile(real, filepath.Join(args.Path, shown), re, maxMatches+1-len(lines))
+		if err != nil {
+			return nil // a file that is no text has no lines to match
+		}
+		lines = append(lines, found...)
+		if len(lines) > maxMatches {
+			lines = append(lines[:maxMatches], fmt.Sprintf("[these are the first %d matching lines, and there are more: "+
+				"narrow the path, the pattern or the glob]", maxMatches))
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errSearched) {
+		return "", err
+	}
+	if more {
+		lines = append(lines, fmt.Sprintf("[the search stopped after %d files: narrow the path or the glob]", maxSearched))
+	}
+	if len(lines) == 0 {
+		return "(no line matches)", nil
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// matches reports whether the name of a file matches glob, which is valid.
+func matches(glob, name string) bool {
+	ok, _ := filepath.Match(glob, name)
+	return ok
+}
+
+// searchFile returns at most limit lines of the file at real that match re,
+// as shown:line: text. A file that is no text, or too big to be read with
+// read, is an error.
+func searchFile(real, shown string, re *regexp.Regexp, limit int) ([]string, error) {
+	info, err := os.Stat(real)
+	if err != nil {
+		return nil, err
+	}
+	// Only a file: a pipe or a device would never end.
+	if !info.Mode().IsRegular() || info.Size() > maxWriteBytes {
+		return nil, fmt.Errorf("%s is not searched", shown)
+	}
+	f, err := open(real)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	content, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		return nil, fmt.Errorf("%s is not a text file", shown)
+	}
+	if len(content) == 0 {
+		return nil, nil
+	}
+	var found []string
+	text, _ := strings.CutSuffix(string(content), "\n")
+	for n, line := range strings.Split(text, "\n") {
+		if len(found) == limit {
+			break
+		}
+		if !re.MatchString(line) {
+			continue
+		}
+		line = strings.TrimSuffix(line, "\r")
+		if len(line) > maxMatchBytes {
+			line = strings.ToValidUTF8(line[:maxMatchBytes], "") + "…"
+		}
+		found = append(found, fmt.Sprintf("%s:%d: %s", shown, n+1, line))
+	}
+	return found, nil
 }

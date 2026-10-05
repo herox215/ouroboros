@@ -228,9 +228,10 @@ func TestAskRemembersAlsoWhenConfiguredAnew(t *testing.T) {
 func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
 	file := agent.NewTool("edit", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	search := agent.NewTool(toolSearch, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
 		LLM:   overHTTP,
-		Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file) },
+		Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file, search) },
 	}, discard)
 	start := `You are "me", the personal agent of the owner of this Ouroboros node. `
 	for _, tt := range []struct {
@@ -241,14 +242,15 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		{config.Named(toolListPeers), start + ownerStyle},
 		{config.Named(toolAskPeer), start + askHint + ownerStyle},
 		{config.Named("edit"), start + filesHint + ownerStyle},
-		{config.Named("*"), start + askHint + filesHint + claimHint + ownerStyle},
+		{config.Named("search"), start + filesHint + searchHint + ownerStyle},
+		{config.Named("*"), start + askHint + filesHint + searchHint + claimHint + ownerStyle},
 	} {
 		cfg.Tools = &config.Tools{H2A: tt.tools}
 		if got, err := a.Ask(context.Background(), "chat", "?system", nil); err != nil || got != tt.want {
 			t.Errorf("with %s: %v\n got %q\nwant %q", tt.tools, err, got, tt.want)
 		}
 	}
-	if strings.Join(fileTools, ",") != "read,write,edit,list,delete" {
+	if strings.Join(fileTools, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools for files: %v", fileTools)
 	}
 }

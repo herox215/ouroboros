@@ -624,7 +624,7 @@ func TestSettings(t *testing.T) {
 			t.Errorf("%s: %v", tool.Name, err)
 		}
 		// Listed by its name alone the tool goes everywhere for the owner and nowhere for a peer.
-		if _, err := tool.Run(a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"}), json.RawMessage(`{"path": "~/x", "old": "x"}`)); err == nil || !strings.Contains(err.Error(), `has no "allow" for peers`) {
+		if _, err := tool.Run(a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"}), json.RawMessage(`{"path": "~/x", "old": "x", "pattern": "x"}`)); err == nil || !strings.Contains(err.Error(), `has no "allow" for peers`) {
 			t.Errorf("%s for a peer: %v", tool.Name, err)
 		}
 	}
@@ -658,7 +658,7 @@ func TestSchemas(t *testing.T) {
 			t.Errorf("%s: %s / %s", tool.Name, tool.Schema, tool.Description)
 		}
 	}
-	if strings.Join(names, ",") != "read,write,edit,list,delete" {
+	if strings.Join(names, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools: %v", names)
 	}
 	want := `{"type":"object","properties":{"limit":{"type":"integer","description":"how many lines to return at most"},` +
@@ -673,8 +673,148 @@ func TestSchemas(t *testing.T) {
 	if want := `"recursive":{"type":"boolean","description":"delete a directory together with its content"}},"required":["path"]}`; !strings.HasSuffix(all[4].Schema, want) {
 		t.Errorf("delete: %s", all[4].Schema)
 	}
+	if want := `"required":["path","pattern"]`; !strings.Contains(all[5].Schema, want) {
+		t.Errorf("search: %s", all[5].Schema)
+	}
+	if !strings.Contains(all[5].Description, "at most 200 lines, and looks into at most 10000 files") ||
+		!strings.Contains(all[5].Description, "more than 1 MiB is not searched") {
+		t.Errorf("the limits of search: %s", all[5].Description)
+	}
 	if !strings.Contains(all[0].Description, "at most 2000 lines or 256 KiB per call") || !strings.Contains(all[1].Description, "At most 1 MiB.") ||
 		!strings.Contains(all[3].Description, "At most 1000 entries") {
 		t.Errorf("the limits are not what the tools say: %s / %s / %s", all[0].Description, all[1].Description, all[3].Description)
 	}
+}
+
+func TestSearch(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/src/main.go", "package main\n\nfunc main() {\n\tprintln(\"Model\")\n}\n")
+	w.file("~/src/view.go", "package main\n\n// the model is shown\nvar model = \"brain\"\n")
+	w.file("~/src/notes.txt", "model\n")
+	w.file("~/src/.git/config", "model\n")
+	w.file("~/src/.env", "model=secret\n")
+	w.file("~/src/blob.bin", "model\x00\n")
+	w.file("~/src/sub/deep.go", "package sub // model\r\n")
+	w.file("~/empty", "")
+	for _, c := range []struct {
+		args any
+		want string
+	}{
+		{map[string]any{"path": "~/src", "pattern": "(?i)model", "glob": "*.go"},
+			"~/src/main.go:4: \tprintln(\"Model\")\n~/src/sub/deep.go:1: package sub // model\n" +
+				"~/src/view.go:3: // the model is shown\n~/src/view.go:4: var model = \"brain\""},
+		// Hidden directories are left out, hidden files are not, what is no text is.
+		{map[string]any{"path": "~/src/", "pattern": "^model"}, "~/src/.env:1: model=secret\n~/src/notes.txt:1: model"},
+		{map[string]any{"path": "~/src/view.go", "pattern": "brain"}, `~/src/view.go:4: var model = "brain"`},
+		{map[string]any{"path": "~/src/view.go", "pattern": "brain", "glob": "*.txt"}, "(no line matches)"},
+		{map[string]any{"path": "~/src", "pattern": "nothing"}, "(no line matches)"},
+		{map[string]any{"path": "~/empty", "pattern": "^$"}, "(no line matches)"},
+		{map[string]any{"path": "~/src/notes.txt", "pattern": "^$"}, "(no line matches)"},
+		// A hidden directory that is searched itself is searched.
+		{map[string]any{"path": "~/src/.git", "pattern": "model"}, "~/src/.git/config:1: model"},
+	} {
+		if got, err := w.run(owner, "search", c.args); err != nil || got != c.want {
+			t.Errorf("%v: got %q, %v; want %q", c.args, got, err, c.want)
+		}
+	}
+	for args, want := range map[string]string{
+		`{"path": "~/src"}`:                              `search needs "pattern"`,
+		`{"path": "~/src", "pattern": "("}`:              "the pattern is no regular expression",
+		`{"path": "~/src", "pattern": "x", "glob": "["}`: `the glob "[" is no pattern of file names`,
+		`{"path": "~/none", "pattern": "x"}`:             "no such file or directory",
+		`{"path": "src", "pattern": "x"}`:                "absolute",
+	} {
+		got, err := w.run(owner, "search", args)
+		fails(t, got, err, want)
+	}
+}
+
+// What the tool may not read is not searched: the configuration, protected
+// paths and what is denied; a peer searches only where it is allowed to.
+func TestSearchKeepsToTheRules(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/.config/ouroboros/contacts.json", `{"key": 1}`)
+	w.file("~/.config/ouroboros/config.json", `{"key": 2}`)
+	w.file("~/share/a.txt", "key\n")
+	w.file("~/share/private/b.txt", "key\n")
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/.config/ouroboros", "pattern": "key"}); err != nil ||
+		got != `~/.config/ouroboros/contacts.json:1: {"key": 1}` {
+		t.Errorf("the node: %q, %v", got, err)
+	}
+	got, err := w.run(owner, "search", map[string]any{"path": "~/.config/ouroboros/config.json", "pattern": "key"})
+	refused(t, got, err, "")
+	got, err = w.run(owner, "search", map[string]any{"path": "~/.ssh", "pattern": "key"})
+	refused(t, got, err, "protected")
+	if got, err := w.run(owner, "search", map[string]any{"path": "~", "pattern": "key"}); err != nil || strings.Contains(got, "id_ed25519") {
+		t.Errorf("the home directory: %q, %v", got, err)
+	}
+	denied := who{settings: `{"deny": ["~/share/private"]}`}
+	if got, err := w.run(denied, "search", map[string]any{"path": "~/share", "pattern": "key"}); err != nil || got != "~/share/a.txt:1: key" {
+		t.Errorf("denied: %q, %v", got, err)
+	}
+	got, err = w.run(peer(`{}`), "search", map[string]any{"path": "~/share", "pattern": "key"})
+	refused(t, got, err, "")
+	if got, err := w.run(peer(`{"allow": ["~/share"]}`), "search", map[string]any{"path": "~/share", "pattern": "key"}); err != nil ||
+		got != "~/share/a.txt:1: key\n~/share/private/b.txt:1: key" {
+		t.Errorf("a peer: %q, %v", got, err)
+	}
+}
+
+func TestSearchIsCut(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/many.txt", strings.Repeat("x\n", maxMatches+5))
+	w.file("~/long.txt", strings.Repeat("ä", maxMatchBytes)+"\n")
+	w.file("~/big.txt", strings.Repeat("x", maxWriteBytes+1))
+	got, err := w.run(owner, "search", map[string]any{"path": "~/many.txt", "pattern": "x"})
+	lines := strings.Split(got, "\n")
+	if err != nil || len(lines) != maxMatches+1 || lines[maxMatches-1] != "~/many.txt:200: x" ||
+		!strings.HasPrefix(lines[maxMatches], "[these are the first 200 matching lines, and there are more") {
+		t.Errorf("many: %d lines, %v", len(lines), err)
+	}
+	got, err = w.run(owner, "search", map[string]any{"path": "~/long.txt", "pattern": "ä"})
+	if want := "~/long.txt:1: " + strings.Repeat("ä", maxMatchBytes/2) + "…"; err != nil || got != want {
+		t.Errorf("long: %q, %v", got, err)
+	}
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/big.txt", "pattern": "x"}); err != nil || got != "(no line matches)" {
+		t.Errorf("big: %q, %v", got, err)
+	}
+	defer func(n int) { maxSearched = n }(maxSearched)
+	maxSearched = 3
+	for i := range maxSearched + 1 {
+		w.file(fmt.Sprintf("~/files/%05d.txt", i), "y\n")
+	}
+	got, err = w.run(owner, "search", map[string]any{"path": "~/files", "pattern": "z"})
+	if err != nil || got != "[the search stopped after 3 files: narrow the path or the glob]" {
+		t.Errorf("files: %q, %v", got, err)
+	}
+	got, err = w.run(owner, "search", map[string]any{"path": "~/files", "pattern": "y", "glob": "00001.txt"})
+	if err != nil || got != "~/files/00001.txt:1: y" {
+		t.Errorf("a glob: %q, %v", got, err)
+	}
+}
+
+// What cannot be looked into is left out of a search, unless it is all there
+// is to search.
+func TestSearchLeavesOutWhatCannotBeRead(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/src/a.txt", "x\n")
+	w.file("~/src/b.txt", "x\n")
+	w.file("~/src/c.txt", "x\n")
+	w.file("~/src/locked/d.txt", "x\n")
+	w.mode("~/src/locked", 0)
+	defer func(o func(string) (io.ReadCloser, error)) { open = o }(open)
+	open = func(path string) (io.ReadCloser, error) {
+		switch filepath.Base(path) {
+		case "b.txt":
+			return nil, errTest
+		case "c.txt":
+			return io.NopCloser(iotest.ErrReader(errTest)), nil
+		}
+		return os.Open(path)
+	}
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/src", "pattern": "x"}); err != nil || got != "~/src/a.txt:1: x" {
+		t.Errorf("got %q, %v", got, err)
+	}
+	got, err := w.run(owner, "search", map[string]any{"path": "~/src/locked", "pattern": "x"})
+	fails(t, got, err, "permission denied")
 }
