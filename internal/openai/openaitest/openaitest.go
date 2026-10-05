@@ -26,6 +26,7 @@ var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 // explain_error, and "!TOOL ARGS" with a call to TOOL with the arguments ARGS
 // (JSON, "{}" if missing), each if that tool is offered.
 // The message "?system" is answered with the system prompt.
+// A request that asks for a stream gets the reply in pieces, as an API does.
 func NewServer(t testing.TB) string {
 	return NewServerWithKey(t, Key)
 }
@@ -46,6 +47,7 @@ func NewServerWithKey(t testing.TB, key string) string {
 			Model    string           `json:"model"`
 			Messages []openai.Message `json:"messages"`
 			Tools    []openai.Tool    `json:"tools"`
+			Stream   bool             `json:"stream"`
 		}
 		json.NewDecoder(r.Body).Decode(&in)
 		last := in.Messages[len(in.Messages)-1]
@@ -57,6 +59,10 @@ func NewServerWithKey(t testing.TB, key string) string {
 		offered := func(t openai.Tool) bool { return t.Function.Name == call.Function.Name }
 		if ok && slices.ContainsFunc(in.Tools, offered) {
 			msg = openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{call}}
+		}
+		if in.Stream {
+			stream(w, msg)
+			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": msg}}})
 	})
@@ -98,4 +104,31 @@ func toolCall(msg openai.Message) (openai.ToolCall, bool) {
 		call.Function = openai.FunctionCall{Name: "ask_peer", Arguments: string(args)}
 	}
 	return call, true
+}
+
+// stream writes msg as a stream of server-sent events: the content in two
+// pieces, and each tool call with its arguments in two pieces.
+func stream(w http.ResponseWriter, msg openai.Message) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	event := func(delta map[string]any, finish any) {
+		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}})
+		fmt.Fprintf(w, "data: %s\n\n", b)
+	}
+	event(map[string]any{"role": "assistant", "content": ""}, nil)
+	content := []rune(msg.Content)
+	event(map[string]any{"content": string(content[:len(content)/2])}, nil)
+	event(map[string]any{"content": string(content[len(content)/2:])}, nil)
+	for i, call := range msg.ToolCalls {
+		args := call.Function.Arguments
+		event(map[string]any{"tool_calls": []any{map[string]any{"index": i, "id": call.ID, "type": call.Type,
+			"function": map[string]any{"name": call.Function.Name, "arguments": args[:len(args)/2]}}}}, nil)
+		event(map[string]any{"tool_calls": []any{map[string]any{"index": i,
+			"function": map[string]any{"arguments": args[len(args)/2:]}}}}, nil)
+	}
+	finish := "stop"
+	if len(msg.ToolCalls) > 0 {
+		finish = "tool_calls"
+	}
+	event(map[string]any{}, finish)
+	fmt.Fprint(w, "data: [DONE]\n\n")
 }

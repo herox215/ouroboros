@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newServer(t *testing.T, h http.HandlerFunc) *Client {
@@ -207,5 +209,144 @@ func TestUnauthorized(t *testing.T) {
 		if got := (&APIError{Status: status}).Unauthorized(); got != want {
 			t.Errorf("Unauthorized() with HTTP %d = %v", status, got)
 		}
+	}
+}
+
+// sse answers with the events, each as a line "data: EVENT" and an empty line.
+func sse(events ...string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, e := range events {
+			w.Write([]byte("data: " + e + "\n\n"))
+		}
+	}
+}
+
+// A completion is asked for as a stream and put together from its pieces.
+func TestCompleteStreams(t *testing.T) {
+	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Stream bool `json:"stream"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		if !in.Stream {
+			t.Error("the completion was not asked for as a stream")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Write([]byte(": keep-alive\n\nevent: message\n" +
+			`data: {"choices":[{"delta":{"role":"assistant","content":""}}]}` + "\n\n" +
+			`data: {"choices":[{"delta":{"reasoning":"thinking"}}]}` + "\n\n" +
+			`data:{"choices":[{"delta":{"content":"Hal"}}]}` + "\n\n" +
+			`data: {"choices":[{"delta":{"content":"lo"}},{"delta":{"content":"other choice"}}]}` + "\n\n" +
+			`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+			`data: {"choices":[],"usage":{"total_tokens":3}}` + "\n\n" +
+			"data: [DONE]\n\n"))
+	})
+	got, err := c.Complete(context.Background(), "gpt", []Message{{Role: "user", Content: "hello"}}, nil)
+	if err != nil || got.Role != "assistant" || got.Content != "Hallo" || got.ToolCalls != nil {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// Tool calls come in pieces too: by their index, or without one, where a
+// piece with an ID starts the next call.
+func TestCompleteStreamsToolCalls(t *testing.T) {
+	want := []ToolCall{
+		{ID: "a", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path": "/x"}`}},
+		{ID: "b", Type: "function", Function: FunctionCall{Name: "list", Arguments: `{}`}},
+	}
+	for name, h := range map[string]http.HandlerFunc{
+		"by index": sse(
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\": "}},{"index":1,"id":"b","function":{"name":"list","arguments":"{"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"/x\"}"}},{"index":1,"function":{"arguments":"}"}}]}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
+		"without index": sse(
+			`{"choices":[{"delta":{"tool_calls":[{"id":"a","type":"function","function":{"name":"read","arguments":"{\"path\": "}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\"/x\"}"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"list","arguments":"{}"}}]}}]}`,
+			"[DONE]"),
+	} {
+		got, err := newServer(t, h).Complete(context.Background(), "gpt", nil, nil)
+		if err != nil || got.Content != "" || !slices.Equal(got.ToolCalls, want) {
+			t.Errorf("%s: got %+v, %v", name, got, err)
+		}
+	}
+}
+
+// A stream that does not tell a whole answer is an error, not a reply.
+func TestCompleteStreamFails(t *testing.T) {
+	for name, tt := range map[string]struct {
+		h    http.HandlerFunc
+		want string
+	}{
+		"error":      {sse(`{"choices":[{"delta":{"content":"Hal"}}]}`, `{"error":{"message":"overloaded"}}`), "openai: the stream broke off: overloaded"},
+		"no JSON":    {sse(`{"choices":`), "openai: the stream has an event that is no JSON"},
+		"no choices": {sse(`{"choices":[]}`, "[DONE]"), "openai: response has no choices"},
+		"nothing":    {sse(), "openai: response has no choices"},
+		"bad index":  {sse(`{"choices":[{"delta":{"tool_calls":[{"index":2,"id":"a"}]}}]}`), "openai: the stream has a tool call with index 2"},
+		"too big":    {sse(`{"choices":[{"delta":{"content":"` + strings.Repeat("x", maxEvent) + `"}}]}`), "token too long"},
+		"cut off": {func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Content-Length", "1000")
+			w.Write([]byte(`data: {"choices":[{"delta":{"content":"Hal"}}]}` + "\n\n"))
+		}, "unexpected EOF"},
+	} {
+		got, err := newServer(t, tt.h).Complete(context.Background(), "gpt", nil, nil)
+		if err == nil || !strings.Contains(err.Error(), tt.want) || got.Content != "" {
+			t.Errorf("%s: got %+v, %v; want %q", name, got, err, tt.want)
+		}
+	}
+}
+
+// A model may think for long while it sends something; an API that sends
+// nothing for the timeout is given up, before and within the stream.
+func TestCompleteIsGivenUpWhenNothingComes(t *testing.T) {
+	defer func(d time.Duration) { timeout = d }(timeout)
+	timeout = 100 * time.Millisecond
+	release := make(chan struct{})
+	defer close(release)
+	slow := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for range 5 { // 250 ms in all, never 100 ms without data
+			w.Write([]byte(": thinking\n\n"))
+			w.(http.Flusher).Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+		w.Write([]byte(`data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}` + "\n\n"))
+	}
+	if got, err := newServer(t, slow).Complete(context.Background(), "gpt", nil, nil); err != nil || got.Content != "done" {
+		t.Errorf("slow: got %+v, %v", got, err)
+	}
+	for name, h := range map[string]http.HandlerFunc{
+		"silent": func(http.ResponseWriter, *http.Request) { <-release },
+		"stuck": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Write([]byte(`data: {"choices":[{"delta":{"content":"Hal"}}]}` + "\n\n"))
+			w.(http.Flusher).Flush()
+			<-release
+		},
+	} {
+		_, err := newServer(t, h).Complete(context.Background(), "gpt", nil, nil)
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "no data from the API for 100ms") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// One who gives up the answer is told so, not that the API was silent.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := newServer(t, slow).Complete(ctx, "gpt", nil, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled: %v", err)
+	}
+}
+
+// An answer in one piece that is no JSON is an error.
+func TestAnswerThatIsNoJSON(t *testing.T) {
+	c := newServer(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("<html>")) })
+	if _, err := c.Complete(context.Background(), "gpt", nil, nil); err == nil {
+		t.Error("completion: want error")
+	}
+	if _, err := c.Models(context.Background()); err == nil {
+		t.Error("models: want error")
 	}
 }
