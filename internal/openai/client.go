@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -32,6 +33,33 @@ const maxEvent = 4 << 20
 // UserAgent identifies ouro to the API. Some providers (e.g. OpenCode Go)
 // reject generic HTTP-library user agents.
 const UserAgent = "ouroboros"
+
+// Provider is the name of the service a base URL points at, as it is
+// commonly called: from its host, like "iGate" for igate.example.com,
+// "OpenAI" for api.openai.com or "localhost" for one on this machine. A URL
+// that cannot be read has no provider.
+func Provider(baseURL string) string {
+	host, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	h := host.Hostname()
+	switch h {
+	case "":
+		return ""
+	case "localhost", "127.0.0.1", "::1":
+		return "localhost"
+	case "api.openai.com":
+		return "OpenAI"
+	case "openrouter.ai":
+		return "OpenRouter"
+	}
+	name, _, _ := strings.Cut(h, ".")
+	if strings.HasPrefix(name, "igate") {
+		return "iGate"
+	}
+	return name
+}
 
 type sessionKey struct{}
 

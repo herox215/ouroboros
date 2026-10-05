@@ -350,3 +350,22 @@ func TestAnswerThatIsNoJSON(t *testing.T) {
 		t.Error("models: want error")
 	}
 }
+
+// The provider is the name of the service the base URL points at.
+func TestProvider(t *testing.T) {
+	for _, test := range []struct{ url, want string }{
+		{"https://igate.service.example.com/v1", "iGate"},
+		{"https://api.openai.com/v1", "OpenAI"},
+		{"https://openrouter.ai/api/v1", "OpenRouter"},
+		{"http://localhost:11434/v1", "localhost"},
+		{"http://127.0.0.1:1234/v1", "localhost"},
+		{"", ""},
+		{"llama.cpp", ""},
+		{"http://[::1", ""},
+		{"https://ollama.example.com/v1", "ollama"},
+	} {
+		if got := Provider(test.url); got != test.want {
+			t.Errorf("Provider(%q) = %q, want %q", test.url, got, test.want)
+		}
+	}
+}

@@ -107,7 +107,7 @@ func TestStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := Local{Home: dir}
-	want := Status{Configured: true, ID: id.ID(), Name: "alpha", Model: "gpt"}
+	want := Status{Configured: true, ID: id.ID(), Name: "alpha", Model: "gpt", Provider: "localhost"}
 	if s, err := l.Status(); err != nil || s != want {
 		t.Fatalf("got %+v, %v, want %+v", s, err, want)
 	}

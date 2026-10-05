@@ -218,6 +218,15 @@ func logoWidth() int {
 	return width
 }
 
+// modelText is what is shown of the model of the node: the provider that
+// answers with it before it, like "iGate / brain", or the model alone.
+func (m *Model) modelText() string {
+	if m.status.Provider == "" {
+		return m.status.Model
+	}
+	return m.status.Provider + " / " + m.status.Model
+}
+
 func (m *Model) headerView() string {
 	s := m.status
 	title := boldStyle.Foreground(accent).Render(" ouroboros ")
@@ -225,7 +234,7 @@ func (m *Model) headerView() string {
 	switch {
 	case s.Running:
 		state = lipgloss.NewStyle().Foreground(good).Render("● online") +
-			mutedStyle.Render(fmt.Sprintf("  %s · %s · :%d · %s", s.ID, s.Name, s.Port, s.Model))
+			mutedStyle.Render(fmt.Sprintf("  %s · %s · :%d · %s", s.ID, s.Name, s.Port, m.modelText()))
 	case !s.Configured:
 		state = lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  type /setup")
 	default:
@@ -254,7 +263,7 @@ func (m *Model) chatView() string {
 		}
 	} else {
 		title := boldStyle.Foreground(peer).Render(m.agentName())
-		title = ansi.Truncate(title+mutedStyle.Render(" · "+m.status.Model+" · your agent"), inner, "…")
+		title = ansi.Truncate(title+mutedStyle.Render(" · "+m.modelText()+" · your agent"), inner, "…")
 		var typing string
 		switch {
 		case c.doing != "":

@@ -14,6 +14,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/home"
+	"ouroboros/internal/openai"
 )
 
 // ServeCommand is the argument that makes the binary run a Server.
@@ -33,7 +34,11 @@ type Status struct {
 	ID         string
 	Name       string
 	Model      string
-	Port       int // A2A port while running
+	// Provider is the name of the service the model is answered by, as it
+	// is commonly called, like "iGate" or "localhost". It follows from the
+	// base URL of the configuration; an unconfigured node has none.
+	Provider string
+	Port     int // A2A port while running
 }
 
 // Status reports how the node is configured and whether it is running.
@@ -42,7 +47,7 @@ func (l Local) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model}
+	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model, Provider: openai.Provider(cfg.BaseURL)}
 	if p, ok := l.Running(); ok {
 		s.Running, s.Port = true, p.Port
 	}

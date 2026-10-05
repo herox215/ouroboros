@@ -311,6 +311,23 @@ func TestViewIsTheChatOnly(t *testing.T) {
 	}
 }
 
+// The model is shown with the provider that answers with it before it.
+func TestViewShowsTheProviderOfTheModel(t *testing.T) {
+	m, b := newModel(t)
+	b.status.Provider = "iGate"
+	b.status.Model = "brain"
+	m.Update(m.refreshStatus())
+	view := m.View().Content
+	if !strings.Contains(view, "iGate / brain") {
+		t.Errorf("view lacks \"iGate / brain\":\n%s", view)
+	}
+	b.status.Provider = ""
+	m.Update(m.refreshStatus())
+	if strings.Contains(m.View().Content, "iGate") {
+		t.Errorf("a node without a provider shows none:\n%s", m.View().Content)
+	}
+}
+
 func TestChat(t *testing.T) {
 	m, b := newModel(t) // the agent needs no other node
 	cmd := say(t, m, "  ping  ")
