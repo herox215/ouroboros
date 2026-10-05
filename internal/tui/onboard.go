@@ -368,7 +368,7 @@ func (m *Model) onboardView() string {
 	if !o.saved.IsZero() {
 		return scene
 	}
-	box := o.dialog(m.spinner.View())
+	box := o.dialog(m.spinner.View(), m.light)
 	x, y := (w-lipgloss.Width(box))/2, int(at.y/4)-lipgloss.Height(box)/2
 	y = max(0, min(y, h-lipgloss.Height(box)))
 	layers := lipgloss.NewCompositor(lipgloss.NewLayer(scene), lipgloss.NewLayer(box).X(max(0, x)).Y(y).Z(1))
@@ -379,7 +379,7 @@ func (m *Model) onboardView() string {
 var pages = [steps]string{"", "LLM endpoint", "API key", "Model", "Node name", "What your agent may do"}
 
 // dialog is the page of the setup that is open, in its box.
-func (o *onboarding) dialog(spin string) string {
+func (o *onboarding) dialog(spin string, light bool) string {
 	inner := boxWidth - 6 // border and padding
 	title := "Welcome to ouroboros"
 	if o.step > stepWelcome {
@@ -430,7 +430,7 @@ func (o *onboarding) dialog(spin string) string {
 		lines = append(lines, "", errStyle.Render("✗ "+o.err))
 	}
 	lines = append(lines, "", o.progress(), mutedStyle.Render(hint))
-	return box(true).Padding(1, 2).Width(boxWidth).Render(strings.Join(lines, "\n"))
+	return box(true, light).Padding(1, 2).Width(boxWidth).Render(strings.Join(lines, "\n"))
 }
 
 // modelList shows a few of the models around the one selected.

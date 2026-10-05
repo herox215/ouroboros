@@ -144,6 +144,7 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 	input.ShowLineNumbers = false
 	input.Prompt = ""
 	input.SetHeight(inputHeight)
+	input.SetStyles(inputStyles(false))
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "shift+enter", "ctrl+j"))
 
 	history := viewport.New()
@@ -282,7 +283,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 	case tea.BackgroundColorMsg:
 		m.light = !msg.IsDark()
-		m.input.SetStyles(textarea.DefaultStyles(msg.IsDark()))
+		m.input.SetStyles(inputStyles(m.light))
 		if m.onboard != nil {
 			m.onboard.input.SetStyles(textinput.DefaultStyles(msg.IsDark()))
 		}

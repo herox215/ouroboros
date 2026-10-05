@@ -115,7 +115,7 @@ func (m *Model) helpView() string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(accent).Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help))
 	}
 	lines = append(lines, "", mutedStyle.Render("Type them into the message input. A message that starts with a slash takes two: //etc"))
-	return box(true).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
+	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
 }
 
 // choices shows names in a row, the one at selected marked.

@@ -150,5 +150,5 @@ func (m *Model) screenView() string {
 		content = lipgloss.NewStyle().Width(max(1, w-4)).Height(rows).MaxHeight(rows).Render(content) +
 			"\n\n" + choices(names, m.choice)
 	}
-	return box(true).Width(w).Height(h).MaxHeight(h).Render(content)
+	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
 }

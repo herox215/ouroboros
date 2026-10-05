@@ -134,6 +134,18 @@ func TestOtherMessages(t *testing.T) {
 	}
 }
 
+// The input never paints its cursor line: a background there shows as a black
+// bar on the line that is being typed, in both themes.
+func TestInputCursorLineHasNoBackground(t *testing.T) {
+	for _, light := range []bool{false, true} {
+		s := inputStyles(light)
+		focused, blurred := s.Focused.CursorLine.GetBackground(), s.Blurred.CursorLine.GetBackground()
+		if focused != (lipgloss.NoColor{}) || blurred != (lipgloss.NoColor{}) {
+			t.Fatalf("light %v: the cursor line must have no background, got %v and %v", light, focused, blurred)
+		}
+	}
+}
+
 func TestChatKeys(t *testing.T) {
 	m, _ := newModel(t)
 	if press(m, "h", "i"); m.input.Value() != "hi" {

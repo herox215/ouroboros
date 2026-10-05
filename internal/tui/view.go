@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -25,12 +27,31 @@ var (
 	boldStyle  = lipgloss.NewStyle().Bold(true)
 )
 
-func box(focused bool) lipgloss.Style {
-	color := muted
+// borderMuted is the color of a box that does not have focus. It is a subtle
+// gray that follows the terminal background, so the frame recedes behind the
+// content instead of standing out.
+func borderMuted(light bool) color.Color {
+	if light {
+		return lipgloss.Color("252")
+	}
+	return lipgloss.Color("237")
+}
+
+func box(focused, light bool) lipgloss.Style {
+	color := borderMuted(light)
 	if focused {
 		color = accent
 	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1)
+}
+
+// inputStyles is the style of the message input. The cursor line has no
+// background, so the line the cursor is on does not look like a black bar.
+func inputStyles(light bool) textarea.Styles {
+	s := textarea.DefaultStyles(!light)
+	s.Focused.CursorLine = lipgloss.NewStyle()
+	s.Blurred.CursorLine = lipgloss.NewStyle()
+	return s
 }
 
 func (m *Model) bodyHeight() int { return max(0, m.height-2) } // minus header and footer
@@ -163,7 +184,7 @@ func (m *Model) requestsView() string {
 		}
 		lines = append(lines, decide(len(m.trust.Incoming)+i)...)
 	}
-	return box(true).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
+	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
 }
 
 // shortKey abbreviates a base64 public key for display.
@@ -243,8 +264,8 @@ func (m *Model) chatView() string {
 		}
 		content = lipgloss.JoinVertical(lipgloss.Left, title, m.history.View(), typing)
 	}
-	chat := box(false).Width(w).Height(h).MaxHeight(h).Render(content)
-	input := box(true).Width(w).Render(m.input.View())
+	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
+	input := box(false, m.light).Width(w).Render(m.input.View())
 	return lipgloss.JoinVertical(lipgloss.Left, chat, input)
 }
 

@@ -392,7 +392,7 @@ func TestSetupDialog(t *testing.T) {
 	o := &onboarding{setup: newFakeSetup(), step: stepRights}
 	f := o.setup.(*fakeSetup)
 	f.owner, f.peers, f.protected = []string{"read", "write"}, nil, nil
-	v := ansi.Strip(o.dialog(""))
+	v := ansi.Strip(o.dialog("", false))
 	if !strings.Contains(v, "For you    read, write") || !strings.Contains(v, "For peers  nothing") || !strings.Contains(v, "Protected  nothing") {
 		t.Fatalf("rights:\n%s", v)
 	}
