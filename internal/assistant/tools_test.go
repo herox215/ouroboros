@@ -133,10 +133,13 @@ func TestListPeers(t *testing.T) {
 	mira := discovery.Node{ID: "mira-id", Name: "mira", Model: "gpt-mira", PublicKey: identity.Generate().Public(), Host: "127.0.0.1", Port: 1}
 	nova := discovery.Node{ID: "nova-id", Name: "nova", Model: "gpt-nova", PublicKey: identity.Generate().Public(), Host: "127.0.0.1", Port: 2}
 	keyless := discovery.Node{ID: "old-id", Name: "old", Model: "gpt-old", Host: "127.0.0.1", Port: 3}
+	// Trusted, but nobody answers at its address.
+	vega := discovery.Node{ID: "vega-id", Name: "vega", Model: "gpt-vega", PublicKey: identity.Generate().Public(), Host: "127.0.0.1", Port: 4}
 	s := newSelf(t)
-	s.found.nodes = []discovery.Node{luna.Node, s.node(), mira, nova, keyless}
+	s.found.nodes = []discovery.Node{luna.Node, s.node(), mira, nova, keyless, vega}
 	s.connect(t, luna)
-	if err := s.contacts.AddOutgoing(mira.PublicKey, mira.Name, mira.Model, mira.Addr()); err != nil {
+	if err := errors.Join(s.contacts.AddOutgoing(mira.PublicKey, mira.Name, mira.Model, mira.Addr()),
+		s.contacts.AddTrusted(vega.PublicKey, vega.Name, vega.Model)); err != nil {
 		t.Fatal(err)
 	}
 	list := s.tools()[toolListPeers]
@@ -145,7 +148,8 @@ func TestListPeers(t *testing.T) {
 	want := "luna (id " + luna.ID + ", model gpt-luna, connected): knows the way\n" +
 		"mira (id mira-id, model gpt-mira, connection requested)\n" +
 		"nova (id nova-id, model gpt-nova, not connected)\n" +
-		"old (id old-id, model gpt-old, not connected)"
+		"old (id old-id, model gpt-old, not connected)\n" +
+		"vega (id vega-id, model gpt-vega, trusted, but not reachable right now)"
 	if err != nil || got != want {
 		t.Fatalf("for the owner: %v\n got %q\nwant %q", err, got, want)
 	}

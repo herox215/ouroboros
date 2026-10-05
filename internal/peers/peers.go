@@ -75,6 +75,10 @@ const (
 	NotConnected State = iota
 	Requested          // this node asked, the human there has not decided
 	Connected
+	// Unreachable is a peer the owner trusts that did not prove to hold its
+	// key just now: it is gone, slow, or someone else answers at its address.
+	// It needs no confirmation, only to be reachable again.
+	Unreachable
 )
 
 func (s State) String() string {
@@ -83,6 +87,8 @@ func (s State) String() string {
 		return "connection requested"
 	case Connected:
 		return "connected"
+	case Unreachable:
+		return "trusted, but not reachable right now"
 	}
 	return "not connected"
 }
@@ -122,6 +128,7 @@ func (n *Network) Peers(ctx context.Context) ([]Peer, error) {
 		case slices.ContainsFunc(known.Trusted, func(c contacts.Contact) bool { return c.PublicKey == node.PublicKey }):
 			// Anyone can announce the key of a trusted peer. Connected is only
 			// the node that proves to hold it, and only that gets a word in.
+			p.State = Unreachable
 			wg.Go(func() {
 				if about, ok := describe(ctx, node); ok {
 					p.State, p.About = Connected, about

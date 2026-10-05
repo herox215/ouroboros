@@ -20,6 +20,7 @@ const (
 	NotConnected = peers.NotConnected
 	Requested    = peers.Requested
 	Connected    = peers.Connected
+	Unreachable  = peers.Unreachable
 )
 
 var (

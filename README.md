@@ -353,6 +353,11 @@ answering, and a message is passed on by at most 3 agents.
 agent cannot be sent to a `host:port` somebody put into its head. Only you address a node that way, with
 `ouro ask`.
 
+`list_peers` tells for each node how far the connection has come: `connected`, `connection requested`,
+`not connected`, or `trusted, but not reachable right now`. The last is a peer you connected to whose node
+did not prove to hold its key within 2 seconds: it is gone, slow, or someone else answers at its address.
+It stays your peer and needs no confirmation; the agent tries it again later.
+
 ### When a peer could not answer
 
 If the agent of a peer fails on your message (its LLM is down, its key was revoked, …), your agent only gets

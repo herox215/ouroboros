@@ -163,7 +163,8 @@ func impostor(mallory, victim *testNode) discovery.Node {
 }
 
 // Announcing the key of a peer the owner trusts connects nobody: connected is
-// the node that proves to hold the key in the TLS handshake.
+// the node that proves to hold the key in the TLS handshake. A trusted peer
+// that does not is unreachable, which asks the owner for nothing.
 func TestPeersConnectsOnlyTheHolderOfTheKey(t *testing.T) {
 	alice, bob, carol, mallory := serve(t, "alice"), serve(t, "bob"), serve(t, "carol"), serve(t, "mallory")
 	trust(alice, bob)
@@ -186,16 +187,16 @@ func TestPeersConnectsOnlyTheHolderOfTheKey(t *testing.T) {
 	want := []struct {
 		state State
 		about string
-	}{{Connected, "knows the way"}, {NotConnected, ""}, {Requested, ""}, {NotConnected, ""}, {NotConnected, ""}}
+	}{{Connected, "knows the way"}, {Unreachable, ""}, {Requested, ""}, {NotConnected, ""}, {Unreachable, ""}}
 	for i, w := range want {
 		if got[i].State != w.state || got[i].About != w.about {
 			t.Errorf("peer %d: %v %q, want %v %q", i, got[i].State, got[i].About, w.state, w.about)
 		}
 	}
 
-	// A peer that is trusted and holds its key, but is gone, is not connected.
+	// A peer that is trusted and holds its key, but is gone, is unreachable.
 	bob.srv.Close()
-	if got, err := alice.network(bob.Node).Peers(context.Background()); err != nil || got[0].State != NotConnected {
+	if got, err := alice.network(bob.Node).Peers(context.Background()); err != nil || got[0].State != Unreachable {
 		t.Fatalf("a node that is gone: %+v, %v", got, err)
 	}
 }
@@ -269,7 +270,8 @@ func TestOneLine(t *testing.T) {
 }
 
 func TestStateAndLabel(t *testing.T) {
-	for state, want := range map[State]string{NotConnected: "not connected", Requested: "connection requested", Connected: "connected"} {
+	for state, want := range map[State]string{NotConnected: "not connected", Requested: "connection requested", Connected: "connected",
+		Unreachable: "trusted, but not reachable right now"} {
 		if state.String() != want {
 			t.Errorf("%d = %q", state, state)
 		}
