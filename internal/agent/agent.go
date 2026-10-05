@@ -85,10 +85,20 @@ type Agent struct {
 	system openai.Message
 	tools  map[string]Tool
 	specs  []openai.Tool
+	memory *Memory
+}
 
+// Memory keeps conversations by context ID. It may outlive the agent that
+// has it: an agent built anew with the same memory goes on with them.
+type Memory struct {
 	mu            sync.Mutex
 	clock         uint64
 	conversations map[string]*conversation
+}
+
+// NewMemory returns a memory that knows no conversation yet.
+func NewMemory() *Memory {
+	return &Memory{conversations: map[string]*conversation{}}
 }
 
 type conversation struct {
@@ -100,16 +110,24 @@ type conversation struct {
 // and may use tools.
 func New(llm LLM, model, system string, tools ...Tool) *Agent {
 	a := &Agent{
-		llm:           llm,
-		model:         model,
-		system:        openai.Message{Role: "system", Content: system},
-		tools:         map[string]Tool{},
-		conversations: map[string]*conversation{},
+		llm:    llm,
+		model:  model,
+		system: openai.Message{Role: "system", Content: system},
+		tools:  map[string]Tool{},
+		memory: NewMemory(),
 	}
 	for _, t := range tools {
 		a.tools[t.Name] = t
 		a.specs = append(a.specs, openai.NewTool(t.Name, t.Description, t.Schema))
 	}
+	return a
+}
+
+// WithMemory makes the agent remember its conversations in m instead of a
+// memory of its own, and returns it. It is for an agent that replaces
+// another: given the memory of that one, it knows what it was told.
+func (a *Agent) WithMemory(m *Memory) *Agent {
+	a.memory = m
 	return a
 }
 
@@ -123,7 +141,7 @@ func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, er
 func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observer) (string, error) {
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
-	history := append(a.history(contextID), openai.Message{Role: "user", Content: text})
+	history := append(a.memory.history(contextID), openai.Message{Role: "user", Content: text})
 	for range maxRounds {
 		// An answer that was stopped while a tool ran asks the LLM no more.
 		if err := ctx.Err(); err != nil {
@@ -143,7 +161,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		msg.Role = "assistant"
 		history = append(history, msg)
 		if len(msg.ToolCalls) == 0 {
-			a.remember(contextID, history)
+			a.memory.remember(contextID, history)
 			return msg.Content, nil
 		}
 		for _, call := range msg.ToolCalls {
@@ -186,36 +204,36 @@ func Invoke(ctx context.Context, tool Tool, args json.RawMessage) (string, error
 	return step.Result, step.Err
 }
 
-func (a *Agent) history(contextID string) []openai.Message {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if c, ok := a.conversations[contextID]; ok {
+func (m *Memory) history(contextID string) []openai.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.conversations[contextID]; ok {
 		return slices.Clone(c.msgs)
 	}
 	return nil
 }
 
-func (a *Agent) remember(contextID string, msgs []openai.Message) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.clock++
+func (m *Memory) remember(contextID string, msgs []openai.Message) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clock++
 	// Start at a user message: a tool result without its call is rejected by the API.
 	msgs = msgs[max(0, len(msgs)-maxHistory):]
 	for len(msgs) > 0 && msgs[0].Role != "user" {
 		msgs = msgs[1:]
 	}
-	a.conversations[contextID] = &conversation{lastUsed: a.clock, msgs: msgs}
-	if len(a.conversations) > maxContexts {
-		a.evictOldest()
+	m.conversations[contextID] = &conversation{lastUsed: m.clock, msgs: msgs}
+	if len(m.conversations) > maxContexts {
+		m.evictOldest()
 	}
 }
 
-func (a *Agent) evictOldest() {
+func (m *Memory) evictOldest() {
 	var oldest string
-	for id, c := range a.conversations {
-		if oldest == "" || c.lastUsed < a.conversations[oldest].lastUsed {
+	for id, c := range m.conversations {
+		if oldest == "" || c.lastUsed < m.conversations[oldest].lastUsed {
 			oldest = id
 		}
 	}
-	delete(a.conversations, oldest)
+	delete(m.conversations, oldest)
 }

@@ -88,9 +88,10 @@ type Assistant struct {
 	builder Builder
 	log     func(format string, args ...any)
 
-	mu    sync.Mutex
-	agent *agent.Agent
-	built setup // what agent was built for
+	mu     sync.Mutex
+	agent  *agent.Agent
+	built  setup         // what agent was built for
+	memory *agent.Memory // of the conversations, for every agent there is
 
 	answering sync.Mutex
 	answers   map[*record]context.CancelFunc // that are on their way
@@ -104,7 +105,7 @@ type setup struct{ baseURL, apiKey, model, name, id, tools string }
 // is read anew for every question. What it does on the way to an answer is
 // told to log, see Ask.
 func New(config func() (config.Config, error), b Builder, log func(format string, args ...any)) *Assistant {
-	return &Assistant{config: config, builder: b, log: log, answers: map[*record]context.CancelFunc{}}
+	return &Assistant{config: config, builder: b, log: log, memory: agent.NewMemory(), answers: map[*record]context.CancelFunc{}}
 }
 
 // ForPeers returns the agent that answers the peers of the node configured by
@@ -244,8 +245,8 @@ func (a *Assistant) Stop() {
 }
 
 // current returns the agent for the configuration as it is now. The agent is
-// kept between questions so that it remembers its conversations, and rebuilt
-// when the node is configured anew.
+// kept between questions, and rebuilt when the node is configured anew: with
+// the memory of the one before, so that it goes on with its conversations.
 func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 	cfg, err := a.config()
 	if err != nil {
@@ -263,7 +264,7 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 		if err != nil {
 			return nil, cfg, err
 		}
-		a.agent, a.built = bot, want
+		a.agent, a.built = bot.WithMemory(a.memory), want
 	}
 	return a.agent, cfg, nil
 }

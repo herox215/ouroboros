@@ -81,7 +81,7 @@ func TestHistoryIsTrimmed(t *testing.T) {
 	for i := range maxHistory {
 		a.Respond(context.Background(), "c1", fmt.Sprint(i))
 	}
-	if n := len(a.history("c1")); n != maxHistory {
+	if n := len(a.memory.history("c1")); n != maxHistory {
 		t.Fatalf("history len = %d, want %d", n, maxHistory)
 	}
 }
@@ -94,10 +94,10 @@ func TestLeastRecentlyUsedContextIsEvicted(t *testing.T) {
 	}
 	a.Respond(ctx, "0", "touch") // 0 is now recent, 1 is oldest
 	a.Respond(ctx, "new", "x")
-	if len(a.conversations) != maxContexts {
-		t.Fatalf("contexts = %d", len(a.conversations))
+	if len(a.memory.conversations) != maxContexts {
+		t.Fatalf("contexts = %d", len(a.memory.conversations))
 	}
-	if a.history("1") != nil || a.history("0") == nil {
+	if a.memory.history("1") != nil || a.memory.history("0") == nil {
 		t.Fatal("expected context 1 to be evicted and 0 to survive")
 	}
 }
@@ -125,7 +125,7 @@ func TestToolCall(t *testing.T) {
 	if len(llm.msgs) != 4 || llm.msgs[3].Role != "tool" || llm.msgs[3].ToolCallID != "c1" {
 		t.Fatalf("request %+v", llm.msgs)
 	}
-	if n := len(a.history("c1")); n != 4 {
+	if n := len(a.memory.history("c1")); n != 4 {
 		t.Fatalf("history should keep the tool call, got %d messages", n)
 	}
 }
@@ -157,7 +157,7 @@ func TestEndlessToolCallsAreStopped(t *testing.T) {
 	if _, err := a.Respond(context.Background(), "c1", "go"); !errors.Is(err, ErrTooManyToolCalls) || llm.calls != maxRounds {
 		t.Fatalf("err %v after %d calls", err, llm.calls)
 	}
-	if a.history("c1") != nil {
+	if a.memory.history("c1") != nil {
 		t.Fatal("an abandoned answer must not be remembered")
 	}
 }
@@ -168,7 +168,7 @@ func TestTrimmedHistoryStartsWithUserMessage(t *testing.T) {
 		a.Respond(context.Background(), "c1", "call noop") // four messages each
 	}
 	a.Respond(context.Background(), "c1", "plain") // two more: the cut now falls into a tool call
-	h := a.history("c1")
+	h := a.memory.history("c1")
 	if len(h) != maxHistory-2 || h[0].Role != "user" {
 		t.Fatalf("history of %d messages starts with %q", len(h), h[0].Role)
 	}
@@ -193,7 +193,7 @@ func TestHistoryWithoutUserMessageIsEmpty(t *testing.T) {
 	if got, err := a.Respond(context.Background(), "c1", "go"); err != nil || got != "done" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if h := a.history("c1"); len(h) != 0 {
+	if h := a.memory.history("c1"); len(h) != 0 {
 		t.Fatalf("history %+v", h)
 	}
 }

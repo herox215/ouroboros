@@ -19,15 +19,16 @@ type Peers struct {
 
 	mu     sync.Mutex
 	agent  *agent.Agent
-	built  string // the configuration agent was built for
-	failed string // why the configuration could not be used the last time
+	built  string        // the configuration agent was built for
+	failed string        // why the configuration could not be used the last time
+	memory *agent.Memory // of the conversations, for every agent there is
 }
 
 // Peers returns what answers the peers of the node whose configuration
 // config reads, anew for every message. What goes wrong with a configuration
 // that was changed while the node runs is told to log.
 func (b Builder) Peers(config func() (config.Config, error), log func(format string, args ...any)) *Peers {
-	return &Peers{config: config, builder: b, log: log}
+	return &Peers{config: config, builder: b, log: log, memory: agent.NewMemory()}
 }
 
 // Ready reports whether the peers of the node can be answered: the error of
@@ -47,8 +48,9 @@ func (p *Peers) Respond(ctx context.Context, contextID, text string) (string, er
 }
 
 // current returns the agent for the configuration as it is now. The agent is
-// kept between messages so that it remembers its conversations, and built
-// anew when what it is built from changes.
+// kept between messages, and built anew when what it is built from changes:
+// with the memory of the one before, so that it goes on with its
+// conversations.
 //
 // A configuration that cannot be used does not take the agent away from a
 // node that runs: it goes on with the one it has, and the log says why. A
@@ -71,7 +73,7 @@ func (p *Peers) current() (*agent.Agent, error) {
 		if p.agent != nil {
 			p.log("the configuration changed: peers are answered by a new agent")
 		}
-		p.agent, p.built = bot, want
+		p.agent, p.built = bot.WithMemory(p.memory), want
 	}
 	p.failed = ""
 	return p.agent, nil

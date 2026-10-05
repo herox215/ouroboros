@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -138,7 +139,7 @@ func TestAskUnconfigured(t *testing.T) {
 
 // The assistant remembers its conversations as long as the node is configured
 // the same, and is built anew for whatever changes of what it is built from.
-func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
+func TestAskRemembersAlsoWhenConfiguredAnew(t *testing.T) {
 	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), APIKey: "sk-1", Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()}
 	built := 0
 	var endpoint agent.Endpoint
@@ -147,22 +148,25 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 		Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
 	}, discard)
 	ctx := context.Background()
-	turns := func(want int) {
+	// next asks in the conversation chat, which goes on with every agent.
+	asked := 0
+	next := func() {
 		t.Helper()
+		asked++
 		got, err := a.Ask(ctx, "chat", "hello", nil)
-		if suffix := " turns=" + string(rune('0'+want)) + " last=hello"; err != nil || !strings.HasSuffix(got, suffix) {
+		if suffix := fmt.Sprintf(" turns=%d last=hello", 2*asked-1); err != nil || !strings.HasSuffix(got, suffix) {
 			t.Fatalf("got %q, %v, want it to end with %q", got, err, suffix)
 		}
 	}
 
-	turns(1)
-	turns(3)
+	next()
+	next()
 	// What does not concern the agent leaves it alone.
 	cfg.Tools = &config.Tools{A2A: config.Named(config.AllTools)}
 	if err := a.Ready(); err != nil {
 		t.Fatal(err)
 	}
-	turns(5)
+	next()
 	if built != 1 || endpoint != (agent.Endpoint{BaseURL: cfg.BaseURL, APIKey: "sk-1"}) {
 		t.Fatalf("built %d agents, the last at %+v", built, endpoint)
 	}
@@ -189,8 +193,9 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 		if built != i+2 {
 			t.Fatalf("new %s: %d agents built, want %d", tt.what, built, i+2)
 		}
-		turns(1)
-		turns(3)
+		// The new agent knows the conversation of the one before.
+		next()
+		next()
 		if built != i+2 {
 			t.Fatalf("new %s: %d agents built for one configuration", tt.what, built)
 		}
@@ -213,9 +218,9 @@ func TestAskRemembersUntilConfiguredAnew(t *testing.T) {
 	if got, err := a.Ask(ctx, "chat", "hello", nil); err == nil || got != "" || !strings.Contains(err.Error(), `tools.h2a: unknown tool "nope"`) {
 		t.Fatalf("unknown tool: %q, %v", got, err)
 	}
-	// ...so that it still knows the conversation when the mistake is undone.
+	// ...and the conversation goes on when the mistake is undone.
 	cfg.Tools = &config.Tools{H2A: config.Named(toolListPeers)}
-	turns(5)
+	next()
 }
 
 // The prompt of the owner's agent says how to use the tools it has, and what

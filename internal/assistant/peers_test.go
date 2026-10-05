@@ -28,9 +28,10 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 	peers := b.Peers(func() (config.Config, error) { return cfg, failing }, func(format string, args ...any) {
 		logged = append(logged, fmt.Sprintf(format, args...))
 	})
+	conversation := "c"
 	ask := func(text string) string {
 		t.Helper()
-		got, err := peers.Respond(from("luna"), "c", text)
+		got, err := peers.Respond(from("luna"), conversation, text)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,10 +63,11 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 		func() { cfg.Tools = &config.Tools{A2A: []config.Entry{{Tool: "list_peers", Settings: []byte(`{}`)}}} },
 	} {
 		change()
-		if got := ask("hello"); !strings.HasSuffix(got, " turns=1 last=hello") || built != i+2 {
+		// The new agent knows the conversation of the one before.
+		if got, want := ask("hello"), fmt.Sprintf(" turns=%d last=hello", 7+4*i); !strings.HasSuffix(got, want) || built != i+2 {
 			t.Fatalf("change %d: %q, %d agents", i, got, built)
 		}
-		if got := ask("hello"); !strings.HasSuffix(got, " turns=3 last=hello") || built != i+2 {
+		if got, want := ask("hello"), fmt.Sprintf(" turns=%d last=hello", 9+4*i); !strings.HasSuffix(got, want) || built != i+2 {
 			t.Fatalf("change %d, again: %q, %d agents", i, got, built)
 		}
 	}
@@ -89,7 +91,7 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 		{"incomplete", func() { failing, cfg.Model = nil, "" }, "node is not configured"},
 		{"a typo", func() { cfg.Model, cfg.Tools = "gpt-4o-mini", &config.Tools{A2A: config.Named("ask_peers")} }, `tools.a2a: unknown tool "ask_peers"`},
 	}
-	turns := 7
+	conversation, turns := "broken", 1 // one that is far from the limit of its history
 	for _, tt := range broken {
 		tt.breaks()
 		for range 2 {
