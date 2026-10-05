@@ -19,7 +19,9 @@ ouro update               # build and install the newest main
 ## Terminal UI
 
 Running `ouro` without arguments opens the terminal UI. On start it shows the ouroboros
-splash for two seconds: the serpent curls around until it bites its tail. Any key (except `ctrl+c`) skips it. Without a terminal (pipes, CI, redirects)
+splash for about three seconds: stars drift by, the serpent curls around in a gradient until it bites its
+tail with a burst of sparks, a glow runs along its body, and the name decodes itself letter by letter. On a light
+background it takes darker colors. Any key (except `ctrl+c`) skips it. Without a terminal (pipes, CI, redirects)
 `ouro` prints the usage instead, so scripts keep working.
 
 The UI is the chat with your own agent. You do not

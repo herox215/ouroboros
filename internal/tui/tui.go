@@ -132,6 +132,7 @@ type Model struct {
 	showSplash    bool
 	splashStart   time.Time
 	splashElapsed time.Duration
+	light         bool // the background of the terminal is light
 	input         textarea.Model
 	history       viewport.Model
 	spinner       spinner.Model
@@ -260,6 +261,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
 	case tea.BackgroundColorMsg:
+		m.light = !msg.IsDark()
 		m.input.SetStyles(textarea.DefaultStyles(msg.IsDark()))
 	case tickMsg:
 		return m, tea.Batch(m.refresh(), tick())

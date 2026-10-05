@@ -153,9 +153,12 @@ func TestSplashShowsLogoUntilKey(t *testing.T) {
 	m, _ := newModel(t)
 	m.showSplash = true
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	view := m.View().Content
-	if !strings.Contains(view, strings.TrimSpace(splashLogo(0)[1])) || !strings.Contains(view, "ouroboros") {
-		t.Fatalf("splash should show the logo and the title:\n%s", view)
+	m.splashElapsed = splashDuration - fadeOut
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{bigTitle[0], tagline, skipHint} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("splash should show %q:\n%s", want, view)
+		}
 	}
 	if strings.Contains(view, "No messages yet") {
 		t.Fatal("splash should hide the normal view")
@@ -192,7 +195,7 @@ func TestSplashClosesAfterTimeout(t *testing.T) {
 func TestSplashFramesKeepTheirSize(t *testing.T) {
 	width := ansi.StringWidth(logoLines[0])
 	for at := time.Duration(0); at <= splashDuration; at += splashFrame {
-		frame := splashLogo(at)
+		frame := drawLogo(splashGrown(at), at >= biteAt)
 		if len(frame) != len(logoLines) {
 			t.Fatalf("frame at %v has %d lines, want %d", at, len(frame), len(logoLines))
 		}
@@ -202,8 +205,51 @@ func TestSplashFramesKeepTheirSize(t *testing.T) {
 			}
 		}
 	}
-	if slices.Equal(splashLogo(0), splashLogo(splashDuration)) {
+	if slices.Equal(drawLogo(splashGrown(0), false), drawLogo(splashGrown(splashDuration), true)) {
 		t.Fatal("the splash should animate")
+	}
+}
+
+func TestSplashSceneFillsTheScreen(t *testing.T) {
+	for _, size := range [][2]int{{100, 30}, {40, 24}, {12, 4}} {
+		for _, light := range []bool{false, true} {
+			w, h := size[0], size[1]
+			seen := map[string]bool{}
+			for at := time.Duration(0); at <= splashDuration; at += splashFrame {
+				frame := drawSplash(w, h, at, light)
+				seen[frame] = true
+				lines := strings.Split(frame, "\n")
+				if len(lines) != h {
+					t.Fatalf("%dx%d at %v: %d lines", w, h, at, len(lines))
+				}
+				for _, l := range lines {
+					if ansi.StringWidth(l) != w {
+						t.Fatalf("%dx%d at %v: a line of width %d:\n%s", w, h, at, ansi.StringWidth(l), ansi.Strip(frame))
+					}
+				}
+			}
+			if len(seen) < 50 {
+				t.Fatalf("%dx%d: only %d different frames, the splash should keep moving", w, h, len(seen))
+			}
+		}
+	}
+	// A narrow screen gets the title in plain letters.
+	if end := ansi.Strip(drawSplash(40, 24, splashDuration-fadeOut, false)); !strings.Contains(end, titleText) || strings.Contains(end, bigTitle[0]) {
+		t.Fatalf("narrow splash:\n%s", end)
+	}
+	// The colors follow the background.
+	if drawSplash(100, 30, biteAt, false) == drawSplash(100, 30, biteAt, true) {
+		t.Fatal("a light background should get other colors")
+	}
+}
+
+func TestSplashTagIsTyped(t *testing.T) {
+	half := ansi.Strip(drawSplash(100, 30, taglineAt+typeSpeed*6, false))
+	if !strings.Contains(half, "a tiny▌") || strings.Contains(half, tagline) {
+		t.Fatalf("the tagline should be typed letter by letter:\n%s", half)
+	}
+	if early := ansi.Strip(drawSplash(100, 30, titleAt-scrambleFor, false)); strings.Contains(early, "▀▄▄▀") {
+		t.Fatalf("the title should not be there before it decodes:\n%s", early)
 	}
 }
 

@@ -126,6 +126,13 @@ func TestSetup(t *testing.T) {
 func TestOtherMessages(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("0")})
+	if m.light {
+		t.Fatal("a black background is dark")
+	}
+	m.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#ffffff")})
+	if !m.light {
+		t.Fatal("a white background is light")
+	}
 	if _, cmd := m.Update(m.spinner.Tick()); cmd == nil {
 		t.Fatal("the spinner should keep turning")
 	}

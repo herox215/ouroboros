@@ -29,35 +29,51 @@ const (
 	eyeAt    = 0.47
 )
 
-// Splash timeline: the body grows around the ring, the tail reaches the
-// mouth, then the jaw snaps shut.
-const (
-	splashDuration = 2 * time.Second
-	splashFrame    = 40 * time.Millisecond
-	growDuration   = 1300 * time.Millisecond
-	biteAt         = 1500 * time.Millisecond
-)
-
 // logoLines is the finished logo: the tail rests in the open mouth.
 var logoLines = drawLogo(1, false)
 
-// splashLogo returns the animation frame elapsed after the start.
-func splashLogo(elapsed time.Duration) []string {
+// splashGrown returns the share of the body grown at the time elapsed after
+// the start of the splash.
+func splashGrown(elapsed time.Duration) float64 {
 	grown := min(1, float64(elapsed)/float64(growDuration))
-	grown = 1 - (1-grown)*(1-grown) // ease out: the snake slows down before it bites
-	return drawLogo(grown, elapsed >= biteAt)
+	return 1 - (1-grown)*(1-grown) // ease out: the snake slows down before it bites
 }
 
 // drawLogo renders the ouroboros with the given share of the body grown.
 // Every frame has the same size, so the logo does not jump while it animates.
 func drawLogo(grown float64, shut bool) []string {
+	cells := logoCells(grown, shut)
+	lines := make([]string, 0, logoRows)
+	for _, row := range cells {
+		var b strings.Builder
+		for _, c := range row {
+			if c.dots == 0 {
+				b.WriteByte(' ')
+			} else {
+				b.WriteRune(0x2800 + c.dots)
+			}
+		}
+		lines = append(lines, b.String())
+	}
+	return lines
+}
+
+// logoCell is one braille cell of the logo: its dots, and where on the snake
+// they lie, from 0 at the head to 1 at the tip of the fully grown tail.
+type logoCell struct {
+	dots  rune
+	along float64
+}
+
+// logoCells draws the ouroboros into braille cells.
+func logoCells(grown float64, shut bool) [logoRows][logoCols]logoCell {
 	// solid is the silhouette of the snake, px the pixels that are drawn.
 	var solid, px [logoPixelsH][logoPixelsW]bool
 	length := bodyArc * grown
 	for y := range logoPixelsH {
 		for x := range logoPixelsW {
 			d, angle := ringPoint(x, y)
-			t := math.Mod(angle-neckAngle+4*math.Pi, 2*math.Pi)
+			t := bodyShare(angle)
 			if length > 0 && t <= length {
 				thickness := 3.4*(1-t/length) + 0.6 // taper from the neck to the tail
 				solid[y][x] = math.Abs(d) <= thickness
@@ -87,27 +103,42 @@ func drawLogo(grown float64, shut bool) []string {
 
 	// The dots of a braille cell, by row and column.
 	dots := [4][2]rune{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}}
-	lines := make([]string, 0, logoRows)
+	var cells [logoRows][logoCols]logoCell
 	for row := range logoRows {
-		var b strings.Builder
 		for col := range logoCols {
-			var cell rune
+			c := &cells[row][col]
+			n := 0
 			for j := range 4 {
 				for i := range 2 {
-					if px[row*4+j][col*2+i] {
-						cell |= dots[j][i]
+					x, y := col*2+i, row*4+j
+					if !px[y][x] {
+						continue
 					}
+					c.dots |= dots[j][i]
+					if _, angle := ringPoint(x, y); !isHead(angle) {
+						c.along += bodyShare(angle) / bodyArc
+					}
+					n++
 				}
 			}
-			if cell == 0 {
-				b.WriteByte(' ')
-			} else {
-				b.WriteRune(0x2800 + cell)
+			if n > 0 {
+				c.along /= float64(n)
 			}
 		}
-		lines = append(lines, b.String())
 	}
-	return lines
+	return cells
+}
+
+// bodyShare returns how far the angle lies along the body from the neck, in
+// radians counterclockwise.
+func bodyShare(angle float64) float64 {
+	return math.Mod(angle-neckAngle+4*math.Pi, 2*math.Pi)
+}
+
+// isHead reports whether the angle lies on the head.
+func isHead(angle float64) bool {
+	_, ok := headShare(angle)
+	return ok
 }
 
 // ringPoint returns where the pixel lies relative to the ring: its distance

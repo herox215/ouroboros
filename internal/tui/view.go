@@ -161,10 +161,7 @@ func shortKey(publicKey string) string {
 
 // splashView shows the ouroboros animation centered on the screen.
 func (m *Model) splashView() string {
-	art := lipgloss.NewStyle().Foreground(accent).Render(logoText(splashLogo(m.splashElapsed), m.width))
-	title := boldStyle.Foreground(accent).Render("ouroboros")
-	content := lipgloss.JoinVertical(lipgloss.Center, art, "", title)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	return drawSplash(m.width, m.height, m.splashElapsed, m.light)
 }
 
 // logoText joins the logo lines, each truncated to width.
