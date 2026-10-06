@@ -468,6 +468,7 @@ func TestFields(t *testing.T) {
 		{"base_url", `"http://evil"`, "base_url is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"tools", `{}`, `the configuration has no field "tools" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
 		{"", `1`, `the configuration has no field "" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
+		{FieldUnsandboxed, `true`, "rebuild_without_sandbox is set by the owner alone, in config.json: no proposal changes it"},
 	} {
 		changed := c
 		if err := changed.SetField(tt.path, json.RawMessage(tt.value)); err == nil || !strings.HasPrefix(err.Error(), tt.want) || !reflect.DeepEqual(changed, c) {
@@ -475,7 +476,7 @@ func TestFields(t *testing.T) {
 		}
 	}
 	// What cannot be proposed cannot be read as a field either: not the keys.
-	for _, path := range []string{"private_key", "api_key", "base_url", "tools", "nope"} {
+	for _, path := range []string{"private_key", "api_key", "base_url", "rebuild_without_sandbox", "tools", "nope"} {
 		if got, err := c.Field(path); err == nil || got != nil {
 			t.Errorf("reading %s: %s, %v", path, got, err)
 		}
@@ -510,8 +511,13 @@ func TestPublic(t *testing.T) {
 	if !strings.Contains(got, "\n  \"tools\": {\n    \"h2a\": [\n") {
 		t.Fatalf("not written for reading: %s", got)
 	}
+	if !strings.Contains(got, "\n  \"rebuild_without_sandbox\": false\n") {
+		t.Fatalf("whether rebuild may build without a sandbox: %s", got)
+	}
 	c.Tools = &Tools{H2A: Named("read"), A2A: Named("list_peers"), Protected: &[]string{"~/x"}}
-	if got := string(c.Public()); !strings.Contains(got, `"read"`) || !strings.Contains(got, `"list_peers"`) || !strings.Contains(got, `"~/x"`) || strings.Contains(got, ".ssh") {
+	c.RebuildWithoutSandbox = true
+	if got := string(c.Public()); !strings.Contains(got, `"read"`) || !strings.Contains(got, `"list_peers"`) || !strings.Contains(got, `"~/x"`) || strings.Contains(got, ".ssh") ||
+		!strings.Contains(got, `"rebuild_without_sandbox": true`) {
 		t.Fatalf("what is set: %s", got)
 	}
 }

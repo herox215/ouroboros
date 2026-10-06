@@ -320,9 +320,6 @@ func write(c *guard.Checker, args writeArgs) (string, error) {
 		return "", fmt.Errorf("the content has %d bytes: a file is written with at most %d", len(args.Content), maxWriteBytes)
 	}
 	real, err := c.Check(guard.Write, args.Path)
-	if err == nil {
-		err = c.Keeps(real, []byte(args.Content))
-	}
 	if err != nil {
 		return "", err
 	}
@@ -379,9 +376,6 @@ func edit(c *guard.Checker, args editArgs) (string, error) {
 	edited := string(content[:at]) + args.New + string(content[at+len(args.Old):])
 	if len(edited) > maxWriteBytes {
 		return "", fmt.Errorf("%s would have %d bytes: a file is written with at most %d", args.Path, len(edited), maxWriteBytes)
-	}
-	if err := c.Keeps(real, []byte(edited)); err != nil {
-		return "", err
 	}
 	if err := safefile.Write(real, []byte(edited), info.Mode().Perm()); err != nil {
 		return "", err

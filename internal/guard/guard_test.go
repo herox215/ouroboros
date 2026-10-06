@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -101,9 +102,11 @@ const (
 	ruleSecret = "it holds the secrets of this node, which no tool reads or changes"
 	ruleState  = "it is in the directory of this node, where the node keeps its state: no tool changes it"
 	ruleCore   = "it is source of the core of ouroboros, which no tool changes"
-	ruleModule = "it marks the source of ouroboros, whose core no tool changes"
+	ruleBuild  = "it decides how ouroboros is built and what the build fetches and runs, which no tool changes"
 	ruleRoot   = "the root of the file system and the home directory are never deleted"
-	ruleSSH    = `~/.ssh is in "protected" of the configuration, which no tool touches`
+
+	ruleToolchain = "it is part of the Go that rebuild builds ouroboros with, which no tool changes"
+	ruleSSH       = `~/.ssh is in "protected" of the configuration, which no tool touches`
 )
 
 // For the owner a tool without settings goes everywhere, for a peer nowhere.
@@ -405,8 +408,8 @@ func TestLinksAndDots(t *testing.T) {
 	}
 }
 
-// The core of ouroboros is not changed in any checkout of it; the plugins
-// next to it are.
+// The core of ouroboros is not changed in any checkout of it, nor what
+// decides how it is built; the plugins next to it are.
 func TestSourceOfTheCore(t *testing.T) {
 	w := newWorld(t)
 	src := w.home + "/src/ouro"
@@ -428,39 +431,60 @@ func TestSourceOfTheCore(t *testing.T) {
 		}
 		w.allowed(a, Read, src+"/"+pkg+"/new.go", src+"/"+pkg+"/new.go")
 	}
-	if len(corePackages) != 11 || corePackages[10] != "internal/guard" {
+	if len(corePackages) != 12 || corePackages[11] != "internal/guard" || !slices.Contains(corePackages, "internal/sandbox") {
 		t.Errorf("the packages of the core: %v", corePackages)
 	}
 	w.refused(a, Write, "~/share/id/identity.go", ruleCore)
+
+	// What decides what a build fetches and runs, and where the frame
+	// hands out what plugins do not get.
+	for _, path := range buildPaths {
+		for _, op := range []Op{Write, Delete} {
+			w.refused(a, op, src+"/"+path, ruleBuild)
+			w.allowed(a, op, w.home+"/src/other/"+path, w.home+"/src/other/"+path)
+		}
+		w.allowed(a, Read, src+"/"+path, src+"/"+path)
+	}
+	for _, path := range []string{"internal/cli/cli.go", "cmd/ouro/main.go", "scripts/new.sh"} {
+		w.refused(a, Write, src+"/"+path, ruleBuild)
+	}
+	if len(buildPaths) != 9 {
+		t.Errorf("what decides the build: %v", buildPaths)
+	}
 	for _, op := range []Op{Write, Delete} {
 		w.allowed(a, op, src+"/internal/plugins/files/files.go", src+"/internal/plugins/files/files.go")
-		w.allowed(a, op, src+"/internal/cli/cli.go", src+"/internal/cli/cli.go")
 		w.allowed(a, op, src+"/internal", src+"/internal")
+		w.allowed(a, op, src+"/Makefile.local", src+"/Makefile.local")
 		w.allowed(a, op, w.home+"/src/other/internal/a2a/a2a.go", w.home+"/src/other/internal/a2a/a2a.go")
 	}
+}
 
-	// The file that marks the checkout stays, and goes on marking it.
-	w.refused(a, Delete, src+"/go.mod", ruleModule)
-	w.allowed(a, Write, src+"/go.mod", src+"/go.mod")
-	w.allowed(a, Delete, w.home+"/src/other/go.mod", w.home+"/src/other/go.mod")
-	w.allowed(a, Delete, src+"/go.sum", src+"/go.sum")
-	c, err := w.guard.Checker(a)
-	if err != nil {
-		t.Fatal(err)
+// The Go that builds ouro is not changed, nor is a go put where rebuild
+// would look for it: rebuild runs it with network.
+func TestToolchain(t *testing.T) {
+	w := newWorld(t)
+	w.file(w.home+"/go/bin/go", "the go")
+	w.link(w.home+"/go/bin/go", w.home+"/bin/go")
+	w.guard.Toolchain = func() []string {
+		return []string{w.home + "/bin/go", w.home + "/path/go", w.home + "/go"}
 	}
-	if err := c.Keeps(src+"/go.mod", []byte("module ouroboros\n\ngo 1.28\n")); err != nil {
-		t.Errorf("a go.mod that keeps the module: %v", err)
+	a := Access{Tool: "write"}
+	for _, op := range []Op{Write, Delete} {
+		w.refused(a, op, "~/go/bin/go", ruleToolchain)
+		w.refused(a, op, "~/go/src/new.go", ruleToolchain)
+		w.refused(a, op, "~/bin/go", ruleToolchain) // the link, and where it leads
+		w.refused(a, op, "~/path/go", ruleToolchain)
+		w.allowed(a, op, "~/path/gopher", w.home+"/path/gopher")
 	}
-	var refusal *Refusal
-	if err := c.Keeps(src+"/go.mod", []byte("module mine\n")); !errors.As(err, &refusal) || refusal.Op != Write || refusal.Path != src+"/go.mod" ||
-		refusal.Rule != "it has to go on naming the module ouroboros: that marks the source of ouroboros, whose core no tool changes" {
-		t.Errorf("a go.mod that renames the module: %v", err)
-	}
-	for _, path := range []string{w.home + "/src/other/go.mod", src + "/main.go", src + "/new/go.mod", src + "/go.sum"} {
-		if err := c.Keeps(path, []byte("module mine\n")); err != nil {
-			t.Errorf("%s: %v", path, err)
-		}
-	}
+	w.allowed(a, Read, "~/bin/go", w.home+"/go/bin/go")
+
+	// A path of Go that leads nowhere, as one below a file in PATH, is
+	// passed over: nothing can be written there.
+	w.link(w.home+"/loop", w.home+"/loop")
+	w.guard.Toolchain = func() []string { return []string{w.home + "/loop/go", w.home + "/notes.md/go", w.home + "/go"} }
+	w.file(w.home+"/notes.md", "a file")
+	w.refused(a, Write, "~/go/bin/go", ruleToolchain)
+	w.allowed(a, Write, "~/other", w.home+"/other")
 }
 
 func TestModuleOf(t *testing.T) {

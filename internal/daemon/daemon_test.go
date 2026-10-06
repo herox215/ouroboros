@@ -14,10 +14,15 @@ import (
 )
 
 // The test binary is also the node of these tests: called as "node" or
-// "stubborn" with a PID file, it holds the file like a node does.
+// "stubborn" with a PID file, it holds the file like a node does. Called as
+// "pgid" it says that it was spawned and in which process group it runs.
 func TestMain(m *testing.M) {
 	if len(os.Args) == 3 && (os.Args[1] == "node" || os.Args[1] == "stubborn") {
 		os.Exit(fakeNode(os.Args[2], os.Args[1] == "stubborn"))
+	}
+	if len(os.Args) == 2 && os.Args[1] == "pgid" {
+		fmt.Printf("spawned\n%d\n", syscall.Getpgrp())
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
@@ -271,7 +276,7 @@ func TestWaitRunning(t *testing.T) {
 
 func TestSpawnDetachesAndLogs(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "ouro.log")
-	exited, err := Spawn("/bin/sh", log, "-c", "echo spawned; ps -o pgid= -p $$")
+	exited, err := Spawn(os.Args[0], log, "pgid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +297,7 @@ func TestSpawnDetachesAndLogs(t *testing.T) {
 	if len(lines) != 2 || lines[0] != "spawned" {
 		t.Fatalf("log = %q", out)
 	}
-	if myPGID := fmt.Sprint(mustPGID(t)); lines[1] == myPGID {
+	if myPGID := fmt.Sprint(syscall.Getpgrp()); lines[1] == myPGID {
 		t.Fatal("child should run in its own session (and thus process group)")
 	}
 }
@@ -321,16 +326,6 @@ func TestStopUnreachableProcess(t *testing.T) {
 	if stopped, err := Stop(path, time.Second); !stopped || !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("Stop = %v, %v", stopped, err)
 	}
-}
-
-func mustPGID(t *testing.T) int {
-	out, err := exec.Command("ps", "-o", "pgid=", "-p", fmt.Sprint(os.Getpid())).Output()
-	if err != nil {
-		t.Skip("ps not available")
-	}
-	var pgid int
-	fmt.Sscan(string(out), &pgid)
-	return pgid
 }
 
 // service returns a service whose files are in a fresh directory.

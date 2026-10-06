@@ -65,7 +65,7 @@ unhooks:
 
 install: build
 	mkdir -p "$(PREFIX)/bin"
-	install -m755 $(BIN) "$(PREFIX)/bin/$(BIN)"
+	install -m755 $(BIN) "$(PREFIX)/bin/$(notdir $(BIN))"
 
 clean:
 	rm -rf $(BIN) .cover cover.out .mutation

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"ouroboros/internal/openai"
 )
 
@@ -231,7 +233,7 @@ func TestScanAndWriteFail(t *testing.T) {
 	flock = func(fd int, _ int) error {
 		// The file can be looked at, but not read.
 		null, _ := syscall.Open(os.DevNull, syscall.O_WRONLY, 0)
-		return syscall.Dup2(null, fd)
+		return unix.Dup2(null, fd)
 	}
 	t.Cleanup(func() { flock = stat })
 	if err := a.Append(owner, question, nil); err == nil {
@@ -254,7 +256,7 @@ func TestWriteFails(t *testing.T) {
 	flock = func(fd int, _ int) error {
 		// The file can be read, but not written.
 		null, _ := syscall.Open(os.DevNull, syscall.O_RDONLY, 0)
-		return syscall.Dup2(null, fd)
+		return unix.Dup2(null, fd)
 	}
 	t.Cleanup(func() { flock = stat })
 	if err := a.Append(owner, question, nil); err == nil {
@@ -274,6 +276,11 @@ func TestSearchScope(t *testing.T) {
 	a.Append(Who{Session: "chat-2"}, answer("and the roof of the shed?", "nothing", "Green."), nil)
 	a.Append(Who{Session: "chat-3"}, answer("the garden", "nothing", "Later."), nil)
 	a.Append(peerA, answer("the roof of peer a", "x", "secret of a"), nil)
+	// The most recent last: a file system may give the same time to all.
+	for i, name := range []string{"chat-1", "chat-2", "chat-3"} {
+		at := time.Now().Add(time.Duration(i-3) * time.Minute)
+		os.Chtimes(a.file(owner, name), at, at)
+	}
 
 	out, hits, err := a.Search(owner, "roof", false, 0)
 	if err != nil || hits != 2 || strings.Contains(out, "chat-2") || strings.Contains(out, "peer a") {

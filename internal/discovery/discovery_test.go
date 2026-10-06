@@ -153,6 +153,7 @@ func TestAddr(t *testing.T) {
 // A firewall may drop the unicast answer to the prober's ephemeral port;
 // the answer to the group on the discovery port must still arrive.
 func TestServeAnswersToGroup(t *testing.T) {
+	multicast(t)
 	port := serve(t, 0, Node{ID: "abc123"})
 	group, err := listenGroup(port)
 	if err != nil {

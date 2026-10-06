@@ -124,6 +124,47 @@ removes. The tool is for you only: a peer is refused even if `a2a` lists it. Tak
 `rebuild` out of `h2a` if your agent should not build what it wrote. A binary installed by `ouro update` keeps
 the checkout of the one it replaced.
 
+**`rebuild` builds in a sandbox.** What the agent wrote runs when the tests run, so the build has two steps:
+
+1. **Download, with network, by the frame.** `go mod download` fetches exactly the modules `go.mod` and
+   `go.sum` name, and Go checks every one against `go.sum`. Nothing of the checkout runs in this step.
+2. **Build and test, without network, in the sandbox.** `make install` and `make test` run there with the
+   modules from step 1. They may listen and connect on the loopback interface (the tests start nodes there)
+   and nothing beyond it, they cannot connect to a socket of the file system (such as that of Docker), and they
+   write only to a temporary directory below `update/`, to `update/stage` and to the build cache of Go. The
+   binary is built in the temporary directory, not in the checkout. Everything they start is in the same
+   sandbox.
+
+Both steps run the Go that `rebuild` finds first in `PATH`, in `OURO_GO_DIR` or `~/.local/go`, or in
+`/usr/local/go`, in an environment the frame fixes: `GOFLAGS=-mod=readonly`, `GOENV=off` (no file of
+`go env`), `GOWORK=off` (no `go.work`, also not above the checkout), `GOTOOLCHAIN=local` (no other
+toolchain; the Go found has to be as new as `go.mod` asks), `GOVCS=*:off` (modules only from the proxy, no
+`git`) and no `GOROOT`; in step 2 also `GOPROXY=off`. `GOPROXY`, `GOPRIVATE` and the like of the environment
+ouro was started in hold for step 1: they are yours.
+
+| System | Sandbox |
+|---|---|
+| macOS | `sandbox-exec` with a profile that refuses the network beyond localhost, sockets of the file system and writing elsewhere |
+| Linux | [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap` in `/usr/bin` or `/bin`, the package `bubblewrap`): the file system read only but for the three directories, a `/dev` of its own, a network namespace of its own with the loopback interface alone, and a filter of seccomp that refuses sockets of the family `AF_UNIX` and `io_uring` |
+
+On Linux, bubblewrap is the one way that works where unprivileged user namespaces are confined, as on Ubuntu
+24.04 and later, where its profile of AppArmor allows them; Debian, Fedora and Arch allow them anyway.
+Landlock (Linux 5.13 and later) is no sandbox for this on its own: it limits TCP by port, not by address, so
+the loopback interface cannot be told from the network, and it does not limit connecting to a socket of the
+file system.
+
+**Without a sandbox** (bubblewrap is missing or cannot run), `rebuild` builds nothing and tells the agent
+why. You, and only you, can let it build as before, with network and without a sandbox, by setting
+`"rebuild_without_sandbox": true` in `config.json`; the output then starts with a warning. The agent sees the
+setting with `get_config` and cannot propose it, and the tools for files never write `config.json`.
+
+When something fails in the sandbox and its output says that something was not permitted, that a file system
+is read only or that the network is unreachable, the agent is told that the sandbox refused it, and that
+trying again does not help.
+
+Sandboxes do not nest: in a process that runs in one, `rebuild` finds none. The tests of ouro that need one
+are skipped there, so `make test` passes in the sandbox too.
+
 Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:11434/v1` (Ollama, no key),
 `http://localhost:1234/v1` (LM Studio), `https://openrouter.ai/api/v1`.
 
@@ -134,7 +175,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | LLM | `GET /models` for the picker, `POST /chat/completions` for replies |
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
-| Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
+| Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open. Where no interface carries multicast (a network namespace with the loopback interface alone), a node hears the probes sent to its host; a datagram the system does not hand over, as a sandbox does with one of another host, is passed over |
 | Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left; the LLM has one tool, `run`, and uses the others in a [script](#scripts) |
 | Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, and a script hands on at most 4 KiB of what it prints and of what it returns. From the 16th call of the LLM in an answer on, it is told with every call to stop searching and ask the user what exactly is meant, unless it has found what it looks for; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives OpenAI the conversation as `prompt_cache_key`. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another. What is cut off is not lost: the [history](#history) keeps every conversation in full |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
@@ -226,8 +267,14 @@ Three things limit a tool for files, and the first that speaks wins:
      `ouro.pid`, `ouro.log`, `ouro.log.1`, `update/`, `history/`) is read and never changed.
    - The source of the core is read and never changed: in every directory whose `go.mod` names the module
      `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `daemon`, `update`,
-     `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable. That `go.mod`
-     is not deleted and has to go on naming the module, or the rule would be gone with one edit.
+     `sandbox`, `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable.
+   - What decides how a checkout is built, what the build fetches and runs, and where the frame hands out what
+     no plugin gets, is read and never changed: `go.mod`, `go.sum`, `go.work`, `go.work.sum`, `Makefile`,
+     `install.sh`, `scripts/`, `cmd/` and `internal/cli/`. A new dependency therefore takes you; so does handing
+     `plugin.Owner` to a plugin.
+   - The Go that [`rebuild`](#updates) builds with is read and never changed, and no `go` is put where it looks
+     for one: the installation of the `go` it finds, a file `go` in every directory of `PATH`, `OURO_GO_DIR` or
+     `~/.local/go`, and `/usr/local/go`. Step 1 of `rebuild` runs that `go` with network.
    - `/` and your home directory are never deleted.
 2. **`protected`**: paths no tool for files touches, for you and for peers. The default holds the usual places
    of keys and credentials and nothing else: profiles of browsers, files like `.env` and whatever else is
@@ -252,9 +299,10 @@ What these tools do not protect: the running binary (it is replaced by `ouro upd
 file), and files your agent reaches in other ways, of which there are none today.
 
 **Known risk.** The rules above hold for the tools for files of the binary that runs. With `write` and
-[`rebuild`](#updates) your agent can change a plugin and install the result, and that build runs as you, with
-whatever the changed plugin does: the core it could not edit no longer limits it. The tests are a check that
-the build works, not that it is harmless.
+[`rebuild`](#updates) your agent can change a plugin and install the result. The build and its tests run in a
+sandbox without network, but the build that is installed runs as you, with whatever the changed plugin does:
+the core it could not edit no longer limits it, and neither does the sandbox. The tests are a check that the
+build works, not that it is harmless.
 
 ### Scripts
 
@@ -634,7 +682,8 @@ internal/diagnosis   why answers to peers failed, by category, for the agent to 
 internal/history     the archive of every conversation, and how the agent searches and reads it
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
-internal/update      self-update: from the newest main, or from the checkout as it is
+internal/update      self-update: from the newest main, or from the checkout as it is, in the sandbox
+internal/sandbox     runs a command without network and writing only where it may: sandbox-exec, bubblewrap
 scripts, hooks       the local quality checks and the pre-commit hook, see [Checks](#checks)
 ```
 

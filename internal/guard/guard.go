@@ -6,10 +6,10 @@
 // Three things limit a tool, and the first that speaks wins:
 //
 //  1. The core, fixed here: the secrets of the node are neither read nor
-//     changed, and neither the state of the node nor the source of the core
-//     of ouroboros is changed. That an agent cannot rewrite the frame it runs
-//     in is a rule of the frame, not of a prompt and not of the
-//     configuration.
+//     changed, and neither the state of the node, nor the source of the core
+//     of ouroboros, nor what decides how it is built, nor the Go it is built
+//     with is changed. That an agent cannot rewrite the frame it runs in is
+//     a rule of the frame, not of a prompt and not of the configuration.
 //  2. "protected" in the configuration: paths no tool touches for anybody.
 //  3. "allow" and "deny" of the tool for the kind of conversation it runs in.
 package guard
@@ -34,8 +34,16 @@ const goMod = "go.mod"
 // checkout. No tool changes them; the plugins next to them stay writable.
 var corePackages = []string{
 	"internal/identity", "internal/a2a", "internal/contacts", "internal/config", "internal/home",
-	"internal/daemon", "internal/update", "internal/kernel", "internal/safefile", "internal/peers",
+	"internal/daemon", "internal/update", "internal/sandbox", "internal/kernel", "internal/safefile", "internal/peers",
 	"internal/guard",
+}
+
+// buildPaths are what decides what a build of a checkout fetches and runs,
+// below the directory of the checkout, and where the plugins are handed
+// what only the frame may hand out: no tool changes them either. The
+// sandbox of rebuild holds only while they are as the owner left them.
+var buildPaths = []string{
+	"go.mod", "go.sum", "go.work", "go.work.sum", "Makefile", "install.sh", "scripts", "internal/cli", "cmd",
 }
 
 // maxLinks is how many symbolic links one path may lead through, like the
@@ -92,6 +100,9 @@ type Guard struct {
 	Secrets []string
 	// Protected returns "protected" of the configuration as it is now.
 	Protected func() ([]string, error)
+	// Toolchain returns the paths of the Go that builds ouro, which are
+	// read and never changed, each with everything below it. May be nil.
+	Toolchain func() []string
 }
 
 // Checker decides about paths for one call of a tool.
@@ -100,6 +111,7 @@ type Checker struct {
 	home      string
 	userHome  string // "" if it is not known
 	secrets   []secret
+	toolchain []string
 	protected []rule
 	allow     []rule
 	deny      []rule
@@ -136,6 +148,18 @@ func (g *Guard) Checker(a Access) (*Checker, error) {
 		}
 		info, _ := os.Stat(real)
 		c.secrets = append(c.secrets, secret{real, info})
+	}
+	if g.Toolchain != nil {
+		for _, path := range g.Toolchain() {
+			// A link counts as itself, and as where it leads. A path that
+			// leads nowhere, like one below a file, cannot be written
+			// either: it is asked again with the next call.
+			for _, follow := range []bool{false, true} {
+				if real, err := resolve(path, follow); err == nil {
+					c.toolchain = append(c.toolchain, real)
+				}
+			}
+		}
 	}
 	protected, err := g.Protected()
 	if err != nil {
@@ -209,11 +233,15 @@ func (c *Checker) refuses(op Op, real string) string {
 	if op != Read && within(real, c.home) {
 		return "it is in the directory of this node, where the node keeps its state: no tool changes it"
 	}
-	if op != Read && inCore(real) {
-		return "it is source of the core of ouroboros, which no tool changes"
-	}
-	if op == Delete && filepath.Base(real) == goMod && moduleAt(real) == Module {
-		return "it marks the source of ouroboros, whose core no tool changes"
+	if op != Read {
+		if rule := inCheckout(real); rule != "" {
+			return rule
+		}
+		for _, t := range c.toolchain {
+			if within(real, t) {
+				return "it is part of the Go that rebuild builds ouroboros with, which no tool changes"
+			}
+		}
 	}
 	if op == Delete && (real == "/" || real == c.userHome) {
 		return "the root of the file system and the home directory are never deleted"
@@ -244,17 +272,6 @@ func (c *Checker) refuses(op Op, real string) string {
 	return fmt.Sprintf(`it is not in "allow" of the tool %s`, c.access.Tool)
 }
 
-// Keeps reports whether content may become the file at the resolved path
-// real, which the tool may write: the go.mod of a checkout of ouroboros has
-// to go on naming the module, or its core would be source of the core no
-// longer.
-func (c *Checker) Keeps(real string, content []byte) error {
-	if filepath.Base(real) == goMod && moduleAt(real) == Module && moduleOf(content) != Module {
-		return &Refusal{Op: Write, Path: real, Rule: "it has to go on naming the module " + Module + ": that marks the source of ouroboros, whose core no tool changes"}
-	}
-	return nil
-}
-
 // secret reports whether real is one of the files that are not read, or
 // another name of one.
 func (c *Checker) secret(real string) bool {
@@ -273,22 +290,28 @@ func (c *Checker) secret(real string) bool {
 	return false
 }
 
-// inCore reports whether real is in a package of the core of a checkout of
-// ouroboros. Every directory above it is asked, not only the nearest with a
-// go.mod: a go.mod written in between does not take the core out of its
-// checkout.
-func inCore(real string) bool {
+// inCheckout returns the rule that keeps real as it is in a checkout of
+// ouroboros: in a package of the core, or among what decides how it is
+// built. "" if none does. Every directory above it is asked, not only the
+// nearest with a go.mod: a go.mod written in between does not take real out
+// of its checkout.
+func inCheckout(real string) string {
 	for dir := filepath.Dir(real); ; dir = filepath.Dir(dir) {
 		if moduleAt(filepath.Join(dir, goMod)) == Module {
 			rel, _ := filepath.Rel(dir, real) // real is below dir: cannot fail
 			for _, pkg := range corePackages {
 				if within(rel, pkg) {
-					return true
+					return "it is source of the core of ouroboros, which no tool changes"
+				}
+			}
+			for _, b := range buildPaths {
+				if within(rel, b) {
+					return "it decides how ouroboros is built and what the build fetches and runs, which no tool changes"
 				}
 			}
 		}
 		if dir == "/" {
-			return false
+			return ""
 		}
 	}
 }

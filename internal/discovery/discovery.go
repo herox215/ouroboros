@@ -31,10 +31,12 @@ var Group = net.IPv4(239, 255, 41, 38)
 
 // What the sockets are made with; tests replace them to make them fail.
 var (
-	netListenUDP      = net.ListenUDP
-	netFilePacketConn = net.FilePacketConn
-	syscallSocket     = syscall.Socket
-	setsockoptInt     = syscall.SetsockoptInt
+	netListenMulticast = net.ListenMulticastUDP
+	netListenUDP       = net.ListenUDP
+	netFilePacketConn  = net.FilePacketConn
+	syscallSocket      = syscall.Socket
+	setsockoptInt      = syscall.SetsockoptInt
+	readFromUDP        = (*net.UDPConn).ReadFromUDP
 )
 
 // Node is what a node announces about itself.
@@ -55,9 +57,14 @@ func (n Node) Addr() string {
 	return net.JoinHostPort(n.Host, strconv.Itoa(n.Port))
 }
 
-// Listen opens the discovery socket. Several nodes on one host may share the port.
+// Listen opens the discovery socket. Several nodes on one host may share the
+// port. Where no interface carries multicast, as in a network namespace with
+// the loopback interface alone, it hears the probes sent to the host.
 func Listen(port int) (*net.UDPConn, error) {
-	conn, err := net.ListenMulticastUDP("udp4", nil, &net.UDPAddr{IP: Group, Port: port})
+	conn, err := netListenMulticast("udp4", nil, &net.UDPAddr{IP: Group, Port: port})
+	if errors.Is(err, syscall.ENODEV) {
+		return netListenUDP("udp4", &net.UDPAddr{Port: port})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -113,9 +120,12 @@ func Serve(conn *net.UDPConn, self func() Node) error {
 	group := &net.UDPAddr{IP: Group, Port: conn.LocalAddr().(*net.UDPAddr).Port}
 	buf := make([]byte, len(probe)+1)
 	for {
-		n, addr, err := conn.ReadFromUDP(buf)
+		n, addr, err := readFromUDP(conn, buf)
 		if errors.Is(err, net.ErrClosed) {
 			return nil
+		}
+		if refused(err) {
+			continue
 		}
 		if err != nil {
 			return err
@@ -287,9 +297,12 @@ func expire(conns []*net.UDPConn) {
 func collect(conn *net.UDPConn, answers chan<- Node) error {
 	buf := make([]byte, 4096)
 	for {
-		n, addr, err := conn.ReadFromUDP(buf)
+		n, addr, err := readFromUDP(conn, buf)
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			return nil
+		}
+		if refused(err) {
+			continue
 		}
 		if err != nil {
 			return err
@@ -302,6 +315,11 @@ func collect(conn *net.UDPConn, answers chan<- Node) error {
 		answers <- node
 	}
 }
+
+// refused reports whether err is a datagram the system did not hand over,
+// as a sandbox does with one from another host: it is gone, and the next one
+// may come through.
+func refused(err error) bool { return errors.Is(err, syscall.EPERM) }
 
 // preferred picks the more useful of two answers from the same node:
 // a LAN address is reachable by others, a loopback address is not.

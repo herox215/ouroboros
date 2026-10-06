@@ -38,14 +38,21 @@ const maxOutput = 8 << 10
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("update", func(ctx *plugin.Context, n needs) (services, error) {
 		c := &updateCommand{
-			term:    n.Console,
-			local:   node.Local{Home: dir},
-			updater: &update.Updater{Repo: update.Repo, Source: update.Source, Dir: dir.UpdateDir(), Revision: update.Revision()},
+			term:  n.Console,
+			local: node.Local{Home: dir},
+			updater: &update.Updater{Repo: update.Repo, Source: update.Source, Dir: dir.UpdateDir(), Revision: update.Revision(),
+				Unsandboxed: func() bool {
+					cfg, err := dir.Config()
+					return err == nil && cfg.RebuildWithoutSandbox
+				}},
 		}
 		plugin.Add(ctx, plugin.Command{Name: "update", Help: "build and install the newest version", Run: c.run})
 		plugin.Add(ctx, plugin.NewTool(Rebuild,
 			"Build ouro, the program you are part of, from its source in "+sourceName(update.Source)+" as it is now, and install it: "+
 				"this is how a change of the source takes effect. make test runs first, which takes a minute or more. "+
+				"The modules go.mod names are downloaded first; the build and the tests run in a sandbox without network beyond localhost, "+
+				"which writes only to a temporary directory and the build cache: go.mod, go.sum, the Makefile, install.sh, scripts, cmd "+
+				"and internal/cli are your owner's, as is the core. "+
 				"Only when everything passes is the binary replaced and a running node restarted; "+
 				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. "+
 				"In the terminal UI ouro restarts with the new build after your answer and the conversation goes on; "+

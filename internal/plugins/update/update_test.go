@@ -18,6 +18,7 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	updateplugin "ouroboros/internal/plugins/update"
+	"ouroboros/internal/sandbox"
 	"ouroboros/internal/update"
 	"ouroboros/internal/update/updatetest"
 	"ouroboros/plugin"
@@ -121,9 +122,13 @@ func TestUpdateRestartsTheNode(t *testing.T) {
 }
 
 // source is a checkout that builds a binary with the given content and whose
-// tests run the shell command tests.
+// tests run the shell command tests. It builds in the sandbox: a test that
+// builds is skipped in a sandbox already, where no other one starts.
 func source(t *testing.T, content, tests string) string {
 	t.Helper()
+	if sandbox.Nested() {
+		t.Skip("in a sandbox already, where no other one starts")
+	}
 	src, _ := updatetest.NewRepo(t, "committed")
 	updatetest.Change(t, src, content)
 	updatetest.Tests(t, src, tests)
@@ -148,7 +153,7 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 
 	tools := plugin.All[plugin.Tool](ctx)
 	at := slices.IndexFunc(tools, func(tool plugin.Tool) bool { return tool.Name == updateplugin.Rebuild })
-	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") {
+	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "in a sandbox without network") {
 		t.Fatalf("tools %+v", tools)
 	}
 	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild, Args: json.RawMessage(`{}`)}); got != "building and testing "+src {
@@ -184,6 +189,27 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 	}
 	if !alive() {
 		t.Fatal("the build signalled an unrelated process")
+	}
+}
+
+// Whether a build may run without a sandbox is the owner's word in the
+// configuration, and nobody else's.
+func TestUnsandboxedIsTheOwnersWord(t *testing.T) {
+	s := clitest.Settings(t)
+	app, _ := clitest.NewApp(t, s, "")
+	updater, _ := cli.Service[*update.Updater](app)
+	if updater.Unsandboxed() {
+		t.Error("allowed without a configuration")
+	}
+	cfg := clitest.NodeConfig(s)
+	cfg.RebuildWithoutSandbox = true
+	config.Save(s.Home, cfg)
+	if !updater.Unsandboxed() {
+		t.Error("not allowed, although the owner said so")
+	}
+	os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600)
+	if updater.Unsandboxed() {
+		t.Error("allowed by a configuration that cannot be read")
 	}
 }
 

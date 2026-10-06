@@ -38,6 +38,10 @@ type Config struct {
 	// Tools says which tools the agent may use, by who it is talking to, and
 	// how far they go. Without it the owner gets every tool and peers get none.
 	Tools *Tools `json:"tools,omitempty"`
+	// RebuildWithoutSandbox lets the tool rebuild build and test without a
+	// sandbox, with network, on a system that has none. Only the owner sets
+	// it: no proposal does.
+	RebuildWithoutSandbox bool `json:"rebuild_without_sandbox,omitempty"`
 }
 
 // AllTools in a list of tools allows every tool.
@@ -250,6 +254,10 @@ func Fields() []string {
 // them to another server.
 var reserved = []string{"private_key", "api_key", "base_url"}
 
+// FieldUnsandboxed is the field that lets rebuild build without a sandbox,
+// which no proposal changes either.
+const FieldUnsandboxed = "rebuild_without_sandbox"
+
 // field returns the value of the field path as it applies: one that is not
 // set has the default that holds for it.
 func (c Config) field(path string) (any, error) {
@@ -264,6 +272,9 @@ func (c Config) field(path string) (any, error) {
 		return append([]Entry{}, c.PeerTools()...), nil // none is an empty list, not null
 	case FieldProtected:
 		return c.Protected(), nil
+	}
+	if path == FieldUnsandboxed {
+		return nil, fmt.Errorf("%s is set by the owner alone, in config.json: no proposal changes it", path)
 	}
 	if slices.Contains(reserved, path) {
 		return nil, fmt.Errorf("%s is changed by the owner alone, with ouro start --setup: no proposal changes it", path)
@@ -332,11 +343,12 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 func (c Config) Public() json.RawMessage {
 	protected := c.Protected()
 	b, _ := json.MarshalIndent(struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Model   string `json:"model"`
-		BaseURL string `json:"base_url"`
-		Tools   Tools  `json:"tools"`
-	}{c.ID(), c.Name, c.Model, c.BaseURL, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}}, "", "  ")
+		ID                    string `json:"id"`
+		Name                  string `json:"name"`
+		Model                 string `json:"model"`
+		BaseURL               string `json:"base_url"`
+		Tools                 Tools  `json:"tools"`
+		RebuildWithoutSandbox bool   `json:"rebuild_without_sandbox"`
+	}{c.ID(), c.Name, c.Model, c.BaseURL, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}, c.RebuildWithoutSandbox}, "", "  ")
 	return b
 }

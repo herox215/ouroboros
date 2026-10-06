@@ -11,10 +11,12 @@ import (
 
 // NewRepo creates a git repository whose install.sh "builds" a binary that
 // consists of the given content. It returns the repository and its commit.
+// Its go.mod names no module to download.
 func NewRepo(t *testing.T, content string) (dir, rev string) {
 	t.Helper()
 	dir = t.TempDir()
 	git(t, dir, "init", "-q", "-b", "main")
+	write(t, filepath.Join(dir, "go.mod"), "module fake\n\ngo 1.21\n")
 	return dir, Commit(t, dir, content)
 }
 
@@ -36,9 +38,10 @@ func Change(t *testing.T, dir, content string) {
 }
 
 // Tests gives dir the tests that "make test" runs: the shell command recipe.
+// "make install" runs install.sh.
 func Tests(t *testing.T, dir, recipe string) {
 	t.Helper()
-	write(t, filepath.Join(dir, "Makefile"), "test:\n\t@"+recipe+"\n")
+	write(t, filepath.Join(dir, "Makefile"), "install:\n\t@sh install.sh\ntest:\n\t@"+recipe+"\n")
 }
 
 func write(t *testing.T, path, content string) {

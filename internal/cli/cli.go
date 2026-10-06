@@ -64,9 +64,10 @@ import (
 	"ouroboros/internal/plugins/tailscale"
 	"ouroboros/internal/plugins/talk"
 	"ouroboros/internal/plugins/tui"
-	"ouroboros/internal/plugins/update"
+	updateplugin "ouroboros/internal/plugins/update"
 	"ouroboros/internal/proposal"
 	"ouroboros/internal/setup"
+	"ouroboros/internal/update"
 	"ouroboros/plugin"
 )
 
@@ -139,7 +140,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 	files := &guard.Guard{Home: s.Home, Secrets: dir.Secrets(), Protected: func() ([]string, error) {
 		cfg, err := dir.Config()
 		return cfg.Protected(), err
-	}}
+	}, Toolchain: update.GoPaths}
 	return []plugin.Plugin{
 		base.Plugin(dir, t),
 		discovery.Plugin(s.DiscoPort),
@@ -156,7 +157,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		}),
 		talk.Plugin(),
 		tui.Plugin(plugin.OwnerOf(dir, network, setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey})),
-		update.Plugin(dir),
+		updateplugin.Plugin(dir),
 	}
 }
 

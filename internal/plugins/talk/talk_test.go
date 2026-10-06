@@ -277,7 +277,9 @@ func TestPeerAsksWhatWentWrong(t *testing.T) {
 		clitest.Trust(t, s, beta, "beta")
 	}
 	// What only beta knows about its failure.
-	internals := []string{"503", "llm-7", "sk-good", "upstream", strings.TrimPrefix(llm, "http://"), "openai", beta.Home}
+	// The status as the error has it: "503" alone is part of an ID or a time
+	// now and then.
+	internals := []string{"HTTP 503", "llm-7", "sk-good", "upstream", strings.TrimPrefix(llm, "http://"), "openai", beta.Home}
 	clean := func(what, text string) {
 		t.Helper()
 		for _, internal := range internals {
