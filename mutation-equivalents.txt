@@ -13,18 +13,18 @@
 # behaviour does not belong here: it needs a test.
 
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
-internal/agent/agent.go:524:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
+internal/agent/agent.go:630:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
 internal/kernel/kernel.go:419:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
 internal/update/update.go:49:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
 internal/plugins/files/files.go:227:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
 internal/script/script.go:551:26 CONDITIONALS_BOUNDARY  # a heap that did not grow is far from the limit either way: now == start is refused by both forms
 internal/script/script.go:551:47 CONDITIONALS_BOUNDARY  # the heap is sampled every few milliseconds and never stands at exactly the limit
 internal/proposal/proposal.go:128:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
-internal/agent/agent.go:299:28 INVERT_LOGICAL  # of an answer, only its first message, the user's, has no calls of tools, and it is no assistant message either
-internal/agent/agent.go:300:4 INVERT_LOOPCTRL  # the message it stops at is the first of the answer: going on ends the loop as well
-internal/agent/agent.go:466:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:471:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:514:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
+internal/agent/agent.go:399:28 INVERT_LOGICAL  # of an answer, only its first message, the user's, has no calls of tools, and it is no assistant message either
+internal/agent/agent.go:400:4 INVERT_LOOPCTRL  # the message it stops at is the first of the answer: going on ends the loop as well
+internal/agent/agent.go:572:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:577:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:620:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
 internal/script/script.go:209:19 INVERT_LOGICAL  # what is kept is only given back by a script that neither failed nor gave back what is no data
 internal/script/script.go:458:44 CONDITIONALS_BOUNDARY  # with no room left, the head of 0 bytes of a line adds nothing
 internal/script/script.go:500:8 CONDITIONALS_BOUNDARY  # what the interpreter prints is valid UTF-8, whose first byte begins a character

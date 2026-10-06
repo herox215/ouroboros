@@ -25,10 +25,11 @@ const (
 
 // Config is the persistent node configuration.
 type Config struct {
-	BaseURL string `json:"base_url"` // OpenAI-compatible endpoint
-	APIKey  string `json:"api_key"`  // optional, e.g. not needed for a local Ollama
-	Model   string `json:"model"`
-	Name    string `json:"name"`
+	ContextProvider string `json:"context_provider,omitempty"`
+	BaseURL         string `json:"base_url"` // OpenAI-compatible endpoint
+	APIKey          string `json:"api_key"`  // optional, e.g. not needed for a local Ollama
+	Model           string `json:"model"`
+	Name            string `json:"name"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	// The ID of the node follows from it, see ID. Older configs also stored

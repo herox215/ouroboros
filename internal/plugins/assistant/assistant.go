@@ -28,9 +28,11 @@ type services struct {
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("assistant", func(ctx *plugin.Context, n needs) (services, error) {
 		builder := assistant.Builder{
-			LLM:      n.LLM,
-			Tools:    func() []agent.Tool { return plugin.All[plugin.Tool](ctx) },
-			Failures: dir.Failures(),
+			LLM:              n.LLM,
+			ContextProviders: func() []agent.ContextProvider { return plugin.All[plugin.ContextProvider](ctx) },
+			AnswerHooks:      func() []agent.AnswerHook { return plugin.All[plugin.AnswerHook](ctx) },
+			Tools:            func() []agent.Tool { return plugin.All[plugin.Tool](ctx) },
+			Failures:         dir.Failures(),
 		}.WithConfig(dir.Config, dir.Proposals())
 		return services{builder, assistant.New(dir.Config, builder, dir.Log)}, nil
 	})

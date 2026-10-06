@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 
 	"ouroboros/internal/agent"
@@ -48,7 +49,11 @@ func (p *Peers) Respond(ctx context.Context, contextID, text string) (string, er
 	if err != nil {
 		return "", err
 	}
-	return bot.Respond(ctx, contextID, text)
+	return bot.Run(ctx, contextID, text, agent.Observer{Diagnostic: func(d agent.Diagnostic) {
+		if p.log != nil {
+			p.log("conversation %s plugin %s %s failed: %v", contextID, d.Plugin, d.Phase, d.Err)
+		}
+	}})
 }
 
 // current returns the agent for the configuration as it is now. The agent is
@@ -64,7 +69,7 @@ func (p *Peers) current() (*agent.Agent, error) {
 	defer p.mu.Unlock()
 	bot, want, err := p.build()
 	if err != nil {
-		if p.agent == nil {
+		if p.agent == nil || errors.Is(err, agent.ErrContextProvider) {
 			return nil, err
 		}
 		if why := err.Error(); why != p.failed {
@@ -94,7 +99,7 @@ func (p *Peers) build() (*agent.Agent, string, error) {
 		return nil, "", config.ErrIncomplete
 	}
 	tools, _ := json.Marshal(cfg.PeerTools()) // an entry that cannot be written is reported by ForPeers
-	want, _ := json.Marshal([]string{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), string(tools)})
+	want, _ := json.Marshal([]string{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider})
 	if p.agent != nil && p.built == string(want) {
 		return nil, string(want), nil
 	}

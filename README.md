@@ -87,7 +87,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/new` | new conversation |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup |
-| `/context` | what the next call of the LLM in this conversation is sent, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
+| `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
 | `/model` | the models the provider of the node offers, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on), `esc` back |
 | `/requests` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
@@ -836,6 +836,93 @@ one can be had, stops ouro from starting, as does a second plugin that provides 
 method added under a built-in name is never called, and `Network.Call` does not run the built-in ones.
 
 Plugins are compiled in. There is no loading at runtime.
+
+#### Context providers and answer hooks
+
+Plugins can contribute `plugin.ContextProvider` and `plugin.AnswerHook` with `plugin.Add`.
+Set `"context_provider": "name"` in `config.json` to select a provider for both owner
+and peer agents. Registration alone never selects one. Missing selected names,
+duplicate registrations of the selected name, or a missing `Prepare` callback are
+configuration errors; peers also refuse this invalid selection instead of using an
+older agent. An empty selection preserves the existing context policy.
+
+```go
+plugin.Add(ctx, plugin.ContextProvider{
+    Name: "example-context",
+    Prepare: func(c context.Context, p plugin.Preparation) ([]plugin.ChatMessage, error) {
+        // A provider decides how to incorporate ephemeral hook context.
+        messages := append([]plugin.ChatMessage{p.Messages[0]}, p.Context...)
+        return append(messages, p.Messages[1:]...), nil
+    },
+})
+plugin.Add(ctx, plugin.AnswerHook{
+    Name: "example-lifecycle",
+    Before: func(c context.Context, p plugin.Preparation) ([]plugin.ChatMessage, error) {
+        return []plugin.ChatMessage{{Role: "system", Content: "Answer concisely."}}, nil
+    },
+    After: func(c context.Context, outcome plugin.AnswerOutcome) error {
+        // Inspect outcome.Reply and outcome.Err; persist plugin state if needed.
+        return nil
+    },
+})
+```
+
+The shared agent loop runs this flow for CLI, TUI and peers. `Before` callbacks run
+once in contribution registration order. Later callbacks see earlier contributions
+in `Preparation.Context`. Contributions allow system/user text only, are scoped to
+this answer, and never enter canonical history. With no selected provider they are
+inserted after the system prompt; a selected provider explicitly incorporates them.
+`Prepare` runs before **every** model call, including calls following tools. It
+receives an owned snapshot including the system prompt and current bounded history.
+Returned messages must preserve the first system message exactly and contain
+adjacent complete tool call/result groups; invalid output or preparation failure
+aborts the answer with the provider name and cause, without fallback.
+
+Optional `Observe` receives each new user message, model reply and raw tool result
+before core history trimming or repeated-result reduction. It runs synchronously;
+failure aborts the answer. This is the persistence boundary: providers must retain
+what they need themselves. The bounded core transcript remains the default source
+snapshot, not a complete archive. Existing/restored history is available through
+`Preparation.Messages`; it is not replayed as new events. Core does not store
+plugin archives, summaries or retention policies. Plugin cleanup belongs to
+`ctx.OnStop`, including closing plugin storage. Switching providers does not replay
+already discarded history.
+
+Every admitted answer runs all `After` callbacks once, in registration order, on
+success, failure or cancellation (including failure of `Before`). They receive
+owned raw events for the current answer and the original terminal outcome. Before
+failure stops further before hooks and model work. After failure allows remaining
+after hooks to run, preserves a successful reply and its nil answer error, and
+never obscures an original answer error. Failures remain in `Inspection.Diagnostics`
+with hook name, phase and cause, and are logged by owner and peer assistants.
+`Assistant.Inspection` exposes these records to plugins/front ends. There is no
+automatic repair loop.
+
+Callbacks and direct model processing share the answer's cancellation context;
+after hooks are still invoked with that canceled context, so they should record
+outcomes without requiring uncanceled model work. A canceled wait for another
+answer does not start a lifecycle. Answers sharing a memory and conversation ID
+are serialized through after processing; different conversations may run
+concurrently, so plugin state must be synchronized. A callback must not reenter
+the same conversation. `Processing.Model.Complete` accesses the configured model
+with `Processing.ModelName` directly, bypassing providers, hooks and tool execution.
+It is synchronous work owned by the callback; plugins must not leave detached work
+running after cancellation. JavaScript sessions remain separate from this API.
+
+`Processing.Conversation` contains the local ID and trusted `Peer`/`Origin` supplied
+by the network. Owner and peer agents have separate memories; peer IDs are scoped
+by authenticated identity. Plugin storage keys must include the caller identity,
+and providers must not add owner-only data to peer preparation. Plugins are trusted
+in-process code; this API does not sandbox their storage or callbacks.
+
+With extensions active, `/context` and `Assistant.Contents` show the **last actual
+prepared request**, including hook contributions, and any answer/preparation error.
+They never invoke preparation speculatively. Before the first request there is no
+prepared snapshot. `Assistant.Context` measures the actual sent request and tools;
+a failed preparation sends no model request. `Inspection` includes owned copies of
+messages, the tool definitions actually sent, and diagnostics for the last answer, retained with bounded conversation
+memory. Without extensions, the existing next-context view remains unchanged.
+
 
 ## Checks
 

@@ -187,6 +187,11 @@ func (u *ui) Contents(contextID string) ([]tui.Message, error) {
 		}
 		msgs = append(msgs, tui.Message{Role: m.Role, Text: strings.TrimSpace(text)})
 	}
+	if snapshot, ok := u.assistant.Inspection(contextID); ok {
+		for _, d := range snapshot.Diagnostics {
+			msgs = append(msgs, tui.Message{Role: "plugin diagnostic", Text: fmt.Sprintf("%s %s failed: %v", d.Plugin, d.Phase, d.Err)})
+		}
+	}
 	return msgs, err
 }
 

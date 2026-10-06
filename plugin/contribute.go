@@ -101,3 +101,15 @@ type (
 	ChatMessage = openai.Message
 	ChatTool    = openai.Tool
 )
+
+// ContextProvider prepares model context when explicitly selected by name.
+type ContextProvider = agent.ContextProvider
+
+// AnswerHook contributes current-answer context and observes terminal outcomes.
+type AnswerHook = agent.AnswerHook
+type Conversation = agent.Conversation
+type Processing = agent.Processing
+type Preparation = agent.Preparation
+type AnswerOutcome = agent.AnswerOutcome
+type Diagnostic = agent.Diagnostic
+type Inspection = agent.Inspection

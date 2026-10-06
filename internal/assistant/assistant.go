@@ -77,6 +77,9 @@ type Step struct {
 
 // Builder is the blueprint of the agents of a node.
 type Builder struct {
+	// ContextProviders and AnswerHooks are read after plugin startup.
+	ContextProviders func() []agent.ContextProvider
+	AnswerHooks      func() []agent.AnswerHook
 	// LLM returns the model that is reached at the endpoint the node is
 	// configured for. It is told the endpoint and nothing else of the
 	// configuration, which holds the key of the node.
@@ -118,7 +121,7 @@ type Assistant struct {
 }
 
 // setup is the part of the configuration an agent is built from.
-type setup struct{ baseURL, apiKey, model, name, id, tools string }
+type setup struct{ baseURL, apiKey, model, name, id, tools, provider string }
 
 // New returns the assistant of the node with the given configuration, which
 // is read anew for every question. What it does on the way to an answer is
@@ -143,7 +146,7 @@ func (b Builder) forPeers(cfg config.Config, sessions *script.Sessions) (*agent.
 	// Its tools are functions of scripts, and a script may keep a node busy:
 	// a peer the owner gave no tool runs none.
 	if len(allowed) == 0 {
-		return b.build(cfg, prompt), nil
+		return b.build(cfg, prompt)
 	}
 	prompt += toolsHint
 	if slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(fileTools, t.Name) }) {
@@ -153,7 +156,7 @@ func (b Builder) forPeers(cfg config.Config, sessions *script.Sessions) (*agent.
 		prompt += explainHint
 		allowed = append(allowed, explainError(b.Failures))
 	}
-	return b.build(cfg, prompt+" "+strings.TrimSpace(scriptHint), withRun(allowed, sessions)), nil
+	return b.build(cfg, prompt+" "+strings.TrimSpace(scriptHint), withRun(allowed, sessions))
 }
 
 // forOwner returns the agent that answers the owner of the node, whose
@@ -179,7 +182,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	if has(toolProposeConfig) {
 		prompt += configHint
 	}
-	return b.build(cfg, prompt+scriptHint+ownerStyle, withRun(allowed, sessions)), nil
+	return b.build(cfg, prompt+scriptHint+ownerStyle, withRun(allowed, sessions))
 }
 
 // peerTools are the tools the owner allows the agent that answers peers.
@@ -207,8 +210,16 @@ func (b Builder) all() []agent.Tool {
 }
 
 // build makes an agent on the LLM of cfg.
-func (b Builder) build(cfg config.Config, prompt string, tools ...agent.Tool) *agent.Agent {
-	return agent.New(b.LLM(agent.Endpoint{BaseURL: cfg.BaseURL, APIKey: cfg.APIKey}), cfg.Model, prompt, tools...)
+func (b Builder) build(cfg config.Config, prompt string, tools ...agent.Tool) (*agent.Agent, error) {
+	var providers []agent.ContextProvider
+	var hooks []agent.AnswerHook
+	if b.ContextProviders != nil {
+		providers = b.ContextProviders()
+	}
+	if b.AnswerHooks != nil {
+		hooks = b.AnswerHooks()
+	}
+	return agent.New(b.LLM(agent.Endpoint{BaseURL: cfg.BaseURL, APIKey: cfg.APIKey}), cfg.Model, prompt, tools...).WithExtensions(cfg.ContextProvider, providers, hooks)
 }
 
 // Ready reports whether the assistant can answer: config.ErrIncomplete if the
@@ -244,6 +255,11 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	defer cancel()
 	r := a.begin(ctx, cancel, contextID, cfg, text)
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
+		Diagnostic: func(d agent.Diagnostic) {
+			if a.log != nil {
+				a.log("conversation %s plugin %s %s failed: %v", contextID, d.Plugin, d.Phase, d.Err)
+			}
+		},
 		Call: func(c agent.Call) {
 			r.call(c)
 			if !c.Done {
@@ -275,6 +291,18 @@ func (a *Assistant) Context(contextID string) int {
 	return a.sizes[contextID]
 }
 
+// Inspection returns the last actual prepared request and extension diagnostics.
+// It does not invoke plugins or prepare speculative context.
+func (a *Assistant) Inspection(contextID string) (agent.Inspection, bool) {
+	a.mu.Lock()
+	bot := a.agent
+	a.mu.Unlock()
+	if bot == nil {
+		return agent.Inspection{}, false
+	}
+	return bot.Inspection(contextID)
+}
+
 // Contents is what the next call of the LLM in a conversation is sent: the
 // system prompt, the tools and the conversation so far.
 type Contents struct {
@@ -283,8 +311,9 @@ type Contents struct {
 	Messages []openai.Message
 }
 
-// Contents returns what the next call of the LLM in the conversation
-// contextID is sent. Without an agent for the configuration as it is, it
+// Contents returns a next-context preview without extensions, or the last
+// actual prepared request with extensions. It never calls plugin callbacks.
+// Without an agent for the configuration as it is, it
 // returns the conversation alone, with the error.
 func (a *Assistant) Contents(contextID string) (Contents, error) {
 	c := Contents{Messages: a.memory.Conversation(contextID)}
@@ -293,6 +322,16 @@ func (a *Assistant) Contents(contextID string) (Contents, error) {
 		return c, err
 	}
 	c.System, c.Tools = bot.Prompt()
+	if bot.HasExtensions() {
+		if snapshot, ok := bot.Inspection(contextID); ok {
+			c.System = ""
+			c.Messages = snapshot.Messages
+			c.Tools = snapshot.Tools
+			return c, snapshot.Err
+		}
+		c.Messages = nil
+		return c, nil
+	}
 	return c, nil
 }
 
@@ -355,7 +394,7 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 		return nil, cfg, config.ErrIncomplete
 	}
 	tools, _ := json.Marshal(cfg.OwnerTools()) // an entry that cannot be written is reported by forOwner
-	want := setup{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), string(tools)}
+	want := setup{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.agent == nil || a.built != want {

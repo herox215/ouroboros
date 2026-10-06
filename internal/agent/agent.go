@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"ouroboros/internal/a2a"
 	"ouroboros/internal/openai"
 )
 
@@ -108,8 +109,9 @@ type Call struct {
 // Observer is told what an agent does on the way to an answer. Either field
 // may be nil.
 type Observer struct {
-	Step func(Step) // every tool call, also those of a script
-	Call func(Call) // every call of the LLM
+	Diagnostic func(Diagnostic)
+	Step       func(Step) // every tool call, also those of a script
+	Call       func(Call) // every call of the LLM
 }
 
 type (
@@ -136,13 +138,14 @@ func ContextID(ctx context.Context) string {
 
 // Agent answers messages and remembers each conversation by context ID.
 type Agent struct {
-	llm    LLM
-	model  string
-	system openai.Message
-	tools  map[string]Tool
-	specs  []openai.Tool
-	sizeOf int // of specs, as JSON
-	memory *Memory
+	llm        LLM
+	model      string
+	system     openai.Message
+	tools      map[string]Tool
+	specs      []openai.Tool
+	sizeOf     int // of specs, as JSON
+	memory     *Memory
+	extensions extensions
 }
 
 // Memory keeps conversations by context ID. It may outlive the agent that
@@ -150,6 +153,7 @@ type Agent struct {
 type Memory struct {
 	mu            sync.Mutex
 	clock         uint64
+	active        map[string]*answerLock
 	conversations map[string]*conversation
 }
 
@@ -159,8 +163,10 @@ func NewMemory() *Memory {
 }
 
 type conversation struct {
-	lastUsed uint64
-	msgs     []openai.Message
+	lastUsed   uint64
+	inspected  bool
+	inspection Inspection
+	msgs       []openai.Message
 }
 
 // New returns an agent that answers with model as told by the system prompt
@@ -203,19 +209,89 @@ func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, er
 
 // Run is like Respond and reports every call of the LLM and every tool call
 // to observe.
-func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observer) (string, error) {
+func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observer) (reply string, answerErr error) {
+	release, err := a.memory.acquire(ctx, contextID)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
 	spent := &atomic.Int64{}
 	ctx = context.WithValue(ctx, spentKey{}, spent)
 	history := append(a.memory.history(contextID), openai.Message{Role: "user", Content: text})
 	asked := len(history) - 1 // where this answer starts
+	origin, peer := a2a.OriginFrom(ctx)
+	processing := Processing{a.llm, a.model, Conversation{contextID, peer, origin}}
+	var contributions, events []openai.Message
+	var diagnostics []Diagnostic
+	emit := func(m openai.Message) error {
+		events = append(events, copyMessages([]openai.Message{m})[0])
+		if p := a.extensions.provider; p != nil && p.Observe != nil {
+			if err := p.Observe(ctx, processing, copyMessages([]openai.Message{m})[0]); err != nil {
+				return fmt.Errorf("context provider %s observe: %w", p.Name, err)
+			}
+		}
+		return nil
+	}
+	defer func() {
+		for _, h := range a.extensions.hooks {
+			if h.After != nil {
+				if err := h.After(ctx, AnswerOutcome{processing, copyMessages(events), reply, answerErr}); err != nil {
+					d := Diagnostic{h.Name, "after", err}
+					diagnostics = append(diagnostics, d)
+					if observe.Diagnostic != nil {
+						observe.Diagnostic(d)
+					}
+				}
+			}
+		}
+		snapshot, _ := a.Inspection(contextID)
+		snapshot.Diagnostics = diagnostics
+		snapshot.Err = answerErr
+		a.inspect(contextID, snapshot)
+	}()
+
 	// An answer that fails is remembered as far as it got: asked again, the
 	// LLM goes on from there instead of starting over. Why it failed is not
 	// part of it: a peer must not learn the cause from a later answer.
 	abandon := func(err error) (string, error) {
+		// An extension can fail between a tool request and its results. Close
+		// pending calls without leaking the failure cause into later context.
+		pending := []string{}
+		for _, m := range history {
+			for _, call := range m.ToolCalls {
+				pending = append(pending, call.ID)
+			}
+			if m.Role == "tool" {
+				pending = slices.DeleteFunc(pending, func(id string) bool { return id == m.ToolCallID })
+			}
+		}
+		for _, id := range pending {
+			history = append(history, openai.Message{Role: "tool", ToolCallID: id, Content: "[This call did not finish.]"})
+		}
 		a.memory.remember(contextID, append(history, openai.Message{Role: "assistant", Content: abandoned}))
 		return "", err
+	}
+	if err := emit(history[asked]); err != nil {
+		return abandon(err)
+	}
+	for _, h := range a.extensions.hooks {
+		if h.Before != nil {
+			extra, err := h.Before(ctx, Preparation{processing, copyMessages(append([]openai.Message{a.system}, history...)), copyMessages(contributions)})
+			if err != nil {
+				return abandon(fmt.Errorf("answer hook %s before: %w", h.Name, err))
+			}
+			for _, m := range extra {
+				if m.Role != "system" && m.Role != "user" {
+					return abandon(fmt.Errorf("answer hook %s: context must have system or user role", h.Name))
+				}
+				if len(m.ToolCalls) > 0 || m.ToolCallID != "" {
+					return abandon(fmt.Errorf("answer hook %s: context cannot contain tool calls", h.Name))
+				}
+			}
+			contributions = append(contributions, copyMessages(extra)...)
+		}
 	}
 	for round := range maxRounds {
 		// An answer that was stopped while a tool ran asks the LLM no more.
@@ -232,6 +308,24 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		if round >= warnRounds {
 			msgs[len(msgs)-1].Content += remaining(round)
 		}
+		if p := a.extensions.provider; p != nil {
+			prepared, err := p.Prepare(ctx, Preparation{processing, copyMessages(msgs), copyMessages(contributions)})
+			if err == nil {
+				err = validatePrepared(a.system, prepared)
+			}
+			if err != nil {
+				err = fmt.Errorf("context provider %s prepare: %w", p.Name, err)
+				a.inspect(contextID, Inspection{Err: err})
+				return abandon(err)
+			}
+			msgs = copyMessages(prepared)
+		} else if len(contributions) > 0 {
+			msgs = append(append([]openai.Message{a.system}, copyMessages(contributions)...), msgs[1:]...)
+		}
+		if err := ctx.Err(); err != nil {
+			return abandon(err)
+		}
+		a.inspect(contextID, Inspection{Messages: msgs, Tools: a.specs})
 		sent := 0
 		if observe.Call != nil {
 			b, _ := json.Marshal(msgs) // texts and JSON: cannot fail
@@ -249,6 +343,9 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		msg.Role = "assistant"
 		history = append(history, msg)
+		if err := emit(msg); err != nil {
+			return abandon(err)
+		}
 		if len(msg.ToolCalls) == 0 {
 			a.memory.remember(contextID, history)
 			return msg.Content, nil
@@ -258,6 +355,9 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			result := repeated(call, before)
 			if result.Content == "" {
 				result = a.call(ctx, call)
+			}
+			if err := emit(result); err != nil {
+				return abandon(err)
 			}
 			result.Content = unrepeated(result.Content, history[asked:])
 			spent.Add(int64(len(result.Content)))
@@ -426,7 +526,7 @@ func (m *Memory) history(contextID string) []openai.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.conversations[contextID]; ok {
-		return slices.Clone(c.msgs)
+		return copyMessages(c.msgs)
 	}
 	return nil
 }
@@ -436,7 +536,13 @@ func (m *Memory) remember(contextID string, msgs []openai.Message) {
 	defer m.mu.Unlock()
 	m.clock++
 	msgs = trim(msgs)
-	m.conversations[contextID] = &conversation{lastUsed: m.clock, msgs: msgs}
+	c := m.conversations[contextID]
+	if c == nil {
+		c = &conversation{}
+	}
+	c.lastUsed = m.clock
+	c.msgs = msgs
+	m.conversations[contextID] = c
 	if len(m.conversations) > maxContexts {
 		m.evictOldest()
 	}

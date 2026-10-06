@@ -472,3 +472,29 @@ func TestHandOverFails(t *testing.T) {
 		t.Fatal("without a directory for the file it should fail")
 	}
 }
+
+func TestContextShowsPostprocessingDiagnostic(t *testing.T) {
+	s := clitest.Settings(t)
+	cfg := clitest.NodeConfig(s)
+	config.Save(s.Home, cfg)
+	var ctx *plugin.Context
+	hook := plugin.New("post", func(c *plugin.Context, _ struct{}) error {
+		plugin.Add(c, plugin.AnswerHook{Name: "post", After: func(context.Context, plugin.AnswerOutcome) error { return errors.New("storage failed") }})
+		return nil
+	})
+	app, _ := clitest.NewApp(t, s, "", spy(&ctx), hook)
+	bot, _ := cli.Service[*plugin.Assistant](app)
+	u := tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), ctx, bot)
+	reply, err := u.Ask(context.Background(), "id", "hi", nil, nil)
+	if err != nil || !strings.Contains(reply, "last=hi") {
+		t.Fatal(reply, err)
+	}
+	msgs, err := u.Contents("id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "plugin diagnostic" || last.Text != "post after failed: storage failed" {
+		t.Fatal(msgs)
+	}
+}

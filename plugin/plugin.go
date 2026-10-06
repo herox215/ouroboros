@@ -41,6 +41,8 @@
 //	Method      a JSON-RPC method for connected peers, run with Network.Call
 //	ChannelHandler  a channel to connected peers, opened with Network.Open
 //	PeerSource  hosts to look for nodes on
+//	ContextProvider  explicitly selected preparation of model context
+//	AnswerHook  before/after-answer lifecycle processing
 //
 // and offers services of its own with NewService: a plugin that provides an
 // LLM replaces the openai plugin.
