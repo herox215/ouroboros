@@ -206,8 +206,14 @@ func (u Updater) Rebuild(ctx context.Context) error {
 	if err := os.MkdirAll(stage, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.MkdirTemp(u.Dir, "build-")
-	if err != nil {
+	// The temporary directory has the same path at every rebuild: Go keeps
+	// the result of a test with the TMPDIR the test read, and with a new
+	// path every test would run again.
+	tmp := filepath.Join(u.Dir, "build")
+	if err := os.RemoveAll(tmp); err != nil {
+		return err
+	}
+	if err := os.Mkdir(tmp, 0o700); err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmp)

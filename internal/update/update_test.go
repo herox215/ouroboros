@@ -154,8 +154,31 @@ func TestRebuildInstallsTheWorkingTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectFile(t, exe, "v2")
-	if left, _ := filepath.Glob(filepath.Join(dir, "build-*")); len(left) != 0 {
-		t.Errorf("the temporary directory is left: %v", left)
+	if _, err := os.Stat(filepath.Join(dir, "build")); !os.IsNotExist(err) {
+		t.Errorf("the temporary directory is left: %v", err)
+	}
+}
+
+// The temporary directory has the same path at every rebuild, and is empty
+// at each: Go runs a test again when the TMPDIR it read is another.
+func TestRebuildKeepsThePathOfTheTemporaryDirectory(t *testing.T) {
+	sandboxed(t)
+	src, _ := updatetest.NewRepo(t, "v1")
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "stage", "seen")
+	updatetest.Tests(t, src, `test ! -e "$$TMPDIR/left" && touch "$$TMPDIR/left" && echo "$$TMPDIR" >> "`+seen+`"`)
+	u := update.Updater{Source: src, Dir: dir, Exe: filepath.Join(t.TempDir(), "ouro")}
+	for range 2 {
+		if err := u.Rebuild(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths := strings.Fields(string(got)); len(paths) != 2 || paths[0] != paths[1] {
+		t.Errorf("TMPDIR of two rebuilds = %q; want the same path twice", paths)
 	}
 }
 
