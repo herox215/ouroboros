@@ -51,11 +51,17 @@ func openSettings(t *testing.T, s Settings) (*Model, *fakeBackend) {
 	return m, b
 }
 
-// pick selects the row of section with label, and the action called name.
+// pick opens the category section and selects its row with label, and the
+// action called name.
 func pick(t *testing.T, m *Model, section, label, name string) {
 	t.Helper()
-	for i, r := range m.rows {
-		if r.section != section || r.label != label {
+	for i, s := range sections {
+		if s == section {
+			m.category, m.opened = i, true
+		}
+	}
+	for i, r := range m.shown() {
+		if r.label != label {
 			continue
 		}
 		m.settingsSel, m.choice = i, 0
@@ -88,14 +94,35 @@ func value(t *testing.T, m *Model, section, label string) row {
 	return row{}
 }
 
-// The settings screen shows the configuration by sections, and never a key.
+// The settings screen lists the categories, shows the configuration of the
+// one that is opened, and never a key.
 func TestSettingsShow(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"Settings", "The node", "alpha", "set, never shown", "Plugins", "↑↓ select · ←→ choose · enter do"} {
+	for _, want := range []string{
+		"│ Settings", "› The node", "the name, the endpoint, the API key, the model", "  The agents", "  Plugins",
+		"  Tools of your agent", "  Tools for peers", "what your agent may do when a peer asks it",
+		"  Protected paths", "the paths no tool for files touches", "↑↓ select · enter open · esc back",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the categories lack %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "set, never shown") || strings.Contains(view, "[") || strings.Index(view, "The node") > strings.Index(view, "The agents") {
+		t.Errorf("the categories, in their order, and no line of one:\n%s", view)
+	}
+	press(m, "enter")
+	view = ansi.Strip(m.View().Content)
+	for _, want := range []string{
+		"│ Settings › The node", "The endpoint, the key and the model are changed with the setup and /model.",
+		"› Name", "alpha", "set, never shown", "↑↓ select · ←→ choose · enter do · esc categories",
+	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("lacks %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "The agents") || strings.Contains(view, "Context provider") {
+		t.Errorf("a category shows its own lines alone:\n%s", view)
 	}
 	for _, tt := range []struct{ section, label, value, note string }{
 		{nodeSection, "Node ID", "abc123def456", "the fingerprint of the key of the node, which nothing here changes"},
@@ -118,11 +145,12 @@ func TestSettingsShow(t *testing.T) {
 			t.Errorf("%s %s: %q, %q", tt.section, tt.label, r.value, r.note)
 		}
 	}
-	if !strings.Contains(view, "│ Settings") || strings.Count(view, "[") != 1 {
+	if strings.Count(view, "[") != 1 {
 		t.Errorf("one line shows what can be done with it:\n%s", view)
 	}
-	if lines := strings.Split(view, "\n"); !strings.Contains(lines[4], "The node") {
-		t.Errorf("the first section follows the title:\n%s", view)
+	pick(t, m, pluginsSection, "tailscale", "turn on")
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "│ Settings › Plugins") || !strings.Contains(view, "runs until ouro starts anew") {
+		t.Errorf("the plugins:\n%s", view)
 	}
 	if r := value(t, m, peersSection, "get_config"); len(r.actions) != 0 {
 		t.Error("a tool for the owner alone can be allowed for peers")
@@ -242,7 +270,7 @@ func TestSettingsEdit(t *testing.T) {
 
 	b.changes = nil
 	press(m, "enter", "x", "esc")
-	if m.editing != nil || len(b.changes) != 0 || m.notice != "nothing changed" || m.screen != screenSettings {
+	if m.editing != nil || len(b.changes) != 0 || m.notice != "nothing changed" || m.screen != screenSettings || !m.opened {
 		t.Fatalf("kept: %+v, %q", b.changes, m.notice)
 	}
 
@@ -275,12 +303,46 @@ func TestSettingsEdit(t *testing.T) {
 	}
 }
 
-// The keys move between lines and between what can be done with one, and
-// stop at the ends; the setup and the model open from here.
+// The keys move between categories, between the lines of one and between
+// what can be done with a line, and stop at the ends; the setup and the model
+// open from here.
 func TestSettingsKeys(t *testing.T) {
 	m, b := openSettings(t, someSettings())
+	if press(m, "up"); m.category != 0 || m.opened {
+		t.Errorf("above the first category: %d", m.category)
+	}
+	if press(m, "down"); m.category != 1 {
+		t.Errorf("down: %d", m.category)
+	}
+	if press(m, "up"); m.category != 0 {
+		t.Errorf("up: %d", m.category)
+	}
+	for range len(sections) + 3 {
+		press(m, "down")
+	}
+	if m.category != len(sections)-1 {
+		t.Errorf("below the last category: %d", m.category)
+	}
+	m.settingsSel, m.choice = 2, 1
+	if press(m, "enter"); !m.opened || m.settingsSel != 0 || m.choice != 0 {
+		t.Errorf("opened %v at %d, choice %d", m.opened, m.settingsSel, m.choice)
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "│ Settings › Protected paths") || !strings.Contains(view, "› ~/.ssh") {
+		t.Errorf("the last category:\n%s", view)
+	}
+	if press(m, "esc"); m.opened || m.screen != screenSettings || m.category != len(sections)-1 {
+		t.Errorf("esc leaves the category: %v, %v, %d", m.opened, m.screen, m.category)
+	}
+
+	pick(t, m, nodeSection, "Name", "change")
 	if press(m, "up"); m.settingsSel != 0 {
 		t.Errorf("above the first: %d", m.settingsSel)
+	}
+	if press(m, "down"); m.settingsSel != 1 {
+		t.Errorf("down: %d", m.settingsSel)
+	}
+	if press(m, "up"); m.settingsSel != 0 {
+		t.Errorf("up: %d", m.settingsSel)
 	}
 	press(m, "left")
 	if press(m, "right"); m.choice != 0 {
@@ -289,8 +351,8 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.rows) + 3 {
 		press(m, "down")
 	}
-	if m.settingsSel != len(m.rows)-1 {
-		t.Errorf("below the last: %d", m.settingsSel)
+	if m.settingsSel != len(m.shown())-1 || len(m.shown()) != 5 {
+		t.Errorf("below the last: %d of %d", m.settingsSel, len(m.shown()))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
 	if press(m, "right"); m.choice != 1 {
@@ -319,7 +381,10 @@ func TestSettingsKeys(t *testing.T) {
 		t.Errorf("model: %v", m.screen)
 	}
 	press(m, "esc")
-	deliver(m, run(m, "/settings"))
+	m.category = 2
+	if deliver(m, run(m, "/settings")); m.opened || m.category != 0 {
+		t.Errorf("opened anew: %v, %d", m.opened, m.category)
+	}
 	pick(t, m, nodeSection, "Endpoint", "open /setup")
 	press(m, "enter") // the setup animates: its frames are not delivered
 	if b.setups != 1 || m.onboard == nil {
@@ -328,12 +393,15 @@ func TestSettingsKeys(t *testing.T) {
 
 	// Read anew with fewer lines, the selection stays on one that is there.
 	m, b = openSettings(t, someSettings())
-	pick(t, m, agentsSection, "Context provider", "compact")
-	m.settingsSel = len(m.rows) - 1
+	pick(t, m, protectedSection, "~/.ssh", "remove")
+	m.settingsSel, m.choice = len(m.shown())-1, 1
 	b.settings = Settings{Name: "alpha"}
 	deliver(m, m.loadSettings)
-	if m.settingsSel != len(m.rows)-1 || m.choice != 0 {
-		t.Errorf("after reading anew: %d of %d, choice %d", m.settingsSel, len(m.rows), m.choice)
+	if m.settingsSel != 1 || len(m.shown()) != 2 || m.choice != 0 {
+		t.Errorf("after reading anew: %d of %d, choice %d", m.settingsSel, len(m.shown()), m.choice)
+	}
+	if press(m, "esc"); m.screen != screenSettings || m.opened {
+		t.Errorf("esc in a category: %v", m.screen)
 	}
 	if press(m, "esc"); m.screen != screenChat {
 		t.Errorf("esc: %v", m.screen)
@@ -344,10 +412,15 @@ func TestSettingsKeys(t *testing.T) {
 // be read is said.
 func TestSettingsScrollAndFail(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
-	pick(t, m, protectedSection, "The default", "")
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 11})
+	m.category = len(sections) - 1
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "› The default") || strings.Contains(view, "The node") {
+	if !strings.Contains(view, "› Protected paths") || strings.Contains(view, "The node") {
+		t.Errorf("the categories scrolled:\n%s", view)
+	}
+	pick(t, m, protectedSection, "The default", "")
+	view = ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "› The default") || strings.Contains(view, "~/.ssh") {
 		t.Errorf("scrolled:\n%s", view)
 	}
 	pick(t, m, nodeSection, "Name", "change")
@@ -362,7 +435,7 @@ func TestSettingsScrollAndFail(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✗ config.json is broken") {
 		t.Errorf("failed:\n%s", view)
 	}
-	if cmd := press(m, "enter"); cmd != nil {
+	if cmd := press(m, "enter"); cmd != nil || m.opened {
 		t.Error("nothing to do did something")
 	}
 
@@ -371,6 +444,62 @@ func TestSettingsScrollAndFail(t *testing.T) {
 	m.openSettings()
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "reading the configuration") {
 		t.Errorf("reading:\n%s", view)
+	}
+}
+
+// The lines hold their place while the selection moves: every row has the
+// same lines, and the window follows the selection by the line, moving only
+// when it would leave it.
+func TestSettingsNoJump(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	pick(t, m, nodeSection, "Name", "change")
+	shown := func() string { return ansi.Strip(m.View().Content) }
+	where := func(what string) int {
+		t.Helper()
+		for i, l := range strings.Split(shown(), "\n") {
+			if strings.Contains(l, what) {
+				return i
+			}
+		}
+		t.Fatalf("%q is not shown:\n%s", what, shown())
+		return -1
+	}
+	if strings.Count(shown(), "[") != 1 {
+		t.Errorf("what can be done is shown on one line alone:\n%s", shown())
+	}
+	name, key := where("Name"), where("API key")
+	if press(m, "down"); where("Name") != name || where("API key") != key {
+		t.Errorf("the lines moved when the selection did:\n%s", shown())
+	}
+	if !strings.Contains(shown(), "what the node is called on the network") {
+		t.Errorf("the note of the row left behind is gone:\n%s", shown())
+	}
+	// To the last row, which the window follows to and stops at.
+	press(m, "down", "down")
+	if !strings.Contains(shown(), "› Model") {
+		t.Errorf("the selection is not on Model:\n%s", shown())
+	}
+	node, key := where("Node ID"), where("API key")
+	press(m, "down")
+	if where("Node ID") != node || where("API key") != key {
+		t.Errorf("the lines moved while the last row was selected:\n%s", shown())
+	}
+	if !strings.Contains(shown(), "the fingerprint of the key of the node") {
+		t.Errorf("the note of the row selected is cut off:\n%s", shown())
+	}
+	// Back to the categories starts at their first line.
+	if press(m, "esc"); m.settingsTop != 0 {
+		t.Errorf("the categories start at line %d", m.settingsTop)
+	}
+	for i, s := range sections {
+		if s == nodeSection {
+			m.category = i
+		}
+	}
+	press(m, "enter")
+	if m.settingsSel != 0 || m.settingsTop != 0 {
+		t.Errorf("a category opens at row %d, line %d", m.settingsSel, m.settingsTop)
 	}
 }
 

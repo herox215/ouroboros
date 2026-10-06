@@ -81,7 +81,8 @@ again unless it was already running before (`ouro start`).
 
 Everything the UI does is a **command**: you type it into the message input with a slash in front and send
 it with `enter`. A command runs in the UI and never goes to your agent, so only you run commands; a command
-the UI does not know stays in the input, to be corrected. While you type one, the footer lists those that fit.
+the UI does not know stays in the input, to be corrected. While you type one, a list above the input offers those that fit:
+`↑` `↓` select one, `tab` completes the input to it and `enter` runs it.
 A message that starts with a slash takes two: `//etc` sends `/etc`.
 
 | Command | What it does |
@@ -90,9 +91,9 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
-| `/settings` | the configuration in one place: the node, the agents, the plugins, the tools of your agent and of peers, the protected paths. `↑` `↓` select a line, `←` `→` what to do with it, `enter` does it, `esc` back; see [Settings](#settings) |
+| `/settings` | the configuration in one place, by categories: the node, the agents, the plugins, the tools of your agent and of peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
 | `/model` | the models the provider of the node offers, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on), `esc` back |
-| `/requests` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
+| `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
 | `/quit` | quit |
 | commands of plugins | open a screen (`esc` back) or run what the plugin added |
@@ -196,8 +197,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
-`history_sessions`) and, for you alone, two for the configuration (`get_config`, `propose_config`) and one
-that builds and installs its own source ([`rebuild`](#updates)). It uses them in **scripts**: the LLM is
+`history_sessions`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
+`withdraw_proposal`) and one that builds and installs its own source ([`rebuild`](#updates)). It uses them in **scripts**: the LLM is
 offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
 Which of them it may use depends on who it is talking to, and is set in `config.json`. This is what the
 setup writes:
@@ -385,7 +386,7 @@ answer in [`ouro.log`](#the-log) says what it cost.
 
 | Limit of a script | Value | Beyond it |
 |---|---|---|
-| time | 60 s | the script is stopped, and so are the tools it is waiting for; a tool that does not end is waited for 2 s longer and then left behind |
+| time | 120 s | the script is stopped, and so are the tools it is waiting for; a tool that does not end is waited for 2 s longer and then left behind |
 | calls of tools | 64 | the script is stopped at the next call |
 | size of the script | 64 KiB | it is not run |
 | size of the result | 16 KiB, 4 KiB once the results of the answer have more than 64 KiB | the start is handed on, and the value is kept in `returned` |
@@ -401,7 +402,7 @@ looks at the heap of the whole process every 5 ms and stops the script once the 
 256 MiB since the script started. That catches a script that keeps collecting data. It does not catch a
 single step that allocates more than that at once, like `"x".repeat(2 ** 30)`: the interpreter cannot be
 stopped inside a step, and the process may run out of memory. The same holds for the time: a regular
-expression that takes minutes to fail is one step. The script is then given up after 60 s and the answer goes
+expression that takes minutes to fail is one step. The script is then given up after 120 s and the answer goes
 on, but the step keeps a processor busy until it ends. As the heap is the one of the process, two scripts
 that run at the same time count against each other, and so does everything else the node allocates
 meanwhile. What a conversation keeps between its scripts counts for none of them: up to 16 conversations
@@ -457,18 +458,19 @@ Before the plugin ran, nothing was archived: conversations from before are not i
 `/settings` in the terminal UI shows the configuration of the node in one place, and changes it. It is the
 owner's alone, like every command of the UI: no agent and no peer reaches it.
 
-| Section | Shows | Changes |
+| Category | Shows | Changes |
 |---|---|---|
 | The node | name, endpoint, whether there is an API key (never which), model, the ID of the node | the name; the endpoint and the key in `/setup`, the model in `/model`, both opened from here |
 | The agents | the context provider and those this build has; whether `rebuild` may build without a sandbox, and whether there is one | both |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with its settings | all tools, each tool, its settings |
 | Tools for peers | `a2a`, the same; a tool for your agent alone is shown as such and cannot be allowed | the same |
-| Paths no tool for files touches | `protected`, or that the default holds | remove a path, add one, go back to the default |
+| Protected paths | `protected`, the paths no tool for files touches, or that the default holds | remove a path, add one, go back to the default |
 
-`↑` `↓` select a line, `←` `→` what to do with it, `enter` does it, `esc` goes back to the chat. A text, like
-the name, a path or the settings of a tool (a JSON object like `{"allow": ["~/share"]}`), is typed in a line
-below the list: `enter` saves it, `esc` keeps what was.
+It opens with the list of the categories: `↑` `↓` select one, `enter` opens it, `esc` goes back to the chat.
+In a category, `↑` `↓` select a line, `←` `→` what to do with it, `enter` does it, and `esc` goes back to the
+categories. A text, like the name, a path or the settings of a tool (a JSON object like
+`{"allow": ["~/share"]}`), is typed in a line below the list: `enter` saves it, `esc` keeps what was.
 
 - **Every change is checked before it is written**, the way the node checks its configuration when it starts:
   an unknown tool, a setting a tool does not take, a protected path that is none, a context provider this
@@ -519,10 +521,11 @@ lists what the provider of the node offers, and the one you pick holds from the 
 | Tool | Does |
 |---|---|
 | `get_config()` | returns the configuration as JSON: ID, name, model, endpoint and `tools`. The key of the node and the key of the API are not in it. What is not set shows with the default that holds (`h2a`, `a2a`, `protected`) |
-| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you |
+| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you, and the agent is told its id |
+| `withdraw_proposal(id?)` | takes back one of the agent's own proposals before you decided on it: with `id` the one it names, without an id it lists what waits, with their ids. Nothing is changed by it, and what you decided on is out of reach |
 
 **Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a
-proposal changes nothing: it waits among the requests in the terminal UI (`/requests`), where you see the field, what
+proposal changes nothing: it waits among the requests in the terminal UI (`/pending`), where you see the field, what
 it is **now** and what it would be **then**, and accept or reject it. Now and then come from the
 node: now is read from `config.json` when the list is shown, then is the value the node checked and would
 write. Only the line "your agent says" is the text of the agent.
@@ -659,10 +662,10 @@ trusted peers:
 
 1. Alice's agent wants to write to Bob (she asks it to, or uses `ouro ask`). Bob is not connected, so
    **nothing is sent**, not even a request: Bob is proposed to Alice, with his ID and key.
-2. In Alice's terminal UI `/requests` shows `bob · your agent wants to connect`. With accept she agrees, and only
+2. In Alice's terminal UI `/pending` shows `bob · your agent wants to connect`. With accept she agrees, and only
    then Bob gets a **connection request** (`contact/request`). It carries no message; Bob records it and
    answers `pending`, no LLM call happens. With reject the proposal is dropped and Bob never hears of it.
-3. In Bob's terminal UI `/requests` shows the request; he selects accept (or reject) and presses `enter`.
+3. In Bob's terminal UI `/pending` shows the request; he selects accept (or reject) and presses `enter`.
 4. Bob notifies Alice, both sides store each other as trusted and can chat. Until then Alice's agent is
    told that Bob has not decided, and what she wanted to say stays with her.
 
@@ -723,7 +726,7 @@ internal/kernel      plugin kernel: services, contributions, start order by decl
 internal/tui         terminal UI (Bubble Tea), with the splash and the setup
 internal/setup       the setup of the node: endpoint, key, model, name; the terminal and the UI both use it
 internal/node        the local node: Server runs it, Local controls the background one
-internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, get_config, propose_config as functions of its scripts; what the owner's agent does goes to the log
+internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, get_config, propose_config, withdraw_proposal as functions of its scripts; what the owner's agent does goes to the log
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them

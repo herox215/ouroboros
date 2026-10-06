@@ -188,7 +188,7 @@ func TestPluginCommand(t *testing.T) {
 	// /help lists it, with the screen.
 	run(m, "/help")
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"/new", "/requests", "/greetings  open Greetings", "/hail       hail everyone"} {
+	for _, want := range []string{"/new", "/pending", "/greetings  open Greetings", "/hail       hail everyone"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("help lacks %q:\n%s", want, view)
 		}
@@ -228,7 +228,7 @@ func TestCommandConflicts(t *testing.T) {
 	}
 	slashes := []plugin.Slash{
 		c.slash("greetings", "go"), // the command of a screen
-		c.slash("requests", "reload"),
+		c.slash("pending", "reload"),
 		c.slash("hail", "hail"),
 		c.slash("hail", "help"),
 		c.slash("", "nothing"),
@@ -247,7 +247,7 @@ func TestCommandConflicts(t *testing.T) {
 		`the screen "Spaced" lacks a command or what it does: left out`,
 		`the screen "Empty" lacks a command or what it does: left out`,
 		`/greetings is taken by the screen "Greetings": "go" is left out`,
-		`/requests is taken by the terminal UI: "reload" is left out`,
+		`/pending is taken by the terminal UI: "reload" is left out`,
 		`/hail is taken by "hail": "help" is left out`,
 		`"nothing" lacks a command or what it does: left out`,
 		`"idle" lacks a command or what it does: left out`,
@@ -271,8 +271,8 @@ func TestCommandConflicts(t *testing.T) {
 	if m.Update(run(m, "/stop")()); b.stopped != 1 || len(c.ran) != 0 {
 		t.Fatalf("/stop should stop the node: stopped %d, ran %v", b.stopped, c.ran)
 	}
-	if run(m, "/requests"); m.screen != screenRequests {
-		t.Fatal("/requests should open the connection requests")
+	if run(m, "/pending"); m.screen != screenRequests {
+		t.Fatal("/pending should open the connection requests")
 	}
 	press(m, "esc")
 	if run(m, "/hail")(); !slices.Equal(c.ran, []string{"hail"}) {

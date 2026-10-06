@@ -100,7 +100,7 @@ func TestBackendErrors(t *testing.T) {
 	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1"}}}
 	b.acceptErr = boom
 	m.Update(m.loadContacts())
-	run(m, "/requests")
+	run(m, "/pending")
 	m.Update(press(m, "enter")())
 	notice(t, m, "boom")
 }
@@ -162,7 +162,7 @@ func TestChatKeys(t *testing.T) {
 
 func TestRequestsScreen(t *testing.T) {
 	m, b := newModel(t)
-	run(m, "/requests")
+	run(m, "/pending")
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "No pending requests.") {
 		t.Fatalf("view:\n%s", view)
 	}

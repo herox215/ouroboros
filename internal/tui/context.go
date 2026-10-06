@@ -34,9 +34,8 @@ type contentsMsg struct {
 func (m *Model) openContext() tea.Cmd {
 	m.screen = screenContext
 	m.contents = viewport.New()
-	m.contents.SoftWrap = true
 	m.contents.KeyMap = viewport.KeyMap{} // the keys are handled explicitly
-	m.contents.SetContent(mutedStyle.Render("…"))
+	m.loaded = nil
 	m.sizeContents()
 	contextID := m.chat.contextID
 	return func() tea.Msg {
@@ -46,10 +45,13 @@ func (m *Model) openContext() tea.Cmd {
 }
 
 // sizeContents fits the viewport of the context screen into its box: the
-// border and padding, and the title with a blank line below it.
+// border and padding, and the title with a blank line below it. The context
+// is wrapped to the width here and not by the viewport, which would measure
+// all of it again on every step of scrolling.
 func (m *Model) sizeContents() {
 	m.contents.SetWidth(max(1, m.width-4))
 	m.contents.SetHeight(max(1, m.bodyHeight()-4))
+	m.renderContents()
 }
 
 // contentsLoaded shows the context that came in, unless the conversation
@@ -58,10 +60,22 @@ func (m *Model) contentsLoaded(msg contentsMsg) {
 	if msg.contextID != m.chat.contextID {
 		return
 	}
+	m.loaded = &msg
+	m.renderContents()
+}
+
+// renderContents fills the viewport of the context screen with the context
+// that came in, wrapped to its width.
+func (m *Model) renderContents() {
+	msg := m.loaded
+	if msg == nil {
+		m.contents.SetContent(mutedStyle.Render("…"))
+		return
+	}
 	body := lipgloss.NewStyle().Width(m.contents.Width()).PaddingLeft(2)
 	var blocks []string
 	if msg.err != nil {
-		blocks = append(blocks, errStyle.Render("✗ "+msg.err.Error()))
+		blocks = append(blocks, lipgloss.Wrap(errStyle.Render("✗ "+msg.err.Error()), m.contents.Width(), ""))
 	}
 	if len(msg.msgs) == 0 {
 		blocks = append(blocks, mutedStyle.Render("Nothing yet."))

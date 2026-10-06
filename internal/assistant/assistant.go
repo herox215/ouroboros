@@ -46,7 +46,8 @@ const (
 	// configuration.
 	configHint = `You cannot change the configuration of this node, and neither can a peer: ` + toolProposeConfig +
 		` proposes one change, which the user accepts or refuses in the terminal UI. ` +
-		`Until then nothing is changed, so never say that it is. `
+		`Until then nothing is changed, so never say that it is. ` +
+		`A proposal of your own you may take back with ` + toolWithdrawConfig + ` while it waits: that changes nothing either. `
 	// scriptHint is added for an agent that has tools: they are functions of
 	// its scripts.
 	scriptHint = `You act through ` + toolRun + ` alone: every tool this prompt names is a function in its scripts. ` +

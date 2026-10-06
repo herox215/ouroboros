@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
@@ -14,10 +15,12 @@ import (
 )
 
 // The tools with which the agent of the owner sees the configuration of the
-// node and proposes changes of it. They are for the owner alone.
+// node, proposes changes of it and takes a proposal of its own back. They
+// are for the owner alone.
 const (
-	toolGetConfig     = "get_config"
-	toolProposeConfig = "propose_config"
+	toolGetConfig      = "get_config"
+	toolProposeConfig  = "propose_config"
+	toolWithdrawConfig = "withdraw_proposal"
 )
 
 // node is the node whose configuration the agent of its owner sees and
@@ -27,10 +30,11 @@ type node struct {
 	proposals *proposal.Store
 }
 
-// WithConfig returns the blueprint with the tools get_config and
-// propose_config for the agent of the owner: config reads the configuration
-// of the node, and what the agent proposes waits in proposals for the owner
-// to decide. The agent changes nothing by itself.
+// WithConfig returns the blueprint with the tools get_config,
+// propose_config and withdraw_proposal for the agent of the owner: config
+// reads the configuration of the node, and what the agent proposes waits in
+// proposals for the owner to decide. The agent changes nothing by itself,
+// and a proposal it takes back changes nothing either.
 //
 // Neither is to be had from the blueprint again: a plugin that gets the
 // blueprint gets no way to the key of the node or to the proposals.
@@ -44,7 +48,7 @@ func (b Builder) configTools() []agent.Tool {
 	if b.node == nil {
 		return nil
 	}
-	return []agent.Tool{b.getConfig(), b.proposeConfig()}
+	return []agent.Tool{b.getConfig(), b.proposeConfig(), b.withdrawProposal()}
 }
 
 // ownerOnly refuses a tool for a conversation of a peer. No list hands these
@@ -103,16 +107,80 @@ func (b Builder) proposeConfig() agent.Tool {
 			p, err := b.propose(args)
 			if errors.Is(err, proposal.ErrFull) {
 				return "", fmt.Errorf("%d proposals are waiting for your owner already, and no more are kept: "+
-					"they decide on them among the requests in the terminal UI (/requests)", proposal.Max)
+					"they decide on them among the requests in the terminal UI (/pending)", proposal.Max)
 			}
 			if err != nil {
 				return "", fmt.Errorf("nothing was proposed: %w", err)
 			}
 			return fmt.Sprintf("Proposed, and nothing is changed yet: %s is to become %s instead of %s. "+
-				"The proposal waits for your owner among the requests in the terminal UI (the command /requests), where they accept or refuse it. "+
-				"Tell them that, and do not say that the change is made.", p.Path, p.Value, p.Before), nil
+				"The proposal waits for your owner among the requests in the terminal UI (the command /pending), where they accept or refuse it. "+
+				"Tell them that, and do not say that the change is made. "+
+				"Its id is %s: with %s you can take it back yourself while it waits.", p.Path, p.Value, p.Before, p.ID, toolWithdrawConfig), nil
 		},
 	}
+}
+
+type withdrawArgs struct {
+	ID string `json:"id"`
+}
+
+// withdrawProposal takes back a proposal of the agent before the owner
+// decided on it. Nothing is changed by it: the agent takes back its own
+// question, and the owner has one decision less to make.
+func (b Builder) withdrawProposal() agent.Tool {
+	return agent.Tool{
+		Name: toolWithdrawConfig,
+		Description: "Take back one change of the configuration that you proposed and that still waits for your owner: " +
+			"it is dropped, and nothing is changed. Give the id that " + toolProposeConfig + " answered with. " +
+			"Without an id this lists the proposals of yours that wait, with their ids. " +
+			"What your owner already decided on is out of reach: it is applied, or it is gone.",
+		Schema: `{"type":"object","properties":{` +
+			`"id":{"type":"string","description":"the id of the proposal to take back; leave it out to see what waits"}}}`,
+		OwnerOnly: true,
+		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			if err := ownerOnly(ctx, toolWithdrawConfig); err != nil {
+				return "", err
+			}
+			var args withdrawArgs
+			if len(raw) > 0 && json.Unmarshal(raw, &args) != nil {
+				return "", errors.New(toolWithdrawConfig + ` takes an "id", or nothing at all to list what waits`)
+			}
+			if args.ID == "" {
+				return b.waitingProposals()
+			}
+			p, err := b.node.proposals.Refuse(args.ID)
+			switch {
+			case errors.Is(err, proposal.ErrGone):
+				return "", fmt.Errorf("no proposal waits with the id %q: %s without an id lists what waits", args.ID, toolWithdrawConfig)
+			case err != nil:
+				return "", fmt.Errorf("nothing was taken back: %w", err)
+			}
+			return fmt.Sprintf("Taken back, and nothing is changed: the proposal for %s no longer waits for your owner, "+
+				"and no one decides on it any more. Tell them that you took it back.", p.Path), nil
+		},
+	}
+}
+
+// waitingProposals lists the proposals that wait for the owner, with their
+// ids, so that the agent can take one of them back.
+func (b Builder) waitingProposals() (string, error) {
+	waiting, err := b.node.proposals.List()
+	if err != nil {
+		return "", err
+	}
+	if len(waiting) == 0 {
+		return "No proposal waits for your owner: there is nothing of yours to take back.", nil
+	}
+	lines := make([]string, len(waiting))
+	for i, p := range waiting {
+		line := fmt.Sprintf("%s: %s is to become %s instead of %s", p.ID, p.Path, p.Value, p.Before)
+		if p.Reason != "" {
+			line += " (" + p.Reason + ")"
+		}
+		lines[i] = line
+	}
+	return fmt.Sprintf("%d of your proposals wait for your owner:\n%s\nTake one back with %s, giving its id.",
+		len(waiting), strings.Join(lines, "\n"), toolWithdrawConfig), nil
 }
 
 // propose records the change args asks for, if the node could run with it:

@@ -12,10 +12,16 @@ import (
 )
 
 // The settings screen is what the command /settings opens: the configuration
-// of the node in one place, by sections, each thing on a line of its own with
-// what can be done with it. ↑ ↓ select a line, ← → what to do with it, enter
-// does it, and esc goes back to the chat. A text, like the name, is typed into
-// a line below the list: enter saves it, esc keeps what was.
+// of the node in one place, by categories. It starts with the list of them:
+// ↑ ↓ select one, enter opens it, and esc goes back to the chat. A category
+// shows each of its things on a line of its own with what can be done with it:
+// ↑ ↓ select a line, ← → what to do with it, enter does it, and esc goes back
+// to the categories. A text, like the name, is typed into a line below the
+// list: enter saves it, esc keeps what was.
+//
+// Every row takes the same lines, what can be done with it included, and the
+// window follows the selection by the line: what is read stands still while
+// the selection moves, and only what leaves the window moves it.
 //
 // Every change is saved at once, after the node checked it, and the footer
 // says from when it holds. What needs ouro to start anew says so on its line.
@@ -43,7 +49,7 @@ type changedMsg struct {
 
 // row is a line of the settings screen.
 type row struct {
-	section string // the heading it is under
+	section string // the category it is in
 	label   string
 	value   string
 	note    string // what it means, muted below it
@@ -66,7 +72,8 @@ type edit struct {
 // openSettings opens the settings screen.
 func (m *Model) openSettings() tea.Cmd {
 	m.screen = screenSettings
-	m.settingsSel, m.choice = 0, 0
+	m.category, m.opened = 0, false
+	m.settingsSel, m.choice, m.settingsTop = 0, 0, 0
 	m.editing = nil
 	return m.loadSettings
 }
@@ -83,14 +90,25 @@ func (m *Model) settingsLoaded(msg settingsMsg) {
 	if msg.err == nil {
 		m.rows = rows(msg.settings)
 	}
-	m.settingsSel = min(m.settingsSel, max(len(m.rows)-1, 0))
+	m.settingsSel = min(m.settingsSel, max(len(m.shown())-1, 0))
 	m.choice = min(m.choice, max(len(m.selectedRow().actions)-1, 0))
+}
+
+// shown are the rows of the category selected.
+func (m *Model) shown() []row {
+	var out []row
+	for _, r := range m.rows {
+		if r.section == sections[m.category] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // selectedRow is the row that is selected, an empty one if there is none.
 func (m *Model) selectedRow() row {
-	if m.settingsSel < len(m.rows) {
-		return m.rows[m.settingsSel]
+	if shown := m.shown(); m.settingsSel < len(shown) {
+		return shown[m.settingsSel]
 	}
 	return row{}
 }
@@ -140,13 +158,28 @@ func (m *Model) handleSettingsKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.editInput, cmd = m.editInput.Update(msg)
 		return cmd
 	}
+	if !m.opened {
+		switch msg.String() {
+		case "esc":
+			m.screen = screenChat
+		case "up", "k":
+			m.category = max(0, m.category-1)
+		case "down", "j":
+			m.category = min(len(sections)-1, m.category+1)
+		case "enter":
+			if len(m.rows) > 0 {
+				m.opened, m.settingsSel, m.choice, m.settingsTop = true, 0, 0, 0
+			}
+		}
+		return nil
+	}
 	switch msg.String() {
 	case "esc":
-		m.screen = screenChat
+		m.opened, m.settingsTop = false, 0
 	case "up", "k":
 		m.settingsSel, m.choice = max(0, m.settingsSel-1), 0
 	case "down", "j":
-		m.settingsSel, m.choice = min(max(len(m.rows)-1, 0), m.settingsSel+1), 0
+		m.settingsSel, m.choice = min(max(len(m.shown())-1, 0), m.settingsSel+1), 0
 	case "left", "h":
 		m.choice = max(0, m.choice-1)
 	case "right", "l":
@@ -159,17 +192,30 @@ func (m *Model) handleSettingsKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// The headings of the settings screen, and what they say of the lines below.
+// The categories of the settings screen.
 const (
 	nodeSection      = "The node"
 	agentsSection    = "The agents"
 	pluginsSection   = "Plugins"
 	ownerSection     = "Tools of your agent"
 	peersSection     = "Tools for peers"
-	protectedSection = "Paths no tool for files touches"
+	protectedSection = "Protected paths"
 )
 
-// about is what a heading says of its lines.
+// sections are the categories in the order the settings screen lists them.
+var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection, peersSection, protectedSection}
+
+// contents is what the list of categories says is in each.
+var contents = map[string]string{
+	nodeSection:      "the name, the endpoint, the API key, the model",
+	agentsSection:    "the context provider, rebuild without a sandbox",
+	pluginsSection:   "which plugins are turned on",
+	ownerSection:     "what your agent may do when you ask it",
+	peersSection:     "what your agent may do when a peer asks it",
+	protectedSection: "the paths no tool for files touches",
+}
+
+// about is what an open category says of its lines.
 var about = map[string]string{
 	nodeSection:      "The endpoint, the key and the model are changed with the setup and /model.",
 	agentsSection:    "A change holds from the next message, for you and for peers.",
@@ -349,53 +395,75 @@ func firstSentence(text string) string {
 	return text
 }
 
-// settingsView shows the lines of the settings screen around the one
-// selected, with what can be done with it, and the text that is typed.
+// settingsView shows the list of categories, or the lines of the one that
+// is open around the one selected, with what can be done with it, and the
+// text that is typed. It moves the window and keeps it (settingsTop), which
+// the key handler cannot: only here is known how many lines a row takes.
 func (m *Model) settingsView() string {
 	w, h := m.width, m.bodyHeight()
 	head := []string{boldStyle.Render("Settings"), ""}
 	var lines []string
-	at := 0 // the line of the row selected
-	section := ""
-	labelWidth := 0
-	for _, r := range m.rows {
-		labelWidth = max(labelWidth, ansi.StringWidth(r.label))
-	}
-	labelWidth = min(labelWidth, 28)
+	at, height := 0, 1 // where what is selected is, and how many lines it takes
 	inner := max(10, w-4)
+	selected := lipgloss.NewStyle().Foreground(accent)
 	switch {
 	case m.settingsErr != nil:
 		lines = append(lines, errStyle.Render("✗ "+m.settingsErr.Error()))
 	case len(m.rows) == 0:
 		lines = append(lines, m.spinner.View()+mutedStyle.Render(" reading the configuration…"))
-	}
-	for i, r := range m.rows {
-		if r.section != section {
-			section = r.section
-			if len(lines) > 0 {
-				lines = append(lines, "")
+	case !m.opened:
+		nameWidth := 0
+		for _, s := range sections {
+			nameWidth = max(nameWidth, ansi.StringWidth(s))
+		}
+		for i, s := range sections {
+			marker, name := "  ", lipgloss.NewStyle().Width(nameWidth+2).Render(s)
+			if i == m.category {
+				at = len(lines)
+				marker, name = selected.Render("› "), selected.Width(nameWidth+2).Render(s)
 			}
-			lines = append(lines, boldStyle.Render(section))
-			lines = append(lines, wrapped(about[section], "", inner, mutedStyle)...)
+			lines = append(lines, ansi.Truncate(marker+name+mutedStyle.Render(contents[s]), inner, "…"))
 		}
-		marker, label := "  ", lipgloss.NewStyle().Width(labelWidth+2).Render(ansi.Truncate(r.label, labelWidth, "…"))
-		if i == m.settingsSel {
-			at = len(lines)
-			marker = lipgloss.NewStyle().Foreground(accent).Render("› ")
-			label = lipgloss.NewStyle().Foreground(accent).Width(labelWidth + 2).Render(ansi.Truncate(r.label, labelWidth, "…"))
+	default:
+		section := sections[m.category]
+		head = []string{boldStyle.Render("Settings") + mutedStyle.Render(" › ") + boldStyle.Render(section)}
+		head = append(append(head, wrapped(about[section], "", inner, mutedStyle)...), "")
+		shown := m.shown()
+		labelWidth := 0
+		for _, r := range shown {
+			labelWidth = max(labelWidth, ansi.StringWidth(r.label))
 		}
-		lines = append(lines, ansi.Truncate(marker+label+r.value, inner, "…"))
-		style := mutedStyle
-		if r.warn {
-			style = lipgloss.NewStyle().Foreground(warn)
-		}
-		lines = append(lines, wrapped(r.note, "    ", inner, style)...)
-		if i == m.settingsSel && len(r.actions) > 0 {
-			names := make([]string, len(r.actions))
-			for j, a := range r.actions {
-				names[j] = a.name
+		labelWidth = min(labelWidth, 28)
+		for i, r := range shown {
+			if i == m.settingsSel {
+				at = len(lines)
 			}
-			lines = append(lines, "    "+choices(names, m.choice))
+			marker, label := "  ", lipgloss.NewStyle().Width(labelWidth+2).Render(ansi.Truncate(r.label, labelWidth, "…"))
+			if i == m.settingsSel {
+				marker = selected.Render("› ")
+				label = selected.Width(labelWidth + 2).Render(ansi.Truncate(r.label, labelWidth, "…"))
+			}
+			lines = append(lines, ansi.Truncate(marker+label+r.value, inner, "…"))
+			style := mutedStyle
+			if r.warn {
+				style = lipgloss.NewStyle().Foreground(warn)
+			}
+			lines = append(lines, wrapped(r.note, "    ", inner, style)...)
+			// What can be done with a line holds a line of its own on every
+			// row, empty on those not selected: the rows below it stay where
+			// they are while the selection moves.
+			doing := ""
+			if i == m.settingsSel {
+				names := make([]string, len(r.actions))
+				for j, a := range r.actions {
+					names[j] = a.name
+				}
+				if len(names) > 0 {
+					doing = choices(names, m.choice)
+				}
+				height = len(lines) + 1 - at
+			}
+			lines = append(lines, "    "+doing)
 		}
 	}
 	room := max(1, h-2-len(head)) // the border
@@ -404,8 +472,15 @@ func (m *Model) settingsView() string {
 		bottom = []string{"", boldStyle.Render(m.editing.label) + mutedStyle.Render("  enter saves · esc keeps what was"), m.editInput.View()}
 		room = max(1, room-len(bottom))
 	}
-	first := max(0, min(at-room/3, len(lines)-room))
-	lines = lines[first:min(len(lines), first+room)]
+	// The window follows what is selected by the line and moves only when
+	// it would leave it, so that what is read stands still while selecting.
+	top := m.settingsTop
+	if top > at || top+room < at+height {
+		top = at
+	}
+	top = max(0, min(top, max(0, len(lines)-room)))
+	m.settingsTop = top
+	lines = lines[top:min(len(lines), top+room)]
 	all := append(append(head, lines...), bottom...)
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(all, "\n"))
 }

@@ -447,9 +447,9 @@ func TestConnectionRequests(t *testing.T) {
 		t.Fatalf("header should show the pending count:\n%s", view)
 	}
 
-	run(m, "/requests")
+	run(m, "/pending")
 	if m.screen != screenRequests || m.input.Value() != "" {
-		t.Fatal("/requests should open the requests screen")
+		t.Fatal("/pending should open the requests screen")
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "gamma") || !strings.Contains(view, "wants to chat") || !strings.Contains(view, "[accept]  reject") {
 		t.Fatalf("requests view:\n%s", view)
@@ -474,7 +474,7 @@ func TestRejectRequest(t *testing.T) {
 	m, b := newModel(t)
 	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
 	m.Update(m.loadContacts())
-	run(m, "/requests")
+	run(m, "/pending")
 	press(m, "right")
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, " accept  [reject]") {
 		t.Fatalf("reject should be selected:\n%s", view)
@@ -635,7 +635,7 @@ func TestQuitCancelsThePendingAnswer(t *testing.T) {
 	for name, quit := range map[string]func(*Model) tea.Cmd{
 		"/quit":                func(m *Model) tea.Cmd { return run(m, "/quit") },
 		"ctrl+c":               func(m *Model) tea.Cmd { _, cmd := m.Update(ctrlC); return cmd },
-		"ctrl+c on requests":   func(m *Model) tea.Cmd { run(m, "/requests"); _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on requests":   func(m *Model) tea.Cmd { run(m, "/pending"); _, cmd := m.Update(ctrlC); return cmd },
 		"ctrl+c on the help":   func(m *Model) tea.Cmd { run(m, "/help"); _, cmd := m.Update(ctrlC); return cmd },
 		"ctrl+c on the splash": func(m *Model) tea.Cmd { m.showSplash = true; _, cmd := m.Update(ctrlC); return cmd },
 	} {
@@ -665,7 +665,7 @@ func TestQuitCancelsRequestDecisions(t *testing.T) {
 		m, b := newModel(t)
 		b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
 		m.Update(m.loadContacts())
-		run(m, "/requests")
+		run(m, "/pending")
 		press(m, key, "enter")()
 		if b.decided == nil || b.decided.Err() != nil {
 			t.Fatalf("%s: a decision should run with a live context", key)
@@ -750,7 +750,7 @@ func TestDecisionThatIsNotSaved(t *testing.T) {
 		b.acceptErr = fmt.Errorf("%w: open contacts.json.lock: permission denied", plugin.ErrNotSaved)
 		b.rejectErr = b.acceptErr
 		m.Update(m.loadContacts())
-		run(m, "/requests")
+		run(m, "/pending")
 
 		_, refresh := m.Update(press(m, key, "enter")())
 		if m.notice != want || !m.noticeErr {
@@ -787,7 +787,7 @@ func TestProposedConnection(t *testing.T) {
 		{PublicKey: "pk2", Name: "gamma"},
 	}}
 	m.Update(m.loadContacts())
-	run(m, "/requests")
+	run(m, "/pending")
 	view := m.View().Content
 	if !strings.Contains(view, "your agent wants to connect (0123456789…)") || strings.Count(view, "wants to chat") != 1 {
 		t.Fatalf("requests view:\n%s", view)
@@ -832,7 +832,7 @@ func TestProposals(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✉ 3") {
 		t.Fatalf("the header should count requests and proposals:\n%s", view)
 	}
-	run(m, "/requests")
+	run(m, "/pending")
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
 		"› gamma", "Changes of the configuration your agent proposes",
@@ -906,7 +906,7 @@ func TestProposals(t *testing.T) {
 	// With nothing waiting there is nothing to decide.
 	b.trust = Contacts{}
 	m.Update(m.loadContacts())
-	run(m, "/requests")
+	run(m, "/pending")
 	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Changes of the configuration") || strings.Contains(view, "[accept]") {
 		t.Fatalf("nothing is proposed:\n%s", view)
 	}
@@ -939,5 +939,58 @@ func TestRestartGoesOnInAnotherUI(t *testing.T) {
 	}
 	if view := ansi.Strip(other.View().Content); !strings.Contains(view, "built and installed") {
 		t.Fatalf("the resumed chat should be shown:\n%s", view)
+	}
+}
+
+// What is pending is said in a line below the footer, with the command that
+// decides on it, until it is decided: on every screen but the one that lists
+// it, and within the height of the window.
+func TestPendingLine(t *testing.T) {
+	m, b := newModel(t)
+	last := func() string {
+		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+		if len(lines) != 30 {
+			t.Fatalf("%d lines in a window of 30", len(lines))
+		}
+		return strings.TrimRight(lines[len(lines)-1], " ")
+	}
+	if line := last(); strings.Contains(line, "pending") {
+		t.Fatalf("nothing is pending: %q", line)
+	}
+	height := m.history.Height()
+
+	b.trust = Contacts{
+		Incoming:  []plugin.Request{{PublicKey: "pk1", Name: "gamma"}, {PublicKey: "pk2", Name: "bob", Proposed: true}},
+		Proposals: []plugin.Proposal{{ID: "1", Field: "tools.a2a"}},
+	}
+	m.Update(m.loadContacts())
+	// The window is too narrow for all of it: the end is cut off, not the command.
+	want := " ● 3 pending · type /pending to decide · gamma wants to chat, your agent wants to connect to bob, "
+	if line := last(); !strings.HasPrefix(line, want) || !strings.HasSuffix(line, "…") {
+		t.Fatalf("pending line %q", line)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	if line := last(); line != want+"your agent proposes to change tools.a2a" {
+		t.Fatalf("pending line %q", line)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if m.history.Height() != height-1 {
+		t.Fatalf("the history is %d high, was %d", m.history.Height(), height)
+	}
+
+	// Seen is not decided: the line is back after the screen.
+	run(m, "/pending")
+	if line := last(); strings.Contains(line, "pending") {
+		t.Fatalf("the screen lists what is pending itself: %q", line)
+	}
+	press(m, "esc")
+	if line := last(); !strings.Contains(line, "3 pending") {
+		t.Fatalf("pending line %q", line)
+	}
+
+	b.trust = Contacts{}
+	m.Update(m.loadContacts())
+	if line := last(); strings.Contains(line, "pending") || m.history.Height() != height {
+		t.Fatalf("nothing is pending: %q, history %d high", line, m.history.Height())
 	}
 }

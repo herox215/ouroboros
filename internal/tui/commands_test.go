@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,7 +13,6 @@ import (
 func TestCommands(t *testing.T) {
 	m, b := newModel(t)
 	for line, want := range map[string]string{
-		"/":          "type a command after the slash: /help lists them",
 		"/ ":         "type a command after the slash: /help lists them",
 		"/nwe":       "unknown command /nwe: /help lists them",
 		"/new chat":  "/new takes no arguments",
@@ -39,25 +39,83 @@ func TestCommands(t *testing.T) {
 	}
 }
 
-// While a command is typed, the footer offers those that fit.
+// suggested are the lines of the list of suggestions in the view, without
+// colors and with one space between the words.
+func suggested(m *Model) []string {
+	var lines []string
+	for _, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if l = strings.Join(strings.Fields(l), " "); strings.HasPrefix(l, "/") || strings.HasPrefix(l, "› /") {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+// While a command is typed, a list above the input offers those that fit:
+// up and down select one, tab completes the input to it and enter runs it.
 func TestCommandSuggestions(t *testing.T) {
 	m, _ := newModel(t)
-	if help := footer(m); !strings.Contains(help, "/help commands") {
-		t.Fatalf("footer %q", help)
+	height := len(strings.Split(m.View().Content, "\n"))
+	if help := footer(m); !strings.Contains(help, "/help commands") || len(suggested(m)) != 0 {
+		t.Fatalf("footer %q, suggested %q", help, suggested(m))
 	}
 	press(m, "/", "s")
-	if help := strings.TrimSpace(footer(m)); help != "/start start the node · /stop stop the node · /setup set up the node · /settings the configuration" {
+	want := []string{"› /start start the node", "/stop stop the node", "/setup set up the node", "/settings the configuration"}
+	if got := suggested(m); !slices.Equal(got, want) {
+		t.Fatalf("suggested %q", got)
+	}
+	if help := strings.TrimSpace(footer(m)); help != "↑↓ select · tab complete · enter run · ctrl+c quit" {
 		t.Fatalf("footer %q", help)
 	}
-	press(m, "t", "o")
-	if help := strings.TrimSpace(footer(m)); help != "/stop stop the node" {
-		t.Fatalf("footer %q", help)
+	// The list takes its rows from the conversation, not from the window.
+	if got := len(strings.Split(m.View().Content, "\n")); got != height {
+		t.Fatalf("the view is %d lines high, not %d", got, height)
 	}
+
+	// Down and up select, around the ends of the list.
+	if press(m, "down"); suggested(m)[1] != "› /stop stop the node" {
+		t.Fatalf("suggested %q", suggested(m))
+	}
+	if press(m, "up", "up"); suggested(m)[3] != "› /settings the configuration" {
+		t.Fatalf("suggested %q", suggested(m))
+	}
+	if press(m, "down"); suggested(m)[0] != want[0] {
+		t.Fatalf("suggested %q", suggested(m))
+	}
+
+	// Typing on narrows the list and selects its first command again.
+	press(m, "down", "down", "e")
+	if got := suggested(m); !slices.Equal(got, []string{"› /setup set up the node", "/settings the configuration"}) {
+		t.Fatalf("suggested %q", got)
+	}
+
+	// Tab completes the input to the command selected.
+	if press(m, "down", "tab"); m.input.Value() != "/settings" || !slices.Equal(suggested(m), []string{"› /settings the configuration"}) {
+		t.Fatalf("input %q, suggested %q", m.input.Value(), suggested(m))
+	}
+
+	// Enter runs the command selected, however little of it is typed.
+	m.input.SetValue("/he")
+	if press(m, "enter"); m.screen != screenHelp || m.input.Value() != "" {
+		t.Fatalf("screen %v, input %q", m.screen, m.input.Value())
+	}
+	press(m, "esc")
+
+	// More commands than the list has rows: it scrolls to the one selected.
+	m.input.SetValue("/")
+	if got := suggested(m); len(got) != maxSuggestions || got[0] != "› /new start a new conversation" {
+		t.Fatalf("suggested %q", got)
+	}
+	press(m, "up")
+	if got := suggested(m); len(got) != maxSuggestions || !strings.HasPrefix(got[maxSuggestions-1], "› /quit") {
+		t.Fatalf("suggested %q", got)
+	}
+
 	// Once the name is complete, or for a message, there is nothing to offer.
 	for _, text := range []string{"/stop now", "/x", "//", "hello"} {
 		m.input.SetValue(text)
-		if help := footer(m); !strings.Contains(help, "/help commands") {
-			t.Fatalf("%q: footer %q", text, help)
+		if help := footer(m); !strings.Contains(help, "/help commands") || len(suggested(m)) != 0 {
+			t.Fatalf("%q: footer %q, suggested %q", text, help, suggested(m))
 		}
 	}
 }

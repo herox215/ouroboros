@@ -134,7 +134,7 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("settings %+v", s)
 	}
 	owner, peers := s.Tools[plugin.ForOwner], s.Tools[plugin.ForPeers]
-	if !owner.All || owner.Unset || len(owner.Tools) != 4 {
+	if !owner.All || owner.Unset || len(owner.Tools) != 5 {
 		t.Fatalf("owner %+v", owner)
 	}
 	if read := owner.Tools[0]; read.Name != "read" || !read.Allowed || !read.Listed || !read.Configurable || read.Settings != "" || read.Description != "Read a file. Really." {
@@ -254,7 +254,7 @@ func TestChange(t *testing.T) {
 
 	// The tools of the owner: all, and then all but read.
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read"})
-	if got := entries(plugin.ForOwner); got != `["list_peers","get_config","propose_config"]` {
+	if got := entries(plugin.ForOwner); got != `["list_peers","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all but read: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
@@ -270,13 +270,13 @@ func TestChange(t *testing.T) {
 		t.Errorf("without settings under *: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all named: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools}) // off already
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"allow":["~/y"]}`})
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: "{}"})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("settings taken away: %s", got)
 	}
 

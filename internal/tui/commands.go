@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // A command is what the owner types into the message input with a slash in
@@ -26,7 +27,7 @@ var own = []command{
 	{"model", "choose the model of the provider", (*Model).openModel},
 	{"settings", "the configuration", (*Model).openSettings},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
-	{"requests", "decide on connection requests and proposals", (*Model).openRequests},
+	{"pending", "decide on what is pending: connection requests and proposals", (*Model).openRequests},
 	{"help", "list the commands", func(m *Model) tea.Cmd { m.screen = screenHelp; return nil }},
 	{"quit", "quit (ctrl+c does too)", (*Model).leave},
 }
@@ -83,6 +84,72 @@ func (m *Model) matching(text string) []command {
 		}
 	}
 	return found
+}
+
+// maxSuggestions is how many of the commands that fit are listed at once; the
+// list scrolls to the one selected.
+const maxSuggestions = 8
+
+// suggestions are the commands the list above the input offers while one is
+// typed, and which of them is selected.
+func (m *Model) suggestions() ([]command, int) {
+	found := m.matching(m.input.Value())
+	if m.suggest >= len(found) {
+		m.suggest = 0
+	}
+	return found, m.suggest
+}
+
+// handleSuggestionKey handles the keys of the list of suggestions: up and
+// down select a command, tab completes the input to it, and enter runs it.
+// It reports whether the key was one of them.
+func (m *Model) handleSuggestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	found, selected := m.suggestions()
+	if len(found) == 0 {
+		return nil, false
+	}
+	switch msg.String() {
+	case "up":
+		m.suggest = (selected + len(found) - 1) % len(found)
+	case "down":
+		m.suggest = (selected + 1) % len(found)
+	case "tab":
+		m.input.SetValue("/" + found[selected].name)
+		m.suggest = 0
+	case "enter":
+		m.input.Reset()
+		m.suggest = 0
+		return found[selected].run(m), true
+	default:
+		return nil, false
+	}
+	return nil, true
+}
+
+// suggestionLines is the list of suggestions, a command a line, the one
+// selected marked. It takes at most rows lines and shows those around the
+// one selected.
+func (m *Model) suggestionLines(rows int) []string {
+	found, selected := m.suggestions()
+	rows = min(rows, maxSuggestions, len(found))
+	if rows <= 0 {
+		return nil
+	}
+	top := max(0, selected-rows+1)
+	width := 0
+	for _, c := range found {
+		width = max(width, len(c.name))
+	}
+	lines := make([]string, rows)
+	for i := range lines {
+		c := found[top+i]
+		mark, name := "  ", lipgloss.NewStyle().Foreground(accent)
+		if top+i == selected {
+			mark, name = boldStyle.Foreground(accent).Render("› "), boldStyle.Foreground(accent)
+		}
+		lines[i] = ansi.Truncate("  "+mark+name.Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help), m.width, "…")
+	}
+	return lines
 }
 
 func (m *Model) start() tea.Cmd {

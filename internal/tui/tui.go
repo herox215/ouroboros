@@ -163,6 +163,7 @@ type Model struct {
 	trust     Contacts
 	screen    screen
 	commands  []command       // of the UI, then of the plugins
+	suggest   int             // the command selected of those suggested while one is typed
 	screens   []plugin.Screen // of the plugins, as far as they got their command
 	open      int             // the screen of a plugin that is shown
 	body      body            // what it shows
@@ -177,11 +178,15 @@ type Model struct {
 	modelErr  error  // why the models are not there
 
 	contents viewport.Model // the context of the conversation, for /context
+	loaded   *contentsMsg   // the context that came in, to wrap again when the window changes
 
 	settings    Settings        // the configuration, for /settings
 	settingsErr error           // why it is not there
 	rows        []row           // what the settings screen shows of it
-	settingsSel int             // the row selected
+	category    int             // the category selected, of sections
+	opened      bool            // its rows are shown, not the list of categories
+	settingsSel int             // the row selected, of those of the category
+	settingsTop int             // the line of a category the settings screen starts at
 	editing     *edit           // the text that is typed, if one is
 	editInput   textinput.Model // where it is typed
 
@@ -211,7 +216,6 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "shift+enter", "ctrl+j"))
 
 	history := viewport.New()
-	history.SoftWrap = true
 	history.KeyMap = viewport.KeyMap{} // keys go to the input; scrolling is handled explicitly
 
 	ctx, quit := context.WithCancel(context.Background())
@@ -346,6 +350,13 @@ func (m *Model) refresh() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The line below the footer comes and goes with what is pending, and
+	// with it the room for everything above.
+	defer func(rows int) {
+		if m.pendingRows() != rows {
+			m.layout()
+		}
+	}(m.pendingRows())
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -481,6 +492,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if cmd, ok := m.handleSuggestionKey(msg); ok {
+		return cmd
+	}
 	switch msg.String() {
 	case "pgup":
 		m.history.PageUp()
@@ -494,7 +508,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.send()
 	}
 	var cmd tea.Cmd
+	typed := m.input.Value()
 	m.input, cmd = m.input.Update(msg)
+	if m.input.Value() != typed {
+		m.suggest = 0 // other commands fit now
+	}
 	return cmd
 }
 

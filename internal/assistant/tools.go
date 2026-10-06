@@ -200,7 +200,7 @@ func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 			switch {
 			case errors.Is(err, peers.ErrUnconfirmed):
 				return fmt.Sprintf("%s (id %s) is not connected to this node, and nothing was sent to it. "+
-					"Only your owner can connect: the node now waits among the connection requests (/requests in the terminal UI) "+
+					"Only your owner can connect: the node now waits among the connection requests (/pending in the terminal UI) "+
 					"for them to confirm. Tell them that, with the ID, so that they can check it is the node they mean.", name, node.ID), nil
 			case errors.Is(err, peers.ErrPending):
 				return fmt.Sprintf("%s was asked to connect, but nothing of your message was sent: "+

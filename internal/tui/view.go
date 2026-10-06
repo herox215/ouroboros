@@ -54,7 +54,43 @@ func inputStyles(light bool) textarea.Styles {
 	return s
 }
 
-func (m *Model) bodyHeight() int { return max(0, m.height-2) } // minus header and footer
+// bodyHeight is the height between the header and the footer, and the line
+// below the footer if something is pending.
+func (m *Model) bodyHeight() int { return max(0, m.height-2-m.pendingRows()) }
+
+// pendingRows is how many rows the line below the footer takes: one while
+// something waits for a decision, except on the screen that lists it.
+func (m *Model) pendingRows() int {
+	if m.trust.waiting() == 0 || m.screen == screenRequests {
+		return 0
+	}
+	return 1
+}
+
+// pendingView is the line below the footer: how much waits for a decision,
+// where to decide, and what it is. The command comes before what waits, so
+// that a narrow window cuts off the latter.
+func (m *Model) pendingView() string {
+	var what []string
+	for _, r := range m.trust.Incoming {
+		name := r.Name
+		if name == "" {
+			name = shortKey(r.PublicKey)
+		}
+		if r.Proposed {
+			what = append(what, "your agent wants to connect to "+name)
+		} else {
+			what = append(what, name+" wants to chat")
+		}
+	}
+	for _, p := range m.trust.Proposals {
+		what = append(what, "your agent proposes to change "+p.Field)
+	}
+	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d pending", m.trust.waiting())) +
+		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/pending") +
+		mutedStyle.Render(" to decide · "+strings.Join(what, ", "))
+	return ansi.Truncate(" "+line, m.width, "…")
+}
 
 // chatHeight is the height of the conversation box above the input box.
 func (m *Model) chatHeight() int { return max(4, m.bodyHeight()-inputHeight-2) }
@@ -75,7 +111,7 @@ func (m *Model) layout() {
 func (m *Model) renderHistory(toBottom bool) {
 	c := &m.chat
 	if len(c.entries) == 0 {
-		m.history.SetContent(mutedStyle.Render("No messages yet. Ask " + m.agentName() + " anything – it can ask the other nodes for you."))
+		m.history.SetContent(lipgloss.Wrap(mutedStyle.Render("No messages yet. Ask "+m.agentName()+" anything – it can ask the other nodes for you."), m.history.Width(), ""))
 		return
 	}
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
@@ -117,7 +153,10 @@ func (m *Model) renderHistory(toBottom bool) {
 		}
 		blocks = append(blocks, head+"\n"+text)
 	}
-	m.history.SetContent(strings.Join(blocks, "\n\n"))
+	// The heads and the lines of the calls are wrapped here and not by the
+	// viewport, which would measure all of the history on every step of
+	// scrolling.
+	m.history.SetContent(lipgloss.Wrap(strings.Join(blocks, "\n\n"), m.history.Width(), ""))
 	if toBottom {
 		m.history.GotoBottom()
 	}
@@ -239,7 +278,7 @@ func (m *Model) View() tea.View {
 		v.SetContent(m.splashView())
 		return v
 	}
-	body := m.chatView()
+	var body string
 	switch m.screen {
 	case screenRequests:
 		body = m.requestsView()
@@ -253,8 +292,14 @@ func (m *Model) View() tea.View {
 		body = m.contextView()
 	case screenSettings:
 		body = m.settingsView()
+	default:
+		body = m.chatView()
 	}
-	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), body, m.footerView()))
+	parts := []string{m.headerView(), body, m.footerView()}
+	if m.pendingRows() > 0 {
+		parts = append(parts, m.pendingView())
+	}
+	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	return v
 }
 
@@ -384,6 +429,10 @@ func (m *Model) chatView() string {
 	w, h := m.width, m.chatHeight()
 	inner := max(1, w-4)
 	c := &m.chat
+	// The commands that fit what is typed are listed between the
+	// conversation and the input, in rows the conversation gives up.
+	suggested := m.suggestionLines(h - 3)
+	h -= len(suggested)
 
 	var content string
 	if !m.status.Configured {
@@ -407,11 +456,14 @@ func (m *Model) chatView() string {
 		case c.pending:
 			typing = m.spinner.View() + mutedStyle.Render(" "+m.agentName()+" is thinking…")
 		}
-		content = lipgloss.JoinVertical(lipgloss.Left, title, m.history.View(), typing)
+		history := strings.Split(m.history.View(), "\n")
+		history = history[min(len(suggested), len(history)):] // the latest stays in view
+		content = lipgloss.JoinVertical(lipgloss.Left, title, strings.Join(history, "\n"), typing)
 	}
 	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
 	input := box(false, m.light).Width(w).Render(m.input.View())
-	return lipgloss.JoinVertical(lipgloss.Left, chat, input)
+	parts := append([]string{chat}, suggested...)
+	return lipgloss.JoinVertical(lipgloss.Left, append(parts, input)...)
 }
 
 // contextSize is how long a context of n bytes is, as the chat shows it:
@@ -426,12 +478,8 @@ func contextSize(n int) string {
 
 func (m *Model) footerView() string {
 	help := "enter send · alt+enter new line · /help commands · pgup/pgdn scroll · ctrl+c quit"
-	if found := m.matching(m.input.Value()); len(found) > 0 {
-		parts := make([]string, len(found))
-		for i, c := range found {
-			parts[i] = "/" + c.name + " " + c.help
-		}
-		help = strings.Join(parts, " · ")
+	if found, _ := m.suggestions(); len(found) > 0 {
+		help = "↑↓ select · tab complete · enter run · ctrl+c quit"
 	}
 	switch m.screen {
 	case screenRequests:
@@ -441,7 +489,10 @@ func (m *Model) footerView() string {
 	case screenModel:
 		help = "↑↓ choose · enter set · esc back · ctrl+c quit"
 	case screenSettings:
-		help = "↑↓ select · ←→ choose · enter do · esc back · ctrl+c quit"
+		help = "↑↓ select · enter open · esc back · ctrl+c quit"
+		if m.opened {
+			help = "↑↓ select · ←→ choose · enter do · esc categories · ctrl+c quit"
+		}
 		if m.editing != nil {
 			help = "enter save · esc keep what was · ctrl+c quit"
 		}

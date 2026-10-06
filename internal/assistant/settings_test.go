@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,10 +116,10 @@ func TestProposeConfig(t *testing.T) {
 	c := newConfigured(t)
 	got := c.tool(toolProposeConfig, propose{"tools.a2a", []any{"list_peers", map[string]any{"tool": "read", "allow": []string{"~/share"}}}, "so that peers can read the share"})
 	want := `Proposed, and nothing is changed yet: tools.a2a is to become ["list_peers",{"allow":["~/share"],"tool":"read"}] instead of []. ` +
-		"The proposal waits for your owner among the requests in the terminal UI (the command /requests), where they accept or refuse it. " +
-		"Tell them that, and do not say that the change is made."
-	if got != want {
-		t.Fatalf("got %q\nwant %q", got, want)
+		"The proposal waits for your owner among the requests in the terminal UI (the command /pending), where they accept or refuse it. " +
+		"Tell them that, and do not say that the change is made. Its id is "
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("got %q\nwant %q…", got, want)
 	}
 	if c.config().Tools != nil {
 		t.Fatal("the proposal changed the configuration")
@@ -127,6 +128,10 @@ func TestProposeConfig(t *testing.T) {
 	if len(list) != 1 || list[0].Path != "tools.a2a" || string(list[0].Value) != `["list_peers",{"allow":["~/share"],"tool":"read"}]` ||
 		string(list[0].Before) != `[]` || list[0].Reason != "so that peers can read the share" {
 		t.Fatalf("waiting: %+v", list)
+	}
+	// The agent is told the id, so that it can take the proposal back.
+	if end := strings.TrimPrefix(got, want); end != list[0].ID+": with "+toolWithdrawConfig+" you can take it back yourself while it waits." {
+		t.Fatalf("the id in the answer: %q", end)
 	}
 
 	// A list that is handed over as a text is the list.
@@ -143,6 +148,62 @@ func TestProposeConfig(t *testing.T) {
 	}
 }
 
+// withdraw are the arguments of the tool that takes a proposal back.
+type withdraw struct {
+	ID string `json:"id,omitempty"`
+}
+
+// The agent takes a proposal of its own back: nothing is changed, and the
+// owner has one decision less to make.
+func TestWithdrawProposal(t *testing.T) {
+	c := newConfigured(t)
+	if got := c.tool(toolWithdrawConfig, struct{}{}); got != "No proposal waits for your owner: there is nothing of yours to take back." {
+		t.Fatalf("nothing waits: %q", got)
+	}
+
+	// What waits is listed with the id it is taken back with.
+	c.tool(toolProposeConfig, propose{"name", "you", "a better name"})
+	c.tool(toolProposeConfig, propose{"tools.a2a", []string{"read"}, "peers may read"})
+	list := c.waiting()
+	if len(list) != 2 {
+		t.Fatalf("waiting: %+v", list)
+	}
+	want := fmt.Sprintf("2 of your proposals wait for your owner:\n%s: name is to become \"you\" instead of \"me\" (a better name)\n"+
+		"%s: tools.a2a is to become [\"read\"] instead of [] (peers may read)\n"+
+		"Take one back with %s, giving its id.", list[0].ID, list[1].ID, toolWithdrawConfig)
+	if got := c.tool(toolWithdrawConfig, struct{}{}); got != want {
+		t.Fatalf("what waits:\n got %q\nwant %q", got, want)
+	}
+
+	// One of them is taken back, and the configuration is as it was.
+	if got := c.tool(toolWithdrawConfig, withdraw{list[0].ID}); !strings.HasPrefix(got, "Taken back, and nothing is changed: the proposal for name no longer waits for your owner") {
+		t.Fatalf("taken back: %q", got)
+	}
+	if waiting := c.waiting(); len(waiting) != 1 || waiting[0].ID != list[1].ID {
+		t.Fatalf("after taking one back: %+v", c.waiting())
+	}
+	if cfg := c.config(); cfg.Name != "me" || cfg.Tools != nil {
+		t.Fatalf("the configuration changed: %+v", cfg)
+	}
+
+	// An id that does not wait is an error, and says how to see what waits.
+	gone := `error: no proposal waits with the id "` + list[0].ID + `": withdraw_proposal without an id lists what waits`
+	if got := c.tool(toolWithdrawConfig, withdraw{list[0].ID}); got != gone {
+		t.Fatalf("an id that is gone: %q", got)
+	}
+
+	// What the owner decided on is out of reach.
+	if _, err := c.proposals.Accept(c.dir, list[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.tool(toolWithdrawConfig, withdraw{list[1].ID}); !strings.HasPrefix(got, "error: no proposal waits with the id ") {
+		t.Fatalf("an accepted proposal: %q", got)
+	}
+	if len(c.waiting()) != 0 || c.config().Tools == nil {
+		t.Fatalf("the owner's decision: %+v", c.waiting())
+	}
+}
+
 // What the node would not start with is an error at once, and no proposal.
 func TestProposeConfigChecksTheValue(t *testing.T) {
 	c := newConfigured(t)
@@ -151,7 +212,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		want string
 	}{
 		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, read)`},
-		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, read, get_config, propose_config)`},
+		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, read, get_config, propose_config, withdraw_proposal)`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "read", "alow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: settings of the tool read: json: unknown field "alow"`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "list_peers", "allow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: the tool list_peers takes no settings`},
 		{propose{"tools.a2a", []string{"read", "read"}, "r"}, `error: nothing was proposed: tools.a2a: the tool "read" is listed twice`},
@@ -199,7 +260,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		c.tool(toolProposeConfig, propose{"name", strings.Repeat("n", i+3), "r"})
 	}
 	if got := c.tool(toolProposeConfig, propose{"name", "one more", "r"}); got != "error: 16 proposals are waiting for your owner already, and no more are kept: "+
-		"they decide on them among the requests in the terminal UI (/requests)" {
+		"they decide on them among the requests in the terminal UI (/pending)" {
 		t.Errorf("a full list: %q", got)
 	}
 	if len(c.waiting()) != proposal.Max {
@@ -227,7 +288,7 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	}
 
 	cfg := c.config()
-	for _, name := range []string{toolGetConfig, toolProposeConfig} {
+	for _, name := range []string{toolGetConfig, toolProposeConfig, toolWithdrawConfig} {
 		cfg.Tools = &config.Tools{A2A: config.Named("read", name)}
 		if _, err := c.builder.ForPeers(cfg); err == nil || err.Error() != "tools.a2a: the tool "+name+" is for the owner of the node only: it is no tool for peers" {
 			t.Errorf("%s in a2a: %v", name, err)
@@ -248,7 +309,7 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 		t.Fatalf("every tool for peers: %q, %v", names(tools), err)
 	}
 	tools, err = c.builder.ownerTools(cfg)
-	if err != nil || names(tools) != "list_peers,ask_peer,read,get_config,propose_config" {
+	if err != nil || names(tools) != "list_peers,ask_peer,read,get_config,propose_config,withdraw_proposal" {
 		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
 	}
 	// A script of a peer has neither.
@@ -256,8 +317,8 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := bot.Respond(from("luna"), "c", runs(`return typeof get_config + " " + typeof propose_config + " " + typeof read`))
-	if got := result(t, got, err); got != "undefined undefined function" {
+	got, err := bot.Respond(from("luna"), "c", runs(`return typeof get_config + " " + typeof propose_config + " " + typeof withdraw_proposal + " " + typeof read`))
+	if got := result(t, got, err); got != "undefined undefined undefined function" {
 		t.Fatalf("a script of a peer: %q", got)
 	}
 
