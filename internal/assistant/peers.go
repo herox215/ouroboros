@@ -7,6 +7,7 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
+	"ouroboros/internal/script"
 )
 
 // Peers answers the peers of a node, with the agent for the configuration of
@@ -22,13 +23,16 @@ type Peers struct {
 	built  string        // the configuration agent was built for
 	failed string        // why the configuration could not be used the last time
 	memory *agent.Memory // of the conversations, for every agent there is
+	// scripts are what the scripts of the conversations kept, for every
+	// agent there is.
+	scripts *script.Sessions
 }
 
 // Peers returns what answers the peers of the node whose configuration
 // config reads, anew for every message. What goes wrong with a configuration
 // that was changed while the node runs is told to log.
 func (b Builder) Peers(config func() (config.Config, error), log func(format string, args ...any)) *Peers {
-	return &Peers{config: config, builder: b, log: log, memory: agent.NewMemory()}
+	return &Peers{config: config, builder: b, log: log, memory: agent.NewMemory(), scripts: script.NewSessions()}
 }
 
 // Ready reports whether the peers of the node can be answered: the error of
@@ -94,6 +98,6 @@ func (p *Peers) build() (*agent.Agent, string, error) {
 	if p.agent != nil && p.built == string(want) {
 		return nil, string(want), nil
 	}
-	bot, err := p.builder.ForPeers(cfg)
+	bot, err := p.builder.forPeers(cfg, p.scripts)
 	return bot, string(want), err
 }

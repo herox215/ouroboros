@@ -58,7 +58,6 @@ func TestScriptsUseTheToolsOfTheNode(t *testing.T) {
 	cfg := clitest.NodeConfig(beta)
 	cfg.Name, cfg.Model = "beta", "gpt-4o-mini"
 	cfg.Tools = &config.Tools{A2A: []config.Entry{
-		{Tool: "run"},
 		{Tool: "read", Settings: json.RawMessage(`{"allow": ["~/share"]}`)},
 		{Tool: "list", Settings: json.RawMessage(`{"allow": ["~/share"]}`)},
 	}}

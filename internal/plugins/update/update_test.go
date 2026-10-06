@@ -148,7 +148,7 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 
 	tools := plugin.All[plugin.Tool](ctx)
 	at := slices.IndexFunc(tools, func(tool plugin.Tool) bool { return tool.Name == updateplugin.Rebuild })
-	if at < 0 || !strings.Contains(tools[at].Description, "module in "+src+",") {
+	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") {
 		t.Fatalf("tools %+v", tools)
 	}
 	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild, Args: json.RawMessage(`{}`)}); got != "building and testing "+src {

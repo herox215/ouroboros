@@ -49,6 +49,10 @@ type record struct {
 	mu      sync.Mutex
 	start   time.Time
 	calls   int       // of the LLM
+	sent    int       // bytes to the LLM, see agent.Call
+	tokens  int       // tokens sent to the LLM, as far as the API said
+	cached  int       // of those, the tokens the provider had cached
+	tooled  int       // tool calls that ended, those of scripts included
 	calling time.Time // when the call of the LLM that is under way started; zero if none is
 	tools   []flight  // under way, in the order they started
 	closed  bool      // the last line is written
@@ -85,10 +89,10 @@ func (r *record) end(reply string, err error) {
 		return
 	}
 	if err != nil {
-		r.close("failed after %s (llm calls: %d): %s", took(time.Since(r.start)), r.calls, r.text(err.Error()))
+		r.close("failed after %s (%s): %s", took(time.Since(r.start)), r.counts(), r.text(err.Error()))
 		return
 	}
-	r.close("answered after %s (llm calls: %d): %s", took(time.Since(r.start)), r.calls, r.text(reply))
+	r.close("answered after %s (%s): %s", took(time.Since(r.start)), r.counts(), r.text(reply))
 }
 
 // cancel writes that the answer was canceled, see canceled.
@@ -122,7 +126,30 @@ func (r *record) canceled() {
 	for _, f := range slices.Backward(r.tools) {
 		r.line("tool %s %s took %s: canceled", r.plain(f.tool), r.args(f.tool, f.args), took(time.Since(f.start)))
 	}
-	r.close("canceled after %s (llm calls: %d)", took(time.Since(r.start)), r.calls)
+	r.close("canceled after %s (%s)", took(time.Since(r.start)), r.counts())
+}
+
+// counts is what the answer cost: calls of the LLM, calls of tools and the
+// bytes sent to the LLM. Holds r.mu.
+func (r *record) counts() string {
+	counts := fmt.Sprintf("llm calls: %d, tool calls: %d, sent %.1f KiB", r.calls, r.tooled, float64(r.sent)/1024)
+	if r.tokens > 0 {
+		counts += ", " + usage(r.tokens, r.cached)
+	}
+	return counts
+}
+
+// usage is how many tokens were sent and how many of them were cached.
+func usage(tokens, cached int) string {
+	return fmt.Sprintf("%s tokens, %s cached (%d%%)", kilo(tokens), kilo(cached), cached*100/tokens)
+}
+
+// kilo is n in thousands, like 12.3k, below 1000 as it is.
+func kilo(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
 
 // close writes the last line. Holds r.mu.
@@ -142,6 +169,7 @@ func (r *record) call(c agent.Call) {
 	}
 	if !c.Done {
 		r.calls++
+		r.sent += c.Sent
 		r.calling = time.Now()
 		return
 	}
@@ -158,6 +186,18 @@ func (r *record) call(c agent.Call) {
 		if c.Content != "" {
 			outcome += ", said " + r.text(c.Content)
 		}
+	}
+	var cost []string
+	if c.Tokens > 0 {
+		r.tokens += c.Tokens
+		r.cached += c.Cached
+		cost = append(cost, usage(c.Tokens, c.Cached))
+	}
+	if c.Thought > 0 {
+		cost = append(cost, fmt.Sprintf("thought %.1f KiB", float64(c.Thought)/1024))
+	}
+	if len(cost) > 0 {
+		outcome += " [" + strings.Join(cost, ", ") + "]"
 	}
 	r.line("llm call %d took %s: %s", r.calls, took(c.Took), outcome)
 }
@@ -182,6 +222,7 @@ func (r *record) step(s agent.Step) {
 			break
 		}
 	}
+	r.tooled++
 	outcome := fmt.Sprintf("ok (%d bytes)", len(s.Result))
 	if s.Err != nil {
 		outcome = "error " + r.text(s.Err.Error())

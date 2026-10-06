@@ -105,6 +105,17 @@ func TestTUIBackendAsk(t *testing.T) {
 		!steps[1].Done || !strings.HasPrefix(steps[1].Text, "asking beta ✓ ") {
 		t.Fatalf("steps %+v", steps)
 	}
+	// The context of the conversation is what the LLM is sent next, message
+	// by message: the call of a tool with its arguments.
+	msgs, err := u.Contents("ctx")
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, m.Role)
+	}
+	if err != nil || strings.Join(roles, " ") != "system tool run user assistant tool assistant" ||
+		!strings.Contains(msgs[1].Text, "\nparameters: {") || msgs[2].Text != "@beta hello" || !strings.HasPrefix(msgs[3].Text, "→ run {") {
+		t.Fatalf("contents %q, %v", msgs, err)
+	}
 	// Looking up the peers is not worth a line in the chat: no plugin says
 	// what to show of it.
 	steps = nil
@@ -309,7 +320,9 @@ func TestQuitLogsThePendingAnswer(t *testing.T) {
 	}
 	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
 	lines := strings.Split(strings.TrimSpace(string(logged)), "\n")
-	if n := len(lines); n < 2 || !strings.Contains(lines[n-2], "chat c1: tool block {} took ") || !strings.HasSuffix(lines[n-2], ": canceled") ||
+	// The tool is called by a script, which is canceled with it.
+	if n := len(lines); n < 3 || !strings.Contains(lines[n-3], "chat c1: tool block {} took ") || !strings.HasSuffix(lines[n-3], ": canceled") ||
+		!strings.Contains(lines[n-2], "chat c1: tool run ") || !strings.HasSuffix(lines[n-2], ": canceled") ||
 		!strings.Contains(lines[n-1], "chat c1: canceled after ") {
 		t.Fatalf("log:\n%s", logged)
 	}

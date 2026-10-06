@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ouroboros/internal/openai"
@@ -16,9 +18,36 @@ import (
 
 const (
 	maxContexts = 256               // conversations kept in memory
-	maxHistory  = 40                // messages kept per conversation
 	maxRounds   = 100               // LLM calls per answer; stops an agent that keeps calling tools
 	warnRounds  = maxRounds * 4 / 5 // LLM calls after which the LLM is told how many it has left
+	// askRounds are the LLM calls after which the LLM is told to ask the
+	// user rather than search on, if it has not found what it looks for:
+	// what it is to look for may not be clear, and the user knows.
+	askRounds = 15
+	// maxRepeats is how often in a row the LLM may ask for the same call of
+	// a tool: one more gives the same result and is not run.
+	maxRepeats = 2
+
+	// A conversation is cut once it has more than maxHistory messages or
+	// maxHistoryBytes, and then down to keptHistory messages and
+	// keptHistoryBytes. Cut in steps, its start stays the same from one
+	// answer to the next until the next cut, and so does what the provider
+	// cached of it. As a cut costs that cache, it is only made when it
+	// leaves at most half, or beyond hugeHistoryBytes.
+	maxHistory       = 80
+	maxHistoryBytes  = 256 << 10
+	keptHistory      = 40
+	keptHistoryBytes = 128 << 10
+	hugeHistoryBytes = 1 << 20
+
+	// Budget is how many bytes the results of tools of one answer may have
+	// before the LLM is told with every call how much it gathered, and the
+	// tools are to give back less: see Spent.
+	Budget = 64 << 10
+
+	// minRepeated is how many bytes of lines a result of a tool has to repeat
+	// of an earlier result of the same answer before they are left out of it.
+	minRepeated = 1 << 10
 
 	// abandoned ends an answer that failed or was stopped in the history, so
 	// that the next message does not follow tool results.
@@ -58,8 +87,17 @@ type Step struct {
 // Call reports a call of the LLM: once when it starts and again, with Done
 // set, when it has ended, with how long it took and whether it ended in a
 // text, in calls of tools or in an error. Content is the text the LLM sent,
-// also along with calls of tools.
+// also along with calls of tools. Sent is how many bytes of messages and
+// tools the call sent the LLM, as JSON: what an answer costs grows with it.
+// Tokens and Cached are what the API said of the call that has ended: the
+// tokens it was sent, and how many of them it had cached. 0 if it did not say.
+// Thought is how many bytes the LLM thought before it wrote, which go back
+// with the calls after it.
 type Call struct {
+	Sent      int
+	Tokens    int
+	Cached    int
+	Thought   int
 	Done      bool
 	Took      time.Duration
 	ToolCalls int
@@ -77,7 +115,18 @@ type Observer struct {
 type (
 	contextKey  struct{}
 	observerKey struct{}
+	spentKey    struct{}
 )
+
+// Spent returns how many bytes the results of tools of the answer that ctx
+// belongs to have so far. A tool that gives back much, like a script, gives
+// back less once it is beyond Budget.
+func Spent(ctx context.Context) int {
+	if spent, ok := ctx.Value(spentKey{}).(*atomic.Int64); ok {
+		return int(spent.Load())
+	}
+	return 0
+}
 
 // ContextID returns the conversation a tool is run for.
 func ContextID(ctx context.Context) string {
@@ -92,6 +141,7 @@ type Agent struct {
 	system openai.Message
 	tools  map[string]Tool
 	specs  []openai.Tool
+	sizeOf int // of specs, as JSON
 	memory *Memory
 }
 
@@ -127,6 +177,8 @@ func New(llm LLM, model, system string, tools ...Tool) *Agent {
 		a.tools[t.Name] = t
 		a.specs = append(a.specs, openai.NewTool(t.Name, t.Description, t.Schema))
 	}
+	specs, _ := json.Marshal(a.specs) // texts and JSON: cannot fail
+	a.sizeOf = len(specs)
 	return a
 }
 
@@ -136,6 +188,12 @@ func New(llm LLM, model, system string, tools ...Tool) *Agent {
 func (a *Agent) WithMemory(m *Memory) *Agent {
 	a.memory = m
 	return a
+}
+
+// Prompt returns what the agent sends with every call of the LLM before the
+// conversation: its system prompt and its tools.
+func (a *Agent) Prompt() (system string, tools []openai.Tool) {
+	return a.system.Content, slices.Clone(a.specs)
 }
 
 // Respond answers text within the conversation contextID.
@@ -148,7 +206,10 @@ func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, er
 func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observer) (string, error) {
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
+	spent := &atomic.Int64{}
+	ctx = context.WithValue(ctx, spentKey{}, spent)
 	history := append(a.memory.history(contextID), openai.Message{Role: "user", Content: text})
+	asked := len(history) - 1 // where this answer starts
 	// An answer that fails is remembered as far as it got: asked again, the
 	// LLM goes on from there instead of starting over. Why it failed is not
 	// part of it: a peer must not learn the cause from a later answer.
@@ -161,17 +222,27 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		if err := ctx.Err(); err != nil {
 			return abandon(err)
 		}
-		if observe.Call != nil {
-			observe.Call(Call{})
-		}
-		start := time.Now()
 		msgs := append([]openai.Message{a.system}, history...)
+		if n := int(spent.Load()); n > Budget && msgs[len(msgs)-1].Role == "tool" {
+			msgs[len(msgs)-1].Content += gathered(n)
+		}
+		if round >= askRounds && round < warnRounds && msgs[len(msgs)-1].Role == "tool" {
+			msgs[len(msgs)-1].Content += searching(round)
+		}
 		if round >= warnRounds {
 			msgs[len(msgs)-1].Content += remaining(round)
 		}
+		sent := 0
+		if observe.Call != nil {
+			b, _ := json.Marshal(msgs) // texts and JSON: cannot fail
+			sent = len(b) + a.sizeOf
+			observe.Call(Call{Sent: sent})
+		}
+		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
 		if observe.Call != nil {
-			observe.Call(Call{Done: true, Took: time.Since(start), ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
+			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Thought: len(msg.Reasoning), Done: true, Took: time.Since(start),
+				ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
 		if err != nil {
 			return abandon(err)
@@ -182,8 +253,15 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			a.memory.remember(contextID, history)
 			return msg.Content, nil
 		}
+		before := history[asked : len(history)-1]
 		for _, call := range msg.ToolCalls {
-			history = append(history, a.call(ctx, call))
+			result := repeated(call, before)
+			if result.Content == "" {
+				result = a.call(ctx, call)
+			}
+			result.Content = unrepeated(result.Content, history[asked:])
+			spent.Add(int64(len(result.Content)))
+			history = append(history, result)
 		}
 	}
 	return abandon(ErrTooManyToolCalls)
@@ -197,6 +275,106 @@ func remaining(round int) string {
 		"Without an answer by then, it breaks off. Finish the work that is begun, "+
 		"and answer with what is done and what is still open: asked again, you go on from there.]",
 		round+1, maxRounds)
+}
+
+// searching is what the LLM is told after the last result of a tool when
+// round, counted from 0, is askRounds or later. Like remaining, it is only
+// sent.
+func searching(round int) string {
+	return fmt.Sprintf("\n\n[Not from the tool: this is call %d of the LLM for this answer. "+
+		"If you have not yet found what you are looking for, stop searching: "+
+		"tell the user in a few words what you checked and what you found, and ask what exactly they mean. "+
+		"If you have found it, go on and finish.]", round+1)
+}
+
+// repeated returns the result of call when it is the same as each of the
+// last maxRepeats calls in msgs, which the LLM asked for in a row: it is not
+// run again. Otherwise it returns a message without content.
+func repeated(call openai.ToolCall, msgs []openai.Message) openai.Message {
+	same := 0
+	for _, m := range slices.Backward(msgs) {
+		if m.Role == "tool" {
+			continue
+		}
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			break
+		}
+		last := m.ToolCalls[len(m.ToolCalls)-1]
+		if last.Function.Name != call.Function.Name || last.Function.Arguments != call.Function.Arguments {
+			break
+		}
+		if same++; same == maxRepeats {
+			return openai.Message{Role: "tool", ToolCallID: call.ID, Content: fmt.Sprintf(
+				"error: this is the call of %s you asked for %d times in a row, with the same arguments: "+
+					"it was not run again, as it would give the same. Do something else, or answer with what you have.",
+				call.Function.Name, maxRepeats+1)}
+		}
+	}
+	return openai.Message{}
+}
+
+// gathered is what the LLM is told after the last result of a tool once the
+// results of the answer have n bytes, beyond Budget. Like remaining, it is
+// only sent.
+func gathered(n int) string {
+	return fmt.Sprintf("\n\n[Not from the tool: the results of tools of this answer have %d KiB, "+
+		"and all of it is sent again with every call. Tools give back less from now on: "+
+		"keep data in variables and print only the little you need for the next step.]", n>>10)
+}
+
+// unrepeated is result without the runs of its lines, of minRepeated bytes
+// or more, that earlier results of tools in msgs have too: the LLM still has
+// those, and the answer sends them again with every call. In their place a
+// line says what was left out. Empty lines go along with a run. Only the
+// results of the same answer count: what came before it may be cut from the
+// conversation, while the answer is kept whole.
+func unrepeated(result string, msgs []openai.Message) string {
+	if len(result) < minRepeated {
+		return result
+	}
+	seen := map[string]bool{}
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			for line := range strings.Lines(m.Content) {
+				if line = strings.TrimRight(line, "\r\n"); strings.TrimSpace(line) != "" {
+					seen[line] = true
+				}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return result
+	}
+	lines := strings.SplitAfter(result, "\n")
+	var out strings.Builder
+	for i := 0; i < len(lines); {
+		j, repeated := i, i
+		for ; j < len(lines); j++ {
+			line := strings.TrimRight(lines[j], "\r\n")
+			blank := strings.TrimSpace(line) == ""
+			if !blank && !seen[line] {
+				break
+			}
+			if !blank {
+				repeated = j + 1 // a run ends with a line that was seen
+			}
+		}
+		if repeated == i {
+			out.WriteString(lines[i])
+			i++
+			continue
+		}
+		// A shorter run that starts within this one ends with it: none is
+		// left out if this one is not.
+		run := strings.Join(lines[i:repeated], "")
+		if len(run) >= minRepeated {
+			fmt.Fprintf(&out, "[%d lines, %d bytes, left out: an earlier result of this answer has them]\n", repeated-i, len(run))
+		} else {
+			out.WriteString(run)
+		}
+		i = repeated
+	}
+	return out.String()
 }
 
 // call runs one tool call and returns its result as a message for the LLM.
@@ -257,23 +435,87 @@ func (m *Memory) remember(contextID string, msgs []openai.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clock++
-	// Start at a user message: a tool result without its call is rejected by the API.
-	// The last one stays, with all that followed it, even beyond maxHistory:
-	// an answer that took many tool calls is not forgotten as a whole.
-	cut := max(0, len(msgs)-maxHistory)
-	for cut < len(msgs) && msgs[cut].Role != "user" {
-		cut++
-	}
-	for i := len(msgs) - 1; cut == len(msgs) && i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			cut = i
-		}
-	}
-	msgs = msgs[cut:]
+	msgs = trim(msgs)
 	m.conversations[contextID] = &conversation{lastUsed: m.clock, msgs: msgs}
 	if len(m.conversations) > maxContexts {
 		m.evictOldest()
 	}
+}
+
+// trim returns the conversation msgs as it is remembered. It starts at a
+// user message: a tool result without its call is rejected by the API.
+//
+// Beyond maxHistory messages or maxHistoryBytes it is cut: it starts at the
+// first user message after which there are at most keptHistory messages and
+// keptHistoryBytes, and what the LLM thought is left out of every message,
+// as the LLM only needs it within an answer. The last user message stays,
+// with all that followed it, even beyond those: an answer that took many tool
+// calls is not forgotten as a whole. A cut that would keep more than half is
+// not made below hugeHistoryBytes: it would cost the cache of all that is
+// kept, to save little.
+//
+// Without a cut, what the LLM thought is left out once it is at least half of
+// the conversation from the first message that has it on: the cache of that
+// part is lost, but every later call sends less.
+func trim(msgs []openai.Message) []openai.Message {
+	size := sizes(msgs)
+	start := cut(msgs, size, len(msgs), size[0])
+	if len(msgs) <= maxHistory && size[0] <= maxHistoryBytes {
+		first, thought := -1, 0
+		for i, m := range msgs[start:] {
+			if m.Reasoning != "" && first < 0 {
+				first = start + i
+			}
+			thought += len(m.Reasoning)
+		}
+		if first >= 0 && 2*thought >= size[first] {
+			return thoughtless(msgs[start:])
+		}
+		return msgs[start:]
+	}
+	bare := thoughtless(msgs)
+	less := sizes(bare)
+	at := cut(bare, less, keptHistory, keptHistoryBytes)
+	if less[at] > size[0]/2 && len(msgs)-at > len(msgs)/2 && size[0] <= hugeHistoryBytes {
+		return msgs[start:]
+	}
+	return bare[at:]
+}
+
+// thoughtless returns msgs without what the LLM thought.
+func thoughtless(msgs []openai.Message) []openai.Message {
+	msgs = slices.Clone(msgs)
+	for i := range msgs {
+		msgs[i].Reasoning, msgs[i].ReasoningField = "", ""
+	}
+	return msgs
+}
+
+// sizes returns the sizes of msgs as JSON: sizes[i] is that of msgs[i:].
+func sizes(msgs []openai.Message) []int {
+	sizes := make([]int, len(msgs)+1)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		b, _ := json.Marshal(msgs[i]) // texts and JSON: cannot fail
+		sizes[i] = sizes[i+1] + len(b)
+	}
+	return sizes
+}
+
+// cut returns the first user message of msgs after which there are at most
+// keep messages and keepBytes, by sizes; the last one if there is none, and
+// len(msgs) if there is no user message at all.
+func cut(msgs []openai.Message, sizes []int, keep, keepBytes int) int {
+	last := len(msgs)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+		if last < len(msgs) && (len(msgs)-i > keep || sizes[i] > keepBytes) {
+			break
+		}
+		last = i
+	}
+	return last
 }
 
 func (m *Memory) evictOldest() {

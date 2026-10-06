@@ -150,8 +150,8 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		args propose
 		want string
 	}{
-		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, read, run)`},
-		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, read, run, get_config, propose_config)`},
+		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, read)`},
+		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, read, get_config, propose_config)`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "read", "alow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: settings of the tool read: json: unknown field "alow"`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "list_peers", "allow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: the tool list_peers takes no settings`},
 		{propose{"tools.a2a", []string{"read", "read"}, "r"}, `error: nothing was proposed: tools.a2a: the tool "read" is listed twice`},
@@ -184,7 +184,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 
 	// What is allowed for the owner is a proposal: every tool, and "*" for peers.
 	for _, args := range []propose{
-		{"tools.h2a", []string{"read", toolGetConfig, toolProposeConfig, toolRun}, "r"},
+		{"tools.h2a", []string{"read", toolGetConfig, toolProposeConfig}, "r"},
 		{"tools.a2a", []string{"*"}, "r"},
 		{"tools.protected", []string{}, "r"},
 		{"model", "gpt-4o-mini", "r"},
@@ -244,11 +244,11 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	// Every tool for peers is every tool there is for peers.
 	cfg.Tools = &config.Tools{A2A: config.Named("*")}
 	tools, err := c.builder.peerTools(cfg)
-	if err != nil || names(tools) != "list_peers,ask_peer,read,run" {
+	if err != nil || names(tools) != "list_peers,ask_peer,read" {
 		t.Fatalf("every tool for peers: %q, %v", names(tools), err)
 	}
 	tools, err = c.builder.ownerTools(cfg)
-	if err != nil || names(tools) != "list_peers,ask_peer,read,run,get_config,propose_config" {
+	if err != nil || names(tools) != "list_peers,ask_peer,read,get_config,propose_config" {
 		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
 	}
 	// A script of a peer has neither.
@@ -273,7 +273,7 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	}
 
 	// A blueprint without a node has neither tool.
-	if got := names((Builder{Tools: func() []agent.Tool { return nil }}).all()); got != "run" {
+	if got := names((Builder{Tools: func() []agent.Tool { return nil }}).all()); got != "" {
 		t.Fatalf("without a node: %q", got)
 	}
 }

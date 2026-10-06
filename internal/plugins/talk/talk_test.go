@@ -212,7 +212,7 @@ func TestChatIsLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`: message from the owner: "hello [redacted]"`, ": llm call 1 took ", ": text\n",
-		`: answered after `, ` (llm calls: 1): "[gpt-4o] turns=1 last=hello [redacted]"`} {
+		`: answered after `, ` (llm calls: 1, tool calls: 0, sent `, ` KiB): "[gpt-4o] turns=1 last=hello [redacted]"`} {
 		if !strings.Contains(logged(), want) {
 			t.Fatalf("the log lacks %q:\n%s", want, logged())
 		}
@@ -225,7 +225,7 @@ func TestChatIsLogged(t *testing.T) {
 	if _, err := clitest.Run(t, s, "", "chat", "stop"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("interrupted: %v", err)
 	}
-	if !regexp.MustCompile(`: message from the owner: "stop"\n.*: canceled after [^ ]+ \(llm calls: 0\)\n$`).MatchString(logged()) {
+	if !regexp.MustCompile(`: message from the owner: "stop"\n.*: canceled after [^ ]+ \(llm calls: 0, tool calls: 0, sent 0.0 KiB\)\n$`).MatchString(logged()) {
 		t.Fatalf("the last line says the answer was canceled:\n%s", logged())
 	}
 }
@@ -255,13 +255,15 @@ func flakyLLM(t *testing.T) (baseURL string, down *atomic.Bool) {
 
 // A peer whose message was not answered asks later what went wrong, with the
 // error ID it was given. The agent of the node looks it up and explains it,
-// to that peer only, in general terms, and only once it can answer again.
+// to that peer only, in general terms, and only once it can answer again. It
+// is a function of scripts, which a peer runs only with a tool of a2a.
 func TestPeerAsksWhatWentWrong(t *testing.T) {
 	llm, down := flakyLLM(t)
 	beta := clitest.Settings(t)
 	beta.BaseURL = llm
 	cfg := clitest.NodeConfig(beta)
 	cfg.Name = "beta"
+	cfg.Tools = &config.Tools{A2A: config.Named("list_peers")}
 	clitest.StartNode(t, beta, cfg)
 	alpha, gamma := clitest.Settings(t), clitest.Settings(t)
 	for name, s := range map[string]cli.Settings{"alpha": alpha, "gamma": gamma} {

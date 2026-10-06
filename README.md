@@ -40,7 +40,16 @@ stays between them; the UI only shows which peer your agent is waiting for.
 The whole **loop** of an answer is in the history, not only its end: what the agent says along with
 the tools it asks for, and below those words one muted line per tool call (`· asking beta ✓ 1.2s`,
 `· writing notes.md ✓ 3ms`, a failed one with `✗` and its reason). A call the agent said nothing of
-is only that line. Lines of calls whose tool is still running are marked with `…`.
+is only that line. Lines of calls whose tool is still running are marked with `…`. Once the answer is in,
+the calls of all its rounds are summed up in one line below the last words of the agent:
+`↳ 4 tool calls, 1 failed: reading a.go, asking beta ×2, writing c.go`.
+Next to the name of your agent, the chat shows how long the context of the conversation is:
+`lucagent  · context 45.2 KiB ≈ 11.6k tokens`. That is what the last call of the LLM sent, the prompt, the
+tools and the conversation so far as JSON; the tokens are an estimate at 4 bytes a token. It grows with
+every step of an answer, since each sends the whole conversation again, and is updated whenever the loop
+shows something new. A new conversation (`/new`) has none until its first call, and neither has one that
+goes on after a restart. `/context` shows what the context is: the system prompt, every tool with its schema
+and the conversation so far, message by message with its size.
 The input is focused on start, so you can type right away. The conversation lives only as long as the TUI runs;
 what your agent did for it is recorded in [`ouro.log`](#the-log).
 
@@ -78,6 +87,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/new` | new conversation |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup |
+| `/context` | what the next call of the LLM in this conversation is sent, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
 | `/model` | the models the provider of the node offers, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on), `esc` back |
 | `/requests` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
@@ -123,8 +133,8 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
-| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left, of which one can run a [script](#scripts) that calls many tools |
-| Memory | last 40 messages per conversation, but always the whole of the last answer, however many tool calls it took; up to 256 conversations. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
+| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left; the LLM has one tool, `run`, and uses the others in a [script](#scripts) |
+| Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, and a script hands on at most 4 KiB of what it prints and of what it returns. From the 16th call of the LLM in an answer on, it is told with every call to stop searching and ask the user what exactly is meant, unless it has found what it looks for; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives OpenAI the conversation as `prompt_cache_key`. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
 | LLM | answers are asked for as a stream (`"stream": true`), so a gateway that gives up on a request without data for a while (HTTP 504) keeps waiting while the model thinks; an API that does not stream answers in one piece, which is taken as well. A completion is given up after 5 minutes without data, a list of the models after 5 minutes |
@@ -141,9 +151,11 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 ## Tools
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
-`delete`, `search`), one that runs a script calling the others (`run`) and, for you alone, two for the configuration
-(`get_config`, `propose_config`) and one that builds and installs its own source ([`rebuild`](#updates)). Which of them it may use depends on who it is talking to, and is set in `config.json`. This is
-what the setup writes:
+`delete`, `search`) and, for you alone, two for the configuration (`get_config`, `propose_config`) and one
+that builds and installs its own source ([`rebuild`](#updates)). It uses them in **scripts**: the LLM is
+offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
+Which of them it may use depends on who it is talking to, and is set in `config.json`. This is what the
+setup writes:
 
 ```json
 "tools": {
@@ -159,7 +171,7 @@ what the setup writes:
 | List | Applies when | Without it |
 |---|---|---|
 | `h2a` (human to agent) | you ask your agent | every tool |
-| `a2a` (agent to agent) | a connected peer asks your agent | no tool, except `explain_error` (see [below](#when-a-peer-could-not-answer)) |
+| `a2a` (agent to agent) | a connected peer asks your agent | no tool, and no scripts (see [Scripts](#scripts)) |
 | `protected` | a tool for files is used, by anybody | the list above; `[]` protects nothing |
 
 An entry of `h2a` and `a2a` is the name of a tool, or an object with the name as `"tool"` and **settings** for
@@ -179,7 +191,7 @@ restart. A node that runs keeps answering peers as before while the file cannot 
 | `edit(path, old, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once; returns the changed lines with 3 lines around them, at most 50 | the file has at most 1 MiB, before and after |
 | `list(path)` | the entries of a directory: directories end in `/`, files come with their size | 1000 entries; what the tool may not read is not listed |
 | `delete(path, recursive?)` | removes a file or an empty directory; one with content only with `recursive: true` | stops, with nothing deleted, before anything it may not delete |
-| `search(path, pattern, glob?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go` | 200 lines of at most 300 bytes, 10000 files; hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out |
+| `search(path, pattern, glob?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go` | 200 lines of at most 300 bytes, 10000 files, 100000 files and directories looked at (also those the glob leaves out); hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out |
 
 A path is absolute or starts with `~`, your home directory. Each of the six tools takes the settings `allow`
 and `deny`: paths the tool may go to, and paths within those it may not. A path is a file, or a directory with
@@ -243,54 +255,94 @@ the build works, not that it is harmless.
 
 ### Scripts
 
-An answer has at most 100 calls of the LLM, every call sends the whole conversation again, and every result of
-a tool stays in it. `run(script)` is for what is known in advance: the same call for many peers or files,
-results that are filtered or passed on unchanged. The agent writes a script in JavaScript, and inside it
-every other tool it has is a function of its name. Every tool stays callable on its own.
+`run(script)` is the only tool the LLM is offered. Everything the agent does, it does in a script: it
+writes JavaScript, and inside it every tool it may use is a function of its name. An answer has at most 100
+calls of the LLM, every call sends the whole conversation again, and every result stays in it: a script
+does in one call what would take many, and hands on only what it prints. The description of `run` lists the
+functions with their parameters, and the prompt says that they are functions of `run`.
 
 ```js
 // "which of my peers knows the way to the station?", in one call of the LLM
-return list_peers().split("\n")
+const connected = list_peers().split("\n")
   .filter(line => line.includes(", connected)"))
   .map(line => line.split(" ")[0])
-  .map(peer => {
-    try { return peer + ": " + ask_peer({peer: peer, message: "Do you know the way to the station?"}) }
-    catch (e) { return peer + " could not answer: " + e.message }
-  })
+for (const peer of connected) {
+  try { print(peer + ": " + ask_peer({peer: peer, message: "Do you know the way to the station?"})) }
+  catch (e) { print(peer + " could not answer: " + e.message) }
+}
 ```
 
-- The script is the body of a function. What it returns goes to the LLM: a string as it is, everything else
-  as JSON.
+- What a script gives back goes to the LLM: what it printed with `print` (or `console.log`), one line per call,
+  and after that the value of its last statement, a string as it is, everything else as JSON. A statement
+  without a value, like `var a = 1`, gives back nothing. Of what is printed, 16 KiB are handed on and the rest
+  is left out, and the LLM is told how much. All that was printed (up to 4 MiB) is then kept in the variable
+  `printed`, so that the next script can look into it instead of reading again. Of a value beyond 16 KiB its
+  start is handed on, and the value itself is kept in `returned`. A script that fails
+  gives back its error and what it printed before.
+- What a script gives back ends with a line of what the interpreter keeps for the next script, like
+  `[kept for the next script: files (array of 312), walk (function), notes (string of 1532 bytes)]`: every
+  name on `globalThis` that is not a standard object or a tool, at most 30 of them. A getter is not called
+  for it.
+- **Everything a script gives back stays in the conversation** and is sent again with every later call of
+  the LLM. The description of `run` says so: keep what the tools return in variables, print counts, names
+  and excerpts instead of whole files, and look at what is kept before calling a tool again.
+- **The scripts of a conversation share one interpreter.** What a script declares at its top level (`let`,
+  `const`, `var`, `function`, `class`) or puts on `globalThis` is there for the scripts after it, as in a REPL
+  or a notebook: the agent can search, look at what it found, and go on with it in the next script instead of
+  calling the same tools again. A `let` or `const` at the top level is a `var`, so a script may declare a
+  name again that one before it declared.
+- A script that uses `return` at its top level is the body of a function instead: what it returns is its
+  value, and what it declares ends with it. What it puts on `globalThis` stays.
 - A tool takes one object with its parameters and returns the text the LLM would get. A tool that fails
   throws an `Error` with the text of its error: not caught, it ends the script, and the LLM gets the error
   with the line of the script; with `try`/`catch` the script goes on.
 - The functions are also in the object `tools`. A tool whose name is a word of JavaScript has to be called
   there: `tools.delete({path: "…"})`. `delete({…})` would be the operator, which does nothing, so a script
   that says so is not run and the LLM is told how to write it.
-- **A script can do nothing the agent could not do with single calls.** It sees exactly the tools this
-  agent has, with their settings, and `run` itself is not among them. For a peer these are the tools of
-  `a2a` (and `explain_error`), and `run` is off for peers unless `a2a` lists it. A tool runs under the
-  conversation the script was started in: for the same peer, as many hops away, so every rule a tool
-  enforces holds inside a script. In the terminal UI the calls of a script show like single ones
-  (`asking beta…`, `writing notes.md…`).
+- **A script can do nothing the lists do not allow.** It sees exactly the tools this agent may use, with
+  their settings: those of `h2a` for you, those of `a2a` for a peer (and `explain_error`, see
+  [below](#when-a-peer-could-not-answer)). `run` is no tool to list: it is always there, and naming it in
+  `h2a` or `a2a` is an error. A tool runs under the conversation the script was started in: for the same
+  peer, as many hops away, so every rule a tool enforces holds inside a script. In the terminal UI and in
+  the log the calls of a script show one by one (`asking beta…`, `writing notes.md…`).
+- **A peer without a tool runs no script.** As long as `a2a` lists no tool, the agent that answers peers
+  has no tool at all, not even `run`: a script may keep your node busy, see below. With one tool in `a2a`
+  peers run scripts with it.
+- Your agent always has `run`, also with an empty `h2a`: its scripts can then only compute.
+- Every script gets the tools, `tools`, `print` and `console` anew, whatever the script before made of them.
+  What else a script changes, like `JSON.stringify`, stays changed for the scripts of its conversation after
+  it, not for the tools, which do not use what a script can reach.
 - The environment is the language (ES2015 and most of what came after, interpreted by
   [goja](https://github.com/dop251/goja), which is part of the binary) with its standard objects (`JSON`,
-  `Math`, `String`, `Array`, …) and the tools. No network, no files, no processes, no `require` or
-  `import`, no timers, no `console`.
-- Every script starts in a fresh interpreter. Nothing is kept between two calls; what is to stay is written
-  to a file with `write`.
+  `Math`, `String`, `Array`, …), `print`, `console` and the tools. No network, no files, no processes, no
+  `require` or `import`, no timers.
+- **What is kept, and for how long.** Each conversation has an interpreter of its own: your conversations
+  with your agent, and every conversation of every peer, which never sees one of another. The scripts of one
+  conversation run one after the other. 16 conversations keep theirs; beyond that the one that ran a script
+  the longest ago loses all its scripts kept. A script that was stopped for its memory, or that left a tool
+  behind that did not end, takes its interpreter with it, and the LLM is told so. Nothing of it is written
+  to disk: when the node or the terminal UI stops (also for a [restart after a rebuild](#updates)), it is gone,
+  while the conversation goes on.
+
+**Only scripts needs a model that writes JavaScript.** On the same questions with deepseek-v4.1-flash,
+answers with scripts were as good as with single calls of the tools, sent about a third less to the LLM in
+all and took about a fifth less time; they did best where a script cuts down what it finds (counting,
+searching, the same call for many files), and worse where the agent has to read and understand text. A small
+model that cannot write JavaScript can do nothing: try yours before you rely on it. The last line of every
+answer in [`ouro.log`](#the-log) says what it cost.
 
 | Limit of a script | Value | Beyond it |
 |---|---|---|
 | time | 60 s | the script is stopped, and so are the tools it is waiting for; a tool that does not end is waited for 2 s longer and then left behind |
 | calls of tools | 64 | the script is stopped at the next call |
 | size of the script | 64 KiB | it is not run |
-| size of the result | 64 KiB | the LLM gets an error instead |
+| size of the result | 16 KiB, 4 KiB once the results of the answer have more than 64 KiB | the start is handed on, and the value is kept in `returned` |
+| what it prints | 16 KiB, 4 KiB once the results of the answer have more than 64 KiB | the rest is left out, the LLM is told how much, and all of it is kept in `printed` |
 | calls of functions within each other | 1024 | the script is stopped |
 | memory | 256 MiB, see below | the script is stopped |
 
 A script that is stopped cannot catch that. The limits are fixed in the code (`internal/script`), the same
-for you and for peers.
+for you and for peers. They hold for each script, not for all scripts of a conversation.
 
 **The limit of memory is approximate.** The interpreter has none of its own. While a script runs, the node
 looks at the heap of the whole process every 5 ms and stops the script once the heap has grown by more than
@@ -300,8 +352,9 @@ stopped inside a step, and the process may run out of memory. The same holds for
 expression that takes minutes to fail is one step. The script is then given up after 60 s and the answer goes
 on, but the step keeps a processor busy until it ends. As the heap is the one of the process, two scripts
 that run at the same time count against each other, and so does everything else the node allocates
-meanwhile. Whoever may run scripts on your node may therefore slow it down or bring it down: list `run` in
-`a2a` only for peers you would let do that.
+meanwhile. What a conversation keeps between its scripts counts for none of them: up to 16 conversations
+keep what their scripts built, and nothing limits how much that is. Whoever may run scripts on your node may
+therefore slow it down or bring it down: list a tool in `a2a` only for peers you would let do that.
 
 ### Configuration
 
@@ -371,9 +424,10 @@ The ID is there to ask about. Your agent can send the peer a message like "what 
   message, the time and a **category** of the cause (LLM unreachable, credentials refused, rate limit,
   request refused, LLM failure, timeout, cancelled, too many tool calls, internal error). The error itself is
   only in `ouro.log`; neither the file nor the explanation contains its text, an endpoint or a key.
-- The agent that answers peers looks an ID up with the tool `explain_error`. It always has this tool, whatever
-  `a2a` lists, and it is not a tool you can list. It finds only failures of the peer that is asking: with the
-  ID of somebody else's error a peer gets the same "nothing on record" as with a made-up one.
+- The agent that answers peers looks an ID up with the tool `explain_error`, a function of its scripts. It
+  has it whatever else `a2a` lists, as long as it lists one tool: a peer without a tool runs no script, and so
+  cannot be told what went wrong. It is not a tool you can list. It finds only failures of the peer that is
+  asking: with the ID of somebody else's error a peer gets the same "nothing on record" as with a made-up one.
 - The explanation comes from the peer's agent, so it is there once that agent can answer again. While its LLM
   is still down, asking about the ID fails like any other message, with a new ID. Your agent knows this and
   does not promise you an explanation it does not have.
@@ -386,16 +440,21 @@ a conversation that went wrong, the log says what the agent did and where the ti
 
 ```
 2026/10/04 14:02:11 chat 3f6c…: message from the owner: "ask beta for the time"
-2026/10/04 14:02:12 chat 3f6c…: llm call 1 took 1.204s: tool calls: 1, said "I will ask beta."
+2026/10/04 14:02:12 chat 3f6c…: llm call 1 took 1.204s: tool calls: 1, said "I will ask beta." [1.3k tokens, 0 cached (0%)]
 2026/10/04 14:02:15 chat 3f6c…: tool ask_peer {"message":"What time is it?","peer":"beta"} took 2.871s: ok (24 bytes)
-2026/10/04 14:02:16 chat 3f6c…: llm call 2 took 0.912s: text
-2026/10/04 14:02:16 chat 3f6c…: answered after 4.991s (llm calls: 2): "Beta says it is noon."
+2026/10/04 14:02:16 chat 3f6c…: llm call 2 took 0.912s: text [1.3k tokens, 1.3k cached (100%)]
+2026/10/04 14:02:16 chat 3f6c…: answered after 4.991s (llm calls: 2, tool calls: 1, sent 5.3 KiB, 2.6k tokens, 1.3k cached (50%)): "Beta says it is noon."
 ```
 
 - **A line per step**: the message of the owner with its conversation, every call of the LLM when it has
   ended (with `text`, `tool calls: N` or `failed` and the error), every tool call when it has ended (the tool,
   its arguments, `ok` or `error` and the error), and the end of the answer: `answered`, `failed` with the error
-  or `canceled`, each with the time it took and the number of calls of the LLM. What the LLM says along with
+  or `canceled`, each with the time it took and what it cost: the number of calls of the LLM, the number of
+  calls of tools that ended (those in a script and `run` itself) and how much was sent to the LLM in all,
+  the messages and the tools of every call as JSON. That grows with every call, as each sends the whole
+  conversation again. Where the API says what a call cost, its line and the last line also have the tokens
+  sent and how many of them the provider had cached: a call that goes on from the one before should find
+  most of its tokens cached. What the LLM says along with
   calls of tools follows them as `said "…"`; a call that ends in `text` has no text in its line, because that
   text is the answer and is in the last line. The calls of a [script](#scripts) are recorded like the others,
   before the line of `run`.
@@ -512,7 +571,7 @@ internal/kernel      plugin kernel: services, contributions, start order by decl
 internal/tui         terminal UI (Bubble Tea), with the splash and the setup
 internal/setup       the setup of the node: endpoint, key, model, name; the terminal and the UI both use it
 internal/node        the local node: Server runs it, Local controls the background one
-internal/assistant   blueprint of the agents (owner and peers) and the tools list_peers, ask_peer, explain_error, run, get_config, propose_config; what the owner's agent does goes to the log
+internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, get_config, propose_config as functions of its scripts; what the owner's agent does goes to the log
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them

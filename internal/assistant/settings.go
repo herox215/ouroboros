@@ -58,9 +58,8 @@ func ownerOnly(ctx context.Context, tool string) error {
 
 func (b Builder) getConfig() agent.Tool {
 	tool := agent.NewTool(toolGetConfig,
-		"Show the configuration of this node as JSON: its name and model, and under \"tools\" which tools you may use for your owner (h2a), "+
-			"which for peers (a2a) and which paths no tool for files touches (protected). "+
-			"What is not set is shown with the default that holds for it. The keys of the node are not part of it.",
+		"Show the configuration of this node as JSON, with defaults for what is not set: name, model, and under \"tools\" "+
+			"the tools for your owner (h2a), for peers (a2a) and the paths no tool for files touches (protected).",
 		nil,
 		func(ctx context.Context, _ struct{}) (string, error) {
 			if err := ownerOnly(ctx, toolGetConfig); err != nil {
@@ -85,9 +84,8 @@ type proposeArgs struct {
 func (b Builder) proposeConfig() agent.Tool {
 	return agent.Tool{
 		Name: toolProposeConfig,
-		Description: "Propose one change of the configuration of this node to your owner. You cannot change the configuration yourself: " +
-			"the proposal waits until your owner accepts or refuses it in the terminal UI, and until then nothing is changed. " +
-			"Look at the configuration with " + toolGetConfig + " first, and propose the whole new value of one field.",
+		Description: "Propose one change of the configuration to your owner, who accepts or refuses it in the terminal UI. " +
+			"Look at it with " + toolGetConfig + " first, and propose the whole new value of one field.",
 		Schema: `{"type":"object","properties":{` +
 			`"path":{"type":"string","description":"the field: name, model, tools.h2a, tools.a2a or tools.protected"},` +
 			`"value":{"description":"the new value of the field as JSON: a text for name and model, a list for the others"},` +

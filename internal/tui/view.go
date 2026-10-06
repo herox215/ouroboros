@@ -67,6 +67,7 @@ func (m *Model) layout() {
 	m.history.SetWidth(inner)
 	m.history.SetHeight(max(1, m.chatHeight()-4)) // border, title and typing line
 	m.renderHistory(atBottom)
+	m.sizeContents()
 }
 
 // renderHistory fills the history viewport with the conversation, the loop of
@@ -78,25 +79,121 @@ func (m *Model) renderHistory(toBottom bool) {
 		return
 	}
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
-	blocks := make([]string, len(c.entries))
+	render := func(s string) string { return body.Render(s) }
+	summaries := c.summaries()
+	var blocks []string
+	words := false // the last block is the words of a round of an answer that is in
 	for i, e := range c.entries {
 		// A round of the loop is its words and a muted line per call; a
-		// message is a head and text.
+		// message is a head and text. Of an answer that is in, the calls
+		// are summed up below its last round.
 		if len(e.calls) > 0 {
-			blocks[i] = m.roundLines(e, i == c.round-1, func(s string) string { return body.Render(s) })
+			summary, settled := summaries[i]
+			if !settled {
+				blocks, words = append(blocks, m.roundLines(e, i == c.round-1, render)), false
+				continue
+			}
+			if e.text != "" {
+				blocks, words = append(blocks, render(e.text)), true
+			}
+			if summary == "" {
+				continue
+			}
+			// The summary goes right below the last words of the answer.
+			line := mutedStyle.Render("  ↳ " + summary)
+			if words {
+				blocks[len(blocks)-1] += "\n" + line
+			} else {
+				blocks = append(blocks, line)
+			}
+			words = false
 			continue
 		}
+		words = false
 		head := m.entryHead(e)
 		text := body.Render(e.text)
 		if e.failed {
 			text = body.Foreground(bad).Render("✗ " + e.text)
 		}
-		blocks[i] = head + "\n" + text
+		blocks = append(blocks, head+"\n"+text)
 	}
 	m.history.SetContent(strings.Join(blocks, "\n\n"))
 	if toBottom {
 		m.history.GotoBottom()
 	}
+}
+
+// summaries sums up the calls of every answer that is in: by the index of
+// each of its rounds, "" but for the last, which gets what all its rounds
+// called. The rounds of the answer that is pending are not in it.
+func (c *conversation) summaries() map[int]string {
+	summaries := map[int]string{}
+	var calls []call
+	last, mine := -1, -1
+	end := func() {
+		if last >= 0 {
+			summaries[last] = summary(calls)
+		}
+		calls, last = nil, -1
+	}
+	for i, e := range c.entries {
+		if e.mine {
+			end()
+			mine = i
+			continue
+		}
+		if len(e.calls) > 0 {
+			if last >= 0 {
+				summaries[last] = ""
+			}
+			calls, last = append(calls, e.calls...), i
+		}
+	}
+	if c.pending {
+		// The rounds after the last message of the owner are on their way.
+		for i := range summaries {
+			if i > mine {
+				delete(summaries, i)
+			}
+		}
+		return summaries
+	}
+	end()
+	return summaries
+}
+
+// summary sums up the calls of an answer in a line: how many there were,
+// how many failed, and what they were, the same ones once with their count.
+func summary(calls []call) string {
+	var names []string
+	count := map[string]int{}
+	failed := 0
+	for _, c := range calls {
+		name := c.text
+		if i := strings.Index(name, " ✓ "); i >= 0 {
+			name = name[:i]
+		}
+		if i := strings.Index(name, " ✗ "); i >= 0 {
+			name, failed = name[:i], failed+1
+		}
+		if count[name] == 0 {
+			names = append(names, name)
+		}
+		count[name]++
+	}
+	for i, n := range names {
+		if count[n] > 1 {
+			names[i] = fmt.Sprintf("%s ×%d", n, count[n])
+		}
+	}
+	line := "1 tool call"
+	if len(calls) != 1 {
+		line = fmt.Sprintf("%d tool calls", len(calls))
+	}
+	if failed > 0 {
+		line += fmt.Sprintf(", %d failed", failed)
+	}
+	return line + ": " + strings.Join(names, ", ")
 }
 
 // entryHead is the line above the text of a message: who wrote it and when.
@@ -152,6 +249,8 @@ func (m *Model) View() tea.View {
 		body = m.screenView()
 	case screenModel:
 		body = m.modelView()
+	case screenContext:
+		body = m.contextView()
 	}
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), body, m.footerView()))
 	return v
@@ -294,7 +393,11 @@ func (m *Model) chatView() string {
 			content = hint
 		}
 	} else {
-		title := ansi.Truncate(boldStyle.Foreground(peer).Render(m.agentName()), inner, "…")
+		title := boldStyle.Foreground(peer).Render(m.agentName())
+		if c.context > 0 {
+			title += mutedStyle.Render("  · context " + contextSize(c.context))
+		}
+		title = ansi.Truncate(title, inner, "…")
 		var typing string
 		switch {
 		case c.doing != "":
@@ -307,6 +410,16 @@ func (m *Model) chatView() string {
 	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
 	input := box(false, m.light).Width(w).Render(m.input.View())
 	return lipgloss.JoinVertical(lipgloss.Left, chat, input)
+}
+
+// contextSize is how long a context of n bytes is, as the chat shows it:
+// in KiB, and about how many tokens that is, at some 4 bytes a token.
+func contextSize(n int) string {
+	tokens := fmt.Sprintf("%d", n/4)
+	if n >= 4000 {
+		tokens = fmt.Sprintf("%.1fk", float64(n)/4000)
+	}
+	return fmt.Sprintf("%.1f KiB ≈ %s tokens", float64(n)/1024, tokens)
 }
 
 func (m *Model) footerView() string {

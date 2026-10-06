@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
@@ -162,6 +163,32 @@ func (u *ui) restarting() string {
 
 // Restarting reports whether a tool asked for ouro to start anew.
 func (u *ui) Restarting() bool { return u.restarting() != "" }
+
+// Context returns how long the context of the conversation contextID is.
+func (u *ui) Context(contextID string) int { return u.assistant.Context(contextID) }
+
+// Contents returns what the next call of the LLM in the conversation
+// contextID is sent, message by message: the system prompt, every tool with
+// its schema, and the conversation so far.
+func (u *ui) Contents(contextID string) ([]tui.Message, error) {
+	c, err := u.assistant.Contents(contextID)
+	var msgs []tui.Message
+	if c.System != "" {
+		msgs = append(msgs, tui.Message{Role: "system", Text: c.System})
+	}
+	for _, t := range c.Tools {
+		msgs = append(msgs, tui.Message{Role: "tool " + t.Function.Name,
+			Text: t.Function.Description + "\nparameters: " + string(t.Function.Parameters)})
+	}
+	for _, m := range c.Messages {
+		text := m.Content
+		for _, call := range m.ToolCalls {
+			text += "\n→ " + call.Function.Name + " " + call.Function.Arguments
+		}
+		msgs = append(msgs, tui.Message{Role: m.Role, Text: strings.TrimSpace(text)})
+	}
+	return msgs, err
+}
 
 // Start starts the node; one that was not set up is told how to get there in
 // the UI.

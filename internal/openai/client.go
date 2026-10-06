@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -83,6 +84,33 @@ type Message struct {
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolCallID names the call a "tool" message answers.
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// Usage is what the call that brought an assistant message cost, as far
+	// as the API told. It is not sent back.
+	Usage Usage `json:"-"`
+}
+
+// Usage is what one call of the LLM cost in tokens: Prompt are the tokens of
+// what was sent, and Cached those of them the provider had cached from an
+// earlier call. Both are 0 when the API did not say.
+type Usage struct {
+	Prompt, Cached int
+}
+
+// usage is how APIs tell what a call cost: OpenAI and most others the cached
+// tokens in prompt_tokens_details, DeepSeek in prompt_cache_hit_tokens.
+type usage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+}
+
+func (u *usage) read() Usage {
+	if u == nil {
+		return Usage{}
+	}
+	return Usage{u.PromptTokens, max(u.PromptTokensDetails.CachedTokens, u.PromptCacheHitTokens)}
 }
 
 // reasoning is what a model thought, in the fields APIs send it in: vLLM and
@@ -193,6 +221,9 @@ type Client struct {
 	apiKey  string
 	session string // fallback session ID for requests without one
 	http    *http.Client
+	// plain is set once the API refused stream_options: then the usage of a
+	// streamed answer is not asked for again.
+	plain atomic.Bool
 }
 
 // New returns a client for baseURL. An empty apiKey sends no credentials.
@@ -236,13 +267,29 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 // The answer is streamed: a gateway that gives up on a request without data
 // for a while (HTTP 504) keeps waiting while the model thinks and writes. An
 // API that does not stream answers in one piece, which is taken as well.
+//
+// The usage of the call is asked for along with the stream, and OpenAI is
+// given the session as prompt_cache_key: calls of one conversation then hit
+// the same cache. An API that refuses stream_options is asked without them
+// from then on.
 func (c *Client) Complete(ctx context.Context, model string, msgs []Message, tools []Tool) (Message, error) {
+	type options struct {
+		IncludeUsage bool `json:"include_usage"`
+	}
 	in := struct {
-		Model    string    `json:"model"`
-		Messages []Message `json:"messages"`
-		Tools    []Tool    `json:"tools,omitempty"`
-		Stream   bool      `json:"stream"`
-	}{model, msgs, tools, true}
+		Model          string    `json:"model"`
+		Messages       []Message `json:"messages"`
+		Tools          []Tool    `json:"tools,omitempty"`
+		Stream         bool      `json:"stream"`
+		StreamOptions  *options  `json:"stream_options,omitempty"`
+		PromptCacheKey string    `json:"prompt_cache_key,omitempty"`
+	}{Model: model, Messages: msgs, Tools: tools, Stream: true}
+	if !c.plain.Load() {
+		in.StreamOptions = &options{IncludeUsage: true}
+	}
+	if Provider(c.baseURL) == "OpenAI" {
+		in.PromptCacheKey = c.sessionOf(ctx)
+	}
 	// Given up when nothing comes for timeout, from the request on.
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -251,6 +298,13 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 	})
 	defer idle.Stop()
 	msg, err := c.complete(ctx, in, func() { idle.Reset(timeout) })
+	var refused *APIError
+	if in.StreamOptions != nil && errors.As(err, &refused) && refused.Status == http.StatusBadRequest &&
+		strings.Contains(refused.Message, "stream_options") {
+		c.plain.Store(true)
+		in.StreamOptions = nil
+		msg, err = c.complete(ctx, in, func() { idle.Reset(timeout) })
+	}
 	if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, context.Canceled) {
 		return Message{}, cause
 	}
@@ -270,6 +324,7 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 			Choices []struct {
 				Message Message `json:"message"`
 			} `json:"choices"`
+			Usage *usage `json:"usage"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			return Message{}, err
@@ -277,21 +332,26 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 		if len(out.Choices) == 0 {
 			return Message{}, errors.New("openai: response has no choices")
 		}
-		return out.Choices[0].Message, nil
+		msg := out.Choices[0].Message
+		msg.Usage = out.Usage.read()
+		return msg, nil
 	}
 	return readStream(resp.Body, alive)
 }
 
 // readStream puts together the message a stream of server-sent events tells
-// in pieces.
+// in pieces. The usage comes after the choice is finished, in an event of its
+// own or in the last one: the stream is read on until it came, or until it
+// ends.
 func readStream(body io.Reader, alive func()) (Message, error) {
 	var msg Message
 	var calls []ToolCall
 	var content, thought strings.Builder
-	chosen, done := false, false
+	var used *usage
+	chosen, finished := false, false
 	lines := bufio.NewScanner(body)
 	lines.Buffer(make([]byte, 0, 64<<10), maxEvent)
-	for !done && lines.Scan() {
+	for !(finished && used != nil) && lines.Scan() {
 		alive()
 		data, ok := strings.CutPrefix(lines.Text(), "data:")
 		if !ok {
@@ -322,12 +382,16 @@ func readStream(body io.Reader, alive func()) (Message, error) {
 			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
+			Usage *usage `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return Message{}, fmt.Errorf("openai: the stream has an event that is no JSON: %w", err)
 		}
 		if chunk.Error != nil {
 			return Message{}, fmt.Errorf("openai: the stream broke off: %s", chunk.Error.Message)
+		}
+		if chunk.Usage != nil {
+			used = chunk.Usage
 		}
 		// Only the first choice counts, as with an answer in one piece.
 		for _, choice := range chunk.Choices[:min(1, len(chunk.Choices))] {
@@ -360,7 +424,7 @@ func readStream(body io.Reader, alive func()) (Message, error) {
 				call.Function.Name += part.Function.Name
 				call.Function.Arguments += part.Function.Arguments
 			}
-			done = choice.FinishReason != ""
+			finished = finished || choice.FinishReason != ""
 		}
 	}
 	if err := lines.Err(); err != nil {
@@ -373,7 +437,16 @@ func readStream(body io.Reader, alive func()) (Message, error) {
 		calls[i].Type = cmp.Or(calls[i].Type, "function")
 	}
 	msg.Content, msg.Reasoning, msg.ToolCalls = content.String(), thought.String(), calls
+	msg.Usage = used.read()
 	return msg, nil
+}
+
+// sessionOf is the session requests under ctx are sent with.
+func (c *Client) sessionOf(ctx context.Context) string {
+	if session, _ := ctx.Value(sessionKey{}).(string); session != "" {
+		return session
+	}
+	return c.session
 }
 
 // do sends a request and returns the response of one that succeeded, whose
@@ -396,11 +469,7 @@ func (c *Client) do(ctx context.Context, method, path string, in any) (*http.Res
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", UserAgent)
-	session, _ := ctx.Value(sessionKey{}).(string)
-	if session == "" {
-		session = c.session
-	}
-	req.Header.Set("X-Opencode-Session", session)
+	req.Header.Set("X-Opencode-Session", c.sessionOf(ctx))
 
 	resp, err := c.http.Do(req)
 	if err != nil {

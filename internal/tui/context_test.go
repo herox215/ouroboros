@@ -1,0 +1,149 @@
+package tui
+
+import (
+	"errors"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+)
+
+// The chat shows how long the context of the conversation is, from the first
+// call of the LLM on; a new conversation has none yet.
+func TestChatShowsTheContext(t *testing.T) {
+	m, b := newModel(t)
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "context") {
+		t.Fatalf("before the first call:\n%s", view)
+	}
+	b.context = 46285
+	b.says = []string{"I will ask beta"}
+	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta", Done: true}}
+	deliver(m, say(t, m, "ask beta"))
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "alpha  · context 45.2 KiB ≈ 11.6k tokens") {
+		t.Fatalf("after the answer:\n%s", view)
+	}
+	run(m, "/new")
+	if m.chat.context != 0 || strings.Contains(ansi.Strip(m.View().Content), "context") {
+		t.Fatalf("a new conversation: %d", m.chat.context)
+	}
+	for n, want := range map[int]string{1: "0.0 KiB ≈ 0 tokens", 3999: "3.9 KiB ≈ 999 tokens", 4000: "3.9 KiB ≈ 1.0k tokens", 409600: "400.0 KiB ≈ 102.4k tokens"} {
+		if got := contextSize(n); got != want {
+			t.Errorf("%d: %q; want %q", n, got, want)
+		}
+	}
+}
+
+// /context shows what the LLM is sent, message by message, and scrolls
+// through it; esc goes back to the chat.
+func TestContextScreenShowsTheContext(t *testing.T) {
+	m, b := newModel(t)
+	b.context = 4000
+	deliver(m, say(t, m, "ping"))
+	b.contents = []Message{{"system", "You are alpha."}, {"tool run", "Run JavaScript"}, {"user", "ping"}, {"assistant", "→ run {}"},
+		{"tool", strings.Repeat("line\n", 60)}, {"assistant", "pong"}}
+	cmd := run(m, "/context")
+	if m.screen != screenContext || m.input.Value() != "" {
+		t.Fatal("/context should open the context screen")
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "…") || !strings.Contains(view, "Context  3.9 KiB ≈ 1.0k tokens at the last call") {
+		t.Fatalf("while the context is on its way:\n%s", view)
+	}
+	m.Update(cmd())
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{"system  14 bytes", "You are alpha.", "tool run  14 bytes", "user  4 bytes", "assistant  10 bytes", "→ run {}", "0%"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the context should show %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "pong") {
+		t.Fatalf("the end is below the screen:\n%s", view)
+	}
+	press(m, "down", "j", "pgdown", "end")
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "pong") || !strings.Contains(view, "100%") {
+		t.Fatalf("the end should be in sight:\n%s", view)
+	}
+	press(m, "up", "k", "pgup", "home")
+	if m.contents.YOffset() != 0 {
+		t.Fatalf("home should go to the top: %d", m.contents.YOffset())
+	}
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if m.contents.YOffset() == 0 || m.history.YOffset() != 0 {
+		t.Fatal("the wheel should scroll the context, not the chat")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	if m.contents.Width() != 56 || m.contents.Height() != 14 {
+		t.Fatalf("the context should fit the window: %dx%d", m.contents.Width(), m.contents.Height())
+	}
+	press(m, "esc")
+	if m.screen != screenChat {
+		t.Fatal("esc should go back to the chat")
+	}
+}
+
+// A context the backend cannot give in full shows why, with what there is;
+// an empty one says so, and one of a conversation that was left is dropped.
+func TestContextScreenWithoutAContext(t *testing.T) {
+	m, b := newModel(t)
+	b.fail = map[string]error{"contents": errors.New("the node is not set up")}
+	m.Update(run(m, "/context")())
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "✗ the node is not set up") || !strings.Contains(view, "Nothing yet.") || strings.Contains(view, "at the last call") {
+		t.Fatalf("the error should be shown:\n%s", view)
+	}
+	press(m, "esc")
+	b.fail = nil
+	b.contents = []Message{{"user", "of another conversation"}}
+	cmd := run(m, "/context")
+	m.newConversation()
+	m.Update(cmd())
+	if strings.Contains(ansi.Strip(m.View().Content), "of another conversation") {
+		t.Fatal("the context of a conversation that was left should be dropped")
+	}
+}
+
+// While an answer is on its way, its calls are shown one by one; the calls
+// of the answers before it are summed up, the same ones once with their
+// count, and an answer without calls has no summary.
+func TestChatSumsUpTheCallsOfAnAnswer(t *testing.T) {
+	m, b := newModel(t)
+	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta ✓ 1s", Done: true}, {Text: "asking beta"}, {Text: "asking beta ✗ offline", Done: true}}
+	deliver(m, say(t, m, "ask beta twice"))
+	b.steps = nil
+	deliver(m, say(t, m, "thanks"))
+	b.steps = []Step{{Text: "reading a.go"}}
+	cmd := say(t, m, "read a.go")
+	_, cmd = m.Update(cmd()) // the call is announced
+	view := trimmedLines(m)
+	if !strings.Contains(view, "│   ↳ 2 tool calls, 1 failed: asking beta ×2\n") || strings.Count(view, "↳") != 2 ||
+		!strings.Contains(view, "↳ · reading a.go …") {
+		t.Fatalf("the answer before is summed up, the one on its way not:\n%s", view)
+	}
+	deliver(m, cmd)
+	if view := trimmedLines(m); !strings.Contains(view, "│   ↳ 1 tool call: reading a.go\n") || strings.Contains(view, "↳ ·") {
+		t.Fatalf("the answer is in:\n%s", view)
+	}
+}
+
+// The calls of an answer are summed up below its last round, also when the
+// answer is the first entry; a message without calls has no summary, and the
+// rounds of an answer on its way have none either.
+func TestSummaries(t *testing.T) {
+	read := []call{{text: "reading a ✓ 1ms", done: true}}
+	both := append(slices.Clone(read), read...)
+	for name, tc := range map[string]struct {
+		c    conversation
+		want map[int]string
+	}{
+		"first entry": {conversation{entries: []entry{{calls: read}, {text: "done"}}}, map[int]string{0: summary(read)}},
+		"two rounds":  {conversation{entries: []entry{{calls: read}, {calls: read}}}, map[int]string{0: "", 1: summary(both)}},
+		"no calls":    {conversation{entries: []entry{{mine: true, text: "hi"}, {text: "hello"}}}, map[int]string{}},
+		"on its way":  {conversation{entries: []entry{{calls: read}, {calls: read}}, pending: true}, map[int]string{}},
+	} {
+		if got := tc.c.summaries(); !maps.Equal(got, tc.want) {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
+	}
+}

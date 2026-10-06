@@ -37,6 +37,32 @@ func run(t *testing.T, source string) (string, *recorder, error) {
 	return got, r, err
 }
 
+// Of a value beyond MaxResult, its start is handed on, and the value is kept
+// in Returned, as it is.
+func TestResultBeyondTheLimit(t *testing.T) {
+	s, r := NewSession(), &recorder{}
+	got, err := s.Run(context.Background(), `var big = {a: "x" + "ä".repeat(`+fmt.Sprint(MaxResult)+`)}; big`, r.names(), r.call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := `{"a":"x` + strings.Repeat("ä", MaxResult) + `"}`
+	shown := encoded[:MaxResult-1] // ä has two bytes: a character begins there
+	want := shown + "\n(the value has " + fmt.Sprint(len(encoded)) + " bytes, of which the first " + fmt.Sprint(len(shown)) +
+		" came back. It is kept in returned: look into it and give back only what you need)\n" +
+		"[kept for the next script: big (object with 1 keys), returned (object with 1 keys)]"
+	if got != want {
+		t.Fatalf("got %q…%q", got[:20], got[len(got)-200:])
+	}
+	if got, err := s.Run(context.Background(), "returned === big", r.names(), r.call); err != nil || got != "true\n[kept for the next script: big (object with 1 keys), returned (object with 1 keys)]" {
+		t.Fatalf("kept: %q", got)
+	}
+	// Under a tightened context, less is handed on.
+	got, err = s.Run(Tighten(context.Background()), `return "x".repeat(`+fmt.Sprint(Tight+1)+`)`, r.names(), r.call)
+	if err != nil || !strings.HasPrefix(got, strings.Repeat("x", Tight)+"\n(the value has 4097 bytes, of which the first 4096 came back.") {
+		t.Fatalf("tight: %.80q, %v", got, err)
+	}
+}
+
 // What a script returns goes to the LLM: a string as it is, everything else
 // as JSON.
 func TestResult(t *testing.T) {
@@ -49,9 +75,9 @@ func TestResult(t *testing.T) {
 		`return null`:                            "null",
 		`return`:                                 "(the script returned nothing)",
 		``:                                       "(the script returned nothing)",
-		`var a = 1 // a comment at the end`:      "(the script returned nothing)",
+		`var a = 1 // a comment at the end`:      "(the script returned nothing)\n[kept for the next script: a (number)]",
 		"const s = `a${1}`; let n = 2\nreturn s": "a1",
-		`x = 3; return x`:                        "3", // no strict mode: an LLM forgets a var
+		`x = 3; return x`:                        "3\n[kept for the next script: x (number)]", // no strict mode: an LLM forgets a var
 		`return new Date(0).toISOString()`:       "1970-01-01T00:00:00.000Z",
 		`return JSON.stringify({a: 1})`:          `{"a":1}`,
 		`return "x".repeat(` + fmt.Sprint(MaxResult) + `)`: strings.Repeat("x", MaxResult),
@@ -64,8 +90,6 @@ func TestResult(t *testing.T) {
 		`return function() {}`: "what the script returned is no data: return a string, or what JSON can hold",
 		`return Symbol("x")`:   "what the script returned is no data: return a string, or what JSON can hold",
 		`return 1n`:            "what the script returned cannot be written as JSON: TypeError: Do not know how to serialize a BigInt",
-		`return "x".repeat(` + fmt.Sprint(MaxResult+1) + `)`:    "the script returned 65537 bytes: at most 65536 are handed on, so return less",
-		`return {a: "x".repeat(` + fmt.Sprint(MaxResult) + `)}`: "the script returned 65544 bytes: at most 65536 are handed on, so return less",
 	} {
 		if got, _, err := run(t, source); err == nil || got != "" || !strings.HasPrefix(err.Error(), want) {
 			t.Errorf("%q = %q, %v; want the error %q", source, got, err, want)
@@ -105,19 +129,19 @@ func TestTools(t *testing.T) {
 
 // Nothing but the language and the tools: no way out of the interpreter.
 func TestEnvironment(t *testing.T) {
-	absent := []string{"console", "require", "module", "process", "setTimeout", "setInterval", "setImmediate", "fetch", "XMLHttpRequest",
-		"Deno", "Bun", "global", "window", "load", "print", "readFile", "exports", "importScripts", "WebAssembly"}
+	absent := []string{"require", "module", "process", "setTimeout", "setInterval", "setImmediate", "fetch", "XMLHttpRequest",
+		"Deno", "Bun", "global", "window", "load", "readFile", "exports", "importScripts", "WebAssembly"}
 	names, _ := json.Marshal(absent)
 	got, _, err := run(t, `return `+string(names)+`.filter(function(name) { return typeof globalThis[name] !== "undefined" })`)
 	if err != nil || got != "[]" {
 		t.Errorf("reachable from a script: %s, %v", got, err)
 	}
 	got, _, err = run(t, `return Object.getOwnPropertyNames(globalThis).filter(function(n) { return typeof globalThis[n] === "function" && !/^[A-Z]/.test(n) }).sort()`)
-	want := `["decodeURI","decodeURIComponent","delete","echo","encodeURI","encodeURIComponent","escape","eval","fail","isFinite","isNaN","list_peers","parseFloat","parseInt","unescape"]`
+	want := `["decodeURI","decodeURIComponent","delete","echo","encodeURI","encodeURIComponent","escape","eval","fail","isFinite","isNaN","list_peers","parseFloat","parseInt","print","unescape"]`
 	if err != nil || got != want {
 		t.Errorf("the functions of a script: %s, %v", got, err)
 	}
-	for _, source := range []string{`import("fs")`, `return require("fs")`, `console.log("x")`} {
+	for _, source := range []string{`import("fs")`, `return require("fs")`} {
 		if got, _, err := run(t, source); err == nil || got != "" {
 			t.Errorf("%q = %q", source, got)
 		}
@@ -154,11 +178,15 @@ func TestErrors(t *testing.T) {
 	}
 
 	for source, want := range map[string]string{
-		"\n\nthrow new Error('boom')": "the script failed: Error: boom\n\tat script:3:7\n\tat script:4:3",
-		"throw 'text'":                "the script failed: text\n\tat script:1:13\n\tat script:2:3",
+		"\n\nthrow new Error('boom')": "the script failed: Error: boom\n\tat script:3:7",
+		"throw 'text'":                "the script failed: text\n\tat script:1:1",
 		"return nothing.there":        "the script failed: ReferenceError: nothing is not defined\n\tat script:1:20\n\tat script:2:3",
-		"var x = ;":                   "the script is not valid JavaScript: SyntaxError: script: Line 1:21 Unexpected token ; (and 2 more errors)",
-		"}":                           "the script is not valid JavaScript: SyntaxError: script: Line 2:1 Unexpected token }",
+		"nothing.there":               "the script failed: ReferenceError: nothing is not defined\n\tat script:1:1",
+		"var x = ;":                   "the script is not valid JavaScript: SyntaxError: script: Line 1:9 Unexpected token ;",
+		"}":                           "the script is not valid JavaScript: SyntaxError: script: Line 1:1 Unexpected token }",
+		"return 1 +":                  "the script is not valid JavaScript: SyntaxError: script: Line 2:1 Unexpected token }",
+		`const home = await list({path: "~"})`: "the script is not valid JavaScript: SyntaxError: script: Line 1:20 Unexpected identifier: " +
+			"the tools return their result right away, so call them without await",
 		"function f() { return f() }\nreturn f()": "the script was stopped: more than 1024 calls within each other, at f (script:1:",
 		strings.Repeat(" ", MaxSource) + ";":      "the script has 65537 bytes: at most 65536 are run",
 	} {
@@ -283,7 +311,7 @@ func TestToolThatDoesNotEnd(t *testing.T) {
 		after <- "returned"
 		return "", nil
 	})
-	if err == nil || got != "" || err.Error() != "the script was stopped: it ran for more than 100ms, and a tool it called did not end" {
+	if err == nil || got != "" || err.Error() != "the script was stopped: it ran for more than 100ms, and a tool it called did not end: what the scripts before it kept is gone" {
 		t.Fatalf("got %q, %v", got, err)
 	}
 	if took := time.Since(start); took < 200*time.Millisecond || took > 20*time.Second {
@@ -325,7 +353,7 @@ func TestCancelled(t *testing.T) {
 func TestLimitOfMemory(t *testing.T) {
 	shorten(t, time.Minute, time.Minute, 32<<20)
 	got, _, err := run(t, `var all = []; while (true) { all.push(new Array(1000).fill(all.length)) }`)
-	if err == nil || got != "" || err.Error() != "the script was stopped: it used more than 32 MiB of memory" {
+	if err == nil || got != "" || err.Error() != "the script was stopped: it used more than 32 MiB of memory: what the scripts before it kept is gone" {
 		t.Fatalf("got %q, %v", got, err)
 	}
 	// What stays below the limit runs to its end.

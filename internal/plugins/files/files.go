@@ -48,15 +48,17 @@ const (
 	maxMatchBytes = 300       // bytes of a line search shows
 )
 
-// maxSearched is how many files one call of search looks into; tests lower it.
-var maxSearched = 10000
+// maxSearched is how many files one call of search looks into, and
+// maxWalked how many files and directories it looks at, whether their names
+// match the glob or not; tests lower them.
+var maxSearched, maxWalked = 10000, 100000
 
 // open opens a file for reading; tests replace it to get in the way.
 var open = func(path string) (io.ReadCloser, error) { return os.Open(path) }
 
-// pathHint is what every tool says about its paths.
-const pathHint = `The path is absolute or starts with "~", the home directory. ` +
-	`Where the tool may go is set by the owner of the node: a refusal names the rule, and there is no way around it.`
+// pathAbout is what every tool says about a path. Where a tool may go is
+// told in the prompt of the agent, once for all of them.
+const pathAbout = `absolute or starting with "~", the home directory`
 
 // Plugin contributes the tools for files, which ask g for every path, and
 // what the owner is shown of their calls.
@@ -82,48 +84,43 @@ func Plugin(g *guard.Guard) plugin.Plugin {
 
 // tools are the six tools.
 func tools(g *guard.Guard) []plugin.Tool {
-	path := param{"path", "string", "the file", false}
+	path := param{"path", "string", "the file, " + pathAbout, false}
 	return []plugin.Tool{
 		tool(g, Read,
-			fmt.Sprintf("Read a text file and return its content: at most %d lines or %d KiB per call. ", maxReadLines, maxReadBytes>>10)+
-				"A result without a note at its end is the whole file. Otherwise the note says which lines of how many it returned, "+
-				"and at which line to continue when there is more. "+
-				"Leave out limit unless only a part of the file you know is wanted: a file read in small pieces costs a call each. "+
-				"To know a whole file, continue with offset until the note says the file ends. "+pathHint,
+			fmt.Sprintf("Read a text file: at most %d lines or %d KiB per call. ", maxReadLines, maxReadBytes>>10)+
+				"When there is more, a note at the end says which lines of how many it returned and where to continue. "+
+				"Leave out limit unless you want only a part of the file you know: every piece costs a call.",
 			[]param{path,
-				{"offset", "integer", "the line to start at, counted from 1; the first one if missing", true},
-				{"limit", "integer", "how many lines to return at most; leave it out to get as many as one call returns", true}},
-			read),
+				{"offset", "integer", "the first line, counted from 1", true},
+				{"limit", "integer", "how many lines at most", true}},
+			without(read)),
 		tool(g, Write,
-			fmt.Sprintf("Create a file with the given content, or replace all of its content. Missing directories are created. At most %d MiB. ", maxWriteBytes>>20)+
-				"To change a part of a file use "+Edit+". "+pathHint,
+			fmt.Sprintf("Create a file or replace all of its content; missing directories are created. At most %d MiB. ", maxWriteBytes>>20)+
+				"To change a part of a file use "+Edit+".",
 			[]param{path, {"content", "string", "the whole content of the file", false}},
-			write),
+			without(write)),
 		tool(g, Edit,
-			`Replace the text "old" in a file by "new". "old" has to match the text of the file exactly, and exactly once: `+
-				"take enough of the text around the change to make it so. "+
-				"Returns the changed lines as they are now, with a few lines around them: check them before the next edit. "+pathHint,
+			`Replace the text "old" in a file by "new". "old" has to match exactly once: take enough of the text around the change. `+
+				"Returns the changed lines with a few around them: check them before the next edit.",
 			[]param{path,
-				{"old", "string", "the text to replace, exactly as it is in the file", false},
+				{"old", "string", "the text to replace, exactly as in the file", false},
 				{"new", "string", "the text to put in its place", false}},
-			edit),
+			without(edit)),
 		tool(g, List,
-			"List the entries of a directory: directories end in /, files come with their size. "+
-				fmt.Sprintf("At most %d entries; what the tool may not read is not listed. ", maxListed)+pathHint,
-			[]param{{"path", "string", "the directory", false}},
-			list),
+			fmt.Sprintf("List a directory: directories end in /, files come with their size. At most %d entries; what the tool may not read is left out.", maxListed),
+			[]param{{"path", "string", "the directory, " + pathAbout, false}},
+			without(list)),
 		tool(g, Delete,
-			"Delete a file or an empty directory. A directory with content is only deleted with everything in it when recursive is true. "+pathHint,
-			[]param{{"path", "string", "the file or directory", false},
-				{"recursive", "boolean", "delete a directory together with its content", true}},
-			remove),
+			"Delete a file or an empty directory, or with recursive a directory and everything in it.",
+			[]param{{"path", "string", "the file or directory, " + pathAbout, false},
+				{"recursive", "boolean", "delete a directory with its content", true}},
+			without(remove)),
 		tool(g, Search,
-			"Find the lines of text files that match a regular expression (RE2 syntax; (?i) at its start ignores case): "+
-				"in one file, or in every file below a directory, hidden directories left out. "+
-				fmt.Sprintf("A file of more than %d MiB is not searched. ", maxWriteBytes>>20)+
-				fmt.Sprintf("Returns path:line: text for every matching line, at most %d lines, and looks into at most %d files. ", maxMatches, maxSearched)+
-				"Search first to find where something is, then read only the lines around it. "+pathHint,
-			[]param{{"path", "string", "the file or directory", false},
+			"Find the lines of text files that match a regular expression (RE2; (?i) at its start ignores case), "+
+				"in one file or every file below a directory, hidden directories left out. "+
+				fmt.Sprintf("Returns path:line: text, at most %d lines from at most %d files of at most %d it looks at; files over %d MiB are skipped. ", maxMatches, maxSearched, maxWalked, maxWriteBytes>>20)+
+				"Search first to find where something is, then read only the lines around it.",
+			[]param{{"path", "string", "the file or directory, " + pathAbout, false},
 				{"pattern", "string", "the regular expression a line has to match", false},
 				{"glob", "string", `only files whose name matches this, like "*.go"`, true}},
 			search),
@@ -148,7 +145,7 @@ type param struct {
 
 // tool returns the tool called name, which takes params and runs run with
 // what decides about paths for the conversation the call is made in.
-func tool[T any](g *guard.Guard, name, description string, params []param, run func(c *guard.Checker, args T) (string, error)) plugin.Tool {
+func tool[T any](g *guard.Guard, name, description string, params []param, run func(ctx context.Context, c *guard.Checker, args T) (string, error)) plugin.Tool {
 	return plugin.Configurable(plugin.Tool{Name: name, Description: description, Schema: schema(params)},
 		func(s settings) (plugin.RunFunc, error) {
 			if s.Allow != nil {
@@ -169,9 +166,15 @@ func tool[T any](g *guard.Guard, name, description string, params []param, run f
 				if err != nil {
 					return "", err
 				}
-				return run(c, args)
+				return run(ctx, c, args)
 			}, nil
 		})
+}
+
+// without makes run, which ends soon on its own, a tool that is given the
+// context of its call.
+func without[T any](run func(c *guard.Checker, args T) (string, error)) func(context.Context, *guard.Checker, T) (string, error) {
+	return func(_ context.Context, c *guard.Checker, args T) (string, error) { return run(c, args) }
 }
 
 // schema is the JSON schema of an object with the properties params.
@@ -492,10 +495,12 @@ type searchArgs struct {
 	Glob    string `json:"glob"`
 }
 
-// errSearched ends a search that looked into maxSearched files.
-var errSearched = errors.New("searched enough")
+// errSearched ends a search that looked into maxSearched files, and
+// errWalked one that looked at maxWalked files and directories.
+var errSearched, errWalked = errors.New("searched enough"), errors.New("walked enough")
 
-func search(c *guard.Checker, args searchArgs) (string, error) {
+// search ends when ctx does, as a search of a big tree takes long.
+func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, error) {
 	if args.Pattern == "" {
 		return "", errors.New(Search + ` needs "pattern", the regular expression to find`)
 	}
@@ -514,8 +519,15 @@ func search(c *guard.Checker, args searchArgs) (string, error) {
 		return "", err
 	}
 	var lines []string
-	searched, more := 0, false
+	searched, walked := 0, 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if walked == maxWalked {
+			return errWalked
+		}
+		walked++
 		if err != nil {
 			if path == root {
 				return err
@@ -534,7 +546,6 @@ func search(c *guard.Checker, args searchArgs) (string, error) {
 			return nil
 		}
 		if searched == maxSearched {
-			more = true
 			return errSearched
 		}
 		searched++
@@ -551,11 +562,15 @@ func search(c *guard.Checker, args searchArgs) (string, error) {
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errSearched) {
-		return "", err
-	}
-	if more {
+	switch {
+	case errors.Is(err, errSearched):
 		lines = append(lines, fmt.Sprintf("[the search stopped after %d files: narrow the path or the glob]", maxSearched))
+	case errors.Is(err, errWalked):
+		lines = append(lines, fmt.Sprintf("[the search stopped after looking at %d files and directories: narrow the path]", maxWalked))
+	case ctx.Err() != nil:
+		return "", fmt.Errorf("the search was stopped after looking at %d files and directories: %w", walked, ctx.Err())
+	case err != nil:
+		return "", err
 	}
 	if len(lines) == 0 {
 		return "(no line matches)", nil

@@ -21,16 +21,18 @@ type sent struct {
 }
 
 type fakeBackend struct {
-	status  Status
-	sent    []sent
-	steps   []Step // reported before the reply
-	says    []string
-	reply   string
-	sendErr error
-	started int
-	stopped int
-	setups  int        // how often the setup was opened
-	setup   *fakeSetup // what it opens; one that knows the fake endpoint if nil
+	status   Status
+	sent     []sent
+	steps    []Step // reported before the reply
+	says     []string
+	reply    string
+	sendErr  error
+	started  int
+	stopped  int
+	setups   int        // how often the setup was opened
+	setup    *fakeSetup // what it opens; one that knows the fake endpoint if nil
+	context  int        // how long the context of every conversation is
+	contents []Message  // what the context of every conversation is
 
 	trust     Contacts
 	accepted  []string
@@ -102,6 +104,8 @@ func (f *fakeBackend) RefuseProposal(id string) error {
 }
 func (f *fakeBackend) Models(ctx context.Context) (Models, error) { return f.offers, f.modelsErr }
 func (f *fakeBackend) Restarting() bool                           { return f.restarting }
+func (f *fakeBackend) Context(string) int                         { return f.context }
+func (f *fakeBackend) Contents(string) ([]Message, error)         { return f.contents, f.fail["contents"] }
 func (f *fakeBackend) SetModel(model string) error {
 	f.set = append(f.set, model)
 	return f.fail["setmodel"]
@@ -404,8 +408,9 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	if c.pending || !sameEntries(c.entries, want) {
 		t.Fatalf("the loop belongs in the history: %+v", c.entries)
 	}
-	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"I will ask beta", "· asking beta", "beta says it is noon"} {
+	view := trimmedLines(m)
+	// Once the answer is in, its calls are summed up below the words.
+	for _, want := range []string{"I will ask beta\n│   ↳ 1 tool call: asking beta", "beta says it is noon"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the history should show %q:\n%s", want, view)
 		}
@@ -514,11 +519,10 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		t.Fatalf("the loop in the history: %+v", m.chat.entries)
 	}
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"I read both", "↳ · reading a.go ✓ 3ms", "↳ · reading b.go ✗ no such file",
-		"↳ · running a script ✓ 9ms", "↳ · writing c.go ✓ 1ms"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("the history should show %q:\n%s", want, view)
-		}
+	// Once the answer is in, the calls of all its rounds are one line.
+	if !strings.Contains(trimmedLines(m), "I read both\n│   ↳ 4 tool calls, 1 failed: reading a.go, reading b.go, running a script, writing c.go\n") ||
+		strings.Contains(view, "↳ ·") {
+		t.Fatalf("the calls should be summed up:\n%s", view)
 	}
 	if strings.Contains(view, " …") {
 		t.Fatalf("no call is waited for any more:\n%s", view)
@@ -530,6 +534,16 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	if !sameEntries(other.chat.entries, want) {
 		t.Fatalf("resumed %+v", other.chat.entries)
 	}
+}
+
+// trimmedLines is the view of m without colors, every line without the
+// spaces and the border at its end.
+func trimmedLines(m *Model) string {
+	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(strings.TrimRight(strings.TrimRight(l, " "), "│"), " ")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // sameEntries reports whether got are the entries of want, the time aside.

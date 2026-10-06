@@ -63,6 +63,11 @@ func TestAsk(t *testing.T) {
 	if err != nil || got != "[gpt-4o] turns=5 last=luna: how are you?" {
 		t.Fatalf("got %q, %v", got, err)
 	}
+	// The script the call is made in is reported around it.
+	if len(steps) != 4 || steps[0].Tool != toolRun || steps[3].Tool != toolRun {
+		t.Fatalf("steps %+v", steps)
+	}
+	steps = steps[1:3]
 	// The call is reported when it starts and when its result is in, with
 	// its arguments and without the answer of the peer.
 	asking := `{"message":"how are you?","peer":"luna"}`
@@ -84,7 +89,7 @@ func TestAsk(t *testing.T) {
 	if err != nil || got != "[gpt-4o] turns=3 last=luna (id "+luna.ID+", model gpt-luna, connected): knows the way" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if len(steps) != 2 || steps[0].Tool != toolListPeers || steps[0].Done || steps[1].Tool != toolListPeers || !steps[1].Done || len(shown(steps)) != 0 {
+	if len(steps) != 4 || steps[1].Tool != toolListPeers || steps[1].Done || steps[2].Tool != toolListPeers || !steps[2].Done || len(shown(steps)) != 0 {
 		t.Fatalf("steps %+v, shown %q", steps, shown(steps))
 	}
 
@@ -239,12 +244,12 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		tools []config.Entry
 		want  string
 	}{
-		{config.Named(), start + ownerStyle},
-		{config.Named(toolListPeers), start + ownerStyle},
-		{config.Named(toolAskPeer), start + askHint + ownerStyle},
-		{config.Named("edit"), start + filesHint + ownerStyle},
-		{config.Named("search"), start + filesHint + searchHint + ownerStyle},
-		{config.Named("*"), start + askHint + filesHint + searchHint + claimHint + ownerStyle},
+		{config.Named(), start + scriptHint + ownerStyle},
+		{config.Named(toolListPeers), start + scriptHint + ownerStyle},
+		{config.Named(toolAskPeer), start + askHint + scriptHint + ownerStyle},
+		{config.Named("edit"), start + filesHint + scriptHint + ownerStyle},
+		{config.Named("search"), start + filesHint + scriptHint + ownerStyle},
+		{config.Named("*"), start + askHint + filesHint + claimHint + scriptHint + ownerStyle},
 	} {
 		cfg.Tools = &config.Tools{H2A: tt.tools}
 		if got, err := a.Ask(context.Background(), "chat", "?system", nil); err != nil || got != tt.want {

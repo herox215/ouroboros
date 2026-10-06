@@ -446,3 +446,92 @@ func TestProvider(t *testing.T) {
 		}
 	}
 }
+
+// The usage of a call comes in the stream after its choice, or in one piece
+// with the answer, the cached tokens in the field of OpenAI or of DeepSeek.
+func TestCompleteTellsTheUsage(t *testing.T) {
+	for name, tc := range map[string]struct {
+		h    http.HandlerFunc
+		want Usage
+	}{
+		"stream": {sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":1200,"prompt_tokens_details":{"cached_tokens":1024}}}`, "[DONE]"), Usage{1200, 1024}},
+		"in the last event": {sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":900,"prompt_cache_hit_tokens":640}}`), Usage{900, 640}},
+		"none":              {sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]"), Usage{}},
+		"in one piece": {func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":50}}`))
+		}, Usage{50, 0}},
+	} {
+		got, err := newServer(t, tc.h).Complete(context.Background(), "gpt", nil, nil)
+		if err != nil || got.Content != "ok" || got.Usage != tc.want {
+			t.Errorf("%s: got %+v, %v; want the usage %+v", name, got, err, tc.want)
+		}
+	}
+}
+
+// redirect sends every request to the server at to, whatever its URL.
+type redirect struct{ to string }
+
+func (r redirect) RoundTrip(req *http.Request) (*http.Response, error) {
+	u, _ := url.Parse(r.to)
+	req.URL.Scheme, req.URL.Host = u.Scheme, u.Host
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// The usage is asked for with stream_options, and OpenAI gets the session as
+// prompt_cache_key; an API that refuses stream_options is asked without them
+// from then on.
+func TestCompleteAsksForUsageAndCache(t *testing.T) {
+	var bodies []map[string]any
+	refuse := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		if _, ok := body["stream_options"]; ok && refuse {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":{"message":"Unrecognized request argument supplied: stream_options"}}`))
+			return
+		}
+		sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]")(w, r)
+	}))
+	defer srv.Close()
+	openAI := New(DefaultBaseURL, "sk")
+	openAI.http = &http.Client{Transport: redirect{srv.URL}}
+	if _, err := openAI.Complete(WithSession(context.Background(), "conv-1"), "gpt", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	other := New(srv.URL, "sk")
+	if _, err := other.Complete(WithSession(context.Background(), "conv-1"), "gpt", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if bodies[0]["prompt_cache_key"] != "conv-1" || bodies[0]["stream_options"] == nil ||
+		bodies[1]["prompt_cache_key"] != nil || bodies[1]["stream_options"] == nil {
+		t.Fatalf("bodies %v", bodies)
+	}
+	refuse, bodies = true, nil
+	for range 2 {
+		if got, err := other.Complete(context.Background(), "gpt", nil, nil); err != nil || got.Content != "ok" {
+			t.Fatalf("refused: %+v, %v", got, err)
+		}
+	}
+	if len(bodies) != 3 || bodies[0]["stream_options"] == nil || bodies[1]["stream_options"] != nil || bodies[2]["stream_options"] != nil {
+		t.Fatalf("after the refusal: %v", bodies)
+	}
+}
+
+// The stream is read until the choice is finished and the usage came, in
+// whatever order, and no further.
+func TestCompleteReadsTheStreamUntilTheUsage(t *testing.T) {
+	for name, h := range map[string]http.HandlerFunc{
+		"usage first": sse(`{"choices":[{"delta":{"content":"o"}}],"usage":{"prompt_tokens":5}}`,
+			`{"choices":[{"delta":{"content":"k"},"finish_reason":"stop"}]}`, "[DONE]"),
+		"then nothing more": sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5}}`,
+			"no event of the API"),
+	} {
+		got, err := newServer(t, h).Complete(context.Background(), "gpt", nil, nil)
+		if err != nil || got.Content != "ok" || got.Usage.Prompt != 5 {
+			t.Errorf("%s: %+v, %v", name, got, err)
+		}
+	}
+}

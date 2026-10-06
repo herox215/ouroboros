@@ -56,6 +56,13 @@ type Backend interface {
 	// loop, not only its end. say comes once for every round of the loop that
 	// asks for tools, with "" if the agent said nothing, before its steps.
 	Ask(ctx context.Context, contextID, text string, step func(Step), say func(string)) (string, error)
+	// Context returns how long the context of the conversation contextID is,
+	// in bytes: what the last call of the LLM in it sent. 0 if none was made.
+	Context(contextID string) int
+	// Contents returns what the next call of the LLM in the conversation
+	// contextID is sent, message by message. With an error it returns what
+	// it has of it.
+	Contents(contextID string) ([]Message, error)
 	Contacts() (Contacts, error)
 	// Accept and Reject decide on a connection request. They fail with
 	// plugin.ErrNotSaved if the decision could not be stored.
@@ -100,6 +107,7 @@ const (
 	screenHelp
 	screenPlugin // the one of Model.screens that is open
 	screenModel  // the models of the provider, for /model
+	screenContext
 )
 
 // entry is one message in the conversation: from the user, from the agent, or
@@ -127,6 +135,7 @@ type conversation struct {
 	doing     string             // what the agent is waiting for, like "asking beta"
 	round     int                // the entry of the round of the loop that is on, counted from 1; 0 for none yet
 	cancel    context.CancelFunc // stops the answer that is pending
+	context   int                // how long its context is, see Backend.Context
 }
 
 // Model is the UI state.
@@ -159,6 +168,8 @@ type Model struct {
 	modelSel  int    // the model selected of models.Chat
 	modelBusy string // what the model screen waits for, like "listing models"
 	modelErr  error  // why the models are not there
+
+	contents viewport.Model // the context of the conversation, for /context
 
 	width, height int
 	showSplash    bool
@@ -369,6 +380,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case modelsMsg:
 		m.modelsLoaded(msg.models, msg.err)
+	case contentsMsg:
+		m.contentsLoaded(msg)
 	case stepMsg:
 		m.step(msg)
 		return m, func() tea.Msg { return <-msg.next }
@@ -394,6 +407,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
+		if m.screen == screenContext {
+			m.contents, cmd = m.contents.Update(msg)
+			return m, cmd
+		}
 		m.history, cmd = m.history.Update(msg)
 		return m, cmd
 	case tea.KeyPressMsg:
@@ -432,6 +449,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.handleScreenKey(msg)
 	case screenModel:
 		return m.handleModelKey(msg)
+	case screenContext:
+		return m.handleContextKey(msg)
 	case screenHelp:
 		if msg.String() == "esc" {
 			m.screen = screenChat
@@ -640,6 +659,7 @@ func (m *Model) step(msg stepMsg) {
 		c.add(entry{at: m.now()})
 		c.round = len(c.entries)
 	}
+	c.context = m.backend.Context(c.contextID)
 	e := &c.entries[c.round-1]
 	if !msg.step.Done {
 		e.calls = append(e.calls, call{text: msg.step.Text})
@@ -683,6 +703,7 @@ func (m *Model) say(msg sayMsg) {
 		return
 	}
 	c.round, c.doing = 0, ""
+	c.context = m.backend.Context(c.contextID)
 	if msg.text != "" {
 		c.add(entry{text: msg.text, at: m.now()})
 		c.round = len(c.entries)
@@ -705,6 +726,7 @@ func (m *Model) receive(msg replyMsg) tea.Cmd {
 	c.cancel() // the answer is in; release its context
 	c.pending, c.doing, c.cancel = false, "", nil
 	c.round = 0 // the loop of this answer is over
+	c.context = m.backend.Context(c.contextID)
 	e := entry{text: msg.text, at: m.now()}
 	if msg.err != nil {
 		e.text, e.failed = msg.err.Error(), true

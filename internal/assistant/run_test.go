@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
 	"ouroboros/internal/script"
 )
@@ -64,9 +66,9 @@ func result(t *testing.T, got string, err error) string {
 	return last
 }
 
-// The owner's agent runs a script that calls its other tools, under the
-// conversation the script was asked for in, and the owner is shown every call
-// the script makes like one the LLM made itself.
+// The owner's agent is offered run and nothing else. A script calls its
+// tools, under the conversation the script was asked for in, and the owner is
+// shown every call the script makes.
 func TestRunForTheOwner(t *testing.T) {
 	cfg, b := scripted(t)
 	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
@@ -84,6 +86,14 @@ func TestRunForTheOwner(t *testing.T) {
 	if strings.Join(steps, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("steps:\n%s\nwant:\n%s", strings.Join(steps, "\n"), strings.Join(want, "\n"))
 	}
+	// A tool on its own is no tool of the LLM: the fake one calls it in a script.
+	steps = nil
+	if got, err := a.Ask(ctx, "chat2", `!who {}`, observe); err != nil || !strings.HasSuffix(got, " last=the owner in chat2") || !strings.HasPrefix(steps[0], "run ") {
+		t.Fatalf("a tool besides run: %q, %v, %q", got, err, steps)
+	}
+	if got, err := a.Ask(ctx, "chat2", "?system", nil); err != nil || !strings.Contains(got, scriptHint) {
+		t.Fatalf("the prompt: %q, %v", got, err)
+	}
 
 	// A tool that fails throws; the error of a script is one of the tool run.
 	got, err = a.Ask(ctx, "chat", runs(`try { note({}) } catch (e) { return "caught " + e.message }`), nil)
@@ -91,109 +101,192 @@ func TestRunForTheOwner(t *testing.T) {
 		t.Fatalf("caught: %s", got)
 	}
 	got, err = a.Ask(ctx, "chat", runs("who()\nnote({})"), nil)
-	if got := result(t, got, err); got != "error: the script failed: Error: test error\n\tat script:2:5\n\tat script:3:3" {
+	if got := result(t, got, err); got != "error: the script failed: Error: test error\n\tat script:2:5" {
 		t.Fatalf("not caught: %q", got)
 	}
-	for _, args := range []string{`{}`, `{"script": ""}`, `{"script": 1}`} {
+	for args, want := range map[string]string{`{}`: `error: run needs "script"`, `{"script": ""}`: `error: run needs "script"`, `{"script": 1}`: "error: run: invalid arguments"} {
 		got, err = a.Ask(ctx, "chat", "!"+toolRun+" "+args, nil)
-		if got := result(t, got, err); got != `error: run needs "script"` {
+		if got := result(t, got, err); got != want {
 			t.Fatalf("%s: %q", args, got)
 		}
 	}
 
 	// The tools of a script are the ones the owner left the agent, with their settings.
-	cfg.Tools = &config.Tools{H2A: []config.Entry{{Tool: toolRun}, {Tool: "note", Settings: json.RawMessage(`{"prefix": "> "}`)}}}
+	cfg.Tools = &config.Tools{H2A: []config.Entry{{Tool: "note", Settings: json.RawMessage(`{"prefix": "> "}`)}}}
 	got, err = a.Ask(ctx, "chat", runs(`return [note({text: "a"}), typeof who, Object.keys(tools)]`), nil)
 	if got := result(t, got, err); got != `["> a","undefined",["note"]]` {
 		t.Fatalf("with settings: %s", got)
 	}
-	cfg.Tools = &config.Tools{H2A: config.Named(toolRun)}
-	got, err = a.Ask(ctx, "chat", runs(`return [typeof note, Object.keys(tools)]`), nil)
-	if got := result(t, got, err); got != `["undefined",[]]` {
-		t.Fatalf("run alone: %s", got)
+	// Without any, a script only computes.
+	cfg.Tools = &config.Tools{H2A: []config.Entry{}}
+	got, err = a.Ask(ctx, "chat", runs(`return [typeof note, Object.keys(tools), 6 * 7]`), nil)
+	if got := result(t, got, err); got != `["undefined",[],42]` {
+		t.Fatalf("no tools: %s", got)
 	}
-	// Without run in the list there is no run.
-	cfg.Tools = &config.Tools{H2A: config.Named("who", "note")}
-	if got, err := a.Ask(ctx, "chat2", runs(`return 1`), nil); err != nil || !strings.HasSuffix(got, " turns=1 last="+runs(`return 1`)) {
-		t.Fatalf("without run: %q, %v", got, err)
+	// run is no tool to list.
+	cfg.Tools = &config.Tools{H2A: config.Named(toolRun, "note")}
+	if _, err := a.Ask(ctx, "chat", "hi", nil); err == nil || err.Error() != "tools.h2a: run is no tool to list: the agent always has it, and every tool listed here is a function of its scripts" {
+		t.Fatalf("run listed: %v", err)
 	}
 }
 
-// For a peer run is off unless it is listed, and a script has the tools of
-// a2a and no others; explain_error is among them as it is among the tools of
-// the agent.
+// A peer runs scripts only when a2a gives it a tool, and a script has the
+// tools of a2a and no others; explain_error is among them.
 func TestRunForAPeer(t *testing.T) {
 	cfg, b := scripted(t)
-	ask := func(source string) string {
+	ask := func(text string) string {
 		t.Helper()
 		bot, err := b.ForPeers(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := bot.Respond(context.WithValue(from("luna"), asker{}, "luna"), "c", runs(source))
+		got, err := bot.Respond(context.WithValue(from("luna"), asker{}, "luna"), "c", text)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return got
 	}
-	if got := ask(`return who()`); !strings.Contains(got, " turns=1 ") {
+	b.Failures = diagnosis.Open(filepath.Join(t.TempDir(), "failures.json"))
+	if got := ask(runs(`return 1`)); !strings.Contains(got, " turns=1 ") {
 		t.Fatalf("by default: %q", got)
 	}
-	cfg.Tools = &config.Tools{A2A: config.Named("who", "note")}
-	if got := ask(`return who()`); !strings.Contains(got, " turns=1 ") {
-		t.Fatalf("not listed: %q", got)
+	if got := ask("?system"); strings.Contains(got, toolRun) || strings.Contains(got, toolExplainError) {
+		t.Fatalf("the prompt without tools: %q", got)
 	}
-	cfg.Tools = &config.Tools{A2A: []config.Entry{{Tool: toolRun}, {Tool: "note", Settings: json.RawMessage(`{"prefix": "peer: "}`)}}}
-	if got := ask(`return [note({text: "a"}), typeof who, Object.keys(tools)]`); !strings.HasSuffix(got, ` last=["peer: a","undefined",["note"]]`) {
+	cfg.Tools = &config.Tools{A2A: []config.Entry{{Tool: "note", Settings: json.RawMessage(`{"prefix": "peer: "}`)}}}
+	if got := ask(runs(`return [note({text: "a"}), typeof who, Object.keys(tools)]`)); !strings.HasSuffix(got, ` last=["peer: a","undefined",["note","explain_error"]]`) {
 		t.Fatalf("listed: %q", got)
 	}
-	cfg.Tools = &config.Tools{A2A: config.Named(toolRun, "who")}
-	if got := ask(`return who()`); !strings.HasSuffix(got, " last=luna in c") {
+	if got := ask("?system"); !strings.HasSuffix(got, " "+strings.TrimSpace(scriptHint)) {
+		t.Fatalf("the prompt: %q", got)
+	}
+	cfg.Tools = &config.Tools{A2A: config.Named("who")}
+	if got := ask(runs(`return who()`)); !strings.HasSuffix(got, " last=luna in c") {
 		t.Fatalf("the conversation of a script: %q", got)
 	}
-
-	// With the failures of the node, the script looks them up for the peer
-	// it runs for, and for nobody else.
-	b.Failures = diagnosis.Open(filepath.Join(t.TempDir(), "failures.json"))
-	if got := ask(`return [Object.keys(tools), explain_error({id: "AAAA2222"})]`); !strings.Contains(got, ` last=[["who","explain_error"],"No failed answer with the error ID AAAA2222`) {
+	// The script looks up the failures of the peer it runs for, and of nobody else.
+	if got := ask(runs(`return explain_error({id: "AAAA2222"})`)); !strings.Contains(got, ` last=No failed answer with the error ID AAAA2222`) {
 		t.Fatalf("with failures: %q", got)
 	}
 	cfg.Tools = &config.Tools{A2A: config.Named("*")}
-	if got := ask(`return Object.keys(tools)`); !strings.HasSuffix(got, ` last=["who","note","explain_error"]`) {
+	if got := ask(runs(`return Object.keys(tools)`)); !strings.HasSuffix(got, ` last=["who","note","explain_error"]`) {
 		t.Fatalf("every tool: %q", got)
+	}
+	cfg.Tools = &config.Tools{A2A: config.Named(toolRun)}
+	if _, err := b.ForPeers(cfg); err == nil || !strings.HasPrefix(err.Error(), "tools.a2a: run is no tool to list") {
+		t.Fatalf("run listed: %v", err)
 	}
 }
 
-// What the LLM is told about run, and what run is before an agent has it.
-func TestRunSlot(t *testing.T) {
-	slot := runSlot()
-	if slot.Name != "run" || slot.Schema != `{"type":"object","properties":{"script":{"type":"string","description":"the body of a JavaScript function"}},"required":["script"]}` {
-		t.Fatalf("got %s: %s", slot.Name, slot.Schema)
+// What the LLM is told of run: every tool as a function, with its parameters,
+// and the limits.
+func TestRunDescription(t *testing.T) {
+	tools := []agent.Tool{
+		agent.NewTool("greet", "Greets a peer.", []agent.Param{{Name: "peer", Description: "who"}, {Name: "how", Optional: true}},
+			func(context.Context, struct{}) (string, error) { return "", nil }),
+		{Name: "delete", Description: "Deletes.", Schema: `{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`},
+		{Name: "list_peers", Schema: `{"type":"object","properties":{}}`},
+		{Name: "odd", Schema: `{"properties":{"value":{"description":"anything"}}}`},
+		{Name: "broken", Schema: `not json`},
 	}
-	if want := "A script may take 1m0s, call 64 tools, have 64 KiB and return 64 KiB. "; !strings.Contains(slot.Description, want) {
-		t.Fatalf("the limits are not what the tool says: %s", slot.Description)
+	run := withRun(tools, script.NewSessions())
+	if run.Name != "run" || run.Schema != `{"type":"object","properties":{"script":{"type":"string","description":"JavaScript"}},"required":["script"]}` {
+		t.Fatalf("got %s: %s", run.Name, run.Schema)
 	}
-	if script.MaxCalls != 64 || script.MaxSource != 64<<10 || script.MaxResult != 64<<10 {
+	want := "Everything you can do is a function here:\n" +
+		"- greet({how?: string, peer: string}): Greets a peer.\n    peer: who\n" +
+		"- tools.delete({path: string}): Deletes.\n" +
+		"- list_peers()\n" +
+		"- odd({value?: any})\n    value: anything\n" +
+		"- broken()\n"
+	if !strings.Contains(run.Description, want) {
+		t.Fatalf("got:\n%s", run.Description)
+	}
+	if want := "Limits: 1m0s, 64 calls, 64 KiB of source; 16 KiB of print and 16 KiB of the value come back, " +
+		"4 KiB each once the results of an answer have more than 64 KiB. What is left out is kept in printed and returned. "; !strings.Contains(run.Description, want) {
+		t.Fatalf("the limits are not what the tool says: %s", run.Description)
+	}
+	if script.MaxCalls != 64 || script.MaxSource != 64<<10 || script.MaxResult != 16<<10 || script.MaxPrint != 16<<10 ||
+		script.Tight != 4<<10 || agent.Budget != 64<<10 {
 		t.Fatal("the limits changed: the README names them")
 	}
-	if got, err := slot.Run(context.Background(), json.RawMessage(`{"script": "return 1"}`)); err == nil || got != "" || err.Error() != "run has no tools to run a script with" {
-		t.Fatalf("run without an agent: %q, %v", got, err)
-	}
-	// Tools without run stay as they are.
-	tools := []agent.Tool{{Name: "a"}, {Name: "b"}}
-	if got := withRun(tools); len(got) != 2 || &got[0] != &tools[0] {
-		t.Fatalf("got %+v", got)
-	}
-	// The list that is handed in is not changed.
-	tools = []agent.Tool{{Name: "a"}, slot, {Name: "b"}}
-	got := withRun(tools)
-	if names(got) != "a,run,b" || got[1].Description != slot.Description || got[1].Schema != slot.Schema {
-		t.Fatalf("got %+v", got)
-	}
-	if out, err := tools[1].Run(context.Background(), json.RawMessage(`{"script": "return 1"}`)); err == nil || out != "" {
-		t.Fatalf("the slot that was handed in runs: %q, %v", out, err)
-	}
-	if out, err := got[1].Run(context.Background(), json.RawMessage(`{"script": "return Object.keys(tools)"}`)); err != nil || out != `["a","b"]` {
+	if out, err := run.Run(context.Background(), json.RawMessage(`{"script": "Object.keys(tools)"}`)); err != nil || out != `["greet","delete","list_peers","odd","broken"]` {
 		t.Fatalf("run: %q, %v", out, err)
+	}
+	if none := withRun(nil, script.NewSessions()); !strings.Contains(none.Description, "a function here, and there is none: a script can only compute. ") {
+		t.Fatalf("without tools:\n%s", none.Description)
+	}
+}
+
+// The scripts of a conversation build on each other; another conversation
+// starts with nothing, and so does a peer in a conversation of the same name.
+func TestRunKeepsPerConversation(t *testing.T) {
+	cfg, b := scripted(t)
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	ask := func(chat, source string) string {
+		t.Helper()
+		got, err := a.Ask(context.Background(), chat, runs(source), nil)
+		return result(t, got, err)
+	}
+	if got := ask("one", `let found = note({text: "a"}); print("found it"); found.length`); got != "found it\n1\n[kept for the next script: found (string of 1 bytes)]" {
+		t.Fatalf("first: %q", got)
+	}
+	if got := ask("one", `let found = found + note({text: "b"}); found`); got != "ab\n[kept for the next script: found (string of 2 bytes)]" {
+		t.Fatalf("second: %q", got)
+	}
+	if got := ask("two", `typeof found`); got != "undefined" {
+		t.Fatalf("another conversation: %q", got)
+	}
+	// An agent built anew for a changed configuration goes on with them.
+	cfg.Model = "gpt-4o-mini"
+	if got := ask("one", `found`); !strings.HasPrefix(got, "ab\n") {
+		t.Fatalf("after a change: %q", got)
+	}
+
+	cfg.Tools = &config.Tools{A2A: config.Named("note")}
+	p := b.Peers(func() (config.Config, error) { return cfg, nil }, discard)
+	respond := func(source string) string {
+		t.Helper()
+		got, err := p.Respond(from("luna"), "one", runs(source))
+		return result(t, got, err)
+	}
+	respond(`var mine = 1`)
+	if got := respond(`[typeof found, mine]`); got != "[\"undefined\",1]\n[kept for the next script: mine (number)]" {
+		t.Fatalf("a peer: %q", got)
+	}
+}
+
+// scriptsLLM runs the scripts one after the other with run, and then answers.
+type scriptsLLM []string
+
+func (l *scriptsLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if len(*l) == 0 {
+		return openai.Message{Content: "done"}, nil
+	}
+	args, _ := json.Marshal(runArgs{Script: (*l)[0]})
+	*l = (*l)[1:]
+	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "c", Function: openai.FunctionCall{Name: toolRun, Arguments: string(args)}}}}, nil
+}
+
+// Once the results of an answer are beyond the budget, a script gives back
+// less of what it prints.
+func TestRunGivesBackLessBeyondTheBudget(t *testing.T) {
+	// 4 times 16000 and 1536 bytes: Budget exactly, which is not beyond it.
+	var scripts scriptsLLM
+	for i, n := range []int{16000, 16000, 16000, 16000, 1536, 16000, 16000} {
+		scripts = append(scripts, fmt.Sprintf(`print("%c".repeat(%d))`, 'a'+i, n)) // none repeats another
+	}
+	a := agent.New(&scripts, "m", "sys", withRun(nil, script.NewSessions()))
+	var printed []int
+	if _, err := a.Run(context.Background(), "c1", "go", agent.Observer{Step: func(s agent.Step) {
+		if s.Done {
+			letter := string(rune('a' + len(printed)))
+			printed = append(printed, len(s.Result)-len(strings.TrimLeft(s.Result, letter)))
+		}
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(printed, []int{16000, 16000, 16000, 16000, 1536, 16000, script.Tight}) {
+		t.Fatalf("printed %v", printed)
 	}
 }

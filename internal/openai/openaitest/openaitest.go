@@ -24,7 +24,10 @@ var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 // non-system messages. A message "@PEER TEXT" is answered with a call to
 // ask_peer, "@" alone with a call to list_peers and "#ID" with a call to
 // explain_error, and "!TOOL ARGS" with a call to TOOL with the arguments ARGS
-// (JSON, "{}" if missing), each if that tool is offered.
+// (JSON, "{}" if missing), each if that tool is offered. An API that offers
+// run, whose description lists the tool as a function, and not the tool
+// itself gets a call to run with a script that calls the tool and gives back
+// its result, or "error: " and its error, as the call itself would.
 // The message "?system" is answered with the system prompt.
 // A request that asks for a stream gets the reply in pieces, as an API does.
 func NewServer(t testing.TB) string {
@@ -56,8 +59,13 @@ func NewServerWithKey(t testing.TB, key string) string {
 			msg.Content = in.Messages[0].Content
 		}
 		call, ok := toolCall(last)
-		offered := func(t openai.Tool) bool { return t.Function.Name == call.Function.Name }
-		if ok && slices.ContainsFunc(in.Tools, offered) {
+		offered := func(name string) bool {
+			return slices.ContainsFunc(in.Tools, func(t openai.Tool) bool { return t.Function.Name == name })
+		}
+		if ok && !offered(call.Function.Name) && function(in.Tools, call.Function.Name) {
+			call.Function = scripted(call.Function)
+		}
+		if ok && offered(call.Function.Name) {
 			msg = openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{call}}
 		}
 		if in.Stream {
@@ -76,6 +84,26 @@ func NewServerWithKey(t testing.TB, key string) string {
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// function reports whether tools offer run with the function name in its
+// scripts.
+func function(tools []openai.Tool, name string) bool {
+	for _, t := range tools {
+		if t.Function.Name == "run" {
+			return strings.Contains(t.Function.Description, "\n- "+name+"(") ||
+				strings.Contains(t.Function.Description, "\n- tools."+name+"(")
+		}
+	}
+	return false
+}
+
+// scripted is the call of run whose script makes call.
+func scripted(call openai.FunctionCall) openai.FunctionCall {
+	name, _ := json.Marshal(call.Name)
+	script := fmt.Sprintf("try { tools[%s](%s) } catch (e) { \"error: \" + e.message }", name, call.Arguments)
+	args, _ := json.Marshal(map[string]string{"script": script})
+	return openai.FunctionCall{Name: "run", Arguments: string(args)}
 }
 
 // toolCall is the tool call a user message of the form "@PEER TEXT", "@",

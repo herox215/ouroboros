@@ -691,30 +691,30 @@ func TestSchemas(t *testing.T) {
 	var names []string
 	for _, tool := range all {
 		names = append(names, tool.Name)
-		if !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Description, pathHint) {
+		if !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Schema, "absolute or starting with") {
 			t.Errorf("%s: %s / %s", tool.Name, tool.Schema, tool.Description)
 		}
 	}
 	if strings.Join(names, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools: %v", names)
 	}
-	want := `{"type":"object","properties":{"limit":{"type":"integer","description":"how many lines to return at most; leave it out to get as many as one call returns"},` +
-		`"offset":{"type":"integer","description":"the line to start at, counted from 1; the first one if missing"},` +
-		`"path":{"type":"string","description":"the file"}},"required":["path"]}`
+	want := `{"type":"object","properties":{"limit":{"type":"integer","description":"how many lines at most"},` +
+		`"offset":{"type":"integer","description":"the first line, counted from 1"},` +
+		`"path":{"type":"string","description":"the file, absolute or starting with \"~\", the home directory"}},"required":["path"]}`
 	if all[0].Schema != want {
 		t.Errorf("read: %s", all[0].Schema)
 	}
 	if want := `"required":["path","old","new"]`; !strings.Contains(all[2].Schema, want) {
 		t.Errorf("edit: %s", all[2].Schema)
 	}
-	if want := `"recursive":{"type":"boolean","description":"delete a directory together with its content"}},"required":["path"]}`; !strings.HasSuffix(all[4].Schema, want) {
+	if want := `"recursive":{"type":"boolean","description":"delete a directory with its content"}},"required":["path"]}`; !strings.HasSuffix(all[4].Schema, want) {
 		t.Errorf("delete: %s", all[4].Schema)
 	}
 	if want := `"required":["path","pattern"]`; !strings.Contains(all[5].Schema, want) {
 		t.Errorf("search: %s", all[5].Schema)
 	}
-	if !strings.Contains(all[5].Description, "at most 200 lines, and looks into at most 10000 files") ||
-		!strings.Contains(all[5].Description, "more than 1 MiB is not searched") {
+	if !strings.Contains(all[5].Description, "at most 200 lines from at most 10000 files") ||
+		!strings.Contains(all[5].Description, "files over 1 MiB are skipped") {
 		t.Errorf("the limits of search: %s", all[5].Description)
 	}
 	if !strings.Contains(all[0].Description, "at most 2000 lines or 256 KiB per call") || !strings.Contains(all[1].Description, "At most 1 MiB.") ||
@@ -827,6 +827,34 @@ func TestSearchIsCut(t *testing.T) {
 	got, err = w.run(owner, "search", map[string]any{"path": "~/files", "pattern": "y", "glob": "00001.txt"})
 	if err != nil || got != "~/files/00001.txt:1: y" {
 		t.Errorf("a glob: %q, %v", got, err)
+	}
+	// What the glob leaves out is looked at all the same, and counts.
+	defer func(n int) { maxWalked = n }(maxWalked)
+	maxWalked = 3
+	got, err = w.run(owner, "search", map[string]any{"path": "~/files", "pattern": "y", "glob": "*.go"})
+	if err != nil || got != "[the search stopped after looking at 3 files and directories: narrow the path]" {
+		t.Errorf("walked: %q, %v", got, err)
+	}
+}
+
+// A search ends with its call, which a script that ran too long ends.
+func TestSearchEndsWithItsCall(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/src/a.txt", "x\n")
+	for _, tool := range tools(w.guard) {
+		if tool.Name != Search {
+			continue
+		}
+		tool, err := tool.Configure(json.RawMessage(owner.settings))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		got, err := tool.Run(ctx, json.RawMessage(`{"path":"~/src","pattern":"x"}`))
+		if want := "the search was stopped after looking at 0 files and directories: context canceled"; got != "" || err == nil || err.Error() != want {
+			t.Errorf("got %q, %v; want the error %q", got, err, want)
+		}
 	}
 }
 

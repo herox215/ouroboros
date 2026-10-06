@@ -44,13 +44,12 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		}
 		plugin.Add(ctx, plugin.Command{Name: "update", Help: "build and install the newest version", Run: c.run})
 		plugin.Add(ctx, plugin.NewTool(Rebuild,
-			"Build ouro, the program you are part of, from its source and install it: this is how a change of that source takes effect. "+
-				"The source is the Go module in "+sourceName(update.Source)+", built with its files as they are now. "+
-				"Its tests are run first (make test), which takes a minute or more. "+
-				"Only when the build and every test pass, the running binary is replaced and a running node restarted. "+
-				"When one fails nothing is installed, and the error carries the end of the output: fix the source and call the tool again. "+
-				"In the terminal UI, ouro starts anew with the new build once your answer is given, and this conversation goes on there; "+
-				"elsewhere it goes on with the old build until ouro is started again. Only the owner of the node can use the tool.",
+			"Build ouro, the program you are part of, from its source in "+sourceName(update.Source)+" as it is now, and install it: "+
+				"this is how a change of the source takes effect. make test runs first, which takes a minute or more. "+
+				"Only when everything passes is the binary replaced and a running node restarted; "+
+				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. "+
+				"In the terminal UI ouro restarts with the new build after your answer and the conversation goes on; "+
+				"elsewhere the new build runs from the next start. Only for the owner of the node.",
 			nil, c.rebuild))
 		plugin.Add(ctx, plugin.ToolView{Tool: Rebuild, Show: func(json.RawMessage) string {
 			return "building and testing " + sourceName(update.Source)

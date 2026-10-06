@@ -29,7 +29,7 @@ type scriptLLM struct {
 	waiting chan struct{} // closed once it waits
 }
 
-func (l *scriptLLM) Complete(ctx context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+func (l *scriptLLM) Complete(ctx context.Context, _ string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
 	last := msgs[len(msgs)-1]
 	if l.failing != nil {
 		return openai.Message{}, l.failing
@@ -41,10 +41,20 @@ func (l *scriptLLM) Complete(ctx context.Context, _ string, msgs []openai.Messag
 	}
 	if rest, ok := strings.CutPrefix(last.Content, "!"); ok && last.Role == "user" {
 		name, args, _ := strings.Cut(rest, " ")
+		if name != toolRun && len(tools) == 1 && tools[0].Function.Name == toolRun {
+			name, args = toolRun, scriptOf(name, args)
+		}
 		call := openai.ToolCall{ID: "1", Type: "function", Function: openai.FunctionCall{Name: name, Arguments: args}}
 		return openai.Message{Content: l.saying, ToolCalls: []openai.ToolCall{call}}, nil
 	}
 	return openai.Message{Content: "said: " + last.Content}, nil
+}
+
+// scriptOf is the arguments of run for a script that calls the tool name
+// with args and gives back what the LLM would get of the call itself.
+func scriptOf(name, args string) string {
+	b, _ := json.Marshal(runArgs{Script: fmt.Sprintf(`try { tools[%q](%s) } catch (e) { "error: " + e.message }`, name, args)})
+	return string(b)
 }
 
 // logged is a log that keeps its lines.
@@ -74,12 +84,15 @@ func (l *logged) take() []string {
 	lines := l.lines
 	l.lines = nil
 	for i, line := range lines {
-		lines[i] = duration.ReplaceAllString(line, "${1}D")
+		lines[i] = sent.ReplaceAllString(duration.ReplaceAllString(line, "${1}D"), "sent N")
 	}
 	return lines
 }
 
-var duration = regexp.MustCompile(`((?:took|after) )[0-9.]+(?:ms|s|µs|ns|m)`)
+var (
+	duration = regexp.MustCompile(`((?:took|after) )[0-9.]+(?:ms|s|µs|ns|m)`)
+	sent     = regexp.MustCompile(`sent [0-9]+\.[0-9] KiB`)
+)
 
 // recorded is an assistant that logs to the returned log, with the LLM llm
 // and the tools of the test.
@@ -136,7 +149,7 @@ func TestAskIsLogged(t *testing.T) {
 	equal(t, "a plain answer", log.take(), []string{
 		`chat c1: message from the owner: "hello\nthere"`,
 		`chat c1: llm call 1 took D: text`,
-		`chat c1: answered after D (llm calls: 1): "said: hello\nthere"`,
+		`chat c1: answered after D (llm calls: 1, tool calls: 0, sent N): "said: hello\nthere"`,
 	})
 
 	if _, err := a.Ask(ctx, "c1", `!echo {"text":"hi"}`, nil); err != nil {
@@ -146,8 +159,9 @@ func TestAskIsLogged(t *testing.T) {
 		`chat c1: message from the owner: "!echo {\"text\":\"hi\"}"`,
 		`chat c1: llm call 1 took D: tool calls: 1`,
 		`chat c1: tool echo {"text":"hi"} took D: ok (2 bytes)`,
+		`chat c1: tool run ` + scriptOf("echo", `{"text":"hi"}`) + ` took D: ok (2 bytes)`,
 		`chat c1: llm call 2 took D: text`,
-		`chat c1: answered after D (llm calls: 2): "said: hi"`,
+		`chat c1: answered after D (llm calls: 2, tool calls: 2, sent N): "said: hi"`,
 	})
 
 	if _, err := a.Ask(ctx, "c2", `!fail {"why":"disk\nfull"}`, nil); err != nil {
@@ -157,8 +171,9 @@ func TestAskIsLogged(t *testing.T) {
 		`chat c2: message from the owner: "!fail {\"why\":\"disk\\nfull\"}"`,
 		`chat c2: llm call 1 took D: tool calls: 1`,
 		`chat c2: tool fail {"why":"disk\nfull"} took D: error "disk\nfull"`,
+		`chat c2: tool run ` + scriptOf("fail", `{"why":"disk\nfull"}`) + ` took D: ok (16 bytes)`,
 		`chat c2: llm call 2 took D: text`,
-		`chat c2: answered after D (llm calls: 2): "said: error: disk\nfull"`,
+		`chat c2: answered after D (llm calls: 2, tool calls: 2, sent N): "said: error: disk\nfull"`,
 	})
 
 	llm.failing = errTest
@@ -168,7 +183,7 @@ func TestAskIsLogged(t *testing.T) {
 	equal(t, "an answer that failed", log.take(), []string{
 		`chat c2: message from the owner: "hi"`,
 		`chat c2: llm call 1 took D: failed "test error"`,
-		`chat c2: failed after D (llm calls: 1): "test error"`,
+		`chat c2: failed after D (llm calls: 1, tool calls: 0, sent N): "test error"`,
 	})
 
 	// A configuration that cannot be used is no answer: nothing to log.
@@ -195,8 +210,9 @@ func TestWhatTheLLMSaysIsLogged(t *testing.T) {
 		`chat c1: message from the owner: "!echo {\"text\":\"hi\"}"`,
 		`chat c1: llm call 1 took D: tool calls: 1, said ` + said,
 		`chat c1: tool echo {"text":"hi"} took D: ok (2 bytes)`,
+		`chat c1: tool run ` + scriptOf("echo", `{"text":"hi"}`) + ` took D: ok (2 bytes)`,
 		`chat c1: llm call 2 took D: text`,
-		`chat c1: answered after D (llm calls: 2): "said: hi"`,
+		`chat c1: answered after D (llm calls: 2, tool calls: 2, sent N): "said: hi"`,
 	})
 }
 
@@ -214,7 +230,7 @@ func TestCallsOfAScriptAreLogged(t *testing.T) {
 		`chat c1: tool fail {"why":"no"} took D: error "no"`,
 		`chat c1: tool run ` + string(script) + ` took D: ok (1 bytes)`,
 		`chat c1: llm call 2 took D: text`,
-		`chat c1: answered after D (llm calls: 2): "said: x"`,
+		`chat c1: answered after D (llm calls: 2, tool calls: 3, sent N): "said: x"`,
 	})
 }
 
@@ -227,7 +243,8 @@ func TestCanceledToolIsLogged(t *testing.T) {
 		`chat c1: message from the owner: "!block {}"`,
 		`chat c1: llm call 1 took D: tool calls: 1`,
 		`chat c1: tool block {} took D: canceled`,
-		`chat c1: canceled after D (llm calls: 1)`,
+		`chat c1: tool run ` + scriptOf("block", "{}") + ` took D: canceled`,
+		`chat c1: canceled after D (llm calls: 1, tool calls: 0, sent N)`,
 	}
 	for name, stop := range map[string]func(cancel context.CancelFunc){
 		"context": func(cancel context.CancelFunc) { cancel() },
@@ -238,7 +255,7 @@ func TestCanceledToolIsLogged(t *testing.T) {
 		done := make(chan error)
 		go func() {
 			_, err := a.Ask(ctx, "c1", "!block {}", func(s Step) {
-				if !s.Done {
+				if !s.Done && s.Tool == "block" {
 					close(started)
 				}
 			})
@@ -275,7 +292,7 @@ func TestCanceledCallOfTheLLMIsLogged(t *testing.T) {
 	equal(t, "stopped", log.take(), []string{
 		`chat c1: message from the owner: "wait"`,
 		`chat c1: llm call 1 took D: canceled`,
-		`chat c1: canceled after D (llm calls: 1)`,
+		`chat c1: canceled after D (llm calls: 1, tool calls: 0, sent N)`,
 	})
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
@@ -300,14 +317,35 @@ func TestNothingAfterTheEnd(t *testing.T) {
 	r.end("late", nil)
 	r.cancel()
 	for i, line := range lines {
-		lines[i] = duration.ReplaceAllString(line, "${1}D")
+		lines[i] = sent.ReplaceAllString(duration.ReplaceAllString(line, "${1}D"), "sent N")
 	}
 	equal(t, "after the end", lines, []string{
 		`chat c: message from the owner: "hi"`,
 		`chat c: llm call 1 took D: canceled`,
 		`chat c: tool b {} took D: canceled`,
 		`chat c: tool a {} took D: canceled`,
-		`chat c: canceled after D (llm calls: 1)`,
+		`chat c: canceled after D (llm calls: 1, tool calls: 0, sent N)`,
+	})
+}
+
+// What the API says a call cost is logged with the call, and summed up at
+// the end of the answer.
+func TestTokensAreLogged(t *testing.T) {
+	var lines []string
+	r := newRecord(context.Background(), func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }, "c", config.Config{}, "hi", func() {})
+	r.call(agent.Call{Sent: 2048})
+	r.call(agent.Call{Done: true, ToolCalls: 1, Tokens: 12345, Cached: 10240})
+	r.call(agent.Call{Sent: 1024})
+	r.call(agent.Call{Done: true, Tokens: 1000, Cached: 999, Thought: 2048})
+	r.end("ok", nil)
+	for i, line := range lines {
+		lines[i] = duration.ReplaceAllString(line, "${1}D")
+	}
+	equal(t, "tokens", lines, []string{
+		`chat c: message from the owner: "hi"`,
+		`chat c: llm call 1 took D: tool calls: 1 [12.3k tokens, 10.2k cached (82%)]`,
+		`chat c: llm call 2 took D: text [1.0k tokens, 999 cached (99%), thought 2.0 KiB]`,
+		`chat c: answered after D (llm calls: 2, tool calls: 0, sent 3.0 KiB, 13.3k tokens, 11.2k cached (84%)): "ok"`,
 	})
 }
 
@@ -423,4 +461,45 @@ func TestOnlyCallsUnderWayAreCanceled(t *testing.T) {
 		`chat c: tool echo {"n":2} took D: canceled`,
 		`chat c: tool echo {"n":1} took D: canceled`,
 	})
+}
+
+// The context of a conversation is as long as what its last call of the LLM
+// sent; one without a call has none.
+func TestContext(t *testing.T) {
+	a, _ := recorded(t, ownerConfig(), &scriptLLM{})
+	if a.Context("c1") != 0 {
+		t.Fatal("before a call")
+	}
+	if _, err := a.Ask(context.Background(), "c1", `!echo {"text":"hi"}`, nil); err != nil {
+		t.Fatal(err)
+	}
+	first := a.Context("c1")
+	if _, err := a.Ask(context.Background(), "c1", "more", nil); err != nil {
+		t.Fatal(err)
+	}
+	if first < 1000 || a.Context("c1") <= first || a.Context("c2") != 0 {
+		t.Fatalf("%d, then %d", first, a.Context("c1"))
+	}
+}
+
+// The contents of a conversation are what its next call of the LLM is sent:
+// the system prompt, the tools and the conversation so far. Without an agent
+// for the configuration there is the conversation alone.
+func TestContents(t *testing.T) {
+	a, _ := recorded(t, ownerConfig(), &scriptLLM{})
+	if _, err := a.Ask(context.Background(), "c1", `!echo {"text":"hi"}`, nil); err != nil {
+		t.Fatal(err)
+	}
+	c, err := a.Contents("c1")
+	if err != nil || !strings.Contains(c.System, `"me"`) || len(c.Tools) != 1 || c.Tools[0].Function.Name != toolRun ||
+		len(c.Messages) < 3 || c.Messages[0].Content != `!echo {"text":"hi"}` || len(c.Messages[1].ToolCalls) != 1 {
+		t.Fatalf("%+v, %v", c, err)
+	}
+	b, _ := recorded(t, config.Config{}, &scriptLLM{})
+	if err := b.Resume("c1", a.Conversation("c1")); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := b.Contents("c1"); !errors.Is(err, config.ErrIncomplete) || c.System != "" || c.Tools != nil || len(c.Messages) < 3 {
+		t.Fatalf("%+v, %v", c, err)
+	}
 }
