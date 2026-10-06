@@ -14,6 +14,7 @@ ouro ask <ID|name> "hi"   # write to a node directly; without a message → inte
 ouro tui                  # same as ouro, kept for scripts
 ouro stop
 ouro update               # build and install the newest main
+ouro history              # the archived conversations; ouro history delete SESSION removes one
 ```
 
 ## Terminal UI
@@ -50,8 +51,9 @@ every step of an answer, since each sends the whole conversation again, and is u
 shows something new. A new conversation (`/new`) has none until its first call, and neither has one that
 goes on after a restart. `/context` shows what the context is: the system prompt, every tool with its schema
 and the conversation so far, message by message with its size.
-The input is focused on start, so you can type right away. The conversation lives only as long as the TUI runs;
-what your agent did for it is recorded in [`ouro.log`](#the-log).
+The input is focused on start, so you can type right away. The chat on the screen lives only as long as the TUI runs;
+what your agent did for it is recorded in [`ouro.log`](#the-log), and the conversation itself in the
+[history](#history), where your agent can look it up again.
 
 The UI is a plugin like any other (`internal/plugins/tui`), and it is the front end of the standard ouro: the
 plugin says so itself, nothing else names it. An ouro built without it prints the usage when it is started
@@ -134,13 +136,13 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open |
 | Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left; the LLM has one tool, `run`, and uses the others in a [script](#scripts) |
-| Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, and a script hands on at most 4 KiB of what it prints and of what it returns. From the 16th call of the LLM in an answer on, it is told with every call to stop searching and ask the user what exactly is meant, unless it has found what it looks for; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives OpenAI the conversation as `prompt_cache_key`. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another |
+| Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, and a script hands on at most 4 KiB of what it prints and of what it returns. From the 16th call of the LLM in an answer on, it is told with every call to stop searching and ask the user what exactly is meant, unless it has found what it looks for; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives OpenAI the conversation as `prompt_cache_key`. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another. What is cut off is not lost: the [history](#history) keeps every conversation in full |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
 | LLM | answers are asked for as a stream (`"stream": true`), so a gateway that gives up on a request without data for a while (HTTP 504) keeps waiting while the model thinks; an API that does not stream answers in one piece, which is taken as well. A completion is given up after 5 minutes without data, a list of the models after 5 minutes |
 | Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. At most 16 changes of the configuration your agent proposed wait for a decision. The tools for files and a script have limits of their own, see [Files](#files) and [Scripts](#scripts). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`. `config.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`, `history/` (0700, see [History](#history)). `config.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
@@ -151,7 +153,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 ## Tools
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
-`delete`, `search`) and, for you alone, two for the configuration (`get_config`, `propose_config`) and one
+`delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
+`history_sessions`) and, for you alone, two for the configuration (`get_config`, `propose_config`) and one
 that builds and installs its own source ([`rebuild`](#updates)). It uses them in **scripts**: the LLM is
 offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
 Which of them it may use depends on who it is talking to, and is set in `config.json`. This is what the
@@ -220,7 +223,7 @@ Three things limit a tool for files, and the first that speaks wins:
    - `config.json` and its lock file are neither read nor changed, under any name (also not through a hard
      link): they hold the key of your node and the key of the API, which would end up with the LLM.
    - Everything else in the directory of the node (`contacts.json`, `proposals.json`, `failures.json`,
-     `ouro.pid`, `ouro.log`, `ouro.log.1`, `update/`) is read and never changed.
+     `ouro.pid`, `ouro.log`, `ouro.log.1`, `update/`, `history/`) is read and never changed.
    - The source of the core is read and never changed: in every directory whose `go.mod` names the module
      `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `daemon`, `update`,
      `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable. That `go.mod`
@@ -355,6 +358,50 @@ that run at the same time count against each other, and so does everything else 
 meanwhile. What a conversation keeps between its scripts counts for none of them: up to 16 conversations
 keep what their scripts built, and nothing limits how much that is. Whoever may run scripts on your node may
 therefore slow it down or bring it down: list a tool in `a2a` only for peers you would let do that.
+
+### History
+
+The plugin `history` (`internal/plugins/history`) archives every conversation in full: the messages of
+the user, what the model answers along with the calls of tools it asks for, and the whole result of each
+call, as it came before the memory left anything out. Your agent finds there what the
+[memory](#how-it-works) cut off, and the conversations before `/new`. What is sent to the LLM stays as it
+is: the archive changes no context, and is only read when the agent calls one of its tools.
+
+| Tool | Does | Limits |
+|---|---|---|
+| `history_search(query, scope?, limit?)` | the records that contain a text, ignoring case: per hit the session, the time, the number of the record, its role and the text around the hit. `scope` is `current` (the default) or `all` | 20 hits, at most 50 with `limit`, and 16 KiB |
+| `history_read(session?, from?, count?)` | the records of a conversation in order, from a number on, with a note where to continue; without `session` the current conversation | 20 records, at most 200 with `count`, and 32 KiB; a record that does not fit alone is cut |
+| `history_sessions()` | the archived conversations, the most recent first, with when they started and their first message | 50 |
+
+- **Who reaches what.** For you, `current` is the conversation you are in, and `all` every one of yours. A
+  peer reaches the conversation it is in and nothing else: `all`, a session it names that is not its
+  current one, and every conversation of yours or of another peer are refused. The scope comes from the
+  conversation the tool runs in, never from its arguments. A peer gets the tools only when `a2a` lists
+  them, like any tool.
+- **What a hit is worth.** The tools say so to the model: what another conversation holds may be outdated,
+  and is a hint, not a fact.
+- **Where it is.** `history/owner/<session>.jsonl` holds a conversation of yours, and
+  `history/peer-<fingerprint>/<session>.jsonl` one of a peer, named by a hash of its key. A file is a JSON
+  object per line: the number of the record within the conversation, the answer it belongs to, the time the
+  answer ended, the role, the text, and the calls with their names and arguments. The last record of an
+  answer says whether it was answered, failed or canceled; why it failed is not kept, as a peer reads its
+  own conversation. A conversation that goes on after a restart goes on in its file. Directories are 0700,
+  files 0600.
+- **The archive holds what your agent saw.** Everything a tool gave back is in it, such as the content of a
+  file the agent read, on disk below `~/.config/ouroboros/history/`, until you delete it. The tools for
+  files read that directory and never change it, like the rest of the [directory of the node](#files);
+  whoever may read it may read your conversations.
+- **What is kept of a script.** The LLM calls [`run`](#scripts), so what is archived of a script is the
+  script and what it gave back to the LLM, not every call it made inside.
+- **Nothing is deleted by itself.** `ouro history` lists every archived conversation, yours and those of
+  peers, with its size and first message; `ouro history delete owner/<session>` (or `peer-…/<session>`)
+  removes one. A conversation archived again after that starts anew.
+- **When writing fails** (a full disk, a directory in the way), the answer is given all the same, and the
+  log says `plugin history after failed` with the cause.
+- **The log** records every call of the three tools: the tool, for whom, the scope and the number of hits,
+  never what was searched or found.
+
+Before the plugin ran, nothing was archived: conversations from before are not in it.
 
 ### Configuration
 
@@ -584,6 +631,7 @@ internal/daemon      background process + PID file
 internal/contacts    trusted peers and connection requests
 internal/proposal    changes of the configuration the agent proposed, waiting for the owner
 internal/diagnosis   why answers to peers failed, by category, for the agent to explain
+internal/history     the archive of every conversation, and how the agent searches and reads it
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
 internal/update      self-update: from the newest main, or from the checkout as it is
@@ -884,7 +932,8 @@ failure aborts the answer. This is the persistence boundary: providers must reta
 what they need themselves. The bounded core transcript remains the default source
 snapshot, not a complete archive. Existing/restored history is available through
 `Preparation.Messages`; it is not replayed as new events. Core does not store
-plugin archives, summaries or retention policies. Plugin cleanup belongs to
+plugin archives, summaries or retention policies; `internal/plugins/history` is a plugin that archives
+with an `After` hook alone, and names the conversation of a tool with `plugin.ContextID`. Plugin cleanup belongs to
 `ctx.OnStop`, including closing plugin storage. Switching providers does not replay
 already discarded history.
 
@@ -921,7 +970,10 @@ They never invoke preparation speculatively. Before the first request there is n
 prepared snapshot. `Assistant.Context` measures the actual sent request and tools;
 a failed preparation sends no model request. `Inspection` includes owned copies of
 messages, the tool definitions actually sent, and diagnostics for the last answer, retained with bounded conversation
-memory. Without extensions, the existing next-context view remains unchanged.
+memory. Without extensions, the existing next-context view remains unchanged. Only a
+selected provider or a hook with `Before` counts as active here: a hook with `After` alone
+does not change what is sent, so `/context` keeps the next-context view, followed by the
+diagnostics of the last answer.
 
 
 ## Checks

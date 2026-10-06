@@ -60,6 +60,9 @@ func (d Dir) Contacts() *contacts.Store { return contacts.Open(d.path("contacts.
 // the owner proposed, which wait for the owner to decide.
 func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposals.json")) }
 
+// History is the directory the conversations of the agents are archived in.
+func (d Dir) History() string { return d.path("history") }
+
 // Failures opens the list of the answers to peers that failed.
 func (d Dir) Failures() *diagnosis.Store { return diagnosis.Open(d.path("failures.json")) }
 

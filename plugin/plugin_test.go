@@ -13,14 +13,26 @@ import (
 	"testing/iotest"
 
 	"ouroboros/internal/a2a"
+	"ouroboros/internal/agent"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/kernel"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/peers"
 	"ouroboros/plugin"
 )
 
 type word string
+
+// callOnce asks for the tool "conversation" and answers with its result.
+type callOnce struct{}
+
+func (callOnce) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if last := msgs[len(msgs)-1]; last.Role == "tool" {
+		return openai.Message{Content: last.Content}, nil
+	}
+	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "conversation", Arguments: "{}"}}}}, nil
+}
 
 // A plugin declares what it needs in the struct its start function takes and
 // what it provides in the one it returns; it is started after its provider.
@@ -122,6 +134,15 @@ func TestContributions(t *testing.T) {
 	}
 
 	ctx := context.Background()
+	if id := plugin.ContextID(ctx); id != "" {
+		t.Fatalf("outside an answer the conversation is %q", id)
+	}
+	conversation := plugin.NewTool("conversation", "", nil, func(ctx context.Context, _ struct{}) (string, error) {
+		return plugin.ContextID(ctx), nil
+	})
+	if got, _ := agent.New(callOnce{}, "m", "s", conversation).Respond(ctx, "c-1", "hi"); got != "c-1" {
+		t.Fatalf("the conversation of a tool: %q", got)
+	}
 	if _, ok := plugin.OriginFrom(ctx); ok {
 		t.Fatal("the owner's context has no origin")
 	}

@@ -8,6 +8,7 @@
 //	tailscale  finding the nodes on the tailnet
 //	peers      the network of nodes and the tools to reach it
 //	files      the tools for files
+//	history    the archive of the conversations, and the tools to search it
 //	openai     the LLM
 //	assistant  the agents
 //	node       start, stop, status, serve and the setup dialog
@@ -56,6 +57,7 @@ import (
 	"ouroboros/internal/plugins/base"
 	"ouroboros/internal/plugins/discovery"
 	filesplugin "ouroboros/internal/plugins/files"
+	historyplugin "ouroboros/internal/plugins/history"
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
 	peersplugin "ouroboros/internal/plugins/peers"
@@ -144,6 +146,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		tailscale.Plugin(),
 		peersplugin.Plugin(dir, network),
 		filesplugin.Plugin(files),
+		historyplugin.Plugin(dir),
 		openaiplugin.Plugin(),
 		assistant.Plugin(dir),
 		nodeplugin.Plugin(dir, nodeplugin.Options{

@@ -32,3 +32,4 @@ internal/script/script.go:675:14 CONDITIONALS_BOUNDARY  # used comes from a cloc
 internal/tui/view.go:155:9 CONDITIONALS_BOUNDARY  # the message of the owner at mine never has a summary
 internal/tui/view.go:173:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✓ " is never at its start
 internal/tui/view.go:176:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✗ " is never at its start
+internal/history/history.go:410:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more

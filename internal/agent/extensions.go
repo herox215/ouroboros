@@ -215,9 +215,11 @@ func (m *Memory) acquire(ctx context.Context, id string) (func(), error) {
 	}
 }
 
-// HasExtensions reports whether context inspection should show actual requests.
+// HasExtensions reports whether context inspection should show actual
+// requests: whether a provider or a Before hook changes them. A hook that
+// only observes the outcome of an answer leaves the next context as it is.
 func (a *Agent) HasExtensions() bool {
-	return a.extensions.provider != nil || len(a.extensions.hooks) > 0
+	return a.extensions.provider != nil || slices.ContainsFunc(a.extensions.hooks, func(h AnswerHook) bool { return h.Before != nil })
 }
 
 func copyTools(ts []openai.Tool) []openai.Tool {

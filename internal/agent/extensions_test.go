@@ -108,6 +108,25 @@ func TestProviderToolLoopAndHooks(t *testing.T) {
 		t.Fatal("hook context persisted")
 	}
 }
+
+// Only what changes the request makes inspection show actual requests: a
+// hook that observes the outcome alone leaves the next context as it is.
+func TestHasExtensions(t *testing.T) {
+	before := AnswerHook{Before: func(context.Context, Preparation) ([]openai.Message, error) { return nil, nil }}
+	after := AnswerHook{After: func(context.Context, AnswerOutcome) error { return nil }}
+	provider := ContextProvider{Name: "p", Prepare: func(_ context.Context, p Preparation) ([]openai.Message, error) { return p.Messages, nil }}
+	for _, test := range []struct {
+		name  string
+		hooks []AnswerHook
+		want  bool
+	}{{"", nil, false}, {"", []AnswerHook{after}, false}, {"", []AnswerHook{after, before}, true}, {"p", nil, true}} {
+		a, _ := New(&fakeLLM{}, "m", "s").WithExtensions(test.name, []ContextProvider{provider}, test.hooks)
+		if got := a.HasExtensions(); got != test.want {
+			t.Errorf("%q with %d hooks: %v", test.name, len(test.hooks), got)
+		}
+	}
+}
+
 func TestProviderFailureAndCancellation(t *testing.T) {
 	for _, phase := range []string{"prepare", "observe", "before", "model", "cancel"} {
 		t.Run(phase, func(t *testing.T) {

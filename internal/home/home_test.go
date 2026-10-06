@@ -129,6 +129,9 @@ func TestFiles(t *testing.T) {
 	if got := d.UpdateDir(); got != filepath.Join(string(d), "update") {
 		t.Errorf("update dir %q", got)
 	}
+	if got := d.History(); got != filepath.Join(string(d), "history") {
+		t.Errorf("history dir %q", got)
+	}
 	s := d.Service()
 	if s.PIDFile != filepath.Join(string(d), "ouro.pid") || s.LogFile != filepath.Join(string(d), "ouro.log") {
 		t.Errorf("service %+v", s)

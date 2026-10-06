@@ -86,6 +86,12 @@ type Origin = a2a.Origin
 // the owner may use asks here.
 func OriginFrom(ctx context.Context) (Origin, bool) { return a2a.OriginFrom(ctx) }
 
+// ContextID returns the conversation a Tool runs for: the ID the agent
+// remembers it by, "" outside of an answer. Together with OriginFrom it
+// names the conversation for a plugin that keeps something of it; the ID
+// alone is local to the agent that answers.
+func ContextID(ctx context.Context) string { return agent.ContextID(ctx) }
+
 // LLM is the service that decides which API the agents talk to: it returns
 // the model reached at the endpoint the node is configured for. One plugin
 // provides it; the openai plugin does for OpenAI-compatible APIs.
