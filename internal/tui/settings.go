@@ -1,0 +1,423 @@
+package tui
+
+import (
+	"strings"
+
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
+)
+
+// The settings screen is what the command /settings opens: the configuration
+// of the node in one place, by sections, each thing on a line of its own with
+// what can be done with it. ↑ ↓ select a line, ← → what to do with it, enter
+// does it, and esc goes back to the chat. A text, like the name, is typed into
+// a line below the list: enter saves it, esc keeps what was.
+//
+// Every change is saved at once, after the node checked it, and the footer
+// says from when it holds. What needs ouro to start anew says so on its line.
+// The keys of the node and of the API are never shown: the setup changes the
+// key, and /setup and /model are a line here like everything else.
+
+type (
+	// Settings is the configuration as the settings screen shows it.
+	Settings = plugin.Settings
+	// Setting is one change made on the settings screen.
+	Setting = plugin.Setting
+)
+
+// settingsMsg is the configuration, on the way to the settings screen.
+type settingsMsg struct {
+	settings Settings
+	err      error
+}
+
+// changedMsg is how a change on the settings screen went.
+type changedMsg struct {
+	done string
+	err  error
+}
+
+// row is a line of the settings screen.
+type row struct {
+	section string // the heading it is under
+	label   string
+	value   string
+	note    string // what it means, muted below it
+	warn    bool   // the note is a warning
+	actions []action
+}
+
+// action is what can be done with a row.
+type action struct {
+	name string
+	run  func(m *Model) tea.Cmd
+}
+
+// edit is a text that is typed on the settings screen.
+type edit struct {
+	label  string
+	change func(value string) Setting
+}
+
+// openSettings opens the settings screen.
+func (m *Model) openSettings() tea.Cmd {
+	m.screen = screenSettings
+	m.settingsSel, m.choice = 0, 0
+	m.editing = nil
+	return m.loadSettings
+}
+
+// loadSettings reads the configuration for the settings screen.
+func (m *Model) loadSettings() tea.Msg {
+	s, err := m.backend.Settings()
+	return settingsMsg{s, err}
+}
+
+// settingsLoaded takes the configuration that was read.
+func (m *Model) settingsLoaded(msg settingsMsg) {
+	m.settings, m.settingsErr, m.rows = msg.settings, msg.err, nil
+	if msg.err == nil {
+		m.rows = rows(msg.settings)
+	}
+	m.settingsSel = min(m.settingsSel, max(len(m.rows)-1, 0))
+	m.choice = min(m.choice, max(len(m.selectedRow().actions)-1, 0))
+}
+
+// selectedRow is the row that is selected, an empty one if there is none.
+func (m *Model) selectedRow() row {
+	if m.settingsSel < len(m.rows) {
+		return m.rows[m.settingsSel]
+	}
+	return row{}
+}
+
+// change makes the change s and reads the configuration anew.
+func (m *Model) change(s Setting) tea.Cmd {
+	return func() tea.Msg {
+		done, err := m.backend.ChangeSetting(s)
+		return changedMsg{done, err}
+	}
+}
+
+// changed shows how a change went, and reads the configuration anew.
+func (m *Model) changed(msg changedMsg) tea.Cmd {
+	if msg.err != nil {
+		m.setNotice(msg.err.Error(), true)
+	} else {
+		m.setNotice(msg.done, false)
+	}
+	return tea.Batch(m.loadSettings, m.refresh())
+}
+
+// startEdit lets the owner type the text of label, starting from value.
+func (m *Model) startEdit(label, value string, change func(string) Setting) tea.Cmd {
+	m.editing = &edit{label, change}
+	m.editInput = textinput.New()
+	m.editInput.SetValue(value)
+	m.editInput.CursorEnd()
+	m.editInput.SetWidth(max(10, m.width-8))
+	return m.editInput.Focus()
+}
+
+// handleSettingsKey handles keys on the settings screen.
+func (m *Model) handleSettingsKey(msg tea.KeyPressMsg) tea.Cmd {
+	if m.editing != nil {
+		switch msg.String() {
+		case "esc":
+			m.editing = nil
+			m.setNotice("nothing changed", false)
+			return nil
+		case "enter":
+			s := m.editing.change(m.editInput.Value())
+			m.editing = nil
+			return m.change(s)
+		}
+		var cmd tea.Cmd
+		m.editInput, cmd = m.editInput.Update(msg)
+		return cmd
+	}
+	switch msg.String() {
+	case "esc":
+		m.screen = screenChat
+	case "up", "k":
+		m.settingsSel, m.choice = max(0, m.settingsSel-1), 0
+	case "down", "j":
+		m.settingsSel, m.choice = min(max(len(m.rows)-1, 0), m.settingsSel+1), 0
+	case "left", "h":
+		m.choice = max(0, m.choice-1)
+	case "right", "l":
+		m.choice = min(max(len(m.selectedRow().actions)-1, 0), m.choice+1)
+	case "enter":
+		if actions := m.selectedRow().actions; m.choice < len(actions) {
+			return actions[m.choice].run(m)
+		}
+	}
+	return nil
+}
+
+// The headings of the settings screen, and what they say of the lines below.
+const (
+	nodeSection      = "The node"
+	agentsSection    = "The agents"
+	pluginsSection   = "Plugins"
+	ownerSection     = "Tools of your agent"
+	peersSection     = "Tools for peers"
+	protectedSection = "Paths no tool for files touches"
+)
+
+// about is what a heading says of its lines.
+var about = map[string]string{
+	nodeSection:      "The endpoint, the key and the model are changed with the setup and /model.",
+	agentsSection:    "A change holds from the next message, for you and for peers.",
+	pluginsSection:   "Plugins are part of the build. Turning one on or off holds once ouro starts anew: quit and start ouro, /stop and /start the node.",
+	ownerSection:     "What your agent may do when you ask it. A change holds from the next message.",
+	peersSection:     "What your agent may do when a connected peer asks it. A change holds from the next message.",
+	protectedSection: "For you and for peers alike. A change holds from the next call of a tool.",
+}
+
+// rows are the lines of the settings screen for s.
+func rows(s Settings) []row {
+	var out []row
+	add := func(section, label, value, note string, actions ...action) {
+		out = append(out, row{section: section, label: label, value: value, note: note, actions: actions})
+	}
+	editing := func(label, value string, change func(string) Setting) action {
+		return action{"change", func(m *Model) tea.Cmd { return m.startEdit(label, value, change) }}
+	}
+	set := func(name string, s Setting) action {
+		return action{name, func(m *Model) tea.Cmd { return m.change(s) }}
+	}
+
+	add(nodeSection, "Name", s.Name, "what the node is called on the network, and your agent too",
+		editing("the name of the node", s.Name, func(v string) Setting { return Setting{Kind: plugin.SetName, Value: v} }))
+	add(nodeSection, "Endpoint", s.Endpoint, "where the LLM is reached", action{"open /setup", (*Model).setup})
+	key := "none"
+	if s.HasKey {
+		key = "set, never shown"
+	}
+	add(nodeSection, "API key", key, "", action{"open /setup", (*Model).setup})
+	add(nodeSection, "Model", s.Model, "", action{"open /model", (*Model).openModel})
+	add(nodeSection, "Node ID", s.ID, "the fingerprint of the key of the node, which nothing here changes")
+
+	provider, choices := "none", []action{set("none", Setting{Kind: plugin.SetContextProvider})}
+	if s.ContextProvider != "" {
+		provider = s.ContextProvider
+	}
+	for _, p := range s.ContextProviders {
+		choices = append(choices, set(p, Setting{Kind: plugin.SetContextProvider, Value: p}))
+	}
+	add(agentsSection, "Context provider", provider,
+		"what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it", choices...)
+	allowed := "no"
+	if s.RebuildWithoutSandbox {
+		allowed = "yes, with network"
+	}
+	note := "rebuild builds and tests in a sandbox here, so this is not used"
+	if s.Sandbox != "" {
+		note = "there is no sandbox here (" + s.Sandbox + "): with yes, rebuild builds as you, with network"
+	}
+	toggle := set("allow", Setting{Kind: plugin.SetRebuildWithoutSandbox, On: true})
+	if s.RebuildWithoutSandbox {
+		toggle = set("refuse", Setting{Kind: plugin.SetRebuildWithoutSandbox})
+	}
+	add(agentsSection, "Rebuild without a sandbox", allowed, note, toggle)
+
+	if s.PluginsKept != "" {
+		out = append(out, row{section: pluginsSection, label: "Turned off", value: "none: all run",
+			note: "the plugins turned off cannot be, ouro could not start without them: " + s.PluginsKept, warn: true})
+	}
+	for _, p := range s.Plugins {
+		out = append(out, pluginRow(p))
+	}
+
+	for who, section := range []string{ownerSection, peersSection} {
+		out = append(out, toolRows(section, plugin.Audience(who), s.Tools[who])...)
+	}
+
+	for i, p := range s.Protected {
+		rest := append(append([]string{}, s.Protected[:i]...), s.Protected[i+1:]...)
+		add(protectedSection, p, "", "", set("remove", Setting{Kind: plugin.SetProtected, Value: strings.Join(rest, "\n")}))
+	}
+	add(protectedSection, "Add a path", "", "absolute, or starting with ~", editing("a path to protect", "", func(v string) Setting {
+		return Setting{Kind: plugin.SetProtected, Value: strings.Join(append(append([]string{}, s.Protected...), v), "\n")}
+	}))
+	if s.ProtectedDefault {
+		add(protectedSection, "The default", "in use", "the usual places of keys and credentials")
+	} else {
+		add(protectedSection, "The default", "not in use", "the usual places of keys and credentials",
+			set("use it", Setting{Kind: plugin.SetProtected, On: true}))
+	}
+	return out
+}
+
+// pluginRow is the line of a plugin.
+func pluginRow(p plugin.PluginState) row {
+	r := row{section: pluginsSection, label: p.Name}
+	turn := func(name string, on bool) action {
+		return action{name, func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetPlugin, Name: p.Name, On: on}) }}
+	}
+	switch {
+	case p.Missing:
+		r.value, r.note = "off", "not part of this build"
+		r.actions = []action{turn("forget", true)}
+	case p.Fixed != "":
+		r.value, r.note = "on", p.Fixed
+	case p.On:
+		r.value, r.actions = "on", []action{turn("turn off", false)}
+	default:
+		r.value, r.actions = "off", []action{turn("turn on", true)}
+	}
+	if !p.Missing && p.On != p.Running {
+		r.note, r.warn = "runs until ouro starts anew", true
+		if !p.Running {
+			r.note = "does not run until ouro starts anew"
+		}
+	}
+	return r
+}
+
+// toolRows are the lines of a list of tools.
+func toolRows(section string, who plugin.Audience, l plugin.ToolList) []row {
+	all := row{section: section, label: "All tools", value: "no"}
+	if l.All {
+		all.value = "yes"
+	}
+	if l.Unset {
+		all.value += ", the default"
+	}
+	all.note = "every tool, also those of plugins turned on later"
+	if who == plugin.ForPeers {
+		all.note = "every tool but those for your agent alone, also those of plugins turned on later"
+	}
+	all.actions = []action{{"turn on", func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetAllTools, For: who, On: true}) }}}
+	if l.All {
+		all.actions = []action{{"turn off", func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetAllTools, For: who}) }}}
+	}
+	out := []row{all}
+	for _, t := range l.Tools {
+		r := row{section: section, label: t.Name, note: firstSentence(t.Description)}
+		switch {
+		case who == plugin.ForPeers && t.OwnerOnly:
+			r.value = "for your agent alone"
+		case t.Allowed && !t.Listed:
+			r.value = "allowed, as all tools are"
+		case t.Allowed:
+			r.value = "allowed"
+		default:
+			r.value = "not allowed"
+		}
+		if t.Settings != "" {
+			r.note = "settings " + t.Settings + " · " + r.note
+		}
+		if who == plugin.ForPeers && t.OwnerOnly {
+			out = append(out, r)
+			continue
+		}
+		name := t.Name
+		toggle := action{"allow", func(m *Model) tea.Cmd {
+			return m.change(Setting{Kind: plugin.SetTool, For: who, Name: name, On: true})
+		}}
+		if t.Allowed {
+			toggle = action{"refuse", func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetTool, For: who, Name: name}) }}
+		}
+		r.actions = []action{toggle}
+		if t.Configurable {
+			value := t.Settings
+			if value == "" {
+				value = "{}"
+			}
+			r.actions = append(r.actions, action{"settings", func(m *Model) tea.Cmd {
+				return m.startEdit("the settings of "+name, value, func(v string) Setting {
+					return Setting{Kind: plugin.SetToolSettings, For: who, Name: name, Value: v}
+				})
+			}})
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// firstSentence is the first sentence of text.
+func firstSentence(text string) string {
+	if i := strings.Index(text, ". "); i >= 0 {
+		return text[:i+1]
+	}
+	return text
+}
+
+// settingsView shows the lines of the settings screen around the one
+// selected, with what can be done with it, and the text that is typed.
+func (m *Model) settingsView() string {
+	w, h := m.width, m.bodyHeight()
+	head := []string{boldStyle.Render("Settings"), ""}
+	var lines []string
+	at := 0 // the line of the row selected
+	section := ""
+	labelWidth := 0
+	for _, r := range m.rows {
+		labelWidth = max(labelWidth, ansi.StringWidth(r.label))
+	}
+	labelWidth = min(labelWidth, 28)
+	inner := max(10, w-4)
+	switch {
+	case m.settingsErr != nil:
+		lines = append(lines, errStyle.Render("✗ "+m.settingsErr.Error()))
+	case len(m.rows) == 0:
+		lines = append(lines, m.spinner.View()+mutedStyle.Render(" reading the configuration…"))
+	}
+	for i, r := range m.rows {
+		if r.section != section {
+			section = r.section
+			if len(lines) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, boldStyle.Render(section))
+			lines = append(lines, wrapped(about[section], "", inner, mutedStyle)...)
+		}
+		marker, label := "  ", lipgloss.NewStyle().Width(labelWidth+2).Render(ansi.Truncate(r.label, labelWidth, "…"))
+		if i == m.settingsSel {
+			at = len(lines)
+			marker = lipgloss.NewStyle().Foreground(accent).Render("› ")
+			label = lipgloss.NewStyle().Foreground(accent).Width(labelWidth + 2).Render(ansi.Truncate(r.label, labelWidth, "…"))
+		}
+		lines = append(lines, ansi.Truncate(marker+label+r.value, inner, "…"))
+		style := mutedStyle
+		if r.warn {
+			style = lipgloss.NewStyle().Foreground(warn)
+		}
+		lines = append(lines, wrapped(r.note, "    ", inner, style)...)
+		if i == m.settingsSel && len(r.actions) > 0 {
+			names := make([]string, len(r.actions))
+			for j, a := range r.actions {
+				names[j] = a.name
+			}
+			lines = append(lines, "    "+choices(names, m.choice))
+		}
+	}
+	room := max(1, h-2-len(head)) // the border
+	var bottom []string
+	if m.editing != nil {
+		bottom = []string{"", boldStyle.Render(m.editing.label) + mutedStyle.Render("  enter saves · esc keeps what was"), m.editInput.View()}
+		room = max(1, room-len(bottom))
+	}
+	first := max(0, min(at-room/3, len(lines)-room))
+	lines = lines[first:min(len(lines), first+room)]
+	all := append(append(head, lines...), bottom...)
+	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(all, "\n"))
+}
+
+// wrapped is text broken into lines of width, each after indent, in style.
+func wrapped(text, indent string, width int, style lipgloss.Style) []string {
+	if text == "" {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(ansi.Wordwrap(text, max(1, width-len(indent)), ""), "\n") {
+		out = append(out, style.Render(indent+line))
+	}
+	return out
+}

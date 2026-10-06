@@ -442,3 +442,25 @@ func TestSealedTypesAreNoServices(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Check tells whether plugins could start together, and starts none of them.
+func TestCheck(t *testing.T) {
+	var s started
+	user := NewPlugin("user", func(*Context, struct{ Word word }) (none, error) { s.note("user"); return none{}, nil })
+	maker := NewPlugin("maker", func(*Context, none) (struct{ Word word }, error) {
+		s.note("maker")
+		return struct{ Word word }{"hi"}, nil
+	})
+	if err := Check(user, maker); err != nil {
+		t.Fatal(err)
+	}
+	if err := Check(user); err == nil || !strings.Contains(err.Error(), "plugin user needs kernel.word, which no plugin provides") {
+		t.Fatalf("a need nobody provides: %v", err)
+	}
+	if err := Check(maker, provides(word("again"))); err == nil || !strings.Contains(err.Error(), "a service has one provider") {
+		t.Fatalf("a service provided twice: %v", err)
+	}
+	if len(s.order) != 0 {
+		t.Fatalf("started %v", s.order)
+	}
+}

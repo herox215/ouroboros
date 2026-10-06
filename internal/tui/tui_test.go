@@ -55,6 +55,18 @@ type fakeBackend struct {
 
 	// restarting is whether a tool asked for ouro to start anew.
 	restarting bool
+
+	// settings are what /settings shows; changes what the owner changed
+	// there, and done what a change answers with.
+	settings Settings
+	changes  []Setting
+	done     string
+}
+
+func (f *fakeBackend) Settings() (Settings, error) { return f.settings, f.fail["settings"] }
+func (f *fakeBackend) ChangeSetting(s Setting) (string, error) {
+	f.changes = append(f.changes, s)
+	return f.done, f.fail["change"]
 }
 
 func (f *fakeBackend) Status() (Status, error)     { return f.status, f.fail["status"] }

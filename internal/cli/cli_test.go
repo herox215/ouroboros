@@ -90,6 +90,35 @@ func TestStandardOuro(t *testing.T) {
 	}
 }
 
+// The owner turns plugins off in the configuration, but not those that are
+// ouro, and not one the others need.
+func TestPluginsTurnedOff(t *testing.T) {
+	s := clitest.Settings(t)
+	cfg := clitest.NodeConfig(s)
+	cfg.Plugins = &config.Plugins{Off: []string{"talk", "update", "tui", "gone"}}
+	config.Save(s.Home, cfg)
+	names := func() []string {
+		var names []string
+		for _, p := range cli.Plugins(s, cli.Terminal{}) {
+			names = append(names, p.Name)
+		}
+		return names
+	}
+	got := names()
+	if slices.Contains(got, "talk") || slices.Contains(got, "update") || !slices.Contains(got, "tui") || !slices.Contains(got, "history") {
+		t.Fatalf("running %v", got)
+	}
+	if _, err := clitest.Run(t, s, "", "update"); err == nil {
+		t.Error("the command of a plugin turned off runs")
+	}
+	// Without discovery, peers cannot start: everything runs.
+	cfg.Plugins.Off = []string{"discovery", "talk"}
+	config.Save(s.Home, cfg)
+	if got := names(); !slices.Contains(got, "discovery") || !slices.Contains(got, "talk") {
+		t.Fatalf("running %v", got)
+	}
+}
+
 // Without the plugin that runs commands there is nothing to run.
 func TestOuroWithoutPlugins(t *testing.T) {
 	app, err := cli.NewWith()

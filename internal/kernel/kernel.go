@@ -183,6 +183,16 @@ func (k *Kernel) Start(plugins ...Plugin) error {
 	return nil
 }
 
+// Check reports whether plugins could be started together, and starts none:
+// the error is the one Start would fail with before it started one, for a
+// plugin that needs what none of them provides, a service provided twice or
+// plugins that need each other in a circle. What a kernel seals is not
+// asked.
+func Check(plugins ...Plugin) error {
+	_, err := New().plan(plugins)
+	return err
+}
+
 // plan returns plugins in the order to start them in: as listed, but each
 // after the plugins that provide what it needs. It fails if they cannot all
 // be started, and says which plugins and services are in the way.

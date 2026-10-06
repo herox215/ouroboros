@@ -193,6 +193,25 @@ func TestTUIBackendModels(t *testing.T) {
 	}
 }
 
+// The settings screen sees the tools the plugins contributed, and changes
+// the configuration through the owner.
+func TestTUIBackendSettings(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	u := backend(t, s)
+	settings, err := u.Settings()
+	if err != nil || settings.Name != "alpha" || !slices.ContainsFunc(settings.Tools[plugin.ForPeers].Tools, func(t plugin.ToolState) bool { return t.Name == "read" }) {
+		t.Fatalf("settings %+v, %v", settings, err)
+	}
+	holds, err := u.ChangeSetting(plugin.Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Name: "list_peers", On: true})
+	if err != nil || !strings.Contains(holds, "from the next message") {
+		t.Fatalf("change: %q, %v", holds, err)
+	}
+	if cfg := clitest.MustLoad(t, s); len(cfg.PeerTools()) != 1 || cfg.PeerTools()[0].Tool != "list_peers" {
+		t.Fatalf("the configuration after the change: %+v", cfg.Tools)
+	}
+}
+
 // The UI shows the connection requests in both directions.
 func TestTUIBackendContacts(t *testing.T) {
 	s := clitest.Settings(t)

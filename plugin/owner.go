@@ -33,12 +33,15 @@ import (
 // waiting and shows them; the contacts, the key of the node and its
 // configuration are not to be had from it, and no change of the
 // configuration but the model the owner picks in the model screen (/model),
-// one that was proposed, or one the owner makes in the setup.
+// one that was proposed, one the owner makes in the setup, or one the owner
+// makes in the settings (/settings, see Settings and Change), each checked
+// before it is written. The settings show no key.
 type Owner struct {
-	home  home.Dir
-	local node.Local
-	net   *peers.Network
-	offer setup.Offer
+	home    home.Dir
+	local   node.Local
+	net     *peers.Network
+	offer   setup.Offer
+	plugins catalog // of the build, see Activate
 }
 
 // OwnerOf returns what the owner of the node in dir does, on its network. The

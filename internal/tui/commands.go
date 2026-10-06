@@ -24,6 +24,7 @@ var own = []command{
 	{"stop", "stop the node", (*Model).stop},
 	{"setup", "set up the node", (*Model).setup},
 	{"model", "choose the model of the provider", (*Model).openModel},
+	{"settings", "the configuration", (*Model).openSettings},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"requests", "decide on connection requests and proposals", (*Model).openRequests},
 	{"help", "list the commands", func(m *Model) tea.Cmd { m.screen = screenHelp; return nil }},

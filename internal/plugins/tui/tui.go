@@ -195,6 +195,17 @@ func (u *ui) Contents(contextID string) ([]tui.Message, error) {
 	return msgs, err
 }
 
+// Settings returns the configuration for the settings screen, with the
+// tools and context providers the plugins contributed.
+func (u *ui) Settings() (tui.Settings, error) {
+	return u.Owner.Settings(plugin.All[plugin.Tool](u.ctx), plugin.All[plugin.ContextProvider](u.ctx))
+}
+
+// ChangeSetting makes a change the owner made on the settings screen.
+func (u *ui) ChangeSetting(s tui.Setting) (string, error) {
+	return u.Owner.Change(s, plugin.All[plugin.Tool](u.ctx), plugin.All[plugin.ContextProvider](u.ctx))
+}
+
 // Start starts the node; one that was not set up is told how to get there in
 // the UI.
 func (u *ui) Start() error {

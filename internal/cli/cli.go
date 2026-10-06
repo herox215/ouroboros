@@ -130,8 +130,9 @@ func envInt(key string, def int) (int, error) {
 type Terminal = plugin.Terminal
 
 // Plugins is the standard ouro for the node described by s, talking to its
-// user through t. The order is only the order of the commands in the usage:
-// the kernel starts each plugin after those it depends on.
+// user through t: the plugins of the build that its configuration does not
+// turn off. The order is only the order of the commands in the usage: the
+// kernel starts each plugin after those it depends on.
 func Plugins(s Settings, t Terminal) []plugin.Plugin {
 	// The frame, see the package comment.
 	dir := home.Dir(s.Home)
@@ -141,7 +142,8 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		cfg, err := dir.Config()
 		return cfg.Protected(), err
 	}, Toolchain: update.GoPaths}
-	return []plugin.Plugin{
+	owner := plugin.OwnerOf(dir, network, setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey})
+	return plugin.Activate(owner, []plugin.Plugin{
 		base.Plugin(dir, t),
 		discovery.Plugin(s.DiscoPort),
 		tailscale.Plugin(),
@@ -156,9 +158,21 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 			OnStop: network.Close, // the channels the node opened to peers
 		}),
 		talk.Plugin(),
-		tui.Plugin(plugin.OwnerOf(dir, network, setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey})),
+		tui.Plugin(owner),
 		updateplugin.Plugin(dir),
-	}
+	}, fixed)
+}
+
+// fixed are the plugins the owner cannot turn off, with why: without them
+// there is no ouro to speak of. The owner turns the others on and off in the
+// configuration, see plugin.Activate.
+var fixed = map[string]string{
+	"base":      "it runs the commands of ouro",
+	"node":      "it starts, stops and runs the node",
+	"assistant": "it builds the agents",
+	"openai":    "it is the LLM, and no other plugin provides one",
+	"peers":     "it is the network of nodes",
+	"tui":       "it is the terminal UI, where the plugins are turned on again",
 }
 
 // seal keeps the frame of ouro out of the kernel: who the node is, how it

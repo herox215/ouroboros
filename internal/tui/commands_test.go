@@ -46,7 +46,7 @@ func TestCommandSuggestions(t *testing.T) {
 		t.Fatalf("footer %q", help)
 	}
 	press(m, "/", "s")
-	if help := strings.TrimSpace(footer(m)); help != "/start start the node · /stop stop the node · /setup set up the node" {
+	if help := strings.TrimSpace(footer(m)); help != "/start start the node · /stop stop the node · /setup set up the node · /settings the configuration" {
 		t.Fatalf("footer %q", help)
 	}
 	press(m, "t", "o")

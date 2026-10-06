@@ -251,6 +251,8 @@ func (m *Model) View() tea.View {
 		body = m.modelView()
 	case screenContext:
 		body = m.contextView()
+	case screenSettings:
+		body = m.settingsView()
 	}
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, m.headerView(), body, m.footerView()))
 	return v
@@ -438,6 +440,11 @@ func (m *Model) footerView() string {
 		help = "esc back · ctrl+c quit"
 	case screenModel:
 		help = "↑↓ choose · enter set · esc back · ctrl+c quit"
+	case screenSettings:
+		help = "↑↓ select · ←→ choose · enter do · esc back · ctrl+c quit"
+		if m.editing != nil {
+			help = "enter save · esc keep what was · ctrl+c quit"
+		}
 	case screenPlugin:
 		help = "esc back · ctrl+c quit"
 		if len(m.screens[m.open].Actions) > 0 {

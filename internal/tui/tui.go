@@ -83,6 +83,12 @@ type Backend interface {
 	// SetModel saves model as the model of the node: the agents answer with
 	// it from the next message on.
 	SetModel(model string) error
+	// Settings returns the configuration of the node for the settings
+	// screen (/settings), without its keys.
+	Settings() (Settings, error)
+	// ChangeSetting makes one change of the configuration, once the node
+	// checked it, and says from when it holds.
+	ChangeSetting(s Setting) (string, error)
 	// Restarting reports whether ouro is to be started anew, as a tool asked
 	// on the way to the answer that came in: the UI then quits, see Restarts.
 	Restarting() bool
@@ -108,6 +114,7 @@ const (
 	screenPlugin // the one of Model.screens that is open
 	screenModel  // the models of the provider, for /model
 	screenContext
+	screenSettings // the configuration, for /settings
 )
 
 // entry is one message in the conversation: from the user, from the agent, or
@@ -170,6 +177,13 @@ type Model struct {
 	modelErr  error  // why the models are not there
 
 	contents viewport.Model // the context of the conversation, for /context
+
+	settings    Settings        // the configuration, for /settings
+	settingsErr error           // why it is not there
+	rows        []row           // what the settings screen shows of it
+	settingsSel int             // the row selected
+	editing     *edit           // the text that is typed, if one is
+	editInput   textinput.Model // where it is typed
 
 	width, height int
 	showSplash    bool
@@ -380,6 +394,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case modelsMsg:
 		m.modelsLoaded(msg.models, msg.err)
+	case settingsMsg:
+		m.settingsLoaded(msg)
+	case changedMsg:
+		return m, m.changed(msg)
 	case contentsMsg:
 		m.contentsLoaded(msg)
 	case stepMsg:
@@ -431,6 +449,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.onboard.input, cmd = m.onboard.input.Update(msg)
 			return m, cmd
 		}
+		if m.editing != nil {
+			m.editInput, cmd = m.editInput.Update(msg)
+			return m, cmd
+		}
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
@@ -451,6 +473,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.handleModelKey(msg)
 	case screenContext:
 		return m.handleContextKey(msg)
+	case screenSettings:
+		return m.handleSettingsKey(msg)
 	case screenHelp:
 		if msg.String() == "esc" {
 			m.screen = screenChat

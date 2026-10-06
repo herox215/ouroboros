@@ -90,6 +90,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
+| `/settings` | the configuration in one place: the node, the agents, the plugins, the tools of your agent and of peers, the protected paths. `↑` `↓` select a line, `←` `→` what to do with it, `enter` does it, `esc` back; see [Settings](#settings) |
 | `/model` | the models the provider of the node offers, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on), `esc` back |
 | `/requests` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
@@ -451,10 +452,66 @@ is: the archive changes no context, and is only read when the agent calls one of
 
 Before the plugin ran, nothing was archived: conversations from before are not in it.
 
+### Settings
+
+`/settings` in the terminal UI shows the configuration of the node in one place, and changes it. It is the
+owner's alone, like every command of the UI: no agent and no peer reaches it.
+
+| Section | Shows | Changes |
+|---|---|---|
+| The node | name, endpoint, whether there is an API key (never which), model, the ID of the node | the name; the endpoint and the key in `/setup`, the model in `/model`, both opened from here |
+| The agents | the context provider and those this build has; whether `rebuild` may build without a sandbox, and whether there is one | both |
+| Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
+| Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with its settings | all tools, each tool, its settings |
+| Tools for peers | `a2a`, the same; a tool for your agent alone is shown as such and cannot be allowed | the same |
+| Paths no tool for files touches | `protected`, or that the default holds | remove a path, add one, go back to the default |
+
+`↑` `↓` select a line, `←` `→` what to do with it, `enter` does it, `esc` goes back to the chat. A text, like
+the name, a path or the settings of a tool (a JSON object like `{"allow": ["~/share"]}`), is typed in a line
+below the list: `enter` saves it, `esc` keeps what was.
+
+- **Every change is checked before it is written**, the way the node checks its configuration when it starts:
+  an unknown tool, a setting a tool does not take, a protected path that is none, a context provider this
+  build does not have, a plugin turned off that another one needs. What fails changes nothing, and the footer
+  says why.
+- **The footer says from when a change holds.** The name, the tools, the paths and the context provider hold
+  from the next message, for you and for peers. Whether `rebuild` may build without a sandbox holds for the
+  next rebuild. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
+  `/start` the node. Until then its line says that it runs, or that it does not.
+- **All tools.** Turning a tool off while all tools are allowed lists every other tool by its name instead
+  of `*`, so that nothing else changes; from then on a tool of a plugin turned on later is not allowed by
+  itself. Turning all tools on again drops the names, but keeps the settings of the tools that have some.
+  For peers, `*` and every plugin turned on give them its tools: the line says so.
+- **Secrets.** The key of the node and the key of the API are not shown, and not changed here: the setup
+  changes the key and the endpoint. The log records that a setting was changed, and which, never a value.
+- `/setup` and `/model` work as before; `/settings` opens them for the endpoint, the key and the model.
+
+#### Plugins on and off
+
+The plugins are compiled into ouro, and `Plugins` in `internal/cli/cli.go` lists them: turning one on or off
+chooses among those, and loads nothing. The configuration keeps the plugins that are off:
+
+```json
+"plugins": {"off": ["tailscale", "history"]}
+```
+
+- **What cannot be turned off**: `base`, `node`, `assistant`, `openai`, `peers` and `tui`, which are
+  ouro, and every plugin another one that is on needs: `discovery` while `peers` is on. Their line says why.
+- **When it holds**: the list is read when ouro starts. The node and the terminal UI are each started anew
+  for it.
+- **A plugin that is gone**: a name in `off` that this build does not have, as after a rebuild without that
+  plugin, is passed over, and `/settings` lists it as not part of this build, to forget.
+- **A list that cannot be**: if the plugins left on cannot start together (`config.json` was changed by
+  hand), ouro starts all of them, and `/settings` says why.
+- **Tools and peers**: turning a plugin on never changes `a2a`. With `*` in `a2a` its tools are for peers
+  as well, which `/settings` says.
+
 ### Configuration
 
 You can see and change the configuration by talking to your agent: "which tools do peers have?", "let beta
 read `~/share`". The agent has two tools for that, and neither changes anything.
+
+`/settings` in the terminal UI shows all of it in one place and changes it, see [Settings](#settings).
 
 You can change the model yourself, without the setup and without a proposal: `/model` in the terminal UI
 lists what the provider of the node offers, and the one you pick holds from the next message on.
@@ -932,7 +989,8 @@ through which
 one can be had, stops ouro from starting, as does a second plugin that provides a service that exists. A
 method added under a built-in name is never called, and `Network.Call` does not run the built-in ones.
 
-Plugins are compiled in. There is no loading at runtime.
+Plugins are compiled in. There is no loading at runtime. The owner turns the plugins of the build on and off in
+[`/settings`](#plugins-on-and-off), which holds once ouro starts anew.
 
 #### Context providers and answer hooks
 

@@ -203,6 +203,11 @@ func (b Builder) ownerTools(cfg config.Config) ([]agent.Tool, error) {
 	return allowed, nil
 }
 
+// Available are the tools the owner picks from for the lists of the
+// configuration: what the plugins contributed, and the tools for the
+// configuration of the node if the blueprint has one.
+func (b Builder) Available() []agent.Tool { return b.all() }
+
 // all are the tools the owner picks from: what the plugins contributed and
 // the tools for the configuration of the node, if the blueprint has one.
 func (b Builder) all() []agent.Tool {

@@ -42,6 +42,22 @@ type Config struct {
 	// sandbox, with network, on a system that has none. Only the owner sets
 	// it: no proposal does.
 	RebuildWithoutSandbox bool `json:"rebuild_without_sandbox,omitempty"`
+	// Plugins says which plugins of the build are turned off.
+	Plugins *Plugins `json:"plugins,omitempty"`
+}
+
+// Plugins are the plugins of the build the owner turned off, by name. They
+// are left out when ouro starts.
+type Plugins struct {
+	Off []string `json:"off"`
+}
+
+// PluginsOff are the names of the plugins that are turned off.
+func (c Config) PluginsOff() []string {
+	if c.Plugins == nil {
+		return nil
+	}
+	return c.Plugins.Off
 }
 
 // AllTools in a list of tools allows every tool.
