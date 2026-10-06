@@ -370,8 +370,11 @@ func TestTUIBackendRestart(t *testing.T) {
 // When a tool asks for ouro to start anew, the UI quits once the answer is
 // in, and ouro ends with plugin.Restarting. The UI of the new process goes
 // on from what it hands over: the chat, what the agent remembers of it, and
-// a node that ran before stays running. The file is read once.
+// a node that ran before stays running. The file is read once. It is written
+// to a directory of the test, not to the temp directory of the user.
 func TestRestartGoesOnWithTheConversation(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	s := clitest.Settings(t)
 	clitest.StartNode(t, s, clitest.NodeConfig(s))
 	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true}, again("/new/ouro"))
@@ -411,6 +414,9 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 		if v, ok := strings.CutPrefix(kv, tuiplugin.ResumeEnv+"="); ok {
 			file = v
 		}
+	}
+	if filepath.Dir(file) != filepath.Clean(tmp) {
+		t.Fatalf("the file to go on from is %s, not in %s", file, tmp)
 	}
 	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("the file to go on from: %v, %v", info, err)
