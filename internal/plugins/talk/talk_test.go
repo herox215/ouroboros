@@ -63,7 +63,7 @@ func TestChatOpensTheFrontEndThatIsThere(t *testing.T) {
 		var out bytes.Buffer
 		term := cli.Terminal{In: strings.NewReader("one\n"), Out: &out, Interactive: true}
 		list := slices.DeleteFunc(clitest.Plugins(s, term, plugins...), func(p plugin.Plugin) bool { return p.Name == "tui" })
-		app, err := cli.NewWith(list...)
+		app, err := cli.NewWith(clitest.InProcess(list)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -399,5 +399,36 @@ func TestListWithoutNetwork(t *testing.T) {
 func TestNotRunning(t *testing.T) {
 	if out, _ := clitest.Run(t, clitest.Settings(t), "", "list"); !strings.Contains(out, "no ouroboros nodes") {
 		t.Fatalf("list: %q", out)
+	}
+}
+
+// "ouro chat" answers in a session of the node: it starts a node that is not
+// running, and stops it again once the answer is given. A node that ran
+// before runs on.
+func TestChatStartsTheNode(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.Env(t, s)
+	chat := func(args ...string) (string, error) {
+		t.Helper()
+		app, out := clitest.NewApp(t, s, "")
+		err := app.Run(context.Background(), append([]string{"chat"}, args...))
+		return out.String(), err
+	}
+	if _, err := chat("hi"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "run: ouro start") {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
+	config.Save(s.Home, clitest.NodeConfig(s))
+	if out, err := chat("hello"); err != nil || out != "[gpt-4o] turns=1 last=hello\n" {
+		t.Fatalf("got %q, %v", out, err)
+	}
+	if _, running := home.Dir(s.Home).Service().Running(); running {
+		t.Fatal("the node the chat started should be stopped")
+	}
+	clitest.StartNode(t, s, clitest.NodeConfig(s))
+	if out, err := chat("again"); err != nil || out != "[gpt-4o] turns=1 last=again\n" {
+		t.Fatalf("got %q, %v", out, err)
+	}
+	if _, running := home.Dir(s.Home).Service().Running(); !running {
+		t.Fatal("a node that ran before should run on")
 	}
 }

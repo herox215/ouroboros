@@ -51,8 +51,9 @@ every step of an answer, since each sends the whole conversation again, and is u
 shows something new. A new conversation (`/new`) has none until its first call, and neither has one that
 goes on after a restart. `/context` shows what the context is: the system prompt, every tool with its schema
 and the conversation so far, message by message with its size.
-The input is focused on start, so you can type right away. The chat on the screen lives only as long as the TUI runs;
-what your agent did for it is recorded in [`ouro.log`](#the-log), and the conversation itself in the
+The input is focused on start, so you can type right away. The conversations are **sessions of the node**, not
+of the UI: the node runs their answers and keeps them as long as it runs, see [Sessions](#sessions). What your
+agent did for them is recorded in [`ouro.log`](#the-log), and the conversation itself in the
 [history](#history), where your agent can look it up again.
 
 The UI is a plugin like any other (`internal/plugins/tui`), and it is the front end of the standard ouro: the
@@ -77,7 +78,8 @@ footer when it opens, until the first key is pressed: `/stop is taken by the ter
 is left out`. The UI opens all the same, and so does everything else of that plugin.
 
 While the UI is open your node is online: opening it starts the node, and closing it stops the node
-again unless it was already running before (`ouro start`).
+again unless it was already running before (`ouro start`). An answer that is on its way when you close the UI
+is given all the same: the node stops once no answer is on its way any more.
 
 Everything the UI does is a **command**: you type it into the message input with a slash in front and send
 it with `enter`. A command runs in the UI and never goes to your agent, so only you run commands; a command
@@ -87,7 +89,9 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 
 | Command | What it does |
 |---|---|
-| `/new` | new conversation |
+| `/new` | new conversation; the one shown goes on in the background |
+| `/session` | the conversations of the node, the latest first, the one shown marked: `↑` `↓` select, `enter` shows the one selected, `esc` back; see [Sessions](#sessions) |
+| `/cancel` | stop the answer that is on its way in the conversation shown |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
@@ -104,25 +108,59 @@ Keys only move around:
 |---|---|
 | any key | skip the ouroboros splash (except `ctrl+c`) |
 | `enter` / `alt+enter` | send / a new line |
+| `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `pgup` `pgdn` | scroll the chat |
 | `esc` | back from a screen to the chat |
 | `ctrl+c` | quit, everywhere |
+
+### Sessions
+
+A conversation with your agent is a **session**, and the sessions belong to the node: the node runs the answers
+and keeps what happens in each of them, the messages, what the agent says on the way, every call of a tool and
+the answer. The UI and `ouro chat` are front ends of it. They talk to the node over a socket of the file
+system, `ouro.sock` in the directory of the node, and show what the node tells them. Nothing of it leaves the
+host: there is no port for it, and only you can open the socket (it is `0600`, its directory `0700`). Where the
+path of the directory is too long for a socket (more than about 100 characters), the socket is in a directory
+of yours in the temporary directory of the system, `ouro-UID/`, named after the directory of the node; the node
+refuses one that is not yours. A session of the socket is always yours: no peer reaches it, and the tools only
+you may use, like `rebuild`, work there.
+
+So an answer does not depend on the UI:
+
+- **Closing the UI** while your agent works does not stop it. The answer is given in the node, and it is in the
+  log and in the history. Open the UI again and the conversation is there, the answer too. A node the UI
+  started stops once no answer is on its way.
+- **Several conversations at once.** `/new` starts a new conversation and leaves the one before going on.
+  `/session` (or `ctrl+s`) lists the conversations of the node: each with the start of your first message
+  and when something last happened in it, and behind those whose answer is on its way a small animation. The
+  one shown is marked. `enter` shows the one selected, with an answer on its way as usual. When an answer
+  comes in in a conversation that is not shown, the footer says so (`answered in “…” · /session`). What you
+  typed stays with the conversation you typed it in; `ctrl+s` takes you to the list without clearing it.
+- **Two front ends** see the same: the UI lists the conversations `ouro chat` had too.
+- `/cancel` stops the answer on its way in the conversation shown. Stopping the node stops every answer.
+
+The node keeps the sessions in memory: once it stops, they are gone from the list (the history keeps them).
+When the node starts anew with a build of `rebuild`, it hands them over, see [Updates](#updates).
 
 ## Updates
 
 `ouro update` fetches the newest `main` from the repository the binary
 was built from, builds it with `install.sh` and replaces the running binary. A running node is
-restarted.
+restarted: an answer on its way is stopped, and the [sessions](#sessions) are gone from the list.
 It needs `git` and `make`; sources and build live in `~/.config/ouroboros/update/`.
 
 Your agent has the tool `rebuild` for the other direction: it builds the checkout the binary was built from
 (`make install` records it) with its files as they are now, committed or not, and runs `make test` there. Only
-when the build and every test pass, the binary is replaced and a running node restarted; otherwise nothing is
-installed and the agent gets the end of the output. That is how a change your agent made to the plugins of ouro
-with its tools for files takes effect. In the terminal UI, ouro then starts anew with the new build once the
-agent has answered, on the same terminal and without the splash, and the chat goes on where it was: what it
-showed and what the agent remembers of it are handed to the new process in a file only you can read, which it
-removes. The tool is for you only: a peer is refused even if `a2a` lists it. Take
+when the build and every test pass, the binary is replaced; otherwise nothing is installed and the agent gets
+the end of the output. That is how a change your agent made to the plugins of ouro
+with its tools for files takes effect. The tool runs in the node, which cannot stop itself while the answer is
+on its way. So the node starts anew with the new build once the agent has answered and no other answer is on
+its way; it takes no new message until then. It hands over to the new build in the same process: the lock on
+`ouro.pid` and the socket stay open across it, so no other node starts in between, and a front end that
+connects meanwhile waits until the new node answers. The sessions, and what the agent remembers of them, go
+over in `sessions.json`, which only you can read and the new node removes. The terminal UI starts anew as
+well, on the same terminal and without the splash, and shows the same conversation. The tool is for you only:
+a peer is refused even if `a2a` lists it. Take
 `rebuild` out of `h2a` if your agent should not build what it wrote. A binary installed by `ouro update` keeps
 the checkout of the one it replaced.
 
@@ -178,14 +216,14 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | A2A | `GET /.well-known/agent-card.json`, JSON-RPC `message/send` on `POST /`, over HTTPS only (TLS 1.3 on TCP 41337, falls back to a free port) |
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open. Where no interface carries multicast (a network namespace with the loopback interface alone), a node hears the probes sent to its host; a datagram the system does not hand over, as a sandbox does with one of another host, is passed over |
-| Agents | two per node, built from one blueprint: yours (`ouro`, `ouro chat`) runs in the UI process, the one answering peers in the node. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left; the LLM has one tool, `run`, and uses the others in a [script](#scripts) |
+| Agents | two per node, built from one blueprint, both in the node: yours answers the [sessions](#sessions) of `ouro` and `ouro chat`, the other one peers. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left; the LLM has one tool, `run`, and uses the others in a [script](#scripts) |
 | Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, and a script hands on at most 4 KiB of what it prints and of what it returns. From the 16th call of the LLM in an answer on, it is told with every call to stop searching and ask the user what exactly is meant, unless it has found what it looks for; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives OpenAI the conversation as `prompt_cache_key`. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another. What is cut off is not lost: the [history](#history) keeps every conversation in full |
 | Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
 | LLM | answers are asked for as a stream (`"stream": true`), so a gateway that gives up on a request without data for a while (HTTP 504) keeps waiting while the model thinks; an API that does not stream answers in one piece, which is taken as well. A completion is given up after 5 minutes without data, a list of the models after 5 minutes |
 | Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. At most 16 changes of the configuration your agent proposed wait for a decision. The tools for files and a script have limits of their own, see [Files](#files) and [Scripts](#scripts). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`, `history/` (0700, see [History](#history)). `config.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.sock` (0600, see [Sessions](#sessions)), `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`, `history/` (0700, see [History](#history)), and `sessions.json` (0600) while a node hands over to a new build. `config.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as setup defaults.
@@ -266,7 +304,8 @@ Three things limit a tool for files, and the first that speaks wins:
    - `config.json` and its lock file are neither read nor changed, under any name (also not through a hard
      link): they hold the key of your node and the key of the API, which would end up with the LLM.
    - Everything else in the directory of the node (`contacts.json`, `proposals.json`, `failures.json`,
-     `ouro.pid`, `ouro.log`, `ouro.log.1`, `update/`, `history/`) is read and never changed.
+     `ouro.pid`, `ouro.sock`, `ouro.log`, `ouro.log.1`, `sessions.json`, `update/`, `history/`) is read and
+     never changed.
    - The source of the core is read and never changed: in every directory whose `go.mod` names the module
      `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `daemon`, `update`,
      `sandbox`, `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable.
@@ -589,9 +628,9 @@ The ID is there to ask about. Your agent can send the peer a message like "what 
 
 ## The log
 
-`ouro.log` is where the node writes what it does, and where the chat with your agent is recorded: in the
-terminal UI and with `ouro chat`, which run your agent in their own process and add to the same file. After
-a conversation that went wrong, the log says what the agent did and where the time went:
+`ouro.log` is where the node writes what it does, and where the chat with your agent is recorded: the node
+runs the answers of the terminal UI and of `ouro chat` (see [Sessions](#sessions)) and writes them to the same
+file. After a conversation that went wrong, the log says what the agent did and where the time went:
 
 ```
 2026/10/04 14:02:11 chat 3f6c…: message from the owner: "ask beta for the time"
@@ -613,11 +652,11 @@ a conversation that went wrong, the log says what the agent did and where the ti
   calls of tools follows them as `said "…"`; a call that ends in `text` has no text in its line, because that
   text is the answer and is in the last line. The calls of a [script](#scripts) are recorded like the others,
   before the line of `run`.
-- **Canceled**: when you quit the UI, type `/new` for a new conversation or interrupt `ouro chat` with Ctrl-C,
-  the call the agent was waiting for is recorded as `canceled` with the time it had run, and then the answer.
-  Ctrl-C while `ouro chat` waits for an answer stops that answer; in the chat line by line you can then go on.
-  The UI writes these lines before it is gone, so the last line of a conversation says what the agent was
-  waiting for.
+- **Canceled**: when you type `/cancel` in the UI, interrupt `ouro chat` with Ctrl-C or stop the node, the call
+  the agent was waiting for is recorded as `canceled` with the time it had run, and then the answer. Ctrl-C
+  while `ouro chat` waits for an answer stops that answer; in the chat line by line you can then go on. The node
+  writes these lines before it is gone, so the last line of a conversation says what the agent was waiting
+  for. Quitting the UI or `/new` stops nothing: the answer goes on in the node.
 - **How much text**: the message, what the LLM says and the answer are cut after 300 bytes, at the start of a
   character, with `… (+N bytes)` for the rest; a line break is written as `\n`, so every entry is one line.
   The arguments of a tool are cut the same way, but the content of `write` and `old` and `new` of `edit` are
@@ -726,6 +765,7 @@ internal/kernel      plugin kernel: services, contributions, start order by decl
 internal/tui         terminal UI (Bubble Tea), with the splash and the setup
 internal/setup       the setup of the node: endpoint, key, model, name; the terminal and the UI both use it
 internal/node        the local node: Server runs it, Local controls the background one
+internal/session     the sessions of the owner: the Service the node runs them in, and the client of its socket
 internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, get_config, propose_config, withdraw_proposal as functions of its scripts; what the owner's agent does goes to the log
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
@@ -970,8 +1010,11 @@ of its actions ran and every ten seconds while it is open. A command is named by
 name.
 
 A front end is what opens when `ouro` runs without a command, and what `ouro chat` opens without a message.
-It talks to the agent of the owner through the service `*plugin.Assistant`, and shows a tool call as
-`plugin.ToolLine` says. ouro opens a front end only if the list of plugins holds exactly one: with none it
+It talks to the agent of the owner through the service `plugin.Sessions`: the sessions of the node, which it
+reaches over the socket of the node (see [Sessions](#sessions)). `Ask` starts an answer and returns at once,
+`Watch` tells what happened in a session and what happens from then on, as `plugin.SessionEvent`s of plain
+data, `Cancel` stops an answer and `List` lists the sessions; `plugin.Await` asks and waits for one answer. A
+front end shows a call of a tool as `plugin.ToolLine` says: the node sends the call, not its text. ouro opens a front end only if the list of plugins holds exactly one: with none it
 prints the usage, with several it fails and names them.
 
 The terminal UI is also where the owner starts and stops the node and accepts or rejects connection

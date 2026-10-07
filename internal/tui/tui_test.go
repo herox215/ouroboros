@@ -2,16 +2,21 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"ouroboros/internal/agent"
+	"ouroboros/internal/assistant"
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
@@ -20,18 +25,57 @@ type sent struct {
 	text      string
 }
 
+// Step is a call of a tool as the fake agent reports it: Text is what the UI
+// shows of it.
+type Step struct {
+	Text string
+	Done bool
+}
+
+// fakeAgent is the agent of the sessions of a fakeBackend: it answers as it
+// is told.
+type fakeAgent struct {
+	steps       []Step // reported after says, before the reply
+	says        []string
+	reply       string
+	err         error // what the answer fails with
+	contextSize int   // how long the context of every session is
+
+	// ask, if set, answers instead of steps, says and reply.
+	ask func(ctx context.Context, step func(Step), say func(string)) (string, error)
+}
+
+func (a *fakeAgent) Ready() error { return nil }
+func (a *fakeAgent) Run(ctx context.Context, _, _ string, observe func(assistant.Step), say func(string)) (string, error) {
+	step := func(s Step) { observe(assistant.Step{Tool: s.Text, Done: s.Done}) }
+	if a.ask != nil {
+		return a.ask(ctx, step, say)
+	}
+	for _, s := range a.says {
+		say(s)
+	}
+	for _, s := range a.steps {
+		step(s)
+	}
+	return a.reply, a.err
+}
+func (a *fakeAgent) Context(string) int                          { return a.contextSize }
+func (a *fakeAgent) Contents(string) (assistant.Contents, error) { return assistant.Contents{}, nil }
+func (a *fakeAgent) Inspection(string) (agent.Inspection, bool)  { return agent.Inspection{}, false }
+func (a *fakeAgent) Conversation(string) json.RawMessage         { return nil }
+func (a *fakeAgent) Resume(string, json.RawMessage) error        { return nil }
+
+// fakeBackend is what the UI controls in the tests. Its sessions are those
+// of the node, in this process: their answers come from the fakeAgent.
 type fakeBackend struct {
+	*fakeAgent
+	sessions *session.Service
+
 	status   Status
-	sent     []sent
-	steps    []Step // reported before the reply
-	says     []string
-	reply    string
-	sendErr  error
 	started  int
 	stopped  int
 	setups   int        // how often the setup was opened
 	setup    *fakeSetup // what it opens; one that knows the fake endpoint if nil
-	context  int        // how long the context of every conversation is
 	contents []Message  // what the context of every conversation is
 
 	trust     Contacts
@@ -50,17 +94,14 @@ type fakeBackend struct {
 	// fail is what fails, by the name of the request.
 	fail map[string]error
 
-	// ask, if set, answers instead of steps, says and reply.
-	ask func(ctx context.Context, step func(Step), say func(string)) (string, error)
-
-	// restarting is whether a tool asked for ouro to start anew.
-	restarting bool
-
 	// settings are what /settings shows; changes what the owner changed
 	// there, and done what a change answers with.
 	settings Settings
 	changes  []Setting
 	done     string
+
+	mu   sync.Mutex
+	sent []sent // the messages asked for
 }
 
 func (f *fakeBackend) Settings() (Settings, error) { return f.settings, f.fail["settings"] }
@@ -83,18 +124,78 @@ func (f *fakeBackend) Setup() (Setup, error) {
 	}
 	return f.setup, nil
 }
-func (f *fakeBackend) Ask(ctx context.Context, contextID, text string, step func(Step), say func(string)) (string, error) {
-	f.sent = append(f.sent, sent{contextID, text})
-	if f.ask != nil {
-		return f.ask(ctx, step, say)
+func (f *fakeBackend) Ask(ctx context.Context, id, text string) error {
+	f.mu.Lock()
+	f.sent = append(f.sent, sent{id, text})
+	f.mu.Unlock()
+	if err := f.fail["ask"]; err != nil {
+		return err
 	}
-	for _, s := range f.says {
-		say(s)
+	return f.sessions.Ask(ctx, id, text)
+}
+
+// messages are the messages asked for so far.
+func (f *fakeBackend) messages() []sent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.sent)
+}
+
+// errNoNode is what a fakeBackend without sessions says to what needs them.
+var errNoNode = errors.New("the node is not running")
+
+func (f *fakeBackend) Watch(ctx context.Context, id string) ([]Event, <-chan Event, error) {
+	if err := f.fail["watch"]; err != nil {
+		return nil, nil, err
 	}
-	for _, s := range f.steps {
-		step(s)
+	if f.sessions == nil {
+		return nil, nil, errNoNode
 	}
-	return f.reply, f.sendErr
+	past, live, err := f.sessions.Watch(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	shown := make([]Event, len(past))
+	for i, e := range past {
+		shown[i] = shownEvent(e)
+	}
+	out := make(chan Event)
+	go func() {
+		defer close(out)
+		for e := range live {
+			out <- shownEvent(e)
+		}
+	}()
+	return shown, out, nil
+}
+
+// shownEvent is e as the UI shows it: what the fake agent calls a tool is
+// what is shown of it.
+func shownEvent(e plugin.SessionEvent) Event {
+	text := e.Text
+	if e.Kind == plugin.SessionStep {
+		text = e.Tool
+	}
+	return Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context}
+}
+
+func (f *fakeBackend) Cancel(ctx context.Context, id string) error {
+	if err := f.fail["cancel"]; err != nil {
+		return err
+	}
+	return f.sessions.Cancel(ctx, id)
+}
+func (f *fakeBackend) Sessions(ctx context.Context) ([]plugin.SessionInfo, error) {
+	if err := f.fail["sessions"]; err != nil {
+		return nil, err
+	}
+	if f.sessions == nil {
+		return nil, errNoNode
+	}
+	return f.sessions.List(ctx)
+}
+func (f *fakeBackend) Contents(context.Context, string) ([]Message, error) {
+	return f.contents, f.fail["contents"]
 }
 func (f *fakeBackend) Accept(ctx context.Context, publicKey string) error {
 	f.decided = ctx
@@ -115,22 +216,35 @@ func (f *fakeBackend) RefuseProposal(id string) error {
 	return f.rejectErr
 }
 func (f *fakeBackend) Models(ctx context.Context) (Models, error) { return f.offers, f.modelsErr }
-func (f *fakeBackend) Restarting() bool                           { return f.restarting }
-func (f *fakeBackend) Context(string) int                         { return f.context }
-func (f *fakeBackend) Contents(string) ([]Message, error)         { return f.contents, f.fail["contents"] }
 func (f *fakeBackend) SetModel(model string) error {
 	f.set = append(f.set, model)
 	return f.fail["setmodel"]
 }
 
+// newBackend is a fakeBackend whose agent answers "pong", until the test ends.
+func newBackend(t *testing.T) *fakeBackend {
+	t.Helper()
+	a := &fakeAgent{reply: "pong"}
+	b := &fakeBackend{fakeAgent: a, sessions: session.New(a), status: Status{Configured: true, Running: true, ID: "aaa111", Name: "alpha"}}
+	t.Cleanup(b.sessions.Close)
+	return b
+}
+
 func newModel(t *testing.T) (*Model, *fakeBackend) {
 	t.Helper()
-	b := &fakeBackend{status: Status{Configured: true, Running: true, ID: "aaa111", Name: "alpha"}, reply: "pong"}
+	b := newBackend(t)
+	return newModelOn(t, b), b
+}
+
+// newModelOn is the UI of b in a window of 100×30, without the splash.
+func newModelOn(t *testing.T, b *fakeBackend) *Model {
+	t.Helper()
 	m := New(b, nil, nil)
+	t.Cleanup(m.quit)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.showSplash = false // dismiss the start screen; its own test is below
 	m.Update(m.refreshStatus())
-	return m, b
+	return m
 }
 
 // run types the command line into the input and sends it.
@@ -182,11 +296,56 @@ func say(t *testing.T, m *Model, text string) tea.Cmd {
 	return cmd
 }
 
-// deliver runs cmd and the commands that follow it until the reply is in.
+// deliver runs cmd and the commands that follow it until none is left.
 func deliver(m *Model, cmd tea.Cmd) {
 	for cmd != nil {
 		_, cmd = m.Update(cmd())
 	}
+}
+
+// drivers run the commands of the UIs of the tests, by UI.
+var drivers sync.Map
+
+// drive runs cmd and what follows of it as the program does, until done
+// reports true. A command that does not come back at once, like the wait for
+// what happens next in a session, goes on waiting: what it brings is handed
+// to the UI in a later drive. Ticks are left out.
+func drive(t *testing.T, m *Model, cmd tea.Cmd, done func() bool) {
+	t.Helper()
+	v, _ := drivers.LoadOrStore(m, make(chan tea.Msg, 1024))
+	msgs := v.(chan tea.Msg)
+	start := func(c tea.Cmd) {
+		if c != nil {
+			go func() { msgs <- c() }()
+		}
+	}
+	start(cmd)
+	deadline := time.After(5 * time.Second)
+	for !done() {
+		select {
+		case msg := <-msgs:
+			switch msg := msg.(type) {
+			case tea.BatchMsg:
+				for _, c := range msg {
+					start(c)
+				}
+			case nil, tickMsg, rewatchMsg, splashMsg:
+			default:
+				_, c := m.Update(msg)
+				start(c)
+			}
+		case <-deadline:
+			t.Fatalf("the UI did not get there: %+v", m.chat)
+		}
+	}
+}
+
+// answered drives the UI until the answer to what cmd sent is in.
+func answered(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	c := m.chat
+	n := len(c.entries)
+	drive(t, m, cmd, func() bool { return !c.pending && len(c.entries) > n+1 })
 }
 
 func TestSplashShowsLogoUntilKey(t *testing.T) {
@@ -373,16 +532,16 @@ func TestChat(t *testing.T) {
 		t.Fatal("a pending answer should be announced")
 	}
 	m.input.SetValue("again")
-	if press(m, "enter") != nil || len(m.chat.entries) != 1 {
+	if press(m, "enter") != nil || m.notice != "wait for the reply first" {
 		t.Fatal("a second message must wait for the reply")
 	}
 
-	deliver(m, cmd)
+	answered(t, m, cmd)
 	c := m.chat
-	if len(b.sent) != 1 || b.sent[0] != (sent{c.contextID, "ping"}) {
-		t.Fatalf("sent %+v", b.sent)
+	if got := b.messages(); len(got) != 1 || got[0] != (sent{c.contextID, "ping"}) {
+		t.Fatalf("sent %+v", got)
 	}
-	if c.pending || len(c.entries) != 2 || c.entries[1].text != "pong" || c.entries[1].mine {
+	if c.pending || len(c.entries) != 2 || c.entries[0].text != "ping" || !c.entries[0].mine || c.entries[1].text != "pong" || c.entries[1].mine {
 		t.Fatalf("entries %+v", c.entries)
 	}
 	if view := m.View().Content; !strings.Contains(view, "ping") || !strings.Contains(view, "pong") {
@@ -390,34 +549,36 @@ func TestChat(t *testing.T) {
 	}
 
 	// The conversation keeps its context.
-	deliver(m, say(t, m, "more"))
-	if b.sent[1].contextID != c.contextID {
+	answered(t, m, say(t, m, "more"))
+	if b.messages()[1].contextID != c.contextID {
 		t.Fatal("context changed within a conversation")
 	}
 }
 
 func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	m, b := newModel(t)
-	b.says = []string{"I will ask beta"}
-	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta", Done: true}}
-	b.reply = "beta says it is noon"
-	cmd := say(t, m, "ask beta for the time")
-
-	_, cmd = m.Update(cmd()) // the words of the agent are in the chat
-	if !strings.Contains(m.View().Content, "I will ask beta") {
+	gate := make(chan struct{})
+	b.ask = func(_ context.Context, step func(Step), say func(string)) (string, error) {
+		say("I will ask beta")
+		step(Step{Text: "asking beta"})
+		<-gate
+		step(Step{Text: "asking beta", Done: true})
+		return "beta says it is noon", nil
+	}
+	// The words of the agent are in the chat, and the call to beta is
+	// announced and still running.
+	drive(t, m, say(t, m, "ask beta for the time"), func() bool { return m.chat.doing == "asking beta" })
+	if !m.chat.pending || !strings.Contains(m.View().Content, "I will ask beta") || !strings.Contains(m.View().Content, "asking beta") {
 		t.Fatalf("what the agent says on the way belongs in the chat:\n%s", m.View().Content)
 	}
-	_, cmd = m.Update(cmd()) // the call to beta is announced and still running
-	if m.chat.doing != "asking beta" || !m.chat.pending || !strings.Contains(m.View().Content, "asking beta") {
-		t.Fatalf("the call to beta should be announced: %+v", m.chat)
-	}
-	deliver(m, cmd) // beta answered, the agent thinks again and answers
+	close(gate) // beta answered, the agent thinks again and answers
+	drive(t, m, nil, func() bool { return !m.chat.pending })
 
 	c := m.chat
 	// The call these words belong to goes below them.
 	want := []entry{{mine: true, text: "ask beta for the time"},
 		{text: "I will ask beta", calls: []call{{"asking beta", true}}}, {text: "beta says it is noon"}}
-	if c.pending || !sameEntries(c.entries, want) {
+	if !sameEntries(c.entries, want) {
 		t.Fatalf("the loop belongs in the history: %+v", c.entries)
 	}
 	view := trimmedLines(m)
@@ -429,13 +590,19 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	}
 }
 
+// An answer that fails says why; a message the node does not take goes back
+// into the input, with why in the footer.
 func TestSendError(t *testing.T) {
 	m, b := newModel(t)
-	b.sendErr = errors.New("connection refused")
-	deliver(m, say(t, m, "ping"))
-	e := m.chat.entries[1]
-	if !e.failed || e.text != "connection refused" {
+	b.err = errors.New("connection refused")
+	answered(t, m, say(t, m, "ping"))
+	if e := m.chat.entries[1]; !e.failed || e.text != "connection refused" {
 		t.Fatalf("entry %+v", e)
+	}
+	b.fail = map[string]error{"ask": errors.New("the node is not running, type /start")}
+	drive(t, m, say(t, m, "again"), func() bool { return m.noticeErr })
+	if m.chat.pending || len(m.chat.entries) != 2 || m.input.Value() != "again" || m.notice != "the node is not running, type /start" {
+		t.Fatalf("pending %v, entries %+v, input %q, notice %q", m.chat.pending, m.chat.entries, m.input.Value(), m.notice)
 	}
 }
 
@@ -492,8 +659,10 @@ func TestRejectRequest(t *testing.T) {
 // Every round of the loop has its entry, a round the agent said nothing of
 // too, and every call of a round its line, which says once the call ended
 // what became of it. The calls a script runs end before the script does.
+// Another UI that shows the session sees the same.
 func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	m, b := newModel(t)
+	written, scripted := make(chan struct{}), make(chan struct{})
 	b.ask = func(_ context.Context, step func(Step), say func(string)) (string, error) {
 		say("I read both")
 		step(Step{Text: "reading a.go"})
@@ -503,25 +672,22 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		say("")
 		step(Step{Text: "running a script"})
 		step(Step{Text: "writing c.go"})
+		<-written
+		step(Step{Text: "writing c.go ✓ 1ms", Done: true})
+		<-scripted
+		step(Step{Text: "running a script ✓ 9ms", Done: true})
+		// A call that ended without having started changes nothing.
+		step(Step{Text: "listing ~ ✓ 1ms", Done: true})
 		return "", nil
 	}
-	cmd := say(t, m, "fix it")
-	for range 8 { // up to the call within the script
-		_, cmd = m.Update(cmd())
-	}
-	if m.chat.doing != "writing c.go" || !strings.Contains(ansi.Strip(m.View().Content), "· writing c.go …") {
+	drive(t, m, say(t, m, "fix it"), func() bool { return m.chat.doing == "writing c.go" })
+	if !strings.Contains(ansi.Strip(m.View().Content), "· writing c.go …") {
 		t.Fatalf("the call the agent waits for should be marked: %+v\n%s", m.chat, ansi.Strip(m.View().Content))
 	}
-	m.step(stepMsg{m.chat.contextID, Step{Text: "writing c.go ✓ 1ms", Done: true}, nil})
-	if m.chat.doing != "running a script" {
-		t.Fatalf("the script still runs: %q", m.chat.doing)
-	}
-	m.step(stepMsg{m.chat.contextID, Step{Text: "running a script ✓ 9ms", Done: true}, nil})
-	// A call that ended without having started, and words of a conversation
-	// that was reset, change nothing.
-	m.step(stepMsg{m.chat.contextID, Step{Text: "listing ~ ✓ 1ms", Done: true}, nil})
-	m.say(sayMsg{"another conversation", "I was reset", nil})
-	deliver(m, cmd)
+	close(written)
+	drive(t, m, nil, func() bool { return m.chat.doing == "running a script" }) // the script still runs
+	close(scripted)
+	drive(t, m, nil, func() bool { return !m.chat.pending })
 
 	want := []entry{{mine: true, text: "fix it"},
 		{text: "I read both", calls: []call{{"reading a.go ✓ 3ms", true}, {"reading b.go ✗ no such file", true}}},
@@ -540,11 +706,12 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		t.Fatalf("no call is waited for any more:\n%s", view)
 	}
 
-	// What ended is what goes on in another UI.
-	other, _ := newModel(t)
-	other.Resume(m.Chat())
+	// Another UI that shows the session gets what happened in it.
+	other := newModelOn(t, b)
+	other.Resume(m.Current())
+	drive(t, other, other.watch(other.chat), func() bool { return len(other.chat.entries) == len(want) })
 	if !sameEntries(other.chat.entries, want) {
-		t.Fatalf("resumed %+v", other.chat.entries)
+		t.Fatalf("the other UI shows %+v", other.chat.entries)
 	}
 }
 
@@ -565,20 +732,37 @@ func sameEntries(got, want []entry) bool {
 	})
 }
 
-func TestNewConversationDropsLateReply(t *testing.T) {
+// A new conversation leaves the one before going on: its answer comes in
+// there, and the footer says so.
+func TestNewConversationLeavesTheAnswerGoingOn(t *testing.T) {
 	m, b := newModel(t)
-	b.steps = []Step{{Text: "asking beta"}}
-	cmd := say(t, m, "ping")
-	old := m.chat.contextID
-	run(m, "/new")
-	deliver(m, cmd)
+	gate := make(chan struct{})
+	b.ask = func(_ context.Context, step func(Step), _ func(string)) (string, error) {
+		step(Step{Text: "asking beta"})
+		<-gate
+		return "beta is fine", nil
+	}
+	drive(t, m, say(t, m, "how is beta"), func() bool { return m.chat.doing == "asking beta" })
+	old := m.chat
+	drive(t, m, run(m, "/new"), func() bool { return true })
 	c := m.chat
-	if c.contextID == old || len(c.entries) != 0 || c.pending || c.doing != "" {
-		t.Fatalf("conversation not reset: %+v", c)
+	if c == old || c.contextID == old.contextID || len(c.entries) != 0 || c.pending || c.doing != "" {
+		t.Fatalf("conversation not new: %+v", c)
+	}
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "asking beta") {
+		t.Fatalf("the new conversation shows the old one:\n%s", view)
+	}
+	close(gate)
+	drive(t, m, nil, func() bool { return !old.pending })
+	if m.chat != c || len(c.entries) != 0 || old.entries[len(old.entries)-1].text != "beta is fine" {
+		t.Fatalf("the answer belongs to the old conversation: %+v, %+v", old.entries, c.entries)
+	}
+	if m.notice != "answered in “how is beta” · /session" || m.noticeErr {
+		t.Fatalf("notice %q", m.notice)
 	}
 }
 
-// askUntilCancelled makes b answer the way a real backend does when it is
+// askUntilCancelled makes b answer the way a real agent does when it is
 // stopped: it asks beta, works until its context ends and fails with that.
 // The returned channel is closed once the answer has given up.
 func askUntilCancelled(b *fakeBackend) <-chan struct{} {
@@ -586,7 +770,7 @@ func askUntilCancelled(b *fakeBackend) <-chan struct{} {
 	b.ask = func(ctx context.Context, step func(Step), _ func(string)) (string, error) {
 		step(Step{Text: "asking beta"})
 		<-ctx.Done()
-		step(Step{Text: "asking beta", Done: true}) // nobody listens any more; must not block
+		step(Step{Text: "asking beta", Done: true})
 		close(stopped)
 		return "", ctx.Err()
 	}
@@ -603,34 +787,47 @@ func awaitStop(t *testing.T, stopped <-chan struct{}) {
 	}
 }
 
-func TestNewConversationCancelsThePendingAnswer(t *testing.T) {
+// /cancel stops the answer on its way in the conversation shown, which says
+// so; the conversation goes on as usual.
+func TestCancelStopsTheAnswer(t *testing.T) {
 	m, b := newModel(t)
-	stopped := askUntilCancelled(b)
-	_, cmd := m.Update(say(t, m, "ping")()) // the question to beta is on its way
-	if m.chat.doing != "asking beta" {
-		t.Fatalf("the answer should be on its way: %+v", m.chat)
+	if run(m, "/cancel"); m.notice != "no answer is on its way here" || m.noticeErr {
+		t.Fatalf("nothing to stop: %q", m.notice)
 	}
-
-	run(m, "/new")
+	stopped := askUntilCancelled(b)
+	drive(t, m, say(t, m, "ping"), func() bool { return m.chat.doing == "asking beta" })
+	cmd := run(m, "/cancel")
+	if m.notice != "stopping the answer…" {
+		t.Fatalf("notice %q", m.notice)
+	}
+	drive(t, m, cmd, func() bool { return !m.chat.pending && m.notice == "answer stopped" })
 	awaitStop(t, stopped)
-	deliver(m, cmd)
 	c := m.chat
-	if len(c.entries) != 0 || c.pending || c.doing != "" {
-		t.Fatalf("a cancelled answer must not land in the new conversation: %+v", c)
+	if e := c.entries[len(c.entries)-1]; !e.failed || e.text != "stopped before it answered" {
+		t.Fatalf("entries %+v", c.entries)
 	}
 	if view := m.View().Content; strings.Contains(view, context.Canceled.Error()) {
 		t.Fatalf("a cancelled answer is no error to show:\n%s", view)
 	}
 
-	// The new conversation answers as usual.
+	// The conversation answers as usual.
 	b.ask = nil
-	deliver(m, say(t, m, "more"))
-	if c := m.chat; c.pending || len(c.entries) != 2 || c.entries[1].text != "pong" || c.entries[1].failed {
+	answered(t, m, say(t, m, "more"))
+	if e := c.entries[len(c.entries)-1]; e.text != "pong" || e.failed {
 		t.Fatalf("entries %+v", c.entries)
+	}
+
+	// What cannot be stopped says why.
+	b.fail = map[string]error{"cancel": errors.New("boom")}
+	c.pending = true
+	m.Update(run(m, "/cancel")())
+	if m.notice != "boom" || !m.noticeErr {
+		t.Fatalf("notice %q", m.notice)
 	}
 }
 
-func TestQuitCancelsThePendingAnswer(t *testing.T) {
+// Quitting the UI leaves the answer on its way going on: it is the node's.
+func TestQuitLeavesTheAnswerGoingOn(t *testing.T) {
 	ctrlC := tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl})
 	for name, quit := range map[string]func(*Model) tea.Cmd{
 		"/quit":                func(m *Model) tea.Cmd { return run(m, "/quit") },
@@ -641,20 +838,28 @@ func TestQuitCancelsThePendingAnswer(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, b := newModel(t)
-			stopped := askUntilCancelled(b)
-			_, cmd := m.Update(say(t, m, "ping")())
-
+			gate := make(chan struct{})
+			b.ask = func(_ context.Context, step func(Step), _ func(string)) (string, error) {
+				step(Step{Text: "asking beta"})
+				<-gate
+				return "beta is fine", nil
+			}
+			drive(t, m, say(t, m, "ping"), func() bool { return m.chat.doing == "asking beta" })
 			if _, ok := quit(m)().(tea.QuitMsg); !ok {
 				t.Fatal("the UI should quit")
 			}
-			awaitStop(t, stopped)
-			deliver(m, cmd) // the reply may still arrive before the UI is gone
-			c := m.chat
-			if len(c.entries) != 2 || !c.entries[0].mine || c.entries[1].text != "" || c.entries[1].failed {
-				t.Fatalf("a cancelled answer is no error to show, and its step stays: %+v", c.entries)
+			running := func() bool {
+				list, _ := b.sessions.List(context.Background())
+				return len(list) == 1 && list[0].Running
 			}
-			if view := m.View().Content; strings.Contains(view, context.Canceled.Error()) {
-				t.Fatalf("a cancelled answer is no error to show:\n%s", view)
+			if !running() {
+				t.Fatal("the answer should go on")
+			}
+			close(gate)
+			for deadline := time.Now().Add(5 * time.Second); running(); time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("the answer should end")
+				}
 			}
 		})
 	}
@@ -916,29 +1121,36 @@ func TestProposals(t *testing.T) {
 }
 
 // A tool that asked for ouro to start anew makes the UI quit once the answer
-// is in; what it showed goes on in another UI, without the splash.
+// is in; the session it showed goes on in another UI, without the splash,
+// which does not quit for what happened before it.
 func TestRestartGoesOnInAnotherUI(t *testing.T) {
 	m, b := newModel(t)
-	b.reply = "built and installed"
-	deliver(m, say(t, m, "ping"))
-	if m.Restarts() {
+	answered(t, m, say(t, m, "ping"))
+	if _, ok := m.Restarts(); ok {
 		t.Fatal("no tool asked for a restart")
 	}
-	b.restarting = true
-	_, cmd := m.Update(say(t, m, "rebuild")())
-	if _, ok := cmd().(tea.QuitMsg); !ok || !m.Restarts() {
-		t.Fatal("the UI should quit to start anew")
+	b.sessions.Attach(nil, func(string) {}) // a node that can take its own place
+	b.ask = func(ctx context.Context, _ func(Step), _ func(string)) (string, error) {
+		plugin.Restart(ctx, "/new/ouro")
+		return "built and installed", nil
+	}
+	drive(t, m, say(t, m, "rebuild"), func() bool { _, ok := m.Restarts(); return ok })
+	if exe, _ := m.Restarts(); exe != "/new/ouro" {
+		t.Fatalf("the UI should quit to start anew from /new/ouro, not %q", exe)
 	}
 
-	chat := m.Chat()
-	other, _ := newModel(t)
+	other := newModelOn(t, b)
 	other.showSplash = true
-	other.Resume(chat)
-	if other.showSplash || !sameEntries(other.chat.entries, m.chat.entries) || other.Chat().ContextID != m.chat.contextID {
+	other.Resume(m.Current())
+	drive(t, other, other.watch(other.chat), func() bool { return len(other.chat.entries) == len(m.chat.entries) })
+	if other.showSplash || !sameEntries(other.chat.entries, m.chat.entries) || other.Current() != m.Current() {
 		t.Fatalf("resumed %+v, want %+v", other.chat, m.chat)
 	}
-	if view := ansi.Strip(other.View().Content); !strings.Contains(view, "built and installed") {
+	if view := ansi.Strip(other.View().Content); !strings.Contains(view, "built and installed") || !strings.Contains(view, "restarted with the new build") {
 		t.Fatalf("the resumed chat should be shown:\n%s", view)
+	}
+	if _, ok := other.Restarts(); ok {
+		t.Fatal("a restart that happened before does not make the UI quit")
 	}
 }
 
@@ -959,6 +1171,12 @@ func TestPendingLine(t *testing.T) {
 	}
 	height := m.history.Height()
 
+	// A peer that did not say its name is called by its key.
+	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "0123456789abcdef"}}}
+	m.Update(m.loadContacts())
+	if line := last(); !strings.Contains(line, "0123456789… wants to chat") {
+		t.Fatalf("pending line %q", line)
+	}
 	b.trust = Contacts{
 		Incoming:  []plugin.Request{{PublicKey: "pk1", Name: "gamma"}, {PublicKey: "pk2", Name: "bob", Proposed: true}},
 		Proposals: []plugin.Proposal{{ID: "1", Field: "tools.a2a"}},

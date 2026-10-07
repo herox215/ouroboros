@@ -339,7 +339,8 @@ func TestOnlyTheListKnowsTheTerminalUI(t *testing.T) {
 		{"cmd", "ouro"}, {"plugin"}, {"plugin", "example"}, {"internal", "kernel"}, {"internal", "assistant"}, {"internal", "node"},
 		{"internal", "plugins", "assistant"}, {"internal", "plugins", "base"}, {"internal", "plugins", "discovery"},
 		{"internal", "plugins", "node"}, {"internal", "plugins", "openai"}, {"internal", "plugins", "peers"},
-		{"internal", "plugins", "tailscale"}, {"internal", "plugins", "talk"}, {"internal", "plugins", "update"},
+		{"internal", "plugins", "session"}, {"internal", "plugins", "tailscale"}, {"internal", "plugins", "talk"},
+		{"internal", "plugins", "update"},
 	} {
 		for _, path := range imports(t, dir...) {
 			if path == "ouroboros/internal/plugins/tui" || path == "ouroboros/internal/tui" {
@@ -353,7 +354,8 @@ func TestOnlyTheListKnowsTheTerminalUI(t *testing.T) {
 }
 
 // ouro without the tui plugin runs: without a command it prints the usage,
-// also for a user at a terminal, and the chat goes line by line.
+// also for a user at a terminal, and the chat goes line by line. Its
+// sessions are in its process here: no node is needed.
 func TestOuroWithoutTheTerminalUI(t *testing.T) {
 	s := clitest.Settings(t)
 	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
@@ -365,7 +367,7 @@ func TestOuroWithoutTheTerminalUI(t *testing.T) {
 	if len(list) != len(cli.Plugins(s, term))-1 {
 		t.Fatal("the standard ouro should have the tui plugin")
 	}
-	app, err := cli.NewWith(list...)
+	app, err := cli.NewWith(clitest.InProcess(list)...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,9 @@ type command struct {
 
 // own are the commands of the UI. Plugins add theirs, see bind.
 var own = []command{
-	{"new", "start a new conversation", func(m *Model) tea.Cmd { m.newConversation(); return nil }},
+	{"new", "start a new conversation; the one shown goes on", (*Model).newConversation},
+	{"session", "list the conversations and switch to one", (*Model).openSessions},
+	{"cancel", "stop the answer on its way in this conversation", (*Model).cancel},
 	{"start", "start the node", (*Model).start},
 	{"stop", "stop the node", (*Model).stop},
 	{"setup", "set up the node", (*Model).setup},

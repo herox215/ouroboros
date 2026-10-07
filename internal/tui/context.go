@@ -39,7 +39,7 @@ func (m *Model) openContext() tea.Cmd {
 	m.sizeContents()
 	contextID := m.chat.contextID
 	return func() tea.Msg {
-		msgs, err := m.backend.Contents(contextID)
+		msgs, err := m.backend.Contents(m.ctx, contextID)
 		return contentsMsg{contextID, msgs, err}
 	}
 }

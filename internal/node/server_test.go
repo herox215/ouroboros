@@ -299,11 +299,11 @@ func TestRunReportsErrors(t *testing.T) {
 	})
 	t.Run("already running", func(t *testing.T) {
 		s, port := reserved(t)
-		release, err := daemon.Hold(s.Home.Service().PIDFile, 41337)
+		lease, err := daemon.Hold(s.Home.Service().PIDFile, 41337)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer release()
+		defer lease.Release()
 		if err := s.Run(context.Background()); !errors.Is(err, daemon.ErrRunning) {
 			t.Fatalf("got %v", err)
 		}

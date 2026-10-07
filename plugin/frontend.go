@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"ouroboros/internal/session"
 )
 
 // FrontEnd is what opens when ouro is started in a terminal without a
@@ -50,28 +52,21 @@ func FrontEndFor(ctx *Context, term *Console) (FrontEnd, error) {
 	return all[0], nil
 }
 
-type restartKey struct{}
-
-// WithRestart returns ctx in which a tool can ask the front end that waits
-// for the answer to start ouro anew: restart is told the binary to start,
-// see Restart. A front end hands such a ctx to the Assistant.
+// WithRestart returns ctx in which a tool can ask for ouro to start anew:
+// restart is told the binary to start, see Restart. The node hands such a ctx
+// to the answers of the sessions of the owner.
 func WithRestart(ctx context.Context, restart func(exe string)) context.Context {
-	return context.WithValue(ctx, restartKey{}, restart)
+	return session.WithRestart(ctx, restart)
 }
 
-// Restart asks the front end of the conversation of ctx to start exe in
-// place of the running ouro once the answer is given, and to go on with the
-// conversation there. It reports false if no front end does that, like
-// "ouro chat" or a peer.
-func Restart(ctx context.Context, exe string) bool {
-	restart, ok := ctx.Value(restartKey{}).(func(string))
-	if ok {
-		restart(exe)
-	}
-	return ok
-}
+// Restart asks the node that holds the conversation of ctx to start exe in
+// its place once the answer is given, and to go on with the conversation
+// there: the node hands over its sessions, and a front end that shows one
+// starts anew as well. It reports false if nobody does that, like for a peer.
+func Restart(ctx context.Context, exe string) bool { return session.AskRestart(ctx, exe) }
 
-// Restarting is the error a front end ends with that is to be started anew:
+// Restarting is the error a command ends with whose process is to be
+// started anew, like a front end or a node that is replaced by a new build:
 // the process runs Exe in its place, with its arguments and Env as its
 // environment, see cmd/ouro.
 type Restarting struct {
@@ -80,3 +75,46 @@ type Restarting struct {
 }
 
 func (r *Restarting) Error() string { return "ouro is to be started anew from " + r.Exe }
+
+// Sessions are the conversations of the owner with its agent, a service for
+// front ends. They belong to the node: it runs their answers and keeps what
+// happens in them, and a front end shows that as it is told. An answer goes
+// on when the front end is closed. Await asks and waits for one answer.
+type Sessions = session.API
+
+type (
+	// SessionEvent is one thing that happened in a session, see Sessions.
+	SessionEvent = session.Event
+	// SessionKind is what a SessionEvent tells.
+	SessionKind = session.Kind
+	// SessionInfo describes a session for a list of them.
+	SessionInfo = session.Info
+	// ContextLine is a message of the context of a session, see
+	// Sessions.Contents.
+	ContextLine = session.Line
+)
+
+// What a SessionEvent tells.
+const (
+	SessionMessage  = session.Message  // a message of the owner: an answer starts
+	SessionSay      = session.Say      // what the agent says along with the tools it asks for
+	SessionStep     = session.Step     // a call of a tool, see SessionEvent.AsStep and ToolLine
+	SessionAnswer   = session.Answer   // the answer
+	SessionFailed   = session.Failed   // an answer that failed
+	SessionCanceled = session.Canceled // an answer that was stopped
+	SessionRestart  = session.Restart  // ouro starts anew from a new build, the binary in Text
+)
+
+var (
+	// ErrBusy means that an answer is on its way in the session already.
+	ErrBusy = session.ErrBusy
+	// ErrNotRunning means that the node that holds the sessions does not
+	// run: Sessions.Open starts it.
+	ErrNotRunning = session.ErrNotRunning
+)
+
+// Await asks for the answer to text in the session id and waits for it, see
+// session.Await.
+func Await(ctx context.Context, s Sessions, id, text string) (string, error) {
+	return session.Await(ctx, s, id, text)
+}

@@ -11,6 +11,7 @@
 //	history    the archive of the conversations, and the tools to search it
 //	openai     the LLM
 //	assistant  the agents
+//	sessions   the conversations of the owner, which the node holds
 //	node       start, stop, status, serve and the setup dialog
 //	talk       list, ask, chat
 //	tui        the terminal UI
@@ -61,6 +62,7 @@ import (
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
 	peersplugin "ouroboros/internal/plugins/peers"
+	sessionplugin "ouroboros/internal/plugins/session"
 	"ouroboros/internal/plugins/tailscale"
 	"ouroboros/internal/plugins/talk"
 	"ouroboros/internal/plugins/tui"
@@ -85,7 +87,7 @@ type Settings struct {
 
 // SettingsFromEnv reads OURO_HOME, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL and OPENAI_API_KEY.
 func SettingsFromEnv() (Settings, error) {
-	home := os.Getenv("OURO_HOME")
+	home := os.Getenv(homeEnv)
 	if home == "" {
 		dir, err := userConfigDir()
 		if err != nil {
@@ -109,6 +111,9 @@ func SettingsFromEnv() (Settings, error) {
 		APIKey:    os.Getenv("OPENAI_API_KEY"),
 	}, nil
 }
+
+// homeEnv names the directory of the node.
+const homeEnv = home.Env
 
 // userConfigDir finds where configurations are kept; tests replace it to get
 // in the way.
@@ -152,6 +157,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		historyplugin.Plugin(dir),
 		openaiplugin.Plugin(),
 		assistant.Plugin(dir),
+		sessionplugin.Plugin(dir),
 		nodeplugin.Plugin(dir, nodeplugin.Options{
 			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,
 			BaseURL: s.BaseURL, APIKey: s.APIKey,
@@ -170,6 +176,7 @@ var fixed = map[string]string{
 	"base":      "it runs the commands of ouro",
 	"node":      "it starts, stops and runs the node",
 	"assistant": "it builds the agents",
+	"sessions":  "it holds the conversations of the owner with the agent",
 	"openai":    "it is the LLM, and no other plugin provides one",
 	"peers":     "it is the network of nodes",
 	"tui":       "it is the terminal UI, where the plugins are turned on again",

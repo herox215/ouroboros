@@ -2,13 +2,12 @@ package tui_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
 	tuiplugin "ouroboros/internal/plugins/tui"
+	"ouroboros/internal/session"
 	"ouroboros/internal/setup"
 	"ouroboros/internal/tui"
 	"ouroboros/plugin"
@@ -36,13 +36,41 @@ func spy(ctx **plugin.Context) plugin.Plugin {
 	})
 }
 
-// backend is what the terminal UI of the node of s controls.
-func backend(t *testing.T, s cli.Settings) tui.Backend {
+// backend is what the terminal UI of the node of s controls, with sessions
+// in the process of the test: their answers come from the assistant of the
+// app.
+func backend(t *testing.T, s cli.Settings, extra ...plugin.Plugin) tui.Backend {
 	t.Helper()
 	var ctx *plugin.Context
-	app, _ := clitest.NewApp(t, s, "", spy(&ctx))
+	app, _ := clitest.NewApp(t, s, "", append(extra, spy(&ctx))...)
 	bot, _ := cli.Service[*plugin.Assistant](app)
-	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), ctx, bot)
+	sessions := session.New(bot)
+	t.Cleanup(sessions.Close)
+	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), ctx, sessions)
+}
+
+// answer asks u text in the session id and returns what happened up to the
+// end of the answer, as the UI is told.
+func answer(t *testing.T, u tui.Backend, id, text string) []tui.Event {
+	t.Helper()
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	_, live, err := u.Watch(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Ask(ctx, id, text); err != nil {
+		t.Fatal(err)
+	}
+	var events []tui.Event
+	for e := range live {
+		events = append(events, e)
+		if e.Kind == plugin.SessionAnswer || e.Kind == plugin.SessionFailed || e.Kind == plugin.SessionCanceled {
+			return events
+		}
+	}
+	t.Fatalf("the events ended before the answer: %+v", events)
+	return nil
 }
 
 // The UI sets the node up with what the owner does: the setup offers the
@@ -89,25 +117,27 @@ func TestShowEndsWithItsContext(t *testing.T) {
 func TestTUIBackendAsk(t *testing.T) {
 	alpha, _ := clitest.TwoNodes(t)
 	u := backend(t, alpha)
-	var steps []tui.Step
-	var says []string
-	reply, err := u.Ask(context.Background(), "ctx", "@beta hello", func(s tui.Step) { steps = append(steps, s) },
-		func(s string) { says = append(says, s) })
-	if err != nil || !strings.Contains(reply, "not connected") {
-		t.Fatalf("got %q, %v", reply, err)
+	events := answer(t, u, "ctx", "@beta hello")
+	var kinds []string
+	for _, e := range events {
+		kinds = append(kinds, string(e.Kind))
 	}
 	// The round that asks beta is told of although the agent said nothing
 	// along with it: that is how the UI tells the rounds apart.
-	if len(says) != 1 || says[0] != "" {
-		t.Fatalf("says %q", says)
+	if strings.Join(kinds, " ") != "message say step step step step answer" || events[0].Text != "@beta hello" || events[1].Text != "" {
+		t.Fatalf("events %+v", events)
 	}
-	if len(steps) != 2 || steps[0] != (tui.Step{Text: "asking beta"}) ||
-		!steps[1].Done || !strings.HasPrefix(steps[1].Text, "asking beta ✓ ") {
-		t.Fatalf("steps %+v", steps)
+	// run itself is shown as nothing; the call of beta within it is.
+	if events[2].Text != "" || events[3].Text != "asking beta" || events[3].Done ||
+		!events[4].Done || !strings.HasPrefix(events[4].Text, "asking beta ✓ ") || events[5].Text != "" || !events[5].Done {
+		t.Fatalf("steps %+v", events[2:6])
+	}
+	if reply := events[6]; !strings.Contains(reply.Text, "not connected") || reply.Context == 0 {
+		t.Fatalf("answer %+v", reply)
 	}
 	// The context of the conversation is what the LLM is sent next, message
 	// by message: the call of a tool with its arguments.
-	msgs, err := u.Contents("ctx")
+	msgs, err := u.Contents(context.Background(), "ctx")
 	var roles []string
 	for _, m := range msgs {
 		roles = append(roles, m.Role)
@@ -116,11 +146,51 @@ func TestTUIBackendAsk(t *testing.T) {
 		!strings.Contains(msgs[1].Text, "\nparameters: {") || msgs[2].Text != "@beta hello" || !strings.HasPrefix(msgs[3].Text, "→ run {") {
 		t.Fatalf("contents %q, %v", msgs, err)
 	}
+	// The sessions are listed, and one is stopped as asked; there is
+	// nothing on its way to stop here.
+	if list, err := u.Sessions(context.Background()); err != nil || len(list) != 1 || list[0].ID != "ctx" || list[0].Title != "@beta hello" {
+		t.Fatalf("sessions %+v, %v", list, err)
+	}
+	if err := u.Cancel(context.Background(), "ctx"); err != nil {
+		t.Fatal(err)
+	}
 	// Looking up the peers is not worth a line in the chat: no plugin says
 	// what to show of it.
-	steps = nil
-	if _, err := u.Ask(context.Background(), "ctx", "@", func(s tui.Step) { steps = append(steps, s) }, nil); err != nil || len(steps) != 0 {
-		t.Fatalf("steps %+v, %v", steps, err)
+	for _, e := range answer(t, u, "ctx", "@") {
+		if e.Kind == plugin.SessionStep && e.Text != "" {
+			t.Fatalf("events %+v", e)
+		}
+	}
+}
+
+// What the UI watches ends with ctx; a session that cannot be watched says
+// why.
+func TestTUIBackendWatch(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	u := backend(t, s)
+	if _, _, err := u.Watch(context.Background(), ""); !errors.Is(err, session.ErrNoSession) {
+		t.Fatalf("no session: %v", err)
+	}
+	answer(t, u, "c1", "hi")
+	ctx, cancel := context.WithCancel(context.Background())
+	past, live, err := u.Watch(ctx, "c1")
+	if err != nil || len(past) != 2 || past[1].Text != "[gpt-4o] turns=1 last=hi" {
+		t.Fatalf("past %+v, %v", past, err)
+	}
+	cancel()
+	for range live {
+	}
+	// Events that come while nobody takes them are dropped once the
+	// watcher gave up.
+	ctx, cancel = context.WithCancel(context.Background())
+	_, live, _ = u.Watch(ctx, "c1")
+	if err := u.Ask(context.Background(), "c1", "again"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	for range live {
 	}
 }
 
@@ -141,7 +211,8 @@ func TestTuiCommand(t *testing.T) {
 	}
 }
 
-// A node that is not set up tells the user of the UI how to get there.
+// A node that is not set up, or does not run, tells the user of the UI how to
+// get there.
 func TestTUIBackendWithoutSetup(t *testing.T) {
 	s := clitest.Settings(t)
 	clitest.Env(t, s)
@@ -149,8 +220,15 @@ func TestTUIBackendWithoutSetup(t *testing.T) {
 	if err := u.Start(); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("start: %v", err)
 	}
-	if _, err := u.Ask(context.Background(), "ctx", "hi", func(tui.Step) {}, nil); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "ouro start") {
+	if err := u.Ask(context.Background(), "ctx", "hi"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("ask: %v", err)
+	}
+	// The sessions of the node, over its socket, which needs the node.
+	app, _ := clitest.NewApp(t, s, "")
+	client, _ := cli.Service[plugin.Sessions](app)
+	remote := tuiplugin.Backend(nil, nil, client)
+	if err := remote.Ask(context.Background(), "ctx", "hi"); !errors.Is(err, plugin.ErrNotRunning) || !strings.Contains(err.Error(), "type /start") {
+		t.Fatalf("ask without a node: %v", err)
 	}
 
 	// Once it is set up, the UI starts it.
@@ -163,6 +241,9 @@ func TestTUIBackendWithoutSetup(t *testing.T) {
 	}
 	if status, err := u.Status(); err != nil || !status.Running {
 		t.Fatalf("status %+v, %v", status, err)
+	}
+	if err := remote.Ask(context.Background(), "ctx", "hi"); err != nil {
+		t.Fatalf("ask the node: %v", err)
 	}
 }
 
@@ -309,44 +390,105 @@ func TestUIShowsWhatPluginsContribute(t *testing.T) {
 	}
 }
 
-// An answer still on its way when the owner quits the UI is stopped, and the
-// log says what it was waiting for before the UI is gone.
-func TestQuitLogsThePendingAnswer(t *testing.T) {
-	started := make(chan struct{})
-	block := plugin.New("block", func(ctx *plugin.Context, _ struct{}) error {
-		plugin.Add(ctx, plugin.NewTool("block", "waits until it is stopped", nil, func(ctx context.Context, _ struct{}) (string, error) {
+// drivers run the commands of the UIs of the tests, by UI.
+var drivers sync.Map
+
+// drive runs cmd and what follows of it as the program does, until done
+// reports true. A command that does not come back at once, like the wait for
+// what happens next in a session, goes on waiting: what it brings is handed
+// to the UI in a later drive.
+func drive(t *testing.T, m *tui.Model, cmd tea.Cmd, done func() bool) {
+	t.Helper()
+	v, _ := drivers.LoadOrStore(m, make(chan tea.Msg, 1024))
+	msgs := v.(chan tea.Msg)
+	start := func(c tea.Cmd) {
+		if c != nil {
+			go func() { msgs <- c() }()
+		}
+	}
+	start(cmd)
+	deadline := time.After(clitest.Patience)
+	for !done() {
+		select {
+		case msg := <-msgs:
+			if batch, ok := msg.(tea.BatchMsg); ok {
+				for _, c := range batch {
+					start(c)
+				}
+				continue
+			}
+			_, c := m.Update(msg)
+			start(c)
+		case <-deadline:
+			t.Fatalf("the UI did not get there:\n%s", ansi.Strip(m.View().Content))
+		}
+	}
+}
+
+// typed types text into m and sends it.
+func typed(m *tui.Model, text string) tea.Cmd {
+	for _, r := range text {
+		m.Update(key(r))
+	}
+	_, cmd := m.Update(enter)
+	return cmd
+}
+
+// waiting is a plugin with a tool that waits until it is let go: started is
+// closed when it is called.
+func waiting(started, letGo chan struct{}) plugin.Plugin {
+	return plugin.New("wait", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.NewTool("wait", "waits until it is let go", nil, func(ctx context.Context, _ struct{}) (string, error) {
 			close(started)
-			<-ctx.Done()
-			return "", ctx.Err()
+			select {
+			case <-letGo:
+				return "let go", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
 		}))
 		return nil
 	})
+}
+
+// An answer still on its way when the owner quits the UI goes on in the
+// node: it ends there, and is in the log and in the history. A node the UI
+// would have stopped stops once the answer is given.
+func TestQuitLeavesTheAnswerToTheNode(t *testing.T) {
 	s := clitest.Settings(t)
 	config.Save(s.Home, clitest.NodeConfig(s))
-	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true}, block)
-	bot, _ := cli.Service[*plugin.Assistant](app)
-	answered := make(chan error, 1)
-	tuiplugin.Use(t, func(*tui.Model) error {
-		go func() {
-			_, err := bot.Ask(context.Background(), "c1", "!block", nil)
-			answered <- err
-		}()
+	started, letGo := make(chan struct{}), make(chan struct{})
+	n := clitest.Serve(t, s, waiting(started, letGo))
+	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true})
+	sessions, _ := cli.Service[plugin.Sessions](app)
+	// The UI of a process that started the node.
+	t.Setenv(tuiplugin.ResumeEnv, `{"session":"c1","was_running":false}`)
+	tuiplugin.Use(t, func(m *tui.Model) error {
+		if m.Current() != "c1" {
+			t.Errorf("the UI shows %s", m.Current())
+		}
+		if err := sessions.Ask(context.Background(), "c1", "!wait"); err != nil {
+			t.Error(err)
+		}
 		<-started
 		return nil // the owner quits
 	})
 	if err := app.Run(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
+	if list, err := sessions.List(context.Background()); err != nil || len(list) != 1 || !list[0].Running {
+		t.Fatalf("the answer should go on: %+v, %v", list, err)
+	}
+	close(letGo)
+	if err := n.Wait(); err != nil {
+		t.Fatalf("the node should stop once the answer is given: %v", err)
+	}
 	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
-	lines := strings.Split(strings.TrimSpace(string(logged)), "\n")
-	// The tool is called by a script, which is canceled with it.
-	if n := len(lines); n < 3 || !strings.Contains(lines[n-3], "chat c1: tool block {} took ") || !strings.HasSuffix(lines[n-3], ": canceled") ||
-		!strings.Contains(lines[n-2], "chat c1: tool run ") || !strings.HasSuffix(lines[n-2], ": canceled") ||
-		!strings.Contains(lines[n-1], "chat c1: canceled after ") {
+	if !strings.Contains(string(logged), "chat c1: tool wait {} took ") || !strings.Contains(string(logged), "chat c1: answered after ") {
 		t.Fatalf("log:\n%s", logged)
 	}
-	if err := <-answered; !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
+	if archived, err := os.ReadDir(home.Dir(s.Home).History()); err != nil || len(archived) == 0 {
+		t.Fatalf("the history: %v, %v", archived, err)
 	}
 }
 
@@ -363,158 +505,94 @@ func again(exe string) plugin.Plugin {
 	})
 }
 
-// A tool the owner's agent calls in the UI can ask for ouro to start anew;
-// the assistant alone has nobody who does.
-func TestTUIBackendRestart(t *testing.T) {
+// When a tool asks for ouro to start anew, the node hands its sessions over
+// to the new build, and the UI quits once the answer is in: ouro ends with
+// plugin.Restarting. The UI of the new process shows the same session, and
+// the agent of the new node remembers it. A node that ran before stays
+// running.
+func TestRestartGoesOnWithTheConversation(t *testing.T) {
 	s := clitest.Settings(t)
 	config.Save(s.Home, clitest.NodeConfig(s))
-	var ctx *plugin.Context
-	app, _ := clitest.NewApp(t, s, "", again("/new/ouro"), spy(&ctx))
-	bot, _ := cli.Service[*plugin.Assistant](app)
-	if _, err := bot.Ask(context.Background(), "c0", "!again", nil); err != nil {
-		t.Fatal(err)
-	}
-	if got := bot.Conversation("c0"); !strings.Contains(string(got), "nobody starts ouro anew") {
-		t.Fatalf("without the UI: %s", got)
-	}
-	u := tuiplugin.Backend(nil, ctx, bot)
-	if u.Restarting() {
-		t.Fatal("nothing asked for a restart yet")
-	}
-	if _, err := u.Ask(context.Background(), "c1", "!again", func(tui.Step) {}, nil); err != nil || !u.Restarting() {
-		t.Fatalf("the tool should have asked for a restart: %v", err)
-	}
-}
+	old := clitest.Serve(t, s, again("/new/ouro"))
+	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true})
 
-// When a tool asks for ouro to start anew, the UI quits once the answer is
-// in, and ouro ends with plugin.Restarting. The UI of the new process goes
-// on from what it hands over: the chat, what the agent remembers of it, and
-// a node that ran before stays running. The file is read once. It is written
-// to a directory of the test, not to the temp directory of the user.
-func TestRestartGoesOnWithTheConversation(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
-	s := clitest.Settings(t)
-	clitest.StartNode(t, s, clitest.NodeConfig(s))
-	app, _ := clitest.NewAppOn(t, s, cli.Terminal{Interactive: true}, again("/new/ouro"))
-
-	var before tui.Chat
+	var shown string
 	tuiplugin.Use(t, func(m *tui.Model) error {
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
-		m.Update(m.Init()().(tea.BatchMsg)[0]()) // the status of the node, which runs
-		m.Update(key(' '))                       // skips the splash
-		for _, r := range "!again" {
-			m.Update(key(r))
-		}
-		_, cmd := m.Update(enter)
-		for cmd != nil {
-			msg := cmd()
-			if _, quit := msg.(tea.QuitMsg); quit {
-				break
-			}
-			_, cmd = m.Update(msg)
-		}
-		if !m.Restarts() {
-			t.Fatal("the UI should quit to start anew")
-		}
-		before = m.Chat()
+		m.Update(key(' ')) // skips the splash
+		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "● online") })
+		drive(t, m, typed(m, "!again"), func() bool { _, ok := m.Restarts(); return ok })
+		shown = m.Current()
 		return nil
 	})
 	err := app.Run(context.Background(), nil)
-	var r *plugin.Restarting
-	if !errors.As(err, &r) || r.Exe != "/new/ouro" || err.Error() != "ouro is to be started anew from /new/ouro" {
+	r, ok := errors.AsType[*plugin.Restarting](err)
+	if !ok || r.Exe != "/new/ouro" || err.Error() != "ouro is to be started anew from /new/ouro" {
 		t.Fatalf("got %v", err)
 	}
-	if len(before.Entries) != 2 || !strings.Contains(before.Entries[1].Text, "starting anew") {
-		t.Fatalf("the chat %+v", before)
-	}
-	var file string
-	for _, kv := range r.Env {
-		if v, ok := strings.CutPrefix(kv, tuiplugin.ResumeEnv+"="); ok {
-			file = v
-		}
-	}
-	if filepath.Dir(file) != filepath.Clean(tmp) {
-		t.Fatalf("the file to go on from is %s, not in %s", file, tmp)
-	}
-	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("the file to go on from: %v, %v", info, err)
+	resume := `{"session":"` + shown + `","was_running":true}`
+	if !slices.Contains(r.Env, tuiplugin.ResumeEnv+"="+resume) {
+		t.Fatalf("the UI hands over %v", r.Env)
 	}
 
-	// The new process.
-	t.Setenv(tuiplugin.ResumeEnv, file)
+	// The node is replaced by the new build: here a node in the same
+	// process, with what the old one handed over.
+	nr, ok := errors.AsType[*plugin.Restarting](old.Wait())
+	if !ok || nr.Exe != "/new/ouro" {
+		t.Fatalf("the node ended with %v", old.Wait())
+	}
+	for _, kv := range nr.Env {
+		if k, v, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "OURO_") {
+			t.Setenv(k, v)
+		}
+	}
+	replaced := clitest.Serve(t, s)
+	t.Setenv(tuiplugin.ResumeEnv, resume)
 	app, _ = clitest.NewAppOn(t, s, cli.Terminal{Interactive: true})
-	bot, _ := cli.Service[*plugin.Assistant](app)
-	var after tui.Chat
 	tuiplugin.Use(t, func(m *tui.Model) error {
-		after = m.Chat()
+		if m.Current() != shown {
+			t.Errorf("the UI shows %s, not %s", m.Current(), shown)
+		}
+		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "starting anew") })
 		return nil
 	})
 	if err := app.Run(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if after.ContextID != before.ContextID || !reflect.DeepEqual(after.Entries, before.Entries) {
-		t.Fatalf("resumed %+v, want %+v", after, before)
-	}
-	if got := bot.Conversation(after.ContextID); !strings.Contains(string(got), "starting anew") {
+	bot, _ := cli.Service[*plugin.Assistant](replaced.App)
+	if got := bot.Conversation(shown); !strings.Contains(string(got), "starting anew") {
 		t.Fatalf("the agent remembers %s", got)
 	}
 	if status, _ := (plugin.OwnerOf(home.Dir(s.Home), nil, setup.Offer{})).Status(); !status.Running {
 		t.Fatal("the node ran before the restart and should run on")
 	}
-	if _, err := os.Stat(file); !os.IsNotExist(err) {
-		t.Fatal("the file should be gone")
-	}
 	if _, ok := os.LookupEnv(tuiplugin.ResumeEnv); ok {
 		t.Fatal("the node started later should not see the variable")
 	}
 
-	// A file that cannot be read, or not as a conversation, is said so.
-	dir := t.TempDir()
-	for name, content := range map[string]string{"not JSON": "{", "no memory": `{"memory": 5}`} {
-		os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600)
-	}
-	for _, name := range []string{"gone", "not JSON", "no memory"} {
-		t.Setenv(tuiplugin.ResumeEnv, filepath.Join(dir, name))
+	// What cannot be read as a session to go on with is said so.
+	for _, v := range []string{"{", `{"session":""}`} {
+		t.Setenv(tuiplugin.ResumeEnv, v)
 		if err := app.Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "the conversation to go on with") {
-			t.Fatalf("%s: got %v", name, err)
+			t.Fatalf("%s: got %v", v, err)
 		}
 	}
 }
 
-// What cannot be handed over leaves no file behind.
-func TestHandOverFails(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
-	if err := tuiplugin.HandOver("/new/ouro", tui.Chat{}, json.RawMessage("{"), false); err == nil {
-		t.Fatal("a memory that is no JSON should fail")
-	}
-	if left, _ := os.ReadDir(tmp); len(left) != 0 {
-		t.Fatalf("left behind: %v", left)
-	}
-	t.Setenv("TMPDIR", filepath.Join(tmp, "gone"))
-	if err := tuiplugin.HandOver("/new/ouro", tui.Chat{}, nil, false); err == nil {
-		t.Fatal("without a directory for the file it should fail")
-	}
-}
-
+// What the plugins report as they prepare the context is shown with it.
 func TestContextShowsPostprocessingDiagnostic(t *testing.T) {
 	s := clitest.Settings(t)
-	cfg := clitest.NodeConfig(s)
-	config.Save(s.Home, cfg)
-	var ctx *plugin.Context
+	config.Save(s.Home, clitest.NodeConfig(s))
 	hook := plugin.New("post", func(c *plugin.Context, _ struct{}) error {
 		plugin.Add(c, plugin.AnswerHook{Name: "post", After: func(context.Context, plugin.AnswerOutcome) error { return errors.New("storage failed") }})
 		return nil
 	})
-	app, _ := clitest.NewApp(t, s, "", spy(&ctx), hook)
-	bot, _ := cli.Service[*plugin.Assistant](app)
-	u := tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), ctx, bot)
-	reply, err := u.Ask(context.Background(), "id", "hi", nil, nil)
-	if err != nil || !strings.Contains(reply, "last=hi") {
-		t.Fatal(reply, err)
+	u := backend(t, s, hook)
+	if events := answer(t, u, "id", "hi"); !strings.Contains(events[len(events)-1].Text, "last=hi") {
+		t.Fatal(events)
 	}
-	msgs, err := u.Contents("id")
+	msgs, err := u.Contents(context.Background(), "id")
 	if err != nil {
 		t.Fatal(err)
 	}

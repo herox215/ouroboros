@@ -17,11 +17,11 @@ func self() (string, error) { return os.Args[0], nil }
 // hold makes dir look like the home of a node that runs on port.
 func hold(t *testing.T, dir home.Dir, port int) {
 	t.Helper()
-	release, err := daemon.Hold(dir.Service().PIDFile, port)
+	lease, err := daemon.Hold(dir.Service().PIDFile, port)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(release)
+	t.Cleanup(lease.Release)
 }
 
 // The node is started as a process of its own, found through its PID file

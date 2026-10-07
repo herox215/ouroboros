@@ -8,6 +8,9 @@ package home
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -63,13 +66,44 @@ func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposal
 // History is the directory the conversations of the agents are archived in.
 func (d Dir) History() string { return d.path("history") }
 
+// Sessions is the file a node hands over the sessions of its owner in to
+// the new build that takes its place. It is there only in between.
+func (d Dir) Sessions() string { return d.path("sessions.json") }
+
 // Failures opens the list of the answers to peers that failed.
 func (d Dir) Failures() *diagnosis.Store { return diagnosis.Open(d.path("failures.json")) }
 
-// Service is the background process of the node.
+// Env names the directory of a node to the process that is started for it.
+const Env = "OURO_HOME"
+
+// Service is the background process of the node. It is started for this
+// directory, whatever the environment of the process that starts it says.
 func (d Dir) Service() daemon.Service {
-	return daemon.Service{PIDFile: d.path("ouro.pid"), LogFile: d.path("ouro.log")}
+	return daemon.Service{PIDFile: d.path("ouro.pid"), LogFile: d.path("ouro.log"), Env: []string{Env + "=" + string(d)}}
 }
+
+// maxSocket is the longest path a socket of the file system can have: its
+// address holds 104 bytes on macOS and 108 on Linux, the byte that ends it
+// included.
+const maxSocket = 103
+
+// Socket is the socket the front ends of the owner reach the node on, which
+// only the user who runs it can open: ouro.sock in the directory. Where that
+// path is too long for a socket, the socket is in SocketDir, named after the
+// directory.
+func (d Dir) Socket() string {
+	if p := d.path("ouro.sock"); len(p) <= maxSocket {
+		return p
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(string(d))))
+	return filepath.Join(SocketDir(), hex.EncodeToString(sum[:8])+".sock")
+}
+
+// SocketDir is where the sockets of the nodes are whose directory is too
+// deep for one: a directory of the user in the temporary directory of the
+// system. Whoever binds a socket there makes sure that it is the user's
+// alone.
+func SocketDir() string { return filepath.Join(os.TempDir(), fmt.Sprintf("ouro-%d", os.Getuid())) }
 
 // maxLog is the size from which the log is rotated; tests make it smaller.
 var maxLog int64 = 10 << 20

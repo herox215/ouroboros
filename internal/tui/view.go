@@ -109,7 +109,7 @@ func (m *Model) layout() {
 // renderHistory fills the history viewport with the conversation, the loop of
 // every answer included.
 func (m *Model) renderHistory(toBottom bool) {
-	c := &m.chat
+	c := m.chat
 	if len(c.entries) == 0 {
 		m.history.SetContent(lipgloss.Wrap(mutedStyle.Render("No messages yet. Ask "+m.agentName()+" anything – it can ask the other nodes for you."), m.history.Width(), ""))
 		return
@@ -292,6 +292,8 @@ func (m *Model) View() tea.View {
 		body = m.contextView()
 	case screenSettings:
 		body = m.settingsView()
+	case screenSessions:
+		body = m.sessionsView()
 	default:
 		body = m.chatView()
 	}
@@ -428,7 +430,7 @@ func (m *Model) headerView() string {
 func (m *Model) chatView() string {
 	w, h := m.width, m.chatHeight()
 	inner := max(1, w-4)
-	c := &m.chat
+	c := m.chat
 	// The commands that fit what is typed are listed between the
 	// conversation and the input, in rows the conversation gives up.
 	suggested := m.suggestionLines(h - 3)
@@ -477,7 +479,7 @@ func contextSize(n int) string {
 }
 
 func (m *Model) footerView() string {
-	help := "enter send · alt+enter new line · /help commands · pgup/pgdn scroll · ctrl+c quit"
+	help := "enter send · alt+enter new line · /help commands · ctrl+s sessions · pgup/pgdn scroll · ctrl+c quit"
 	if found, _ := m.suggestions(); len(found) > 0 {
 		help = "↑↓ select · tab complete · enter run · ctrl+c quit"
 	}
@@ -488,6 +490,8 @@ func (m *Model) footerView() string {
 		help = "esc back · ctrl+c quit"
 	case screenModel:
 		help = "↑↓ choose · enter set · esc back · ctrl+c quit"
+	case screenSessions:
+		help = "↑↓ select · enter show · esc back · ctrl+c quit"
 	case screenSettings:
 		help = "↑↓ select · enter open · esc back · ctrl+c quit"
 		if m.opened {

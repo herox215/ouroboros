@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/cli"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
@@ -25,6 +26,7 @@ import (
 	"ouroboros/internal/node"
 	"ouroboros/internal/openai/openaitest"
 	"ouroboros/internal/peers"
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
@@ -197,12 +199,18 @@ func NewApp(t *testing.T, s cli.Settings, input string, extra ...plugin.Plugin) 
 // NewAppOn is NewApp for a user at term.
 func NewAppOn(t *testing.T, s cli.Settings, term cli.Terminal, extra ...plugin.Plugin) (*cli.App, *bytes.Buffer) {
 	t.Helper()
+	return newApp(t, s, term, func(list []plugin.Plugin) []plugin.Plugin { return list }, extra...)
+}
+
+// newApp is NewAppOn with the plugins as change makes them.
+func newApp(t *testing.T, s cli.Settings, term cli.Terminal, change func([]plugin.Plugin) []plugin.Plugin, extra ...plugin.Plugin) (*cli.App, *bytes.Buffer) {
+	t.Helper()
 	var out bytes.Buffer
 	term.Out = &out
 	if term.In == nil {
 		term.In = strings.NewReader("")
 	}
-	app, err := cli.NewWith(Plugins(s, term, extra...)...)
+	app, err := cli.NewWith(change(Plugins(s, term, extra...))...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,12 +220,39 @@ func NewAppOn(t *testing.T, s cli.Settings, term cli.Terminal, extra ...plugin.P
 }
 
 // Run runs the command args of ouro for the node of s and returns what it
-// printed.
+// printed. Its sessions are in its own process, see InProcess: "ouro chat"
+// needs no node.
 func Run(t *testing.T, s cli.Settings, input string, args ...string) (string, error) {
 	t.Helper()
-	app, out := NewApp(t, s, input)
+	app, out := newApp(t, s, cli.Terminal{In: strings.NewReader(input)}, InProcess)
 	err := app.Run(context.Background(), args)
 	return out.String(), err
+}
+
+// InProcess is list with the sessions of the owner in the process of its
+// front ends, as the node has them, instead of those of the node on its
+// socket: the same Service, without the socket. The front ends answer
+// without a node then.
+func InProcess(list []plugin.Plugin) []plugin.Plugin {
+	type needs struct{ Assistant *assistant.Assistant }
+	type services struct {
+		Service  *session.Service
+		Sessions plugin.Sessions
+	}
+	sessions := plugin.NewService("sessions", func(_ *plugin.Context, n needs) (services, error) {
+		s := session.New(n.Assistant)
+		return services{s, s}, nil
+	})
+	return slices.Collect(func(yield func(plugin.Plugin) bool) {
+		for _, p := range list {
+			if p.Name == "sessions" {
+				p = sessions
+			}
+			if !yield(p) {
+				return
+			}
+		}
+	})
 }
 
 // StartNode runs "ouro serve" for the node of s, configured by cfg, in the
@@ -227,21 +262,53 @@ func StartNode(t *testing.T, s cli.Settings, cfg config.Config, extra ...plugin.
 	if err := config.Save(s.Home, cfg); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	app, _ := NewApp(t, s, "", extra...)
-	done := make(chan error, 1)
-	go func() { done <- app.Run(ctx, []string{"serve"}) }()
+	n := Serve(t, s, extra...)
 	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
+		if err := n.Stop(); err != nil {
 			t.Errorf("serve: %v", err)
 		}
 	})
-	p, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), Patience)
-	if !ok {
+	return Port(t, s)
+}
+
+// Node is "ouro serve" that runs in the process of the test.
+type Node struct {
+	App  *cli.App // that serves
+	stop context.CancelFunc
+	done chan struct{}
+	err  error
+}
+
+// Wait returns once the node stopped, with what serve ended with.
+func (n *Node) Wait() error {
+	<-n.done
+	return n.err
+}
+
+// Stop stops the node, and returns once it stopped, with what serve ended
+// with.
+func (n *Node) Stop() error {
+	n.stop()
+	return n.Wait()
+}
+
+// Serve runs "ouro serve" for the node of s as it is configured, in the
+// process of the test, and returns once the node runs. It is stopped when the
+// test ends at the latest.
+func Serve(t *testing.T, s cli.Settings, extra ...plugin.Plugin) *Node {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	app, _ := NewApp(t, s, "", extra...)
+	n := &Node{App: app, stop: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(n.done)
+		n.err = app.Run(ctx, []string{"serve"})
+	}()
+	t.Cleanup(func() { n.Stop() })
+	if _, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), Patience); !ok {
 		t.Fatal("node did not start")
 	}
-	return p.Port
+	return n
 }
 
 // TwoNodes starts the node "beta" and returns the settings of "alpha", which

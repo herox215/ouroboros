@@ -20,6 +20,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) == 3 && (os.Args[1] == "node" || os.Args[1] == "stubborn") {
 		os.Exit(fakeNode(os.Args[2], os.Args[1] == "stubborn"))
 	}
+	if len(os.Args) == 3 && (os.Args[1] == "bequeath" || os.Args[1] == "heir") {
+		os.Exit(succession(os.Args[2], os.Args[1] == "heir"))
+	}
 	if len(os.Args) == 2 && os.Args[1] == "pgid" {
 		fmt.Printf("spawned\n%d\n", syscall.Getpgrp())
 		os.Exit(0)
@@ -35,17 +38,49 @@ func fakeNode(path string, stubborn bool) int {
 	} else {
 		signal.Notify(term, syscall.SIGTERM)
 	}
-	release, err := Hold(path, 41337)
+	lease, err := Hold(path, 41337)
 	if err != nil {
 		fmt.Println(err)
 		return 1
 	}
-	defer release()
+	defer lease.Release()
 	select {
 	case <-term:
 	case <-time.After(30 * time.Second):
 	}
 	return 0
+}
+
+// succession holds path, and hands it on to the heir that this process is
+// replaced by: the heir holds it as the node on port 41338 until it is
+// asked to stop.
+func succession(path string, heir bool) int {
+	port := 41337
+	if heir {
+		port = 41338
+	}
+	lease, err := Hold(path, port)
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	if heir {
+		term := make(chan os.Signal, 1)
+		signal.Notify(term, syscall.SIGTERM)
+		defer lease.Release()
+		select {
+		case <-term:
+		case <-time.After(30 * time.Second):
+		}
+		return 0
+	}
+	env, err := lease.Bequeath()
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	fmt.Println(syscall.Exec(os.Args[0], []string{os.Args[0], "heir", path}, append(os.Environ(), env)))
+	return 1
 }
 
 func pidFile(t *testing.T) string {
@@ -90,7 +125,7 @@ func bystander(t *testing.T) (pid int, alive func() bool) {
 func TestHoldAndRunning(t *testing.T) {
 	path := pidFile(t)
 	os.WriteFile(path, []byte("1 2 and what a dead node left behind"), 0o600)
-	release, err := Hold(path, 41337)
+	lease, err := Hold(path, 41337)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +145,7 @@ func TestHoldAndRunning(t *testing.T) {
 		t.Fatalf("the node lost its file: %+v, %v", p, ok)
 	}
 
-	release()
+	lease.Release()
 	if _, ok := Running(path); ok {
 		t.Fatal("a released file should not count as running")
 	}
@@ -135,11 +170,11 @@ func TestRunningRejectsMissingGarbageAndStale(t *testing.T) {
 // What a locked file says is only believed if it names a process.
 func TestRunningRejectsHeldGarbage(t *testing.T) {
 	path := pidFile(t)
-	release, err := Hold(path, 41337)
+	lease, err := Hold(path, 41337)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer lease.Release()
 	for _, content := range []string{"", "nope", "0 41337", "-1 41337"} {
 		os.WriteFile(path, []byte(content), 0o600)
 		if p, ok := Running(path); ok {
@@ -169,11 +204,11 @@ func TestStalePIDFileOfLiveProcess(t *testing.T) {
 	}
 
 	// A node takes the file over.
-	release, err := Hold(path, 1)
+	lease, err := Hold(path, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer lease.Release()
 	if p, ok := Running(path); !ok || p.PID != os.Getpid() || p.Port != 1 {
 		t.Fatalf("got %+v, %v", p, ok)
 	}
@@ -223,11 +258,11 @@ func TestHoldWaitsForALook(t *testing.T) {
 		return syscall.Flock(fd, how)
 	}
 	defer func() { flock = syscall.Flock }()
-	release, err := Hold(pidFile(t), 1)
+	lease, err := Hold(pidFile(t), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	release()
+	lease.Release()
 	if looks != 3 {
 		t.Fatalf("locked %d times", looks)
 	}
@@ -246,11 +281,11 @@ func TestHoldFileRemovedMeanwhile(t *testing.T) {
 		return syscall.Flock(fd, how)
 	}
 	defer func() { flock = syscall.Flock }()
-	release, err := Hold(path, 41337)
+	lease, err := Hold(path, 41337)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer lease.Release()
 	flock = syscall.Flock
 	if p, ok := Running(path); !ok || p.Port != 41337 {
 		t.Fatalf("got %+v, %v", p, ok)
@@ -262,13 +297,13 @@ func TestWaitRunning(t *testing.T) {
 	if _, ok := WaitRunning(path, 100*time.Millisecond); ok {
 		t.Fatal("nothing should be running")
 	}
-	released := make(chan func(), 1)
+	released := make(chan *Lease, 1)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		release, _ := Hold(path, 1)
-		released <- release
+		lease, _ := Hold(path, 1)
+		released <- lease
 	}()
-	defer func() { (<-released)() }()
+	defer func() { (<-released).Release() }()
 	if p, ok := WaitRunning(path, 2*time.Second); !ok || p.Port != 1 {
 		t.Fatalf("got %+v, %v", p, ok)
 	}
@@ -276,7 +311,7 @@ func TestWaitRunning(t *testing.T) {
 
 func TestSpawnDetachesAndLogs(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "ouro.log")
-	exited, err := Spawn(os.Args[0], log, "pgid")
+	exited, err := spawn(os.Args[0], log, nil, "pgid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +338,7 @@ func TestSpawnDetachesAndLogs(t *testing.T) {
 }
 
 func TestSpawnMissingExecutable(t *testing.T) {
-	if _, err := Spawn("/does/not/exist", filepath.Join(t.TempDir(), "log")); err == nil {
+	if _, err := spawn("/does/not/exist", filepath.Join(t.TempDir(), "log"), nil); err == nil {
 		t.Fatal("want error")
 	}
 }
@@ -317,11 +352,11 @@ func TestStopNotRunning(t *testing.T) {
 // A node whose process cannot be signalled is reported.
 func TestStopUnreachableProcess(t *testing.T) {
 	path := pidFile(t)
-	release, err := Hold(path, 41337)
+	lease, err := Hold(path, 41337)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer lease.Release()
 	os.WriteFile(path, fmt.Appendf(nil, "%d 41337\n", exitedPID(t)), 0o600)
 	if stopped, err := Stop(path, time.Second); !stopped || !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("Stop = %v, %v", stopped, err)
@@ -416,11 +451,11 @@ func TestServiceStartFails(t *testing.T) {
 // started the one that ended finds the node that runs.
 func TestServiceStartFindsTheOtherNode(t *testing.T) {
 	s := service(t)
-	release, err := Hold(s.PIDFile, 41337)
+	lease, err := Hold(s.PIDFile, 41337)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer lease.Release()
 	exited := make(chan struct{})
 	close(exited)
 	// Looked at through another path, the file is not held on the first
@@ -456,11 +491,11 @@ func TestNothingButOneProcessIsSignalled(t *testing.T) {
 	}
 	// Also when a file that is held names it: Running believes a PID of 1.
 	path := pidFile(t)
-	release, err := Hold(path, 41337)
+	lease, err := Hold(path, 41337)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer lease.Release()
 	os.WriteFile(path, []byte("1 41337\n"), 0o600)
 	if stopped, err := Stop(path, time.Second); !stopped || err == nil || !strings.Contains(err.Error(), "refusing to signal PID 1") {
 		t.Fatalf("Stop = %v, %v", stopped, err)
@@ -474,7 +509,7 @@ func TestNothingButOneProcessIsSignalled(t *testing.T) {
 }
 
 func TestSpawnWithoutLog(t *testing.T) {
-	if _, err := Spawn("/bin/sh", filepath.Join(t.TempDir(), "missing", "log"), "-c", "exit 0"); err == nil {
+	if _, err := spawn("/bin/sh", filepath.Join(t.TempDir(), "missing", "log"), nil, "-c", "exit 0"); err == nil {
 		t.Fatal("want error")
 	}
 }
@@ -489,5 +524,145 @@ func TestStopStubbornNode(t *testing.T) {
 	defer syscall.Kill(p.PID, syscall.SIGKILL)
 	if stopped, err := Stop(s.PIDFile, 200*time.Millisecond); !stopped || err == nil || !strings.Contains(err.Error(), "did not stop in time") {
 		t.Fatalf("Stop = %v, %v", stopped, err)
+	}
+}
+
+// A node hands its PID file on to the program it is replaced by with exec:
+// the lock is held all the time, and the heir records itself in the file.
+func TestBequeathAcrossExec(t *testing.T) {
+	path := pidFile(t)
+	cmd := exec.Command(os.Args[0], "bequeath", path)
+	out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	defer cmd.Process.Kill()
+	for deadline := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
+		if p, ok := Running(path); ok && p.Port == 41338 {
+			if p.PID != cmd.Process.Pid {
+				t.Fatalf("the heir is %d, not %d", p.PID, cmd.Process.Pid)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			said, _ := os.ReadFile(out.Name())
+			t.Fatalf("the heir does not hold the file: %s", said)
+		}
+	}
+	// Nobody else gets the file in the meantime.
+	if _, err := Hold(path, 1); !errors.Is(err, ErrRunning) {
+		t.Fatalf("got %v", err)
+	}
+	if stopped, err := Stop(path, patience); !stopped || err != nil {
+		t.Fatalf("stop: %v, %v", stopped, err)
+	}
+}
+
+// In the process that takes over, the lease is the one handed on: the file is
+// the node's, and its process and port are recorded anew.
+func TestHoldInherits(t *testing.T) {
+	path := pidFile(t)
+	lease, err := Hold(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := lease.Bequeath()
+	k, v, _ := strings.Cut(env, "=")
+	if err != nil || k != InheritEnv {
+		t.Fatalf("bequeathed %q, %v", env, err)
+	}
+	t.Setenv(k, v)
+	heir, err := Hold(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := os.LookupEnv(InheritEnv); ok {
+		t.Fatal("a process started later should not be handed the file")
+	}
+	if p, ok := Running(path); !ok || p.Port != 2 || p.PID != os.Getpid() {
+		t.Fatalf("running %+v, %v", p, ok)
+	}
+	heir.Release()
+	if _, ok := Running(path); ok {
+		t.Fatal("released")
+	}
+}
+
+// What is not handed on as a PID file of a node is left alone, and the file
+// is held as usual: here it is held by another file already.
+func TestHoldDoesNotInheritWhatIsNone(t *testing.T) {
+	path := pidFile(t)
+	lease, err := Hold(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	other, err := os.Create(filepath.Join(t.TempDir(), "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	unlocked, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlocked.Close()
+	// What is handed on is the new node's: it may close it.
+	handed, err := syscall.Dup(int(unlocked.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]string{
+		"no number":                       "x",
+		"no descriptor":                   "-1",
+		"another file":                    fmt.Sprint(other.Fd()),
+		"the file, open without its lock": fmt.Sprint(handed),
+	} {
+		t.Setenv(InheritEnv, v)
+		if _, err := Hold(path, 2); !errors.Is(err, ErrRunning) {
+			t.Errorf("%s: got %v", name, err)
+		}
+	}
+	if _, err := other.Stat(); err != nil {
+		t.Fatalf("another file should be left alone: %v", err)
+	}
+}
+
+// A lease that cannot be handed on, or a file handed on that cannot be
+// written, says so.
+func TestSuccessionFails(t *testing.T) {
+	path := pidFile(t)
+	lease, err := Hold(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("too many open files")
+	dup = func(int) (int, error) { return 0, refused }
+	_, err = lease.Bequeath()
+	dup = syscall.Dup
+	if !errors.Is(err, refused) {
+		t.Fatalf("got %v", err)
+	}
+	if _, ok := Running(path); ok {
+		t.Fatal("a lease that is not handed on is given up")
+	}
+
+	lease, err = Hold(path, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _ := lease.Bequeath()
+	_, v, _ := strings.Cut(env, "=")
+	t.Setenv(InheritEnv, v)
+	full := errors.New("full")
+	truncate = func(*os.File, int64) error { return full }
+	defer func() { truncate = (*os.File).Truncate }()
+	if _, err := Hold(path, 2); !errors.Is(err, full) {
+		t.Fatalf("got %v", err)
 	}
 }

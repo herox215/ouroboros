@@ -34,7 +34,8 @@ const Rebuild = "rebuild"
 const maxOutput = 8 << 10
 
 // Plugin contributes the command that updates ouro itself and the tool that
-// builds its source. Both restart the node in dir if it is running.
+// builds its source. The command restarts the node in dir if it is running;
+// the tool asks the node it runs in to take its own place, see rebuild.
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("update", func(ctx *plugin.Context, n needs) (services, error) {
 		c := &updateCommand{
@@ -53,10 +54,10 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				"The modules go.mod names are downloaded first; the build and the tests run in a sandbox without network beyond localhost, "+
 				"which writes only to a temporary directory and the build cache: go.mod, go.sum, the Makefile, install.sh, scripts, cmd "+
 				"and internal/cli are your owner's, as is the core. "+
-				"Only when everything passes is the binary replaced and a running node restarted; "+
+				"Only when everything passes is the binary replaced; "+
 				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. "+
-				"In the terminal UI ouro restarts with the new build after your answer and the conversation goes on; "+
-				"elsewhere the new build runs from the next start. Only for the owner of the node.",
+				"Once you have answered, the node starts anew with the new build and the conversation goes on there, "+
+				"and so does the terminal UI. Only for the owner of the node.",
 			nil, c.rebuild))
 		plugin.Add(ctx, plugin.ToolView{Tool: Rebuild, Show: func(json.RawMessage) string {
 			return "building and testing " + sourceName(update.Source)
@@ -106,8 +107,10 @@ func sourceName(source string) string {
 }
 
 // rebuild installs a build of the source over the running binary, once its
-// tests pass, and restarts the node if it is running. A peer never gets
-// that far, whatever the configuration allows it.
+// tests pass. The node whose session asked for it starts anew with it once
+// the answer is given, see plugin.Restart; where nobody does that, a running
+// node is restarted at once. A peer never gets that far, whatever the
+// configuration allows it.
 func (c *updateCommand) rebuild(ctx context.Context, _ struct{}) (string, error) {
 	if _, peer := plugin.OriginFrom(ctx); peer {
 		return "", errors.New(Rebuild + " is for the owner of the node only")
@@ -128,14 +131,16 @@ func (c *updateCommand) rebuild(ctx context.Context, _ struct{}) (string, error)
 		}
 		return "", fmt.Errorf("%w; nothing was installed. The end of the output:\n%s", err, tail(out.Bytes()))
 	}
+	done := "built " + u.Source + ", its tests pass, and the build is installed as " + u.Exe + ". "
+	// The node this runs in cannot stop itself while the answer is on its
+	// way: it takes its own place once the answer is given.
+	if plugin.Restart(ctx, u.Exe) {
+		return done + "The node starts anew with it once you have answered, and this conversation goes on there.", nil
+	}
 	if err := c.restart(u.Exe); err != nil {
 		return "", fmt.Errorf("the build is installed, but the node did not restart: %w", err)
 	}
-	done := "built " + u.Source + ", its tests pass, and the build is installed as " + u.Exe + ". A running node was restarted with it; "
-	if plugin.Restart(ctx, u.Exe) {
-		return done + "ouro starts anew with it once you have answered, and this conversation goes on there.", nil
-	}
-	return done + "this conversation uses the old build until ouro is started again.", nil
+	return done + "A running node was restarted with it; this conversation uses the old build until ouro is started again.", nil
 }
 
 // tail is the end of output, from the start of a line.

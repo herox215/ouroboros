@@ -50,19 +50,23 @@ type Backend interface {
 	Status() (Status, error)
 	Start() error
 	Stop() error
-	// Ask lets the agent of this node answer text within the conversation
-	// contextID. On the way it reports what it is waiting for, in step, and
-	// what the agent says along with the tools it asks for, in say: the whole
-	// loop, not only its end. say comes once for every round of the loop that
-	// asks for tools, with "" if the agent said nothing, before its steps.
-	Ask(ctx context.Context, contextID, text string, step func(Step), say func(string)) (string, error)
-	// Context returns how long the context of the conversation contextID is,
-	// in bytes: what the last call of the LLM in it sent. 0 if none was made.
-	Context(contextID string) int
-	// Contents returns what the next call of the LLM in the conversation
-	// contextID is sent, message by message. With an error it returns what
-	// it has of it.
-	Contents(contextID string) ([]Message, error)
+	// Ask lets the agent of this node answer text in the session id, and
+	// returns once the answer is on its way: what happens on the way comes
+	// from Watch. It fails with plugin.ErrBusy while an answer is on its way
+	// in the session.
+	Ask(ctx context.Context, id, text string) error
+	// Watch returns what happened in the session id so far, and what
+	// happens from now on, until ctx ends or the node stops: the whole loop
+	// of every answer, not only its end.
+	Watch(ctx context.Context, id string) (past []Event, live <-chan Event, err error)
+	// Cancel stops the answer on its way in the session id.
+	Cancel(ctx context.Context, id string) error
+	// Sessions lists the sessions of the node that have a message, the one
+	// with the latest event first.
+	Sessions(ctx context.Context) ([]plugin.SessionInfo, error)
+	// Contents returns what the next call of the LLM in the session id is
+	// sent, message by message. With an error it returns what it has of it.
+	Contents(ctx context.Context, id string) ([]Message, error)
 	Contacts() (Contacts, error)
 	// Accept and Reject decide on a connection request. They fail with
 	// plugin.ErrNotSaved if the decision could not be stored.
@@ -89,18 +93,22 @@ type Backend interface {
 	// ChangeSetting makes one change of the configuration, once the node
 	// checked it, and says from when it holds.
 	ChangeSetting(s Setting) (string, error)
-	// Restarting reports whether ouro is to be started anew, as a tool asked
-	// on the way to the answer that came in: the UI then quits, see Restarts.
-	Restarting() bool
 }
 
-// Step reports what the agent is waiting for on the way to its answer, like
-// "asking beta". It is reported twice: once on its own, when the agent starts
-// to wait, and again with Done set, when it no longer does. Text may say more
-// the second time, like how long the call took.
-type Step struct {
+// Event is what happened in a session, as the UI shows it: see
+// plugin.SessionEvent, whose Kind it has.
+type Event struct {
+	Kind plugin.SessionKind
+	// Text is the message, what the agent said along with the tools it asks
+	// for, the answer, why it failed, or the binary ouro starts anew from.
+	// Of a call of a tool it is what is shown of it, like "asking beta", ""
+	// for nothing; once Done, it may say more, like how long the call took.
 	Text string
 	Done bool
+	At   time.Time
+	// Context is how long the context of the session is: what the last call
+	// of the LLM in it sent, in bytes. 0 if none was made.
+	Context int
 }
 
 // screen is the top-level view: the chat, the connection requests, the list
@@ -115,6 +123,7 @@ const (
 	screenModel  // the models of the provider, for /model
 	screenContext
 	screenSettings // the configuration, for /settings
+	screenSessions // the sessions, for /session
 )
 
 // entry is one message in the conversation: from the user, from the agent, or
@@ -134,15 +143,19 @@ type call struct {
 	done bool
 }
 
-// conversation is the chat with the agent of this node.
+// conversation is a session of the chat with the agent of this node, as far
+// as its events came in.
 type conversation struct {
 	contextID string
 	entries   []entry
-	pending   bool               // waiting for a reply; one message at a time keeps the history in order
-	doing     string             // what the agent is waiting for, like "asking beta"
-	round     int                // the entry of the round of the loop that is on, counted from 1; 0 for none yet
-	cancel    context.CancelFunc // stops the answer that is pending
-	context   int                // how long its context is, see Backend.Context
+	pending   bool   // waiting for a reply; one message at a time keeps the history in order
+	doing     string // what the agent is waiting for, like "asking beta"
+	round     int    // the entry of the round of the loop that is on, counted from 1; 0 for none yet
+	context   int    // how long its context is, see Event.Context
+	title     string // the first message of the owner
+	last      time.Time
+	draft     string // what is typed in the input for it while another one is shown
+	watching  bool   // its events come in, or are asked for
 }
 
 // Model is the UI state.
@@ -154,11 +167,15 @@ type Model struct {
 	quit context.CancelFunc
 
 	status    Status
-	chat      conversation
+	chat      *conversation            // the session shown
+	chats     map[string]*conversation // every session the UI knows, by its ID
 	notice    string
 	noticeErr bool
 
-	restarts bool // the UI quit for ouro to start anew
+	restarts string // the binary the UI quit for ouro to start anew from
+
+	sessionSel int // the session selected on the sessions screen
+	ticks      int // of the spinner, which the sessions screen animates with
 
 	trust     Contacts
 	screen    screen
@@ -224,13 +241,14 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		ctx:        ctx,
 		quit:       quit,
 		now:        time.Now,
-		chat:       conversation{contextID: plugin.NewID()},
+		chats:      map[string]*conversation{},
 		showSplash: true,
 		input:      input,
 		history:    history,
 		spinner:    spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 	m.input.Focus() // the input is where everything is typed, commands too
+	m.chat = m.conversation(plugin.NewID())
 	var problems []string
 	m.screens, slashes, problems = bind(ownNames(), screens, slashes)
 	m.commands = append(m.commands, own...)
@@ -254,23 +272,6 @@ type (
 	contactsMsg struct {
 		trust Contacts
 		err   error
-	}
-	replyMsg struct {
-		contextID, text string
-		err             error
-		cancelled       bool // the answer was stopped; whatever it returned is dropped
-	}
-	// sayMsg is what the agent says along with the tools it asks for; next
-	// delivers what follows.
-	sayMsg struct {
-		contextID, text string
-		next            <-chan tea.Msg
-	}
-	// stepMsg is a step of the answer that is on its way; next delivers what follows.
-	stepMsg struct {
-		contextID string
-		step      Step
-		next      <-chan tea.Msg
 	}
 	// bodyMsg is what the screen of a plugin shows.
 	bodyMsg struct {
@@ -297,7 +298,7 @@ func (m *Model) Init() tea.Cmd {
 		m.openSetup(true)
 	}
 	m.animating = true
-	return tea.Batch(m.goOnline, m.loadContacts, tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
+	return tea.Batch(m.goOnline, m.loadContacts, m.loadSessions, m.watch(m.chat), tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
 }
 
 // animate makes the frames come unless they do already.
@@ -340,13 +341,13 @@ func (m *Model) loadContacts() tea.Msg {
 	return contactsMsg{trust, err}
 }
 
-// refresh reloads the node status, the connection requests and the screen of
-// a plugin that is open.
+// refresh reloads the node status, the connection requests, the sessions
+// and the screen of a plugin that is open.
 func (m *Model) refresh() tea.Cmd {
 	if m.screen == screenPlugin {
-		return tea.Batch(m.refreshStatus, m.loadContacts, m.loadBody())
+		return tea.Batch(m.refreshStatus, m.loadContacts, m.loadSessions, m.loadBody())
 	}
-	return tea.Batch(m.refreshStatus, m.loadContacts)
+	return tea.Batch(m.refreshStatus, m.loadContacts, m.loadSessions)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -411,14 +412,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.changed(msg)
 	case contentsMsg:
 		m.contentsLoaded(msg)
-	case stepMsg:
-		m.step(msg)
-		return m, func() tea.Msg { return <-msg.next }
-	case sayMsg:
-		m.say(msg)
-		return m, func() tea.Msg { return <-msg.next }
-	case replyMsg:
-		return m, m.receive(msg)
+	case watchedMsg:
+		return m, m.watched(msg)
+	case eventMsg:
+		return m, m.event(msg)
+	case unwatchedMsg:
+		return m, m.unwatched(msg.id)
+	case rewatchMsg:
+		return m, m.watch(m.chats[msg.id])
+	case askedMsg:
+		m.asked(msg)
+	case sessionsMsg:
+		return m, m.sessionsLoaded(msg)
 	case bodyMsg:
 		if m.screen == screenPlugin && m.open == msg.screen {
 			m.body = msg.body
@@ -431,6 +436,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refresh()
 	case spinner.TickMsg:
+		if msg.ID == m.spinner.ID() {
+			m.ticks++
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -486,6 +494,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.handleContextKey(msg)
 	case screenSettings:
 		return m.handleSettingsKey(msg)
+	case screenSessions:
+		return m.handleSessionsKey(msg)
 	case screenHelp:
 		if msg.String() == "esc" {
 			m.screen = screenChat
@@ -496,6 +506,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	switch msg.String() {
+	case "ctrl+s":
+		return m.openSessions() // what is typed stays with the session shown
 	case "pgup":
 		m.history.PageUp()
 		return nil
@@ -543,8 +555,9 @@ const (
 	reject
 )
 
-// leave quits the UI and stops what it still asks of the backend: a pending
-// answer, with the peers it asks, and a decision on a connection request.
+// leave quits the UI and stops what it still asks of the backend, such as a
+// decision on a connection request. The answers on their way are the
+// node's: they go on.
 func (m *Model) leave() tea.Cmd {
 	m.quit()
 	return tea.Quit
@@ -643,7 +656,7 @@ func (m *Model) setup() tea.Cmd {
 }
 
 func (m *Model) send() tea.Cmd {
-	c := &m.chat
+	c := m.chat
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
 		return nil
@@ -660,56 +673,40 @@ func (m *Model) send() tea.Cmd {
 		m.setNotice("wait for the reply first", true)
 		return nil
 	}
-	c.entries = append(c.entries, entry{mine: true, text: text, at: m.now()})
+	// The message shows once the node says it is on its way; the agent is
+	// thinking from now on.
 	c.pending, c.round = true, 0
 	m.input.Reset()
 	m.renderHistory(true)
-
-	contextID := c.contextID
-	ctx, cancel := context.WithCancel(m.ctx)
-	c.cancel = cancel
-	return func() tea.Msg {
-		events := make(chan tea.Msg)
-		go func() {
-			reply, err := m.backend.Ask(ctx, contextID, text, func(s Step) {
-				select {
-				case events <- stepMsg{contextID, s, events}:
-				case <-ctx.Done(): // nobody follows the steps of a stopped answer
-				}
-			}, func(what string) {
-				select {
-				case events <- sayMsg{contextID, what, events}:
-				case <-ctx.Done():
-				}
-			})
-			events <- replyMsg{contextID, reply, err, ctx.Err() != nil}
-		}()
-		return <-events
-	}
+	id := c.contextID
+	ask := func() tea.Msg { return askedMsg{id, text, m.backend.Ask(m.ctx, id, text)} }
+	return tea.Batch(ask, m.watch(c))
 }
 
-// step notes what the agent is waiting for while the answer is pending. A
-// call that starts goes into the entry of its round, which a round the agent
-// said nothing of gets now; one that ended takes the place of its start,
-// with what became of it.
-func (m *Model) step(msg stepMsg) {
-	c := &m.chat
-	if c.contextID != msg.contextID {
-		return // step of a conversation that was reset
+// askedMsg is what the backend said to a message: whether the answer is on
+// its way.
+type askedMsg struct {
+	id, text string
+	err      error
+}
+
+// asked takes what the backend said to a message. One that is not on its
+// way goes back into the input, unless something else was typed meanwhile.
+func (m *Model) asked(msg askedMsg) {
+	if msg.err == nil {
+		return
 	}
-	if c.round == 0 {
-		c.add(entry{at: m.now()})
-		c.round = len(c.entries)
+	c := m.chats[msg.id]
+	c.pending = false
+	if c == m.chat {
+		if m.input.Value() == "" {
+			m.input.SetValue(msg.text)
+		}
+		m.renderHistory(m.history.AtBottom())
+	} else if c.draft == "" {
+		c.draft = msg.text
 	}
-	c.context = m.backend.Context(c.contextID)
-	e := &c.entries[c.round-1]
-	if !msg.step.Done {
-		e.calls = append(e.calls, call{text: msg.step.Text})
-	} else if i := e.started(msg.step.Text); i >= 0 {
-		e.calls[i] = call{text: msg.step.Text, done: true}
-	}
-	c.doing = e.waitingFor()
-	m.renderHistory(m.history.AtBottom())
+	m.setNotice(msg.err.Error(), true)
 }
 
 // started returns the call of e that the call ended, which done tells of,
@@ -735,111 +732,39 @@ func (e *entry) waitingFor() string {
 	return ""
 }
 
-// say begins a round of the loop: what the agent says along with the tools
-// it asks for, which is not the answer, becomes part of the conversation, and
-// the calls of those tools go below these words. A round the agent said
-// nothing of gets its entry with its first call that is shown.
-func (m *Model) say(msg sayMsg) {
-	c := &m.chat
-	if c.contextID != msg.contextID {
-		return
-	}
-	c.round, c.doing = 0, ""
-	c.context = m.backend.Context(c.contextID)
-	if msg.text != "" {
-		c.add(entry{text: msg.text, at: m.now()})
-		c.round = len(c.entries)
-	}
-	m.renderHistory(m.history.AtBottom())
-}
-
 // add appends an entry to the conversation.
 func (c *conversation) add(e entry) {
 	c.entries = append(c.entries, e)
 }
 
-// receive shows the reply that came in. When a tool asked on the way for
-// ouro to start anew, the UI quits for it.
-func (m *Model) receive(msg replyMsg) tea.Cmd {
-	c := &m.chat
-	if c.contextID != msg.contextID || msg.cancelled {
-		return nil // reply to a conversation that was reset, or stopped by quitting
-	}
-	c.cancel() // the answer is in; release its context
-	c.pending, c.doing, c.cancel = false, "", nil
-	c.round = 0 // the loop of this answer is over
-	c.context = m.backend.Context(c.contextID)
-	e := entry{text: msg.text, at: m.now()}
-	if msg.err != nil {
-		e.text, e.failed = msg.err.Error(), true
-	}
-	c.add(e)
-	m.renderHistory(m.history.AtBottom())
-	if m.backend.Restarting() {
-		m.restarts = true
-		return m.leave()
-	}
-	return nil
-}
+// Restarts reports whether the UI quit for ouro to start anew, and from
+// which binary: the session it showed is Current, to go on with by Resume.
+func (m *Model) Restarts() (exe string, ok bool) { return m.restarts, m.restarts != "" }
 
-// Restarts reports whether the UI quit for ouro to start anew: what it
-// showed is in Chat, to go on with by Resume.
-func (m *Model) Restarts() bool { return m.restarts }
+// Current is the ID of the session the UI shows.
+func (m *Model) Current() string { return m.chat.contextID }
 
-// Chat is the conversation of a UI, to go on with in another one.
-type Chat struct {
-	ContextID string  `json:"context_id"`
-	Entries   []Entry `json:"entries"`
-}
-
-// Entry is a message of a Chat: from the owner, or from the agent. Calls are
-// the tool calls of a round of the loop to an answer, as they ended; such an
-// entry carries no text when the agent had nothing to say along with them.
-type Entry struct {
-	Mine   bool      `json:"mine,omitempty"`
-	Text   string    `json:"text"`
-	At     time.Time `json:"at"`
-	Failed bool      `json:"failed,omitempty"`
-	Calls  []string  `json:"calls,omitempty"`
-}
-
-// Chat returns the conversation the UI shows.
-func (m *Model) Chat() Chat {
-	c := Chat{ContextID: m.chat.contextID, Entries: make([]Entry, len(m.chat.entries))}
-	for i, e := range m.chat.entries {
-		c.Entries[i] = Entry{e.mine, e.text, e.at.Round(0), e.failed, nil} // the reading of the clock is of this process
-		for _, call := range e.calls {
-			c.Entries[i].Calls = append(c.Entries[i].Calls, call.text)
-		}
-	}
-	return c
-}
-
-// Resume makes the UI go on with the conversation c of another one, without
-// the splash: it is to be called before the UI is shown.
-func (m *Model) Resume(c Chat) {
-	m.chat = conversation{contextID: c.ContextID}
-	for _, e := range c.Entries {
-		resumed := entry{e.Mine, e.Text, e.At, e.Failed, nil}
-		for _, text := range e.Calls {
-			resumed.calls = append(resumed.calls, call{text: text, done: true}) // a call that had not ended is not waited for any more
-		}
-		m.chat.entries = append(m.chat.entries, resumed)
-	}
+// Resume makes the UI show the session id, as another UI did before ouro
+// started anew, without the splash: it is to be called before the UI is
+// shown.
+func (m *Model) Resume(id string) {
+	delete(m.chats, m.chat.contextID)
+	m.chat = m.conversation(id)
 	m.showSplash = false
 	m.renderHistory(true)
 	m.setNotice("restarted with the new build", false)
 }
 
-// newConversation starts over; the agent keeps no memory of the old context
-// and stops working on an answer that is still pending.
-func (m *Model) newConversation() {
-	if m.chat.cancel != nil {
-		m.chat.cancel()
-	}
-	m.chat = conversation{contextID: plugin.NewID()}
+// newConversation starts a new session and shows it. The session that was
+// shown goes on: an answer on its way there is given all the same, see
+// /session.
+func (m *Model) newConversation() tea.Cmd {
+	m.chat.draft = m.input.Value()
+	m.chat = m.conversation(plugin.NewID())
+	m.input.Reset()
 	m.renderHistory(true)
 	m.setNotice("new conversation", false)
+	return m.watch(m.chat)
 }
 
 // agentName is how the agent of this node is called in the chat.

@@ -358,8 +358,8 @@ func (a *Assistant) begin(ctx context.Context, cancel context.CancelFunc, contex
 }
 
 // Stop stops the answers that are on their way and returns once the log
-// says so. It is for a front end that quits: what the agent was waiting for
-// is in the log before the process ends.
+// says so. It is for a process that ends while answers are on their way:
+// what the agent was waiting for is in the log before it is gone.
 func (a *Assistant) Stop() {
 	a.answering.Lock()
 	for _, cancel := range a.answers {

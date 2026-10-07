@@ -33,6 +33,7 @@
 //	*Console  the dialogue with the user on the terminal
 //	*Network  the other nodes: Find, Peers, Resolve, Send, Call, Open
 //	LLM       the model behind the agents
+//	Sessions  the conversations of the owner with its agent, held by the node
 //
 // In its start function a plugin contributes with Add:
 //
@@ -54,9 +55,10 @@
 //	ToolView  what is shown of a call of its tool while the agent waits
 //
 // The terminal UI is a plugin itself. It contributes a FrontEnd, which is
-// what ouro opens without a command, and talks to the *Assistant, the agent
-// of the owner. What only the owner does there, like accepting a connection
-// request, is no service: see Owner.
+// what ouro opens without a command, and talks to the agent of the owner
+// through the Sessions of the node, which runs the answers. What only the
+// owner does there, like accepting a connection request, is no service: see
+// Owner.
 package plugin
 
 import "ouroboros/internal/kernel"

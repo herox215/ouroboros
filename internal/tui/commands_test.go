@@ -23,15 +23,22 @@ func TestCommands(t *testing.T) {
 			t.Fatalf("%q: notice %q (error %v), input %q", line, m.notice, m.noticeErr, m.input.Value())
 		}
 	}
-	if len(b.sent) != 0 || len(m.chat.entries) != 0 {
-		t.Fatalf("a command is no message: sent %v", b.sent)
+	if len(b.messages()) != 0 || len(m.chat.entries) != 0 {
+		t.Fatalf("a command is no message: sent %v", b.messages())
 	}
 
 	// A message that starts with a slash is typed with two.
-	deliver(m, say(t, m, "//etc is a directory"))
-	if len(b.sent) != 1 || b.sent[0].text != "/etc is a directory" {
-		t.Fatalf("sent %+v", b.sent)
+	answered(t, m, say(t, m, "//etc is a directory"))
+	if sent := b.messages(); len(sent) != 1 || sent[0].text != "/etc is a directory" {
+		t.Fatalf("sent %+v", sent)
 	}
+
+	// A command typed in full runs too, with a space after it.
+	m.input.SetValue("/help ")
+	if press(m, "enter"); m.screen != screenHelp || m.input.Value() != "" {
+		t.Fatalf("screen %v, input %q", m.screen, m.input.Value())
+	}
+	press(m, "esc")
 
 	// /new starts over and clears the input.
 	if run(m, "/new"); len(m.chat.entries) != 0 || m.input.Value() != "" || m.notice != "new conversation" {
@@ -60,7 +67,7 @@ func TestCommandSuggestions(t *testing.T) {
 		t.Fatalf("footer %q, suggested %q", help, suggested(m))
 	}
 	press(m, "/", "s")
-	want := []string{"› /start start the node", "/stop stop the node", "/setup set up the node", "/settings the configuration"}
+	want := []string{"› /session list the conversations and switch to one", "/start start the node", "/stop stop the node", "/setup set up the node", "/settings the configuration"}
 	if got := suggested(m); !slices.Equal(got, want) {
 		t.Fatalf("suggested %q", got)
 	}
@@ -73,10 +80,10 @@ func TestCommandSuggestions(t *testing.T) {
 	}
 
 	// Down and up select, around the ends of the list.
-	if press(m, "down"); suggested(m)[1] != "› /stop stop the node" {
+	if press(m, "down"); suggested(m)[1] != "› /start start the node" {
 		t.Fatalf("suggested %q", suggested(m))
 	}
-	if press(m, "up", "up"); suggested(m)[3] != "› /settings the configuration" {
+	if press(m, "up", "up"); suggested(m)[4] != "› /settings the configuration" {
 		t.Fatalf("suggested %q", suggested(m))
 	}
 	if press(m, "down"); suggested(m)[0] != want[0] {
@@ -85,12 +92,12 @@ func TestCommandSuggestions(t *testing.T) {
 
 	// Typing on narrows the list and selects its first command again.
 	press(m, "down", "down", "e")
-	if got := suggested(m); !slices.Equal(got, []string{"› /setup set up the node", "/settings the configuration"}) {
+	if got := suggested(m); !slices.Equal(got, []string{"› /session list the conversations and switch to one", "/setup set up the node", "/settings the configuration"}) {
 		t.Fatalf("suggested %q", got)
 	}
 
 	// Tab completes the input to the command selected.
-	if press(m, "down", "tab"); m.input.Value() != "/settings" || !slices.Equal(suggested(m), []string{"› /settings the configuration"}) {
+	if press(m, "down", "down", "tab"); m.input.Value() != "/settings" || !slices.Equal(suggested(m), []string{"› /settings the configuration"}) {
 		t.Fatalf("input %q, suggested %q", m.input.Value(), suggested(m))
 	}
 
@@ -103,7 +110,7 @@ func TestCommandSuggestions(t *testing.T) {
 
 	// More commands than the list has rows: it scrolls to the one selected.
 	m.input.SetValue("/")
-	if got := suggested(m); len(got) != maxSuggestions || got[0] != "› /new start a new conversation" {
+	if got := suggested(m); len(got) != maxSuggestions || got[0] != "› /new start a new conversation; the one shown goes on" {
 		t.Fatalf("suggested %q", got)
 	}
 	press(m, "up")

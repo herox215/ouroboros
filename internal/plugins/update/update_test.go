@@ -177,15 +177,16 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 		t.Fatalf("binary %q", built)
 	}
 	if !strings.HasSuffix(got, "this conversation uses the old build until ouro is started again.") {
-		t.Fatalf("without a front end that starts ouro anew: %q", got)
+		t.Fatalf("without a node that starts anew: %q", got)
 	}
 
-	// In the terminal UI, ouro starts anew with the build.
+	// In a session of the node, the node starts anew with the build once
+	// the answer is given: the tool does not stop it.
 	var restart string
-	inUI := plugin.WithRestart(context.Background(), func(exe string) { restart = exe })
-	got, err = tools[at].Run(inUI, json.RawMessage(`{}`))
-	if err != nil || restart != exe || !strings.HasSuffix(got, "ouro starts anew with it once you have answered, and this conversation goes on there.") {
-		t.Fatalf("in the UI: %q, %v, restart %q", got, err, restart)
+	inNode := plugin.WithRestart(context.Background(), func(exe string) { restart = exe })
+	got, err = tools[at].Run(inNode, json.RawMessage(`{}`))
+	if err != nil || restart != exe || !strings.HasSuffix(got, "The node starts anew with it once you have answered, and this conversation goes on there.") {
+		t.Fatalf("in the node: %q, %v, restart %q", got, err, restart)
 	}
 	if !alive() {
 		t.Fatal("the build signalled an unrelated process")

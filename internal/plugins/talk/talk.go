@@ -18,16 +18,17 @@ import (
 
 // needs are the services the plugin uses.
 type needs struct {
-	Console   *plugin.Console
-	Network   *plugin.Network
-	Assistant *plugin.Assistant
+	Console  *plugin.Console
+	Network  *plugin.Network
+	Sessions plugin.Sessions
 }
 
 // Plugin contributes the commands that find the nodes on the network and
-// talk to them: directly, or through the assistant of this node.
+// talk to them: directly, or through the agent of the owner of this node,
+// in a session of the node.
 func Plugin() plugin.Plugin {
 	return plugin.New("talk", func(ctx *plugin.Context, n needs) error {
-		c := &talkCommands{ctx: ctx, term: n.Console, network: n.Network, assistant: n.Assistant}
+		c := &talkCommands{ctx: ctx, term: n.Console, network: n.Network, sessions: n.Sessions}
 		plugin.Add(ctx, plugin.Command{Name: "list", Help: "find ouroboros nodes on the network", Run: c.list})
 		plugin.Add(ctx, plugin.Command{Name: "chat", Args: `["msg"]`, Help: "ask your agent, which can ask the other nodes (interactive without msg)", Run: c.chat})
 		plugin.Add(ctx, plugin.Command{Name: "ask", Args: `ID ["msg"]`, Help: "write to a node directly (interactive without msg)", Run: c.ask})
@@ -36,10 +37,10 @@ func Plugin() plugin.Plugin {
 }
 
 type talkCommands struct {
-	ctx       *plugin.Context // to find the front end
-	term      *plugin.Console
-	network   *plugin.Network
-	assistant *plugin.Assistant
+	ctx      *plugin.Context // to find the front end
+	term     *plugin.Console
+	network  *plugin.Network
+	sessions plugin.Sessions
 }
 
 func (c *talkCommands) list(ctx context.Context, _ []string) error {
@@ -93,10 +94,14 @@ var interrupted = func(ctx context.Context) (context.Context, context.CancelFunc
 	return signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 }
 
-// chat talks to the assistant: once with the given message, otherwise in the
-// front end a plugin contributed, which is what ouro without a command opens,
-// or line by line if there is none or no terminal.
-func (c *talkCommands) chat(ctx context.Context, args []string) error {
+// chat talks to the agent of the owner: once with the given message,
+// otherwise in the front end a plugin contributed, which is what ouro without
+// a command opens, or line by line if there is none or no terminal.
+//
+// The agent answers in a session of the node, which is started for the chat
+// if it does not run, and stopped again afterwards once no answer keeps it
+// running.
+func (c *talkCommands) chat(ctx context.Context, args []string) (err error) {
 	if len(args) == 0 {
 		front, err := plugin.FrontEndFor(c.ctx, c.term)
 		if !errors.Is(err, plugin.ErrNoFrontEnd) {
@@ -106,15 +111,19 @@ func (c *talkCommands) chat(ctx context.Context, args []string) error {
 			return front.Run(ctx)
 		}
 	}
-	if err := base.WithHint(c.assistant.Ready()); err != nil {
-		return err
+	started, err := c.sessions.Open(ctx)
+	if err != nil {
+		return base.WithHint(err)
 	}
-	contextID := plugin.NewID()
+	if started {
+		defer func() { err = errors.Join(err, c.sessions.Release(context.WithoutCancel(ctx))) }()
+	}
+	id := plugin.NewID() // the session of this chat
 	answer := func(text string) (string, error) {
 		// Ctrl-C stops the answer, and the log says what it was waiting for.
 		ctx, stop := interrupted(ctx)
 		defer stop()
-		return c.assistant.Ask(ctx, contextID, text, nil)
+		return plugin.Await(ctx, c.sessions, id, text)
 	}
 	if len(args) > 0 {
 		return c.print(answer(strings.Join(args, " ")))

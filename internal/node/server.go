@@ -48,7 +48,26 @@ type Server struct {
 	// would not end by itself, such as the channels the node opened to peers.
 	// May be nil.
 	OnStop func()
+	// Local answers the front ends of the owner on the socket of the node
+	// (home.Dir.Socket), which only the user who runs the node can open. May
+	// be nil.
+	Local http.Handler
+	// Successor returns the binary that takes the place of the node once it
+	// stopped, "" if none does: then Run hands on its PID file and its socket
+	// and returns a *Succession. It is asked once the node stopped. May be
+	// nil.
+	Successor func() string
 }
+
+// Succession is what Run ends with when a new build takes the place of the
+// node: the process runs Exe in its place, with its arguments and Env added
+// to its environment. Env names what the new node takes over.
+type Succession struct {
+	Exe string
+	Env []string
+}
+
+func (s *Succession) Error() string { return "the node is handed over to " + s.Exe }
 
 // Run serves until ctx is done. It opens the A2A port for TLS, answers discovery
 // probes, holds the PID file and hands the messages of trusted peers to an
@@ -111,17 +130,39 @@ func (s Server) Run(ctx context.Context) error {
 
 	// Held until the node is gone: the lock on the file is what tells other
 	// processes that it runs.
-	release, err := daemon.Hold(s.Home.Service().PIDFile, port)
+	lease, err := daemon.Hold(s.Home.Service().PIDFile, port)
 	if err != nil {
 		ln.Close()
 		return err
 	}
-	defer release()
+	// The socket is opened once the PID file is the node's: a socket left
+	// behind is none of another node then.
+	local, err := listenLocal(s.Home.Socket())
+	if err != nil {
+		lease.Release()
+		ln.Close()
+		return fmt.Errorf("the socket of the node: %w", err)
+	}
+	// What waits for more on the socket, such as a front end that watches a
+	// session, ends when the node stops.
+	localCtx, endLocal := context.WithCancel(context.Background())
+	defer endLocal()
+	localSrv := &http.Server{Handler: s.Local, ErrorLog: logger, BaseContext: func(net.Listener) context.Context { return localCtx }}
+	if localSrv.Handler == nil {
+		localSrv.Handler = http.NotFoundHandler()
+	}
+	go localSrv.Serve(local)
 
+	var successor *Succession // once the node stopped
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		<-ctx.Done()
+		if s.Successor != nil {
+			if exe := s.Successor(); exe != "" {
+				successor = handOver(exe, local, logger)
+			}
+		}
 		// A channel is no request that the shutdown waits for: the ones peers
 		// opened are closed here, and no further one is opened. That goes
 		// along with the shutdown, so that stopping takes no longer for it.
@@ -132,6 +173,8 @@ func (s Server) Run(ctx context.Context) error {
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
+		endLocal()
+		closing.Go(func() { localSrv.Shutdown(shutdownCtx) })
 		srv.Shutdown(shutdownCtx)
 		closing.Wait()
 	}()
@@ -147,11 +190,45 @@ func (s Server) Run(ctx context.Context) error {
 	// TLS only, with the certificate of the node's key: peers pin it, and
 	// nobody on the way reads along.
 	if err := srv.Serve(tls.NewListener(ln, a2a.TLSConfig(id))); !errors.Is(err, http.ErrServerClosed) {
+		localSrv.Close()
+		lease.Release()
 		return err
 	}
 	<-stopped
-	logger.Print("stopped")
-	return nil
+	if successor == nil {
+		lease.Release()
+		logger.Print("stopped")
+		return nil
+	}
+	// The PID file stays locked across the exec: no other node starts in
+	// between.
+	env, err := bequeath(lease)
+	if err != nil {
+		lease.Release()
+		return fmt.Errorf("the node cannot be handed over: %w", err)
+	}
+	successor.Env = append(successor.Env, env)
+	logger.Printf("stopped, handing over to %s", successor.Exe)
+	return successor
+}
+
+// bequeath hands the PID file of a lease on; tests replace it to get in the
+// way.
+var bequeath = (*daemon.Lease).Bequeath
+
+// handOver prepares the succession of the node by exe: the socket local
+// stays open for it, and front ends that connect meanwhile wait in it until
+// the new node answers. A socket that cannot be handed on is let go: the
+// new node opens it anew.
+func handOver(exe string, local *net.UnixListener, logger *log.Logger) *Succession {
+	succession := &Succession{Exe: exe}
+	fd, err := bequeathSocket(local)
+	if err != nil {
+		logger.Printf("the socket is not handed over, the new node opens it anew: %v", err)
+		return succession
+	}
+	succession.Env = append(succession.Env, fmt.Sprintf("%s=%d", socketEnv, fd))
+	return succession
 }
 
 // current returns what reads the configuration of the node as it is now.

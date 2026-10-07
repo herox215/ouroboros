@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -46,6 +47,8 @@ var kill = syscall.Kill
 type Service struct {
 	PIDFile string
 	LogFile string
+	// Env is added to the environment the node is started with.
+	Env []string
 }
 
 // Running returns the process of the service if it is alive.
@@ -53,7 +56,7 @@ func (s Service) Running() (Process, bool) { return Running(s.PIDFile) }
 
 // Start runs exe with args in the background and waits until it is up.
 func (s Service) Start(exe string, args ...string) (Process, error) {
-	exited, err := Spawn(exe, s.LogFile, args...)
+	exited, err := spawn(exe, s.LogFile, s.Env, args...)
 	if err != nil {
 		return Process{}, err
 	}
@@ -73,10 +76,30 @@ type Process struct {
 	Port int
 }
 
+// Lease is the hold of a node on its PID file, see Hold.
+type Lease struct {
+	f    *os.File
+	path string
+}
+
+// InheritEnv names the descriptor of the PID file a node hands on to the
+// process that takes its place, see Lease.Bequeath.
+const InheritEnv = "OURO_PID_FD"
+
 // Hold records the current process as the node listening on port and locks
-// the PID file at path until release is called or the process ends. It fails
-// with ErrRunning if another node holds the file.
-func Hold(path string, port int) (release func(), err error) {
+// the PID file at path until the lease is released or the process ends. It
+// fails with ErrRunning if another node holds the file.
+//
+// A node that took the place of another one (see Lease.Bequeath) takes over
+// the lock it was handed instead: no other node can start in between.
+func Hold(path string, port int) (*Lease, error) {
+	if f := inherited(path); f != nil {
+		if err := record(f, port); err != nil {
+			f.Close()
+			return nil, err
+		}
+		return &Lease{f, path}, nil
+	}
 	for {
 		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 		if err != nil {
@@ -92,18 +115,80 @@ func Hold(path string, port int) (release func(), err error) {
 			f.Close()
 			continue
 		}
-		if err = truncate(f, 0); err == nil { // drop what a dead node left behind
-			_, err = fmt.Fprintf(f, "%d %d\n", os.Getpid(), port)
-		}
-		if err != nil {
+		if err := record(f, port); err != nil {
 			f.Close()
 			return nil, err
 		}
-		// Removed before the lock is given up, so that nobody locks a file
-		// that is about to disappear without noticing.
-		return func() { os.Remove(path); f.Close() }, nil
+		return &Lease{f, path}, nil
 	}
 }
+
+// record writes the current process and port into the locked file f.
+func record(f *os.File, port int) error {
+	err := truncate(f, 0) // drop what a node before left behind
+	if err == nil {
+		_, err = f.WriteAt(fmt.Appendf(nil, "%d %d\n", os.Getpid(), port), 0)
+	}
+	return err
+}
+
+// inherited returns the PID file at path as the node before this process
+// handed it on, locked, or nil if it handed on none. The variable that
+// names it is removed: a process this one starts is not handed it.
+func inherited(path string) *os.File {
+	v, ok := os.LookupEnv(InheritEnv)
+	if !ok {
+		return nil
+	}
+	os.Unsetenv(InheritEnv)
+	fd, err := strconv.Atoi(v)
+	if err != nil || !same(fd, path) {
+		return nil
+	}
+	f := os.NewFile(uintptr(fd), path)
+	// Locked by this process already: locking it again with the same open
+	// file is no change.
+	if flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		f.Close()
+		return nil
+	}
+	return f
+}
+
+// same reports whether the descriptor fd is open on the file at path. A
+// descriptor that is not is none of the node's, and is left alone.
+func same(fd int, path string) bool {
+	var open, named syscall.Stat_t
+	return fd >= 0 && syscall.Fstat(fd, &open) == nil && syscall.Stat(path, &named) == nil &&
+		open.Dev == named.Dev && open.Ino == named.Ino
+}
+
+// Release gives up the PID file: it is removed, and the lock is let go.
+func (l *Lease) Release() {
+	// Removed before the lock is given up, so that nobody locks a file that
+	// is about to disappear without noticing.
+	os.Remove(l.path)
+	l.f.Close()
+}
+
+// Bequeath hands the lock on to the program this process is replaced by
+// with exec, and gives up the lease: the lock is kept by a descriptor that
+// stays open across exec. It returns the variable that tells that program
+// which descriptor it is, for its environment; Hold takes it from there.
+func (l *Lease) Bequeath() (string, error) {
+	defer l.f.Close()
+	// A duplicate is open across exec, unlike the file, and holds the same
+	// lock: the lock goes when the last descriptor of the file goes.
+	fd, err := dup(int(l.f.Fd()))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s=%d", InheritEnv, fd), nil
+}
+
+// dup duplicates a descriptor, open across exec; tests replace it to get in
+// the way.
+var dup = syscall.Dup
 
 // lock takes the exclusive lock on f without waiting for a node to stop.
 func lock(f *os.File) error {
@@ -143,10 +228,11 @@ func Running(path string) (Process, bool) {
 	return p, true
 }
 
-// Spawn starts exe with args in a new session, detached from the terminal,
-// with stdout and stderr appended to logPath. exited is closed when the
-// process ends, should this one live to see it.
-func Spawn(exe, logPath string, args ...string) (exited <-chan struct{}, err error) {
+// spawn starts exe with args in a new session, detached from the terminal,
+// with env added to its environment and stdout and stderr appended to
+// logPath. exited is closed when the process ends, should this one live to
+// see it.
+func spawn(exe, logPath string, env []string, args ...string) (exited <-chan struct{}, err error) {
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
@@ -154,6 +240,7 @@ func Spawn(exe, logPath string, args ...string) (exited <-chan struct{}, err err
 	defer log.Close()
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout, cmd.Stderr = log, log
+	cmd.Env = append(os.Environ(), env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, err

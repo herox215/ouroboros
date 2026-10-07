@@ -1,6 +1,7 @@
 package home
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -133,8 +134,12 @@ func TestFiles(t *testing.T) {
 		t.Errorf("history dir %q", got)
 	}
 	s := d.Service()
-	if s.PIDFile != filepath.Join(string(d), "ouro.pid") || s.LogFile != filepath.Join(string(d), "ouro.log") {
+	if s.PIDFile != filepath.Join(string(d), "ouro.pid") || s.LogFile != filepath.Join(string(d), "ouro.log") ||
+		len(s.Env) != 1 || s.Env[0] != "OURO_HOME="+string(d) {
 		t.Errorf("service %+v", s)
+	}
+	if got := d.Sessions(); got != filepath.Join(string(d), "sessions.json") {
+		t.Errorf("sessions %q", got)
 	}
 
 	d.Contacts().AddTrusted("key", "beta", "gpt")
@@ -288,5 +293,29 @@ func TestLogFromTwoWriters(t *testing.T) {
 		if !strings.HasSuffix(line, strings.Repeat("n", 40)) && !strings.HasSuffix(line, strings.Repeat("u", 40)) {
 			t.Fatalf("torn line %q", line)
 		}
+	}
+}
+
+// The socket is in the directory of the node, unless that path is too long
+// for a socket: then it is in a directory of the user in the temporary
+// directory, named after the directory of the node.
+func TestSocket(t *testing.T) {
+	short := Dir("/home/luna/.config/ouroboros")
+	if got := short.Socket(); got != "/home/luna/.config/ouroboros/ouro.sock" {
+		t.Errorf("socket %q", got)
+	}
+	long := Dir("/" + strings.Repeat("a", 100))
+	got := long.Socket()
+	if filepath.Dir(got) != SocketDir() || !strings.HasSuffix(got, ".sock") || len(filepath.Base(got)) != 21 {
+		t.Errorf("socket %q", got)
+	}
+	if other := Dir("/" + strings.Repeat("b", 100)).Socket(); other == got {
+		t.Error("two nodes share a socket")
+	}
+	if again := Dir("/" + strings.Repeat("a", 100) + "/").Socket(); again != got {
+		t.Errorf("the same directory has another socket: %q", again)
+	}
+	if want := filepath.Join(os.TempDir(), fmt.Sprintf("ouro-%d", os.Getuid())); SocketDir() != want {
+		t.Errorf("socket dir %q", SocketDir())
 	}
 }

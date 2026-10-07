@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/home"
 	"ouroboros/internal/openai/openaitest"
+	"ouroboros/plugin"
 )
 
 func TestMain(m *testing.M) { clitest.Main(m) }
@@ -238,5 +240,96 @@ func TestPeersDoNotShareAConversation(t *testing.T) {
 	}
 	if got := ask["alpha"]("again"); !strings.Contains(got, "turns=3 last=again") {
 		t.Fatalf("alpha lost its conversation: %q", got)
+	}
+}
+
+// again is a plugin with a tool that asks for ouro to start anew from exe.
+func again(exe string) plugin.Plugin {
+	return plugin.New("again", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.NewTool("again", "starts ouro anew", nil, func(ctx context.Context, _ struct{}) (string, error) {
+			if !plugin.Restart(ctx, exe) {
+				return "", errors.New("nobody starts ouro anew")
+			}
+			return "starting anew", nil
+		}))
+		return nil
+	})
+}
+
+// A node that a tool asks for a new build of ends with plugin.Restarting once
+// the answer is given, and hands its sessions over in a file the new node
+// reads once.
+func TestServeHandsOverTheSessions(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	n := clitest.Serve(t, s, again("/new/ouro"))
+	app, _ := clitest.NewApp(t, s, "")
+	sessions, _ := cli.Service[plugin.Sessions](app)
+	if reply, err := plugin.Await(context.Background(), sessions, "c1", "!again"); err != nil || !strings.Contains(reply, "starting anew") {
+		t.Fatalf("got %q, %v", reply, err)
+	}
+	err := n.Wait()
+	r, ok := errors.AsType[*plugin.Restarting](err)
+	if !ok || r.Exe != "/new/ouro" {
+		t.Fatalf("got %v", err)
+	}
+	var file string
+	for _, kv := range r.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "OURO_") {
+			t.Setenv(k, v)
+		}
+		if k == "OURO_SESSIONS" {
+			file = v
+		}
+	}
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 || file != home.Dir(s.Home).Sessions() {
+		t.Fatalf("the sessions handed over: %v, %v", info, err)
+	}
+	next := clitest.Serve(t, s)
+	if list, err := sessions.List(context.Background()); err != nil || len(list) != 1 || list[0].ID != "c1" {
+		t.Fatalf("the new node has %+v, %v", list, err)
+	}
+	if reply, err := plugin.Await(context.Background(), sessions, "c1", "and now?"); err != nil || !strings.Contains(reply, "turns=5 last=and now?") {
+		t.Fatalf("the agent of the new node should remember: %q, %v", reply, err)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("the file should be read once")
+	}
+	if _, ok := os.LookupEnv("OURO_SESSIONS"); ok {
+		t.Fatal("a process the node starts should not see the file")
+	}
+	next.Stop()
+
+	// Sessions that cannot be written are lost, and the node is replaced all
+	// the same; those that cannot be read are lost, and the node starts.
+	os.Mkdir(file, 0o700)
+	os.WriteFile(filepath.Join(file, "in the way"), nil, 0o600)
+	n = clitest.Serve(t, s, again("/new/ouro"))
+	plugin.Await(context.Background(), sessions, "c2", "!again")
+	r, ok = errors.AsType[*plugin.Restarting](n.Wait())
+	if !ok || slices.ContainsFunc(r.Env, func(kv string) bool { return strings.HasPrefix(kv, "OURO_SESSIONS=") }) {
+		t.Fatalf("got %+v", r)
+	}
+	for _, kv := range r.Env {
+		if k, v, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "OURO_") {
+			t.Setenv(k, v)
+		}
+	}
+	for _, content := range []string{"", "{"} {
+		os.RemoveAll(file)
+		if content != "" {
+			os.WriteFile(file, []byte(content), 0o600)
+		}
+		t.Setenv("OURO_SESSIONS", file)
+		if err := clitest.Serve(t, s).Stop(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
+	for _, want := range []string{"the sessions are not handed over: ", "the sessions handed over are lost: open ", "the sessions handed over are lost: unexpected end of JSON input"} {
+		if !strings.Contains(string(logged), want) {
+			t.Fatalf("the log lacks %q:\n%s", want, logged)
+		}
 	}
 }

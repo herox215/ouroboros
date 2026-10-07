@@ -6,10 +6,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"ouroboros/internal/a2a"
@@ -17,6 +19,8 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	"ouroboros/internal/plugins/base"
+	"ouroboros/internal/safefile"
+	"ouroboros/internal/session"
 	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
@@ -34,14 +38,17 @@ type Options struct {
 
 // needs are the services the plugin uses.
 type needs struct {
-	Console *plugin.Console
-	Builder assistant.Builder
+	Console  *plugin.Console
+	Builder  assistant.Builder
+	Sessions *session.Service
 }
 
 // Plugin contributes the commands that start, stop and run the node in dir.
 // The node it runs answers peers with the agent of the assistant plugin,
 // serves every plugin.Method a plugin contributed and opens every
-// plugin.ChannelHandler.
+// plugin.ChannelHandler. On its socket it serves the sessions of the owner,
+// whose answers it runs; when a tool asks for a new build, the node hands
+// them over to it.
 //
 // Who the node is and whom it trusts is read from dir by the node itself (see
 // node.Server): no plugin provides it, and none can put something in its
@@ -49,9 +56,10 @@ type needs struct {
 func Plugin(dir home.Dir, o Options) plugin.Plugin {
 	return plugin.New("node", func(ctx *plugin.Context, n needs) error {
 		c := &nodeCommands{
-			term:   n.Console,
-			local:  node.Local{Home: dir},
-			wizard: &wizard{term: n.Console, home: dir, offer: setup.Offer{BaseURL: o.BaseURL, APIKey: o.APIKey}},
+			term:     n.Console,
+			sessions: n.Sessions,
+			local:    node.Local{Home: dir},
+			wizard:   &wizard{term: n.Console, home: dir, offer: setup.Offer{BaseURL: o.BaseURL, APIKey: o.APIKey}},
 			server: node.Server{
 				Home: dir, HTTPPort: o.HTTPPort, DiscoPort: o.DiscoPort, Version: o.Version, Log: dir.LogTo(o.Log),
 				Responder: func(logf func(format string, args ...any)) (a2a.Responder, error) {
@@ -67,7 +75,15 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 				},
 				Methods:  func() []a2a.Method { return plugin.All[plugin.Method](ctx) },
 				Channels: func() []a2a.ChannelHandler { return plugin.All[plugin.ChannelHandler](ctx) },
-				OnStop:   o.OnStop,
+				Local:    session.Handler(n.Sessions),
+				OnStop: func() {
+					// The answers on their way are stopped with the node,
+					// and the log says what they waited for.
+					n.Sessions.Close()
+					if o.OnStop != nil {
+						o.OnStop()
+					}
+				},
 			},
 		}
 		plugin.Add(ctx, plugin.Command{Name: "start", Args: "[--setup]", Help: "start the node (asks for endpoint, key + model on first run)", Run: c.start})
@@ -89,10 +105,11 @@ func conversation(ctx context.Context, contextID string) string {
 }
 
 type nodeCommands struct {
-	term   *plugin.Console
-	local  node.Local
-	wizard *wizard
-	server node.Server
+	term     *plugin.Console
+	sessions *session.Service
+	local    node.Local
+	wizard   *wizard
+	server   node.Server
 }
 
 func (c *nodeCommands) start(ctx context.Context, args []string) error {
@@ -156,8 +173,70 @@ func (c *nodeCommands) status(context.Context, []string) error {
 }
 
 // serve runs the node in the foreground until ctx is done or a signal arrives.
+//
+// When a tool asked for a new build of ouro, the node stops once no answer
+// is on its way, and serve ends with plugin.Restarting: the process runs the
+// new build in its place, which takes over the PID file, the socket and the
+// sessions, see handOver.
 func (c *nodeCommands) serve(ctx context.Context, _ []string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return base.WithHint(c.server.Run(ctx))
+	ctx, end := context.WithCancel(ctx)
+	defer end()
+	if err := c.resume(); err != nil {
+		c.local.Home.Log("the sessions handed over are lost: %v", err)
+	}
+	var mu sync.Mutex
+	var successor string
+	c.sessions.Attach(end, func(exe string) {
+		mu.Lock()
+		defer mu.Unlock()
+		successor = exe
+		end()
+	})
+	server := c.server
+	server.Successor = func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return successor
+	}
+	err := server.Run(ctx)
+	if s, ok := errors.AsType[*node.Succession](err); ok {
+		return c.handOver(s)
+	}
+	return base.WithHint(err)
+}
+
+// sessionsEnv names the file a node hands over its sessions in.
+const sessionsEnv = "OURO_SESSIONS"
+
+// handOver writes the sessions to a file only the user can read, for the
+// node that takes the place of this one, and returns the plugin.Restarting
+// that starts it. Sessions that cannot be written are lost, the node is
+// replaced all the same.
+func (c *nodeCommands) handOver(s *node.Succession) error {
+	env := append(os.Environ(), s.Env...)
+	path := c.local.Home.Sessions()
+	if err := safefile.Write(path, c.sessions.HandOver(), 0o600); err != nil {
+		c.local.Home.Log("the sessions are not handed over: %v", err)
+		return &plugin.Restarting{Exe: s.Exe, Env: env}
+	}
+	return &plugin.Restarting{Exe: s.Exe, Env: append(env, sessionsEnv+"="+path)}
+}
+
+// resume takes over the sessions the node before this one handed over, if it
+// did. The file is read once: it is removed, and so is the variable that
+// names it, which a process this one starts must not see.
+func (c *nodeCommands) resume() error {
+	path, ok := os.LookupEnv(sessionsEnv)
+	if !ok {
+		return nil
+	}
+	os.Unsetenv(sessionsEnv)
+	data, err := os.ReadFile(path)
+	os.Remove(path)
+	if err != nil {
+		return err
+	}
+	return c.sessions.Resume(data)
 }

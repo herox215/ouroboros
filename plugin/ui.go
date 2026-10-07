@@ -72,12 +72,14 @@ type (
 )
 
 type (
-	// Assistant is the agent of the owner of the node, a service for front
-	// ends: Ready reports whether it can answer, Ask lets it.
+	// Assistant is the agent of the owner of the node: Ready reports
+	// whether it can answer, Ask lets it. The node runs it for the sessions
+	// of the owner; a front end talks to it through Sessions.
 	Assistant = assistant.Assistant
 	// Step is a tool call the Assistant reports on the way to its answer
-	// and, with Done set, that its result is in. ToolLine turns it into what
-	// the owner is shown, ToolDetail adds what became of the call.
+	// and, with Done set, that its result is in; a front end gets it from a
+	// SessionEvent with AsStep. ToolLine turns it into what the owner is
+	// shown, ToolDetail adds what became of the call.
 	Step = assistant.Step
 )
 

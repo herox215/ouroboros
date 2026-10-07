@@ -124,9 +124,10 @@ func TestOtherMessages(t *testing.T) {
 	if _, cmd := m.Update(splashMsg{m.now()}); cmd != nil {
 		t.Fatal("a splash that is closed is not animated")
 	}
-	// A step of a conversation that was reset is dropped.
-	m.step(stepMsg{contextID: "old", step: Step{Text: "asking beta"}})
-	if m.chat.doing != "" {
+	// What happens in another session leaves the one shown as it is.
+	m.Update(eventMsg{id: "other", event: Event{Kind: plugin.SessionMessage, Text: "hi"}})
+	m.Update(eventMsg{id: "other", event: Event{Kind: plugin.SessionStep, Text: "asking beta"}})
+	if m.chat.doing != "" || m.chats["other"].doing != "asking beta" {
 		t.Fatalf("doing %q", m.chat.doing)
 	}
 	if view := New(&fakeBackend{}, nil, nil).View(); view.Content != "" {

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"slices"
@@ -18,10 +19,10 @@ func TestChatShowsTheContext(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); strings.Contains(view, "context") {
 		t.Fatalf("before the first call:\n%s", view)
 	}
-	b.context = 46285
+	b.contextSize = 46285
 	b.says = []string{"I will ask beta"}
 	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta", Done: true}}
-	deliver(m, say(t, m, "ask beta"))
+	answered(t, m, say(t, m, "ask beta"))
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "alpha  · context 45.2 KiB ≈ 11.6k tokens") {
 		t.Fatalf("after the answer:\n%s", view)
 	}
@@ -40,8 +41,8 @@ func TestChatShowsTheContext(t *testing.T) {
 // through it; esc goes back to the chat.
 func TestContextScreenShowsTheContext(t *testing.T) {
 	m, b := newModel(t)
-	b.context = 4000
-	deliver(m, say(t, m, "ping"))
+	b.contextSize = 4000
+	answered(t, m, say(t, m, "ping"))
 	b.contents = []Message{{"system", "You are alpha."}, {"tool run", "Run JavaScript"}, {"user", "ping"}, {"assistant", "→ run {}"},
 		{"tool", strings.Repeat("line\n", 60)}, {"assistant", "pong"}}
 	cmd := run(m, "/context")
@@ -110,18 +111,24 @@ func TestContextScreenWithoutAContext(t *testing.T) {
 func TestChatSumsUpTheCallsOfAnAnswer(t *testing.T) {
 	m, b := newModel(t)
 	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta ✓ 1s", Done: true}, {Text: "asking beta"}, {Text: "asking beta ✗ offline", Done: true}}
-	deliver(m, say(t, m, "ask beta twice"))
+	answered(t, m, say(t, m, "ask beta twice"))
 	b.steps = nil
-	deliver(m, say(t, m, "thanks"))
-	b.steps = []Step{{Text: "reading a.go"}}
+	answered(t, m, say(t, m, "thanks"))
+	gate := make(chan struct{})
+	b.ask = func(_ context.Context, step func(Step), _ func(string)) (string, error) {
+		step(Step{Text: "reading a.go"})
+		<-gate
+		return "", nil
+	}
 	cmd := say(t, m, "read a.go")
-	_, cmd = m.Update(cmd()) // the call is announced
+	drive(t, m, cmd, func() bool { return m.chat.doing == "reading a.go" }) // the call is announced
 	view := trimmedLines(m)
 	if !strings.Contains(view, "│   ↳ 2 tool calls, 1 failed: asking beta ×2\n") || strings.Count(view, "↳") != 2 ||
 		!strings.Contains(view, "↳ · reading a.go …") {
 		t.Fatalf("the answer before is summed up, the one on its way not:\n%s", view)
 	}
-	deliver(m, cmd)
+	close(gate)
+	drive(t, m, nil, func() bool { return !m.chat.pending })
 	if view := trimmedLines(m); !strings.Contains(view, "│   ↳ 1 tool call: reading a.go\n") || strings.Contains(view, "↳ ·") {
 		t.Fatalf("the answer is in:\n%s", view)
 	}
