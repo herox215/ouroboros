@@ -644,3 +644,43 @@ func TestAwait(t *testing.T) {
 		t.Fatalf("lost: %v", err)
 	}
 }
+
+// Titles that fit preserve the accepted first message. The in-process API
+// accepts Go strings without a UTF-8 precondition, unlike JSON on the socket.
+// A boundary change must not silently sanitize only exactly-full titles.
+func TestListPreservesTitlesThatFit(t *testing.T) {
+	for _, text := range []string{"short", strings.Repeat("ä", maxTitle/2), strings.Repeat("x", maxTitle-1) + "\xff"} {
+		s := service(t, &fakeAgent{})
+		_, live, err := s.Watch(t.Context(), "id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Ask(t.Context(), "id", text); err != nil {
+			t.Fatal(err)
+		}
+		until(t, live, Answer)
+		list, err := s.List(t.Context())
+		if err != nil || len(list) != 1 || list[0].Title != text {
+			t.Fatalf("accepted message %q, titles %+v, error %v", text, list, err)
+		}
+	}
+}
+
+// Truncation may cut a multibyte character. The title must end at the last
+// complete character, rather than contain an incomplete UTF-8 sequence.
+func TestListTruncatesAtACompleteCharacter(t *testing.T) {
+	prefix := strings.Repeat("x", maxTitle-1)
+	s := service(t, &fakeAgent{})
+	_, live, err := s.Watch(t.Context(), "id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ask(t.Context(), "id", prefix+"ä"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, live, Answer)
+	list, err := s.List(t.Context())
+	if err != nil || len(list) != 1 || list[0].Title != prefix {
+		t.Fatalf("titles %+v, error %v", list, err)
+	}
+}

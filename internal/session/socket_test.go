@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -310,5 +311,68 @@ func TestWatchEnds(t *testing.T) {
 	_, live, _ = c.Watch(context.Background(), "s1")
 	s.Close()
 	for range live {
+	}
+}
+
+// A PID file can become visible before the socket is listening. A client
+// with its default startup allowance must survive that normal startup gap.
+func TestClientWaitsForListeningNode(t *testing.T) {
+	dir := home.Dir(t.TempDir())
+	lease, err := daemon.Hold(dir.Service().PIDFile, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	path := dir.Socket()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient(dir)
+	transport := c.http.Transport.(*http.Transport)
+	originalDial := transport.DialContext
+	started := make(chan struct{})
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		close(started)
+		return originalDial(ctx, network, address)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		list, err := c.List(ctx)
+		if err == nil && len(list) != 0 {
+			err = fmt.Errorf("unexpected sessions: %+v", list)
+		}
+		done <- err
+	}()
+	<-started
+	// This gap exceeds a retry interval and stays well inside startup patience.
+	time.Sleep(125 * time.Millisecond)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: Handler(service(t, &fakeAgent{}))}
+	defer srv.Close()
+	go srv.Serve(ln)
+	if err := <-done; err != nil {
+		t.Fatalf("client should wait for the node's socket: %v", err)
+	}
+}
+
+// Neither an empty error message nor a partially decoded response is a
+// trustworthy service error. Report the HTTP status instead of stale data.
+func TestClientRejectsMalformedErrorResponses(t *testing.T) {
+	for _, body := range []string{`{}`, `{"error":""}`, `{"error":"partially decoded","code":3}`} {
+		t.Run(body, func(t *testing.T) {
+			n := serve(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, body)
+			}))
+			err := NewClient(n.dir).Ask(t.Context(), "s1", "hi")
+			if err == nil || err.Error() != "the node answered 409 Conflict" {
+				t.Fatalf("malformed response %s: %v", body, err)
+			}
+		})
 	}
 }
