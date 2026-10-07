@@ -477,16 +477,9 @@ func (m *Model) chatView() string {
 			title += mutedStyle.Render("  · cached " + cacheRate(c.cache))
 		}
 		title = ansi.Truncate(title, inner, "…")
-		var typing string
-		switch {
-		case c.doing != "":
-			typing = m.spinner.View() + mutedStyle.Render(" "+c.doing+"…")
-		case c.pending:
-			typing = m.spinner.View() + mutedStyle.Render(" "+m.agentName()+" is thinking…")
-		}
 		history := m.highlight(strings.Split(m.history.View(), "\n"))
 		history = history[min(len(suggested), len(history)):] // the latest stays in view
-		content = lipgloss.JoinVertical(lipgloss.Left, title, strings.Join(history, "\n"), typing)
+		content = lipgloss.JoinVertical(lipgloss.Left, title, strings.Join(history, "\n"), m.waitView(inner))
 	}
 	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
 	input := box(false, m.light).Width(w).Render(m.input.View())

@@ -521,3 +521,23 @@ func TestPeerConversations(t *testing.T) {
 		t.Fatal("esc goes back")
 	}
 }
+
+// A session that is built anew still waits for its answer only if it did
+// before and nothing of it is known yet: one that did not wait does not
+// start to, and what is known says itself whether an answer is on its way.
+func TestReplayKeepsWaitingOnlyForWhatWaited(t *testing.T) {
+	m, _ := newModel(t)
+	idle := &conversation{contextID: "idle"}
+	if m.replay(idle, nil); idle.pending {
+		t.Fatal("a session that did not wait is waiting")
+	}
+	asked := &conversation{contextID: "asked", pending: true, art: 3}
+	if m.replay(asked, nil); !asked.pending || asked.art != 3 {
+		t.Fatalf("a session that waited: pending %v, art %d", asked.pending, asked.art)
+	}
+	answered := &conversation{contextID: "answered", pending: true}
+	m.replay(answered, []Event{{Kind: plugin.SessionMessage, Text: "hi"}, {Kind: plugin.SessionAnswer, Text: "ho"}})
+	if answered.pending {
+		t.Fatal("a session whose answer is known is waiting")
+	}
+}

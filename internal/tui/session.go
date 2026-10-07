@@ -145,7 +145,7 @@ func (m *Model) rewatch(id string) tea.Cmd {
 
 // replay builds the session c anew from what happened in it.
 func (m *Model) replay(c *conversation, past []Event) {
-	*c = conversation{contextID: c.contextID, draft: c.draft, watching: true, pending: c.pending && len(past) == 0}
+	*c = conversation{contextID: c.contextID, draft: c.draft, art: c.art, watching: true, pending: c.pending && len(past) == 0}
 	for _, e := range past {
 		m.apply(c, e, false)
 	}
@@ -173,6 +173,9 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 	switch e.Kind {
 	case plugin.SessionMessage:
 		c.add(entry{mine: true, text: e.Text, at: e.At})
+		if live && !c.pending { // else the wait was shown, or is shown already
+			c.art++
+		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
 		c.title = cmp.Or(c.title, e.Text)
 	case plugin.SessionSay:
