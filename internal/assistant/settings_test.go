@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -201,6 +202,21 @@ func TestWithdrawProposal(t *testing.T) {
 	}
 	if len(c.waiting()) != 0 || c.config().Tools == nil {
 		t.Fatalf("the owner's decision: %+v", c.waiting())
+	}
+
+	// What is no id is said so.
+	if got := c.tool(toolWithdrawConfig, "x"); got != `error: withdraw_proposal takes an "id", or nothing at all to list what waits` {
+		t.Fatalf("no id: %q", got)
+	}
+	// A list that cannot be read takes nothing back, and shows nothing.
+	if err := os.WriteFile(filepath.Join(c.dir, "proposals.json"), []byte("nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.tool(toolWithdrawConfig, withdraw{"x"}); !strings.HasPrefix(got, "error: nothing was taken back: ") {
+		t.Fatalf("an unreadable list: %q", got)
+	}
+	if got := c.tool(toolWithdrawConfig, struct{}{}); !strings.HasPrefix(got, "error: ") || strings.Contains(got, "wait") {
+		t.Fatalf("an unreadable list: %q", got)
 	}
 }
 

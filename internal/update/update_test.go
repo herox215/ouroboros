@@ -304,6 +304,16 @@ func TestRebuildFailsBeforeTheBuild(t *testing.T) {
 		if err := (update.Updater{Source: src, Dir: dir, Exe: exe}).Rebuild(context.Background()); err == nil {
 			t.Error("a working directory that cannot be written should fail")
 		}
+		// What a build before left behind and cannot be removed.
+		left := t.TempDir()
+		locked := filepath.Join(left, "build", "locked")
+		os.MkdirAll(locked, 0o700)
+		os.WriteFile(filepath.Join(locked, "file"), nil, 0o600)
+		os.Chmod(locked, 0o500)
+		t.Cleanup(func() { os.Chmod(locked, 0o700) })
+		if err := (update.Updater{Source: src, Dir: left, Exe: exe}).Rebuild(context.Background()); !errors.Is(err, os.ErrPermission) {
+			t.Errorf("a temporary directory that cannot be removed should fail: %v", err)
+		}
 	}
 	if _, err := os.Stat(exe); err == nil {
 		t.Error("something was installed")

@@ -499,6 +499,9 @@ func TestContents(t *testing.T) {
 	if err := b.Resume("c1", a.Conversation("c1")); err != nil {
 		t.Fatal(err)
 	}
+	if err := b.Resume("c2", []byte("{")); err == nil {
+		t.Fatal("what is no conversation cannot be resumed")
+	}
 	if c, err := b.Contents("c1"); !errors.Is(err, config.ErrIncomplete) || c.System != "" || c.Tools != nil || len(c.Messages) < 3 {
 		t.Fatalf("%+v, %v", c, err)
 	}
