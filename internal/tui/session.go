@@ -169,7 +169,7 @@ func (m *Model) event(msg eventMsg) tea.Cmd {
 // now, and is not replayed: an answer of a session that is not shown is told
 // in the footer, and ouro starting anew makes the UI quit for it.
 func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
-	c.last, c.context = e.At, e.Context
+	c.last, c.context, c.cache = e.At, e.Context, e.Cache
 	switch e.Kind {
 	case plugin.SessionMessage:
 		c.add(entry{mine: true, text: e.Text, at: e.At})

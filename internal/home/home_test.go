@@ -316,3 +316,23 @@ func TestSocket(t *testing.T) {
 		t.Errorf("socket dir %q", SocketDir())
 	}
 }
+
+// The debug mode is off until it is turned on, and off again after.
+func TestDebug(t *testing.T) {
+	d := Dir(t.TempDir())
+	if d.Debug() {
+		t.Fatal("on from the start")
+	}
+	for _, on := range []bool{true, true, false, false} {
+		if err := d.SetDebug(on); err != nil || d.Debug() != on {
+			t.Fatalf("set %v: %v, debug %v", on, err, d.Debug())
+		}
+	}
+	// What cannot be removed keeps the mode on.
+	if err := os.MkdirAll(filepath.Join(string(d), "debug", "in"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetDebug(false); err == nil || !d.Debug() {
+		t.Fatalf("a debug that cannot be removed: %v, debug %v", err, d.Debug())
+	}
+}

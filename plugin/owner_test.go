@@ -400,3 +400,26 @@ func TestConfigToolsAreNotForPeers(t *testing.T) {
 		t.Fatalf("get_config: %q, %v", out, err)
 	}
 }
+
+// The owner turns the debug mode of the node on and off, and the log says so.
+func TestOwnerSetsDebug(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.Env(t, s)
+	o := owner(t, s)
+	dir := home.Dir(s.Home)
+	for _, on := range []bool{true, false} {
+		if err := o.SetDebug(on); err != nil || dir.Debug() != on {
+			t.Fatalf("set %v: %v, debug %v", on, err, dir.Debug())
+		}
+	}
+	log, _ := os.ReadFile(dir.Service().LogFile)
+	if !strings.Contains(string(log), "debug mode on") || !strings.Contains(string(log), "debug mode off") {
+		t.Fatalf("the log:\n%s", log)
+	}
+	if err := os.MkdirAll(filepath.Join(s.Home, "debug", "in"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SetDebug(false); err == nil {
+		t.Fatal("a debug that cannot be removed")
+	}
+}

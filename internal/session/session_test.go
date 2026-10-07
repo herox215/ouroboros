@@ -21,6 +21,7 @@ type fakeAgent struct {
 	ready    error
 	run      func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
 	size     int
+	cache    assistant.Cache
 	contents assistant.Contents
 	failed   error // of Contents
 	inspect  *agent.Inspection
@@ -37,6 +38,7 @@ func (a *fakeAgent) Run(ctx context.Context, _, text string, observe func(assist
 	return "pong", nil
 }
 func (a *fakeAgent) Context(string) int                          { return a.size }
+func (a *fakeAgent) Cache(string) assistant.Cache                { return a.cache }
 func (a *fakeAgent) Contents(string) (assistant.Contents, error) { return a.contents, a.failed }
 func (a *fakeAgent) Inspection(string) (agent.Inspection, bool) {
 	if a.inspect == nil {
@@ -107,7 +109,7 @@ func kinds(events []Event) string {
 // answer, each with the size of the context.
 func TestAnswerIsTold(t *testing.T) {
 	gate := make(chan struct{})
-	a := &fakeAgent{size: 42, run: func(_ context.Context, text string, observe func(assistant.Step), say func(string)) (string, error) {
+	a := &fakeAgent{size: 42, cache: assistant.Cache{Tokens: 10, Cached: 5, AllTokens: 30, AllCached: 20}, run: func(_ context.Context, text string, observe func(assistant.Step), say func(string)) (string, error) {
 		say("I will look")
 		observe(assistant.Step{Tool: "read", Args: json.RawMessage(`{"path":"~/a"}`)})
 		observe(assistant.Step{Tool: "read", Args: json.RawMessage(`{"path":"~/a"}`), Done: true, Took: time.Second, Err: errors.New("no such file")})
@@ -128,7 +130,7 @@ func TestAnswerIsTold(t *testing.T) {
 	}
 	got := until(t, live, Step, Step)
 	got = append(got, until(t, live, Step)...)
-	if kinds(got) != "message say step step" || got[0].Text != "where is a" || got[1].Text != "I will look" || got[0].Context != 42 {
+	if kinds(got) != "message say step step" || got[0].Text != "where is a" || got[1].Text != "I will look" || got[0].Context != 42 || got[0].Cache != a.cache {
 		t.Fatalf("events %+v", got)
 	}
 	if st := got[3].AsStep(); st.Tool != "read" || !st.Done || st.Took != time.Second || st.Err.Error() != "no such file" || string(st.Args) != `{"path":"~/a"}` {

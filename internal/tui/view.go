@@ -10,6 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
 )
 
 const inputHeight = 3 // text rows of the message input
@@ -99,7 +101,8 @@ func (m *Model) chatHeight() int { return max(4, m.bodyHeight()-inputHeight-2) }
 // layout sizes the widgets after the window changed.
 func (m *Model) layout() {
 	atBottom := m.history.AtBottom()
-	inner := max(1, m.width-4) // border and padding
+	m.selected, m.pressed = nil, nil // its lines are wrapped anew
+	inner := max(1, m.width-4)       // border and padding
 	m.input.SetWidth(inner)
 	m.history.SetWidth(inner)
 	m.history.SetHeight(max(1, m.chatHeight()-4)) // border, title and typing line
@@ -116,7 +119,10 @@ func (m *Model) renderHistory(toBottom bool) {
 		return
 	}
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
-	render := func(s string) string { return body.Render(s) }
+	// What the agent says is markdown, and shown formatted.
+	render := func(s string) string {
+		return "  " + strings.ReplaceAll(renderMarkdown(s, m.history.Width()-2), "\n", "\n  ")
+	}
 	summaries := c.summaries()
 	var blocks []string
 	words := false // the last block is the words of a round of an answer that is in
@@ -148,7 +154,10 @@ func (m *Model) renderHistory(toBottom bool) {
 		}
 		words = false
 		head := m.entryHead(e)
-		text := body.Render(e.text)
+		text := render(e.text)
+		if e.mine {
+			text = body.Render(e.text)
+		}
 		if e.failed {
 			text = body.Foreground(bad).Render("✗ " + e.text)
 		}
@@ -425,7 +434,17 @@ func (m *Model) headerView() string {
 	if m.unreadReq > 0 {
 		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.unreadReq))
 	}
-	return ansi.Truncate(title+" "+state, m.width, "…")
+	if !s.Debug {
+		return ansi.Truncate(title+" "+state, m.width, "…")
+	}
+	// The debug mode is not to be missed: on the right, whatever the rest
+	// leaves of the line.
+	debug := boldStyle.Foreground(lipgloss.Color("0")).Background(warn).Render(" DEBUG MODE ")
+	if m.width <= lipgloss.Width(debug) {
+		return ansi.Truncate(debug, m.width, "")
+	}
+	left := ansi.Truncate(title+" "+state, m.width-lipgloss.Width(debug)-1, "…")
+	return left + strings.Repeat(" ", m.width-lipgloss.Width(left)-lipgloss.Width(debug)) + debug
 }
 
 func (m *Model) chatView() string {
@@ -454,6 +473,9 @@ func (m *Model) chatView() string {
 		if c.context > 0 {
 			title += mutedStyle.Render("  · context " + contextSize(c.context))
 		}
+		if c.cache.Tokens > 0 {
+			title += mutedStyle.Render("  · cached " + cacheRate(c.cache))
+		}
 		title = ansi.Truncate(title, inner, "…")
 		var typing string
 		switch {
@@ -462,7 +484,7 @@ func (m *Model) chatView() string {
 		case c.pending:
 			typing = m.spinner.View() + mutedStyle.Render(" "+m.agentName()+" is thinking…")
 		}
-		history := strings.Split(m.history.View(), "\n")
+		history := m.highlight(strings.Split(m.history.View(), "\n"))
 		history = history[min(len(suggested), len(history)):] // the latest stays in view
 		content = lipgloss.JoinVertical(lipgloss.Left, title, strings.Join(history, "\n"), typing)
 	}
@@ -480,6 +502,12 @@ func contextSize(n int) string {
 		tokens = fmt.Sprintf("%.1fk", float64(n)/4000)
 	}
 	return fmt.Sprintf("%.1f KiB ≈ %s tokens", float64(n)/1024, tokens)
+}
+
+// cacheRate is how much of what the LLM was sent the provider had cached, as
+// the chat shows it: of the last call, and of all calls in the session.
+func cacheRate(c plugin.SessionCache) string {
+	return fmt.Sprintf("%d%%, session %d%%", c.Cached*100/c.Tokens, c.AllCached*100/max(c.AllTokens, 1))
 }
 
 func (m *Model) footerView() string {

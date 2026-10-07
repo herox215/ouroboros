@@ -44,7 +44,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Tools:    func() []agent.Tool { return plugin.All[plugin.Tool](ctx) },
 			Failures: dir.Failures(),
 		}.WithConfig(dir.Config, dir.Proposals())
-		return services{builder, assistant.New(dir.Config, builder, dir.Log)}, nil
+		return services{builder, assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug)}, nil
 	})
 }
 

@@ -1065,11 +1065,13 @@ func TestChannelsCloseWhenTrustIsWithdrawn(t *testing.T) {
 	expect(t, ofDave, "AND ME")
 
 	// Contacts that cannot be read trust nobody.
+	// The node may hold the lock for a moment itself, so it is taken once it
+	// is free.
 	lock := bob.path + ".lock"
-	os.Remove(lock)
-	if err := os.Mkdir(lock, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	eventually(t, "the lock should be taken", func() bool {
+		os.Remove(lock)
+		return os.Mkdir(lock, 0o700) == nil
+	})
 	defer os.Remove(lock)
 	closedWith(t, ofDave, ErrDisconnected)
 	if err := onBob.why(t); err != ErrDisconnected {

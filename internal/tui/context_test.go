@@ -10,6 +10,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
 )
 
 // The chat shows how long the context of the conversation is, from the first
@@ -23,11 +25,18 @@ func TestChatShowsTheContext(t *testing.T) {
 	b.says = []string{"I will ask beta"}
 	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta", Done: true}}
 	answered(t, m, say(t, m, "ask beta"))
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "alpha  · context 45.2 KiB ≈ 11.6k tokens") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "alpha  · context 45.2 KiB ≈ 11.6k tokens") || strings.Contains(view, "cached") {
 		t.Fatalf("after the answer:\n%s", view)
 	}
+	// Once the API told what it had cached, the chat shows it too: of the
+	// last call, and of the session.
+	b.cache = plugin.SessionCache{Tokens: 1000, Cached: 920, AllTokens: 3000, AllCached: 2520}
+	answered(t, m, say(t, m, "again"))
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "alpha  · context 45.2 KiB ≈ 11.6k tokens  · cached 92%, session 84%") {
+		t.Fatalf("with the cache:\n%s", view)
+	}
 	run(m, "/new")
-	if m.chat.context != 0 || strings.Contains(ansi.Strip(m.View().Content), "context") {
+	if m.chat.context != 0 || m.chat.cache.Tokens != 0 || strings.Contains(ansi.Strip(m.View().Content), "context") {
 		t.Fatalf("a new conversation: %d", m.chat.context)
 	}
 	for n, want := range map[int]string{1: "0.0 KiB ≈ 0 tokens", 3999: "3.9 KiB ≈ 999 tokens", 4000: "3.9 KiB ≈ 1.0k tokens", 409600: "400.0 KiB ≈ 102.4k tokens"} {
@@ -42,6 +51,7 @@ func TestChatShowsTheContext(t *testing.T) {
 func TestContextScreenShowsTheContext(t *testing.T) {
 	m, b := newModel(t)
 	b.contextSize = 4000
+	b.cache = plugin.SessionCache{Tokens: 1000, Cached: 500, AllTokens: 1000, AllCached: 500}
 	answered(t, m, say(t, m, "ping"))
 	b.contents = []Message{{"system", "You are alpha."}, {"tool run", "Run JavaScript"}, {"user", "ping"}, {"assistant", "→ run {}"},
 		{"tool", strings.Repeat("line\n", 60)}, {"assistant", "pong"}}
@@ -49,7 +59,7 @@ func TestContextScreenShowsTheContext(t *testing.T) {
 	if m.screen != screenContext || m.input.Value() != "" {
 		t.Fatal("/context should open the context screen")
 	}
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "…") || !strings.Contains(view, "Context  3.9 KiB ≈ 1.0k tokens at the last call") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "…") || !strings.Contains(view, "Context  3.9 KiB ≈ 1.0k tokens at the last call, cached 50%, session 50%") {
 		t.Fatalf("while the context is on its way:\n%s", view)
 	}
 	m.Update(cmd())

@@ -96,6 +96,10 @@ type Backend interface {
 	// SetModel saves model as the model of the node: the agents answer with
 	// it from the next message on.
 	SetModel(model string) error
+	// SetDebug turns the debug mode of the node on or off: in it, the log
+	// of the node tells much more of every call of the LLM. Status says
+	// whether it is on.
+	SetDebug(on bool) error
 	// Settings returns the configuration of the node for the settings
 	// screen (/settings), without its keys.
 	Settings() (Settings, error)
@@ -118,6 +122,9 @@ type Event struct {
 	// Context is how long the context of the session is: what the last call
 	// of the LLM in it sent, in bytes. 0 if none was made.
 	Context int
+	// Cache is how much of what the LLM was sent in the session the
+	// provider had cached.
+	Cache plugin.SessionCache
 }
 
 // screen is the top-level view: the chat, the connection requests, the list
@@ -157,12 +164,13 @@ type call struct {
 type conversation struct {
 	contextID string
 	entries   []entry
-	pending   bool   // request submitted or answer on its way: one message at a time
-	running   bool   // the node has said an answer is on its way
-	doing     string // what the agent is waiting for, like "asking beta"
-	round     int    // the entry of the round of the loop that is on, counted from 1; 0 for none yet
-	context   int    // how long its context is, see Event.Context
-	title     string // the first message of the owner
+	pending   bool                // request submitted or answer on its way: one message at a time
+	running   bool                // the node has said an answer is on its way
+	doing     string              // what the agent is waiting for, like "asking beta"
+	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
+	context   int                 // how long its context is, see Event.Context
+	cache     plugin.SessionCache // what the provider had cached, see Event.Cache
+	title     string              // the first message of the owner
 	last      time.Time
 	draft     string // what is typed in the input for it while another one is shown
 	watching  bool   // its events come in, or are asked for
@@ -233,6 +241,8 @@ type Model struct {
 	light         bool          // the background of the terminal is light
 	input         textarea.Model
 	history       viewport.Model
+	selected      *selection // what the mouse selected of the history
+	pressed       *spot      // where the mouse went down, before the drag began
 	spinner       spinner.Model
 }
 
@@ -464,6 +474,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		return m, m.mouse(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
 		if m.screen == screenContext {
@@ -502,6 +514,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.notice = ""
+	m.selected, m.pressed = nil, nil
 	if msg.String() == "ctrl+c" {
 		return m.leave()
 	}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -478,20 +480,22 @@ func (r redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// The usage is asked for with stream_options, and OpenAI gets the session as
-// prompt_cache_key; an API that refuses stream_options is asked without them
-// from then on.
+// The usage is asked for with stream_options, and every API gets the session
+// as prompt_cache_key, OpenAI as a gateway; an API that refuses one of them
+// is asked without it from then on.
 func TestCompleteAsksForUsageAndCache(t *testing.T) {
 	var bodies []map[string]any
-	refuse := false
+	var refuse []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, body)
-		if _, ok := body["stream_options"]; ok && refuse {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":{"message":"Unrecognized request argument supplied: stream_options"}}`))
-			return
+		for _, name := range refuse {
+			if _, ok := body[name]; ok {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":{"message":"Unrecognized request argument supplied: ` + name + `"}}`))
+				return
+			}
 		}
 		sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]")(w, r)
 	}))
@@ -505,18 +509,110 @@ func TestCompleteAsksForUsageAndCache(t *testing.T) {
 	if _, err := other.Complete(WithSession(context.Background(), "conv-1"), "gpt", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if bodies[0]["prompt_cache_key"] != "conv-1" || bodies[0]["stream_options"] == nil ||
-		bodies[1]["prompt_cache_key"] != nil || bodies[1]["stream_options"] == nil {
-		t.Fatalf("bodies %v", bodies)
+	for i, b := range bodies {
+		if b["prompt_cache_key"] != "conv-1" || b["stream_options"] == nil {
+			t.Fatalf("body %d: %v", i, b)
+		}
 	}
-	refuse, bodies = true, nil
+	refuse, bodies = []string{"stream_options", "prompt_cache_key"}, nil
 	for range 2 {
 		if got, err := other.Complete(context.Background(), "gpt", nil, nil); err != nil || got.Content != "ok" {
 			t.Fatalf("refused: %+v, %v", got, err)
 		}
 	}
-	if len(bodies) != 3 || bodies[0]["stream_options"] == nil || bodies[1]["stream_options"] != nil || bodies[2]["stream_options"] != nil {
-		t.Fatalf("after the refusal: %v", bodies)
+	if len(bodies) != 4 || bodies[0]["stream_options"] == nil || bodies[1]["stream_options"] != nil || bodies[1]["prompt_cache_key"] == nil ||
+		bodies[2]["prompt_cache_key"] != nil || bodies[3]["stream_options"] != nil || bodies[3]["prompt_cache_key"] != nil {
+		t.Fatalf("after the refusals: %v", bodies)
+	}
+	// An error that names no parameter sent is no refusal of one.
+	refuse, bodies = []string{"model"}, nil
+	if _, err := other.Complete(context.Background(), "gpt", nil, nil); err == nil || len(bodies) != 1 {
+		t.Fatalf("%v, %d requests", err, len(bodies))
+	}
+}
+
+// A Claude model gets the first system message and the last 3 messages with
+// content as cache_control breakpoints; another model gets none, and an API
+// that refuses them is asked without them from then on.
+func TestCompleteSetsBreakpointsForClaude(t *testing.T) {
+	var bodies []string
+	refuse := false
+	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		if refuse && strings.Contains(string(b), "cache_control") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":{"message":"messages.1.content.0.cache_control: Extra inputs are not permitted"}}`))
+			return
+		}
+		sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]")(w, r)
+	})
+	call := ToolCall{ID: "c1", Type: "function", Function: FunctionCall{Name: "read", Arguments: "{}"}}
+	msgs := []Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "u1"}, {Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"}, {Role: "assistant", ToolCalls: []ToolCall{call}}, {Role: "tool", ToolCallID: "c1", Content: "r1"},
+		{Role: "user", Content: "note"}}
+	before := slices.Clone(msgs)
+	for _, model := range []string{"anthropic/claude-sonnet-4.5", "deepseek-v4"} {
+		if _, err := c.Complete(context.Background(), model, msgs, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part := func(text string) string {
+		return `"content":[{"type":"text","text":"` + text + `","cache_control":{"type":"ephemeral"}}]`
+	}
+	for _, text := range []string{"sys", "u2", "r1", "note"} {
+		if !strings.Contains(bodies[0], `{"role":`) || !strings.Contains(bodies[0], part(text)) {
+			t.Errorf("no breakpoint at %q: %s", text, bodies[0])
+		}
+	}
+	if strings.Count(bodies[0], "cache_control") != 4 || !strings.Contains(bodies[0], `{"role":"user","content":"u1"}`) ||
+		!strings.Contains(bodies[0], `"tool_call_id":"c1"`) {
+		t.Errorf("Claude: %s", bodies[0])
+	}
+	if strings.Contains(bodies[1], "cache_control") {
+		t.Errorf("another model: %s", bodies[1])
+	}
+	if !reflect.DeepEqual(msgs, before) {
+		t.Error("the messages were changed")
+	}
+
+	refuse, bodies = true, nil
+	for range 2 {
+		if _, err := c.Complete(context.Background(), "claude-opus-4", msgs, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(bodies) != 3 || !strings.Contains(bodies[0], "cache_control") || strings.Contains(bodies[1], "cache_control") ||
+		strings.Contains(bodies[2], "cache_control") || !strings.Contains(bodies[1], `{"role":"user","content":"note"}`) {
+		t.Fatalf("after the refusal: %q", bodies)
+	}
+}
+
+// A conversation without a system message, or one whose system message is
+// empty, has breakpoints at its last messages only.
+func TestBreakpoints(t *testing.T) {
+	for name, tc := range map[string]struct {
+		msgs []Message
+		want []bool
+	}{
+		"no system":    {[]Message{{Role: "user", Content: "a"}, {Role: "user", Content: "b"}}, []bool{true, true}},
+		"empty system": {[]Message{{Role: "system"}, {Role: "user", Content: "a"}}, []bool{false, true}},
+		"many": {[]Message{{Role: "system", Content: "s"}, {Role: "user", Content: "a"}, {Role: "user", Content: "b"},
+			{Role: "user", Content: "c"}, {Role: "user", Content: "d"}}, []bool{true, false, true, true, true}},
+		"none": {nil, []bool{}},
+	} {
+		got, n := breakpoints(tc.msgs)
+		marks := []bool{}
+		count := 0
+		for _, m := range got {
+			marks = append(marks, m.breakpoint)
+			if m.breakpoint {
+				count++
+			}
+		}
+		if !slices.Equal(marks, tc.want) || n != count {
+			t.Errorf("%s: %v, %d", name, marks, n)
+		}
 	}
 }
 

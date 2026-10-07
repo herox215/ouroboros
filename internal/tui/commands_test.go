@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -147,5 +148,35 @@ func TestHelp(t *testing.T) {
 	}
 	if press(m, "esc"); m.screen != screenChat {
 		t.Fatal("esc should lead back to the chat")
+	}
+}
+
+// /debug turns the debug mode of the node on and off again, and the header
+// says so on the right while it is on.
+func TestDebug(t *testing.T) {
+	m, b := newModel(t)
+	header := func() string { return strings.Split(ansi.Strip(m.View().Content), "\n")[0] }
+	if strings.Contains(header(), "DEBUG MODE") {
+		t.Fatalf("header %q", header())
+	}
+	settle(m, run(m, "/debug"))
+	if !slices.Equal(b.debug, []bool{true}) || !strings.HasPrefix(m.notice, "debug mode on") {
+		t.Fatalf("debug %v, notice %q", b.debug, m.notice)
+	}
+
+	b.status.Debug = true
+	m.Update(m.refreshStatus())
+	if h := header(); !strings.HasSuffix(h, " DEBUG MODE ") || ansi.StringWidth(h) != m.width || !strings.Contains(h, "ouroboros") {
+		t.Fatalf("header %q", h)
+	}
+	settle(m, run(m, "/debug"))
+	if !slices.Equal(b.debug, []bool{true, false}) || m.notice != "debug mode off" {
+		t.Fatalf("debug %v, notice %q", b.debug, m.notice)
+	}
+
+	// A narrow window keeps the mark, not the rest.
+	m.Update(tea.WindowSizeMsg{Width: 12, Height: 30})
+	if h := header(); h != " DEBUG MODE " {
+		t.Fatalf("header %q", h)
 	}
 }

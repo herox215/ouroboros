@@ -239,12 +239,12 @@ func TestEndlessToolCallsAreStopped(t *testing.T) {
 	for i, last := range llm.lasts {
 		told := strings.Contains(last, fmt.Sprintf("this is call %d of at most %d", i+1, maxRounds))
 		asked := strings.Contains(last, fmt.Sprintf("this is call %d of the LLM for this answer. If you have not yet found", i+1))
-		if told != (i >= warnRounds) || asked != (i >= askRounds && i < warnRounds) || strings.Contains(last, "Not from the tool") != (told || asked) {
+		if told != (i >= warnRounds) || asked != (i >= askRounds && i < warnRounds) || strings.Contains(last, "Not from the user") != (told || asked) {
 			t.Fatalf("call %d: %q", i+1, last)
 		}
 	}
 	for _, m := range h {
-		if strings.Contains(m.Content, "Not from the tool") {
+		if strings.Contains(m.Content, "Not from the user") {
 			t.Fatalf("the count is remembered: %q", m.Content)
 		}
 	}
@@ -544,13 +544,24 @@ func TestBudgetOfAnAnswer(t *testing.T) {
 	if !slices.Equal(spent, []int{0, Budget/2 + 1, Budget + 2}) {
 		t.Fatalf("spent %v", spent)
 	}
+	// The note is a message of its own after the results, which stay as
+	// they are remembered: the next call begins like this one.
 	for i, msgs := range llm.sent {
-		told := strings.Contains(msgs[len(msgs)-1].Content, "[Not from the tool: the results of tools of this answer have")
+		last := msgs[len(msgs)-1]
+		told := last.Role == "user" && strings.HasPrefix(last.Content, "[Not from the user: the results of tools of this answer have")
 		if told != (i >= 2) {
 			t.Errorf("call %d: told %v", i+1, told)
 		}
+		if told && (msgs[len(msgs)-2].Role != "tool" || strings.Contains(msgs[len(msgs)-2].Content, "Not from")) {
+			t.Errorf("call %d: the result before the note %+v", i+1, msgs[len(msgs)-2])
+		}
 	}
-	if h := a.memory.history("c1"); strings.Contains(h[len(h)-2].Content, "Not from the tool") {
+	if next := llm.sent[3]; !slices.EqualFunc(llm.sent[2][:len(llm.sent[2])-1], next[:len(llm.sent[2])-1], func(a, b openai.Message) bool {
+		return a.Role == b.Role && a.Content == b.Content
+	}) {
+		t.Error("the next call does not begin like the last one")
+	}
+	if h := a.memory.history("c1"); strings.Contains(h[len(h)-2].Content, "Not from the user") {
 		t.Error("what the LLM was told is remembered")
 	}
 	if len(calls) != 4 || calls[3].Tokens != 400 || calls[3].Cached != 200 {
@@ -691,7 +702,7 @@ func TestBudgetIsABound(t *testing.T) {
 	var told []bool
 	i := 0
 	llm := llmFunc(func(msgs []openai.Message) openai.Message {
-		told = append(told, strings.Contains(msgs[len(msgs)-1].Content, "Not from the tool"))
+		told = append(told, strings.Contains(msgs[len(msgs)-1].Content, "Not from the user"))
 		if i == len(results) {
 			return openai.Message{Content: "done"}
 		}

@@ -73,6 +73,9 @@ type Event struct {
 	// happens: what the last call of the LLM in it sent, in bytes, 0 if
 	// none was made yet.
 	Context int `json:"context,omitempty"`
+	// Cache is how much of what the LLM was sent in the session the
+	// provider had cached when the Event happens, see assistant.Cache.
+	Cache assistant.Cache `json:"cache,omitzero"`
 }
 
 // AsStep is the call of a tool a Step tells of, as the plugin of the tool
@@ -178,6 +181,7 @@ type Assistant interface {
 	Ready() error
 	Run(ctx context.Context, contextID, text string, observe func(assistant.Step), say func(string)) (string, error)
 	Context(contextID string) int
+	Cache(contextID string) assistant.Cache
 	Contents(contextID string) (assistant.Contents, error)
 	Inspection(contextID string) (agent.Inspection, bool)
 	Conversation(contextID string) json.RawMessage
@@ -370,6 +374,7 @@ func (s *Service) add(se *session, e Event) {
 func (s *Service) emit(se *session, e Event) {
 	e.At = s.now().Round(0) // as it is written, without the reading of the clock of this process
 	e.Context = s.agent.Context(se.id)
+	e.Cache = s.agent.Cache(se.id)
 	se.events = append(se.events, e)
 	for ch := range se.watchers {
 		select {

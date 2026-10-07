@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/session"
 )
 
@@ -92,6 +93,9 @@ type (
 	// ContextLine is a message of the context of a session, see
 	// Sessions.Contents.
 	ContextLine = session.Line
+	// SessionCache is how much of what the LLM was sent in a session the
+	// provider had cached, see SessionEvent.
+	SessionCache = assistant.Cache
 )
 
 // What a SessionEvent tells.

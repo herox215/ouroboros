@@ -87,6 +87,9 @@ type Message struct {
 	// Usage is what the call that brought an assistant message cost, as far
 	// as the API told. It is not sent back.
 	Usage Usage `json:"-"`
+	// breakpoint makes the message a cache_control breakpoint: see
+	// breakpoints.
+	breakpoint bool
 }
 
 // Usage is what one call of the LLM cost in tokens: Prompt are the tokens of
@@ -136,7 +139,8 @@ func (r reasoning) first() (text, field string) {
 	return "", ""
 }
 
-// MarshalJSON writes the reasoning of m into the field it came in.
+// MarshalJSON writes the reasoning of m into the field it came in. The
+// content of a breakpoint is a part of text marked for the cache.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type plain Message
 	out := struct {
@@ -151,7 +155,20 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	default:
 		out.reasoning.Reasoning = m.Reasoning
 	}
-	return json.Marshal(out)
+	if !m.breakpoint {
+		return json.Marshal(out)
+	}
+	type part struct {
+		Type         string            `json:"type"`
+		Text         string            `json:"text"`
+		CacheControl map[string]string `json:"cache_control"`
+	}
+	return json.Marshal(struct {
+		Role    string `json:"role"`
+		Content []part `json:"content"`
+		plain
+		reasoning
+	}{m.Role, []part{{"text", m.Content, map[string]string{"type": "ephemeral"}}}, out.plain, out.reasoning})
 }
 
 // UnmarshalJSON reads a message with its reasoning from any of the fields.
@@ -221,10 +238,28 @@ type Client struct {
 	apiKey  string
 	session string // fallback session ID for requests without one
 	http    *http.Client
-	// plain is set once the API refused stream_options: then the usage of a
-	// streamed answer is not asked for again.
-	plain atomic.Bool
+	// refused are the optional parameters the API refused: they are not
+	// sent again.
+	refused [len(optional)]atomic.Bool
+	sent    sent // the last requests of the sessions, for a trace
 }
+
+// optional are the parameters of a completion that ouro sends to save, which
+// an API may not know: the usage of a streamed answer, the key of the cache
+// of the session, and the breakpoints of the cache of a Claude model. An API
+// that refuses one with HTTP 400, naming it, is asked again without it, and
+// not sent it again.
+var optional = [...]string{"stream_options", "prompt_cache_key", "cache_control"}
+
+const (
+	streamOptions = iota
+	promptCacheKey
+	cacheControl
+)
+
+// maxBreakpoints is how many messages after the first system message are
+// breakpoints of the cache: Anthropic takes 4 in all.
+const maxBreakpoints = 3
 
 // New returns a client for baseURL. An empty apiKey sends no credentials.
 func New(baseURL, apiKey string) *Client {
@@ -268,10 +303,11 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 // for a while (HTTP 504) keeps waiting while the model thinks and writes. An
 // API that does not stream answers in one piece, which is taken as well.
 //
-// The usage of the call is asked for along with the stream, and OpenAI is
-// given the session as prompt_cache_key: calls of one conversation then hit
-// the same cache. An API that refuses stream_options is asked without them
-// from then on.
+// The usage of the call is asked for along with the stream, and the session
+// goes as prompt_cache_key: calls of one conversation then hit the same
+// cache, also behind a gateway that spreads them over servers. A Claude
+// model caches only up to breakpoints, which are set, see breakpoints. An API
+// that refuses one of these parameters is asked without it from then on.
 func (c *Client) Complete(ctx context.Context, model string, msgs []Message, tools []Tool) (Message, error) {
 	type options struct {
 		IncludeUsage bool `json:"include_usage"`
@@ -284,11 +320,19 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 		StreamOptions  *options  `json:"stream_options,omitempty"`
 		PromptCacheKey string    `json:"prompt_cache_key,omitempty"`
 	}{Model: model, Messages: msgs, Tools: tools, Stream: true}
-	if !c.plain.Load() {
+	if !c.refused[streamOptions].Load() {
 		in.StreamOptions = &options{IncludeUsage: true}
 	}
-	if Provider(c.baseURL) == "OpenAI" {
+	if !c.refused[promptCacheKey].Load() {
 		in.PromptCacheKey = c.sessionOf(ctx)
+	}
+	marked := 0
+	if claude(model) && !c.refused[cacheControl].Load() {
+		in.Messages, marked = breakpoints(msgs)
+	}
+	t := traceOf(ctx)
+	if t != nil {
+		c.traceRequest(t, c.sessionOf(ctx), model, msgs, tools, in.StreamOptions != nil, in.PromptCacheKey != "", marked)
 	}
 	// Given up when nothing comes for timeout, from the request on.
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -298,17 +342,66 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 	})
 	defer idle.Stop()
 	msg, err := c.complete(ctx, in, func() { idle.Reset(timeout) })
-	var refused *APIError
-	if in.StreamOptions != nil && errors.As(err, &refused) && refused.Status == http.StatusBadRequest &&
-		strings.Contains(refused.Message, "stream_options") {
-		c.plain.Store(true)
-		in.StreamOptions = nil
+	for range optional {
+		sent := []bool{in.StreamOptions != nil, in.PromptCacheKey != "", marked > 0}
+		i := slices.IndexFunc(optional[:], func(name string) bool { return refuses(err, name) })
+		if i < 0 || !sent[i] {
+			break
+		}
+		c.refused[i].Store(true)
+		switch i {
+		case streamOptions:
+			in.StreamOptions = nil
+		case promptCacheKey:
+			in.PromptCacheKey = ""
+		case cacheControl:
+			in.Messages, marked = msgs, 0
+		}
+		if t != nil {
+			t("llm request: the API refused %s, asked again without it", optional[i])
+		}
 		msg, err = c.complete(ctx, in, func() { idle.Reset(timeout) })
 	}
 	if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, context.Canceled) {
 		return Message{}, cause
 	}
 	return msg, err
+}
+
+// refuses reports whether err is the API refusing the parameter name.
+func refuses(err error, name string) bool {
+	var refused *APIError
+	return errors.As(err, &refused) && refused.Status == http.StatusBadRequest && strings.Contains(refused.Message, name)
+}
+
+// claude reports whether model is one of Anthropic, also behind a gateway,
+// like "anthropic/claude-sonnet-4.5": it caches only up to cache_control
+// breakpoints.
+func claude(model string) bool { return strings.Contains(strings.ToLower(model), "claude") }
+
+// breakpoints returns msgs with the first system message and the last
+// maxBreakpoints messages with content after it as breakpoints of the cache,
+// and how many there are. A provider like Anthropic caches a request up to
+// each breakpoint, and the next request finds what it has of that: the
+// system prompt, along with the tools before it, and the conversation up to
+// one of the last messages of the request before, also when the last of
+// them is not sent again. msgs is not changed.
+func breakpoints(msgs []Message) ([]Message, int) {
+	out := slices.Clone(msgs)
+	marked := 0
+	first := slices.IndexFunc(out, func(m Message) bool { return m.Role == "system" })
+	if first >= 0 && out[first].Content != "" {
+		out[first].breakpoint = true
+		marked++
+	}
+	last := 0
+	for i := len(out) - 1; i > first && last < maxBreakpoints; i-- {
+		if out[i].Content != "" {
+			out[i].breakpoint = true
+			last++
+		}
+	}
+	return out, marked + last
 }
 
 // complete sends in and reads the answer, telling alive whenever data came.
@@ -319,6 +412,7 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 	}
 	defer resp.Body.Close()
 	alive()
+	t := traceOf(ctx)
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		var out struct {
 			Choices []struct {
@@ -326,7 +420,16 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 			} `json:"choices"`
 			Usage *usage `json:"usage"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return Message{}, err
+		}
+		if t != nil {
+			var a answered
+			a.read(body)
+			a.tell(t, 0)
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
 			return Message{}, err
 		}
 		if len(out.Choices) == 0 {
@@ -336,14 +439,20 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 		msg.Usage = out.Usage.read()
 		return msg, nil
 	}
-	return readStream(resp.Body, alive)
+	return readStream(resp.Body, alive, t)
 }
 
 // readStream puts together the message a stream of server-sent events tells
 // in pieces. The usage comes after the choice is finished, in an event of its
 // own or in the last one: the stream is read on until it came, or until it
-// ends.
-func readStream(body io.Reader, alive func()) (Message, error) {
+// ends. A trace t, if not nil, is told what the API said besides the message.
+func readStream(body io.Reader, alive func(), t trace) (Message, error) {
+	var said *answered
+	events := 0
+	if t != nil {
+		said = &answered{}
+		defer func() { said.tell(t, events) }()
+	}
 	var msg Message
 	var calls []ToolCall
 	var content, thought strings.Builder
@@ -360,6 +469,10 @@ func readStream(body io.Reader, alive func()) (Message, error) {
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
 			break
+		}
+		if said != nil {
+			events++
+			said.read([]byte(data))
 		}
 		var chunk struct {
 			Choices []struct {
@@ -471,18 +584,30 @@ func (c *Client) do(ctx context.Context, method, path string, in any) (*http.Res
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("X-Opencode-Session", c.sessionOf(ctx))
 
+	start := time.Now()
 	resp, err := c.http.Do(req)
+	t := traceOf(ctx)
 	if err != nil {
+		if t != nil {
+			t("llm response: none after %s: %v", time.Since(start).Round(time.Millisecond), err)
+		}
 		return nil, err
+	}
+	if t != nil {
+		traceResponse(t, resp, time.Since(start).Round(time.Millisecond).String())
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxEvent))
+		if t != nil {
+			t("llm response: body %s", around(raw, 0))
+		}
 		var e struct {
 			Error struct {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&e)
+		json.Unmarshal(raw, &e)
 		return nil, &APIError{Status: resp.StatusCode, Message: e.Error.Message}
 	}
 	return resp, nil

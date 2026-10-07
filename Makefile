@@ -16,7 +16,7 @@ export PATH := $(PATH):$(or $(OURO_GO_DIR),$(HOME)/.local/go)/bin:/usr/local/go/
 	check fmt-check vet lint cover-check mutation tools hooks unhooks
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/ouro
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o "$(BIN)" ./cmd/ouro
 
 vet:
 	go vet ./...
@@ -65,7 +65,7 @@ unhooks:
 
 install: build
 	mkdir -p "$(PREFIX)/bin"
-	install -m755 $(BIN) "$(PREFIX)/bin/$(notdir $(BIN))"
+	install -m755 "$(BIN)" "$(PREFIX)/bin/$(notdir $(BIN))"
 
 clean:
 	rm -rf $(BIN) .cover cover.out .mutation

@@ -144,6 +144,20 @@ func (o *Owner) RefuseProposal(id string) error {
 // Status reports how the node is configured and whether it is running.
 func (o *Owner) Status() (NodeStatus, error) { return o.local.Status() }
 
+// SetDebug turns the debug mode of the node on or off: in it, the log tells
+// much more of every call of the LLM. It holds from the next call on.
+func (o *Owner) SetDebug(on bool) error {
+	if err := o.home.SetDebug(on); err != nil {
+		return err
+	}
+	if on {
+		o.home.Log("debug mode on")
+	} else {
+		o.home.Log("debug mode off")
+	}
+	return nil
+}
+
 // Running reports whether the node is running.
 func (o *Owner) Running() bool {
 	_, running := o.local.Running()

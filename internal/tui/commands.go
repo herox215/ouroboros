@@ -29,6 +29,7 @@ var own = []command{
 	{"model", "choose the model of the provider", (*Model).openModel},
 	{"settings", "the configuration", (*Model).openSettings},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
+	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
 	{"pending", "decide on what is pending: connection requests and proposals", (*Model).openRequests},
 	{"help", "list the commands", func(m *Model) tea.Cmd { m.screen = screenHelp; return nil }},
 	{"quit", "quit (ctrl+c does too)", (*Model).leave},
@@ -173,6 +174,16 @@ func (m *Model) stop() tea.Cmd {
 	}
 	m.setNotice("stopping node…", false)
 	return func() tea.Msg { return actionMsg{"node stopped", m.backend.Stop()} }
+}
+
+// toggleDebug turns the debug mode of the node on or off. The header shows
+// it once the status is read anew.
+func (m *Model) toggleDebug() tea.Cmd {
+	on, done := !m.status.Debug, "debug mode off"
+	if on {
+		done = "debug mode on: the log of the node (ouro.log) tells much more"
+	}
+	return func() tea.Msg { return actionMsg{done, m.backend.SetDebug(on)} }
 }
 
 // helpView lists the commands.

@@ -173,7 +173,7 @@ func (u *ui) Watch(ctx context.Context, id string) ([]tui.Event, <-chan tui.Even
 
 // event is e as the UI shows it.
 func (u *ui) event(e plugin.SessionEvent) tui.Event {
-	shown := tui.Event{Kind: e.Kind, Text: e.Text, Done: e.Done, At: e.At, Context: e.Context}
+	shown := tui.Event{Kind: e.Kind, Text: e.Text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
 	if e.Kind == plugin.SessionStep {
 		s := e.AsStep()
 		shown.Text = plugin.ToolLine(u.ctx, s)

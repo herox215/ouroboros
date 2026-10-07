@@ -69,6 +69,26 @@ func (d Dir) History() string { return d.path("history") }
 // Failures opens the list of the answers to peers that failed.
 func (d Dir) Failures() *diagnosis.Store { return diagnosis.Open(d.path("failures.json")) }
 
+// Debug reports whether the node is in debug mode: then the log tells much
+// more of every call of the LLM, see SetDebug. The mode is a file, so that
+// the node and the front ends, which are other processes, see it alike.
+func (d Dir) Debug() bool {
+	_, err := os.Stat(d.path("debug"))
+	return err == nil
+}
+
+// SetDebug turns the debug mode of the node on or off. It holds from the next
+// call of the LLM on, without a restart.
+func (d Dir) SetDebug(on bool) error {
+	if on {
+		return safefile.Write(d.path("debug"), nil, 0o600)
+	}
+	if err := os.Remove(d.path("debug")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // Env names the directory of a node to the process that is started for it.
 const Env = "OURO_HOME"
 

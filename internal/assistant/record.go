@@ -202,6 +202,18 @@ func (r *record) call(c agent.Call) {
 	r.line("llm call %d took %s: %s", r.calls, took(c.Took), outcome)
 }
 
+// trace writes a line of what a call of the LLM sent and got, for the debug
+// mode: without secrets, but not shortened. Nothing is written once the last
+// line is.
+func (r *record) trace(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.line("debug %s", oneLine.Replace(r.redact(fmt.Sprintf(format, args...))))
+}
+
 // step notes a tool call, and writes it when it has ended. Of its result only
 // the size is written.
 func (r *record) step(s agent.Step) {

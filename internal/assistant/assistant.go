@@ -104,6 +104,7 @@ type Assistant struct {
 	config  func() (config.Config, error)
 	builder Builder
 	log     func(format string, args ...any)
+	debug   func() bool // whether the log is to tell much more, see WithDebug
 
 	mu     sync.Mutex
 	agent  *agent.Agent
@@ -114,7 +115,8 @@ type Assistant struct {
 	scripts *script.Sessions
 
 	sizing sync.Mutex
-	sizes  map[string]int // what the last call of the LLM sent, by conversation
+	sizes  map[string]int   // what the last call of the LLM sent, by conversation
+	caches map[string]Cache // what the provider had cached of it, by conversation
 
 	answering sync.Mutex
 	answers   map[*record]context.CancelFunc // that are on their way
@@ -128,7 +130,15 @@ type setup struct{ baseURL, apiKey, model, name, id, tools, provider string }
 // is read anew for every question. What it does on the way to an answer is
 // told to log, see Ask.
 func New(config func() (config.Config, error), b Builder, log func(format string, args ...any)) *Assistant {
-	return &Assistant{config: config, builder: b, log: log, memory: agent.NewMemory(), scripts: script.NewSessions(), sizes: map[string]int{}, answers: map[*record]context.CancelFunc{}}
+	return &Assistant{config: config, builder: b, log: log, memory: agent.NewMemory(), scripts: script.NewSessions(), sizes: map[string]int{}, caches: map[string]Cache{}, answers: map[*record]context.CancelFunc{}}
+}
+
+// WithDebug makes a tell, while debug says so, much more of every call of
+// the LLM to the log: see openai.WithTrace. debug is asked anew for every
+// line, so that the mode holds from the next call on.
+func (a *Assistant) WithDebug(debug func() bool) *Assistant {
+	a.debug = debug
+	return a
 }
 
 // ForPeers returns the agent that answers the peers of the node configured by
@@ -260,6 +270,13 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r := a.begin(ctx, cancel, contextID, cfg, text)
+	if a.debug != nil {
+		ctx = openai.WithTrace(ctx, func(format string, args ...any) {
+			if a.debug() {
+				r.trace(format, args...)
+			}
+		})
+	}
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {
 			if a.log != nil {
@@ -268,11 +285,13 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		},
 		Call: func(c agent.Call) {
 			r.call(c)
+			a.sizing.Lock()
 			if !c.Done {
-				a.sizing.Lock()
 				a.sizes[contextID] = c.Sent
-				a.sizing.Unlock()
+			} else if c.Tokens > 0 {
+				a.caches[contextID] = a.caches[contextID].add(c.Tokens, c.Cached)
 			}
+			a.sizing.Unlock()
 			if say != nil && c.Done && c.Err == nil && c.ToolCalls > 0 {
 				say(c.Content)
 			}
@@ -295,6 +314,31 @@ func (a *Assistant) Context(contextID string) int {
 	a.sizing.Lock()
 	defer a.sizing.Unlock()
 	return a.sizes[contextID]
+}
+
+// Cache is how many of the tokens sent to the LLM in a conversation the
+// provider had cached from earlier calls, as far as the API said: of the last
+// call, and of all calls in it since the node started. A call the API told
+// nothing of does not count.
+type Cache struct {
+	Tokens    int `json:"tokens,omitempty"`     // sent with the last call
+	Cached    int `json:"cached,omitempty"`     // of those, cached
+	AllTokens int `json:"all_tokens,omitempty"` // sent with all calls
+	AllCached int `json:"all_cached,omitempty"` // of those, cached
+}
+
+// add is c with a call that sent tokens, of which cached were cached.
+func (c Cache) add(tokens, cached int) Cache {
+	return Cache{tokens, cached, c.AllTokens + tokens, c.AllCached + cached}
+}
+
+// Cache returns how much the provider had cached of the calls of the LLM in
+// the conversation contextID: nothing if this process made no call in it the
+// API told of.
+func (a *Assistant) Cache(contextID string) Cache {
+	a.sizing.Lock()
+	defer a.sizing.Unlock()
+	return a.caches[contextID]
 }
 
 // Inspection returns the last actual prepared request and extension diagnostics.

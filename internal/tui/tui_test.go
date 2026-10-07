@@ -38,8 +38,9 @@ type fakeAgent struct {
 	steps       []Step // reported after says, before the reply
 	says        []string
 	reply       string
-	err         error // what the answer fails with
-	contextSize int   // how long the context of every session is
+	err         error               // what the answer fails with
+	contextSize int                 // how long the context of every session is
+	cache       plugin.SessionCache // what the provider cached of every session
 
 	// ask, if set, answers instead of steps, says and reply.
 	ask func(ctx context.Context, step func(Step), say func(string)) (string, error)
@@ -60,6 +61,7 @@ func (a *fakeAgent) Run(ctx context.Context, _, _ string, observe func(assistant
 	return a.reply, a.err
 }
 func (a *fakeAgent) Context(string) int                          { return a.contextSize }
+func (a *fakeAgent) Cache(string) assistant.Cache                { return a.cache }
 func (a *fakeAgent) Contents(string) (assistant.Contents, error) { return assistant.Contents{}, nil }
 func (a *fakeAgent) Inspection(string) (agent.Inspection, bool)  { return agent.Inspection{}, false }
 func (a *fakeAgent) Conversation(string) json.RawMessage         { return nil }
@@ -94,6 +96,8 @@ type fakeBackend struct {
 
 	// fail is what fails, by the name of the request.
 	fail map[string]error
+	// debug is what SetDebug was called with, in order.
+	debug []bool
 
 	// settings are what /settings shows; changes what the owner changed
 	// there, and done what a change answers with.
@@ -180,7 +184,7 @@ func shownEvent(e plugin.SessionEvent) Event {
 	if e.Kind == plugin.SessionStep {
 		text = e.Tool
 	}
-	return Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context}
+	return Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
 }
 
 func (f *fakeBackend) Cancel(ctx context.Context, id string) error {
@@ -245,6 +249,11 @@ func (f *fakeBackend) Models(ctx context.Context) (Models, error) { return f.off
 func (f *fakeBackend) SetModel(model string) error {
 	f.set = append(f.set, model)
 	return f.fail["setmodel"]
+}
+
+func (f *fakeBackend) SetDebug(on bool) error {
+	f.debug = append(f.debug, on)
+	return f.fail["setdebug"]
 }
 
 // newBackend is a fakeBackend whose agent answers "pong", until the test ends.

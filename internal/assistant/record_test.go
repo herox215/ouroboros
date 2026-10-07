@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -316,6 +318,7 @@ func TestNothingAfterTheEnd(t *testing.T) {
 	r.call(agent.Call{Done: true})
 	r.end("late", nil)
 	r.cancel()
+	r.trace("llm request: %s", "late")
 	for i, line := range lines {
 		lines[i] = sent.ReplaceAllString(duration.ReplaceAllString(line, "${1}D"), "sent N")
 	}
@@ -482,6 +485,37 @@ func TestContext(t *testing.T) {
 	}
 }
 
+// usageLLM answers with what the API would say of the calls: of call n, 1000n
+// tokens, of which cached[n-1] were cached; the calls beyond cached say
+// nothing.
+type usageLLM struct {
+	cached []int
+	calls  int
+}
+
+func (l *usageLLM) Complete(context.Context, string, []openai.Message, []openai.Tool) (openai.Message, error) {
+	l.calls++
+	if l.calls > len(l.cached) {
+		return openai.Message{Content: "ok"}, nil
+	}
+	return openai.Message{Content: "ok", Usage: openai.Usage{Prompt: 1000 * l.calls, Cached: l.cached[l.calls-1]}}, nil
+}
+
+// The cache of a conversation is what the API said of its last call and of
+// all its calls; a call it said nothing of does not count, and a conversation
+// without a call has none.
+func TestCache(t *testing.T) {
+	a, _ := recorded(t, ownerConfig(), &usageLLM{cached: []int{0, 1500}})
+	for _, text := range []string{"one", "two", "three"} {
+		if _, err := a.Ask(context.Background(), "c1", text, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := a.Cache("c1"), (Cache{Tokens: 2000, Cached: 1500, AllTokens: 3000, AllCached: 1500}); got != want || a.Cache("c2") != (Cache{}) {
+		t.Fatalf("%+v, want %+v; c2 %+v", got, want, a.Cache("c2"))
+	}
+}
+
 // The contents of a conversation are what its next call of the LLM is sent:
 // the system prompt, the tools and the conversation so far. Without an agent
 // for the configuration there is the conversation alone.
@@ -504,5 +538,42 @@ func TestContents(t *testing.T) {
 	}
 	if c, err := b.Contents("c1"); !errors.Is(err, config.ErrIncomplete) || c.System != "" || c.Tools != nil || len(c.Messages) < 3 {
 		t.Fatalf("%+v, %v", c, err)
+	}
+}
+
+// In debug mode the log has what every call of the LLM sent and got, without
+// secrets; off, it has none of it, from the next call on.
+func TestDebugIsLogged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Echo", strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":9}}`))
+	}))
+	defer srv.Close()
+	cfg := ownerConfig()
+	log := &logged{}
+	debug := true
+	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
+		LLM:   func(agent.Endpoint) agent.LLM { return openai.New(srv.URL, cfg.APIKey) },
+		Tools: func() []agent.Tool { return nil },
+	}, log.log).WithDebug(func() bool { return debug })
+
+	if _, err := a.Ask(context.Background(), "c1", "hi", nil); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Join(log.take(), "\n")
+	for _, want := range []string{"chat c1: debug llm request: ", "chat c1: debug llm prefix: first request",
+		"chat c1: debug llm response: HTTP 200", "X-Echo: [redacted]", `chat c1: debug llm answered: `, `usage {"prompt_tokens":9}`} {
+		if !strings.Contains(lines, want) {
+			t.Errorf("no %q in:\n%s", want, lines)
+		}
+	}
+	if strings.Contains(lines, cfg.APIKey) {
+		t.Errorf("the key in:\n%s", lines)
+	}
+
+	debug = false
+	a.Ask(context.Background(), "c1", "hi", nil)
+	if lines := strings.Join(log.take(), "\n"); strings.Contains(lines, "debug") {
+		t.Errorf("debug off:\n%s", lines)
 	}
 }

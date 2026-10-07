@@ -285,14 +285,8 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			return abandon(err)
 		}
 		msgs := append([]openai.Message{a.system}, history...)
-		if n := int(spent.Load()); n > Budget && msgs[len(msgs)-1].Role == "tool" {
-			msgs[len(msgs)-1].Content += gathered(n)
-		}
-		if round >= askRounds && round < warnRounds && msgs[len(msgs)-1].Role == "tool" {
-			msgs[len(msgs)-1].Content += searching(round)
-		}
-		if round >= warnRounds {
-			msgs[len(msgs)-1].Content += remaining(round)
+		if note := notes(round, int(spent.Load())); note != "" && msgs[len(msgs)-1].Role == "tool" {
+			msgs = append(msgs, openai.Message{Role: "user", Content: note})
 		}
 		if p := a.extensions.provider; p != nil {
 			prepared, err := p.Prepare(ctx, Preparation{processing, copyMessages(msgs), copyMessages(contributions)})
@@ -375,21 +369,39 @@ func Abandon(msgs []openai.Message) []openai.Message {
 	return append(msgs, openai.Message{Role: "assistant", Content: abandoned})
 }
 
-// remaining is what the LLM is told after the last result of a tool when
-// round, counted from 0, is one of the last calls of the LLM for an answer.
-// It is only sent, not remembered: the next call tells the next number.
+// notes is what the LLM is told after the results of the tools when round,
+// counted from 0, is the call of the LLM and the results of the answer have
+// spent bytes: "" if nothing. It goes in a message of its own after them, and
+// is only sent, not remembered: the next call tells the next numbers. The
+// results stay as they are remembered, and with them what the provider
+// cached of the conversation.
+func notes(round, spent int) string {
+	var notes []string
+	if spent > Budget {
+		notes = append(notes, gathered(spent))
+	}
+	if round >= askRounds && round < warnRounds {
+		notes = append(notes, searching(round))
+	}
+	if round >= warnRounds {
+		notes = append(notes, remaining(round))
+	}
+	return strings.Join(notes, "\n\n")
+}
+
+// remaining is what the LLM is told when round, counted from 0, is one of the
+// last calls of the LLM for an answer.
 func remaining(round int) string {
-	return fmt.Sprintf("\n\n[Not from the tool: this is call %d of at most %d of the LLM for this answer. "+
+	return fmt.Sprintf("[Not from the user: this is call %d of at most %d of the LLM for this answer. "+
 		"Without an answer by then, it breaks off. Finish the work that is begun, "+
 		"and answer with what is done and what is still open: asked again, you go on from there.]",
 		round+1, maxRounds)
 }
 
-// searching is what the LLM is told after the last result of a tool when
-// round, counted from 0, is askRounds or later. Like remaining, it is only
-// sent.
+// searching is what the LLM is told when round, counted from 0, is askRounds
+// or later.
 func searching(round int) string {
-	return fmt.Sprintf("\n\n[Not from the tool: this is call %d of the LLM for this answer. "+
+	return fmt.Sprintf("[Not from the user: this is call %d of the LLM for this answer. "+
 		"If you have not yet found what you are looking for, stop searching: "+
 		"tell the user in a few words what you checked and what you found, and ask what exactly they mean. "+
 		"If you have found it, go on and finish.]", round+1)
@@ -421,11 +433,10 @@ func repeated(call openai.ToolCall, msgs []openai.Message) openai.Message {
 	return openai.Message{}
 }
 
-// gathered is what the LLM is told after the last result of a tool once the
-// results of the answer have n bytes, beyond Budget. Like remaining, it is
-// only sent.
+// gathered is what the LLM is told once the results of the tools of the
+// answer have n bytes, beyond Budget.
 func gathered(n int) string {
-	return fmt.Sprintf("\n\n[Not from the tool: the results of tools of this answer have %d KiB, "+
+	return fmt.Sprintf("[Not from the user: the results of tools of this answer have %d KiB, "+
 		"and all of it is sent again with every call. Tools give back less from now on: "+
 		"keep data in variables and print only the little you need for the next step.]", n>>10)
 }
