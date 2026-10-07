@@ -40,7 +40,7 @@ func scripted(t *testing.T) (config.Config, Builder) {
 			return s.Prefix + args.Text, nil
 		}, nil
 	})
-	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
 	return cfg, Builder{LLM: overHTTP, Tools: func() []agent.Tool { return []agent.Tool{who, note} }}
 }
 
@@ -288,5 +288,39 @@ func TestRunGivesBackLessBeyondTheBudget(t *testing.T) {
 	}
 	if !slices.Equal(printed, []int{16000, 16000, 16000, 16000, 1536, 16000, script.Tight}) {
 		t.Fatalf("printed %v", printed)
+	}
+}
+
+// A front end is told what the LLM says along with the tools it asks for,
+// once for every call that asks for some: not what it answers with in the
+// end, and nothing of a call that failed.
+func TestRunTellsWhatTheLLMSaysAlongWithTools(t *testing.T) {
+	llm := &scriptLLM{saying: "let me look"}
+	a, _ := recorded(t, ownerConfig(), llm)
+	var said []string
+	say := func(text string) { said = append(said, text) }
+	if _, err := a.Run(context.Background(), "c", `!echo {"text":"x"}`, nil, say); err != nil {
+		t.Fatal(err)
+	}
+	if len(said) != 1 || said[0] != "let me look" {
+		t.Fatalf("with a call of a tool: %q", said)
+	}
+	// An answer in text alone is the answer: it is not said on the way.
+	if _, err := a.Run(context.Background(), "c", "hello", nil, say); err != nil || len(said) != 1 {
+		t.Fatalf("with an answer alone: %q, %v", said, err)
+	}
+	llm.failing = errTest
+	if _, err := a.Run(context.Background(), "c", `!echo {"text":"x"}`, nil, say); err == nil || len(said) != 1 {
+		t.Fatalf("with a call that failed: %q, %v", said, err)
+	}
+}
+
+// The first line of a text ends at its first line break, also when that is
+// where the text begins.
+func TestFirstLine(t *testing.T) {
+	for in, want := range map[string]string{"one\ntwo": "one", "\nrest": "", "": "", "plain": "plain"} {
+		if got := firstLine(in); got != want {
+			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

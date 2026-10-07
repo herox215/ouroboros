@@ -62,7 +62,7 @@ func ownerOnly(ctx context.Context, tool string) error {
 
 func (b Builder) getConfig() agent.Tool {
 	tool := agent.NewTool(toolGetConfig,
-		"Show the configuration of this node as JSON, with defaults for what is not set: name, model, and under \"tools\" "+
+		"Show the configuration of this node as JSON, with defaults for what is not set: name, model, the provider that answers, and under \"tools\" "+
 			"the tools for your owner (h2a), for peers (a2a) and the paths no tool for files touches (protected).",
 		nil,
 		func(ctx context.Context, _ struct{}) (string, error) {
@@ -73,7 +73,11 @@ func (b Builder) getConfig() agent.Tool {
 			if err != nil {
 				return "", err
 			}
-			return string(cfg.Public()), nil
+			provider := ""
+			if b.Accesses != nil {
+				provider = b.Accesses.Label(cfg.Access)
+			}
+			return string(cfg.Public(provider)), nil
 		})
 	tool.OwnerOnly = true
 	return tool

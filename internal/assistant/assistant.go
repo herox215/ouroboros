@@ -81,10 +81,13 @@ type Builder struct {
 	// ContextProviders and AnswerHooks are read after plugin startup.
 	ContextProviders func() []agent.ContextProvider
 	AnswerHooks      func() []agent.AnswerHook
-	// LLM returns the model that is reached at the endpoint the node is
-	// configured for. It is told the endpoint and nothing else of the
-	// configuration, which holds the key of the node.
-	LLM func(at agent.Endpoint) agent.LLM
+	// LLM returns the model the agents answer with through the access id of
+	// the node. It is told the access and nothing else of the configuration,
+	// which holds the key of the node.
+	LLM func(access string) (agent.LLM, error)
+	// Accesses tells what the blueprint needs to know of the accesses of the
+	// node besides their model. May be nil.
+	Accesses Accesses
 	// Tools returns everything an agent can do. It is read when an agent is
 	// built; the owner's lists in config.Tools decide which of them it gets.
 	Tools func() []agent.Tool
@@ -97,6 +100,26 @@ type Builder struct {
 	Failures *diagnosis.Store
 	// node is set by WithConfig.
 	node *node
+}
+
+// Accesses is what the blueprint needs to know of the accesses of the node.
+type Accesses interface {
+	// Revision changes when the owner signed in to the access id anew: the
+	// agents are built anew then. It stays when the provider renews what it
+	// keeps, like a token that ran out.
+	Revision(id string) string
+	// Label is what the access id is called where it is shown.
+	Label(id string) string
+	// Secrets are the texts of the accesses that never go into the log.
+	Secrets() []string
+}
+
+// revision is the revision of the access id, "" without Accesses.
+func (b Builder) revision(id string) string {
+	if b.Accesses == nil {
+		return ""
+	}
+	return b.Accesses.Revision(id)
 }
 
 // Assistant answers the owner of the node.
@@ -124,7 +147,7 @@ type Assistant struct {
 }
 
 // setup is the part of the configuration an agent is built from.
-type setup struct{ baseURL, apiKey, model, name, id, tools, provider string }
+type setup struct{ access, revision, model, name, id, tools, provider string }
 
 // New returns the assistant of the node with the given configuration, which
 // is read anew for every question. What it does on the way to an answer is
@@ -235,7 +258,11 @@ func (b Builder) build(cfg config.Config, prompt string, tools ...agent.Tool) (*
 	if b.AnswerHooks != nil {
 		hooks = b.AnswerHooks()
 	}
-	return agent.New(b.LLM(agent.Endpoint{BaseURL: cfg.BaseURL, APIKey: cfg.APIKey}), cfg.Model, prompt, tools...).WithExtensions(cfg.ContextProvider, providers, hooks)
+	llm, err := b.LLM(cfg.Access)
+	if err != nil {
+		return nil, err
+	}
+	return agent.New(llm, cfg.Model, prompt, tools...).WithExtensions(cfg.ContextProvider, providers, hooks)
 }
 
 // Ready reports whether the assistant can answer: config.ErrIncomplete if the
@@ -391,7 +418,11 @@ func (a *Assistant) begin(ctx context.Context, cancel context.CancelFunc, contex
 	defer a.answering.Unlock()
 	a.open.Add(1)
 	var r *record
-	r = newRecord(ctx, a.log, contextID, cfg, text, func() {
+	var known []string
+	if a.builder.Accesses != nil {
+		known = a.builder.Accesses.Secrets()
+	}
+	r = newRecord(ctx, a.log, contextID, append(secrets(cfg), known...), text, func() {
 		a.answering.Lock()
 		delete(a.answers, r)
 		a.answering.Unlock()
@@ -448,13 +479,18 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 		return nil, cfg, config.ErrIncomplete
 	}
 	tools, _ := json.Marshal(cfg.OwnerTools()) // an entry that cannot be written is reported by forOwner
-	want := setup{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider}
+	want := setup{cfg.Access, a.builder.revision(cfg.Access), cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.agent == nil || a.built != want {
 		bot, err := a.builder.forOwner(cfg, a.scripts)
 		if err != nil {
 			return nil, cfg, err
+		}
+		// Another access is another provider, or another account of it:
+		// what the LLM thought so far is not sent there.
+		if a.agent != nil && a.built.access != want.access {
+			a.memory.Unthink()
 		}
 		a.agent, a.built = bot.WithMemory(a.memory), want
 	}

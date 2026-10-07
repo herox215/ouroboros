@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"ouroboros/internal/credentials"
 )
 
 func newServer(t *testing.T, h http.HandlerFunc) *Client {
@@ -311,6 +313,9 @@ func TestReasoningIsSentBack(t *testing.T) {
 		{Message{Role: "assistant", Reasoning: "r", ReasoningField: "reasoning_text"}, `{"role":"assistant","content":"","reasoning_text":"r"}`},
 		{Message{Role: "assistant", Reasoning: "r"}, `{"role":"assistant","content":"","reasoning":"r"}`},
 		{Message{Role: "assistant", Reasoning: "r", ReasoningField: "thoughts"}, `{"role":"assistant","content":"","reasoning":"r"}`},
+		// What another kind of provider kept of the thoughts of its model is
+		// not sent to an OpenAI-compatible API.
+		{Message{Role: "assistant", Content: "a", Reasoning: `[{"type":"reasoning"}]`, ReasoningField: ReasoningItems}, `{"role":"assistant","content":"a"}`},
 	} {
 		var sent string
 		c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -407,7 +412,9 @@ func TestCompleteIsGivenUpWhenNothingComes(t *testing.T) {
 		},
 	} {
 		_, err := newServer(t, h).Complete(context.Background(), "gpt", nil, nil)
-		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "no data from the API for 100ms") {
+		// The error is why it was given up, and nothing of how the request
+		// broke off because of it.
+		if !errors.Is(err, context.DeadlineExceeded) || err.Error() != "openai: no data from the API for 100ms: context deadline exceeded" {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -628,6 +635,67 @@ func TestCompleteReadsTheStreamUntilTheUsage(t *testing.T) {
 		got, err := newServer(t, h).Complete(context.Background(), "gpt", nil, nil)
 		if err != nil || got.Content != "ok" || got.Usage.Prompt != 5 {
 			t.Errorf("%s: %+v, %v", name, got, err)
+		}
+	}
+}
+
+// What another kind of provider kept of the thoughts of its model is kept
+// with the message as it is, in a field of its own, and read back as that.
+func TestReasoningItemsAreKept(t *testing.T) {
+	msg := Message{Role: "assistant", Content: "a", Reasoning: `[{"type":"reasoning"}]`, ReasoningField: ReasoningItems}
+	b, err := json.Marshal(msg)
+	if err != nil || string(b) != `{"role":"assistant","content":"a","reasoning_items":"[{\"type\":\"reasoning\"}]"}` {
+		t.Fatalf("written as %s, %v", b, err)
+	}
+	var back Message
+	if err := json.Unmarshal(b, &back); err != nil || back.Reasoning != msg.Reasoning || back.ReasoningField != ReasoningItems {
+		t.Fatalf("read back as %+v, %v", back, err)
+	}
+	// The messages of the caller are not changed by leaving it out.
+	msgs := []Message{{Role: "user", Content: "hi"}, msg}
+	if got := own(msgs); got[1].Reasoning != "" || got[1].ReasoningField != "" || got[1].Content != "a" || msgs[1].Reasoning == "" {
+		t.Fatalf("own = %+v, of %+v", got, msgs)
+	}
+	plain := []Message{{Role: "assistant", Reasoning: "r", ReasoningField: "reasoning"}}
+	if got := own(plain); &got[0] != &plain[0] {
+		t.Fatal("messages without foreign thoughts are copied")
+	}
+}
+
+func TestSessionOf(t *testing.T) {
+	if got := SessionOf(context.Background()); got != "" {
+		t.Fatalf("a context without a session has %q", got)
+	}
+	if got := SessionOf(WithSession(context.Background(), "conv-1")); got != "conv-1" {
+		t.Fatalf("SessionOf = %q", got)
+	}
+}
+
+// An access is kept as its endpoint, which is shown, and its key, which is
+// a secret, and read back as both.
+func TestCredentials(t *testing.T) {
+	c := Credentials(" http://localhost:11434/v1/ ", "sk-1")
+	if c.Title != "localhost" || c.About != "http://localhost:11434/v1" || string(c.Data) != `{"base_url":"http://localhost:11434/v1"}` || string(c.Secret) != `{"api_key":"sk-1"}` {
+		t.Fatalf("kept as %+v", c)
+	}
+	if got := c.Secrets(); len(got) != 1 || got[0] != "sk-1" {
+		t.Fatalf("its secrets: %q", got)
+	}
+	if url, key, err := Saved(c); err != nil || url != "http://localhost:11434/v1" || key != "sk-1" {
+		t.Fatalf("Saved = %q, %q, %v", url, key, err)
+	}
+	// An access without a key has no secret.
+	open := Credentials("http://x/v1", "")
+	if open.Secret != nil {
+		t.Fatalf("an access without a key keeps %s", open.Secret)
+	}
+	if url, key, err := Saved(open); err != nil || url != "http://x/v1" || key != "" {
+		t.Fatalf("Saved = %q, %q, %v", url, key, err)
+	}
+	// What is no access of this kind.
+	for _, c := range []credentials.Credentials{{}, {Data: []byte(`{"base_url":""}`)}, {Data: []byte(`{`)}, {Data: open.Data, Secret: []byte(`[1]`)}} {
+		if _, _, err := Saved(c); err == nil {
+			t.Errorf("Saved(%+v) should fail", c)
 		}
 	}
 }

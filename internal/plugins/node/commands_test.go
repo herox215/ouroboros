@@ -20,7 +20,7 @@ import (
 // commands returns the commands of the node in dir, started from exe.
 func commands(dir home.Dir, exe func() (string, error)) *nodeCommands {
 	term := plugin.NewConsole(plugin.Terminal{In: strings.NewReader(""), Out: &bytes.Buffer{}})
-	return &nodeCommands{term: term, local: node.Local{Home: dir, Exe: exe}, wizard: &wizard{term: term, home: dir}}
+	return &nodeCommands{term: term, local: node.Local{Home: dir, Exe: exe}, wizard: &wizard{term: term, home: dir, providers: func() []plugin.Provider { return nil }}}
 }
 
 // A home whose files cannot be read fails every command, and so does a

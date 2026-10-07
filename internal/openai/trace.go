@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // A trace is told what a call of the LLM sends and gets, beyond what the
@@ -59,29 +60,60 @@ type request struct {
 // traceRequest tells t what a request of a completion in session sends, and
 // how far it begins like the last request of the session.
 func (c *Client) traceRequest(t trace, session, model string, msgs []Message, tools []Tool, options, cacheKey bool, breakpoints int) {
-	now := request{tools: hash(tools), msgs: make([][]byte, len(msgs))}
+	items := make([][]byte, len(msgs))
 	size := 0
 	for i, m := range msgs {
-		now.msgs[i], _ = json.Marshal(m) // texts and JSON: cannot fail
-		size += len(now.msgs[i])
+		items[i], _ = json.Marshal(m) // texts and JSON: cannot fail
+		size += len(items[i])
 	}
 	toolBytes, _ := json.Marshal(tools)
 	t("llm request: %s/chat/completions, model %s, session %s, %d messages (%.1f KiB), %d tools (%.1f KiB, hash %s), stream_options %t, prompt_cache_key %t, cache_control breakpoints %d",
-		c.baseURL, model, session, len(msgs), float64(size)/1024, len(tools), float64(len(toolBytes))/1024, now.tools, options, cacheKey, breakpoints)
-
-	c.sent.mu.Lock()
-	last, ok := c.sent.last[session]
-	if c.sent.last == nil || len(c.sent.last) >= maxSessions && !ok {
-		c.sent.last = map[string]request{}
-	}
-	c.sent.last[session] = now
-	c.sent.mu.Unlock()
-	if !ok {
-		t("llm prefix: first request of the session in the trace")
-		return
-	}
-	t("llm prefix: %s", compare(last, now))
+		c.baseURL, model, session, len(msgs), float64(size)/1024, len(tools), float64(len(toolBytes))/1024, hash(tools), options, cacheKey, breakpoints)
+	t("llm prefix: %s", c.sent.Compare(session, tools, items))
 }
+
+// TraceOf returns what a call of the LLM under ctx tells its trace with, nil
+// if it has none: see WithTrace. It is for a provider that is no
+// OpenAI-compatible API, which tells the same lines of its own requests.
+func TraceOf(ctx context.Context) func(format string, args ...any) {
+	if t := traceOf(ctx); t != nil {
+		return t
+	}
+	return nil
+}
+
+// Sent are the last requests of the sessions a client traced, to say how far
+// the next one of a session begins like the one before. Its zero value is
+// ready to use.
+type Sent = sent
+
+// Compare says how far the request of session with tools and items, each a
+// message as JSON, begins like the last request of the session that was
+// compared: what a provider can have cached of it. It keeps the request for
+// the next one.
+func (s *sent) Compare(session string, tools any, items [][]byte) string {
+	now := request{tools: hash(tools), msgs: items}
+	s.mu.Lock()
+	last, ok := s.last[session]
+	if s.last == nil || len(s.last) >= maxSessions && !ok {
+		s.last = map[string]request{}
+	}
+	s.last[session] = now
+	s.mu.Unlock()
+	if !ok {
+		return "first request of the session in the trace"
+	}
+	return compare(last, now)
+}
+
+// TraceResponse tells t the status and the headers of resp, which came
+// after took.
+func TraceResponse(t func(format string, args ...any), resp *http.Response, took time.Duration) {
+	traceResponse(t, resp, took.Round(time.Millisecond).String())
+}
+
+// Hash is a short hash of v as JSON, as a trace names tools by.
+func Hash(v any) string { return hash(v) }
 
 // compare says how far the request now begins like the request last: where
 // the first message differs, and how. A provider caches a request from its

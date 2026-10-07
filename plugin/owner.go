@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"strings"
 	"time"
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/home"
+	"ouroboros/internal/llm"
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
 	"ouroboros/internal/proposal"
@@ -40,15 +40,13 @@ type Owner struct {
 	home    home.Dir
 	local   node.Local
 	net     *peers.Network
-	offer   setup.Offer
 	plugins catalog // of the build, see Activate
 }
 
-// OwnerOf returns what the owner of the node in dir does, on its network. The
-// setup offers what offer says until the node has its own. It is for the
-// list of plugins.
-func OwnerOf(dir home.Dir, network *peers.Network, offer setup.Offer) *Owner {
-	return &Owner{home: dir, local: node.Local{Home: dir}, net: network, offer: offer}
+// OwnerOf returns what the owner of the node in dir does, on its network. It
+// is for the list of plugins.
+func OwnerOf(dir home.Dir, network *peers.Network) *Owner {
+	return &Owner{home: dir, local: node.Local{Home: dir}, net: network}
 }
 
 type (
@@ -58,8 +56,14 @@ type (
 	Request = contacts.Request
 	// Setup is one run of the setup of the node, see Owner.Setup.
 	Setup = setup.Session
-	// SetupModels are the models an endpoint offers, as Setup.Connect lists them.
+	// SetupModels are the models an access offers, as Setup.Login lists them.
 	SetupModels = setup.Models
+	// SetupProvider is a provider to sign in with, and SetupAccess an access
+	// of the node as the owner sees it.
+	SetupProvider = setup.Provider
+	SetupAccess   = setup.Access
+	// AccessModels are the models of one access, as Owner.Models lists them.
+	AccessModels = setup.Listed
 )
 
 var (
@@ -76,8 +80,8 @@ var (
 	ErrStale = proposal.ErrStale
 	// ErrNoProposal means there is no such proposal to decide on.
 	ErrNoProposal = proposal.ErrGone
-	// ErrKeyRejected means the endpoint refused the API key the setup tried.
-	ErrKeyRejected = setup.ErrKeyRejected
+	// ErrLastAccess means the only access of the node was to be removed.
+	ErrLastAccess = setup.ErrLastAccess
 )
 
 // Proposal is a change of the configuration that the agent of the owner
@@ -188,39 +192,45 @@ func (o *Owner) SetupCommand() (*exec.Cmd, error) {
 }
 
 // Setup starts the setup of the node, for a front end that asks for it in a
-// dialog of its own: SetupCommand is the one on the terminal. What the setup
-// saves holds for the node once it is started again. The key for the
-// endpoint stays in the Setup: it tells whether there is one, never which.
-func (o *Owner) Setup() (*Setup, error) { return setup.Open(o.home, o.offer) }
+// dialog of its own: SetupCommand is the one on the terminal. providers are
+// the providers the plugins contributed. What the setup saves holds for the
+// node once it is started again. What a provider signs in with stays in the
+// Setup: it tells which accesses there are, never what they hold.
+func (o *Owner) Setup(providers []Provider) (*Setup, error) {
+	return setup.Open(o.home, func() []Provider { return providers })
+}
 
-// Models lists the models the provider of the node offers, to choose from
-// with /model in a front end: they are listed at the endpoint of the node,
-// with the key it has. It fails with ErrNotSetUp for a node that is not set
-// up, and with ErrKeyRejected if the provider refuses the key.
-func (o *Owner) Models(ctx context.Context) (SetupModels, error) {
-	s, err := setup.Open(o.home, o.offer)
+// Models lists the models of every access of the node, to choose from with
+// /model in a front end, for the providers the plugins contributed. An access
+// that does not answer shows with why, and with the models it listed the last
+// time. It fails with ErrNotSetUp for a node that is not set up.
+func (o *Owner) Models(ctx context.Context, providers []Provider) ([]AccessModels, error) {
+	s, err := o.Setup(providers)
 	if err != nil {
-		return SetupModels{}, err
+		return nil, err
 	}
-	return s.Configured(ctx)
+	return s.Models(ctx)
 }
 
-// SetModel saves model as the model of the node, with the endpoint and the
-// key it has. The agents of the node answer with it from the next message
-// they get: no restart is needed.
-func (o *Owner) SetModel(model string) error {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return errors.New("the model cannot be empty")
+// SetModel makes model of the access what the agents of the node answer
+// with, from the next message they get: no restart is needed. It reports
+// whether they answer through another access than before, whose provider
+// has cached nothing of their conversations yet.
+func (o *Owner) SetModel(access, model string) (switched bool, err error) {
+	s, err := o.Setup(nil)
+	if err != nil {
+		return false, err
 	}
-	return config.Update(string(o.home), func(c *config.Config) error {
-		if !c.Complete() {
-			return ErrNotSetUp
-		}
-		c.Model = model
-		return nil
-	})
+	if switched, err = s.Pick(access, model); err == nil {
+		o.home.Log("the owner picked the model %s of the access %s", model, access)
+	}
+	return switched, err
 }
+
+// Browse shows url in the browser of the user, for a front end that is asked
+// to by a provider that signs in. It fails where there is no browser to
+// start: show the URL either way.
+func Browse(url string) error { return llm.Browse(url) }
 
 // Requests returns the connection requests that wait for a decision: those
 // of other nodes and those the agent of this node proposed (Request.Proposed),

@@ -15,7 +15,7 @@ import (
 )
 
 func TestExtensionsSharedOwnerPeerFlow(t *testing.T) {
-	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "m", Name: "node", ContextProvider: "p"}
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "m", Name: "node", ContextProvider: "p"}
 	var conversations []agent.Conversation
 	var logs []string
 	log := func(f string, args ...any) { logs = append(logs, fmt.Sprintf(f, args...)) }
@@ -88,7 +88,7 @@ func TestExtensionsSharedOwnerPeerFlow(t *testing.T) {
 }
 
 func TestContentsPreparationFailure(t *testing.T) {
-	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "m", Name: "node", ContextProvider: "p"}
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "m", Name: "node", ContextProvider: "p"}
 	boom := errors.New("prepare failed")
 	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return nil }, ContextProviders: func() []agent.ContextProvider {
 		return []agent.ContextProvider{{Name: "p", Prepare: func(context.Context, agent.Preparation) ([]openai.Message, error) { return nil, boom }}}

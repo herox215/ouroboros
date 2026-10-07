@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -67,8 +68,8 @@ type flight struct {
 
 // newRecord starts the record of the answer to text in the conversation chat,
 // which ends with ctx. done is called once its last line is written.
-func newRecord(ctx context.Context, log func(format string, args ...any), chat string, cfg config.Config, text string, done func()) *record {
-	r := &record{log: log, ctx: ctx, chat: chat, secrets: secrets(cfg), start: time.Now(), done: done}
+func newRecord(ctx context.Context, log func(format string, args ...any), chat string, secrets []string, text string, done func()) *record {
+	r := &record{log: log, ctx: ctx, chat: chat, secrets: longestFirst(secrets), start: time.Now(), done: done}
 	r.line("message from the owner: %s", r.text(text))
 	r.stop = context.AfterFunc(ctx, r.cancel)
 	return r
@@ -312,10 +313,10 @@ func more(rest int) string {
 // took is a duration as the log writes it.
 func took(d time.Duration) string { return d.Round(time.Millisecond).String() }
 
-// secrets are the texts of cfg that never go into the log: the key of the API
-// and the private key of the node, as it is stored and in the other usual
-// encodings, of the whole key and of its seed. The longest come first, so that
-// none is left in part because a shorter one was replaced inside it.
+// secrets are the texts of cfg that never go into the log: the private key of
+// the node, as it is stored and in the other usual encodings, of the whole key
+// and of its seed, and the key of the API of a configuration from before
+// there were accesses.
 func secrets(cfg config.Config) []string {
 	list := []string{cfg.APIKey, cfg.PrivateKey}
 	if key, err := base64.StdEncoding.DecodeString(cfg.PrivateKey); err == nil {
@@ -326,7 +327,14 @@ func secrets(cfg config.Config) []string {
 				hex.EncodeToString(b), strings.ToUpper(hex.EncodeToString(b)))
 		}
 	}
-	list = slices.DeleteFunc(list, func(s string) bool { return s == "" })
-	slices.SortFunc(list, func(a, b string) int { return len(b) - len(a) })
+	return list
+}
+
+// longestFirst is list without what is empty or there twice, the longest
+// first: so none is left in part because a shorter one was replaced inside
+// it.
+func longestFirst(list []string) []string {
+	list = slices.DeleteFunc(slices.Clone(list), func(s string) bool { return s == "" })
+	slices.SortFunc(list, func(a, b string) int { return cmp.Or(len(b)-len(a), strings.Compare(a, b)) })
 	return slices.Compact(list)
 }

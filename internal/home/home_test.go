@@ -5,12 +5,16 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
 	"ouroboros/internal/config"
+	"ouroboros/internal/credentials"
 	"ouroboros/internal/diagnosis"
+	"ouroboros/internal/openai"
 )
 
 func TestIdentityIsGeneratedOnce(t *testing.T) {
@@ -147,8 +151,15 @@ func TestFiles(t *testing.T) {
 		t.Errorf("contacts: %v", err)
 	}
 
-	if got := d.Secrets(); len(got) != 2 || got[0] != filepath.Join(string(d), "config.json") || got[1] != filepath.Join(string(d), "config.json.lock") {
+	want := []string{"config.json", "config.json.lock", "credentials.json", "credentials.json.lock"}
+	for i := range want {
+		want[i] = filepath.Join(string(d), want[i])
+	}
+	if got := d.Secrets(); !reflect.DeepEqual(got, want) {
 		t.Errorf("secrets %v", got)
+	}
+	if got := d.Models(); got != filepath.Join(string(d), "models.json") {
+		t.Errorf("models %q", got)
 	}
 	if _, err := d.Proposals().Add(config.Config{Name: "alpha"}, "name", []byte(`"beta"`), "why"); err != nil {
 		t.Errorf("a proposal should be kept: %v", err)
@@ -334,5 +345,154 @@ func TestDebug(t *testing.T) {
 	}
 	if err := d.SetDebug(false); err == nil || !d.Debug() {
 		t.Fatalf("a debug that cannot be removed: %v, debug %v", err, d.Debug())
+	}
+}
+
+// A configuration from before there were accesses names an endpoint and a
+// key. Reading it moves them into the credentials: the configuration names
+// the access, and holds no key any more.
+func TestConfigMovesTheKeyIntoTheCredentials(t *testing.T) {
+	d := Dir(t.TempDir())
+	old := `{"base_url": "http://localhost:11434/v1/", "api_key": "sk-old", "model": "m", "name": "n", "private_key": "key"}`
+	os.WriteFile(filepath.Join(string(d), "config.json"), []byte(old), 0o600)
+
+	cfg, err := d.Config()
+	if err != nil || cfg.Access != LegacyAccess || cfg.BaseURL != "" || cfg.APIKey != "" || cfg.Model != "m" || cfg.Name != "n" || cfg.PrivateKey != "key" || !cfg.Complete() {
+		t.Fatalf("read as %+v, %v", cfg, err)
+	}
+	access, err := d.Credentials().Get(LegacyAccess)
+	if err != nil || access.Provider != openai.ProviderName || access.About != "http://localhost:11434/v1" || access.Title != "localhost" {
+		t.Fatalf("the access: %+v, %v", access, err)
+	}
+	if url, key, err := openai.Saved(access.Credentials); err != nil || url != "http://localhost:11434/v1" || key != "sk-old" {
+		t.Fatalf("the access holds %q, %q, %v", url, key, err)
+	}
+	written, _ := os.ReadFile(filepath.Join(string(d), "config.json"))
+	if strings.Contains(string(written), "sk-old") || strings.Contains(string(written), "base_url") || !strings.Contains(string(written), `"access": "default"`) {
+		t.Fatalf("the configuration still holds the key: %s", written)
+	}
+	if info, _ := os.Stat(filepath.Join(string(d), "credentials.json")); info.Mode().Perm() != 0o600 {
+		t.Fatalf("the credentials are readable by others: %v", info.Mode())
+	}
+
+	// Read again, nothing is moved again: the access is as it was.
+	if again, err := d.Config(); err != nil || !reflect.DeepEqual(again, cfg) {
+		t.Fatalf("read again as %+v, %v", again, err)
+	}
+	if got, _ := d.Credentials().Get(LegacyAccess); got.Rev != access.Rev {
+		t.Fatal("the access was written again")
+	}
+}
+
+// A crash after the access was written and before the configuration was:
+// the next reading moves the key again, to the same access. And an endpoint
+// that is left next to an access is dropped, not made an access of.
+func TestConfigMovesTheKeyAgain(t *testing.T) {
+	d := Dir(t.TempDir())
+	d.Credentials().Put(credentials.Access{ID: LegacyAccess, Provider: openai.ProviderName, Credentials: openai.Credentials("http://x/v1", "sk-old")})
+	config.Save(string(d), config.Config{BaseURL: "http://x/v1", APIKey: "sk-old", Model: "m", Name: "n"})
+	if cfg, err := d.Config(); err != nil || cfg.Access != LegacyAccess || cfg.BaseURL != "" {
+		t.Fatalf("read as %+v, %v", cfg, err)
+	}
+	if list, _ := d.Credentials().List(); len(list) != 1 {
+		t.Fatalf("the key was moved to a second access: %+v", list)
+	}
+
+	other, _ := d.Credentials().Put(credentials.Access{Provider: "chatgpt"})
+	config.Save(string(d), config.Config{Access: other.ID, BaseURL: "http://y/v1", APIKey: "sk-stray", Model: "m", Name: "n"})
+	cfg, err := d.Config()
+	if err != nil || cfg.Access != other.ID || cfg.BaseURL != "" || cfg.APIKey != "" {
+		t.Fatalf("read as %+v, %v", cfg, err)
+	}
+	if got, _ := d.Credentials().Get(LegacyAccess); got.About != "http://x/v1" {
+		t.Fatalf("the access was overwritten: %+v", got)
+	}
+}
+
+// The key stays where it is when it cannot be moved: nothing is lost.
+func TestConfigKeepsTheKeyItCannotMove(t *testing.T) {
+	d := Dir(t.TempDir())
+	config.Save(string(d), config.Config{BaseURL: "http://x/v1", APIKey: "sk-old", Model: "m", Name: "n"})
+	os.Mkdir(filepath.Join(string(d), "credentials.json.lock"), 0o700)
+	if _, err := d.Config(); err == nil || !strings.Contains(err.Error(), "moving the key of the API into credentials.json") {
+		t.Fatalf("Config = %v", err)
+	}
+	if kept, _ := config.Load(string(d)); kept.APIKey != "sk-old" || kept.BaseURL != "http://x/v1" || kept.Access != "" {
+		t.Fatalf("the configuration was changed: %+v", kept)
+	}
+}
+
+// The host has one ID, made once and the same for everyone who asks.
+func TestHostID(t *testing.T) {
+	d := Dir(t.TempDir())
+	ids := make([]string, 8)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Go(func() {
+			id, err := d.HostID()
+			if err != nil {
+				t.Error(err)
+			}
+			ids[i] = id
+		})
+	}
+	wg.Wait()
+	if !regexp.MustCompile(`^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(ids[0]) {
+		t.Fatalf("host ID %q is no UUID of version 4", ids[0])
+	}
+	for _, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("the host has two IDs: %q and %q", id, ids[0])
+		}
+	}
+	if other, _ := Dir(t.TempDir()).HostID(); other == ids[0] {
+		t.Fatal("two installations share an ID")
+	}
+	// An ID that cannot be kept is none.
+	if _, err := Dir(filepath.Join(string(d), "missing")).HostID(); err == nil {
+		t.Fatal("HostID without a home should fail")
+	}
+	broken := Dir(t.TempDir())
+	os.Mkdir(filepath.Join(string(broken), "host-id"), 0o700)
+	if _, err := broken.HostID(); err == nil {
+		t.Fatal("HostID should report an ID it cannot write")
+	}
+}
+
+// A configuration that names its access is read as it is: nothing is moved,
+// so nothing is locked or written, and a home that cannot be written is
+// read all the same.
+func TestConfigWithAnAccessIsOnlyRead(t *testing.T) {
+	d := Dir(t.TempDir())
+	config.Save(string(d), config.Config{Access: "a1", Model: "m", Name: "n"})
+	os.Mkdir(filepath.Join(string(d), "config.json.lock"), 0o700) // nothing can take the lock
+	cfg, err := d.Config()
+	if err != nil || cfg.Access != "a1" || cfg.Name != "n" {
+		t.Fatalf("read as %+v, %v", cfg, err)
+	}
+}
+
+// A file of the host ID that holds nothing is none: the host gets its ID.
+func TestHostIDOfAnEmptyFile(t *testing.T) {
+	d := Dir(t.TempDir())
+	os.WriteFile(filepath.Join(string(d), "host-id"), []byte(" \n"), 0o600)
+	id, err := d.HostID()
+	if err != nil || !strings.HasPrefix(id, "urn:uuid:") {
+		t.Fatalf("HostID = %q, %v", id, err)
+	}
+	if again, _ := d.HostID(); again != id {
+		t.Fatalf("the ID was not kept: %q, then %q", id, again)
+	}
+}
+
+// The socket is in the directory as long as its path fits an address, to
+// the byte.
+func TestSocketOfTheLongestPath(t *testing.T) {
+	fits := Dir("/" + strings.Repeat("a", maxSocket-len("/ouro.sock")-1))
+	if got := fits.Socket(); got != string(fits)+"/ouro.sock" || len(got) != maxSocket {
+		t.Fatalf("a path of %d bytes: %q", len(got), got)
+	}
+	if got := Dir(string(fits) + "a").Socket(); filepath.Dir(got) != SocketDir() {
+		t.Fatalf("a path one byte longer: %q", got)
 	}
 }

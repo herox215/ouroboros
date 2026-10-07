@@ -469,6 +469,31 @@ func TestMemoryRestore(t *testing.T) {
 	}
 }
 
+// What the LLM thought is forgotten for another provider; what was said and
+// what the tools gave stays.
+func TestMemoryUnthink(t *testing.T) {
+	m := NewMemory()
+	m.remember("a", []openai.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Reasoning: "think", ReasoningField: "reasoning_content", ToolCalls: []openai.ToolCall{{ID: "1"}}},
+		{Role: "tool", ToolCallID: "1", Content: "result"},
+		{Role: "assistant", Content: "hello", Reasoning: "more", ReasoningField: openai.ReasoningItems},
+	})
+	m.remember("b", []openai.Message{{Role: "user", Content: "x"}, {Role: "assistant", Content: "y", Reasoning: "z"}})
+	m.Unthink()
+	for _, id := range []string{"a", "b"} {
+		for _, msg := range m.Conversation(id) {
+			if msg.Reasoning != "" || msg.ReasoningField != "" {
+				t.Fatalf("%s still has thoughts: %+v", id, msg)
+			}
+		}
+	}
+	got := m.Conversation("a")
+	if len(got) != 4 || got[0].Content != "hi" || len(got[1].ToolCalls) != 1 || got[2].Content != "result" || got[2].ToolCallID != "1" || got[3].Content != "hello" {
+		t.Fatalf("the conversation changed: %+v", got)
+	}
+}
+
 // toolsLLM asks for the tool on its first rounds calls, reports what it was
 // told of the API's usage, and remembers what it was sent.
 type toolsLLM struct {

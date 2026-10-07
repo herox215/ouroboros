@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"ouroboros/internal/credentials"
 )
 
 // DefaultBaseURL is the official OpenAI endpoint.
@@ -62,12 +64,56 @@ func Provider(baseURL string) string {
 	return name
 }
 
+// ProviderName names the provider of OpenAI-compatible APIs in the accesses
+// of a node.
+const ProviderName = "openai"
+
+// Credentials are what is kept of an access to the OpenAI-compatible API at
+// baseURL with apiKey, which may be empty: the endpoint, which is shown, and
+// the key, which is a secret.
+func Credentials(baseURL, apiKey string) credentials.Credentials {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	data, _ := json.Marshal(map[string]string{"base_url": baseURL}) // texts: cannot fail
+	c := credentials.Credentials{Title: Provider(baseURL), About: baseURL, Data: data}
+	if apiKey != "" {
+		c.Secret, _ = json.Marshal(map[string]string{"api_key": apiKey})
+	}
+	return c
+}
+
+// Saved reads the endpoint and the key of an access as Credentials keeps
+// them.
+func Saved(c credentials.Credentials) (baseURL, apiKey string, err error) {
+	var data struct {
+		BaseURL string `json:"base_url"`
+	}
+	var secret struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(c.Data, &data); err != nil || data.BaseURL == "" {
+		return "", "", errors.New("openai: the access has no endpoint")
+	}
+	if len(c.Secret) > 0 {
+		if err := json.Unmarshal(c.Secret, &secret); err != nil {
+			return "", "", errors.New("openai: the key of the access cannot be read")
+		}
+	}
+	return data.BaseURL, secret.APIKey, nil
+}
+
 type sessionKey struct{}
 
 // WithSession returns a context whose requests are sent with the stable
 // session ID id, letting providers route and cache per conversation.
 func WithSession(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, sessionKey{}, id)
+}
+
+// SessionOf is the session WithSession gave ctx, "" if none: another kind of
+// provider sends it its own way.
+func SessionOf(ctx context.Context) string {
+	session, _ := ctx.Value(sessionKey{}).(string)
+	return session
 }
 
 // Message is a single chat message.
@@ -91,6 +137,11 @@ type Message struct {
 	// breakpoints.
 	breakpoint bool
 }
+
+// ReasoningItems is the ReasoningField of what a provider with a form of its
+// own keeps of the thoughts of its model, to hand back to that provider and
+// to no other: an OpenAI-compatible API is not sent it.
+const ReasoningItems = "reasoning_items"
 
 // Usage is what one call of the LLM cost in tokens: Prompt are the tokens of
 // what was sent, and Cached those of them the provider had cached from an
@@ -122,6 +173,7 @@ type reasoning struct {
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 	Reasoning        string `json:"reasoning,omitempty"`
 	ReasoningText    string `json:"reasoning_text,omitempty"`
+	ReasoningItems   string `json:"reasoning_items,omitempty"`
 }
 
 // first returns the first field that is not empty, with its name. An API
@@ -135,6 +187,9 @@ func (r reasoning) first() (text, field string) {
 	}
 	if r.ReasoningText != "" {
 		return r.ReasoningText, "reasoning_text"
+	}
+	if r.ReasoningItems != "" {
+		return r.ReasoningItems, ReasoningItems
 	}
 	return "", ""
 }
@@ -152,6 +207,8 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		out.ReasoningContent = m.Reasoning
 	case "reasoning_text":
 		out.ReasoningText = m.Reasoning
+	case ReasoningItems:
+		out.ReasoningItems = m.Reasoning
 	default:
 		out.reasoning.Reasoning = m.Reasoning
 	}
@@ -312,6 +369,7 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 	type options struct {
 		IncludeUsage bool `json:"include_usage"`
 	}
+	msgs = own(msgs)
 	in := struct {
 		Model          string    `json:"model"`
 		Messages       []Message `json:"messages"`
@@ -366,6 +424,22 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 		return Message{}, cause
 	}
 	return msg, err
+}
+
+// own returns msgs without what another kind of provider kept of the
+// thoughts of its model: see ReasoningItems. msgs is not changed.
+func own(msgs []Message) []Message {
+	foreign := func(m Message) bool { return m.ReasoningField == ReasoningItems }
+	if !slices.ContainsFunc(msgs, foreign) {
+		return msgs
+	}
+	msgs = slices.Clone(msgs)
+	for i := range msgs {
+		if foreign(msgs[i]) {
+			msgs[i].Reasoning, msgs[i].ReasoningField = "", ""
+		}
+	}
+	return msgs
 }
 
 // refuses reports whether err is the API refusing the parameter name.
@@ -556,10 +630,7 @@ func readStream(body io.Reader, alive func(), t trace) (Message, error) {
 
 // sessionOf is the session requests under ctx are sent with.
 func (c *Client) sessionOf(ctx context.Context) string {
-	if session, _ := ctx.Value(sessionKey{}).(string); session != "" {
-		return session
-	}
-	return c.session
+	return cmp.Or(SessionOf(ctx), c.session)
 }
 
 // do sends a request and returns the response of one that succeeded, whose

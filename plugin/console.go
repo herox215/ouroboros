@@ -46,9 +46,12 @@ func (c *Console) ReadLine() (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-// Prompt prints prompt and reads an answer, returning def for an empty one.
+// Prompt prints prompt, if it is one, and reads an answer, returning def for
+// an empty one.
 func (c *Console) Prompt(prompt, def string) (string, error) {
-	fmt.Fprint(c.Out, prompt)
+	if prompt != "" {
+		fmt.Fprint(c.Out, prompt)
+	}
 	line, err := c.ReadLine()
 	return cmp.Or(line, def), err
 }

@@ -4,18 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/cli"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
+	"ouroboros/internal/llm"
+	"ouroboros/internal/llm/llmtest"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
-	"ouroboros/internal/setup"
+	openaiplugin "ouroboros/internal/plugins/openai"
 	"ouroboros/plugin"
 )
 
@@ -26,7 +32,13 @@ func TestMain(m *testing.M) { clitest.Main(m) }
 func owner(t *testing.T, s cli.Settings) *plugin.Owner {
 	t.Helper()
 	app, _ := clitest.NewApp(t, s, "")
-	return plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey})
+	return plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app))
+}
+
+// llms are the providers of the node of s: the one for OpenAI-compatible
+// APIs, with what the settings offer, and one that is none.
+func llms(s cli.Settings) []plugin.Provider {
+	return []plugin.Provider{openaiplugin.Provider(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), llmtest.Provider("two")}
 }
 
 // The owner starts and stops the node, and sees how it is.
@@ -70,39 +82,57 @@ func TestOwnerControlsTheNode(t *testing.T) {
 	}
 }
 
-// The owner sets the node up in a dialog of a front end, with what the
-// settings offer: the setup saves what the node is started with.
+// The owner sets the node up in a dialog of a front end, with the providers
+// of this ouro and what the settings offer: the setup saves what the node is
+// started with.
 func TestOwnerSetsUpTheNode(t *testing.T) {
 	s := clitest.Settings(t)
 	s.APIKey = openaitest.Key
 	o := owner(t, s)
-	set, err := o.Setup()
-	if err != nil || set.Endpoint() != s.BaseURL || !set.HasKey(s.BaseURL) {
+	set, err := o.Setup(llms(s))
+	if err != nil || len(set.Providers()) != 2 {
 		t.Fatalf("got %+v, %v", set, err)
 	}
-	models, err := set.Saved(context.Background(), set.Endpoint())
-	if err != nil {
-		t.Fatal(err)
+	// The key that is offered is known for the endpoint offered.
+	d := &llmtest.Dialog{Answers: map[string][]string{"LLM endpoint": {""}, "API key": {""}}}
+	models, err := set.Login(context.Background(), "openai", d)
+	if err != nil || !d.Asked()[1].Known {
+		t.Fatalf("signing in: %+v, %v", d.Asked(), err)
 	}
 	if err := set.Save(models.Default, "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := o.Status(); err != nil || !status.Configured || status.Name != "alpha" {
+	if status, err := o.Status(); err != nil || !status.Configured || status.Name != "alpha" || status.Provider != "localhost" {
 		t.Fatalf("a node that was set up: %+v, %v", status, err)
 	}
-	if _, err := set.Connect(context.Background(), s.BaseURL, "sk-bad"); !errors.Is(err, plugin.ErrKeyRejected) {
-		t.Fatalf("a bad key: %v", err)
+	if endpoint, key := clitest.Reached(t, s); endpoint != s.BaseURL || key != openaitest.Key {
+		t.Fatalf("the node reaches %q with %q", endpoint, key)
+	}
+	bad := &llmtest.Dialog{Answers: map[string][]string{"LLM endpoint": {""}, "API key": {"sk-bad"}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		for len(bad.Rejected()) == 0 && ctx.Err() == nil {
+			time.Sleep(time.Millisecond)
+		}
+		cancel() // the owner gives up at the second question for the key
+	}()
+	if _, err := set.Login(ctx, "openai", bad); !errors.Is(err, context.Canceled) || !slices.Equal(bad.Rejected(), []string{"API key rejected, try again"}) {
+		t.Fatalf("a bad key: %v, rejected %v", err, bad.Rejected())
 	}
 
 	broken := clitest.Settings(t)
 	if err := os.WriteFile(filepath.Join(broken.Home, "config.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := owner(t, broken).Setup(); err == nil {
+	if _, err := owner(t, broken).Setup(llms(broken)); err == nil {
 		t.Fatal("a configuration that cannot be read: want error")
 	}
-	if _, err := owner(t, broken).Models(context.Background()); err == nil {
+	if _, err := owner(t, broken).Models(context.Background(), llms(broken)); err == nil {
 		t.Fatal("models of a configuration that cannot be read: want error")
+	}
+	if _, err := owner(t, broken).SetModel("a", "m"); err == nil {
+		t.Fatal("a model for a configuration that cannot be read: want error")
 	}
 }
 
@@ -119,59 +149,101 @@ func TestOwnerRequests(t *testing.T) {
 }
 
 // The owner changes the model of the node in the model screen of a front
-// end: Models lists what the provider offers, with the model of the node to
-// offer first, and SetModel saves one of them, with the endpoint and the key
-// the node has.
+// end: Models lists what every access offers, and SetModel makes a model of
+// one of them the model of the node. Picking one of another access switches
+// the provider, without a setup and without a restart.
 func TestOwnerChangesTheModel(t *testing.T) {
 	s := clitest.Settings(t)
 	o := owner(t, s)
 
 	// A node that is not set up has no models, and no model to save.
-	if _, err := o.Models(context.Background()); !errors.Is(err, plugin.ErrNotSetUp) {
-		t.Fatalf("a node that is not set up: %v", err)
-	}
-	if err := o.SetModel("gpt-4o-mini"); !errors.Is(err, plugin.ErrNotSetUp) {
+	if _, err := o.Models(context.Background(), llms(s)); !errors.Is(err, plugin.ErrNotSetUp) {
 		t.Fatalf("a node that is not set up: %v", err)
 	}
 	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
 		t.Fatal(err)
 	}
 
-	models, err := o.Models(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	listed, err := o.Models(context.Background(), llms(s))
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("got %+v, %v", listed, err)
 	}
-	// The models that cannot chat are not listed, and the model of the node
-	// is the one offered first.
-	if !slices.Equal(models.Chat, []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}) || models.Default != "gpt-4o" ||
-		len(models.All) != len(openaitest.Models) {
-		t.Fatalf("got %+v", models)
+	// The models that cannot chat are not listed.
+	first := listed[0]
+	if !slices.Equal(first.Models, []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}) || first.Err != "" ||
+		!first.Access.Active || first.Access.Provider != "openai" || first.Access.Label != "localhost" || first.Access.About != s.BaseURL {
+		t.Fatalf("got %+v", first)
 	}
-	if err := o.SetModel("  gpt-4o-mini  "); err != nil {
-		t.Fatal(err)
+	if switched, err := o.SetModel(first.Access.ID, "  gpt-4o-mini  "); err != nil || switched {
+		t.Fatalf("SetModel = %v, %v", switched, err)
 	}
-	if cfg := clitest.MustLoad(t, s); cfg.Model != "gpt-4o-mini" || cfg.BaseURL != s.BaseURL ||
-		cfg.APIKey != openaitest.Key || cfg.Name != "alpha" {
-		t.Fatalf("the configuration after saving: %+v", cfg)
+	cfg := clitest.MustLoad(t, s)
+	if endpoint, key := clitest.Reached(t, s); cfg.Model != "gpt-4o-mini" || cfg.Name != "alpha" || endpoint != s.BaseURL || key != openaitest.Key {
+		t.Fatalf("the configuration after saving: %+v, at %q with %q", cfg, endpoint, key)
 	}
 	// An empty model changes nothing.
-	if err := o.SetModel("   "); err == nil {
+	if _, err := o.SetModel(first.Access.ID, "   "); err == nil {
 		t.Fatal("an empty model: want error")
 	}
 	if cfg := clitest.MustLoad(t, s); cfg.Model != "gpt-4o-mini" {
 		t.Fatalf("an empty model changed the configuration: %+v", cfg)
 	}
 
-	// The models are listed with the key of the node: one the provider
-	// refuses is an error that says so.
-	bad := clitest.Settings(t)
-	cfg := clitest.NodeConfig(bad)
-	cfg.APIKey = "sk-bad"
-	if err := config.Save(bad.Home, cfg); err != nil {
+	// A second access, of another provider: its models are listed next to
+	// those of the first, and one of them is picked.
+	set, _ := o.Setup(llms(s))
+	if _, err := set.Login(context.Background(), "two", &llmtest.Dialog{Answers: map[string][]string{"Token": {llmtest.Token}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := owner(t, bad).Models(context.Background()); !errors.Is(err, plugin.ErrKeyRejected) {
-		t.Fatalf("a key the provider refuses: %v", err)
+	if err := set.Save("two-small", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if switched, err := o.SetModel(first.Access.ID, "gpt-4o"); err != nil || !switched {
+		t.Fatalf("back to the first access: %v, %v", switched, err)
+	}
+	listed, err = o.Models(context.Background(), llms(s))
+	if err != nil || len(listed) != 2 || !listed[0].Access.Active || listed[1].Access.Active ||
+		!slices.Equal(listed[1].Models, []string{"two-small", "two-large"}) || listed[1].Access.Label != "Test two" {
+		t.Fatalf("got %+v, %v", listed, err)
+	}
+	if switched, err := o.SetModel(listed[1].Access.ID, "two-large"); err != nil || !switched {
+		t.Fatalf("SetModel of another access = %v, %v", switched, err)
+	}
+	if cfg := clitest.MustLoad(t, s); cfg.Access != listed[1].Access.ID || cfg.Model != "two-large" {
+		t.Fatalf("picked %+v", cfg)
+	}
+	if status, _ := o.Status(); status.Provider != "Test two" || status.Model != "two-large" {
+		t.Fatalf("status %+v", status)
+	}
+	log, _ := os.ReadFile(filepath.Join(s.Home, "ouro.log"))
+	if !strings.Contains(string(log), "the owner picked the model two-large of the access "+listed[1].Access.ID) || strings.Contains(string(log), llmtest.Token+`"`) {
+		t.Fatalf("log: %s", log)
+	}
+
+	// The models are listed with the key of the node: one the provider
+	// refuses shows with the access, and keeps the others.
+	bad := clitest.Settings(t)
+	refused := clitest.NodeConfig(bad)
+	refused.APIKey = "sk-bad"
+	if err := config.Save(bad.Home, refused); err != nil {
+		t.Fatal(err)
+	}
+	if listed, err := owner(t, bad).Models(context.Background(), llms(bad)); err != nil || len(listed) != 1 || listed[0].Err != plugin.ErrKeyRejected.Error() || listed[0].Models != nil {
+		t.Fatalf("a key the provider refuses: %+v, %v", listed, err)
+	}
+}
+
+// A provider opens the page it signs in on through the front end.
+func TestBrowse(t *testing.T) {
+	old := llm.Browse
+	t.Cleanup(func() { llm.Browse = old })
+	var opened string
+	llm.Browse = func(url string) error {
+		opened = url
+		return errors.New("no browser")
+	}
+	if err := plugin.Browse("https://example.com"); err == nil || opened != "https://example.com" {
+		t.Fatalf("Browse = %v, opened %q", err, opened)
 	}
 }
 
@@ -421,5 +493,34 @@ func TestOwnerSetsDebug(t *testing.T) {
 	}
 	if err := o.SetDebug(false); err == nil {
 		t.Fatal("a debug that cannot be removed")
+	}
+}
+
+// A provider that is no part of ouro tells the debug log of the node what
+// its calls send and get, with what the package hands out and nothing else.
+func TestProviderTrace(t *testing.T) {
+	if plugin.Trace(context.Background()) != nil {
+		t.Fatal("a node that is not in debug mode has a trace")
+	}
+	var lines []string
+	ctx := openai.WithTrace(context.Background(), func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	})
+	trace := plugin.Trace(ctx)
+	if trace == nil {
+		t.Fatal("no trace in debug mode")
+	}
+	var requests plugin.Requests
+	first := [][]byte{[]byte(`{"role":"user","content":"hi"}`)}
+	trace("llm prefix: %s", requests.Compare("conv", "tools", first))
+	trace("llm prefix: %s", requests.Compare("conv", "tools", append(first, []byte(`{"role":"assistant","content":"ho"}`))))
+	plugin.TraceResponse(trace, &http.Response{StatusCode: 200, Header: http.Header{"X-Cache": {"hit"}}}, 2*time.Second)
+	want := []string{
+		"llm prefix: first request of the session in the trace",
+		"llm prefix: all 1 messages of the last request are kept, 1 are new; 46.2% of the bytes are the same",
+		"llm response: HTTP 200 after 2s, headers {X-Cache: hit}",
+	}
+	if !slices.Equal(lines, want) {
+		t.Fatalf("told %q", lines)
 	}
 }

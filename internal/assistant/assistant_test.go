@@ -109,7 +109,7 @@ func TestPickWithSettings(t *testing.T) {
 // The agent that answers peers is told about its tools when it has some, and
 // about the rules for paths when it has a tool for files.
 func TestPeerPromptFollowsTheTools(t *testing.T) {
-	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
 	file := agent.NewTool("read", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
 	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file) }}
 	for _, tt := range []struct {
@@ -132,7 +132,7 @@ func TestPeerPromptFollowsTheTools(t *testing.T) {
 }
 
 func TestUnknownToolFailsEarly(t *testing.T) {
-	cfg := config.Config{BaseURL: "http://x", Model: "m", Name: "n"}
+	cfg := config.Config{Access: "http://x", Model: "m", Name: "n"}
 	b := Builder{Tools: func() []agent.Tool { return nil }}
 	cfg.Tools = &config.Tools{A2A: config.Named("nope")}
 	if _, err := b.ForPeers(cfg); err == nil || !strings.Contains(err.Error(), "tools.a2a") {

@@ -27,3 +27,6 @@ const ResumeEnv = resumeEnv
 
 // Show runs m on the terminal as the plugin does.
 func Show(ctx context.Context, m *tui.Model) error { return show(ctx, m) }
+
+// Shown is e as the UI of the plugins of ctx shows it.
+func Shown(ctx *plugin.Context, e plugin.SessionEvent) tui.Event { return (&ui{ctx: ctx}).event(e) }

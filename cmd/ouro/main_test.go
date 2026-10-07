@@ -67,8 +67,10 @@ func TestEndToEnd(t *testing.T) {
 		}
 	}
 
-	started := ouro("\n"+openaitest.Key+"\n2\ne2e-node\n", "start")
-	expect(started, "API endpoint", "Available models", "online", "gpt-4o-mini")
+	// The provider (Enter: the one for OpenAI-compatible APIs), then what it
+	// asks, the endpoint and the key, then the model and the name.
+	started := ouro("\n\n"+openaitest.Key+"\n2\ne2e-node\n", "start")
+	expect(started, "LLM endpoint", "Available models", "online", "gpt-4o-mini")
 	// The ID is the fingerprint of the node's key: the same wherever it shows.
 	id := regexp.MustCompile(`ouroboros ([0-9a-f]{12}) \(e2e-node\)`).FindStringSubmatch(started)
 	if id == nil {
@@ -163,7 +165,9 @@ func TestEndToEnd(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	tty.await("API endpoint")
+	tty.await("Provider [number, Enter = 1]: ")
+	tty.typeLine("")
+	tty.await("LLM endpoint")
 	tty.typeLine("")
 	tty.await("API key (Enter for none): ")
 	// Typed before the echo is off, the key would show like on any terminal:

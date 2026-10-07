@@ -29,9 +29,9 @@ var refreshInterval = 10 * time.Second
 // Status describes the local node.
 type Status = plugin.NodeStatus
 
-// Models is what the provider of the node offers, as Models of a Backend
+// Models are the models of one access of the node, as Models of a Backend
 // lists them for the model screen (/model).
-type Models = plugin.SetupModels
+type Models = plugin.AccessModels
 
 // Contacts is what waits for the owner of the local node: the connection
 // requests, and the changes of the configuration its agent proposed.
@@ -88,14 +88,15 @@ type Backend interface {
 	RefuseProposal(id string) error
 	// Setup starts the setup of the node.
 	Setup() (Setup, error)
-	// Models lists the models the configured provider offers, for the model
-	// screen (/model). It fails with plugin.ErrNotSetUp for a node that is
-	// not set up, and with plugin.ErrKeyRejected if the provider refuses the
-	// key of the node.
-	Models(ctx context.Context) (Models, error)
-	// SetModel saves model as the model of the node: the agents answer with
-	// it from the next message on.
-	SetModel(model string) error
+	// Models lists the models of every access of the node, for the model
+	// screen (/model): an access that does not answer comes with why, and
+	// with what it listed the last time. It fails with plugin.ErrNotSetUp
+	// for a node that is not set up.
+	Models(ctx context.Context) ([]Models, error)
+	// SetModel makes model of the access what the node answers with: the
+	// agents do from the next message on. It reports whether they answer
+	// through another access than before.
+	SetModel(access, model string) (switched bool, err error)
 	// SetDebug turns the debug mode of the node on or off: in it, the log
 	// of the node tells much more of every call of the LLM. Status says
 	// whether it is on.
@@ -167,6 +168,7 @@ type conversation struct {
 	pending   bool                // request submitted or answer on its way: one message at a time
 	running   bool                // the node has said an answer is on its way
 	doing     string              // what the agent is waiting for, like "asking beta"
+	art       int                 // which of arts a wait is shown with: the next for every message
 	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
 	context   int                 // how long its context is, see Event.Context
 	cache     plugin.SessionCache // what the provider had cached, see Event.Cache
@@ -213,10 +215,11 @@ type Model struct {
 	unreadReq int
 	seenReq   int
 
-	models    Models // what the provider offers, once /model asked for them
-	modelSel  int    // the model selected of models.Chat
-	modelBusy string // what the model screen waits for, like "listing models"
-	modelErr  error  // why the models are not there
+	models    []Models // what the accesses offer, once /model asked for them
+	choices   []choice // the models of them all, to select from
+	modelSel  int      // the one selected of choices
+	modelBusy string   // what the model screen waits for, like "listing models"
+	modelErr  error    // why the models are not there
 
 	contents viewport.Model // the context of the conversation, for /context
 	loaded   *contentsMsg   // the context that came in, to wrap again when the window changes
@@ -413,6 +416,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, splashTick()
 	case connectedMsg:
 		return m, m.connected(msg)
+	case loginMsg:
+		return m, m.loggedIn(msg)
+	case accessesMsg:
+		m.managed(msg)
 	case savedMsg:
 		return m, m.setupSaved(msg)
 	case statusMsg:
@@ -715,6 +722,7 @@ func (m *Model) send() tea.Cmd {
 	// The message shows once the node says it is on its way; the agent is
 	// thinking from now on.
 	c.pending, c.round = true, 0
+	c.art++
 	m.input.Reset()
 	m.renderHistory(true)
 	id := c.contextID

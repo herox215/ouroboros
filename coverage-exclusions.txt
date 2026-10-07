@@ -17,3 +17,11 @@ internal/update/updatetest
 # Whole nodes on this host, with a fake LLM, for the tests of ouro and of its
 # plugins. Test code, shared the same way.
 internal/cli/clitest
+
+# A second provider and a scripted sign-in dialog for the tests of what ouro
+# does with providers. Test code, shared the same way.
+internal/llm/llmtest
+
+# Fake sign-in service and Responses API of OpenAI for the tests of the
+# chatgpt provider. Test code, shared the same way.
+internal/chatgpt/chatgpttest

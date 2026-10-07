@@ -22,6 +22,7 @@ type Peers struct {
 	mu     sync.Mutex
 	agent  *agent.Agent
 	built  string        // the configuration agent was built for
+	access string        // the access agent was built for
 	failed string        // why the configuration could not be used the last time
 	memory *agent.Memory // of the conversations, for every agent there is
 	// scripts are what the scripts of the conversations kept, for every
@@ -71,7 +72,7 @@ func (p *Peers) Forget(contextID string) { p.memory.Forget(contextID) }
 func (p *Peers) current() (*agent.Agent, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	bot, want, err := p.build()
+	bot, want, access, err := p.build()
 	if err != nil {
 		if p.agent == nil || errors.Is(err, agent.ErrContextProvider) {
 			return nil, err
@@ -85,28 +86,33 @@ func (p *Peers) current() (*agent.Agent, error) {
 	if bot != nil {
 		if p.agent != nil {
 			p.log("the configuration changed: peers are answered by a new agent")
+			// What the LLM thought so far is not sent to another access.
+			if p.access != access {
+				p.memory.Unthink()
+			}
 		}
-		p.agent, p.built = bot.WithMemory(p.memory), want
+		p.agent, p.built, p.access = bot.WithMemory(p.memory), want, access
 	}
 	p.failed = ""
 	return p.agent, nil
 }
 
-// build returns the agent for the configuration as it is now and what it was
-// built for, or no agent if the one there is was built for the same.
-func (p *Peers) build() (*agent.Agent, string, error) {
+// build returns the agent for the configuration as it is now, what it was
+// built for and the access it answers through, or no agent if the one there
+// is was built for the same.
+func (p *Peers) build() (*agent.Agent, string, string, error) {
 	cfg, err := p.config()
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if !cfg.Complete() {
-		return nil, "", config.ErrIncomplete
+		return nil, "", "", config.ErrIncomplete
 	}
 	tools, _ := json.Marshal(cfg.PeerTools()) // an entry that cannot be written is reported by ForPeers
-	want, _ := json.Marshal([]string{cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider})
+	want, _ := json.Marshal([]string{cfg.Access, p.builder.revision(cfg.Access), cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider})
 	if p.agent != nil && p.built == string(want) {
-		return nil, string(want), nil
+		return nil, string(want), cfg.Access, nil
 	}
 	bot, err := p.builder.forPeers(cfg, p.scripts)
-	return bot, string(want), err
+	return bot, string(want), cfg.Access, err
 }

@@ -47,7 +47,7 @@ func newConfigured(t *testing.T) *configured {
 	c.builder = Builder{LLM: overHTTP, Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), read1) }}.
 		WithConfig(read, c.proposals)
 	c.assistant = New(read, c.builder, discard)
-	c.save(config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), APIKey: "sk-secret", Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()})
+	c.save(config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()})
 	return c
 }
 
@@ -96,8 +96,16 @@ func TestGetConfig(t *testing.T) {
 	c := newConfigured(t)
 	got := c.tool(toolGetConfig, struct{}{})
 	cfg := c.config()
-	if got != string(cfg.Public()) || strings.Contains(got, "sk-secret") || strings.Contains(got, cfg.PrivateKey) || !strings.Contains(got, `"name": "me"`) {
+	if got != string(cfg.Public("")) || strings.Contains(got, cfg.Access) || strings.Contains(got, cfg.PrivateKey) || !strings.Contains(got, `"name": "me"`) {
 		t.Fatalf("got %s", got)
+	}
+	// With the accesses of the node, it names the one that answers as the
+	// owner sees it: not its ID, and nothing of what it signs in with.
+	named := c.builder
+	named.Accesses = &accesses{label: "Ollama local", secrets: []string{"sk-secret"}}
+	shown, err := named.getConfig().Run(context.Background(), json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(shown, `"provider": "Ollama local"`) || strings.Contains(shown, "sk-secret") || strings.Contains(shown, cfg.Access) {
+		t.Fatalf("with accesses: %s, %v", shown, err)
 	}
 	// As it is now, not as it was when the agent was built.
 	cfg.Tools = &config.Tools{A2A: config.Named("list_peers")}
@@ -160,6 +168,10 @@ func TestWithdrawProposal(t *testing.T) {
 	c := newConfigured(t)
 	if got := c.tool(toolWithdrawConfig, struct{}{}); got != "No proposal waits for your owner: there is nothing of yours to take back." {
 		t.Fatalf("nothing waits: %q", got)
+	}
+	// Called without any arguments at all, it lists what waits too.
+	if got, err := c.builder.withdrawProposal().Run(context.Background(), nil); err != nil || !strings.HasPrefix(got, "No proposal waits") {
+		t.Fatalf("without arguments: %q, %v", got, err)
 	}
 
 	// What waits is listed with the id it is taken back with.

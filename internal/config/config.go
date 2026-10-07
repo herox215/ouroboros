@@ -26,10 +26,18 @@ const (
 // Config is the persistent node configuration.
 type Config struct {
 	ContextProvider string `json:"context_provider,omitempty"`
-	BaseURL         string `json:"base_url"` // OpenAI-compatible endpoint
-	APIKey          string `json:"api_key"`  // optional, e.g. not needed for a local Ollama
-	Model           string `json:"model"`
-	Name            string `json:"name"`
+	// Access is the ID of the access the agents reach their LLM with, one of
+	// the credentials of the node (see package credentials), and Model the
+	// model they answer with there.
+	Access string `json:"access,omitempty"`
+	Model  string `json:"model"`
+	// BaseURL and APIKey are how a configuration from before there were
+	// accesses names its LLM: an OpenAI-compatible endpoint and the key for
+	// it. Such a configuration is still read. The node makes an access of
+	// them and takes them out of this file, see home.Dir.Config.
+	BaseURL string `json:"base_url,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`
+	Name    string `json:"name"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	// The ID of the node follows from it, see ID. Older configs also stored
@@ -174,9 +182,8 @@ func (c Config) Protected() []string {
 	return *c.Tools.Protected
 }
 
-// Files are the files in dir that hold the secrets of the node: the
-// configuration, with the key of the node and the key of the API, and the
-// file that is locked while it is changed.
+// Files are the files in dir that hold the configuration, with the key of
+// the node, and the file that is locked while it is changed.
 func Files(dir string) []string {
 	return []string{filepath.Join(dir, fileName), filepath.Join(dir, lockName)}
 }
@@ -197,7 +204,7 @@ var ErrIncomplete = errors.New("node is not configured")
 // Complete reports whether the node can be started with this configuration.
 // The key is not needed for that: a node without one generates it.
 func (c Config) Complete() bool {
-	return c.BaseURL != "" && c.Model != "" && c.Name != ""
+	return (c.Access != "" || c.BaseURL != "") && c.Model != "" && c.Name != ""
 }
 
 // Load reads the configuration from dir. A missing file yields an empty Config.
@@ -268,7 +275,7 @@ func Fields() []string {
 // reserved are the fields no proposal changes: who the node is, and where the
 // conversations of the owner go. A proposal a peer slipped in must not send
 // them to another server.
-var reserved = []string{"private_key", "api_key", "base_url"}
+var reserved = []string{"private_key", "access", "api_key", "base_url"}
 
 // FieldUnsandboxed is the field that lets rebuild build without a sandbox,
 // which no proposal changes either.
@@ -354,17 +361,18 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 }
 
 // Public is the configuration as the agent of the owner gets to see it:
-// without the key of the node and the key of the API, and with the defaults
-// that hold for what is not set.
-func (c Config) Public() json.RawMessage {
+// without the key of the node and without its accesses, and with the defaults
+// that hold for what is not set. provider is what the access in use is
+// called, as the node tells it.
+func (c Config) Public(provider string) json.RawMessage {
 	protected := c.Protected()
 	b, _ := json.MarshalIndent(struct {
 		ID                    string `json:"id"`
 		Name                  string `json:"name"`
 		Model                 string `json:"model"`
-		BaseURL               string `json:"base_url"`
+		Provider              string `json:"provider"`
 		Tools                 Tools  `json:"tools"`
 		RebuildWithoutSandbox bool   `json:"rebuild_without_sandbox"`
-	}{c.ID(), c.Name, c.Model, c.BaseURL, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}, c.RebuildWithoutSandbox}, "", "  ")
+	}{c.ID(), c.Name, c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}, c.RebuildWithoutSandbox}, "", "  ")
 	return b
 }

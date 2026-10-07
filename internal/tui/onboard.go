@@ -19,21 +19,29 @@ import (
 )
 
 // Setup is the setup of the node, as the UI goes through it: see
-// plugin.Setup, which keeps the key for the endpoint to itself.
+// plugin.Setup, which keeps what the providers sign in with to itself.
 type Setup interface {
-	// Endpoint and Name are what to offer.
-	Endpoint() string
+	// Name is the name to offer.
 	Name() string
-	// HasKey reports whether a key is known for endpoint, which Saved uses.
-	HasKey(endpoint string) bool
-	// Connect lists the models of endpoint with key; it fails with
-	// plugin.ErrKeyRejected if the endpoint refuses the key.
-	Connect(ctx context.Context, endpoint, key string) (plugin.SetupModels, error)
-	Saved(ctx context.Context, endpoint string) (plugin.SetupModels, error)
+	// Providers are the providers to sign in with, and Accesses the
+	// accesses the node has.
+	Providers() []plugin.SetupProvider
+	Accesses() ([]plugin.SetupAccess, error)
+	// Login signs in to a new access with a provider, which asks through d,
+	// Again to the access id anew, and Use takes the access id as it is.
+	// Each lists the models of the access, which Save then saves.
+	Login(ctx context.Context, provider string, d plugin.Dialog) (plugin.SetupModels, error)
+	Again(ctx context.Context, id string, d plugin.Dialog) (plugin.SetupModels, error)
+	Use(ctx context.Context, id string) (plugin.SetupModels, error)
+	// Rename and Remove manage the accesses. Remove returns what to tell
+	// the owner of how it went.
+	Rename(id, name string) error
+	Remove(ctx context.Context, id string) (string, error)
 	// Rights are the names of the tools for the owner and for peers, and
 	// the paths that are protected, as they are once the setup is saved.
 	Rights() (owner, peers, protected []string)
-	// Save saves what Connect accepted with model and name.
+	// Save saves the access that was signed in to or taken, with model and
+	// name.
 	Save(model, name string) error
 }
 
@@ -56,13 +64,32 @@ type step int
 
 const (
 	stepWelcome step = iota
-	stepEndpoint
-	stepKey
+	// The pages of the access: the accesses the node has, the providers to
+	// sign in with, and what the provider asks while it signs in. Which of
+	// them are shown depends on the node: a new one with one provider goes
+	// straight to what that provider asks.
+	stepAccess
+	stepProvider
+	stepLogin
 	stepModel
 	stepName
 	stepRights
-	steps // how many pages there are
 )
+
+// phases is how many parts the setup has after the welcome: the access, the
+// model, the name and the rights.
+const phases = 4
+
+// phase is the part of the setup the page s belongs to, 0 for the welcome.
+func (s step) phase() int {
+	switch s {
+	case stepWelcome:
+		return 0
+	case stepAccess, stepProvider, stepLogin:
+		return 1
+	}
+	return int(s-stepModel) + 2
+}
 
 // onboarding is the setup of the node in the UI.
 type onboarding struct {
@@ -71,12 +98,20 @@ type onboarding struct {
 	step  step
 	input textinput.Model
 
-	endpoint string
-	models   plugin.SetupModels
-	model    int // selected of models.Chat
-	name     string
-	busy     string // what it waits for, like "connecting"
-	err      string
+	accesses  []plugin.SetupAccess
+	providers []plugin.SetupProvider
+	sel       int    // the row selected on the pages of the accesses and the providers
+	renaming  string // the ID of the access a name is typed for, "" if none
+
+	login   *login            // what a provider is asking, while it signs in
+	answers map[string]string // what was entered so far, by the title of the question, to offer again
+
+	models plugin.SetupModels
+	model  int // selected of models.Chat
+	name   string
+	busy   string // what it waits for, like "connecting"
+	err    string
+	note   string // what the provider told, or how removing an access went
 
 	// The scene: when it opened, the time of its last frame, how far the
 	// body is curled up since when, and when the setup was saved.
@@ -88,15 +123,87 @@ type onboarding struct {
 	saved time.Time
 }
 
+// login is one run of a provider signing in. The provider runs beside the
+// UI and asks through it: what it asks, tells and ends with comes as
+// loginMsg, and the answers go back through reply.
+type login struct {
+	events chan loginMsg
+	cancel context.CancelFunc
+	asked  *plugin.Question // what is asked right now, nil while the provider works
+	reply  chan<- string
+}
+
 type (
-	// connectedMsg is the answer of the endpoint to the key.
-	connectedMsg struct {
+	// loginMsg is what a provider that signs in wants of the UI: a question
+	// asked, a line told, an answer rejected, a URL opened, or done, with
+	// the models of the access or why it failed.
+	loginMsg struct {
+		from   *login
+		ask    *plugin.Question
+		reply  chan<- string
+		tell   string
+		reject string
+		open   string
+		done   bool
 		models plugin.SetupModels
 		err    error
+	}
+	// connectedMsg is what an access that is taken as it is answered with.
+	connectedMsg struct {
+		id     string
+		models plugin.SetupModels
+		err    error
+	}
+	// accessesMsg reports how renaming or removing an access went, with
+	// the accesses there are now.
+	accessesMsg struct {
+		accesses []plugin.SetupAccess
+		note     string
+		err      error
 	}
 	// savedMsg reports how saving the setup went.
 	savedMsg struct{ err error }
 )
+
+// dialog is the plugin.Dialog of a login: it hands what the provider wants to
+// the UI and waits for the answer.
+type dialog struct {
+	ctx context.Context // of the login: given up when the owner leaves it
+	l   *login
+}
+
+// send hands msg to the UI unless the login was given up.
+func (d dialog) send(msg loginMsg) bool {
+	msg.from = d.l
+	select {
+	case d.l.events <- msg:
+		return true
+	case <-d.ctx.Done():
+		return false
+	}
+}
+
+func (d dialog) Ask(ctx context.Context, q plugin.Question) (string, error) {
+	reply := make(chan string, 1)
+	if !d.send(loginMsg{ask: &q, reply: reply}) {
+		return "", d.ctx.Err()
+	}
+	select {
+	case answer := <-reply:
+		return answer, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-d.ctx.Done():
+		return "", d.ctx.Err()
+	}
+}
+
+func (d dialog) Tell(text string)  { d.send(loginMsg{tell: text}) }
+func (d dialog) Reject(why string) { d.send(loginMsg{reject: why}) }
+func (d dialog) Open(url string)   { d.send(loginMsg{open: url}) }
+
+// browse shows a URL in the browser of the user; tests replace it.
+var browse = plugin.Browse
 
 // openSetup opens the setup. first says that the node was not set up yet.
 // If the setup cannot be had, the UI says so in its footer.
@@ -106,12 +213,18 @@ func (m *Model) openSetup(first bool) {
 		m.setNotice("setup: "+err.Error(), true)
 		return
 	}
+	accesses, err := s.Accesses()
+	if err != nil {
+		m.setNotice("setup: "+err.Error(), true)
+		return
+	}
 	input := textinput.New()
 	input.Prompt = "› "
 	input.SetWidth(boxWidth - 8)
 	input.SetStyles(textinput.DefaultStyles(!m.light))
 	now := m.now()
-	o := &onboarding{setup: s, first: first, input: input, opened: now, at: now}
+	o := &onboarding{setup: s, first: first, input: input, opened: now, at: now,
+		accesses: accesses, providers: s.Providers(), answers: map[string]string{}}
 	o.curl.from, o.curl.to, o.curl.since = curlFrom, curlFrom, now
 	m.onboard = o
 }
@@ -127,65 +240,180 @@ func (o *onboarding) curlTo(curl float64) {
 	o.curl.from, o.curl.to, o.curl.since = o.curled(o.at), curl, o.at
 }
 
-// goTo turns to the page s. The snake curls up with every page.
+// goTo turns to the page s. The snake curls up with every part of the setup.
 func (o *onboarding) goTo(s step) tea.Cmd {
-	o.step, o.err, o.busy = s, "", ""
-	o.curlTo(curlFrom + (curlLast-curlFrom)*float64(s)/float64(steps-1))
+	o.stop()
+	o.step, o.err, o.busy, o.renaming, o.note = s, "", "", "", ""
+	o.curlTo(curlFrom + (curlLast-curlFrom)*float64(s.phase())/phases)
+	switch s {
+	case stepAccess:
+		o.sel = max(0, slices.IndexFunc(o.accesses, func(a plugin.SetupAccess) bool { return a.Active }))
+	case stepProvider:
+		o.sel = 0
+	case stepName:
+		return o.type_(cmp.Or(o.name, o.setup.Name()), "", false)
+	}
+	o.input.Blur()
+	return nil
+}
+
+// type_ makes the input ready for a text, with value in it.
+func (o *onboarding) type_(value, hint string, secret bool) tea.Cmd {
 	o.input.Reset()
 	o.input.EchoMode = textinput.EchoNormal
-	o.input.Placeholder = ""
-	switch s {
-	case stepEndpoint:
-		o.input.SetValue(cmp.Or(o.endpoint, o.setup.Endpoint()))
-	case stepKey:
+	o.input.Placeholder = hint
+	if secret {
 		o.input.EchoMode = textinput.EchoPassword
 		o.input.EchoCharacter = '•'
-		o.input.Placeholder = "Enter for none"
-		if o.setup.HasKey(o.endpoint) {
-			o.input.Placeholder = "Enter keeps the saved key"
-		}
-	case stepName:
-		o.input.SetValue(cmp.Or(o.name, o.setup.Name()))
-	default:
-		o.input.Blur()
-		return nil
 	}
+	o.input.SetValue(value)
 	o.input.CursorEnd()
 	return o.input.Focus()
 }
 
+// stop gives up the login that is on its way, if one is.
+func (o *onboarding) stop() {
+	if o.login != nil {
+		o.login.cancel()
+		o.login = nil
+	}
+}
+
 // typing reports whether the page is one to type on.
 func (o *onboarding) typing() bool {
-	return o.step == stepEndpoint || o.step == stepKey || o.step == stepName
+	return o.step == stepName || o.renaming != "" || o.step == stepLogin && o.login != nil && o.login.asked != nil
+}
+
+// enter is the page the access is picked on, as the node is: its accesses if
+// it has some, the providers if there are several, and else what the only
+// provider asks.
+func (m *Model) enter() tea.Cmd {
+	o := m.onboard
+	if len(o.accesses) > 0 {
+		return o.goTo(stepAccess)
+	}
+	return m.add()
+}
+
+// add starts a new access: with the only provider, or on the page of the
+// providers.
+func (m *Model) add() tea.Cmd {
+	o := m.onboard
+	switch len(o.providers) {
+	case 0:
+		o.err = "this ouro has no provider to sign in with: turn the plugin of one on in /settings"
+		return nil
+	case 1:
+		return m.signIn(o.providers[0].Name, "")
+	}
+	return o.goTo(stepProvider)
+}
+
+// signIn lets a provider sign in: to a new access with the provider called
+// provider, or anew to the access again.
+func (m *Model) signIn(provider, again string) tea.Cmd {
+	o := m.onboard
+	o.goTo(stepLogin)
+	ctx, cancel := context.WithCancel(m.ctx)
+	l := &login{events: make(chan loginMsg), cancel: cancel}
+	o.login, o.busy = l, "one moment"
+	setup, d := o.setup, dialog{ctx, l}
+	go func() {
+		var models plugin.SetupModels
+		var err error
+		if again != "" {
+			models, err = setup.Again(ctx, again, d)
+		} else {
+			models, err = setup.Login(ctx, provider, d)
+		}
+		d.send(loginMsg{done: true, models: models, err: err})
+	}()
+	return l.next
+}
+
+// next waits for what the provider wants next.
+func (l *login) next() tea.Msg { return <-l.events }
+
+// loggedIn takes what the provider that signs in wants: a question to show,
+// a line to tell, and in the end the models of the access.
+func (m *Model) loggedIn(msg loginMsg) tea.Cmd {
+	o := m.onboard
+	if o == nil || o.login == nil || o.login != msg.from {
+		return nil // of a login that was given up
+	}
+	l := o.login
+	switch {
+	case msg.done:
+		o.login, o.busy = nil, ""
+		l.cancel()
+		if msg.err != nil {
+			o.err = msg.err.Error()
+			return nil
+		}
+		return m.offer(msg.models)
+	case msg.ask != nil:
+		l.asked, l.reply, o.busy = msg.ask, msg.reply, ""
+		value := ""
+		if !msg.ask.Secret {
+			value = cmp.Or(o.answers[msg.ask.Title], msg.ask.Default)
+		}
+		return tea.Batch(o.type_(value, msg.ask.Hint, msg.ask.Secret), l.next)
+	case msg.reject != "":
+		o.err = msg.reject
+	case msg.tell != "":
+		o.note = msg.tell
+	case msg.open != "":
+		o.note = "The page opens in your browser. Its link is on the clipboard too."
+		url := msg.open
+		return tea.Batch(tea.SetClipboard(url), l.next, func() tea.Msg {
+			_ = writeClipboard(url) // the terminal may have it anyway
+			_ = browse(url)         // without a browser here, the link is what there is
+			return nil
+		})
+	}
+	return l.next
+}
+
+// offer shows the models of the access that was signed in to or taken.
+func (m *Model) offer(models plugin.SetupModels) tea.Cmd {
+	o := m.onboard
+	if len(models.Chat) == 0 {
+		o.err = "the access offers no model"
+		return nil
+	}
+	o.models = models
+	o.model = max(0, slices.Index(models.Chat, models.Default))
+	return o.goTo(stepModel)
 }
 
 // onboardKey handles a key while the setup is open.
 func (m *Model) onboardKey(msg tea.KeyPressMsg) tea.Cmd {
 	o := m.onboard
 	if msg.String() == "ctrl+c" {
+		o.stop()
 		return m.leave()
 	}
 	if !o.saved.IsZero() {
 		m.closeSetup() // any key skips the scene
 		return nil
 	}
-	if o.busy != "" {
+	if o.busy != "" && o.step != stepLogin {
 		return nil
 	}
 	switch msg.String() {
 	case "esc":
-		if o.step > stepWelcome {
-			return o.goTo(o.step - 1)
-		}
-		if o.first {
-			return m.leave()
-		}
-		m.closeSetup()
-		return nil
+		return m.back()
 	case "enter":
 		return m.next()
 	}
-	if o.step == stepModel {
+	if o.typing() {
+		var cmd tea.Cmd
+		o.input, cmd = o.input.Update(msg)
+		return cmd
+	}
+	rows := 0
+	switch o.step {
+	case stepModel:
 		switch msg.String() {
 		case "up", "k":
 			o.model = max(0, o.model-1)
@@ -193,13 +421,70 @@ func (m *Model) onboardKey(msg tea.KeyPressMsg) tea.Cmd {
 			o.model = min(len(o.models.Chat)-1, o.model+1)
 		}
 		return nil
+	case stepAccess:
+		rows = len(o.accesses) + 1 // and the row that adds one
+	case stepProvider:
+		rows = len(o.providers)
 	}
-	if o.typing() {
-		var cmd tea.Cmd
-		o.input, cmd = o.input.Update(msg)
-		return cmd
+	switch msg.String() {
+	case "up", "k":
+		o.sel = max(0, o.sel-1)
+	case "down", "j":
+		o.sel = min(rows-1, o.sel+1)
+	}
+	if o.step != stepAccess || o.sel >= len(o.accesses) {
+		return nil
+	}
+	access := o.accesses[o.sel]
+	switch msg.String() {
+	case "l":
+		return m.signIn("", access.ID)
+	case "r":
+		o.renaming, o.err, o.note = access.ID, "", ""
+		return o.type_(access.Name, "Enter for no name", false)
+	case "d":
+		o.busy, o.err, o.note = "removing", "", ""
+		setup, ctx := o.setup, m.ctx
+		return func() tea.Msg {
+			note, err := setup.Remove(ctx, access.ID)
+			accesses, listErr := setup.Accesses()
+			return accessesMsg{accesses, note, cmp.Or(err, listErr)}
+		}
 	}
 	return nil
+}
+
+// back leaves the page for the one before it.
+func (m *Model) back() tea.Cmd {
+	o := m.onboard
+	if o.renaming != "" {
+		o.renaming = ""
+		o.input.Blur()
+		return nil
+	}
+	switch o.step {
+	case stepWelcome:
+		if o.first {
+			return m.leave()
+		}
+		m.closeSetup()
+		return nil
+	case stepLogin:
+		if len(o.providers) > 1 {
+			return o.goTo(stepProvider)
+		}
+		fallthrough
+	case stepProvider:
+		if len(o.accesses) > 0 {
+			return o.goTo(stepAccess)
+		}
+		fallthrough
+	case stepAccess:
+		return o.goTo(stepWelcome)
+	case stepModel:
+		return m.enter()
+	}
+	return o.goTo(o.step - 1)
 }
 
 // next leaves the page with what was entered on it.
@@ -207,23 +492,47 @@ func (m *Model) next() tea.Cmd {
 	o := m.onboard
 	value := strings.TrimSpace(o.input.Value())
 	switch o.step {
-	case stepEndpoint:
-		if value == "" {
-			o.err = "the endpoint is needed"
-			return nil
-		}
-		o.endpoint = strings.TrimRight(value, "/")
-	case stepKey:
-		o.busy = "connecting"
-		endpoint, setup, ctx := o.endpoint, o.setup, m.ctx
-		return func() tea.Msg {
-			if value == "" && setup.HasKey(endpoint) {
-				models, err := setup.Saved(ctx, endpoint)
-				return connectedMsg{models, err}
+	case stepWelcome:
+		return m.enter()
+	case stepAccess:
+		setup, ctx := o.setup, m.ctx
+		if id := o.renaming; id != "" {
+			o.renaming = ""
+			o.input.Blur()
+			return func() tea.Msg {
+				err := setup.Rename(id, value)
+				accesses, listErr := setup.Accesses()
+				return accessesMsg{accesses, "", cmp.Or(err, listErr)}
 			}
-			models, err := setup.Connect(ctx, endpoint, value)
-			return connectedMsg{models, err}
 		}
+		if o.sel >= len(o.accesses) {
+			return m.add()
+		}
+		id := o.accesses[o.sel].ID
+		o.busy, o.err, o.note = "connecting", "", ""
+		return func() tea.Msg {
+			models, err := setup.Use(ctx, id)
+			return connectedMsg{id, models, err}
+		}
+	case stepProvider:
+		return m.signIn(o.providers[o.sel].Name, "")
+	case stepLogin:
+		l := o.login
+		if l == nil {
+			return m.enter() // it failed: once more
+		}
+		if l.asked == nil {
+			return nil // the provider works
+		}
+		if value == "" {
+			value = l.asked.Default
+		} else if !l.asked.Secret {
+			o.answers[l.asked.Title] = value
+		}
+		l.reply <- value
+		l.asked, o.busy, o.err, o.note = nil, "one moment", "", ""
+		o.input.Blur()
+		return nil
 	case stepModel:
 		o.name = cmp.Or(o.name, o.setup.Name())
 	case stepName:
@@ -240,26 +549,40 @@ func (m *Model) next() tea.Cmd {
 	return o.goTo(o.step + 1)
 }
 
-// connected takes the answer of the endpoint: on to the models, or the key
-// once more.
+// connected takes the answer of an access that was taken as it is: on to its
+// models, or to signing in to it anew if it refused its key.
 func (m *Model) connected(msg connectedMsg) tea.Cmd {
 	o := m.onboard
-	if o == nil || o.step != stepKey {
+	if o == nil || o.step != stepAccess {
 		return nil
 	}
 	o.busy = ""
 	switch {
 	case errors.Is(msg.err, plugin.ErrKeyRejected):
-		o.err = "API key rejected, try again"
-		o.input.Reset()
-		return nil
+		cmd := m.signIn("", msg.id)
+		o.err = "API key rejected: sign in again"
+		return cmd
 	case msg.err != nil:
 		o.err = msg.err.Error()
 		return nil
 	}
-	o.models = msg.models
-	o.model = max(0, slices.Index(msg.models.Chat, msg.models.Default))
-	return o.goTo(stepModel)
+	return m.offer(msg.models)
+}
+
+// managed takes how renaming or removing an access went.
+func (m *Model) managed(msg accessesMsg) {
+	o := m.onboard
+	if o == nil || o.step != stepAccess {
+		return
+	}
+	o.busy, o.note, o.err = "", msg.note, ""
+	if msg.err != nil {
+		o.err = msg.err.Error()
+	}
+	if msg.accesses != nil {
+		o.accesses = msg.accesses
+	}
+	o.sel = min(o.sel, len(o.accesses))
 }
 
 // setupSaved starts the end of the scene once the setup is saved, and the
@@ -304,6 +627,7 @@ func (m *Model) frame(at time.Time) {
 
 // closeSetup leaves the setup for the chat.
 func (m *Model) closeSetup() {
+	m.onboard.stop()
 	m.onboard = nil
 	m.showSplash = false
 }
@@ -375,37 +699,78 @@ func (m *Model) onboardView() string {
 	return lipgloss.NewCanvas(w, h).Compose(layers).Render()
 }
 
-// pages are the titles of the pages after the welcome.
-var pages = [steps]string{"", "LLM endpoint", "API key", "Model", "Node name", "What your agent may do"}
+// titles are the titles of the pages that have a fixed one.
+var titles = map[step]string{stepAccess: "Access", stepProvider: "Provider", stepLogin: "Sign in",
+	stepModel: "Model", stepName: "Node name", stepRights: "What your agent may do"}
 
 // dialog is the page of the setup that is open, in its box.
 func (o *onboarding) dialog(spin string, light bool) string {
 	inner := boxWidth - 6 // border and padding
 	title := "Welcome to ouroboros"
 	if o.step > stepWelcome {
-		title = fmt.Sprintf("%d/%d · %s", o.step, steps-1, pages[o.step])
+		page := titles[o.step]
+		if o.login != nil && o.login.asked != nil {
+			page = o.login.asked.Title
+		}
+		title = fmt.Sprintf("%d/%d · %s", o.step.phase(), phases, page)
 	}
 	lines := []string{boldStyle.Foreground(accent).Render(title), ""}
 	text := func(s ...string) {
 		for _, l := range s {
-			lines = append(lines, mutedStyle.Render(l))
+			lines = append(lines, mutedStyle.Render(ansi.Truncate(l, inner, "…")))
+		}
+	}
+	pick := func(i int, row string) {
+		row = ansi.Truncate(row, inner-2, "…")
+		if i == o.sel {
+			lines = append(lines, lipgloss.NewStyle().Foreground(accent).Render("▸ "+row))
+		} else {
+			lines = append(lines, "  "+row)
 		}
 	}
 	hint := "enter next · esc back"
 	switch o.step {
 	case stepWelcome:
 		text("Your own agent runs as a node here.", "Other nodes find it; it can ask them.",
-			"", "Four questions, then you can chat.", "Change the answers later with /setup.")
+			"", "A few questions, then you can chat.", "Change the answers later with /setup.")
 		hint = "enter start · esc quit"
 		if !o.first {
 			hint = "enter start · esc back to the chat"
 		}
-	case stepEndpoint:
-		text("Any OpenAI-compatible API:", "OpenAI, Ollama, LM Studio, vLLM, …", "")
-		lines = append(lines, o.input.View())
-	case stepKey:
-		text("for "+ansi.Truncate(o.endpoint, inner-4, "…"), "")
-		lines = append(lines, o.input.View())
+	case stepAccess:
+		for i, a := range o.accesses {
+			row := a.Label
+			if a.About != "" {
+				row += " · " + a.About
+			}
+			if a.Active {
+				row += "  in use"
+			}
+			if a.Missing {
+				row += "  (no " + a.Provider + " plugin)"
+			}
+			pick(i, row)
+		}
+		pick(len(o.accesses), "+ add another access")
+		hint = "enter use · l sign in again\nr rename · d remove · esc back"
+		if o.renaming != "" {
+			text("", "What do you call this access?")
+			lines = append(lines, o.input.View())
+			hint = "enter save · esc back"
+		}
+	case stepProvider:
+		text("Where does your agent get its model?", "")
+		for i, p := range o.providers {
+			pick(i, p.Title)
+		}
+		hint = "↑↓ choose · enter next · esc back"
+	case stepLogin:
+		if o.login != nil && o.login.asked != nil {
+			text(o.login.asked.Text...)
+			lines = append(lines, "", o.input.View())
+		} else if o.login == nil {
+			hint = "enter once more · esc back"
+		}
 	case stepModel:
 		lines = append(lines, o.modelList(inner)...)
 		hint = "↑↓ choose · enter next · esc back"
@@ -420,14 +785,17 @@ func (o *onboarding) dialog(spin string, light bool) string {
 		row("For you", owner)
 		row("For peers", peers)
 		lines = append(lines, mutedStyle.Render("Protected  ")+ansi.Truncate(cmp.Or(strings.Join(protected, " "), "nothing"), inner-11, "…"))
-		text("", "Change it in config.json, under tools.")
+		text("", "Change it in /settings.")
 		hint = "enter finish · esc back"
 	}
-	switch {
-	case o.busy != "":
+	if o.note != "" {
+		lines = append(lines, "", mutedStyle.Width(inner).Render(o.note))
+	}
+	if o.err != "" {
+		lines = append(lines, "", errStyle.Width(inner).Render("✗ "+o.err))
+	}
+	if o.busy != "" {
 		lines = append(lines, "", spin+mutedStyle.Render(" "+o.busy+"…"))
-	case o.err != "":
-		lines = append(lines, "", errStyle.Render("✗ "+o.err))
 	}
 	lines = append(lines, "", o.progress(), mutedStyle.Render(hint))
 	return box(true, light).Padding(1, 2).Width(boxWidth).Render(strings.Join(lines, "\n"))
@@ -461,14 +829,14 @@ func tools(names []string) string {
 	return strings.Join(names, ", ")
 }
 
-// progress shows how far the setup is: a dot per page after the welcome.
+// progress shows how far the setup is: a dot per part after the welcome.
 func (o *onboarding) progress() string {
-	dots := make([]string, 0, steps-1)
-	for s := stepEndpoint; s < steps; s++ {
-		switch {
-		case s < o.step:
+	dots := make([]string, 0, phases)
+	for p := 1; p <= phases; p++ {
+		switch at := o.step.phase(); {
+		case p < at:
 			dots = append(dots, lipgloss.NewStyle().Foreground(accent).Render("●"))
-		case s == o.step:
+		case p == at:
 			dots = append(dots, lipgloss.NewStyle().Foreground(accent).Render("◉"))
 		default:
 			dots = append(dots, mutedStyle.Render("○"))

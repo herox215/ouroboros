@@ -12,9 +12,9 @@ import (
 
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
+	"ouroboros/internal/credentials"
 	"ouroboros/internal/home"
 	"ouroboros/internal/sandbox"
-	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -40,7 +40,7 @@ func built(t *testing.T, cfg config.Config) (*plugin.Owner, string, []string) {
 	if err := config.Save(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
-	o := plugin.OwnerOf(home.Dir(dir), nil, setup.Offer{})
+	o := plugin.OwnerOf(home.Dir(dir), nil)
 	var names []string
 	for _, p := range plugin.Activate(o, []plugin.Plugin{maker, user, free, frame}, fixed) {
 		names = append(names, p.Name)
@@ -90,7 +90,7 @@ func TestActivate(t *testing.T) {
 	// A configuration that cannot be read turns nothing off.
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "config.json"), []byte("{"), 0o600)
-	o = plugin.OwnerOf(home.Dir(dir), nil, setup.Offer{})
+	o = plugin.OwnerOf(home.Dir(dir), nil)
 	if got := plugin.Activate(o, []plugin.Plugin{maker, free}, nil); len(got) != 2 {
 		t.Fatalf("running %v", got)
 	}
@@ -128,7 +128,9 @@ func TestSettings(t *testing.T) {
 	if b, _ := json.Marshal(s); strings.Contains(string(b), "sk-secret") {
 		t.Fatalf("the key is shown: %s", b)
 	}
-	if s.Name != cfg.Name || s.Endpoint != cfg.BaseURL || s.Model != cfg.Model || !s.HasKey || s.ID != cfg.ID() ||
+	// The access shows as what it is called and where it reaches, as the
+	// node made it of the endpoint of the configuration.
+	if s.Name != cfg.Name || s.Access != "localhost" || s.About != cfg.BaseURL || s.Model != cfg.Model || s.ID != cfg.ID() ||
 		s.ContextProvider != "compact" || !slices.Equal(s.ContextProviders, []string{"compact", "other"}) || !s.RebuildWithoutSandbox ||
 		!s.ProtectedDefault || !slices.Equal(s.Protected, config.DefaultProtected()) {
 		t.Fatalf("settings %+v", s)
@@ -238,6 +240,13 @@ func TestChange(t *testing.T) {
 	refused(plugin.Setting{Kind: plugin.SetPlugin, Name: "maker"}, "so ouro cannot start: plugin user needs plugin_test.greeting, which no plugin provides")
 	refused(plugin.Setting{Kind: plugin.SetPlugin, Name: "frame"}, "frame cannot be turned off: it is the frame")
 	refused(plugin.Setting{Kind: plugin.SetPlugin, Name: "nope"}, `this build has no plugin "nope"`)
+	// A provider is the plugin of its name: while an access of the node
+	// signs in with it, it stays on. Once the access is gone, it can go.
+	store := home.Dir(dir).Credentials()
+	access, _ := store.Put(credentials.Access{Provider: "free"})
+	refused(plugin.Setting{Kind: plugin.SetPlugin, Name: "free"}, "free cannot be turned off: an access of the node signs in with it. Remove the access in /setup first")
+	store.Remove(access.ID)
+	change(plugin.Setting{Kind: plugin.SetPlugin, Name: "free"})
 	if change(plugin.Setting{Kind: plugin.SetPlugin, Name: "free", On: true}); read().Plugins != nil {
 		t.Errorf("none off: %+v", read().Plugins)
 	}

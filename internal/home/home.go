@@ -8,6 +8,7 @@ package home
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -18,9 +19,11 @@ import (
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
+	"ouroboros/internal/credentials"
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/identity"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/proposal"
 	"ouroboros/internal/safefile"
 )
@@ -37,7 +40,64 @@ func (d Dir) path(name string) string { return filepath.Join(string(d), name) }
 func (d Dir) UpdateDir() string { return d.path("update") }
 
 // Config reads the configuration. A node that was never set up has an empty one.
-func (d Dir) Config() (config.Config, error) { return config.Load(string(d)) }
+//
+// A configuration from before there were accesses names its LLM itself, an
+// endpoint and the key for it. Reading it moves the two into the credentials
+// of the node, as the access LegacyAccess, and takes them out of the
+// configuration: whoever reads it sees the access and nothing else. The
+// access is written first, so a crash in between leaves a configuration that
+// is moved again the next time, to the same access.
+func (d Dir) Config() (config.Config, error) {
+	c, err := config.Load(string(d))
+	if err != nil || c.BaseURL == "" {
+		return c, err
+	}
+	err = config.Update(string(d), func(cur *config.Config) error {
+		if cur.BaseURL != "" && cur.Access == "" {
+			if _, err := d.Credentials().Put(credentials.Access{ID: LegacyAccess, Provider: openai.ProviderName,
+				Credentials: openai.Credentials(cur.BaseURL, cur.APIKey)}); err != nil {
+				return fmt.Errorf("moving the key of the API into %s: %w", credentials.FileName, err)
+			}
+			cur.Access = LegacyAccess
+		}
+		cur.BaseURL, cur.APIKey = "", ""
+		c = *cur
+		return nil
+	})
+	return c, err
+}
+
+// LegacyAccess is the ID of the access that is made of the endpoint and the
+// key of a configuration from before there were accesses.
+const LegacyAccess = "default"
+
+// Credentials opens the accesses of the node: how it signs in to the APIs
+// its agents talk to.
+func (d Dir) Credentials() *credentials.Store { return credentials.Open(string(d)) }
+
+// HostID returns what names this installation of ouro to a provider that
+// tells the hosts of an account apart: an opaque ID, made on first use and
+// kept for good. It names the host, not the owner, and is no secret.
+func (d Dir) HostID() (string, error) {
+	path := d.path("host-id")
+	unlock, err := safefile.Lock(path + ".lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if b, err := os.ReadFile(path); err == nil && len(bytes.TrimSpace(b)) > 0 {
+		return string(bytes.TrimSpace(b)), nil
+	}
+	var u [16]byte
+	rand.Read(u[:])
+	u[6], u[8] = u[6]&0x0f|0x40, u[8]&0x3f|0x80 // a UUID of version 4
+	id := fmt.Sprintf("urn:uuid:%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+	return id, safefile.Write(path, []byte(id+"\n"), 0o600)
+}
+
+// Models is the file the lists of models the accesses last offered are kept
+// in, to show when an access does not answer.
+func (d Dir) Models() string { return d.path("models.json") }
 
 // SaveConfig writes the configuration. The identity of the node is not given
 // up by it: a configuration without a key, read before the key was generated,
@@ -53,8 +113,11 @@ func (d Dir) SaveConfig(c config.Config) error {
 }
 
 // Secrets are the files that hold the secrets of the node, which no tool of
-// an agent reads: the configuration and the file it is locked with.
-func (d Dir) Secrets() []string { return config.Files(string(d)) }
+// an agent reads: the configuration with the key of the node, the accesses
+// with the keys of the APIs, and the files they are locked with.
+func (d Dir) Secrets() []string {
+	return append(config.Files(string(d)), credentials.Files(string(d))...)
+}
 
 // Contacts opens the contact list of the node.
 func (d Dir) Contacts() *contacts.Store { return contacts.Open(d.path("contacts.json")) }

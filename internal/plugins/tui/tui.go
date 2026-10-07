@@ -240,20 +240,23 @@ func (u *ui) Start() error {
 	return err
 }
 
+// providers are the providers the plugins contributed.
+func (u *ui) providers() []plugin.Provider { return plugin.All[plugin.Provider](u.ctx) }
+
 // Setup starts the setup of the node, which the UI goes through in a dialog
-// of its own.
+// of its own, with the providers the plugins contributed.
 func (u *ui) Setup() (tui.Setup, error) {
-	s, err := u.Owner.Setup()
+	s, err := u.Owner.Setup(u.providers())
 	if err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-// Models lists the models the provider of the node offers, for /model. A
-// node that is not set up is told how to get there in the UI.
-func (u *ui) Models(ctx context.Context) (tui.Models, error) {
-	models, err := u.Owner.Models(ctx)
+// Models lists the models of every access of the node, for /model. A node
+// that is not set up is told how to get there in the UI.
+func (u *ui) Models(ctx context.Context) ([]tui.Models, error) {
+	models, err := u.Owner.Models(ctx, u.providers())
 	if errors.Is(err, plugin.ErrNotSetUp) {
 		return models, fmt.Errorf("%w, type /setup", err)
 	}
@@ -262,12 +265,12 @@ func (u *ui) Models(ctx context.Context) (tui.Models, error) {
 
 // SetModel saves the model the owner picked in the model screen. A node that
 // is not set up is told how to get there in the UI.
-func (u *ui) SetModel(model string) error {
-	err := u.Owner.SetModel(model)
+func (u *ui) SetModel(access, model string) (bool, error) {
+	switched, err := u.Owner.SetModel(access, model)
 	if errors.Is(err, plugin.ErrNotSetUp) {
-		return fmt.Errorf("%w, type /setup", err)
+		return false, fmt.Errorf("%w, type /setup", err)
 	}
-	return err
+	return switched, err
 }
 
 func (u *ui) Contacts() (tui.Contacts, error) {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // traced returns a context with a trace and the lines it was told.
@@ -165,5 +166,38 @@ func TestBodyCutOff(t *testing.T) {
 	})
 	if _, err := c.Complete(context.Background(), "gpt", nil, nil); err == nil {
 		t.Fatal("no error")
+	}
+}
+
+// Another kind of provider tells the same lines of its own requests: it gets
+// the trace of the context, compares its requests by session and tells the
+// headers of its responses.
+func TestTraceForOtherProviders(t *testing.T) {
+	if TraceOf(context.Background()) != nil {
+		t.Fatal("a context without a trace has one")
+	}
+	var lines []string
+	tell := TraceOf(WithTrace(context.Background(), func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}))
+	var sent Sent
+	first := [][]byte{[]byte(`{"role":"user","content":"hi"}`)}
+	if got := sent.Compare("s", "tools", first); got != "first request of the session in the trace" {
+		t.Fatalf("the first request: %q", got)
+	}
+	next := append(first, []byte(`{"role":"assistant","content":"ho"}`))
+	if got := sent.Compare("s", "tools", next); !strings.Contains(got, "all 1 messages of the last request are kept, 1 are new") {
+		t.Fatalf("the next request: %q", got)
+	}
+	if got := sent.Compare("other", "tools", next); got != "first request of the session in the trace" {
+		t.Fatalf("another session: %q", got)
+	}
+	resp := &http.Response{StatusCode: 200, Header: http.Header{"X-Request-Id": {"req_1"}, "Set-Cookie": {"secret"}}}
+	TraceResponse(tell, resp, 1500*time.Millisecond)
+	if len(lines) != 1 || lines[0] != "llm response: HTTP 200 after 1.5s, headers {X-Request-Id: req_1}" {
+		t.Fatalf("told %q", lines)
+	}
+	if Hash("a") != hash("a") || Hash("a") == Hash("b") {
+		t.Fatal("the hash of tools")
 	}
 }

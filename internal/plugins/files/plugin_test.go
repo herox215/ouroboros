@@ -92,6 +92,24 @@ func TestOwnerWorksWithFiles(t *testing.T) {
 	if clitest.MustLoad(t, s).Name != "alpha" {
 		t.Error("the configuration was changed")
 	}
+	// It is in the credentials of the node by now, which no tool reads or
+	// changes either.
+	if kept, _ := os.ReadFile(filepath.Join(s.Home, "credentials.json")); !strings.Contains(string(kept), "sk-") {
+		t.Fatalf("the credentials: %s", kept)
+	}
+	for tool, args := range map[string]map[string]any{
+		"read":   {"path": filepath.Join(s.Home, "credentials.json")},
+		"search": {"path": filepath.Join(s.Home, "credentials.json"), "pattern": "sk-"},
+		"write":  {"path": filepath.Join(s.Home, "credentials.json"), "content": "{}"},
+		"delete": {"path": filepath.Join(s.Home, "credentials.json.lock")},
+	} {
+		if got := chat(tool, args); !strings.Contains(got, "the secrets of this node") || strings.Contains(got, "sk-") {
+			t.Errorf("%s of the credentials: %q", tool, got)
+		}
+	}
+	if kept, _ := os.ReadFile(filepath.Join(s.Home, "credentials.json")); !strings.Contains(string(kept), "sk-") {
+		t.Fatalf("the credentials were changed: %s", kept)
+	}
 
 	// The owner holds the own agent back.
 	cfg := clitest.NodeConfig(s)

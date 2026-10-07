@@ -2,10 +2,13 @@ package plugin
 
 import (
 	"context"
+	"net/http"
+	"time"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
 	"ouroboros/internal/discovery"
+	"ouroboros/internal/llm"
 	"ouroboros/internal/openai"
 )
 
@@ -92,14 +95,30 @@ func OriginFrom(ctx context.Context) (Origin, bool) { return a2a.OriginFrom(ctx)
 // alone is local to the agent that answers.
 func ContextID(ctx context.Context) string { return agent.ContextID(ctx) }
 
-// LLM is the service that decides which API the agents talk to: it returns
-// the model reached at the endpoint the node is configured for. One plugin
-// provides it; the openai plugin does for OpenAI-compatible APIs.
-type LLM func(at Endpoint) Model
+// Provider is an API the agents can talk to: how the owner signs in to it,
+// which models it has and the model the agents answer with. A plugin
+// contributes it with Add, under the name of the plugin; the openai plugin
+// does for OpenAI-compatible APIs. The node may have several accesses, each
+// signed in by one provider, and the owner picks the model of one of them.
+//
+// A provider gets its own credentials and nothing else of the node: see
+// Access. What it returns from Login is kept in a file of its own, apart from
+// the configuration, and everything it puts under Credentials.Secret is kept
+// out of the log, out of reach of the tools and of every proposal.
+type Provider = llm.Provider
 
 type (
-	// Endpoint is where the LLM of the node is reached.
-	Endpoint = agent.Endpoint
+	// Access is one access of the node as its provider sees it: its own
+	// credentials, to read, and to renew when they ran out.
+	Access = llm.Access
+	// Credentials are what a provider keeps of an access.
+	Credentials = llm.Credentials
+	// Dialog is how a provider asks the owner while it signs in, on the
+	// terminal and in the terminal UI alike, and Question what it asks.
+	Dialog   = llm.Dialog
+	Question = llm.Question
+	// Models are the models of an access, as a provider lists them.
+	Models = llm.Models
 	// Model generates a reply for a conversation or asks for tools to be
 	// run. Another provider translates to and from the OpenAI message types.
 	Model = agent.LLM
@@ -107,6 +126,49 @@ type (
 	ChatMessage = openai.Message
 	ChatTool    = openai.Tool
 )
+
+// What a Model does for the cache of its API is its own business: which
+// parameters and headers tell the API that a call goes on from the one before
+// differs from API to API. ouro gives it what it needs for that and shows
+// what came of it:
+//
+//   - ContextID(ctx) in Complete is the conversation the call belongs to, the
+//     same for every call of it. Send it the way the API wants a conversation
+//     named, so that it takes the call where it cached the one before.
+//   - ChatMessage.Usage of the answer says how many tokens were sent and how
+//     many of them the API had cached. ouro shows it to the owner and logs it.
+//   - Trace(ctx), in the debug mode of the node, takes what the call sent and
+//     got: the lines that tell why a call was not cached.
+
+// Trace returns what a Model tells the log of the node with while the node
+// is in debug mode, nil while it is not: check before putting a line
+// together. The lines of the providers of ouro start with "llm request: ",
+// "llm prefix: ", "llm response: " and "llm answered: ". No secret of the
+// node shows in them: the log replaces every one.
+func Trace(ctx context.Context) func(format string, args ...any) { return openai.TraceOf(ctx) }
+
+// Requests keeps the last request of every conversation a Model traced, to
+// say with Compare how far the next one begins like it: what the API can
+// have cached of it. A Model has one; its zero value is ready to use.
+//
+//	if trace := plugin.Trace(ctx); trace != nil {
+//		trace("llm prefix: %s", m.requests.Compare(plugin.ContextID(ctx), tools, items))
+//	}
+//
+// items are the messages of the request as the API is sent them, each as
+// JSON, and tools whatever the request sends of tools.
+type Requests = openai.Sent
+
+// TraceResponse tells trace the status and the headers of resp, which came
+// after took: where a header says which machine or cache answered, that is
+// where to look for it.
+func TraceResponse(trace func(format string, args ...any), resp *http.Response, took time.Duration) {
+	openai.TraceResponse(trace, resp, took)
+}
+
+// ErrKeyRejected is what the Login and the Models of a provider fail with
+// when the API refused the key.
+var ErrKeyRejected = llm.ErrKeyRejected
 
 // ContextProvider prepares model context when explicitly selected by name.
 type ContextProvider = agent.ContextProvider

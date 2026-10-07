@@ -119,9 +119,9 @@ func TestStartAndStop(t *testing.T) {
 	clitest.Env(t, s)
 	t.Cleanup(func() { clitest.Run(t, s, "", "stop") })
 
-	out, err := clitest.Run(t, s, "\n"+openaitest.Key+"\n2\nmynode\n", "start")
+	out, err := clitest.Run(t, s, "\n\n"+openaitest.Key+"\n2\nmynode\n", "start")
 	id := clitest.NodeID(t, s)
-	if err != nil || !strings.Contains(out, "API endpoint") || !strings.Contains(out, "● ouroboros "+id+" (mynode) online on :") || !strings.Contains(out, "→ gpt-4o-mini") {
+	if err != nil || !strings.Contains(out, "Provider [number, Enter = 1]: ") || !strings.Contains(out, "LLM endpoint") || !strings.Contains(out, "● ouroboros "+id+" (mynode) online on :") || !strings.Contains(out, "→ gpt-4o-mini") {
 		t.Fatalf("start: %q, %v", out, err)
 	}
 	if out, err := clitest.Run(t, s, "", "status"); err != nil || !strings.Contains(out, "● running  id="+id+"  name=mynode") {

@@ -19,11 +19,12 @@ import (
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
+	"ouroboros/internal/credentials"
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
+	"ouroboros/internal/llm"
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
-	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -256,9 +257,15 @@ func TestFrameIsOutOfReach(t *testing.T) {
 		// What the owner does is handed to a front end in the list of
 		// plugins, and to nobody who asks the kernel for it.
 		"what the owner does":            needing[*plugin.Owner]("p"),
-		"an owner of its own":            providing("p", plugin.OwnerOf(dir, &peers.Network{}, setup.Offer{})),
+		"an owner of its own":            providing("p", plugin.OwnerOf(dir, &peers.Network{})),
 		"a way to what the owner does":   needing[func() *plugin.Owner]("p"),
 		"the setup, which saves the key": needing[*plugin.Setup]("p"),
+		// What the node signs in to its LLMs with: a provider is handed its
+		// own access, and nobody the store or the book that opens it.
+		"the credentials":           needing[*credentials.Store]("p"),
+		"credentials of its own":    providing("p", dir.Credentials()),
+		"the book of the accesses":  needing[llm.Book]("p"),
+		"a way to every credential": providing("p", &llm.Book{Store: dir.Credentials()}),
 		// An LLM that is handed the configuration would be handed the key.
 		"an LLM that reads the configuration": providing("p", func(config.Config) plugin.Model { return nil }),
 	} {
@@ -274,7 +281,6 @@ func TestServicesCannotBeReplaced(t *testing.T) {
 	for name, p := range map[string]plugin.Plugin{
 		"*plugin.Network": providing("mine", plugin.NetworkOf(&peers.Network{})),
 		"*plugin.Console": providing("mine", plugin.NewConsole(plugin.Terminal{})),
-		"plugin.LLM":      providing("mine", plugin.LLM(func(plugin.Endpoint) plugin.Model { return nil })),
 	} {
 		_, err := cli.NewWith(standard(t, p)...)
 		if err == nil || !strings.Contains(err.Error(), name+" is provided by plugin") || !strings.Contains(err.Error(), "and by plugin mine") {

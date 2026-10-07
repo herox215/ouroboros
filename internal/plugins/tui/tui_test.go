@@ -2,6 +2,7 @@ package tui_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -17,12 +18,12 @@ import (
 	"ouroboros/internal/cli"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
+	"ouroboros/internal/credentials"
 	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 	"ouroboros/internal/openai"
 	tuiplugin "ouroboros/internal/plugins/tui"
 	"ouroboros/internal/session"
-	"ouroboros/internal/setup"
 	"ouroboros/internal/tui"
 	"ouroboros/plugin"
 	"ouroboros/plugin/example"
@@ -49,7 +50,7 @@ func backend(t *testing.T, s cli.Settings, extra ...plugin.Plugin) tui.Backend {
 	sessions := session.New(bot)
 	sessions.Archive(history.Open(home.Dir(s.Home).History()), func(string, ...any) {}, func(string) string { return "beta" })
 	t.Cleanup(sessions.Close)
-	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), ctx, sessions)
+	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app)), ctx, sessions)
 }
 
 // answer asks u text in the session id and returns what happened up to the
@@ -77,13 +78,20 @@ func answer(t *testing.T, u tui.Backend, id, text string) []tui.Event {
 }
 
 // The UI sets the node up with what the owner does: the setup offers the
-// endpoint of the settings, and one whose configuration cannot be read is
-// none.
+// providers the plugins contributed, and one whose configuration cannot be
+// read is none.
 func TestTUIBackendSetup(t *testing.T) {
 	s := clitest.Settings(t)
 	set, err := backend(t, s).Setup()
-	if err != nil || set.Endpoint() != s.BaseURL {
+	if err != nil {
 		t.Fatalf("got %v, %v", set, err)
+	}
+	var names []string
+	for _, p := range set.Providers() {
+		names = append(names, p.Name)
+	}
+	if !slices.Equal(names, []string{"openai", "chatgpt"}) {
+		t.Fatalf("the providers to sign in with: %v", names)
 	}
 	if err := os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
@@ -271,8 +279,8 @@ func TestTUIBackendWithoutSetup(t *testing.T) {
 	}
 }
 
-// The model screen of the UI lists the models of the provider the node is
-// set up with, and saves the model the owner picked: without the rest of the
+// The model screen of the UI lists the models of the accesses of the node,
+// and saves the model the owner picked: without the rest of the
 // configuration changing.
 func TestTUIBackendModels(t *testing.T) {
 	s := clitest.Settings(t)
@@ -280,21 +288,25 @@ func TestTUIBackendModels(t *testing.T) {
 	if _, err := u.Models(context.Background()); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("a node that is not set up: %v", err)
 	}
-	if err := u.SetModel("gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) {
+	// An access without a node that is set up, as after a setup that was
+	// not finished.
+	stray, _ := home.Dir(s.Home).Credentials().Put(credentials.Access{Provider: "openai"})
+	if _, err := u.SetModel(stray.ID, "gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("a node that is not set up: %v", err)
 	}
+	home.Dir(s.Home).Credentials().Remove(stray.ID)
 	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
 		t.Fatal(err)
 	}
 	models, err := u.Models(context.Background())
-	if err != nil || !slices.Contains(models.Chat, "gpt-4o") {
+	if err != nil || len(models) != 1 || !slices.Contains(models[0].Models, "gpt-4o") || !models[0].Access.Active {
 		t.Fatalf("models %+v, %v", models, err)
 	}
-	if err := u.SetModel("gpt-4o-mini"); err != nil {
-		t.Fatal(err)
+	if switched, err := u.SetModel(models[0].Access.ID, "gpt-4o-mini"); err != nil || switched {
+		t.Fatalf("SetModel = %v, %v", switched, err)
 	}
-	if cfg := clitest.MustLoad(t, s); cfg.Model != "gpt-4o-mini" || cfg.BaseURL != s.BaseURL {
-		t.Fatalf("the configuration after saving: %+v", cfg)
+	if endpoint, _ := clitest.Reached(t, s); clitest.MustLoad(t, s).Model != "gpt-4o-mini" || endpoint != s.BaseURL {
+		t.Fatalf("the configuration after saving: %+v", clitest.MustLoad(t, s))
 	}
 }
 
@@ -588,7 +600,7 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 	if got := bot.Conversation(shown); !strings.Contains(string(got), "starting anew") {
 		t.Fatalf("the agent remembers %s", got)
 	}
-	if status, _ := (plugin.OwnerOf(home.Dir(s.Home), nil, setup.Offer{})).Status(); !status.Running {
+	if status, _ := (plugin.OwnerOf(home.Dir(s.Home), nil)).Status(); !status.Running {
 		t.Fatal("the node ran before the restart and should run on")
 	}
 	if _, ok := os.LookupEnv(tuiplugin.ResumeEnv); ok {
@@ -623,5 +635,36 @@ func TestContextShowsPostprocessingDiagnostic(t *testing.T) {
 	last := msgs[len(msgs)-1]
 	if last.Role != "plugin diagnostic" || last.Text != "post after failed: storage failed" {
 		t.Fatal(msgs)
+	}
+}
+
+// What became of a call is added to its line once it ended, and only to a
+// line: a call that is still running has none of it, and a call no plugin
+// shows stays unseen when it ended.
+func TestStepShowsHowItEndedOnlyOnceItEnded(t *testing.T) {
+	var ctx *plugin.Context
+	views := plugin.New("views", func(c *plugin.Context, _ struct{}) error {
+		ctx = c
+		plugin.Add(c, plugin.ToolView{Tool: "seen", Show: func(json.RawMessage) string { return "looking" }, Detail: func(plugin.Step) string { return "✓" }})
+		plugin.Add(c, plugin.ToolView{Tool: "unseen", Show: func(json.RawMessage) string { return "" }, Detail: func(plugin.Step) string { return "✓" }})
+		return nil
+	})
+	if _, err := cli.NewWith(views); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		tool string
+		done bool
+		want string
+	}{
+		{"seen", false, "looking"},
+		{"seen", true, "looking ✓"},
+		{"unseen", false, ""},
+		{"unseen", true, ""},
+	} {
+		got := tuiplugin.Shown(ctx, plugin.SessionEvent{Kind: plugin.SessionStep, Tool: tt.tool, Done: tt.done})
+		if got.Text != tt.want || got.Done != tt.done {
+			t.Errorf("%s, done %v: shown as %q", tt.tool, tt.done, got.Text)
+		}
 	}
 }

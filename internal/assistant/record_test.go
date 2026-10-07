@@ -120,14 +120,15 @@ func recorded(t *testing.T, cfg config.Config, llm agent.LLM) (*Assistant, *logg
 		agent.NewTool("edit", "", nil, func(context.Context, struct{}) (string, error) { return "edited", nil }),
 	}
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
-		LLM:   func(agent.Endpoint) agent.LLM { return llm },
-		Tools: func() []agent.Tool { return tools },
+		LLM:      func(string) (agent.LLM, error) { return llm, nil },
+		Accesses: &accesses{secrets: []string{accessToken, accessToken + "-longer"}},
+		Tools:    func() []agent.Tool { return tools },
 	}, log.log)
 	return a, log
 }
 
 func ownerConfig() config.Config {
-	return config.Config{BaseURL: "http://llm", APIKey: "sk-secret-123", Model: "m", Name: "me", PrivateKey: identity.Generate().Private()}
+	return config.Config{Access: "http://llm", APIKey: "sk-secret-123", Model: "m", Name: "me", PrivateKey: identity.Generate().Private()}
 }
 
 func equal(t *testing.T, what string, got, want []string) {
@@ -309,7 +310,7 @@ func TestCanceledCallOfTheLLMIsLogged(t *testing.T) {
 func TestNothingAfterTheEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var lines []string
-	r := newRecord(ctx, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }, "c", config.Config{}, "hi", func() {})
+	r := newRecord(ctx, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }, "c", nil, "hi", func() {})
 	r.step(agent.Step{Tool: "a", Args: json.RawMessage(`{}`)})
 	r.call(agent.Call{})
 	r.step(agent.Step{Tool: "b", Args: json.RawMessage(`{}`)})
@@ -335,7 +336,7 @@ func TestNothingAfterTheEnd(t *testing.T) {
 // the end of the answer.
 func TestTokensAreLogged(t *testing.T) {
 	var lines []string
-	r := newRecord(context.Background(), func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }, "c", config.Config{}, "hi", func() {})
+	r := newRecord(context.Background(), func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }, "c", nil, "hi", func() {})
 	r.call(agent.Call{Sent: 2048})
 	r.call(agent.Call{Done: true, ToolCalls: 1, Tokens: 12345, Cached: 10240})
 	r.call(agent.Call{Sent: 1024})
@@ -386,6 +387,9 @@ func TestHowMuchTextIsLogged(t *testing.T) {
 	}
 }
 
+// accessToken is what an access of the node signs in with, in these tests.
+const accessToken = "tok-of-an-access-456"
+
 // Neither the key of the API nor the key of the node is in the log, in any of
 // the ways it is written, also not as part of an argument, an error, what the
 // LLM says along with a tool call or an answer.
@@ -394,7 +398,7 @@ func TestNoSecretIsLogged(t *testing.T) {
 	key, _ := base64.StdEncoding.DecodeString(cfg.PrivateKey)
 	seed := key[:32]
 	leaks := []string{
-		cfg.APIKey, cfg.PrivateKey, base64.RawStdEncoding.EncodeToString(key), base64.URLEncoding.EncodeToString(key),
+		accessToken, accessToken + "-longer", cfg.APIKey, cfg.PrivateKey, base64.RawStdEncoding.EncodeToString(key), base64.URLEncoding.EncodeToString(key),
 		base64.RawURLEncoding.EncodeToString(key), hex.EncodeToString(key), strings.ToUpper(hex.EncodeToString(key)),
 		base64.StdEncoding.EncodeToString(seed), hex.EncodeToString(seed),
 	}
@@ -426,11 +430,15 @@ func TestNoSecretIsLogged(t *testing.T) {
 	}
 
 	// A key of the node that cannot be read is redacted as it is written.
-	if got := secrets(config.Config{APIKey: "k", PrivateKey: "not base64!"}); strings.Join(got, ",") != "not base64!,k" {
+	if got := longestFirst(secrets(config.Config{APIKey: "k", PrivateKey: "not base64!"})); strings.Join(got, ",") != "not base64!,k" {
 		t.Fatalf("secrets %q", got)
 	}
-	if got := secrets(config.Config{}); len(got) != 0 {
+	if got := longestFirst(secrets(config.Config{})); len(got) != 0 {
 		t.Fatalf("no secrets: %q", got)
+	}
+	// The longest first, and each once: none is left in part.
+	if got := longestFirst([]string{"b", "abc", "", "ab", "a", "abc"}); strings.Join(got, ",") != "abc,ab,a,b" {
+		t.Fatalf("longest first: %q", got)
 	}
 }
 
@@ -439,7 +447,7 @@ func TestNoSecretIsLogged(t *testing.T) {
 func TestOnlyCallsUnderWayAreCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var lines []string
-	r := newRecord(ctx, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }, "c", config.Config{}, "hi", func() {})
+	r := newRecord(ctx, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }, "c", nil, "hi", func() {})
 	step := func(tool, args string, done bool) {
 		r.step(agent.Step{Tool: tool, Args: json.RawMessage(args), Done: done})
 	}
@@ -553,8 +561,9 @@ func TestDebugIsLogged(t *testing.T) {
 	log := &logged{}
 	debug := true
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
-		LLM:   func(agent.Endpoint) agent.LLM { return openai.New(srv.URL, cfg.APIKey) },
-		Tools: func() []agent.Tool { return nil },
+		LLM:      func(string) (agent.LLM, error) { return openai.New(srv.URL, accessToken), nil },
+		Accesses: &accesses{secrets: []string{accessToken}},
+		Tools:    func() []agent.Tool { return nil },
 	}, log.log).WithDebug(func() bool { return debug })
 
 	if _, err := a.Ask(context.Background(), "c1", "hi", nil); err != nil {
@@ -567,7 +576,7 @@ func TestDebugIsLogged(t *testing.T) {
 			t.Errorf("no %q in:\n%s", want, lines)
 		}
 	}
-	if strings.Contains(lines, cfg.APIKey) {
+	if strings.Contains(lines, accessToken) {
 		t.Errorf("the key in:\n%s", lines)
 	}
 

@@ -67,13 +67,6 @@ type LLM interface {
 	Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error)
 }
 
-// Endpoint is where the LLM of a node is reached: all that whoever provides
-// the LLM gets to know of the configuration of the node.
-type Endpoint struct {
-	BaseURL string
-	APIKey  string
-}
-
 // Step reports a tool call: once when it starts and again, with Done set,
 // when its result is in, together with how long the call took.
 type Step struct {
@@ -538,6 +531,20 @@ func (m *Memory) Conversation(contextID string) []openai.Message { return m.hist
 func (m *Memory) Restore(contextID string, msgs []openai.Message) {
 	if len(msgs) > 0 {
 		m.remember(contextID, slices.Clone(msgs))
+	}
+}
+
+// Unthink makes m forget what the LLM thought before its answers, in every
+// conversation: the messages and the results of the tools stay. It is for a
+// memory that goes on with another provider, which is not sent what the one
+// before thought, in a form that is its own.
+func (m *Memory) Unthink() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.conversations {
+		for i := range c.msgs {
+			c.msgs[i].Reasoning, c.msgs[i].ReasoningField = "", ""
+		}
 	}
 }
 

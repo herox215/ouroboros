@@ -10,6 +10,7 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
+	"ouroboros/internal/credentials"
 	"ouroboros/internal/kernel"
 	"ouroboros/internal/sandbox"
 )
@@ -30,11 +31,11 @@ const (
 )
 
 // Settings is the configuration of the node as the owner sees it in a front
-// end. The key of the node and the key of the API are not in it: HasKey says
-// whether there is one for the API.
+// end. The key of the node and what the accesses sign in with are not in it:
+// Access is what the access in use is called, and About what tells it apart,
+// like its endpoint or its account.
 type Settings struct {
-	Name, Endpoint, Model, ID string
-	HasKey                    bool
+	Name, Access, About, Model, ID string
 	// ContextProvider is the one selected, "" for none; ContextProviders
 	// are the ones this build has.
 	ContextProvider  string
@@ -166,8 +167,9 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 	if err != nil {
 		return Settings{}, err
 	}
+	access, _ := o.home.Credentials().Get(cfg.Access) // one that is no more shows as nothing
 	s := Settings{
-		Name: cfg.Name, Endpoint: cfg.BaseURL, Model: cfg.Model, ID: cfg.ID(), HasKey: cfg.APIKey != "",
+		Name: cfg.Name, Access: access.Label(), About: access.About, Model: cfg.Model, ID: cfg.ID(),
 		ContextProvider: cfg.ContextProvider, RebuildWithoutSandbox: cfg.RebuildWithoutSandbox,
 		PluginsKept: o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
@@ -321,6 +323,11 @@ func (o *Owner) switchPlugin(c *config.Config, name string, on bool) error {
 	} else {
 		if why := o.plugins.fixed[name]; why != "" && !on {
 			return fmt.Errorf("%s cannot be turned off: %s", name, why)
+		}
+		// A provider is the plugin of its name: without it, its accesses
+		// reach nothing.
+		if accesses, _ := o.home.Credentials().List(); !on && slices.ContainsFunc(accesses, func(a credentials.Access) bool { return a.Provider == name }) {
+			return fmt.Errorf("%s cannot be turned off: an access of the node signs in with it. Remove the access in /setup first", name)
 		}
 		if !on {
 			off = append(off, name)

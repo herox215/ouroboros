@@ -9,13 +9,9 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
 	"ouroboros/internal/home"
+	"ouroboros/internal/llm"
 	"ouroboros/plugin"
 )
-
-// needs are the services the plugin uses.
-type needs struct {
-	LLM plugin.LLM
-}
 
 // services are what the plugin provides.
 type services struct {
@@ -24,7 +20,8 @@ type services struct {
 }
 
 // Plugin provides the blueprint of the agents of the node in dir and the
-// assistant of its owner. The agents get every plugin.Tool a plugin
+// assistant of its owner. The agents answer with the model of the access the
+// configuration names, through the plugin.Provider that signed in to it. They get every plugin.Tool a plugin
 // contributed, as far as the owner allows it in the configuration, and the
 // agent of the owner the tools to see that configuration and to propose
 // changes of it, which wait in dir for the owner to decide. What the assistant
@@ -33,10 +30,13 @@ type services struct {
 // Every answer of the agents is archived in dir, see Archived: the sessions
 // of the owner are kept there, and the history plugin searches it.
 func Plugin(dir home.Dir) plugin.Plugin {
-	return plugin.NewService("assistant", func(ctx *plugin.Context, n needs) (services, error) {
+	return plugin.NewService("assistant", func(ctx *plugin.Context, _ struct{}) (services, error) {
 		archived := Archived(history.Open(dir.History()))
+		// The accesses of the node, with the providers the plugins contributed.
+		book := llm.Book{Store: dir.Credentials(), Providers: func() []llm.Provider { return plugin.All[plugin.Provider](ctx) }}
 		builder := assistant.Builder{
-			LLM:              n.LLM,
+			LLM:              book.Model,
+			Accesses:         book,
 			ContextProviders: func() []agent.ContextProvider { return plugin.All[plugin.ContextProvider](ctx) },
 			AnswerHooks: func() []agent.AnswerHook {
 				return append([]agent.AnswerHook{archived}, plugin.All[plugin.AnswerHook](ctx)...)

@@ -178,9 +178,16 @@ func TestLoadInvalidJSON(t *testing.T) {
 }
 
 func TestComplete(t *testing.T) {
-	full := Config{BaseURL: "u", Model: "m", Name: "n"}
+	full := Config{Access: "a", Model: "m", Name: "n"}
 	if !full.Complete() {
-		t.Fatal("config without API key and node key should be complete")
+		t.Fatal("config without node key should be complete")
+	}
+	// A configuration from before there were accesses names its endpoint.
+	if !(Config{BaseURL: "u", Model: "m", Name: "n"}).Complete() {
+		t.Fatal("a configuration with an endpoint in place of an access should be complete")
+	}
+	if (Config{Model: "m", Name: "n"}).Complete() {
+		t.Fatal("config without access should be incomplete")
 	}
 	partial := full
 	partial.Model = ""
@@ -466,6 +473,7 @@ func TestFields(t *testing.T) {
 		{"private_key", `"mine"`, "private_key is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"api_key", `"mine"`, "api_key is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"base_url", `"http://evil"`, "base_url is changed by the owner alone, with ouro start --setup: no proposal changes it"},
+		{"access", `"other"`, "access is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"tools", `{}`, `the configuration has no field "tools" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
 		{"", `1`, `the configuration has no field "" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
 		{FieldUnsandboxed, `true`, "rebuild_without_sandbox is set by the owner alone, in config.json: no proposal changes it"},
@@ -476,7 +484,7 @@ func TestFields(t *testing.T) {
 		}
 	}
 	// What cannot be proposed cannot be read as a field either: not the keys.
-	for _, path := range []string{"private_key", "api_key", "base_url", "rebuild_without_sandbox", "tools", "nope"} {
+	for _, path := range []string{"private_key", "access", "api_key", "base_url", "rebuild_without_sandbox", "tools", "nope"} {
 		if got, err := c.Field(path); err == nil || got != nil {
 			t.Errorf("reading %s: %s, %v", path, got, err)
 		}
@@ -487,14 +495,15 @@ func TestFields(t *testing.T) {
 // that hold.
 func TestPublic(t *testing.T) {
 	id := identity.Generate()
-	c := Config{Name: "alpha", Model: "gpt", BaseURL: "http://x/v1", APIKey: "sk-secret", PrivateKey: id.Private()}
-	got := string(c.Public())
-	if strings.Contains(got, "sk-secret") || strings.Contains(got, id.Private()) || strings.Contains(got, "key") && !strings.Contains(got, "keyrings") {
+	c := Config{Name: "alpha", Model: "gpt", Access: "a1b2c3d4", BaseURL: "http://x/v1", APIKey: "sk-secret", PrivateKey: id.Private()}
+	got := string(c.Public("localhost"))
+	if strings.Contains(got, "sk-secret") || strings.Contains(got, id.Private()) || strings.Contains(got, "key") && !strings.Contains(got, "keyrings") ||
+		strings.Contains(got, "a1b2c3d4") || strings.Contains(got, "http://x/v1") {
 		t.Fatalf("a secret is shown: %s", got)
 	}
 	var shown struct {
 		ID, Name, Model string
-		BaseURL         string `json:"base_url"`
+		Provider        string
 		Tools           struct {
 			H2A, A2A  []string
 			Protected []string
@@ -503,7 +512,7 @@ func TestPublic(t *testing.T) {
 	if err := json.Unmarshal([]byte(got), &shown); err != nil {
 		t.Fatalf("%v: %s", err, got)
 	}
-	if shown.ID != id.ID() || shown.Name != "alpha" || shown.Model != "gpt" || shown.BaseURL != "http://x/v1" ||
+	if shown.ID != id.ID() || shown.Name != "alpha" || shown.Model != "gpt" || shown.Provider != "localhost" ||
 		!reflect.DeepEqual(shown.Tools.H2A, []string{"*"}) || shown.Tools.A2A == nil || len(shown.Tools.A2A) != 0 ||
 		!reflect.DeepEqual(shown.Tools.Protected, DefaultProtected()) {
 		t.Fatalf("shown: %s", got)
@@ -516,7 +525,7 @@ func TestPublic(t *testing.T) {
 	}
 	c.Tools = &Tools{H2A: Named("read"), A2A: Named("list_peers"), Protected: &[]string{"~/x"}}
 	c.RebuildWithoutSandbox = true
-	if got := string(c.Public()); !strings.Contains(got, `"read"`) || !strings.Contains(got, `"list_peers"`) || !strings.Contains(got, `"~/x"`) || strings.Contains(got, ".ssh") ||
+	if got := string(c.Public("")); !strings.Contains(got, `"read"`) || !strings.Contains(got, `"list_peers"`) || !strings.Contains(got, `"~/x"`) || strings.Contains(got, ".ssh") ||
 		!strings.Contains(got, `"rebuild_without_sandbox": true`) {
 		t.Fatalf("what is set: %s", got)
 	}

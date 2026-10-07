@@ -104,9 +104,9 @@ func (promptLLM) Complete(_ context.Context, _ string, msgs []openai.Message, to
 // peer without a tool does not run. It knows when to; without a list of
 // failures it cannot.
 func TestPeerAgentExplainsErrors(t *testing.T) {
-	cfg := config.Config{BaseURL: "http://x", Model: "m", Name: "n"}
+	cfg := config.Config{Access: "http://x", Model: "m", Name: "n"}
 	b := Builder{
-		LLM:   func(agent.Endpoint) agent.LLM { return promptLLM{} },
+		LLM:   func(string) (agent.LLM, error) { return promptLLM{}, nil },
 		Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
 	}
 	ask := func() string {

@@ -207,7 +207,7 @@ var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection
 
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
-	nodeSection:      "the name, the endpoint, the API key, the model",
+	nodeSection:      "the name, the access to the LLM, the model",
 	agentsSection:    "the context provider, rebuild without a sandbox",
 	pluginsSection:   "which plugins are turned on",
 	ownerSection:     "what your agent may do when you ask it",
@@ -217,7 +217,7 @@ var contents = map[string]string{
 
 // about is what an open category says of its lines.
 var about = map[string]string{
-	nodeSection:      "The endpoint, the key and the model are changed with the setup and /model.",
+	nodeSection:      "The access and the model are changed with the setup and /model.",
 	agentsSection:    "A change holds from the next message, for you and for peers.",
 	pluginsSection:   "Plugins are part of the build. Turning one on or off holds once ouro starts anew: quit and start ouro, /stop and /start the node.",
 	ownerSection:     "What your agent may do when you ask it. A change holds from the next message.",
@@ -240,12 +240,12 @@ func rows(s Settings) []row {
 
 	add(nodeSection, "Name", s.Name, "what the node is called on the network, and your agent too",
 		editing("the name of the node", s.Name, func(v string) Setting { return Setting{Kind: plugin.SetName, Value: v} }))
-	add(nodeSection, "Endpoint", s.Endpoint, "where the LLM is reached", action{"open /setup", (*Model).setup})
-	key := "none"
-	if s.HasKey {
-		key = "set, never shown"
+	access := s.Access
+	if s.About != "" {
+		access += " · " + s.About
 	}
-	add(nodeSection, "API key", key, "", action{"open /setup", (*Model).setup})
+	add(nodeSection, "Access", access, "how the LLM is reached; what it signs in with is never shown",
+		action{"open /setup", (*Model).setup})
 	add(nodeSection, "Model", s.Model, "", action{"open /model", (*Model).openModel})
 	add(nodeSection, "Node ID", s.ID, "the fingerprint of the key of the node, which nothing here changes")
 

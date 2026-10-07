@@ -17,8 +17,19 @@ import (
 	"ouroboros/internal/openai/openaitest"
 )
 
-// overHTTP is the LLM of a node as it runs: the API at the endpoint.
-func overHTTP(at agent.Endpoint) agent.LLM { return openai.New(at.BaseURL, at.APIKey) }
+// accesses is what a test says of the accesses of a node.
+type accesses struct {
+	rev, label string
+	secrets    []string
+}
+
+func (a *accesses) Revision(string) string { return a.rev }
+func (a *accesses) Label(string) string    { return a.label }
+func (a *accesses) Secrets() []string      { return a.secrets }
+
+// overHTTP is the LLM of a node as it runs, for a test: the access is the
+// endpoint of the API, which takes the key of the fake one.
+func overHTTP(access string) (agent.LLM, error) { return openai.New(access, openaitest.Key), nil }
 
 // shown is what the owner is shown of steps: of a call of ask_peer which peer
 // the assistant is waiting for, as the peers plugin contributes it, and
@@ -41,7 +52,7 @@ func TestAsk(t *testing.T) {
 	s := newSelf(t, luna.Node)
 	s.found.nodes = append(s.found.nodes, s.node())
 	s.connect(t, luna)
-	cfg := config.Config{BaseURL: openaitest.NewServer(t), APIKey: openaitest.Key, Model: "gpt-4o", Name: "me", PrivateKey: s.id.Private()}
+	cfg := config.Config{Access: openaitest.NewServer(t), Model: "gpt-4o", Name: "me", PrivateKey: s.id.Private()}
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
 		LLM:   overHTTP,
 		Tools: func() []agent.Tool { return PeerTools(s.network, s.id.ID) },
@@ -101,11 +112,11 @@ func TestAsk(t *testing.T) {
 
 // A node that cannot answer says why, and asks nobody.
 func TestAskUnconfigured(t *testing.T) {
-	cfg := config.Config{BaseURL: openaitest.NewServer(t), APIKey: openaitest.Key, Model: "gpt-4o", Name: "me"}
+	cfg := config.Config{Access: openaitest.NewServer(t), Model: "gpt-4o", Name: "me"}
 	var failed error
 	built := 0
 	a := New(func() (config.Config, error) { return cfg, failed }, Builder{
-		LLM:   func(at agent.Endpoint) agent.LLM { built++; return overHTTP(at) },
+		LLM:   func(access string) (agent.LLM, error) { built++; return overHTTP(access) },
 		Tools: func() []agent.Tool { return nil },
 	}, discard)
 	ctx := context.Background()
@@ -120,9 +131,9 @@ func TestAskUnconfigured(t *testing.T) {
 
 	failed = nil
 	for field, clear := range map[string]func(*config.Config){
-		"base URL": func(c *config.Config) { c.BaseURL = "" },
-		"model":    func(c *config.Config) { c.Model = "" },
-		"name":     func(c *config.Config) { c.Name = "" },
+		"access": func(c *config.Config) { c.Access = "" },
+		"model":  func(c *config.Config) { c.Model = "" },
+		"name":   func(c *config.Config) { c.Name = "" },
 	} {
 		complete := cfg
 		clear(&cfg)
@@ -143,16 +154,48 @@ func TestAskUnconfigured(t *testing.T) {
 	}
 }
 
+// An access whose model cannot be had, as when its provider is turned off,
+// is why the node cannot answer.
+func TestAskWithoutTheModelOfTheAccess(t *testing.T) {
+	cfg := config.Config{Access: "gone", Model: "m", Name: "me"}
+	b := Builder{
+		LLM: func(access string) (agent.LLM, error) {
+			return nil, fmt.Errorf("access %q: its provider is not part of this ouro", access)
+		},
+		Tools: func() []agent.Tool { return nil },
+	}
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	if got, err := a.Ask(context.Background(), "chat", "hello", nil); err == nil || got != "" || !strings.Contains(err.Error(), `access "gone": its provider is not part of this ouro`) {
+		t.Fatalf("Ask = %q, %v", got, err)
+	}
+	if _, err := b.ForPeers(cfg); err == nil {
+		t.Fatal("peers are answered without a model")
+	}
+}
+
 // The assistant remembers its conversations as long as the node is configured
 // the same, and is built anew for whatever changes of what it is built from.
 func TestAskRemembersAlsoWhenConfiguredAnew(t *testing.T) {
-	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), APIKey: "sk-1", Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()}
+	first, second := openaitest.NewServerWithKey(t, ""), openaitest.NewServerWithKey(t, "")
+	cfg := config.Config{Access: first, Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()}
 	built := 0
-	var endpoint agent.Endpoint
+	var access string
+	known := &accesses{rev: "1"}
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
-		LLM:   func(at agent.Endpoint) agent.LLM { built++; endpoint = at; return overHTTP(at) },
-		Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
+		LLM:      func(id string) (agent.LLM, error) { built++; access = id; return overHTTP(id) },
+		Accesses: known,
+		Tools:    func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
 	}, discard)
+	// What the LLM thought in a conversation, to see what becomes of it.
+	thought := func() string {
+		for _, m := range a.memory.Conversation("thinking") {
+			if m.Reasoning != "" {
+				return m.Reasoning
+			}
+		}
+		return ""
+	}
+	a.memory.Restore("thinking", []openai.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "ho", Reasoning: "hm", ReasoningField: "reasoning"}})
 	ctx := context.Background()
 	// next asks in the conversation chat, which goes on with every agent.
 	asked := 0
@@ -173,16 +216,16 @@ func TestAskRemembersAlsoWhenConfiguredAnew(t *testing.T) {
 		t.Fatal(err)
 	}
 	next()
-	if built != 1 || endpoint != (agent.Endpoint{BaseURL: cfg.BaseURL, APIKey: "sk-1"}) {
-		t.Fatalf("built %d agents, the last at %+v", built, endpoint)
+	if built != 1 || access != first {
+		t.Fatalf("built %d agents, the last with %q", built, access)
 	}
 
 	changes := []struct {
 		what   string
 		change func(*config.Config)
 	}{
-		{"base URL", func(c *config.Config) { c.BaseURL += "/" }},
-		{"API key", func(c *config.Config) { c.APIKey = "sk-2" }},
+		// The owner signed in to the access anew, as with another key.
+		{"login", func(*config.Config) { known.rev = "2" }},
 		{"model", func(c *config.Config) { c.Model = "gpt-4o-mini" }},
 		{"name", func(c *config.Config) { c.Name = "you" }},
 		{"key of the node", func(c *config.Config) { c.PrivateKey = identity.Generate().Private() }},
@@ -206,8 +249,19 @@ func TestAskRemembersAlsoWhenConfiguredAnew(t *testing.T) {
 			t.Fatalf("new %s: %d agents built for one configuration", tt.what, built)
 		}
 	}
-	if endpoint != (agent.Endpoint{BaseURL: cfg.BaseURL, APIKey: "sk-2"}) {
-		t.Fatalf("the last agent is at %+v", endpoint)
+	// All of that was the same access: what the LLM thought is still there.
+	if access != first || thought() != "hm" {
+		t.Fatalf("the last agent answers with %q, thoughts %q", access, thought())
+	}
+	// Another access is another provider: the conversation goes on there,
+	// without what the LLM of the one before thought.
+	cfg.Access = second
+	next()
+	if built != len(changes)+2 || access != second || thought() != "" {
+		t.Fatalf("another access: %d agents, the last with %q, thoughts %q", built, access, thought())
+	}
+	if kept := a.memory.Conversation("thinking"); len(kept) != 2 || kept[1].Content != "ho" {
+		t.Fatalf("the conversation did not stay: %+v", kept)
 	}
 
 	// The new agent is the one that is asked: it has the new model, name and tools.
@@ -232,7 +286,7 @@ func TestAskRemembersAlsoWhenConfiguredAnew(t *testing.T) {
 // The prompt of the owner's agent says how to use the tools it has, and what
 // to make of a peer that asks for a file.
 func TestOwnerPromptFollowsTheTools(t *testing.T) {
-	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
 	file := agent.NewTool("edit", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
 	search := agent.NewTool(toolSearch, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{

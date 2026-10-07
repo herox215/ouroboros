@@ -24,6 +24,7 @@ import (
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
 	"ouroboros/internal/peers"
 	sessionplugin "ouroboros/internal/plugins/session"
@@ -95,9 +96,31 @@ func Settings(t *testing.T) cli.Settings {
 	}
 }
 
-// NodeConfig is a complete configuration for a node using the fake API of s.
+// NodeConfig is a complete configuration for a node using the fake API of s,
+// as a node from before there were accesses has it: the node makes an access
+// of the endpoint and the key when it reads it.
 func NodeConfig(s cli.Settings) config.Config {
 	return config.Config{BaseURL: s.BaseURL, APIKey: openaitest.Key, Model: "gpt-4o", Name: "alpha"}
+}
+
+// Reached returns the endpoint and the key of the access the node of s
+// answers through, as its credentials keep them.
+func Reached(t *testing.T, s cli.Settings) (endpoint, key string) {
+	t.Helper()
+	dir := home.Dir(s.Home)
+	cfg, err := dir.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, err := dir.Credentials().Get(cfg.Access)
+	if err != nil {
+		t.Fatalf("the access %q of the node: %v", cfg.Access, err)
+	}
+	endpoint, key, err = openai.Saved(access.Credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return endpoint, key
 }
 
 // MustLoad returns the configuration of the node of s.

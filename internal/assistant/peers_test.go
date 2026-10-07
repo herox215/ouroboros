@@ -10,6 +10,7 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/identity"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
 )
 
@@ -17,13 +18,16 @@ import (
 // change holds from the next message on, and the agent stays while nothing
 // it is built from changes.
 func TestPeersFollowTheConfiguration(t *testing.T) {
-	cfg := config.Config{BaseURL: openaitest.NewServerWithKey(t, ""), APIKey: "sk-1", Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()}
+	first, second := openaitest.NewServerWithKey(t, ""), openaitest.NewServerWithKey(t, "")
+	cfg := config.Config{Access: first, Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()}
 	var failing error
 	var logged []string
 	built := 0
+	known := &accesses{rev: "1"}
 	b := Builder{
-		LLM:   func(at agent.Endpoint) agent.LLM { built++; return overHTTP(at) },
-		Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
+		LLM:      func(access string) (agent.LLM, error) { built++; return overHTTP(access) },
+		Accesses: known,
+		Tools:    func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
 	}
 	peers := b.Peers(func() (config.Config, error) { return cfg, failing }, func(format string, args ...any) {
 		logged = append(logged, fmt.Sprintf(format, args...))
@@ -59,9 +63,25 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 	}
 
 	for i, change := range []func(){
-		func() { cfg.BaseURL += "/" },
-		func() { cfg.APIKey = "sk-2" },
-		func() { cfg.Model = "gpt-4o-mini" },
+		// Another access: what the LLM thought so far is not sent there.
+		func() {
+			peers.memory.Restore("thinking", []openai.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "ho", Reasoning: "hm"}})
+			cfg.Access = second
+		},
+		// The owner signed in to the access anew: the thoughts stay.
+		func() {
+			if kept := peers.memory.Conversation("thinking"); len(kept) != 2 || kept[1].Reasoning != "" || kept[1].Content != "ho" {
+				t.Fatalf("another access was sent the thoughts: %+v", kept)
+			}
+			peers.memory.Restore("thinking", []openai.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "ho", Reasoning: "hm"}})
+			known.rev = "2"
+		},
+		func() {
+			if kept := peers.memory.Conversation("thinking"); kept[1].Reasoning != "hm" {
+				t.Fatalf("the thoughts are gone with the same access: %+v", kept)
+			}
+			cfg.Model = "gpt-4o-mini"
+		},
 		func() { cfg.Name = "you" },
 		func() { cfg.PrivateKey = identity.Generate().Private() },
 		func() { cfg.Tools = &config.Tools{A2A: config.Named("list_peers")} },
@@ -128,7 +148,7 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 // A node that has no agent yet does not answer with a configuration it
 // cannot use: it does not start.
 func TestPeersNeedAConfiguration(t *testing.T) {
-	cfg := config.Config{BaseURL: "http://x", Model: "m", Name: "n"}
+	cfg := config.Config{Access: "http://x", Model: "m", Name: "n"}
 	var failing error
 	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return nil }}
 	silent := func(format string, args ...any) { t.Errorf("logged: "+format, args...) }

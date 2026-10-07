@@ -32,7 +32,6 @@
 //
 //	*Console  the dialogue with the user on the terminal
 //	*Network  the other nodes: Find, Peers, Resolve, Send, Call, Open
-//	LLM       the model behind the agents
 //	Sessions  the conversations of the owner with its agent, held by the node
 //
 // In its start function a plugin contributes with Add:
@@ -44,9 +43,9 @@
 //	PeerSource  hosts to look for nodes on
 //	ContextProvider  explicitly selected preparation of model context
 //	AnswerHook  before/after-answer lifecycle processing
+//	Provider    an API the agents can talk to, with its own way to sign in
 //
-// and offers services of its own with NewService: a plugin that provides an
-// LLM replaces the openai plugin.
+// and offers services of its own with NewService.
 //
 // What a plugin adds it can show in the terminal UI, with Add as well:
 //

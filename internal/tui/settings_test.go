@@ -14,7 +14,7 @@ import (
 // someSettings are the settings of a node with something of every kind.
 func someSettings() Settings {
 	return Settings{
-		Name: "alpha", Endpoint: "https://api.example/v1", Model: "gpt-4o", ID: "abc123def456", HasKey: true,
+		Name: "alpha", Access: "Example", About: "https://api.example/v1", Model: "gpt-4o", ID: "abc123def456",
 		ContextProviders: []string{"compact"},
 		Plugins: []plugin.PluginState{
 			{Name: "base", On: true, Running: true, Fixed: "it runs the commands of ouro"},
@@ -100,7 +100,7 @@ func TestSettingsShow(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"│ Settings", "› The node", "the name, the endpoint, the API key, the model", "  The agents", "  Plugins",
+		"│ Settings", "› The node", "the name, the access to the LLM, the model", "  The agents", "  Plugins",
 		"  Tools of your agent", "  Tools for peers", "what your agent may do when a peer asks it",
 		"  Protected paths", "the paths no tool for files touches", "↑↓ select · enter open · esc back",
 	} {
@@ -108,14 +108,14 @@ func TestSettingsShow(t *testing.T) {
 			t.Errorf("the categories lack %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "set, never shown") || strings.Contains(view, "[") || strings.Index(view, "The node") > strings.Index(view, "The agents") {
+	if strings.Contains(view, "https://api.example/v1") || strings.Contains(view, "[") || strings.Index(view, "The node") > strings.Index(view, "The agents") {
 		t.Errorf("the categories, in their order, and no line of one:\n%s", view)
 	}
 	press(m, "enter")
 	view = ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"│ Settings › The node", "The endpoint, the key and the model are changed with the setup and /model.",
-		"› Name", "alpha", "set, never shown", "↑↓ select · ←→ choose · enter do · esc categories",
+		"│ Settings › The node", "The access and the model are changed with the setup and /model.",
+		"› Name", "alpha", "Example · https://api.example/v1", "↑↓ select · ←→ choose · enter do · esc categories",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("lacks %q:\n%s", want, view)
@@ -161,12 +161,12 @@ func TestSettingsShow(t *testing.T) {
 
 	// Another configuration.
 	s := someSettings()
-	s.HasKey, s.ContextProvider, s.RebuildWithoutSandbox, s.Sandbox = false, "compact", true, "bubblewrap is not installed"
+	s.About, s.ContextProvider, s.RebuildWithoutSandbox, s.Sandbox = "", "compact", true, "bubblewrap is not installed"
 	s.PluginsKept, s.ProtectedDefault = "plugin peers needs a scanner", false
 	s.Tools[ForPeersIndex()].All = true
 	m, _ = openSettings(t, s)
 	for _, tt := range []struct{ section, label, value string }{
-		{nodeSection, "API key", "none"},
+		{nodeSection, "Access", "Example"},
 		{agentsSection, "Context provider", "compact"},
 		{agentsSection, "Rebuild without a sandbox", "yes, with network"},
 		{pluginsSection, "Turned off", "none: all run"},
@@ -351,7 +351,7 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.rows) + 3 {
 		press(m, "down")
 	}
-	if m.settingsSel != len(m.shown())-1 || len(m.shown()) != 5 {
+	if m.settingsSel != len(m.shown())-1 || len(m.shown()) != 4 {
 		t.Errorf("below the last: %d of %d", m.settingsSel, len(m.shown()))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
@@ -385,7 +385,7 @@ func TestSettingsKeys(t *testing.T) {
 	if deliver(m, run(m, "/settings")); m.opened || m.category != 0 {
 		t.Errorf("opened anew: %v, %d", m.opened, m.category)
 	}
-	pick(t, m, nodeSection, "Endpoint", "open /setup")
+	pick(t, m, nodeSection, "Access", "open /setup")
 	press(m, "enter") // the setup animates: its frames are not delivered
 	if b.setups != 1 || m.onboard == nil {
 		t.Errorf("setup: %d", b.setups)
@@ -468,8 +468,8 @@ func TestSettingsNoJump(t *testing.T) {
 	if strings.Count(shown(), "[") != 1 {
 		t.Errorf("what can be done is shown on one line alone:\n%s", shown())
 	}
-	name, key := where("Name"), where("API key")
-	if press(m, "down"); where("Name") != name || where("API key") != key {
+	name, key := where("Name"), where("Access")
+	if press(m, "down"); where("Name") != name || where("Access") != key {
 		t.Errorf("the lines moved when the selection did:\n%s", shown())
 	}
 	if !strings.Contains(shown(), "what the node is called on the network") {
@@ -477,12 +477,12 @@ func TestSettingsNoJump(t *testing.T) {
 	}
 	// To the last row, which the window follows to and stops at.
 	press(m, "down", "down")
-	if !strings.Contains(shown(), "› Model") {
-		t.Errorf("the selection is not on Model:\n%s", shown())
+	if !strings.Contains(shown(), "› Node ID") {
+		t.Errorf("the selection is not on the last row:\n%s", shown())
 	}
-	node, key := where("Node ID"), where("API key")
+	node, key := where("Node ID"), where("Model")
 	press(m, "down")
-	if where("Node ID") != node || where("API key") != key {
+	if where("Node ID") != node || where("Model") != key {
 		t.Errorf("the lines moved while the last row was selected:\n%s", shown())
 	}
 	if !strings.Contains(shown(), "the fingerprint of the key of the node") {

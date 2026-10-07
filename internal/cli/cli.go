@@ -9,7 +9,8 @@
 //	peers      the network of nodes and the tools to reach it
 //	files      the tools for files
 //	history    the archive of the conversations, and the tools to search it
-//	openai     the LLM
+//	openai     the provider for OpenAI-compatible APIs
+//	chatgpt    the provider that signs in with ChatGPT
 //	assistant  the agents
 //	sessions   the conversations of the owner, which the node holds
 //	node       start, stop, status, serve and the setup dialog
@@ -45,17 +46,21 @@ import (
 	"strconv"
 
 	"ouroboros/internal/a2a"
+	"ouroboros/internal/chatgpt"
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
+	"ouroboros/internal/credentials"
 	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/kernel"
+	"ouroboros/internal/llm"
 	"ouroboros/internal/node"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/peers"
 	"ouroboros/internal/plugins/assistant"
 	"ouroboros/internal/plugins/base"
+	chatgptplugin "ouroboros/internal/plugins/chatgpt"
 	"ouroboros/internal/plugins/discovery"
 	filesplugin "ouroboros/internal/plugins/files"
 	historyplugin "ouroboros/internal/plugins/history"
@@ -83,6 +88,10 @@ type Settings struct {
 	DiscoPort int    // UDP discovery port
 	BaseURL   string // default LLM endpoint offered during setup
 	APIKey    string // key for BaseURL offered during setup
+	// ChatGPTAuth and ChatGPTAPI are where the chatgpt provider signs in and
+	// answers, those of OpenAI if empty. They are no setting of the user:
+	// tests point them at a fake.
+	ChatGPTAuth, ChatGPTAPI string
 }
 
 // SettingsFromEnv reads OURO_HOME, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL and OPENAI_API_KEY.
@@ -147,7 +156,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		cfg, err := dir.Config()
 		return cfg.Protected(), err
 	}, Toolchain: update.GoPaths}
-	owner := plugin.OwnerOf(dir, network, setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey})
+	owner := plugin.OwnerOf(dir, network)
 	return plugin.Activate(owner, []plugin.Plugin{
 		base.Plugin(dir, t),
 		discovery.Plugin(s.DiscoPort),
@@ -155,12 +164,12 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		peersplugin.Plugin(dir, network),
 		filesplugin.Plugin(files),
 		historyplugin.Plugin(dir),
-		openaiplugin.Plugin(),
+		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
+		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),
 		assistant.Plugin(dir),
 		sessionplugin.Plugin(dir),
 		nodeplugin.Plugin(dir, nodeplugin.Options{
 			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,
-			BaseURL: s.BaseURL, APIKey: s.APIKey,
 			OnStop: network.Close, // the channels the node opened to peers
 		}),
 		talk.Plugin(),
@@ -177,7 +186,6 @@ var fixed = map[string]string{
 	"node":      "it starts, stops and runs the node",
 	"assistant": "it builds the agents",
 	"sessions":  "it holds the conversations of the owner with the agent",
-	"openai":    "it is the LLM, and no other plugin provides one",
 	"peers":     "it is the network of nodes",
 	"tui":       "it is the terminal UI, where the plugins are turned on again",
 }
@@ -198,11 +206,13 @@ func seal(k *kernel.Kernel) {
 	kernel.Seal[a2a.ChannelSet](k) // keeps the limits of the channels
 	kernel.Seal[node.Local](k)
 	kernel.Seal[node.Server](k)
-	kernel.Seal[peers.Network](k)  // holds the contacts and the client
-	kernel.Seal[plugin.Owner](k)   // decides whom the node trusts: handed to a front end in Plugins
-	kernel.Seal[setup.Session](k)  // saves the configuration, and holds the key for the LLM
-	kernel.Seal[guard.Guard](k)    // decides which files a tool touches
-	kernel.Seal[proposal.Store](k) // what the agent proposed; accepting it changes the configuration
+	kernel.Seal[peers.Network](k)     // holds the contacts and the client
+	kernel.Seal[plugin.Owner](k)      // decides whom the node trusts: handed to a front end in Plugins
+	kernel.Seal[setup.Session](k)     // saves the configuration, and holds what a provider signed in with
+	kernel.Seal[credentials.Store](k) // what the node signs in to its LLMs with
+	kernel.Seal[llm.Book](k)          // opens the credentials for every provider
+	kernel.Seal[guard.Guard](k)       // decides which files a tool touches
+	kernel.Seal[proposal.Store](k)    // what the agent proposed; accepting it changes the configuration
 }
 
 // App runs ouro commands. It is a kernel with plugins and has no logic of its

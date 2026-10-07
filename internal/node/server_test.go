@@ -417,3 +417,32 @@ func TestKeepFailures(t *testing.T) {
 		t.Fatalf("logged %q", logged.String())
 	}
 }
+
+// A connection that sends nothing is closed by the node after headerTime,
+// which is ten seconds; and a node whose peers have no tool does not say
+// that they have some.
+func TestRunClosesConnectionsThatSendNothing(t *testing.T) {
+	if headerTime != 10*time.Second {
+		t.Fatalf("a connection may take %v for its header", headerTime)
+	}
+	replace(t, &headerTime, 100*time.Millisecond)
+	var log bytes.Buffer
+	s := testServer(configured(t))
+	s.Log = &log
+	p, stop := run(t, s)
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", p.Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the node kept a connection that sends nothing: %v", err)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(log.String(), "peers may use the tools") {
+		t.Fatalf("a node without tools for peers says:\n%s", log.String())
+	}
+}

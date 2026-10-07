@@ -69,6 +69,11 @@ type Succession struct {
 
 func (s *Succession) Error() string { return "the node is handed over to " + s.Exe }
 
+// headerTime is how long a connection may take for its handshake and the
+// header of a request before the node closes it: one that sends nothing
+// does not keep a place. Tests shorten it.
+var headerTime = 10 * time.Second
+
 // Run serves until ctx is done. It opens the A2A port for TLS, answers discovery
 // probes, holds the PID file and hands the messages of trusted peers to an
 // Responder. What the node offers over A2A is defined in a2a.Server plus
@@ -124,7 +129,7 @@ func (s Server) Run(ctx context.Context) error {
 	}
 	srv := &http.Server{
 		Handler:           logRequests(logger, server.Handler()),
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: headerTime,
 		ErrorLog:          logger, // failed handshakes, such as plain HTTP
 	}
 

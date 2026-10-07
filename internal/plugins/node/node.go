@@ -20,7 +20,6 @@ import (
 	"ouroboros/internal/node"
 	"ouroboros/internal/plugins/base"
 	"ouroboros/internal/session"
-	"ouroboros/internal/setup"
 	"ouroboros/plugin"
 )
 
@@ -30,8 +29,6 @@ type Options struct {
 	DiscoPort int       // UDP discovery port
 	Version   string    // of ouro, as told in the agent card
 	Log       io.Writer // of the node that runs in the foreground
-	BaseURL   string    // default LLM endpoint offered during setup
-	APIKey    string    // key for BaseURL offered during setup
 	OnStop    func()    // called when the node in the foreground stops; may be nil
 }
 
@@ -58,7 +55,7 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 			term:     n.Console,
 			sessions: n.Sessions,
 			local:    node.Local{Home: dir},
-			wizard:   &wizard{term: n.Console, home: dir, offer: setup.Offer{BaseURL: o.BaseURL, APIKey: o.APIKey}},
+			wizard:   &wizard{term: n.Console, home: dir, providers: func() []plugin.Provider { return plugin.All[plugin.Provider](ctx) }},
 			server: node.Server{
 				Home: dir, HTTPPort: o.HTTPPort, DiscoPort: o.DiscoPort, Version: o.Version, Log: dir.LogTo(o.Log),
 				Responder: func(logf func(format string, args ...any)) (a2a.Responder, error) {
@@ -86,7 +83,7 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 				},
 			},
 		}
-		plugin.Add(ctx, plugin.Command{Name: "start", Args: "[--setup]", Help: "start the node (asks for endpoint, key + model on first run)", Run: c.start})
+		plugin.Add(ctx, plugin.Command{Name: "start", Args: "[--setup]", Help: "start the node (asks for the LLM access + model on first run)", Run: c.start})
 		plugin.Add(ctx, plugin.Command{Name: "stop", Help: "stop the node", Run: c.stop})
 		plugin.Add(ctx, plugin.Command{Name: "status", Help: "show the local node", Run: c.status})
 		plugin.Add(ctx, plugin.Command{Name: node.ServeCommand, Help: "run the node in the foreground", Run: c.serve})

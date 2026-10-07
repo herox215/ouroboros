@@ -88,11 +88,13 @@ type fakeBackend struct {
 	rejectErr error
 	decided   context.Context // what a decision on a request ran with
 
-	// offers are what the provider answers with, for /model; modelsErr is
-	// why not. set are the models the owner saved.
-	offers    Models
+	// offers are what the accesses answer with, for /model; modelsErr is
+	// why not. set are the models the owner saved, each as "access model",
+	// and switched says that saving one switches the access.
+	offers    []Models
 	modelsErr error
 	set       []string
+	switched  bool
 
 	// fail is what fails, by the name of the request.
 	fail map[string]error
@@ -245,10 +247,10 @@ func (f *fakeBackend) RefuseProposal(id string) error {
 	f.rejected = append(f.rejected, "proposal "+id)
 	return f.rejectErr
 }
-func (f *fakeBackend) Models(ctx context.Context) (Models, error) { return f.offers, f.modelsErr }
-func (f *fakeBackend) SetModel(model string) error {
-	f.set = append(f.set, model)
-	return f.fail["setmodel"]
+func (f *fakeBackend) Models(ctx context.Context) ([]Models, error) { return f.offers, f.modelsErr }
+func (f *fakeBackend) SetModel(access, model string) (bool, error) {
+	f.set = append(f.set, access+" "+model)
+	return f.switched, f.fail["setmodel"]
 }
 
 func (f *fakeBackend) SetDebug(on bool) error {
