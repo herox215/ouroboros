@@ -143,7 +143,7 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 	switch e.Kind {
 	case plugin.SessionMessage:
 		c.add(entry{mine: true, text: e.Text, at: e.At})
-		c.pending, c.round, c.doing = true, 0, ""
+		c.pending, c.running, c.round, c.doing = true, true, 0, ""
 		c.title = cmp.Or(c.title, e.Text)
 	case plugin.SessionSay:
 		c.say(e)
@@ -203,7 +203,7 @@ func (c *conversation) step(e Event) {
 // end shows how the answer ended: the answer, why it failed, or that it was
 // stopped.
 func (c *conversation) end(e Event) {
-	c.pending, c.doing, c.round = false, "", 0 // the loop of this answer is over
+	c.pending, c.running, c.doing, c.round = false, false, "", 0 // the loop of this answer is over
 	last := entry{text: e.Text, at: e.At}
 	switch e.Kind {
 	case plugin.SessionFailed:
@@ -236,7 +236,7 @@ func (m *Model) sessionsLoaded(msg sessionsMsg) tea.Cmd {
 			continue
 		}
 		// What the list says, until the events say it all.
-		c.title, c.last, c.pending = cmp.Or(c.title, info.Title), info.Last, info.Running
+		c.title, c.last, c.pending, c.running = cmp.Or(c.title, info.Title), info.Last, info.Running, info.Running
 		cmds = append(cmds, m.watch(c))
 	}
 	return tea.Batch(cmds...)

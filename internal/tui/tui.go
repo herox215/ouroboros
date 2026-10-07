@@ -148,7 +148,8 @@ type call struct {
 type conversation struct {
 	contextID string
 	entries   []entry
-	pending   bool   // waiting for a reply; one message at a time keeps the history in order
+	pending   bool   // request submitted or answer on its way: one message at a time
+	running   bool   // the node has said an answer is on its way
 	doing     string // what the agent is waiting for, like "asking beta"
 	round     int    // the entry of the round of the loop that is on, counted from 1; 0 for none yet
 	context   int    // how long its context is, see Event.Context
@@ -697,7 +698,7 @@ func (m *Model) asked(msg askedMsg) {
 		return
 	}
 	c := m.chats[msg.id]
-	c.pending = false
+	c.pending = c.running
 	if c == m.chat {
 		if m.input.Value() == "" {
 			m.input.SetValue(msg.text)

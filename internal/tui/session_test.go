@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -278,5 +279,54 @@ func TestSessionRows(t *testing.T) {
 	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep}})
 	if len(shown.entries) != 1 || shown.round != 0 {
 		t.Fatalf("entries %+v", shown.entries)
+	}
+}
+
+// Watch events and Ask responses are independent streams. Another client
+// can start an answer before our rejected Ask response arrives. That error
+// must restore our draft without hiding the node's already-observed work.
+func TestRejectedAskPreservesObservedAnswer(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		for _, background := range []bool{false, true} {
+			for _, finished := range []bool{false, true} {
+				t.Run(fmt.Sprintf("replay=%v/background=%v/finished=%v", replay, background, finished), func(t *testing.T) {
+					m, _ := newModel(t)
+					m.input.SetValue("my draft")
+					m.send()
+					c := m.chat
+					if background {
+						m.newConversation()
+					}
+					events := []Event{{Kind: plugin.SessionMessage, Text: "from another client"}}
+					if finished {
+						events = append(events, Event{Kind: plugin.SessionAnswer, Text: "done"})
+					}
+					if replay {
+						m.replay(c, events)
+					} else {
+						for _, e := range events {
+							m.apply(c, e, true)
+						}
+					}
+					m.Update(askedMsg{c.contextID, "my draft", plugin.ErrBusy})
+					draft := m.input.Value()
+					if background {
+						draft = c.draft
+					}
+					if c.pending != !finished || draft != "my draft" {
+						t.Fatalf("node running=%v, UI pending=%v, draft=%q", !finished, c.pending, draft)
+					}
+					if c.entries[0].text != "from another client" {
+						t.Fatal("observed history changed", c.entries)
+					}
+					if background {
+						m.switchTo(c)
+					}
+					if !finished && m.cancel() == nil {
+						t.Fatal("the observed answer must still be cancellable")
+					}
+				})
+			}
+		}
 	}
 }
