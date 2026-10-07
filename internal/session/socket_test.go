@@ -166,7 +166,16 @@ func TestClientRelease(t *testing.T) {
 	}}
 	s := service(t, a)
 	n := serve(t, Handler(s))
-	s.Attach(func() { go n.stop() }, nil)
+	// The node stops as soon as the answer ended, and the fake one cuts its
+	// connections when it does: it waits here until the test has read the
+	// answer, which is on its way to it by then.
+	read := make(chan struct{})
+	s.Attach(func() {
+		go func() {
+			<-read
+			n.stop()
+		}()
+	}, nil)
 	c := NewClient(n.dir)
 	ctx := context.Background()
 	_, live, _ := c.Watch(ctx, "s1")
@@ -179,6 +188,7 @@ func TestClientRelease(t *testing.T) {
 	}
 	close(gate)
 	until(t, live, Answer)
+	close(read)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
 		if _, running := c.local.Running(); !running {
 			break
