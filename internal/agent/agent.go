@@ -256,21 +256,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	// LLM goes on from there instead of starting over. Why it failed is not
 	// part of it: a peer must not learn the cause from a later answer.
 	abandon := func(err error) (string, error) {
-		// An extension can fail between a tool request and its results. Close
-		// pending calls without leaking the failure cause into later context.
-		pending := []string{}
-		for _, m := range history {
-			for _, call := range m.ToolCalls {
-				pending = append(pending, call.ID)
-			}
-			if m.Role == "tool" {
-				pending = slices.DeleteFunc(pending, func(id string) bool { return id == m.ToolCallID })
-			}
-		}
-		for _, id := range pending {
-			history = append(history, openai.Message{Role: "tool", ToolCallID: id, Content: "[This call did not finish.]"})
-		}
-		a.memory.remember(contextID, append(history, openai.Message{Role: "assistant", Content: abandoned}))
+		a.memory.remember(contextID, Abandon(history))
 		return "", err
 	}
 	if err := emit(history[asked]); err != nil {
@@ -365,6 +351,28 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 	}
 	return abandon(ErrTooManyToolCalls)
+}
+
+// Abandon returns the conversation msgs as it is remembered when its last
+// answer failed or was stopped: as far as it got, its calls of tools that
+// did not finish closed, and with a note that it broke off. An answer can
+// fail between a call and its result, which the API would reject. Why it
+// failed is not part of it, so that no later context leaks the cause.
+func Abandon(msgs []openai.Message) []openai.Message {
+	msgs = slices.Clone(msgs)
+	pending := []string{}
+	for _, m := range msgs {
+		for _, call := range m.ToolCalls {
+			pending = append(pending, call.ID)
+		}
+		if m.Role == "tool" {
+			pending = slices.DeleteFunc(pending, func(id string) bool { return id == m.ToolCallID })
+		}
+	}
+	for _, id := range pending {
+		msgs = append(msgs, openai.Message{Role: "tool", ToolCallID: id, Content: "[This call did not finish.]"})
+	}
+	return append(msgs, openai.Message{Role: "assistant", Content: abandoned})
 }
 
 // remaining is what the LLM is told after the last result of a tool when
@@ -520,6 +528,13 @@ func (m *Memory) Restore(contextID string, msgs []openai.Message) {
 	if len(msgs) > 0 {
 		m.remember(contextID, slices.Clone(msgs))
 	}
+}
+
+// Forget makes m forget the conversation contextID.
+func (m *Memory) Forget(contextID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.conversations, contextID)
 }
 
 func (m *Memory) history(contextID string) []openai.Message {

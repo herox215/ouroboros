@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/history"
 )
 
 // Kind is what an Event tells.
@@ -91,6 +93,8 @@ type Info struct {
 	Title   string    `json:"title"`
 	Running bool      `json:"running"` // an answer is on its way
 	Last    time.Time `json:"last"`    // when the last Event happened
+	// Peer is the peer a conversation of a peer is with, see API.Peers.
+	Peer string `json:"peer,omitempty"`
 }
 
 // Line is a message of the context of a session: who it is of, like
@@ -119,8 +123,19 @@ type API interface {
 	// there is one.
 	Cancel(ctx context.Context, id string) error
 	// List describes the sessions that have a message, the one with the
-	// latest Event first.
+	// latest Event first: also those the node keeps from before it started.
 	List(ctx context.Context) ([]Info, error)
+	// Delete removes the session id, or the conversation of a peer id as
+	// Peers names it: from the archive, and what the agent remembers of it.
+	// It fails with ErrBusy while an answer is on its way in it, and with
+	// ErrNoSession if there is nothing of it.
+	Delete(ctx context.Context, id string) error
+	// Peers describes the conversations of peers with the agent of the
+	// node, the latest first. They are only to read and delete.
+	Peers(ctx context.Context) ([]Info, error)
+	// Read returns what happened in the conversation of a peer id, as Peers
+	// names it.
+	Read(ctx context.Context, id string) ([]Event, error)
 	// Contents returns what the next call of the LLM in the session id is
 	// sent, message by message. With an error it returns what it has of it.
 	Contents(ctx context.Context, id string) ([]Line, error)
@@ -144,8 +159,8 @@ var (
 	ErrRestarting = errors.New("ouro is starting anew with a new build, ask again in a moment")
 	// ErrStopped means that the node is stopping.
 	ErrStopped = errors.New("the node is stopping")
-	// ErrNoSession means that a session was named without an ID, or with
-	// one that is too long.
+	// ErrNoSession means that a session was named with an ID that is none,
+	// or that there is nothing of it to delete or read.
 	ErrNoSession = errors.New("no such session")
 	// ErrEmpty means a message without text.
 	ErrEmpty = errors.New("the message is empty")
@@ -153,9 +168,6 @@ var (
 
 // maxTitle is how much of the first message the Title of a session has.
 const maxTitle = 200
-
-// maxID is how long the ID of a session may be.
-const maxID = 128
 
 // watchBuffer is how many Events a watcher may fall behind before it is let
 // go.
@@ -170,6 +182,7 @@ type Assistant interface {
 	Inspection(contextID string) (agent.Inspection, bool)
 	Conversation(contextID string) json.RawMessage
 	Resume(contextID string, conversation json.RawMessage) error
+	Forget(contextID string)
 }
 
 // Service holds the sessions of the owner in the process of the node.
@@ -183,9 +196,10 @@ type Service struct {
 
 	mu        sync.Mutex
 	sessions  map[string]*session
-	answering int  // answers on their way
-	closed    bool // by Close
-	release   bool // stop the node once no answer is on its way
+	archive   *archive // where the sessions are kept; nil keeps none, see Archive
+	answering int      // answers on their way
+	closed    bool     // by Close
+	release   bool     // stop the node once no answer is on its way
 	successor string
 	// stopNode and replace are what the node does once it is to stop or to
 	// be replaced by successor, see Attach.
@@ -200,6 +214,10 @@ type session struct {
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc // of the answer on its way; nil without one
 	restart  string             // the binary a tool of that answer asked to start anew from
+	// resumed is when the last answer ended of a session that was loaded
+	// from where it is kept, until the agent is told so with the next
+	// message; zero otherwise.
+	resumed time.Time
 }
 
 // New returns the Service of the sessions with agent.
@@ -221,9 +239,22 @@ func (s *Service) Attach(stop func(), replace func(exe string)) {
 
 // get returns the session id, which it adds if there is none. s.mu is held.
 func (s *Service) get(id string) *session {
-	se, ok := s.sessions[id]
-	if !ok {
+	se := s.lookup(id)
+	if se == nil {
 		se = &session{id: id, watchers: map[chan Event]struct{}{}}
+		s.sessions[id] = se
+	}
+	return se
+}
+
+// lookup returns the session id, loaded from the archive if it is there;
+// nil if there is none. s.mu is held.
+func (s *Service) lookup(id string) *session {
+	if se, ok := s.sessions[id]; ok {
+		return se
+	}
+	se := s.load(id)
+	if se != nil {
 		s.sessions[id] = se
 	}
 	return se
@@ -236,9 +267,12 @@ func (s *Service) forget(se *session) {
 	}
 }
 
+// named is what the ID of a session may be: as the archive names it.
+var named = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
 // valid checks the ID of a session.
 func valid(id string) error {
-	if id == "" || len(id) > maxID {
+	if !named.MatchString(id) {
 		return ErrNoSession
 	}
 	return nil
@@ -275,6 +309,10 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	s.answering++
 	s.release = false // somebody wants the node
 	s.emit(se, Event{Kind: Message, Text: text})
+	if !se.resumed.IsZero() {
+		text = resumed(se.resumed, s.now()) + text
+		se.resumed = time.Time{}
+	}
 	s.answers.Add(1)
 	go s.answer(ctx, se, text, s.replace != nil)
 	return nil
@@ -310,6 +348,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	se.cancel()
 	se.cancel = nil
 	s.answering--
+	// The answer is archived already: who learns of its end finds it there.
 	s.emit(se, end)
 	if se.restart != "" {
 		s.emit(se, Event{Kind: Restart, Text: se.restart})
@@ -397,7 +436,45 @@ func (s *Service) Cancel(_ context.Context, id string) error {
 	return nil
 }
 
-// List describes the sessions that have a message, the latest first.
+// Delete removes the session id, unless an answer is on its way in it. Those
+// who watch it are let go: watched again, it is empty.
+func (s *Service) Delete(_ context.Context, id string) error {
+	if peerID(id) {
+		return s.deletePeer(id)
+	}
+	if err := valid(id); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	found := false
+	if se, ok := s.sessions[id]; ok && len(se.events) > 0 {
+		if se.cancel != nil {
+			return ErrBusy
+		}
+		found = true
+		for ch := range se.watchers {
+			delete(se.watchers, ch)
+			close(ch)
+		}
+		delete(s.sessions, id)
+	}
+	s.agent.Forget(id)
+	if s.archive != nil {
+		err := s.archive.Delete(history.Owner(id))
+		if err != nil && !errors.Is(err, history.ErrNotArchived) {
+			return err
+		}
+		found = found || err == nil
+	}
+	if !found {
+		return ErrNoSession
+	}
+	return nil
+}
+
+// List describes the sessions that have a message, the latest first: those
+// in memory and those kept.
 func (s *Service) List(context.Context) ([]Info, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -411,6 +488,18 @@ func (s *Service) List(context.Context) ([]Info, error) {
 			title = strings.ToValidUTF8(title[:maxTitle], "")
 		}
 		list = append(list, Info{ID: se.id, Title: title, Running: se.cancel != nil, Last: se.events[len(se.events)-1].At})
+	}
+	if s.archive != nil {
+		entries, err := s.archive.List()
+		if err != nil {
+			s.archive.log("the archive cannot be listed: %v", err)
+		}
+		for _, e := range entries {
+			id, ok := strings.CutPrefix(e.ID, "owner/")
+			if se, known := s.sessions[id]; ok && (!known || len(se.events) == 0) {
+				list = append(list, Info{ID: id, Title: e.Title, Last: e.Modified})
+			}
+		}
 	}
 	slices.SortFunc(list, func(a, b Info) int {
 		if c := b.Last.Compare(a.Last); c != 0 {
@@ -428,6 +517,9 @@ func (s *Service) Contents(_ context.Context, id string) ([]Line, error) {
 	if err := valid(id); err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	s.lookup(id) // the agent remembers a session that is kept once it is loaded
+	s.mu.Unlock()
 	c, err := s.agent.Contents(id)
 	var lines []Line
 	if c.System != "" {
@@ -486,50 +578,6 @@ func (s *Service) Close() {
 	s.mu.Unlock()
 	s.stop()
 	s.answers.Wait()
-}
-
-// handed is a session as one node hands it over to the next.
-type handed struct {
-	ID     string          `json:"id"`
-	Events []Event         `json:"events"`
-	Memory json.RawMessage `json:"memory"` // what the agent remembers of it
-}
-
-// HandOver returns the sessions and what the agent remembers of them, for
-// the node that takes the place of this one: see Resume. It is for a node
-// whose answers ended.
-func (s *Service) HandOver() []byte {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var all []handed
-	for _, se := range s.sessions {
-		if len(se.events) > 0 {
-			all = append(all, handed{se.id, se.events, s.agent.Conversation(se.id)})
-		}
-	}
-	slices.SortFunc(all, func(a, b handed) int { return strings.Compare(a.ID, b.ID) })
-	b, _ := json.Marshal(all) // events and memory are always written
-	return b
-}
-
-// Resume takes over the sessions another node handed over.
-func (s *Service) Resume(data []byte) error {
-	var all []handed
-	if err := json.Unmarshal(data, &all); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, h := range all {
-		if err := valid(h.ID); err != nil {
-			return err
-		}
-		if err := s.agent.Resume(h.ID, h.Memory); err != nil {
-			return fmt.Errorf("session %s: %w", h.ID, err)
-		}
-		s.get(h.ID).events = h.Events
-	}
-	return nil
 }
 
 // Await asks for the answer to text in the session id of api and waits for

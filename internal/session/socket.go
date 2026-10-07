@@ -86,9 +86,23 @@ func Handler(s *Service) http.Handler {
 			reply(w, nil, s.Cancel(r.Context(), in.ID))
 		}
 	})
+	mux.HandleFunc("POST /delete", func(w http.ResponseWriter, r *http.Request) {
+		var in idRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.Delete(r.Context(), in.ID))
+		}
+	})
 	mux.HandleFunc("GET /list", func(w http.ResponseWriter, r *http.Request) {
 		list, _ := s.List(r.Context()) // a Service always has its list
 		reply(w, list, nil)
+	})
+	mux.HandleFunc("GET /peers", func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Peers(r.Context())
+		reply(w, list, err)
+	})
+	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
+		events, err := s.Read(r.Context(), r.URL.Query().Get("id"))
+		reply(w, events, err)
 	})
 	mux.HandleFunc("GET /contents", func(w http.ResponseWriter, r *http.Request) {
 		lines, err := s.Contents(r.Context(), r.URL.Query().Get("id"))
@@ -263,11 +277,30 @@ func (c *Client) Cancel(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/cancel", idRequest{id}, nil)
 }
 
+// Delete removes the session id.
+func (c *Client) Delete(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodPost, "/delete", idRequest{id}, nil)
+}
+
 // List describes the sessions that have a message, the latest first.
 func (c *Client) List(ctx context.Context) ([]Info, error) {
 	var list []Info
 	err := c.do(ctx, http.MethodGet, "/list", nil, &list)
 	return list, err
+}
+
+// Peers describes the conversations of peers, the latest first.
+func (c *Client) Peers(ctx context.Context) ([]Info, error) {
+	var list []Info
+	err := c.do(ctx, http.MethodGet, "/peers", nil, &list)
+	return list, err
+}
+
+// Read returns what happened in the conversation of a peer id.
+func (c *Client) Read(ctx context.Context, id string) ([]Event, error) {
+	var events []Event
+	err := c.do(ctx, http.MethodGet, "/read?id="+url.QueryEscape(id), nil, &events)
+	return events, err
 }
 
 // Contents returns what the next call of the LLM in the session id is sent.

@@ -1,15 +1,28 @@
 package assistant_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"ouroboros/internal/agent"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
+	"ouroboros/internal/history"
+	assistantplugin "ouroboros/internal/plugins/assistant"
 )
+
+// A conversation of a peer is archived by its key: one without is not.
+func TestArchivedPeerWithoutKey(t *testing.T) {
+	hook := assistantplugin.Archived(history.Open(t.TempDir()))
+	err := hook.After(context.Background(), agent.AnswerOutcome{Processing: agent.Processing{Conversation: agent.Conversation{ID: "c", Peer: true}}})
+	if err == nil {
+		t.Error("a peer without its key should not be archived")
+	}
+}
 
 // The owner can take tools away from the own agent, too.
 func TestOwnerToolsCanBeRestricted(t *testing.T) {

@@ -26,6 +26,7 @@ import (
 	"ouroboros/internal/node"
 	"ouroboros/internal/openai/openaitest"
 	"ouroboros/internal/peers"
+	sessionplugin "ouroboros/internal/plugins/session"
 	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
@@ -224,23 +225,28 @@ func newApp(t *testing.T, s cli.Settings, term cli.Terminal, change func([]plugi
 // needs no node.
 func Run(t *testing.T, s cli.Settings, input string, args ...string) (string, error) {
 	t.Helper()
-	app, out := newApp(t, s, cli.Terminal{In: strings.NewReader(input)}, InProcess)
+	app, out := newApp(t, s, cli.Terminal{In: strings.NewReader(input)}, InProcess(s))
 	err := app.Run(context.Background(), args)
 	return out.String(), err
 }
 
-// InProcess is list with the sessions of the owner in the process of its
-// front ends, as the node has them, instead of those of the node on its
-// socket: the same Service, without the socket. The front ends answer
-// without a node then.
-func InProcess(list []plugin.Plugin) []plugin.Plugin {
+// InProcess changes a list of plugins for the node of s to have the sessions
+// of the owner in the process of its front ends, as the node has them and
+// kept where it keeps them, instead of those of the node on its socket: the
+// same Service, without the socket. The front ends answer without a node
+// then.
+func InProcess(s cli.Settings) func(list []plugin.Plugin) []plugin.Plugin {
+	return func(list []plugin.Plugin) []plugin.Plugin { return inProcess(home.Dir(s.Home), list) }
+}
+
+func inProcess(dir home.Dir, list []plugin.Plugin) []plugin.Plugin {
 	type needs struct{ Assistant *assistant.Assistant }
 	type services struct {
 		Service  *session.Service
 		Sessions plugin.Sessions
 	}
 	sessions := plugin.NewService("sessions", func(_ *plugin.Context, n needs) (services, error) {
-		s := session.New(n.Assistant)
+		s := sessionplugin.In(dir, n.Assistant)
 		return services{s, s}, nil
 	})
 	return slices.Collect(func(yield func(plugin.Plugin) bool) {

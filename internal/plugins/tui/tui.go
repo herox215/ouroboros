@@ -190,6 +190,23 @@ func (u *ui) Cancel(ctx context.Context, id string) error { return u.sessions.Ca
 // Sessions lists the sessions of the node.
 func (u *ui) Sessions(ctx context.Context) ([]plugin.SessionInfo, error) { return u.sessions.List(ctx) }
 
+// Delete removes the session id from the node.
+func (u *ui) Delete(ctx context.Context, id string) error { return u.sessions.Delete(ctx, id) }
+
+// Peers lists the conversations of peers the node has.
+func (u *ui) Peers(ctx context.Context) ([]plugin.SessionInfo, error) { return u.sessions.Peers(ctx) }
+
+// Read returns what happened in the conversation of a peer id, as the UI
+// shows it.
+func (u *ui) Read(ctx context.Context, id string) ([]tui.Event, error) {
+	past, err := u.sessions.Read(ctx, id)
+	events := make([]tui.Event, len(past))
+	for i, e := range past {
+		events[i] = u.event(e)
+	}
+	return events, err
+}
+
 // Contents returns what the next call of the LLM in the session id is sent,
 // message by message: the system prompt, every tool with its schema, and the
 // conversation so far.

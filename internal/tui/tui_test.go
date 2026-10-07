@@ -64,6 +64,7 @@ func (a *fakeAgent) Contents(string) (assistant.Contents, error) { return assist
 func (a *fakeAgent) Inspection(string) (agent.Inspection, bool)  { return agent.Inspection{}, false }
 func (a *fakeAgent) Conversation(string) json.RawMessage         { return nil }
 func (a *fakeAgent) Resume(string, json.RawMessage) error        { return nil }
+func (a *fakeAgent) Forget(string)                               {}
 
 // fakeBackend is what the UI controls in the tests. Its sessions are those
 // of the node, in this process: their answers come from the fakeAgent.
@@ -102,6 +103,9 @@ type fakeBackend struct {
 
 	mu   sync.Mutex
 	sent []sent // the messages asked for
+
+	peers []plugin.SessionInfo // the conversations of peers
+	read  map[string][]Event   // what happened in them
 }
 
 func (f *fakeBackend) Settings() (Settings, error) { return f.settings, f.fail["settings"] }
@@ -193,6 +197,28 @@ func (f *fakeBackend) Sessions(ctx context.Context) ([]plugin.SessionInfo, error
 		return nil, errNoNode
 	}
 	return f.sessions.List(ctx)
+}
+func (f *fakeBackend) Delete(ctx context.Context, id string) error {
+	if err := f.fail["delete"]; err != nil {
+		return err
+	}
+	if i := slices.IndexFunc(f.peers, func(p plugin.SessionInfo) bool { return p.ID == id }); i >= 0 {
+		f.peers = slices.Delete(f.peers, i, i+1)
+		return nil
+	}
+	return f.sessions.Delete(ctx, id)
+}
+func (f *fakeBackend) Peers(ctx context.Context) ([]plugin.SessionInfo, error) {
+	if err := f.fail["peers"]; err != nil {
+		return nil, err
+	}
+	return f.peers, nil
+}
+func (f *fakeBackend) Read(ctx context.Context, id string) ([]Event, error) {
+	if err := f.fail["read"]; err != nil {
+		return nil, err
+	}
+	return f.read[id], nil
 }
 func (f *fakeBackend) Contents(context.Context, string) ([]Message, error) {
 	return f.contents, f.fail["contents"]

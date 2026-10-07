@@ -66,10 +66,6 @@ func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposal
 // History is the directory the conversations of the agents are archived in.
 func (d Dir) History() string { return d.path("history") }
 
-// Sessions is the file a node hands over the sessions of its owner in to
-// the new build that takes its place. It is there only in between.
-func (d Dir) Sessions() string { return d.path("sessions.json") }
-
 // Failures opens the list of the answers to peers that failed.
 func (d Dir) Failures() *diagnosis.Store { return diagnosis.Open(d.path("failures.json")) }
 

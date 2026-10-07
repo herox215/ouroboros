@@ -19,8 +19,16 @@ import (
 // watches every session it knows and shows one of them. The others go on in
 // the background, and the command /session opens a screen that lists them,
 // as ctrl+s does, which leaves what is typed in the input for the session
-// shown: the arrow keys select one, enter shows it, and esc goes back to the
-// chat.
+// shown: the arrow keys select one, enter shows it, d pressed twice deletes
+// it, and esc goes back to the chat.
+//
+// The node keeps the sessions, also those from before it started. The UI
+// watches a session once it shows it, or while an answer is on its way in
+// it: the others are only listed, and the node loads them when they are
+// watched.
+//
+// tab switches the screen to the conversations of peers with the agent:
+// enter shows one, only to read, and d pressed twice deletes it.
 
 // rewatchDelay is how long the UI waits before it watches a session again
 // whose events stopped coming, as when the node stopped or starts anew.
@@ -51,6 +59,22 @@ type (
 		list []plugin.SessionInfo
 		err  error
 	}
+	// deletedMsg says whether the session id was deleted.
+	deletedMsg struct {
+		id  string
+		err error
+	}
+	// peersMsg are the conversations of peers the node has.
+	peersMsg struct {
+		list []plugin.SessionInfo
+		err  error
+	}
+	// readMsg is what happened in the conversation of a peer c.
+	readMsg struct {
+		c      *conversation
+		events []Event
+		err    error
+	}
 )
 
 // conversation returns the session id, which the UI knows from now on.
@@ -63,9 +87,10 @@ func (m *Model) conversation(id string) *conversation {
 	return c
 }
 
-// watch asks for the events of the session c, unless they come already.
+// watch asks for the events of the session c, unless they come already. A
+// conversation of a peer is read, not watched.
 func (m *Model) watch(c *conversation) tea.Cmd {
-	if c == nil || c.watching {
+	if c == nil || c.watching || c.peer != "" {
 		return nil
 	}
 	c.watching = true
@@ -99,9 +124,14 @@ func next(id string, live <-chan Event) tea.Cmd {
 	}
 }
 
-// unwatched watches a session again whose events stopped coming.
+// unwatched watches a session again whose events stopped coming, unless
+// it was deleted.
 func (m *Model) unwatched(id string) tea.Cmd {
-	m.conversation(id).watching = false
+	c, ok := m.chats[id]
+	if !ok {
+		return nil
+	}
+	c.watching = false
 	return m.rewatch(id)
 }
 
@@ -225,9 +255,10 @@ func (m *Model) loadSessions() tea.Msg {
 	return sessionsMsg{list, err}
 }
 
-// sessionsLoaded watches the sessions of the node the UI does not know yet,
-// such as those of another front end. Without a node to ask, the UI goes on
-// with those it knows.
+// sessionsLoaded lists the sessions of the node the UI does not watch, such
+// as those of another front end or from before the node started, and
+// watches those whose answer is on its way. Without a node to ask, the UI
+// goes on with those it knows.
 func (m *Model) sessionsLoaded(msg sessionsMsg) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, info := range msg.list {
@@ -237,22 +268,88 @@ func (m *Model) sessionsLoaded(msg sessionsMsg) tea.Cmd {
 		}
 		// What the list says, until the events say it all.
 		c.title, c.last, c.pending, c.running = cmp.Or(c.title, info.Title), info.Last, info.Running, info.Running
-		cmds = append(cmds, m.watch(c))
+		if info.Running {
+			cmds = append(cmds, m.watch(c))
+		}
 	}
 	return tea.Batch(cmds...)
 }
 
-// openSessions opens the sessions screen, with the session shown selected.
+// openSessions opens the sessions screen, with the session shown selected:
+// among the conversations of peers if it is one of them.
 func (m *Model) openSessions() tea.Cmd {
 	m.screen = screenSessions
+	m.peerTab = m.chat.peer != ""
 	m.sessionSel = max(0, slices.Index(m.sessionRows(), m.chat))
-	return m.loadSessions
+	return tea.Batch(m.loadSessions, m.loadPeers)
+}
+
+// loadPeers asks for the conversations of peers the node has.
+func (m *Model) loadPeers() tea.Msg {
+	list, err := m.backend.Peers(m.ctx)
+	return peersMsg{list, err}
+}
+
+// peersLoaded lists the conversations of peers. The one shown stays as it
+// is; without a node to ask, the list stays as it was.
+func (m *Model) peersLoaded(msg peersMsg) {
+	if msg.err != nil {
+		return
+	}
+	selected := m.sessionRows()
+	m.peers = nil
+	for _, info := range msg.list {
+		c := &conversation{contextID: info.ID, peer: info.Peer, title: info.Title, last: info.Last}
+		if m.chat.contextID == info.ID {
+			c = m.chat
+		}
+		m.peers = append(m.peers, c)
+	}
+	if m.peerTab && m.sessionSel < len(selected) {
+		m.sessionSel = max(0, slices.Index(m.peers, selected[m.sessionSel]))
+	}
+}
+
+// showPeer asks for what happened in the conversation of a peer c, to show
+// it.
+func (m *Model) showPeer(c *conversation) tea.Cmd {
+	m.screen = screenChat
+	id := c.contextID
+	return func() tea.Msg {
+		events, err := m.backend.Read(m.ctx, id)
+		return readMsg{c, events, err}
+	}
+}
+
+// read shows the conversation of a peer that was read. What is typed stays
+// with the session that was shown.
+func (m *Model) read(msg readMsg) {
+	if msg.err != nil {
+		m.setNotice("not read: "+msg.err.Error(), true)
+		return
+	}
+	c := msg.c
+	c.entries, c.round, c.doing = nil, 0, ""
+	for _, e := range msg.events {
+		m.apply(c, e, false)
+	}
+	c.pending = false // what is not over yet is shown as far as it got
+	if m.chat.peer == "" {
+		m.chat.draft = m.input.Value()
+		m.input.Reset()
+	}
+	m.chat = c
+	m.renderHistory(true)
 }
 
 // sessionRows are the sessions the sessions screen lists: those with a
 // message or with something typed for them, and the one shown, the latest
-// first. One without a message yet is the latest of all.
+// first. One without a message yet is the latest of all. Among the
+// conversations of peers, those the node listed.
 func (m *Model) sessionRows() []*conversation {
+	if m.peerTab {
+		return m.peers
+	}
 	var rows []*conversation
 	for _, c := range m.chats {
 		if c == m.chat || c.title != "" || c.draft != "" {
@@ -275,10 +372,27 @@ func (m *Model) sessionRows() []*conversation {
 }
 
 // handleSessionsKey handles keys on the sessions screen: up and down select
-// a session, enter shows it, esc goes back to the chat.
+// a session, enter shows it, d pressed twice deletes it, esc goes back to the
+// chat.
 func (m *Model) handleSessionsKey(msg tea.KeyPressMsg) tea.Cmd {
 	rows := m.sessionRows()
+	deleting := m.deleting
+	m.deleting = nil
 	switch msg.String() {
+	case "tab":
+		m.peerTab = !m.peerTab
+		m.sessionSel = max(0, slices.Index(m.sessionRows(), m.chat))
+		return nil
+	}
+	if len(rows) == 0 {
+		if msg.String() == "esc" {
+			m.screen = screenChat
+		}
+		return nil
+	}
+	switch msg.String() {
+	case "d":
+		return m.delete(rows[min(m.sessionSel, len(rows)-1)], deleting)
 	case "esc":
 		m.screen = screenChat
 	case "up", "k":
@@ -286,17 +400,28 @@ func (m *Model) handleSessionsKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "down", "j":
 		m.sessionSel = min(len(rows)-1, m.sessionSel+1)
 	case "enter":
+		if c := rows[min(m.sessionSel, len(rows)-1)]; c.peer != "" {
+			return m.showPeer(c)
+		}
 		return m.switchTo(rows[min(m.sessionSel, len(rows)-1)])
 	}
 	return nil
 }
 
 // switchTo shows the session c in the chat. What was typed for the session
-// that was shown stays with it, and what was typed for c comes back.
+// that was shown stays with it, and what was typed for c comes back; from a
+// conversation of a peer, what is typed stays.
 func (m *Model) switchTo(c *conversation) tea.Cmd {
 	m.screen = screenChat
 	if c == m.chat {
 		return nil
+	}
+	if m.chat.peer != "" {
+		m.chat = c
+		m.input.SetValue(m.input.Value() + c.draft)
+		c.draft = ""
+		m.renderHistory(true)
+		return m.watch(c)
 	}
 	m.chat.draft = m.input.Value()
 	m.chat = c
@@ -304,6 +429,58 @@ func (m *Model) switchTo(c *conversation) tea.Cmd {
 	c.draft = ""
 	m.renderHistory(true)
 	return m.watch(c)
+}
+
+// delete deletes the session c once it is selected for it, which it is
+// first: a session is deleted with the second d, not by a key pressed by
+// mistake. One without a message is not in the node; one whose answer is on
+// its way is not deleted.
+func (m *Model) delete(c, selected *conversation) tea.Cmd {
+	switch {
+	case c.title == "":
+		m.setNotice("nothing to delete here yet", false)
+		return nil
+	case c.pending:
+		m.setNotice("an answer is on its way there: /cancel it first", true)
+		return nil
+	case c != selected && c.peer != "":
+		m.deleting = c
+		m.setNotice("press d again to delete the conversation of "+c.peer+" “"+short(c.title, 40)+"”", false)
+		return nil
+	case c != selected:
+		m.deleting = c
+		m.setNotice("press d again to delete “"+short(c.title, 40)+"” with its history", false)
+		return nil
+	}
+	id := c.contextID
+	return func() tea.Msg { return deletedMsg{id, m.backend.Delete(m.ctx, id)} }
+}
+
+// deleted forgets a session that was deleted. The session shown gives way to
+// a new one.
+func (m *Model) deleted(msg deletedMsg) tea.Cmd {
+	if msg.err != nil {
+		m.setNotice("not deleted: "+msg.err.Error(), true)
+		return nil
+	}
+	c, ok := m.chats[msg.id]
+	if i := slices.IndexFunc(m.peers, func(p *conversation) bool { return p.contextID == msg.id }); i >= 0 {
+		c, ok = m.peers[i], true
+		m.peers = slices.Delete(m.peers, i, i+1)
+	}
+	if !ok {
+		return nil
+	}
+	delete(m.chats, msg.id)
+	m.setNotice("deleted “"+short(c.title, 40)+"”", false)
+	var cmd tea.Cmd
+	if c == m.chat { // what is typed stays
+		m.chat = m.conversation(plugin.NewID())
+		m.renderHistory(true)
+		cmd = m.watch(m.chat)
+	}
+	m.sessionSel = max(0, min(m.sessionSel, len(m.sessionRows())-1))
+	return cmd
 }
 
 // cancel stops the answer on its way in the session shown.
@@ -330,12 +507,19 @@ func (m *Model) runningFrame() string { return running[m.ticks/3%len(running)] }
 func (m *Model) sessionsView() string {
 	w, h := m.width, m.bodyHeight()
 	rows := m.sessionRows()
-	lines := []string{boldStyle.Render("Sessions") + mutedStyle.Render("  each goes on in the background while another one is shown"), ""}
+	yours, peers, about := boldStyle.Render("Sessions"), mutedStyle.Render("Peers"), "  each goes on in the background while another one is shown"
+	if m.peerTab {
+		yours, peers, about = mutedStyle.Render("Sessions"), boldStyle.Render("Peers"), "  how peers talked with "+m.agentName()+", only to read"
+	}
+	lines := []string{yours + mutedStyle.Render(" · ") + peers + mutedStyle.Render(about), ""}
 	shown := max(1, h-6) // border, title, blank lines and count
 	first := max(0, min(m.sessionSel-shown/2, len(rows)-shown))
 	for i := first; i < min(len(rows), first+shown); i++ {
 		c := rows[i]
 		title := cmp.Or(c.title, "new conversation")
+		if c.peer != "" {
+			title = c.peer + ": " + title
+		}
 		var after string
 		if c.pending {
 			after = " " + lipgloss.NewStyle().Foreground(accent).Render(m.runningFrame())
@@ -353,9 +537,13 @@ func (m *Model) sessionsView() string {
 			lines = append(lines, "  "+line)
 		}
 	}
-	count := "1 session"
+	thing := "session"
+	if m.peerTab {
+		thing = "conversation"
+	}
+	count := "1 " + thing
 	if len(rows) != 1 {
-		count = fmt.Sprintf("%d sessions", len(rows))
+		count = fmt.Sprintf("%d %ss", len(rows), thing)
 	}
 	lines = append(lines, "", mutedStyle.Render(count))
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))

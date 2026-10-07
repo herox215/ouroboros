@@ -17,7 +17,9 @@ import (
 	"ouroboros/internal/cli"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
+	"ouroboros/internal/history"
 	"ouroboros/internal/home"
+	"ouroboros/internal/openai"
 	tuiplugin "ouroboros/internal/plugins/tui"
 	"ouroboros/internal/session"
 	"ouroboros/internal/setup"
@@ -45,6 +47,7 @@ func backend(t *testing.T, s cli.Settings, extra ...plugin.Plugin) tui.Backend {
 	app, _ := clitest.NewApp(t, s, "", append(extra, spy(&ctx))...)
 	bot, _ := cli.Service[*plugin.Assistant](app)
 	sessions := session.New(bot)
+	sessions.Archive(history.Open(home.Dir(s.Home).History()), func(string, ...any) {}, func(string) string { return "beta" })
 	t.Cleanup(sessions.Close)
 	return tuiplugin.Backend(plugin.OwnerOf(home.Dir(s.Home), clitest.Network(t, s, app), setup.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}), ctx, sessions)
 }
@@ -160,6 +163,27 @@ func TestTUIBackendAsk(t *testing.T) {
 		if e.Kind == plugin.SessionStep && e.Text != "" {
 			t.Fatalf("events %+v", e)
 		}
+	}
+	// No peer talked with the agent yet; what is not a conversation of a
+	// peer is not read.
+	if list, err := u.Peers(context.Background()); err != nil || len(list) != 0 {
+		t.Fatalf("peers %+v, %v", list, err)
+	}
+	if _, err := u.Read(context.Background(), "ctx"); !errors.Is(err, session.ErrNoSession) {
+		t.Fatalf("read: %v", err)
+	}
+	history.Open(home.Dir(alpha.Home).History()).Append(history.Who{Session: "p", Peer: "key"},
+		[]openai.Message{{Role: "user", Content: "hello"}, {Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "history_search", Arguments: "{}"}}}}}, nil)
+	list, _ := u.Peers(context.Background())
+	if events, err := u.Read(context.Background(), list[0].ID); err != nil || len(events) != 3 || events[0].Text != "hello" || events[2].Text != "searching the history" {
+		t.Fatalf("read %+v, %v", events, err)
+	}
+	// A session is deleted.
+	if err := u.Delete(context.Background(), "ctx"); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := u.Sessions(context.Background()); err != nil || len(list) != 0 {
+		t.Fatalf("sessions %+v, %v", list, err)
 	}
 }
 

@@ -111,6 +111,8 @@ var (
 	// ErrNotRunning means that the node that holds the sessions does not
 	// run: Sessions.Open starts it.
 	ErrNotRunning = session.ErrNotRunning
+	// ErrNoSession means that there is no session of that ID.
+	ErrNoSession = session.ErrNoSession
 )
 
 // Await asks for the answer to text in the session id and waits for it, see

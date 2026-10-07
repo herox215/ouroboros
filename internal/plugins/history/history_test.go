@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
+	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 	"ouroboros/plugin"
 )
@@ -29,15 +31,26 @@ func logged(t *testing.T, dir string) string {
 	return string(b)
 }
 
+// archived is what the archive of the node of dir holds, the latest first.
+func archived(t *testing.T, dir string) []history.Entry {
+	t.Helper()
+	entries, err := history.Open(home.Dir(dir).History()).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
 // The agent of the owner finds what was said before in this conversation and
-// in earlier ones, and the owner deletes what is archived.
+// in earlier ones. There is no command for the archive: the owner deletes in
+// the sessions of the terminal UI.
 func TestOwner(t *testing.T) {
 	s := clitest.Settings(t)
 	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := clitest.Run(t, s, "", "history"); err != nil || out != "no conversation is archived\n" {
-		t.Fatalf("empty: %q, %v", out, err)
+	if _, err := clitest.Run(t, s, "", "history"); err == nil {
+		t.Fatal("ouro history should be no command")
 	}
 	if _, err := clitest.Run(t, s, "", "chat", "the roof is red"); err != nil {
 		t.Fatal(err)
@@ -81,13 +94,11 @@ func TestOwner(t *testing.T) {
 	}
 
 	// Another session named, and one that is none.
-	out, _ = clitest.Run(t, s, "", "history")
-	entries := strings.Split(strings.TrimSpace(out), "\n")
-	if len(entries) != 2 || !strings.HasPrefix(entries[1], "owner/") || !strings.HasSuffix(entries[1], `"the roof is red"`) {
-		t.Fatalf("history: %q", out)
+	entries := archived(t, s.Home)
+	if len(entries) != 2 || !strings.HasPrefix(entries[1].ID, "owner/") || entries[1].Title != "the roof is red" {
+		t.Fatalf("history: %+v", entries)
 	}
-	first := strings.Fields(entries[1])[0]
-	session := strings.TrimPrefix(first, "owner/")
+	session := strings.TrimPrefix(entries[1].ID, "owner/")
 	out, _ = clitest.Run(t, s, "", "chat", call("history_read", map[string]any{"session": session}))
 	if !strings.Contains(out, "the roof is red\n") {
 		t.Errorf("read another session: %q", out)
@@ -101,25 +112,11 @@ func TestOwner(t *testing.T) {
 	if !strings.Contains(logged(t, s.Home), "history_read for the owner, scope a named session, failed: there is no session") {
 		t.Error("a failed call is not logged")
 	}
-
-	if out, err := clitest.Run(t, s, "", "history", "delete", first); err != nil || out != "● deleted "+first+"\n" {
-		t.Fatalf("delete: %q, %v", out, err)
-	}
-	if out, _ := clitest.Run(t, s, "", "history"); strings.Contains(out, first) {
-		t.Errorf("deleted, but listed: %q", out)
-	}
-	if _, err := clitest.Run(t, s, "", "history", "delete", first); err == nil {
-		t.Error("deleting it again should fail")
-	}
-	for _, args := range [][]string{{"history", "delete"}, {"history", "drop", first}, {"history", "a", "b", "c"}} {
-		if _, err := clitest.Run(t, s, "", args...); err == nil || err.Error() != "usage: ouro history [delete SESSION]" {
-			t.Errorf("%v: %v", args, err)
-		}
-	}
 }
 
 // An archive that cannot be written leaves the answer as it is and is
-// logged as the diagnostic of the plugin.
+// logged as the diagnostic of the node, which archives with or without the
+// plugin.
 func TestArchiveFails(t *testing.T) {
 	s := clitest.Settings(t)
 	config.Save(s.Home, clitest.NodeConfig(s))
@@ -128,11 +125,8 @@ func TestArchiveFails(t *testing.T) {
 	if err != nil || !strings.Contains(out, "last=hello") {
 		t.Fatalf("answer: %q, %v", out, err)
 	}
-	if !strings.Contains(logged(t, s.Home), " plugin history after failed: ") {
+	if !strings.Contains(logged(t, s.Home), " plugin archive after failed: ") {
 		t.Errorf("not logged:\n%s", logged(t, s.Home))
-	}
-	if _, err := clitest.Run(t, s, "", "history"); err == nil {
-		t.Error("listing an archive that is a file should fail")
 	}
 	if out, _ := clitest.Run(t, s, "", "chat", call("history_sessions", nil)); !strings.Contains(out, "error: ") {
 		t.Errorf("sessions: %q", out)
@@ -187,8 +181,15 @@ func TestPeer(t *testing.T) {
 		}
 	}
 	// The session of the owner of beta is no session of a peer.
-	owner, _ := clitest.Run(t, beta, "", "history")
-	session := strings.TrimPrefix(strings.Fields(owner)[0], "owner/")
+	var session string
+	var peers []history.Entry
+	for _, e := range archived(t, beta.Home) {
+		if id, ok := strings.CutPrefix(e.ID, "owner/"); ok {
+			session = id
+		} else {
+			peers = append(peers, e)
+		}
+	}
 	for _, s := range []string{session, "../owner/" + session} {
 		if out, _ := clitest.Run(t, alpha, "", "ask", "beta", call("history_read", map[string]any{"session": s})); !strings.Contains(out, "error: a peer can only reach") {
 			t.Errorf("%q: %q", s, out)
@@ -198,8 +199,8 @@ func TestPeer(t *testing.T) {
 		t.Error("the call of a peer is not logged")
 	}
 	// The conversations of the peer are archived apart from those of the owner.
-	if !strings.Contains(owner, "peer-") || !strings.Contains(owner, `"the secret of an earlier talk"`) {
-		t.Errorf("the archive of beta: %q", owner)
+	if len(peers) != 2 || !slices.ContainsFunc(peers, func(e history.Entry) bool { return e.Title == "the secret of an earlier talk" }) {
+		t.Errorf("the archive of beta: %+v", peers)
 	}
 }
 

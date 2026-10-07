@@ -367,7 +367,7 @@ func TestOuroWithoutTheTerminalUI(t *testing.T) {
 	if len(list) != len(cli.Plugins(s, term))-1 {
 		t.Fatal("the standard ouro should have the tui plugin")
 	}
-	app, err := cli.NewWith(clitest.InProcess(list)...)
+	app, err := cli.NewWith(clitest.InProcess(s)(list)...)
 	if err != nil {
 		t.Fatal(err)
 	}

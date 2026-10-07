@@ -127,8 +127,10 @@ func Open(dir string) *Archive {
 // a UUID or a hash. Anything else is hashed before it names a file.
 var named = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-// sessionName is the name of the file of the conversation id.
-func sessionName(id string) string {
+// Name is the name of the file of the conversation id, and of the session
+// in what the archive lists: id itself when it is a context ID as ouro makes
+// them, and a hash of it otherwise.
+func Name(id string) string {
 	if named.MatchString(id) {
 		return id
 	}
@@ -141,8 +143,14 @@ func (a *Archive) partyDir(who Who) string {
 	if who.Peer == "" {
 		return filepath.Join(a.dir, ownerDir)
 	}
-	sum := sha256.Sum256([]byte(who.Peer))
-	return filepath.Join(a.dir, peerPrefix+hex.EncodeToString(sum[:16]))
+	return filepath.Join(a.dir, Party(who.Peer))
+}
+
+// Party is how the archive names the peer with the public key publicKey: as
+// the start of the ID of its conversations in List.
+func Party(publicKey string) string {
+	sum := sha256.Sum256([]byte(publicKey))
+	return peerPrefix + hex.EncodeToString(sum[:16])
 }
 
 func (a *Archive) file(who Who, session string) string {
@@ -164,7 +172,7 @@ func (a *Archive) Append(who Who, msgs []openai.Message, err error) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	path := a.file(who, sessionName(who.Session))
+	path := a.file(who, Name(who.Session))
 	f, err2 := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err2 != nil {
 		return err2
@@ -311,7 +319,7 @@ type session struct {
 // first; for a peer only its current one.
 func (a *Archive) sessions(who Who) ([]session, error) {
 	if who.Peer != "" {
-		name := sessionName(who.Session)
+		name := Name(who.Session)
 		path := a.file(who, name)
 		info, err := os.Stat(path)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -371,7 +379,7 @@ func (a *Archive) Search(who Who, query string, all bool, limit int) (string, in
 		limit = DefaultHits
 	}
 	limit = min(limit, MaxHits)
-	current := sessionName(who.Session)
+	current := Name(who.Session)
 	var in []session
 	if all {
 		listed, err := a.sessions(who)
@@ -482,7 +490,7 @@ func oneLine(text string) string {
 // go on. Without session it is the current conversation; a peer may name no
 // other.
 func (a *Archive) Read(who Who, session string, from, count int) (string, error) {
-	current := sessionName(who.Session)
+	current := Name(who.Session)
 	if session == "" {
 		session = current
 	}
@@ -572,7 +580,7 @@ func (a *Archive) Sessions(who Who) (string, int, error) {
 	if len(in) == 0 {
 		return "no conversation is archived yet", 0, nil
 	}
-	current := sessionName(who.Session)
+	current := Name(who.Session)
 	var out strings.Builder
 	shown := min(len(in), MaxSessions)
 	for _, s := range in[:shown] {
@@ -644,21 +652,52 @@ func (a *Archive) List() ([]Entry, error) {
 	return out, nil
 }
 
+// ErrNotArchived is the error of Delete for a session the archive does not
+// have.
+var ErrNotArchived = errors.New("the archive has no such session")
+
 // party is what the directory of a party may be called.
 var party = regexp.MustCompile(`^(` + ownerDir + `|` + peerPrefix + `[0-9a-f]{32})$`)
 
-// Delete removes the conversation id, as List names it, from the archive.
-func (a *Archive) Delete(id string) error {
+// Owner is the ID of the conversation session of the owner, as List names
+// it.
+func Owner(session string) string { return ownerDir + "/" + Name(session) }
+
+// path is the file of the conversation id, as List names it.
+func (a *Archive) path(id string) (string, error) {
 	dir, name, ok := strings.Cut(id, "/")
 	if !ok || !party.MatchString(dir) || !named.MatchString(name) {
-		return fmt.Errorf("%q names no session: ouro history lists them as owner/SESSION or peer-…/SESSION", id)
+		return "", fmt.Errorf("%q names no session: they are named owner/SESSION or peer-…/SESSION", id)
 	}
-	path := filepath.Join(a.dir, dir, name+suffix)
+	return filepath.Join(a.dir, dir, name+suffix), nil
+}
+
+// Delete removes the conversation id, as List names it, from the archive.
+func (a *Archive) Delete(id string) error {
+	path, err := a.path(id)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(path); errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("there is no session %s in the archive", id)
+		return fmt.Errorf("%w: %s", ErrNotArchived, id)
 	} else if err != nil {
 		return err
 	}
 	a.forget(path)
 	return nil
+}
+
+// Records returns every record of the conversation id, as List names it, in
+// order.
+func (a *Archive) Records(id string) ([]Record, error) {
+	path, err := a.path(id)
+	if err != nil {
+		return nil, err
+	}
+	var out []Record
+	err = records(path, func(r Record) bool { out = append(out, r); return true })
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", ErrNotArchived, id)
+	}
+	return out, err
 }

@@ -64,6 +64,15 @@ type Backend interface {
 	// Sessions lists the sessions of the node that have a message, the one
 	// with the latest event first.
 	Sessions(ctx context.Context) ([]plugin.SessionInfo, error)
+	// Delete removes the session id from the node, with its history, or the
+	// conversation of a peer id as Peers names it. It fails with
+	// plugin.ErrBusy while an answer is on its way in it.
+	Delete(ctx context.Context, id string) error
+	// Peers lists the conversations of peers with the agent of the node,
+	// the latest first: only to read and delete.
+	Peers(ctx context.Context) ([]plugin.SessionInfo, error)
+	// Read returns what happened in the conversation of a peer id.
+	Read(ctx context.Context, id string) ([]Event, error)
 	// Contents returns what the next call of the LLM in the session id is
 	// sent, message by message. With an error it returns what it has of it.
 	Contents(ctx context.Context, id string) ([]Message, error)
@@ -157,6 +166,9 @@ type conversation struct {
 	last      time.Time
 	draft     string // what is typed in the input for it while another one is shown
 	watching  bool   // its events come in, or are asked for
+	// peer is the peer a conversation of a peer with the agent is with: it
+	// is only to read. "" for a session of the owner.
+	peer string
 }
 
 // Model is the UI state.
@@ -175,8 +187,11 @@ type Model struct {
 
 	restarts string // the binary the UI quit for ouro to start anew from
 
-	sessionSel int // the session selected on the sessions screen
-	ticks      int // of the spinner, which the sessions screen animates with
+	sessionSel int             // the session selected on the sessions screen
+	deleting   *conversation   // the session that d deletes when it is pressed again
+	peerTab    bool            // the sessions screen lists the conversations of peers
+	peers      []*conversation // the conversations of peers, as far as they were listed
+	ticks      int             // of the spinner, which the sessions screen animates with
 
 	trust     Contacts
 	screen    screen
@@ -425,6 +440,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.asked(msg)
 	case sessionsMsg:
 		return m, m.sessionsLoaded(msg)
+	case deletedMsg:
+		return m, m.deleted(msg)
+	case peersMsg:
+		m.peersLoaded(msg)
+	case readMsg:
+		m.read(msg)
 	case bodyMsg:
 		if m.screen == screenPlugin && m.open == msg.screen {
 			m.body = msg.body
@@ -670,6 +691,10 @@ func (m *Model) send() tea.Cmd {
 		m.setNotice("set up the node first: /setup", true)
 		return nil
 	}
+	if c.peer != "" {
+		m.setNotice("this is how "+c.peer+" and "+m.agentName()+" talked: it is only to read · /new", true)
+		return nil
+	}
 	if c.pending {
 		m.setNotice("wait for the reply first", true)
 		return nil
@@ -743,7 +768,13 @@ func (c *conversation) add(e entry) {
 func (m *Model) Restarts() (exe string, ok bool) { return m.restarts, m.restarts != "" }
 
 // Current is the ID of the session the UI shows.
-func (m *Model) Current() string { return m.chat.contextID }
+// A conversation of a peer is none: then it is a new one.
+func (m *Model) Current() string {
+	if m.chat.peer != "" {
+		return plugin.NewID()
+	}
+	return m.chat.contextID
+}
 
 // Resume makes the UI show the session id, as another UI did before ouro
 // started anew, without the splash: it is to be called before the UI is

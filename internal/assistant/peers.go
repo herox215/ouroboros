@@ -56,6 +56,10 @@ func (p *Peers) Respond(ctx context.Context, contextID, text string) (string, er
 	}})
 }
 
+// Forget makes the agent forget the conversation contextID, as if it was
+// never had.
+func (p *Peers) Forget(contextID string) { p.memory.Forget(contextID) }
+
 // current returns the agent for the configuration as it is now. The agent is
 // kept between messages, and built anew when what it is built from changes:
 // with the memory of the one before, so that it goes on with its

@@ -257,9 +257,10 @@ func again(exe string) plugin.Plugin {
 }
 
 // A node that a tool asks for a new build of ends with plugin.Restarting once
-// the answer is given, and hands its sessions over in a file the new node
-// reads once.
-func TestServeHandsOverTheSessions(t *testing.T) {
+// the answer is given. The new node finds the sessions in the archive, and so
+// does a node started after one that stopped: the agent goes on
+// with what it remembers, told that ouro started anew.
+func TestServeKeepsTheSessions(t *testing.T) {
 	s := clitest.Settings(t)
 	config.Save(s.Home, clitest.NodeConfig(s))
 	n := clitest.Serve(t, s, again("/new/ouro"))
@@ -273,63 +274,40 @@ func TestServeHandsOverTheSessions(t *testing.T) {
 	if !ok || r.Exe != "/new/ouro" {
 		t.Fatalf("got %v", err)
 	}
-	var file string
-	for _, kv := range r.Env {
-		k, v, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "OURO_") {
-			t.Setenv(k, v)
-		}
-		if k == "OURO_SESSIONS" {
-			file = v
-		}
-	}
-	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 || file != home.Dir(s.Home).Sessions() {
-		t.Fatalf("the sessions handed over: %v, %v", info, err)
-	}
-	next := clitest.Serve(t, s)
-	if list, err := sessions.List(context.Background()); err != nil || len(list) != 1 || list[0].ID != "c1" {
-		t.Fatalf("the new node has %+v, %v", list, err)
-	}
-	if reply, err := plugin.Await(context.Background(), sessions, "c1", "and now?"); err != nil || !strings.Contains(reply, "turns=5 last=and now?") {
-		t.Fatalf("the agent of the new node should remember: %q, %v", reply, err)
-	}
-	if _, err := os.Stat(file); !os.IsNotExist(err) {
-		t.Fatal("the file should be read once")
-	}
-	if _, ok := os.LookupEnv("OURO_SESSIONS"); ok {
-		t.Fatal("a process the node starts should not see the file")
-	}
-	next.Stop()
-
-	// Sessions that cannot be written are lost, and the node is replaced all
-	// the same; those that cannot be read are lost, and the node starts.
-	os.Mkdir(file, 0o700)
-	os.WriteFile(filepath.Join(file, "in the way"), nil, 0o600)
-	n = clitest.Serve(t, s, again("/new/ouro"))
-	plugin.Await(context.Background(), sessions, "c2", "!again")
-	r, ok = errors.AsType[*plugin.Restarting](n.Wait())
-	if !ok || slices.ContainsFunc(r.Env, func(kv string) bool { return strings.HasPrefix(kv, "OURO_SESSIONS=") }) {
-		t.Fatalf("got %+v", r)
-	}
 	for _, kv := range r.Env {
 		if k, v, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "OURO_") {
 			t.Setenv(k, v)
 		}
 	}
-	for _, content := range []string{"", "{"} {
-		os.RemoveAll(file)
-		if content != "" {
-			os.WriteFile(file, []byte(content), 0o600)
-		}
-		t.Setenv("OURO_SESSIONS", file)
-		if err := clitest.Serve(t, s).Stop(); err != nil {
-			t.Fatal(err)
+	if info, err := os.Stat(filepath.Join(home.Dir(s.Home).History(), "owner", "c1.jsonl")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the session archived: %v, %v", info, err)
+	}
+	next := clitest.Serve(t, s)
+	if list, err := sessions.List(context.Background()); err != nil || len(list) != 1 || list[0].ID != "c1" || list[0].Title != "!again" {
+		t.Fatalf("the new node has %+v, %v", list, err)
+	}
+	reply, err := plugin.Await(context.Background(), sessions, "c1", "and now?")
+	if err != nil || !strings.Contains(reply, "turns=5 last=[Not from the owner: ouro started anew since the last answer of this conversation, less than a minute ago.") ||
+		!strings.HasSuffix(reply, "]\n\nand now?") {
+		t.Fatalf("the agent of the new node should remember: %q, %v", reply, err)
+	}
+	if err := next.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stopped and started, the node goes on with it as well.
+	clitest.Serve(t, s)
+	past, _, err := sessions.Watch(context.Background(), "c1")
+	var asked []string
+	for _, e := range past {
+		if e.Kind == plugin.SessionMessage {
+			asked = append(asked, e.Text)
 		}
 	}
-	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
-	for _, want := range []string{"the sessions are not handed over: ", "the sessions handed over are lost: open ", "the sessions handed over are lost: unexpected end of JSON input"} {
-		if !strings.Contains(string(logged), want) {
-			t.Fatalf("the log lacks %q:\n%s", want, logged)
-		}
+	if err != nil || !slices.Equal(asked, []string{"!again", "and now?"}) || past[len(past)-1].Kind != plugin.SessionAnswer {
+		t.Fatalf("past %+v, %v", past, err)
+	}
+	if reply, err := plugin.Await(context.Background(), sessions, "c1", "still there?"); err != nil || !strings.Contains(reply, "turns=7 last=[Not from the owner: ") {
+		t.Fatalf("got %q, %v", reply, err)
 	}
 }

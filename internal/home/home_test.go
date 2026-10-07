@@ -138,9 +138,6 @@ func TestFiles(t *testing.T) {
 		len(s.Env) != 1 || s.Env[0] != "OURO_HOME="+string(d) {
 		t.Errorf("service %+v", s)
 	}
-	if got := d.Sessions(); got != filepath.Join(string(d), "sessions.json") {
-		t.Errorf("sessions %q", got)
-	}
 
 	d.Contacts().AddTrusted("key", "beta", "gpt")
 	if trusted, _, _ := d.Contacts().State("key"); !trusted {

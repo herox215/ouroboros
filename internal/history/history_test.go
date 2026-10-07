@@ -51,7 +51,7 @@ func answer(user, result, reply string) []openai.Message {
 func all(t *testing.T, a *Archive, who Who) []Record {
 	t.Helper()
 	var out []Record
-	if err := records(a.file(who, sessionName(who.Session)), func(r Record) bool { out = append(out, r); return true }); err != nil {
+	if err := records(a.file(who, Name(who.Session)), func(r Record) bool { out = append(out, r); return true }); err != nil {
 		t.Fatal(err)
 	}
 	return out
@@ -173,7 +173,7 @@ func TestParties(t *testing.T) {
 			t.Errorf("file %q", f)
 		}
 	}
-	if sessionName("../../etc/passwd") == "../../etc/passwd" || len(sessionName("../../etc/passwd")) != 32 || sessionName("a-B_9") != "a-B_9" {
+	if Name("../../etc/passwd") == "../../etc/passwd" || len(Name("../../etc/passwd")) != 32 || Name("a-B_9") != "a-B_9" {
 		t.Error("session names")
 	}
 	if a.partyDir(peerA) == a.partyDir(peerB) || a.partyDir(peerA) == a.partyDir(owner) {
@@ -524,7 +524,7 @@ func TestReadScope(t *testing.T) {
 	if out, err := a.Read(peerA, "", 0, 0); err != nil || !strings.Contains(out, "peer a asks") {
 		t.Fatalf("own: %q, %v", out, err)
 	}
-	if out, err := a.Read(peerA, sessionName(peerA.Session), 0, 0); err != nil || !strings.Contains(out, "peer a asks") {
+	if out, err := a.Read(peerA, Name(peerA.Session), 0, 0); err != nil || !strings.Contains(out, "peer a asks") {
 		t.Fatalf("own, named: %q, %v", out, err)
 	}
 	for _, session := range []string{"chat-1", "../owner/chat-1"} {
@@ -608,7 +608,7 @@ func TestListAndDelete(t *testing.T) {
 	}
 	a.Append(owner, question, nil)
 	a.Append(peerA, []openai.Message{{Role: "user", Content: "from a"}}, nil)
-	os.Chtimes(a.file(peerA, sessionName(peerA.Session)), time.Now(), time.Now().Add(time.Hour))
+	os.Chtimes(a.file(peerA, Name(peerA.Session)), time.Now(), time.Now().Add(time.Hour))
 	os.WriteFile(filepath.Join(a.dir, "README"), nil, 0o600)
 	os.Mkdir(filepath.Join(a.dir, "other"), 0o700)
 	os.WriteFile(filepath.Join(a.dir, "other", "x.jsonl"), []byte(`{"seq":1}`+"\n"), 0o600)
@@ -631,7 +631,7 @@ func TestListAndDelete(t *testing.T) {
 	if got := all(t, a, peerA); got[0].Seq != 1 || got[0].Answer != 1 {
 		t.Errorf("after delete: %+v", got)
 	}
-	if err := a.Delete("owner/chat-2"); err == nil || !strings.Contains(err.Error(), "there is no session owner/chat-2") {
+	if err := a.Delete("owner/chat-2"); !errors.Is(err, ErrNotArchived) || !strings.Contains(err.Error(), "owner/chat-2") {
 		t.Errorf("missing: %v", err)
 	}
 	for _, id := range []string{"chat-1", "owner/../x", "../owner/chat-1", "peer-xyz/conv", "owner/a/b", "other/chat-1"} {
@@ -641,6 +641,20 @@ func TestListAndDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(a.file(owner, "chat-1")); err != nil {
 		t.Error("a session that was not named is gone")
+	}
+
+	// The records of a conversation, as List names it.
+	if got, err := a.Records(Owner(owner.Session)); err != nil || len(got) != 2 || got[0].Content != question[0].Content || got[1].Role != "end" {
+		t.Errorf("records %+v, %v", got, err)
+	}
+	if _, err := a.Records("owner/none"); !errors.Is(err, ErrNotArchived) {
+		t.Errorf("none: %v", err)
+	}
+	if _, err := a.Records("../x"); err == nil || errors.Is(err, ErrNotArchived) {
+		t.Errorf("no ID: %v", err)
+	}
+	if Party(peerA.Peer) != strings.Split(entries[0].ID, "/")[0] || Owner("../x") != "owner/"+Name("../x") {
+		t.Errorf("party %q, owner %q", Party(peerA.Peer), Owner("../x"))
 	}
 
 	// What cannot be read or removed fails.

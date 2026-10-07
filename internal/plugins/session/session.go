@@ -1,11 +1,14 @@
 // Package session is the plugin that holds the conversations of the owner
 // with the agent of the node: the sessions. The node runs their answers
-// (session.Service); the front ends reach them over the socket of the node
-// (session.Client).
+// (session.Service) and keeps them in its archive, so that they outlive it;
+// the front ends reach them over the socket of the node (session.Client).
 package session
 
 import (
+	"strings"
+
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 	"ouroboros/internal/session"
 	"ouroboros/plugin"
@@ -27,9 +30,25 @@ type services struct {
 }
 
 // Plugin provides the sessions of the owner of the node in dir, with its
-// assistant.
+// assistant: those in the archive of the node too, and the conversations of
+// peers in it to read. A peer is named as the contacts in dir name it.
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("sessions", func(_ *plugin.Context, n needs) (services, error) {
-		return services{session.New(n.Assistant), session.NewClient(dir)}, nil
+		return services{In(dir, n.Assistant), session.NewClient(dir)}, nil
 	})
+}
+
+// In returns the Service of the sessions of the node in dir, with a.
+func In(dir home.Dir, a *assistant.Assistant) *session.Service {
+	s := session.New(a)
+	s.Archive(history.Open(dir.History()), dir.Log, func(party string) string {
+		data, _ := dir.Contacts().Snapshot() // a peer that is not known is named by its party
+		for _, c := range data.Trusted {
+			if history.Party(c.PublicKey) == party {
+				return c.Name
+			}
+		}
+		return "unknown peer " + strings.TrimPrefix(party, "peer-")[:8]
+	})
+	return s
 }

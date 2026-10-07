@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"image/color"
 	"strings"
@@ -239,7 +240,7 @@ func summary(calls []call) string {
 func (m *Model) entryHead(e entry) string {
 	name, color := m.agentName(), peer
 	if e.mine {
-		name, color = "you", accent
+		name, color = cmp.Or(m.chat.peer, "you"), accent
 	}
 	return boldStyle.Foreground(color).Render(name) + mutedStyle.Render(" · "+e.at.Format("15:04"))
 }
@@ -447,6 +448,9 @@ func (m *Model) chatView() string {
 		}
 	} else {
 		title := boldStyle.Foreground(peer).Render(m.agentName())
+		if c.peer != "" {
+			title = boldStyle.Foreground(accent).Render(c.peer) + mutedStyle.Render(" with ") + title + mutedStyle.Render("  · only to read")
+		}
 		if c.context > 0 {
 			title += mutedStyle.Render("  · context " + contextSize(c.context))
 		}
@@ -491,7 +495,7 @@ func (m *Model) footerView() string {
 	case screenModel:
 		help = "↑↓ choose · enter set · esc back · ctrl+c quit"
 	case screenSessions:
-		help = "↑↓ select · enter show · esc back · ctrl+c quit"
+		help = "↑↓ select · enter show · d delete · tab yours/peers · esc back · ctrl+c quit"
 	case screenSettings:
 		help = "↑↓ select · enter open · esc back · ctrl+c quit"
 		if m.opened {

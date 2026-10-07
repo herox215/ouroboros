@@ -1,12 +1,12 @@
-// Package history is the plugin that archives every conversation of the
-// agents in full and gives them the tools to search and read it again:
-// history_search, history_read and history_sessions. What is sent to the LLM
-// stays as it is; the archive only makes what the memory cut off, and the
-// conversations before, reachable for the agent.
+// Package history is the plugin that gives the agents the tools to search
+// and read the archive of their conversations again: history_search,
+// history_read and history_sessions. The node archives every conversation in
+// full, with or without this plugin (see the assistant plugin); what is sent
+// to the LLM stays as it is, and the tools only make what the memory cut off,
+// and the conversations before, reachable for the agent.
 //
 // The owner reaches all of its own conversations, a peer only the one it is
-// in. The owner deletes a conversation from the archive with the command
-// ouro history delete.
+// in. The owner deletes a conversation in the sessions of the terminal UI.
 package history
 
 import (
@@ -29,28 +29,18 @@ const (
 	Sessions = "history_sessions"
 )
 
-// needs are the services the plugin uses.
-type needs struct {
-	Console *plugin.Console
-}
-
-// Plugin contributes the hook that archives every answer of the agents of
-// the node in dir, the tools that read the archive, what the owner is shown
-// of their calls, and the command with which the owner lists and deletes
-// what is archived. Every call of a tool is logged in dir, without what was
-// searched or found.
+// Plugin contributes the tools that read the archive of the node in dir and
+// what the owner is shown of their calls. Every call of a tool is logged in
+// dir, without what was searched or found.
 func Plugin(dir home.Dir) plugin.Plugin {
-	return plugin.New("history", func(ctx *plugin.Context, n needs) error {
+	return plugin.New("history", func(ctx *plugin.Context, _ struct{}) error {
 		h := &archive{history.Open(dir.History()), dir.Log}
-		plugin.Add(ctx, plugin.AnswerHook{Name: "history", After: h.after})
 		for _, tool := range h.tools() {
 			plugin.Add(ctx, tool)
 		}
 		for name, doing := range map[string]string{Search: "searching the history", Read: "reading the history", Sessions: "listing the history"} {
 			plugin.Add(ctx, plugin.ToolView{Tool: name, Show: func(json.RawMessage) string { return doing }, Detail: assistant.HowItEnded})
 		}
-		plugin.Add(ctx, plugin.Command{Name: "history", Args: "[delete SESSION]",
-			Help: "list the archived conversations, or delete one", Run: h.command(n.Console)})
 		return nil
 	})
 }
@@ -59,19 +49,6 @@ func Plugin(dir home.Dir) plugin.Plugin {
 type archive struct {
 	archive *history.Archive
 	log     func(format string, args ...any)
-}
-
-// after keeps an answer that ended. A failure is the plugin's diagnostic,
-// and leaves the answer as it is.
-func (h *archive) after(_ context.Context, o plugin.AnswerOutcome) error {
-	who := history.Who{Session: o.Conversation.ID}
-	if o.Conversation.Peer {
-		if o.Conversation.Origin.PublicKey == "" {
-			return errors.New("a conversation of a peer without its key is not archived")
-		}
-		who.Peer = o.Conversation.Origin.PublicKey
-	}
-	return h.archive.Append(who, o.Messages, o.Err)
 }
 
 // who is the party and the conversation a tool runs for.
@@ -205,44 +182,4 @@ func failed(err error) string {
 		return ""
 	}
 	return ", failed: " + err.Error()
-}
-
-// command lists the archive, or deletes a session of it: ouro history
-// [delete SESSION].
-func (h *archive) command(term *plugin.Console) func(context.Context, []string) error {
-	return func(_ context.Context, args []string) error {
-		switch {
-		case len(args) == 0:
-			entries, err := h.archive.List()
-			if err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				fmt.Fprintln(term.Out, "no conversation is archived")
-			}
-			for _, e := range entries {
-				fmt.Fprintf(term.Out, "%s  %s  %s  %q\n", e.ID, e.Modified.Local().Format("2006-01-02 15:04"), size(e.Size), e.Title)
-			}
-			return nil
-		case len(args) == 2 && args[0] == "delete":
-			if err := h.archive.Delete(args[1]); err != nil {
-				return err
-			}
-			h.log("history: the owner deleted a session")
-			fmt.Fprintf(term.Out, "● deleted %s\n", args[1])
-			return nil
-		}
-		return errors.New("usage: ouro history [delete SESSION]")
-	}
-}
-
-// size is a number of bytes for people.
-func size(n int64) string {
-	switch {
-	case n < 1<<10:
-		return fmt.Sprintf("%d B", n)
-	case n < 1<<20:
-		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
-	}
-	return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
 }

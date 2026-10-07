@@ -26,10 +26,6 @@ func TestWho(t *testing.T) {
 	if len(logs) != 0 {
 		t.Errorf("logged: %v", logs)
 	}
-	err := h.after(context.Background(), plugin.AnswerOutcome{Processing: plugin.Processing{Conversation: plugin.Conversation{ID: "c", Peer: true}}})
-	if err == nil {
-		t.Error("a peer without its key should not be archived")
-	}
 }
 
 // llm asks for the tool "who" once, and then answers with its result.
@@ -58,13 +54,5 @@ func TestWhoWithinAConversation(t *testing.T) {
 	}
 	if got, _ := bot.Respond(a2a.WithOrigin(context.Background(), a2a.Origin{}), "c3", "hi"); got != "error: "+history.ErrScope.Error() {
 		t.Errorf("peer without key: %q", got)
-	}
-}
-
-func TestSize(t *testing.T) {
-	for n, want := range map[int64]string{12: "12 B", 2048: "2.0 KiB", 3 << 20: "3.0 MiB"} {
-		if got := size(n); got != want {
-			t.Errorf("%d: %q", n, got)
-		}
 	}
 }

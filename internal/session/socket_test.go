@@ -18,7 +18,9 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
+	"ouroboros/internal/history"
 	"ouroboros/internal/home"
+	"ouroboros/internal/openai"
 )
 
 // fakeNode is a node in a directory of its own as far as its front ends can
@@ -140,6 +142,17 @@ func TestClient(t *testing.T) {
 	a.failed = errors.New("not set up")
 	if lines, err := c.Contents(ctx, id); err == nil || err.Error() != "not set up" || len(lines) != 1 {
 		t.Fatalf("contents %+v, %v", lines, err)
+	}
+
+	// A session is deleted once, and that is all of it.
+	if err := c.Delete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, id); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("deleted again: %v", err)
+	}
+	if list, err := c.List(ctx); err != nil || len(list) != 0 {
+		t.Fatalf("list %+v, %v", list, err)
 	}
 }
 
@@ -374,5 +387,28 @@ func TestClientRejectsMalformedErrorResponses(t *testing.T) {
 				t.Fatalf("malformed response %s: %v", body, err)
 			}
 		})
+	}
+}
+
+// The conversations of peers are listed, read and deleted over the socket
+// too.
+func TestClientPeers(t *testing.T) {
+	dir := t.TempDir()
+	s, arch, _ := archived(t, &fakeAgent{}, dir, time.Now())
+	arch.Append(history.Who{Session: "conv", Peer: "key"}, []openai.Message{{Role: "user", Content: "hello"}, {Role: "assistant", Content: "hi"}}, nil)
+	c := NewClient(serve(t, Handler(s)).dir)
+	ctx := context.Background()
+	list, err := c.Peers(ctx)
+	if err != nil || len(list) != 1 || list[0].Peer == "" || list[0].Title != "hello" {
+		t.Fatalf("peers %+v, %v", list, err)
+	}
+	if events, err := c.Read(ctx, list[0].ID); err != nil || kinds(events) != "message answer" {
+		t.Fatalf("read %+v, %v", events, err)
+	}
+	if err := c.Delete(ctx, list[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Read(ctx, list[0].ID); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("read deleted: %v", err)
 	}
 }

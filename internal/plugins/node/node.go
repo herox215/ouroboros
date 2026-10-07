@@ -19,7 +19,6 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	"ouroboros/internal/plugins/base"
-	"ouroboros/internal/safefile"
 	"ouroboros/internal/session"
 	"ouroboros/internal/setup"
 	"ouroboros/plugin"
@@ -47,8 +46,8 @@ type needs struct {
 // The node it runs answers peers with the agent of the assistant plugin,
 // serves every plugin.Method a plugin contributed and opens every
 // plugin.ChannelHandler. On its socket it serves the sessions of the owner,
-// whose answers it runs; when a tool asks for a new build, the node hands
-// them over to it.
+// whose answers it runs; when a tool asks for a new build, the new node goes
+// on with them from the archive.
 //
 // Who the node is and whom it trusts is read from dir by the node itself (see
 // node.Server): no plugin provides it, and none can put something in its
@@ -69,6 +68,7 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 					if err := peers.Ready(); err != nil {
 						return nil, err
 					}
+					n.Sessions.ForgetPeers(peers.Forget) // a conversation the owner deletes
 					return func(ctx context.Context, contextID, text string) (string, error) {
 						return peers.Respond(ctx, conversation(ctx, contextID), text)
 					}, nil
@@ -176,16 +176,13 @@ func (c *nodeCommands) status(context.Context, []string) error {
 //
 // When a tool asked for a new build of ouro, the node stops once no answer
 // is on its way, and serve ends with plugin.Restarting: the process runs the
-// new build in its place, which takes over the PID file, the socket and the
-// sessions, see handOver.
+// new build in its place, which takes over the PID file and the socket. It
+// finds the sessions where this one kept them, see session.Service.Keep.
 func (c *nodeCommands) serve(ctx context.Context, _ []string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, end := context.WithCancel(ctx)
 	defer end()
-	if err := c.resume(); err != nil {
-		c.local.Home.Log("the sessions handed over are lost: %v", err)
-	}
 	var mu sync.Mutex
 	var successor string
 	c.sessions.Attach(end, func(exe string) {
@@ -202,41 +199,7 @@ func (c *nodeCommands) serve(ctx context.Context, _ []string) error {
 	}
 	err := server.Run(ctx)
 	if s, ok := errors.AsType[*node.Succession](err); ok {
-		return c.handOver(s)
+		return &plugin.Restarting{Exe: s.Exe, Env: append(os.Environ(), s.Env...)}
 	}
 	return base.WithHint(err)
-}
-
-// sessionsEnv names the file a node hands over its sessions in.
-const sessionsEnv = "OURO_SESSIONS"
-
-// handOver writes the sessions to a file only the user can read, for the
-// node that takes the place of this one, and returns the plugin.Restarting
-// that starts it. Sessions that cannot be written are lost, the node is
-// replaced all the same.
-func (c *nodeCommands) handOver(s *node.Succession) error {
-	env := append(os.Environ(), s.Env...)
-	path := c.local.Home.Sessions()
-	if err := safefile.Write(path, c.sessions.HandOver(), 0o600); err != nil {
-		c.local.Home.Log("the sessions are not handed over: %v", err)
-		return &plugin.Restarting{Exe: s.Exe, Env: env}
-	}
-	return &plugin.Restarting{Exe: s.Exe, Env: append(env, sessionsEnv+"="+path)}
-}
-
-// resume takes over the sessions the node before this one handed over, if it
-// did. The file is read once: it is removed, and so is the variable that
-// names it, which a process this one starts must not see.
-func (c *nodeCommands) resume() error {
-	path, ok := os.LookupEnv(sessionsEnv)
-	if !ok {
-		return nil
-	}
-	os.Unsetenv(sessionsEnv)
-	data, err := os.ReadFile(path)
-	os.Remove(path)
-	if err != nil {
-		return err
-	}
-	return c.sessions.Resume(data)
 }

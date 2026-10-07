@@ -47,6 +47,11 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 	if got := ask("hello"); got != "[gpt-4o] turns=3 last=hello" {
 		t.Fatalf("the agent forgot the conversation: %q", got)
 	}
+	peers.Forget(conversation) // and asked anew, it starts anew
+	if got := ask("hello"); got != "[gpt-4o] turns=1 last=hello" {
+		t.Fatalf("the agent should have forgotten the conversation: %q", got)
+	}
+	ask("hello")
 	// What does not concern the agent leaves it alone.
 	cfg.Tools = &config.Tools{H2A: config.Named("list_peers"), Protected: &[]string{}}
 	if got := ask("hello"); got != "[gpt-4o] turns=5 last=hello" || built != 1 || len(logged) != 0 {

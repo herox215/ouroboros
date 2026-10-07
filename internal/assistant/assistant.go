@@ -388,6 +388,10 @@ func (a *Assistant) Resume(contextID string, conversation json.RawMessage) error
 	return nil
 }
 
+// Forget makes the agent forget the conversation contextID, as if it was
+// never had.
+func (a *Assistant) Forget(contextID string) { a.memory.Forget(contextID) }
+
 // current returns the agent for the configuration as it is now. The agent is
 // kept between questions, and rebuilt when the node is configured anew: with
 // the memory of the one before, so that it goes on with its conversations.

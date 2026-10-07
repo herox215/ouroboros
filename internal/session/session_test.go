@@ -26,6 +26,7 @@ type fakeAgent struct {
 	inspect  *agent.Inspection
 	resumed  map[string]json.RawMessage
 	resume   error
+	forgot   []string
 }
 
 func (a *fakeAgent) Ready() error { return a.ready }
@@ -54,6 +55,12 @@ func (a *fakeAgent) Resume(id string, memory json.RawMessage) error {
 	}
 	a.resumed[id] = memory
 	return a.resume
+}
+
+func (a *fakeAgent) Forget(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.forgot = append(a.forgot, id)
 }
 
 // service is a Service with a, closed when the test ends.
@@ -214,8 +221,8 @@ func TestRefused(t *testing.T) {
 	a := &fakeAgent{}
 	s := service(t, a)
 	ctx := context.Background()
-	long := strings.Repeat("x", maxID+1)
-	for _, id := range []string{"", long} {
+	long := strings.Repeat("x", 129)
+	for _, id := range []string{"", long, "../x", "peer-a/b"} {
 		if err := s.Ask(ctx, id, "hi"); !errors.Is(err, ErrNoSession) {
 			t.Errorf("ask %q: %v", id, err)
 		}
@@ -229,7 +236,7 @@ func TestRefused(t *testing.T) {
 			t.Errorf("contents %q: %v", id, err)
 		}
 	}
-	if _, _, err := s.Watch(ctx, strings.Repeat("x", maxID)); err != nil {
+	if _, _, err := s.Watch(ctx, strings.Repeat("x", 128)); err != nil {
 		t.Errorf("the longest ID: %v", err)
 	}
 	if err := s.Ask(ctx, "s1", " \n "); !errors.Is(err, ErrEmpty) {
@@ -489,51 +496,6 @@ func TestClose(t *testing.T) {
 	s.mu.Unlock()
 	if last[len(last)-1].Kind != Canceled {
 		t.Fatalf("events %+v", last)
-	}
-}
-
-// The sessions and what the agent remembers of them go over to the node
-// that takes the place of this one.
-func TestHandOver(t *testing.T) {
-	a := &fakeAgent{}
-	s := service(t, a)
-	ctx := context.Background()
-	for _, id := range []string{"s2", "s1"} {
-		_, live, _ := s.Watch(ctx, id)
-		s.Ask(ctx, id, "hi "+id)
-		until(t, live, Answer)
-	}
-	s.Watch(ctx, "empty") // nothing to hand over
-	data := s.HandOver()
-
-	b := &fakeAgent{}
-	next := service(t, b)
-	if err := next.Resume(data); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := s.List(ctx)
-	after, _ := next.List(ctx)
-	if !slices.Equal(before, after) || len(after) != 2 {
-		t.Fatalf("before %+v, after %+v", before, after)
-	}
-	if string(b.resumed["s1"]) != `[{"role":"user","content":"of s1"}]` || len(b.resumed) != 2 {
-		t.Fatalf("resumed %s", b.resumed)
-	}
-	past, _, _ := next.Watch(ctx, "s2")
-	if kinds(past) != "message answer" || past[1].Text != "pong" {
-		t.Fatalf("past %+v", past)
-	}
-
-	// What cannot be taken over is said so.
-	if err := next.Resume([]byte("{")); err == nil {
-		t.Error("no JSON")
-	}
-	if err := next.Resume([]byte(`[{"id":""}]`)); !errors.Is(err, ErrNoSession) {
-		t.Errorf("no ID: %v", err)
-	}
-	b.resume = errors.New("no memory")
-	if err := next.Resume(data); err == nil || !strings.Contains(err.Error(), "session s1: no memory") {
-		t.Errorf("a memory that cannot be resumed: %v", err)
 	}
 }
 

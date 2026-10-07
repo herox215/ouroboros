@@ -462,6 +462,11 @@ func TestMemoryRestore(t *testing.T) {
 	if len(other.conversations) != 1 {
 		t.Fatal("an empty conversation should not be remembered")
 	}
+	other.Forget("c")
+	other.Forget("none")
+	if got := other.Conversation("c"); got != nil {
+		t.Fatalf("forgotten: %+v", got)
+	}
 }
 
 // toolsLLM asks for the tool on its first rounds calls, reports what it was

@@ -63,7 +63,7 @@ func TestChatOpensTheFrontEndThatIsThere(t *testing.T) {
 		var out bytes.Buffer
 		term := cli.Terminal{In: strings.NewReader("one\n"), Out: &out, Interactive: true}
 		list := slices.DeleteFunc(clitest.Plugins(s, term, plugins...), func(p plugin.Plugin) bool { return p.Name == "tui" })
-		app, err := cli.NewWith(clitest.InProcess(list)...)
+		app, err := cli.NewWith(clitest.InProcess(s)(list)...)
 		if err != nil {
 			t.Fatal(err)
 		}
