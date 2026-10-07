@@ -50,6 +50,7 @@ func TestTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	has(t, *lines, "llm request:", "/chat/completions", "model deepseek-v4", "session conv-1", "2 messages", "1 tools", "stream_options true", "prompt_cache_key true", "cache_control breakpoints 0")
+	has(t, *lines, "2 messages (0.1 KiB)", "1 tools (0.1 KiB")
 	has(t, *lines, "llm prefix: first request of the session")
 	has(t, *lines, "llm response: HTTP 200", "X-Upstream: deepseek-1")
 	has(t, *lines, `llm answered: id "cmpl-1", model "deepseek-v4", provider "zen"`, `finish_reason "stop"`, "events 2",
@@ -71,7 +72,8 @@ func TestTrace(t *testing.T) {
 	*lines = nil
 	noted := append(msgs[:3:3], Message{Role: "tool", Content: "the file\n\n[a note]", ToolCallID: "c1"}, Message{Role: "user", Content: "go on"})
 	c.Complete(ctx, "deepseek-v4", noted, []Tool{tool})
-	has(t, *lines, "llm prefix: breaks at message 3 of 5", `role "tool"`, `it is 68 bytes long, from there "\\n\\n[a note]`)
+	has(t, *lines, "llm prefix: breaks at message 3 of 5", `role "tool"`, `it is 68 bytes long, from there "\\n\\n[a note]`,
+		"before it 67.2% of the bytes are the same")
 	*lines = nil
 	c.Complete(ctx, "deepseek-v4", append(msgs, Message{Role: "user", Content: "go on"}), []Tool{tool})
 	has(t, *lines, "llm prefix: breaks at message 3 of 5", `it was 68 bytes long, from there "\\n\\n[a note]`)
@@ -199,5 +201,41 @@ func TestTraceForOtherProviders(t *testing.T) {
 	}
 	if Hash("a") != hash("a") || Hash("a") == Hash("b") {
 		t.Fatal("the hash of tools")
+	}
+}
+
+// A trace keeps the last requests of maxSessions sessions: a further session
+// makes it forget them all, a session it has does not.
+func TestTraceForgetsSessions(t *testing.T) {
+	c := New("http://127.0.0.1:1", "")
+	var last string
+	request := func(session string) string {
+		c.traceRequest(func(format string, args ...any) { last = fmt.Sprintf(format, args...) }, session, "gpt", nil, nil, true, true, 0)
+		return last
+	}
+	for i := range maxSessions {
+		request(fmt.Sprint("s", i))
+	}
+	if got := request("s0"); !strings.Contains(got, "all 0 messages") {
+		t.Fatalf("a session it has: %s", got)
+	}
+	request("one more")
+	if got := request("s1"); !strings.Contains(got, "first request") {
+		t.Fatalf("after one more session: %s", got)
+	}
+}
+
+// A text far longer than a line of a trace takes is cut there, one exactly as
+// long is not, and a part is given in percent.
+func TestAroundAndPercent(t *testing.T) {
+	long := []byte(strings.Repeat("x", maxTraced+101))
+	if got := around(long, 0); !strings.HasSuffix(got, "… (+101 bytes)") {
+		t.Errorf("around = %s", got)
+	}
+	if got := around(long, 101); strings.Contains(got, "…") {
+		t.Errorf("around = %s", got)
+	}
+	if got := percent(1, 4); got != "25.0%" {
+		t.Errorf("percent = %s", got)
 	}
 }

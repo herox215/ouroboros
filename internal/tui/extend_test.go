@@ -286,3 +286,40 @@ func TestCommandConflicts(t *testing.T) {
 		t.Fatalf("a command that does nothing is not bound: %q", m.notice)
 	}
 }
+
+// The text of a screen is wrapped within the box; what does not fit is cut
+// off above the actions, which stay in sight. Without actions the text takes
+// their lines too.
+func TestPluginScreenText(t *testing.T) {
+	c := &contribution{}
+	shown := map[bool]int{} // the lines of text, with actions and without
+	for _, actions := range []bool{true, false} {
+		s := c.screen()
+		s.Body = func(context.Context) (string, error) { return strings.Repeat("word ", 200), nil }
+		if !actions {
+			s.Actions = nil
+		}
+		m := New(&fakeBackend{status: Status{Configured: true, Running: true}}, []plugin.Screen{s}, nil)
+		m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
+		m.showSplash = false
+		m.Update(run(m, "/greetings")())
+		view := ansi.Strip(m.View().Content)
+		for _, l := range strings.Split(view, "\n") {
+			if strings.Contains(l, "word") {
+				shown[actions]++
+				if !strings.HasPrefix(l, "│ word") {
+					t.Errorf("the text is wrapped wider than the box: %q", l)
+				}
+			}
+		}
+		if actions && !strings.Contains(view, "word   │\n│                                                          │\n│ [wave]") {
+			t.Errorf("the actions are not below the text:\n%s", view)
+		}
+		if lines := strings.Split(view, "\n"); !strings.HasPrefix(lines[len(lines)-2], "╰") {
+			t.Errorf("the box has lost its bottom border:\n%s", view)
+		}
+	}
+	if shown[false] <= shown[true] {
+		t.Errorf("%d lines of text without actions, %d with", shown[false], shown[true])
+	}
+}

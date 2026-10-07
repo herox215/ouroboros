@@ -18,6 +18,7 @@ cd "$ROOT"
 
 gremlins=$("$ROOT/scripts/tool.sh" gremlins)
 equivalents=mutation-equivalents.txt
+uncoverable=mutation-uncoverable.txt
 out=${OURO_MUTATION_DIR:-$ROOT/.mutation}
 limit=${OURO_MUTATION_TIME:-0}
 mutant_time=90
@@ -123,16 +124,27 @@ else
 	: >"$accepted"
 fi
 
+# Mutants gremlins never tries, as coverage gives their code no block of its
+# own (a constant, a case expression), and that were checked by hand.
+outside=$out/uncoverable.txt
+if [ -f "$uncoverable" ]; then
+	sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$uncoverable" >"$outside"
+else
+	: >"$outside"
+fi
+
 report=$out/report.txt
-awk -v accepted="$accepted" '
+awk -v accepted="$accepted" -v outside="$outside" '
 BEGIN {
 	while ((getline line < accepted) > 0) { split(line, f, " "); equivalent[f[1] " " f[2]] = 1 }
+	while ((getline line < outside) > 0) { split(line, f, " "); unreached[f[1] " " f[2]] = 1 }
 }
 {
 	where = $1; mutator = $2
 	status = $3; for (i = 4; i <= NF; i++) status = status " " $i
 	total++
 	if (status == "LIVED" && ((where " " mutator) in equivalent)) { status = "EQUIVALENT"; seen[where " " mutator] = 1 }
+	if (status == "NOT COVERED" && ((where " " mutator) in unreached)) { status = "UNCOVERABLE"; reached[where " " mutator] = 1 }
 	count[status]++
 	if (status == "LIVED") lived[++l] = sprintf("  %s: %s", where, mutator)
 	if (status == "EQUIVALENT") same[++e] = sprintf("  %s: %s", where, mutator)
@@ -141,8 +153,8 @@ BEGIN {
 	file = where; sub(/:[0-9]+:[0-9]+$/, "", file); files[file] = 1
 }
 END {
-	printf "mutation: %d mutants: %d killed, %d survived, %d accepted as equivalent, %d timed out, %d not covered, %d not viable\n", \
-		total, count["KILLED"], count["LIVED"], count["EQUIVALENT"], count["TIMED OUT"], count["NOT COVERED"], count["NOT VIABLE"] + count["SKIPPED"]
+	printf "mutation: %d mutants: %d killed, %d survived, %d accepted as equivalent, %d timed out, %d not covered, %d accepted as uncoverable, %d not viable\n", \
+		total, count["KILLED"], count["LIVED"], count["EQUIVALENT"], count["TIMED OUT"], count["NOT COVERED"], count["UNCOVERABLE"], count["NOT VIABLE"] + count["SKIPPED"]
 	if (l) {
 		print "Survived: the tests of the package still pass with this operator changed (file:line:column: mutator)."
 		for (i = 1; i <= l; i++) print lived[i]
@@ -152,6 +164,7 @@ END {
 	if (b) {
 		print "Not covered: no test of the package itself runs this code, so the mutant was not tried."
 		for (i = 1; i <= b; i++) print bare[i]
+		print "Add a test in the package; a constant or a case expression, which coverage gives no block, goes into mutation-uncoverable.txt."
 	}
 	if (s) {
 		print "Timed out: the tests did not finish with this change (counts as noticed; often a loop that no longer ends)."
@@ -165,13 +178,17 @@ END {
 		split(key, f, " "); file = f[1]; sub(/:[0-9]+:[0-9]+$/, "", file)
 		if ((file in files) && !(key in seen)) printf "mutation-equivalents.txt: no surviving %s at %s any more; remove or update the line.\n", f[2], f[1]
 	}
+	for (key in unreached) {
+		split(key, f, " "); file = f[1]; sub(/:[0-9]+:[0-9]+$/, "", file)
+		if ((file in files) && !(key in reached)) printf "mutation-uncoverable.txt: no uncovered %s at %s any more; remove or update the line.\n", f[2], f[1]
+	}
 }' "$results" >"$report"
 if [ -n "$skipped" ]; then
 	echo "Not mutated, because the package sends signals to process IDs and a mutant could signal the wrong ones:$skipped" >>"$report"
 fi
 
-# The lists of covered-but-fine mutants are long; the terminal gets what needs a look.
-awk '/^Not covered:/ || /^Timed out:/ || /^Accepted as equivalent/ { quiet = 1; next } /^[^ ]/ { quiet = 0 } !quiet' "$report"
+# The lists of mutants that are fine are long; the terminal gets what needs a look.
+awk '/^Timed out:/ || /^Accepted as equivalent/ { quiet = 1; next } /^[^ ]/ { quiet = 0 } !quiet' "$report"
 if [ -n "$unfinished" ]; then
 	echo "mutation: stopped after ${limit}s, not or not completely done:$unfinished" >&2
 	echo "          Run them to the end with: make mutation PKGS=\"${unfinished# }\"" >&2

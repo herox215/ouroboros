@@ -395,7 +395,7 @@ func changed(path, edited string, at int, put string) string {
 		return "edited " + path + ", which is empty now"
 	}
 	first := min(strings.Count(edited[:at], "\n"), len(lines)-1)
-	last := min(first+strings.Count(strings.TrimSuffix(put, "\n"), "\n"), len(lines)-1)
+	last := first + strings.Count(strings.TrimSuffix(put, "\n"), "\n")
 	from, to := max(0, first-editContext), min(len(lines)-1, last+editContext)
 	more := ""
 	if to-from >= maxEditLines {

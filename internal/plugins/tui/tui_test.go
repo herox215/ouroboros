@@ -195,6 +195,21 @@ func TestTUIBackendAsk(t *testing.T) {
 	}
 }
 
+// A call whose plugin shows nothing of it stays unshown when it ends, though
+// the plugin has something to add to its line.
+func TestTUIBackendLeavesUnshownCallsUnshown(t *testing.T) {
+	alpha, _ := clitest.TwoNodes(t)
+	quiet := plugin.New("quiet", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.ToolView{Tool: "run", Show: func(json.RawMessage) string { return "" }, Detail: func(plugin.Step) string { return "ran" }})
+		return nil
+	})
+	for _, e := range answer(t, backend(t, alpha, quiet), "ctx", "@beta hello") {
+		if e.Kind == plugin.SessionStep && strings.Contains(e.Text, "ran") {
+			t.Fatalf("event %+v", e)
+		}
+	}
+}
+
 // What the UI watches ends with ctx; a session that cannot be watched says
 // why.
 func TestTUIBackendWatch(t *testing.T) {

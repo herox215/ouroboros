@@ -82,7 +82,7 @@ func TestArchivedSession(t *testing.T) {
 		return "pong", nil
 	}}
 	later := time.Now().Add(3 * time.Hour)
-	s, _, _ := archived(t, b, dir, later)
+	s, _, l := archived(t, b, dir, later)
 	ctx := context.Background()
 	list, _ := s.List(ctx)
 	if len(list) != 1 || list[0].ID != "s1" || list[0].Title != "hi" || list[0].Running || list[0].Peer != "" {
@@ -130,6 +130,11 @@ func TestArchivedSession(t *testing.T) {
 	s.Contents(ctx, "s2")
 	if _, ok := b.resumed["s2"]; !ok {
 		t.Fatal("the context loads the session")
+	}
+	// A session that was read, or that is not archived, is nothing to log.
+	s.Watch(ctx, "s3")
+	if l.has("cannot be read") {
+		t.Fatalf("log %q", l.lines)
 	}
 }
 
@@ -196,6 +201,9 @@ func TestDelete(t *testing.T) {
 	asked(t, s, "s1", "hi")
 	arch.Append(history.Who{Session: "s1"}, []openai.Message{{Role: "user", Content: "hi"}}, nil) // as the node archives it
 	_, watching, _ := s.Watch(ctx, "s1")
+	if list, _ := s.List(ctx); len(list) != 1 || list[0].ID != "s1" {
+		t.Fatalf("in memory and archived, listed once: %+v", list)
+	}
 
 	_, live, _ := s.Watch(ctx, "busy")
 	s.Ask(ctx, "busy", "wait")
@@ -253,6 +261,10 @@ func TestDeleteInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.Delete(ctx, "s1"); !errors.Is(err, ErrNoSession) {
+		t.Fatal(err)
+	}
+	s.Watch(ctx, "quiet") // watched, but nothing was said in it
+	if err := s.Delete(ctx, "quiet"); !errors.Is(err, ErrNoSession) {
 		t.Fatal(err)
 	}
 	if list, err := s.Peers(ctx); err != nil || list != nil {

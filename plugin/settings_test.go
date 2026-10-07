@@ -278,11 +278,30 @@ func TestChange(t *testing.T) {
 	if got := entries(plugin.ForOwner); got != `["*"]` {
 		t.Errorf("without settings under *: %s", got)
 	}
+	// Also where the entry comes before "*" in a file written by hand.
+	config.Update(dir, func(c *config.Config) error {
+		tools := *c.Tools
+		tools.H2A = []config.Entry{{Tool: "read", Settings: json.RawMessage(`{"allow":["~/x"]}`)}, {Tool: config.AllTools}}
+		c.Tools = &tools
+		return nil
+	})
+	if got := entries(plugin.ForOwner); got != `[{"allow":["~/x"],"tool":"read"},"*"]` {
+		t.Fatalf("written by hand: %s", got)
+	}
+	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: ""})
+	if got := entries(plugin.ForOwner); got != `["*"]` {
+		t.Errorf("without settings before *: %s", got)
+	}
 	change(plugin.Setting{Kind: plugin.SetAllTools})
 	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all named: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools}) // off already
+	// Turned on where it is listed first, it stays listed once.
+	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {
+		t.Errorf("listed first: %s", got)
+	}
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"allow":["~/y"]}`})
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: "{}"})
 	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {

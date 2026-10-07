@@ -323,6 +323,14 @@ func TestSocket(t *testing.T) {
 	if again := Dir("/" + strings.Repeat("a", 100) + "/").Socket(); again != got {
 		t.Errorf("the same directory has another socket: %q", again)
 	}
+	// A path of exactly maxSocket bytes still fits; one byte more does not.
+	if edge := Dir("/" + strings.Repeat("c", maxSocket-len("//ouro.sock"))); len(edge.Socket()) != maxSocket ||
+		filepath.Dir(edge.Socket()) != string(edge) {
+		t.Errorf("a path of %d bytes moved: %q", maxSocket, edge.Socket())
+	}
+	if over := Dir("/" + strings.Repeat("c", maxSocket-len("//ouro.sock")+1)); filepath.Dir(over.Socket()) != SocketDir() {
+		t.Errorf("a path of %d bytes stayed: %q", maxSocket+1, over.Socket())
+	}
 	if want := filepath.Join(os.TempDir(), fmt.Sprintf("ouro-%d", os.Getuid())); SocketDir() != want {
 		t.Errorf("socket dir %q", SocketDir())
 	}

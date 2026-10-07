@@ -1249,3 +1249,41 @@ func TestPendingLine(t *testing.T) {
 		t.Fatalf("nothing is pending: %q, history %d high", line, m.history.Height())
 	}
 }
+
+// The empty chat names the agent as the status of the node calls it now.
+func TestEmptyChatFollowsTheName(t *testing.T) {
+	m, b := newModel(t)
+	b.status.Name = "beta"
+	m.Update(m.refreshStatus())
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Ask beta anything") {
+		t.Fatalf("the empty chat does not name the agent:\n%s", view)
+	}
+}
+
+// A paste goes to the input that is open: the one of a setting while it is
+// edited, else the one of the chat.
+func TestPasteGoesToTheInputThatIsOpen(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	pick(t, m, nodeSection, "Name", "change")
+	press(m, "enter")
+	m.Update(tea.PasteMsg{Content: "-x"})
+	if m.editInput.Value() != "alpha-x" || m.input.Value() != "" {
+		t.Fatalf("edit %q, chat %q", m.editInput.Value(), m.input.Value())
+	}
+	press(m, "esc", "esc", "esc")
+	m.Update(tea.PasteMsg{Content: "hello"})
+	if m.input.Value() != "hello" || m.editInput.Value() != "alpha-x" {
+		t.Fatalf("edit %q, chat %q", m.editInput.Value(), m.input.Value())
+	}
+}
+
+// The call an ending one started as is the last that is still running with
+// its text: not one that ended, nor one of other text.
+func TestTheCallAnEndStartedAs(t *testing.T) {
+	e := &entry{calls: []call{{text: "read a"}, {text: "read a", done: true}, {text: "list"}}}
+	for done, want := range map[string]int{"read a ✓ 1s": 0, "list ✗ 2s": 2, "read b ✓": -1} {
+		if got := e.started(done); got != want {
+			t.Errorf("%q started as call %d, not %d", done, got, want)
+		}
+	}
+}

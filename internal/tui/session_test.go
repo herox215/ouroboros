@@ -425,7 +425,8 @@ func TestDeleteSession(t *testing.T) {
 // deletes it. What was typed stays with the session of the owner.
 func TestPeerConversations(t *testing.T) {
 	m, b := newModel(t)
-	at := time.Date(2026, 10, 7, 14, 0, 0, 0, time.Local)
+	now := time.Now() // a time of today is shown without its date
+	at := time.Date(now.Year(), now.Month(), now.Day(), 14, 0, 0, 0, time.Local)
 	b.peers = []plugin.SessionInfo{
 		{ID: "peer-aa/c1", Peer: "beta", Title: "hello alpha", Last: at},
 		{ID: "peer-aa/c2", Peer: "beta", Title: "second", Last: at.Add(-time.Hour)},
@@ -539,5 +540,132 @@ func TestReplayKeepsWaitingOnlyForWhatWaited(t *testing.T) {
 	m.replay(answered, []Event{{Kind: plugin.SessionMessage, Text: "hi"}, {Kind: plugin.SessionAnswer, Text: "ho"}})
 	if answered.pending {
 		t.Fatal("a session whose answer is known is waiting")
+	}
+}
+
+// A session built anew without events is pending if it was; with events,
+// they tell if it is.
+func TestReplayIsPendingOnlyWithoutEvents(t *testing.T) {
+	m, _ := newModel(t)
+	for _, tc := range []struct {
+		pending bool
+		past    []Event
+		want    bool
+	}{
+		{true, nil, true},
+		{false, nil, false},
+		{true, []Event{{Kind: plugin.SessionSay}}, false},
+	} {
+		c := &conversation{contextID: "c", pending: tc.pending}
+		if m.replay(c, tc.past); c.pending != tc.want {
+			t.Errorf("pending %v with %d events: %v", tc.pending, len(tc.past), c.pending)
+		}
+	}
+}
+
+// The sessions after one that is watched are listed too.
+func TestSessionsAfterAWatchedOne(t *testing.T) {
+	m, _ := newModel(t)
+	m.chat.watching = true
+	m.sessionsLoaded(sessionsMsg{list: []plugin.SessionInfo{{ID: m.chat.contextID, Title: "shown"}, {ID: "other", Title: "of another front end"}}})
+	if c := m.chats["other"]; c == nil || c.title != "of another front end" || m.chat.title != "" {
+		t.Fatalf("listed %+v", m.chats)
+	}
+}
+
+// The conversations of peers listed anew leave the selection among the
+// sessions as it is; among no peers there is none to follow.
+func TestPeersListedAnewKeepTheSelection(t *testing.T) {
+	m, _ := newModel(t)
+	m.conversation("a").title, m.conversation("b").title = "a", "b"
+	m.Update(ctrlS)
+	m.sessionSel = 1
+	peers := peersMsg{list: []plugin.SessionInfo{{ID: "peer-aa/c1", Peer: "beta", Title: "hello"}}}
+	if m.peersLoaded(peers); m.sessionSel != 1 {
+		t.Fatalf("selected %d", m.sessionSel)
+	}
+	m.peers = nil
+	press(m, "tab")
+	if m.peersLoaded(peers); !m.peerTab || m.sessionSel != 0 || len(m.peers) != 1 {
+		t.Fatalf("selected %d of %v", m.sessionSel, m.peers)
+	}
+}
+
+// down stops at the last session, and a selection past the end stands for
+// the last one.
+func TestSessionSelectionStopsAtTheLast(t *testing.T) {
+	m, _ := newModel(t)
+	m.conversation("a").title, m.conversation("a").last = "a", time.Now()
+	m.Update(ctrlS)
+	press(m, "down", "down", "down")
+	if m.sessionSel != 1 {
+		t.Fatalf("selected %d", m.sessionSel)
+	}
+	for _, key := range []string{"d", "enter"} {
+		m.screen, m.sessionSel = screenSessions, 5
+		press(m, key)
+	}
+	if m.chat != m.chats["a"] || m.notice != "" {
+		t.Fatalf("shown %+v, notice %q", m.chat, m.notice)
+	}
+	m.peers = []*conversation{{contextID: "peer-aa/c1", peer: "beta", title: "hello"}}
+	m.screen, m.peerTab, m.sessionSel = screenSessions, true, 5
+	if cmd := press(m, "enter"); cmd == nil {
+		t.Fatal("the last conversation of a peer should be read")
+	}
+}
+
+// The dot behind a session whose answer is on its way moves on every third
+// tick of the spinner, and starts over.
+func TestRunningFrame(t *testing.T) {
+	m, _ := newModel(t)
+	for ticks, want := range map[int]string{0: ".  ", 1: ".  ", 2: ".  ", 3: ".. ", 12: "  .", 14: "  .", 15: "   ", 18: ".  "} {
+		if m.ticks = ticks; m.runningFrame() != want {
+			t.Errorf("tick %d: %q", ticks, m.runningFrame())
+		}
+	}
+}
+
+// Of many sessions, the screen lists those around the one selected, as many
+// as fit.
+func TestSessionsListFollowsTheSelection(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
+	at := time.Now()
+	for i := range 20 {
+		c := m.conversation(fmt.Sprintf("s%02d", i))
+		c.title, c.last = c.contextID, at.Add(-time.Duration(i)*time.Minute)
+	}
+	m.Update(ctrlS)
+	titles := func() []string {
+		var titles []string
+		for _, l := range sessionLines(m) {
+			title, selected := strings.CutPrefix(l, "▸ ")
+			if title = strings.Fields(title)[0]; selected {
+				title = "▸" + title
+			}
+			titles = append(titles, title)
+		}
+		return titles
+	}
+	// The session shown, new, is the first row; s00 the second.
+	m.sessionSel = 10
+	if got := strings.Join(titles(), " "); got != "s05 s06 s07 s08 ▸s09 s10 s11 s12" {
+		t.Fatalf("around the middle: %s", got)
+	}
+	m.sessionSel = 20
+	if got := strings.Join(titles(), " "); got != "s12 s13 s14 s15 s16 s17 s18 ▸s19" {
+		t.Fatalf("at the last: %s", got)
+	}
+}
+
+// A title too long for the screen is cut to what is left of the line.
+func TestSessionTitleIsCut(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 30})
+	m.chat.title = "a title much too long for the narrow screen"
+	m.Update(ctrlS)
+	if lines := sessionLines(m); !slices.Contains(lines, "▸ a title much too long …  · shown") {
+		t.Fatalf("listed %q", lines)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -362,5 +364,31 @@ func TestLimitOfMemory(t *testing.T) {
 	}
 	if MaxHeap != 256<<20 || MaxDepth != 1024 {
 		t.Fatalf("the limits are %d bytes and %d calls", MaxHeap, MaxDepth)
+	}
+}
+
+// What counts is how far the heap grows while the script runs, not how
+// large it already was.
+func TestLimitOfMemoryCountsTheGrowth(t *testing.T) {
+	shorten(t, time.Minute, time.Minute, 32<<20)
+	held := make([]byte, 64<<20)
+	got, _, err := run(t, `var t = Date.now(), n = 0; while (Date.now() - t < 100) n++; return "done"`)
+	runtime.KeepAlive(held)
+	if err != nil || got != "done" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+
+	// A heap that shrinks while the script runs is no growth either. The
+	// garbage stays until the tool collects it.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	garbage := make([]byte, 64<<20)
+	runtime.KeepAlive(garbage) // from here on it is garbage
+	got, err = Run(context.Background(), `collect({}); var t = Date.now(), n = 0; while (Date.now() - t < 100) n++; return "done"`,
+		[]string{"collect"}, func(context.Context, string, json.RawMessage) (string, error) {
+			runtime.GC()
+			return "", nil
+		})
+	if err != nil || got != "done" {
+		t.Fatalf("after a collection: got %q, %v", got, err)
 	}
 }

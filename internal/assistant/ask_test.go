@@ -370,6 +370,7 @@ func TestHowItEnded(t *testing.T) {
 		{"running", Step{Took: time.Second}, ""},
 		{"done", Step{Done: true, Took: 1234567 * time.Microsecond}, "✓ 1.235s"},
 		{"failed", Step{Done: true, Err: errors.New("no node \"luna\"\nsee: ouro list")}, `✗ no node "luna"`},
+		{"empty first line", Step{Done: true, Err: errors.New("\nsee: ouro list")}, "✗ "},
 		{"carriage return", Step{Done: true, Err: errors.New("a\rb")}, `✗ a\rb`},
 		{"120 bytes", Step{Done: true, Err: errors.New(strings.Repeat("a", 120))}, "✗ " + strings.Repeat("a", 120)},
 		{"cut in a character", Step{Done: true, Err: errors.New(long)}, "✗ " + strings.Repeat("a", 119) + "…"},

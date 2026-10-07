@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/home"
 	"ouroboros/internal/openai/openaitest"
+	nodeplugin "ouroboros/internal/plugins/node"
 	"ouroboros/plugin"
 )
 
@@ -59,6 +61,40 @@ func TestNodeRemovesPIDFileOnShutdown(t *testing.T) {
 	}
 	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
 		t.Fatal("PID file should be removed")
+	}
+}
+
+// What the node was given to release when it stops is released with it.
+func TestServeCallsOnStop(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	stopped := make(chan struct{})
+	list := clitest.Plugins(s, cli.Terminal{In: strings.NewReader(""), Out: io.Discard})
+	for i, p := range list {
+		if p.Name == "node" {
+			list[i] = nodeplugin.Plugin(home.Dir(s.Home), nodeplugin.Options{
+				HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Log: io.Discard, OnStop: func() { close(stopped) },
+			})
+		}
+	}
+	app, err := cli.NewWith(list...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- app.Run(ctx, []string{"serve"}) }()
+	if _, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), clitest.Patience); !ok {
+		t.Fatal("node did not start")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("OnStop was not called")
 	}
 }
 

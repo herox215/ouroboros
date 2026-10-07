@@ -530,3 +530,14 @@ func TestPublic(t *testing.T) {
 		t.Fatalf("what is set: %s", got)
 	}
 }
+
+// A configuration without a plugins section turns no plugin off.
+func TestPluginsOff(t *testing.T) {
+	if got := (Config{}).PluginsOff(); got != nil {
+		t.Fatalf("no plugins section: off = %v", got)
+	}
+	off := []string{"talk"}
+	if got := (Config{Plugins: &Plugins{Off: off}}).PluginsOff(); !reflect.DeepEqual(got, off) {
+		t.Fatalf("off = %v, want %v", got, off)
+	}
+}

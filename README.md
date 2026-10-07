@@ -1434,6 +1434,10 @@ Scope and limits:
 - Statements are not removed, constants and strings are not changed, and the bitwise and assignment mutations
   of gremlins are off: operators only.
 - A mutant whose tests do not finish in time is *timed out* and counts as noticed.
+- gremlins only tries a mutant in code that coverage gives a block of its own. A constant or a `case`
+  expression has none, so its mutants are always *not covered*, whatever the tests do. Such a mutant is
+  applied by hand to a copy of the package, a test that kills it is made sure of, and it is listed in
+  `mutation-uncoverable.txt` as `file:line:column MUTATION  # reason`: it is then reported as accepted.
 - **Packages that send signals to process IDs are not mutated**, today `internal/daemon` and `cmd/ouro` (its
   test kills the node). A mutant there lets a PID of 0 or -1 through, and the code under test then signals its
   own process group (that happened when the checks were set up: the run terminated itself) or every process
@@ -1458,15 +1462,14 @@ package next to it. How to read it:
 |---|---|---|
 | first line | the counts of the run | nothing: there is no score to reach |
 | `Survived` | the tests pass with this operator changed | decide: missing assertion, or equivalent (see above) |
-| `Not covered` | no test of the package itself runs this line | nothing, if another package or the end-to-end test does: `make cover-check` proves that |
+| `Not covered` | no test of the package itself runs this line | add a test in the package; a constant or a `case` expression goes into `mutation-uncoverable.txt` (see above) |
 | `Timed out` | the tests did not finish with the change | nothing: it was noticed |
 | `Accepted as equivalent` | survivors listed in `mutation-equivalents.txt` | nothing; a line that no longer matches is named |
+| `Accepted as uncoverable` | mutants not covered and listed in `mutation-uncoverable.txt` | nothing; a line that no longer matches is named |
 | `Not mutated` | the packages left out because they signal processes | review their tests by hand |
 
-Most survivors are in the drawing of `internal/tui` (the arithmetic of the logo), some in the parts of
-`internal/discovery` that depend on the network interfaces of the machine, and some in `internal/safefile`,
-where what the mutant leaves out only shows after a power failure or a write that fails. The counts change
-with every commit and are not kept here: the first line of the report has them.
+Every survivor and every mutant not covered is either killed by a test or listed in one of the two files.
+The counts change with every commit and are not kept here: the first line of the report has them.
 
 ### Git hook
 

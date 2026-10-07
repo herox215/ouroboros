@@ -368,6 +368,11 @@ func TestNameOf(t *testing.T) {
 			t.Errorf("NameOf(%q) = %q, want %q", target, got, want)
 		}
 	}
+	// An empty target is the start of every ID, even where only one peer is trusted.
+	bob.contacts.AddTrusted(alice.PublicKey, "alice", "")
+	if got := bob.network().NameOf(""); got != "" {
+		t.Errorf("NameOf(\"\") = %q with one trusted peer", got)
+	}
 	os.Remove(alice.contactsPath)
 	os.Mkdir(alice.contactsPath, 0o700)
 	if got := n.NameOf(bobID); got != "" {

@@ -2,6 +2,9 @@ package tui
 
 import (
 	"errors"
+	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -508,5 +511,83 @@ func TestFirstSentence(t *testing.T) {
 		if got := firstSentence(text); got != want {
 			t.Errorf("%q: %q", text, got)
 		}
+	}
+}
+
+// What does not fit in the box is cut off or wrapped within it: the lines of
+// the categories, the rows, their notes, and what is typed into a setting.
+func TestSettingsFitTheBox(t *testing.T) {
+	line := func(v, of string) string {
+		t.Helper()
+		for _, l := range strings.Split(v, "\n") {
+			if strings.Contains(l, of) {
+				return l
+			}
+		}
+		t.Fatalf("no line with %q:\n%s", of, v)
+		return ""
+	}
+	// The categories say what is in them in one column.
+	m, _ := openSettings(t, someSettings())
+	view := ansi.Strip(m.View().Content)
+	at := func(l, s string) int { return ansi.StringWidth(l[:strings.Index(l, s)]) }
+	if node, agents := line(view, "› The node"), line(view, "  The agents"); at(node, contents[nodeSection]) != at(agents, contents[agentsSection]) {
+		t.Errorf("the categories are not aligned:\n%s", view)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 40})
+	if l := line(ansi.Strip(m.View().Content), "› The node"); !strings.HasSuffix(strings.TrimRight(l, " │"), "…") {
+		t.Errorf("the category is not cut off: %q", l)
+	}
+
+	s := someSettings()
+	s.Name = "a-name-much-longer-than-the-box-is-wide-" + strings.Repeat("x", 40)
+	words := make([]string, 40)
+	for i := range words {
+		words[i] = fmt.Sprintf("w%02d", i)
+	}
+	s.Tools[ForPeersIndex()].Tools[2].Description = strings.Join(words, " ")
+	m, _ = openSettings(t, s)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 60})
+	pick(t, m, nodeSection, "Name", "change")
+	if l := line(ansi.Strip(m.View().Content), "› Name"); !strings.HasSuffix(strings.TrimRight(l, " │"), "…") {
+		t.Errorf("the row is not cut off: %q", l)
+	}
+	press(m, "enter")
+	m.editInput.CursorEnd()
+	view = ansi.Strip(m.View().Content)
+	lines := strings.Split(view, "\n")
+	input := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "│ > ") })
+	if input < 0 || strings.Trim(lines[input+1], " │") != "" {
+		t.Errorf("the input takes more than its line:\n%s", view)
+	}
+	press(m, "esc")
+	pick(t, m, peersSection, "list_peers", "")
+	for _, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if regexp.MustCompile(`\bw\d\d\b`).MatchString(l) && !strings.HasPrefix(l, "│     w") {
+			t.Errorf("a line of the note is not indented: %q", l)
+		}
+	}
+}
+
+// The window moves no sooner than the selection would leave it: on the
+// lowest screen that shows the first rows unmoved, the last line of the
+// selected one is the last in the box.
+func TestSettingsWindowMovesAtTheEdge(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	pick(t, m, nodeSection, "Access", "")
+	h := 40
+	for ; ; h-- {
+		m.settingsTop = 0
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: h - 1})
+		if m.View(); m.settingsTop != 0 {
+			break
+		}
+	}
+	m.settingsTop = 0
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: h})
+	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	box := lines[:len(lines)-1] // the footer
+	if m.settingsTop != 0 || !strings.Contains(box[len(box)-2], "[open /setup]") {
+		t.Fatalf("at a height of %d, line %d is at the top:\n%s", h, m.settingsTop, strings.Join(box, "\n"))
 	}
 }

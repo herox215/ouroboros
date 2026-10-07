@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -92,5 +93,34 @@ func TestChatShowsMarkdown(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
 	if !strings.Contains(trimmedLines(m), "done: x") {
 		t.Fatal("the answer should stay formatted in another width")
+	}
+}
+
+// Headings of the first two levels stand out in the accent, the others are
+// only bold. Emphasis is italic, strong emphasis bold. The head of a table
+// is bold, its rows are not.
+func TestMarkdownStyles(t *testing.T) {
+	for src, want := range map[string]string{
+		"# One":     boldStyle.Foreground(accent).Render("One"),
+		"## Two":    boldStyle.Foreground(accent).Render("Two"),
+		"### Three": boldStyle.Render("Three"),
+		"*it*":      lipgloss.NewStyle().Italic(true).Render("it"),
+		"**it**":    lipgloss.NewStyle().Bold(true).Render("it"),
+	} {
+		if got := renderMarkdown(src, 40); got != want {
+			t.Errorf("%q: got %q, want %q", src, got, want)
+		}
+	}
+	table := strings.Split(renderMarkdown("| Name |\n|---|\n| a |\n", 40), "\n")
+	if len(table) != 5 || !strings.Contains(table[1], "\x1b[1m") || strings.Contains(table[3], "\x1b[1m") {
+		t.Fatalf("table %q", table)
+	}
+}
+
+// A quote is wrapped inside its mark: the mark takes two columns of the
+// width.
+func TestMarkdownQuoteWraps(t *testing.T) {
+	if got := plainMarkdown("> aaaa bbbb cc", 12); got != "│ aaaa bbbb\n│ cc" {
+		t.Fatalf("quote %q", got)
 	}
 }

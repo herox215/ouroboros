@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net"
 	"os"
@@ -211,9 +212,31 @@ func TestPeerAddr(t *testing.T) {
 }
 
 func TestBroadcasts(t *testing.T) {
-	for _, ip := range broadcasts() {
+	got := broadcasts()
+	for _, ip := range got {
 		if ip.To4() == nil || ip.IsLoopback() {
 			t.Fatalf("unexpected broadcast address %v", ip)
+		}
+	}
+	// Every IPv4 network of an interface that is up and broadcasts has its
+	// broadcast address listed, however many interfaces and addresses come before.
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagBroadcast == 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			ipnet := addr.(*net.IPNet)
+			if ipnet.IP.To4() == nil {
+				continue
+			}
+			ones, _ := ipnet.Mask.Size()
+			last := binary.BigEndian.Uint32(ipnet.IP.To4()) | (1<<(32-ones) - 1)
+			want := net.IPv4(byte(last>>24), byte(last>>16), byte(last>>8), byte(last))
+			if !slices.ContainsFunc(got, want.Equal) {
+				t.Errorf("%s: %v is not in %v", iface.Name, want, got)
+			}
 		}
 	}
 }
@@ -227,6 +250,22 @@ func TestTailscalePeers(t *testing.T) {
 	}
 	if got := tailscalePeers([]byte("not json")); got != nil {
 		t.Fatalf("got %v", got)
+	}
+
+	// A peer that is offline is passed over, whatever peers come after it.
+	peers := map[string]any{}
+	var want []string
+	for i := range 10 {
+		ip := "100.64.1." + strconv.Itoa(i)
+		peers["on"+ip] = map[string]any{"TailscaleIPs": []string{ip}, "Online": true}
+		peers["off"+ip] = map[string]any{"TailscaleIPs": []string{"100.64.2." + strconv.Itoa(i)}, "Online": false}
+		want = append(want, ip)
+	}
+	many, _ := json.Marshal(map[string]any{"Peer": peers})
+	got := tailscalePeers(many)
+	slices.Sort(got)
+	if slices.Sort(want); !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
@@ -354,23 +393,31 @@ func TestScannerAsksSources(t *testing.T) {
 func TestTailscalePeersAsksTheCLI(t *testing.T) {
 	defer func(d time.Duration) { tailscaleTimeout = d }(tailscaleTimeout)
 	tailscaleTimeout = time.Minute
-	dir := t.TempDir()
+	defer func(app string) { tailscaleApp = app }(tailscaleApp)
+	dir, apps := t.TempDir(), t.TempDir()
 	t.Setenv("PATH", dir)
-	if _, err := os.Stat(tailscaleApp); err == nil {
-		t.Skip("Tailscale is installed as an app")
-	}
+	tailscaleApp = filepath.Join(apps, "Tailscale")
 	if got := TailscalePeers(context.Background()); got != nil {
 		t.Fatalf("without tailscale: %v", got)
 	}
 
-	cli := filepath.Join(dir, "tailscale")
-	script := func(body string) {
+	write := func(cli, body string) {
 		t.Helper()
 		if err := os.WriteFile(cli, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	script(`[ "$1 $2" = "status --json" ] && echo '{"Peer": {"a": {"TailscaleIPs": ["100.64.0.2"], "Online": true}}}'`)
+	status := `[ "$1 $2" = "status --json" ] && echo '{"Peer": {"a": {"TailscaleIPs": ["100.64.0.2"], "Online": true}}}'`
+	// Not on the PATH, the CLI of the app is asked.
+	write(tailscaleApp, status)
+	if got := TailscalePeers(context.Background()); !slices.Equal(got, []string{"100.64.0.2"}) {
+		t.Fatalf("the app: got %v", got)
+	}
+	os.Remove(tailscaleApp)
+
+	cli := filepath.Join(dir, "tailscale")
+	script := func(body string) { t.Helper(); write(cli, body) }
+	script(status)
 	if got := TailscalePeers(context.Background()); !slices.Equal(got, []string{"100.64.0.2"}) {
 		t.Fatalf("got %v", got)
 	}

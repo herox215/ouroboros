@@ -137,18 +137,17 @@ func (m *Model) screenView() string {
 	case m.body.err != nil:
 		text = errStyle.Render("✗ " + m.body.err.Error())
 	}
-	content := boldStyle.Render(s.Title) + "\n\n" + text
+	// The text is cut off to what the box has room for, so that its bottom
+	// border stays: the box takes its border and padding, the actions, which
+	// stay in sight below the text, a blank line and their own.
+	rows, below := max(0, h-2), ""
 	if len(s.Actions) > 0 {
 		names := make([]string, len(s.Actions))
 		for i, a := range s.Actions {
 			names[i] = a.Name
 		}
-		// The actions stay in sight below the text, which is cut off instead:
-		// the box takes its border and padding, the actions a blank line and
-		// their own.
-		rows := max(0, h-4)
-		content = lipgloss.NewStyle().Width(max(1, w-4)).Height(rows).MaxHeight(rows).Render(content) +
-			"\n\n" + choices(names, m.choice)
+		rows, below = max(0, h-4), "\n\n"+choices(names, m.choice)
 	}
+	content := lipgloss.NewStyle().Width(max(1, w-4)).Height(rows).MaxHeight(rows).Render(boldStyle.Render(s.Title)+"\n\n"+text) + below
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
 }

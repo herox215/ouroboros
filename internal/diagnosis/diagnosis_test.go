@@ -45,6 +45,8 @@ func TestClassify(t *testing.T) {
 		{&openai.APIError{Status: 400, Message: "context length exceeded"}, CauseLLMRejected},
 		{&openai.APIError{Status: 404, Message: "model gpt-secret not found"}, CauseLLMRejected},
 		{&openai.APIError{Status: 503, Message: "upstream 10.0.0.5 is down"}, CauseLLMFailed},
+		{&openai.APIError{Status: 500, Message: "internal error"}, CauseLLMFailed},
+		{&openai.APIError{Status: 499, Message: "client closed request"}, CauseLLMRejected},
 		{fmt.Errorf("wrapped: %w", agent.ErrTooManyToolCalls), CauseTooManyToolCalls},
 		{errors.New("open /home/alice/.config/ouroboros/config.json: permission denied"), CauseInternal},
 	}

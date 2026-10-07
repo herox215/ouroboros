@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var errTest = errors.New("test error")
@@ -156,6 +158,66 @@ func TestListenGroupFails(t *testing.T) {
 			t.Fatalf("got %v, %v", conn, err)
 		}
 	})
+}
+
+// The socket of the group is closed on exec from the start: a program started
+// meanwhile does not inherit it.
+func TestListenGroupClosesOnExec(t *testing.T) {
+	multicast(t)
+	fd := -1
+	replace(t, &syscallSocket, func(domain, typ, proto int) (int, error) {
+		var err error
+		fd, err = syscall.Socket(domain, typ, proto)
+		return fd, err
+	})
+	flags := -1
+	replace(t, &netFilePacketConn, func(f *os.File) (net.PacketConn, error) {
+		flags, _ = unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+		return net.FilePacketConn(f)
+	})
+	conn, err := listenGroup(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if flags < 0 || flags&unix.FD_CLOEXEC == 0 {
+		t.Fatalf("flags of the socket: %#x", flags)
+	}
+}
+
+// Without the socket of the group, the answers sent to the prober are enough.
+func TestDiscoverWithoutGroup(t *testing.T) {
+	port := serve(t, 0, node("alpha"))
+	replace(t, &syscallSocket, func(int, int, int) (int, error) { return -1, errTest })
+	nodes, err := Discover(context.Background(), port, wait)
+	if err != nil || len(nodes) != 1 || nodes[0].Name != "alpha" {
+		t.Fatalf("got %+v, %v", nodes, err)
+	}
+}
+
+// Of several sockets that fail, the first failure is the one reported: the
+// others only fail because the reading was ended.
+func TestGatherReportsTheFirstFailure(t *testing.T) {
+	var conns []*net.UDPConn
+	for range 2 {
+		conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		conns = append(conns, conn)
+	}
+	errLater := errors.New("ended")
+	replace(t, &readFromUDP, func(c *net.UDPConn, b []byte) (int, *net.UDPAddr, error) {
+		if c == conns[0] {
+			return 0, nil, errTest
+		}
+		c.ReadFromUDP(b) // waits until the reading is ended
+		return 0, nil, errLater
+	})
+	if _, err := gather(conns); err != errTest {
+		t.Fatalf("got %v", err)
+	}
 }
 
 // A socket that fails for another reason than being closed ends the serving

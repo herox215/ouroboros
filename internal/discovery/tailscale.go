@@ -9,7 +9,7 @@ import (
 )
 
 // tailscaleApp is where the macOS app keeps the CLI when it is not on the PATH.
-const tailscaleApp = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+var tailscaleApp = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 
 // tailscaleTimeout is how long the CLI may take to tell the peers. Tests
 // raise it: macOS checks a program that was just written before it runs it.

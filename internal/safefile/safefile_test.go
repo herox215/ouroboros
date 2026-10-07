@@ -3,6 +3,7 @@ package safefile
 import (
 	"errors"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -85,8 +86,77 @@ func TestWriteFailureLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+// A write the file system refuses part way fails, and the target keeps its
+// old content. The limit on the size of files makes the write fail.
+func TestWriteThatFailsKeepsTheOldContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "file.json")
+	os.WriteFile(path, []byte("old"), 0o600)
+	signal.Ignore(syscall.SIGXFSZ) // the write fails instead of ending the process
+	defer signal.Reset(syscall.SIGXFSZ)
+	var limit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	small := limit
+	small.Cur = 16
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &small); err != nil {
+		t.Skip("cannot limit the size of files:", err)
+	}
+	err := Write(path, make([]byte, 1024), 0o600)
+	syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limit)
+	if err == nil {
+		t.Fatal("a write beyond the limit should fail")
+	}
+	if b, _ := os.ReadFile(path); string(b) != "old" {
+		t.Fatalf("content = %q", b)
+	}
+	if left := leftovers(t, path); len(left) != 0 {
+		t.Fatalf("temporary files left behind: %v", left)
+	}
+}
+
+// The directory is synced once the file has its new name, and not after a
+// write that failed: then there is no new name to keep.
+func TestWriteSyncsTheDirectory(t *testing.T) {
+	var synced []string
+	defer func(sync func(string)) { syncDir = sync }(syncDir)
+	syncDir = func(dir string) { synced = append(synced, dir) }
+	dir := t.TempDir()
+	if err := Write(filepath.Join(dir, "file.json"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if len(synced) != 1 || synced[0] != dir {
+		t.Fatalf("synced %q", synced)
+	}
+	synced = nil
+	path := filepath.Join(dir, "taken")
+	os.MkdirAll(filepath.Join(path, "sub"), 0o700)
+	if err := Write(path, []byte("new"), 0o600); err == nil || synced != nil {
+		t.Fatalf("a write that failed: %v, synced %q", err, synced)
+	}
+}
+
 func TestSyncDirIgnoresMissingDirectory(t *testing.T) {
 	syncDir(filepath.Join(t.TempDir(), "missing"))
+}
+
+// Syncing a directory closes it again.
+func TestSyncDirClosesTheDirectory(t *testing.T) {
+	open := func() int {
+		fds, err := os.ReadDir("/dev/fd")
+		if err != nil {
+			t.Skip("cannot list the open files:", err)
+		}
+		return len(fds)
+	}
+	dir := t.TempDir()
+	before := open()
+	for range 10 {
+		syncDir(dir)
+	}
+	if after := open(); after != before {
+		t.Fatalf("%d files open before, %d after", before, after)
+	}
 }
 
 // Only one holder has the lock at a time, also within one process.

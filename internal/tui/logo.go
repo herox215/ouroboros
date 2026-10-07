@@ -11,9 +11,8 @@ import (
 // runs counterclockwise until the tail ends between the jaws. Its back is
 // filled and its belly is only an outline.
 const (
-	logoCols, logoRows       = 30, 16
-	logoPixelsW, logoPixelsH = logoCols * 2, logoRows * 4
-	ringX, ringY, ringR      = 30, 34, 25.2
+	logoCols, logoRows  = 30, 16
+	ringX, ringY, ringR = 30, 34, 25.2
 )
 
 var (

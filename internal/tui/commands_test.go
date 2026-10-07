@@ -180,3 +180,14 @@ func TestDebug(t *testing.T) {
 		t.Fatalf("header %q", h)
 	}
 }
+
+// A paste that leaves fewer commands to offer than the one selected selects
+// the first again.
+func TestPasteNarrowsTheSuggestions(t *testing.T) {
+	m, _ := newModel(t)
+	press(m, "/", "s", "down", "down", "down")
+	m.Update(tea.PasteMsg{Content: "e"})
+	if got := suggested(m); !slices.Equal(got, []string{"› /session list the conversations and switch to one", "/setup set up the node", "/settings the configuration"}) {
+		t.Fatalf("suggested %q", got)
+	}
+}

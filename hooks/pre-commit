@@ -20,7 +20,7 @@ if [ -z "$staged" ]; then
 fi
 
 # Only code and the checks themselves need checking; a commit of prose does not.
-relevant=$(printf '%s\n' "$staged" | grep -E '(\.go|\.sh)$|^(go\.mod|go\.sum|Makefile|staticcheck\.conf|\.gremlins\.yaml|coverage-exclusions\.txt|mutation-equivalents\.txt)$|^(scripts|hooks)/' || true)
+relevant=$(printf '%s\n' "$staged" | grep -E '(\.go|\.sh)$|^(go\.mod|go\.sum|Makefile|staticcheck\.conf|\.gremlins\.yaml|coverage-exclusions\.txt|mutation-equivalents\.txt|mutation-uncoverable\.txt)$|^(scripts|hooks)/' || true)
 if [ -z "$relevant" ]; then
 	echo "pre-commit: no Go code or check configuration staged, nothing to check."
 	exit 0

@@ -428,6 +428,18 @@ func TestEdit(t *testing.T) {
 		!strings.HasSuffix(got, fmt.Sprintf("x\n[and more: continue with read at offset %d]", maxEditLines+1)) {
 		t.Errorf("got %q, %v", got, err)
 	}
+	// One line more than shown is cut as well.
+	w.file("~/long", "start\n")
+	got, err = w.run(owner, Edit, editArgs{Path: "~/long", Old: "start\n", New: strings.Repeat("x\n", maxEditLines+1)})
+	if err != nil || !strings.HasPrefix(got, fmt.Sprintf("edited ~/long; lines 1 to %d of %d are now:\n", maxEditLines, maxEditLines+1)) {
+		t.Errorf("got %q, %v", got, err)
+	}
+	// A short change far down in a file is not cut.
+	w.file("~/far", lines(1, 100))
+	got, err = w.run(owner, Edit, editArgs{Path: "~/far", Old: "line 60\n", New: "sixty\n"})
+	if want := "edited ~/far; lines 57 to 63 of 100 are now:\nline 57\nline 58\nline 59\nsixty\nline 61\nline 62\nline 63"; err != nil || got != want {
+		t.Errorf("got %q, %v, want %q", got, err, want)
+	}
 
 	// The limit holds for what is edited and for what comes of it.
 	w.file("~/big", "a"+strings.Repeat("x", maxWriteBytes-1))
@@ -728,6 +740,7 @@ func TestSearch(t *testing.T) {
 	w.file("~/src/.env", "model=secret\n")
 	w.file("~/src/blob.bin", "model\x00\n")
 	w.file("~/src/sub/deep.go", "package sub // model\r\n")
+	w.file("~/src/lead.bin", "\x00model\n")
 	w.file("~/empty", "")
 	for _, c := range []struct {
 		args any
@@ -743,6 +756,7 @@ func TestSearch(t *testing.T) {
 		{map[string]any{"path": "~/src", "pattern": "nothing"}, "(no line matches)"},
 		{map[string]any{"path": "~/empty", "pattern": "^$"}, "(no line matches)"},
 		{map[string]any{"path": "~/src/notes.txt", "pattern": "^$"}, "(no line matches)"},
+		{map[string]any{"path": "~/src/lead.bin", "pattern": "model"}, "(no line matches)"},
 		// A hidden directory that is searched itself is searched.
 		{map[string]any{"path": "~/src/.git", "pattern": "model"}, "~/src/.git/config:1: model"},
 	} {
@@ -810,6 +824,21 @@ func TestSearchIsCut(t *testing.T) {
 	}
 	if got, err := w.run(owner, "search", map[string]any{"path": "~/big.txt", "pattern": "x"}); err != nil || got != "(no line matches)" {
 		t.Errorf("big: %q, %v", got, err)
+	}
+	// Up to the limits, nothing is cut.
+	w.file("~/enough.txt", strings.Repeat("x\n", maxMatches))
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/enough.txt", "pattern": "x"}); err != nil ||
+		strings.Count(got, "\n") != maxMatches-1 || strings.Contains(got, "[") {
+		t.Errorf("enough: %q, %v", got, err)
+	}
+	w.file("~/wide.txt", strings.Repeat("a", maxMatchBytes)+"\n")
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/wide.txt", "pattern": "a"}); err != nil ||
+		got != "~/wide.txt:1: "+strings.Repeat("a", maxMatchBytes) {
+		t.Errorf("wide: %q, %v", got, err)
+	}
+	w.file("~/limit.txt", "y"+strings.Repeat("x", maxWriteBytes-1))
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/limit.txt", "pattern": "^y"}); err != nil || !strings.HasPrefix(got, "~/limit.txt:1: yx") {
+		t.Errorf("limit: %q, %v", got, err)
 	}
 	defer func(n int) { maxSearched = n }(maxSearched)
 	maxSearched = 3

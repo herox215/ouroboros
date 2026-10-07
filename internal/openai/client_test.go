@@ -699,3 +699,27 @@ func TestCredentials(t *testing.T) {
 		}
 	}
 }
+
+// A stream ends with [DONE]: an event after it is not read.
+func TestCompleteStopsAtDone(t *testing.T) {
+	c := newServer(t, sse(`{"choices":[{"delta":{"content":"ok"}}]}`, "[DONE]", `{"choices":[{"delta":{"content":" and more"}}]}`))
+	if got, err := c.Complete(context.Background(), "gpt", nil, nil); err != nil || got.Content != "ok" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// An answer that is complete is given, even when the call is ended right
+// after it.
+func TestCompleteEndedAfterTheAnswer(t *testing.T) {
+	c := newServer(t, sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]"))
+	ctx, end := context.WithCancelCause(context.Background())
+	defer end(nil)
+	ctx = WithTrace(ctx, func(format string, _ ...any) {
+		if strings.HasPrefix(format, "llm answered") {
+			end(errors.New("ended"))
+		}
+	})
+	if got, err := c.Complete(ctx, "gpt", nil, nil); err != nil || got.Content != "ok" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}

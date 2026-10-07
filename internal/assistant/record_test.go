@@ -219,6 +219,17 @@ func TestWhatTheLLMSaysIsLogged(t *testing.T) {
 	})
 }
 
+// Run tells say what the LLM says along with calls of tools, and nothing of
+// the answer, which is what Run returns.
+func TestRunSaysWhatComesWithToolCalls(t *testing.T) {
+	a, _ := recorded(t, ownerConfig(), &scriptLLM{saying: "I will look"})
+	var said []string
+	got, err := a.Run(context.Background(), "c1", `!echo {"text":"hi"}`, nil, func(s string) { said = append(said, s) })
+	if err != nil || got != "said: hi" || strings.Join(said, "|") != "I will look" {
+		t.Fatalf("got %q, %v, said %q", got, err, said)
+	}
+}
+
 // The tools a script calls are logged like the others, before the script.
 func TestCallsOfAScriptAreLogged(t *testing.T) {
 	a, log := recorded(t, ownerConfig(), &scriptLLM{})

@@ -44,8 +44,8 @@ func Write(path string, data []byte, perm fs.FileMode) (err error) {
 }
 
 // syncDir makes the new name of a file survive a crash. Not every file
-// system can do that, so failing is not an error.
-func syncDir(dir string) {
+// system can do that, so failing is not an error. Tests replace it.
+var syncDir = func(dir string) {
 	if d, err := os.Open(dir); err == nil {
 		d.Sync()
 		d.Close()

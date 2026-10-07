@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -294,6 +295,16 @@ func TestFetchCardErrors(t *testing.T) {
 		if key, err := FetchKey(ctx, url); err == nil || key != "" {
 			t.Errorf("%s: FetchKey = %q, %v", name, key, err)
 		}
+	}
+}
+
+// The codes are what nodes of other versions read: they stay as they are.
+func TestErrorCodesStay(t *testing.T) {
+	codes := []int{CodeParseError, CodeMethodNotFound, CodeInvalidParams, CodeInternalError,
+		CodeUnauthorized, CodePending, CodeBlocked, CodeTooManyHops, CodeTooManyRequests, CodeTooManyChannels}
+	want := []int{-32700, -32601, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32006}
+	if !slices.Equal(codes, want) {
+		t.Fatalf("codes %v, want %v", codes, want)
 	}
 }
 
