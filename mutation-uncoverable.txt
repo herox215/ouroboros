@@ -154,7 +154,6 @@ internal/session/session.go:591:19 CONDITIONALS_NEGATION  # the expression of a 
 internal/session/session.go:593:17 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; the test of the release asserts that a message after it keeps the node running
 internal/session/session.go:593:31 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with a release and a node to stop the test of the release asserts it stopped
 internal/session/socket.go:218:25 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds
-internal/tui/extend.go:137:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPluginScreen
 internal/tui/extend.go:45:25 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestCommandConflicts
 internal/tui/logo.go:19:19 ARITHMETIC_BASE  # package var initialiser (neckAngle): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:19:29 ARITHMETIC_BASE  # package var initialiser (neckAngle): runs before any test, gremlins never sees it covered
@@ -167,8 +166,6 @@ internal/tui/logo.go:21:33 ARITHMETIC_BASE  # package var initialiser (bodyArc):
 internal/tui/logo.go:21:43 ARITHMETIC_BASE  # package var initialiser (bodyArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:97:25 ARITHMETIC_BASE  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:97:25 INVERT_NEGATIVES  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
-internal/tui/model.go:176:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
-internal/tui/model.go:178:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
 internal/tui/onboard.go:53:21 ARITHMETIC_BASE  # in the const block of the scene, curlFrom
 internal/tui/onboard.go:53:31 ARITHMETIC_BASE  # in the const block of the scene, curlFrom
 internal/tui/onboard.go:54:21 ARITHMETIC_BASE  # in the const block of the scene, curlLast
@@ -178,37 +175,33 @@ internal/tui/onboard.go:565:15 CONDITIONALS_NEGATION  # case expression: coverag
 internal/tui/onboard.go:56:21 ARITHMETIC_BASE  # in the const block of the scene, turnAt
 internal/tui/onboard.go:57:22 ARITHMETIC_BASE  # in the const block of the scene, turnDuration
 internal/tui/onboard.go:826:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSetupDialog
-internal/tui/session.go:382:24 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSessionRows
-internal/tui/session.go:461:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:467:21 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:467:31 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:467:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPeerConversations
-internal/tui/session.go:471:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:488:100 CONDITIONALS_BOUNDARY  # if condition after a function literal in its header: coverage gives it no block; killed by TestPeerConversations
-internal/tui/session.go:488:100 CONDITIONALS_NEGATION  # if condition after a function literal in its header: coverage gives it no block; killed by TestDeleteSession
-internal/tui/settings.go:333:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:370:12 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:370:31 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:372:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:430:21 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:432:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/splash.go:17:24 ARITHMETIC_BASE  # constant declaration (splashDuration): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:18:22 ARITHMETIC_BASE  # constant declaration (splashFrame): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:19:23 ARITHMETIC_BASE  # constant declaration (fadeIn): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:20:23 ARITHMETIC_BASE  # constant declaration (fadeOut): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:21:24 ARITHMETIC_BASE  # constant declaration (growDuration): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:22:24 ARITHMETIC_BASE  # constant declaration (biteAt): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:23:23 ARITHMETIC_BASE  # constant declaration (flashDuration): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:24:23 ARITHMETIC_BASE  # constant declaration (pulseDuration): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:25:23 ARITHMETIC_BASE  # constant declaration (sparkLife): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:26:24 ARITHMETIC_BASE  # constant declaration (titleAt): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:27:22 ARITHMETIC_BASE  # constant declaration (letterGap): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:28:23 ARITHMETIC_BASE  # constant declaration (scrambleFor): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:29:24 ARITHMETIC_BASE  # constant declaration (shineAt): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:30:23 ARITHMETIC_BASE  # constant declaration (shineDuration): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:31:24 ARITHMETIC_BASE  # constant declaration (taglineAt): evaluated at compile time, gremlins never sees it covered
-internal/tui/splash.go:32:22 ARITHMETIC_BASE  # constant declaration (typeSpeed): evaluated at compile time, gremlins never sees it covered
-internal/tui/tui.go:27:26 ARITHMETIC_BASE  # the var refreshInterval, set at package level
+internal/tui/session.go:390:24 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSessionRows
+internal/tui/session.go:469:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:475:21 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:475:31 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:475:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPeerConversations
+internal/tui/session.go:479:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/settings.go:353:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:392:12 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:392:31 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:394:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/splash.go:63:24 ARITHMETIC_BASE  # constant declaration (splashDuration): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:64:22 ARITHMETIC_BASE  # constant declaration (splashFrame): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:65:23 ARITHMETIC_BASE  # constant declaration (fadeIn): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:66:23 ARITHMETIC_BASE  # constant declaration (fadeOut): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:67:24 ARITHMETIC_BASE  # constant declaration (growDuration): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:68:24 ARITHMETIC_BASE  # constant declaration (biteAt): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:69:23 ARITHMETIC_BASE  # constant declaration (flashDuration): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:70:23 ARITHMETIC_BASE  # constant declaration (pulseDuration): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:71:23 ARITHMETIC_BASE  # constant declaration (sparkLife): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:72:24 ARITHMETIC_BASE  # constant declaration (titleAt): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:73:22 ARITHMETIC_BASE  # constant declaration (letterGap): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:74:23 ARITHMETIC_BASE  # constant declaration (scrambleFor): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:75:24 ARITHMETIC_BASE  # constant declaration (shineAt): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:76:23 ARITHMETIC_BASE  # constant declaration (shineDuration): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:77:24 ARITHMETIC_BASE  # constant declaration (taglineAt): evaluated at compile time, gremlins never sees it covered
+internal/tui/splash.go:78:22 ARITHMETIC_BASE  # constant declaration (typeSpeed): evaluated at compile time, gremlins never sees it covered
+internal/tui/tui.go:36:26 ARITHMETIC_BASE  # the var refreshInterval, set at package level
 internal/update/update.go:274:92 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
 internal/update/update.go:275:109 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
 internal/update/update.go:283:115 ARITHMETIC_BASE  # a string concatenation in a constant declaration
@@ -264,3 +257,27 @@ internal/assistant/assistant.go:66:72 ARITHMETIC_BASE  # strings joined in a con
 internal/assistant/assistant.go:66:86 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/tools.go:243:23 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds
 internal/assistant/tools.go:303:13 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestAskPeer, which is answered, and TestAskPeerWhoIsNoPeer, which is not
+internal/tui/paste.go:136:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:136:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:136:27 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:138:19 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:138:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:138:24 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:140:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:142:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:142:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:142:23 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:144:43 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:144:30 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:144:17 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:144:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:144:22 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:144:35 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:144:48 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/extend.go:144:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPluginScreen
+internal/tui/model.go:186:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
+internal/tui/model.go:188:13 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
+internal/tui/session.go:496:109 CONDITIONALS_BOUNDARY  # if condition after a function literal in its header: coverage gives it no block; killed by TestPeerConversations
+internal/tui/session.go:496:109 CONDITIONALS_NEGATION  # if condition after a function literal in its header: coverage gives it no block; killed by TestDeleteSession
+internal/tui/settings.go:452:13 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:454:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow

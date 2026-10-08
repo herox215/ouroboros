@@ -36,7 +36,7 @@ func TestProfileSwitchKeepsDraftAndRoutesLateEvents(t *testing.T) {
 	terra.chat.pending = true
 	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	root.Update(shiftTab)
-	if root.profiles.shown != 1 || luna.showSplash || luna.width != 100 || !terra.chat.pending {
+	if root.profiles.shown != 1 || luna.splash.show || luna.width != 100 || !terra.chat.pending {
 		t.Fatal("the switch changed the other profile")
 	}
 	if view := ansi.Strip(root.View().Content); !strings.Contains(view, "profile Luna (bbb222) · shift+tab shows the next") {
@@ -145,7 +145,7 @@ func TestProfilesAcrossARestart(t *testing.T) {
 	}
 	root.SelectProfile("bbb222")
 	root.Resume("s1")
-	if root.profiles.shown != 1 || luna.Current() != "s1" || root.Current() != "s1" || luna.showSplash {
+	if root.profiles.shown != 1 || luna.Current() != "s1" || root.Current() != "s1" || luna.splash.show {
 		t.Fatalf("the UI goes on with %s", root.Current())
 	}
 	root.SelectProfile("ccc333") // none: it stays

@@ -64,7 +64,7 @@ func (m *Model) bodyHeight() int { return max(0, m.height-2-m.pendingRows()) }
 // pendingRows is how many rows the line below the footer takes: one while
 // something waits for a decision, except on the screen that lists it.
 func (m *Model) pendingRows() int {
-	if m.trust.waiting() == 0 || m.screen == screenRequests {
+	if m.requests.trust.waiting() == 0 || m.screen == screenRequests {
 		return 0
 	}
 	return 1
@@ -73,9 +73,9 @@ func (m *Model) pendingRows() int {
 // pendingView is the line below the footer: how much waits for a decision,
 // where to decide, and what it is. The command comes before what waits, so
 // that a narrow window cuts off the latter.
-func (m *Model) pendingView() string {
+func (r *requestsScreen) pendingView(m *Model) string {
 	var what []string
-	for _, r := range m.trust.Incoming {
+	for _, r := range r.trust.Incoming {
 		name := r.Name
 		if name == "" {
 			name = shortKey(r.PublicKey)
@@ -86,10 +86,10 @@ func (m *Model) pendingView() string {
 			what = append(what, name+" wants to chat")
 		}
 	}
-	for _, p := range m.trust.Proposals {
+	for _, p := range r.trust.Proposals {
 		what = append(what, "your agent proposes to change "+p.Field)
 	}
-	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d pending", m.trust.waiting())) +
+	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d pending", r.trust.waiting())) +
 		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/pending") +
 		mutedStyle.Render(" to decide · "+strings.Join(what, ", "))
 	return ansi.Truncate(" "+line, m.width, "…")
@@ -107,7 +107,7 @@ func (m *Model) layout() {
 	m.history.SetWidth(inner)
 	m.history.SetHeight(max(1, m.chatHeight()-4)) // border, title and typing line
 	m.renderHistory(atBottom)
-	m.sizeContents()
+	m.context.size(m)
 }
 
 // renderHistory fills the history viewport with the conversation, the loop of
@@ -252,32 +252,32 @@ func (m *Model) View() tea.View {
 		v.SetContent(m.onboardView())
 		return v
 	}
-	if m.showSplash {
-		v.SetContent(m.splashView())
+	if m.splash.show {
+		v.SetContent(m.splash.view(m))
 		return v
 	}
 	var body string
 	switch m.screen {
 	case screenRequests:
-		body = m.requestsView()
+		body = m.requests.view(m)
 	case screenHelp:
 		body = m.helpView()
 	case screenPlugin:
-		body = m.screenView()
+		body = m.plugins.view(m)
 	case screenModel:
-		body = m.modelView()
+		body = m.picker.view(m)
 	case screenContext:
-		body = m.contextView()
+		body = m.context.view(m)
 	case screenSettings:
-		body = m.settingsView()
+		body = m.config.view(m)
 	case screenSessions:
-		body = m.sessionsView()
+		body = m.sessions.view(m)
 	default:
 		body = m.chatView()
 	}
 	parts := []string{m.headerView(), body, m.footerView()}
 	if m.pendingRows() > 0 {
-		parts = append(parts, m.pendingView())
+		parts = append(parts, m.requests.pendingView(m))
 	}
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	return v
@@ -297,26 +297,26 @@ func (m *Model) windowTitle() string {
 
 // requestsView lists what is waiting for a decision: the connection requests,
 // and the changes of the configuration the agent proposed.
-func (m *Model) requestsView() string {
+func (r *requestsScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
 	lines := []string{boldStyle.Render("Connection requests"), ""}
-	if len(m.trust.Incoming) == 0 {
+	if len(r.trust.Incoming) == 0 {
 		lines = append(lines, mutedStyle.Render("No pending requests."))
 	}
 	selected := func(i int) string {
-		if i == m.reqSel {
+		if i == r.sel {
 			return lipgloss.NewStyle().Foreground(accent).Render("› ")
 		}
 		return "  "
 	}
 	// decide is what can be done with the entry i, if it is selected.
 	decide := func(i int) []string {
-		if i != m.reqSel {
+		if i != r.sel {
 			return nil
 		}
 		return []string{"    " + choices([]string{"accept", "reject"}, m.choice)}
 	}
-	for i, r := range m.trust.Incoming {
+	for i, r := range r.trust.Incoming {
 		name := r.Name
 		if name == "" {
 			name = shortKey(r.PublicKey)
@@ -332,27 +332,27 @@ func (m *Model) requestsView() string {
 			"    "+mutedStyle.Render(r.Addr+" · "+r.At.Format("15:04")))
 		lines = append(lines, decide(i)...)
 	}
-	if len(m.trust.Outgoing) > 0 {
+	if len(r.trust.Outgoing) > 0 {
 		lines = append(lines, "", mutedStyle.Render("Waiting for the other side:"))
-		for _, r := range m.trust.Outgoing {
+		for _, r := range r.trust.Outgoing {
 			lines = append(lines, "  "+mutedStyle.Render(r.Name+" ("+shortKey(r.PublicKey)+")"))
 		}
 	}
-	if len(m.trust.Proposals) > 0 {
+	if len(r.trust.Proposals) > 0 {
 		lines = append(lines, "", boldStyle.Render("Changes of the configuration your agent proposes"), "")
 	}
-	for i, p := range m.trust.Proposals {
+	for i, p := range r.trust.Proposals {
 		// Now and then are what the node says. The reason is what the agent
 		// says, and it is shown as that.
 		lines = append(lines,
-			selected(len(m.trust.Incoming)+i)+boldStyle.Render(p.Field)+"  "+mutedStyle.Render("· "+p.At.Format("15:04")),
+			selected(len(r.trust.Incoming)+i)+boldStyle.Render(p.Field)+"  "+mutedStyle.Render("· "+p.At.Format("15:04")),
 			"    "+mutedStyle.Render("now:  ")+p.Now,
 			"    "+mutedStyle.Render("then: ")+p.Then,
 			"    "+mutedStyle.Render("your agent says: "+p.Reason))
 		if p.Stale {
 			lines = append(lines, "    "+errStyle.Render("the configuration was changed since: accepting drops this without applying it"))
 		}
-		lines = append(lines, decide(len(m.trust.Incoming)+i)...)
+		lines = append(lines, decide(len(r.trust.Incoming)+i)...)
 	}
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
 }
@@ -365,9 +365,9 @@ func shortKey(publicKey string) string {
 	return publicKey[:10] + "…"
 }
 
-// splashView shows the ouroboros animation centered on the screen.
-func (m *Model) splashView() string {
-	return drawSplash(m.width, m.height, m.splashElapsed, m.splashElapsed+m.skyShift, m.light)
+// view shows the ouroboros animation centered on the screen.
+func (s *splashScreen) view(m *Model) string {
+	return drawSplash(m.width, m.height, s.elapsed, s.elapsed+s.skyShift, m.light)
 }
 
 // logoText joins the logo lines, each truncated to width.
@@ -414,8 +414,8 @@ func (m *Model) headerView() string {
 		state = lipgloss.NewStyle().Foreground(bad).Render("○ offline") +
 			mutedStyle.Render(fmt.Sprintf("  %s · %s · type /start", s.ID, s.Name))
 	}
-	if m.unreadReq > 0 {
-		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.unreadReq))
+	if m.requests.unread > 0 {
+		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.requests.unread))
 	}
 	if !s.Debug {
 		return ansi.Truncate(title+" "+state, m.width, "…")
@@ -508,15 +508,15 @@ func (m *Model) footerView() string {
 		help = "↑↓ select · enter show · d delete · tab yours/peers · esc back · ctrl+c quit"
 	case screenSettings:
 		help = "↑↓ select · enter open · esc back · ctrl+c quit"
-		if m.opened {
+		if m.config.opened {
 			help = "↑↓ select · ←→ choose · enter do · esc categories · ctrl+c quit"
 		}
-		if m.editing != nil {
+		if m.config.editing != nil {
 			help = "enter save · esc keep what was · ctrl+c quit"
 		}
 	case screenPlugin:
 		help = "esc back · ctrl+c quit"
-		if len(m.screens[m.open].Actions) > 0 {
+		if len(m.plugins.screens[m.plugins.open].Actions) > 0 {
 			help = "←→ select · enter run · " + help
 		}
 	}

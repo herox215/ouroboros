@@ -33,7 +33,7 @@ func TestCallMetricsDisplay(t *testing.T) {
 	if got := m.chatView(); !strings.Contains(got, "42.0 TPS") || !strings.Contains(got, "included in plan") {
 		t.Fatalf("%s", got)
 	}
-	if got := m.contextView(); !strings.Contains(got, "42.0 TPS · cost included in plan") {
+	if got := m.context.view(m); !strings.Contains(got, "42.0 TPS · cost included in plan") {
 		t.Fatalf("%s", got)
 	}
 }

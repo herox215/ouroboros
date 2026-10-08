@@ -270,7 +270,7 @@ func TestSessionRows(t *testing.T) {
 	m.conversation("c").title, m.conversation("c").last = "c", at.Add(time.Minute)
 	m.conversation("x") // nothing in it, and not shown
 	var ids []string
-	for _, c := range m.sessionRows() {
+	for _, c := range m.sessions.rows(m) {
 		ids = append(ids, c.contextID)
 	}
 	if strings.Join(ids, " ") != "y z c a b" {
@@ -396,10 +396,10 @@ func TestDeleteSession(t *testing.T) {
 	if cmd := press(m, "down", "d", "d"); cmd != nil || m.notice != "an answer is on its way there: /cancel it first" || !m.noticeErr {
 		t.Fatalf("on its way: %q", m.notice)
 	}
-	if cmd := press(m, "down", "d"); cmd != nil || m.deleting != first || m.notice != "press d again to delete “first question” with its history" {
+	if cmd := press(m, "down", "d"); cmd != nil || m.sessions.deleting != first || m.notice != "press d again to delete “first question” with its history" {
 		t.Fatalf("first d: %q", m.notice)
 	}
-	if cmd := press(m, "up", "down", "d"); cmd != nil || m.deleting != first {
+	if cmd := press(m, "up", "down", "d"); cmd != nil || m.sessions.deleting != first {
 		t.Fatal("a key in between starts over")
 	}
 	cmd := press(m, "d")
@@ -407,8 +407,8 @@ func TestDeleteSession(t *testing.T) {
 		t.Fatal("the second d deletes")
 	}
 	m.Update(cmd())
-	if _, ok := m.chats[first.contextID]; ok || m.notice != "deleted “first question”" || m.sessionSel != 1 {
-		t.Fatalf("notice %q, sel %d, chats %v", m.notice, m.sessionSel, m.chats)
+	if _, ok := m.chats[first.contextID]; ok || m.notice != "deleted “first question”" || m.sessions.sel != 1 {
+		t.Fatalf("notice %q, sel %d, chats %v", m.notice, m.sessions.sel, m.chats)
 	}
 	if list, _ := b.sessions.List(context.Background()); len(list) != 1 || list[0].ID != second.contextID {
 		t.Fatalf("the node has %+v", list)
@@ -466,10 +466,10 @@ func TestPeerConversations(t *testing.T) {
 	mine := m.chat
 	m.input.SetValue("typed for mine")
 	m.Update(ctrlS)
-	m.Update(m.loadPeers())
+	m.Update(m.sessions.loadPeers(m))
 	press(m, "tab")
 	lines := sessionLines(m)
-	if !m.peerTab || len(lines) != 2 || lines[0] != "▸ beta: hello alpha  14:00" || !strings.Contains(view(m), "Sessions · Peers  how peers talked with alpha, only to read") ||
+	if !m.sessions.peerTab || len(lines) != 2 || lines[0] != "▸ beta: hello alpha  14:00" || !strings.Contains(view(m), "Sessions · Peers  how peers talked with alpha, only to read") ||
 		!strings.Contains(view(m), "2 conversations") {
 		t.Fatalf("peers %q\n%s", lines, view(m))
 	}
@@ -499,16 +499,16 @@ func TestPeerConversations(t *testing.T) {
 	// Back on the screen it is selected among the peers; listed anew, it
 	// stays the one shown.
 	m.Update(ctrlS)
-	m.Update(m.loadPeers())
-	if !m.peerTab || m.sessionSel != 0 || m.peers[0] != c {
-		t.Fatalf("selected %d of %+v", m.sessionSel, m.peers)
+	m.Update(m.sessions.loadPeers(m))
+	if !m.sessions.peerTab || m.sessions.sel != 0 || m.sessions.peers[0] != c {
+		t.Fatalf("selected %d of %+v", m.sessions.sel, m.sessions.peers)
 	}
 	// What the node does not give is said, and the list stays.
 	b.fail = map[string]error{"read": errors.New("gone"), "peers": errors.New("not running")}
-	m.Update(m.loadPeers())
+	m.Update(m.sessions.loadPeers(m))
 	press(m, "down")
 	m.Update(press(m, "enter")())
-	if m.notice != "not read: gone" || m.chat != c || len(m.peers) != 2 {
+	if m.notice != "not read: gone" || m.chat != c || len(m.sessions.peers) != 2 {
 		t.Fatalf("notice %q", m.notice)
 	}
 	b.fail = nil
@@ -520,8 +520,8 @@ func TestPeerConversations(t *testing.T) {
 	}
 	_, watch := m.Update(press(m, "d")())
 	drive(t, m, watch, func() bool { return true })
-	if len(b.peers) != 1 || len(m.peers) != 1 || m.chat.peer != "" || m.chat == mine || m.notice != "deleted “hello alpha”" {
-		t.Fatalf("peers %+v, shown %+v, notice %q", m.peers, m.chat, m.notice)
+	if len(b.peers) != 1 || len(m.sessions.peers) != 1 || m.chat.peer != "" || m.chat == mine || m.notice != "deleted “hello alpha”" {
+		t.Fatalf("peers %+v, shown %+v, notice %q", m.sessions.peers, m.chat, m.notice)
 	}
 
 	// From a conversation of a peer, what is typed goes along to a session.
@@ -529,8 +529,8 @@ func TestPeerConversations(t *testing.T) {
 	m.input.SetValue("more ")
 	m.Update(ctrlS)
 	press(m, "tab")
-	rows := m.sessionRows()
-	m.sessionSel = slices.Index(rows, mine)
+	rows := m.sessions.rows(m)
+	m.sessions.sel = slices.Index(rows, mine)
 	m.Update(press(m, "enter"))
 	if m.chat != mine || m.input.Value() != "more typed for mine" {
 		t.Fatalf("shown %+v, input %q", m.chat, m.input.Value())
@@ -539,7 +539,7 @@ func TestPeerConversations(t *testing.T) {
 	// Without peers there is nothing to select.
 	b.peers = nil
 	m.Update(ctrlS)
-	m.Update(m.loadPeers())
+	m.Update(m.sessions.loadPeers(m))
 	press(m, "tab")
 	if cmd := press(m, "d", "enter", "up"); cmd != nil || len(sessionLines(m)) != 0 || !strings.Contains(view(m), "0 conversations") {
 		t.Fatalf("empty:\n%s", view(m))
@@ -606,15 +606,15 @@ func TestPeersListedAnewKeepTheSelection(t *testing.T) {
 	m, _ := newModel(t)
 	m.conversation("a").title, m.conversation("b").title = "a", "b"
 	m.Update(ctrlS)
-	m.sessionSel = 1
+	m.sessions.sel = 1
 	peers := peersMsg{list: []plugin.SessionInfo{{ID: "peer-aa/c1", Peer: "beta", Title: "hello"}}}
-	if m.peersLoaded(peers); m.sessionSel != 1 {
-		t.Fatalf("selected %d", m.sessionSel)
+	if m.sessions.peersLoaded(m, peers); m.sessions.sel != 1 {
+		t.Fatalf("selected %d", m.sessions.sel)
 	}
-	m.peers = nil
+	m.sessions.peers = nil
 	press(m, "tab")
-	if m.peersLoaded(peers); !m.peerTab || m.sessionSel != 0 || len(m.peers) != 1 {
-		t.Fatalf("selected %d of %v", m.sessionSel, m.peers)
+	if m.sessions.peersLoaded(m, peers); !m.sessions.peerTab || m.sessions.sel != 0 || len(m.sessions.peers) != 1 {
+		t.Fatalf("selected %d of %v", m.sessions.sel, m.sessions.peers)
 	}
 }
 
@@ -625,18 +625,18 @@ func TestSessionSelectionStopsAtTheLast(t *testing.T) {
 	m.conversation("a").title, m.conversation("a").last = "a", time.Now()
 	m.Update(ctrlS)
 	press(m, "down", "down", "down")
-	if m.sessionSel != 1 {
-		t.Fatalf("selected %d", m.sessionSel)
+	if m.sessions.sel != 1 {
+		t.Fatalf("selected %d", m.sessions.sel)
 	}
 	for _, key := range []string{"d", "enter"} {
-		m.screen, m.sessionSel = screenSessions, 5
+		m.screen, m.sessions.sel = screenSessions, 5
 		press(m, key)
 	}
 	if m.chat != m.chats["a"] || m.notice != "" {
 		t.Fatalf("shown %+v, notice %q", m.chat, m.notice)
 	}
-	m.peers = []*conversation{{contextID: "peer-aa/c1", peer: "beta", title: "hello"}}
-	m.screen, m.peerTab, m.sessionSel = screenSessions, true, 5
+	m.sessions.peers = []*conversation{{contextID: "peer-aa/c1", peer: "beta", title: "hello"}}
+	m.screen, m.sessions.peerTab, m.sessions.sel = screenSessions, true, 5
 	if cmd := press(m, "enter"); cmd == nil {
 		t.Fatal("the last conversation of a peer should be read")
 	}
@@ -676,11 +676,11 @@ func TestSessionsListFollowsTheSelection(t *testing.T) {
 		return titles
 	}
 	// The session shown, new, is the first row; s00 the second.
-	m.sessionSel = 10
+	m.sessions.sel = 10
 	if got := strings.Join(titles(), " "); got != "s05 s06 s07 s08 ▸s09 s10 s11 s12" {
 		t.Fatalf("around the middle: %s", got)
 	}
-	m.sessionSel = 20
+	m.sessions.sel = 20
 	if got := strings.Join(titles(), " "); got != "s12 s13 s14 s15 s16 s17 s18 ▸s19" {
 		t.Fatalf("at the last: %s", got)
 	}
@@ -694,5 +694,22 @@ func TestSessionTitleIsCut(t *testing.T) {
 	m.Update(ctrlS)
 	if lines := sessionLines(m); !slices.Contains(lines, "▸ a title much too long …  · shown") {
 		t.Fatalf("listed %q", lines)
+	}
+}
+
+// Opening the sessions screen asks the node for its sessions and for the
+// conversations of its peers.
+func TestOpeningTheSessionsAsksForThePeers(t *testing.T) {
+	m, b := newModel(t)
+	b.peers = []plugin.SessionInfo{{ID: "peer/1", Peer: "luna", Title: "hello"}}
+	batch, ok := m.openSessions()().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("opening asks for %d things", len(batch))
+	}
+	for _, cmd := range batch {
+		m.Update(cmd())
+	}
+	if len(m.sessions.peers) != 1 || m.sessions.peers[0].peer != "luna" || m.screen != screenSessions {
+		t.Fatalf("peers %+v", m.sessions.peers)
 	}
 }

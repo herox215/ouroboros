@@ -619,17 +619,17 @@ func (m *Model) frame(at time.Time) {
 		return
 	}
 	m.closeSetup()
-	m.showSplash = true
-	m.splashStart = at.Add(-biteAt)
-	m.splashElapsed = biteAt
-	m.skyShift = at.Sub(o.opened) - biteAt
+	m.splash.show = true
+	m.splash.start = at.Add(-biteAt)
+	m.splash.elapsed = biteAt
+	m.splash.skyShift = at.Sub(o.opened) - biteAt
 }
 
 // closeSetup leaves the setup for the chat.
 func (m *Model) closeSetup() {
 	m.onboard.stop()
 	m.onboard = nil
-	m.showSplash = false
+	m.splash.show = false
 }
 
 // scale is how large the snake lies behind the dialog on a screen of w by h:

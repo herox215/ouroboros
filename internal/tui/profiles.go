@@ -79,7 +79,7 @@ func (p *profileViews) next() tea.Cmd {
 	if !p.started[p.shown] {
 		p.started[p.shown] = true
 		cmd = m.Init()
-		m.showSplash = false
+		m.splash.show = false
 	}
 	_, resized := m.Update(p.size)
 	who, err := m.backend.Status()

@@ -81,16 +81,16 @@ func TestContextScreenShowsTheContext(t *testing.T) {
 	for _, k := range []string{"up", "k", "pgup", "home"} {
 		scroll(t, m, press(m, k)) // each key glides on its own
 	}
-	if m.contents.YOffset() != 0 {
-		t.Fatalf("home should go to the top: %d", m.contents.YOffset())
+	if m.context.port.YOffset() != 0 {
+		t.Fatalf("home should go to the top: %d", m.context.port.YOffset())
 	}
 	turn(t, m, tea.MouseWheelDown)
-	if m.contents.YOffset() == 0 || m.history.YOffset() != 0 {
+	if m.context.port.YOffset() == 0 || m.history.YOffset() != 0 {
 		t.Fatal("the wheel should scroll the context, not the chat")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
-	if m.contents.Width() != 56 || m.contents.Height() != 14 {
-		t.Fatalf("the context should fit the window: %dx%d", m.contents.Width(), m.contents.Height())
+	if m.context.port.Width() != 56 || m.context.port.Height() != 14 {
+		t.Fatalf("the context should fit the window: %dx%d", m.context.port.Width(), m.context.port.Height())
 	}
 	press(m, "pgdown")
 	if m.glide == nil {

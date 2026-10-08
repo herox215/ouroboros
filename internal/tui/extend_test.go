@@ -57,7 +57,7 @@ func extended(t *testing.T) (*Model, *contribution) {
 	m := New(&fakeBackend{status: Status{Configured: true, Running: true, Name: "alpha"}},
 		[]plugin.Screen{c.screen()}, []plugin.Slash{c.slash("hail", "hail everyone")})
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
-	m.showSplash = false
+	m.splash.show = false
 	m.Update(m.refreshStatus())
 	return m, c
 }
@@ -129,7 +129,7 @@ func TestPluginScreen(t *testing.T) {
 
 	// A screen that cannot say what it shows says why.
 	c.bodyErr = errors.New("network is down")
-	settle(m, m.loadBody())
+	settle(m, m.plugins.load(m))
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✗ network is down") || strings.Contains(view, "beta says hello") {
 		t.Fatalf("view:\n%s", view)
 	}
@@ -137,11 +137,11 @@ func TestPluginScreen(t *testing.T) {
 	// esc leads back, and what arrives late is dropped.
 	press(m, "esc")
 	run(m, "/greetings")
-	late := m.loadBody()
+	late := m.plugins.load(m)
 	if press(m, "esc"); m.screen != screenChat {
 		t.Fatal("esc should lead back to the chat")
 	}
-	if m.Update(late()); m.body.loaded {
+	if m.Update(late()); m.plugins.body.loaded {
 		t.Fatal("a screen that is closed shows nothing")
 	}
 	// Off the screen it is not read any more.
@@ -163,7 +163,7 @@ func TestPluginScreenWithoutActions(t *testing.T) {
 	s.Actions = nil
 	m := New(&fakeBackend{status: Status{Configured: true, Running: true}}, []plugin.Screen{s}, nil)
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	m.showSplash = false
+	m.splash.show = false
 	m.Update(run(m, "/greetings")())
 	if help := footer(m); strings.Contains(help, "select") || !strings.Contains(help, "esc back") {
 		t.Fatalf("footer %q", help)
@@ -257,7 +257,7 @@ func TestCommandConflicts(t *testing.T) {
 	}
 	// The user sees it when the UI opens, and until the first key.
 	m.Update(tea.WindowSizeMsg{Width: 400, Height: 30})
-	m.showSplash = false
+	m.splash.show = false
 	m.Update(m.refreshStatus())
 	if help := footer(m); !strings.Contains(help, want[0]) {
 		t.Fatalf("footer %q", help)
@@ -278,8 +278,8 @@ func TestCommandConflicts(t *testing.T) {
 	if run(m, "/hail")(); !slices.Equal(c.ran, []string{"hail"}) {
 		t.Fatalf("ran %v", c.ran)
 	}
-	if run(m, "/greetings"); m.screen != screenPlugin || m.screens[m.open].Title != "Greetings" || len(m.screens[m.open].Actions) != 1 {
-		t.Fatalf("/greetings should open the first screen that claimed it: %+v", m.screens)
+	if run(m, "/greetings"); m.screen != screenPlugin || m.plugins.screens[m.plugins.open].Title != "Greetings" || len(m.plugins.screens[m.plugins.open].Actions) != 1 {
+		t.Fatalf("/greetings should open the first screen that claimed it: %+v", m.plugins.screens)
 	}
 	press(m, "esc")
 	if run(m, "/idle"); m.notice != "unknown command /idle: /help lists them" {
@@ -301,7 +301,7 @@ func TestPluginScreenText(t *testing.T) {
 		}
 		m := New(&fakeBackend{status: Status{Configured: true, Running: true}}, []plugin.Screen{s}, nil)
 		m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
-		m.showSplash = false
+		m.splash.show = false
 		m.Update(run(m, "/greetings")())
 		view := ansi.Strip(m.View().Content)
 		for _, l := range strings.Split(view, "\n") {

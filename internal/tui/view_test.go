@@ -60,8 +60,8 @@ func TestShortKey(t *testing.T) {
 // The stars of the splash are as far ahead of it as the setup left them.
 func TestSplashViewShiftsTheSky(t *testing.T) {
 	m, _ := newModel(t)
-	m.splashElapsed, m.skyShift = 3*time.Second, 20*time.Second
-	if m.splashView() != drawSplash(m.width, m.height, 3*time.Second, 23*time.Second, m.light) {
+	m.splash.elapsed, m.splash.skyShift = 3*time.Second, 20*time.Second
+	if m.splash.view(m) != drawSplash(m.width, m.height, 3*time.Second, 23*time.Second, m.light) {
 		t.Fatal("the sky should be shifted ahead")
 	}
 }

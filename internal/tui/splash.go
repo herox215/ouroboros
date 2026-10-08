@@ -6,8 +6,54 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
+
+// splashScreen is the state of the splash, which the UI opens with, and of
+// the frames that move it and the setup.
+type splashScreen struct {
+	show     bool
+	start    time.Time
+	elapsed  time.Duration
+	skyShift time.Duration // how much farther the stars are than the splash: see frame
+	// animating says that frames are coming, for the splash or the setup.
+	animating bool
+}
+
+// animate makes the frames come unless they do already.
+func (s *splashScreen) animate() tea.Cmd {
+	if s.animating {
+		return nil
+	}
+	s.animating = true
+	return splashTick()
+}
+
+// update takes the frame at at: the splash goes on until it is over, and
+// then no frame follows.
+func (s *splashScreen) update(at time.Time) tea.Cmd {
+	if !s.show {
+		s.animating = false
+		return nil
+	}
+	s.elapsed = at.Sub(s.start)
+	if s.elapsed >= splashDuration {
+		s.show, s.animating = false, false
+		return nil
+	}
+	return splashTick()
+}
+
+// handleKey handles a key while the splash is shown: any key skips it, and
+// ctrl+c quits.
+func (s *splashScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	if msg.String() == "ctrl+c" {
+		return m.leave()
+	}
+	s.show = false
+	return nil
+}
 
 // Splash timeline: the stars come up, the body grows around the ring and the
 // jaw snaps shut on the tail with a burst of sparks. Then a glow runs along

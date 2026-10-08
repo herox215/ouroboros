@@ -37,6 +37,16 @@ type fallbacksMsg struct {
 	err  error
 }
 
+// modelScreen is the state of the model screen.
+type modelScreen struct {
+	lists     []Models   // what the accesses offer, once /model asked for them
+	choices   []choice   // the models of them all, to select from
+	sel       int        // the one selected of choices
+	busy      string     // what the screen waits for, like "listing models"
+	err       error      // why the models are not there
+	fallbacks []Fallback // what the node falls back on, as the list marks it
+}
+
 // choice is one model to select: a model of an access.
 type choice struct {
 	access int // of Model.models
@@ -55,13 +65,13 @@ func (m *Model) openModel() tea.Cmd {
 		return nil
 	}
 	m.screen = screenModel
-	m.models, m.choices, m.modelErr, m.modelBusy = nil, nil, nil, "listing models"
-	m.modelSel = 0
-	return m.loadModels
+	m.picker.lists, m.picker.choices, m.picker.err, m.picker.busy = nil, nil, nil, "listing models"
+	m.picker.sel = 0
+	return func() tea.Msg { return m.picker.load(m) }
 }
 
 // loadModels asks the accesses of the node for their models.
-func (m *Model) loadModels() tea.Msg {
+func (s *modelScreen) load(m *Model) tea.Msg {
 	models, err := m.backend.Models(m.ctx)
 	if err != nil {
 		return modelsMsg{err: err}
@@ -71,19 +81,19 @@ func (m *Model) loadModels() tea.Msg {
 }
 
 // modelsLoaded takes the answer of the accesses: the lists, or why not.
-func (m *Model) modelsLoaded(msg modelsMsg) {
-	m.modelBusy = ""
-	m.models, m.choices, m.modelErr, m.modelSel = nil, nil, msg.err, 0
+func (s *modelScreen) loaded(m *Model, msg modelsMsg) {
+	s.busy = ""
+	s.lists, s.choices, s.err, s.sel = nil, nil, msg.err, 0
 	if msg.err != nil {
 		return
 	}
-	m.models, m.fallbacks = msg.models, msg.fallbacks
+	s.lists, s.fallbacks = msg.models, msg.fallbacks
 	for i, l := range msg.models {
 		for _, model := range l.Models {
 			if l.Access.Active && model == m.status.Model {
-				m.modelSel = len(m.choices)
+				s.sel = len(s.choices)
 			}
-			m.choices = append(m.choices, choice{i, model})
+			s.choices = append(s.choices, choice{i, model})
 		}
 	}
 }
@@ -91,25 +101,25 @@ func (m *Model) modelsLoaded(msg modelsMsg) {
 // handleModelKey handles keys on the model screen: up and down select a
 // model, enter makes the one selected the model of the node, esc goes back
 // to the chat.
-func (m *Model) handleModelKey(msg tea.KeyPressMsg) tea.Cmd {
+func (s *modelScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.screen = screenChat
 	case "up", "k":
-		m.modelSel = max(0, m.modelSel-1)
+		s.sel = max(0, s.sel-1)
 	case "down", "j":
-		m.modelSel = min(max(len(m.choices)-1, 0), m.modelSel+1)
+		s.sel = min(max(len(s.choices)-1, 0), s.sel+1)
 	case "enter", "p", "f":
-		if m.modelBusy != "" || m.modelErr != nil || m.modelSel >= len(m.choices) {
+		if s.busy != "" || s.err != nil || s.sel >= len(s.choices) {
 			return nil
 		}
-		picked := m.choices[m.modelSel]
-		access := m.models[picked.access].Access
+		picked := s.choices[s.sel]
+		access := s.lists[picked.access].Access
 		if msg.String() == "p" {
-			return m.pickForPeers(access, picked.model)
+			return s.pickForPeers(m, access, picked.model)
 		}
 		if msg.String() == "f" {
-			return m.toggleFallback(access, picked.model)
+			return s.toggleFallback(m, access, picked.model)
 		}
 		return func() tea.Msg {
 			switched, err := m.backend.SetModel(access.ID, picked.model)
@@ -126,8 +136,8 @@ func (m *Model) handleModelKey(msg tea.KeyPressMsg) tea.Cmd {
 // pickForPeers makes model of access what peers are answered with, or, if
 // it is that already, lets them be answered with the model of the node
 // again.
-func (m *Model) pickForPeers(access plugin.SetupAccess, model string) tea.Cmd {
-	if m.forPeers(access, model) {
+func (s *modelScreen) pickForPeers(m *Model, access plugin.SetupAccess, model string) tea.Cmd {
+	if s.forPeers(m, access, model) {
 		return func() tea.Msg {
 			return actionMsg{"peers are answered with the model of the node again", m.backend.SetPeerModel("", "")}
 		}
@@ -139,7 +149,7 @@ func (m *Model) pickForPeers(access plugin.SetupAccess, model string) tea.Cmd {
 
 // toggleFallback makes model of access the last of the fallbacks of the
 // node, or none of them any more if it is one.
-func (m *Model) toggleFallback(access plugin.SetupAccess, model string) tea.Cmd {
+func (s *modelScreen) toggleFallback(m *Model, access plugin.SetupAccess, model string) tea.Cmd {
 	return func() tea.Msg {
 		list, err := m.backend.ToggleFallback(access.ID, model)
 		done := model + " of " + access.Label + " is no fallback any more"
@@ -152,33 +162,33 @@ func (m *Model) toggleFallback(access plugin.SetupAccess, model string) tea.Cmd 
 
 // fallbacksSet takes the fallbacks as they are after f, or why they are as
 // before.
-func (m *Model) fallbacksSet(msg fallbacksMsg) {
+func (s *modelScreen) fallbacksSet(m *Model, msg fallbacksMsg) {
 	if msg.err != nil {
 		m.setNotice(msg.err.Error(), true)
 		return
 	}
-	m.fallbacks = msg.list
+	s.fallbacks = msg.list
 	m.setNotice(msg.done, false)
 }
 
 // forPeers reports whether model of access is what the owner chose to
 // answer peers with.
-func (m *Model) forPeers(access plugin.SetupAccess, model string) bool {
+func (s *modelScreen) forPeers(m *Model, access plugin.SetupAccess, model string) bool {
 	return access.ID == m.status.PeerAccess && model == m.status.PeerModel
 }
 
 // modelView shows the models of the accesses, the one in use marked and the
 // one selected ready to be set with enter.
-func (m *Model) modelView() string {
+func (s *modelScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
 	lines := []string{boldStyle.Render("Model") + mutedStyle.Render("  "+m.modelText()), ""}
 	switch {
-	case m.modelBusy != "":
-		lines = append(lines, m.spinner.View()+mutedStyle.Render(" "+m.modelBusy+"…"))
-	case m.modelErr != nil:
-		lines = append(lines, errStyle.Render("✗ "+m.modelErr.Error()))
+	case s.busy != "":
+		lines = append(lines, m.spinner.View()+mutedStyle.Render(" "+s.busy+"…"))
+	case s.err != nil:
+		lines = append(lines, errStyle.Render("✗ "+s.err.Error()))
 	default:
-		lines = append(lines, m.modelList(w, max(1, h-5))...)
+		lines = append(lines, s.list(m, w, max(1, h-5))...)
 	}
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
 }
@@ -186,14 +196,14 @@ func (m *Model) modelView() string {
 // modelList shows the models around the one selected, in at most height
 // lines, each below the access it belongs to: what the access is called and
 // what tells it apart, and why it did not list its models, if it did not.
-func (m *Model) modelList(width, height int) []string {
+func (s *modelScreen) list(m *Model, width, height int) []string {
 	type line struct {
 		text string
 		head string // of a model: the line of its access, "" for another line
 	}
 	var all []line
 	at, n := 0, 0
-	for i, l := range m.models {
+	for i, l := range s.lists {
 		head := boldStyle.Render(l.Access.Label)
 		if l.Access.About != "" {
 			head += mutedStyle.Render(" · " + l.Access.About)
@@ -215,13 +225,13 @@ func (m *Model) modelList(width, height int) []string {
 			if l.Access.Active && model == m.status.Model {
 				name += mutedStyle.Render("  in use")
 			}
-			if m.forPeers(l.Access, model) {
+			if s.forPeers(m, l.Access, model) {
 				name += mutedStyle.Render("  for peers")
 			}
-			if at := slices.Index(m.fallbacks, Fallback{Access: l.Access.ID, Model: model}); at >= 0 {
+			if at := slices.Index(s.fallbacks, Fallback{Access: l.Access.ID, Model: model}); at >= 0 {
 				name += mutedStyle.Render(fmt.Sprintf("  fallback %d", at+1))
 			}
-			if n == m.modelSel {
+			if n == s.sel {
 				at = len(all)
 				name = lipgloss.NewStyle().Foreground(accent).Render("▸ " + name)
 			} else {
@@ -241,5 +251,5 @@ func (m *Model) modelList(width, height int) []string {
 	if len(shown) > 1 && shown[0].head != "" {
 		lines[0] = shown[0].head
 	}
-	return append(lines, "", mutedStyle.Render(fmt.Sprintf("%d of %d", min(m.modelSel+1, len(m.choices)), len(m.choices))))
+	return append(lines, "", mutedStyle.Render(fmt.Sprintf("%d of %d", min(s.sel+1, len(s.choices)), len(s.choices))))
 }

@@ -44,7 +44,7 @@ func shortRefresh(t *testing.T) {
 
 func TestInitAndTicks(t *testing.T) {
 	m, b := newModel(t)
-	if m.Init() == nil || m.splashStart.IsZero() {
+	if m.Init() == nil || m.splash.start.IsZero() {
 		t.Fatal("the UI should start with the splash and its first requests")
 	}
 	if _, ok := splashTick()().(splashMsg); !ok {
@@ -61,8 +61,8 @@ func TestInitAndTicks(t *testing.T) {
 	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1"}}}
 	_, cmd := m.Update(msg)
 	settle(m, cmd)
-	if m.status.Name != "renamed" || len(m.trust.Incoming) != 1 {
-		t.Fatalf("status %+v, requests %+v", m.status, m.trust)
+	if m.status.Name != "renamed" || len(m.requests.trust.Incoming) != 1 {
+		t.Fatalf("status %+v, requests %+v", m.status, m.requests.trust)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestRequestsScreen(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "No pending requests.") {
 		t.Fatalf("view:\n%s", view)
 	}
-	if press(m, "down"); m.reqSel != 0 || press(m, "enter") != nil || press(m, "right", "enter") != nil {
+	if press(m, "down"); m.requests.sel != 0 || press(m, "enter") != nil || press(m, "right", "enter") != nil {
 		t.Fatal("without a request there is nothing to select or decide")
 	}
 
@@ -186,8 +186,8 @@ func TestRequestsScreen(t *testing.T) {
 		key  string
 		want int
 	}{{"down", 1}, {"j", 1}, {"up", 0}, {"k", 0}, {"j", 1}} {
-		if press(m, step.key); m.reqSel != step.want {
-			t.Fatalf("after %s: selected %d, want %d", step.key, m.reqSel, step.want)
+		if press(m, step.key); m.requests.sel != step.want {
+			t.Fatalf("after %s: selected %d, want %d", step.key, m.requests.sel, step.want)
 		}
 	}
 	for _, step := range []struct {

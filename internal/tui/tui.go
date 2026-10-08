@@ -3,6 +3,15 @@
 // commands like /new, typed into the message input: see commands.go. Plugins
 // add screens and commands to it: see plugin.Screen and plugin.Slash, and
 // extend.go for how they are bound.
+//
+// Model is the root: it holds what every screen shares, the node it controls,
+// the size of the window, the chat and which screen is shown, and hands the
+// keys and the messages on to that screen. Each screen is a type of its own
+// with its state, its keys and its view: modelScreen (/model),
+// settingsScreen (/settings), sessionsScreen (/session), contextScreen
+// (/context), requestsScreen (/pending), pluginScreen (what plugins added),
+// splashScreen, and onboarding for the setup. A method of a screen takes the
+// Model for what it shares.
 package tui
 
 import (
@@ -229,52 +238,26 @@ type Model struct {
 
 	restarts string // the binary the UI quit for ouro to start anew from
 
-	sessionSel int             // the session selected on the sessions screen
-	deleting   *conversation   // the session that d deletes when it is pressed again
-	peerTab    bool            // the sessions screen lists the conversations of peers
-	peers      []*conversation // the conversations of peers, as far as they were listed
-	ticks      int             // of the spinner, which the sessions screen animates with
+	sessions sessionsScreen // the list of the sessions, for /session
+	ticks    int            // of the spinner, which the sessions screen animates with
 
-	trust     Contacts
-	screen    screen
-	commands  []command       // of the UI, then of the plugins
-	suggest   int             // the command selected of those suggested while one is typed
-	screens   []plugin.Screen // of the plugins, as far as they got their command
-	open      int             // the screen of a plugin that is shown
-	body      body            // what it shows
-	reqSel    int
-	choice    int // the action selected: accept or reject, or one of a screen
-	unreadReq int
-	seenReq   int
+	requests requestsScreen // what waits for a decision, for /pending
+	screen   screen
+	commands []command    // of the UI, then of the plugins
+	suggest  int          // the command selected of those suggested while one is typed
+	plugins  pluginScreen // the screens the plugins contributed, and the one that is open
+	choice   int          // the action selected: accept or reject, or one of a screen
 
-	models    []Models   // what the accesses offer, once /model asked for them
-	choices   []choice   // the models of them all, to select from
-	modelSel  int        // the one selected of choices
-	modelBusy string     // what the model screen waits for, like "listing models"
-	modelErr  error      // why the models are not there
-	fallbacks []Fallback // what the node falls back on, as /model marks it
+	picker modelScreen // the models of the accesses, for /model
 
-	contents viewport.Model // the context of the conversation, for /context
-	loaded   *contentsMsg   // the context that came in, to wrap again when the window changes
+	context contextScreen // the context of the conversation, for /context
 
-	settings    Settings        // the configuration, for /settings
-	settingsErr error           // why it is not there
-	rows        []row           // what the settings screen shows of it
-	category    int             // the category selected, of sections
-	opened      bool            // its rows are shown, not the list of categories
-	settingsSel int             // the row selected, of those of the category
-	settingsTop int             // the line of a category the settings screen starts at
-	editing     *edit           // the text that is typed, if one is
-	editInput   textinput.Model // where it is typed
+	config settingsScreen // the configuration, for /settings
 
 	width, height int
-	showSplash    bool
-	splashStart   time.Time
-	splashElapsed time.Duration
-	skyShift      time.Duration // how much farther the stars are than the splash: see frame
-	animating     bool          // frames are coming, for the splash or the setup
-	onboard       *onboarding   // the setup, while it is open
-	light         bool          // the background of the terminal is light
+	splash        splashScreen // the splash, and the frames of what moves
+	onboard       *onboarding  // the setup, while it is open
+	light         bool         // the background of the terminal is light
 	input         textarea.Model
 	history       viewport.Model
 	glide         *glide     // the viewport on its way to a line, if one is
@@ -300,22 +283,22 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 
 	ctx, quit := context.WithCancel(context.Background())
 	m := &Model{
-		backend:    backend,
-		ctx:        ctx,
-		quit:       quit,
-		now:        time.Now,
-		chats:      map[string]*conversation{},
-		showSplash: true,
-		input:      input,
-		history:    history,
-		spinner:    spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		backend: backend,
+		ctx:     ctx,
+		quit:    quit,
+		now:     time.Now,
+		chats:   map[string]*conversation{},
+		splash:  splashScreen{show: true},
+		input:   input,
+		history: history,
+		spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 	m.input.Focus() // the input is where everything is typed, commands too
 	m.chat = m.conversation(plugin.NewID())
 	var problems []string
-	m.screens, slashes, problems = bind(ownNames(), screens, slashes)
+	m.plugins.screens, slashes, problems = bind(ownNames(), screens, slashes)
 	m.commands = append(m.commands, own...)
-	for i, s := range m.screens {
+	for i, s := range m.plugins.screens {
 		m.commands = append(m.commands, command{s.Command, "open " + s.Title, func(m *Model) tea.Cmd { return m.openScreen(i) }})
 	}
 	for _, c := range slashes {
@@ -358,22 +341,13 @@ func (m *Model) Init() tea.Cmd {
 	if m.profiles != nil {
 		return m.profiles.init()
 	}
-	m.splashStart = m.now()
+	m.splash.start = m.now()
 	if s, err := m.backend.Status(); err == nil && !s.Configured {
-		m.showSplash = false
+		m.splash.show = false
 		m.openSetup(true)
 	}
-	m.animating = true
+	m.splash.animating = true
 	return tea.Batch(m.goOnline, m.loadContacts, m.loadSessions, m.watch(m.chat), tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
-}
-
-// animate makes the frames come unless they do already.
-func (m *Model) animate() tea.Cmd {
-	if m.animating {
-		return nil
-	}
-	m.animating = true
-	return splashTick()
 }
 
 func splashTick() tea.Cmd {
@@ -411,7 +385,7 @@ func (m *Model) loadContacts() tea.Msg {
 // and the screen of a plugin that is open.
 func (m *Model) refresh() tea.Cmd {
 	if m.screen == screenPlugin {
-		return tea.Batch(m.refreshStatus, m.loadContacts, m.loadSessions, m.loadBody())
+		return tea.Batch(m.refreshStatus, m.loadContacts, m.loadSessions, m.plugins.load(m))
 	}
 	return tea.Batch(m.refreshStatus, m.loadContacts, m.loadSessions)
 }
@@ -444,16 +418,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.frame(msg.at)
 			return m, splashTick()
 		}
-		if !m.showSplash {
-			m.animating = false
-			return m, nil
-		}
-		m.splashElapsed = msg.at.Sub(m.splashStart)
-		if m.splashElapsed >= splashDuration {
-			m.showSplash, m.animating = false, false
-			return m, nil
-		}
-		return m, splashTick()
+		return m, m.splash.update(msg.at)
 	case connectedMsg:
 		return m, m.connected(msg)
 	case loginMsg:
@@ -475,18 +440,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.setNotice("contacts: "+msg.err.Error(), true)
 		} else {
-			m.applyContacts(msg.trust)
+			m.requests.apply(m, msg.trust)
 		}
 	case modelsMsg:
-		m.modelsLoaded(msg)
+		m.picker.loaded(m, msg)
 	case fallbacksMsg:
-		m.fallbacksSet(msg)
+		m.picker.fallbacksSet(m, msg)
 	case settingsMsg:
-		m.settingsLoaded(msg)
+		m.config.loaded(m, msg)
 	case changedMsg:
-		return m, m.changed(msg)
+		return m, m.config.changed(m, msg)
 	case contentsMsg:
-		m.contentsLoaded(msg)
+		m.context.loaded(m, msg)
 	case watchedMsg:
 		return m, m.watched(msg)
 	case eventMsg:
@@ -506,12 +471,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case deletedMsg:
 		return m, m.deleted(msg)
 	case peersMsg:
-		m.peersLoaded(msg)
+		m.sessions.peersLoaded(m, msg)
 	case readMsg:
 		m.read(msg)
 	case bodyMsg:
-		if m.screen == screenPlugin && m.open == msg.screen {
-			m.body = msg.body
+		if m.screen == screenPlugin && m.plugins.open == msg.screen {
+			m.plugins.body = msg.body
 		}
 	case actionMsg:
 		if msg.err != nil {
@@ -531,7 +496,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.mouse(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
 		if m.screen == screenContext {
-			m.wheel(&m.contents, msg)
+			m.wheel(&m.context.port, msg)
 			return m, nil
 		}
 		m.wheel(&m.history, msg)
@@ -546,12 +511,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.onboard != nil {
 			return m, m.onboardKey(msg)
 		}
-		if m.showSplash {
-			if msg.String() == "ctrl+c" {
-				return m, m.leave()
-			}
-			m.showSplash = false
-			return m, nil
+		if m.splash.show {
+			return m, m.splash.handleKey(m, msg)
 		}
 		return m, m.handleKey(msg)
 	default:
@@ -560,8 +521,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.onboard.input, cmd = m.onboard.input.Update(msg)
 			return m, cmd
 		}
-		if m.editing != nil {
-			m.editInput, cmd = m.editInput.Update(msg)
+		if m.config.editing != nil {
+			m.config.input, cmd = m.config.input.Update(msg)
 			return m, cmd
 		}
 		if pasted, ok := msg.(tea.PasteMsg); ok {
@@ -581,17 +542,17 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch m.screen {
 	case screenRequests:
-		return m.handleRequestKey(msg)
+		return m.requests.handleKey(m, msg)
 	case screenPlugin:
-		return m.handleScreenKey(msg)
+		return m.plugins.handleKey(m, msg)
 	case screenModel:
-		return m.handleModelKey(msg)
+		return m.picker.handleKey(m, msg)
 	case screenContext:
-		return m.handleContextKey(msg)
+		return m.context.handleKey(m, msg)
 	case screenSettings:
-		return m.handleSettingsKey(msg)
+		return m.config.handleKey(m, msg)
 	case screenSessions:
-		return m.handleSessionsKey(msg)
+		return m.sessions.handleKey(m, msg)
 	case screenHelp:
 		if msg.String() == "esc" {
 			m.screen = screenChat
@@ -633,23 +594,32 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
+// requestsScreen is the state of the screen of what waits for a decision:
+// the connection requests and the proposals.
+type requestsScreen struct {
+	trust  Contacts // what waits
+	sel    int      // the entry selected
+	unread int      // what came since the screen was last open
+	seen   int      // how much waited when it was last looked at
+}
+
 // handleRequestKey handles keys on the connection requests screen: up and
 // down select an entry, left and right whether to accept or reject it, and
 // enter decides.
-func (m *Model) handleRequestKey(msg tea.KeyPressMsg) tea.Cmd {
+func (r *requestsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.screen = screenChat
 	case "up", "k":
-		m.selectRequest(m.reqSel - 1)
+		r.selectAt(m, r.sel-1)
 	case "down", "j":
-		m.selectRequest(m.reqSel + 1)
+		r.selectAt(m, r.sel+1)
 	case "left", "h":
 		m.choice = accept
 	case "right", "l":
 		m.choice = reject
 	case "enter":
-		return m.decideRequest(m.choice == accept)
+		return r.decide(m, m.choice == accept)
 	}
 	return nil
 }
@@ -670,35 +640,35 @@ func (m *Model) leave() tea.Cmd {
 
 func (m *Model) openRequests() tea.Cmd {
 	m.screen = screenRequests
-	m.reqSel, m.choice = 0, accept
-	m.unreadReq = 0
-	m.seenReq = m.trust.waiting()
+	m.requests.sel, m.choice = 0, accept
+	m.requests.unread = 0
+	m.requests.seen = m.requests.trust.waiting()
 	return nil
 }
 
-func (m *Model) selectRequest(i int) {
-	if i != m.reqSel {
+func (r *requestsScreen) selectAt(m *Model, i int) {
+	if i != r.sel {
 		m.choice = accept // what is decided is chosen anew for each entry
 	}
-	if m.trust.waiting() == 0 {
-		m.reqSel = 0
+	if r.trust.waiting() == 0 {
+		r.sel = 0
 		return
 	}
-	m.reqSel = min(max(i, 0), m.trust.waiting()-1)
+	r.sel = min(max(i, 0), r.trust.waiting()-1)
 }
 
-func (m *Model) decideRequest(accept bool) tea.Cmd {
-	if m.reqSel >= m.trust.waiting() {
+func (r *requestsScreen) decide(m *Model, accept bool) tea.Cmd {
+	if r.sel >= r.trust.waiting() {
 		return nil
 	}
-	if m.reqSel >= len(m.trust.Incoming) {
-		return m.decideProposal(m.trust.Proposals[m.reqSel-len(m.trust.Incoming)], accept)
+	if r.sel >= len(r.trust.Incoming) {
+		return r.decideProposal(m, r.trust.Proposals[r.sel-len(r.trust.Incoming)], accept)
 	}
-	pub := m.trust.Incoming[m.reqSel].PublicKey
+	pub := r.trust.Incoming[r.sel].PublicKey
 	verb, failed := "declined", "rejecting failed"
 	if accept {
 		verb, failed = "accepted", "accepting failed"
-		if m.trust.Incoming[m.reqSel].Proposed {
+		if r.trust.Incoming[r.sel].Proposed {
 			verb = "sent" // to the peer, where a human decides
 		}
 	}
@@ -723,7 +693,7 @@ func (m *Model) decideRequest(accept bool) tea.Cmd {
 
 // decideProposal accepts or refuses a change of the configuration the agent
 // proposed.
-func (m *Model) decideProposal(p plugin.Proposal, accept bool) tea.Cmd {
+func (r *requestsScreen) decideProposal(m *Model, p plugin.Proposal, accept bool) tea.Cmd {
 	return func() tea.Msg {
 		if !accept {
 			if err := m.backend.RefuseProposal(p.ID); err != nil {
@@ -738,16 +708,16 @@ func (m *Model) decideProposal(p plugin.Proposal, accept bool) tea.Cmd {
 	}
 }
 
-func (m *Model) applyContacts(trust Contacts) {
-	m.trust = trust
-	if trust.waiting() > m.seenReq {
-		m.unreadReq += trust.waiting() - m.seenReq
+func (r *requestsScreen) apply(m *Model, trust Contacts) {
+	r.trust = trust
+	if trust.waiting() > r.seen {
+		r.unread += trust.waiting() - r.seen
 	}
 	if m.screen == screenRequests {
-		m.unreadReq = 0
+		r.unread = 0
 	}
-	m.seenReq = trust.waiting()
-	m.selectRequest(m.reqSel)
+	r.seen = trust.waiting()
+	r.selectAt(m, r.sel)
 }
 
 // setup opens the setup of the node. The node keeps running until what the
@@ -757,7 +727,7 @@ func (m *Model) setup() tea.Cmd {
 	if m.onboard == nil {
 		return nil
 	}
-	return m.animate()
+	return m.splash.animate()
 }
 
 func (m *Model) send() tea.Cmd {
@@ -918,7 +888,7 @@ func (m *Model) Resume(id string) {
 	}
 	delete(m.chats, m.chat.contextID)
 	m.chat = m.conversation(id)
-	m.showSplash = false
+	m.splash.show = false
 	m.renderHistory(true)
 	m.setNotice("restarted with the new build", false)
 }

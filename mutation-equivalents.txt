@@ -59,10 +59,9 @@ internal/tui/selection.go:152:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1
 internal/tui/selection.go:40:67 CONDITIONALS_BOUNDARY  # two spots of the same line and column are the same, swapped or not
 internal/tui/selection.go:72:49 ARITHMETIC_BASE  # the rows differ only where the suggestions hide all of the history, and then no row is on it either way
 internal/tui/selection.go:72:49 INVERT_NEGATIVES  # the rows differ only where the suggestions hide all of the history, and then no row is on it either way
-internal/tui/settings.go:481:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
-internal/tui/settings.go:498:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
-internal/tui/splash.go:284:8 CONDITIONALS_BOUNDARY  # at the bite all sparks lie in the cell of the bite, and the shut jaws are drawn over that cell
-internal/tui/tui.go:743:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/tui/settings.go:503:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
+internal/tui/settings.go:520:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
+internal/tui/splash.go:330:8 CONDITIONALS_BOUNDARY  # at the bite all sparks lie in the cell of the bite, and the shut jaws are drawn over that cell
 internal/tui/view.go:213:9 CONDITIONALS_BOUNDARY  # the message of the owner at mine never has a summary
 internal/tui/view.go:231:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✓ " is never at its start
 internal/tui/view.go:234:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✗ " is never at its start
@@ -70,3 +69,4 @@ internal/tui/view.go:470:13 CONDITIONALS_BOUNDARY  # at the width of the mark th
 internal/session/session.go:524:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
 internal/history/history.go:717:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
+internal/tui/tui.go:713:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing

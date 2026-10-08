@@ -29,14 +29,20 @@ type contentsMsg struct {
 	err       error
 }
 
+// contextScreen is the state of the context screen.
+type contextScreen struct {
+	port viewport.Model // where the context is shown
+	got  *contentsMsg   // the context that came in, to wrap again when the window changes
+}
+
 // openContext opens the context screen and loads the context of the
 // conversation.
 func (m *Model) openContext() tea.Cmd {
 	m.screen = screenContext
-	m.contents = viewport.New()
-	m.contents.KeyMap = viewport.KeyMap{} // the keys are handled explicitly
-	m.loaded = nil
-	m.sizeContents()
+	m.context.port = viewport.New()
+	m.context.port.KeyMap = viewport.KeyMap{} // the keys are handled explicitly
+	m.context.got = nil
+	m.context.size(m)
 	contextID := m.chat.contextID
 	return func() tea.Msg {
 		msgs, err := m.backend.Contents(m.ctx, contextID)
@@ -48,34 +54,34 @@ func (m *Model) openContext() tea.Cmd {
 // border and padding, and the title with a blank line below it. The context
 // is wrapped to the width here and not by the viewport, which would measure
 // all of it again on every step of scrolling.
-func (m *Model) sizeContents() {
-	m.contents.SetWidth(max(1, m.width-4))
-	m.contents.SetHeight(max(1, m.bodyHeight()-4))
-	m.renderContents()
+func (x *contextScreen) size(m *Model) {
+	x.port.SetWidth(max(1, m.width-4))
+	x.port.SetHeight(max(1, m.bodyHeight()-4))
+	x.render(m)
 }
 
 // contentsLoaded shows the context that came in, unless the conversation
 // changed meanwhile.
-func (m *Model) contentsLoaded(msg contentsMsg) {
+func (x *contextScreen) loaded(m *Model, msg contentsMsg) {
 	if msg.contextID != m.chat.contextID {
 		return
 	}
-	m.loaded = &msg
-	m.renderContents()
+	x.got = &msg
+	x.render(m)
 }
 
 // renderContents fills the viewport of the context screen with the context
 // that came in, wrapped to its width.
-func (m *Model) renderContents() {
-	msg := m.loaded
+func (x *contextScreen) render(m *Model) {
+	msg := x.got
 	if msg == nil {
-		m.contents.SetContent(mutedStyle.Render("…"))
+		x.port.SetContent(mutedStyle.Render("…"))
 		return
 	}
-	body := lipgloss.NewStyle().Width(m.contents.Width()).PaddingLeft(2)
+	body := lipgloss.NewStyle().Width(x.port.Width()).PaddingLeft(2)
 	var blocks []string
 	if msg.err != nil {
-		blocks = append(blocks, lipgloss.Wrap(errStyle.Render("✗ "+msg.err.Error()), m.contents.Width(), ""))
+		blocks = append(blocks, lipgloss.Wrap(errStyle.Render("✗ "+msg.err.Error()), x.port.Width(), ""))
 	}
 	if len(msg.msgs) == 0 {
 		blocks = append(blocks, mutedStyle.Render("Nothing yet."))
@@ -91,34 +97,34 @@ func (m *Model) renderContents() {
 		size := mutedStyle.Render(fmt.Sprintf("  %d bytes", len(c.Text)))
 		blocks = append(blocks, boldStyle.Foreground(color).Render(c.Role)+size+"\n"+body.Render(c.Text))
 	}
-	m.contents.SetContent(strings.Join(blocks, "\n\n"))
+	x.port.SetContent(strings.Join(blocks, "\n\n"))
 }
 
 // handleContextKey handles keys on the context screen.
-func (m *Model) handleContextKey(msg tea.KeyPressMsg) tea.Cmd {
+func (x *contextScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
-		m.stopGlide(&m.contents) // the screen it was for is left
+		m.stopGlide(&x.port) // the screen it was for is left
 		m.screen = screenChat
 	case "up", "k":
-		return m.scrollBy(&m.contents, -1)
+		return m.scrollBy(&x.port, -1)
 	case "down", "j":
-		return m.scrollBy(&m.contents, 1)
+		return m.scrollBy(&x.port, 1)
 	case "pgup":
-		return m.scrollBy(&m.contents, -m.contents.Height())
+		return m.scrollBy(&x.port, -x.port.Height())
 	case "pgdown":
-		return m.scrollBy(&m.contents, m.contents.Height())
+		return m.scrollBy(&x.port, x.port.Height())
 	case "home":
-		return m.scrollBy(&m.contents, -topLine(&m.contents))
+		return m.scrollBy(&x.port, -topLine(&x.port))
 	case "end":
-		return m.scrollBy(&m.contents, topLine(&m.contents))
+		return m.scrollBy(&x.port, topLine(&x.port))
 	}
 	return nil
 }
 
 // contextView shows the context of the conversation, with how long it was
 // when the LLM was last called.
-func (m *Model) contextView() string {
+func (x *contextScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
 	title := boldStyle.Render("Context")
 	if m.chat.context > 0 {
@@ -130,6 +136,6 @@ func (m *Model) contextView() string {
 	if metrics := callMetrics(m.chat.cache); metrics != "" {
 		title += mutedStyle.Render("  · " + metrics)
 	}
-	title += mutedStyle.Render(fmt.Sprintf("  · %.0f%%  · ↑↓ pgup pgdn scroll · esc back", m.contents.ScrollPercent()*100))
-	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(title + "\n\n" + m.contents.View())
+	title += mutedStyle.Render(fmt.Sprintf("  · %.0f%%  · ↑↓ pgup pgdn scroll · esc back", x.port.ScrollPercent()*100))
+	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(title + "\n\n" + x.port.View())
 }

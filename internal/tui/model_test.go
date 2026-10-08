@@ -30,15 +30,15 @@ func TestModelScreenChoosesAModel(t *testing.T) {
 	m.Update(m.refreshStatus())
 	b.offers = []Models{local("gpt-4o", "gpt-4o-mini", "o3-mini")}
 	cmd := run(m, "/model")
-	if m.screen != screenModel || m.modelBusy == "" || m.input.Value() != "" {
+	if m.screen != screenModel || m.picker.busy == "" || m.input.Value() != "" {
 		t.Fatal("/model should open the model screen and list the models")
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "listing models") {
 		t.Fatalf("while the models are on their way:\n%s", view)
 	}
 	deliver(m, cmd)
-	if m.modelBusy != "" || m.modelSel != 0 || m.modelErr != nil {
-		t.Fatalf("the models should be in: sel %d, err %v", m.modelSel, m.modelErr)
+	if m.picker.busy != "" || m.picker.sel != 0 || m.picker.err != nil {
+		t.Fatalf("the models should be in: sel %d, err %v", m.picker.sel, m.picker.err)
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Ollama local · http://localhost:11434/v1") || !strings.Contains(view, "▸ gpt-4o  in use") {
 		t.Fatalf("the access and the model in use should show:\n%s", view)
@@ -48,8 +48,8 @@ func TestModelScreenChoosesAModel(t *testing.T) {
 	press(m, "up")
 	press(m, "down")
 	press(m, "up")
-	if m.modelSel != 0 {
-		t.Fatalf("up should select the first model: %d", m.modelSel)
+	if m.picker.sel != 0 {
+		t.Fatalf("up should select the first model: %d", m.picker.sel)
 	}
 	press(m, "down")
 	m.Update(press(m, "enter")())
@@ -90,8 +90,8 @@ func TestModelScreenSwitchesTheProvider(t *testing.T) {
 			t.Fatalf("no %q in:\n%s", want, view)
 		}
 	}
-	if strings.Count(view, "in use") != 1 || m.modelSel != 2 {
-		t.Fatalf("selected %d, in use:\n%s", m.modelSel, view)
+	if strings.Count(view, "in use") != 1 || m.picker.sel != 2 {
+		t.Fatalf("selected %d, in use:\n%s", m.picker.sel, view)
 	}
 	if strings.Index(view, "OpenCode Go") > strings.Index(view, "gpt-6") || strings.Index(view, "gpt-6") > strings.Index(view, "Ollama local") {
 		t.Fatalf("the models are not below their access:\n%s", view)
@@ -112,12 +112,12 @@ func TestModelScreenSwitchesTheProvider(t *testing.T) {
 	}
 	// Down does not go past the last model.
 	press(m, "down", "down", "down", "down", "j")
-	if m.modelSel != 3 {
-		t.Fatalf("selected %d", m.modelSel)
+	if m.picker.sel != 3 {
+		t.Fatalf("selected %d", m.picker.sel)
 	}
 	press(m, "k")
-	if m.modelSel != 2 {
-		t.Fatalf("selected %d", m.modelSel)
+	if m.picker.sel != 2 {
+		t.Fatalf("selected %d", m.picker.sel)
 	}
 }
 
@@ -137,8 +137,8 @@ func TestModelScreenWithAnAccessThatIsDown(t *testing.T) {
 			t.Fatalf("no %q in:\n%s", want, view)
 		}
 	}
-	if len(m.choices) != 2 || strings.Contains(view, "Work ·") {
-		t.Fatalf("choices %+v:\n%s", m.choices, view)
+	if len(m.picker.choices) != 2 || strings.Contains(view, "Work ·") {
+		t.Fatalf("choices %+v:\n%s", m.picker.choices, view)
 	}
 	m.Update(press(m, "enter")())
 	if len(b.set) != 1 || b.set[0] != "b2 gpt-6" {
@@ -167,14 +167,14 @@ func TestModelScreenScrolls(t *testing.T) {
 		t.Fatalf("the access of the models shown should stay in sight:\n%s", view)
 	}
 	// A list that starts with the line of an access keeps it.
-	m.modelSel = 0
-	lines := m.modelList(80, 3)
+	m.picker.sel = 0
+	lines := m.picker.list(m, 80, 3)
 	if !strings.Contains(ansi.Strip(lines[0]), "OpenCode Go") {
 		t.Fatalf("the top of the list: %q", lines)
 	}
 	// One line is the model selected, not the name of its access.
-	m.modelSel = 5
-	if lines = m.modelList(80, 1); !strings.Contains(ansi.Strip(lines[0]), "▸ model-04") {
+	m.picker.sel = 5
+	if lines = m.picker.list(m, 80, 1); !strings.Contains(ansi.Strip(lines[0]), "▸ model-04") {
 		t.Fatalf("one line: %q", lines)
 	}
 }
@@ -185,8 +185,8 @@ func TestModelScreenWithoutModels(t *testing.T) {
 	m, b := newModel(t)
 	b.modelsErr = errors.New("the credentials cannot be read")
 	deliver(m, run(m, "/model"))
-	if m.modelErr == nil || m.modelBusy != "" {
-		t.Fatalf("the error should be in: %q", m.modelErr)
+	if m.picker.err == nil || m.picker.busy != "" {
+		t.Fatalf("the error should be in: %q", m.picker.err)
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✗ the credentials cannot be read") {
 		t.Fatalf("the error should be shown:\n%s", view)
@@ -195,8 +195,8 @@ func TestModelScreenWithoutModels(t *testing.T) {
 		t.Fatal("saving without models should do nothing")
 	}
 	// Accesses that list nothing leave nothing to pick.
-	m.modelsLoaded(modelsMsg{models: []Models{plan()}})
-	if cmd := press(m, "enter", "down", "up"); cmd != nil || m.modelSel != 0 {
+	m.picker.loaded(m, modelsMsg{models: []Models{plan()}})
+	if cmd := press(m, "enter", "down", "up"); cmd != nil || m.picker.sel != 0 {
 		t.Fatal("picking without models should do nothing")
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "0 of 0") {
@@ -236,15 +236,15 @@ func TestModelScreenPicksOnlyWhatIsListed(t *testing.T) {
 	m, b := newModel(t)
 	b.offers = []Models{local("gpt-4o")}
 	deliver(m, run(m, "/model"))
-	m.modelBusy = "listing models"
+	m.picker.busy = "listing models"
 	if cmd := press(m, "enter"); cmd != nil {
 		t.Fatal("picked while the models are listed")
 	}
-	m.modelBusy, m.modelErr = "", errors.New("gone")
+	m.picker.busy, m.picker.err = "", errors.New("gone")
 	if cmd := press(m, "enter"); cmd != nil {
 		t.Fatal("picked from a list that did not come")
 	}
-	m.modelErr = nil
+	m.picker.err = nil
 	if cmd := press(m, "enter"); cmd == nil || len(b.set) != 0 {
 		t.Fatal("a model that is listed should be picked")
 	}
@@ -259,9 +259,9 @@ func TestModelListLayout(t *testing.T) {
 	down.Err = "no route to host"
 	never := plan()
 	never.Err, never.Access.Label, never.Access.About = "API key rejected", "Work", ""
-	m.modelsLoaded(modelsMsg{models: []Models{down, never, local("llama3")}})
+	m.picker.loaded(m, modelsMsg{models: []Models{down, never, local("llama3")}})
 	var got []string
-	for _, l := range m.modelList(80, 20) {
+	for _, l := range m.picker.list(m, 80, 20) {
 		got = append(got, ansi.Strip(l))
 	}
 	want := []string{
@@ -285,8 +285,8 @@ func TestModelListLayout(t *testing.T) {
 	// an access 4 cells, a reason 6 and a model 14 before the edge.
 	long := local(strings.Repeat("m", 60))
 	long.Err = strings.Repeat("e", 60)
-	m.modelsLoaded(modelsMsg{models: []Models{long}})
-	lines := m.modelList(40, 20)
+	m.picker.loaded(m, modelsMsg{models: []Models{long}})
+	lines := m.picker.list(m, 40, 20)
 	for i, width := range []int{36, 34, 28} {
 		if w := ansi.StringWidth(ansi.Strip(lines[i])); w != width || !strings.HasSuffix(ansi.Strip(lines[i]), "…") {
 			t.Errorf("line %d is %d cells wide, want %d: %q", i, w, width, ansi.Strip(lines[i]))
@@ -302,11 +302,11 @@ func TestModelListWindow(t *testing.T) {
 	for i := range 40 {
 		many = append(many, fmt.Sprintf("model-%02d", i))
 	}
-	m.modelsLoaded(modelsMsg{models: []Models{local(many...)}})
+	m.picker.loaded(m, modelsMsg{models: []Models{local(many...)}})
 	shown := func(sel int) []string {
-		m.modelSel = sel
+		m.picker.sel = sel
 		var lines []string
-		for _, l := range m.modelList(80, 10) {
+		for _, l := range m.picker.list(m, 80, 10) {
 			lines = append(lines, strings.TrimSpace(ansi.Strip(l)))
 		}
 		return lines[:10]
@@ -372,7 +372,7 @@ func TestModelScreenChoosesAModelForPeers(t *testing.T) {
 		t.Fatalf("a model that cannot be saved: %q", m.notice)
 	}
 	// p picks nothing while the models are on their way.
-	m.modelBusy = "listing models"
+	m.picker.busy = "listing models"
 	if press(m, "p") != nil {
 		t.Fatal("p while the models are listed")
 	}
@@ -411,14 +411,25 @@ func TestModelScreenTogglesFallbacks(t *testing.T) {
 
 	b.fail = map[string]error{"togglefallback": errors.New("the node answers with this model")}
 	deliver(m, press(m, "f"))
-	if m.notice != "the node answers with this model" || !m.noticeErr || len(m.fallbacks) != 1 {
-		t.Fatalf("a fallback that cannot be: %q, %+v", m.notice, m.fallbacks)
+	if m.notice != "the node answers with this model" || !m.noticeErr || len(m.picker.fallbacks) != 1 {
+		t.Fatalf("a fallback that cannot be: %q, %+v", m.notice, m.picker.fallbacks)
 	}
 	// Fallbacks that cannot be read are no models to show.
 	b.fail = map[string]error{"fallbacks": errors.New("the configuration cannot be read")}
 	press(m, "esc")
 	deliver(m, run(m, "/model"))
-	if m.modelErr == nil || len(m.choices) != 0 {
-		t.Fatalf("models without their fallbacks: %v, %d", m.modelErr, len(m.choices))
+	if m.picker.err == nil || len(m.picker.choices) != 0 {
+		t.Fatalf("models without their fallbacks: %v, %d", m.picker.err, len(m.picker.choices))
+	}
+}
+
+// The first fallback of a node is fallback 1.
+func TestModelScreenAddsTheFirstFallback(t *testing.T) {
+	m, b := newModel(t)
+	b.offers = []Models{local("gpt-4o")}
+	deliver(m, run(m, "/model"))
+	deliver(m, press(m, "f"))
+	if len(b.fallbacks) != 1 || m.notice != "gpt-4o of Ollama local is fallback 1: it answers you when what is before it cannot for now" {
+		t.Fatalf("fallbacks %+v, notice %q", b.fallbacks, m.notice)
 	}
 }

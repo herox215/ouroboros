@@ -70,35 +70,53 @@ type edit struct {
 }
 
 // openSettings opens the settings screen.
+// settingsScreen is the state of the settings screen.
+type settingsScreen struct {
+	values   Settings        // the configuration
+	err      error           // why it is not there
+	rows     []row           // what the screen shows of it
+	category int             // the category selected, of sections
+	opened   bool            // its rows are shown, not the list of categories
+	sel      int             // the row selected, of those of the category
+	top      int             // the line of a category the screen starts at
+	editing  *edit           // the text that is typed, if one is
+	input    textinput.Model // where it is typed
+}
+
+// reload asks for the configuration of the node anew.
+func (c *settingsScreen) reload(m *Model) tea.Cmd {
+	return func() tea.Msg { return c.load(m) }
+}
+
 func (m *Model) openSettings() tea.Cmd {
 	m.screen = screenSettings
-	m.category, m.opened = 0, false
-	m.settingsSel, m.choice, m.settingsTop = 0, 0, 0
-	m.editing = nil
-	return m.loadSettings
+	m.config.category, m.config.opened = 0, false
+	m.config.sel, m.choice, m.config.top = 0, 0, 0
+	m.config.editing = nil
+	return m.config.reload(m)
 }
 
 // loadSettings reads the configuration for the settings screen.
-func (m *Model) loadSettings() tea.Msg {
+func (c *settingsScreen) load(m *Model) tea.Msg {
 	s, err := m.backend.Settings()
 	return settingsMsg{s, err}
 }
 
 // settingsLoaded takes the configuration that was read.
-func (m *Model) settingsLoaded(msg settingsMsg) {
-	m.settings, m.settingsErr, m.rows = msg.settings, msg.err, nil
+func (c *settingsScreen) loaded(m *Model, msg settingsMsg) {
+	c.values, c.err, c.rows = msg.settings, msg.err, nil
 	if msg.err == nil {
-		m.rows = rows(msg.settings)
+		c.rows = rows(msg.settings)
 	}
-	m.settingsSel = min(m.settingsSel, max(len(m.shown())-1, 0))
-	m.choice = min(m.choice, max(len(m.selectedRow().actions)-1, 0))
+	c.sel = min(c.sel, max(len(c.shown(m))-1, 0))
+	m.choice = min(m.choice, max(len(c.selectedRow(m).actions)-1, 0))
 }
 
 // shown are the rows of the category selected.
-func (m *Model) shown() []row {
+func (c *settingsScreen) shown(m *Model) []row {
 	var out []row
-	for _, r := range m.rows {
-		if r.section == sections[m.category] {
+	for _, r := range c.rows {
+		if r.section == sections[c.category] {
 			out = append(out, r)
 		}
 	}
@@ -106,15 +124,15 @@ func (m *Model) shown() []row {
 }
 
 // selectedRow is the row that is selected, an empty one if there is none.
-func (m *Model) selectedRow() row {
-	if shown := m.shown(); m.settingsSel < len(shown) {
-		return shown[m.settingsSel]
+func (c *settingsScreen) selectedRow(m *Model) row {
+	if shown := c.shown(m); c.sel < len(shown) {
+		return shown[c.sel]
 	}
 	return row{}
 }
 
 // change makes the change s and reads the configuration anew.
-func (m *Model) change(s Setting) tea.Cmd {
+func (c *settingsScreen) change(m *Model, s Setting) tea.Cmd {
 	return func() tea.Msg {
 		done, err := m.backend.ChangeSetting(s)
 		return changedMsg{done, err}
@@ -122,70 +140,70 @@ func (m *Model) change(s Setting) tea.Cmd {
 }
 
 // changed shows how a change went, and reads the configuration anew.
-func (m *Model) changed(msg changedMsg) tea.Cmd {
+func (c *settingsScreen) changed(m *Model, msg changedMsg) tea.Cmd {
 	if msg.err != nil {
 		m.setNotice(msg.err.Error(), true)
 	} else {
 		m.setNotice(msg.done, false)
 	}
-	return tea.Batch(m.loadSettings, m.refresh())
+	return tea.Batch(c.reload(m), m.refresh())
 }
 
 // startEdit lets the owner type the text of label, starting from value.
-func (m *Model) startEdit(label, value string, change func(string) Setting) tea.Cmd {
-	m.editing = &edit{label, change}
-	m.editInput = textinput.New()
-	m.editInput.SetValue(value)
-	m.editInput.CursorEnd()
-	m.editInput.SetWidth(max(10, m.width-8))
-	return m.editInput.Focus()
+func (c *settingsScreen) startEdit(m *Model, label, value string, change func(string) Setting) tea.Cmd {
+	c.editing = &edit{label, change}
+	c.input = textinput.New()
+	c.input.SetValue(value)
+	c.input.CursorEnd()
+	c.input.SetWidth(max(10, m.width-8))
+	return c.input.Focus()
 }
 
 // handleSettingsKey handles keys on the settings screen.
-func (m *Model) handleSettingsKey(msg tea.KeyPressMsg) tea.Cmd {
-	if m.editing != nil {
+func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	if c.editing != nil {
 		switch msg.String() {
 		case "esc":
-			m.editing = nil
+			c.editing = nil
 			m.setNotice("nothing changed", false)
 			return nil
 		case "enter":
-			s := m.editing.change(m.editInput.Value())
-			m.editing = nil
-			return m.change(s)
+			s := c.editing.change(c.input.Value())
+			c.editing = nil
+			return c.change(m, s)
 		}
 		var cmd tea.Cmd
-		m.editInput, cmd = m.editInput.Update(msg)
+		c.input, cmd = c.input.Update(msg)
 		return cmd
 	}
-	if !m.opened {
+	if !c.opened {
 		switch msg.String() {
 		case "esc":
 			m.screen = screenChat
 		case "up", "k":
-			m.category = max(0, m.category-1)
+			c.category = max(0, c.category-1)
 		case "down", "j":
-			m.category = min(len(sections)-1, m.category+1)
+			c.category = min(len(sections)-1, c.category+1)
 		case "enter":
-			if len(m.rows) > 0 {
-				m.opened, m.settingsSel, m.choice, m.settingsTop = true, 0, 0, 0
+			if len(c.rows) > 0 {
+				c.opened, c.sel, m.choice, c.top = true, 0, 0, 0
 			}
 		}
 		return nil
 	}
 	switch msg.String() {
 	case "esc":
-		m.opened, m.settingsTop = false, 0
+		c.opened, c.top = false, 0
 	case "up", "k":
-		m.settingsSel, m.choice = max(0, m.settingsSel-1), 0
+		c.sel, m.choice = max(0, c.sel-1), 0
 	case "down", "j":
-		m.settingsSel, m.choice = min(max(len(m.shown())-1, 0), m.settingsSel+1), 0
+		c.sel, m.choice = min(max(len(c.shown(m))-1, 0), c.sel+1), 0
 	case "left", "h":
 		m.choice = max(0, m.choice-1)
 	case "right", "l":
-		m.choice = min(max(len(m.selectedRow().actions)-1, 0), m.choice+1)
+		m.choice = min(max(len(c.selectedRow(m).actions)-1, 0), m.choice+1)
 	case "enter":
-		if actions := m.selectedRow().actions; m.choice < len(actions) {
+		if actions := c.selectedRow(m).actions; m.choice < len(actions) {
 			return actions[m.choice].run(m)
 		}
 	}
@@ -232,10 +250,10 @@ func rows(s Settings) []row {
 		out = append(out, row{section: section, label: label, value: value, note: note, actions: actions})
 	}
 	editing := func(label, value string, change func(string) Setting) action {
-		return action{"change", func(m *Model) tea.Cmd { return m.startEdit(label, value, change) }}
+		return action{"change", func(m *Model) tea.Cmd { return m.config.startEdit(m, label, value, change) }}
 	}
 	set := func(name string, s Setting) action {
-		return action{name, func(m *Model) tea.Cmd { return m.change(s) }}
+		return action{name, func(m *Model) tea.Cmd { return m.config.change(m, s) }}
 	}
 
 	add(nodeSection, "Name", s.Name, "what the node is called on the network, and your agent too",
@@ -324,7 +342,9 @@ func rows(s Settings) []row {
 func pluginRow(p plugin.PluginState) row {
 	r := row{section: pluginsSection, label: p.Name}
 	turn := func(name string, on bool) action {
-		return action{name, func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetPlugin, Name: p.Name, On: on}) }}
+		return action{name, func(m *Model) tea.Cmd {
+			return m.config.change(m, Setting{Kind: plugin.SetPlugin, Name: p.Name, On: on})
+		}}
 	}
 	switch {
 	case p.Missing:
@@ -359,9 +379,11 @@ func toolRows(section string, who plugin.Audience, l plugin.ToolList) []row {
 	if who == plugin.ForPeers {
 		all.note = "every tool but those for your agent alone, also those of plugins turned on later"
 	}
-	all.actions = []action{{"turn on", func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetAllTools, For: who, On: true}) }}}
+	all.actions = []action{{"turn on", func(m *Model) tea.Cmd {
+		return m.config.change(m, Setting{Kind: plugin.SetAllTools, For: who, On: true})
+	}}}
 	if l.All {
-		all.actions = []action{{"turn off", func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetAllTools, For: who}) }}}
+		all.actions = []action{{"turn off", func(m *Model) tea.Cmd { return m.config.change(m, Setting{Kind: plugin.SetAllTools, For: who}) }}}
 	}
 	out := []row{all}
 	for _, t := range l.Tools {
@@ -385,10 +407,10 @@ func toolRows(section string, who plugin.Audience, l plugin.ToolList) []row {
 		}
 		name := t.Name
 		toggle := action{"allow", func(m *Model) tea.Cmd {
-			return m.change(Setting{Kind: plugin.SetTool, For: who, Name: name, On: true})
+			return m.config.change(m, Setting{Kind: plugin.SetTool, For: who, Name: name, On: true})
 		}}
 		if t.Allowed {
-			toggle = action{"refuse", func(m *Model) tea.Cmd { return m.change(Setting{Kind: plugin.SetTool, For: who, Name: name}) }}
+			toggle = action{"refuse", func(m *Model) tea.Cmd { return m.config.change(m, Setting{Kind: plugin.SetTool, For: who, Name: name}) }}
 		}
 		r.actions = []action{toggle}
 		if t.Configurable {
@@ -397,7 +419,7 @@ func toolRows(section string, who plugin.Audience, l plugin.ToolList) []row {
 				value = "{}"
 			}
 			r.actions = append(r.actions, action{"settings", func(m *Model) tea.Cmd {
-				return m.startEdit("the settings of "+name, value, func(v string) Setting {
+				return m.config.startEdit(m, "the settings of "+name, value, func(v string) Setting {
 					return Setting{Kind: plugin.SetToolSettings, For: who, Name: name, Value: v}
 				})
 			}})
@@ -419,7 +441,7 @@ func firstSentence(text string) string {
 // is open around the one selected, with what can be done with it, and the
 // text that is typed. It moves the window and keeps it (settingsTop), which
 // the key handler cannot: only here is known how many lines a row takes.
-func (m *Model) settingsView() string {
+func (c *settingsScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
 	head := []string{boldStyle.Render("Settings"), ""}
 	var lines []string
@@ -427,39 +449,39 @@ func (m *Model) settingsView() string {
 	inner := max(10, w-4)
 	selected := lipgloss.NewStyle().Foreground(accent)
 	switch {
-	case m.settingsErr != nil:
-		lines = append(lines, errStyle.Render("✗ "+m.settingsErr.Error()))
-	case len(m.rows) == 0:
+	case c.err != nil:
+		lines = append(lines, errStyle.Render("✗ "+c.err.Error()))
+	case len(c.rows) == 0:
 		lines = append(lines, m.spinner.View()+mutedStyle.Render(" reading the configuration…"))
-	case !m.opened:
+	case !c.opened:
 		nameWidth := 0
 		for _, s := range sections {
 			nameWidth = max(nameWidth, ansi.StringWidth(s))
 		}
 		for i, s := range sections {
 			marker, name := "  ", lipgloss.NewStyle().Width(nameWidth+2).Render(s)
-			if i == m.category {
+			if i == c.category {
 				at = len(lines)
 				marker, name = selected.Render("› "), selected.Width(nameWidth+2).Render(s)
 			}
 			lines = append(lines, ansi.Truncate(marker+name+mutedStyle.Render(contents[s]), inner, "…"))
 		}
 	default:
-		section := sections[m.category]
+		section := sections[c.category]
 		head = []string{boldStyle.Render("Settings") + mutedStyle.Render(" › ") + boldStyle.Render(section)}
 		head = append(append(head, wrapped(about[section], "", inner, mutedStyle)...), "")
-		shown := m.shown()
+		shown := c.shown(m)
 		labelWidth := 0
 		for _, r := range shown {
 			labelWidth = max(labelWidth, ansi.StringWidth(r.label))
 		}
 		labelWidth = min(labelWidth, 28)
 		for i, r := range shown {
-			if i == m.settingsSel {
+			if i == c.sel {
 				at = len(lines)
 			}
 			marker, label := "  ", lipgloss.NewStyle().Width(labelWidth+2).Render(ansi.Truncate(r.label, labelWidth, "…"))
-			if i == m.settingsSel {
+			if i == c.sel {
 				marker = selected.Render("› ")
 				label = selected.Width(labelWidth + 2).Render(ansi.Truncate(r.label, labelWidth, "…"))
 			}
@@ -473,7 +495,7 @@ func (m *Model) settingsView() string {
 			// row, empty on those not selected: the rows below it stay where
 			// they are while the selection moves.
 			doing := ""
-			if i == m.settingsSel {
+			if i == c.sel {
 				names := make([]string, len(r.actions))
 				for j, a := range r.actions {
 					names[j] = a.name
@@ -488,18 +510,18 @@ func (m *Model) settingsView() string {
 	}
 	room := max(1, h-2-len(head)) // the border
 	var bottom []string
-	if m.editing != nil {
-		bottom = []string{"", boldStyle.Render(m.editing.label) + mutedStyle.Render("  enter saves · esc keeps what was"), m.editInput.View()}
+	if c.editing != nil {
+		bottom = []string{"", boldStyle.Render(c.editing.label) + mutedStyle.Render("  enter saves · esc keeps what was"), c.input.View()}
 		room = max(1, room-len(bottom))
 	}
 	// The window follows what is selected by the line and moves only when
 	// it would leave it, so that what is read stands still while selecting.
-	top := m.settingsTop
+	top := c.top
 	if top > at || top+room < at+height {
 		top = at
 	}
 	top = max(0, min(top, max(0, len(lines)-room)))
-	m.settingsTop = top
+	c.top = top
 	lines = lines[top:min(len(lines), top+room)]
 	all := append(append(head, lines...), bottom...)
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(all, "\n"))

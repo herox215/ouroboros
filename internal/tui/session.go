@@ -77,6 +77,14 @@ type (
 	}
 )
 
+// sessionsScreen is the state of the sessions screen.
+type sessionsScreen struct {
+	sel      int             // the session selected
+	deleting *conversation   // the session that d deletes when it is pressed again
+	peerTab  bool            // the screen lists the conversations of peers
+	peers    []*conversation // the conversations of peers, as far as they were listed
+}
+
 // conversation returns the session id, which the UI knows from now on.
 func (m *Model) conversation(id string) *conversation {
 	c, ok := m.chats[id]
@@ -300,34 +308,34 @@ func (m *Model) sessionsLoaded(msg sessionsMsg) tea.Cmd {
 // among the conversations of peers if it is one of them.
 func (m *Model) openSessions() tea.Cmd {
 	m.screen = screenSessions
-	m.peerTab = m.chat.peer != ""
-	m.sessionSel = max(0, slices.Index(m.sessionRows(), m.chat))
-	return tea.Batch(m.loadSessions, m.loadPeers)
+	m.sessions.peerTab = m.chat.peer != ""
+	m.sessions.sel = max(0, slices.Index(m.sessions.rows(m), m.chat))
+	return tea.Batch(m.loadSessions, func() tea.Msg { return m.sessions.loadPeers(m) })
 }
 
 // loadPeers asks for the conversations of peers the node has.
-func (m *Model) loadPeers() tea.Msg {
+func (l *sessionsScreen) loadPeers(m *Model) tea.Msg {
 	list, err := m.backend.Peers(m.ctx)
 	return peersMsg{list, err}
 }
 
 // peersLoaded lists the conversations of peers. The one shown stays as it
 // is; without a node to ask, the list stays as it was.
-func (m *Model) peersLoaded(msg peersMsg) {
+func (l *sessionsScreen) peersLoaded(m *Model, msg peersMsg) {
 	if msg.err != nil {
 		return
 	}
-	selected := m.sessionRows()
-	m.peers = nil
+	selected := l.rows(m)
+	l.peers = nil
 	for _, info := range msg.list {
 		c := &conversation{contextID: info.ID, peer: info.Peer, title: info.Title, last: info.Last}
 		if m.chat.contextID == info.ID {
 			c = m.chat
 		}
-		m.peers = append(m.peers, c)
+		l.peers = append(l.peers, c)
 	}
-	if m.peerTab && m.sessionSel < len(selected) {
-		m.sessionSel = max(0, slices.Index(m.peers, selected[m.sessionSel]))
+	if l.peerTab && l.sel < len(selected) {
+		l.sel = max(0, slices.Index(l.peers, selected[l.sel]))
 	}
 }
 
@@ -367,9 +375,9 @@ func (m *Model) read(msg readMsg) {
 // message or with something typed for them, and the one shown, the latest
 // first. One without a message yet is the latest of all. Among the
 // conversations of peers, those the node listed.
-func (m *Model) sessionRows() []*conversation {
-	if m.peerTab {
-		return m.peers
+func (l *sessionsScreen) rows(m *Model) []*conversation {
+	if l.peerTab {
+		return l.peers
 	}
 	var rows []*conversation
 	for _, c := range m.chats {
@@ -395,14 +403,14 @@ func (m *Model) sessionRows() []*conversation {
 // handleSessionsKey handles keys on the sessions screen: up and down select
 // a session, enter shows it, d pressed twice deletes it, esc goes back to the
 // chat.
-func (m *Model) handleSessionsKey(msg tea.KeyPressMsg) tea.Cmd {
-	rows := m.sessionRows()
-	deleting := m.deleting
-	m.deleting = nil
+func (l *sessionsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	rows := l.rows(m)
+	deleting := l.deleting
+	l.deleting = nil
 	switch msg.String() {
 	case "tab":
-		m.peerTab = !m.peerTab
-		m.sessionSel = max(0, slices.Index(m.sessionRows(), m.chat))
+		l.peerTab = !l.peerTab
+		l.sel = max(0, slices.Index(l.rows(m), m.chat))
 		return nil
 	}
 	if len(rows) == 0 {
@@ -413,18 +421,18 @@ func (m *Model) handleSessionsKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch msg.String() {
 	case "d":
-		return m.delete(rows[min(m.sessionSel, len(rows)-1)], deleting)
+		return l.delete(m, rows[min(l.sel, len(rows)-1)], deleting)
 	case "esc":
 		m.screen = screenChat
 	case "up", "k":
-		m.sessionSel = max(0, m.sessionSel-1)
+		l.sel = max(0, l.sel-1)
 	case "down", "j":
-		m.sessionSel = min(len(rows)-1, m.sessionSel+1)
+		l.sel = min(len(rows)-1, l.sel+1)
 	case "enter":
-		if c := rows[min(m.sessionSel, len(rows)-1)]; c.peer != "" {
+		if c := rows[min(l.sel, len(rows)-1)]; c.peer != "" {
 			return m.showPeer(c)
 		}
-		return m.switchTo(rows[min(m.sessionSel, len(rows)-1)])
+		return m.switchTo(rows[min(l.sel, len(rows)-1)])
 	}
 	return nil
 }
@@ -456,7 +464,7 @@ func (m *Model) switchTo(c *conversation) tea.Cmd {
 // first: a session is deleted with the second d, not by a key pressed by
 // mistake. One without a message is not in the node; one whose answer is on
 // its way is not deleted.
-func (m *Model) delete(c, selected *conversation) tea.Cmd {
+func (l *sessionsScreen) delete(m *Model, c, selected *conversation) tea.Cmd {
 	switch {
 	case c.title == "":
 		m.setNotice("nothing to delete here yet", false)
@@ -465,11 +473,11 @@ func (m *Model) delete(c, selected *conversation) tea.Cmd {
 		m.setNotice("an answer is on its way there: /cancel it first", true)
 		return nil
 	case c != selected && c.peer != "":
-		m.deleting = c
+		l.deleting = c
 		m.setNotice("press d again to delete the conversation of "+c.peer+" “"+short(c.title, 40)+"”", false)
 		return nil
 	case c != selected:
-		m.deleting = c
+		l.deleting = c
 		m.setNotice("press d again to delete “"+short(c.title, 40)+"” with its history", false)
 		return nil
 	}
@@ -485,9 +493,9 @@ func (m *Model) deleted(msg deletedMsg) tea.Cmd {
 		return nil
 	}
 	c, ok := m.chats[msg.id]
-	if i := slices.IndexFunc(m.peers, func(p *conversation) bool { return p.contextID == msg.id }); i >= 0 {
-		c, ok = m.peers[i], true
-		m.peers = slices.Delete(m.peers, i, i+1)
+	if i := slices.IndexFunc(m.sessions.peers, func(p *conversation) bool { return p.contextID == msg.id }); i >= 0 {
+		c, ok = m.sessions.peers[i], true
+		m.sessions.peers = slices.Delete(m.sessions.peers, i, i+1)
 	}
 	if !ok {
 		return nil
@@ -500,7 +508,7 @@ func (m *Model) deleted(msg deletedMsg) tea.Cmd {
 		m.renderHistory(true)
 		cmd = m.watch(m.chat)
 	}
-	m.sessionSel = max(0, min(m.sessionSel, len(m.sessionRows())-1))
+	m.sessions.sel = max(0, min(m.sessions.sel, len(m.sessions.rows(m))-1))
 	return cmd
 }
 
@@ -525,16 +533,16 @@ func (m *Model) runningFrame() string { return running[m.ticks/3%len(running)] }
 
 // sessionsView lists the sessions: the one selected marked, the one shown
 // said, and those whose answer is on its way moving.
-func (m *Model) sessionsView() string {
+func (l *sessionsScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
-	rows := m.sessionRows()
+	rows := l.rows(m)
 	yours, peers, about := boldStyle.Render("Sessions"), mutedStyle.Render("Peers"), "  each goes on in the background while another one is shown"
-	if m.peerTab {
+	if l.peerTab {
 		yours, peers, about = mutedStyle.Render("Sessions"), boldStyle.Render("Peers"), "  how peers talked with "+m.agentName()+", only to read"
 	}
 	lines := []string{yours + mutedStyle.Render(" · ") + peers + mutedStyle.Render(about), ""}
 	shown := max(1, h-6) // border, title, blank lines and count
-	first := max(0, min(m.sessionSel-shown/2, len(rows)-shown))
+	first := max(0, min(l.sel-shown/2, len(rows)-shown))
 	for i := first; i < min(len(rows), first+shown); i++ {
 		c := rows[i]
 		title := cmp.Or(c.title, "new conversation")
@@ -552,14 +560,14 @@ func (m *Model) sessionsView() string {
 			after += mutedStyle.Render("  · shown")
 		}
 		line := short(title, max(10, w-8-lipgloss.Width(after))) + after
-		if i == m.sessionSel {
+		if i == l.sel {
 			lines = append(lines, lipgloss.NewStyle().Foreground(accent).Render("▸ ")+line)
 		} else {
 			lines = append(lines, "  "+line)
 		}
 	}
 	thing := "session"
-	if m.peerTab {
+	if l.peerTab {
 		thing = "conversation"
 	}
 	count := "1 " + thing

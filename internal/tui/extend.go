@@ -83,15 +83,22 @@ func isCommand(name string) bool {
 	return name != "" && !strings.HasPrefix(name, "/") && !strings.ContainsFunc(name, unicode.IsSpace)
 }
 
+// pluginScreen is the state of the screens the plugins contributed.
+type pluginScreen struct {
+	screens []plugin.Screen // of the plugins, as far as they got their command
+	open    int             // the one that is shown
+	body    body            // what it shows
+}
+
 // openScreen opens the screen of a plugin with the index i.
 func (m *Model) openScreen(i int) tea.Cmd {
-	m.screen, m.open, m.body, m.choice = screenPlugin, i, body{}, 0
-	return m.loadBody()
+	m.screen, m.plugins.open, m.plugins.body, m.choice = screenPlugin, i, body{}, 0
+	return m.plugins.load(m)
 }
 
 // handleScreenKey handles keys on the screen of a plugin.
-func (m *Model) handleScreenKey(msg tea.KeyPressMsg) tea.Cmd {
-	actions := m.screens[m.open].Actions
+func (p *pluginScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	actions := p.screens[p.open].Actions
 	switch msg.String() {
 	case "esc":
 		m.screen = screenChat
@@ -117,8 +124,8 @@ func (m *Model) run(do func(ctx context.Context) (string, error)) tea.Cmd {
 }
 
 // loadBody asks the plugin for what its screen, the one that is open, shows.
-func (m *Model) loadBody() tea.Cmd {
-	open, load := m.open, m.screens[m.open].Body
+func (p *pluginScreen) load(m *Model) tea.Cmd {
+	open, load := p.open, p.screens[p.open].Body
 	return func() tea.Msg {
 		text, err := load(m.ctx)
 		return bodyMsg{open, body{text, err, true}}
@@ -127,15 +134,15 @@ func (m *Model) loadBody() tea.Cmd {
 
 // screenView shows the screen of a plugin that is open, with its actions
 // below what it shows.
-func (m *Model) screenView() string {
+func (p *pluginScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
-	s := m.screens[m.open]
-	text := m.body.text
+	s := p.screens[p.open]
+	text := p.body.text
 	switch {
-	case !m.body.loaded:
+	case !p.body.loaded:
 		text = mutedStyle.Render("…")
-	case m.body.err != nil:
-		text = errStyle.Render("✗ " + m.body.err.Error())
+	case p.body.err != nil:
+		text = errStyle.Render("✗ " + p.body.err.Error())
 	}
 	// The text is cut off to what the box has room for, so that its bottom
 	// border stays: the box takes its border and padding, the actions, which

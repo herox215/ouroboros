@@ -78,7 +78,7 @@ func (m *Model) onHistory(x, y int) bool {
 // only remembers where it went down: the selection begins with the drag, so
 // a click marks nothing.
 func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
-	if m.onboard != nil || m.showSplash || m.screen != screenChat || !m.status.Configured {
+	if m.onboard != nil || m.splash.show || m.screen != screenChat || !m.status.Configured {
 		return nil
 	}
 	at := msg.Mouse()

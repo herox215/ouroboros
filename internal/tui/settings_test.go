@@ -61,14 +61,14 @@ func pick(t *testing.T, m *Model, section, label, name string) {
 	t.Helper()
 	for i, s := range sections {
 		if s == section {
-			m.category, m.opened = i, true
+			m.config.category, m.config.opened = i, true
 		}
 	}
-	for i, r := range m.shown() {
+	for i, r := range m.config.shown(m) {
 		if r.label != label {
 			continue
 		}
-		m.settingsSel, m.choice = i, 0
+		m.config.sel, m.choice = i, 0
 		if name == "" {
 			return
 		}
@@ -89,7 +89,7 @@ func do(m *Model) { deliver(m, press(m, "enter")) }
 // value is the value of the row of section with label.
 func value(t *testing.T, m *Model, section, label string) row {
 	t.Helper()
-	for _, r := range m.rows {
+	for _, r := range m.config.rows {
 		if r.section == section && r.label == label {
 			return r
 		}
@@ -249,7 +249,7 @@ func TestSettingsChange(t *testing.T) {
 	s.RebuildWithoutTests = true
 	s.Tools[ForPeersIndex()].All = true
 	b.settings = s
-	deliver(m, m.loadSettings)
+	deliver(m, m.config.reload(m))
 	for _, tt := range []struct {
 		section, label, action string
 		want                   Setting
@@ -282,8 +282,8 @@ func TestSettingsEdit(t *testing.T) {
 	m, b := openSettings(t, someSettings())
 	pick(t, m, nodeSection, "Name", "change")
 	press(m, "enter")
-	if m.editing == nil || m.editInput.Value() != "alpha" {
-		t.Fatalf("editing %+v %q", m.editing, m.editInput.Value())
+	if m.config.editing == nil || m.config.input.Value() != "alpha" {
+		t.Fatalf("editing %+v %q", m.config.editing, m.config.input.Value())
 	}
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "the name of the node  enter saves · esc keeps what was") || !strings.Contains(view, "enter save · esc keep what was") {
@@ -292,13 +292,13 @@ func TestSettingsEdit(t *testing.T) {
 	press(m, "-", "2")
 	m.Update(tea.FocusMsg{}) // what is no key goes to the input too
 	do(m)
-	if len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetName, Value: "alpha-2"}) || m.editing != nil {
+	if len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetName, Value: "alpha-2"}) || m.config.editing != nil {
 		t.Fatalf("saved %+v", b.changes)
 	}
 
 	b.changes = nil
 	press(m, "enter", "x", "esc")
-	if m.editing != nil || len(b.changes) != 0 || m.notice != "nothing changed" || m.screen != screenSettings || !m.opened {
+	if m.config.editing != nil || len(b.changes) != 0 || m.notice != "nothing changed" || m.screen != screenSettings || !m.config.opened {
 		t.Fatalf("kept: %+v, %q", b.changes, m.notice)
 	}
 
@@ -314,7 +314,7 @@ func TestSettingsEdit(t *testing.T) {
 		b.changes = nil
 		pick(t, m, tt.section, tt.label, tt.action)
 		press(m, "enter")
-		m.editInput.SetValue(tt.typed)
+		m.config.input.SetValue(tt.typed)
 		do(m)
 		if len(b.changes) != 1 || b.changes[0] != tt.want {
 			t.Errorf("%s %s: %+v", tt.section, tt.label, b.changes)
@@ -322,18 +322,18 @@ func TestSettingsEdit(t *testing.T) {
 	}
 	// What the owner edits starts from what is there.
 	pick(t, m, nodeSection, "Description", "change")
-	if press(m, "enter"); m.editInput.Value() != "Ouroboros instance named alpha" {
-		t.Errorf("the description: %q", m.editInput.Value())
+	if press(m, "enter"); m.config.input.Value() != "Ouroboros instance named alpha" {
+		t.Errorf("the description: %q", m.config.input.Value())
 	}
 	press(m, "esc")
 	pick(t, m, ownerSection, "read", "settings")
-	if press(m, "enter"); m.editInput.Value() != "{}" {
-		t.Errorf("settings of a tool without any: %q", m.editInput.Value())
+	if press(m, "enter"); m.config.input.Value() != "{}" {
+		t.Errorf("settings of a tool without any: %q", m.config.input.Value())
 	}
 	press(m, "esc")
 	pick(t, m, peersSection, "read", "settings")
-	if press(m, "enter"); m.editInput.Value() != `{"allow":["~/share"]}` {
-		t.Errorf("settings of a tool: %q", m.editInput.Value())
+	if press(m, "enter"); m.config.input.Value() != `{"allow":["~/share"]}` {
+		t.Errorf("settings of a tool: %q", m.config.input.Value())
 	}
 }
 
@@ -342,51 +342,51 @@ func TestSettingsEdit(t *testing.T) {
 // open from here.
 func TestSettingsKeys(t *testing.T) {
 	m, b := openSettings(t, someSettings())
-	if press(m, "up"); m.category != 0 || m.opened {
-		t.Errorf("above the first category: %d", m.category)
+	if press(m, "up"); m.config.category != 0 || m.config.opened {
+		t.Errorf("above the first category: %d", m.config.category)
 	}
-	if press(m, "down"); m.category != 1 {
-		t.Errorf("down: %d", m.category)
+	if press(m, "down"); m.config.category != 1 {
+		t.Errorf("down: %d", m.config.category)
 	}
-	if press(m, "up"); m.category != 0 {
-		t.Errorf("up: %d", m.category)
+	if press(m, "up"); m.config.category != 0 {
+		t.Errorf("up: %d", m.config.category)
 	}
 	for range len(sections) + 3 {
 		press(m, "down")
 	}
-	if m.category != len(sections)-1 {
-		t.Errorf("below the last category: %d", m.category)
+	if m.config.category != len(sections)-1 {
+		t.Errorf("below the last category: %d", m.config.category)
 	}
-	m.settingsSel, m.choice = 2, 1
-	if press(m, "enter"); !m.opened || m.settingsSel != 0 || m.choice != 0 {
-		t.Errorf("opened %v at %d, choice %d", m.opened, m.settingsSel, m.choice)
+	m.config.sel, m.choice = 2, 1
+	if press(m, "enter"); !m.config.opened || m.config.sel != 0 || m.choice != 0 {
+		t.Errorf("opened %v at %d, choice %d", m.config.opened, m.config.sel, m.choice)
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "│ Settings › Protected paths") || !strings.Contains(view, "› ~/.ssh") {
 		t.Errorf("the last category:\n%s", view)
 	}
-	if press(m, "esc"); m.opened || m.screen != screenSettings || m.category != len(sections)-1 {
-		t.Errorf("esc leaves the category: %v, %v, %d", m.opened, m.screen, m.category)
+	if press(m, "esc"); m.config.opened || m.screen != screenSettings || m.config.category != len(sections)-1 {
+		t.Errorf("esc leaves the category: %v, %v, %d", m.config.opened, m.screen, m.config.category)
 	}
 
 	pick(t, m, nodeSection, "Name", "change")
-	if press(m, "up"); m.settingsSel != 0 {
-		t.Errorf("above the first: %d", m.settingsSel)
+	if press(m, "up"); m.config.sel != 0 {
+		t.Errorf("above the first: %d", m.config.sel)
 	}
-	if press(m, "down"); m.settingsSel != 1 {
-		t.Errorf("down: %d", m.settingsSel)
+	if press(m, "down"); m.config.sel != 1 {
+		t.Errorf("down: %d", m.config.sel)
 	}
-	if press(m, "up"); m.settingsSel != 0 {
-		t.Errorf("up: %d", m.settingsSel)
+	if press(m, "up"); m.config.sel != 0 {
+		t.Errorf("up: %d", m.config.sel)
 	}
 	press(m, "left")
 	if press(m, "right"); m.choice != 0 {
 		t.Errorf("beyond the only action: %d", m.choice)
 	}
-	for range len(m.rows) + 3 {
+	for range len(m.config.rows) + 3 {
 		press(m, "down")
 	}
-	if m.settingsSel != len(m.shown())-1 || len(m.shown()) != 5 {
-		t.Errorf("below the last: %d of %d", m.settingsSel, len(m.shown()))
+	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 5 {
+		t.Errorf("below the last: %d of %d", m.config.sel, len(m.config.shown(m)))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
 	if press(m, "right"); m.choice != 1 {
@@ -415,9 +415,9 @@ func TestSettingsKeys(t *testing.T) {
 		t.Errorf("model: %v", m.screen)
 	}
 	press(m, "esc")
-	m.category = 2
-	if deliver(m, run(m, "/settings")); m.opened || m.category != 0 {
-		t.Errorf("opened anew: %v, %d", m.opened, m.category)
+	m.config.category = 2
+	if deliver(m, run(m, "/settings")); m.config.opened || m.config.category != 0 {
+		t.Errorf("opened anew: %v, %d", m.config.opened, m.config.category)
 	}
 	pick(t, m, nodeSection, "Access", "open /setup")
 	press(m, "enter") // the setup animates: its frames are not delivered
@@ -428,13 +428,13 @@ func TestSettingsKeys(t *testing.T) {
 	// Read anew with fewer lines, the selection stays on one that is there.
 	m, b = openSettings(t, someSettings())
 	pick(t, m, protectedSection, "~/.ssh", "remove")
-	m.settingsSel, m.choice = len(m.shown())-1, 1
+	m.config.sel, m.choice = len(m.config.shown(m))-1, 1
 	b.settings = Settings{Name: "alpha"}
-	deliver(m, m.loadSettings)
-	if m.settingsSel != 1 || len(m.shown()) != 2 || m.choice != 0 {
-		t.Errorf("after reading anew: %d of %d, choice %d", m.settingsSel, len(m.shown()), m.choice)
+	deliver(m, m.config.reload(m))
+	if m.config.sel != 1 || len(m.config.shown(m)) != 2 || m.choice != 0 {
+		t.Errorf("after reading anew: %d of %d, choice %d", m.config.sel, len(m.config.shown(m)), m.choice)
 	}
-	if press(m, "esc"); m.screen != screenSettings || m.opened {
+	if press(m, "esc"); m.screen != screenSettings || m.config.opened {
 		t.Errorf("esc in a category: %v", m.screen)
 	}
 	if press(m, "esc"); m.screen != screenChat {
@@ -447,7 +447,7 @@ func TestSettingsKeys(t *testing.T) {
 func TestSettingsScrollAndFail(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 11})
-	m.category = len(sections) - 1
+	m.config.category = len(sections) - 1
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "› Protected paths") || strings.Contains(view, "The node") {
 		t.Errorf("the categories scrolled:\n%s", view)
@@ -469,7 +469,7 @@ func TestSettingsScrollAndFail(t *testing.T) {
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✗ config.json is broken") {
 		t.Errorf("failed:\n%s", view)
 	}
-	if cmd := press(m, "enter"); cmd != nil || m.opened {
+	if cmd := press(m, "enter"); cmd != nil || m.config.opened {
 		t.Error("nothing to do did something")
 	}
 
@@ -523,17 +523,17 @@ func TestSettingsNoJump(t *testing.T) {
 		t.Errorf("the note of the row selected is cut off:\n%s", shown())
 	}
 	// Back to the categories starts at their first line.
-	if press(m, "esc"); m.settingsTop != 0 {
-		t.Errorf("the categories start at line %d", m.settingsTop)
+	if press(m, "esc"); m.config.top != 0 {
+		t.Errorf("the categories start at line %d", m.config.top)
 	}
 	for i, s := range sections {
 		if s == nodeSection {
-			m.category = i
+			m.config.category = i
 		}
 	}
 	press(m, "enter")
-	if m.settingsSel != 0 || m.settingsTop != 0 {
-		t.Errorf("a category opens at row %d, line %d", m.settingsSel, m.settingsTop)
+	if m.config.sel != 0 || m.config.top != 0 {
+		t.Errorf("a category opens at row %d, line %d", m.config.sel, m.config.top)
 	}
 }
 
@@ -584,7 +584,7 @@ func TestSettingsFitTheBox(t *testing.T) {
 		t.Errorf("the row is not cut off: %q", l)
 	}
 	press(m, "enter")
-	m.editInput.CursorEnd()
+	m.config.input.CursorEnd()
 	view = ansi.Strip(m.View().Content)
 	lines := strings.Split(view, "\n")
 	input := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "│ > ") })
@@ -608,17 +608,17 @@ func TestSettingsWindowMovesAtTheEdge(t *testing.T) {
 	pick(t, m, nodeSection, "Access", "")
 	h := 40
 	for ; ; h-- {
-		m.settingsTop = 0
+		m.config.top = 0
 		m.Update(tea.WindowSizeMsg{Width: 80, Height: h - 1})
-		if m.View(); m.settingsTop != 0 {
+		if m.View(); m.config.top != 0 {
 			break
 		}
 	}
-	m.settingsTop = 0
+	m.config.top = 0
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: h})
 	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
 	box := lines[:len(lines)-1] // the footer
-	if m.settingsTop != 0 || !strings.Contains(box[len(box)-2], "[open /setup]") {
-		t.Fatalf("at a height of %d, line %d is at the top:\n%s", h, m.settingsTop, strings.Join(box, "\n"))
+	if m.config.top != 0 || !strings.Contains(box[len(box)-2], "[open /setup]") {
+		t.Fatalf("at a height of %d, line %d is at the top:\n%s", h, m.config.top, strings.Join(box, "\n"))
 	}
 }

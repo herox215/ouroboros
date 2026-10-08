@@ -156,7 +156,7 @@ func onboard(t *testing.T) (*Model, *fakeBackend, *fakeSetup) {
 	m := New(b, nil, nil)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.Init()
-	if m.onboard == nil || !m.onboard.first || m.showSplash {
+	if m.onboard == nil || !m.onboard.first || m.splash.show {
 		t.Fatal("a node that is not set up should open with the setup")
 	}
 	return m, b, b.setup
@@ -801,11 +801,11 @@ func TestSetupScene(t *testing.T) {
 	if math.Abs(wrap(p.turn+1e-9)) > 1e-6 || p.scale != 1 || p.x != float64(left*2)+ringX || p.y != float64(top*4)+ringY || bright != 1 || o.curled(end) != bodyArc {
 		t.Fatalf("got %+v, %v", p, bright)
 	}
-	if _, cmd := m.Update(splashMsg{end}); cmd == nil || m.onboard != nil || !m.showSplash || m.splashElapsed != biteAt {
+	if _, cmd := m.Update(splashMsg{end}); cmd == nil || m.onboard != nil || !m.splash.show || m.splash.elapsed != biteAt {
 		t.Fatal("the splash should take over")
 	}
-	if m.skyShift != end.Sub(o.opened)-biteAt {
-		t.Fatalf("the stars should stay where they are: %v", m.skyShift)
+	if m.splash.skyShift != end.Sub(o.opened)-biteAt {
+		t.Fatalf("the stars should stay where they are: %v", m.splash.skyShift)
 	}
 }
 
@@ -815,7 +815,7 @@ func TestSetupSceneIsSkipped(t *testing.T) {
 	s.saved = "sk-good"
 	toRights(t, m)
 	m.Update(press(m, "enter")())
-	if press(m, "x"); m.onboard != nil || m.showSplash {
+	if press(m, "x"); m.onboard != nil || m.splash.show {
 		t.Fatal("a key should skip to the chat")
 	}
 }
@@ -854,11 +854,11 @@ func TestInitOpensTheSetupOnlyWhenNeeded(t *testing.T) {
 	for _, b := range []*fakeBackend{{status: Status{Configured: true}}, {fail: map[string]error{"status": errors.New("boom")}}} {
 		m := New(b, nil, nil)
 		m.Init()
-		if m.onboard != nil || !m.showSplash || b.setups != 0 {
+		if m.onboard != nil || !m.splash.show || b.setups != 0 {
 			t.Fatalf("%+v: the splash should open", b)
 		}
 		// The frames of the splash are coming: the setup opened now uses them.
-		if cmd := m.animate(); cmd != nil {
+		if cmd := m.splash.animate(); cmd != nil {
 			t.Fatal("a second line of frames")
 		}
 	}

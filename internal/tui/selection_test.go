@@ -244,7 +244,7 @@ func TestTheEdgesOfTheHistory(t *testing.T) {
 func TestNoSelectionOffTheChat(t *testing.T) {
 	for name, set := range map[string]func(*Model, *fakeBackend){
 		"setup":  func(m *Model, _ *fakeBackend) { run(m, "/setup") },
-		"splash": func(m *Model, _ *fakeBackend) { m.showSplash = true },
+		"splash": func(m *Model, _ *fakeBackend) { m.splash.show = true },
 		"not set up": func(m *Model, b *fakeBackend) {
 			b.status = Status{}
 			m.Update(m.refreshStatus())

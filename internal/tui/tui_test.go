@@ -332,7 +332,7 @@ func newModelOn(t *testing.T, b *fakeBackend) *Model {
 	m := New(b, nil, nil)
 	t.Cleanup(m.quit)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m.showSplash = false // dismiss the start screen; its own test is below
+	m.splash.show = false // dismiss the start screen; its own test is below
 	m.Update(m.refreshStatus())
 	return m
 }
@@ -440,9 +440,9 @@ func answered(t *testing.T, m *Model, cmd tea.Cmd) {
 
 func TestSplashShowsLogoUntilKey(t *testing.T) {
 	m, _ := newModel(t)
-	m.showSplash = true
+	m.splash.show = true
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m.splashElapsed = splashDuration - fadeOut
+	m.splash.elapsed = splashDuration - fadeOut
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{bigTitle[0], tagline, skipHint} {
 		if !strings.Contains(view, want) {
@@ -456,7 +456,7 @@ func TestSplashShowsLogoUntilKey(t *testing.T) {
 	if cmd := press(m, "x"); cmd != nil {
 		t.Fatal("closing the splash should not run a command")
 	}
-	if m.showSplash {
+	if m.splash.show {
 		t.Fatal("a key should close the splash")
 	}
 	if view := m.View().Content; !strings.Contains(view, "No messages yet") {
@@ -466,14 +466,14 @@ func TestSplashShowsLogoUntilKey(t *testing.T) {
 
 func TestSplashClosesAfterTimeout(t *testing.T) {
 	m, _ := newModel(t)
-	m.showSplash = true
+	m.splash.show = true
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m.splashStart = time.Unix(0, 0)
-	if _, cmd := m.Update(splashMsg{m.splashStart.Add(splashDuration / 2)}); cmd == nil || !m.showSplash {
+	m.splash.start = time.Unix(0, 0)
+	if _, cmd := m.Update(splashMsg{m.splash.start.Add(splashDuration / 2)}); cmd == nil || !m.splash.show {
 		t.Fatal("the splash should keep animating until its time is up")
 	}
-	m.Update(splashMsg{m.splashStart.Add(splashDuration)})
-	if m.showSplash {
+	m.Update(splashMsg{m.splash.start.Add(splashDuration)})
+	if m.splash.show {
 		t.Fatal("the splash should close when its time is up")
 	}
 	if view := m.View().Content; !strings.Contains(view, "No messages yet") {
@@ -544,12 +544,12 @@ func TestSplashTagIsTyped(t *testing.T) {
 
 func TestSplashCtrlCQuits(t *testing.T) {
 	m, _ := newModel(t)
-	m.showSplash = true
+	m.splash.show = true
 	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
 	if cmd == nil {
 		t.Fatal("ctrl+c should quit")
 	}
-	if !m.showSplash {
+	if !m.splash.show {
 		t.Fatal("ctrl+c should keep the splash and quit instead")
 	}
 }
@@ -976,7 +976,7 @@ func TestQuitLeavesTheAnswerGoingOn(t *testing.T) {
 		"ctrl+c":               func(m *Model) tea.Cmd { _, cmd := m.Update(ctrlC); return cmd },
 		"ctrl+c on requests":   func(m *Model) tea.Cmd { run(m, "/pending"); _, cmd := m.Update(ctrlC); return cmd },
 		"ctrl+c on the help":   func(m *Model) tea.Cmd { run(m, "/help"); _, cmd := m.Update(ctrlC); return cmd },
-		"ctrl+c on the splash": func(m *Model) tea.Cmd { m.showSplash = true; _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on the splash": func(m *Model) tea.Cmd { m.splash.show = true; _, cmd := m.Update(ctrlC); return cmd },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, b := newModel(t)
@@ -1060,9 +1060,9 @@ func TestTinyWindow(t *testing.T) {
 	m, _ := newModel(t)
 	for _, size := range [][2]int{{1, 1}, {20, 5}, {40, 8}} {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		m.showSplash = true
+		m.splash.show = true
 		m.View() // the splash must survive tiny windows
-		m.showSplash = false
+		m.splash.show = false
 		m.View()
 		m.setup() // and so must the setup
 		m.View()
@@ -1112,7 +1112,7 @@ func TestDecisionThatIsNotSaved(t *testing.T) {
 			t.Fatalf("%s: a failed decision should reload the requests", key)
 		}
 		m.Update(m.loadContacts())
-		if m.screen != screenRequests || len(m.trust.Incoming) != 1 || !strings.Contains(ansi.Strip(m.View().Content), "gamma") {
+		if m.screen != screenRequests || len(m.requests.trust.Incoming) != 1 || !strings.Contains(ansi.Strip(m.View().Content), "gamma") {
 			t.Fatalf("%s: the request is gone:\n%s", key, ansi.Strip(m.View().Content))
 		}
 
@@ -1205,8 +1205,8 @@ func TestProposals(t *testing.T) {
 	}
 	// Further down to the second, which is the last, and refuse it.
 	press(m, "j", "j", "j")
-	if m.reqSel != 2 {
-		t.Fatalf("selected %d", m.reqSel)
+	if m.requests.sel != 2 {
+		t.Fatalf("selected %d", m.requests.sel)
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› name") || strings.Contains(view, "› tools.a2a") {
 		t.Fatalf("the second proposal should be selected:\n%s", view)
@@ -1238,8 +1238,8 @@ func TestProposals(t *testing.T) {
 	// Proposals alone: nothing but them to select, and a new one is counted.
 	b.trust = Contacts{Proposals: b.trust.Proposals[:1]}
 	m.Update(m.loadContacts())
-	if m.reqSel != 0 {
-		t.Fatalf("selected %d of one entry", m.reqSel)
+	if m.requests.sel != 0 {
+		t.Fatalf("selected %d of one entry", m.requests.sel)
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "No pending requests.") || !strings.Contains(view, "› tools.a2a") {
 		t.Fatalf("proposals alone:\n%s", view)
@@ -1282,10 +1282,10 @@ func TestRestartGoesOnInAnotherUI(t *testing.T) {
 	}
 
 	other := newModelOn(t, b)
-	other.showSplash = true
+	other.splash.show = true
 	other.Resume(m.Current())
 	drive(t, other, other.watch(other.chat), func() bool { return len(other.chat.entries) == len(m.chat.entries) })
-	if other.showSplash || !sameEntries(other.chat.entries, m.chat.entries) || other.Current() != m.Current() {
+	if other.splash.show || !sameEntries(other.chat.entries, m.chat.entries) || other.Current() != m.Current() {
 		t.Fatalf("resumed %+v, want %+v", other.chat, m.chat)
 	}
 	if view := ansi.Strip(other.View().Content); !strings.Contains(view, "built and installed") || !strings.Contains(view, "restarted with the new build") {
@@ -1372,13 +1372,13 @@ func TestPasteGoesToTheInputThatIsOpen(t *testing.T) {
 	pick(t, m, nodeSection, "Name", "change")
 	press(m, "enter")
 	m.Update(tea.PasteMsg{Content: "-x"})
-	if m.editInput.Value() != "alpha-x" || m.input.Value() != "" {
-		t.Fatalf("edit %q, chat %q", m.editInput.Value(), m.input.Value())
+	if m.config.input.Value() != "alpha-x" || m.input.Value() != "" {
+		t.Fatalf("edit %q, chat %q", m.config.input.Value(), m.input.Value())
 	}
 	press(m, "esc", "esc", "esc")
 	m.Update(tea.PasteMsg{Content: "hello"})
-	if m.input.Value() != "hello" || m.editInput.Value() != "alpha-x" {
-		t.Fatalf("edit %q, chat %q", m.editInput.Value(), m.input.Value())
+	if m.input.Value() != "hello" || m.config.input.Value() != "alpha-x" {
+		t.Fatalf("edit %q, chat %q", m.config.input.Value(), m.input.Value())
 	}
 }
 
