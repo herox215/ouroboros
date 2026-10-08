@@ -98,19 +98,20 @@ func (m *Model) renderContents() {
 func (m *Model) handleContextKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
+		m.stopGlide(&m.contents) // the screen it was for is left
 		m.screen = screenChat
 	case "up", "k":
-		m.contents.ScrollUp(1)
+		return m.scrollBy(&m.contents, -1)
 	case "down", "j":
-		m.contents.ScrollDown(1)
+		return m.scrollBy(&m.contents, 1)
 	case "pgup":
-		m.contents.PageUp()
+		return m.scrollBy(&m.contents, -m.contents.Height())
 	case "pgdown":
-		m.contents.PageDown()
+		return m.scrollBy(&m.contents, m.contents.Height())
 	case "home":
-		m.contents.GotoTop()
+		return m.scrollBy(&m.contents, -topLine(&m.contents))
 	case "end":
-		m.contents.GotoBottom()
+		return m.scrollBy(&m.contents, topLine(&m.contents))
 	}
 	return nil
 }

@@ -245,6 +245,7 @@ type Model struct {
 	light         bool          // the background of the terminal is light
 	input         textarea.Model
 	history       viewport.Model
+	glide         *glide     // the viewport on its way to a line, if one is
 	selected      *selection // what the mouse selected of the history
 	pressed       *spot      // where the mouse went down, before the drag began
 	spinner       spinner.Model
@@ -485,13 +486,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		return m, m.mouse(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
-		var cmd tea.Cmd
 		if m.screen == screenContext {
-			m.contents, cmd = m.contents.Update(msg)
-			return m, cmd
+			m.wheel(&m.contents, msg)
+			return m, nil
 		}
-		m.history, cmd = m.history.Update(msg)
-		return m, cmd
+		m.wheel(&m.history, msg)
+		return m, nil
+	case scrollMsg:
+		// A frame of a glide: see scrollBy.
+		if m.glideOn(msg.at) {
+			return m, scrollTick()
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		if m.onboard != nil {
 			return m, m.onboardKey(msg)
@@ -552,11 +558,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+s":
 		return m.openSessions() // what is typed stays with the session shown
 	case "pgup":
-		m.history.PageUp()
-		return nil
+		return m.scrollBy(&m.history, -m.history.Height())
 	case "pgdown":
-		m.history.PageDown()
-		return nil
+		return m.scrollBy(&m.history, m.history.Height())
 	case "esc":
 		return nil
 	case "enter":

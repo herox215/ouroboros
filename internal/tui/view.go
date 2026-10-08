@@ -164,6 +164,7 @@ func (m *Model) renderHistory(toBottom bool) {
 	// scrolling.
 	m.history.SetContent(lipgloss.Wrap(strings.Join(blocks, "\n\n"), m.history.Width(), ""))
 	if toBottom {
+		m.stopGlide(&m.history) // the bottom is where it goes now
 		m.history.GotoBottom()
 	}
 }

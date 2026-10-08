@@ -156,13 +156,21 @@ func (m *Model) replay(c *conversation, past []Event) {
 
 // event shows what happened in a session just now and waits for what
 // follows.
+//
+// A history that follows its end, as it does at the bottom, glides to what
+// came instead of jumping there.
 func (m *Model) event(msg eventMsg) tea.Cmd {
 	c := m.conversation(msg.id)
+	following := c == m.chat && m.followsEnd()
 	cmd := m.apply(c, msg.event, true)
+	var glide tea.Cmd
 	if c == m.chat {
-		m.renderHistory(m.history.AtBottom())
+		m.renderHistory(false)
+		if following {
+			glide = m.glideTo(&m.history, topLine(&m.history))
+		}
 	}
-	return tea.Batch(cmd, next(msg.id, msg.live))
+	return tea.Batch(cmd, glide, next(msg.id, msg.live))
 }
 
 // apply adds what happened, e, to the session c. With live it happened just

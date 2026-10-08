@@ -72,15 +72,19 @@ func TestContextScreenShowsTheContext(t *testing.T) {
 	if strings.Contains(view, "pong") {
 		t.Fatalf("the end is below the screen:\n%s", view)
 	}
-	press(m, "down", "j", "pgdown", "end")
+	for _, k := range []string{"down", "j", "pgdown", "end"} {
+		scroll(t, m, press(m, k)) // each key glides on its own
+	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "pong") || !strings.Contains(view, "100%") {
 		t.Fatalf("the end should be in sight:\n%s", view)
 	}
-	press(m, "up", "k", "pgup", "home")
+	for _, k := range []string{"up", "k", "pgup", "home"} {
+		scroll(t, m, press(m, k)) // each key glides on its own
+	}
 	if m.contents.YOffset() != 0 {
 		t.Fatalf("home should go to the top: %d", m.contents.YOffset())
 	}
-	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	turn(t, m, tea.MouseWheelDown)
 	if m.contents.YOffset() == 0 || m.history.YOffset() != 0 {
 		t.Fatal("the wheel should scroll the context, not the chat")
 	}
@@ -88,9 +92,13 @@ func TestContextScreenShowsTheContext(t *testing.T) {
 	if m.contents.Width() != 56 || m.contents.Height() != 14 {
 		t.Fatalf("the context should fit the window: %dx%d", m.contents.Width(), m.contents.Height())
 	}
+	press(m, "pgdown")
+	if m.glide == nil {
+		t.Fatal("a page key should start a glide of the context")
+	}
 	press(m, "esc")
-	if m.screen != screenChat {
-		t.Fatal("esc should go back to the chat")
+	if m.glide != nil || m.screen != screenChat {
+		t.Fatal("esc should end the scroll of the context and go back to the chat")
 	}
 }
 

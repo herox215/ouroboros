@@ -51,6 +51,13 @@ arguments and its result, is on the context screen (`/context`).
 What the agent says is markdown, as the models write it, and the chat shows it formatted: headings, bold,
 italic, code in a line and in blocks, lists, quotes, tables and links, in the colors of the terminal theme and
 without the marks. What you write is shown as you wrote it.
+The wheel scrolls at once, a line a step, under the hand: a touchpad sends many steps for a fast stroke and
+few for a slow one, and nothing moves on after the fingers stop. The page keys and, on `/context`, the arrows,
+`home` and `end` glide instead: they carry the view to where they mean over a tenth to a quarter of a
+second, fast at first and slowly at the end, at 60 frames a second; a line is the smallest step a terminal
+has. Pressed again on the way, a key adds to where it goes and the view goes on from where it is; the wheel
+ends a glide and takes over. While the chat is at its end, what comes glides into view the same way;
+scrolled up, it stays where it is.
 The UI takes the mouse for the wheel, so the terminal does not select text itself. The chat does: press on the
 history and drag, and once you release, the text selected is on the clipboard, without its colors. A press
 alone marks nothing, so a click leaves no mark. It is put
