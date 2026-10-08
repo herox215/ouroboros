@@ -94,15 +94,21 @@ func inheritedSocket(path string) *net.UnixListener {
 // bequeathSocket keeps the socket ln open for the program this process is
 // replaced by with exec, and returns the descriptor it is open at there. The
 // file of the socket stays when ln is closed.
+//
+// The descriptor is duplicated where it is, not through ln.File: Fd of that
+// file would put the socket into blocking mode, which its duplicates share,
+// and an Accept that waits on ln then blocks in the system, where closing ln
+// does not end it, and the shutdown of the node waits for ever.
 func bequeathSocket(ln *net.UnixListener) (int, error) {
 	ln.SetUnlinkOnClose(false)
-	f, err := ln.File()
-	if err != nil {
+	rc, _ := ln.SyscallConn() // fails for no listener but nil: one that is closed fails below
+	var fd int
+	var dupErr error
+	if err := rc.Control(func(at uintptr) { fd, dupErr = dup(int(at)) }); err != nil {
 		return 0, err
 	}
-	defer f.Close()
-	// A duplicate is open across exec, unlike the file.
-	return dup(int(f.Fd()))
+	// A duplicate is open across exec, unlike the descriptor of ln.
+	return fd, dupErr
 }
 
 // chmod changes the mode of a file; tests replace it to get in the way.

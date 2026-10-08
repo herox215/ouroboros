@@ -305,3 +305,51 @@ func TestBequeathSocket(t *testing.T) {
 		t.Fatalf("got %+v, %s", s, logged.String())
 	}
 }
+
+// Handing the socket on leaves the listener as it was: it still accepts
+// through the poller, so that closing it ends an Accept that waits. A
+// descriptor in blocking mode would keep the shutdown waiting for ever.
+func TestBequeathSocketKeepsTheListener(t *testing.T) {
+	ln, err := listenLocal(home.Dir(t.TempDir()).Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := bequeathSocket(ln)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+	rc, err := ln.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flags int
+	rc.Control(func(at uintptr) { flags, _ = fcntl(int(at), syscall.F_GETFL, 0) })
+	if flags&syscall.O_NONBLOCK == 0 {
+		t.Error("the listener blocks")
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := ln.Accept()
+		accepted <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // the Accept waits
+	go ln.Close()                     // with a descriptor in blocking mode, this would not return
+	select {
+	case err := <-accepted:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("accept: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing the listener does not end its Accept")
+	}
+}
+
+// fcntl is the call of that name, which package syscall has no function for.
+func fcntl(fd, cmd, arg int) (int, error) {
+	r, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), uintptr(cmd), uintptr(arg))
+	if errno != 0 {
+		return 0, errno
+	}
+	return int(r), nil
+}
