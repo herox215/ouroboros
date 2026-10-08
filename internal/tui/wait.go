@@ -2,6 +2,7 @@ package tui
 
 import (
 	"math"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -84,16 +85,23 @@ func (a art) row(w, t int) []rune {
 
 // waiting is what the agent of the session shown is waiting for, as the chat
 // says it; "" when no answer is on its way.
+//
+// A tool shows once it has run for a while: one that ends at once, as most
+// commands and reads do, would flash its name for a moment and make the line
+// flicker, so the agent is thinking until then.
 func (m *Model) waiting() string {
 	c := m.chat
 	switch {
-	case c.doing != "":
+	case c.doing != "" && m.now().Sub(c.since) >= toolShown:
 		return c.doing
-	case c.pending:
+	case c.doing != "" || c.pending:
 		return m.agentName() + " is thinking"
 	}
 	return ""
 }
+
+// toolShown is how long a tool runs before the chat names it.
+const toolShown = 300 * time.Millisecond
 
 // waitView is what the chat shows while an answer is on its way: a picture
 // that moves, w cells wide, and in its middle what the agent waits for.

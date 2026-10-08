@@ -607,6 +607,7 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	// The words of the agent are in the chat, and the call to beta is
 	// announced and still running.
 	drive(t, m, say(t, m, "ask beta for the time"), func() bool { return m.chat.doing == "asking beta" })
+	m.now = func() time.Time { return time.Now().Add(toolShown) } // the tool has run long enough to be named
 	if !m.chat.pending || !strings.Contains(m.View().Content, "I will ask beta") || !strings.Contains(m.View().Content, "asking beta") {
 		t.Fatalf("what the agent says on the way belongs in the chat:\n%s", m.View().Content)
 	}
@@ -622,7 +623,7 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	}
 	view := trimmedLines(m)
 	// Once the answer is in, its calls are summed up below the words.
-	for _, want := range []string{"I will ask beta\n│   ↳ 1 tool call: asking beta", "beta says it is noon"} {
+	for _, want := range []string{"I will ask beta\n│   ↳ Used 1 tool", "beta says it is noon"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the history should show %q:\n%s", want, view)
 		}
@@ -720,8 +721,9 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		return "", nil
 	}
 	drive(t, m, say(t, m, "fix it"), func() bool { return m.chat.doing == "writing c.go" })
-	if !strings.Contains(ansi.Strip(m.View().Content), "· writing c.go …") {
-		t.Fatalf("the call the agent waits for should be marked: %+v\n%s", m.chat, ansi.Strip(m.View().Content))
+	// While it is on its way, the calls that are already there are one line.
+	if !strings.Contains(trimmedLines(m), "│   ↳ Used 4 tools, 1 failed\n") {
+		t.Fatalf("the calls should be one line: %+v\n%s", m.chat, trimmedLines(m))
 	}
 	close(written)
 	drive(t, m, nil, func() bool { return m.chat.doing == "running a script" }) // the script still runs
@@ -736,10 +738,10 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		t.Fatalf("the loop in the history: %+v", m.chat.entries)
 	}
 	view := ansi.Strip(m.View().Content)
-	// Once the answer is in, the calls of all its rounds are one line.
-	if !strings.Contains(trimmedLines(m), "I read both\n│   ↳ 4 tool calls, 1 failed: reading a.go, reading b.go, running a script, writing c.go\n") ||
+	// The calls of all the rounds of the answer are one line, whatever they were.
+	if !strings.Contains(trimmedLines(m), "I read both\n│   ↳ Used 4 tools, 1 failed\n") ||
 		strings.Contains(view, "↳ ·") {
-		t.Fatalf("the calls should be summed up:\n%s", view)
+		t.Fatalf("the calls should be one line:\n%s", view)
 	}
 	if strings.Contains(view, " …") {
 		t.Fatalf("no call is waited for any more:\n%s", view)

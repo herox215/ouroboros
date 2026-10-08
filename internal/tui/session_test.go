@@ -100,6 +100,7 @@ func TestSessionsScreen(t *testing.T) {
 		t.Fatalf("sessions %q", sessionLines(m))
 	}
 	m.Update(press(m, "enter"))
+	m.now = func() time.Time { return time.Now().Add(toolShown) } // the tool has run long enough to be named
 	if m.screen != screenChat || m.chat != second || m.input.Value() != "" || !strings.Contains(view(m), "asking beta") {
 		t.Fatalf("shown %+v:\n%s", m.chat, view(m))
 	}

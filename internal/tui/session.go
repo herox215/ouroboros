@@ -232,7 +232,9 @@ func (c *conversation) step(e Event) {
 	} else if i := r.started(e.Text); i >= 0 {
 		r.calls[i] = call{text: e.Text, done: true}
 	}
-	c.doing = r.waitingFor()
+	if doing := r.waitingFor(); doing != c.doing {
+		c.doing, c.since = doing, e.At
+	}
 }
 
 // end shows how the answer ended: the answer, why it failed, or that it was

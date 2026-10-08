@@ -115,9 +115,9 @@ func TestContextScreenWithoutAContext(t *testing.T) {
 	}
 }
 
-// While an answer is on its way, its calls are shown one by one; the calls
-// of the answers before it are summed up, the same ones once with their
-// count, and an answer without calls has no summary.
+// Every answer has its one line of calls, also while it is on its way, which
+// counts its calls as far as they have come; an answer without calls has
+// none.
 func TestChatSumsUpTheCallsOfAnAnswer(t *testing.T) {
 	m, b := newModel(t)
 	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta ✓ 1s", Done: true}, {Text: "asking beta"}, {Text: "asking beta ✗ offline", Done: true}}
@@ -133,20 +133,20 @@ func TestChatSumsUpTheCallsOfAnAnswer(t *testing.T) {
 	cmd := say(t, m, "read a.go")
 	drive(t, m, cmd, func() bool { return m.chat.doing == "reading a.go" }) // the call is announced
 	view := trimmedLines(m)
-	if !strings.Contains(view, "│   ↳ 2 tool calls, 1 failed: asking beta ×2\n") || strings.Count(view, "↳") != 2 ||
-		!strings.Contains(view, "↳ · reading a.go …") {
-		t.Fatalf("the answer before is summed up, the one on its way not:\n%s", view)
+	if !strings.Contains(view, "│   ↳ Used 2 tools, 1 failed\n") || strings.Count(view, "↳") != 2 ||
+		!strings.Contains(view, "│   ↳ Used 1 tool\n") {
+		t.Fatalf("the answer before is summed up, the one on its way too:\n%s", view)
 	}
 	close(gate)
 	drive(t, m, nil, func() bool { return !m.chat.pending })
-	if view := trimmedLines(m); !strings.Contains(view, "│   ↳ 1 tool call: reading a.go\n") || strings.Contains(view, "↳ ·") {
+	if view := trimmedLines(m); !strings.Contains(view, "│   ↳ Used 1 tool\n") || strings.Contains(view, "↳ ·") {
 		t.Fatalf("the answer is in:\n%s", view)
 	}
 }
 
-// The calls of an answer are summed up below its last round, also when the
-// answer is the first entry; a message without calls has no summary, and the
-// rounds of an answer on its way have none either.
+// The line of an answer goes below its last round, also when the answer is
+// the first entry of the conversation; a message without calls has none, and
+// the answer on its way has as far as it has come.
 func TestSummaries(t *testing.T) {
 	read := []call{{text: "reading a ✓ 1ms", done: true}}
 	both := append(slices.Clone(read), read...)
@@ -157,7 +157,7 @@ func TestSummaries(t *testing.T) {
 		"first entry": {conversation{entries: []entry{{calls: read}, {text: "done"}}}, map[int]string{0: summary(read)}},
 		"two rounds":  {conversation{entries: []entry{{calls: read}, {calls: read}}}, map[int]string{0: "", 1: summary(both)}},
 		"no calls":    {conversation{entries: []entry{{mine: true, text: "hi"}, {text: "hello"}}}, map[int]string{}},
-		"on its way":  {conversation{entries: []entry{{calls: read}, {calls: read}}, pending: true}, map[int]string{}},
+		"on its way":  {conversation{entries: []entry{{calls: read}, {calls: read}}, pending: true}, map[int]string{0: "", 1: summary(both)}},
 	} {
 		if got := tc.c.summaries(); !maps.Equal(got, tc.want) {
 			t.Errorf("%s: %v, want %v", name, got, tc.want)

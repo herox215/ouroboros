@@ -127,29 +127,25 @@ func (m *Model) renderHistory(toBottom bool) {
 	var blocks []string
 	words := false // the last block is the words of a round of an answer that is in
 	for i, e := range c.entries {
-		// A round of the loop is its words and a muted line per call; a
-		// message is a head and text. Of an answer that is in, the calls
-		// are summed up below its last round.
+		// A round of the loop is its words; the calls of all the rounds of
+		// an answer are one line below its last words, also while the
+		// answer is on its way: what the agent waits for is below the
+		// input meanwhile, and what every call was is on the context
+		// screen (/context).
 		if len(e.calls) > 0 {
-			summary, settled := summaries[i]
-			if !settled {
-				blocks, words = append(blocks, m.roundLines(e, i == c.round-1, render)), false
-				continue
-			}
 			if e.text != "" {
 				blocks, words = append(blocks, render(e.text)), true
 			}
-			if summary == "" {
-				continue
+			if used := summaries[i]; used != "" {
+				// The line goes right below the last words of the answer.
+				line := mutedStyle.Render("  ↳ " + used)
+				if words {
+					blocks[len(blocks)-1] += "\n" + line
+				} else {
+					blocks = append(blocks, line)
+				}
+				words = false
 			}
-			// The summary goes right below the last words of the answer.
-			line := mutedStyle.Render("  ↳ " + summary)
-			if words {
-				blocks[len(blocks)-1] += "\n" + line
-			} else {
-				blocks = append(blocks, line)
-			}
-			words = false
 			continue
 		}
 		words = false
@@ -172,13 +168,14 @@ func (m *Model) renderHistory(toBottom bool) {
 	}
 }
 
-// summaries sums up the calls of every answer that is in: by the index of
-// each of its rounds, "" but for the last, which gets what all its rounds
-// called. The rounds of the answer that is pending are not in it.
+// summaries says for every answer, by the index of the round of the loop the
+// line goes below, how many tools it used: the last of its rounds, "" for
+// the rounds before it. The answer on its way is in it as far as it has
+// come.
 func (c *conversation) summaries() map[int]string {
 	summaries := map[int]string{}
 	var calls []call
-	last, mine := -1, -1
+	last := -1
 	end := func() {
 		if last >= 0 {
 			summaries[last] = summary(calls)
@@ -188,7 +185,6 @@ func (c *conversation) summaries() map[int]string {
 	for i, e := range c.entries {
 		if e.mine {
 			end()
-			mine = i
 			continue
 		}
 		if len(e.calls) > 0 {
@@ -198,51 +194,28 @@ func (c *conversation) summaries() map[int]string {
 			calls, last = append(calls, e.calls...), i
 		}
 	}
-	if c.pending {
-		// The rounds after the last message of the owner are on their way.
-		for i := range summaries {
-			if i > mine {
-				delete(summaries, i)
-			}
-		}
-		return summaries
-	}
 	end()
 	return summaries
 }
 
-// summary sums up the calls of an answer in a line: how many there were,
-// how many failed, and what they were, the same ones once with their count.
+// summary sums up the calls of an answer in one line: how many tools it used,
+// and how many of the calls failed. What every call was is on the context
+// screen (/context), so that even a long loop stays one line in the chat.
 func summary(calls []call) string {
-	var names []string
-	count := map[string]int{}
 	failed := 0
 	for _, c := range calls {
-		name := c.text
-		if i := strings.Index(name, " ✓ "); i >= 0 {
-			name = name[:i]
-		}
-		if i := strings.Index(name, " ✗ "); i >= 0 {
-			name, failed = name[:i], failed+1
-		}
-		if count[name] == 0 {
-			names = append(names, name)
-		}
-		count[name]++
-	}
-	for i, n := range names {
-		if count[n] > 1 {
-			names[i] = fmt.Sprintf("%s ×%d", n, count[n])
+		if strings.Contains(c.text, " ✗ ") {
+			failed++
 		}
 	}
-	line := "1 tool call"
+	line := "Used 1 tool"
 	if len(calls) != 1 {
-		line = fmt.Sprintf("%d tool calls", len(calls))
+		line = fmt.Sprintf("Used %d tools", len(calls))
 	}
 	if failed > 0 {
 		line += fmt.Sprintf(", %d failed", failed)
 	}
-	return line + ": " + strings.Join(names, ", ")
+	return line
 }
 
 // entryHead is the line above the text of a message: who wrote it and when.
@@ -252,24 +225,6 @@ func (m *Model) entryHead(e entry) string {
 		name, color = cmp.Or(m.chat.peer, "you"), accent
 	}
 	return boldStyle.Foreground(color).Render(name) + mutedStyle.Render(" · "+e.at.Format("15:04"))
-}
-
-// roundLines is a round of the loop as the history shows it: what the agent
-// said along with its calls, if it said anything, and below one line per
-// call. Of the round that is on, the calls not yet ended are marked.
-func (m *Model) roundLines(e entry, on bool, render func(string) string) string {
-	var lines []string
-	if e.text != "" {
-		lines = append(lines, render(e.text))
-	}
-	for _, c := range e.calls {
-		what := mutedStyle.Render("· " + c.text)
-		if !c.done && on && m.chat.pending {
-			what = lipgloss.NewStyle().Foreground(accent).Render("· " + c.text + " …")
-		}
-		lines = append(lines, mutedStyle.Render("  ↳ ")+what)
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (m *Model) View() tea.View {

@@ -41,12 +41,13 @@ The UI is the chat with your own agent. You do not
 write to other nodes yourself: the agent does, whenever you ask it to or it thinks a peer knows
 better ("ask Luna how she is" → "Luna says she is fine"). What the two agents say to each other
 stays between them; the UI only shows which peer your agent is waiting for.
-The whole **loop** of an answer is in the history, not only its end: what the agent says along with
-the tools it asks for, and below those words one muted line per tool call (`· asking beta ✓ 1.2s`,
-`· writing notes.md ✓ 3ms`, a failed one with `✗` and its reason). A call the agent said nothing of
-is only that line. Lines of calls whose tool is still running are marked with `…`. Once the answer is in,
-the calls of all its rounds are summed up in one line below the last words of the agent:
-`↳ 4 tool calls, 1 failed: reading a.go, asking beta ×2, writing c.go`.
+The whole **loop** of an answer is in the history, not only its end: what the agent says, round by
+round, and below the last words of the answer one muted line that says how many tools it used, like
+`↳ Used 4 tools, 1 failed`. The line counts the calls of all its rounds, and it is there while the
+answer is still on its way, as far as it has come; what the agent waits for at that moment is the line
+below the input (`asking beta`), once the call has run for 0.3 s: one that ends sooner, as most commands
+and reads do, leaves the agent thinking, so the line does not flicker. What each call was, with its
+arguments and its result, is on the context screen (`/context`).
 What the agent says is markdown, as the models write it, and the chat shows it formatted: headings, bold,
 italic, code in a line and in blocks, lists, quotes, tables and links, in the colors of the terminal theme and
 without the marks. What you write is shown as you wrote it.

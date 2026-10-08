@@ -168,6 +168,7 @@ type conversation struct {
 	pending   bool                // request submitted or answer on its way: one message at a time
 	running   bool                // the node has said an answer is on its way
 	doing     string              // what the agent is waiting for, like "asking beta"
+	since     time.Time           // when it began to wait for that
 	art       int                 // which of arts a wait is shown with: the next for every message
 	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
 	context   int                 // how long its context is, see Event.Context

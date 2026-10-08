@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -75,8 +76,14 @@ func TestWaitIsShownOnAPicture(t *testing.T) {
 	if m.ticks != 1 || m.waitView(96) == before || !strings.Contains(ansi.Strip(m.View().Content), wait()) {
 		t.Fatalf("the picture should move:\n%s", m.View().Content)
 	}
-	// What the agent waits for takes the place of its thinking.
+	// What the agent waits for takes the place of its thinking once it has
+	// run for a while: a call that ends at once does not flash its name.
 	drive(t, m, cmd, func() bool { return m.chat.doing == "asking beta" })
+	m.now = func() time.Time { return m.chat.since.Add(toolShown - time.Millisecond) }
+	if !strings.Contains(ansi.Strip(m.View().Content), wait()) {
+		t.Fatalf("a call that just began should leave the agent thinking:\n%s", m.View().Content)
+	}
+	m.now = func() time.Time { return m.chat.since.Add(toolShown) }
 	label = " asking beta "
 	if m.chat.art != 1 || !strings.Contains(ansi.Strip(m.View().Content), wait()) {
 		t.Fatalf("the call should stand on the same picture, not on %d:\n%s", m.chat.art, m.View().Content)

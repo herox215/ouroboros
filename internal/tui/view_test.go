@@ -29,20 +29,6 @@ func TestAnswerIsWrappedToTheHistory(t *testing.T) {
 	}
 }
 
-// Of the round that is on, only the calls that did not end yet are marked.
-func TestOnlyCallsGoingOnAreMarked(t *testing.T) {
-	m, _ := newModel(t)
-	m.chat.pending = true
-	e := entry{calls: []call{{text: "asking beta ✓ 2s", done: true}, {text: "asking gamma"}}}
-	same := func(s string) string { return s }
-	if got := ansi.Strip(m.roundLines(e, true, same)); got != "  ↳ · asking beta ✓ 2s\n  ↳ · asking gamma …" {
-		t.Fatalf("on: %q", got)
-	}
-	if got := ansi.Strip(m.roundLines(e, false, same)); got != "  ↳ · asking beta ✓ 2s\n  ↳ · asking gamma" {
-		t.Fatalf("not on: %q", got)
-	}
-}
-
 // Without requests of this node, none is said to wait. The choices go below
 // the proposal selected.
 func TestPendingScreenWithProposalsOnly(t *testing.T) {
