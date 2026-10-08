@@ -18,6 +18,7 @@ import (
 func someSettings() Settings {
 	return Settings{
 		Name: "alpha", Access: "Example", About: "https://api.example/v1", Model: "gpt-4o", ID: "abc123def456",
+		Description: "Ouroboros instance named alpha", DescriptionDefault: true,
 		ContextProviders: []string{"compact"},
 		Plugins: []plugin.PluginState{
 			{Name: "base", On: true, Running: true, Fixed: "it runs the commands of ouro"},
@@ -103,7 +104,7 @@ func TestSettingsShow(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"│ Settings", "› The node", "the name, the access to the LLM, the model", "  The agents", "  Plugins",
+		"│ Settings", "› The node", "the name, the description, the access to the LLM, the model", "  The agents", "  Plugins",
 		"  Tools of your agent", "  Tools for peers", "what your agent may do when a peer asks it",
 		"  Protected paths", "the paths no tool for files touches", "↑↓ select · enter open · esc back",
 	} {
@@ -128,6 +129,7 @@ func TestSettingsShow(t *testing.T) {
 		t.Errorf("a category shows its own lines alone:\n%s", view)
 	}
 	for _, tt := range []struct{ section, label, value, note string }{
+		{nodeSection, "Description", "Ouroboros instance named alpha", "the default; public: anyone reads it in the agent card"},
 		{nodeSection, "Node ID", "abc123def456", "the fingerprint of the key of the node, which nothing here changes"},
 		{agentsSection, "Context provider", "none", "what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it"},
 		{agentsSection, "Rebuild without a sandbox", "no", "rebuild builds and tests in a sandbox here, so this is not used"},
@@ -166,10 +168,12 @@ func TestSettingsShow(t *testing.T) {
 	s := someSettings()
 	s.About, s.ContextProvider, s.RebuildWithoutSandbox, s.Sandbox = "", "compact", true, "bubblewrap is not installed"
 	s.PluginsKept, s.ProtectedDefault = "plugin peers needs a scanner", false
+	s.Description, s.DescriptionDefault = "knows the way", false
 	s.Tools[ForPeersIndex()].All = true
 	m, _ = openSettings(t, s)
 	for _, tt := range []struct{ section, label, value string }{
 		{nodeSection, "Access", "Example"},
+		{nodeSection, "Description", "knows the way"},
 		{agentsSection, "Context provider", "compact"},
 		{agentsSection, "Rebuild without a sandbox", "yes, with network"},
 		{pluginsSection, "Turned off", "none: all run"},
@@ -179,6 +183,9 @@ func TestSettingsShow(t *testing.T) {
 		if r := value(t, m, tt.section, tt.label); r.value != tt.value {
 			t.Errorf("%s %s: %q", tt.section, tt.label, r.value)
 		}
+	}
+	if r := value(t, m, nodeSection, "Description"); r.note != "public: anyone reads it in the agent card; empty is the default" {
+		t.Errorf("description: %q", r.note)
 	}
 	if r := value(t, m, agentsSection, "Rebuild without a sandbox"); !strings.Contains(r.note, "there is no sandbox here (bubblewrap is not installed)") {
 		t.Errorf("sandbox: %q", r.note)
@@ -284,6 +291,7 @@ func TestSettingsEdit(t *testing.T) {
 		{peersSection, "read", "settings", `{"allow": ["~/x"]}`, Setting{Kind: plugin.SetToolSettings, For: plugin.ForPeers, Name: "read", Value: `{"allow": ["~/x"]}`}},
 		{ownerSection, "read", "settings", "", Setting{Kind: plugin.SetToolSettings, Name: "read", Value: ""}},
 		{protectedSection, "Add a path", "change", "~/keys", Setting{Kind: plugin.SetProtected, Value: "~/.ssh\n~/.gnupg\n~/keys"}},
+		{nodeSection, "Description", "change", "knows the way", Setting{Kind: plugin.SetDescription, Value: "knows the way"}},
 	} {
 		b.changes = nil
 		pick(t, m, tt.section, tt.label, tt.action)
@@ -295,6 +303,11 @@ func TestSettingsEdit(t *testing.T) {
 		}
 	}
 	// What the owner edits starts from what is there.
+	pick(t, m, nodeSection, "Description", "change")
+	if press(m, "enter"); m.editInput.Value() != "Ouroboros instance named alpha" {
+		t.Errorf("the description: %q", m.editInput.Value())
+	}
+	press(m, "esc")
 	pick(t, m, ownerSection, "read", "settings")
 	if press(m, "enter"); m.editInput.Value() != "{}" {
 		t.Errorf("settings of a tool without any: %q", m.editInput.Value())
@@ -354,7 +367,7 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.rows) + 3 {
 		press(m, "down")
 	}
-	if m.settingsSel != len(m.shown())-1 || len(m.shown()) != 4 {
+	if m.settingsSel != len(m.shown())-1 || len(m.shown()) != 5 {
 		t.Errorf("below the last: %d of %d", m.settingsSel, len(m.shown()))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
@@ -471,15 +484,15 @@ func TestSettingsNoJump(t *testing.T) {
 	if strings.Count(shown(), "[") != 1 {
 		t.Errorf("what can be done is shown on one line alone:\n%s", shown())
 	}
-	name, key := where("Name"), where("Access")
-	if press(m, "down"); where("Name") != name || where("Access") != key {
+	name, key := where("Name"), where("Description")
+	if press(m, "down"); where("Name") != name || where("Description") != key {
 		t.Errorf("the lines moved when the selection did:\n%s", shown())
 	}
 	if !strings.Contains(shown(), "what the node is called on the network") {
 		t.Errorf("the note of the row left behind is gone:\n%s", shown())
 	}
 	// To the last row, which the window follows to and stops at.
-	press(m, "down", "down")
+	press(m, "down", "down", "down")
 	if !strings.Contains(shown(), "› Node ID") {
 		t.Errorf("the selection is not on the last row:\n%s", shown())
 	}

@@ -78,7 +78,7 @@ internal/assistant/record.go:180:13 CONDITIONALS_NEGATION  # an expression of a 
 internal/assistant/record.go:182:19 CONDITIONALS_BOUNDARY  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/assistant/record.go:182:19 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/assistant/settings.go:159:13 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
-internal/config/config.go:23:22 ARITHMETIC_BASE  # a string concatenation in a constant declaration
+internal/config/config.go:25:22 ARITHMETIC_BASE  # a string concatenation in a constant declaration
 internal/diagnosis/diagnosis.go:101:19 CONDITIONALS_BOUNDARY  # a case expression; killed by TestClassify (status 500, added)
 internal/diagnosis/diagnosis.go:101:19 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
 internal/diagnosis/diagnosis.go:99:19 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
@@ -95,6 +95,7 @@ internal/kernel/kernel.go:215:15 CONDITIONALS_NEGATION  # a case expression; kil
 internal/kernel/kernel.go:215:21 INVERT_LOGICAL  # a case expression; killed by TestPluginErrors
 internal/kernel/kernel.go:215:32 CONDITIONALS_NEGATION  # a case expression; killed by TestPluginErrors
 internal/node/server.go:26:27 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds
+internal/node/socket.go:107:76 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement; negated, TestBequeathSocket gets no error for a closed listener
 internal/openai/client.go:31:17 ARITHMETIC_BASE  # a duration in the declaration of a variable
 internal/openai/trace.go:136:12 CONDITIONALS_NEGATION  # a case expression; killed by TestTrace
 internal/openai/trace.go:139:12 CONDITIONALS_NEGATION  # a case expression; killed by TestTrace

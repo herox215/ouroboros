@@ -252,7 +252,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open. Where no interface carries multicast (a network namespace with the loopback interface alone), a node hears the probes sent to its host; a datagram the system does not hand over, as a sandbox does with one of another host, is passed over |
 | Agents | two per node, built from one blueprint, both in the node: yours answers the [sessions](#sessions) of `ouro` and `ouro chat`, the other one peers. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left; the LLM has one tool, `run`, and uses the others in a [script](#scripts) |
 | Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, in a message of its own after the results, which stay as they are and as the provider cached them, and a script hands on at most 4 KiB of what it prints and of what it returns. From the 16th call of the LLM in an answer on, it is told with every call to stop searching and ask the user what exactly is meant, unless it has found what it looks for; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives every API the conversation as `prompt_cache_key`, so that a gateway sends its calls to the same cache. A Claude model (its name has `claude`) caches only up to `cache_control` breakpoints: ouro sets them at the system prompt and at the last 3 messages with content. An API that refuses one of these parameters (HTTP 400 that names it) is asked again without it, and not sent it again. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another. What is cut off is not lost: the [history](#history) keeps every conversation in full |
-| Card | the description in the agent card is `Ouroboros instance named <name>` for every node; `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
+| Card | the description in the agent card is what you wrote in `/settings` (`description` in `config.json`, one line of at most 300 characters), or `Ouroboros instance named <name>` without one; anyone can read it, so nothing private belongs there. `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
 | LLM | answers are asked for as a stream (`"stream": true`), so a gateway that gives up on a request without data for a while (HTTP 504) keeps waiting while the model thinks; an API that does not stream answers in one piece, which is taken as well. A completion is given up after 5 minutes without data, a list of the models after 5 minutes |
 | Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. At most 16 changes of the configuration your agent proposed wait for a decision. The tools for files and a script have limits of their own, see [Files](#files) and [Scripts](#scripts). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
@@ -343,8 +343,10 @@ Three things limit a tool for files, and the first that speaks wins:
      `ouro.pid`, `ouro.sock`, `ouro.log`, `ouro.log.1`, `update/`, `history/`) is read and
      never changed.
    - The source of the core is read and never changed: in every directory whose `go.mod` names the module
-     `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `daemon`, `update`,
-     `sandbox`, `kernel`, `safefile`, `peers` and `guard`. The plugins in the same checkout stay writable.
+     `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `update`, `sandbox`,
+     `safefile`, `peers` and `guard`. They hold the keys and the secrets, decide whom the node trusts and keep
+     the rules of the tools and of `rebuild`. The plugins and the other packages in the same checkout stay
+     writable.
    - What decides how a checkout is built, what the build fetches and runs, and where the frame hands out what
      no plugin gets, is read and never changed: `go.mod`, `go.sum`, `go.work`, `go.work.sum`, `Makefile`,
      `install.sh`, `scripts/`, `cmd/` and `internal/cli/`. A new dependency therefore takes you; so does handing
@@ -537,7 +539,7 @@ owner's alone, like every command of the UI: no agent and no peer reaches it.
 
 | Category | Shows | Changes |
 |---|---|---|
-| The node | name, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node | the name; the accesses in `/setup`, the model in `/model`, both opened from here |
+| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node | the name and the description (empty is the default); the accesses in `/setup`, the model in `/model`, both opened from here |
 | The agents | the context provider and those this build has; whether `rebuild` may build without a sandbox, and whether there is one | both |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with its settings | all tools, each tool, its settings |
@@ -551,10 +553,10 @@ categories. A text, like the name, a path or the settings of a tool (a JSON obje
 
 - **Every change is checked before it is written**, the way the node checks its configuration when it starts:
   an unknown tool, a setting a tool does not take, a protected path that is none, a context provider this
-  build does not have, a plugin turned off that another one needs. What fails changes nothing, and the footer
-  says why.
+  build does not have, a plugin turned off that another one needs, a description of more than one line or
+  300 characters. What fails changes nothing, and the footer says why.
 - **The footer says from when a change holds.** The name, the tools, the paths and the context provider hold
-  from the next message, for you and for peers. Whether `rebuild` may build without a sandbox holds for the
+  from the next message, for you and for peers. The description holds for the next one who reads the card. Whether `rebuild` may build without a sandbox holds for the
   next rebuild. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
   `/start` the node. Until then its line says that it runs, or that it does not.
 - **All tools.** Turning a tool off while all tools are allowed lists every other tool by its name instead
@@ -602,8 +604,8 @@ it is a model of another provider, see [Providers and accesses](#providers-and-a
 
 | Tool | Does |
 |---|---|
-| `get_config()` | returns the configuration as JSON: ID, name, model, `provider` (what the access in use is called) and `tools`. The key of the node and what the accesses sign in with are not in it, and neither is the ID of the access. What is not set shows with the default that holds (`h2a`, `a2a`, `protected`) |
-| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you, and the agent is told its id |
+| `get_config()` | returns the configuration as JSON: ID, name, description, model, `provider` (what the access in use is called) and `tools`. The key of the node and what the accesses sign in with are not in it, and neither is the ID of the access. What is not set shows with the default that holds (`description`, `h2a`, `a2a`, `protected`) |
+| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you, and the agent is told its id |
 | `withdraw_proposal(id?)` | takes back one of the agent's own proposals before you decided on it: with `id` the one it names, without an id it lists what waits, with their ids. Nothing is changed by it, and what you decided on is out of reach |
 
 **Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a
@@ -613,8 +615,9 @@ node: now is read from `config.json` when the list is shown, then is the value t
 write. Only the line "your agent says" is the text of the agent.
 
 - The value is checked the way the node checks its configuration when it starts: an unknown tool, a tool that
-  is listed twice, a setting a tool does not have, a value of the wrong type or a protected path that is none
-  is an error the agent gets at once, and no proposal.
+  is listed twice, a setting a tool does not have, a value of the wrong type, a protected path that is none
+  or a description of more than one line or 300 characters is an error the agent gets at once, and no
+  proposal.
 - The key of the node and the access to the LLM cannot be proposed: not which access the node answers
   through, and nothing of what an access holds, which is not in the configuration at all. A proposal that a
   peer talked your agent into must not send your conversations to another server. You change them alone, in

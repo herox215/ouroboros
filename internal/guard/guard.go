@@ -31,10 +31,12 @@ const Module = "ouroboros"
 const goMod = "go.mod"
 
 // corePackages are the packages of the core, below the directory of a
-// checkout. No tool changes them; the plugins next to them stay writable.
+// checkout: those that hold the keys and the secrets, decide whom the node
+// trusts, and keep the rules of the tools and of rebuild. No tool changes
+// them; the plugins and the other packages next to them stay writable.
 var corePackages = []string{
 	"internal/identity", "internal/a2a", "internal/contacts", "internal/config", "internal/home",
-	"internal/daemon", "internal/update", "internal/sandbox", "internal/kernel", "internal/safefile", "internal/peers",
+	"internal/update", "internal/sandbox", "internal/safefile", "internal/peers",
 	"internal/guard",
 }
 

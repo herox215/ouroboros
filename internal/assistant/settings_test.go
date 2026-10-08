@@ -152,7 +152,14 @@ func TestProposeConfig(t *testing.T) {
 	if !strings.HasPrefix(got, `Proposed, and nothing is changed yet: name is to become "you" instead of "me".`) {
 		t.Fatalf("a name: %q", got)
 	}
-	if len(c.waiting()) != 3 || c.config().Name != "me" {
+	got = c.tool(toolProposeConfig, propose{"description", "knows the way", "say what I do"})
+	if !strings.HasPrefix(got, `Proposed, and nothing is changed yet: description is to become "knows the way" instead of "Ouroboros instance named me".`) {
+		t.Fatalf("a description: %q", got)
+	}
+	if got := c.tool(toolProposeConfig, propose{"description", "two\nlines", "r"}); !strings.HasPrefix(got, "error: nothing was proposed: description is one line") {
+		t.Fatalf("a description of two lines: %q", got)
+	}
+	if len(c.waiting()) != 4 || c.config().Name != "me" || c.config().Description != "" {
 		t.Fatalf("waiting: %+v", c.waiting())
 	}
 }
@@ -254,7 +261,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		{propose{"api_key", "sk-mine", "r"}, `error: nothing was proposed: api_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
 		{propose{"private_key", "mine", "r"}, `error: nothing was proposed: private_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
 		{propose{"base_url", "http://evil.example/v1", "r"}, `error: nothing was proposed: base_url is changed by the owner alone, with ouro start --setup: no proposal changes it`},
-		{propose{"tools", map[string]any{}, "r"}, `error: nothing was proposed: the configuration has no field "tools" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
+		{propose{"tools", map[string]any{}, "r"}, `error: nothing was proposed: the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
 		{propose{"", "x", "r"}, `error: propose_config needs "path", "value" and "reason"`},
 		{propose{"name", nil, "r"}, `error: propose_config needs "path", "value" and "reason"`},
 		{propose{"name", "x", ""}, `error: propose_config needs "path", "value" and "reason"`},
@@ -330,6 +337,12 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 			t.Errorf("%s in h2a: %v", name, err)
 		}
 	}
+	// A description written by hand is checked like a proposed one.
+	cfg.Description = "two\nlines"
+	if err := c.builder.Check(cfg); err == nil || !strings.HasPrefix(err.Error(), "description is one line") {
+		t.Errorf("a description of two lines: %v", err)
+	}
+	cfg.Description = ""
 	// Every tool for peers is every tool there is for peers.
 	cfg.Tools = &config.Tools{A2A: config.Named("*")}
 	tools, err := c.builder.peerTools(cfg)

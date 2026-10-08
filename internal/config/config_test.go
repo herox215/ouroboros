@@ -397,13 +397,13 @@ func TestFiles(t *testing.T) {
 // A field is read as it applies, with the default that holds for what is not
 // set, and written from JSON of its type.
 func TestFields(t *testing.T) {
-	if got := Fields(); !reflect.DeepEqual(got, []string{"name", "model", "tools.h2a", "tools.a2a", "tools.protected"}) {
+	if got := Fields(); !reflect.DeepEqual(got, []string{"name", "description", "model", "tools.h2a", "tools.a2a", "tools.protected"}) {
 		t.Fatalf("the fields: %v", got)
 	}
 	c := Config{Name: "alpha", Model: "gpt", BaseURL: "http://x", APIKey: "sk", PrivateKey: "key"}
 	protected, _ := json.Marshal(DefaultProtected())
 	for path, want := range map[string]string{
-		"name": `"alpha"`, "model": `"gpt"`, "tools.h2a": `["*"]`, "tools.a2a": `[]`, "tools.protected": string(protected),
+		"name": `"alpha"`, "description": `"Ouroboros instance named alpha"`, "model": `"gpt"`, "tools.h2a": `["*"]`, "tools.a2a": `[]`, "tools.protected": string(protected),
 	} {
 		if got, err := c.Field(path); err != nil || string(got) != want {
 			t.Errorf("%s = %s, %v; want %s", path, got, err, want)
@@ -419,6 +419,8 @@ func TestFields(t *testing.T) {
 
 	for _, tt := range []struct{ path, value, want string }{
 		{"name", `"beta"`, `"beta"`},
+		{"description", `"knows the way"`, `"knows the way"`},
+		{"description", `""`, `"Ouroboros instance named alpha"`},
 		{"model", `"gpt-5"`, `"gpt-5"`},
 		{"tools.h2a", `["list_peers", {"tool": "read", "deny": ["~/tax"]}]`, `["list_peers",{"deny":["~/tax"],"tool":"read"}]`},
 		{"tools.a2a", `["*"]`, `["*"]`},
@@ -435,9 +437,10 @@ func TestFields(t *testing.T) {
 			t.Errorf("%s = %s reads as %s", tt.path, tt.value, got)
 		}
 		// Nothing else changes, and the one it was copied from stays as it was.
+		// The default description is made of the name, and follows it.
 		for _, other := range Fields() {
 			was, _ := c.Field(other)
-			if now, _ := changed.Field(other); other != tt.path && string(now) != string(was) {
+			if now, _ := changed.Field(other); other != tt.path && string(now) != string(was) && (tt.path != FieldName || other != FieldDescription) {
 				t.Errorf("%s = %s changed %s to %s", tt.path, tt.value, other, now)
 			}
 		}
@@ -462,6 +465,9 @@ func TestFields(t *testing.T) {
 	for _, tt := range []struct{ path, value, want string }{
 		{"name", `""`, "name cannot be empty"},
 		{"model", `""`, "model cannot be empty"},
+		{"description", `"two\nlines"`, "description is one line"},
+		{"description", `"a\ttab"`, "description is one line"},
+		{"description", `3`, "description: json: cannot unmarshal number"},
 		{"name", `["beta"]`, "name: json: cannot unmarshal array into Go value of type string"},
 		{"name", `nope`, "name: invalid character 'o' in literal null (expecting 'u')"},
 		{"tools.h2a", `"*"`, "tools.h2a: json: cannot unmarshal string into Go value of type []config.Entry"},
@@ -474,8 +480,8 @@ func TestFields(t *testing.T) {
 		{"api_key", `"mine"`, "api_key is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"base_url", `"http://evil"`, "base_url is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"access", `"other"`, "access is changed by the owner alone, with ouro start --setup: no proposal changes it"},
-		{"tools", `{}`, `the configuration has no field "tools" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
-		{"", `1`, `the configuration has no field "" that can be proposed: there are name, model, tools.h2a, tools.a2a, tools.protected`},
+		{"tools", `{}`, `the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
+		{"", `1`, `the configuration has no field "" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
 		{FieldUnsandboxed, `true`, "rebuild_without_sandbox is set by the owner alone, in config.json: no proposal changes it"},
 	} {
 		changed := c
@@ -487,6 +493,45 @@ func TestFields(t *testing.T) {
 	for _, path := range []string{"private_key", "access", "api_key", "base_url", "rebuild_without_sandbox", "tools", "nope"} {
 		if got, err := c.Field(path); err == nil || got != nil {
 			t.Errorf("reading %s: %s, %v", path, got, err)
+		}
+	}
+}
+
+// A node says what its owner wrote about it, or what it is called. The
+// default is no description of its own: it follows the name.
+func TestDescription(t *testing.T) {
+	c := Config{Name: "alpha"}
+	if got := c.About(); got != "Ouroboros instance named alpha" {
+		t.Fatalf("the default: %q", got)
+	}
+	c.Description = "knows the way"
+	if got := c.About(); got != "knows the way" {
+		t.Fatalf("set: %q", got)
+	}
+	// Set to the default, it is none, and a new name is in it.
+	if err := c.SetField(FieldDescription, json.RawMessage(`"Ouroboros instance named alpha"`)); err != nil || c.Description != "" {
+		t.Fatalf("the default set: %q, %v", c.Description, err)
+	}
+	if c.Name = "beta"; c.About() != "Ouroboros instance named beta" {
+		t.Fatalf("after a new name: %q", c.About())
+	}
+	if b, _ := json.Marshal(c); strings.Contains(string(b), "description") {
+		t.Errorf("the default is written: %s", b)
+	}
+
+	for _, s := range []string{"", "knows the way", strings.Repeat("ü", MaxDescription), "Grüße 👋"} {
+		if err := ValidDescription(s); err != nil {
+			t.Errorf("%q: %v", s, err)
+		}
+	}
+	for s, want := range map[string]string{
+		strings.Repeat("ü", MaxDescription+1): "description has 301 characters, at most 300 are kept",
+		"two\nlines":                          "description is one line, without tabs or other control characters",
+		"\x1b[31mred":                         "description is one line, without tabs or other control characters",
+		"\u0085":                              "description is one line, without tabs or other control characters",
+	} {
+		if err := ValidDescription(s); err == nil || err.Error() != want {
+			t.Errorf("%q: %v, want %q", s, err, want)
 		}
 	}
 }

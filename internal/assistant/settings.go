@@ -62,7 +62,7 @@ func ownerOnly(ctx context.Context, tool string) error {
 
 func (b Builder) getConfig() agent.Tool {
 	tool := agent.NewTool(toolGetConfig,
-		"Show the configuration of this node as JSON, with defaults for what is not set: name, model, the provider that answers, and under \"tools\" "+
+		"Show the configuration of this node as JSON, with defaults for what is not set: name, description (what the agent card of the node tells anyone about it), model, the provider that answers, and under \"tools\" "+
 			"the tools for your owner (h2a), for peers (a2a) and the paths no tool for files touches (protected).",
 		nil,
 		func(ctx context.Context, _ struct{}) (string, error) {
@@ -95,8 +95,9 @@ func (b Builder) proposeConfig() agent.Tool {
 		Description: "Propose one change of the configuration to your owner, who accepts or refuses it in the terminal UI. " +
 			"Look at it with " + toolGetConfig + " first, and propose the whole new value of one field.",
 		Schema: `{"type":"object","properties":{` +
-			`"path":{"type":"string","description":"the field: name, model, tools.h2a, tools.a2a or tools.protected"},` +
-			`"value":{"description":"the new value of the field as JSON: a text for name and model, a list for the others"},` +
+			`"path":{"type":"string","description":"the field: name, description, model, tools.h2a, tools.a2a or tools.protected"},` +
+			`"value":{"description":"the new value of the field as JSON: a text for name, description and model, a list for the others. ` +
+			`The description is public, one line of at most 300 characters; an empty one is the default"},` +
 			`"reason":{"type":"string","description":"one sentence on why, for your owner to read"}},` +
 			`"required":["path","value","reason"]}`,
 		OwnerOnly: true,
@@ -211,8 +212,8 @@ func (b Builder) propose(args proposeArgs) (proposal.Proposal, error) {
 }
 
 // Check reports whether the agents of a node can be built from cfg: an
-// unknown tool, a tool that is listed twice, a setting a tool does not take
-// and a protected path that is none are errors.
+// unknown tool, a tool that is listed twice, a setting a tool does not take,
+// a protected path that is none and a description that is no line are errors.
 func (b Builder) Check(cfg config.Config) error {
 	if _, err := b.ownerTools(cfg); err != nil {
 		return err
@@ -223,5 +224,5 @@ func (b Builder) Check(cfg config.Config) error {
 	if err := guard.Valid(cfg.Protected()); err != nil {
 		return fmt.Errorf("tools.protected: %w", err)
 	}
-	return nil
+	return config.ValidDescription(cfg.Description)
 }

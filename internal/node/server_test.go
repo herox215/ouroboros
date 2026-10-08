@@ -385,6 +385,9 @@ func TestCard(t *testing.T) {
 	if got.Description != "Ouroboros instance named alpha" {
 		t.Errorf("description %q", got.Description)
 	}
+	if got := card(config.Config{Name: "alpha", Description: "knows the way"}, ""); got.Description != "knows the way" {
+		t.Errorf("description of its own %q", got.Description)
+	}
 	if len(got.Skills) != 1 || got.Skills[0].ID != "chat" || got.Skills[0].Description != "Chat with gpt" {
 		t.Errorf("skills %+v", got.Skills)
 	}

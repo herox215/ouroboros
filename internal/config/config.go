@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"ouroboros/internal/identity"
 	"ouroboros/internal/safefile"
@@ -38,6 +40,9 @@ type Config struct {
 	BaseURL string `json:"base_url,omitempty"`
 	APIKey  string `json:"api_key,omitempty"`
 	Name    string `json:"name"`
+	// Description is what the node says about itself in its agent card, ""
+	// for the default, see About.
+	Description string `json:"description,omitempty"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	// The ID of the node follows from it, see ID. Older configs also stored
@@ -182,6 +187,35 @@ func (c Config) Protected() []string {
 	return *c.Tools.Protected
 }
 
+// MaxDescription is how many characters the description of a node has at
+// most: as many as a peer shows of it.
+const MaxDescription = 300
+
+// About is what the node says about itself in its agent card: its
+// description, or the default that holds without one.
+func (c Config) About() string {
+	if c.Description == "" {
+		return defaultAbout(c.Name)
+	}
+	return c.Description
+}
+
+// defaultAbout is the description of a node named name that has none.
+func defaultAbout(name string) string { return "Ouroboros instance named " + name }
+
+// ValidDescription reports whether s can be the description of a node. It is
+// public, anyone reads it in the agent card, and peers show it in a line: it
+// is one line of at most MaxDescription characters.
+func ValidDescription(s string) error {
+	if n := utf8.RuneCountInString(s); n > MaxDescription {
+		return fmt.Errorf("description has %d characters, at most %d are kept", n, MaxDescription)
+	}
+	if strings.ContainsFunc(s, unicode.IsControl) {
+		return errors.New("description is one line, without tabs or other control characters")
+	}
+	return nil
+}
+
 // Files are the files in dir that hold the configuration, with the key of
 // the node, and the file that is locked while it is changed.
 func Files(dir string) []string {
@@ -260,16 +294,17 @@ func Update(dir string, change func(*Config) error) error {
 // The fields of the configuration by the names a proposal of the agent uses
 // for them, see Field.
 const (
-	FieldName      = "name"
-	FieldModel     = "model"
-	FieldOwner     = "tools.h2a"
-	FieldPeers     = "tools.a2a"
-	FieldProtected = "tools.protected"
+	FieldName        = "name"
+	FieldDescription = "description"
+	FieldModel       = "model"
+	FieldOwner       = "tools.h2a"
+	FieldPeers       = "tools.a2a"
+	FieldProtected   = "tools.protected"
 )
 
 // Fields are the fields the agent of the owner may propose a change of.
 func Fields() []string {
-	return []string{FieldName, FieldModel, FieldOwner, FieldPeers, FieldProtected}
+	return []string{FieldName, FieldDescription, FieldModel, FieldOwner, FieldPeers, FieldProtected}
 }
 
 // reserved are the fields no proposal changes: who the node is, and where the
@@ -287,6 +322,8 @@ func (c Config) field(path string) (any, error) {
 	switch path {
 	case FieldName:
 		return c.Name, nil
+	case FieldDescription:
+		return c.About(), nil
 	case FieldModel:
 		return c.Model, nil
 	case FieldOwner:
@@ -317,7 +354,8 @@ func (c Config) Field(path string) (json.RawMessage, error) {
 }
 
 // SetField sets the field path to value, which is JSON. A value of the wrong
-// type is an error and changes nothing. Whether the tools a list names exist
+// type is an error and changes nothing. An empty description, or one that is
+// the default, leaves the default to hold. Whether the tools a list names exist
 // is not for the configuration to know.
 func (c *Config) SetField(path string, value json.RawMessage) error {
 	if _, err := c.field(path); err != nil {
@@ -328,11 +366,15 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 		tools []Entry
 		paths []string
 	)
-	into := map[string]any{FieldName: &text, FieldModel: &text, FieldOwner: &tools, FieldPeers: &tools, FieldProtected: &paths}[path]
+	into := map[string]any{FieldName: &text, FieldDescription: &text, FieldModel: &text, FieldOwner: &tools, FieldPeers: &tools, FieldProtected: &paths}[path]
 	if err := json.Unmarshal(value, into); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	if into == &text && text == "" {
+	if path == FieldDescription {
+		if err := ValidDescription(text); err != nil {
+			return err
+		}
+	} else if into == &text && text == "" {
 		return fmt.Errorf("%s cannot be empty", path)
 	}
 	// Null is no list: the default it would stand for is written out instead.
@@ -348,6 +390,11 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 	switch path {
 	case FieldName:
 		c.Name = text
+	case FieldDescription:
+		c.Description = text
+		if text == defaultAbout(c.Name) {
+			c.Description = ""
+		}
 	case FieldModel:
 		c.Model = text
 	case FieldOwner:
@@ -369,10 +416,11 @@ func (c Config) Public(provider string) json.RawMessage {
 	b, _ := json.MarshalIndent(struct {
 		ID                    string `json:"id"`
 		Name                  string `json:"name"`
+		Description           string `json:"description"`
 		Model                 string `json:"model"`
 		Provider              string `json:"provider"`
 		Tools                 Tools  `json:"tools"`
 		RebuildWithoutSandbox bool   `json:"rebuild_without_sandbox"`
-	}{c.ID(), c.Name, c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}, c.RebuildWithoutSandbox}, "", "  ")
+	}{c.ID(), c.Name, c.About(), c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}, c.RebuildWithoutSandbox}, "", "  ")
 	return b
 }

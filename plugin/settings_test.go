@@ -214,6 +214,21 @@ func TestChange(t *testing.T) {
 	}
 	refused(plugin.Setting{Kind: plugin.SetName, Value: " "}, "name cannot be empty")
 
+	if holds := change(plugin.Setting{Kind: plugin.SetDescription, Value: " knows the way "}); read().Description != "knows the way" || !strings.Contains(holds, "card of the node") {
+		t.Errorf("description: %q, %q", read().Description, holds)
+	}
+	if s, _ := o.Settings(tools(), nil); s.Description != "knows the way" || s.DescriptionDefault {
+		t.Errorf("description shown: %q, %v", s.Description, s.DescriptionDefault)
+	}
+	refused(plugin.Setting{Kind: plugin.SetDescription, Value: "two\nlines"}, "description is one line")
+	refused(plugin.Setting{Kind: plugin.SetDescription, Value: strings.Repeat("x", config.MaxDescription+1)}, "at most 300")
+	if change(plugin.Setting{Kind: plugin.SetDescription, Value: " "}); read().Description != "" {
+		t.Errorf("no description: %q", read().Description)
+	}
+	if s, _ := o.Settings(tools(), nil); s.Description != "Ouroboros instance named beta" || !s.DescriptionDefault {
+		t.Errorf("the default shown: %q, %v", s.Description, s.DescriptionDefault)
+	}
+
 	if holds := change(plugin.Setting{Kind: plugin.SetContextProvider, Value: "compact"}); read().ContextProvider != "compact" || !strings.Contains(holds, "from the next message") {
 		t.Errorf("provider: %q", holds)
 	}

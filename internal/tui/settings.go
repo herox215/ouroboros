@@ -207,7 +207,7 @@ var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection
 
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
-	nodeSection:      "the name, the access to the LLM, the model",
+	nodeSection:      "the name, the description, the access to the LLM, the model",
 	agentsSection:    "the context provider, rebuild without a sandbox",
 	pluginsSection:   "which plugins are turned on",
 	ownerSection:     "what your agent may do when you ask it",
@@ -240,6 +240,12 @@ func rows(s Settings) []row {
 
 	add(nodeSection, "Name", s.Name, "what the node is called on the network, and your agent too",
 		editing("the name of the node", s.Name, func(v string) Setting { return Setting{Kind: plugin.SetName, Value: v} }))
+	about := "public: anyone reads it in the agent card; empty is the default"
+	if s.DescriptionDefault {
+		about = "the default; public: anyone reads it in the agent card"
+	}
+	add(nodeSection, "Description", s.Description, about,
+		editing("the description of the node", s.Description, func(v string) Setting { return Setting{Kind: plugin.SetDescription, Value: v} }))
 	access := s.Access
 	if s.About != "" {
 		access += " · " + s.About

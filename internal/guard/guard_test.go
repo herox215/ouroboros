@@ -431,10 +431,13 @@ func TestSourceOfTheCore(t *testing.T) {
 		}
 		w.allowed(a, Read, src+"/"+pkg+"/new.go", src+"/"+pkg+"/new.go")
 	}
-	if len(corePackages) != 12 || corePackages[11] != "internal/guard" || !slices.Contains(corePackages, "internal/sandbox") {
+	if len(corePackages) != 10 || corePackages[9] != "internal/guard" || !slices.Contains(corePackages, "internal/sandbox") {
 		t.Errorf("the packages of the core: %v", corePackages)
 	}
 	w.refused(a, Write, "~/share/id/identity.go", ruleCore)
+	for _, pkg := range []string{"internal/daemon", "internal/kernel"} {
+		w.allowed(a, Write, src+"/"+pkg+"/new.go", src+"/"+pkg+"/new.go")
+	}
 
 	// What decides what a build fetches and runs, and where the frame
 	// hands out what plugins do not get.

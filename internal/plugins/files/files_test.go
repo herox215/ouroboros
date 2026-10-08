@@ -635,13 +635,13 @@ func TestDeleteRecursiveKeepsWhatItMayNot(t *testing.T) {
 		t.Fatal("the state of the node was deleted")
 	}
 	w.file("~/tree/go.mod", "module ouroboros\n")
-	w.file("~/tree/internal/kernel/kernel.go", "package kernel\n")
+	w.file("~/tree/internal/guard/guard.go", "package guard\n")
 	got, err = w.run(owner, Delete, deleteArgs{Path: "~/tree/internal", Recursive: true})
 	refused(t, got, err, "source of the core")
 	got, err = w.run(owner, Delete, deleteArgs{Path: "~/tree", Recursive: true})
 	refused(t, got, err, "it decides how ouroboros is built")
 	intact("a checkout")
-	if w.content("~/tree/internal/kernel/kernel.go") != "package kernel\n" {
+	if w.content("~/tree/internal/guard/guard.go") != "package guard\n" {
 		t.Fatal("the core was deleted")
 	}
 

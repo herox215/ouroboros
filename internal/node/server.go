@@ -282,7 +282,7 @@ func card(cfg config.Config, version string) a2a.AgentCard {
 	return a2a.AgentCard{
 		ProtocolVersion:    a2a.ProtocolVersion,
 		Name:               cfg.Name,
-		Description:        "Ouroboros instance named " + cfg.Name,
+		Description:        cfg.About(),
 		PreferredTransport: "JSONRPC",
 		Version:            version,
 		// No streaming: that is A2A's message/stream, which the node does not

@@ -36,6 +36,11 @@ const (
 // like its endpoint or its account.
 type Settings struct {
 	Name, Access, About, Model, ID string
+	// Description is what the node says about itself in its agent card;
+	// DescriptionDefault says that the configuration has none and the
+	// default holds.
+	Description        string
+	DescriptionDefault bool
 	// ContextProvider is the one selected, "" for none; ContextProviders
 	// are the ones this build has.
 	ContextProvider  string
@@ -97,6 +102,7 @@ const (
 	SetTool                                     // For, Name, On
 	SetToolSettings                             // For, Name, Value: a JSON object, "" for none
 	SetProtected                                // Value: one path a line; On resets to the default
+	SetDescription                              // Value, "" for the default
 )
 
 // Setting is one change the owner makes in the settings.
@@ -170,6 +176,7 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 	access, _ := o.home.Credentials().Get(cfg.Access) // one that is no more shows as nothing
 	s := Settings{
 		Name: cfg.Name, Access: access.Label(), About: access.About, Model: cfg.Model, ID: cfg.ID(),
+		Description: cfg.About(), DescriptionDefault: cfg.Description == "",
 		ContextProvider: cfg.ContextProvider, RebuildWithoutSandbox: cfg.RebuildWithoutSandbox,
 		PluginsKept: o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
@@ -253,7 +260,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "rebuild without a sandbox", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "rebuild without a sandbox", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -276,6 +283,9 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 	case SetName:
 		name, _ := json.Marshal(strings.TrimSpace(s.Value)) // a text: cannot fail
 		return "saved: the node is called so from now on, also on the network", c.SetField(config.FieldName, name)
+	case SetDescription:
+		description, _ := json.Marshal(strings.TrimSpace(s.Value)) // a text: cannot fail
+		return "saved: the card of the node says so from now on, for anyone who reads it", c.SetField(config.FieldDescription, description)
 	case SetContextProvider:
 		if s.Value != "" && !slices.ContainsFunc(providers, func(p ContextProvider) bool { return p.Name == s.Value }) {
 			return "", fmt.Errorf("this build has no context provider %q", s.Value)
