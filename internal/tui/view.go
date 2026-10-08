@@ -491,6 +491,9 @@ func cacheRate(c plugin.SessionCache) string {
 
 func (m *Model) footerView() string {
 	help := "enter send · alt+enter new line · /help commands · ctrl+s sessions · pgup/pgdn scroll · ctrl+c quit"
+	if m.chat.pending {
+		help = "esc stop · " + help
+	}
 	if found, _ := m.suggestions(); len(found) > 0 {
 		help = "↑↓ select · tab complete · enter run · ctrl+c quit"
 	}

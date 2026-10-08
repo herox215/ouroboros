@@ -584,6 +584,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "pgdown":
 		return m.scrollBy(&m.history, m.history.Height())
 	case "esc":
+		// In the chat there is nothing to go back from: it stops the answer
+		// on its way here, as /cancel does.
+		if m.chat.pending {
+			return m.cancel()
+		}
 		return nil
 	case "enter":
 		return m.send()

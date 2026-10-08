@@ -140,7 +140,7 @@ Keys only move around:
 | `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `pgup` `pgdn` | scroll the chat |
-| `esc` | back from a screen to the chat |
+| `esc` | on a screen: back to the chat. In the chat: stop the answer on its way in the conversation shown, like `/cancel` |
 | `ctrl+c` | quit, everywhere |
 
 ### Sessions
@@ -173,7 +173,10 @@ So an answer does not depend on the UI:
   is shown at once and kept in the archive; the call is part of no conversation and not in the log. An
   answer that is in before the title waits for it, 20 seconds at most.
 - **Two front ends** see the same: the UI lists the conversations `ouro chat` had too.
-- `/cancel` stops the answer on its way in the conversation shown. Stopping the node stops every answer.
+- `/cancel` stops the answer on its way in the conversation shown, and so does `esc` in the chat: the call
+  of the LLM and the tools that can be stopped end, the conversation stays as far as it got, and the next
+  message goes on from there. What a tool already did is not undone. The other conversations go on.
+  Stopping the node stops every answer.
 - **Steering.** What you send while an answer is on its way is queued, and shown as that below the
   conversation. The agent takes it as soon as the tools it waits for have run, as a message of yours after
   their results, or, if the answer is given before, as your next message. Either way it goes at the end of

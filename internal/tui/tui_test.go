@@ -111,6 +111,8 @@ type fakeBackend struct {
 
 	mu   sync.Mutex
 	sent []sent // the messages asked for
+	// canceled are the sessions whose answer was stopped, in order.
+	canceled []string
 	// unsteers is how often a message that waits was asked back.
 	unsteers int
 
@@ -209,6 +211,9 @@ func (f *fakeBackend) Unsteer(ctx context.Context, id string) (string, error) {
 	return f.sessions.Unsteer(ctx, id)
 }
 func (f *fakeBackend) Cancel(ctx context.Context, id string) error {
+	f.mu.Lock()
+	f.canceled = append(f.canceled, id)
+	f.mu.Unlock()
 	if err := f.fail["cancel"]; err != nil {
 		return err
 	}
@@ -828,6 +833,61 @@ func askUntilCancelled(b *fakeBackend) <-chan struct{} {
 		return "", ctx.Err()
 	}
 	return stopped
+}
+
+// esc in the chat stops the answer on its way in the session shown, and only
+// that one: on a screen it goes back, and without an answer it does nothing.
+func TestEscapeStopsTheAnswer(t *testing.T) {
+	m, b := newModel(t)
+	if press(m, "esc") != nil || m.notice != "" || len(b.canceled) != 0 {
+		t.Fatalf("nothing to stop: %q, %v", m.notice, b.canceled)
+	}
+	if strings.Contains(m.View().Content, "esc stop") {
+		t.Fatal("esc stops nothing while no answer is on its way")
+	}
+	b.ask = func(ctx context.Context, step func(Step), _ func(string)) (string, error) {
+		step(Step{Text: "asking beta"})
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	first := m.chat
+	drive(t, m, say(t, m, "ping"), func() bool { return first.doing == "asking beta" })
+
+	// On a screen esc goes back, and the answer goes on.
+	run(m, "/help")
+	if press(m, "esc") != nil || m.screen != screenChat || len(b.canceled) != 0 || !first.pending {
+		t.Fatalf("esc on a screen: screen %v, canceled %v", m.screen, b.canceled)
+	}
+
+	// Another session answers too: esc stops the one shown.
+	drive(t, m, run(m, "/new"), func() bool { return true })
+	second := m.chat
+	drive(t, m, say(t, m, "pong"), func() bool { return second.doing == "asking beta" })
+	if !strings.Contains(m.View().Content, "esc stop · enter send") {
+		t.Fatalf("the footer should say what esc does:\n%s", m.View().Content)
+	}
+	cmd := press(m, "esc")
+	if m.notice != "stopping the answer…" {
+		t.Fatalf("notice %q", m.notice)
+	}
+	drive(t, m, cmd, func() bool { return !second.pending && m.notice == "answer stopped" })
+	if e := second.entries[len(second.entries)-1]; !e.failed || e.text != "stopped before it answered" {
+		t.Fatalf("entries %+v", second.entries)
+	}
+	if !first.pending || len(b.canceled) != 1 || b.canceled[0] != second.contextID {
+		t.Fatalf("only the session shown is stopped: %v", b.canceled)
+	}
+
+	// Stopped, there is nothing more to stop, and the session answers again.
+	if press(m, "esc") != nil || len(b.canceled) != 1 {
+		t.Fatalf("stopped twice: %v", b.canceled)
+	}
+	b.ask = nil
+	answered(t, m, say(t, m, "more"))
+	if e := second.entries[len(second.entries)-1]; e.text != "pong" || e.failed {
+		t.Fatalf("entries %+v", second.entries)
+	}
+	b.sessions.Cancel(context.Background(), first.contextID)
 }
 
 // awaitStop fails the test unless the pending answer gives up soon.
