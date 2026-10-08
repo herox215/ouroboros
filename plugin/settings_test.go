@@ -118,6 +118,7 @@ var providers = []plugin.ContextProvider{{Name: "compact"}, {Name: "compact"}, {
 func TestSettings(t *testing.T) {
 	cfg := clitest.NodeConfig(clitest.Settings(t))
 	cfg.APIKey, cfg.ContextProvider, cfg.RebuildWithoutSandbox, cfg.BashWithoutSandbox = "sk-secret", "compact", true, true
+	cfg.RebuildWithoutTests = true
 	cfg.Tools = &config.Tools{H2A: []config.Entry{{Tool: "*"}, {Tool: "read", Settings: json.RawMessage(`{}`)}},
 		A2A: []config.Entry{{Tool: "read", Settings: json.RawMessage(`{"allow":["~/share"]}`)}}}
 	o, _, _ := built(t, cfg)
@@ -131,7 +132,7 @@ func TestSettings(t *testing.T) {
 	// The access shows as what it is called and where it reaches, as the
 	// node made it of the endpoint of the configuration.
 	if s.Name != cfg.Name || s.Access != "localhost" || s.About != cfg.BaseURL || s.Model != cfg.Model || s.ID != cfg.ID() ||
-		s.ContextProvider != "compact" || !slices.Equal(s.ContextProviders, []string{"compact", "other"}) || !s.RebuildWithoutSandbox || !s.BashWithoutSandbox ||
+		s.ContextProvider != "compact" || !slices.Equal(s.ContextProviders, []string{"compact", "other"}) || !s.RebuildWithoutSandbox || !s.RebuildWithoutTests || !s.BashWithoutSandbox ||
 		!s.ProtectedDefault || !slices.Equal(s.Protected, config.DefaultProtected()) {
 		t.Fatalf("settings %+v", s)
 	}
@@ -239,6 +240,12 @@ func TestChange(t *testing.T) {
 
 	if holds := change(plugin.Setting{Kind: plugin.SetRebuildWithoutSandbox, On: true}); !read().RebuildWithoutSandbox || !strings.Contains(holds, "next rebuild") {
 		t.Errorf("rebuild: %q", holds)
+	}
+	if holds := change(plugin.Setting{Kind: plugin.SetRebuildWithoutTests, On: true}); !read().RebuildWithoutTests || !strings.Contains(holds, "next rebuild") {
+		t.Errorf("rebuild without the tests: %q", holds)
+	}
+	if s := (plugin.Setting{Kind: plugin.SetRebuildWithoutTests}).String(); s != "rebuild without the tests" {
+		t.Errorf("logged as %q", s)
 	}
 	if holds := change(plugin.Setting{Kind: plugin.SetBashWithoutSandbox, On: true}); !read().BashWithoutSandbox || !strings.Contains(holds, "next command of bash") {
 		t.Errorf("bash: %q", holds)

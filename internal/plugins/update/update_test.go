@@ -153,7 +153,8 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 
 	tools := plugin.All[plugin.Tool](ctx)
 	at := slices.IndexFunc(tools, func(tool plugin.Tool) bool { return tool.Name == updateplugin.Rebuild })
-	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "in a sandbox without network") {
+	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "in a sandbox without network") ||
+		!strings.Contains(tools[at].Description, "rebuild_without_sandbox and rebuild_without_tests") {
 		t.Fatalf("tools %+v", tools)
 	}
 	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild, Args: json.RawMessage(`{}`)}); got != "building and testing "+src {
@@ -193,24 +194,41 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 	}
 }
 
-// Whether a build may run without a sandbox is the owner's word in the
-// configuration, and nobody else's.
+// Whether a build may run without a sandbox, and be installed without its
+// tests, is the owner's word in the configuration, and nobody else's.
 func TestUnsandboxedIsTheOwnersWord(t *testing.T) {
 	s := clitest.Settings(t)
 	app, _ := clitest.NewApp(t, s, "")
 	updater, _ := cli.Service[*update.Updater](app)
-	if updater.Unsandboxed() {
+	if updater.Unsandboxed() || updater.Untested() {
 		t.Error("allowed without a configuration")
 	}
 	cfg := clitest.NodeConfig(s)
 	cfg.RebuildWithoutSandbox = true
 	config.Save(s.Home, cfg)
-	if !updater.Unsandboxed() {
+	if !updater.Unsandboxed() || updater.Untested() {
 		t.Error("not allowed, although the owner said so")
 	}
+	cfg.RebuildWithoutSandbox, cfg.RebuildWithoutTests = false, true
+	config.Save(s.Home, cfg)
+	if updater.Unsandboxed() || !updater.Untested() {
+		t.Error("the tests are not left out, although the owner said so")
+	}
 	os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600)
-	if updater.Unsandboxed() {
+	if updater.Unsandboxed() || updater.Untested() {
 		t.Error("allowed by a configuration that cannot be read")
+	}
+}
+
+// A build installed without its tests says so to the agent.
+func TestRebuildToolWithoutTests(t *testing.T) {
+	src := source(t, "v2", "false")
+	s := clitest.Settings(t)
+	exe := filepath.Join(t.TempDir(), "ouro")
+	updater := &update.Updater{Source: src, Dir: filepath.Join(s.Home, "update"), Untested: func() bool { return true }}
+	got, err := updateplugin.Tool(home.Dir(s.Home), updater, func() (string, error) { return exe, nil })(context.Background())
+	if err != nil || !strings.HasPrefix(got, "built "+src+" and installed the build as "+exe+", without running the tests, as your owner set it. ") {
+		t.Fatalf("got %q, %v", got, err)
 	}
 }
 

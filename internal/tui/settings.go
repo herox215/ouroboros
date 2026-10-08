@@ -208,7 +208,7 @@ var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
 	nodeSection:      "the name, the description, the access to the LLM, the model",
-	agentsSection:    "the context provider, rebuild without a sandbox",
+	agentsSection:    "the context provider, how rebuild builds, bash without a sandbox",
 	pluginsSection:   "which plugins are turned on",
 	ownerSection:     "what your agent may do when you ask it",
 	peersSection:     "what your agent may do when a peer asks it",
@@ -264,19 +264,23 @@ func rows(s Settings) []row {
 	}
 	add(agentsSection, "Context provider", provider,
 		"what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it", choices...)
-	allowed := "no"
-	if s.RebuildWithoutSandbox {
-		allowed = "yes, with network"
-	}
-	note := "rebuild builds and tests in a sandbox here, so this is not used"
-	if s.Sandbox != "" {
-		note = "there is no sandbox here (" + s.Sandbox + "): with yes, rebuild builds as you, with network"
-	}
+	allowed, note := "no", "rebuild builds and tests in a sandbox: without network, writing only where the build goes"
 	toggle := set("allow", Setting{Kind: plugin.SetRebuildWithoutSandbox, On: true})
 	if s.RebuildWithoutSandbox {
+		allowed, note = "yes, with network", "rebuild builds and tests as you: with network, and with all you may write in reach"
 		toggle = set("refuse", Setting{Kind: plugin.SetRebuildWithoutSandbox})
 	}
+	if s.Sandbox != "" {
+		note += "; there is no sandbox here (" + s.Sandbox + "), so without yes rebuild builds nothing"
+	}
 	add(agentsSection, "Rebuild without a sandbox", allowed, note, toggle)
+	allowed, note = "no", "rebuild installs a build only once make test passes"
+	toggle = set("allow", Setting{Kind: plugin.SetRebuildWithoutTests, On: true})
+	if s.RebuildWithoutTests {
+		allowed, note = "yes", "rebuild installs a build once it builds, without running the tests: one that breaks ouro is installed all the same"
+		toggle = set("refuse", Setting{Kind: plugin.SetRebuildWithoutTests})
+	}
+	add(agentsSection, "Rebuild without the tests", allowed, note, toggle)
 	allowed, note = "no", "bash runs its commands in a sandbox: without network, and only where the tools for files may write"
 	toggle = set("allow", Setting{Kind: plugin.SetBashWithoutSandbox, On: true})
 	if s.BashWithoutSandbox {

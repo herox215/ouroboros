@@ -131,8 +131,10 @@ type Updater struct {
 	Revision string    // commit Exe was built from
 	Out      io.Writer // git and build output
 	// Unsandboxed reports whether the owner lets Rebuild build without a
-	// sandbox where there is none. Nil is no.
+	// sandbox, and Untested whether it installs without running the tests.
+	// Nil is no.
 	Unsandboxed func() bool
+	Untested    func() bool
 }
 
 // Latest returns the newest commit on main.
@@ -181,15 +183,16 @@ var ErrNoSource = errors.New("this ouro does not know its source: build it with 
 
 // Rebuild installs a build of the checkout at Source over Exe: of its files
 // as they are now, committed or not. Nothing is installed unless the build
-// and the tests of the checkout pass.
+// and the tests of the checkout pass; the tests run unless Untested says
+// otherwise.
 //
 // It goes in two steps. First the frame downloads the modules go.mod and
 // go.sum name, with network, and Go checks them against go.sum: nothing of
 // the checkout runs then. Then the build and the tests run in a sandbox,
 // without network and writing only to a temporary directory, the stage and
-// the build cache of Go, with the modules downloaded. Where there is no
-// sandbox, Rebuild builds only if Unsandboxed says so, as before: with
-// network, and with a warning in the output.
+// the build cache of Go, with the modules downloaded. When Unsandboxed says
+// so they run without one, with network, and the output says so. Where
+// there is no sandbox, Rebuild builds only then.
 //
 // Both steps run the Go that GoTool finds, in an environment the frame
 // fixes: no file of go env, no go.work, no other toolchain, modules only as
@@ -232,20 +235,21 @@ func (u Updater) Rebuild(ctx context.Context) error {
 	}
 	env = append(env, "GOPROXY=off", "TMPDIR="+tmp)
 	box := &sandbox.Policy{Writable: []string{tmp, stage, cache}}
-	if why := sandboxAvailable(); why != nil {
-		if u.Unsandboxed == nil || !u.Unsandboxed() {
-			return fmt.Errorf("%w: %w", ErrNoSandbox, why)
-		}
+	unsandboxed := u.Unsandboxed != nil && u.Unsandboxed()
+	if why := sandboxAvailable(); why != nil && !unsandboxed {
+		return fmt.Errorf("%w: %w", ErrNoSandbox, why)
+	}
+	if unsandboxed {
 		box = nil
-		if u.Out != nil {
-			fmt.Fprintf(u.Out, "warning: %v; the owner lets the build run without one, with network\n", why)
-		}
+		u.say("warning: the owner lets the build run without a sandbox, with network\n")
 	}
 	// The build goes to the temporary directory: the checkout is not
 	// written.
-	steps := [][]string{
-		{"make", "install", "BIN=" + filepath.Join(tmp, "ouro")},
-		{"make", "test"},
+	steps := [][]string{{"make", "install", "BIN=" + filepath.Join(tmp, "ouro")}}
+	if u.Untested != nil && u.Untested() {
+		u.say("warning: the owner lets the build be installed without running the tests\n")
+	} else {
+		steps = append(steps, []string{"make", "test"})
 	}
 	for _, step := range steps {
 		if _, err := u.runIn(ctx, u.Source, env, box, step[0], step[1:]...); err != nil {
@@ -255,13 +259,21 @@ func (u Updater) Rebuild(ctx context.Context) error {
 	return replace(filepath.Join(stage, "bin", "ouro"), u.Exe)
 }
 
+// say writes text to Out, if there is one.
+func (u Updater) say(text string) {
+	if u.Out != nil {
+		fmt.Fprint(u.Out, text)
+	}
+}
+
 // sandboxAvailable reports why there is no sandbox; tests replace it.
 var sandboxAvailable = sandbox.Available
 
 // ErrNoSandbox is the error of a rebuild on a system without a sandbox that
 // the owner did not allow to build without one.
 var ErrNoSandbox = errors.New("rebuild builds and tests in a sandbox, and there is none: " +
-	`only the owner can let it build without one, with "rebuild_without_sandbox": true in the configuration`)
+	`only the owner can let it build without one, with "rebuild_without_sandbox": true in the configuration, ` +
+	`set in the settings or proposed to them`)
 
 // refusals are what the output of a command says of what a sandbox refused.
 var refusals = []string{"operation not permitted", "read-only file system", "network is unreachable"}

@@ -51,10 +51,13 @@ type Config struct {
 	// Tools says which tools the agent may use, by who it is talking to, and
 	// how far they go. Without it the owner gets every tool and peers get none.
 	Tools *Tools `json:"tools,omitempty"`
-	// RebuildWithoutSandbox lets the tool rebuild build and test without a
-	// sandbox, with network, on a system that has none. Only the owner sets
-	// it: no proposal does.
+	// RebuildWithoutSandbox makes the tool rebuild build and test without a
+	// sandbox, with network, also where there is one; without it rebuild
+	// builds nothing where there is none. RebuildWithoutTests makes it
+	// install a build without running the tests first. The owner sets them,
+	// or accepts a proposal of them.
 	RebuildWithoutSandbox bool `json:"rebuild_without_sandbox,omitempty"`
+	RebuildWithoutTests   bool `json:"rebuild_without_tests,omitempty"`
 	// BashWithoutSandbox lets the tool bash run its commands without a
 	// sandbox, wherever there is one: with network, and with nothing of the
 	// rules for files. Only the owner sets it: no proposal does.
@@ -304,11 +307,13 @@ const (
 	FieldOwner       = "tools.h2a"
 	FieldPeers       = "tools.a2a"
 	FieldProtected   = "tools.protected"
+	FieldUnsandboxed = "rebuild_without_sandbox"
+	FieldUntested    = "rebuild_without_tests"
 )
 
 // Fields are the fields the agent of the owner may propose a change of.
 func Fields() []string {
-	return []string{FieldName, FieldDescription, FieldModel, FieldOwner, FieldPeers, FieldProtected}
+	return []string{FieldName, FieldDescription, FieldModel, FieldOwner, FieldPeers, FieldProtected, FieldUnsandboxed, FieldUntested}
 }
 
 // reserved are the fields no proposal changes: who the node is, and where the
@@ -316,13 +321,9 @@ func Fields() []string {
 // them to another server.
 var reserved = []string{"private_key", "access", "api_key", "base_url"}
 
-// FieldUnsandboxed is the field that lets rebuild build without a sandbox,
-// and FieldBashUnsandboxed the one that lets bash run without one, which no
-// proposal changes either.
-const (
-	FieldUnsandboxed     = "rebuild_without_sandbox"
-	FieldBashUnsandboxed = "bash_without_sandbox"
-)
+// FieldBashUnsandboxed is the field that lets bash run without a sandbox,
+// which no proposal changes either.
+const FieldBashUnsandboxed = "bash_without_sandbox"
 
 // field returns the value of the field path as it applies: one that is not
 // set has the default that holds for it.
@@ -340,8 +341,12 @@ func (c Config) field(path string) (any, error) {
 		return append([]Entry{}, c.PeerTools()...), nil // none is an empty list, not null
 	case FieldProtected:
 		return c.Protected(), nil
+	case FieldUnsandboxed:
+		return c.RebuildWithoutSandbox, nil
+	case FieldUntested:
+		return c.RebuildWithoutTests, nil
 	}
-	if path == FieldUnsandboxed || path == FieldBashUnsandboxed {
+	if path == FieldBashUnsandboxed {
 		return nil, fmt.Errorf("%s is set by the owner alone, in config.json: no proposal changes it", path)
 	}
 	if slices.Contains(reserved, path) {
@@ -373,8 +378,10 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 		text  string
 		tools []Entry
 		paths []string
+		on    bool
 	)
-	into := map[string]any{FieldName: &text, FieldDescription: &text, FieldModel: &text, FieldOwner: &tools, FieldPeers: &tools, FieldProtected: &paths}[path]
+	into := map[string]any{FieldName: &text, FieldDescription: &text, FieldModel: &text, FieldOwner: &tools, FieldPeers: &tools, FieldProtected: &paths,
+		FieldUnsandboxed: &on, FieldUntested: &on}[path]
 	if err := json.Unmarshal(value, into); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
@@ -389,7 +396,8 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 	if (into == &tools && tools == nil) || (into == &paths && paths == nil) {
 		return fmt.Errorf("%s has to be a list", path)
 	}
-	if c.Tools == nil && into != &text {
+	listed := into == &tools || into == &paths
+	if c.Tools == nil && listed {
 		c.Tools = &Tools{}
 	} else if c.Tools != nil {
 		copied := *c.Tools // the Tools of the caller's copy are not changed
@@ -411,6 +419,10 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 		c.Tools.A2A = tools
 	case FieldProtected:
 		c.Tools.Protected = &paths
+	case FieldUnsandboxed:
+		c.RebuildWithoutSandbox = on
+	case FieldUntested:
+		c.RebuildWithoutTests = on
 	}
 	return nil
 }
@@ -429,8 +441,9 @@ func (c Config) Public(provider string) json.RawMessage {
 		Provider              string `json:"provider"`
 		Tools                 Tools  `json:"tools"`
 		RebuildWithoutSandbox bool   `json:"rebuild_without_sandbox"`
+		RebuildWithoutTests   bool   `json:"rebuild_without_tests"`
 		BashWithoutSandbox    bool   `json:"bash_without_sandbox"`
 	}{c.ID(), c.Name, c.About(), c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected},
-		c.RebuildWithoutSandbox, c.BashWithoutSandbox}, "", "  ")
+		c.RebuildWithoutSandbox, c.RebuildWithoutTests, c.BashWithoutSandbox}, "", "  ")
 	return b
 }

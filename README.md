@@ -228,9 +228,12 @@ the loopback interface cannot be told from the network, and it does not limit co
 file system.
 
 **Without a sandbox** (bubblewrap is missing or cannot run), `rebuild` builds nothing and tells the agent
-why. You, and only you, can let it build as before, with network and without a sandbox, by setting
-`"rebuild_without_sandbox": true` in `config.json`; the output then starts with a warning. The agent sees the
-setting with `get_config` and cannot propose it, and the tools for files never write `config.json`.
+why. You can let it build without a sandbox, with network, with `"rebuild_without_sandbox": true`; this
+holds wherever there is a sandbox too. With `"rebuild_without_tests": true` it installs a build once it
+builds, without running `make test`. Both are switches of the agents in `/settings`, and the output of a
+build starts with a warning for each that is on. Your agent sees them with `get_config` and may propose
+them (say "let rebuild run without the tests and without a sandbox"), but a proposal changes nothing until
+you accept it in `/pending`. The tools for files never write `config.json`.
 
 When something fails in the sandbox and its output says that something was not permitted, that a file system
 is read only or that the network is unreachable, the agent is told that the sandbox refused it, and that
@@ -662,8 +665,8 @@ it is a model of another provider, see [Providers and accesses](#providers-and-a
 
 | Tool | Does |
 |---|---|
-| `get_config()` | returns the configuration as JSON: ID, name, description, model, `provider` (what the access in use is called) and `tools`. The key of the node and what the accesses sign in with are not in it, and neither is the ID of the access. What is not set shows with the default that holds (`description`, `h2a`, `a2a`, `protected`) |
-| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you, and the agent is told its id |
+| `get_config()` | returns the configuration as JSON: ID, name, description, model, `provider` (what the access in use is called) and `tools`. The key of the node and what the accesses sign in with are not in it, and neither is the ID of the access. What is not set shows with the default that holds (`description`, `h2a`, `a2a`, `protected`), and so do the switches of `rebuild` and `bash` |
+| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a`, `tools.protected`, `rebuild_without_sandbox` or `rebuild_without_tests`, with a sentence on why. The proposal waits for you, and the agent is told its id |
 | `withdraw_proposal(id?)` | takes back one of the agent's own proposals before you decided on it: with `id` the one it names, without an id it lists what waits, with their ids. Nothing is changed by it, and what you decided on is out of reach |
 
 **Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a

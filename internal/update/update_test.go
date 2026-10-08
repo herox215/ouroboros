@@ -226,13 +226,70 @@ func TestRebuildWithoutSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectFile(t, exe, "v1")
-	if !strings.Contains(out.String(), "warning: no sandbox here; the owner lets the build run without one, with network\n") {
+	if !strings.Contains(out.String(), "warning: the owner lets the build run without a sandbox, with network\n") {
 		t.Errorf("output %q", out.String())
 	}
 	// Outside of the sandbox, nothing says the sandbox refused something.
 	updatetest.Tests(t, src, "echo operation not permitted; exit 1")
 	if err := u.Rebuild(context.Background()); err == nil || strings.Contains(err.Error(), "sandbox") {
 		t.Errorf("failed without a sandbox: %v", err)
+	}
+}
+
+// Where there is a sandbox, the owner lets the build run without one all the
+// same, with network.
+func TestRebuildUnsandboxed(t *testing.T) {
+	sandboxed(t)
+	src, _ := updatetest.NewRepo(t, "v1")
+	updatetest.Tests(t, src, `test "$$OURO_SANDBOX" = "`+os.Getenv(sandbox.Env)+`"`) // not one of its own
+	exe := filepath.Join(t.TempDir(), "ouro")
+	var out bytes.Buffer
+	u := update.Updater{Source: src, Dir: t.TempDir(), Exe: exe, Out: &out, Unsandboxed: func() bool { return true }}
+	if err := u.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, exe, "v1")
+	if !strings.Contains(out.String(), "warning: the owner lets the build run without a sandbox, with network\n") {
+		t.Errorf("output %q", out.String())
+	}
+	// Without the switch the tests run in the sandbox, which this test
+	// tells apart from where it runs.
+	u.Unsandboxed = func() bool { return false }
+	if err := u.Rebuild(context.Background()); err == nil {
+		t.Error("the tests ran without a sandbox")
+	}
+}
+
+// The owner lets the build be installed without running the tests; without
+// that, tests that fail keep it from being installed.
+func TestRebuildUntested(t *testing.T) {
+	update.WithoutSandbox(t, errors.New("no sandbox here"))
+	src, _ := updatetest.NewRepo(t, "v1")
+	updatetest.Tests(t, src, "exit 1")
+	exe := filepath.Join(t.TempDir(), "ouro")
+	var out bytes.Buffer
+	u := update.Updater{Source: src, Dir: t.TempDir(), Exe: exe, Unsandboxed: func() bool { return true }}
+	for _, untested := range []func() bool{nil, func() bool { return false }} {
+		u.Untested = untested
+		if err := u.Rebuild(context.Background()); err == nil {
+			t.Fatal("installed with tests that fail")
+		}
+	}
+	if _, err := os.Stat(exe); err == nil {
+		t.Fatal("installed with tests that fail")
+	}
+	u.Out, u.Untested = &out, func() bool { return true }
+	if err := u.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, exe, "v1")
+	if !strings.Contains(out.String(), "warning: the owner lets the build be installed without running the tests\n") {
+		t.Errorf("output %q", out.String())
+	}
+	// Without an output nothing is said.
+	u.Out = nil
+	if err := u.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

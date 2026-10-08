@@ -45,6 +45,10 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				Unsandboxed: func() bool {
 					cfg, err := dir.Config()
 					return err == nil && cfg.RebuildWithoutSandbox
+				},
+				Untested: func() bool {
+					cfg, err := dir.Config()
+					return err == nil && cfg.RebuildWithoutTests
 				}},
 		}
 		plugin.Add(ctx, plugin.Command{Name: "update", Help: "build and install the newest version", Run: c.run})
@@ -54,6 +58,8 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				"The modules go.mod names are downloaded first; the build and the tests run in a sandbox without network beyond localhost, "+
 				"which writes only to a temporary directory and the build cache: go.mod, go.sum, the Makefile, install.sh, scripts, cmd "+
 				"and internal/cli are your owner's, as is the core. "+
+				"Your owner may turn off the sandbox and the tests (rebuild_without_sandbox and rebuild_without_tests in the configuration, "+
+				"which you may propose to them); the output says so when they are off. "+
 				"Only when everything passes is the binary replaced; "+
 				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. "+
 				"Once you have answered, the node starts anew with the new build and the conversation goes on there, "+
@@ -132,6 +138,9 @@ func (c *updateCommand) rebuild(ctx context.Context, _ struct{}) (string, error)
 		return "", fmt.Errorf("%w; nothing was installed. The end of the output:\n%s", err, tail(out.Bytes()))
 	}
 	done := "built " + u.Source + ", its tests pass, and the build is installed as " + u.Exe + ". "
+	if u.Untested != nil && u.Untested() {
+		done = "built " + u.Source + " and installed the build as " + u.Exe + ", without running the tests, as your owner set it. "
+	}
 	// The node this runs in cannot stop itself while the answer is on its
 	// way: it takes its own place once the answer is given.
 	if plugin.Restart(ctx, u.Exe) {

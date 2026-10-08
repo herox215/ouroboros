@@ -164,6 +164,43 @@ func TestProposeConfig(t *testing.T) {
 	}
 }
 
+// The agent proposes how rebuild builds: without a sandbox, and without the
+// tests. Nothing changes until the owner accepts it, and the bash sandbox is
+// no proposal.
+func TestProposeRebuild(t *testing.T) {
+	c := newConfigured(t)
+	got := c.tool(toolProposeConfig, propose{"rebuild_without_sandbox", true, "the owner asked for it"})
+	if !strings.HasPrefix(got, "Proposed, and nothing is changed yet: rebuild_without_sandbox is to become true instead of false.") {
+		t.Fatalf("without a sandbox: %q", got)
+	}
+	// A switch handed over as a text is taken as the switch.
+	got = c.tool(toolProposeConfig, propose{"rebuild_without_tests", "true", "the owner asked for it"})
+	if !strings.HasPrefix(got, "Proposed, and nothing is changed yet: rebuild_without_tests is to become true instead of false.") {
+		t.Fatalf("without the tests: %q", got)
+	}
+	if got := c.tool(toolProposeConfig, propose{"rebuild_without_tests", "maybe", "r"}); !strings.HasPrefix(got, "error: nothing was proposed: rebuild_without_tests: json: cannot unmarshal") {
+		t.Fatalf("no switch: %q", got)
+	}
+	if got := c.tool(toolProposeConfig, propose{"bash_without_sandbox", true, "r"}); !strings.HasPrefix(got, "error: nothing was proposed: bash_without_sandbox is set by the owner alone") {
+		t.Fatalf("bash: %q", got)
+	}
+	list := c.waiting()
+	if cfg := c.config(); len(list) != 2 || cfg.RebuildWithoutSandbox || cfg.RebuildWithoutTests {
+		t.Fatalf("waiting %+v with %+v", list, cfg)
+	}
+	for _, p := range list {
+		if _, err := c.proposals.Accept(c.dir, p.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if cfg := c.config(); !cfg.RebuildWithoutSandbox || !cfg.RebuildWithoutTests || cfg.BashWithoutSandbox {
+		t.Fatalf("accepted: %+v", cfg)
+	}
+	if got := c.tool(toolGetConfig, struct{}{}); !strings.Contains(got, `"rebuild_without_sandbox": true`) || !strings.Contains(got, `"rebuild_without_tests": true`) {
+		t.Fatalf("shown: %s", got)
+	}
+}
+
 // withdraw are the arguments of the tool that takes a proposal back.
 type withdraw struct {
 	ID string `json:"id,omitempty"`
@@ -261,7 +298,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		{propose{"api_key", "sk-mine", "r"}, `error: nothing was proposed: api_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
 		{propose{"private_key", "mine", "r"}, `error: nothing was proposed: private_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
 		{propose{"base_url", "http://evil.example/v1", "r"}, `error: nothing was proposed: base_url is changed by the owner alone, with ouro start --setup: no proposal changes it`},
-		{propose{"tools", map[string]any{}, "r"}, `error: nothing was proposed: the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
+		{propose{"tools", map[string]any{}, "r"}, `error: nothing was proposed: the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected, rebuild_without_sandbox, rebuild_without_tests`},
 		{propose{"", "x", "r"}, `error: propose_config needs "path", "value" and "reason"`},
 		{propose{"name", nil, "r"}, `error: propose_config needs "path", "value" and "reason"`},
 		{propose{"name", "x", ""}, `error: propose_config needs "path", "value" and "reason"`},
