@@ -16,6 +16,7 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
@@ -60,13 +61,14 @@ func (a *fakeAgent) Run(ctx context.Context, _, _ string, observe func(assistant
 	}
 	return a.reply, a.err
 }
-func (a *fakeAgent) Context(string) int                          { return a.contextSize }
-func (a *fakeAgent) Cache(string) assistant.Cache                { return a.cache }
-func (a *fakeAgent) Contents(string) (assistant.Contents, error) { return assistant.Contents{}, nil }
-func (a *fakeAgent) Inspection(string) (agent.Inspection, bool)  { return agent.Inspection{}, false }
-func (a *fakeAgent) Conversation(string) json.RawMessage         { return nil }
-func (a *fakeAgent) Resume(string, json.RawMessage) error        { return nil }
-func (a *fakeAgent) Forget(string)                               {}
+func (a *fakeAgent) Context(string) int                                      { return a.contextSize }
+func (a *fakeAgent) Cache(string) assistant.Cache                            { return a.cache }
+func (a *fakeAgent) Contents(string) (assistant.Contents, error)             { return assistant.Contents{}, nil }
+func (a *fakeAgent) Inspection(string) (agent.Inspection, bool)              { return agent.Inspection{}, false }
+func (a *fakeAgent) Conversation(string) json.RawMessage                     { return nil }
+func (a *fakeAgent) Resume(string, json.RawMessage) error                    { return nil }
+func (a *fakeAgent) Forget(string)                                           {}
+func (a *fakeAgent) Title(context.Context, []openai.Message) (string, error) { return "", nil }
 
 // fakeBackend is what the UI controls in the tests. Its sessions are those
 // of the node, in this process: their answers come from the fakeAgent.

@@ -27,6 +27,7 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
+	"ouroboros/internal/openai"
 )
 
 // Kind is what an Event tells.
@@ -52,6 +53,9 @@ const (
 	// start anew from the binary in Text: the node takes its own place, and
 	// a front end may do the same.
 	Restart Kind = "restart"
+	// Title names the session for its topic, in Text, once the agent can
+	// tell it: on the way to an answer, and anew when the session is loaded.
+	Title Kind = "title"
 )
 
 // Event is one thing that happened in a session. It is plain data, written
@@ -91,8 +95,9 @@ func (e Event) AsStep() assistant.Step {
 // Info describes a session for a list of them.
 type Info struct {
 	ID string `json:"id"`
-	// Title is the first message of the owner in it, at most maxTitle
-	// bytes of it.
+	// Title names it for its topic, see the Event Title; until there is one
+	// it is the first message of the owner in it, at most maxTitle bytes of
+	// it.
 	Title   string    `json:"title"`
 	Running bool      `json:"running"` // an answer is on its way
 	Last    time.Time `json:"last"`    // when the last Event happened
@@ -172,6 +177,14 @@ var (
 // maxTitle is how much of the first message the Title of a session has.
 const maxTitle = 200
 
+// titleTries is after how many messages in a session the agent gives up to
+// name it, when it cannot tell a topic; titleTime is how long it may take
+// for one.
+const (
+	titleTries = 3
+	titleTime  = 20 * time.Second
+)
+
 // watchBuffer is how many Events a watcher may fall behind before it is let
 // go.
 const watchBuffer = 1024
@@ -187,6 +200,7 @@ type Assistant interface {
 	Conversation(contextID string) json.RawMessage
 	Resume(contextID string, conversation json.RawMessage) error
 	Forget(contextID string)
+	Title(ctx context.Context, conversation []openai.Message) (string, error)
 }
 
 // Service holds the sessions of the owner in the process of the node.
@@ -222,6 +236,10 @@ type session struct {
 	// from where it is kept, until the agent is told so with the next
 	// message; zero otherwise.
 	resumed time.Time
+	// title names the session for its topic, "" until the agent named it;
+	// tries is for how many messages it was asked to.
+	title string
+	tries int
 }
 
 // New returns the Service of the sessions with agent.
@@ -313,18 +331,26 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	s.answering++
 	s.release = false // somebody wants the node
 	s.emit(se, Event{Kind: Message, Text: text})
+	named := make(chan struct{})
+	if se.title == "" && se.tries < titleTries {
+		se.tries++
+		go s.name(ctx, se, said(se.events), named)
+	} else {
+		close(named)
+	}
 	if !se.resumed.IsZero() {
 		text = resumed(se.resumed, s.now()) + text
 		se.resumed = time.Time{}
 	}
 	s.answers.Add(1)
-	go s.answer(ctx, se, text, s.replace != nil)
+	go s.answer(ctx, se, text, s.replace != nil, named)
 	return nil
 }
 
 // answer runs the answer to text in se and tells what happens on the way.
-// With restartable a tool may ask for ouro to start anew.
-func (s *Service) answer(ctx context.Context, se *session, text string, restartable bool) {
+// With restartable a tool may ask for ouro to start anew. It ends once named
+// is closed: the session is named, or not, on the way.
+func (s *Service) answer(ctx context.Context, se *session, text string, restartable bool, named <-chan struct{}) {
 	defer s.answers.Done()
 	if restartable {
 		ctx = WithRestart(ctx, func(exe string) {
@@ -340,6 +366,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.add(se, e)
 	}, func(said string) { s.add(se, Event{Kind: Say, Text: said}) })
+	<-named
 	end := Event{Kind: Answer, Text: reply}
 	switch {
 	case err != nil && ctx.Err() != nil:
@@ -359,6 +386,49 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		s.successor, se.restart = se.restart, ""
 	}
 	s.settle()
+}
+
+// name asks the agent for the title of se, with what was said in it, while
+// the answer to the last message runs, and tells it once it has one: it is
+// kept along with the session. named is closed then.
+func (s *Service) name(ctx context.Context, se *session, conversation []openai.Message, named chan<- struct{}) {
+	defer close(named)
+	asking, stop := context.WithTimeout(ctx, titleTime)
+	defer stop()
+	title, err := s.agent.Title(asking, conversation)
+	if len(title) > history.MaxTitle {
+		title = strings.ToValidUTF8(title[:history.MaxTitle], "")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.archive != nil && err != nil && ctx.Err() == nil {
+		s.archive.log("the session %s cannot be named: %v", se.id, err)
+	}
+	if title == "" {
+		return
+	}
+	se.title = title
+	s.emit(se, Event{Kind: Title, Text: title})
+	if s.archive != nil {
+		if err := s.archive.SetTitle(history.Owner(se.id), title); err != nil {
+			s.archive.log("the title of the session %s cannot be kept: %v", se.id, err)
+		}
+	}
+}
+
+// said is what the owner and the agent said in events: the messages and the
+// answers.
+func said(events []Event) []openai.Message {
+	var msgs []openai.Message
+	for _, e := range events {
+		switch e.Kind {
+		case Message:
+			msgs = append(msgs, openai.Message{Role: "user", Content: e.Text})
+		case Answer:
+			msgs = append(msgs, openai.Message{Role: "assistant", Content: e.Text})
+		}
+	}
+	return msgs
 }
 
 // add tells what happened in se.
@@ -488,7 +558,7 @@ func (s *Service) List(context.Context) ([]Info, error) {
 		if len(se.events) == 0 {
 			continue
 		}
-		title := se.events[0].Text
+		title := cmp.Or(se.title, se.events[0].Text)
 		if len(title) > maxTitle {
 			title = strings.ToValidUTF8(title[:maxTitle], "")
 		}

@@ -16,6 +16,13 @@ import (
 // Key is the API key NewServer accepts.
 const Key = "sk-good"
 
+// TitlePrompt starts the system prompt of a request to name a conversation,
+// Untitled is what it is answered with.
+const (
+	TitlePrompt = "Name the topic of the conversation"
+	Untitled    = "NONE"
+)
+
 // Models are the models the fake server offers.
 var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 
@@ -28,7 +35,10 @@ var Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "tts-1", "whisper-1"}
 // run, whose description lists the tool as a function, and not the tool
 // itself gets a call to run with a script that calls the tool and gives back
 // its result, or "error: " and its error, as the call itself would.
-// The message "?system" is answered with the system prompt.
+// The message "?system" is answered with the system prompt. A request to name
+// a conversation, whose system prompt starts with TitlePrompt, is answered
+// with Untitled: the nodes of a test name no session, which they would do at
+// a time of their own.
 // A request that asks for a stream gets the reply in pieces, as an API does.
 func NewServer(t testing.TB) string {
 	return NewServerWithKey(t, Key)
@@ -57,6 +67,9 @@ func NewServerWithKey(t testing.TB, key string) string {
 		msg := openai.Message{Role: "assistant", Content: fmt.Sprintf("[%s] turns=%d last=%s", in.Model, len(in.Messages)-1, last.Content)}
 		if last.Content == "?system" {
 			msg.Content = in.Messages[0].Content
+		}
+		if strings.HasPrefix(in.Messages[0].Content, TitlePrompt) {
+			msg.Content = Untitled
 		}
 		call, ok := toolCall(last)
 		offered := func(name string) bool {

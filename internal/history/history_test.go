@@ -678,3 +678,80 @@ func TestListAndDelete(t *testing.T) {
 		}
 	}
 }
+
+// A conversation that was given a title is named by it, in place of its first
+// message: on one line, cut to MaxTitle. The title goes with it.
+func TestTitles(t *testing.T) {
+	a := at(t)
+	if title, err := a.Title(Owner(owner.Session)); err != nil || title != "" {
+		t.Fatalf("none: %q, %v", title, err)
+	}
+	// A conversation is given its title before it is archived, too.
+	if err := a.SetTitle(Owner(owner.Session), "  Roof\n repairs  "); err != nil {
+		t.Fatal(err)
+	}
+	a.Append(owner, question, nil)
+	if title, err := a.Title(Owner(owner.Session)); err != nil || title != "Roof repairs" {
+		t.Fatalf("title %q, %v", title, err)
+	}
+	if out, _, _ := a.Sessions(owner); !strings.HasPrefix(out, "chat-1 (this conversation) · started 2026-10-06 ") || !strings.Contains(out, ` · "Roof repairs"`) {
+		t.Errorf("sessions %q", out)
+	}
+	if entries, _ := a.List(); len(entries) != 1 || entries[0].Title != "Roof repairs" {
+		t.Errorf("entries %+v", entries)
+	}
+	long := strings.Repeat("t", MaxTitle-1) + "ü"
+	a.SetTitle(Owner(owner.Session), long)
+	if title, _ := a.Title(Owner(owner.Session)); title != long[:MaxTitle-1] {
+		t.Errorf("long title %q", title)
+	}
+	whole := strings.Repeat("t", MaxTitle)
+	a.SetTitle(Owner(owner.Session), whole)
+	if title, _ := a.Title(Owner(owner.Session)); title != whole {
+		t.Errorf("title of %d bytes %q", MaxTitle, title)
+	}
+	if err := a.Delete(Owner(owner.Session)); err != nil {
+		t.Fatal(err)
+	}
+	if title, err := a.Title(Owner(owner.Session)); err != nil || title != "" {
+		t.Errorf("deleted: %q, %v", title, err)
+	}
+
+	// What is no title, or names no conversation, fails, as does what
+	// cannot be written or read.
+	if err := a.SetTitle(Owner(owner.Session), " \n "); err == nil {
+		t.Error("an empty title should fail")
+	}
+	for _, id := range []string{"chat-1", "owner/../x"} {
+		if err := a.SetTitle(id, "x"); err == nil || !strings.Contains(err.Error(), "names no session") {
+			t.Errorf("set %q: %v", id, err)
+		}
+		if _, err := a.Title(id); err == nil || !strings.Contains(err.Error(), "names no session") {
+			t.Errorf("get %q: %v", id, err)
+		}
+	}
+	b := at(t)
+	os.MkdirAll(filepath.Dir(b.dir), 0o700)
+	os.WriteFile(b.dir, nil, 0o600)
+	if err := b.SetTitle(Owner(owner.Session), "x"); err == nil {
+		t.Error("an archive that is a file should fail")
+	}
+	c := at(t)
+	c.Append(owner, question, nil)
+	os.MkdirAll(filepath.Join(c.dir, ownerDir, "chat-1.title", "x"), 0o700)
+	if err := c.SetTitle(Owner(owner.Session), "x"); err == nil {
+		t.Error("a title that is a directory should fail")
+	}
+	if _, err := c.Title(Owner(owner.Session)); err == nil {
+		t.Error("a title that cannot be read should fail")
+	}
+	if entries, _ := c.List(); len(entries) != 1 || entries[0].Title != question[0].Content {
+		t.Errorf("entries %+v", entries)
+	}
+	if err := c.Delete(Owner(owner.Session)); err == nil {
+		t.Error("a title that cannot be removed should fail")
+	}
+	if _, err := os.Stat(c.file(owner, "chat-1")); err != nil {
+		t.Errorf("the conversation is gone without its title: %v", err)
+	}
+}

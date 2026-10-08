@@ -145,11 +145,17 @@ So an answer does not depend on the UI:
   log and in the history. Open the UI again and the conversation is there, the answer too. A node the UI
   started stops once no answer is on its way.
 - **Several conversations at once.** `/new` starts a new conversation and leaves the one before going on.
-  `/session` (or `ctrl+s`) lists the conversations of the node: each with the start of your first message
-  and when something last happened in it, and behind those whose answer is on its way a small animation. The
+  `/session` (or `ctrl+s`) lists the conversations of the node: each with its title and when something last
+  happened in it, and behind those whose answer is on its way a small animation. The
   one shown is marked. `enter` shows the one selected, with an answer on its way as usual. When an answer
   comes in in a conversation that is not shown, the footer says so (`answered in “…” · /session`). What you
   typed stays with the conversation you typed it in; `ctrl+s` takes you to the list without clearing it.
+- **Titles.** A conversation is named for its topic. With each of your first three messages, while the
+  answer runs, the model of the node is asked for a title of a few words from what you and the agent said
+  so far, without the calls of tools. A greeting alone has no topic yet: then it is asked again with the
+  next message. Until there is a title, the start of your first message names the conversation. The title
+  is shown at once and kept in the archive; the call is part of no conversation and not in the log. An
+  answer that is in before the title waits for it, 20 seconds at most.
 - **Two front ends** see the same: the UI lists the conversations `ouro chat` had too.
 - `/cancel` stops the answer on its way in the conversation shown. Stopping the node stops every answer.
 
@@ -561,7 +567,7 @@ plugin takes the tools away, and the node archives all the same.
 |---|---|---|
 | `history_search(query, scope?, limit?)` | the records that contain a text, ignoring case: per hit the session, the time, the number of the record, its role and the text around the hit. `scope` is `current` (the default) or `all` | 20 hits, at most 50 with `limit`, and 16 KiB |
 | `history_read(session?, from?, count?)` | the records of a conversation in order, from a number on, with a note where to continue; without `session` the current conversation | 20 records, at most 200 with `count`, and 32 KiB; a record that does not fit alone is cut |
-| `history_sessions()` | the archived conversations, the most recent first, with when they started and their first message | 50 |
+| `history_sessions()` | the archived conversations, the most recent first, with when they started and their title, or else their first message | 50 |
 
 - **Who reaches what.** For you, `current` is the conversation you are in, and `all` every one of yours. A
   peer reaches the conversation it is in and nothing else: `all`, a session it names that is not its
@@ -575,7 +581,8 @@ plugin takes the tools away, and the node archives all the same.
   object per line: the number of the record within the conversation, the answer it belongs to, the time the
   answer ended, the role, the text, and the calls with their names and arguments. The last record of an
   answer says whether it was answered, failed or canceled; why it failed is not kept, as a peer reads its
-  own conversation. A conversation that goes on after a restart goes on in its file. Directories are 0700,
+  own conversation. A conversation that goes on after a restart goes on in its file. The title of a
+  conversation of yours is in `history/owner/<session>.title`, and goes with it. Directories are 0700,
   files 0600.
 - **The archive holds what your agent saw.** Everything a tool gave back is in it, such as the content of a
   file the agent read, on disk below `~/.config/ouroboros/history/`, until you delete it. The tools for

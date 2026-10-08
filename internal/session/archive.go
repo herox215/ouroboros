@@ -69,7 +69,15 @@ func (s *Service) load(id string) *session {
 	if err := s.agent.Resume(id, memory); err != nil {
 		s.archive.log("what the agent remembers of the session %s is lost: %v", id, err)
 	}
-	return &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: records[len(records)-1].Time}
+	last := records[len(records)-1].Time
+	title, err := s.archive.Title(history.Owner(id))
+	if err != nil {
+		s.archive.log("the title of the session %s cannot be read: %v", id, err)
+	}
+	if title != "" {
+		events = append(events, Event{Kind: Title, At: last.Local(), Text: title})
+	}
+	return &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
 }
 
 // replay returns what happened in an archived conversation, as its events,

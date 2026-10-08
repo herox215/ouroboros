@@ -9,6 +9,10 @@
 // only what is in scope for it: the owner its current conversation or all of
 // its own, a peer its current conversation and nothing else.
 //
+// A conversation may have a title besides, named for its topic (see
+// SetTitle): it is kept in a file of its own next to it, and names it in
+// place of its first message.
+//
 // Nothing is deleted by the archive itself: the owner deletes a session with
 // Delete.
 package history
@@ -60,9 +64,10 @@ const (
 // The parties of an archive: the directory of the owner, and the start of
 // the directory of each peer.
 const (
-	ownerDir   = "owner"
-	peerPrefix = "peer-"
-	suffix     = ".jsonl"
+	ownerDir    = "owner"
+	peerPrefix  = "peer-"
+	suffix      = ".jsonl"
+	titleSuffix = ".title"
 )
 
 // The outcomes of an answer, in the record that ends it.
@@ -596,15 +601,19 @@ func (a *Archive) Sessions(who Who) (string, int, error) {
 	return out.String(), shown, nil
 }
 
-// describe returns when the conversation at path started and its first
-// message of the user, as far as they are there.
+// describe returns when the conversation at path started and its title: the
+// one it was given, or else its first message of the user, as far as they are
+// there.
 func describe(path string) (started, title string) {
+	if b, err := os.ReadFile(titled(path)); err == nil {
+		title = string(b)
+	}
 	records(path, func(r Record) bool {
 		if started == "" {
 			started = when(r.Time)
 		}
-		if r.Role != "user" {
-			return true
+		if title != "" || r.Role != "user" {
+			return title == ""
 		}
 		title = oneLine(r.Content)
 		if len(title) > maxTitle {
@@ -678,6 +687,9 @@ func (a *Archive) Delete(id string) error {
 	if err != nil {
 		return err
 	}
+	if err := os.Remove(titled(path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	if err := os.Remove(path); errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: %s", ErrNotArchived, id)
 	} else if err != nil {
@@ -685,6 +697,47 @@ func (a *Archive) Delete(id string) error {
 	}
 	a.forget(path)
 	return nil
+}
+
+// titled is the file of the title of the conversation in the file at path.
+func titled(path string) string { return strings.TrimSuffix(path, suffix) + titleSuffix }
+
+// MaxTitle is how long a title SetTitle keeps may be, in bytes.
+const MaxTitle = 80
+
+// SetTitle gives the conversation id, as List names it, a title, which names
+// it from now on in place of its first message: on one line, cut to
+// MaxTitle bytes. The conversation needs not be archived yet.
+func (a *Archive) SetTitle(id, title string) error {
+	path, err := a.path(id)
+	if err != nil {
+		return err
+	}
+	title = oneLine(title)
+	if len(title) > MaxTitle {
+		title = strings.ToValidUTF8(title[:MaxTitle], "")
+	}
+	if title == "" {
+		return errors.New("a title needs a text")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(titled(path), []byte(title), 0o600)
+}
+
+// Title returns the title the conversation id, as List names it, was given
+// with SetTitle, "" without one.
+func (a *Archive) Title(id string) (string, error) {
+	path, err := a.path(id)
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(titled(path))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	return string(b), err
 }
 
 // Records returns every record of the conversation id, as List names it, in

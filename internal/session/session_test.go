@@ -28,6 +28,7 @@ type fakeAgent struct {
 	resumed  map[string]json.RawMessage
 	resume   error
 	forgot   []string
+	title    func(ctx context.Context, conversation []openai.Message) (string, error)
 }
 
 func (a *fakeAgent) Ready() error { return a.ready }
@@ -57,6 +58,13 @@ func (a *fakeAgent) Resume(id string, memory json.RawMessage) error {
 	}
 	a.resumed[id] = memory
 	return a.resume
+}
+
+func (a *fakeAgent) Title(ctx context.Context, conversation []openai.Message) (string, error) {
+	if a.title != nil {
+		return a.title(ctx, conversation)
+	}
+	return "", nil
 }
 
 func (a *fakeAgent) Forget(id string) {

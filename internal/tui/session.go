@@ -191,6 +191,8 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 			}
 			m.setNotice(verb+" in “"+short(c.title, 40)+"” · /session", e.Kind != plugin.SessionAnswer)
 		}
+	case plugin.SessionTitle:
+		c.title = e.Text
 	case plugin.SessionRestart:
 		if live {
 			m.restarts = e.Text
@@ -269,8 +271,9 @@ func (m *Model) sessionsLoaded(msg sessionsMsg) tea.Cmd {
 		if c.watching {
 			continue
 		}
-		// What the list says, until the events say it all.
-		c.title, c.last, c.pending, c.running = cmp.Or(c.title, info.Title), info.Last, info.Running, info.Running
+		// What the list says, until the events say it all: a title it was
+		// given meanwhile too.
+		c.title, c.last, c.pending, c.running = cmp.Or(info.Title, c.title), info.Last, info.Running, info.Running
 		if info.Running {
 			cmds = append(cmds, m.watch(c))
 		}

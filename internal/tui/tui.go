@@ -172,7 +172,7 @@ type conversation struct {
 	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
 	context   int                 // how long its context is, see Event.Context
 	cache     plugin.SessionCache // what the provider had cached, see Event.Cache
-	title     string              // the first message of the owner
+	title     string              // named for its topic, else the first message of the owner
 	last      time.Time
 	draft     string // what is typed in the input for it while another one is shown
 	watching  bool   // its events come in, or are asked for

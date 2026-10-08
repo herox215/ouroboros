@@ -107,6 +107,7 @@ const (
 	SessionFailed   = session.Failed   // an answer that failed
 	SessionCanceled = session.Canceled // an answer that was stopped
 	SessionRestart  = session.Restart  // ouro starts anew from a new build, the binary in Text
+	SessionTitle    = session.Title    // the session is named for its topic, in Text
 )
 
 var (

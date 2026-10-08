@@ -348,6 +348,32 @@ func TestKeptSessionsAreWatchedWhenShown(t *testing.T) {
 	}
 }
 
+// A session is named for its topic once the node names it: as it happens,
+// as it happened before, and in the list of a session that is not watched.
+func TestSessionTitle(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.conversation("named")
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "hi, plan my garden"}, true)
+	m.apply(c, Event{Kind: plugin.SessionTitle, Text: "Garden plans"}, true)
+	if c.title != "Garden plans" {
+		t.Fatalf("title %q", c.title)
+	}
+	m.replay(c, []Event{{Kind: plugin.SessionMessage, Text: "hi"}, {Kind: plugin.SessionAnswer, Text: "ho"}, {Kind: plugin.SessionTitle, Text: "Greeting"}})
+	if c.title != "Greeting" {
+		t.Fatalf("replayed title %q", c.title)
+	}
+	kept := m.conversation("kept")
+	m.sessionsLoaded(sessionsMsg{list: []plugin.SessionInfo{{ID: "kept", Title: "hi"}}})
+	m.sessionsLoaded(sessionsMsg{list: []plugin.SessionInfo{{ID: "kept", Title: "Greeting"}}})
+	if kept.title != "Greeting" {
+		t.Fatalf("listed title %q", kept.title)
+	}
+	m.sessionsLoaded(sessionsMsg{list: []plugin.SessionInfo{{ID: "kept"}}})
+	if kept.title != "Greeting" {
+		t.Fatalf("a list without a title took it: %q", kept.title)
+	}
+}
+
 // d pressed twice on the sessions screen deletes the session selected; a key
 // in between starts over. One whose answer is on its way is not deleted, nor
 // is one without a message. The session shown gives way to a new one, and
