@@ -50,6 +50,15 @@ results=$out/mutants.txt
 GOFLAGS="${GOFLAGS:-} -count=1"
 export GOFLAGS
 
+# Every mutant is new source to Go, and what it builds of it is never used
+# again. In the cache of the user that grew by about 20 GB a day; Go removes
+# entries only after five days unused. The mutants get a cache of their own,
+# which goes when the run ends.
+GOCACHE=$(mktemp -d "${TMPDIR:-/tmp}/ouro-mutation-cache.XXXXXX")
+export GOCACHE
+trap 'rm -rf "$GOCACHE"' EXIT
+trap 'exit 130' INT TERM
+
 start=$(date +%s)
 unfinished=
 skipped=
