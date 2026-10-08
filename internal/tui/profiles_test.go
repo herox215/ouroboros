@@ -61,6 +61,25 @@ func TestProfileSwitchKeepsDraftAndRoutesLateEvents(t *testing.T) {
 	}
 }
 
+// The top tells which of the profiles of the node the UI shows, and the
+// title of the window names it; a UI of one profile tells neither.
+func TestHeaderTellsWhichProfile(t *testing.T) {
+	root, terra, luna, _ := profiles(t)
+	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if head := ansi.Strip(terra.headerView()); !strings.Contains(head, " ouroboros [1/2] ") || terra.View().WindowTitle != "ouro · alpha (1/2)" {
+		t.Fatalf("Terra: %q, %q", head, terra.View().WindowTitle)
+	}
+	root.Update(shiftTab)
+	luna.Update(luna.refreshStatus())
+	if head := ansi.Strip(luna.headerView()); !strings.Contains(head, " ouroboros [2/2] ") || luna.View().WindowTitle != "ouro · Luna (2/2)" {
+		t.Fatalf("Luna: %q, %q", head, luna.View().WindowTitle)
+	}
+	single, _ := newModel(t)
+	if head := ansi.Strip(single.headerView()); strings.Contains(head, "[") || single.View().WindowTitle != "ouro" {
+		t.Fatalf("one profile: %q, %q", head, single.View().WindowTitle)
+	}
+}
+
 // containsText reports whether c has an entry of text.
 func containsText(c *conversation, text string) bool {
 	for _, e := range c.entries {
@@ -73,7 +92,7 @@ func containsText(c *conversation, text string) bool {
 
 // A profile whose node cannot tell who it is is named by its place.
 func TestProfileThatCannotTell(t *testing.T) {
-	root, _, _, lb := profiles(t)
+	root, _, luna, lb := profiles(t)
 	lb.fail = map[string]error{"status": errors.New("gone")}
 	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	root.Update(shiftTab)
@@ -82,6 +101,10 @@ func TestProfileThatCannotTell(t *testing.T) {
 	}
 	if root.Profile() != "" {
 		t.Fatalf("the profile is %q", root.Profile())
+	}
+	// Named by nobody, the title of the window tells only the place.
+	if title := luna.View().WindowTitle; title != "ouro · 2/2" {
+		t.Fatalf("the window is %q", title)
 	}
 	// None is selected by an ID no profile tells.
 	root.SelectProfile("bbb222")

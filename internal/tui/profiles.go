@@ -28,8 +28,12 @@ type profileMsg struct {
 }
 
 // WithProfiles returns the UI that shows the models of the profiles of a
-// node, starting with models[shown].
+// node, starting with models[shown]. Each model is told which of the profiles
+// it is, so that it shows that at the top.
 func WithProfiles(models []*Model, shown int) *Model {
+	for i, m := range models {
+		m.profileAt, m.profileOf = i+1, len(models)
+	}
 	return &Model{profiles: &profileViews{models: models, shown: shown, started: make([]bool, len(models))}}
 }
 

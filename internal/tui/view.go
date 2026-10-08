@@ -235,7 +235,7 @@ func (m *Model) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle = "ouro"
+	v.WindowTitle = m.windowTitle()
 	if m.width == 0 {
 		return v
 	}
@@ -272,6 +272,18 @@ func (m *Model) View() tea.View {
 	}
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	return v
+}
+
+// windowTitle is what the terminal shows in the title of its window: the node
+// and, when it has several profiles, which of them this UI shows.
+func (m *Model) windowTitle() string {
+	if m.profileOf < 2 {
+		return "ouro"
+	}
+	if name := cmp.Or(m.status.Name, m.status.ID); name != "" {
+		return fmt.Sprintf("ouro · %s (%d/%d)", name, m.profileAt, m.profileOf)
+	}
+	return fmt.Sprintf("ouro · %d/%d", m.profileAt, m.profileOf)
 }
 
 // requestsView lists what is waiting for a decision: the connection requests,
@@ -379,6 +391,9 @@ func (m *Model) modelText() string {
 func (m *Model) headerView() string {
 	s := m.status
 	title := boldStyle.Foreground(accent).Render(" ouroboros ")
+	if m.profileOf > 1 { // of how many profiles of the node this is the one shown
+		title += mutedStyle.Render(fmt.Sprintf("[%d/%d]", m.profileAt, m.profileOf))
+	}
 	var state string
 	switch {
 	case s.Running:

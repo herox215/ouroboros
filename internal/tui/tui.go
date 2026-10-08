@@ -185,8 +185,13 @@ type conversation struct {
 // Model is the UI state.
 type Model struct {
 	profiles *profileViews
-	backend  Backend
-	now      func() time.Time
+
+	// profileAt is which of the profileOf profiles of the node this UI shows:
+	// 0 for a UI of one.
+	profileAt, profileOf int
+
+	backend Backend
+	now     func() time.Time
 	// ctx ends when the user quits; what the UI asks of the backend stops with it.
 	ctx  context.Context
 	quit context.CancelFunc
