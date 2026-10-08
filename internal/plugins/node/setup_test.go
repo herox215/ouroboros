@@ -327,7 +327,7 @@ func TestSetupWithASecondProvider(t *testing.T) {
 	if err != nil || cfg.Model != "two-large" || cfg.Name != "beta" {
 		t.Fatalf("got %+v, %v, output %q", cfg, err, out.String())
 	}
-	for _, want := range []string{"Providers:\n\n    1) OpenAI-compatible API\n    2) Test two\n", "Provider [number, Enter = 1]: ", "the token of two\nToken: ", "✗ wrong token"} {
+	for _, want := range []string{"Providers:\n\n    1) Custom Provider\n    2) Test two\n", "Provider [number, Enter = 1]: ", "the token of two\nToken: ", "✗ wrong token"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("no %q in %q", want, out.String())
 		}

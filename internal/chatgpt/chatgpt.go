@@ -97,7 +97,7 @@ func orDefault(s, def string) string {
 func Provider(o Options) llm.Provider {
 	return llm.Provider{
 		Name:   Name,
-		Title:  "ChatGPT plan (sign in with ChatGPT)",
+		Title:  "ChatGPT",
 		Login:  o.login,
 		Models: o.models,
 		Model:  func(a llm.Access) agent.LLM { return &client{o: o, access: a} },

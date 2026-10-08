@@ -248,5 +248,4 @@ internal/assistant/title.go:23:77 ARITHMETIC_BASE  # a string concatenation in a
 internal/pasteboard/pasteboard.go:64:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read on macOS and beside it
 internal/pasteboard/pasteboard.go:66:35 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read with and without Wayland
 internal/pasteboard/pasteboard.go:70:27 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read with and without X11
-
 internal/assistant/fallback.go:28:22 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; TestFallbacksAnswerInTheirOrder asserts how long retryFirst is by the calls around it

@@ -44,7 +44,7 @@ type fakeSetup struct {
 func newFakeSetup() *fakeSetup {
 	return &fakeSetup{
 		endpoint: "http://llm", name: "alpha", key: "sk-good",
-		providers: []plugin.SetupProvider{{Name: "openai", Title: "OpenAI-compatible API"}},
+		providers: []plugin.SetupProvider{{Name: "openai", Title: "Custom Provider"}},
 		models:    plugin.SetupModels{Chat: []string{"a", "b", "c"}, All: []string{"a", "b", "c", "tts"}, Default: "b"},
 		owner:     []string{plugin.AllTools},
 		protected: []string{"~/.ssh", "~/.aws"},
@@ -169,7 +169,7 @@ func configured(t *testing.T) (*Model, *fakeSetup) {
 	m, b := newModel(t)
 	b.setup = newFakeSetup()
 	b.setup.accesses = twoAccesses()
-	b.setup.providers = append(b.setup.providers, plugin.SetupProvider{Name: "chatgpt", Title: "ChatGPT plan"})
+	b.setup.providers = append(b.setup.providers, plugin.SetupProvider{Name: "chatgpt", Title: "ChatGPT"})
 	run(m, "/setup")
 	press(m, "enter")
 	if m.onboard == nil || m.onboard.step != stepAccess {
@@ -551,7 +551,7 @@ func TestSetupManagesTheAccesses(t *testing.T) {
 func TestSetupAddsAnAccess(t *testing.T) {
 	m, s := configured(t)
 	press(m, "down", "down", "enter")
-	if v := shown(m); m.onboard.step != stepProvider || !strings.Contains(v, "1/4 · Provider") || !strings.Contains(v, "▸ OpenAI-compatible API") || !strings.Contains(v, "  ChatGPT plan") {
+	if v := shown(m); m.onboard.step != stepProvider || !strings.Contains(v, "1/4 · Provider") || !strings.Contains(v, "▸ Custom Provider") || !strings.Contains(v, "  ChatGPT") {
 		t.Fatalf("providers:\n%s", v)
 	}
 	press(m, "up", "down", "down", "j", "k", "j")

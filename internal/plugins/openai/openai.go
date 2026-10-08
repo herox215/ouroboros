@@ -46,7 +46,7 @@ func Provider(offer Offer) plugin.Provider {
 	offer.BaseURL = clean(offer.BaseURL)
 	return plugin.Provider{
 		Name:  openai.ProviderName,
-		Title: "OpenAI-compatible API",
+		Title: "Custom Provider",
 		Login: offer.login,
 		Models: func(ctx context.Context, a plugin.Access) (plugin.Models, error) {
 			c, err := a.Credentials()

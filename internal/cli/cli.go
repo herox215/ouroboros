@@ -10,6 +10,7 @@
 //	files      the tools for files
 //	history    the archive of the conversations, and the tools to search it
 //	openai     the provider for OpenAI-compatible APIs
+//	opencode-go  the provider for OpenCode Go, by its API key alone
 //	chatgpt    the provider that signs in with ChatGPT
 //	assistant  the agents
 //	sessions   the conversations of the owner, which the node holds
@@ -66,6 +67,7 @@ import (
 	historyplugin "ouroboros/internal/plugins/history"
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
+	opencodeplugin "ouroboros/internal/plugins/opencode"
 	peersplugin "ouroboros/internal/plugins/peers"
 	sessionplugin "ouroboros/internal/plugins/session"
 	shellplugin "ouroboros/internal/plugins/shell"
@@ -93,6 +95,9 @@ type Settings struct {
 	// answers, those of OpenAI if empty. They are no setting of the user:
 	// tests point them at a fake.
 	ChatGPTAuth, ChatGPTAPI string
+	// OpenCodeGo is where the opencode-go provider reaches OpenCode Go; ""
+	// is where it is.
+	OpenCodeGo string
 }
 
 // SettingsFromEnv reads OURO_HOME, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL and OPENAI_API_KEY.
@@ -172,6 +177,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		historyplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
 		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),
+		opencodeplugin.Plugin(opencodeplugin.Options{BaseURL: s.OpenCodeGo}),
 		assistant.Plugin(dir),
 		sessionplugin.Plugin(dir),
 		nodeplugin.Plugin(dir, nodeplugin.Options{

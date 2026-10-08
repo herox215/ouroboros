@@ -801,12 +801,27 @@ The file tools cannot do any of this: `config.json` is locked for them, see [Fil
 
 ### Providers and accesses
 
-A **provider** is a kind of LLM a node can talk to. This ouro has two:
+A **provider** is a kind of LLM a node can talk to. This ouro has three, which the setup offers by these
+names:
 
 | Provider | Signs in with | Answers through |
 |---|---|---|
-| `openai` – OpenAI-compatible API | an endpoint and an API key, which may be none (a local Ollama) | `POST /chat/completions` at the endpoint |
-| `chatgpt` – ChatGPT plan | your ChatGPT account, in the browser ("Sign in with ChatGPT") | `POST /v1/responses` at `api.openai.com`, within the limits of your plan |
+| **Custom Provider** (`openai`) | an endpoint and an API key, which may be none (a local Ollama): any OpenAI-compatible API | `POST /chat/completions` at the endpoint |
+| **ChatGPT** (`chatgpt`) | your ChatGPT account, in the browser ("Sign in with ChatGPT") | `POST /v1/responses` at `api.openai.com`, within the limits of your plan |
+| **OpenCode Go** (`opencode-go`) | the API key of your OpenCode Go subscription, from the OpenCode console, and nothing else | `POST /chat/completions` at `https://opencode.ai/zen/go/v1` |
+
+**OpenCode Go** needs no endpoint from you: where it is reached is part of ouro. The key is kept with the
+other credentials and sent as `Authorization: Bearer …`, with the ID of the conversation in
+`x-opencode-session` and ouro's own `User-Agent`, as OpenCode asks of clients. Its models are listed with
+`GET /models`. OpenCode Go answers some of them in the form of other APIs, on `/responses` (the models of
+OpenAI, xAI and Muse) or `/messages` (those of Anthropic, MiniMax and Qwen): ouro speaks chat completions
+to it and offers the models that answer there (`glm-…`, `kimi-…`, `deepseek-…`, `mimo-…` and the like),
+not the others. The list does not say the route, so ouro tells it by the family of the model, as
+[the documentation of OpenCode Go](https://opencode.ai/docs/go/) lists them. A key that is refused is asked
+for again, and an OpenCode Go that does not answer is told as that.
+
+An access you set up before as a custom provider stays what it is, also when its endpoint is the one of
+OpenCode Go: its ID, its key and the model in use are not touched, and nothing turns it into another kind.
 
 An **access** is one way the node signs in: an endpoint with its key, or a ChatGPT account. A node can have
 several, also several of the same provider – a key of your own and one of work, or two Ollama servers. Each
@@ -948,7 +963,7 @@ OpenAI documents for open-source apps that run where their user is
 client ID of another app, no file of the Codex CLI (`~/.codex/auth.json` is neither read nor written) and no
 endpoint of ChatGPT itself. The API key stays available, as the other provider.
 
-1. Pick "ChatGPT plan" in the setup. ouro opens the page of OpenAI in your browser (and puts its link on the
+1. Pick "ChatGPT" in the setup. ouro opens the page of OpenAI in your browser (and puts its link on the
    clipboard in the terminal UI). You sign in there and allow the app to use your plan. The first time this
    registers a client of its own for your account, named "Ouroboros"; you can change the name on that page.
 2. The browser comes back to ouro on `http://127.0.0.1:1455/auth/callback`. If that port is taken, ouro uses
