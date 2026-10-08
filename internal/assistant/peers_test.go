@@ -206,3 +206,41 @@ func TestPeersNeedAConfiguration(t *testing.T) {
 		t.Fatalf("set up: %v", err)
 	}
 }
+
+// What a peer tells without asking is kept where its answers are, and read
+// by the agent when the peer asks the next time: no LLM is called for it.
+func TestPeersTakeNotes(t *testing.T) {
+	llm := openaitest.NewServerWithKey(t, "")
+	cfg := config.Config{Access: llm, Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private()}
+	var failing error
+	var kept []agent.AnswerOutcome
+	b := Builder{
+		LLM:   overHTTP,
+		Tools: func() []agent.Tool { return nil },
+		AnswerHooks: func() []agent.AnswerHook {
+			return []agent.AnswerHook{{Name: "archive", After: func(_ context.Context, o agent.AnswerOutcome) error {
+				kept = append(kept, o)
+				return nil
+			}}}
+		},
+	}
+	peers := b.Peers(func() (config.Config, error) { return cfg, failing }, discard)
+	if err := peers.Note(from("luna"), "c", "thanks"); err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || len(kept[0].Messages) != 1 || kept[0].Messages[0].Content != "[A note from the peer, which asks for no answer:]\nthanks" ||
+		kept[0].Messages[0].Role != "user" || !kept[0].Conversation.Peer || kept[0].Conversation.Origin.PublicKey != "luna" || kept[0].Conversation.ID != "c" || kept[0].Reply != "" {
+		t.Fatalf("kept %+v", kept)
+	}
+	// The next request has the note before it.
+	if got, err := peers.Respond(from("luna"), "c", "hello"); err != nil || got != "[gpt-4o] turns=2 last=hello" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if got, err := peers.Respond(from("luna"), "c", "hello"); err != nil || got != "[gpt-4o] turns=4 last=hello" {
+		t.Fatalf("the note is read once: %q, %v", got, err)
+	}
+	fresh := b.Peers(func() (config.Config, error) { return cfg, errTest }, discard)
+	if err := fresh.Note(from("luna"), "c", "thanks"); !errors.Is(err, errTest) {
+		t.Fatalf("a node that cannot answer takes no note: %v", err)
+	}
+}

@@ -36,8 +36,10 @@ var (
 	// ErrRefused means the peer refused to connect to this node.
 	ErrRefused = errors.New("refused to connect")
 	// ErrSender means the node is the peer whose message is being answered:
-	// it gets the answer, it is not asked in turn.
-	ErrSender = errors.New("is the peer you are answering, reply to it instead of asking it")
+	// it gets the answer, and it is not sent a request in turn, for which
+	// the two agents would wait for one another. What the agent needs of it
+	// is asked back, see a2a.AskBack.
+	ErrSender = errors.New("is the peer you are answering: reply to it, or ask it back what you need to go on, instead of sending it a request")
 	// ErrNotConnected means the node is not a peer this node is connected
 	// to: nothing was sent to it.
 	ErrNotConnected = errors.New("is not connected to this node")
@@ -236,27 +238,81 @@ func (n *Network) NameOf(target string) string {
 // Whatever is sent is signed for the public key of node and sent over a
 // connection pinned to that key: whoever else answers at its address gets
 // nothing to read, and Send fails with a2a.ErrUnverified.
+//
+// Send is for who cannot answer a question the agent of node asks back: it
+// is given up, and returned as what the agent said. An agent asks with Ask.
 func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text string) (string, error) {
+	r, err := n.request(ctx, node, func(c *a2a.Client, addr, publicKey string) (a2a.Reply, error) {
+		text, err := c.Send(ctx, addr, publicKey, contextID, text)
+		return a2a.Reply{Text: text}, err
+	})
+	return r.Text, err
+}
+
+// Ask is Send for an agent: what the agent of node answers with is its
+// result, or a question back, which Answer answers and GiveUp gives up.
+// Asking counts against the budget of the task of ctx, see a2a.Task.
+func (n *Network) Ask(ctx context.Context, node discovery.Node, contextID, text string) (a2a.Reply, error) {
+	return n.request(ctx, node, func(c *a2a.Client, addr, publicKey string) (a2a.Reply, error) {
+		return c.Ask(ctx, addr, publicKey, contextID, text)
+	})
+}
+
+// Answer answers the question the agent of node asked back in the
+// conversation contextID, and returns what that agent says next: its result,
+// or another question. It is for connected peers only, like Call.
+func (n *Network) Answer(ctx context.Context, node discovery.Node, contextID, question, text string) (a2a.Reply, error) {
+	publicKey, client, err := n.connected(ctx, node)
+	if err != nil {
+		return a2a.Reply{}, err
+	}
+	return client.Answer(ctx, url(node.Addr()), publicKey, contextID, question, text)
+}
+
+// GiveUp tells node that the question its agent asked back is not answered:
+// the agent stops working on the request it asked it for.
+func (n *Network) GiveUp(ctx context.Context, node discovery.Node, contextID, question string) error {
+	publicKey, client, err := n.connected(ctx, node)
+	if err != nil {
+		return err
+	}
+	return client.GiveUp(ctx, url(node.Addr()), publicKey, contextID, question)
+}
+
+// Tell delivers text to node as a note of the conversation contextID: it is
+// kept there for its agent to read with the next request, and no agent
+// starts or answers for it. It is for connected peers only, like Call.
+func (n *Network) Tell(ctx context.Context, node discovery.Node, contextID, text string) error {
+	publicKey, client, err := n.connected(ctx, node)
+	if err != nil {
+		return err
+	}
+	return client.Tell(ctx, url(node.Addr()), publicKey, contextID, text)
+}
+
+// request sends a request to node with send, once node may be sent one: see
+// Send.
+func (n *Network) request(ctx context.Context, node discovery.Node, send func(c *a2a.Client, addr, publicKey string) (a2a.Reply, error)) (a2a.Reply, error) {
 	origin, answering := a2a.OriginFrom(ctx)
 	// A node without a key cannot be told apart from the sender.
 	if answering && (node.PublicKey == "" || node.PublicKey == origin.PublicKey) {
-		return "", ErrSender
+		return a2a.Reply{}, ErrSender
 	}
 	client, err := n.Client()
 	if err != nil {
-		return "", err
+		return a2a.Reply{}, err
 	}
 	publicKey := node.PublicKey
 	if publicKey == "" {
 		// A node given by its address: the key of whoever answers there, and
 		// only the holder of that key is reached from here on.
 		if publicKey, err = key(ctx, node); err != nil {
-			return "", err
+			return a2a.Reply{}, err
 		}
 	}
 	known, err := n.Contacts.Snapshot()
 	if err != nil {
-		return "", err
+		return a2a.Reply{}, err
 	}
 	req := contacts.Request{PublicKey: publicKey, Name: node.Name, Model: node.Model, Addr: node.Addr()}
 	// The node itself needs no connection: the owner writes to its own agent.
@@ -264,39 +320,39 @@ func (n *Network) Send(ctx context.Context, node discovery.Node, contextID, text
 	if !own && !slices.ContainsFunc(known.Trusted, func(c contacts.Contact) bool { return c.PublicKey == publicKey }) {
 		switch {
 		case answering || slices.Contains(known.Blocked, publicKey):
-			return "", fmt.Errorf("%s %w", Label(node), ErrNotConnected)
+			return a2a.Reply{}, fmt.Errorf("%s %w", Label(node), ErrNotConnected)
 		case !slices.ContainsFunc(known.Outgoing, func(r contacts.Request) bool { return r.PublicKey == publicKey }):
 			if err := n.Contacts.Propose(req.PublicKey, req.Name, req.Model, req.Addr); err != nil {
-				return "", err
+				return a2a.Reply{}, err
 			}
-			return "", fmt.Errorf("%s %w", Label(node), ErrUnconfirmed)
+			return a2a.Reply{}, fmt.Errorf("%s %w", Label(node), ErrUnconfirmed)
 		}
 		// The owner asked the node to connect. Has it decided by now?
-		if err := n.request(ctx, client, req); err != nil {
-			return "", err
+		if err := n.connect(ctx, client, req); err != nil {
+			return a2a.Reply{}, err
 		}
 	}
-	reply, err := client.Send(ctx, url(req.Addr), publicKey, contextID, text)
+	reply, err := send(client, url(req.Addr), publicKey)
 	switch {
 	case a2a.IsPending(err):
 		// A peer of this node that does not trust it, or no longer. Remembered,
 		// so that the acceptance of the peer is recognised later.
 		if err := n.Contacts.AddOutgoing(req.PublicKey, req.Name, req.Model, req.Addr); err != nil {
-			return "", fmt.Errorf("%w, but it could not be remembered here: %w", ErrPending, err)
+			return a2a.Reply{}, fmt.Errorf("%w, but it could not be remembered here: %w", ErrPending, err)
 		}
-		return "", ErrPending
+		return a2a.Reply{}, ErrPending
 	case a2a.IsBlocked(err):
-		return "", ErrRefused
+		return a2a.Reply{}, ErrRefused
 	}
 	return reply, err
 }
 
-// request asks the peer of req to connect, which the owner of this node
+// connect asks the peer of req to connect, which the owner of this node
 // decided to do, and tells it nothing else. It returns nil once the peer is
 // connected: a peer that says it trusts this node is trusted in turn, like
 // one that accepts. Until a human there has decided it fails with ErrPending,
 // and with ErrRefused if the peer refused.
-func (n *Network) request(ctx context.Context, client *a2a.Client, req contacts.Request) error {
+func (n *Network) connect(ctx context.Context, client *a2a.Client, req contacts.Request) error {
 	err := client.Request(ctx, url(req.Addr), req.PublicKey)
 	switch {
 	case err == nil:
@@ -415,7 +471,7 @@ func (n *Network) ask(ctx context.Context, req contacts.Request) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
 	defer cancel()
-	if err := n.request(ctx, client, req); err != nil && !errors.Is(err, ErrPending) {
+	if err := n.connect(ctx, client, req); err != nil && !errors.Is(err, ErrPending) {
 		return fmt.Errorf("decided locally, but %s was not asked: %w", req.Addr, err)
 	}
 	return nil

@@ -13,22 +13,22 @@
 # behaviour does not belong here: it needs a test.
 
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
-internal/agent/agent.go:702:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
+internal/agent/agent.go:796:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
 internal/kernel/kernel.go:429:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
 internal/update/update.go:118:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
 internal/plugins/files/files.go:227:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
 internal/script/script.go:551:26 CONDITIONALS_BOUNDARY  # a heap that did not grow is far from the limit either way: now == start is refused by both forms
 internal/script/script.go:551:47 CONDITIONALS_BOUNDARY  # the heap is sampled every few milliseconds and never stands at exactly the limit
 internal/proposal/proposal.go:128:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
-internal/agent/agent.go:447:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
-internal/agent/agent.go:640:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:645:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:692:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
+internal/agent/agent.go:541:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
+internal/agent/agent.go:734:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:739:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:786:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
 internal/script/script.go:209:19 INVERT_LOGICAL  # what is kept is only given back by a script that neither failed nor gave back what is no data
 internal/script/script.go:458:44 CONDITIONALS_BOUNDARY  # with no room left, the head of 0 bytes of a line adds nothing
 internal/script/script.go:500:8 CONDITIONALS_BOUNDARY  # what the interpreter prints is valid UTF-8, whose first byte begins a character
 internal/script/script.go:675:14 CONDITIONALS_BOUNDARY  # used comes from a clock that only counts up: two sessions never have the same
-internal/agent/agent.go:322:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
+internal/agent/agent.go:359:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
 internal/openai/client.go:443:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
 internal/tui/wait.go:41:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
 internal/discovery/discovery.go:245:11 INVERT_LOGICAL  # the system gives every address of an interface as an *net.IPNet, so ok is always true and the mask decides alone
@@ -69,3 +69,4 @@ internal/tui/view.go:234:43 CONDITIONALS_BOUNDARY  # a call is shown by what it 
 internal/tui/view.go:470:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
 internal/session/session.go:524:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
 internal/history/history.go:717:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
+internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart

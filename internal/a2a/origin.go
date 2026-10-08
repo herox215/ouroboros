@@ -11,6 +11,9 @@ import "context"
 type Origin struct {
 	PublicKey string // of the peer, authenticated by its signature
 	Hops      int    // agents that passed the message on before it got here
+	// Task is the task the message belongs to, with what is left of its
+	// budget: what the agent sends on while it answers counts against it.
+	Task *Task
 }
 
 type originKey struct{}

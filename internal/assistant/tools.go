@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -15,12 +16,16 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
+	"ouroboros/internal/discovery"
 	"ouroboros/internal/peers"
 )
 
 const (
 	toolListPeers = "list_peers"
 	toolAskPeer   = "ask_peer"
+	toolAnswer    = "answer_peer"
+	toolTellPeer  = "tell_peer"
+	toolAskBack   = "ask_back"
 	// toolExplainError is not among the tools the owner picks from: see
 	// Builder.Failures.
 	toolExplainError = "explain_error"
@@ -64,6 +69,9 @@ func PeerTools(network *peers.Network, selfID func() string) []agent.Tool {
 	return []agent.Tool{
 		listPeers(network, selfID),
 		askPeer(network, selfID),
+		answerPeer(network),
+		tellPeer(network),
+		askBack(),
 	}
 }
 
@@ -175,9 +183,87 @@ type askPeerArgs struct {
 	Message string `json:"message"`
 }
 
+// The messages between the agents of two peers are of three kinds, and what
+// a message is decides what it starts, not what it says:
+//
+//   - ask_peer sends a request: the agent of the peer starts and answers
+//     with its result, or with a question back.
+//   - answer_peer answers such a question, and ask_back asks one: the agent
+//     that asked goes on where it was, and no new one starts.
+//   - tell_peer sends a note: the peer keeps it, and nothing starts or
+//     answers. Thanks are a note.
+//
+// All messages an agent sends for one answer to its owner, and what the
+// peers send for them in turn, are one task with one budget, see a2a.Task.
+
+// taskKey is what the answer of an agent keeps the task of its messages to
+// peers under.
+type taskKey struct{}
+
+// questionKey is what an answer keeps a question a peer asked back under,
+// by its ID: whether it was answered.
+type questionKey string
+
+// inTask returns ctx for a message to a peer: it belongs to the task of the
+// answer, which starts with the first message unless the answer is itself
+// for a peer, whose task it is then.
+func inTask(ctx context.Context) context.Context {
+	if answer := agent.AnswerOf(ctx); answer != nil && a2a.TaskFrom(ctx) == nil {
+		return a2a.WithTask(ctx, answer.Value(taskKey{}, func() any { return a2a.NewTask() }).(*a2a.Task))
+	}
+	return ctx
+}
+
+// told is what the agent is told of what a peer answered a request, or an
+// answer, with. A question back is kept open for the answer: if the answer of
+// the agent ends without answering it, it is given up, so that the peer does
+// not wait.
+func told(ctx context.Context, network *peers.Network, node discovery.Node, contextID string, r a2a.Reply) string {
+	if r.Question == "" {
+		return r.Text
+	}
+	name := peers.Label(node)
+	if answer := agent.AnswerOf(ctx); answer != nil {
+		answered := answer.Value(questionKey(r.Question), func() any { return &atomic.Bool{} }).(*atomic.Bool)
+		context.AfterFunc(answer.Context(), func() {
+			if !answered.Load() {
+				giving, cancel := context.WithTimeout(context.WithoutCancel(ctx), giveUpTime)
+				defer cancel()
+				network.GiveUp(giving, node, contextID, r.Question) // it stops waiting by itself otherwise
+			}
+		})
+	}
+	return fmt.Sprintf("%s has not answered yet. It asks back, and waits for your answer before it goes on (question %s):\n\n%s\n\n"+
+		"Answer with %s({peer, question: %q, answer}), which returns what %s says next. "+
+		"If you cannot answer, ask your user, or let it be: the question is given up when your answer ends.",
+		name, r.Question, r.Text, toolAnswer, r.Question, name)
+}
+
+// giveUpTime is how long giving up a question may take.
+const giveUpTime = 10 * time.Second
+
+// refused is what the agent is told when a message to a peer was not taken
+// for a reason it can do something about, "" for any other error.
+func refused(err error, name string) string {
+	switch {
+	case a2a.IsBudget(err):
+		return fmt.Sprintf("Nothing was sent to %s: the budget of this task for messages between peers is used up "+
+			"(%d messages or %s, whichever comes first). Finish with what you have, and say what is still open.", name, a2a.MaxExchanges, a2a.TaskTime)
+	case a2a.IsQuestionOpen(err):
+		return fmt.Sprintf("Nothing was started at %s: its agent asked back in this conversation and waits for the answer. "+
+			"Answer its question with %s first. (%v)", name, toolAnswer, err)
+	case a2a.IsNoQuestion(err):
+		return fmt.Sprintf("%s has no such question open: it was answered or given up, or its agent stopped waiting. "+
+			"Ask it anew with %s if you still need its answer.", name, toolAskPeer)
+	}
+	return ""
+}
+
 func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 	return agent.NewTool(toolAskPeer,
-		"Send a message to the agent of a peer and return its answer. "+
+		"Send a request to the agent of a peer, which starts for it, and return its answer. "+
+			"Instead of its answer the peer may ask back what it needs to go on: answer that with "+toolAnswer+". "+
+			"To tell a peer something without asking, like thanks, use "+toolTellPeer+": a request makes its agent work. "+
 			"A peer that is not connected gets nothing until your owner confirms the connection and a human at the peer accepts it. "+
 			"A peer that fails to answer gives an error ID instead of the cause: ask it about the ID once it answers again.",
 		[]agent.Param{
@@ -200,7 +286,10 @@ func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 			name := peers.Label(node)
 			// One context per peer and conversation: the peer remembers what was said before.
 			contextID := agent.ContextID(ctx) + "/" + node.ID
-			reply, err := network.Send(ctx, node, contextID, args.Message)
+			reply, err := network.Ask(inTask(ctx), node, contextID, args.Message)
+			if said := refused(err, name); said != "" {
+				return said, nil
+			}
 			switch {
 			case errors.Is(err, peers.ErrUnconfirmed):
 				return fmt.Sprintf("%s (id %s) is not connected to this node, and nothing was sent to it. "+
@@ -211,8 +300,113 @@ func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 					"a human there has to accept the connection request before %s answers.", name, name), nil
 			case errors.Is(err, peers.ErrRefused), errors.Is(err, peers.ErrSender):
 				return "", fmt.Errorf("%s %w", name, err)
+			case err != nil:
+				return "", err
 			}
-			return reply, err
+			return told(ctx, network, node, contextID, reply), nil
+		})
+}
+
+type answerPeerArgs struct {
+	Peer     string `json:"peer"`
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
+}
+
+func answerPeer(network *peers.Network) agent.Tool {
+	return agent.NewTool(toolAnswer,
+		"Answer a question a peer asked back instead of answering your request, and return what it says next: "+
+			"its answer to your request, or another question. The peer goes on where it was; nothing starts anew.",
+		[]agent.Param{
+			{Name: "peer", Description: "name or ID of the peer that asked back"},
+			{Name: "question", Description: "the ID of the question, as " + toolAskPeer + " returned it"},
+			{Name: "answer", Description: "what you answer"},
+		},
+		func(ctx context.Context, args answerPeerArgs) (string, error) {
+			if args.Peer == "" || args.Question == "" || args.Answer == "" {
+				return "", errors.New(toolAnswer + ` needs "peer", "question" and "answer"`)
+			}
+			node, err := network.Online(ctx, args.Peer)
+			if err != nil {
+				return "", err
+			}
+			name := peers.Label(node)
+			contextID := agent.ContextID(ctx) + "/" + node.ID
+			if answer := agent.AnswerOf(ctx); answer != nil {
+				answer.Value(questionKey(args.Question), func() any { return &atomic.Bool{} }).(*atomic.Bool).Store(true)
+			}
+			reply, err := network.Answer(inTask(ctx), node, contextID, args.Question, args.Answer)
+			if said := refused(err, name); said != "" {
+				return said, nil
+			}
+			if err != nil {
+				return "", err
+			}
+			return told(ctx, network, node, contextID, reply), nil
+		})
+}
+
+type tellPeerArgs struct {
+	Peer    string `json:"peer"`
+	Message string `json:"message"`
+}
+
+func tellPeer(network *peers.Network) agent.Tool {
+	return agent.NewTool(toolTellPeer,
+		"Tell a connected peer something without asking: thanks, or that something is done. "+
+			"The peer keeps it for its agent to read when it is asked the next time. No agent starts for it and nothing answers.",
+		[]agent.Param{
+			{Name: "peer", Description: "name or ID of the peer, as listed by " + toolListPeers},
+			{Name: "message", Description: "what to tell the peer"},
+		},
+		func(ctx context.Context, args tellPeerArgs) (string, error) {
+			if args.Peer == "" || args.Message == "" {
+				return "", errors.New(toolTellPeer + ` needs "peer" and "message"`)
+			}
+			node, err := network.Online(ctx, args.Peer)
+			if err != nil {
+				return "", err
+			}
+			name := peers.Label(node)
+			err = network.Tell(inTask(ctx), node, agent.ContextID(ctx)+"/"+node.ID, args.Message)
+			if said := refused(err, name); said != "" {
+				return said, nil
+			}
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s was told. Nothing answers a note.", name), nil
+		})
+}
+
+type askBackArgs struct {
+	Question string `json:"question"`
+}
+
+// askBack is the tool with which the agent that answers a peer asks that
+// peer what it needs to go on. The agent of the peer that sent the request
+// answers it, which knows what the request is for.
+func askBack() agent.Tool {
+	return agent.NewTool(toolAskBack,
+		"Ask the peer whose request you are answering what you need to know to go on, and return its answer. "+
+			"Use it instead of guessing when the request leaves open what only the peer can know; then go on and answer the request. "+
+			"Every question counts against the budget of the task: ask what you need at once.",
+		[]agent.Param{{Name: "question", Description: "what you need to know from the peer"}},
+		func(ctx context.Context, args askBackArgs) (string, error) {
+			if args.Question == "" {
+				return "", errors.New(toolAskBack + ` needs "question"`)
+			}
+			answer, err := a2a.AskBack(ctx, args.Question)
+			switch {
+			case errors.Is(err, a2a.ErrNoAsker):
+				return "", errors.New(toolAskBack + " is for the request of a peer: here you are answering your owner, who reads what you answer")
+			case a2a.IsBudget(err):
+				return "The question was not asked: the budget of this task for messages between peers is used up. " +
+					"Answer with what you have, and say what you could not find out.", nil
+			case errors.Is(err, a2a.ErrNoAnswer):
+				return "The peer did not answer the question in time. Answer with what you have, and say what you could not find out.", nil
+			}
+			return answer, err
 		})
 }
 

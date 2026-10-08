@@ -41,6 +41,12 @@ type Server struct {
 	// can be explained to the peer when it asks about it. May be nil.
 	Failed func(Failure)
 
+	// Note is told what a peer tells the node without asking for an answer,
+	// see KindNote: it keeps it, and starts nothing. Without it a note is
+	// refused.
+	Note func(ctx context.Context, contextID, text string) error
+
+	dialogs   dialogs    // the runs of the Responder for the requests of peers
 	strangers limiter    // limits the connection requests per address
 	channels  ChannelSet // the channels peers have open, and their limits
 }
@@ -235,23 +241,66 @@ func (s *Server) channel(name string) (ChannelHandler, bool) {
 // Close closes every channel peers have open to the server, and from then on
 // no further one is opened. Shutting down the HTTP server does not: a channel
 // is no request that ends by itself.
-func (s *Server) Close() { s.channels.Close() }
+func (s *Server) Close() {
+	s.channels.Close()
+	s.dialogs.stop()
+}
 
 // send answers a message of a trusted peer. Anyone else leaves a connection
 // request instead.
 func (s *Server) send(ctx context.Context, from Caller, params json.RawMessage) (*Message, *Error) {
 	var p sendParams
-	if json.Unmarshal(params, &p) != nil || p.Message.Text() == "" {
+	// Only giving up a question says nothing.
+	if json.Unmarshal(params, &p) != nil || p.Message.Text() == "" && p.Message.meta().Kind != KindCancel {
 		return nil, errNoText
 	}
+	meta := p.Message.meta()
 	if p.Hops > MaxHops {
 		return nil, &Error{CodeTooManyHops, "too many agents have passed this message on"}
 	}
 	if err := s.admit(from, p.Peer); err != nil {
 		return nil, err
 	}
-	// The Responder learns who asks: what it does for a peer is limited.
-	return s.reply(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), from, p.Message)
+	if p.Message.ContextID == "" {
+		p.Message.ContextID = NewID()
+	}
+	// What a message is decides what it starts, not what it says: only a
+	// request starts the agent.
+	switch meta.Kind {
+	case KindNote:
+		return nil, s.noted(WithOrigin(ctx, Origin{PublicKey: from.PublicKey, Hops: p.Hops}), from, p.Message)
+	case KindAnswer, KindCancel:
+		t, more, err := s.dialogs.answered(from, p.Message, meta)
+		if !more {
+			return nil, err
+		}
+		return t.d.await(ctx, t.index)
+	}
+	t, err := s.dialogs.start(ctx, from, p.Message, p.Hops, func(ctx context.Context, d *dialog) {
+		// The Responder learns who asks: what it does for a peer is limited.
+		answer, err := s.reply(ctx, from, p.Message)
+		if answer != nil {
+			answer.Metadata = &Meta{Task: d.task.Budget()}
+		}
+		s.dialogs.end(d, outcome{answer, err})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return t.d.await(ctx, t.index)
+}
+
+// noted keeps what a peer tells the node without asking for an answer.
+// Nothing is started for it, and nothing answers.
+func (s *Server) noted(ctx context.Context, from Caller, msg Message) *Error {
+	if s.Note == nil {
+		return &Error{CodeMethodNotFound, "this node takes no notes"}
+	}
+	if err := s.Note(ctx, msg.ContextID, msg.Text()); err != nil {
+		s.logf("a note of %s (%s) was not kept: %v", from.Addr, from.PublicKey, err)
+		return &Error{CodeInternalError, "the note could not be kept"}
+	}
+	return nil
 }
 
 // request answers a node that asks to connect: nothing if the owner is
@@ -347,9 +396,6 @@ var errNoText = &Error{CodeInvalidParams, "message needs a text part"}
 // Only the owner, who asks with the key of this node, reads the cause itself.
 func (s *Server) reply(ctx context.Context, from Caller, msg Message) (*Message, *Error) {
 	contextID := msg.ContextID
-	if contextID == "" {
-		contextID = NewID()
-	}
 	text, err := s.Respond(ctx, contextID, msg.Text())
 	if err != nil {
 		id := rand.Text()[:8]

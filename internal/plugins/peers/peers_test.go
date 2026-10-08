@@ -2,6 +2,9 @@ package peers_test
 
 import (
 	"context"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -138,5 +141,50 @@ func TestPeerAgentUsesAllowedTools(t *testing.T) {
 	out, err = clitest.Run(t, beta, "", "ask", "gamma", "@beta hello")
 	if err != nil || out != "[o3-mini] turns=1 last=@beta hello\n" {
 		t.Fatalf("gamma should not use tools: %q, %v", out, err)
+	}
+}
+
+// The agent of a peer asks back what it needs instead of sending a request
+// of its own, which the two agents would wait on forever: the agent that
+// asked gets the question as what its request is answered with. A note
+// starts no agent at the peer: it is kept there, and that is all.
+func TestPeerAsksBackAcrossNodes(t *testing.T) {
+	beta := clitest.Settings(t)
+	cfg := clitest.NodeConfig(beta)
+	cfg.Name, cfg.Model = "beta", "gpt-4o-mini"
+	cfg.Tools = &config.Tools{A2A: config.Named("ask_back")}
+	clitest.StartNode(t, beta, cfg)
+	alpha := clitest.Settings(t)
+	clitest.StartNode(t, alpha, clitest.NodeConfig(alpha))
+	clitest.Finds(alpha, beta)
+	clitest.Finds(beta, alpha)
+	clitest.Trust(t, beta, alpha, "alpha")
+	clitest.Trust(t, alpha, beta, "beta")
+
+	out, err := clitest.Run(t, alpha, "", "chat", `@beta !ask_back {"question":"which file do you mean?"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"last=beta has not answered yet. It asks back, and waits for your answer before it goes on (question ", "which file do you mean?", "Answer with answer_peer("} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+
+	out, err = clitest.Run(t, alpha, "", "chat", `!tell_peer {"peer":"beta","message":"thanks for asking"}`)
+	if err != nil || !strings.Contains(out, "last=beta was told. Nothing answers a note.") {
+		t.Fatalf("a note: %q, %v", out, err)
+	}
+	// beta kept the note among its conversations with alpha, and no agent
+	// answered it.
+	var kept []string
+	filepath.WalkDir(home.Dir(beta.Home).History(), func(path string, d fs.DirEntry, _ error) error {
+		if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), "thanks for asking") {
+			kept = append(kept, string(b))
+		}
+		return nil
+	})
+	if len(kept) != 1 || !strings.Contains(kept[0], `[A note from the peer, which asks for no answer:]\nthanks for asking`) || strings.Contains(kept[0], `"role":"assistant"`) {
+		t.Fatalf("beta kept %q", kept)
 	}
 }

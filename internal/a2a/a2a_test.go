@@ -301,8 +301,9 @@ func TestFetchCardErrors(t *testing.T) {
 // The codes are what nodes of other versions read: they stay as they are.
 func TestErrorCodesStay(t *testing.T) {
 	codes := []int{CodeParseError, CodeMethodNotFound, CodeInvalidParams, CodeInternalError,
-		CodeUnauthorized, CodePending, CodeBlocked, CodeTooManyHops, CodeTooManyRequests, CodeTooManyChannels}
-	want := []int{-32700, -32601, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32006}
+		CodeUnauthorized, CodePending, CodeBlocked, CodeTooManyHops, CodeTooManyRequests, CodeTooManyChannels,
+		CodeBudget, CodeNoQuestion, CodeQuestionOpen}
+	want := []int{-32700, -32601, -32602, -32603, -32001, -32002, -32003, -32004, -32005, -32006, -32007, -32008, -32009}
 	if !slices.Equal(codes, want) {
 		t.Fatalf("codes %v, want %v", codes, want)
 	}

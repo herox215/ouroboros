@@ -30,7 +30,10 @@ type testNode struct {
 
 	mu     sync.Mutex
 	heard  []string // "contextID: text" of every message its agent got
+	noted  []string // "contextID: text" of every note it was told
 	failed error    // what its agent fails with, if set
+	// respond answers instead of "name: text", if set.
+	respond a2a.Responder
 }
 
 // serveNode runs a node called name whose agent answers "name: text".
@@ -41,11 +44,21 @@ func serveNode(t *testing.T, name string) *testNode {
 		Card:     func() a2a.AgentCard { return a2a.AgentCard{Name: name, Description: "knows the way"} },
 		Identity: n.id,
 		Trust:    n.contacts,
-		Respond: func(_ context.Context, contextID, text string) (string, error) {
+		Respond: func(ctx context.Context, contextID, text string) (string, error) {
+			n.mu.Lock()
+			n.heard = append(n.heard, contextID+": "+text)
+			respond, failed := n.respond, n.failed
+			n.mu.Unlock()
+			if respond != nil {
+				return respond(ctx, contextID, text)
+			}
+			return name + ": " + text, failed
+		},
+		Note: func(_ context.Context, contextID, text string) error {
 			n.mu.Lock()
 			defer n.mu.Unlock()
-			n.heard = append(n.heard, contextID+": "+text)
-			return name + ": " + text, n.failed
+			n.noted = append(n.noted, contextID+": "+text)
+			return nil
 		},
 	}).Handler())
 	// Like a node: over TLS, with the certificate of its key.
@@ -63,6 +76,20 @@ func (n *testNode) messages() string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return strings.Join(n.heard, "\n")
+}
+
+// notes are the notes n was told so far.
+func (n *testNode) notes() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return strings.Join(n.noted, "\n")
+}
+
+// answers makes the agent of n answer with respond from now on.
+func (n *testNode) answers(respond a2a.Responder) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.respond = respond
 }
 
 // fail makes the agent of n fail with err from now on.

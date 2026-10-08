@@ -44,7 +44,48 @@ const (
 	// CodeTooManyChannels answers a peer that has MaxChannelsPerPeer channels
 	// open and asks for one more.
 	CodeTooManyChannels = -32006
+	// CodeBudget answers a message of a task whose budget is used up, see
+	// Task.
+	CodeBudget = -32007
+	// CodeNoQuestion answers an answer to a question that is not open: it
+	// was answered, given up, or its agent stopped waiting.
+	CodeNoQuestion = -32008
+	// CodeQuestionOpen answers a message in a conversation whose agent asked
+	// back and waits for the answer: that comes first.
+	CodeQuestionOpen = -32009
 )
+
+// What a message is, see Meta.Kind. Only a request starts the agent of the
+// receiver, and only a question and the answer to it belong together: what
+// a message is does not follow from what it says.
+const (
+	// KindRequest asks for an answer: the agent of the receiver starts, and
+	// what it answers with is the result of the request, or a question back.
+	KindRequest = ""
+	// KindNote tells the receiver something. Nothing starts and nothing
+	// answers: it is kept for the agent to read when it is asked the next
+	// time.
+	KindNote = "note"
+	// KindAnswer answers the question Meta.Question names, which the agent
+	// of the receiver asked back: that agent goes on, and what it answers
+	// with next is the answer to this message.
+	KindAnswer = "answer"
+	// KindCancel gives up the question Meta.Question names: the agent that
+	// asked it stops.
+	KindCancel = "cancel"
+	// KindQuestion is the kind of an answer that is none yet: the agent asks
+	// back what it needs to go on, under the ID in Meta.Question, and waits.
+	KindQuestion = "question"
+)
+
+// Meta is what a message says of itself beyond its text, in the metadata of
+// A2A: what kind it is, the question it asks or answers, and the budget of
+// the task it belongs to.
+type Meta struct {
+	Kind     string  `json:"ouroboros.kind,omitempty"`
+	Question string  `json:"ouroboros.question,omitempty"`
+	Task     *Budget `json:"ouroboros.task,omitempty"`
+}
 
 // MaxHops is how many agents may pass a message on before it is refused.
 // It ends a question that goes round in a circle of nodes.
@@ -111,6 +152,17 @@ type Message struct {
 	MessageID string `json:"messageId"`
 	ContextID string `json:"contextId,omitempty"`
 	Parts     []Part `json:"parts"`
+	// Metadata says what the message is, see Meta: nil for a plain request
+	// or its plain answer, as every A2A agent sends them.
+	Metadata *Meta `json:"metadata,omitempty"`
+}
+
+// meta is what m says of itself: nothing for a plain message.
+func (m Message) meta() Meta {
+	if m.Metadata == nil {
+		return Meta{}
+	}
+	return *m.Metadata
 }
 
 // Part is a piece of message content. Only text parts are supported.
@@ -163,6 +215,18 @@ func IsPending(err error) bool { return code(err, CodePending) }
 // ErrTooManyHops is returned instead of sending a message that MaxHops agents
 // have passed on already.
 var ErrTooManyHops = errors.New("a2a: too many agents have passed this message on")
+
+// IsBudget reports whether err means that the budget of the task is used
+// up, here or at the peer.
+func IsBudget(err error) bool { return errors.Is(err, ErrBudget) || code(err, CodeBudget) }
+
+// IsQuestionOpen reports whether err means that the peer asked back in this
+// conversation and waits for the answer.
+func IsQuestionOpen(err error) bool { return code(err, CodeQuestionOpen) }
+
+// IsNoQuestion reports whether err means that the question that was
+// answered is not open.
+func IsNoQuestion(err error) bool { return code(err, CodeNoQuestion) }
 
 // IsBlocked reports whether err means the peer refused to connect.
 func IsBlocked(err error) bool { return code(err, CodeBlocked) }

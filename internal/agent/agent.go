@@ -118,7 +118,37 @@ type (
 	observerKey struct{}
 	spentKey    struct{}
 	steeringKey struct{}
+	answerKey   struct{}
 )
+
+// Answer is what lasts as long as one answer of an agent: what its tools
+// keep from one call to the next, like the task its messages to peers
+// belong to, and a context that ends with the answer, however it ends.
+type Answer struct {
+	values sync.Map
+	ctx    context.Context
+}
+
+// AnswerOf returns the answer a tool is run for under ctx, nil outside of
+// one.
+func AnswerOf(ctx context.Context) *Answer {
+	a, _ := ctx.Value(answerKey{}).(*Answer)
+	return a
+}
+
+// Value returns what the answer keeps under key: what make returns the
+// first time it is asked for.
+func (a *Answer) Value(key any, make func() any) any {
+	if v, ok := a.values.Load(key); ok {
+		return v
+	}
+	v, _ := a.values.LoadOrStore(key, make())
+	return v
+}
+
+// Context ends when the answer does: given, failed or stopped. The context
+// of a call of a tool may end before, as that of a script does.
+func (a *Answer) Context() context.Context { return a.ctx }
 
 // WithSteering returns a context under which an answer takes what its user
 // says while it is on its way: Run calls steer once the tools of a round of
@@ -183,6 +213,9 @@ func NewMemory() *Memory {
 }
 
 type conversation struct {
+	// notes are what the user told since the last answer without asking,
+	// see Agent.Note: the next answer starts with them.
+	notes      []openai.Message
 	lastUsed   uint64
 	inspected  bool
 	inspection Inspection
@@ -235,11 +268,15 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		return "", err
 	}
 	defer release()
+	ctx, end := context.WithCancel(ctx)
+	defer end() // after the hooks that are told how the answer ended
+	ctx = context.WithValue(ctx, answerKey{}, &Answer{ctx: ctx})
 	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
 	spent := &atomic.Int64{}
 	ctx = context.WithValue(ctx, spentKey{}, spent)
-	history := append(a.memory.history(contextID), openai.Message{Role: "user", Content: text})
+	// What the user told meanwhile without asking comes before what it asks.
+	history := append(append(a.memory.history(contextID), a.memory.noted(contextID)...), openai.Message{Role: "user", Content: text})
 	asked := len(history) - 1 // where this answer starts
 	origin, peer := a2a.OriginFrom(ctx)
 	processing := Processing{a.llm, a.model, Conversation{contextID, peer, origin}}
@@ -373,6 +410,63 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 	}
 	return abandon(ErrTooManyToolCalls)
+}
+
+// maxNotes is how many notes a conversation keeps for its next answer: of
+// more, the oldest are dropped.
+const maxNotes = 32
+
+// Note makes the agent remember text as something the user of the
+// conversation contextID said without asking for an answer. No LLM is called
+// for it: the next answer in the conversation starts with it. The hooks are
+// told of it as of an answer that is nothing but that message, so that it is
+// kept where answers are.
+func (a *Agent) Note(ctx context.Context, contextID, text string) error {
+	note := openai.Message{Role: "user", Content: text}
+	a.memory.note(contextID, note)
+	origin, peer := a2a.OriginFrom(ctx)
+	told := AnswerOutcome{Processing{a.llm, a.model, Conversation{contextID, peer, origin}}, []openai.Message{note}, "", nil}
+	var failed error
+	for _, h := range a.extensions.hooks {
+		if h.After != nil {
+			if err := h.After(ctx, told); err != nil {
+				failed = errors.Join(failed, fmt.Errorf("answer hook %s after: %w", h.Name, err))
+			}
+		}
+	}
+	return failed
+}
+
+// note keeps msg for the next answer of the conversation contextID.
+func (m *Memory) note(contextID string, msg openai.Message) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clock++
+	c := m.conversations[contextID]
+	if c == nil {
+		c = &conversation{}
+		m.conversations[contextID] = c
+	}
+	c.lastUsed = m.clock
+	c.notes = append(c.notes, msg)
+	c.notes = c.notes[max(0, len(c.notes)-maxNotes):]
+	if len(m.conversations) > maxContexts {
+		m.evictOldest()
+	}
+}
+
+// noted returns the notes of the conversation contextID, which are part of
+// its next answer from now on.
+func (m *Memory) noted(contextID string) []openai.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.conversations[contextID]
+	if c == nil {
+		return nil
+	}
+	notes := c.notes
+	c.notes = nil
+	return notes
 }
 
 // Abandon returns the conversation msgs as it is remembered when its last

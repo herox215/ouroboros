@@ -57,6 +57,20 @@ func (p *Peers) Respond(ctx context.Context, contextID, text string) (string, er
 	}})
 }
 
+// noteHead is what the agent reads before a note of a peer.
+const noteHead = "[A note from the peer, which asks for no answer:]\n"
+
+// Note keeps text as what the peer of the conversation contextID told
+// without asking for an answer: no agent starts for it. The agent reads it
+// when the peer asks the next time, and it is archived like an answer.
+func (p *Peers) Note(ctx context.Context, contextID, text string) error {
+	bot, err := p.current()
+	if err != nil {
+		return err
+	}
+	return bot.Note(ctx, contextID, noteHead+text)
+}
+
 // Forget makes the agent forget the conversation contextID, as if it was
 // never had.
 func (p *Peers) Forget(contextID string) { p.memory.Forget(contextID) }

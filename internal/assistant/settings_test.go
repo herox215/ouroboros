@@ -283,8 +283,8 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		args propose
 		want string
 	}{
-		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, read)`},
-		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, read, get_config, propose_config, withdraw_proposal)`},
+		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read)`},
+		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read, get_config, propose_config, withdraw_proposal)`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "read", "alow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: settings of the tool read: json: unknown field "alow"`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "list_peers", "allow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: the tool list_peers takes no settings`},
 		{propose{"tools.a2a", []string{"read", "read"}, "r"}, `error: nothing was proposed: tools.a2a: the tool "read" is listed twice`},
@@ -383,11 +383,11 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	// Every tool for peers is every tool there is for peers.
 	cfg.Tools = &config.Tools{A2A: config.Named("*")}
 	tools, err := c.builder.peerTools(cfg)
-	if err != nil || names(tools) != "list_peers,ask_peer,read" {
+	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read" {
 		t.Fatalf("every tool for peers: %q, %v", names(tools), err)
 	}
 	tools, err = c.builder.ownerTools(cfg)
-	if err != nil || names(tools) != "list_peers,ask_peer,read,get_config,propose_config,withdraw_proposal" {
+	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read,get_config,propose_config,withdraw_proposal" {
 		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
 	}
 	// A script of a peer has neither.

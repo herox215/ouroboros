@@ -62,7 +62,8 @@ const (
 	peerPrompt = `You are %q, an Ouroboros agent reachable via A2A. Be helpful and concise.`
 	// toolsHint is added for peers whose questions the agent may use tools for.
 	toolsHint = ` You are answering the agent of another person, not your owner. ` +
-		`Use your tools when they help to answer. You cannot ask the peer you are answering.`
+		`Use your tools when they help to answer. You cannot send the peer you are answering a request: ` +
+		`what only it can know and you need to go on, you ask it back with ` + toolAskBack + `, if you have that, instead of guessing.`
 	// explainHint is added for peers when the agent can look up failed answers.
 	explainHint = ` When the peer asks about an error ID it was given because an earlier message could not be answered, ` +
 		`look it up with ` + toolExplainError + ` and explain in plain words what went wrong. ` +

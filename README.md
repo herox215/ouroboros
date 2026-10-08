@@ -1004,8 +1004,9 @@ endpoint of ChatGPT itself. The API key stays available, as the other provider.
 
 With `ask_peer` in `a2a`, a peer you connected to can make your agent ask the peers you are connected to,
 in your name, and nobody else: for a peer the agent neither writes to a node you are not connected to nor
-proposes a connection. Two rules keep that from running in circles: the agent never asks the peer it is
-answering, and a message is passed on by at most 3 agents.
+proposes a connection. Three rules keep that from running in circles: the agent never sends the peer it is
+answering a request, a message is passed on by at most 3 agents, and all the messages of a task share one
+budget, see [Dialogs between peers](#dialogs-between-peers).
 
 `ask_peer` takes the name or ID of a node that is online, as `list_peers` shows it, and no address: an
 agent cannot be sent to a `host:port` somebody put into its head. Only you address a node that way, with
@@ -1015,6 +1016,62 @@ agent cannot be sent to a `host:port` somebody put into its head. Only you addre
 `not connected`, or `trusted, but not reachable right now`. The last is a peer you connected to whose node
 did not prove to hold its key within 2 seconds: it is gone, slow, or someone else answers at its address.
 It stays your peer and needs no confirmation; the agent tries it again later.
+
+### Dialogs between peers
+
+Your agent (Terra) asks the agent of a peer (Luna) to do something, and Luna lacks something only Terra
+knows. Luna does not have to guess or give up: it **asks back**, Terra answers, and Luna goes on where it was
+and delivers its result, with which Terra goes on.
+
+```
+Terra                                   Luna
+ask_peer(luna, "clean up")   ──────►    starts for the request
+       ◄──────  question q1: "which file?"        ask_back("which file?"), waits
+answer_peer(luna, q1, "a.txt") ────►    goes on where it was
+       ◄──────  result: "removed a.txt"
+tell_peer(luna, "thanks")    ──────►    kept, nothing starts
+```
+
+What a message is, is said by the message and enforced by the nodes. It is not read from its words, and
+no prompt decides it:
+
+| Message | Tool | What it starts at the receiver |
+|---|---|---|
+| **request** | `ask_peer` | its agent, which answers with its result or with a question |
+| **question** | `ask_back`, by the agent that answers a request | nothing: it is what the request is answered with for now, and the agent that asked waits |
+| **answer** | `answer_peer` | nothing new: the agent that asked the question goes on. It answers exactly the question whose ID it names |
+| **note** | `tell_peer` | nothing: it is kept, and the agent reads it when it is asked the next time. Thanks are a note |
+| **result** | the answer of the agent | nothing: it ends the request it belongs to |
+
+- **No agent waits for one that waits for it.** A question is no request of its own, which the two agents
+  would wait on forever: it travels as the answer to the request, and the answer to it as a message of its
+  own. So only one side waits at a time. While an agent waits for the answer to its question, a new request
+  in the same conversation is told that the question comes first.
+- **Nothing is handled twice.** Every message has an ID. One that is delivered once more is answered with
+  what it was answered with, and starts nothing; a question that was answered takes no second answer. A new
+  message is a new one, whatever it says.
+- **One budget for the whole task.** All messages your agent sends for one answer to you, and everything
+  the peers send for them in turn, questions and answers and what they ask of other peers, are one task: at
+  most **16 messages** and **30 minutes**. The budget travels with every message and its answer, and each
+  node takes the lower of what it knows and what it is told: a peer can spend it, but not fill it, and a
+  request passed on to a third node starts no new one. When it is used up, nothing more is sent, and the
+  agent is told to finish with what it has.
+- **Stopping stops all of it.** When the answer of your agent ends or is stopped (`esc`, `/cancel`) while a
+  request is on its way, the peer stops working on it. A question that was not answered by then is given
+  up, and the agent that asked it stops. A question nobody answers ends by itself after 10 minutes. Your
+  other conversations and the other peers are not touched.
+- **No new rights.** Questions, answers and notes go between connected peers only, and none asks for a
+  connection. `ask_back` reaches the peer that sent the request and nobody else, and what an agent does for
+  a peer is what `tools.a2a` allows it: list `ask_back` there to let your agent ask peers back. It gives a
+  peer nothing of yours but the question.
+- **What happened stays readable.** The requests, questions and answers are calls of tools in your
+  conversation and in its archive; at the peer, the conversation in the `Peers` tab of `/session` shows
+  what it was asked and told, notes included.
+
+The dialog works between nodes of any host, over the same signed and pinned requests as every message. It is
+an extension of A2A, carried in the `metadata` of the messages (`ouroboros.kind`, `ouroboros.question`,
+`ouroboros.task`): a node that does not know it gets plain requests and gives plain answers. A front end
+that cannot answer a question, like `ouro ask`, gets it as what the agent said, and gives it up.
 
 ### When a peer could not answer
 

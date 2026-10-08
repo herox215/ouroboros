@@ -12,7 +12,9 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"ouroboros/internal/contacts"
@@ -38,6 +40,16 @@ type node struct {
 	fail faults
 	// failed are the failed answers the server reported.
 	failed []Failure
+	// mu guards log and failed, which an agent that goes on after its
+	// request was answered writes while the test reads.
+	mu sync.Mutex
+}
+
+// failures are the failed answers the server reported so far.
+func (n *node) failures() []Failure {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.failed)
 }
 
 // faults are the errors the contacts of a node fail with, by what is asked
@@ -106,8 +118,16 @@ func newNode(t *testing.T, name string) *node {
 	}
 	n.server = &Server{Card: func() AgentCard { return testCard }, Identity: id, Trust: faulty{trust, &n.fail}, Respond: respond, Methods: func() []Method { return n.methods },
 		Channels: func() []ChannelHandler { return n.channels },
-		Log:      func(format string, args ...any) { n.log = append(n.log, fmt.Sprintf(format, args...)) },
-		Failed:   func(f Failure) { n.failed = append(n.failed, f) }}
+		Log: func(format string, args ...any) {
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			n.log = append(n.log, fmt.Sprintf(format, args...))
+		},
+		Failed: func(f Failure) {
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			n.failed = append(n.failed, f)
+		}}
 	n.srv = serve(t, id, n.server.Handler())
 	// The channels go before the server, which waits for nothing of theirs.
 	t.Cleanup(n.server.Close)

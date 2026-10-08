@@ -43,6 +43,10 @@ type Server struct {
 	// error of a configuration it cannot answer with. It is told what goes
 	// wrong later with logf.
 	Responder func(logf func(format string, args ...any)) (a2a.Responder, error)
+	// Note keeps what a trusted peer tells the node without asking for an
+	// answer, see a2a.Server.Note. It is called once Responder was. May be
+	// nil: the node takes no notes then.
+	Note func(ctx context.Context, contextID, text string) error
 	// Methods returns the A2A methods added to the built-in ones. May be nil.
 	Methods func() []a2a.Method
 	// Channels returns the channels peers can open. May be nil.
@@ -291,6 +295,7 @@ func (s Server) agent(logger *log.Logger, version string) (*agent, error) {
 		Identity: id,
 		Trust:    s.Home.Contacts(),
 		Respond:  respond,
+		Note:     s.Note,
 		Methods:  s.Methods,
 		Channels: s.Channels,
 		Log:      logger.Printf,

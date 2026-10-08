@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"ouroboros/internal/a2a"
@@ -55,6 +56,8 @@ type needs struct {
 // place.
 func Plugin(dir home.Dir, o Options) plugin.Plugin {
 	return plugin.New("node", func(ctx *plugin.Context, n needs) error {
+		// answering is what answers the peers, once the node runs.
+		var answering atomic.Pointer[assistant.Peers]
 		c := &nodeCommands{
 			term:     n.Console,
 			sessions: n.Sessions,
@@ -69,10 +72,15 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 					if err := peers.Ready(); err != nil {
 						return nil, err
 					}
+					answering.Store(peers)
 					n.Sessions.ForgetPeers(peers.Forget) // a conversation the owner deletes
 					return func(ctx context.Context, contextID, text string) (string, error) {
 						return peers.Respond(ctx, conversation(ctx, contextID), text)
 					}, nil
+				},
+				// What a peer tells without asking is kept, and starts no agent.
+				Note: func(ctx context.Context, contextID, text string) error {
+					return answering.Load().Note(ctx, conversation(ctx, contextID), text)
 				},
 				Methods:  func() []a2a.Method { return plugin.All[plugin.Method](ctx) },
 				Channels: func() []a2a.ChannelHandler { return plugin.All[plugin.ChannelHandler](ctx) },

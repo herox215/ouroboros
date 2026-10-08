@@ -74,6 +74,10 @@ type testNode struct {
 	before         func() // runs before it handles a request, if set
 	methods        []a2a.Method
 	channels       []a2a.ChannelHandler
+	// respond answers instead of "name: text", if set, and notes are what
+	// the node was told without being asked.
+	respond func(ctx context.Context, text string) (string, error)
+	notes   []string
 }
 
 // serve runs a node called name whose agent answers "name: text".
@@ -85,9 +89,16 @@ func serve(t *testing.T, name string) *testNode {
 		Card:     func() a2a.AgentCard { return a2a.AgentCard{Name: name, Description: "  knows\nthe way "} },
 		Identity: n.id,
 		Trust:    n.contacts,
-		Respond: func(_ context.Context, _, text string) (string, error) {
+		Respond: func(ctx context.Context, _, text string) (string, error) {
 			n.asked++
+			if n.respond != nil {
+				return n.respond(ctx, text)
+			}
 			return name + ": " + text, nil
+		},
+		Note: func(_ context.Context, contextID, text string) error {
+			n.notes = append(n.notes, contextID+": "+text)
+			return nil
 		},
 		Methods:  func() []a2a.Method { return n.methods },
 		Channels: func() []a2a.ChannelHandler { return n.channels },

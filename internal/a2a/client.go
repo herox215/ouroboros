@@ -29,23 +29,101 @@ type Client struct {
 // Send delivers text to the agent of the node with publicKey at baseURL and
 // returns its reply. Messages with the same contextID belong to the same
 // conversation.
+//
+// Send is for who cannot answer a question: if the agent there asks back, the
+// question is given up, and returned as what the agent said, with a line that
+// says so. An agent asks with Ask.
 func (c *Client) Send(ctx context.Context, baseURL, publicKey, contextID, text string) (string, error) {
+	r, err := c.Ask(ctx, baseURL, publicKey, contextID, text)
+	if err != nil || r.Question == "" {
+		return r.Text, err
+	}
+	c.GiveUp(context.WithoutCancel(ctx), baseURL, publicKey, contextID, r.Question) // it stops waiting by itself otherwise
+	return r.Text + "\n\n[This is a question back, which nobody can answer from here: ask again with what it needs.]", nil
+}
+
+// Reply is what the agent of a peer answers a request, or the answer to a
+// question, with.
+type Reply struct {
+	// Text is the result, or the question if Question names one.
+	Text string
+	// Question is the ID of the question the agent asks back before it goes
+	// on, "" for a result: Answer answers it, and GiveUp gives it up.
+	Question string
+}
+
+// Ask delivers text as a request to the agent of the node with publicKey at
+// baseURL, which starts for it, and returns what it answers with: its
+// result, or a question back. Messages with the same contextID belong to the
+// same conversation.
+func (c *Client) Ask(ctx context.Context, baseURL, publicKey, contextID, text string) (Reply, error) {
+	return c.message(ctx, baseURL, publicKey, contextID, Meta{Kind: KindRequest}, text)
+}
+
+// Answer answers the question the agent of the node asked back, and returns
+// what that agent says next: the result of the request the question was
+// asked for, or another question.
+func (c *Client) Answer(ctx context.Context, baseURL, publicKey, contextID, question, text string) (Reply, error) {
+	return c.message(ctx, baseURL, publicKey, contextID, Meta{Kind: KindAnswer, Question: question}, text)
+}
+
+// Tell delivers text to the node as a note: it is kept there for its agent
+// to read with the next request, and nothing starts or answers.
+func (c *Client) Tell(ctx context.Context, baseURL, publicKey, contextID, text string) error {
+	_, err := c.message(ctx, baseURL, publicKey, contextID, Meta{Kind: KindNote}, text)
+	return err
+}
+
+// GiveUp tells the node that the question its agent asked back is not
+// answered: the agent stops. It costs nothing of the budget of the task.
+func (c *Client) GiveUp(ctx context.Context, baseURL, publicKey, contextID, question string) error {
+	_, err := c.message(ctx, baseURL, publicKey, contextID, Meta{Kind: KindCancel, Question: question}, "")
+	return err
+}
+
+// message sends a message of the kind meta says and returns what it is
+// answered with. It counts against the budget of the task of ctx, if there
+// is one, and what the answer says is left of that is taken.
+func (c *Client) message(ctx context.Context, baseURL, publicKey, contextID string, meta Meta, text string) (Reply, error) {
 	// A message sent while answering a peer is that peer's message passed on.
 	hops := 0
 	if origin, ok := OriginFrom(ctx); ok {
 		hops = origin.Hops + 1
 	}
 	if hops > MaxHops {
-		return "", ErrTooManyHops
+		return Reply{}, ErrTooManyHops
 	}
-	res, err := c.call(ctx, baseURL, publicKey, MethodSend, sendParams{NewMessage("user", contextID, text), c.peer(), hops})
+	task := TaskFrom(ctx)
+	if task != nil {
+		if meta.Kind != KindCancel {
+			if err := task.spend(); err != nil {
+				return Reply{}, err
+			}
+		}
+		meta.Task = task.Budget()
+	}
+	msg := NewMessage("user", contextID, text)
+	if meta != (Meta{}) {
+		msg.Metadata = &meta
+	}
+	res, err := c.call(ctx, baseURL, publicKey, MethodSend, sendParams{msg, c.peer(), hops})
 	if err != nil {
-		return "", err
+		return Reply{}, err
 	}
 	if res.Result == nil {
-		return "", errors.New("a2a: response has no message")
+		if meta.Kind == KindNote || meta.Kind == KindCancel {
+			return Reply{}, nil
+		}
+		return Reply{}, errors.New("a2a: response has no message")
 	}
-	return res.Result.Text(), nil
+	answer := res.Result.meta()
+	if task != nil {
+		task.heard(answer.Task)
+	}
+	if answer.Kind != KindQuestion {
+		answer.Question = ""
+	}
+	return Reply{Text: res.Result.Text(), Question: answer.Question}, nil
 }
 
 // Request asks the node with publicKey at baseURL to connect, and tells it
