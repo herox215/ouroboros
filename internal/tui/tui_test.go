@@ -112,6 +112,8 @@ type fakeBackend struct {
 
 	mu   sync.Mutex
 	sent []sent // the messages asked for
+	// fallbacks are what the node falls back on.
+	fallbacks []Fallback
 	// pictures are the pictures that were pasted, to keep.
 	pictures []string
 	// canceled are the sessions whose answer was stopped, in order.
@@ -279,6 +281,19 @@ func (f *fakeBackend) RefuseProposal(id string) error {
 	return f.rejectErr
 }
 func (f *fakeBackend) Models(ctx context.Context) ([]Models, error) { return f.offers, f.modelsErr }
+func (f *fakeBackend) Fallbacks() ([]Fallback, error)               { return f.fallbacks, f.fail["fallbacks"] }
+func (f *fakeBackend) ToggleFallback(access, model string) ([]Fallback, error) {
+	if err := f.fail["togglefallback"]; err != nil {
+		return nil, err
+	}
+	this := Fallback{Access: access, Model: model}
+	if at := slices.Index(f.fallbacks, this); at >= 0 {
+		f.fallbacks = slices.Delete(f.fallbacks, at, at+1)
+	} else {
+		f.fallbacks = append(f.fallbacks, this)
+	}
+	return slices.Clone(f.fallbacks), nil
+}
 func (f *fakeBackend) SetPeerModel(access, model string) error {
 	if err := f.fail["setpeermodel"]; err != nil {
 		return err

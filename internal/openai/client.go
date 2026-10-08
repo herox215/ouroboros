@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -133,6 +134,12 @@ type Message struct {
 	// Usage is what the call that brought an assistant message cost, as far
 	// as the API told. It is not sent back.
 	Usage Usage `json:"-"`
+	// Via is what answered instead of the access and the model that were
+	// asked, like "model-a of Ollama local", and Instead why those could not:
+	// a node with fallbacks sets them, see config.Config.Fallbacks. They are
+	// not sent back.
+	Via     string `json:"-"`
+	Instead string `json:"-"`
 	// breakpoint makes the message a cache_control breakpoint: see
 	// breakpoints.
 	breakpoint bool
@@ -293,6 +300,35 @@ func (e *APIError) Error() string {
 // Unauthorized reports whether the API key was rejected.
 func (e *APIError) Unauthorized() bool {
 	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden
+}
+
+// Unavailable marks err as the error of a call the API cannot answer for
+// now, whatever it is asked: see IsUnavailable. It is for a provider whose
+// errors do not tell by themselves.
+func Unavailable(err error) error { return &unavailable{err} }
+
+type unavailable struct{ error }
+
+func (u *unavailable) Unwrap() error { return u.error }
+
+// IsUnavailable reports whether err says that the API cannot answer for now,
+// whatever it is asked: a limit or a quota is reached (HTTP 429 or 402), the
+// service fails (5xx), it is not reached at all, or its provider marked the
+// error with Unavailable. A node with fallbacks goes on with another access
+// then. An error of what was asked is none, like a key that is refused or a
+// context that is too long, nor is a call that was stopped.
+func IsUnavailable(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if marked := (*unavailable)(nil); errors.As(err, &marked) {
+		return true
+	}
+	if api := (*APIError)(nil); errors.As(err, &api) {
+		return api.Status == http.StatusTooManyRequests || api.Status == http.StatusPaymentRequired || api.Status >= http.StatusInternalServerError
+	}
+	var network net.Error
+	return errors.As(err, &network)
 }
 
 // Client talks to an OpenAI-compatible API.

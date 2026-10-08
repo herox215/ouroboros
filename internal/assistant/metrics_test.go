@@ -21,9 +21,15 @@ func TestCallMetrics(t *testing.T) {
 	if !c.Metrics.InPlan || c.Metrics.PlanCalls != 1 || c.Metrics.Calls != 3 || c.Metrics.TPS != 0 {
 		t.Fatalf("%+v", c)
 	}
+	if c = c.withCall(agent.Call{Via: "mid of B"}); c.Metrics.Via != "mid of B" {
+		t.Fatalf("%+v", c)
+	}
+	if c = c.withCall(agent.Call{InPlan: true}); c.Metrics.Via != "" || c.Metrics.Calls != 5 {
+		t.Fatalf("%+v", c)
+	}
 	zero := 0.0
 	c = c.withCall(agent.Call{CostUSD: &zero})
-	if !c.Metrics.CostKnown || c.Metrics.InPlan || c.Metrics.ChargedCalls != 2 {
+	if !c.Metrics.CostKnown || c.Metrics.InPlan || c.Metrics.ChargedCalls != 2 || c.Metrics.PlanCalls != 2 {
 		t.Fatalf("%+v", c)
 	}
 	for _, invalid := range []float64{-1, math.NaN(), math.Inf(1)} {

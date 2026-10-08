@@ -23,6 +23,9 @@ func callMetrics(c plugin.SessionCache) string {
 		cost = fmt.Sprintf("cost $%.4f", m.CostUSD)
 	}
 	parts := []string{tps, cost}
+	if m.Via != "" {
+		parts = append([]string{"answered by the fallback " + m.Via}, parts...)
+	}
 	if m.ChargedCalls > 0 {
 		total := fmt.Sprintf("session $%.4f", m.AllCostUSD)
 		if m.UnknownCalls > 0 {

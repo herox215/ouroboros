@@ -29,6 +29,10 @@ var refreshInterval = 10 * time.Second
 // Status describes the local node.
 type Status = plugin.NodeStatus
 
+// Fallback is a model of an access the node falls back on, see
+// Backend.Fallbacks.
+type Fallback = plugin.Fallback
+
 // Models are the models of one access of the node, as Models of a Backend
 // lists them for the model screen (/model).
 type Models = plugin.AccessModels
@@ -107,6 +111,12 @@ type Backend interface {
 	// agents do from the next message on. It reports whether they answer
 	// through another access than before.
 	SetModel(access, model string) (switched bool, err error)
+	// Fallbacks are what the node goes on with, in their order, when the
+	// access it answers the owner with cannot for now, and ToggleFallback
+	// makes model of the access the last of them, or none of them if it is
+	// one: it returns them as they are then.
+	Fallbacks() ([]Fallback, error)
+	ToggleFallback(access, model string) ([]Fallback, error)
 	// SetPeerModel makes model of the access what the node answers peers
 	// with, whatever it answers the owner with; with the access "", what it
 	// answers the owner with again. Status says what it is.
@@ -237,11 +247,12 @@ type Model struct {
 	unreadReq int
 	seenReq   int
 
-	models    []Models // what the accesses offer, once /model asked for them
-	choices   []choice // the models of them all, to select from
-	modelSel  int      // the one selected of choices
-	modelBusy string   // what the model screen waits for, like "listing models"
-	modelErr  error    // why the models are not there
+	models    []Models   // what the accesses offer, once /model asked for them
+	choices   []choice   // the models of them all, to select from
+	modelSel  int        // the one selected of choices
+	modelBusy string     // what the model screen waits for, like "listing models"
+	modelErr  error      // why the models are not there
+	fallbacks []Fallback // what the node falls back on, as /model marks it
 
 	contents viewport.Model // the context of the conversation, for /context
 	loaded   *contentsMsg   // the context that came in, to wrap again when the window changes
@@ -467,7 +478,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyContacts(msg.trust)
 		}
 	case modelsMsg:
-		m.modelsLoaded(msg.models, msg.err)
+		m.modelsLoaded(msg)
+	case fallbacksMsg:
+		m.fallbacksSet(msg)
 	case settingsMsg:
 		m.settingsLoaded(msg)
 	case changedMsg:

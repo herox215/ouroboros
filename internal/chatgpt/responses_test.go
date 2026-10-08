@@ -144,14 +144,14 @@ func TestCompleteAtTheLimit(t *testing.T) {
 	limit := `{"error":{"code":"subscription_sharing_usage_limit_exceeded","message":"limit"}}`
 	srv.Set(func(s *chatgpttest.State) { s.Responses = []chatgpttest.Response{{Status: 429, Body: limit}} })
 	err := ask()
-	if !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), UsagePage) || strings.Contains(err.Error(), "try again after") || len(srv.Seen().Requests) != 1 {
+	if !errors.Is(err, ErrLimit) || !openai.IsUnavailable(err) || !strings.Contains(err.Error(), UsagePage) || strings.Contains(err.Error(), "try again after") || len(srv.Seen().Requests) != 1 {
 		t.Fatalf("at the limit: %v, %d requests", err, len(srv.Seen().Requests))
 	}
 	// When it is over is told as far as the API says.
 	srv.Set(func(s *chatgpttest.State) {
 		s.Responses = []chatgpttest.Response{{Status: 429, Body: limit, Header: map[string]string{"Retry-After": "3600"}}}
 	})
-	if err := ask(); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "the API says to try again after 3600") {
+	if err := ask(); !errors.Is(err, ErrLimit) || !openai.IsUnavailable(err) || !strings.Contains(err.Error(), "the API says to try again after 3600") {
 		t.Fatalf("at the limit, with a time: %v", err)
 	}
 	// The limit may come after the stream began.
@@ -217,7 +217,7 @@ func TestCompleteTriesAgainLater(t *testing.T) {
 	}
 	// It stays down: told after the last try, with what the API said.
 	srv.Set(func(s *chatgpttest.State) { s.Responses = []chatgpttest.Response{down, down, down, down} })
-	if _, err := ask(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot be used right now, try again later") || !strings.Contains(err.Error(), "routing is unavailable") {
+	if _, err := ask(context.Background()); err == nil || !openai.IsUnavailable(err) || !strings.Contains(err.Error(), "cannot be used right now, try again later") || !strings.Contains(err.Error(), "routing is unavailable") {
 		t.Fatalf("down for good: %v", err)
 	}
 	if n := len(srv.Seen().Requests); n != 6 {

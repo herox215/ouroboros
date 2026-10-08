@@ -195,7 +195,7 @@ func TestModelScreenWithoutModels(t *testing.T) {
 		t.Fatal("saving without models should do nothing")
 	}
 	// Accesses that list nothing leave nothing to pick.
-	m.modelsLoaded([]Models{plan()}, nil)
+	m.modelsLoaded(modelsMsg{models: []Models{plan()}})
 	if cmd := press(m, "enter", "down", "up"); cmd != nil || m.modelSel != 0 {
 		t.Fatal("picking without models should do nothing")
 	}
@@ -259,7 +259,7 @@ func TestModelListLayout(t *testing.T) {
 	down.Err = "no route to host"
 	never := plan()
 	never.Err, never.Access.Label, never.Access.About = "API key rejected", "Work", ""
-	m.modelsLoaded([]Models{down, never, local("llama3")}, nil)
+	m.modelsLoaded(modelsMsg{models: []Models{down, never, local("llama3")}})
 	var got []string
 	for _, l := range m.modelList(80, 20) {
 		got = append(got, ansi.Strip(l))
@@ -285,7 +285,7 @@ func TestModelListLayout(t *testing.T) {
 	// an access 4 cells, a reason 6 and a model 14 before the edge.
 	long := local(strings.Repeat("m", 60))
 	long.Err = strings.Repeat("e", 60)
-	m.modelsLoaded([]Models{long}, nil)
+	m.modelsLoaded(modelsMsg{models: []Models{long}})
 	lines := m.modelList(40, 20)
 	for i, width := range []int{36, 34, 28} {
 		if w := ansi.StringWidth(ansi.Strip(lines[i])); w != width || !strings.HasSuffix(ansi.Strip(lines[i]), "…") {
@@ -302,7 +302,7 @@ func TestModelListWindow(t *testing.T) {
 	for i := range 40 {
 		many = append(many, fmt.Sprintf("model-%02d", i))
 	}
-	m.modelsLoaded([]Models{local(many...)}, nil)
+	m.modelsLoaded(modelsMsg{models: []Models{local(many...)}})
 	shown := func(sel int) []string {
 		m.modelSel = sel
 		var lines []string
@@ -375,5 +375,50 @@ func TestModelScreenChoosesAModelForPeers(t *testing.T) {
 	m.modelBusy = "listing models"
 	if press(m, "p") != nil {
 		t.Fatal("p while the models are listed")
+	}
+}
+
+// f on the model screen makes the model selected the last of the fallbacks
+// of the node, which the list marks with their order, and f on a fallback
+// makes it none any more.
+func TestModelScreenTogglesFallbacks(t *testing.T) {
+	m, b := newModel(t)
+	b.status.Model = "gpt-4o"
+	b.offers = []Models{local("gpt-4o", "gpt-4o-mini"), plan("gpt-4o-mini")}
+	b.fallbacks = []Fallback{{Access: "b2", Model: "gpt-4o-mini"}}
+	deliver(m, run(m, "/model"))
+	view := ansi.Strip(m.View().Content)
+	if strings.Count(view, "fallback 1") != 1 || strings.Contains(view, "fallback 2") || !strings.Contains(view, "f fallback") {
+		t.Fatalf("the fallback of the node should be marked:\n%s", view)
+	}
+	press(m, "down")
+	deliver(m, press(m, "f"))
+	if len(b.fallbacks) != 2 || b.fallbacks[1] != (Fallback{Access: "a1", Model: "gpt-4o-mini"}) || m.noticeErr ||
+		m.notice != "gpt-4o-mini of Ollama local is fallback 2: it answers you when what is before it cannot for now" {
+		t.Fatalf("fallbacks %+v, notice %q", b.fallbacks, m.notice)
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "▸ gpt-4o-mini  fallback 2") || strings.Count(view, "fallback 1") != 1 {
+		t.Fatalf("both fallbacks should be marked:\n%s", view)
+	}
+	press(m, "down")
+	deliver(m, press(m, "f"))
+	if len(b.fallbacks) != 1 || m.notice != "gpt-4o-mini of OpenCode Go is no fallback any more" {
+		t.Fatalf("fallbacks %+v, notice %q", b.fallbacks, m.notice)
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "gpt-4o-mini  fallback 1") || strings.Contains(view, "fallback 2") || !strings.Contains(view, "▸ gpt-4o-mini\n") && !strings.Contains(view, "▸ gpt-4o-mini ") {
+		t.Fatalf("the one that is left is the first:\n%s", view)
+	}
+
+	b.fail = map[string]error{"togglefallback": errors.New("the node answers with this model")}
+	deliver(m, press(m, "f"))
+	if m.notice != "the node answers with this model" || !m.noticeErr || len(m.fallbacks) != 1 {
+		t.Fatalf("a fallback that cannot be: %q, %+v", m.notice, m.fallbacks)
+	}
+	// Fallbacks that cannot be read are no models to show.
+	b.fail = map[string]error{"fallbacks": errors.New("the configuration cannot be read")}
+	press(m, "esc")
+	deliver(m, run(m, "/model"))
+	if m.modelErr == nil || len(m.choices) != 0 {
+		t.Fatalf("models without their fallbacks: %v, %d", m.modelErr, len(m.choices))
 	}
 }

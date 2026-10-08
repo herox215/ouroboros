@@ -135,6 +135,12 @@ func TestOwnerSetsUpTheNode(t *testing.T) {
 	if _, err := owner(t, broken).SetModel("a", "m"); err == nil {
 		t.Fatal("a model for a configuration that cannot be read: want error")
 	}
+	if _, err := owner(t, broken).ToggleFallback("a", "m"); err == nil {
+		t.Fatal("a fallback for a configuration that cannot be read: want error")
+	}
+	if _, err := owner(t, broken).Fallbacks(); err == nil {
+		t.Fatal("the fallbacks of a configuration that cannot be read: want error")
+	}
 	if err := owner(t, broken).SetPeerModel("a", "m"); err == nil {
 		t.Fatal("a model for peers for a configuration that cannot be read: want error")
 	}
@@ -218,6 +224,27 @@ func TestOwnerChangesTheModel(t *testing.T) {
 	}
 	if status, _ := o.Status(); status.Provider != "Test two" || status.Model != "two-large" {
 		t.Fatalf("status %+v", status)
+	}
+	// The other access is what the node falls back on, until it is not.
+	if list, err := o.Fallbacks(); err != nil || len(list) != 0 {
+		t.Fatalf("no fallbacks yet: %+v, %v", list, err)
+	}
+	fallback := plugin.Fallback{Access: first.Access.ID, Model: "gpt-4o"}
+	if list, err := o.ToggleFallback(fallback.Access, fallback.Model); err != nil || len(list) != 1 || list[0] != fallback {
+		t.Fatalf("ToggleFallback = %+v, %v", list, err)
+	}
+	if list, err := o.Fallbacks(); err != nil || len(list) != 1 || list[0] != fallback {
+		t.Fatalf("Fallbacks = %+v, %v", list, err)
+	}
+	if _, err := o.ToggleFallback(listed[1].Access.ID, "two-large"); err == nil {
+		t.Fatal("the model in use as its own fallback: want error")
+	}
+	if list, err := o.ToggleFallback(fallback.Access, fallback.Model); err != nil || len(list) != 0 {
+		t.Fatalf("ToggleFallback again = %+v, %v", list, err)
+	}
+	if log, _ := os.ReadFile(filepath.Join(s.Home, "ouro.log")); strings.Count(string(log), "the owner changed the fallbacks to ") != 2 ||
+		!strings.Contains(string(log), "the owner changed the fallbacks to [{Access:"+fallback.Access+" Model:gpt-4o}]") {
+		t.Fatalf("log: %s", log)
 	}
 	// Peers get a model of their own, of the other access, and lose it again.
 	if err := o.SetPeerModel(first.Access.ID, "gpt-4o-mini"); err != nil {

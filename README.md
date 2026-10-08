@@ -125,7 +125,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/setup` | run the setup; for a node that is set up it starts with its accesses: `enter` uses the one selected, `l` signs in to it again, `r` renames it, `d` removes it, the last row adds another one, see [Providers and accesses](#providers-and-accesses) |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
 | `/settings` | the configuration in one place, by categories: the node, the agents, the plugins, the tools of your agent and of peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
-| `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `esc` back |
+| `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `f` a [fallback](#fallbacks), `esc` back |
 | `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
 | `/quit` | quit |
@@ -838,8 +838,9 @@ The names here are examples: which models an access has is what its provider lis
   the model of the provider before thought does not go along: every provider keeps that in a form of its
   own, and none is sent what another one thought. The first time the agents answer through another access,
   the UI says once that the prompt cache starts anew there: the first requests may cost more or take longer.
-- **Nothing is switched for you.** An access that fails, or a plan whose limit is reached, stops the answer
-  with what went wrong. The node never moves to another access on its own.
+- **Nothing is switched for you, unless you list fallbacks.** An access that fails, or a plan whose limit is
+  reached, stops the answer with what went wrong. The node never moves to another access on its own: only
+  to those you named for it, see [Fallbacks](#fallbacks).
 - **Manage the accesses in the setup**: `/setup` in the terminal UI and `ouro start --setup` on the terminal
   both start with the accesses of the node. There you add one, sign in to one again (a new key, a login that
   ran out), rename one and remove one. Renaming changes no ID, so nothing that refers to the access breaks.
@@ -853,6 +854,32 @@ The names here are examples: which models an access has is what its provider lis
   model again takes the choice back, and peers are answered with what you are. The choice is `peer_access`
   and `peer_model` in the configuration, of every profile its own; no proposal of the agent changes it.
   Removing the access peers are answered through takes the choice back too.
+
+#### Fallbacks
+
+A fallback is a model of an access that answers you when the one before it **cannot answer for now**. `f` on
+a model in `/model` makes it the last of the fallbacks, marked `fallback 1`, `fallback 2` … in their order,
+and `f` on a fallback takes it out again. Without fallbacks nothing changes: the answer stops with why.
+
+- **What hands on to a fallback**: a limit or a quota that is reached (HTTP 429 or 402, the limit of a ChatGPT
+  plan), a service that fails (HTTP 5xx, a plan that cannot be used right now), and an access that is not
+  reached at all, like a local server that is down. **What does not**: an error of what was asked, like a
+  context that is too long or a model the access does not have, a key or a login that is refused, and an
+  answer you stopped. Those are told as they are.
+- **In their order.** The first fallback that can answers; one that cannot for now hands on to the next. If
+  none can, the answer fails with why the access could not and why the last fallback could not.
+- **It says so.** The title of the conversation shows `answered by the fallback MODEL of ACCESS`, and the
+  [log](#the-log) has it with every call, with what the access before it said. What the call cost is shown
+  as for any call: a fallback may charge where a plan did not.
+- **For five minutes** a fallback that answered goes on answering, so that not every call waits for an
+  access that is down; then the access before it is asked again, and answers again as soon as it can.
+- **A conversation goes on**, as when you pick another model: a fallback is not sent what the model before
+  it thought, and what it thought is not kept.
+- **For you alone.** Peers are answered through your access, or the one you chose for them, and not through
+  a fallback: a peer does not make the node spend where you did not say so.
+
+The fallbacks are `fallbacks` in the configuration, a list of `{"access": …, "model": …}`, of every profile
+its own. A fallback whose access is removed is gone with it.
 
 ```
 ouro start --setup

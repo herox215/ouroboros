@@ -88,18 +88,21 @@ type Step struct {
 // Thought is how many bytes the LLM thought before it wrote, which go back
 // with the calls after it.
 type Call struct {
-	Sent      int
-	Tokens    int
-	Cached    int
-	Output    int
-	CostUSD   *float64
-	InPlan    bool
-	Thought   int
-	Done      bool
-	Took      time.Duration
-	ToolCalls int
-	Content   string
-	Err       error
+	Sent    int
+	Tokens  int
+	Cached  int
+	Output  int
+	CostUSD *float64
+	InPlan  bool
+	Thought int
+	// Via is what answered instead of the access and the model of the agent,
+	// and Instead why those could not: see openai.Message.
+	Via, Instead string
+	Done         bool
+	Took         time.Duration
+	ToolCalls    int
+	Content      string
+	Err          error
 }
 
 // Observer is told what an agent does on the way to an answer. Either field
@@ -332,7 +335,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
 		if observe.Call != nil {
-			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Done: true, Took: time.Since(start),
+			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Via: msg.Via, Instead: msg.Instead, Done: true, Took: time.Since(start),
 				ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
 		if err != nil {
@@ -652,6 +655,10 @@ func trim(msgs []openai.Message) []openai.Message {
 	}
 	return bare[at:]
 }
+
+// Thoughtless returns msgs without what the LLM thought: for another access
+// than the one that thought it, which is not sent it.
+func Thoughtless(msgs []openai.Message) []openai.Message { return thoughtless(msgs) }
 
 // thoughtless returns msgs without what the LLM thought.
 func thoughtless(msgs []openai.Message) []openai.Message {

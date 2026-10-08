@@ -244,6 +244,33 @@ func (o *Owner) SetPeerModel(access, model string) error {
 	return err
 }
 
+// Fallback is an access of the node and a model of it that the agent goes on
+// with when the one it answers the owner with cannot for now.
+type Fallback = config.Fallback
+
+// Fallbacks are the fallbacks of the node, in their order: what the agent
+// answers the owner with when the access before cannot answer for now, as
+// its limit is reached or its service is down.
+func (o *Owner) Fallbacks() ([]Fallback, error) {
+	cfg, err := o.home.Config()
+	return cfg.Fallbacks, err
+}
+
+// ToggleFallback makes model of the access the last of the fallbacks of the
+// node, or, if it is one of them, none any more, and returns them as they
+// are then. It holds from the next message on.
+func (o *Owner) ToggleFallback(access, model string) ([]Fallback, error) {
+	s, err := o.Setup(nil)
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.ToggleFallback(access, model)
+	if err == nil {
+		o.home.Log("the owner changed the fallbacks to %+v", list)
+	}
+	return list, err
+}
+
 // Browse shows url in the browser of the user, for a front end that is asked
 // to by a provider that signs in. It fails where there is no browser to
 // start: show the URL either way.

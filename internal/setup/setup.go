@@ -183,7 +183,8 @@ var ErrLastAccess = errors.New("the last access cannot be removed: add another o
 // the model that one offers by default: an access that does not list its
 // models cannot take over, and nothing is removed then. Nor is an access
 // another profile of the node answers through. Peers that were answered
-// through the access are answered like the owner again. It returns what the owner
+// through the access are answered like the owner again, and the fallbacks
+// of the access are none any more. It returns what the owner
 // should know of how it went, "" if nothing.
 func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 	saved, err := s.book.Store.List()
@@ -242,6 +243,7 @@ func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 		if c.PeerAccess == id { // peers are answered like the owner again
 			c.PeerAccess, c.PeerModel = "", ""
 		}
+		c.Fallbacks = slices.DeleteFunc(c.Fallbacks, func(f config.Fallback) bool { return f.Access == id })
 		return s.book.Store.Remove(id)
 	})
 	if err != nil {
@@ -452,6 +454,38 @@ func (s *Session) PickForPeers(id, model string) error {
 		c.PeerAccess, c.PeerModel = id, model
 		return nil
 	})
+}
+
+// ErrInUse is the error of ToggleFallback for the model the node answers
+// with.
+var ErrInUse = errors.New("the node answers with this model: it is no fallback of itself")
+
+// ToggleFallback makes model of the access id the last of the fallbacks of
+// the node, see config.Config.Fallbacks, or, if it is one of them, none any
+// more. It returns the fallbacks as they are then.
+func (s *Session) ToggleFallback(id, model string) ([]config.Fallback, error) {
+	this := config.Fallback{Access: id, Model: strings.TrimSpace(model)}
+	if this.Model == "" {
+		return nil, ErrNoModel
+	}
+	var list []config.Fallback
+	err := config.Update(string(s.home), func(c *config.Config) error {
+		if !c.Complete() {
+			return config.ErrIncomplete
+		}
+		if at := slices.Index(c.Fallbacks, this); at >= 0 {
+			c.Fallbacks = slices.Delete(c.Fallbacks, at, at+1)
+		} else if c.Access == id && c.Model == this.Model {
+			return ErrInUse
+		} else if _, err := s.book.Store.Get(id); err != nil {
+			return err
+		} else {
+			c.Fallbacks = append(c.Fallbacks, this)
+		}
+		list = slices.Clone(c.Fallbacks)
+		return nil
+	})
+	return list, err
 }
 
 // osHostname names this host; tests replace it to get in the way.

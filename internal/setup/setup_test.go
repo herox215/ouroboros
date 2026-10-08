@@ -741,3 +741,62 @@ func TestRemoveTakesBackTheChoiceForPeers(t *testing.T) {
 		t.Fatalf("the access of the peers was removed: %+v", cfg)
 	}
 }
+
+// The owner lists the fallbacks of the node in the order they are added, and
+// takes one out again. The model the node answers with is none of its own.
+func TestToggleFallback(t *testing.T) {
+	s := session(t)
+	one := signedIn(t, s, "one", "good-1", "one-large")
+	two := signedIn(t, s, "two", "good-2", "two-large")
+	a, b, c := config.Fallback{Access: one.ID, Model: "one-small"}, config.Fallback{Access: one.ID, Model: "one-large"}, config.Fallback{Access: two.ID, Model: "two-small"}
+	for i, f := range []config.Fallback{a, b, c} {
+		list, err := s.ToggleFallback(f.Access, " "+f.Model+" ")
+		if err != nil || len(list) != i+1 || list[i] != f {
+			t.Fatalf("added %+v: %+v, %v", f, list, err)
+		}
+	}
+	list, err := s.ToggleFallback(b.Access, b.Model)
+	if cfg, _ := s.home.Config(); err != nil || !slices.Equal(list, []config.Fallback{a, c}) || !slices.Equal(cfg.Fallbacks, list) || cfg.Access != two.ID {
+		t.Fatalf("taken out: %+v, %v, kept %+v", list, err, cfg.Fallbacks)
+	}
+	if _, err := s.ToggleFallback(two.ID, "two-large"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("the model in use: %v", err)
+	}
+	if _, err := s.ToggleFallback(two.ID, " "); !errors.Is(err, ErrNoModel) {
+		t.Fatalf("no model: %v", err)
+	}
+	if _, err := s.ToggleFallback("none", "m"); !errors.Is(err, credentials.ErrGone) {
+		t.Fatalf("no access: %v", err)
+	}
+	if cfg, _ := s.home.Config(); !slices.Equal(cfg.Fallbacks, []config.Fallback{a, c}) {
+		t.Fatalf("what failed changed %+v", cfg.Fallbacks)
+	}
+	// The same model of another access, and another model of the access in
+	// use, are fallbacks like any.
+	if list, err := s.ToggleFallback(two.ID, "one-small"); err != nil || len(list) != 3 {
+		t.Fatalf("added: %+v, %v", list, err)
+	}
+	// With its access, a fallback is gone; one of an access that is gone
+	// otherwise is still taken out.
+	if _, err := s.Remove(context.Background(), one.ID); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := s.home.Config(); !slices.Equal(cfg.Fallbacks, []config.Fallback{c, {Access: two.ID, Model: "one-small"}}) {
+		t.Fatalf("after removing the access: %+v", cfg.Fallbacks)
+	}
+	config.Update(string(s.home), func(cfg *config.Config) error {
+		cfg.Fallbacks = append(cfg.Fallbacks, config.Fallback{Access: "none", Model: "m"})
+		return nil
+	})
+	if list, err := s.ToggleFallback("none", "m"); err != nil || len(list) != 2 {
+		t.Fatalf("a fallback whose access is gone: %+v, %v", list, err)
+	}
+	if list, err := s.ToggleFallback(c.Access, c.Model); err != nil || !slices.Equal(list, []config.Fallback{{Access: two.ID, Model: "one-small"}}) {
+		t.Fatalf("the first fallback taken out: %+v, %v", list, err)
+	}
+	fresh := session(t)
+	stray, _ := fresh.book.Store.Put(credentials.Access{Provider: "one"})
+	if _, err := fresh.ToggleFallback(stray.ID, "one-small"); !errors.Is(err, config.ErrIncomplete) {
+		t.Fatalf("not set up: %v", err)
+	}
+}

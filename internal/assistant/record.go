@@ -189,6 +189,9 @@ func (r *record) call(c agent.Call) {
 		}
 	}
 	var cost []string
+	if c.Via != "" {
+		cost = append(cost, "by the fallback "+r.plain(c.Via)+", as the one before it said "+r.text(c.Instead))
+	}
 	if c.Tokens > 0 {
 		r.tokens += c.Tokens
 		r.cached += c.Cached

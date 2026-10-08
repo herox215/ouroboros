@@ -19,6 +19,9 @@ type CallMetrics struct {
 	UnknownCalls int     `json:"unknown_calls,omitempty"`
 	PlanCalls    int     `json:"plan_calls,omitempty"`
 	Calls        int     `json:"calls,omitempty"`
+	// Via is what answered the last call instead of the access and the
+	// model of the agent, "" if those did: see config.Config.Fallbacks.
+	Via string `json:"via,omitempty"`
 }
 
 func (c Cache) withCall(call agent.Call) Cache {
@@ -31,7 +34,7 @@ func (c Cache) withCall(call agent.Call) Cache {
 	if call.Output > 0 && call.Took > 0 {
 		m.TPS = float64(call.Output) / call.Took.Seconds()
 	}
-	m.InPlan = call.InPlan
+	m.InPlan, m.Via = call.InPlan, call.Via
 	m.CostKnown, m.CostUSD = false, 0
 	switch {
 	case call.InPlan:

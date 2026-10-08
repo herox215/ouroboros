@@ -99,7 +99,7 @@ internal/kernel/kernel.go:215:21 INVERT_LOGICAL  # a case expression; killed by 
 internal/kernel/kernel.go:215:32 CONDITIONALS_NEGATION  # a case expression; killed by TestPluginErrors
 internal/node/server.go:26:27 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds
 internal/node/socket.go:107:76 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement; negated, TestBequeathSocket gets no error for a closed listener
-internal/openai/client.go:31:17 ARITHMETIC_BASE  # a duration in the declaration of a variable
+internal/openai/client.go:32:17 ARITHMETIC_BASE  # a duration in the declaration of a variable
 internal/openai/trace.go:136:12 CONDITIONALS_NEGATION  # a case expression; killed by TestTrace
 internal/openai/trace.go:139:12 CONDITIONALS_NEGATION  # a case expression; killed by TestTrace
 internal/peers/card.go:15:18 ARITHMETIC_BASE  # a duration in a constant declaration
@@ -167,8 +167,8 @@ internal/tui/logo.go:21:33 ARITHMETIC_BASE  # package var initialiser (bodyArc):
 internal/tui/logo.go:21:43 ARITHMETIC_BASE  # package var initialiser (bodyArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:97:25 ARITHMETIC_BASE  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:97:25 INVERT_NEGATIVES  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
-internal/tui/model.go:134:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
-internal/tui/model.go:136:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
+internal/tui/model.go:176:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
+internal/tui/model.go:178:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
 internal/tui/onboard.go:53:21 ARITHMETIC_BASE  # in the const block of the scene, curlFrom
 internal/tui/onboard.go:53:31 ARITHMETIC_BASE  # in the const block of the scene, curlFrom
 internal/tui/onboard.go:54:21 ARITHMETIC_BASE  # in the const block of the scene, curlLast
@@ -248,3 +248,5 @@ internal/assistant/title.go:23:77 ARITHMETIC_BASE  # a string concatenation in a
 internal/pasteboard/pasteboard.go:64:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read on macOS and beside it
 internal/pasteboard/pasteboard.go:66:35 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read with and without Wayland
 internal/pasteboard/pasteboard.go:70:27 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read with and without X11
+
+internal/assistant/fallback.go:28:22 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; TestFallbacksAnswerInTheirOrder asserts how long retryFirst is by the calls around it

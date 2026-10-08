@@ -503,7 +503,7 @@ func (m *Model) footerView() string {
 	case screenHelp:
 		help = "esc back · ctrl+c quit"
 	case screenModel:
-		help = "↑↓ choose · enter set · p for peers · esc back · ctrl+c quit"
+		help = "↑↓ choose · enter set · p for peers · f fallback · esc back · ctrl+c quit"
 	case screenSessions:
 		help = "↑↓ select · enter show · d delete · tab yours/peers · esc back · ctrl+c quit"
 	case screenSettings:

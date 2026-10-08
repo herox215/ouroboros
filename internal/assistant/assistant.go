@@ -156,7 +156,7 @@ type Assistant struct {
 }
 
 // setup is the part of the configuration an agent is built from.
-type setup struct{ access, revision, model, name, id, tools, provider string }
+type setup struct{ access, revision, model, name, id, tools, provider, fallbacks string }
 
 // New returns the assistant of the node with the given configuration, which
 // is read anew for every question. What it does on the way to an answer is
@@ -183,6 +183,7 @@ func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
 // forPeers is ForPeers with the scripts of the conversations in sessions.
 func (b Builder) forPeers(cfg config.Config, sessions *script.Sessions) (*agent.Agent, error) {
 	cfg.Access, cfg.Model, _ = cfg.PeerLLM()
+	cfg.Fallbacks = nil // of the owner: no peer makes the node answer through another access
 	allowed, err := b.peerTools(cfg)
 	if err != nil {
 		return nil, err
@@ -280,6 +281,7 @@ func (b Builder) build(cfg config.Config, prompt string, tools ...agent.Tool) (*
 	if err != nil {
 		return nil, err
 	}
+	llm = b.withFallbacks(llm, cfg)
 	return agent.New(llm, cfg.Model, prompt, tools...).WithExtensions(cfg.ContextProvider, providers, hooks)
 }
 
@@ -509,7 +511,7 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 		return nil, cfg, config.ErrIncomplete
 	}
 	tools, _ := json.Marshal(cfg.OwnerTools()) // an entry that cannot be written is reported by forOwner
-	want := setup{cfg.Access, a.builder.revision(cfg.Access), cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider}
+	want := setup{cfg.Access, a.builder.revision(cfg.Access), cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider, a.builder.fallbacksOf(cfg)}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.agent == nil || a.built != want {

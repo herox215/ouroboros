@@ -38,6 +38,10 @@ type Config struct {
 	// Without both, peers are answered with Access and Model: see PeerLLM.
 	PeerAccess string `json:"peer_access,omitempty"`
 	PeerModel  string `json:"peer_model,omitempty"`
+	// Fallbacks are what the agent goes on with, in this order, when the
+	// access it answers the owner with cannot answer for now: see Fallback.
+	// Without them, such an answer stops with why.
+	Fallbacks []Fallback `json:"fallbacks,omitempty"`
 	// BaseURL and APIKey are how a configuration from before there were
 	// accesses names its LLM: an OpenAI-compatible endpoint and the key for
 	// it. Such a configuration is still read. The node makes an access of
@@ -246,6 +250,15 @@ func (c Config) ID() string {
 
 // ErrIncomplete means that the node was not set up yet.
 var ErrIncomplete = errors.New("node is not configured")
+
+// Fallback is an access of the node and a model of it that the agent answers
+// the owner with when the one before it cannot for now: its limit or quota
+// is reached, its service fails or is not reached. The owner lists them; no
+// access is switched to that is not listed.
+type Fallback struct {
+	Access string `json:"access"`
+	Model  string `json:"model"`
+}
 
 // PeerLLM returns the access and the model the agent answers peers with:
 // those the owner chose for them, which own reports, or else those it

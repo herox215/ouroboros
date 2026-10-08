@@ -20,6 +20,7 @@ func TestCallMetricsDisplay(t *testing.T) {
 		{assistant.CallMetrics{Calls: 2, InPlan: true, AllCostUSD: 0.5, ChargedCalls: 1, PlanCalls: 1}, "TPS unknown · cost included in plan · session $0.5000 + plan"},
 		{assistant.CallMetrics{Calls: 2, InPlan: true, UnknownCalls: 1, PlanCalls: 1}, "TPS unknown · cost included in plan · session partial"},
 		{assistant.CallMetrics{Calls: 1, UnknownCalls: 1}, "TPS unknown · cost unknown"},
+		{assistant.CallMetrics{Calls: 1, UnknownCalls: 1, Via: "mid of Ollama"}, "answered by the fallback mid of Ollama · TPS unknown · cost unknown"},
 	} {
 		if got := callMetrics(plugin.SessionCache{Metrics: tc.m}); got != tc.want {
 			t.Fatalf("%q, want %q", got, tc.want)

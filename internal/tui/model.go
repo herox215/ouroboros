@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -18,12 +19,22 @@ import (
 // also when it is one of another access – and esc goes back to the chat.
 // p makes the one selected the model peers are answered with, whatever the
 // owner is, and p on that one makes it the model of the node for them again.
+// f makes it the last of the fallbacks of the node, or none of them any more.
 
 // modelsMsg is what the accesses of the node answered with, on the way to
 // the model screen.
 type modelsMsg struct {
-	models []Models
-	err    error
+	models    []Models
+	fallbacks []Fallback
+	err       error
+}
+
+// fallbacksMsg are the fallbacks of the node after f changed them, with
+// what the owner is told of it.
+type fallbacksMsg struct {
+	list []Fallback
+	done string
+	err  error
 }
 
 // choice is one model to select: a model of an access.
@@ -52,18 +63,22 @@ func (m *Model) openModel() tea.Cmd {
 // loadModels asks the accesses of the node for their models.
 func (m *Model) loadModels() tea.Msg {
 	models, err := m.backend.Models(m.ctx)
-	return modelsMsg{models, err}
+	if err != nil {
+		return modelsMsg{err: err}
+	}
+	fallbacks, err := m.backend.Fallbacks()
+	return modelsMsg{models, fallbacks, err}
 }
 
 // modelsLoaded takes the answer of the accesses: the lists, or why not.
-func (m *Model) modelsLoaded(models []Models, err error) {
+func (m *Model) modelsLoaded(msg modelsMsg) {
 	m.modelBusy = ""
-	m.models, m.choices, m.modelErr, m.modelSel = nil, nil, err, 0
-	if err != nil {
+	m.models, m.choices, m.modelErr, m.modelSel = nil, nil, msg.err, 0
+	if msg.err != nil {
 		return
 	}
-	m.models = models
-	for i, l := range models {
+	m.models, m.fallbacks = msg.models, msg.fallbacks
+	for i, l := range msg.models {
 		for _, model := range l.Models {
 			if l.Access.Active && model == m.status.Model {
 				m.modelSel = len(m.choices)
@@ -84,7 +99,7 @@ func (m *Model) handleModelKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.modelSel = max(0, m.modelSel-1)
 	case "down", "j":
 		m.modelSel = min(max(len(m.choices)-1, 0), m.modelSel+1)
-	case "enter", "p":
+	case "enter", "p", "f":
 		if m.modelBusy != "" || m.modelErr != nil || m.modelSel >= len(m.choices) {
 			return nil
 		}
@@ -92,6 +107,9 @@ func (m *Model) handleModelKey(msg tea.KeyPressMsg) tea.Cmd {
 		access := m.models[picked.access].Access
 		if msg.String() == "p" {
 			return m.pickForPeers(access, picked.model)
+		}
+		if msg.String() == "f" {
+			return m.toggleFallback(access, picked.model)
 		}
 		return func() tea.Msg {
 			switched, err := m.backend.SetModel(access.ID, picked.model)
@@ -117,6 +135,30 @@ func (m *Model) pickForPeers(access plugin.SetupAccess, model string) tea.Cmd {
 	return func() tea.Msg {
 		return actionMsg{"peers are answered with " + model + " of " + access.Label, m.backend.SetPeerModel(access.ID, model)}
 	}
+}
+
+// toggleFallback makes model of access the last of the fallbacks of the
+// node, or none of them any more if it is one.
+func (m *Model) toggleFallback(access plugin.SetupAccess, model string) tea.Cmd {
+	return func() tea.Msg {
+		list, err := m.backend.ToggleFallback(access.ID, model)
+		done := model + " of " + access.Label + " is no fallback any more"
+		if at := slices.Index(list, Fallback{Access: access.ID, Model: model}); at >= 0 {
+			done = fmt.Sprintf("%s of %s is fallback %d: it answers you when what is before it cannot for now", model, access.Label, at+1)
+		}
+		return fallbacksMsg{list, done, err}
+	}
+}
+
+// fallbacksSet takes the fallbacks as they are after f, or why they are as
+// before.
+func (m *Model) fallbacksSet(msg fallbacksMsg) {
+	if msg.err != nil {
+		m.setNotice(msg.err.Error(), true)
+		return
+	}
+	m.fallbacks = msg.list
+	m.setNotice(msg.done, false)
 }
 
 // forPeers reports whether model of access is what the owner chose to
@@ -175,6 +217,9 @@ func (m *Model) modelList(width, height int) []string {
 			}
 			if m.forPeers(l.Access, model) {
 				name += mutedStyle.Render("  for peers")
+			}
+			if at := slices.Index(m.fallbacks, Fallback{Access: l.Access.ID, Model: model}); at >= 0 {
+				name += mutedStyle.Render(fmt.Sprintf("  fallback %d", at+1))
 			}
 			if n == m.modelSel {
 				at = len(all)
