@@ -9,7 +9,7 @@ import (
 // The ouroboros is drawn with braille dots, so every cell holds two by four
 // square pixels. The snake lies on a ring: the body starts at the neck and
 // runs counterclockwise until the tail ends between the jaws. Its back is
-// filled and its belly is only an outline.
+// armored with chevron scales; fine ribs pick out the outlined belly.
 const (
 	logoCols, logoRows  = 30, 16
 	ringX, ringY, ringR = 30, 34, 25.2
@@ -155,14 +155,16 @@ func poseCells(p pose, grown float64, shut bool, cols, rows int) [][]logoCell {
 			if !solid[y][x] {
 				continue
 			}
-			d, _, f := g.point(x, y)
+			d, u, f := g.point(x, y)
 			edge := x == 0 || y == 0 || x == w-1 || y == h-1 ||
 				!solid[y][x-1] || !solid[y][x+1] || !solid[y-1][x] || !solid[y+1][x]
-			px[y][x] = edge || d > 0.2 // the back is the outer side of the ring
+			px[y][x] = edge || bodyInk(u, d)
 			if f <= 1 {
-				eye := math.Hypot((f-eyeAt)*headLength(), d-4)
-				if eye < 1.9 {
-					px[y][x] = eye < 0.6 // a pupil in a hollow eye
+				px[y][x] = edge || d > 0.2
+				// A long brow frames a vertical slit rather than a round pupil.
+				ex, ey := (f-eyeAt)*headLength(), d-4
+				if ex*ex/(2.3*2.3)+ey*ey/(1.6*1.6) < 1 {
+					px[y][x] = math.Abs(ex) < 0.45 && math.Abs(ey) < 1.2
 				}
 			}
 		}
@@ -197,6 +199,17 @@ func poseCells(p pose, grown float64, shut bool, cols, rows int) [][]logoCell {
 	return cells
 }
 
+// bodyInk carves staggered chevrons into the back and adds sparse belly
+// ribs. Coordinates follow the ring, so the armor turns and uncurls with it.
+func bodyInk(u, d float64) bool {
+	along := u * ringR
+	if d > 0.2 {
+		seam := math.Mod(along+1.4*math.Abs(d-1.8), 5.5)
+		return seam > 0.85
+	}
+	return math.Mod(along-0.7*d, 5.5) < 0.8
+}
+
 func grid(w, h int) [][]bool {
 	g := make([][]bool, h)
 	for y := range g {
@@ -226,5 +239,14 @@ func inHead(f, d float64, shut bool) bool {
 	upper := d >= 1.3 && d <= center+width
 	swung := d + 5*g
 	lower := f < jawEnd && swung <= -1.3 && swung >= center-width*0.85
-	return upper || lower
+	// Two tapered fangs hang from the upper jaw into the open mouth.
+	// They stay inside the old silhouette's reach, clear of the lower jaw.
+	fang := false
+	for _, at := range [...]float64{0.64, 0.81} {
+		depth := (1.3 - d) / 3.0
+		if depth >= 0 && depth <= 1 && math.Abs((f-at)*headLength()) <= 0.9*(1-depth) {
+			fang = true
+		}
+	}
+	return upper || lower || fang
 }
