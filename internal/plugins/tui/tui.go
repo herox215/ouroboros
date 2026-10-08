@@ -35,7 +35,11 @@ type needs struct {
 // The UI is where the owner starts and stops the node and decides whom it
 // trusts. No service offers that: it is what owner does, a part of the frame
 // of ouro that is handed to this plugin where the plugins are listed.
-func Plugin(owner *plugin.Owner) plugin.Plugin {
+//
+// profile, if not nil, is handed the Profile of the UI once the plugin is
+// started: the frame of ouro shows the profiles of a node in one UI with it,
+// see Together.
+func Plugin(owner *plugin.Owner, profile func(*Profile)) plugin.Plugin {
 	return plugin.New(name, func(ctx *plugin.Context, n needs) error {
 		u := &ui{Owner: owner, ctx: ctx, sessions: n.Sessions}
 		const help = "chat with your agent in the terminal UI"
@@ -46,6 +50,9 @@ func Plugin(owner *plugin.Owner) plugin.Plugin {
 			return u.run(c)
 		}})
 		plugin.Add(ctx, plugin.FrontEnd{Name: name, Help: help, Run: u.run})
+		if profile != nil {
+			profile(&Profile{u})
+		}
 		return nil
 	})
 }
@@ -56,6 +63,23 @@ type ui struct {
 	*plugin.Owner
 	ctx      *plugin.Context // to read what the plugins contributed to the UI
 	sessions plugin.Sessions
+	profiles []*ui // the profiles of the node the UI shows, if it has several
+}
+
+// Profile is the UI of one profile of a node, for the frame of ouro alone.
+type Profile struct{ u *ui }
+
+// Together lets the UI of each of profiles show all of them, in their
+// order: shift+tab goes on to the next. The UI opens on the one it belongs
+// to.
+func Together(profiles []*Profile) {
+	all := make([]*ui, len(profiles))
+	for i, p := range profiles {
+		all[i] = p.u
+	}
+	for _, p := range profiles {
+		p.u.profiles = all
+	}
 }
 
 // show runs the UI m on the terminal until the user quits; tests replace it
@@ -82,16 +106,20 @@ var show = func(ctx context.Context, m *tui.Model) error {
 // it quits if this UI would have.
 func (u *ui) run(ctx context.Context) error {
 	wasRunning := u.Running()
-	m := tui.New(u, plugin.All[plugin.Screen](u.ctx), plugin.All[plugin.Slash](u.ctx))
-	if r, err := resumed(); err != nil {
+	m := u.model()
+	r, err := resumed()
+	if err != nil {
 		return err
-	} else if r != nil {
+	}
+	if r != nil {
+		m.SelectProfile(r.Profile)
 		m.Resume(r.Session)
 		wasRunning = r.WasRunning
 	}
-	err := show(ctx, m)
+	defer m.CloseProfiles()
+	err = show(ctx, m)
 	if exe, ok := m.Restarts(); ok {
-		return handOver(exe, resume{m.Current(), wasRunning})
+		return handOver(exe, resume{Session: m.Current(), WasRunning: wasRunning, Profile: m.Profile()})
 	}
 	if !wasRunning {
 		err = errors.Join(err, u.sessions.Release(context.WithoutCancel(ctx)))
@@ -99,12 +127,30 @@ func (u *ui) run(ctx context.Context) error {
 	return err
 }
 
+// model is the UI of u, with the screens and the commands the plugins
+// contributed: of every profile it shows, if it shows several.
+func (u *ui) model() *tui.Model {
+	if len(u.profiles) < 2 {
+		return tui.New(u, plugin.All[plugin.Screen](u.ctx), plugin.All[plugin.Slash](u.ctx))
+	}
+	models := make([]*tui.Model, len(u.profiles))
+	selected := 0
+	for i, p := range u.profiles {
+		models[i] = tui.New(p, plugin.All[plugin.Screen](p.ctx), plugin.All[plugin.Slash](p.ctx))
+		if p == u {
+			selected = i
+		}
+	}
+	return tui.WithProfiles(models, selected)
+}
+
 // resumeEnv says what the UI of a new process goes on from.
 const resumeEnv = "OURO_RESUME"
 
 // resume is what the UI of a new process goes on from.
 type resume struct {
-	Session    string `json:"session"` // the session shown
+	Profile    string `json:"profile,omitempty"` // the ID of the profile shown, of several
+	Session    string `json:"session"`           // the session shown
 	WasRunning bool   `json:"was_running"`
 }
 

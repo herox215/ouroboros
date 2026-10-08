@@ -83,6 +83,10 @@ type Step struct {
 
 // Builder is the blueprint of the agents of a node.
 type Builder struct {
+	// Workspace is the directory the agents work in, when the node has
+	// several profiles; "" for none, where they work from the home
+	// directory of the owner.
+	Workspace string
 	// ContextProviders and AnswerHooks are read after plugin startup.
 	ContextProviders func() []agent.ContextProvider
 	AnswerHooks      func() []agent.AnswerHook
@@ -265,6 +269,9 @@ func (b Builder) build(cfg config.Config, prompt string, tools ...agent.Tool) (*
 	}
 	if b.AnswerHooks != nil {
 		hooks = b.AnswerHooks()
+	}
+	if b.Workspace != "" {
+		prompt += " You work in " + b.Workspace + ": your commands start there unless they name a directory, and the tools for files want whole paths."
 	}
 	llm, err := b.LLM(cfg.Access)
 	if err != nil {

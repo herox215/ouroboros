@@ -387,9 +387,9 @@ func TestRelease(t *testing.T) {
 	s.Release(ctx)
 	awaitStop(t, stops)
 	// A message after the release keeps the node.
-	s.mu.Lock()
-	s.release = true
-	s.mu.Unlock()
+	s.node.mu.Lock()
+	s.node.release = true
+	s.node.mu.Unlock()
 	s.Ask(ctx, "s1", "more")
 	until(t, live, Answer)
 	s.Ask(ctx, "s1", "again") // settles with the answer before

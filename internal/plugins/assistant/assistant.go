@@ -41,8 +41,9 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			AnswerHooks: func() []agent.AnswerHook {
 				return append([]agent.AnswerHook{archived}, plugin.All[plugin.AnswerHook](ctx)...)
 			},
-			Tools:    func() []agent.Tool { return plugin.All[plugin.Tool](ctx) },
-			Failures: dir.Failures(),
+			Tools:     func() []agent.Tool { return plugin.All[plugin.Tool](ctx) },
+			Failures:  dir.Failures(),
+			Workspace: dir.WorkingDir(),
 		}.WithConfig(dir.Config, dir.Proposals())
 		return services{builder, assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug)}, nil
 	})

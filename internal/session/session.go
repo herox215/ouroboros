@@ -212,12 +212,22 @@ type Service struct {
 	stop    context.CancelFunc
 	answers sync.WaitGroup // on their way
 
+	mu       sync.Mutex
+	sessions map[string]*session
+	archive  *archive // where the sessions are kept; nil keeps none, see Archive
+	closed   bool     // by Close
+	node     *process // s.mu is held to read it
+}
+
+// process is what the sessions know of the process of the node they run in:
+// whether it is to stop or to be replaced, once no answer is on its way. The
+// Services of the profiles of a node share it, see Share: an answer of one
+// of them keeps it running for all. Its mu is taken with the mu of a
+// Service held, never the other way round.
+type process struct {
 	mu        sync.Mutex
-	sessions  map[string]*session
-	archive   *archive // where the sessions are kept; nil keeps none, see Archive
-	answering int      // answers on their way
-	closed    bool     // by Close
-	release   bool     // stop the node once no answer is on its way
+	answering int  // answers on their way
+	release   bool // stop the node once no answer is on its way
 	successor string
 	// stopNode and replace are what the node does once it is to stop or to
 	// be replaced by successor, see Attach.
@@ -245,7 +255,20 @@ type session struct {
 // New returns the Service of the sessions with agent.
 func New(agent Assistant) *Service {
 	ctx, stop := context.WithCancel(context.Background())
-	return &Service{agent: agent, now: time.Now, ctx: ctx, stop: stop, sessions: map[string]*session{}}
+	return &Service{agent: agent, now: time.Now, ctx: ctx, stop: stop, sessions: map[string]*session{}, node: &process{}}
+}
+
+// Share lets the Services of the profiles of one node run in one process,
+// before any of them is used: it stops, or is replaced by a new build, once
+// no answer of any of them is on its way, and an answer of any of them keeps
+// it running. Attach one of them, which attaches all.
+func Share(services ...*Service) {
+	node := &process{}
+	for _, s := range services {
+		s.mu.Lock()
+		s.node = node
+		s.mu.Unlock()
+	}
 }
 
 // Attach tells the Service what the node that serves it does: stop stops
@@ -254,9 +277,17 @@ func New(agent Assistant) *Service {
 // and no answer is on its way. Without replace a tool cannot ask for a new
 // build: a Service that is not served by a node has no node to replace.
 func (s *Service) Attach(stop func(), replace func(exe string)) {
+	p := s.process()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stopNode, p.replace = stop, replace
+}
+
+// process returns the process s runs in.
+func (s *Service) process() *process {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.stopNode, s.replace = stop, replace
+	return s.node
 }
 
 // get returns the session id, which it adds if there is none. s.mu is held.
@@ -316,10 +347,13 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	p := s.node
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	switch {
 	case s.closed:
 		return ErrStopped
-	case s.successor != "":
+	case p.successor != "":
 		return ErrRestarting
 	}
 	se := s.get(id)
@@ -328,8 +362,8 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	se.cancel = cancel
-	s.answering++
-	s.release = false // somebody wants the node
+	p.answering++
+	p.release = false // somebody wants the node
 	s.emit(se, Event{Kind: Message, Text: text})
 	named := make(chan struct{})
 	if se.title == "" && se.tries < titleTries {
@@ -343,7 +377,7 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 		se.resumed = time.Time{}
 	}
 	s.answers.Add(1)
-	go s.answer(ctx, se, text, s.replace != nil, named)
+	go s.answer(ctx, se, text, p.replace != nil, named)
 	return nil
 }
 
@@ -378,14 +412,20 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	defer s.mu.Unlock()
 	se.cancel()
 	se.cancel = nil
-	s.answering--
+	p := s.node
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.answering--
 	// The answer is archived already: who learns of its end finds it there.
 	s.emit(se, end)
 	if se.restart != "" {
 		s.emit(se, Event{Kind: Restart, Text: se.restart})
-		s.successor, se.restart = se.restart, ""
+		if p.successor == "" { // the first build asked for is the one
+			p.successor = se.restart
+		}
+		se.restart = ""
 	}
-	s.settle()
+	p.settle()
 }
 
 // name asks the agent for the title of se, with what was said in it, while
@@ -457,17 +497,17 @@ func (s *Service) emit(se *session, e Event) {
 }
 
 // settle does what waits for no answer to be on its way: the node is
-// replaced by a new build, or stopped. s.mu is held.
-func (s *Service) settle() {
-	if s.answering > 0 {
+// replaced by a new build, or stopped. p.mu is held.
+func (p *process) settle() {
+	if p.answering > 0 {
 		return
 	}
 	switch {
-	case s.successor != "":
-		s.replace(s.successor)
-	case s.release && s.stopNode != nil:
-		s.release = false
-		s.stopNode()
+	case p.successor != "":
+		p.replace(p.successor)
+	case p.release && p.stopNode != nil:
+		p.release = false
+		p.stopNode()
 	}
 }
 
@@ -483,7 +523,9 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 		return nil, nil, ErrStopped
 	}
 	se := s.get(id)
-	s.release = false // somebody wants the node
+	s.node.mu.Lock()
+	s.node.release = false // somebody wants the node
+	s.node.mu.Unlock()
 	live := make(chan Event, watchBuffer)
 	se.watchers[live] = struct{}{}
 	context.AfterFunc(ctx, func() {
@@ -631,11 +673,12 @@ func (s *Service) Release(context.Context) error {
 // Releases is Release, and reports whether the node stops now: no answer
 // keeps it running.
 func (s *Service) Releases() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.release = true
-	stops := s.answering == 0 && s.successor == "" && s.stopNode != nil
-	s.settle()
+	p := s.process()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.release = true
+	stops := p.answering == 0 && p.successor == "" && p.stopNode != nil
+	p.settle()
 	return stops
 }
 

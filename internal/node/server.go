@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
+	"ouroboros/internal/identity"
 )
 
 // shutdownTimeout is how long requests that are being answered may take when
@@ -52,6 +55,10 @@ type Server struct {
 	// (home.Dir.Socket), which only the user who runs the node can open. May
 	// be nil.
 	Local http.Handler
+	// Profiles are the other profiles of the node that it runs, with what
+	// each answers with, see home.Dir.Profiles. Of them, Home, Responder,
+	// Methods, Channels, OnStop and Local are used.
+	Profiles []Server
 	// Successor returns the binary that takes the place of the node once it
 	// stopped, "" if none does: then Run hands on its PID file and its socket
 	// and returns a *Succession. It is asked once the node stopped. May be
@@ -103,32 +110,62 @@ func (s Server) Run(ctx context.Context) error {
 		return fmt.Errorf("discovery: %w", err)
 	}
 	defer udp.Close()
-	// How the node is called and what it answers with may change while it
-	// runs: both are read when they are told.
-	now := s.current(cfg)
-	go discovery.Serve(udp, func() discovery.Node {
-		cfg := now()
-		return discovery.Node{ID: id.ID(), Name: cfg.Name, Model: cfg.Model, PublicKey: id.Public(), Port: port}
-	})
-
 	logger := log.New(s.Log, "", log.LstdFlags)
-	respond, err := s.Responder(logger.Printf)
-	if err != nil {
-		ln.Close()
-		return err
+	var agents []*agent
+	for _, profile := range append([]Server{s}, s.Profiles...) {
+		a, err := profile.agent(logger, s.Version)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		agents = append(agents, a)
 	}
-	server := &a2a.Server{
-		Card:     func() a2a.AgentCard { return card(now(), s.Version) },
-		Identity: id,
-		Trust:    s.Home.Contacts(),
-		Respond:  respond,
-		Methods:  s.Methods,
-		Channels: s.Channels,
-		Log:      logger.Printf,
-		Failed:   keep(s.Home.Failures(), logger),
+	// How the profiles are called may change while the node runs: it is
+	// read when it is told.
+	go discovery.ServeAll(udp, func() []discovery.Node {
+		nodes := make([]discovery.Node, len(agents))
+		for i, a := range agents {
+			c := a.now()
+			nodes[i] = discovery.Node{ID: a.id.ID(), Name: c.Name, Model: c.Model, PublicKey: a.id.Public(), Port: port}
+		}
+		return nodes
+	})
+	// A peer names the profile it writes to by the name of the server in
+	// the handshake, see a2a.ServerName: the handshake is made with its
+	// certificate, which the peer pins, and the request goes to it. A peer
+	// that names none, as an ouro from before there were profiles, reaches
+	// the first one.
+	byName := map[string]*agent{}
+	for _, a := range agents {
+		byName[a2a.ServerName(a.id.Public())] = a
 	}
+	addressed := func(name string) *agent { return cmp.Or(byName[name], agents[0]) }
+	tlsConfig := a2a.TLSConfig(id)
+	tlsConfig.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &addressed(hello.ServerName).cert, nil
+	}
+	public := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		addressed(r.TLS.ServerName).handler.ServeHTTP(w, r)
+	})
+	// A front end names the profile by its ID, see ProfileHeader.
+	localHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a := agents[0]
+		if want := r.Header.Get(ProfileHeader); want != "" {
+			i := slices.IndexFunc(agents, func(a *agent) bool { return a.id.ID() == want })
+			if i < 0 {
+				http.Error(w, "the node runs no profile "+want, http.StatusNotFound)
+				return
+			}
+			a = agents[i]
+		}
+		if a.local == nil {
+			http.NotFound(w, r)
+			return
+		}
+		a.local.ServeHTTP(w, r)
+	})
 	srv := &http.Server{
-		Handler:           logRequests(logger, server.Handler()),
+		Handler:           logRequests(logger, public),
 		ReadHeaderTimeout: headerTime,
 		ErrorLog:          logger, // failed handshakes, such as plain HTTP
 	}
@@ -152,10 +189,7 @@ func (s Server) Run(ctx context.Context) error {
 	// session, ends when the node stops.
 	localCtx, endLocal := context.WithCancel(context.Background())
 	defer endLocal()
-	localSrv := &http.Server{Handler: s.Local, ErrorLog: logger, BaseContext: func(net.Listener) context.Context { return localCtx }}
-	if localSrv.Handler == nil {
-		localSrv.Handler = http.NotFoundHandler()
-	}
+	localSrv := &http.Server{Handler: localHandler, ErrorLog: logger, BaseContext: func(net.Listener) context.Context { return localCtx }}
 	go localSrv.Serve(local)
 
 	var successor *Succession // once the node stopped
@@ -172,9 +206,11 @@ func (s Server) Run(ctx context.Context) error {
 		// opened are closed here, and no further one is opened. That goes
 		// along with the shutdown, so that stopping takes no longer for it.
 		var closing sync.WaitGroup
-		closing.Go(server.Close)
-		if s.OnStop != nil {
-			closing.Go(s.OnStop)
+		for _, a := range agents {
+			closing.Go(a.server.Close)
+			if a.onStop != nil {
+				closing.Go(a.onStop)
+			}
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
@@ -184,17 +220,20 @@ func (s Server) Run(ctx context.Context) error {
 		closing.Wait()
 	}()
 
-	logger.Printf("ouroboros %s (%s) listening on :%d → %s", id.ID(), cfg.Name, port, cfg.Model)
-	if allowed := cfg.PeerTools(); len(allowed) > 0 {
-		names := make([]string, len(allowed))
-		for i, e := range allowed {
-			names[i] = e.Tool
+	for _, a := range agents {
+		cfg := a.now()
+		logger.Printf("ouroboros %s (%s) listening on :%d → %s", a.id.ID(), cfg.Name, port, cfg.Model)
+		if allowed := cfg.PeerTools(); len(allowed) > 0 {
+			names := make([]string, len(allowed))
+			for i, e := range allowed {
+				names[i] = e.Tool
+			}
+			logger.Printf("peers may use the tools: %s", strings.Join(names, ", "))
 		}
-		logger.Printf("peers may use the tools: %s", strings.Join(names, ", "))
 	}
 	// TLS only, with the certificate of the node's key: peers pin it, and
 	// nobody on the way reads along.
-	if err := srv.Serve(tls.NewListener(ln, a2a.TLSConfig(id))); !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(tls.NewListener(ln, tlsConfig)); !errors.Is(err, http.ErrServerClosed) {
 		localSrv.Close()
 		lease.Release()
 		return err
@@ -216,6 +255,53 @@ func (s Server) Run(ctx context.Context) error {
 	logger.Printf("stopped, handing over to %s", successor.Exe)
 	return successor
 }
+
+// agent is a profile the node runs: who it is, what it answers peers and
+// the front ends of its owner with, and how it is called now.
+type agent struct {
+	id      *identity.Identity
+	cert    tls.Certificate
+	server  *a2a.Server
+	handler http.Handler
+	local   http.Handler // nil for none
+	onStop  func()
+	now     func() config.Config
+}
+
+// agent returns the profile of the node that s describes, which logs to
+// logger.
+func (s Server) agent(logger *log.Logger, version string) (*agent, error) {
+	cfg, err := s.Home.Config()
+	if err != nil {
+		return nil, err
+	}
+	id, err := s.Home.Identity()
+	if err != nil {
+		return nil, err
+	}
+	respond, err := s.Responder(logger.Printf)
+	if err != nil {
+		return nil, err
+	}
+	// What the profile answers with may change while the node runs: it is
+	// read when it is told.
+	now := s.current(cfg)
+	server := &a2a.Server{
+		Card:     func() a2a.AgentCard { return card(now(), version) },
+		Identity: id,
+		Trust:    s.Home.Contacts(),
+		Respond:  respond,
+		Methods:  s.Methods,
+		Channels: s.Channels,
+		Log:      logger.Printf,
+		Failed:   keep(s.Home.Failures(), logger),
+	}
+	return &agent{id: id, cert: id.Certificate(), server: server, handler: server.Handler(), local: s.Local, onStop: s.OnStop, now: now}, nil
+}
+
+// ProfileHeader is the header of a request on the socket of the node that
+// names the profile it is for by its ID: the first one without it.
+const ProfileHeader = "Ouro-Profile"
 
 // bequeath hands the PID file of a lease on; tests replace it to get in the
 // way.

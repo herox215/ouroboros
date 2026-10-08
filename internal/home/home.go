@@ -73,13 +73,13 @@ const LegacyAccess = "default"
 
 // Credentials opens the accesses of the node: how it signs in to the APIs
 // its agents talk to.
-func (d Dir) Credentials() *credentials.Store { return credentials.Open(string(d)) }
+func (d Dir) Credentials() *credentials.Store { return credentials.Open(string(d.Root())) }
 
 // HostID returns what names this installation of ouro to a provider that
 // tells the hosts of an account apart: an opaque ID, made on first use and
 // kept for good. It names the host, not the owner, and is no secret.
 func (d Dir) HostID() (string, error) {
-	path := d.path("host-id")
+	path := d.Root().path("host-id")
 	unlock, err := safefile.Lock(path + ".lock")
 	if err != nil {
 		return "", err
@@ -97,7 +97,7 @@ func (d Dir) HostID() (string, error) {
 
 // Models is the file the lists of models the accesses last offered are kept
 // in, to show when an access does not answer.
-func (d Dir) Models() string { return d.path("models.json") }
+func (d Dir) Models() string { return d.Root().path("models.json") }
 
 // SaveConfig writes the configuration. The identity of the node is not given
 // up by it: a configuration without a key, read before the key was generated,
@@ -115,8 +115,32 @@ func (d Dir) SaveConfig(c config.Config) error {
 // Secrets are the files that hold the secrets of the node, which no tool of
 // an agent reads: the configuration with the key of the node, the accesses
 // with the keys of the APIs, and the files they are locked with.
+//
+// Of a node with several profiles, what the other profiles keep is no
+// business of the agent of d either: their directories, or the files of the
+// first one, and the workspaces they work in. A directory counts with
+// everything below it.
 func (d Dir) Secrets() []string {
-	return append(config.Files(string(d)), credentials.Files(string(d))...)
+	root := d.Root()
+	files := append(config.Files(string(root)), credentials.Files(string(root))...)
+	profiles, _ := d.Profiles()
+	for _, p := range profiles {
+		switch {
+		case p == d:
+			if p != root {
+				files = append(files, config.Files(string(p))...)
+			}
+			continue
+		case p == root:
+			files = append(files, p.path("contacts.json"), p.path("proposals.json"), p.path("failures.json"), p.History(), p.UpdateDir())
+		default:
+			files = append(files, string(p))
+		}
+		if workspace, err := p.Workspace(); err == nil {
+			files = append(files, workspace)
+		}
+	}
+	return files
 }
 
 // Contacts opens the contact list of the node.
@@ -158,7 +182,7 @@ const Env = "OURO_HOME"
 // Service is the background process of the node. It is started for this
 // directory, whatever the environment of the process that starts it says.
 func (d Dir) Service() daemon.Service {
-	return daemon.Service{PIDFile: d.path("ouro.pid"), LogFile: d.path("ouro.log"), Env: []string{Env + "=" + string(d)}}
+	return daemon.Service{PIDFile: d.Root().path("ouro.pid"), LogFile: d.Root().path("ouro.log"), Env: []string{Env + "=" + string(d.Root())}}
 }
 
 // maxSocket is the longest path a socket of the file system can have: its
@@ -171,6 +195,7 @@ const maxSocket = 103
 // path is too long for a socket, the socket is in SocketDir, named after the
 // directory.
 func (d Dir) Socket() string {
+	d = d.Root()
 	if p := d.path("ouro.sock"); len(p) <= maxSocket {
 		return p
 	}
@@ -227,6 +252,7 @@ func (l logWriter) Write(p []byte) (n int, err error) {
 // moment, but never leaves a gap: the log is opened for appending, so it goes
 // on at its end.
 func (d Dir) logging(write func()) {
+	d = d.Root()
 	if unlock, err := safefile.Lock(d.path("ouro.log.lock")); err == nil {
 		defer unlock()
 	}

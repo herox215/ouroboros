@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"time"
 
 	"ouroboros/internal/config"
@@ -174,8 +175,9 @@ var ErrNotRunning = errors.New("the node is not running")
 // Client is the API of the sessions of the node that runs on this host, over
 // its socket.
 type Client struct {
-	local node.Local
-	http  *http.Client
+	local   node.Local
+	http    *http.Client
+	profile string // the ID of the profile of the sessions, "" for the first
 	// Patience is how long the node may take to stop once it was released.
 	Patience time.Duration
 	// Listening is how long a node that runs may take to listen on its
@@ -183,9 +185,13 @@ type Client struct {
 	Listening time.Duration
 }
 
-// NewClient returns the client of the sessions of the node in dir.
+// NewClient returns the client of the sessions of the node in dir, or of
+// the profile of a node in dir, see home.Dir.Profiles.
 func NewClient(dir home.Dir) *Client {
 	c := &Client{local: node.Local{Home: dir}, Patience: time.Minute, Listening: 5 * time.Second}
+	if dir.Root() != dir {
+		c.profile = filepath.Base(string(dir)) // named after its ID
+	}
 	c.http = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return c.dial(ctx, dir.Socket())
 	}}}
@@ -239,6 +245,9 @@ func (c *Client) request(ctx context.Context, method, path string, in any) (*htt
 		body = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequestWithContext(ctx, method, "http://ouro"+path, body) // the method and the path are the client's
+	if c.profile != "" {
+		req.Header.Set(node.ProfileHeader, c.profile)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {

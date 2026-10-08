@@ -30,6 +30,10 @@ type Options struct {
 	Version   string    // of ouro, as told in the agent card
 	Log       io.Writer // of the node that runs in the foreground
 	OnStop    func()    // called when the node in the foreground stops; may be nil
+	// Profile is handed the Profile of the node in dir once the plugin is
+	// started, for the frame of ouro to run the profiles of a node in one
+	// process; may be nil.
+	Profile func(*Profile)
 }
 
 // needs are the services the plugin uses.
@@ -87,6 +91,11 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 		plugin.Add(ctx, plugin.Command{Name: "stop", Help: "stop the node", Run: c.stop})
 		plugin.Add(ctx, plugin.Command{Name: "status", Help: "show the local node", Run: c.status})
 		plugin.Add(ctx, plugin.Command{Name: node.ServeCommand, Help: "run the node in the foreground", Run: c.serve})
+		plugin.Add(ctx, plugin.Command{Name: "profile", Args: "[add NAME | rename PROFILE NAME]",
+			Help: "list the profiles of the node, add one or rename one; ouro --profile PROFILE COMMAND runs a command for one", Run: c.profile})
+		if o.Profile != nil {
+			o.Profile(&Profile{commands: c})
+		}
 		return nil
 	})
 }
@@ -199,4 +208,25 @@ func (c *nodeCommands) serve(ctx context.Context, _ []string) error {
 		return &plugin.Restarting{Exe: s.Exe, Env: append(os.Environ(), s.Env...)}
 	}
 	return base.WithHint(err)
+}
+
+// Profile is the part of the plugin that runs one profile of a node: what
+// serve runs for it. The frame of ouro joins the others to the first, see
+// Join; no plugin gets it.
+type Profile struct {
+	commands *nodeCommands
+	joined   []*session.Service // the sessions of p and of those it joined
+}
+
+// Join lets the node of p run the profile other in its process, with the
+// agent, the sessions and the plugins other was started with: on its port,
+// on its socket, among what it tells discovery, and stopping and starting
+// anew with it. It is to be called before the node runs.
+func (p *Profile) Join(other *Profile) {
+	p.commands.server.Profiles = append(p.commands.server.Profiles, other.commands.server)
+	if p.joined == nil {
+		p.joined = []*session.Service{p.commands.sessions}
+	}
+	p.joined = append(p.joined, other.commands.sessions)
+	session.Share(p.joined...)
 }

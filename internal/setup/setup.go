@@ -181,8 +181,9 @@ var ErrLastAccess = errors.New("the last access cannot be removed: add another o
 // API as far as it can. The last access stays. If the agents answer through
 // the access, they answer through the first of the others from then on, with
 // the model that one offers by default: an access that does not list its
-// models cannot take over, and nothing is removed then. It returns what the
-// owner should know of how it went, "" if nothing.
+// models cannot take over, and nothing is removed then. Nor is an access
+// another profile of the node answers through. It returns what the owner
+// should know of how it went, "" if nothing.
 func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 	saved, err := s.book.Store.List()
 	if err != nil {
@@ -198,6 +199,21 @@ func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 	cfg, err := s.home.Config()
 	if err != nil {
 		return "", err
+	}
+	// The other profiles of the node answer through the accesses of the
+	// node too: what one of them uses stays.
+	profiles, err := s.home.Profiles()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range profiles {
+		c, err := p.Config()
+		if err != nil {
+			return "", err
+		}
+		if p != s.home && c.Access == id {
+			return "", fmt.Errorf("%s is in use by the profile %s: give it another access first", saved[at].Label(), c.Name)
+		}
 	}
 	var next credentials.Access
 	var model string

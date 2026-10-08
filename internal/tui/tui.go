@@ -184,8 +184,9 @@ type conversation struct {
 
 // Model is the UI state.
 type Model struct {
-	backend Backend
-	now     func() time.Time
+	profiles *profileViews
+	backend  Backend
+	now      func() time.Time
 	// ctx ends when the user quits; what the UI asks of the backend stops with it.
 	ctx  context.Context
 	quit context.CancelFunc
@@ -323,6 +324,9 @@ type (
 // Init starts the UI with the splash, or with the setup for a node that was
 // not set up yet.
 func (m *Model) Init() tea.Cmd {
+	if m.profiles != nil {
+		return m.profiles.init()
+	}
 	m.splashStart = m.now()
 	if s, err := m.backend.Status(); err == nil && !s.Configured {
 		m.showSplash = false
@@ -382,6 +386,9 @@ func (m *Model) refresh() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.profiles != nil {
+		return m, m.profiles.update(msg)
+	}
 	// The line below the footer comes and goes with what is pending, and
 	// with it the room for everything above.
 	defer func(rows int) {
@@ -791,11 +798,24 @@ func (c *conversation) add(e entry) {
 
 // Restarts reports whether the UI quit for ouro to start anew, and from
 // which binary: the session it showed is Current, to go on with by Resume.
-func (m *Model) Restarts() (exe string, ok bool) { return m.restarts, m.restarts != "" }
+func (m *Model) Restarts() (exe string, ok bool) {
+	if m.profiles != nil {
+		for _, model := range m.profiles.models {
+			if exe, ok := model.Restarts(); ok {
+				return exe, true
+			}
+		}
+		return "", false
+	}
+	return m.restarts, m.restarts != ""
+}
 
 // Current is the ID of the session the UI shows.
 // A conversation of a peer is none: then it is a new one.
 func (m *Model) Current() string {
+	if m.profiles != nil {
+		return m.profiles.current().Current()
+	}
 	if m.chat.peer != "" {
 		return plugin.NewID()
 	}
@@ -806,6 +826,10 @@ func (m *Model) Current() string {
 // started anew, without the splash: it is to be called before the UI is
 // shown.
 func (m *Model) Resume(id string) {
+	if m.profiles != nil {
+		m.profiles.current().Resume(id)
+		return
+	}
 	delete(m.chats, m.chat.contextID)
 	m.chat = m.conversation(id)
 	m.showSplash = false

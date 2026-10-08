@@ -234,7 +234,10 @@ func run(ctx context.Context, g *guard.Guard, unsandboxed func() (bool, error), 
 // for access, or the home directory of the user.
 func workDir(g *guard.Guard, access guard.Access, dir string) (string, error) {
 	if dir == "" {
-		dir = "~"
+		dir = g.Workspace
+		if dir == "" {
+			dir = "~"
+		}
 	}
 	c, err := g.Checker(access)
 	if err != nil {

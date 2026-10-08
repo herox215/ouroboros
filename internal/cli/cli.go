@@ -148,15 +148,19 @@ type Terminal = plugin.Terminal
 // user through t: the plugins of the build that its configuration does not
 // turn off. The order is only the order of the commands in the usage: the
 // kernel starts each plugin after those it depends on.
-func Plugins(s Settings, t Terminal) []plugin.Plugin {
+func Plugins(s Settings, t Terminal) []plugin.Plugin { return plugins(s, t, &profile{}) }
+
+// plugins is Plugins, which hand what runs a profile of the node to p once
+// they are started.
+func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 	// The frame, see the package comment.
 	dir := home.Dir(s.Home)
 	network := &peers.Network{Contacts: dir.Contacts(), Client: node.Local{Home: dir}.Client}
 	// What no tool for files does, whatever the configuration says.
-	files := &guard.Guard{Home: s.Home, Secrets: dir.Secrets(), Protected: func() ([]string, error) {
+	files := &guard.Guard{Home: string(dir.Root()), Secrets: dir.Secrets(), Protected: func() ([]string, error) {
 		cfg, err := dir.Config()
 		return cfg.Protected(), err
-	}, Toolchain: update.GoPaths, Checkouts: update.Checkouts}
+	}, Toolchain: update.GoPaths, Checkouts: update.Checkouts, Workspace: dir.WorkingDir()}
 	owner := plugin.OwnerOf(dir, network)
 	return plugin.Activate(owner, []plugin.Plugin{
 		base.Plugin(dir, t),
@@ -172,10 +176,11 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		sessionplugin.Plugin(dir),
 		nodeplugin.Plugin(dir, nodeplugin.Options{
 			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,
-			OnStop: network.Close, // the channels the node opened to peers
+			OnStop:  network.Close, // the channels the node opened to peers
+			Profile: func(n *nodeplugin.Profile) { p.node = n },
 		}),
 		talk.Plugin(),
-		tui.Plugin(owner),
+		tui.Plugin(owner, func(u *tui.Profile) { p.ui = u }),
 		updateplugin.Plugin(dir),
 	}, fixed)
 }
@@ -221,13 +226,15 @@ func seal(k *kernel.Kernel) {
 // own: a command belongs to the plugin that contributes it.
 type App struct {
 	kernel *kernel.Kernel
+	// profiles are the apps of the profiles of the node, by their
+	// directories, the first one a itself; nil for an app of NewWith.
+	profiles map[home.Dir]*App
+	home     home.Dir
 }
 
 // New returns the standard ouro for the node described by s, talking to its
-// user through t.
-func New(s Settings, t Terminal) (*App, error) {
-	return NewWith(Plugins(s, t)...)
-}
+// user through t: with every profile of the node, see Run.
+func New(s Settings, t Terminal) (*App, error) { return newProfiles(s, t) }
 
 // NewWith returns an ouro made of plugins. It fails, with nothing started, if
 // they cannot all be started: see kernel.Kernel.Start.
@@ -240,8 +247,18 @@ func NewWith(plugins ...plugin.Plugin) (*App, error) {
 	return &App{kernel: k}, nil
 }
 
-// Run executes the command given by args (without the program name).
+// Run executes the command given by args (without the program name), for
+// the profile of the node that --profile names, see forProfile.
 func (a *App) Run(ctx context.Context, args []string) error {
+	app, args, err := a.forProfile(args)
+	if err != nil {
+		return err
+	}
+	return app.dispatch(ctx, args)
+}
+
+// dispatch runs the command args of a.
+func (a *App) dispatch(ctx context.Context, args []string) error {
 	d, ok := Service[*base.Dispatcher](a)
 	if !ok {
 		return errors.New("no plugin runs commands: the base plugin is missing")

@@ -297,6 +297,37 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+// An access another profile of the node answers through stays.
+func TestRemoveKeepsTheAccessOfAnotherProfile(t *testing.T) {
+	ctx := context.Background()
+	root := home.Dir(filepath.Join(t.TempDir(), "node"))
+	t.Cleanup(func() { os.RemoveAll(string(root) + "-workspaces") })
+	root.Create()
+	s := New(root, func() []llm.Provider { return []llm.Provider{llmtest.Provider("one"), llmtest.Provider("two")} }, config.Config{})
+	first := signedIn(t, s, "one", "good-1", "one-large")
+	luna, err := root.AddProfile("Luna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedIn(t, s, "two", "good-2", "two-large")
+	if _, err := s.Remove(ctx, first.ID); err == nil || err.Error() != "Test one is in use by the profile Luna: give it another access first" {
+		t.Fatalf("Remove = %v", err)
+	}
+	os.WriteFile(filepath.Join(string(luna), "config.json"), []byte("{"), 0o600)
+	if _, err := s.Remove(ctx, first.ID); err == nil || strings.Contains(err.Error(), "in use") {
+		t.Fatalf("a profile that cannot be read: %v", err)
+	}
+	os.RemoveAll(filepath.Join(string(root), "profiles"))
+	os.WriteFile(filepath.Join(string(root), "profiles"), nil, 0o600)
+	if _, err := s.Remove(ctx, first.ID); err == nil || strings.Contains(err.Error(), "in use") {
+		t.Fatalf("profiles that cannot be listed: %v", err)
+	}
+	os.Remove(filepath.Join(string(root), "profiles"))
+	if note, err := s.Remove(ctx, first.ID); err != nil || note != "" {
+		t.Fatalf("Remove = %q, %v", note, err)
+	}
+}
+
 // An access that cannot take over does not: the one in use stays, and
 // nothing is signed out.
 func TestRemoveKeepsTheAccessInUseWithoutAnotherToUse(t *testing.T) {

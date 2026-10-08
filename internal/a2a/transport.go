@@ -47,39 +47,48 @@ func TLSConfig(id *identity.Identity) *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{id.Certificate()}}
 }
 
-// holder accepts the node with publicKey and no other.
-func holder(publicKey string) func(key string) bool {
-	return func(key string) bool { return key == publicKey }
-}
+// ServerName is the name of the server a node with publicKey is asked for in
+// the TLS handshake. Several agents of one node, its profiles, answer on one
+// port: the name tells it which of them is to answer, with its certificate.
+// A node that runs one agent answers with it whatever the name is.
+func ServerName(publicKey string) string { return identity.IDOf(publicKey) + ".ouro" }
 
-// anyone accepts whatever node answers: for the first contact with an address.
-func anyone(string) bool { return true }
+// pin is the public key of the node a connection is for.
+type pin string
 
-// pinned is how a node connects to another: TLS 1.3, and the handshake fails
-// with ErrUnverified unless accept takes the key of the certificate.
-func pinned(accept func(key string) bool) *tls.Config {
-	return &tls.Config{
+// anyone is the pin that takes whatever node answers: for the first contact
+// with an address. No public key is "*".
+const anyone pin = "*"
+
+// pinned is how a node connects to the node of p: TLS 1.3, and the
+// handshake fails with ErrUnverified unless the certificate is of its key.
+func pinned(p pin) *tls.Config {
+	c := &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		// No authority signs the certificate of a node and its name is not
 		// what counts: its key is, checked right below.
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			if key := identity.CertificateKey(cs.PeerCertificates[0]); key == "" || !accept(key) {
+			if key := identity.CertificateKey(cs.PeerCertificates[0]); key == "" || p != anyone && key != string(p) {
 				return ErrUnverified
 			}
 			return nil
 		},
 	}
+	if p != anyone {
+		c.ServerName = ServerName(string(p))
+	}
+	return c
 }
 
 // exchange sends req to a node and returns the body of its answer with the
-// public key the node proved to hold in the TLS handshake. accept decides
-// whether that key is the node req is meant for; if not, the handshake fails
-// with ErrUnverified before anything of req is sent.
+// public key the node proved to hold in the TLS handshake. Unless that is
+// p, the key of the node req is meant for (see pinned), the handshake
+// fails with ErrUnverified before anything of req is sent.
 //
 // Every exchange has its own connection, so a key is never taken over from an
 // earlier one, and the node has to answer itself: a redirect is not followed.
-func exchange(req *http.Request, accept func(key string) bool) (answer []byte, key string, err error) {
+func exchange(req *http.Request, p pin) (answer []byte, key string, err error) {
 	if req.URL.Scheme != "https" {
 		return nil, "", errPlain
 	}
@@ -90,7 +99,7 @@ func exchange(req *http.Request, accept func(key string) bool) (answer []byte, k
 			DialContext:         (&net.Dialer{Timeout: dialTimeout}).DialContext,
 			TLSHandshakeTimeout: handshakeTimeout,
 			DisableKeepAlives:   true,
-			TLSClientConfig:     pinned(accept),
+			TLSClientConfig:     pinned(p),
 		},
 	}
 	resp, err := client.Do(req)
@@ -113,17 +122,17 @@ func exchange(req *http.Request, accept func(key string) bool) (answer []byte, k
 // Any other answer is returned as answer, like exchange does, and the
 // connection is closed.
 //
-// The connection is pinned like every other: accept decides whether the key
-// the node proved to hold is the node req is meant for, and if not, the
-// handshake fails with ErrUnverified before anything of req is sent. The
+// The connection is pinned like every other: unless the node proves to hold
+// p, the key of the node req is meant for, the handshake fails with
+// ErrUnverified before anything of req is sent. The
 // node has openTimeout, and no longer than the context of req, to answer.
-func upgrade(req *http.Request, accept func(key string) bool) (conn net.Conn, r *bufio.Reader, answer []byte, err error) {
+func upgrade(req *http.Request, p pin) (conn net.Conn, r *bufio.Reader, answer []byte, err error) {
 	if req.URL.Scheme != "https" {
 		return nil, nil, nil, errPlain
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), openTimeout)
 	defer cancel()
-	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: pinned(accept)}
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: pinned(p)}
 	if conn, err = dialer.DialContext(ctx, "tcp", req.URL.Host); err != nil {
 		return nil, nil, nil, err
 	}

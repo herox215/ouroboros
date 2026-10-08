@@ -190,6 +190,45 @@ one where you left it.
   cannot write there. `d` pressed twice deletes it, and your agent forgets it. They start anew for the peer
   after a restart; only yours go on.
 
+### Profiles
+
+A node may hold several agents, its **profiles**: Terra and Luna, say, side by side on one node. Each is an
+agent of its own, with its own key and so its own ID, its name, description, model, tools and what they may do,
+its contacts, sessions, history, proposals and workspace. What they share is the process of the node, with its
+port, its socket and its log, and the [accesses](#providers-and-accesses) to the LLMs: each picks one of them
+and a model of its own.
+
+- **Adding one.** `ouro profile add Luna` adds a profile, while the node is stopped: it has a new key and
+  nothing of another profile, and it talks through the access and with the model of the first one until you
+  pick others. The node you had is the first profile and keeps all it had, where it had it; every further one
+  is in `profiles/<ID>/` of the directory of the node. `ouro profile` lists them, with their IDs and models,
+  and `ouro profile rename Luna Selene` renames one. Two profiles never have the same name, whatever the case
+  of its letters. A profile is not removed by ouro: its directory holds its key and its conversations.
+- **All of them run.** The node starts every profile and runs it until it stops, whichever the UI shows. An
+  answer of one goes on while you look at another, and keeps the node running; a new build of `rebuild` waits
+  until no profile answers, and no profile takes a new message meanwhile. A front end that lets go of the node
+  it started stops it once no profile answers.
+- **The UI shows them all.** `shift+tab` shows the next profile, with all it showed: its conversation, what
+  you typed there, its screen. The header names the profile shown, and the footer says so once you switch. `/settings`, `/model`, `/contacts` and the
+  rest are of the profile shown. `ouro` opens on the first profile, `ouro --profile Luna` on Luna.
+- **The command line names one.** `ouro --profile PROFILE COMMAND` runs a command for the profile that
+  `PROFILE` names: its ID, the start of its ID that no other one has, or its name, whatever the case of its
+  letters (`--profile=PROFILE` too). While there are several, a command that is about one of them fails
+  without it, so a script never talks to one it did not mean: `ouro chat`, `ouro ask`, `ouro status`,
+  `ouro start --setup`. What is about the node needs none: `ouro start`, `stop`, `serve`, `update`, `list`,
+  `profile` and the UI. Which profile the UI showed last does not count. With one profile nothing changes.
+- **Peers see each of them.** Every profile answers discovery as a node of its own, with its ID and name,
+  on the port of the node, and has a card of its own there. A peer names the profile it writes to by its key,
+  in the name of the server of the TLS handshake (`<ID>.ouro`): the node answers with the certificate of that
+  profile, which the peer pins, and hands the request to it, which checks that it is signed for it. A peer
+  that names none, as an ouro from before there were profiles does, reaches the first profile; such an ouro
+  cannot write to the others. A profile trusts another of its node no more than any peer: they find each
+  other, and talk once both of you agreed, as two nodes do. Whom one trusts, another does not.
+- **Each works in its own place.** While there are several profiles, a command of `bash` that names no
+  directory starts in the workspace of its profile, `<directory of the node>-workspaces/<ID>/`, next to the
+  directory of the node, and the agent is told so. The tools of one profile neither read nor change what
+  another keeps: its directory, or the files of the first one, and its workspace.
+
 ## Updates
 
 `ouro update` fetches the newest `main` from the repository the binary
@@ -404,7 +443,7 @@ build works, not that it is harmless.
 ### Commands
 
 `bash(command, dir?, timeout?)` runs `command` with `/bin/bash -c` in `dir` (absolute or below `~`, the home
-directory without it), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
+directory without it, or the workspace of the [profile](#profiles) while the node has several), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
 an error. It returns `exit N` and below it what the command printed, its output and its errors as they came;
 of more than 64 KiB the first and the last 32 KiB, with how much was left out between them. A status other
 than 0 is a result, not an error. Every call starts anew: `cd` and variables do not carry over.

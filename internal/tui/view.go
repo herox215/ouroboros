@@ -229,6 +229,9 @@ func (m *Model) entryHead(e entry) string {
 }
 
 func (m *Model) View() tea.View {
+	if m.profiles != nil {
+		return m.profiles.current().View()
+	}
 	v := tea.NewView("")
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion

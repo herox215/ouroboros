@@ -290,6 +290,23 @@ func TestSecrets(t *testing.T) {
 	}
 }
 
+// A secret that is a directory is one with everything below it: the
+// directory of another profile of the node.
+func TestSecretDirectories(t *testing.T) {
+	w := newWorld(t)
+	profile := w.node + "/profiles/0123456789ab"
+	if err := os.MkdirAll(profile+"/history", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w.link(profile, w.home+"/share/other")
+	w.guard.Secrets = []string{profile}
+	a := Access{Tool: "read"}
+	for _, path := range []string{"~/.config/ouroboros/profiles/0123456789ab", "~/.config/ouroboros/profiles/0123456789ab/history/x.jsonl", "~/share/other/contacts.json"} {
+		w.refused(a, Read, path, ruleSecret)
+	}
+	w.allowed(a, Read, "~/.config/ouroboros/profiles/0123456789abc", w.node+"/profiles/0123456789abc")
+}
+
 // The state of the node is read and never changed.
 func TestStateOfTheNode(t *testing.T) {
 	w := newWorld(t)

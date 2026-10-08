@@ -119,7 +119,7 @@ func (c *Client) Open(ctx context.Context, baseURL, publicKey, name string) (*Ch
 	}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", ChannelProtocol)
-	conn, r, answer, err := upgrade(req, holder(publicKey))
+	conn, r, answer, err := upgrade(req, pin(publicKey))
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (c *Client) call(ctx context.Context, baseURL, publicKey, method string, pa
 		return nil, err
 	}
 	// Whoever answers in place of the node that was asked gets nothing to read.
-	answer, _, err := exchange(httpReq, holder(publicKey))
+	answer, _, err := exchange(httpReq, pin(publicKey))
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func decode(answer []byte) (*response, error) {
 // the one that answers at baseURL; otherwise FetchCard fails with
 // ErrUnverified. What the card says is still only what that node claims.
 func FetchCard(ctx context.Context, baseURL, publicKey string) (AgentCard, error) {
-	card, _, err := fetchCard(ctx, baseURL, holder(publicKey))
+	card, _, err := fetchCard(ctx, baseURL, pin(publicKey))
 	return card, err
 }
 
@@ -205,15 +205,15 @@ func FetchKey(ctx context.Context, baseURL string) (string, error) {
 	return key, err
 }
 
-// fetchCard reads the agent card of the node at baseURL, if accept takes its
-// public key, and returns the card with that key.
-func fetchCard(ctx context.Context, baseURL string, accept func(key string) bool) (AgentCard, string, error) {
+// fetchCard reads the agent card of the node at baseURL, if it holds the
+// key of p (see pinned), and returns the card with its key.
+func fetchCard(ctx context.Context, baseURL string, p pin) (AgentCard, string, error) {
 	var card AgentCard
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(baseURL, "/")+CardPath, nil)
 	if err != nil {
 		return card, "", err
 	}
-	body, key, err := exchange(req, accept)
+	body, key, err := exchange(req, p)
 	if err != nil {
 		return card, "", err
 	}

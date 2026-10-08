@@ -117,6 +117,11 @@ func listenGroup(port int) (*net.UDPConn, error) {
 // Serve answers probes on conn until conn is closed, each with what self
 // returns then: the node as it is called now.
 func Serve(conn *net.UDPConn, self func() Node) error {
+	return ServeAll(conn, func() []Node { return []Node{self()} })
+}
+
+// ServeAll announces every independently addressable agent on a node.
+func ServeAll(conn *net.UDPConn, self func() []Node) error {
 	group := &net.UDPAddr{IP: Group, Port: conn.LocalAddr().(*net.UDPAddr).Port}
 	buf := make([]byte, len(probe)+1)
 	for {
@@ -131,9 +136,11 @@ func Serve(conn *net.UDPConn, self func() Node) error {
 			return err
 		}
 		if string(buf[:n]) == probe {
-			reply, _ := json.Marshal(self()) // strings and a number: cannot fail
-			conn.WriteToUDP(reply, addr)
-			conn.WriteToUDP(reply, group)
+			for _, agent := range self() {
+				reply, _ := json.Marshal(agent)
+				conn.WriteToUDP(reply, addr)
+				conn.WriteToUDP(reply, group)
+			}
 		}
 	}
 }

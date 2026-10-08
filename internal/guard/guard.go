@@ -100,9 +100,13 @@ func (r *Refusal) Error() string {
 
 // Guard holds what is fixed for the node.
 type Guard struct {
+	// Workspace is where commands start that name no directory; "" for
+	// the home directory of the user.
+	Workspace string
 	// Home is the directory of the node. Nothing in it is changed.
 	Home string
-	// Secrets are the files that are neither read nor changed.
+	// Secrets are the files that are neither read nor changed, each with
+	// everything below it.
 	Secrets []string
 	// Protected returns "protected" of the configuration as it is now.
 	Protected func() ([]string, error)
@@ -348,10 +352,10 @@ func (c *Checker) refuses(op Op, real string) string {
 }
 
 // secret reports whether real is one of the files that are not read, or
-// another name of one.
+// another name of one, or below one that is a directory.
 func (c *Checker) secret(real string) bool {
 	for _, s := range c.secrets {
-		if real == s.real {
+		if within(real, s.real) {
 			return true
 		}
 		if s.info == nil {
