@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"ouroboros/internal/config"
@@ -265,4 +267,31 @@ func (o *Owner) decided(action, publicKey string, err error) error {
 		return ErrNotSaved
 	}
 	return err
+}
+
+// pasted is the directory of the workspace of a profile that keeps the
+// pictures its owner pasted into the chat.
+const pasted = "pasted"
+
+// SavePicture keeps a picture the owner pasted into the chat, of the kind ext
+// like "png", as a file and returns its path. It goes into the directory
+// "pasted" of the workspace of the profile, where the agent works and its
+// tools read: every profile has its own. The file is named after the time
+// and stays until the owner or the agent removes it.
+func (o *Owner) SavePicture(data []byte, ext string) (string, error) {
+	workspace := o.home.WorkingDir()
+	if workspace == "" {
+		return "", ErrNotSetUp
+	}
+	dir := filepath.Join(workspace, pasted)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, time.Now().Format("2006-01-02-150405")+"-*."+ext)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	_, err = f.Write(data)
+	return f.Name(), err
 }

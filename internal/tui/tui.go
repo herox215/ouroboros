@@ -62,6 +62,9 @@ type Backend interface {
 	// Unsteer takes back the last message that is queued in the session id
 	// and returns it, "" if none is.
 	Unsteer(ctx context.Context, id string) (string, error)
+	// SavePicture keeps a picture the owner pasted into the chat as a file
+	// of the profile, of the kind ext like "png", and returns its path.
+	SavePicture(data []byte, ext string) (string, error)
 	// Watch returns what happened in the session id so far, and what
 	// happens from now on, until ctx ends or the node stops: the whole loop
 	// of every answer, not only its end.
@@ -479,6 +482,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.asked(msg)
 	case unsteeredMsg:
 		m.unsteered(msg)
+	case pastedMsg:
+		m.pasted(msg)
 	case sessionsMsg:
 		return m, m.sessionsLoaded(msg)
 	case deletedMsg:
@@ -542,6 +547,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editInput, cmd = m.editInput.Update(msg)
 			return m, cmd
 		}
+		if pasted, ok := msg.(tea.PasteMsg); ok {
+			return m, m.paste(pasted.Content)
+		}
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
@@ -592,6 +600,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "enter":
 		return m.send()
+	case "ctrl+v":
+		return m.pasteClipboard() // a picture too, which the input does not paste
 	case "up":
 		if m.input.Value() == "" && len(m.chat.queued) > 0 {
 			return m.unsteer()

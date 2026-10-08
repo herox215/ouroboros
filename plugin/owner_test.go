@@ -17,6 +17,7 @@ import (
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
+	"ouroboros/internal/identity"
 	"ouroboros/internal/llm"
 	"ouroboros/internal/llm/llmtest"
 	"ouroboros/internal/openai"
@@ -522,5 +523,47 @@ func TestProviderTrace(t *testing.T) {
 	}
 	if !slices.Equal(lines, want) {
 		t.Fatalf("told %q", lines)
+	}
+}
+
+// A picture the owner pasted into the chat is kept as a file of its own in
+// the workspace of the profile, which only the owner reads.
+func TestOwnerSavesAPicture(t *testing.T) {
+	if _, err := plugin.OwnerOf(home.Dir(t.TempDir()), nil).SavePicture([]byte("PNG"), "png"); !errors.Is(err, plugin.ErrNotSetUp) {
+		t.Fatalf("a node that is not set up has no workspace: %v", err)
+	}
+	s := clitest.Settings(t)
+	o := owner(t, s)
+	cfg := clitest.NodeConfig(s)
+	cfg.PrivateKey = identity.Generate().Private()
+	if err := config.Save(s.Home, cfg); err != nil {
+		t.Fatal(err)
+	}
+	workspace := home.Dir(s.Home).WorkingDir()
+	first, err := o.SavePicture([]byte("PNG"), "png")
+	if err != nil || filepath.Dir(first) != filepath.Join(workspace, "pasted") || filepath.Ext(first) != ".png" {
+		t.Fatalf("kept as %q, %v", first, err)
+	}
+	second, err := o.SavePicture([]byte("JPEG"), "jpg")
+	if err != nil || second == first || filepath.Ext(second) != ".jpg" {
+		t.Fatalf("kept as %q, %v", second, err)
+	}
+	data, _ := os.ReadFile(first)
+	info, _ := os.Stat(first)
+	dir, _ := os.Stat(filepath.Dir(first))
+	if string(data) != "PNG" || info.Mode().Perm() != 0o600 || dir.Mode().Perm() != 0o700 {
+		t.Fatalf("%q, %v in %v", data, info.Mode(), dir.Mode())
+	}
+	if _, err := o.SavePicture([]byte("PNG"), "p/ng"); err == nil {
+		t.Fatal("a kind that is no extension")
+	}
+	if err := os.RemoveAll(filepath.Join(workspace, "pasted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "pasted"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.SavePicture([]byte("PNG"), "png"); err == nil {
+		t.Fatal("a workspace that cannot keep it")
 	}
 }

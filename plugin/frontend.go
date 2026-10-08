@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/pasteboard"
 	"ouroboros/internal/session"
 )
 
@@ -127,3 +129,27 @@ var (
 func Await(ctx context.Context, s Sessions, id, text string) (string, error) {
 	return session.Await(ctx, s, id, text)
 }
+
+// Picture is a picture of the clipboard of the system: the file it is, if a
+// file was copied, or else its data and the extension of its kind.
+type Picture = pasteboard.Picture
+
+// ErrNoPicture means that the clipboard holds no picture, or none that can
+// be read on this desktop.
+var ErrNoPicture = pasteboard.ErrNone
+
+// ClipboardPicture returns the picture on the clipboard of the system, for a
+// front end to paste: a terminal hands it the text of the clipboard only.
+// It asks the tools of the desktop, see the package pasteboard.
+func ClipboardPicture(ctx context.Context) (Picture, error) {
+	return pasteboard.System(os.Getenv).Picture(ctx)
+}
+
+// IsPicture reports whether a file named path is a picture, by its
+// extension, and LocalPath is the path of the file a URI of the scheme file
+// names, or name as it is.
+func IsPicture(path string) bool { return pasteboard.IsPicture(path) }
+
+// LocalPath is the path of the file a URI of the scheme file names; what is
+// no such URI is returned as it is.
+func LocalPath(name string) string { return pasteboard.Local(name) }

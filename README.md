@@ -138,10 +138,41 @@ Keys only move around:
 | any key | skip the ouroboros splash (except `ctrl+c`) |
 | `enter` / `alt+enter` | send / a new line |
 | `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions) |
+| `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `pgup` `pgdn` | scroll the chat |
 | `esc` | on a screen: back to the chat. In the chat: stop the answer on its way in the conversation shown, like `/cancel` |
 | `ctrl+c` | quit, everywhere |
+
+### Pictures
+
+A picture gets into a message as the **path of its file**, in double quotes, which the agent reads with its
+tools. Nothing is sent by pasting: the path is typed where the cursor is, and the message is yours to send.
+
+- **A file**, dropped on the terminal or pasted as text: the terminal writes its path, plain, in quotes, with
+  its spaces escaped or as a `file://` URI, one or several, and the chat types each as `"/the/path.png"`. In
+  the quotes a `"` is `\"` and a `\` is `\\`; a space is a space. Only text that is nothing but the paths of
+  files that are there and pictures by their extension (`png` `jpg` `jpeg` `webp` `gif` `bmp` `tif` `tiff`
+  `heic` `avif` `svg`) is changed: any other text is pasted as it is.
+- **A picture that is no file**, like a screenshot on the clipboard: `ctrl+v` reads it from the clipboard of
+  the system and keeps it as a file, whose path it types. A terminal that pastes such a picture as nothing
+  does the same. A file copied in a file manager is typed as its own path. Without a picture, `ctrl+v` pastes
+  the text of the clipboard.
+
+The pictures that are kept go into `pasted/` in the [workspace](#profiles) of the profile, where its agent
+works: every profile has its own. They are named after the time, only you can read them, and they stay until
+you or the agent remove them.
+
+What works depends on the desktop, as a program in a terminal is handed text alone:
+
+| Where | A dropped or pasted file | A picture on the clipboard (`ctrl+v`) |
+|---|---|---|
+| Linux, Wayland | any terminal that pastes the path | with `wl-paste` (wl-clipboard) |
+| Linux, X11 | any terminal that pastes the path | with `xclip` |
+| macOS | any terminal that pastes the path | with `osascript`, which macOS has; as PNG |
+| over SSH, in tmux or a container | if the terminal pastes the path, and the file is on the host of ouro | no: the clipboard is on another host |
+
+Without the tool, `ctrl+v` pastes the text of the clipboard as before.
 
 ### Sessions
 

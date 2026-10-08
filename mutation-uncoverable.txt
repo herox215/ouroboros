@@ -245,3 +245,6 @@ internal/assistant/title.go:21:117 ARITHMETIC_BASE  # a string concatenation in 
 internal/assistant/title.go:22:96 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
 internal/assistant/title.go:23:68 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
 internal/assistant/title.go:23:77 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
+internal/pasteboard/pasteboard.go:64:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read on macOS and beside it
+internal/pasteboard/pasteboard.go:66:35 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read with and without Wayland
+internal/pasteboard/pasteboard.go:70:27 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPicture and TestNoPicture, which read with and without X11

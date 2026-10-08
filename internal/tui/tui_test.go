@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -111,6 +112,8 @@ type fakeBackend struct {
 
 	mu   sync.Mutex
 	sent []sent // the messages asked for
+	// pictures are the pictures that were pasted, to keep.
+	pictures []string
 	// canceled are the sessions whose answer was stopped, in order.
 	canceled []string
 	// unsteers is how often a message that waits was asked back.
@@ -209,6 +212,10 @@ func (f *fakeBackend) Unsteer(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	return f.sessions.Unsteer(ctx, id)
+}
+func (f *fakeBackend) SavePicture(data []byte, ext string) (string, error) {
+	f.pictures = append(f.pictures, string(data))
+	return "/work/pasted/" + strconv.Itoa(len(f.pictures)) + "." + ext, f.fail["picture"]
 }
 func (f *fakeBackend) Cancel(ctx context.Context, id string) error {
 	f.mu.Lock()
