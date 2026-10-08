@@ -37,7 +37,11 @@ type Status struct {
 	// the name the owner gave it, or what its service is commonly called,
 	// like "iGate" or "localhost". An unconfigured node has none.
 	Provider string
-	Port     int // A2A port while running
+	// PeerAccess and PeerModel are the access, by its ID, and the model the
+	// agent answers peers with, if the owner chose others for them than
+	// for themselves; "" otherwise.
+	PeerAccess, PeerModel string
+	Port                  int // A2A port while running
 	// Debug says that the node is in debug mode, see home.Dir.Debug.
 	Debug bool
 }
@@ -51,6 +55,9 @@ func (l Local) Status() (Status, error) {
 	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model, Debug: l.Home.Debug()}
 	if access, err := l.Home.Credentials().Get(cfg.Access); err == nil {
 		s.Provider = access.Label()
+	}
+	if access, model, own := cfg.PeerLLM(); own {
+		s.PeerAccess, s.PeerModel = access, model
 	}
 	if p, ok := l.Running(); ok {
 		s.Running, s.Port = true, p.Port

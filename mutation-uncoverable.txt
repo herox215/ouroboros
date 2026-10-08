@@ -167,8 +167,8 @@ internal/tui/logo.go:21:33 ARITHMETIC_BASE  # package var initialiser (bodyArc):
 internal/tui/logo.go:21:43 ARITHMETIC_BASE  # package var initialiser (bodyArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:97:25 ARITHMETIC_BASE  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:97:25 INVERT_NEGATIVES  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
-internal/tui/model.go:107:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
-internal/tui/model.go:109:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
+internal/tui/model.go:134:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
+internal/tui/model.go:136:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestModelScreenChoosesAModel
 internal/tui/onboard.go:53:21 ARITHMETIC_BASE  # in the const block of the scene, curlFrom
 internal/tui/onboard.go:53:31 ARITHMETIC_BASE  # in the const block of the scene, curlFrom
 internal/tui/onboard.go:54:21 ARITHMETIC_BASE  # in the const block of the scene, curlLast

@@ -174,13 +174,15 @@ func (a *Assistant) WithDebug(debug func() bool) *Assistant {
 }
 
 // ForPeers returns the agent that answers the peers of the node configured by
-// cfg, with the tools its owner allows for them.
+// cfg, with the tools its owner allows for them, and with the access and the
+// model the owner chose for them, see config.Config.PeerLLM.
 func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
 	return b.forPeers(cfg, script.NewSessions())
 }
 
 // forPeers is ForPeers with the scripts of the conversations in sessions.
 func (b Builder) forPeers(cfg config.Config, sessions *script.Sessions) (*agent.Agent, error) {
+	cfg.Access, cfg.Model, _ = cfg.PeerLLM()
 	allowed, err := b.peerTools(cfg)
 	if err != nil {
 		return nil, err

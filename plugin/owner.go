@@ -229,6 +229,21 @@ func (o *Owner) SetModel(access, model string) (switched bool, err error) {
 	return switched, err
 }
 
+// SetPeerModel makes model of the access what the agent of the node answers
+// peers with, whatever it answers the owner with: from the next message of a
+// peer on, without a restart. With the access "" peers are answered with what
+// the owner is again, as they are until the owner chooses for them.
+func (o *Owner) SetPeerModel(access, model string) error {
+	s, err := o.Setup(nil)
+	if err != nil {
+		return err
+	}
+	if err = s.PickForPeers(access, model); err == nil {
+		o.home.Log("the owner picked the model %q of the access %q for peers", model, access)
+	}
+	return err
+}
+
 // Browse shows url in the browser of the user, for a front end that is asked
 // to by a provider that signs in. It fails where there is no browser to
 // start: show the URL either way.

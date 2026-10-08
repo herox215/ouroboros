@@ -325,3 +325,55 @@ func TestModelListWindow(t *testing.T) {
 		t.Fatalf("at the end: %q", got)
 	}
 }
+
+// p on the model screen makes the model selected what peers are answered
+// with, which the list marks, and p on that one lets them be answered with
+// the model of the node again. Nothing of it changes the model of the node.
+func TestModelScreenChoosesAModelForPeers(t *testing.T) {
+	m, b := newModel(t)
+	b.status.Model = "gpt-4o"
+	b.offers = []Models{local("gpt-4o", "gpt-4o-mini"), plan("gpt-4o-mini")}
+	// p picks for peers, and the status is read anew as the UI does then.
+	p := func() {
+		m.Update(press(m, "p")())
+		m.Update(m.refreshStatus())
+	}
+	m.Update(m.refreshStatus())
+	deliver(m, run(m, "/model"))
+	if view := ansi.Strip(m.View().Content); strings.Count(view, "for peers") != 1 || !strings.Contains(view, "p for peers") {
+		t.Fatalf("no model is chosen for peers yet:\n%s", view)
+	}
+	press(m, "down")
+	p()
+	if b.status.PeerAccess != "a1" || b.status.PeerModel != "gpt-4o-mini" || len(b.set) != 0 ||
+		m.notice != "peers are answered with gpt-4o-mini of Ollama local" || m.noticeErr {
+		t.Fatalf("for peers %q of %q, set %v, notice %q", b.status.PeerModel, b.status.PeerAccess, b.set, m.notice)
+	}
+	// The model of that name of the other access is not the one.
+	if view := ansi.Strip(m.View().Content); strings.Count(view, "for peers") != 2 || !strings.Contains(view, "▸ gpt-4o-mini  for peers") || !strings.Contains(view, "gpt-4o  in use") {
+		t.Fatalf("the model for peers should be marked, once:\n%s", view)
+	}
+	press(m, "down")
+	p()
+	if b.status.PeerAccess != "b2" || m.notice != "peers are answered with gpt-4o-mini of OpenCode Go" {
+		t.Fatalf("for peers of %q, notice %q", b.status.PeerAccess, m.notice)
+	}
+	p()
+	if b.status.PeerAccess != "" || b.status.PeerModel != "" || m.notice != "peers are answered with the model of the node again" {
+		t.Fatalf("for peers %q of %q, notice %q", b.status.PeerModel, b.status.PeerAccess, m.notice)
+	}
+	if view := ansi.Strip(m.View().Content); strings.Count(view, "for peers") != 1 {
+		t.Fatalf("no model is chosen for peers any more:\n%s", view)
+	}
+
+	b.fail = map[string]error{"setpeermodel": errors.New("disk full")}
+	m.Update(press(m, "p")())
+	if m.notice != "disk full" || !m.noticeErr {
+		t.Fatalf("a model that cannot be saved: %q", m.notice)
+	}
+	// p picks nothing while the models are on their way.
+	m.modelBusy = "listing models"
+	if press(m, "p") != nil {
+		t.Fatal("p while the models are listed")
+	}
+}

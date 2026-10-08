@@ -135,6 +135,9 @@ func TestOwnerSetsUpTheNode(t *testing.T) {
 	if _, err := owner(t, broken).SetModel("a", "m"); err == nil {
 		t.Fatal("a model for a configuration that cannot be read: want error")
 	}
+	if err := owner(t, broken).SetPeerModel("a", "m"); err == nil {
+		t.Fatal("a model for peers for a configuration that cannot be read: want error")
+	}
 }
 
 // The owner sees the connection requests in both directions.
@@ -216,7 +219,27 @@ func TestOwnerChangesTheModel(t *testing.T) {
 	if status, _ := o.Status(); status.Provider != "Test two" || status.Model != "two-large" {
 		t.Fatalf("status %+v", status)
 	}
+	// Peers get a model of their own, of the other access, and lose it again.
+	if err := o.SetPeerModel(first.Access.ID, "gpt-4o-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := o.Status(); status.PeerAccess != first.Access.ID || status.PeerModel != "gpt-4o-mini" || status.Model != "two-large" {
+		t.Fatalf("status %+v", status)
+	}
+	if err := o.SetPeerModel(first.Access.ID, " "); err == nil {
+		t.Fatal("no model for peers: want error")
+	}
+	if err := o.SetPeerModel("", ""); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := o.Status(); status.PeerAccess != "" || status.PeerModel != "" {
+		t.Fatalf("status %+v", status)
+	}
 	log, _ := os.ReadFile(filepath.Join(s.Home, "ouro.log"))
+	if n := strings.Count(string(log), "for peers"); n != 2 || !strings.Contains(string(log), `the owner picked the model "gpt-4o-mini" of the access "`+first.Access.ID+`" for peers`) ||
+		!strings.Contains(string(log), `the owner picked the model "" of the access "" for peers`) {
+		t.Fatalf("log (%d): %s", n, log)
+	}
 	if !strings.Contains(string(log), "the owner picked the model two-large of the access "+listed[1].Access.ID) || strings.Contains(string(log), llmtest.Token+`"`) {
 		t.Fatalf("log: %s", log)
 	}

@@ -597,3 +597,26 @@ func TestPluginsOff(t *testing.T) {
 		t.Fatalf("off = %v, want %v", got, off)
 	}
 }
+
+// Peers are answered with the access and the model the owner chose for
+// them, and with those of the owner until both are chosen.
+func TestPeerLLM(t *testing.T) {
+	for _, tc := range []struct {
+		cfg           Config
+		access, model string
+		own           bool
+	}{
+		{Config{Access: "a", Model: "m"}, "a", "m", false},
+		{Config{Access: "a", Model: "m", PeerAccess: "b", PeerModel: "n"}, "b", "n", true},
+		{Config{Access: "a", Model: "m", PeerAccess: "b"}, "a", "m", false},
+		{Config{Access: "a", Model: "m", PeerModel: "n"}, "a", "m", false},
+	} {
+		if access, model, own := tc.cfg.PeerLLM(); access != tc.access || model != tc.model || own != tc.own {
+			t.Errorf("%+v: %q, %q, %v", tc.cfg, access, model, own)
+		}
+	}
+	b, _ := json.Marshal(Config{Model: "m", Name: "n"})
+	if strings.Contains(string(b), "peer") {
+		t.Fatalf("a configuration without a choice for peers says nothing of it: %s", b)
+	}
+}

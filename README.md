@@ -125,7 +125,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/setup` | run the setup; for a node that is set up it starts with its accesses: `enter` uses the one selected, `l` signs in to it again, `r` renames it, `d` removes it, the last row adds another one, see [Providers and accesses](#providers-and-accesses) |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
 | `/settings` | the configuration in one place, by categories: the node, the agents, the plugins, the tools of your agent and of peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
-| `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `esc` back |
+| `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `esc` back |
 | `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
 | `/quit` | quit |
@@ -846,7 +846,13 @@ The names here are examples: which models an access has is what its provider lis
   The last access cannot be removed. Removing the access in use hands over to the first of the others, with
   the model that one offers by default, and says so; if that one does not list its models, nothing is
   removed. A ChatGPT access is signed out at OpenAI before it is removed.
-- **Peers answer with the same access and model as you do.**
+- **Peers answer with the same access and model as you do, until you choose others for them.** `p` on a
+  model in `/model` makes it the one the agent answers peers with, of whatever access it is, and marks it
+  `for peers`: you chat through ChatGPT, say, and peers are answered by a local Ollama. It holds from the
+  next message of a peer on, and what the model before thought is not sent to another access. `p` on that
+  model again takes the choice back, and peers are answered with what you are. The choice is `peer_access`
+  and `peer_model` in the configuration, of every profile its own; no proposal of the agent changes it.
+  Removing the access peers are answered through takes the choice back too.
 
 ```
 ouro start --setup

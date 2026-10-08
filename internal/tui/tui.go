@@ -107,6 +107,10 @@ type Backend interface {
 	// agents do from the next message on. It reports whether they answer
 	// through another access than before.
 	SetModel(access, model string) (switched bool, err error)
+	// SetPeerModel makes model of the access what the node answers peers
+	// with, whatever it answers the owner with; with the access "", what it
+	// answers the owner with again. Status says what it is.
+	SetPeerModel(access, model string) error
 	// SetDebug turns the debug mode of the node on or off: in it, the log
 	// of the node tells much more of every call of the LLM. Status says
 	// whether it is on.

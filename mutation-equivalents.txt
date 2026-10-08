@@ -62,7 +62,7 @@ internal/tui/selection.go:72:49 INVERT_NEGATIVES  # the rows differ only where t
 internal/tui/settings.go:481:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
 internal/tui/settings.go:498:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
 internal/tui/splash.go:284:8 CONDITIONALS_BOUNDARY  # at the bite all sparks lie in the cell of the bite, and the shut jaws are drawn over that cell
-internal/tui/tui.go:726:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/tui/tui.go:730:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
 internal/tui/view.go:213:9 CONDITIONALS_BOUNDARY  # the message of the owner at mine never has a summary
 internal/tui/view.go:231:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✓ " is never at its start
 internal/tui/view.go:234:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✗ " is never at its start

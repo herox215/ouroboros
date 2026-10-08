@@ -112,6 +112,26 @@ func TestStatus(t *testing.T) {
 		t.Fatalf("got %+v, %v, want %+v", s, err, want)
 	}
 
+	// What the owner chose for peers, once it is an access and a model.
+	chosen := func(access, model string) {
+		t.Helper()
+		if err := config.Update(string(dir), func(c *config.Config) error {
+			c.PeerAccess, c.PeerModel = access, model
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chosen("other", "")
+	if s, err := l.Status(); err != nil || s != want {
+		t.Fatalf("half a choice for peers: got %+v, %v", s, err)
+	}
+	chosen("other", "small")
+	want.PeerAccess, want.PeerModel = "other", "small"
+	if s, err := l.Status(); err != nil || s != want {
+		t.Fatalf("a choice for peers: got %+v, %v, want %+v", s, err, want)
+	}
+
 	hold(t, dir, 41337)
 	want.Running, want.Port = true, 41337
 	if s, err := l.Status(); err != nil || s != want {

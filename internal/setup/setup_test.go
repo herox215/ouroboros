@@ -313,6 +313,16 @@ func TestRemoveKeepsTheAccessOfAnotherProfile(t *testing.T) {
 	if _, err := s.Remove(ctx, first.ID); err == nil || err.Error() != "Test one is in use by the profile Luna: give it another access first" {
 		t.Fatalf("Remove = %v", err)
 	}
+	// So does one it answers peers through.
+	other := signedIn(t, s, "one", "good-1", "one-large")
+	theirs, _ := luna.Config()
+	theirs.PeerAccess, theirs.PeerModel = other.ID, "one-small"
+	if err := luna.SaveConfig(theirs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Remove(ctx, other.ID); err == nil || err.Error() != "Test one is in use by the profile Luna: give it another access first" {
+		t.Fatalf("Remove = %v", err)
+	}
 	os.WriteFile(filepath.Join(string(luna), "config.json"), []byte("{"), 0o600)
 	if _, err := s.Remove(ctx, first.ID); err == nil || strings.Contains(err.Error(), "in use") {
 		t.Fatalf("a profile that cannot be read: %v", err)
@@ -668,5 +678,66 @@ func TestHostname(t *testing.T) {
 	osHostname = func() (string, error) { return "box", nil }
 	if got := New("", two, config.Config{}).Name(); got != "box" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The owner picks an access and a model for peers, beside what the node
+// answers the owner with, and takes the choice back.
+func TestPickForPeers(t *testing.T) {
+	s := session(t)
+	one := signedIn(t, s, "one", "good-1", "one-large")
+	two := signedIn(t, s, "two", "good-2", "two-large")
+	if err := s.PickForPeers(one.ID, " one-small "); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := s.home.Config()
+	if cfg.PeerAccess != one.ID || cfg.PeerModel != "one-small" || cfg.Access != two.ID || cfg.Model != "two-large" {
+		t.Fatalf("picked %+v", cfg)
+	}
+	if err := s.PickForPeers(one.ID, " "); !errors.Is(err, ErrNoModel) {
+		t.Fatalf("no model: %v", err)
+	}
+	if err := s.PickForPeers("none", "m"); !errors.Is(err, credentials.ErrGone) {
+		t.Fatalf("no access: %v", err)
+	}
+	if cfg, _ := s.home.Config(); cfg.PeerAccess != one.ID || cfg.PeerModel != "one-small" {
+		t.Fatalf("a choice that failed changed %+v", cfg)
+	}
+	// Taken back, whatever model is named along.
+	if err := s.PickForPeers("", "one-small"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := s.home.Config(); cfg.PeerAccess != "" || cfg.PeerModel != "" || cfg.Access != two.ID || cfg.Model != "two-large" {
+		t.Fatalf("taken back: %+v", cfg)
+	}
+	fresh := session(t)
+	a, _ := fresh.book.Store.Put(credentials.Access{Provider: "one"})
+	if err := fresh.PickForPeers(a.ID, "one-small"); !errors.Is(err, config.ErrIncomplete) {
+		t.Fatalf("not set up: %v", err)
+	}
+}
+
+// Peers that were answered through an access that is removed are answered
+// like the owner again; those of another access stay as they are.
+func TestRemoveTakesBackTheChoiceForPeers(t *testing.T) {
+	ctx := context.Background()
+	s := session(t)
+	one := signedIn(t, s, "one", "good-1", "one-large")
+	two := signedIn(t, s, "two", "good-2", "two-large")
+	three := signedIn(t, s, "one", "good-1", "one-large")
+	if err := s.PickForPeers(two.ID, "two-small"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Remove(ctx, one.ID); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := s.home.Config(); cfg.PeerAccess != two.ID || cfg.PeerModel != "two-small" || cfg.Access != three.ID {
+		t.Fatalf("another access was removed: %+v", cfg)
+	}
+	if note, err := s.Remove(ctx, two.ID); err != nil || note != "" {
+		t.Fatalf("Remove = %q, %v", note, err)
+	}
+	if cfg, _ := s.home.Config(); cfg.PeerAccess != "" || cfg.PeerModel != "" || cfg.Access != three.ID || cfg.Model != "one-large" {
+		t.Fatalf("the access of the peers was removed: %+v", cfg)
 	}
 }

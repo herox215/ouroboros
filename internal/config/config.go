@@ -33,6 +33,11 @@ type Config struct {
 	// model they answer with there.
 	Access string `json:"access,omitempty"`
 	Model  string `json:"model"`
+	// PeerAccess and PeerModel are the access and the model the agent answers
+	// peers with, if the owner chose others for them than for themselves.
+	// Without both, peers are answered with Access and Model: see PeerLLM.
+	PeerAccess string `json:"peer_access,omitempty"`
+	PeerModel  string `json:"peer_model,omitempty"`
 	// BaseURL and APIKey are how a configuration from before there were
 	// accesses names its LLM: an OpenAI-compatible endpoint and the key for
 	// it. Such a configuration is still read. The node makes an access of
@@ -241,6 +246,16 @@ func (c Config) ID() string {
 
 // ErrIncomplete means that the node was not set up yet.
 var ErrIncomplete = errors.New("node is not configured")
+
+// PeerLLM returns the access and the model the agent answers peers with:
+// those the owner chose for them, which own reports, or else those it
+// answers the owner with.
+func (c Config) PeerLLM() (access, model string, own bool) {
+	if c.PeerAccess != "" && c.PeerModel != "" {
+		return c.PeerAccess, c.PeerModel, true
+	}
+	return c.Access, c.Model, false
+}
 
 // Complete reports whether the node can be started with this configuration.
 // The key is not needed for that: a node without one generates it.

@@ -329,6 +329,16 @@ func (u *ui) SetModel(access, model string) (bool, error) {
 	return switched, err
 }
 
+// SetPeerModel saves the model the owner picked for peers in the model
+// screen, like SetModel.
+func (u *ui) SetPeerModel(access, model string) error {
+	err := u.Owner.SetPeerModel(access, model)
+	if errors.Is(err, plugin.ErrNotSetUp) {
+		return fmt.Errorf("%w, type /setup", err)
+	}
+	return err
+}
+
 func (u *ui) Contacts() (tui.Contacts, error) {
 	incoming, outgoing, err := u.Requests()
 	if err != nil {

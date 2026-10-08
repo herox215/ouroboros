@@ -62,6 +62,7 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 		t.Fatalf("got %q, %d agents, log %v", got, built, logged)
 	}
 
+	var last string // what the agent answered after the change before
 	for i, change := range []func(){
 		// Another access: what the LLM thought so far is not sent there.
 		func() {
@@ -82,7 +83,37 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 			}
 			cfg.Model = "gpt-4o-mini"
 		},
-		func() { cfg.Name = "you" },
+		// A model of their own for peers, of another access: the one of
+		// the owner is theirs no more.
+		func() {
+			if !strings.HasPrefix(last, "[gpt-4o-mini] ") {
+				t.Fatalf("peers are answered like the owner until then: %q", last)
+			}
+			peers.memory.Restore("thinking", []openai.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "ho", Reasoning: "hm"}})
+			cfg.PeerAccess, cfg.PeerModel = first, "o3-mini"
+		},
+		func() {
+			if kept := peers.memory.Conversation("thinking"); kept[1].Reasoning != "" {
+				t.Fatalf("the access of the peers was sent the thoughts: %+v", kept)
+			}
+			if !strings.HasPrefix(last, "[o3-mini] ") {
+				t.Fatalf("peers are answered with their model: %q", last)
+			}
+			cfg.PeerModel = "gpt-4o"
+		},
+		func() {
+			if !strings.HasPrefix(last, "[gpt-4o] ") {
+				t.Fatalf("peers are answered with their new model: %q", last)
+			}
+			cfg.PeerAccess, cfg.PeerModel = "", ""
+		},
+		func() {
+			if !strings.HasPrefix(last, "[gpt-4o-mini] ") {
+				t.Fatalf("peers are answered like the owner again: %q", last)
+			}
+			cfg.Description = "of the owner" // nothing the agent is built from
+			cfg.Name = "you"
+		},
 		func() { cfg.PrivateKey = identity.Generate().Private() },
 		func() { cfg.Tools = &config.Tools{A2A: config.Named("list_peers")} },
 		func() { cfg.Tools = &config.Tools{A2A: []config.Entry{{Tool: "list_peers", Settings: []byte(`{}`)}}} },
@@ -92,11 +123,12 @@ func TestPeersFollowTheConfiguration(t *testing.T) {
 		if got, want := ask("hello"), fmt.Sprintf(" turns=%d last=hello", 7+4*i); !strings.HasSuffix(got, want) || built != i+2 {
 			t.Fatalf("change %d: %q, %d agents", i, got, built)
 		}
-		if got, want := ask("hello"), fmt.Sprintf(" turns=%d last=hello", 9+4*i); !strings.HasSuffix(got, want) || built != i+2 {
-			t.Fatalf("change %d, again: %q, %d agents", i, got, built)
+		last = ask("hello")
+		if want := fmt.Sprintf(" turns=%d last=hello", 9+4*i); !strings.HasSuffix(last, want) || built != i+2 {
+			t.Fatalf("change %d, again: %q, %d agents", i, last, built)
 		}
 	}
-	if len(logged) != 7 || logged[0] != "the configuration changed: peers are answered by a new agent" {
+	if len(logged) != 10 || logged[0] != "the configuration changed: peers are answered by a new agent" {
 		t.Fatalf("log: %v", logged)
 	}
 	// The new agent is the one that answers: with the tools of the new list.

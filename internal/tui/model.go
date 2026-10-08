@@ -7,6 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
 )
 
 // The model screen is what the command /model opens: the models of every
@@ -14,6 +16,8 @@ import (
 // The arrow keys select one, enter makes it the model of the node – the
 // agents answer with it from the next message they get, without a restart,
 // also when it is one of another access – and esc goes back to the chat.
+// p makes the one selected the model peers are answered with, whatever the
+// owner is, and p on that one makes it the model of the node for them again.
 
 // modelsMsg is what the accesses of the node answered with, on the way to
 // the model screen.
@@ -80,12 +84,15 @@ func (m *Model) handleModelKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.modelSel = max(0, m.modelSel-1)
 	case "down", "j":
 		m.modelSel = min(max(len(m.choices)-1, 0), m.modelSel+1)
-	case "enter":
+	case "enter", "p":
 		if m.modelBusy != "" || m.modelErr != nil || m.modelSel >= len(m.choices) {
 			return nil
 		}
 		picked := m.choices[m.modelSel]
 		access := m.models[picked.access].Access
+		if msg.String() == "p" {
+			return m.pickForPeers(access, picked.model)
+		}
 		return func() tea.Msg {
 			switched, err := m.backend.SetModel(access.ID, picked.model)
 			done := "model changed to " + picked.model
@@ -96,6 +103,26 @@ func (m *Model) handleModelKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// pickForPeers makes model of access what peers are answered with, or, if
+// it is that already, lets them be answered with the model of the node
+// again.
+func (m *Model) pickForPeers(access plugin.SetupAccess, model string) tea.Cmd {
+	if m.forPeers(access, model) {
+		return func() tea.Msg {
+			return actionMsg{"peers are answered with the model of the node again", m.backend.SetPeerModel("", "")}
+		}
+	}
+	return func() tea.Msg {
+		return actionMsg{"peers are answered with " + model + " of " + access.Label, m.backend.SetPeerModel(access.ID, model)}
+	}
+}
+
+// forPeers reports whether model of access is what the owner chose to
+// answer peers with.
+func (m *Model) forPeers(access plugin.SetupAccess, model string) bool {
+	return access.ID == m.status.PeerAccess && model == m.status.PeerModel
 }
 
 // modelView shows the models of the accesses, the one in use marked and the
@@ -145,6 +172,9 @@ func (m *Model) modelList(width, height int) []string {
 			name := ansi.Truncate(model, max(0, width-14), "…")
 			if l.Access.Active && model == m.status.Model {
 				name += mutedStyle.Render("  in use")
+			}
+			if m.forPeers(l.Access, model) {
+				name += mutedStyle.Render("  for peers")
 			}
 			if n == m.modelSel {
 				at = len(all)

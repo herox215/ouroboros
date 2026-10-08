@@ -317,6 +317,9 @@ func TestTUIBackendModels(t *testing.T) {
 	if _, err := u.SetModel(stray.ID, "gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("a node that is not set up: %v", err)
 	}
+	if err := u.SetPeerModel(stray.ID, "gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
 	home.Dir(s.Home).Credentials().Remove(stray.ID)
 	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
 		t.Fatal(err)
@@ -330,6 +333,12 @@ func TestTUIBackendModels(t *testing.T) {
 	}
 	if endpoint, _ := clitest.Reached(t, s); clitest.MustLoad(t, s).Model != "gpt-4o-mini" || endpoint != s.BaseURL {
 		t.Fatalf("the configuration after saving: %+v", clitest.MustLoad(t, s))
+	}
+	if err := u.SetPeerModel(models[0].Access.ID, "gpt-4o"); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := u.Status(); status.PeerAccess != models[0].Access.ID || status.PeerModel != "gpt-4o" || status.Model != "gpt-4o-mini" {
+		t.Fatalf("the status after choosing for peers: %+v", status)
 	}
 }
 

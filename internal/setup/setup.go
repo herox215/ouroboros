@@ -182,7 +182,8 @@ var ErrLastAccess = errors.New("the last access cannot be removed: add another o
 // the access, they answer through the first of the others from then on, with
 // the model that one offers by default: an access that does not list its
 // models cannot take over, and nothing is removed then. Nor is an access
-// another profile of the node answers through. It returns what the owner
+// another profile of the node answers through. Peers that were answered
+// through the access are answered like the owner again. It returns what the owner
 // should know of how it went, "" if nothing.
 func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 	saved, err := s.book.Store.List()
@@ -211,7 +212,7 @@ func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if p != s.home && c.Access == id {
+		if p != s.home && (c.Access == id || c.PeerAccess == id) {
 			return "", fmt.Errorf("%s is in use by the profile %s: give it another access first", saved[at].Label(), c.Name)
 		}
 	}
@@ -237,6 +238,9 @@ func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 				return errors.New("the access was put in use just now: try again")
 			}
 			c.Access, c.Model = next.ID, model
+		}
+		if c.PeerAccess == id { // peers are answered like the owner again
+			c.PeerAccess, c.PeerModel = "", ""
 		}
 		return s.book.Store.Remove(id)
 	})
@@ -427,6 +431,27 @@ func (s *Session) Pick(id, model string) (switched bool, err error) {
 		return nil
 	})
 	return switched && err == nil, err
+}
+
+// PickForPeers makes model of the access id what the agent answers peers
+// with, whatever it answers the owner with, from the next message of a peer
+// on. With the id "" peers are answered with what the owner is again.
+func (s *Session) PickForPeers(id, model string) error {
+	model = strings.TrimSpace(model)
+	if id == "" {
+		model = ""
+	} else if model == "" {
+		return ErrNoModel
+	} else if _, err := s.book.Store.Get(id); err != nil {
+		return err
+	}
+	return config.Update(string(s.home), func(c *config.Config) error {
+		if !c.Complete() {
+			return config.ErrIncomplete
+		}
+		c.PeerAccess, c.PeerModel = id, model
+		return nil
+	})
 }
 
 // osHostname names this host; tests replace it to get in the way.

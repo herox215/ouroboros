@@ -108,6 +108,7 @@ func (p *Peers) build() (*agent.Agent, string, string, error) {
 	if !cfg.Complete() {
 		return nil, "", "", config.ErrIncomplete
 	}
+	cfg.Access, cfg.Model, _ = cfg.PeerLLM()
 	tools, _ := json.Marshal(cfg.PeerTools()) // an entry that cannot be written is reported by ForPeers
 	want, _ := json.Marshal([]string{cfg.Access, p.builder.revision(cfg.Access), cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider})
 	if p.agent != nil && p.built == string(want) {

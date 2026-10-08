@@ -279,6 +279,13 @@ func (f *fakeBackend) RefuseProposal(id string) error {
 	return f.rejectErr
 }
 func (f *fakeBackend) Models(ctx context.Context) ([]Models, error) { return f.offers, f.modelsErr }
+func (f *fakeBackend) SetPeerModel(access, model string) error {
+	if err := f.fail["setpeermodel"]; err != nil {
+		return err
+	}
+	f.status.PeerAccess, f.status.PeerModel = access, model
+	return nil
+}
 func (f *fakeBackend) SetModel(access, model string) (bool, error) {
 	f.set = append(f.set, access+" "+model)
 	return f.switched, f.fail["setmodel"]
