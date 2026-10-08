@@ -27,7 +27,7 @@ type profile struct {
 }
 
 // newProfiles returns the app of the node of s, with the app of every
-// profile of it. While there are several, each has its workspace.
+// profile of it. Each has its workspace, once it has the key that names it.
 func newProfiles(s Settings, t Terminal) (*App, error) {
 	dirs, err := home.Dir(s.Home).Profiles()
 	if err != nil {
@@ -37,7 +37,7 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 	nodes := make([]*nodeplugin.Profile, len(dirs))
 	uis := make([]*tuiplugin.Profile, len(dirs))
 	for i, dir := range dirs {
-		if len(dirs) > 1 {
+		if cfg, err := dir.Config(); err == nil && cfg.PrivateKey != "" {
 			workspace, err := dir.Workspace()
 			if err != nil {
 				return nil, fmt.Errorf("the profile in %s: %w", dir, err)

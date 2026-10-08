@@ -224,10 +224,11 @@ and a model of its own.
   that names none, as an ouro from before there were profiles does, reaches the first profile; such an ouro
   cannot write to the others. A profile trusts another of its node no more than any peer: they find each
   other, and talk once both of you agreed, as two nodes do. Whom one trusts, another does not.
-- **Each works in its own place.** While there are several profiles, a command of `bash` that names no
-  directory starts in the workspace of its profile, `<directory of the node>-workspaces/<ID>/`, next to the
-  directory of the node, and the agent is told so. The tools of one profile neither read nor change what
-  another keeps: its directory, or the files of the first one, and its workspace.
+- **Each works in its own place.** A command of `bash` that names no directory starts in the workspace of
+  its profile, `<directory of the node>-workspaces/<ID>/`, next to the directory of the node, whether the
+  node has one profile or several. The agent is told so, and that what you work on is elsewhere: speak of
+  a project without its path and it looks for it or asks. The tools of one profile neither read nor change
+  what another keeps: its directory, or the files of the first one, and its workspace.
 
 ## Updates
 
@@ -442,8 +443,8 @@ build works, not that it is harmless.
 
 ### Commands
 
-`bash(command, dir?, timeout?)` runs `command` with `/bin/bash -c` in `dir` (absolute or below `~`, the home
-directory without it, or the workspace of the [profile](#profiles) while the node has several), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
+`bash(command, dir?, timeout?)` runs `command` with `/bin/bash -c` in `dir` (absolute or below `~`, the
+workspace of the [profile](#profiles) without it), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
 an error. It returns `exit N` and below it what the command printed, its output and its errors as they came;
 of more than 64 KiB the first and the last 32 KiB, with how much was left out between them. A status other
 than 0 is a result, not an error. Every call starts anew: `cd` and variables do not carry over.

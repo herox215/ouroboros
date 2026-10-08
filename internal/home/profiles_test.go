@@ -103,9 +103,6 @@ func TestProfiles(t *testing.T) {
 	if _, err := other.Profiles(); err == nil {
 		t.Fatal("a file should fail")
 	}
-	if other.WorkingDir() != "" {
-		t.Fatal("a node whose profiles cannot be read works where it did")
-	}
 	// A directory that is named like a profile, outside a node, is no
 	// profile.
 	if d := Dir(filepath.Join(t.TempDir(), "elsewhere", "0123456789ab")); d.Root() != d {
@@ -263,21 +260,24 @@ func TestSelectProfile(t *testing.T) {
 	}
 }
 
-// Each profile works in a workspace of its own next to the node, while
-// there are several; the agent of one does not see what the others keep.
+// Each profile works in a workspace of its own next to the node, however
+// many there are; the agent of one does not see what the others keep.
 func TestWorkspacesAndSecrets(t *testing.T) {
 	root := node(t)
 	if root.WorkingDir() != "" {
-		t.Fatal("a node with one profile has no workspace")
+		t.Fatal("a node without a key has a workspace")
+	}
+	terraID, _ := root.Identity()
+	workspaces := string(root) + "-workspaces"
+	if w := root.WorkingDir(); w != filepath.Join(workspaces, terraID.ID()) {
+		t.Fatalf("workspace of the only profile %s", w)
 	}
 	shared := append(config.Files(string(root)), credentials.Files(string(root))...)
 	if got := root.Secrets(); !slices.Equal(got, shared) {
 		t.Fatalf("secrets of one profile %v", got)
 	}
 	luna, _ := root.AddProfile("Luna")
-	terraID, _ := root.Identity()
 	lunaID, _ := luna.Identity()
-	workspaces := string(root) + "-workspaces"
 	if w := root.WorkingDir(); w != filepath.Join(workspaces, terraID.ID()) {
 		t.Fatalf("workspace %s", w)
 	}
@@ -301,5 +301,9 @@ func TestWorkspacesAndSecrets(t *testing.T) {
 	}
 	if luna.WorkingDir() != "" {
 		t.Fatal("a profile without an identity has a workspace")
+	}
+	os.WriteFile(filepath.Join(string(luna), "config.json"), []byte(`{`), 0o600)
+	if luna.WorkingDir() != "" {
+		t.Fatal("a profile whose configuration cannot be read has a workspace")
 	}
 }

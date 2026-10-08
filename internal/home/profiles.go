@@ -190,10 +190,10 @@ func (d Dir) SelectProfile(target string) (Dir, error) {
 	return "", fmt.Errorf("%q starts the ID of several profiles: name one of them by more of it", target)
 }
 
-// Workspace is the directory the agent of the profile works in while the
-// node has several profiles: its commands start there. It is outside the
-// directory of the node, which no tool for files changes, next to it: one
-// for every profile, named after its ID.
+// Workspace is the directory the agent of the profile works in: its
+// commands start there. It is outside the directory of the node, which no
+// tool for files changes, next to it: one for every profile, named after
+// its ID, however many the node has.
 func (d Dir) Workspace() (string, error) {
 	id, err := d.Identity()
 	if err != nil {
@@ -202,12 +202,11 @@ func (d Dir) Workspace() (string, error) {
 	return filepath.Join(string(d.Root())+"-workspaces", id.ID()), nil
 }
 
-// WorkingDir is the Workspace of d while the node has several profiles, ""
-// while it has one, or while neither can be read: then the agent works where
-// it always did.
+// WorkingDir is the Workspace of d, or "" while d has no key to name it
+// after: a node that is not set up yet gets none here, and its agent works
+// from the home directory of the user.
 func (d Dir) WorkingDir() string {
-	profiles, err := d.Profiles()
-	if err != nil || len(profiles) < 2 {
+	if cfg, err := d.Config(); err != nil || cfg.PrivateKey == "" {
 		return ""
 	}
 	workspace, _ := d.Workspace()

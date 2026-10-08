@@ -214,8 +214,19 @@ func TestOneProfile(t *testing.T) {
 			t.Fatalf("%v: %v", args, err)
 		}
 	}
+	// It has its workspace as soon as it has the key that names it.
 	if _, err := os.Stat(s.Home + "-workspaces"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a node of one profile has a workspace: %v", err)
+		t.Fatalf("a node without a key has a workspace: %v", err)
+	}
+	dir := home.Dir(s.Home)
+	if _, err := dir.Identity(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.New(s, cli.Terminal{In: strings.NewReader(""), Out: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(dir.WorkingDir()); err != nil || !info.IsDir() {
+		t.Fatalf("the workspace of the only profile: %v", err)
 	}
 	plain, _ := clitest.NewApp(t, s, "")
 	if err := plain.Run(context.Background(), []string{"--profile", "alpha", "status"}); err == nil || err.Error() != "this ouro runs no profiles" {
