@@ -91,6 +91,9 @@ type Call struct {
 	Sent      int
 	Tokens    int
 	Cached    int
+	Output    int
+	CostUSD   *float64
+	InPlan    bool
 	Thought   int
 	Done      bool
 	Took      time.Duration
@@ -308,7 +311,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
 		if observe.Call != nil {
-			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Thought: len(msg.Reasoning), Done: true, Took: time.Since(start),
+			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Done: true, Took: time.Since(start),
 				ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
 		if err != nil {

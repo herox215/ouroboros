@@ -338,12 +338,13 @@ func readStream(body io.Reader, alive func(), t func(string, ...any)) (openai.Me
 			msg.Content = content.String()
 			var used struct {
 				InputTokens        int `json:"input_tokens"`
+				OutputTokens       int `json:"output_tokens"`
 				InputTokensDetails struct {
 					CachedTokens int `json:"cached_tokens"`
 				} `json:"input_tokens_details"`
 			}
 			json.Unmarshal(e.Response.Usage, &used) // a usage that cannot be read is none
-			msg.Usage = openai.Usage{Prompt: used.InputTokens, Cached: used.InputTokensDetails.CachedTokens}
+			msg.Usage = openai.Usage{Prompt: used.InputTokens, Cached: used.InputTokensDetails.CachedTokens, Output: used.OutputTokens, InPlan: true}
 			if t != nil {
 				t("llm answered: id %q, model %q, events %d, usage %s", e.Response.ID, e.Response.Model, events, orDefault(string(e.Response.Usage), "none"))
 			}

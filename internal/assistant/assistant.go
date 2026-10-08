@@ -331,8 +331,8 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			a.sizing.Lock()
 			if !c.Done {
 				a.sizes[contextID] = c.Sent
-			} else if c.Tokens > 0 {
-				a.caches[contextID] = a.caches[contextID].add(c.Tokens, c.Cached)
+			} else {
+				a.caches[contextID] = a.caches[contextID].withCall(c)
 			}
 			a.sizing.Unlock()
 			if say != nil && c.Done && c.Err == nil && c.ToolCalls > 0 {
@@ -364,15 +364,19 @@ func (a *Assistant) Context(contextID string) int {
 // call, and of all calls in it since the node started. A call the API told
 // nothing of does not count.
 type Cache struct {
-	Tokens    int `json:"tokens,omitempty"`     // sent with the last call
-	Cached    int `json:"cached,omitempty"`     // of those, cached
-	AllTokens int `json:"all_tokens,omitempty"` // sent with all calls
-	AllCached int `json:"all_cached,omitempty"` // of those, cached
+	Tokens    int         `json:"tokens,omitempty"`     // sent with the last call
+	Cached    int         `json:"cached,omitempty"`     // of those, cached
+	AllTokens int         `json:"all_tokens,omitempty"` // sent with all calls
+	AllCached int         `json:"all_cached,omitempty"` // of those, cached
+	Metrics   CallMetrics `json:"metrics,omitempty"`
 }
 
 // add is c with a call that sent tokens, of which cached were cached.
 func (c Cache) add(tokens, cached int) Cache {
-	return Cache{tokens, cached, c.AllTokens + tokens, c.AllCached + cached}
+	c.Tokens, c.Cached = tokens, cached
+	c.AllTokens += tokens
+	c.AllCached += cached
+	return c
 }
 
 // Cache returns how much the provider had cached of the calls of the LLM in

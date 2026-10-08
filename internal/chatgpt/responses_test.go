@@ -37,7 +37,7 @@ func TestComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Role != "assistant" || got.Content != "[gpt-6.1-sol] items=1 last=hi" || got.ToolCalls != nil || got.Reasoning != "" || got.Usage != (openai.Usage{Prompt: 100, Cached: 80}) {
+	if got.Role != "assistant" || got.Content != "[gpt-6.1-sol] items=1 last=hi" || got.ToolCalls != nil || got.Reasoning != "" || got.Usage != (openai.Usage{Prompt: 100, Cached: 80, InPlan: true}) {
 		t.Fatalf("got %+v", got)
 	}
 	seen := srv.Seen()
@@ -348,7 +348,7 @@ func TestCompleteIsTraced(t *testing.T) {
 	srv.Set(func(s *chatgpttest.State) {
 		s.Responses = []chatgpttest.Response{{Events: []string{`{"type":"response.completed","response":{"id":"resp_1","model":"m-1"}}`}}}
 	})
-	if msg, err := m.Complete(ctx, "m", msgs, nil); err != nil || msg.Usage != (openai.Usage{}) {
+	if msg, err := m.Complete(ctx, "m", msgs, nil); err != nil || msg.Usage != (openai.Usage{InPlan: true}) {
 		t.Fatalf("without a usage: %+v, %v", msg, err)
 	}
 	if got := take(); !strings.Contains(got, `llm answered: id "resp_1", model "m-1", events 1, usage none`) {

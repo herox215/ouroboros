@@ -530,7 +530,7 @@ func TestCache(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got, want := a.Cache("c1"), (Cache{Tokens: 2000, Cached: 1500, AllTokens: 3000, AllCached: 1500}); got != want || a.Cache("c2") != (Cache{}) {
+	if got, want := a.Cache("c1"), (Cache{Tokens: 2000, Cached: 1500, AllTokens: 3000, AllCached: 1500, Metrics: CallMetrics{Calls: 3, UnknownCalls: 3}}); got != want || a.Cache("c2") != (Cache{}) {
 		t.Fatalf("%+v, want %+v; c2 %+v", got, want, a.Cache("c2"))
 	}
 }

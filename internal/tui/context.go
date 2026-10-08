@@ -127,6 +127,9 @@ func (m *Model) contextView() string {
 	if m.chat.cache.Tokens > 0 {
 		title += mutedStyle.Render(", cached " + cacheRate(m.chat.cache))
 	}
+	if metrics := callMetrics(m.chat.cache); metrics != "" {
+		title += mutedStyle.Render("  · " + metrics)
+	}
 	title += mutedStyle.Render(fmt.Sprintf("  · %.0f%%  · ↑↓ pgup pgdn scroll · esc back", m.contents.ScrollPercent()*100))
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(title + "\n\n" + m.contents.View())
 }

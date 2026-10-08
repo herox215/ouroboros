@@ -464,12 +464,12 @@ func TestCompleteTellsTheUsage(t *testing.T) {
 		want Usage
 	}{
 		"stream": {sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`,
-			`{"choices":[],"usage":{"prompt_tokens":1200,"prompt_tokens_details":{"cached_tokens":1024}}}`, "[DONE]"), Usage{1200, 1024}},
-		"in the last event": {sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":900,"prompt_cache_hit_tokens":640}}`), Usage{900, 640}},
+			`{"choices":[],"usage":{"prompt_tokens":1200,"prompt_tokens_details":{"cached_tokens":1024}}}`, "[DONE]"), Usage{Prompt: 1200, Cached: 1024}},
+		"in the last event": {sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":900,"prompt_cache_hit_tokens":640}}`), Usage{Prompt: 900, Cached: 640}},
 		"none":              {sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]"), Usage{}},
 		"in one piece": {func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":50}}`))
-		}, Usage{50, 0}},
+		}, Usage{Prompt: 50}},
 	} {
 		got, err := newServer(t, tc.h).Complete(context.Background(), "gpt", nil, nil)
 		if err != nil || got.Content != "ok" || got.Usage != tc.want {

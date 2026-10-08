@@ -444,6 +444,9 @@ func (m *Model) chatView() string {
 		if c.peer != "" {
 			title = boldStyle.Foreground(accent).Render(c.peer) + mutedStyle.Render(" with ") + title + mutedStyle.Render("  · only to read")
 		}
+		if metrics := callMetrics(c.cache); metrics != "" {
+			title += mutedStyle.Render("  · " + metrics)
+		}
 		if c.context > 0 {
 			title += mutedStyle.Render("  · context " + contextSize(c.context))
 		}

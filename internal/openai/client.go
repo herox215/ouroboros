@@ -148,12 +148,18 @@ const ReasoningItems = "reasoning_items"
 // earlier call. Both are 0 when the API did not say.
 type Usage struct {
 	Prompt, Cached int
+	Output         int
+	// CostUSD is the charge reported by the API; nil means unknown.
+	CostUSD *float64
+	InPlan  bool
 }
 
 // usage is how APIs tell what a call cost: OpenAI and most others the cached
 // tokens in prompt_tokens_details, DeepSeek in prompt_cache_hit_tokens.
 type usage struct {
-	PromptTokens        int `json:"prompt_tokens"`
+	PromptTokens        int      `json:"prompt_tokens"`
+	CompletionTokens    int      `json:"completion_tokens"`
+	CostUSD             *float64 `json:"cost"`
 	PromptTokensDetails struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
@@ -164,7 +170,7 @@ func (u *usage) read() Usage {
 	if u == nil {
 		return Usage{}
 	}
-	return Usage{u.PromptTokens, max(u.PromptTokensDetails.CachedTokens, u.PromptCacheHitTokens)}
+	return Usage{Prompt: u.PromptTokens, Cached: max(u.PromptTokensDetails.CachedTokens, u.PromptCacheHitTokens), Output: u.CompletionTokens, CostUSD: u.CostUSD}
 }
 
 // reasoning is what a model thought, in the fields APIs send it in: vLLM and
