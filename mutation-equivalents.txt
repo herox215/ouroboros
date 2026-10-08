@@ -34,12 +34,12 @@ internal/openai/client.go:407:4 INVERT_LOOPCTRL  # nothing changes between the r
 internal/tui/wait.go:41:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
 internal/discovery/discovery.go:245:11 INVERT_LOGICAL  # the system gives every address of an interface as an *net.IPNet, so ok is always true and the mask decides alone
 internal/discovery/discovery.go:245:36 INVERT_LOGICAL  # the system gives an IPv4 address a mask of 4 bytes and an IPv6 address one of 16: both tests always agree
-internal/history/history.go:418:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
+internal/history/history.go:423:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
 internal/openai/trace.go:145:10 CONDITIONALS_BOUNDARY  # two different messages as JSON objects differ before the end of the shorter: neither is the start of the other
 internal/plugins/files/files.go:547:83 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:547:83 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:612:4 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
-internal/session/archive.go:97:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:105:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
 internal/tui/commands.go:138:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
 internal/tui/logo.go:141:19 CONDITIONALS_BOUNDARY  # a pixel exactly reach from the ring line is outside the body (at most 4) and the head (at most 7.4) either way
 internal/tui/logo.go:144:14 CONDITIONALS_BOUNDARY  # with nothing grown, the pixels at u == 0 get a thickness of NaN and stay not solid, as they were
@@ -60,11 +60,13 @@ internal/tui/selection.go:152:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1
 internal/tui/selection.go:40:67 CONDITIONALS_BOUNDARY  # two spots of the same line and column are the same, swapped or not
 internal/tui/selection.go:72:49 ARITHMETIC_BASE  # the rows differ only where the suggestions hide all of the history, and then no row is on it either way
 internal/tui/selection.go:72:49 INVERT_NEGATIVES  # the rows differ only where the suggestions hide all of the history, and then no row is on it either way
-internal/tui/settings.go:461:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
-internal/tui/settings.go:478:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
+internal/tui/settings.go:481:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
+internal/tui/settings.go:498:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
 internal/tui/splash.go:284:8 CONDITIONALS_BOUNDARY  # at the bite all sparks lie in the cell of the bite, and the shut jaws are drawn over that cell
 internal/tui/tui.go:680:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
 internal/tui/view.go:204:9 CONDITIONALS_BOUNDARY  # the message of the owner at mine never has a summary
 internal/tui/view.go:222:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✓ " is never at its start
 internal/tui/view.go:225:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✗ " is never at its start
 internal/tui/view.go:443:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
+internal/session/session.go:399:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
+internal/history/history.go:717:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
