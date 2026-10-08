@@ -203,6 +203,16 @@ func (r *record) call(c agent.Call) {
 	r.line("llm call %d took %s: %s", r.calls, took(c.Took), outcome)
 }
 
+// steered writes a message of the owner that the answer takes on its way.
+func (r *record) steered(text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped() {
+		return
+	}
+	r.line("message from the owner on the way: %s", r.text(text))
+}
+
 // trace writes a line of what a call of the LLM sent and got, for the debug
 // mode: without secrets, but not shortened. Nothing is written once the last
 // line is.

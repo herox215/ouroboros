@@ -330,6 +330,7 @@ func TestNothingAfterTheEnd(t *testing.T) {
 	r.call(agent.Call{Done: true})
 	r.end("late", nil)
 	r.cancel()
+	r.steered("late")
 	r.trace("llm request: %s", "late")
 	for i, line := range lines {
 		lines[i] = sent.ReplaceAllString(duration.ReplaceAllString(line, "${1}D"), "sent N")
@@ -596,4 +597,28 @@ func TestDebugIsLogged(t *testing.T) {
 	if lines := strings.Join(log.take(), "\n"); strings.Contains(lines, "debug") {
 		t.Errorf("debug off:\n%s", lines)
 	}
+}
+
+// What the owner says while the answer is on its way is logged when the
+// answer takes it, and the agent goes on with it.
+func TestSteeringIsLogged(t *testing.T) {
+	a, log := recorded(t, ownerConfig(), &scriptLLM{})
+	queue := []string{"and this"}
+	ctx := agent.WithSteering(context.Background(), func() []string {
+		said := queue
+		queue = nil
+		return said
+	})
+	if got, err := a.Ask(ctx, "c1", `!echo {"text":"hi"}`, nil); err != nil || got != "said: and this" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	equal(t, "steered", log.take(), []string{
+		`chat c1: message from the owner: "!echo {\"text\":\"hi\"}"`,
+		`chat c1: llm call 1 took D: tool calls: 1`,
+		`chat c1: tool echo {"text":"hi"} took D: ok (2 bytes)`,
+		`chat c1: tool run ` + scriptOf("echo", `{"text":"hi"}`) + ` took D: ok (2 bytes)`,
+		`chat c1: message from the owner on the way: "and this"`,
+		`chat c1: llm call 2 took D: text`,
+		`chat c1: answered after D (llm calls: 2, tool calls: 2, sent N): "said: and this"`,
+	})
 }

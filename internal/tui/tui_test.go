@@ -111,6 +111,8 @@ type fakeBackend struct {
 
 	mu   sync.Mutex
 	sent []sent // the messages asked for
+	// unsteers is how often a message that waits was asked back.
+	unsteers int
 
 	peers []plugin.SessionInfo // the conversations of peers
 	read  map[string][]Event   // what happened in them
@@ -191,6 +193,21 @@ func shownEvent(e plugin.SessionEvent) Event {
 	return Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
 }
 
+func (f *fakeBackend) Steer(ctx context.Context, id, text string) error {
+	if err := f.fail["steer"]; err != nil {
+		return err
+	}
+	return f.sessions.Steer(ctx, id, text)
+}
+func (f *fakeBackend) Unsteer(ctx context.Context, id string) (string, error) {
+	f.mu.Lock()
+	f.unsteers++
+	f.mu.Unlock()
+	if err := f.fail["unsteer"]; err != nil {
+		return "", err
+	}
+	return f.sessions.Unsteer(ctx, id)
+}
 func (f *fakeBackend) Cancel(ctx context.Context, id string) error {
 	if err := f.fail["cancel"]; err != nil {
 		return err
@@ -570,11 +587,6 @@ func TestChat(t *testing.T) {
 	if !strings.Contains(m.View().Content, "alpha is thinking") {
 		t.Fatal("a pending answer should be announced")
 	}
-	m.input.SetValue("again")
-	if press(m, "enter") != nil || m.notice != "wait for the reply first" {
-		t.Fatal("a second message must wait for the reply")
-	}
-
 	answered(t, m, cmd)
 	c := m.chat
 	if got := b.messages(); len(got) != 1 || got[0] != (sent{c.contextID, "ping"}) {

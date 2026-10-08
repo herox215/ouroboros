@@ -114,7 +114,28 @@ type (
 	contextKey  struct{}
 	observerKey struct{}
 	spentKey    struct{}
+	steeringKey struct{}
 )
+
+// WithSteering returns a context under which an answer takes what its user
+// says while it is on its way: Run calls steer once the tools of a round of
+// its loop ran, and what steer returns follows their results as messages of
+// the user, before the next call of the LLM. They go at the end of the
+// conversation and are remembered there, so what the provider cached of it
+// stays as it is.
+func WithSteering(ctx context.Context, steer func() []string) context.Context {
+	return context.WithValue(ctx, steeringKey{}, steer)
+}
+
+// Steered returns what the user of the answer that ctx belongs to said since
+// it was asked the last time: see WithSteering. Who is told does not hear it
+// again.
+func Steered(ctx context.Context) []string {
+	if steer, ok := ctx.Value(steeringKey{}).(func() []string); ok {
+		return steer()
+	}
+	return nil
+}
 
 // Spent returns how many bytes the results of tools of the answer that ctx
 // belongs to have so far. A tool that gives back much, like a script, gives
@@ -338,6 +359,14 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			result.Content = unrepeated(result.Content, history[asked:])
 			spent.Add(int64(len(result.Content)))
 			history = append(history, result)
+		}
+		// What the user said meanwhile follows the results.
+		for _, text := range Steered(ctx) {
+			said := openai.Message{Role: "user", Content: text}
+			if err := emit(said); err != nil {
+				return abandon(err)
+			}
+			history = append(history, said)
 		}
 	}
 	return abandon(ErrTooManyToolCalls)

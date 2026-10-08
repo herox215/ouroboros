@@ -320,6 +320,14 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			}
 		})
 	}
+	asked := ctx
+	ctx = agent.WithSteering(ctx, func() []string {
+		texts := agent.Steered(asked)
+		for _, text := range texts {
+			r.steered(text)
+		}
+		return texts
+	})
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {
 			if a.log != nil {

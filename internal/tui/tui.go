@@ -55,6 +55,13 @@ type Backend interface {
 	// from Watch. It fails with plugin.ErrBusy while an answer is on its way
 	// in the session.
 	Ask(ctx context.Context, id, text string) error
+	// Steer gives text to the answer on its way in the session id: it is
+	// queued until the answer takes it, after the tools it waits for or as
+	// the next message. Without an answer on its way it is Ask.
+	Steer(ctx context.Context, id, text string) error
+	// Unsteer takes back the last message that is queued in the session id
+	// and returns it, "" if none is.
+	Unsteer(ctx context.Context, id string) (string, error)
 	// Watch returns what happened in the session id so far, and what
 	// happens from now on, until ctx ends or the node stops: the whole loop
 	// of every answer, not only its end.
@@ -165,7 +172,8 @@ type call struct {
 type conversation struct {
 	contextID string
 	entries   []entry
-	pending   bool                // request submitted or answer on its way: one message at a time
+	pending   bool                // request submitted or answer on its way: what is sent meanwhile is queued
+	queued    []string            // the messages that wait for the answer on its way to take them
 	running   bool                // the node has said an answer is on its way
 	doing     string              // what the agent is waiting for, like "asking beta"
 	since     time.Time           // when it began to wait for that
@@ -469,6 +477,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.watch(m.chats[msg.id])
 	case askedMsg:
 		m.asked(msg)
+	case unsteeredMsg:
+		m.unsteered(msg)
 	case sessionsMsg:
 		return m, m.sessionsLoaded(msg)
 	case deletedMsg:
@@ -577,6 +587,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "enter":
 		return m.send()
+	case "up":
+		if m.input.Value() == "" && len(m.chat.queued) > 0 {
+			return m.unsteer()
+		}
 	}
 	var cmd tea.Cmd
 	typed := m.input.Value()
@@ -732,9 +746,12 @@ func (m *Model) send() tea.Cmd {
 		m.setNotice("this is how "+c.peer+" and "+m.agentName()+" talked: it is only to read · /new", true)
 		return nil
 	}
+	id := c.contextID
 	if c.pending {
-		m.setNotice("wait for the reply first", true)
-		return nil
+		// The answer on its way takes it as soon as it can: until then it is
+		// queued, as the node says.
+		m.input.Reset()
+		return func() tea.Msg { return askedMsg{id, text, m.backend.Steer(m.ctx, id, text)} }
 	}
 	// The message shows once the node says it is on its way; the agent is
 	// thinking from now on.
@@ -742,7 +759,6 @@ func (m *Model) send() tea.Cmd {
 	c.art++
 	m.input.Reset()
 	m.renderHistory(true)
-	id := c.contextID
 	ask := func() tea.Msg { return askedMsg{id, text, m.backend.Ask(m.ctx, id, text)} }
 	return tea.Batch(ask, m.watch(c))
 }
@@ -771,6 +787,39 @@ func (m *Model) asked(msg askedMsg) {
 		c.draft = msg.text
 	}
 	m.setNotice(msg.err.Error(), true)
+}
+
+// unsteeredMsg is the last message that was queued in a session, taken back:
+// "" if none was.
+type unsteeredMsg struct {
+	id, text string
+	err      error
+}
+
+// unsteer takes back the last message that is queued in the session shown.
+func (m *Model) unsteer() tea.Cmd {
+	id := m.chat.contextID
+	return func() tea.Msg {
+		text, err := m.backend.Unsteer(m.ctx, id)
+		return unsteeredMsg{id, text, err}
+	}
+}
+
+// unsteered puts a message that was taken back into the input, before what
+// was typed meanwhile: it is the owner's again, to change or to drop.
+func (m *Model) unsteered(msg unsteeredMsg) {
+	if msg.err != nil {
+		m.setNotice(msg.err.Error(), true)
+		return
+	}
+	if msg.text == "" {
+		return // the answer took it meanwhile
+	}
+	if c := m.chats[msg.id]; c != m.chat {
+		c.draft = strings.TrimSuffix(msg.text+"\n"+c.draft, "\n")
+		return
+	}
+	m.input.SetValue(strings.TrimSuffix(msg.text+"\n"+m.input.Value(), "\n"))
 }
 
 // started returns the call of e that the call ended, which done tells of,

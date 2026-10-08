@@ -165,6 +165,14 @@ func TestTUIBackendAsk(t *testing.T) {
 	if err := u.Cancel(context.Background(), "ctx"); err != nil {
 		t.Fatal(err)
 	}
+	// So is what the owner says while an answer is on its way: nothing
+	// waits here, and nothing is said.
+	if text, err := u.Unsteer(context.Background(), "ctx"); text != "" || err != nil {
+		t.Fatalf("unsteer %q, %v", text, err)
+	}
+	if err := u.Steer(context.Background(), "ctx", " "); !errors.Is(err, session.ErrEmpty) {
+		t.Fatalf("steer: %v", err)
+	}
 	// Looking up the peers is not worth a line in the chat: no plugin says
 	// what to show of it.
 	for _, e := range answer(t, u, "ctx", "@") {

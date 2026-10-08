@@ -71,6 +71,13 @@ shows something new. A new conversation (`/new`) has none until its first call, 
 goes on after a restart. Once the API tells how many of the tokens it was sent it had cached, the chat shows
 that too: `· cached 92%, session 84%`, of the last call and of all calls in the session since the node started.
 A call that goes on from the one before should find most of its tokens cached; a low rate costs time and money.
+The chat and `/context` also show TPS for the last model call: API-reported output tokens divided by
+the full request duration, including request latency but excluding tool execution. Missing output usage
+is shown as `TPS unknown`. Costs use the API-reported USD `usage.cost`, when available; ChatGPT access
+shows `cost included in plan`. Missing costs are unknown, never assumed to be zero. The session total
+is accumulated since the node started and marked `(partial)` if any calls have unknown costs. No
+model-price estimate is currently applied. On narrow terminals the chat title is truncated; `/context`
+provides the detailed metrics.
 `/context` shows what the context is: the system prompt, every tool with its schema
 and the conversation so far, message by message with its size.
 The input is focused on start, so you can type right away. The conversations are **sessions of the node**, not
@@ -130,6 +137,7 @@ Keys only move around:
 |---|---|
 | any key | skip the ouroboros splash (except `ctrl+c`) |
 | `enter` / `alt+enter` | send / a new line |
+| `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `pgup` `pgdn` | scroll the chat |
 | `esc` | back from a screen to the chat |
@@ -166,6 +174,11 @@ So an answer does not depend on the UI:
   answer that is in before the title waits for it, 20 seconds at most.
 - **Two front ends** see the same: the UI lists the conversations `ouro chat` had too.
 - `/cancel` stops the answer on its way in the conversation shown. Stopping the node stops every answer.
+- **Steering.** What you send while an answer is on its way is queued, and shown as that below the
+  conversation. The agent takes it as soon as the tools it waits for have run, as a message of yours after
+  their results, or, if the answer is given before, as your next message. Either way it goes at the end of
+  the conversation, so what the provider cached of it stays. `↑` in an empty input takes the last queued
+  message back into the input, and it is not queued any more.
 
 The node **keeps the sessions** in its [archive](#history), so that they outlive it: after `ouro stop`, a
 crash, a reboot, `ouro update` or a build of `rebuild`, `/session` lists them as before, and you go on with

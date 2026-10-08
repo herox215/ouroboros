@@ -230,6 +230,16 @@ func (u *ui) event(e plugin.SessionEvent) tui.Event {
 	return shown
 }
 
+// Steer gives text to the answer on its way in the session id.
+func (u *ui) Steer(ctx context.Context, id, text string) error {
+	return u.sessions.Steer(ctx, id, text)
+}
+
+// Unsteer takes back the last message that is queued in the session id.
+func (u *ui) Unsteer(ctx context.Context, id string) (string, error) {
+	return u.sessions.Unsteer(ctx, id)
+}
+
 // Cancel stops the answer on its way in the session id.
 func (u *ui) Cancel(ctx context.Context, id string) error { return u.sessions.Cancel(ctx, id) }
 

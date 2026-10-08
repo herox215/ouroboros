@@ -145,15 +145,15 @@ internal/session/archive.go:177:9 CONDITIONALS_NEGATION  # the expression of a c
 internal/session/archive.go:179:13 ARITHMETIC_BASE  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours, which 48/time.Hour would make days
 internal/session/archive.go:179:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
 internal/session/archive.go:179:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
-internal/session/session.go:322:19 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; every test that asks asserts that a node without a successor answers
-internal/session/session.go:372:11 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestFailedAndCanceled asserts answers that fail and that are stopped, and every other test answers
-internal/session/session.go:372:18 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; TestFailedAndCanceled asserts that an answer that fails while its call goes on is Failed
-internal/session/session.go:372:31 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestFailedAndCanceled asserts that an answer that fails while its call goes on is Failed
-internal/session/session.go:374:11 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; every test that is answered asserts an Answer, not Failed
-internal/session/session.go:466:19 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; the tests of restarts assert the successor, and every other answer that the node is not replaced
-internal/session/session.go:468:17 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; the test of the release asserts that a message after it keeps the node running
-internal/session/session.go:468:31 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with a release and a node to stop the test of the release asserts it stopped
-internal/session/socket.go:196:25 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds
+internal/session/session.go:373:19 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; every test that asks asserts that a node without a successor answers
+internal/session/session.go:484:11 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestFailedAndCanceled asserts answers that fail and that are stopped, and every other test answers
+internal/session/session.go:484:18 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; TestFailedAndCanceled asserts that an answer that fails while its call goes on is Failed
+internal/session/session.go:484:31 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestFailedAndCanceled asserts that an answer that fails while its call goes on is Failed
+internal/session/session.go:486:11 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; every test that is answered asserts an Answer, not Failed
+internal/session/session.go:591:19 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; the tests of restarts assert the successor, and every other answer that the node is not replaced
+internal/session/session.go:593:17 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; the test of the release asserts that a message after it keeps the node running
+internal/session/session.go:593:31 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with a release and a node to stop the test of the release asserts it stopped
+internal/session/socket.go:218:25 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds
 internal/tui/extend.go:137:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPluginScreen
 internal/tui/extend.go:45:25 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestCommandConflicts
 internal/tui/logo.go:19:19 ARITHMETIC_BASE  # package var initialiser (neckAngle): runs before any test, gremlins never sees it covered
@@ -178,14 +178,14 @@ internal/tui/onboard.go:565:15 CONDITIONALS_NEGATION  # case expression: coverag
 internal/tui/onboard.go:56:21 ARITHMETIC_BASE  # in the const block of the scene, turnAt
 internal/tui/onboard.go:57:22 ARITHMETIC_BASE  # in the const block of the scene, turnDuration
 internal/tui/onboard.go:826:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSetupDialog
-internal/tui/session.go:377:24 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSessionRows
-internal/tui/session.go:456:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:462:21 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:462:31 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:462:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPeerConversations
-internal/tui/session.go:466:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
-internal/tui/session.go:483:100 CONDITIONALS_BOUNDARY  # if condition after a function literal in its header: coverage gives it no block; killed by TestPeerConversations
-internal/tui/session.go:483:100 CONDITIONALS_NEGATION  # if condition after a function literal in its header: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:382:24 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSessionRows
+internal/tui/session.go:461:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:467:21 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:467:31 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:467:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPeerConversations
+internal/tui/session.go:471:9 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestDeleteSession
+internal/tui/session.go:488:100 CONDITIONALS_BOUNDARY  # if condition after a function literal in its header: coverage gives it no block; killed by TestPeerConversations
+internal/tui/session.go:488:100 CONDITIONALS_NEGATION  # if condition after a function literal in its header: coverage gives it no block; killed by TestDeleteSession
 internal/tui/settings.go:333:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
 internal/tui/settings.go:370:12 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
 internal/tui/settings.go:370:31 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
@@ -240,7 +240,7 @@ plugin/settings.go:446:33 CONDITIONALS_BOUNDARY  # an expression of a case claus
 plugin/settings.go:446:33 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 plugin/settings.go:448:16 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/guard/guard.go:215:15 CONDITIONALS_NEGATION  # a case expression, which gremlins never counts as covered; negated, TestBox panics on the allow of the owner that is nil
-internal/session/session.go:185:18 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; TestTitleOnceThereIsATopic asserts the deadline of titleTime
+internal/session/session.go:201:18 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; TestTitleOnceThereIsATopic asserts the deadline of titleTime
 internal/assistant/title.go:21:117 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
 internal/assistant/title.go:22:96 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
 internal/assistant/title.go:23:68 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds

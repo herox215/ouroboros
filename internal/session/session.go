@@ -35,8 +35,15 @@ type Kind string
 
 // The kinds of Events.
 const (
-	// Message is a message of the owner. An answer to it starts.
+	// Message is a message of the owner. An answer to it starts, or the one
+	// on its way goes on with it: then it was Queued before.
 	Message Kind = "message"
+	// Queued is a message of the owner that waits for the answer on its way
+	// to take it, see API.Steer: it follows as a Message once it does.
+	Queued Kind = "queued"
+	// Unqueued is the last message that was Queued, taken back: see
+	// API.Unsteer.
+	Unqueued Kind = "unqueued"
 	// Say is what the agent says along with the tools it asks for, "" if it
 	// said nothing: it begins a round of the loop to the answer, before the
 	// Steps of those tools.
@@ -122,6 +129,15 @@ type API interface {
 	// what happens on the way is told to those who Watch it. It fails with
 	// ErrBusy while an answer is on its way in that session.
 	Ask(ctx context.Context, id, text string) error
+	// Steer gives text to the answer that is on its way in the session id,
+	// which takes it as soon as it can without losing what the provider
+	// cached of the conversation: after the tools it waits for, else as the
+	// next message, once the answer is given. Until then it is queued.
+	// Without an answer on its way it is Ask.
+	Steer(ctx context.Context, id, text string) error
+	// Unsteer takes back the last message that is queued in the session id
+	// and returns it: "" if none is, as when the answer took it meanwhile.
+	Unsteer(ctx context.Context, id string) (string, error)
 	// Watch returns what happened in the session id so far, and what
 	// happens from now on until ctx ends. The channel is closed when ctx
 	// ends, when the node stops, or when the watcher falls too far behind:
@@ -241,6 +257,7 @@ type session struct {
 	events   []Event
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc // of the answer on its way; nil without one
+	queue    []string           // the messages that wait for that answer to take them
 	restart  string             // the binary a tool of that answer asked to start anew from
 	// resumed is when the last answer ended of a session that was loaded
 	// from where it is kept, until the agent is told so with the next
@@ -360,11 +377,21 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	if se.cancel != nil {
 		return ErrBusy
 	}
+	s.begin(se, p, text)
+	return nil
+}
+
+// begin starts the answer to texts, the messages of the owner, in se. s.mu
+// and the mu of p, the process of s, are held.
+func (s *Service) begin(se *session, p *process, texts ...string) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	se.cancel = cancel
 	p.answering++
 	p.release = false // somebody wants the node
-	s.emit(se, Event{Kind: Message, Text: text})
+	for _, text := range texts {
+		s.emit(se, Event{Kind: Message, Text: text})
+	}
+	text := strings.Join(texts, "\n\n")
 	named := make(chan struct{})
 	if se.title == "" && se.tries < titleTries {
 		se.tries++
@@ -378,7 +405,57 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	}
 	s.answers.Add(1)
 	go s.answer(ctx, se, text, p.replace != nil, named)
-	return nil
+}
+
+// Steer queues text for the answer on its way in the session id, and asks
+// for an answer to it if none is.
+func (s *Service) Steer(ctx context.Context, id, text string) error {
+	if err := valid(id); err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return ErrEmpty
+	}
+	s.mu.Lock()
+	if se, ok := s.sessions[id]; ok && se.cancel != nil {
+		defer s.mu.Unlock()
+		se.queue = append(se.queue, text)
+		s.emit(se, Event{Kind: Queued, Text: text})
+		return nil
+	}
+	s.mu.Unlock()
+	return s.Ask(ctx, id, text)
+}
+
+// Unsteer takes back the last message that is queued in the session id.
+func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
+	if err := valid(id); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	se, ok := s.sessions[id]
+	if !ok || len(se.queue) == 0 {
+		return "", nil
+	}
+	last := len(se.queue) - 1
+	text := se.queue[last]
+	se.queue = se.queue[:last]
+	s.emit(se, Event{Kind: Unqueued, Text: text})
+	return text, nil
+}
+
+// steered hands the answer on its way in se the messages that are queued
+// for it: each is a Message now.
+func (s *Service) steered(se *session) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	texts := se.queue
+	se.queue = nil
+	for _, text := range texts {
+		s.emit(se, Event{Kind: Message, Text: text})
+	}
+	return texts
 }
 
 // answer runs the answer to text in se and tells what happens on the way.
@@ -393,6 +470,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			se.restart = exe
 		})
 	}
+	ctx = agent.WithSteering(ctx, func() []string { return s.steered(se) })
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
 		e := Event{Kind: Step, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took}
 		if st.Err != nil {
@@ -424,6 +502,13 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			p.successor = se.restart
 		}
 		se.restart = ""
+	}
+	// What was queued too late for this answer is the next message, unless
+	// the node takes none: then it is lost with the process.
+	if len(se.queue) > 0 && !s.closed && p.successor == "" {
+		texts := se.queue
+		se.queue = nil
+		s.begin(se, p, texts...)
 	}
 	p.settle()
 }

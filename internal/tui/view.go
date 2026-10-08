@@ -159,6 +159,15 @@ func (m *Model) renderHistory(toBottom bool) {
 		}
 		blocks = append(blocks, head+"\n"+text)
 	}
+	// What waits for the answer on its way to take it comes last.
+	for i, text := range c.queued {
+		state := " · queued"
+		if i == len(c.queued)-1 {
+			state += ", ↑ takes it back"
+		}
+		head := boldStyle.Foreground(accent).Render("you") + mutedStyle.Render(state)
+		blocks = append(blocks, head+"\n"+body.Faint(true).Render(text))
+	}
 	// The heads and the lines of the calls are wrapped here and not by the
 	// viewport, which would measure all of the history on every step of
 	// scrolling.

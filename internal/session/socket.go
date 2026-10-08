@@ -52,6 +52,9 @@ type (
 	idRequest struct {
 		ID string `json:"id"`
 	}
+	unsteerResponse struct {
+		Text string `json:"text"`
+	}
 	newResponse struct {
 		ID string `json:"id"`
 	}
@@ -79,6 +82,19 @@ func Handler(s *Service) http.Handler {
 		var in askRequest
 		if read(w, r, &in) {
 			reply(w, nil, s.Ask(r.Context(), in.ID, in.Text))
+		}
+	})
+	mux.HandleFunc("POST /steer", func(w http.ResponseWriter, r *http.Request) {
+		var in askRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.Steer(r.Context(), in.ID, in.Text))
+		}
+	})
+	mux.HandleFunc("POST /unsteer", func(w http.ResponseWriter, r *http.Request) {
+		var in idRequest
+		if read(w, r, &in) {
+			text, err := s.Unsteer(r.Context(), in.ID)
+			reply(w, unsteerResponse{text}, err)
 		}
 	})
 	mux.HandleFunc("POST /cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +295,18 @@ func (c *Client) New(ctx context.Context) (string, error) {
 // Ask starts the answer to text in the session id.
 func (c *Client) Ask(ctx context.Context, id, text string) error {
 	return c.do(ctx, http.MethodPost, "/ask", askRequest{id, text}, nil)
+}
+
+// Steer gives text to the answer on its way in the session id.
+func (c *Client) Steer(ctx context.Context, id, text string) error {
+	return c.do(ctx, http.MethodPost, "/steer", askRequest{id, text}, nil)
+}
+
+// Unsteer takes back the last message that is queued in the session id.
+func (c *Client) Unsteer(ctx context.Context, id string) (string, error) {
+	var out unsteerResponse
+	err := c.do(ctx, http.MethodPost, "/unsteer", idRequest{id}, &out)
+	return out.Text, err
 }
 
 // Cancel stops the answer on its way in the session id.

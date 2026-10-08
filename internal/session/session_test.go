@@ -489,6 +489,7 @@ func TestClose(t *testing.T) {
 	_, live, _ := s.Watch(ctx, "s1")
 	s.Ask(ctx, "s1", "wait")
 	<-started
+	s.Steer(ctx, "s1", "late") // nobody answers it any more
 	s.Close()
 	for range live {
 	}
@@ -504,7 +505,7 @@ func TestClose(t *testing.T) {
 	s.mu.Lock()
 	last := s.sessions["s1"].events
 	s.mu.Unlock()
-	if last[len(last)-1].Kind != Canceled {
+	if kinds(last) != "message queued canceled" {
 		t.Fatalf("events %+v", last)
 	}
 }
@@ -654,5 +655,108 @@ func TestListTruncatesAtACompleteCharacter(t *testing.T) {
 	list, err := s.List(t.Context())
 	if err != nil || len(list) != 1 || list[0].Title != prefix {
 		t.Fatalf("titles %+v, error %v", list, err)
+	}
+}
+
+// What the owner says while an answer is on its way is queued: the answer
+// takes it after the tools it waits for, and what comes too late for that is
+// the next message. The last that waits is taken back.
+func TestSteer(t *testing.T) {
+	tools, late := make(chan struct{}), make(chan struct{})
+	var asked []string
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		asked = append(asked, text)
+		if text != "a" {
+			return "then", nil
+		}
+		<-tools
+		taken := agent.Steered(ctx)
+		if again := agent.Steered(ctx); len(again) != 0 {
+			return "", errors.New("taken twice")
+		}
+		<-late
+		return "took " + strings.Join(taken, ","), nil
+	}}
+	s := service(t, a)
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	if text, err := s.Unsteer(ctx, "s1"); text != "" || err != nil {
+		t.Fatalf("nothing waits: %q, %v", text, err)
+	}
+	if text, err := s.Unsteer(ctx, "nobody"); text != "" || err != nil {
+		t.Fatalf("no session: %q, %v", text, err)
+	}
+	// Without an answer on its way, it is asked.
+	if err := s.Steer(ctx, "s1", "a"); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"b", "c", "d"} {
+		if err := s.Steer(ctx, "s1", text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if text, err := s.Unsteer(ctx, "s1"); text != "d" || err != nil {
+		t.Fatalf("taken back %q, %v", text, err)
+	}
+	close(tools)
+	got := until(t, live, Message, Message, Message)
+	got = append(got, until(t, live, Message)...)
+	got = append(got, until(t, live, Message)...)
+	if kinds(got) != "message queued queued queued unqueued message message" || got[4].Text != "d" || got[5].Text != "b" || got[6].Text != "c" {
+		t.Fatalf("events %+v", got)
+	}
+	if text, err := s.Unsteer(ctx, "s1"); text != "" || err != nil {
+		t.Fatalf("the answer took them: %q, %v", text, err)
+	}
+	// Too late for the tools: the next message, all of it at once.
+	s.Steer(ctx, "s1", "e")
+	s.Steer(ctx, "s1", "f")
+	close(late)
+	got = until(t, live, Answer)
+	got = append(got, until(t, live, Answer)...)
+	if kinds(got) != "queued queued answer message message answer" || got[2].Text != "took b,c" || got[3].Text != "e" || got[4].Text != "f" || got[5].Text != "then" {
+		t.Fatalf("events %+v", got)
+	}
+	if strings.Join(asked, "|") != "a|e\n\nf" {
+		t.Fatalf("asked %q", asked)
+	}
+	if list, _ := s.List(ctx); len(list) != 1 || list[0].Running {
+		t.Fatalf("list %+v", list)
+	}
+	for id, want := range map[string]error{"": ErrNoSession, "s1": ErrEmpty} {
+		if err := s.Steer(ctx, id, " "); !errors.Is(err, want) {
+			t.Fatalf("steer %q: %v", id, err)
+		}
+	}
+	if _, err := s.Unsteer(ctx, ""); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("unsteer: %v", err)
+	}
+}
+
+// What waits when ouro is to start anew is not answered by the build that
+// goes: the node takes no message until then.
+func TestQueueIsLostWhenRestarting(t *testing.T) {
+	gate := make(chan struct{})
+	a := &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		AskRestart(ctx, "/new/ouro")
+		<-gate
+		return "built", nil
+	}}
+	s := service(t, a)
+	replaced := make(chan string, 8)
+	s.Attach(nil, func(exe string) { replaced <- exe })
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "build")
+	s.Steer(ctx, "s1", "late")
+	close(gate)
+	if got := until(t, live, Restart); kinds(got) != "message queued answer restart" {
+		t.Fatalf("events %+v", got)
+	}
+	if exe := <-replaced; exe != "/new/ouro" {
+		t.Fatalf("replaced by %q", exe)
+	}
+	if past, _, _ := s.Watch(ctx, "s1"); kinds(past) != "message queued answer restart" {
+		t.Fatalf("past %+v", past)
 	}
 }

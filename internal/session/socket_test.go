@@ -111,10 +111,25 @@ func TestClient(t *testing.T) {
 	if err := c.Ask(ctx, id, "more"); !errors.Is(err, ErrBusy) {
 		t.Fatalf("busy: %v", err)
 	}
+	// What is said meanwhile is queued, and taken back.
+	if err := c.Steer(ctx, id, "more"); err != nil {
+		t.Fatal(err)
+	}
+	if text, err := c.Unsteer(ctx, id); err != nil || text != "more" {
+		t.Fatalf("unsteer: %q, %v", text, err)
+	}
+	if err := c.Steer(ctx, "", "more"); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("steer no session: %v", err)
+	}
+	if _, err := c.Unsteer(ctx, ""); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("unsteer no session: %v", err)
+	}
 	if err := c.Cancel(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	until(t, live, Canceled)
+	if got := until(t, live, Canceled); kinds(got) != "message queued unqueued canceled" {
+		t.Fatalf("events %+v", got)
+	}
 	close(gate)
 	if _, err := c.Contents(ctx, ""); !errors.Is(err, ErrNoSession) {
 		t.Fatalf("contents of no session: %v", err)
@@ -297,7 +312,7 @@ func TestClientOfAStrangeNode(t *testing.T) {
 // A request the Service cannot read is refused as that.
 func TestHandlerRefusesWhatItCannotRead(t *testing.T) {
 	h := Handler(service(t, &fakeAgent{}))
-	for _, path := range []string{"/ask", "/cancel"} {
+	for _, path := range []string{"/ask", "/steer", "/unsteer", "/cancel"} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{")))
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"error":"the request cannot be read: `) {

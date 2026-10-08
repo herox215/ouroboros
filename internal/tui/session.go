@@ -181,11 +181,16 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 	switch e.Kind {
 	case plugin.SessionMessage:
 		c.add(entry{mine: true, text: e.Text, at: e.At})
-		if live && !c.pending { // else the wait was shown, or is shown already
+		c.queued = c.queued[min(1, len(c.queued)):] // one that was queued is the first of them
+		if live && !c.pending {                     // else the wait was shown, or is shown already
 			c.art++
 		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
 		c.title = cmp.Or(c.title, e.Text)
+	case plugin.SessionQueued:
+		c.queued = append(c.queued, e.Text)
+	case plugin.SessionUnqueued:
+		c.queued = c.queued[:max(0, len(c.queued)-1)]
 	case plugin.SessionSay:
 		c.say(e)
 	case plugin.SessionStep:

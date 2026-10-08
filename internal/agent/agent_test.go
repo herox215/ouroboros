@@ -746,3 +746,91 @@ func TestBudgetIsABound(t *testing.T) {
 		t.Fatalf("told %v", told)
 	}
 }
+
+// What the user says while an answer is on its way follows the results of
+// the tools the LLM waited for: at the end of the conversation, where it is
+// remembered, and asked for once a round.
+func TestSteering(t *testing.T) {
+	llm := &fakeLLM{}
+	a := New(llm, "gpt", "sys", Tool{Name: "shout", Run: func(context.Context, json.RawMessage) (string, error) { return "LOUD", nil }})
+	queue, asked := []string{"wait", "do this instead"}, 0
+	ctx := WithSteering(context.Background(), func() []string {
+		asked++
+		said := queue
+		queue = nil
+		return said
+	})
+	got, err := a.Run(ctx, "c1", "call shout", Observer{})
+	if err != nil || got != "echo do this instead" || asked != 1 {
+		t.Fatalf("got %q, %v, asked %d times", got, err, asked)
+	}
+	var roles []string
+	for _, m := range a.memory.history("c1") {
+		roles = append(roles, m.Role)
+	}
+	if strings.Join(roles, " ") != "user assistant tool user user assistant" {
+		t.Fatalf("remembered %v", roles)
+	}
+	// system, then all of it but the answer.
+	if sent := llm.msgs; len(sent) != 6 || sent[4].Content != "wait" || sent[5].Content != "do this instead" {
+		t.Fatalf("sent %+v", sent)
+	}
+	if Steered(context.Background()) != nil {
+		t.Fatal("nobody steers an answer without steering")
+	}
+}
+
+// A provider that cannot take what the user said on the way ends the answer,
+// as with any other message.
+func TestSteeringIsObserved(t *testing.T) {
+	boom := errors.New("boom")
+	var seen []string
+	p := ContextProvider{Name: "p", Prepare: func(_ context.Context, p Preparation) ([]openai.Message, error) { return p.Messages, nil },
+		Observe: func(_ context.Context, _ Processing, m openai.Message) error {
+			seen = append(seen, m.Role+" "+m.Content)
+			if m.Content == "no" {
+				return boom
+			}
+			return nil
+		}}
+	a, err := New(&fakeLLM{}, "gpt", "sys", Tool{Name: "shout", Run: func(context.Context, json.RawMessage) (string, error) { return "LOUD", nil }}).
+		WithExtensions("p", []ContextProvider{p}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithSteering(context.Background(), func() []string { return []string{"no", "never"} })
+	if _, err := a.Run(ctx, "c1", "call shout", Observer{}); !errors.Is(err, boom) {
+		t.Fatalf("err %v", err)
+	}
+	if strings.Join(seen, "|") != "user call shout|assistant calling shout|tool LOUD|user no" {
+		t.Fatalf("observed %q", seen)
+	}
+}
+
+// What the user says on the way is between the calls before it and after
+// it: a call the LLM asks for again after it is run, as the user may have
+// asked for just that.
+func TestSteeringEndsARowOfTheSameCall(t *testing.T) {
+	i := 0
+	llm := llmFunc(func([]openai.Message) openai.Message {
+		if i == 3 {
+			return openai.Message{Content: "done"}
+		}
+		i++
+		return openai.Message{ToolCalls: []openai.ToolCall{{ID: fmt.Sprint("c", i), Function: openai.FunctionCall{Name: "noop", Arguments: `{}`}}}}
+	})
+	ran, round := 0, 0
+	a := New(llm, "gpt", "sys", Tool{Name: "noop", Run: func(context.Context, json.RawMessage) (string, error) {
+		ran++
+		return "ok", nil
+	}})
+	ctx := WithSteering(context.Background(), func() []string {
+		if round++; round == 2 {
+			return []string{"once more"}
+		}
+		return nil
+	})
+	if _, err := a.Run(ctx, "c1", "go", Observer{}); err != nil || ran != 3 {
+		t.Fatalf("ran %d times, %v", ran, err)
+	}
+}

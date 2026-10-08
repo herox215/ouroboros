@@ -100,7 +100,9 @@ type (
 
 // What a SessionEvent tells.
 const (
-	SessionMessage  = session.Message  // a message of the owner: an answer starts
+	SessionMessage  = session.Message  // a message of the owner: an answer starts, or goes on with it
+	SessionQueued   = session.Queued   // a message that waits for the answer on its way to take it
+	SessionUnqueued = session.Unqueued // the last message that waits, taken back
 	SessionSay      = session.Say      // what the agent says along with the tools it asks for
 	SessionStep     = session.Step     // a call of a tool, see SessionEvent.AsStep and ToolLine
 	SessionAnswer   = session.Answer   // the answer
