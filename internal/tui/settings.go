@@ -277,6 +277,16 @@ func rows(s Settings) []row {
 		toggle = set("refuse", Setting{Kind: plugin.SetRebuildWithoutSandbox})
 	}
 	add(agentsSection, "Rebuild without a sandbox", allowed, note, toggle)
+	allowed, note = "no", "bash runs its commands in a sandbox: without network, and only where the tools for files may write"
+	toggle = set("allow", Setting{Kind: plugin.SetBashWithoutSandbox, On: true})
+	if s.BashWithoutSandbox {
+		allowed, note = "yes", "bash runs its commands as you: with network, the secrets of the node and the source of the core in reach"
+		toggle = set("refuse", Setting{Kind: plugin.SetBashWithoutSandbox})
+	}
+	if s.Sandbox != "" {
+		note += "; there is no sandbox here (" + s.Sandbox + "), so without yes bash runs nothing"
+	}
+	add(agentsSection, "Bash without a sandbox", allowed, note, toggle)
 
 	if s.PluginsKept != "" {
 		out = append(out, row{section: pluginsSection, label: "Turned off", value: "none: all run",

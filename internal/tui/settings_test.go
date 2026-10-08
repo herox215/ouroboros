@@ -133,6 +133,7 @@ func TestSettingsShow(t *testing.T) {
 		{nodeSection, "Node ID", "abc123def456", "the fingerprint of the key of the node, which nothing here changes"},
 		{agentsSection, "Context provider", "none", "what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it"},
 		{agentsSection, "Rebuild without a sandbox", "no", "rebuild builds and tests in a sandbox here, so this is not used"},
+		{agentsSection, "Bash without a sandbox", "no", "bash runs its commands in a sandbox: without network, and only where the tools for files may write"},
 		{pluginsSection, "base", "on", "it runs the commands of ouro"},
 		{pluginsSection, "history", "on", ""},
 		{pluginsSection, "tailscale", "off", "runs until ouro starts anew"},
@@ -167,6 +168,7 @@ func TestSettingsShow(t *testing.T) {
 	// Another configuration.
 	s := someSettings()
 	s.About, s.ContextProvider, s.RebuildWithoutSandbox, s.Sandbox = "", "compact", true, "bubblewrap is not installed"
+	s.BashWithoutSandbox = true
 	s.PluginsKept, s.ProtectedDefault = "plugin peers needs a scanner", false
 	s.Description, s.DescriptionDefault = "knows the way", false
 	s.Tools[ForPeersIndex()].All = true
@@ -176,6 +178,7 @@ func TestSettingsShow(t *testing.T) {
 		{nodeSection, "Description", "knows the way"},
 		{agentsSection, "Context provider", "compact"},
 		{agentsSection, "Rebuild without a sandbox", "yes, with network"},
+		{agentsSection, "Bash without a sandbox", "yes"},
 		{pluginsSection, "Turned off", "none: all run"},
 		{peersSection, "All tools", "yes"},
 		{protectedSection, "The default", "not in use"},
@@ -189,6 +192,10 @@ func TestSettingsShow(t *testing.T) {
 	}
 	if r := value(t, m, agentsSection, "Rebuild without a sandbox"); !strings.Contains(r.note, "there is no sandbox here (bubblewrap is not installed)") {
 		t.Errorf("sandbox: %q", r.note)
+	}
+	if r := value(t, m, agentsSection, "Bash without a sandbox"); r.note != "bash runs its commands as you: with network, the secrets of the node and the source of the core in reach"+
+		"; there is no sandbox here (bubblewrap is not installed), so without yes bash runs nothing" {
+		t.Errorf("bash: %q", r.note)
 	}
 	if r := value(t, m, pluginsSection, "Turned off"); !r.warn || !strings.Contains(r.note, "plugin peers needs a scanner") {
 		t.Errorf("kept: %+v", r)
@@ -209,6 +216,7 @@ func TestSettingsChange(t *testing.T) {
 		{agentsSection, "Context provider", "compact", Setting{Kind: plugin.SetContextProvider, Value: "compact"}},
 		{agentsSection, "Context provider", "none", Setting{Kind: plugin.SetContextProvider}},
 		{agentsSection, "Rebuild without a sandbox", "allow", Setting{Kind: plugin.SetRebuildWithoutSandbox, On: true}},
+		{agentsSection, "Bash without a sandbox", "allow", Setting{Kind: plugin.SetBashWithoutSandbox, On: true}},
 		{pluginsSection, "history", "turn off", Setting{Kind: plugin.SetPlugin, Name: "history"}},
 		{pluginsSection, "tailscale", "turn on", Setting{Kind: plugin.SetPlugin, Name: "tailscale", On: true}},
 		{pluginsSection, "old", "forget", Setting{Kind: plugin.SetPlugin, Name: "old", On: true}},
@@ -230,7 +238,7 @@ func TestSettingsChange(t *testing.T) {
 	}
 
 	s := someSettings()
-	s.RebuildWithoutSandbox, s.ProtectedDefault = true, false
+	s.RebuildWithoutSandbox, s.BashWithoutSandbox, s.ProtectedDefault = true, true, false
 	s.Tools[ForPeersIndex()].All = true
 	b.settings = s
 	deliver(m, m.loadSettings)
@@ -239,6 +247,7 @@ func TestSettingsChange(t *testing.T) {
 		want                   Setting
 	}{
 		{agentsSection, "Rebuild without a sandbox", "refuse", Setting{Kind: plugin.SetRebuildWithoutSandbox}},
+		{agentsSection, "Bash without a sandbox", "refuse", Setting{Kind: plugin.SetBashWithoutSandbox}},
 		{peersSection, "All tools", "turn off", Setting{Kind: plugin.SetAllTools, For: plugin.ForPeers}},
 		{protectedSection, "The default", "use it", Setting{Kind: plugin.SetProtected, On: true}},
 	} {

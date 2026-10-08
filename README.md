@@ -271,7 +271,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
 `history_sessions`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
-`withdraw_proposal`) and one that builds and installs its own source ([`rebuild`](#updates)). It uses them in **scripts**: the LLM is
+`withdraw_proposal`), one that runs commands ([`bash`](#commands)) and one that builds and installs its own
+source ([`rebuild`](#updates)). It uses them in **scripts**: the LLM is
 offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
 Which of them it may use depends on who it is talking to, and is set in `config.json`. This is what the
 setup writes:
@@ -383,6 +384,63 @@ sandbox without network, but the build that is installed runs as you, with whate
 the core it could not edit no longer limits it, and neither does the sandbox. The tests are a check that the
 build works, not that it is harmless.
 
+### Commands
+
+`bash(command, dir?, timeout?)` runs `command` with `/bin/bash -c` in `dir` (absolute or below `~`, the home
+directory without it), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
+an error. It returns `exit N` and below it what the command printed, its output and its errors as they came;
+of more than 64 KiB the first and the last 32 KiB, with how much was left out between them. A status other
+than 0 is a result, not an error. Every call starts anew: `cd` and variables do not carry over.
+
+| Limit of a command | Value | Beyond it |
+|---|---|---|
+| time | 60 s, or `timeout` seconds; at most what is left of its [script](#scripts) less 2 s | the command is stopped with everything it started, and what it printed so far comes along with the error |
+| input | none | it reads nothing, as from `/dev/null` |
+| environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `TZ` and the variables of Go (`GOPATH`, `GOROOT`, `GOCACHE`, `GOMODCACHE`, `GOPROXY`, `GOPRIVATE`, `GOFLAGS`, `GOTOOLCHAIN`), and those named in `env` | the rest of the environment of the node, its keys among it, is not passed on |
+
+**A command runs in a sandbox**, the [one of `rebuild`](#updates), with the rules of the
+[tools for files](#files) as far as a sandbox can hold them. The guard never sees the paths of a command,
+so the system holds them for every process it starts:
+
+- The secrets of the node, what is `protected` and what `deny` of `bash` names are neither read nor written.
+  On Linux a file of them is covered by an empty one, a directory by an empty one in memory.
+- The directory of the node, the Go of `rebuild` and, in the checkout ouro was built from, the source of the
+  core and what decides how it is built are read and never written, and what of them is missing is not
+  created. A symbolic link among them counts as itself and as where it leads.
+- The rest is writable, or with `allow` only what it names. Reading is not limited beyond the first point.
+- No other host, unless `network` is set: the loopback interface alone, as for `rebuild`. With network,
+  still no socket of the file system, such as that of Docker; on macOS but the one that resolves names.
+
+What the sandbox refused does not pass when tried again; the result says so when the output says that
+something was not permitted, on a read-only file system or without network.
+
+```json
+"h2a": ["*", {"tool": "bash", "allow": ["~/projects", "~/Library/Caches/go-build", "~/go"], "network": true, "env": ["GITHUB_TOKEN"]}]
+```
+
+| Setting | Means | Without it |
+|---|---|---|
+| `allow` | the paths a command may write, each with everything below it; one that does not exist is not writable | everywhere the rules above leave writable |
+| `deny` | paths within those that a command neither reads nor writes | none |
+| `network` | `true` lets a command reach other hosts | `false` |
+| `env` | the names of further variables of the environment it gets | none |
+
+The sandbox holds less than the guard of the tools for files:
+
+- **A checkout is the one ouro was built from**, not every directory whose `go.mod` names the module. In
+  another one a command may change the core; `rebuild` builds only the first.
+- **`/` and your home directory** are not kept from being deleted, only what the rules keep in them.
+- **On Linux a path that is missing, or a link**, cannot be covered: the directory it is in is mounted read
+  only, and what is in it writable again, so nothing new is created there. In your home directory that is
+  whenever a protected path such as `~/.aws` does not exist.
+- A process that leaves the group of the command (`setsid`, a daemon) is not stopped with it.
+
+**Without a sandbox.** Where there is none (bubblewrap is missing or cannot run, or ouro runs in a sandbox
+already), `bash` runs nothing and tells the agent why. You, and only you, can let it run its commands without
+one, also where there is one, with `"bash_without_sandbox": true` in `config.json` or in `/settings`. A
+command then runs as you: with network, the secrets of the node and the source of the core in reach, and
+none of the rules of the tools for files. The agent sees the setting with `get_config` and cannot propose it.
+
 ### Scripts
 
 `run(script)` is the only tool the LLM is offered. Everything the agent does, it does in a script: it
@@ -463,7 +521,7 @@ answer in [`ouro.log`](#the-log) says what it cost.
 
 | Limit of a script | Value | Beyond it |
 |---|---|---|
-| time | 120 s | the script is stopped, and so are the tools it is waiting for; a tool that does not end is waited for 2 s longer and then left behind |
+| time | 600 s | the script is stopped, and so are the tools it is waiting for; a tool that does not end is waited for 2 s longer and then left behind |
 | calls of tools | 64 | the script is stopped at the next call |
 | size of the script | 64 KiB | it is not run |
 | size of the result | 16 KiB, 4 KiB once the results of the answer have more than 64 KiB | the start is handed on, and the value is kept in `returned` |
@@ -479,7 +537,7 @@ looks at the heap of the whole process every 5 ms and stops the script once the 
 256 MiB since the script started. That catches a script that keeps collecting data. It does not catch a
 single step that allocates more than that at once, like `"x".repeat(2 ** 30)`: the interpreter cannot be
 stopped inside a step, and the process may run out of memory. The same holds for the time: a regular
-expression that takes minutes to fail is one step. The script is then given up after 120 s and the answer goes
+expression that takes minutes to fail is one step. The script is then given up after 600 s and the answer goes
 on, but the step keeps a processor busy until it ends. As the heap is the one of the process, two scripts
 that run at the same time count against each other, and so does everything else the node allocates
 meanwhile. What a conversation keeps between its scripts counts for none of them: up to 16 conversations
@@ -540,7 +598,7 @@ owner's alone, like every command of the UI: no agent and no peer reaches it.
 | Category | Shows | Changes |
 |---|---|---|
 | The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node | the name and the description (empty is the default); the accesses in `/setup`, the model in `/model`, both opened from here |
-| The agents | the context provider and those this build has; whether `rebuild` may build without a sandbox, and whether there is one | both |
+| The agents | the context provider and those this build has; whether `rebuild` may build without a sandbox, and whether there is one; whether `bash` runs its commands without one | all three |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with its settings | all tools, each tool, its settings |
 | Tools for peers | `a2a`, the same; a tool for your agent alone is shown as such and cannot be allowed | the same |
@@ -557,7 +615,7 @@ categories. A text, like the name, a path or the settings of a tool (a JSON obje
   300 characters. What fails changes nothing, and the footer says why.
 - **The footer says from when a change holds.** The name, the tools, the paths and the context provider hold
   from the next message, for you and for peers. The description holds for the next one who reads the card. Whether `rebuild` may build without a sandbox holds for the
-  next rebuild. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
+  next rebuild, whether `bash` runs without one for its next command. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
   `/start` the node. Until then its line says that it runs, or that it does not.
 - **All tools.** Turning a tool off while all tools are allowed lists every other tool by its name instead
   of `*`, so that nothing else changes; from then on a tool of a plugin turned on later is not allowed by
@@ -986,7 +1044,7 @@ internal/history     the archive of every conversation, and how the agent search
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
 internal/update      self-update: from the newest main, or from the checkout as it is, in the sandbox
-internal/sandbox     runs a command without network and writing only where it may: sandbox-exec, bubblewrap
+internal/sandbox     runs a command writing only where it may, without network unless allowed: sandbox-exec, bubblewrap
 scripts, hooks       the local quality checks and the pre-commit hook, see [Checks](#checks)
 ```
 

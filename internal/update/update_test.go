@@ -442,3 +442,17 @@ func TestRunPassesOnTheSource(t *testing.T) {
 	}
 	expectFile(t, exe, "/the/checkout")
 }
+
+// The binary knows the checkout it was built from, if the build said so.
+func TestCheckouts(t *testing.T) {
+	old := update.Source
+	t.Cleanup(func() { update.Source = old })
+	update.Source = ""
+	if got := update.Checkouts(); got != nil {
+		t.Errorf("without a source: %q", got)
+	}
+	update.Source = "/src/ouro"
+	if got := update.Checkouts(); len(got) != 1 || got[0] != "/src/ouro" {
+		t.Errorf("with a source: %q", got)
+	}
+}

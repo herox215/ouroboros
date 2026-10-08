@@ -1,7 +1,8 @@
 // Package guard decides which files the tools of an agent may touch. Every
 // tool for files asks it for every path, and works on the path it answers
 // with: the one behind every symbolic link and every "..", so that none of
-// them leads around a rule.
+// them leads around a rule. A tool that runs commands, whose paths it never
+// sees, runs them in the sandbox Box returns, with the same rules.
 //
 // Three things limit a tool, and the first that speaks wins:
 //
@@ -20,7 +21,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"ouroboros/internal/sandbox"
 )
 
 // Module is the name of the Go module of ouroboros. A directory whose go.mod
@@ -105,6 +109,9 @@ type Guard struct {
 	// Toolchain returns the paths of the Go that builds ouro, which are
 	// read and never changed, each with everything below it. May be nil.
 	Toolchain func() []string
+	// Checkouts returns the checkouts of ouroboros a sandbox keeps as the
+	// rules for checkouts say, see Box. May be nil.
+	Checkouts func() []string
 }
 
 // Checker decides about paths for one call of a tool.
@@ -177,6 +184,72 @@ func (g *Guard) Checker(a Access) (*Checker, error) {
 	}
 	c.deny, err = rules(a.Deny)
 	return c, err
+}
+
+// Box returns the sandbox for a command that the tool of a runs, which the
+// guard is not asked about: it holds the rules of the guard for what is
+// written and read, as far as a sandbox can.
+//
+// It knows no rule a guard decides when a path is asked: a checkout is one
+// of Checkouts, not every directory whose go.mod names the module; / and the
+// home directory are not kept from being deleted, only what the rules keep
+// in them; a path that "allow" names and that does not exist is not
+// writable.
+func (g *Guard) Box(a Access, network bool) (sandbox.Policy, error) {
+	p := sandbox.Policy{Network: network}
+	protected, err := g.Protected()
+	if err != nil {
+		return p, fmt.Errorf("the configuration cannot be read, so no command runs: %w", err)
+	}
+	closed, err := expandAll(protected)
+	if err != nil {
+		return p, fmt.Errorf(`"protected" in the configuration: %w`, err)
+	}
+	deny, err := expandAll(a.Deny)
+	if err != nil {
+		return p, err
+	}
+	// What no tool touches is neither read nor written.
+	p.Hidden = slices.Concat(g.Secrets, closed, deny)
+	switch {
+	case a.Allow != nil:
+		allow, err := expandAll(*a.Allow)
+		if err != nil {
+			return p, err
+		}
+		for _, path := range allow {
+			if _, err := os.Stat(path); err == nil {
+				p.Writable = append(p.Writable, path)
+			}
+		}
+	case !a.Peer:
+		p.Writable = []string{"/"}
+	}
+	p.ReadOnly = []string{g.Home}
+	if g.Toolchain != nil {
+		p.ReadOnly = append(p.ReadOnly, g.Toolchain()...)
+	}
+	if g.Checkouts != nil {
+		for _, dir := range g.Checkouts() {
+			for _, rel := range slices.Concat(corePackages, buildPaths) {
+				p.ReadOnly = append(p.ReadOnly, filepath.Join(dir, rel))
+			}
+		}
+	}
+	return p, nil
+}
+
+// expandAll expands every path of a list of the configuration.
+func expandAll(paths []string) ([]string, error) {
+	var out []string
+	for _, path := range paths {
+		abs, err := expand(path)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, abs)
+	}
+	return out, nil
 }
 
 // rules resolves the paths of a list of the configuration.

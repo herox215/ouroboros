@@ -33,6 +33,10 @@ var fileTools = []string{"read", "write", "edit", "list", "delete", toolSearch}
 // toolSearch is the tool for files the prompt points to for finding text.
 const toolSearch = "search"
 
+// ToolBash is the tool that runs a command of the shell, which the shell
+// plugin contributes.
+const ToolBash = "bash"
+
 // PeerTools are the tools with which an agent reaches other nodes. selfID
 // returns the ID of this node, which is not a peer of itself.
 //

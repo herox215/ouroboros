@@ -4,17 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
 // On Linux the sandbox is bubblewrap: the command sees the file system read
-// only, but for what it may write and a /dev of its own, and has a network
-// namespace of its own, in which only the loopback interface is up. A
+// only, but for what it may write and a /dev of its own, and without network
+// has a network namespace of its own, in which only the loopback interface is
+// up. What is hidden is covered: a file by an empty one, a directory by an
+// empty one in memory. A
 // network namespace does not reach the sockets of the file system, and one
 // like the socket of Docker is a way out: a filter of seccomp refuses
 // sockets of the family AF_UNIX, and io_uring, which could open them.
@@ -49,7 +56,7 @@ func available() error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	cmd, err := wrap(context.Background(), b, nil, truth, nil)
+	cmd, err := wrap(context.Background(), b, Policy{}, truth, nil)
 	if err != nil {
 		return err
 	}
@@ -59,16 +66,21 @@ func available() error {
 	return nil
 }
 
-func command(ctx context.Context, writable []string, path string, args []string) (*exec.Cmd, error) {
-	return wrap(ctx, find(), writable, path, args) // Available found it
+func command(ctx context.Context, p Policy, path string, args []string) (*exec.Cmd, error) {
+	return wrap(ctx, find(), p, path, args) // Available found it
 }
 
 // pipe makes the pipe the filter goes through; tests replace it.
 var pipe = os.Pipe
 
-// wrap returns the command path with args in the bubblewrap at b.
-func wrap(ctx context.Context, b string, writable []string, path string, args []string) (*exec.Cmd, error) {
+// wrap returns the command path with args in the bubblewrap at b, kept to
+// what p allows.
+func wrap(ctx context.Context, b string, p Policy, path string, args []string) (*exec.Cmd, error) {
 	prog, err := filter()
+	if err != nil {
+		return nil, err
+	}
+	mounted, err := mounts(p)
 	if err != nil {
 		return nil, err
 	}
@@ -81,14 +93,117 @@ func wrap(ctx context.Context, b string, writable []string, path string, args []
 		w.Write(prog)
 		w.Close()
 	}()
-	flags := []string{"--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev"}
-	for _, p := range writable {
-		flags = append(flags, "--bind", p, p)
+	flags := []string{"--die-with-parent"}
+	if !p.Network {
+		flags = append(flags, "--unshare-net")
 	}
-	flags = append(flags, "--seccomp", "3", "--", path)
+	flags = append(flags, "--ro-bind", "/", "/")
+	flags = append(flags, mounted...)
+	// /dev comes last: a writable / would cover it.
+	flags = append(flags, "--dev", "/dev", "--seccomp", "3", "--", path)
 	cmd := exec.CommandContext(ctx, b, append(flags, args...)...)
 	cmd.ExtraFiles = []*os.File{r}
 	return cmd, nil
+}
+
+// mount is what bubblewrap mounts at one path, as its flags.
+type mount struct {
+	at    string
+	flags []string
+}
+
+// mounts are the flags of bubblewrap that mount what p allows over a root
+// that is read only. A mount hides what is mounted below it before, so they
+// go from the root down, and what is read only or hidden is left out of
+// every mount that makes it writable.
+//
+// A path that is read only and does not exist cannot be mounted over, nor can
+// a symbolic link, as the mount would go where it leads: the directory above
+// it that exists is mounted read only instead, and what is in it but links
+// writable again, so that nothing new is created there and no link changed.
+// What a link leads to, a policy names besides, see reals.
+func mounts(p Policy) ([]string, error) {
+	closed := slices.Concat(p.ReadOnly, p.Hidden)
+	var all []mount
+	writable := func(at string) {
+		if !slices.ContainsFunc(closed, func(c string) bool { return within(at, c) }) {
+			all = append(all, mount{at, []string{"--bind", at, at}})
+		}
+	}
+	for _, w := range p.Writable {
+		writable(w)
+	}
+	for _, r := range p.ReadOnly {
+		info, err := os.Lstat(r)
+		if err == nil && info.Mode()&fs.ModeSymlink == 0 {
+			all = append(all, mount{r, []string{"--ro-bind", r, r}})
+			continue
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+		if !slices.ContainsFunc(p.Writable, func(w string) bool { return within(r, w) }) {
+			continue // nothing is created where nothing is written
+		}
+		// The directory the link is in, or the nearest above what is
+		// missing that exists.
+		dir := filepath.Dir(r)
+		for err != nil {
+			if _, err = os.Lstat(dir); err != nil {
+				dir = filepath.Dir(dir)
+			}
+		}
+		all = append(all, mount{dir, []string{"--ro-bind", dir, dir}})
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			// A link is not written through: what it leads to is mounted
+			// for where it is.
+			if e.Type()&fs.ModeSymlink == 0 {
+				writable(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	for _, h := range p.Hidden {
+		info, err := os.Lstat(h)
+		if errors.Is(err, fs.ErrNotExist) || err == nil && info.Mode()&fs.ModeSymlink != 0 {
+			continue // there is nothing to read, or nothing but where it leads
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info.IsDir() {
+			all = append(all, mount{h, []string{"--tmpfs", h, "--remount-ro", h}})
+		} else {
+			all = append(all, mount{h, []string{"--ro-bind", os.DevNull, h}})
+		}
+	}
+	slices.SortStableFunc(all, func(a, b mount) int { return depth(a.at) - depth(b.at) })
+	var flags []string
+	seen := map[string]bool{}
+	for _, m := range all {
+		// A directory closed for two paths is mounted once.
+		if key := strings.Join(m.flags, "\x00"); !seen[key] {
+			seen[key] = true
+			flags = append(flags, m.flags...)
+		}
+	}
+	return flags, nil
+}
+
+// depth is how many directories path is below the root.
+func depth(path string) int {
+	if path == "/" {
+		return 0
+	}
+	return strings.Count(path, "/")
+}
+
+// within reports whether path is root or below it.
+func within(path, root string) bool {
+	return path == root || root == "/" || strings.HasPrefix(path, root+"/")
 }
 
 // The parts of a program of seccomp.

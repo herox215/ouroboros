@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestFilterFails(t *testing.T) {
 	replace(t, &arch, "amd64")
 	broken := errors.New("no pipe")
 	replace(t, &pipe, func() (*os.File, *os.File, error) { return nil, nil, broken })
-	if _, err := wrap(context.Background(), "/usr/bin/bwrap", nil, "true", nil); !errors.Is(err, broken) {
+	if _, err := wrap(context.Background(), "/usr/bin/bwrap", Policy{}, "true", nil); !errors.Is(err, broken) {
 		t.Errorf("without a pipe: %v", err)
 	}
 }
@@ -111,4 +112,83 @@ func run(prog []unix.SockFilter, nr, audit, arg0 uint32) uint32 {
 		}
 	}
 	panic("the program does not end in ret")
+}
+
+// What is writable is mounted from the root down, without what is read only
+// or hidden in it; what is read only and missing closes the directory above
+// it to anything new; what is hidden is covered.
+func TestMounts(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"w/sub/keep", "w/ro", "w/secrets", "w/closed/inner"} {
+		os.MkdirAll(filepath.Join(dir, d), 0o700)
+	}
+	os.WriteFile(filepath.Join(dir, "w/sub/file"), nil, 0o600)
+	os.WriteFile(filepath.Join(dir, "w/secret"), nil, 0o600)
+	os.Symlink("/etc", filepath.Join(dir, "w/sub/link"))
+	os.Symlink("/etc", filepath.Join(dir, "w/ro/link"))
+	os.Symlink("/etc", filepath.Join(dir, "w/linked"))
+	at := func(p string) string { return filepath.Join(dir, p) }
+	got, err := mounts(Policy{
+		Writable: []string{at("w"), at("w/ro/inner"), at("w/secrets/inner")},
+		ReadOnly: []string{at("w/ro"), at("w/sub/missing"), at("w/closed"), at("w/closed/inner/missing"), at("elsewhere/missing"), at("w/ro/link")},
+		Hidden:   []string{at("w/secret"), at("w/secrets"), at("w/none"), at("w/linked")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"--bind", at("w"), at("w"),
+		"--ro-bind", at("w/ro"), at("w/ro"),
+		"--ro-bind", at("w/sub"), at("w/sub"),
+		"--ro-bind", at("w/closed"), at("w/closed"),
+		"--ro-bind", os.DevNull, at("w/secret"),
+		"--tmpfs", at("w/secrets"), "--remount-ro", at("w/secrets"),
+		"--bind", at("w/sub/file"), at("w/sub/file"),
+		"--bind", at("w/sub/keep"), at("w/sub/keep"),
+		"--ro-bind", at("w/closed/inner"), at("w/closed/inner"),
+	}
+	// The link in w/ro closes w/ro, which is closed already; the hidden
+	// link leaves nothing to cover but where it leads.
+	if !slices.Equal(got, want) {
+		t.Errorf("mounts:\n%q\nwant\n%q", got, want)
+	}
+
+	if got, err := mounts(Policy{Writable: []string{"/"}}); err != nil || !slices.Equal(got, []string{"--bind", "/", "/"}) {
+		t.Errorf("the root: %q, %v", got, err)
+	}
+	// A directory that cannot be looked into, or not listed, is no answer.
+	locked, blind := at("locked"), at("blind")
+	os.Mkdir(locked, 0)
+	os.Mkdir(blind, 0o100)
+	t.Cleanup(func() { os.Chmod(locked, 0o700); os.Chmod(blind, 0o700) })
+	if os.Geteuid() != 0 {
+		for _, p := range []Policy{
+			{Writable: []string{dir}, ReadOnly: []string{filepath.Join(locked, "x")}},
+			{Writable: []string{dir}, ReadOnly: []string{filepath.Join(blind, "x")}},
+			{Hidden: []string{filepath.Join(locked, "x")}},
+		} {
+			if _, err := mounts(p); err == nil {
+				t.Errorf("below a directory that cannot be read, %+v: no error", p)
+			}
+		}
+		if _, err := wrap(context.Background(), "/usr/bin/bwrap", Policy{Hidden: []string{filepath.Join(locked, "x")}}, "true", nil); err == nil {
+			t.Error("a policy that cannot be mounted should fail")
+		}
+	}
+}
+
+// Without network the command has a network of its own; with it, the one of
+// the machine. /dev comes after what is writable.
+func TestWrapFlags(t *testing.T) {
+	for _, network := range []bool{false, true} {
+		cmd, err := wrap(context.Background(), "/usr/bin/bwrap", Policy{Writable: []string{"/"}, Network: network}, "/bin/true", []string{"x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := strings.Join(cmd.Args, " ")
+		if strings.Contains(args, "--unshare-net") == network ||
+			!strings.HasSuffix(args, "--ro-bind / / --bind / / --dev /dev --seccomp 3 -- /bin/true x") {
+			t.Errorf("network %v: %s", network, args)
+		}
+	}
 }

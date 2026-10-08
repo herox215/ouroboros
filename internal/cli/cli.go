@@ -68,6 +68,7 @@ import (
 	openaiplugin "ouroboros/internal/plugins/openai"
 	peersplugin "ouroboros/internal/plugins/peers"
 	sessionplugin "ouroboros/internal/plugins/session"
+	shellplugin "ouroboros/internal/plugins/shell"
 	"ouroboros/internal/plugins/tailscale"
 	"ouroboros/internal/plugins/talk"
 	"ouroboros/internal/plugins/tui"
@@ -155,7 +156,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 	files := &guard.Guard{Home: s.Home, Secrets: dir.Secrets(), Protected: func() ([]string, error) {
 		cfg, err := dir.Config()
 		return cfg.Protected(), err
-	}, Toolchain: update.GoPaths}
+	}, Toolchain: update.GoPaths, Checkouts: update.Checkouts}
 	owner := plugin.OwnerOf(dir, network)
 	return plugin.Activate(owner, []plugin.Plugin{
 		base.Plugin(dir, t),
@@ -163,6 +164,7 @@ func Plugins(s Settings, t Terminal) []plugin.Plugin {
 		tailscale.Plugin(),
 		peersplugin.Plugin(dir, network),
 		filesplugin.Plugin(files),
+		shellplugin.Plugin(dir, files),
 		historyplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
 		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),

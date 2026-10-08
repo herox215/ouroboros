@@ -27,13 +27,13 @@ import (
 
 // The limits of a script. Beyond one of them it is stopped.
 const (
-	MaxTime   = 2 * time.Minute // from its start to its result
-	MaxCalls  = 64              // calls of tools
-	MaxSource = 64 << 10        // bytes of the script
-	MaxResult = 16 << 10        // bytes of what it returns that are handed on
-	MaxPrint  = 16 << 10        // bytes of what it prints that are handed on
-	MaxDepth  = 1024            // calls of functions within each other
-	MaxHeap   = 256 << 20       // bytes the heap of the process may grow by while it runs
+	MaxTime   = 10 * time.Minute // from its start to its result: a build or its tests may take a while
+	MaxCalls  = 64               // calls of tools
+	MaxSource = 64 << 10         // bytes of the script
+	MaxResult = 16 << 10         // bytes of what it returns that are handed on
+	MaxPrint  = 16 << 10         // bytes of what it prints that are handed on
+	MaxDepth  = 1024             // calls of functions within each other
+	MaxHeap   = 256 << 20        // bytes the heap of the process may grow by while it runs
 
 	// MaxSessions is how many conversations keep what their scripts left.
 	MaxSessions = 16
@@ -61,7 +61,7 @@ func Tighten(ctx context.Context) context.Context {
 	return context.WithValue(ctx, tightKey{}, true)
 }
 
-// Changed by tests, which do not wait two minutes or fill the memory.
+// Changed by tests, which do not wait ten minutes or fill the memory.
 var (
 	maxTime = MaxTime
 	maxHeap = uint64(MaxHeap)

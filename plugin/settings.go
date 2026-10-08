@@ -49,7 +49,10 @@ type Settings struct {
 	// Sandbox says why there is none here, "" if there is.
 	RebuildWithoutSandbox bool
 	Sandbox               string
-	Plugins               []PluginState
+	// BashWithoutSandbox lets bash run its commands without a sandbox,
+	// also where there is one.
+	BashWithoutSandbox bool
+	Plugins            []PluginState
 	// PluginsKept says why the plugins the configuration turns off run all
 	// the same, "" if they do not.
 	PluginsKept string
@@ -103,6 +106,7 @@ const (
 	SetToolSettings                             // For, Name, Value: a JSON object, "" for none
 	SetProtected                                // Value: one path a line; On resets to the default
 	SetDescription                              // Value, "" for the default
+	SetBashWithoutSandbox                       // On
 )
 
 // Setting is one change the owner makes in the settings.
@@ -178,7 +182,8 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 		Name: cfg.Name, Access: access.Label(), About: access.About, Model: cfg.Model, ID: cfg.ID(),
 		Description: cfg.About(), DescriptionDefault: cfg.Description == "",
 		ContextProvider: cfg.ContextProvider, RebuildWithoutSandbox: cfg.RebuildWithoutSandbox,
-		PluginsKept: o.plugins.kept, Protected: cfg.Protected(),
+		BashWithoutSandbox: cfg.BashWithoutSandbox,
+		PluginsKept:        o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
 	}
 	for _, p := range providers {
@@ -260,7 +265,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "rebuild without a sandbox", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "rebuild without a sandbox", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "bash without a sandbox"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -274,6 +279,7 @@ func (s Setting) String() string {
 const (
 	holdsNow     = "saved: it holds from the next message, for you and for peers"
 	holdsRebuild = "saved: it holds for the next rebuild"
+	holdsBash    = "saved: it holds for the next command of bash"
 	holdsRestart = "saved: it holds once ouro starts anew: quit and start ouro, /stop and /start the node"
 )
 
@@ -295,6 +301,9 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 	case SetRebuildWithoutSandbox:
 		c.RebuildWithoutSandbox = s.On
 		return holdsRebuild, nil
+	case SetBashWithoutSandbox:
+		c.BashWithoutSandbox = s.On
+		return holdsBash, nil
 	case SetPlugin:
 		return holdsRestart, o.switchPlugin(c, s.Name, s.On)
 	case SetAllTools, SetTool, SetToolSettings:

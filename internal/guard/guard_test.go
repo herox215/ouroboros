@@ -520,3 +520,61 @@ func TestRefusalNamesTheRule(t *testing.T) {
 		t.Errorf("got %v, %v", Read, Delete)
 	}
 }
+
+// The sandbox of a command holds the rules for files: the secrets, what is
+// protected and what the tool is denied are neither read nor written, the
+// node, the Go of rebuild and what is fixed in the checkouts it knows are not
+// written, and the rest is writable as "allow" says.
+func TestBox(t *testing.T) {
+	w := newWorld(t)
+	w.file(w.home+"/src/go.mod", "module ouroboros\n")
+	w.guard.Toolchain = func() []string { return []string{w.home + "/go", w.home + "/bin/go"} }
+	w.guard.Checkouts = func() []string { return []string{w.home + "/src"} }
+	p, err := w.guard.Box(Access{Tool: "bash", Deny: []string{"~/share"}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.Writable, []string{"/"}) || !p.Network {
+		t.Errorf("for the owner without allow: %+v", p)
+	}
+	hidden := []string{w.node + "/config.json", w.node + "/config.json.lock", w.home + "/.ssh", w.home + "/share"}
+	if !slices.Equal(p.Hidden, hidden) {
+		t.Errorf("hidden: %q", p.Hidden)
+	}
+	readOnly := []string{w.node, w.home + "/go", w.home + "/bin/go"}
+	for _, rel := range slices.Concat(corePackages, buildPaths) {
+		readOnly = append(readOnly, w.home+"/src/"+rel)
+	}
+	if !slices.Equal(p.ReadOnly, readOnly) {
+		t.Errorf("read only: %q", p.ReadOnly)
+	}
+
+	// What "allow" names is writable as far as it exists; a peer without
+	// it writes nothing.
+	p, err = w.guard.Box(Access{Tool: "bash", Allow: paths("~/share", "~/missing", w.root)}, false)
+	if err != nil || !slices.Equal(p.Writable, []string{w.home + "/share", w.root}) || p.Network {
+		t.Errorf("with allow: %+v, %v", p, err)
+	}
+	if p, err := w.guard.Box(Access{Tool: "bash", Peer: true}, false); err != nil || len(p.Writable) != 0 {
+		t.Errorf("for a peer: %+v, %v", p, err)
+	}
+	w.guard.Toolchain, w.guard.Checkouts = nil, nil
+	if p, err := w.guard.Box(Access{Tool: "bash"}, false); err != nil || !slices.Equal(p.ReadOnly, []string{w.node}) {
+		t.Errorf("without toolchain and checkouts: %+v, %v", p, err)
+	}
+
+	// Rules that cannot be read run nothing.
+	for _, a := range []Access{{Allow: paths("relative")}, {Deny: []string{"relative"}}} {
+		if _, err := w.guard.Box(a, false); err == nil {
+			t.Errorf("%+v: no error", a)
+		}
+	}
+	w.protected = []string{"relative"}
+	if _, err := w.guard.Box(Access{}, false); err == nil || !strings.Contains(err.Error(), `"protected"`) {
+		t.Errorf("protected that is no path: %v", err)
+	}
+	w.protected, w.failing = nil, errTest
+	if _, err := w.guard.Box(Access{}, false); !errors.Is(err, errTest) {
+		t.Errorf("a configuration that cannot be read: %v", err)
+	}
+}

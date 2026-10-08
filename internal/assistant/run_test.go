@@ -202,7 +202,7 @@ func TestRunDescription(t *testing.T) {
 	if !strings.Contains(run.Description, want) {
 		t.Fatalf("got:\n%s", run.Description)
 	}
-	if want := "Limits: 2m0s, 64 calls, 64 KiB of source; 16 KiB of print and 16 KiB of the value come back, " +
+	if want := "Limits: 10m0s, 64 calls, 64 KiB of source; 16 KiB of print and 16 KiB of the value come back, " +
 		"4 KiB each once the results of an answer have more than 64 KiB. What is left out is kept in printed and returned. "; !strings.Contains(run.Description, want) {
 		t.Fatalf("the limits are not what the tool says: %s", run.Description)
 	}

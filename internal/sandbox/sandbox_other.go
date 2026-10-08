@@ -11,6 +11,6 @@ import (
 
 func available() error { return fmt.Errorf("%w on %s", ErrUnavailable, runtime.GOOS) }
 
-func command(context.Context, []string, string, []string) (*exec.Cmd, error) {
+func command(context.Context, Policy, string, []string) (*exec.Cmd, error) {
 	return nil, available()
 }

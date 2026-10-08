@@ -55,6 +55,10 @@ type Config struct {
 	// sandbox, with network, on a system that has none. Only the owner sets
 	// it: no proposal does.
 	RebuildWithoutSandbox bool `json:"rebuild_without_sandbox,omitempty"`
+	// BashWithoutSandbox lets the tool bash run its commands without a
+	// sandbox, wherever there is one: with network, and with nothing of the
+	// rules for files. Only the owner sets it: no proposal does.
+	BashWithoutSandbox bool `json:"bash_without_sandbox,omitempty"`
 	// Plugins says which plugins of the build are turned off.
 	Plugins *Plugins `json:"plugins,omitempty"`
 }
@@ -313,8 +317,12 @@ func Fields() []string {
 var reserved = []string{"private_key", "access", "api_key", "base_url"}
 
 // FieldUnsandboxed is the field that lets rebuild build without a sandbox,
-// which no proposal changes either.
-const FieldUnsandboxed = "rebuild_without_sandbox"
+// and FieldBashUnsandboxed the one that lets bash run without one, which no
+// proposal changes either.
+const (
+	FieldUnsandboxed     = "rebuild_without_sandbox"
+	FieldBashUnsandboxed = "bash_without_sandbox"
+)
 
 // field returns the value of the field path as it applies: one that is not
 // set has the default that holds for it.
@@ -333,7 +341,7 @@ func (c Config) field(path string) (any, error) {
 	case FieldProtected:
 		return c.Protected(), nil
 	}
-	if path == FieldUnsandboxed {
+	if path == FieldUnsandboxed || path == FieldBashUnsandboxed {
 		return nil, fmt.Errorf("%s is set by the owner alone, in config.json: no proposal changes it", path)
 	}
 	if slices.Contains(reserved, path) {
@@ -421,6 +429,8 @@ func (c Config) Public(provider string) json.RawMessage {
 		Provider              string `json:"provider"`
 		Tools                 Tools  `json:"tools"`
 		RebuildWithoutSandbox bool   `json:"rebuild_without_sandbox"`
-	}{c.ID(), c.Name, c.About(), c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}, c.RebuildWithoutSandbox}, "", "  ")
+		BashWithoutSandbox    bool   `json:"bash_without_sandbox"`
+	}{c.ID(), c.Name, c.About(), c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected},
+		c.RebuildWithoutSandbox, c.BashWithoutSandbox}, "", "  ")
 	return b
 }

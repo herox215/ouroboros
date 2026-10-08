@@ -297,7 +297,7 @@ func TestLimitOfTime(t *testing.T) {
 	if err == nil || got != "" || err.Error() != "the script was stopped: it ran for more than 200ms" || !errors.Is(told, context.DeadlineExceeded) {
 		t.Fatalf("got %q, %v; the tool was told %v", got, err, told)
 	}
-	if MaxTime != 2*time.Minute {
+	if MaxTime != 10*time.Minute {
 		t.Fatalf("the limit is %s", MaxTime)
 	}
 }

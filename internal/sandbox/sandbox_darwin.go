@@ -12,6 +12,10 @@ import (
 // is written to be thrown away, terminals and pseudo-terminals.
 var devices = []string{os.DevNull, "/dev/zero", "/dev/tty", "/dev/ptmx"}
 
+// resolver is the socket through which macOS resolves names: with network a
+// command reaches it, or it reaches no host by its name.
+const resolver = "/private/var/run/mDNSResponder"
+
 // sandboxExec is the program that runs a command in a sandbox of macOS; tests
 // replace it.
 var sandboxExec = "/usr/bin/sandbox-exec"
@@ -23,33 +27,53 @@ func available() error {
 	return nil
 }
 
-func command(ctx context.Context, writable []string, path string, args []string) (*exec.Cmd, error) {
-	return exec.CommandContext(ctx, sandboxExec, append([]string{"-p", profile(writable), path}, args...)...), nil
+func command(ctx context.Context, p Policy, path string, args []string) (*exec.Cmd, error) {
+	return exec.CommandContext(ctx, sandboxExec, append([]string{"-p", profile(p), path}, args...)...), nil
 }
 
-// profile is the profile of sandbox-exec that keeps a command off the network
-// and lets it write to writable alone, with the devices.
+// profile is the profile of sandbox-exec that keeps a command to what p
+// allows, with the devices.
 //
 // A rule that comes later wins over one before it. "local ip" is not used for
-// what goes out: it lets every connection out.
-func profile(writable []string) string {
+// what goes out: it lets every connection out. A path the profile names need
+// not exist: what does not is not created either.
+func profile(p Policy) string {
 	var b strings.Builder
-	b.WriteString(`(version 1)
-(allow default)
-(deny network*)
+	b.WriteString("(version 1)\n(allow default)\n")
+	if p.Network {
+		fmt.Fprintf(&b, "(deny network-outbound (remote unix-socket))\n"+
+			"(allow network-outbound (remote unix-socket (path-literal %s)))\n", quote(resolver))
+	} else {
+		b.WriteString(`(deny network*)
 (allow network-bind (local ip "*:*"))
 (allow network-inbound (local ip "localhost:*"))
 (allow network-outbound (remote ip "localhost:*"))
-(deny file-write*)
-(allow file-write*`)
-	for _, w := range writable {
+`)
+	}
+	b.WriteString("(deny file-write*)\n(allow file-write*")
+	for _, w := range p.Writable {
 		fmt.Fprintf(&b, "\n  (subpath %s)", quote(w))
 	}
 	for _, d := range devices {
 		fmt.Fprintf(&b, "\n  (literal %s)", quote(d))
 	}
 	b.WriteString("\n  (regex #\"^/dev/ttys[0-9]+$\")\n  (regex #\"^/dev/fd/[0-9]+$\"))\n")
+	rule(&b, "file-write*", p.ReadOnly)
+	rule(&b, "file-read* file-write*", p.Hidden)
 	return b.String()
+}
+
+// rule writes the rule that denies ops on paths, each with everything below
+// it, if there are any.
+func rule(b *strings.Builder, ops string, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "(deny %s", ops)
+	for _, p := range paths {
+		fmt.Fprintf(b, "\n  (subpath %s)", quote(p))
+	}
+	b.WriteString(")\n")
 }
 
 // quote is s as a string of a profile.
