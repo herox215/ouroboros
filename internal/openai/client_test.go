@@ -723,3 +723,82 @@ func TestCompleteEndedAfterTheAnswer(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
+
+// The pictures of the results of tools go in a message of the user right
+// after the last of them, as the API takes a result only as text; a message
+// of the user has its own pictures as parts. Before a breakpoint they are
+// parts as well.
+func TestCompleteSendsImages(t *testing.T) {
+	var bodies []string
+	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		sse(`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`, "[DONE]")(w, r)
+	})
+	png := Image{Type: "image/png", Data: []byte("p")}
+	jpeg := Image{Type: "image/jpeg", Data: []byte("j")}
+	calls := []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: "read", Arguments: "{}"}},
+		{ID: "c2", Type: "function", Function: FunctionCall{Name: "read", Arguments: "{}"}}}
+	msgs := []Message{{Role: "user", Content: "look", Images: []Image{jpeg}}, {Role: "assistant", ToolCalls: calls},
+		{Role: "tool", ToolCallID: "c1", Content: "r1", Images: []Image{png}}, {Role: "tool", ToolCallID: "c2", Content: "r2", Images: []Image{jpeg}},
+		{Role: "user", Content: "note"}}
+	before := slices.Clone(msgs)
+	for _, model := range []string{"gpt-5", "claude-sonnet-4.5"} {
+		if _, err := c.Complete(context.Background(), model, msgs, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var sent struct{ Messages []json.RawMessage }
+	json.Unmarshal([]byte(bodies[0]), &sent)
+	want := []string{
+		`{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,ag=="}}]}`,
+		`{"role":"tool","content":"r1","tool_call_id":"c1"}`,
+		`{"role":"tool","content":"r2","tool_call_id":"c2"}`,
+		`{"role":"user","content":[{"type":"text","text":"[The pictures the tools above returned.]"},` +
+			`{"type":"image_url","image_url":{"url":"data:image/png;base64,cA=="}},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,ag=="}}]}`,
+		`{"role":"user","content":"note"}`,
+	}
+	if len(sent.Messages) != 6 {
+		t.Fatalf("sent %s", bodies[0])
+	}
+	for i, j := range []int{0, 2, 3, 4, 5} {
+		if got := string(sent.Messages[j]); got != want[i] {
+			t.Errorf("message %d:\n%s\nwant\n%s", j, got, want[i])
+		}
+	}
+	if !strings.Contains(bodies[1], `"text":"[The pictures the tools above returned.]","cache_control":{"type":"ephemeral"}},{"type":"image_url"`) {
+		t.Errorf("a breakpoint with pictures: %s", bodies[1])
+	}
+	if !reflect.DeepEqual(msgs, before) {
+		t.Error("the messages were changed")
+	}
+}
+
+// The pictures of results at the end of a conversation follow them all the
+// same, and a conversation without them stays as it is.
+func TestShown(t *testing.T) {
+	png := Image{Type: "image/png", Data: []byte("p")}
+	msgs := []Message{{Role: "user", Content: "look", Images: []Image{png}}, {Role: "tool", Content: "r", Images: []Image{png}}}
+	got := shown(msgs)
+	if len(got) != 3 || got[1].Images != nil || got[2].Role != "user" || len(got[2].Images) != 1 || len(got[0].Images) != 1 {
+		t.Fatalf("shown %+v", got)
+	}
+	plain := []Message{{Role: "user", Content: "look"}}
+	if got := shown(plain); &got[0] != &plain[0] {
+		t.Fatal("a conversation without pictures should stay as it is")
+	}
+}
+
+// A message is written without its pictures where it is kept, and read
+// back as it was, but for them.
+func TestImagesAreNotKept(t *testing.T) {
+	msgs := []Message{{Role: "user", Content: "look", Images: []Image{{Type: "image/png", Data: []byte("p")}}}}
+	b, err := json.Marshal(msgs)
+	if err != nil || string(b) != `[{"role":"user","content":"look"}]` {
+		t.Fatalf("kept %s, %v", b, err)
+	}
+	var back []Message
+	if err := json.Unmarshal(b, &back); err != nil || len(back) != 1 || back[0].Content != "look" {
+		t.Fatalf("read back %+v, %v", back, err)
+	}
+}

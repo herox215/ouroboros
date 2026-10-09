@@ -75,6 +75,22 @@ func Configurable[S any](t Tool, with func(settings S) (RunFunc, error)) Tool {
 	return agent.Configurable(t, with)
 }
 
+// Image is a picture a Tool shows the LLM: its media type, like
+// "image/png", and its bytes.
+type Image = openai.Image
+
+// ShowImage makes the LLM see images along with the result of the Tool that
+// ctx is run for, which says in words what they are. It reports false
+// outside of a call of a tool, where they would go nowhere. A model that
+// takes no pictures fails the answer; the pictures are not kept then.
+func ShowImage(ctx context.Context, images ...Image) bool { return agent.Show(ctx, images...) }
+
+// Remark gives the owner a short remark on the call of the Tool that ctx is
+// run for, which a front end shows with how the call ended: the size a
+// picture was shown in, say. The LLM is not told it. It reports false
+// outside of a call of a tool.
+func Remark(ctx context.Context, text string) bool { return agent.Remark(ctx, text) }
+
 // Reply returns the message a Method answers text with.
 func Reply(text string) *Message {
 	m := a2a.NewMessage("agent", "", text)
@@ -146,6 +162,12 @@ type (
 // "llm prefix: ", "llm response: " and "llm answered: ". No secret of the
 // node shows in them: the log replaces every one.
 func Trace(ctx context.Context) func(format string, args ...any) { return openai.TraceOf(ctx) }
+
+// Effort is how much the owner wants the model to think before it answers,
+// for a Model to send the way its API takes it: one of AllEfforts, like
+// "low" or "max", and "" to leave it to the model. Peers are answered with
+// "". A model that does not know the effort takes the nearest it knows.
+func Effort(ctx context.Context) string { return openai.EffortOf(ctx) }
 
 // Requests keeps the last request of every conversation a Model traced, to
 // say with Compare how far the next one begins like it: what the API can

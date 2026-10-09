@@ -2,11 +2,15 @@ package tui
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
 )
@@ -299,5 +303,77 @@ func TestHistoryGlidesToWhatComes(t *testing.T) {
 	say("five")
 	if m.history.YOffset() != up || m.glide != nil {
 		t.Fatalf("a history scrolled up should stay at %d: at %d, %+v", up, m.history.YOffset(), m.glide)
+	}
+}
+
+// fades is how a box shows the lines of a viewport, port: a letter a line,
+// "e" for one faded at an edge, nearly the color of the background, "d" for
+// a dim one and "." for one as it is. shown are the lines of the box from the
+// first of the viewport on.
+func fades(t *testing.T, m *Model, shown []string, port string) string {
+	t.Helper()
+	edge := lipgloss.NewStyle().Foreground(fadeColor(m.light))
+	var got strings.Builder
+	for i, l := range strings.Split(port, "\n") {
+		switch {
+		case strings.Contains(shown[i], edge.Render(ansi.Strip(l))):
+			got.WriteString("e")
+		case strings.Contains(shown[i], faint(l)):
+			got.WriteString("d")
+		case strings.Contains(shown[i], l):
+			got.WriteString(".")
+		default:
+			t.Fatalf("line %d of the viewport is not in the box: %q", i, shown[i])
+		}
+	}
+	return got.String()
+}
+
+// The history fades out over two lines at an edge of the box where more of it
+// is beyond: at the bottom only at the top, scrolled up at both edges, at the
+// top only at the bottom, and the lines between stay as they are. The
+// commands offered for what is typed take the rows at the top of the history,
+// so that more of it is above then, also at its top.
+func TestHistoryFadesAtItsEdges(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 80)
+	faded := func() string {
+		return fades(t, m, strings.Split(m.chatView(), "\n")[2:], m.history.View()) // below the border and the title
+	}
+	n := m.history.Height()
+	if got, want := faded(), "ed"+strings.Repeat(".", n-2); got != want {
+		t.Fatalf("at the bottom only the top should fade: %s, want %s", got, want)
+	}
+	scroll(t, m, press(m, "pgup"))
+	if got, want := faded(), "ed"+strings.Repeat(".", n-4)+"de"; got != want {
+		t.Fatalf("scrolled up both edges should fade: %s, want %s", got, want)
+	}
+	m.history.SetYOffset(0)
+	if got, want := faded(), strings.Repeat(".", n-2)+"de"; got != want {
+		t.Fatalf("at the top only the bottom should fade: %s, want %s", got, want)
+	}
+	press(m, "/", "s")
+	k := len(suggested(m))
+	shown := strings.Join(strings.Split(m.history.View(), "\n")[k:], "\n")
+	if got, want := fades(t, m, strings.Split(m.chatView(), "\n")[2:], shown), "ed"+strings.Repeat(".", n-k-4)+"de"; k == 0 || got != want {
+		t.Fatalf("with %d commands offered at the top both edges should fade: %s, want %s", k, got, want)
+	}
+	if got := m.fadeEdges([]string{"a", "b", "c"}, true, true); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("a history of three lines should not fade: %q", got)
+	}
+	if got := m.fadeEdges([]string{"a", "b", "c", "d"}, true, true); got[0] == "a" || got[3] == "d" {
+		t.Fatalf("a history of four lines should fade at both edges: %q", got)
+	}
+	if fadeColor(true) == fadeColor(false) {
+		t.Fatal("the faded edge should follow the background")
+	}
+}
+
+// A dim line keeps its colors, and stays dim after every sequence in it.
+func TestFaintKeepsColors(t *testing.T) {
+	got := faint("a\x1b[31mb\x1b[mc")
+	want := "\x1b[2ma\x1b[31m\x1b[2mb\x1b[m\x1b[2mc\x1b[22m"
+	if got != want {
+		t.Fatalf("faint = %q, want %q", got, want)
 	}
 }

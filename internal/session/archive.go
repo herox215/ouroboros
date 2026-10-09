@@ -77,7 +77,9 @@ func (s *Service) load(id string) *session {
 	if title != "" {
 		events = append(events, Event{Kind: Title, At: last.Local(), Text: title})
 	}
-	return &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
+	se := &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
+	s.effortOf(se)
+	return se
 }
 
 // replay returns what happened in an archived conversation, as its events,

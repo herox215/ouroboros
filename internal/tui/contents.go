@@ -1,0 +1,401 @@
+package tui
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"image/color"
+	"regexp"
+	"strings"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+)
+
+// How the context screen shows a context: not as the chat shows a
+// conversation, but as what the LLM is sent. Every message has a head: a
+// badge of its role in the color of the role, a rule, and its size at the
+// end. Its lines hang on a bar of that color. The text stays what it is;
+// only how it is laid out and colored differs. The functions a tool offers
+// and their parameters stand out, its schema is indented JSON, and the
+// arguments of a call are taken apart: a text is shown as the lines it has,
+// not as a string of JSON. A note in brackets, like the one where an answer
+// broke off, recedes.
+
+// bar is what the lines of a message hang on. It is no part of what is
+// searched.
+const bar = "▎"
+
+var (
+	keyStyle     = lipgloss.NewStyle().Foreground(accent) // a parameter, an argument, a key of JSON
+	stringStyle  = lipgloss.NewStyle().Foreground(good)   // a text in JSON
+	literalStyle = lipgloss.NewStyle().Foreground(warn)   // a number, true, false or null in JSON
+	noteStyle    = mutedStyle.Italic(true)                // a note in brackets
+	varStyle     = lipgloss.NewStyle().Foreground(warn)   // a variable the scripts keep
+)
+
+// roleColors are the colors of the roles of messages: the user and the agent
+// have theirs of the chat.
+var roleColors = map[string]color.Color{
+	"user":              accent,
+	"assistant":         peer,
+	"system":            lipgloss.Color("7"),
+	"tool":              good, // what a tool returned
+	"plugin diagnostic": bad,
+}
+
+// roleColor is the color of the messages of role: a tool the LLM is offered
+// is blue, a role that is not known muted.
+func roleColor(role string) color.Color {
+	if c, ok := roleColors[role]; ok {
+		return c
+	}
+	if strings.HasPrefix(role, "tool ") {
+		return lipgloss.Color("4")
+	}
+	return muted
+}
+
+// renderContext lays out the messages of a context width cells wide, a
+// block each, and after them the variables its scripts kept, when they kept
+// any.
+func renderContext(msgs []Message, width int, light bool) []string {
+	t := traceScripts(msgs)
+	var blocks []string
+	for i, c := range msgs {
+		blocks = append(blocks, renderMessage(c, i, &t, width, light))
+	}
+	if len(t.variables) > 0 {
+		blocks = append(blocks, renderVariables(t.variables, width, light))
+	}
+	return blocks
+}
+
+// renderMessage lays out the message i of a context width cells wide: its
+// head, with its number and its size, and its lines on the bar.
+func renderMessage(c Message, i int, t *scriptTrace, width int, light bool) string {
+	return block(c.Role, roleColor(c.Role), fmt.Sprintf("#%d", i+1), byteSize(len(c.Text)), messageLines(c, i, t, width-2), width, light)
+}
+
+// block lays out a block of the context screen width cells wide: a head of a
+// badge with label in col, a note after it, a rule and end, and lines that
+// hang on a bar of col, two cells narrower.
+func block(label string, col color.Color, note, end string, lines []string, width int, light bool) string {
+	badge := lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(col).Bold(true).Padding(0, 1).Render(label)
+	note, end = " "+note, " "+end
+	rule := strings.Repeat("─", max(0, width-lipgloss.Width(badge)-lipgloss.Width(note)-lipgloss.Width(end)-1))
+	out := []string{badge + mutedStyle.Render(note) + lipgloss.NewStyle().Foreground(borderMuted(light)).Render(" "+rule) + mutedStyle.Render(end)}
+	edge := lipgloss.NewStyle().Foreground(col).Render(bar) + " "
+	for _, l := range lines {
+		out = append(out, edge+l)
+	}
+	return strings.Join(out, "\n")
+}
+
+// byteSize is how long a message is: in bytes below a KiB, in KiB from there
+// on.
+func byteSize(n int) string {
+	if n == 1 {
+		return "1 byte"
+	}
+	if n < 1024 {
+		return fmt.Sprintf("%d bytes", n)
+	}
+	return fmt.Sprintf("%.1f KiB", float64(n)/1024)
+}
+
+// messageLines lays out the text of the message i width cells wide, as its
+// role has it: the calls of the agent with what their scripts use, and the
+// result of a script with how what is kept changed.
+func messageLines(c Message, i int, t *scriptTrace, width int) []string {
+	text := strings.ReplaceAll(c.Text, "\t", "    ")
+	if c.Role == "assistant" {
+		return callLines(text, t.calls[i], width)
+	}
+	if strings.HasPrefix(c.Role, "tool ") {
+		return toolLines(text, width)
+	}
+	if r := t.results[i]; r != nil {
+		return resultLines(r, width)
+	}
+	return textLines(text, width)
+}
+
+// textLines wraps text; a line that is a note in brackets recedes.
+func textLines(text string, width int) []string {
+	var lines []string
+	for _, l := range strings.Split(text, "\n") {
+		if strings.HasPrefix(l, "[") && strings.HasSuffix(l, "]") {
+			l = noteStyle.Render(l)
+		}
+		lines = append(lines, hang("", "", l, width)...)
+	}
+	return lines
+}
+
+// hang wraps text width cells wide: its first line goes after first, the
+// others after rest, which is as wide.
+func hang(first, rest, text string, width int) []string {
+	lines := strings.Split(lipgloss.Wrap(text, max(1, width-lipgloss.Width(first)), ""), "\n")
+	for i := range lines {
+		prefix := rest
+		if i == 0 {
+			prefix = first
+		}
+		lines[i] = prefix + lines[i]
+	}
+	return lines
+}
+
+var (
+	// function is a line of the description of a tool that names a function
+	// it offers: "- name(signature): what it does".
+	function = regexp.MustCompile(`^- ([\w.]+)(\(.*?\))(.*)$`)
+	// parameter is an indented line that names a parameter: "name: what it is".
+	parameter = regexp.MustCompile(`^(\s+)([\w.?]+)(: .*)$`)
+)
+
+// toolLines lays out what a tool the LLM is offered is: its description,
+// the functions it names and their parameters standing out, and the schema
+// of its parameters as indented JSON.
+func toolLines(text string, width int) []string {
+	description, schema := text, ""
+	const label = "\nparameters: "
+	if i := strings.LastIndex(text, label); i >= 0 {
+		description, schema = text[:i], text[i+len(label):]
+	}
+	var lines []string
+	for _, l := range strings.Split(description, "\n") {
+		if f := function.FindStringSubmatch(l); f != nil {
+			lines = append(lines, hang("- ", "  ", boldStyle.Render(f[1])+mutedStyle.Render(f[2])+f[3], width)...)
+		} else if p := parameter.FindStringSubmatch(l); p != nil {
+			lines = append(lines, hang(p[1], p[1]+"  ", keyStyle.Render(p[2])+p[3], width)...)
+		} else {
+			lines = append(lines, hang("", "", l, width)...)
+		}
+	}
+	if schema != "" {
+		lines = append(lines, mutedStyle.Render("parameters"))
+		lines = append(lines, jsonLines(schema, width)...)
+	}
+	return lines
+}
+
+// jsonLines lays out JSON indented and colored, a line that is too long
+// hanging below its key; what is no JSON as it is.
+func jsonLines(raw string, width int) []string {
+	var b bytes.Buffer
+	if json.Indent(&b, []byte(raw), "", "  ") != nil {
+		return hang("", "", raw, width)
+	}
+	var lines []string
+	for _, l := range strings.Split(b.String(), "\n") {
+		indent := strings.Repeat(" ", len(l)-len(strings.TrimLeft(l, " "))+2)
+		lines = append(lines, hang("", indent, colorJSON(l), width)...)
+	}
+	return lines
+}
+
+// jsonToken is a string of JSON, with the colon after it when it is a key,
+// or a number, true, false or null.
+var jsonToken = regexp.MustCompile(`"(?:[^"\\]|\\.)*":?|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?`)
+
+// colorJSON colors the keys, the strings and the other values of JSON
+// without white space between a key and its colon.
+func colorJSON(s string) string {
+	return jsonToken.ReplaceAllStringFunc(s, func(t string) string {
+		if key, ok := strings.CutSuffix(t, ":"); ok {
+			return keyStyle.Render(key) + ":"
+		}
+		if strings.HasPrefix(t, `"`) {
+			return stringStyle.Render(t)
+		}
+		return literalStyle.Render(t)
+	})
+}
+
+// callLines lays out what the agent says and the calls of tools it makes,
+// each a line "→ name arguments"; runs are what their scripts use, by call.
+func callLines(text string, runs []*runTrace, width int) []string {
+	parts := strings.Split("\n"+text, "\n→ ")
+	var lines []string
+	if words := strings.TrimPrefix(parts[0], "\n"); words != "" {
+		lines = textLines(words, width)
+	}
+	for i, call := range parts[1:] {
+		var r *runTrace
+		if i < len(runs) {
+			r = runs[i]
+		}
+		lines = append(lines, callLine(call, r, width)...)
+	}
+	return lines
+}
+
+// callLine lays out a call of a tool: "→ name", and its arguments below it,
+// one a line and their values in a column. A text is shown as the lines it
+// has; other values, and arguments that are no object of JSON, as JSON. The
+// script of a call of run r has the variables it uses marked, and a line
+// below that names them.
+func callLine(call string, r *runTrace, width int) []string {
+	name, args, _ := strings.Cut(call, " ")
+	head := lipgloss.NewStyle().Foreground(peer).Render("→ ") + boldStyle.Render(name)
+	fields, ok := objectFields(args)
+	if !ok {
+		return hang("", "  ", strings.TrimRight(head+" "+args, " "), width)
+	}
+	lines := hang("", "  ", head, width)
+	column := 0
+	for _, f := range fields {
+		column = max(column, ansi.StringWidth(f.key))
+	}
+	for _, f := range fields {
+		first := "  " + keyStyle.Render(f.key) + strings.Repeat(" ", column-ansi.StringWidth(f.key)+2)
+		rest := strings.Repeat(" ", column+4)
+		var s string
+		if json.Unmarshal(f.value, &s) == nil && s != "" {
+			if r != nil && f.key == "script" {
+				s = markUses(s, r.at)
+			}
+			lines = append(lines, hang(first, rest, strings.ReplaceAll(s, "\t", "    "), width)...)
+			continue
+		}
+		var b bytes.Buffer
+		_ = json.Compact(&b, f.value) // it was decoded: it is JSON
+		lines = append(lines, hang(first, rest, colorJSON(b.String()), width)...)
+	}
+	if r != nil && len(r.uses) > 0 {
+		lines = append(lines, hang("  ", "  ", mutedStyle.Render("uses ")+varNames(r.uses), width)...)
+	}
+	return lines
+}
+
+// markUses marks the variables a script uses where they are in it.
+func markUses(script string, uses []nameAt) string {
+	for i := len(uses) - 1; i >= 0; i-- {
+		u := uses[i]
+		script = script[:u.at] + varStyle.Render(u.name) + script[u.at+len(u.name):]
+	}
+	return script
+}
+
+// varNames is names of variables, one after the other.
+func varNames(names []string) string {
+	marked := make([]string, len(names))
+	for i, name := range names {
+		marked[i] = varStyle.Render(name)
+	}
+	return strings.Join(marked, mutedStyle.Render(", "))
+}
+
+// resultLines lays out the result of a script: its text, and below it what
+// the interpreter keeps for the next script, as it changed with the script.
+// What it set comes first with what it is, then what is gone; the names that
+// stayed as they were are only named.
+func resultLines(r *resultTrace, width int) []string {
+	var lines []string
+	if r.text != "" {
+		lines = textLines(strings.ReplaceAll(r.text, "\t", "    "), width)
+	}
+	lines = append(lines, mutedStyle.Render("kept for the next script"))
+	column := 0
+	for _, k := range r.added {
+		column = max(column, ansi.StringWidth(k.name))
+	}
+	for _, c := range r.changed {
+		column = max(column, ansi.StringWidth(c.name))
+	}
+	for _, name := range r.gone {
+		column = max(column, ansi.StringWidth(name))
+	}
+	row := func(mark, name, what string) []string {
+		first := "  " + mark + " " + varStyle.Render(name) + strings.Repeat(" ", column-ansi.StringWidth(name)+2)
+		return hang(first, strings.Repeat(" ", column+6), what, width)
+	}
+	for _, k := range r.added {
+		lines = append(lines, row(lipgloss.NewStyle().Foreground(good).Render("+"), k.name, mutedStyle.Render(k.what))...)
+	}
+	for _, c := range r.changed {
+		what := c.now + ", set again"
+		if c.was != c.now {
+			what = c.now + ", was " + c.was
+		}
+		lines = append(lines, row(literalStyle.Render("~"), c.name, mutedStyle.Render(what))...)
+	}
+	for _, name := range r.gone {
+		lines = append(lines, row(errStyle.Render("−"), name, errStyle.Render("gone"))...)
+	}
+	if len(r.same) > 0 {
+		lines = append(lines, hang("  · ", "    ", mutedStyle.Render(strings.Join(r.same, ", ")+" as they were"), width)...)
+	}
+	if r.more != "" {
+		lines = append(lines, "  "+mutedStyle.Render(r.more))
+	}
+	return lines
+}
+
+// renderVariables lays out the variables the scripts of a context kept, a
+// line each: what it was when it was last kept, and the numbers of the
+// messages whose scripts set it, used it, and after which it was gone. The
+// interpreter keeps them beside the context: the LLM is not sent this.
+func renderVariables(vars []*variable, width int, light bool) string {
+	names, whats := 0, 0
+	for _, v := range vars {
+		names, whats = max(names, ansi.StringWidth(v.name)), max(whats, ansi.StringWidth(v.what))
+	}
+	var lines []string
+	for _, v := range vars {
+		first := varStyle.Render(v.name) + strings.Repeat(" ", names-ansi.StringWidth(v.name)+2) +
+			mutedStyle.Render(v.what) + strings.Repeat(" ", whats-ansi.StringWidth(v.what)+2)
+		where := mutedStyle.Render("set ") + messageNumbers(v.set)
+		if len(v.used) > 0 {
+			where += mutedStyle.Render(" · used ") + messageNumbers(v.used)
+		}
+		if v.gone > 0 {
+			where += mutedStyle.Render(" · ") + errStyle.Render(fmt.Sprintf("gone #%d", v.gone))
+		}
+		lines = append(lines, hang(first, strings.Repeat(" ", names+whats+4), where, width-2)...)
+	}
+	return block("variables", warn, fmt.Sprint(len(vars)), "not sent to the LLM", lines, width, light)
+}
+
+// messageNumbers are the numbers of messages, as their heads show them.
+func messageNumbers(numbers []int) string {
+	s := make([]string, len(numbers))
+	for i, n := range numbers {
+		s[i] = fmt.Sprintf("#%d", n)
+	}
+	return strings.Join(s, " ")
+}
+
+// field is a field of an object of JSON.
+type field struct {
+	key   string
+	value json.RawMessage
+}
+
+// objectFields takes an object of JSON apart into its fields, in the order
+// they have; false when s is no object of JSON, or has more after it.
+func objectFields(s string) ([]field, bool) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, false
+	}
+	var fields []field
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		key, _ := t.(string) // where a key is, a token is a string or an error
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, false
+		}
+		fields = append(fields, field{key, value})
+	}
+	if _, err := dec.Token(); err != nil || dec.More() {
+		return nil, false
+	}
+	return fields, true
+}

@@ -203,6 +203,9 @@ func TestWhatGoesWrong(t *testing.T) {
 	if _, err := p.Models(ctx, access{}); err == nil {
 		t.Fatal("an access without an endpoint: want error")
 	}
+	if got := p.Catalog(access{}); got != "opencode-go" {
+		t.Fatalf("models.dev names OpenCode Go %q", got)
+	}
 	// An access that cannot be read offers no key to sign in again with.
 	d := answer()
 	z.set(func() { z.status, z.listed = 0, []string{"kimi-k3"} })

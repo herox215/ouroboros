@@ -74,6 +74,7 @@ func Provider(o Options) plugin.Provider {
 			}
 			return openai.New(baseURL, key)
 		},
+		Catalog: func(plugin.Access) string { return Name }, // as models.dev names OpenCode Go
 	}
 }
 

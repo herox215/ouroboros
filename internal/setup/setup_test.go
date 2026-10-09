@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,6 +19,7 @@ import (
 	"ouroboros/internal/identity"
 	"ouroboros/internal/llm"
 	"ouroboros/internal/llm/llmtest"
+	"ouroboros/internal/modelsdev"
 )
 
 // two are the providers of the tests: neither is an OpenAI-compatible API.
@@ -799,4 +801,62 @@ func TestToggleFallback(t *testing.T) {
 	if _, err := fresh.ToggleFallback(stray.ID, "one-small"); !errors.Is(err, config.ErrIncomplete) {
 		t.Fatalf("not set up: %v", err)
 	}
+}
+
+// The owner sets one of the efforts, and "" for the one of the model; any
+// other is refused and changes nothing, as does a node that is not set up.
+func TestSetEffort(t *testing.T) {
+	s := session(t)
+	signedIn(t, s, "one", "good-1", "one-large")
+	for _, effort := range config.AllEfforts {
+		if err := s.SetEffort(effort); err != nil {
+			t.Fatal(err)
+		}
+		if cfg, _ := s.home.Config(); cfg.Effort != effort {
+			t.Fatalf("set %q, have %q", effort, cfg.Effort)
+		}
+	}
+	if err := s.SetEffort("huge"); !errors.Is(err, ErrNoEffort) {
+		t.Fatalf("no such effort: %v", err)
+	}
+	if cfg, _ := s.home.Config(); cfg.Effort != "max" {
+		t.Fatalf("a refused effort changed %q", cfg.Effort)
+	}
+	if err := session(t).SetEffort("low"); !errors.Is(err, config.ErrIncomplete) {
+		t.Fatalf("not set up: %v", err)
+	}
+}
+
+// The efforts the model of the node takes are what models.dev lists of it,
+// as the provider of its access names it there; of a model it does not list,
+// or of a node that is not set up, nothing is known.
+func TestEfforts(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "catalog.json")
+	listed := fmt.Sprintf(`{"at": %q, "providers": {"one": {"one-large": {"efforts": ["low", "high"]}, "one-small": {}}}}`,
+		time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(file, []byte(listed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := modelsdev.Open(file, nil)
+	s := session(t)
+	if efforts, known := s.Efforts(c); known || efforts != nil {
+		t.Fatalf("not set up: %q, %v", efforts, known)
+	}
+	signedIn(t, s, "one", "good-1", "one-large")
+	if efforts, known := s.Efforts(c); !known || !slices.Equal(efforts, []string{"low", "high"}) {
+		t.Fatalf("listed: %q, %v", efforts, known)
+	}
+	if err := s.Save("one-small", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if efforts, known := s.Efforts(c); !known || len(efforts) != 0 {
+		t.Fatalf("one without efforts: %q, %v", efforts, known)
+	}
+	if err := s.Save("one-medium", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, known := s.Efforts(c); known {
+		t.Fatal("a model that is not listed is known")
+	}
+	c.Wait()
 }

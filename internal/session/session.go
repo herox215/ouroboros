@@ -26,6 +26,7 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/config"
 	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
 )
@@ -63,6 +64,11 @@ const (
 	// Title names the session for its topic, in Text, once the agent can
 	// tell it: on the way to an answer, and anew when the session is loaded.
 	Title Kind = "title"
+	// Effort is how much the model thinks in the session, in Text, as the
+	// owner set it with SetEffort; "" leaves it to the model. Who watches a
+	// session that has one gets it with what happened in it so far, last.
+	// Without one the session has the effort of the node.
+	Effort Kind = "effort"
 )
 
 // Event is one thing that happened in a session. It is plain data, written
@@ -73,13 +79,15 @@ type Event struct {
 	// Text is the message, what the agent said, the answer, why it failed,
 	// or the binary of a Restart.
 	Text string `json:"text,omitempty"`
-	// Tool, Args, Done, Took and Err are of a Step: the call of Tool with
-	// Args, and once Done, how long it took and why it failed, if it did.
-	Tool string          `json:"tool,omitempty"`
-	Args json.RawMessage `json:"args,omitempty"`
-	Done bool            `json:"done,omitempty"`
-	Took time.Duration   `json:"took,omitempty"`
-	Err  string          `json:"err,omitempty"`
+	// Tool, Args, Done, Took, Err and Remark are of a Step: the call of
+	// Tool with Args, and once Done, how long it took, why it failed, if it
+	// did, and what the tool said of it for the owner.
+	Tool   string          `json:"tool,omitempty"`
+	Args   json.RawMessage `json:"args,omitempty"`
+	Done   bool            `json:"done,omitempty"`
+	Took   time.Duration   `json:"took,omitempty"`
+	Err    string          `json:"err,omitempty"`
+	Remark string          `json:"remark,omitempty"`
 	// Context is how long the context of the session is when the Event
 	// happens: what the last call of the LLM in it sent, in bytes, 0 if
 	// none was made yet.
@@ -92,7 +100,7 @@ type Event struct {
 // AsStep is the call of a tool a Step tells of, as the plugin of the tool
 // shows it, see plugin.ToolLine.
 func (e Event) AsStep() assistant.Step {
-	s := assistant.Step{Tool: e.Tool, Args: e.Args, Done: e.Done, Took: e.Took}
+	s := assistant.Step{Tool: e.Tool, Args: e.Args, Done: e.Done, Took: e.Took, Remark: e.Remark}
 	if e.Err != "" {
 		s.Err = errors.New(e.Err)
 	}
@@ -146,6 +154,11 @@ type API interface {
 	// Cancel stops the answer that is on its way in the session id, if
 	// there is one.
 	Cancel(ctx context.Context, id string) error
+	// SetEffort makes effort, one of config.AllEfforts, how much the model
+	// thinks in the session id from its next call on, whatever the node
+	// says: the Event Effort tells it. It fails with ErrNoEffort for one
+	// that is none.
+	SetEffort(ctx context.Context, id, effort string) error
 	// List describes the sessions that have a message, the one with the
 	// latest Event first: also those the node keeps from before it started.
 	List(ctx context.Context) ([]Info, error)
@@ -186,6 +199,8 @@ var (
 	// ErrNoSession means that a session was named with an ID that is none,
 	// or that there is nothing of it to delete or read.
 	ErrNoSession = errors.New("no such session")
+	// ErrNoEffort means an effort that is none of config.AllEfforts.
+	ErrNoEffort = errors.New("no such effort")
 	// ErrEmpty means a message without text.
 	ErrEmpty = errors.New("the message is empty")
 )
@@ -217,6 +232,7 @@ type Assistant interface {
 	Resume(contextID string, conversation json.RawMessage) error
 	Forget(contextID string)
 	Title(ctx context.Context, conversation []openai.Message) (string, error)
+	Effort() string
 }
 
 // Service holds the sessions of the owner in the process of the node.
@@ -267,6 +283,10 @@ type session struct {
 	// tries is for how many messages it was asked to.
 	title string
 	tries int
+	// effort is how much the model thinks in the session, once efforted
+	// says that the owner set it: else the agent says.
+	effort   string
+	efforted bool
 }
 
 // New returns the Service of the sessions with agent.
@@ -312,6 +332,7 @@ func (s *Service) get(id string) *session {
 	se := s.lookup(id)
 	if se == nil {
 		se = &session{id: id, watchers: map[chan Event]struct{}{}}
+		s.effortOf(se) // set before anything was said in it
 		s.sessions[id] = se
 	}
 	return se
@@ -332,7 +353,7 @@ func (s *Service) lookup(id string) *session {
 
 // forget drops se once nothing is in it and nobody watches it. s.mu is held.
 func (s *Service) forget(se *session) {
-	if len(se.events) == 0 && len(se.watchers) == 0 && se.cancel == nil {
+	if len(se.events) == 0 && len(se.watchers) == 0 && se.cancel == nil && !se.efforted {
 		delete(s.sessions, se.id)
 	}
 }
@@ -471,8 +492,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		})
 	}
 	ctx = agent.WithSteering(ctx, func() []string { return s.steered(se) })
+	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
-		e := Event{Kind: Step, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took}
+		e := Event{Kind: Step, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took, Remark: st.Remark}
 		if st.Err != nil {
 			e.Err = st.Err.Error()
 		}
@@ -571,6 +593,12 @@ func (s *Service) emit(se *session, e Event) {
 	e.Context = s.agent.Context(se.id)
 	e.Cache = s.agent.Cache(se.id)
 	se.events = append(se.events, e)
+	s.tell(se, e)
+}
+
+// tell hands e to those who watch se. A watcher that fell too far behind is
+// let go: it watches again and gets everything anew. s.mu is held.
+func (s *Service) tell(se *session, e Event) {
 	for ch := range se.watchers {
 		select {
 		case ch <- e:
@@ -622,7 +650,71 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 		}
 		s.forget(se)
 	})
-	return slices.Clone(se.events), live, nil
+	past := slices.Clone(se.events)
+	if se.efforted {
+		past = append(past, s.effortEvent(se))
+	}
+	return past, live, nil
+}
+
+// SetEffort makes effort, one of config.AllEfforts, how much the model thinks
+// in the session id, from its next call on: also in the answer on its way.
+// It is kept along with the session, and told to who watches it.
+func (s *Service) SetEffort(_ context.Context, id, effort string) error {
+	if err := valid(id); err != nil {
+		return err
+	}
+	if !slices.Contains(config.AllEfforts, effort) {
+		return fmt.Errorf("%w: %q, there are %s", ErrNoEffort, effort, strings.Join(config.AllEfforts[1:], ", "))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStopped
+	}
+	se := s.get(id)
+	se.effort, se.efforted = effort, true
+	s.tell(se, s.effortEvent(se))
+	if s.archive != nil {
+		if err := s.archive.SetEffort(history.Owner(id), effort); err != nil {
+			s.archive.log("the effort of the session %s cannot be kept: %v", id, err)
+		}
+	}
+	return nil
+}
+
+// effortEvent tells the effort of se, with the size of its context and
+// what was cached as the last Event told them. s.mu is held.
+func (s *Service) effortEvent(se *session) Event {
+	e := Event{Kind: Effort, At: s.now().Round(0), Text: se.effort}
+	if n := len(se.events); n > 0 {
+		e.Context, e.Cache = se.events[n-1].Context, se.events[n-1].Cache
+	}
+	return e
+}
+
+// effort is how much the model thinks in se now: as the owner set it, or as
+// the agent says.
+func (s *Service) effort(se *session) string {
+	s.mu.Lock()
+	effort, own := se.effort, se.efforted
+	s.mu.Unlock()
+	if own {
+		return effort
+	}
+	return s.agent.Effort()
+}
+
+// effortOf gives se the effort it is kept with, if it is. s.mu is held.
+func (s *Service) effortOf(se *session) {
+	if s.archive == nil {
+		return
+	}
+	effort, ok, err := s.archive.Effort(history.Owner(se.id))
+	if err != nil {
+		s.archive.log("the effort of the session %s cannot be read: %v", se.id, err)
+	}
+	se.effort, se.efforted = effort, ok
 }
 
 // Cancel stops the answer on its way in the session id.

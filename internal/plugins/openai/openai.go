@@ -70,6 +70,15 @@ func Provider(offer Offer) plugin.Provider {
 			}
 			return openai.New(baseURL, key)
 		},
+		// models.dev knows a provider by where its API is reached.
+		Catalog: func(a plugin.Access) string {
+			c, err := a.Credentials()
+			if err != nil {
+				return ""
+			}
+			baseURL, _, _ := openai.Saved(c)
+			return baseURL
+		},
 	}
 }
 

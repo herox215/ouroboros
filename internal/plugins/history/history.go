@@ -86,13 +86,14 @@ type readArgs struct {
 	Count   int    `json:"count"`
 }
 
-// about is what each tool says of the archive. The descriptions are the
-// same in every conversation, so that the prompt stays the same for the
-// cache of the provider.
+// about is what the tools that find conversations say of the archive. The
+// descriptions are the same in every conversation, so that the prompt stays
+// the same for the cache of the provider.
 const about = "Every conversation is archived in full: messages that are no longer in your context, " +
 	"and earlier conversations, can be found there. "
 
-// hint is what the tools say of what other conversations hold.
+// hint is what the tools that show what conversations hold say of the
+// others.
 const hint = "What you find in another conversation may be outdated: take it as a hint to check, not as a fact."
 
 func (h *archive) tools() []plugin.Tool {
@@ -127,7 +128,7 @@ func (h *archive) tools() []plugin.Tool {
 		},
 		{
 			Name: Read,
-			Description: about + fmt.Sprintf("Read the records of an archived conversation in order, from a record number on: "+
+			Description: fmt.Sprintf("Read the records of an archived conversation in order, from a record number on: "+
 				"at most %d per call, and fewer when they are long; a note at the end says where to continue. ", history.MaxRecords) + hint,
 			Schema: `{"type":"object","properties":{` +
 				`"session":{"type":"string","description":"the session, as ` + Search + ` and ` + Sessions + ` name it; this conversation if left out"},` +
@@ -150,7 +151,7 @@ func (h *archive) tools() []plugin.Tool {
 		{
 			Name: Sessions,
 			Description: about + fmt.Sprintf("List the archived conversations, the most recent first, with when they started "+
-				"and their first message: for the owner all of theirs (at most %d), for a peer the one it is in. ", history.MaxSessions) + hint,
+				"and their first message: for the owner all of theirs (at most %d), for a peer the one it is in.", history.MaxSessions),
 			Schema: `{"type":"object","properties":{}}`,
 			Run: run(func(ctx context.Context, _ struct{}) (string, error) {
 				w, err := who(ctx)

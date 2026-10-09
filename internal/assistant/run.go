@@ -35,8 +35,9 @@ func runDescription(functions string) string {
 	d += `A function takes one object and returns the text of its result, like ask_peer({peer: "beta", message: "…"}); ` +
 		"one that fails throws an Error. A function named like a word of JavaScript is tools.NAME, like tools.delete({path: \"…\"}). " +
 		"Besides these there are no files, network, timers or require. " +
-		"The scripts of a conversation share one interpreter: top-level declarations and globalThis are kept for the next script, " +
-		"and the end of the result lists them, like [kept for the next script: files (array of 312)]. " +
+		"The scripts of a conversation share one interpreter: what a script declares at its top level, const and let too, " +
+		"and what it puts on globalThis is kept for the next script under its name, so keep nothing twice; " +
+		"the end of the result lists what is kept, like [kept for the next script: files (array of 312)]. " +
 		"A script with return is a function body, and what it declares is gone. " +
 		fmt.Sprintf("Limits: %s, %d calls, %d KiB of source; %d KiB of print and %d KiB of the value come back, "+
 			"%d KiB each once the results of an answer have more than %d KiB. What is left out is kept in %s and %s. ",

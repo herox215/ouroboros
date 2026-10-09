@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,10 @@ const (
 	keptHistory      = 40
 	keptHistoryBytes = 128 << 10
 	hugeHistoryBytes = 1 << 20
+	// maxImages is how many pictures a conversation keeps, the last ones
+	// the tools showed. They count for none of the bytes above: a single
+	// picture would cut all that came before it.
+	maxImages = 8
 
 	// Budget is how many bytes the results of tools of one answer may have
 	// before the LLM is told with every call how much it gathered, and the
@@ -76,6 +81,8 @@ type Step struct {
 	Result string
 	Err    error
 	Took   time.Duration
+	// Remark is what the tool said of the call for the owner, see Remark.
+	Remark string
 }
 
 // Call reports a call of the LLM: once when it starts and again, with Done
@@ -98,11 +105,13 @@ type Call struct {
 	// Via is what answered instead of the access and the model of the agent,
 	// and Instead why those could not: see openai.Message.
 	Via, Instead string
-	Done         bool
-	Took         time.Duration
-	ToolCalls    int
-	Content      string
-	Err          error
+	// Effort is what the API took of the effort, see openai.Message.
+	Effort    openai.Took
+	Done      bool
+	Took      time.Duration
+	ToolCalls int
+	Content   string
+	Err       error
 }
 
 // Observer is told what an agent does on the way to an answer. Either field
@@ -119,7 +128,51 @@ type (
 	spentKey    struct{}
 	steeringKey struct{}
 	answerKey   struct{}
+	imagesKey   struct{}
+	remarkKey   struct{}
 )
+
+// remark is what a tool says of its call for the owner.
+type remark struct {
+	mu   sync.Mutex
+	text string
+}
+
+// Remark gives the owner a short remark on the call of the tool that ctx is
+// run for, which is shown with how it ended: the size a picture was shown
+// in, say. The LLM is not told it. A later remark replaces an earlier one,
+// and outside of a call it goes nowhere: Remark reports false then.
+func Remark(ctx context.Context, text string) bool {
+	r, ok := ctx.Value(remarkKey{}).(*remark)
+	if !ok {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.text = text
+	return true
+}
+
+// shownImages are the pictures a call of a tool shows the LLM.
+type shownImages struct {
+	mu     sync.Mutex
+	images []openai.Image
+}
+
+// Show makes the LLM see images along with the result of the call of a tool
+// that ctx is run for: the result says in words what they are. It reports
+// false outside of a call, where they would go nowhere. A tool that a script
+// runs shows them with the call of the script.
+func Show(ctx context.Context, images ...openai.Image) bool {
+	s, ok := ctx.Value(imagesKey{}).(*shownImages)
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.images = append(s.images, images...)
+	return true
+}
 
 // Answer is what lasts as long as one answer of an agent: what its tools
 // keep from one call to the next, like the task its messages to peers
@@ -372,7 +425,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
 		if observe.Call != nil {
-			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Via: msg.Via, Instead: msg.Instead, Done: true, Took: time.Since(start),
+			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Via: msg.Via, Instead: msg.Instead, Effort: msg.Effort, Done: true, Took: time.Since(start),
 				ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
 		if err != nil {
@@ -391,7 +444,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		for _, call := range msg.ToolCalls {
 			result := repeated(call, before)
 			if result.Content == "" {
-				result = a.call(ctx, call)
+				result = once(a.call(ctx, call), history)
 			}
 			if err := emit(result); err != nil {
 				return abandon(err)
@@ -473,11 +526,14 @@ func (m *Memory) noted(contextID string) []openai.Message {
 // answer failed or was stopped: as far as it got, its calls of tools that
 // did not finish closed, and with a note that it broke off. An answer can
 // fail between a call and its result, which the API would reject. Why it
-// failed is not part of it, so that no later context leaks the cause.
+// failed is not part of it, so that no later context leaks the cause. Nor
+// are the pictures the tools showed: a model that takes none would fail with
+// them again on every answer.
 func Abandon(msgs []openai.Message) []openai.Message {
 	msgs = slices.Clone(msgs)
 	pending := []string{}
-	for _, m := range msgs {
+	for i, m := range msgs {
+		msgs[i].Images = nil
 		for _, call := range m.ToolCalls {
 			pending = append(pending, call.ID)
 		}
@@ -555,6 +611,35 @@ func repeated(call openai.ToolCall, msgs []openai.Message) openai.Message {
 	return openai.Message{}
 }
 
+// once returns result without the pictures history shows already: its
+// content names the call they came with instead. What the LLM saw once is
+// not sent twice.
+func once(result openai.Message, history []openai.Message) openai.Message {
+	var kept []openai.Image
+	for _, image := range result.Images {
+		if call := shownWith(image, history); call != "" {
+			result.Content += fmt.Sprintf("\n[The picture is the same as the one shown above with the result of the call %s: it is not sent again.]", call)
+			continue
+		}
+		kept = append(kept, image)
+	}
+	result.Images = kept
+	return result
+}
+
+// shownWith returns the call whose result in history shows image, "" if
+// none does.
+func shownWith(image openai.Image, history []openai.Message) string {
+	for _, m := range history {
+		for _, seen := range m.Images {
+			if bytes.Equal(seen.Data, image.Data) {
+				return m.ToolCallID
+			}
+		}
+	}
+	return ""
+}
+
 // gathered is what the LLM is told once the results of the tools of the
 // answer have n bytes, beyond Budget.
 func gathered(n int) string {
@@ -626,11 +711,12 @@ func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
 			return "", errors.New("unknown tool " + call.Function.Name)
 		}}
 	}
-	content, err := Invoke(ctx, tool, json.RawMessage(call.Function.Arguments))
+	shown := &shownImages{}
+	content, err := Invoke(context.WithValue(ctx, imagesKey{}, shown), tool, json.RawMessage(call.Function.Arguments))
 	if err != nil {
-		content = "error: " + err.Error()
+		return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error()}
 	}
-	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content}
+	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content, Images: shown.images}
 }
 
 // Invoke runs tool with args within the conversation of ctx and reports the
@@ -643,8 +729,9 @@ func Invoke(ctx context.Context, tool Tool, args json.RawMessage) (string, error
 		observe.Step(step)
 	}
 	start := time.Now()
-	step.Result, step.Err = tool.Run(ctx, args)
-	step.Done, step.Took = true, time.Since(start)
+	said := &remark{}
+	step.Result, step.Err = tool.Run(context.WithValue(ctx, remarkKey{}, said), args)
+	step.Done, step.Took, step.Remark = true, time.Since(start), said.text
 	if observe.Step != nil {
 		observe.Step(step)
 	}
@@ -703,7 +790,7 @@ func (m *Memory) remember(contextID string, msgs []openai.Message) {
 		c = &conversation{}
 	}
 	c.lastUsed = m.clock
-	c.msgs = msgs
+	c.msgs = lastImages(msgs)
 	m.conversations[contextID] = c
 	if len(m.conversations) > maxContexts {
 		m.evictOldest()
@@ -763,7 +850,8 @@ func thoughtless(msgs []openai.Message) []openai.Message {
 	return msgs
 }
 
-// sizes returns the sizes of msgs as JSON: sizes[i] is that of msgs[i:].
+// sizes returns the sizes of msgs as JSON, which leaves out their pictures:
+// sizes[i] is that of msgs[i:].
 func sizes(msgs []openai.Message) []int {
 	sizes := make([]int, len(msgs)+1)
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -771,6 +859,26 @@ func sizes(msgs []openai.Message) []int {
 		sizes[i] = sizes[i+1] + len(b)
 	}
 	return sizes
+}
+
+// lastImages returns msgs with no more than the last maxImages pictures:
+// those before are left out of their messages, and msgs is not changed.
+func lastImages(msgs []openai.Message) []openai.Message {
+	kept := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		images := msgs[i].Images
+		if kept+len(images) <= maxImages {
+			kept += len(images)
+			continue
+		}
+		msgs = slices.Clone(msgs)
+		msgs[i].Images = images[len(images)-(maxImages-kept):]
+		for j := range i {
+			msgs[j].Images = nil
+		}
+		return msgs
+	}
+	return msgs
 }
 
 // cut returns the first user message of msgs after which there are at most

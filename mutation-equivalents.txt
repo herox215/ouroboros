@@ -29,17 +29,17 @@ internal/script/script.go:458:44 CONDITIONALS_BOUNDARY  # with no room left, the
 internal/script/script.go:500:8 CONDITIONALS_BOUNDARY  # what the interpreter prints is valid UTF-8, whose first byte begins a character
 internal/script/script.go:675:14 CONDITIONALS_BOUNDARY  # used comes from a clock that only counts up: two sessions never have the same
 internal/agent/agent.go:359:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
-internal/openai/client.go:443:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
+internal/openai/client.go:496:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
 internal/tui/wait.go:41:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
 internal/discovery/discovery.go:245:11 INVERT_LOGICAL  # the system gives every address of an interface as an *net.IPNet, so ok is always true and the mask decides alone
 internal/discovery/discovery.go:245:36 INVERT_LOGICAL  # the system gives an IPv4 address a mask of 4 bytes and an IPv6 address one of 16: both tests always agree
-internal/history/history.go:423:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
+internal/history/history.go:425:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
 internal/openai/trace.go:145:10 CONDITIONALS_BOUNDARY  # two different messages as JSON objects differ before the end of the shorter: neither is the start of the other
 internal/plugins/files/files.go:547:83 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:547:83 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:612:4 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
-internal/session/archive.go:105:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/tui/commands.go:138:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
+internal/session/archive.go:107:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/tui/commands.go:140:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
 internal/tui/logo.go:141:19 CONDITIONALS_BOUNDARY  # a pixel exactly reach from the ring line is outside the body (at most 4) and the head (at most 7.4) either way
 internal/tui/logo.go:144:14 CONDITIONALS_BOUNDARY  # with nothing grown, the pixels at u == 0 get a thickness of NaN and stay not solid, as they were
 internal/tui/logo.go:144:23 CONDITIONALS_BOUNDARY  # u comes from atan2 at pixel centers and is never exactly the length of the body
@@ -66,7 +66,7 @@ internal/tui/view.go:213:9 CONDITIONALS_BOUNDARY  # the message of the owner at 
 internal/tui/view.go:231:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✓ " is never at its start
 internal/tui/view.go:234:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✗ " is never at its start
 internal/tui/view.go:470:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
-internal/session/session.go:524:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
-internal/history/history.go:717:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
+internal/session/session.go:546:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
+internal/history/history.go:725:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
-internal/tui/tui.go:713:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/tui/tui.go:742:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing

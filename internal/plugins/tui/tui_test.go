@@ -165,6 +165,17 @@ func TestTUIBackendAsk(t *testing.T) {
 	if err := u.Cancel(context.Background(), "ctx"); err != nil {
 		t.Fatal(err)
 	}
+	// What the model takes is not known here: models.dev is not reached.
+	if efforts, known := u.Efforts(); known || efforts != nil {
+		t.Fatalf("efforts %q, %v", efforts, known)
+	}
+	// The session gets an effort of its own, which the node tells.
+	if err := u.SetSessionEffort(context.Background(), "ctx", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if past, _, err := u.Watch(context.Background(), "ctx"); err != nil || past[len(past)-1].Kind != plugin.SessionEffort || past[len(past)-1].Text != "high" {
+		t.Fatalf("effort %+v, %v", past, err)
+	}
 	// So is what the owner says while an answer is on its way: nothing
 	// waits here, and nothing is said.
 	if text, err := u.Unsteer(context.Background(), "ctx"); text != "" || err != nil {

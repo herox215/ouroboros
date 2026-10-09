@@ -13,6 +13,7 @@ import (
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/home"
 	"ouroboros/internal/llm"
+	"ouroboros/internal/modelsdev"
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
 	"ouroboros/internal/proposal"
@@ -43,12 +44,13 @@ type Owner struct {
 	local   node.Local
 	net     *peers.Network
 	plugins catalog // of the build, see Activate
+	models  *modelsdev.Catalog
 }
 
 // OwnerOf returns what the owner of the node in dir does, on its network. It
 // is for the list of plugins.
 func OwnerOf(dir home.Dir, network *peers.Network) *Owner {
-	return &Owner{home: dir, local: node.Local{Home: dir}, net: network}
+	return &Owner{home: dir, local: node.Local{Home: dir}, net: network, models: modelsdev.Open(dir.Catalog(), dir.Log)}
 }
 
 type (
@@ -227,6 +229,41 @@ func (o *Owner) SetModel(access, model string) (switched bool, err error) {
 		o.home.Log("the owner picked the model %s of the access %s", model, access)
 	}
 	return switched, err
+}
+
+// Efforts are the efforts the owner chooses from with SetEffort, from the
+// least to the most: "" leaves it to the model, "none" has it not think.
+var Efforts = config.Efforts
+
+// AllEfforts are all efforts there are, from the least to the most: those a
+// model may know besides Efforts too, see Owner.Efforts.
+var AllEfforts = config.AllEfforts
+
+// SetEffort makes effort, one of Efforts, how much the model thinks before
+// it answers the owner, from the next call of it on: see Effort for how it
+// gets to the model.
+func (o *Owner) SetEffort(effort string) error {
+	s, err := o.Setup(nil)
+	if err != nil {
+		return err
+	}
+	if err = s.SetEffort(effort); err == nil {
+		o.home.Log("the owner set the effort to %q", effort)
+	}
+	return err
+}
+
+// Efforts returns the efforts the model the node answers the owner with
+// takes, as models.dev lists them, from the least to the most, and whether it
+// lists the model: one it lists takes none of them when the list is empty.
+// providers are those the plugins contributed. The list is fetched in the
+// background once a day: until it is, nothing is known.
+func (o *Owner) Efforts(providers []Provider) ([]string, bool) {
+	s, err := o.Setup(providers)
+	if err != nil {
+		return nil, false
+	}
+	return s.Efforts(o.models)
 }
 
 // SetPeerModel makes model of the access what the agent of the node answers

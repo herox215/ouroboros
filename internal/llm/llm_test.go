@@ -42,6 +42,7 @@ func fake(name string, out *[]string) Provider {
 		Model:  func(a Access) agent.LLM { return said(key(a)) },
 	}
 	if out != nil {
+		p.Catalog = func(a Access) string { return "catalog of " + key(a) }
 		p.Logout = func(_ context.Context, a Access) error {
 			*out = append(*out, key(a))
 			return errors.New("not revoked")
@@ -99,6 +100,11 @@ func TestBook(t *testing.T) {
 	}
 	if _, err := b.Provider("three"); !errors.Is(err, ErrNoProvider) {
 		t.Errorf("Provider(three): %v", err)
+	}
+
+	// The provider names an access to models.dev, if it can.
+	if b.Catalog(two.ID) != "catalog of k2" || b.Catalog(one.ID) != "" || b.Catalog(gone.ID) != "" || b.Catalog("none") != "" {
+		t.Errorf("catalog %q, %q", b.Catalog(two.ID), b.Catalog(one.ID))
 	}
 
 	// Signing out is for the provider that can; its error is handed on.

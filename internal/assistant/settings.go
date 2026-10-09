@@ -123,7 +123,7 @@ func (b Builder) proposeConfig() agent.Tool {
 			return fmt.Sprintf("Proposed, and nothing is changed yet: %s is to become %s instead of %s. "+
 				"The proposal waits for your owner among the requests in the terminal UI (the command /pending), where they accept or refuse it. "+
 				"Tell them that, and do not say that the change is made. "+
-				"Its id is %s: with %s you can take it back yourself while it waits.", p.Path, p.Value, p.Before, p.ID, toolWithdrawConfig), nil
+				"Its id is %s.", p.Path, p.Value, p.Before, p.ID), nil
 		},
 	}
 }

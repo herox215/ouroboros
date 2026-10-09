@@ -315,6 +315,43 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	}
 }
 
+// ask_peer tells of answer_peer and tell_peer only where the agent has
+// them too, for the owner and for peers: the LLM is not told of a tool it
+// does not have.
+func TestAskPeerNamesOnlyTheToolsThereAre(t *testing.T) {
+	b := Builder{Tools: func() []agent.Tool { return PeerTools(nil, func() string { return "" }) }}
+	answer, tell := " "+companions[0].text, " "+companions[1].text
+	base := askPeer(nil, nil).Description
+	for _, tt := range []struct {
+		tools []config.Entry
+		want  string
+	}{
+		{config.Named(toolAskPeer), base},
+		{config.Named(toolAskPeer, toolAnswer), base + answer},
+		{config.Named(toolAskPeer, toolTellPeer), base + tell},
+		{config.Named("*"), base + answer + tell},
+	} {
+		cfg := config.Config{Tools: &config.Tools{H2A: tt.tools, A2A: tt.tools}}
+		owner, err := b.ownerTools(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer, err := b.peerTools(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tools := range [][]agent.Tool{owner, peer} {
+			if i := slices.IndexFunc(tools, func(t agent.Tool) bool { return t.Name == toolAskPeer }); tools[i].Description != tt.want {
+				t.Errorf("with %s: %q", tt.tools, tools[i].Description)
+			}
+		}
+	}
+	if tools, err := b.ownerTools(config.Config{Tools: &config.Tools{H2A: config.Named(toolAnswer)}}); err != nil || len(tools) != 1 ||
+		tools[0].Description != answerPeer(nil).Description {
+		t.Fatalf("without ask_peer: %v, %v", tools, err)
+	}
+}
+
 // The owner is shown which peer the assistant waits for, and nothing of what
 // it says to the peer.
 func TestAskingPeer(t *testing.T) {
@@ -375,6 +412,8 @@ func TestHowItEnded(t *testing.T) {
 		{"120 bytes", Step{Done: true, Err: errors.New(strings.Repeat("a", 120))}, "✗ " + strings.Repeat("a", 120)},
 		{"cut in a character", Step{Done: true, Err: errors.New(long)}, "✗ " + strings.Repeat("a", 119) + "…"},
 		{"cut after a character", Step{Done: true, Err: errors.New("ä" + long)}, "✗ ä" + strings.Repeat("a", 118) + "…"},
+		{"remark", Step{Done: true, Took: time.Second, Remark: long + "\nmore"}, "✓ 1s · " + long},
+		{"remark of a failed call", Step{Done: true, Err: errors.New("no"), Remark: "said"}, "✗ no"},
 	}
 	for _, tt := range tests {
 		if got := HowItEnded(tt.step); got != tt.want {

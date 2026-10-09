@@ -83,6 +83,9 @@ type State struct {
 	Usage [2]int
 	// NoCacheKey makes the API refuse the key of the cache.
 	NoCacheKey bool
+	// Efforts are the reasoning efforts the API takes: another is refused.
+	// Nil takes every effort.
+	Efforts []string
 	// ModelsStatus and ModelsBody are what the list of models answers with
 	// instead of the list.
 	ModelsStatus int
@@ -379,6 +382,12 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	if _, sent := body["prompt_cache_key"]; sent && s.State.NoCacheKey {
 		w.WriteHeader(http.StatusBadRequest)
 		io.WriteString(w, `{"error":{"code":"subscription_sharing_unsupported_capability","message":"unsupported","param":"prompt_cache_key"}}`)
+		return
+	}
+	reasoning, _ := body["reasoning"].(map[string]any)
+	if effort, _ := reasoning["effort"].(string); reasoning != nil && s.State.Efforts != nil && !slices.Contains(s.State.Efforts, effort) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `{"error":{"code":"unsupported_value","message":"Unsupported value: %v","param":"reasoning.effort"}}`, reasoning["effort"])
 		return
 	}
 	if len(s.State.Responses) > 0 {

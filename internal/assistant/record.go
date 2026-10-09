@@ -200,6 +200,9 @@ func (r *record) call(c agent.Call) {
 	if c.Thought > 0 {
 		cost = append(cost, fmt.Sprintf("thought %.1f KiB", float64(c.Thought)/1024))
 	}
+	if c.Effort.Fell() {
+		cost = append(cost, "effort "+c.Effort.Asked+" taken as "+cmp.Or(c.Effort.Value, "none: the API takes no effort"))
+	}
 	if len(cost) > 0 {
 		outcome += " [" + strings.Join(cost, ", ") + "]"
 	}

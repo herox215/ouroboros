@@ -79,7 +79,20 @@ is accumulated since the node started and marked `(partial)` if any calls have u
 model-price estimate is currently applied. On narrow terminals the chat title is truncated; `/context`
 provides the detailed metrics.
 `/context` shows what the context is: the system prompt, every tool with its schema
-and the conversation so far, message by message with its size.
+and the conversation so far, message by message with its size. It is laid out to be read, not as a chat: every
+message has a head with its role and size and hangs on a bar of the color of its role, the functions a tool
+offers and their parameters stand out, its schema is indented JSON, and the arguments of a call are taken apart,
+a text as the lines it has. What the text says is not changed. Every message has its number in its head.
+
+The scripts of `run` keep their variables for the scripts after them, and every result ends with a line that lists
+what is kept. `/context` follows the variables from these lines and from the scripts themselves: a script has the
+variables it uses of the ones scripts before it kept marked, with a line `uses …` below it; a result shows, below
+`kept for the next script`, what the script added (`+`), set again (`~`, with what it was) and what is gone (`−`);
+and a last block `variables`, which the LLM is not sent, lists every variable with what it was last kept as and the
+numbers of the messages whose scripts set it, used it, and after which it was gone. The values are not in the
+context: only the interpreter of the node has them, and only while it runs. A name a script declares is its own,
+not a use; one it only assigns to is the kept one.
+
 The input is focused on start, so you can type right away. The conversations are **sessions of the node**, not
 of the UI: the node runs their answers and keeps them, also when it starts anew, see [Sessions](#sessions). What your
 agent did for them is recorded in [`ouro.log`](#the-log), and the conversation itself in the
@@ -123,7 +136,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/cancel` | stop the answer that is on its way in the conversation shown |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup; for a node that is set up it starts with its accesses: `enter` uses the one selected, `l` signs in to it again, `r` renames it, `d` removes it, the last row adds another one, see [Providers and accesses](#providers-and-accesses) |
-| `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back |
+| `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back. `/` searches it: every match is marked as you type, without regard to case and across the ends of lines; `↑` `↓` go from match to match, `enter` keeps the search, `esc` ends it |
 | `/settings` | the configuration in one place, by categories: the node, the agents, the plugins, the tools of your agent and of peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
 | `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `f` a [fallback](#fallbacks), `esc` back |
 | `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
@@ -137,7 +150,8 @@ Keys only move around:
 |---|---|
 | any key | skip the ouroboros splash (except `ctrl+c`) |
 | `enter` / `alt+enter` | send / a new line |
-| `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions) |
+| `↑` `↓` | bring back what you entered while the UI is open, messages and commands, the latest first. Below the latest is what you had typed, and below that an empty input, from which `↑` brings it back again. A line you change is what you type from then on. In an input of several lines they move between its lines first |
+| `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions); with nothing queued, bring back what you entered |
 | `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `pgup` `pgdn` | scroll the chat |
@@ -203,6 +217,25 @@ So an answer does not depend on the UI:
   next message. Until there is a title, the start of your first message names the conversation. The title
   is shown at once and kept in the archive; the call is part of no conversation and not in the log. An
   answer that is in before the title waits for it, 20 seconds at most.
+- **Effort per conversation.** `/effort` sets how much the model thinks before it answers (`auto`, `none`,
+  `low`, `medium`, `high`, `max`) for the conversation shown, from its next call of the LLM on, also in the
+  answer on its way. Its dialog shows a slider, and above it a net of nerve cells that thinks as hard as the
+  effort: it grows when the dialog opens, and grows on or dies back in half a second as you move the slider, with
+  the cells that grow anew placed at random. A few cells make a simple tree, more of them a mesh, and signals run
+  through it, more, faster and hotter for each effort more. Nothing runs
+  through it for `none`, and for `auto` it thinks more and less in turn. Other conversations keep theirs, so two can answer at once with different efforts. What
+  you choose is also the effort of the node (`effort` in `config.json`): a new conversation, and one that never
+  had its own, starts with it. A conversation keeps its effort in `history/owner/<session>.effort`. The header
+  shows the effort of the conversation shown. Which efforts a model takes comes from
+  [models.dev](https://models.dev): for a model it lists, `/effort` offers those alone, by the names its API
+  knows (`low`, `high`, `max` for DeepSeek V4.1 Flash at OpenCode Go, `xhigh` for OpenAI), and only `auto`
+  for one it lists without any. ouro fetches the list from `https://models.dev/api.json` at most once a day,
+  in the background, and keeps what it needs of it in `catalog.json`; `OURO_MODELS_DEV` names another source,
+  `off` fetches nothing. A provider is found there by its ID (OpenCode Go, ChatGPT as OpenAI) or by its
+  endpoint. For a model it does not list, `/effort` offers `auto` to `max`, and an API that refuses one is asked
+  with the nearest it takes, and at last with none: then the header says what it took at the last call
+  (`effort max → high`, `→ not taken`), and so does the line of the call in `ouro.log`. An API that takes an
+  effort and does nothing with it cannot be told apart. Peers are answered with the model's own effort.
 - **Two front ends** see the same: the UI lists the conversations `ouro chat` had too.
 - `/cancel` stops the answer on its way in the conversation shown, and so does `esc` in the chat: the call
   of the LLM and the tools that can be stopped end, the conversation stays as far as it got, and the next
@@ -361,10 +394,10 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | LLM | answers are asked for as a stream (`"stream": true`), so a gateway that gives up on a request without data for a while (HTTP 504) keeps waiting while the model thinks; an API that does not stream answers in one piece, which is taken as well. A completion is given up after 5 minutes without data, a list of the models after 5 minutes |
 | Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. At most 16 changes of the configuration your agent proposed wait for a decision. The tools for files and a script have limits of their own, see [Files](#files) and [Scripts](#scripts). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `credentials.json` (0600, what the node signs in to its LLMs with, see [Providers and accesses](#providers-and-accesses)), `models.json` (0600, the models the accesses last listed), `host-id` (0600, an opaque ID of this installation, made on first use), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.sock` (0600, see [Sessions](#sessions)), `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`, and `history/` (0700, see [History](#history) and [Sessions](#sessions)). `config.json`, `credentials.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `credentials.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `credentials.json` (0600, what the node signs in to its LLMs with, see [Providers and accesses](#providers-and-accesses)), `models.json` (0600, the models the accesses last listed), `catalog.json` (0600, the efforts of the models as models.dev lists them), `host-id` (0600, an opaque ID of this installation, made on first use), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.sock` (0600, see [Sessions](#sessions)), `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`, and `history/` (0700, see [History](#history) and [Sessions](#sessions)). `config.json`, `credentials.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `credentials.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
-Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as what the
+Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, `OURO_MODELS_DEV` (see [Sessions](#sessions)), and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as what the
 provider for OpenAI-compatible APIs offers in the setup.
 `ouro start --setup` reconfigures, `ouro serve` runs in the foreground (e.g. for systemd).
 

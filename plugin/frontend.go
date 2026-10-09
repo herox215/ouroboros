@@ -112,6 +112,7 @@ const (
 	SessionCanceled = session.Canceled // an answer that was stopped
 	SessionRestart  = session.Restart  // ouro starts anew from a new build, the binary in Text
 	SessionTitle    = session.Title    // the session is named for its topic, in Text
+	SessionEffort   = session.Effort   // how much the model thinks in the session, in Text
 )
 
 var (

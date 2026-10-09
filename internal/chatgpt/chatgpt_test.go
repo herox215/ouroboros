@@ -700,3 +700,10 @@ func TestDefaults(t *testing.T) {
 	}
 	_ = openai.ReasoningItems
 }
+
+// The models of a ChatGPT plan are those of OpenAI, as models.dev lists them.
+func TestCatalog(t *testing.T) {
+	if got := Provider(Options{}).Catalog(nil); got != "openai" {
+		t.Fatalf("catalog %q", got)
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"fmt"
 	"image/color"
+	"regexp"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
@@ -26,6 +28,7 @@ var (
 	warn   = lipgloss.Color("3")
 
 	mutedStyle = lipgloss.NewStyle().Foreground(muted)
+	imageStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("4")) // the label of a picture, like [Image_1]
 	errStyle   = lipgloss.NewStyle().Foreground(bad)
 	boldStyle  = lipgloss.NewStyle().Bold(true)
 )
@@ -138,7 +141,7 @@ func (m *Model) renderHistory(toBottom bool) {
 			}
 			if used := summaries[i]; used != "" {
 				// The line goes right below the last words of the answer.
-				line := mutedStyle.Render("  ↳ " + used)
+				line := c.muted("  ↳ " + used)
 				if words {
 					blocks[len(blocks)-1] += "\n" + line
 				} else {
@@ -152,7 +155,7 @@ func (m *Model) renderHistory(toBottom bool) {
 		head := m.entryHead(e)
 		text := render(e.text)
 		if e.mine {
-			text = body.Render(e.text)
+			text = body.Render(c.showLabels(c.labelled(e.text)))
 		}
 		if e.failed {
 			text = body.Foreground(bad).Render("✗ " + e.text)
@@ -166,7 +169,7 @@ func (m *Model) renderHistory(toBottom bool) {
 			state += ", ↑ takes it back"
 		}
 		head := boldStyle.Foreground(accent).Render("you") + mutedStyle.Render(state)
-		blocks = append(blocks, head+"\n"+body.Faint(true).Render(text))
+		blocks = append(blocks, head+"\n"+body.Faint(true).Render(c.showLabels(c.labelled(text))))
 	}
 	// The heads and the lines of the calls are wrapped here and not by the
 	// viewport, which would measure all of the history on every step of
@@ -188,7 +191,7 @@ func (c *conversation) summaries() map[int]string {
 	last := -1
 	end := func() {
 		if last >= 0 {
-			summaries[last] = summary(calls)
+			summaries[last] = c.summary(calls)
 		}
 		calls, last = nil, -1
 	}
@@ -211,11 +214,16 @@ func (c *conversation) summaries() map[int]string {
 // summary sums up the calls of an answer in one line: how many tools it used,
 // and how many of the calls failed. What every call was is on the context
 // screen (/context), so that even a long loop stays one line in the chat.
-func summary(calls []call) string {
+func (c *conversation) summary(calls []call) string {
 	failed := 0
-	for _, c := range calls {
-		if strings.Contains(c.text, " ✗ ") {
+	var pictures []string
+	for _, call := range calls {
+		if strings.Contains(call.text, " ✗ ") {
 			failed++
+		}
+		// How large a picture was shown, as the tool that read it said.
+		if _, picture, ok := strings.Cut(call.text, " · picture "); ok && !slices.Contains(pictures, picture) {
+			pictures = append(pictures, picture)
 		}
 	}
 	line := "Used 1 tool"
@@ -224,6 +232,9 @@ func summary(calls []call) string {
 	}
 	if failed > 0 {
 		line += fmt.Sprintf(", %d failed", failed)
+	}
+	for _, picture := range pictures {
+		line += " · " + c.short(picture)
 	}
 	return line
 }
@@ -265,13 +276,15 @@ func (m *Model) View() tea.View {
 	case screenPlugin:
 		body = m.plugins.view(m)
 	case screenModel:
-		body = m.picker.view(m)
+		body = m.overlay(m.picker.view(m))
 	case screenContext:
 		body = m.context.view(m)
 	case screenSettings:
 		body = m.config.view(m)
 	case screenSessions:
 		body = m.sessions.view(m)
+	case screenEffort:
+		body = m.overlay(m.effort.view(m))
 	default:
 		body = m.chatView()
 	}
@@ -391,10 +404,43 @@ func logoWidth() int {
 // modelText is what is shown of the model of the node: the provider that
 // answers with it before it, like "iGate / brain", or the model alone.
 func (m *Model) modelText() string {
-	if m.status.Provider == "" {
-		return m.status.Model
+	text := m.status.Model
+	if m.status.Provider != "" {
+		text = m.status.Provider + " / " + text
 	}
-	return m.status.Provider + " / " + m.status.Model
+	if effort := m.chatEffort(); effort != "" {
+		text += " · effort " + effort + m.tookText(effort)
+	}
+	return text
+}
+
+// tookText says what the API took of effort at the last call in the
+// conversation shown, when it took less or something else: " → high" for
+// "max", say. The value is the API's own.
+func (m *Model) tookText(effort string) string {
+	took := m.chat.cache.Metrics
+	if !took.Fell || took.Effort != effort {
+		return ""
+	}
+	return " → " + cmp.Or(took.Took, "not taken")
+}
+
+// speedText is how fast the last call of the LLM in the conversation shown
+// wrote, for the header: "" while it is not known.
+func (m *Model) speedText() string {
+	if tps := m.chat.cache.Metrics.TPS; tps > 0 {
+		return fmt.Sprintf(" · %.1f TPS", tps)
+	}
+	return ""
+}
+
+// chatEffort is how much the model thinks in the conversation shown: its
+// own effort, or that of the node.
+func (m *Model) chatEffort() string {
+	if m.chat.efforted {
+		return m.chat.effort
+	}
+	return m.status.Effort
 }
 
 func (m *Model) headerView() string {
@@ -407,7 +453,7 @@ func (m *Model) headerView() string {
 	switch {
 	case s.Running:
 		state = lipgloss.NewStyle().Foreground(good).Render("● online") +
-			mutedStyle.Render(fmt.Sprintf("  %s · %s · :%d · %s", s.ID, s.Name, s.Port, m.modelText()))
+			mutedStyle.Render(fmt.Sprintf("  %s · %s · :%d · %s", s.ID, s.Name, s.Port, m.modelText())+m.speedText())
 	case !s.Configured:
 		state = lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  type /setup")
 	default:
@@ -465,12 +511,52 @@ func (m *Model) chatView() string {
 		title = ansi.Truncate(title, inner, "…")
 		history := m.highlight(strings.Split(m.history.View(), "\n"))
 		history = history[min(len(suggested), len(history)):] // the latest stays in view
+		history = m.fadeEdges(history, m.history.YOffset()+len(suggested) > 0, !m.history.AtBottom())
 		content = lipgloss.JoinVertical(lipgloss.Left, title, strings.Join(history, "\n"), m.waitView(inner))
 	}
 	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
-	input := box(false, m.light).Width(w).Render(m.input.View())
+	input := box(false, m.light).Width(w).Render(c.showLabels(m.input.View()))
 	parts := append([]string{chat}, suggested...)
 	return lipgloss.JoinVertical(lipgloss.Left, append(parts, input)...)
+}
+
+// sgr is a sequence that sets how the text after it looks.
+var sgr = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+
+// fadeEdges fades what a box shows of the history, or of the context, out
+// over two lines at the top when more of it is above, and at the bottom when
+// more of it is below, so the text runs out at the edges of the box instead
+// of being cut off there: the line at the edge is nearly the color of the
+// background, the one next to it dim.
+func (m *Model) fadeEdges(lines []string, above, below bool) []string {
+	n := len(lines)
+	if n < 4 { // too few lines to give up two at each edge
+		return lines
+	}
+	edge := lipgloss.NewStyle().Foreground(fadeColor(m.light))
+	if above {
+		lines[0], lines[1] = edge.Render(ansi.Strip(lines[0])), faint(lines[1])
+	}
+	if below {
+		lines[n-1], lines[n-2] = edge.Render(ansi.Strip(lines[n-1])), faint(lines[n-2])
+	}
+	return lines
+}
+
+// fadeColor is the color of the line at a faded edge: a gray a few steps
+// from the background of the terminal.
+func fadeColor(light bool) color.Color {
+	if light {
+		return lipgloss.Color("250")
+	}
+	return lipgloss.Color("239")
+}
+
+// faint dims a line and keeps its colors. Every sequence in it may turn the
+// dimming off, so it is turned on again after each.
+func faint(line string) string {
+	const on, off = "\x1b[2m", "\x1b[22m"
+	return on + sgr.ReplaceAllString(line, "${0}"+on) + off
 }
 
 // contextSize is how long a context of n bytes is, as the chat shows it:
@@ -502,10 +588,20 @@ func (m *Model) footerView() string {
 		help = "↑↓ select · ←→ accept or reject · enter decide · esc back · ctrl+c quit"
 	case screenHelp:
 		help = "esc back · ctrl+c quit"
+	case screenEffort:
+		help = "←→ choose · enter set · esc back · ctrl+c quit"
 	case screenModel:
 		help = "↑↓ choose · enter set · p for peers · f fallback · esc back · ctrl+c quit"
 	case screenSessions:
 		help = "↑↓ select · enter show · d delete · tab yours/peers · esc back · ctrl+c quit"
+	case screenContext:
+		help = "↑↓ pgup/pgdn scroll · / search · esc back · ctrl+c quit"
+		if m.context.searching() {
+			help = "↑↓ previous/next match · j/k pgup/pgdn scroll · / search anew · esc end search · ctrl+c quit"
+		}
+		if m.context.typing {
+			help = "↑↓ previous/next match · enter keep · esc end search · ctrl+c quit"
+		}
 	case screenSettings:
 		help = "↑↓ select · enter open · esc back · ctrl+c quit"
 		if m.config.opened {

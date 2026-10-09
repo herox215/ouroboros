@@ -3,6 +3,7 @@ package assistant
 import (
 	"math"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/openai"
 	"testing"
 	"time"
 )
@@ -37,5 +38,14 @@ func TestCallMetrics(t *testing.T) {
 		if got.Metrics.CostKnown || got.Metrics.UnknownCalls != 1 {
 			t.Fatalf("%+v", got)
 		}
+	}
+
+	// What the API took of the effort is of the last call.
+	e := Cache{}.withCall(agent.Call{Effort: openai.Took{Asked: "max", Value: "high", Told: true}})
+	if e.Metrics.Effort != "max" || e.Metrics.Took != "high" || !e.Metrics.Fell {
+		t.Fatalf("%+v", e)
+	}
+	if e = e.withCall(agent.Call{Effort: openai.Took{Asked: "max", Value: "max", Told: true}}); e.Metrics.Took != "max" || e.Metrics.Fell {
+		t.Fatalf("%+v", e)
 	}
 }

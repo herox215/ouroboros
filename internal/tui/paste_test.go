@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
 )
@@ -31,56 +32,87 @@ func files(t *testing.T, names ...string) string {
 }
 
 // The files of pictures a terminal pastes, as when they are dropped on it,
-// are typed as their paths in double quotes, however the terminal wrote
-// them. Anything else is pasted as it is, and nothing is sent.
-func TestPastedPicturesAreTypedAsPaths(t *testing.T) {
+// are typed as their labels, however the terminal wrote them, and the
+// conversation keeps their paths: the same file has the same label.
+// Anything else is pasted as it is, and nothing is sent.
+func TestPastedPicturesAreTypedAsLabels(t *testing.T) {
 	dir := files(t, "cat.png", "my cat.JPG", `the "odd" one.gif`, `back\slash.webp`, "notes.txt")
 	in := func(name string) string { return filepath.Join(dir, name) }
-	q := func(names ...string) string {
-		var paths []string
-		for _, name := range names {
-			paths = append(paths, in(name))
-		}
-		return quoted(paths)
+	type typed struct {
+		text  string
+		paths []string // of the labels, by their number
 	}
-	for pasted, want := range map[string]string{
-		in("cat.png"):                                                q("cat.png"),
-		"  " + in("cat.png") + "\n":                                  q("cat.png"),
-		in("my cat.JPG"):                                             q("my cat.JPG"), // as it is, spaces and all
-		"'" + in("my cat.JPG") + "'":                                 q("my cat.JPG"),
-		`"` + in("my cat.JPG") + `"`:                                 q("my cat.JPG"),
-		strings.ReplaceAll(in("my cat.JPG"), " ", `\ `):              q("my cat.JPG"),
-		"file://" + strings.ReplaceAll(in("my cat.JPG"), " ", "%20"): q("my cat.JPG"),
-		in("cat.png") + " '" + in("my cat.JPG") + "'\t" + in("cat.png") + "\n": q("cat.png", "my cat.JPG", "cat.png"),
-		"'" + in(`the "odd" one.gif`) + "'":                                    q(`the "odd" one.gif`),
-		`"` + strings.ReplaceAll(in(`the "odd" one.gif`), `"`, `\"`) + `"`:     q(`the "odd" one.gif`),
-		"'" + in(`back\slash.webp`) + "'":                                      q(`back\slash.webp`),
+	one := func(name string) typed { return typed{"[Image_1] ", []string{in(name)}} }
+	as := func(text string) typed { return typed{text, nil} }
+	for pasted, want := range map[string]typed{
+		in("cat.png"):                                                one("cat.png"),
+		"  " + in("cat.png") + "\n":                                  one("cat.png"),
+		in("my cat.JPG"):                                             one("my cat.JPG"), // as it is, spaces and all
+		"'" + in("my cat.JPG") + "'":                                 one("my cat.JPG"),
+		`"` + in("my cat.JPG") + `"`:                                 one("my cat.JPG"),
+		strings.ReplaceAll(in("my cat.JPG"), " ", `\ `):              one("my cat.JPG"),
+		"file://" + strings.ReplaceAll(in("my cat.JPG"), " ", "%20"): one("my cat.JPG"),
+		in("cat.png") + " '" + in("my cat.JPG") + "'\t" + in("cat.png") + "\n": {"[Image_1] [Image_2] [Image_1] ", []string{in("cat.png"), in("my cat.JPG")}},
+		"'" + in(`the "odd" one.gif`) + "'":                                    one(`the "odd" one.gif`),
+		`"` + strings.ReplaceAll(in(`the "odd" one.gif`), `"`, `\"`) + `"`:     one(`the "odd" one.gif`),
+		"'" + in(`back\slash.webp`) + "'":                                      one(`back\slash.webp`),
 
-		"look at " + in("cat.png"):            "look at " + in("cat.png"),
-		in("cat.png") + " " + in("notes.txt"): in("cat.png") + " " + in("notes.txt"),
-		in("notes.txt"):                       in("notes.txt"),
-		in("gone.png"):                        in("gone.png"),
-		in("dir.png"):                         in("dir.png"),
-		"cat.png":                             "cat.png",
-		"'" + in("cat.png"):                   "'" + in("cat.png"),
-		in("cat.png") + `\`:                   in("cat.png") + `\`,
-		"''":                                  "''",
-		"hello":                               "hello",
+		"look at " + in("cat.png"):            as("look at " + in("cat.png")),
+		in("cat.png") + " " + in("notes.txt"): as(in("cat.png") + " " + in("notes.txt")),
+		in("notes.txt"):                       as(in("notes.txt")),
+		in("gone.png"):                        as(in("gone.png")),
+		in("dir.png"):                         as(in("dir.png")),
+		"cat.png":                             as("cat.png"),
+		"'" + in("cat.png"):                   as("'" + in("cat.png")),
+		in("cat.png") + `\`:                   as(in("cat.png") + `\`),
+		"''":                                  as("''"),
+		"hello":                               as("hello"),
 	} {
 		m, b := newModel(t)
 		m.input.SetValue("see ")
 		if _, cmd := m.Update(tea.PasteMsg{Content: pasted}); cmd != nil {
 			t.Errorf("%q: pasting runs nothing", pasted)
 		}
-		if got := m.input.Value(); got != "see "+want {
-			t.Errorf("%q typed %q, want %q", pasted, got, "see "+want)
+		if got := m.input.Value(); got != "see "+want.text || !slices.Equal(m.chat.images, want.paths) {
+			t.Errorf("%q typed %q with %q, want %q with %q", pasted, got, m.chat.images, "see "+want.text, want.paths)
 		}
 		if len(b.messages()) != 0 || m.chat.pending {
 			t.Errorf("%q: nothing is sent by pasting", pasted)
 		}
 	}
-	if got := q("cat.png", `the "odd" one.gif`, `back\slash.webp`); got != `"`+in("cat.png")+`" "`+dir+`/the \"odd\" one.gif" "`+dir+`/back\\slash.webp" ` {
+	if got := quote(in(`the "odd" one.gif`)) + quote(in(`back\slash.webp`)); got != `"`+dir+`/the \"odd\" one.gif""`+dir+`/back\\slash.webp"` {
 		t.Fatalf("quoted %s", got)
+	}
+}
+
+// What is sent has the paths of the pictures in place of their labels; a
+// label without a picture stays. The chat shows the labels again, colored
+// as in the input, and so does a message that comes back into the input.
+func TestLabelsAreSentAsPaths(t *testing.T) {
+	m, b := newModel(t)
+	dir := files(t, "cat.png", `my "dog".png`)
+	m.Update(tea.PasteMsg{Content: filepath.Join(dir, "cat.png")})
+	m.input.InsertString("and ")
+	m.Update(tea.PasteMsg{Content: "'" + filepath.Join(dir, `my "dog".png`) + "'"})
+	m.input.InsertString("but not [Image_3] [Image_0] [Image_99999999999999999999]")
+	if !strings.Contains(m.chatView(), imageStyle.Render("[Image_2]")) {
+		t.Error("the input should color the labels")
+	}
+	answered(t, m, press(m, "enter"))
+	cat, dog := quote(filepath.Join(dir, "cat.png")), quote(filepath.Join(dir, `my "dog".png`))
+	want := cat + " and " + dog + " but not [Image_3] [Image_0] [Image_99999999999999999999]"
+	if got := b.messages(); len(got) != 1 || got[0].text != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+	m.chat.queued = []string{"queued " + dog}
+	m.renderHistory(true)
+	shown := m.history.View()
+	if !strings.Contains(shown, imageStyle.Render("[Image_1]")) || !strings.Contains(shown, "queued "+imageStyle.Render("[Image_2]")) ||
+		strings.Contains(shown, "cat.png") || !strings.Contains(shown, "but not [Image_3] [Image_0]") {
+		t.Fatalf("the chat shows %q", shown)
+	}
+	if got := m.chat.labelled(want); got != "[Image_1] and [Image_2] but not [Image_3] [Image_0] [Image_99999999999999999999]" {
+		t.Fatalf("labelled %q", got)
 	}
 }
 
@@ -106,13 +138,13 @@ func TestCtrlVPastesAPicture(t *testing.T) {
 	m, b := newModel(t)
 	m.input.SetValue("see ")
 	ctrlV(t, m, plugin.Picture{Data: []byte("PNG"), Ext: "png"}, nil, "not this")
-	if m.input.Value() != `see "/work/pasted/1.png" ` || !slices.Equal(b.pictures, []string{"PNG"}) || m.notice != "" {
+	if m.input.Value() != "see [Image_1] " || !slices.Equal(m.chat.images, []string{"/work/pasted/1.png"}) || !slices.Equal(b.pictures, []string{"PNG"}) || m.notice != "" {
 		t.Fatalf("input %q, kept %q, notice %q", m.input.Value(), b.pictures, m.notice)
 	}
 
 	// A file that was copied is there already.
 	ctrlV(t, m, plugin.Picture{Path: `/home/me/my "cat".png`}, nil, "")
-	if m.input.Value() != `see "/work/pasted/1.png" "/home/me/my \"cat\".png" ` || len(b.pictures) != 1 {
+	if m.input.Value() != "see [Image_1] [Image_2] " || m.chat.images[1] != `/home/me/my "cat".png` || len(b.pictures) != 1 {
 		t.Fatalf("input %q, kept %q", m.input.Value(), b.pictures)
 	}
 
@@ -122,7 +154,7 @@ func TestCtrlVPastesAPicture(t *testing.T) {
 	ctrlV(t, m, plugin.Picture{}, plugin.ErrNoPicture, "hello ")
 	ctrlV(t, m, plugin.Picture{}, plugin.ErrNoPicture, " \n")
 	ctrlV(t, m, plugin.Picture{}, plugin.ErrNoPicture, filepath.Join(dir, "cat.png"))
-	if m.input.Value() != `hello "`+filepath.Join(dir, "cat.png")+`" ` || len(b.pictures) != 1 {
+	if m.input.Value() != "hello [Image_3] " || m.chat.images[2] != filepath.Join(dir, "cat.png") || len(b.pictures) != 1 {
 		t.Fatalf("input %q", m.input.Value())
 	}
 
@@ -156,7 +188,7 @@ func TestEmptyPasteAsksTheClipboard(t *testing.T) {
 		t.Fatal("an empty paste asks the clipboard")
 	}
 	m.Update(cmd())
-	if m.input.Value() != `"/work/pasted/1.jpg" ` || !slices.Equal(b.pictures, []string{"JPEG"}) {
+	if m.input.Value() != "[Image_1] " || !slices.Equal(m.chat.images, []string{"/work/pasted/1.jpg"}) || !slices.Equal(b.pictures, []string{"JPEG"}) {
 		t.Fatalf("input %q, kept %q", m.input.Value(), b.pictures)
 	}
 }
@@ -193,5 +225,43 @@ func TestWords(t *testing.T) {
 		if _, ok := words(text); ok {
 			t.Errorf("words(%q) should not end", text)
 		}
+	}
+}
+
+// A message the node did not take comes back into the input with the labels
+// of its pictures, as it was typed.
+func TestRefusedMessageKeepsItsLabels(t *testing.T) {
+	m, b := newModel(t)
+	b.fail = map[string]error{"ask": errors.New("the node is busy")}
+	dir := files(t, "cat.png")
+	m.Update(tea.PasteMsg{Content: filepath.Join(dir, "cat.png")})
+	m.input.InsertString("look")
+	drive(t, m, press(m, "enter"), func() bool { return m.noticeErr })
+	if got := m.input.Value(); got != "[Image_1] look" {
+		t.Fatalf("input %q", got)
+	}
+}
+
+// The line below an answer says how large the pictures the agent read were
+// shown, each once: a pasted one by its label, in its color, any other by
+// the name of its file.
+func TestSummaryShowsThePictures(t *testing.T) {
+	m, _ := newModel(t)
+	m.chat.images = []string{`/tmp/my "cat".png`}
+	cat := `reading /tmp/my "cat".png ✓ 48ms · picture "/tmp/my \"cat\".png" 768×384 of 2400×1200 (effort low)`
+	m.chat.add(entry{mine: true, text: "look", at: m.now()})
+	m.chat.add(entry{at: m.now(), calls: []call{
+		{text: cat, done: true},
+		{text: "running a script ✓ 1s", done: true},
+		{text: cat, done: true},
+		{text: `reading /tmp/a\b.png ✓ 9ms · picture "/tmp/a\\b.png" 10×10`, done: true},
+		{text: `reading /tmp/[Image_9].png ✓ 9ms · picture "/tmp/[Image_9].png" 5×5`, done: true},
+	}})
+	m.chat.add(entry{text: "a cat", at: m.now()})
+	m.renderHistory(true)
+	want := "↳ Used 5 tools · [Image_1] 768×384 of 2400×1200 (effort low) · a\\b.png 10×10 · [Image_9].png"
+	shown := m.history.View()
+	if !strings.Contains(ansi.Strip(shown), want) || !strings.Contains(shown, imageStyle.Render("[Image_1]")) || strings.Contains(shown, imageStyle.Render("[Image_9]")) {
+		t.Fatalf("the chat shows %q, want %q", ansi.Strip(shown), want)
 	}
 }

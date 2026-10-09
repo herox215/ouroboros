@@ -10,8 +10,9 @@
 // its own, a peer its current conversation and nothing else.
 //
 // A conversation may have a title besides, named for its topic (see
-// SetTitle): it is kept in a file of its own next to it, and names it in
-// place of its first message.
+// SetTitle), and an effort of its own (see SetEffort): each is kept in a
+// file of its own next to it. The title names it in place of its first
+// message.
 //
 // Nothing is deleted by the archive itself: the owner deletes a session with
 // Delete.
@@ -64,10 +65,11 @@ const (
 // The parties of an archive: the directory of the owner, and the start of
 // the directory of each peer.
 const (
-	ownerDir    = "owner"
-	peerPrefix  = "peer-"
-	suffix      = ".jsonl"
-	titleSuffix = ".title"
+	ownerDir     = "owner"
+	peerPrefix   = "peer-"
+	suffix       = ".jsonl"
+	titleSuffix  = ".title"
+	effortSuffix = ".effort"
 )
 
 // The outcomes of an answer, in the record that ends it.
@@ -687,8 +689,10 @@ func (a *Archive) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(titled(path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	for _, beside := range []string{titleSuffix, effortSuffix} {
+		if err := os.Remove(besides(path, beside)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	if err := os.Remove(path); errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: %s", ErrNotArchived, id)
@@ -699,8 +703,12 @@ func (a *Archive) Delete(id string) error {
 	return nil
 }
 
+// besides is the file with the ending kind next to the conversation in the
+// file at path, like its title.
+func besides(path, kind string) string { return strings.TrimSuffix(path, suffix) + kind }
+
 // titled is the file of the title of the conversation in the file at path.
-func titled(path string) string { return strings.TrimSuffix(path, suffix) + titleSuffix }
+func titled(path string) string { return besides(path, titleSuffix) }
 
 // MaxTitle is how long a title SetTitle keeps may be, in bytes.
 const MaxTitle = 80
@@ -720,24 +728,53 @@ func (a *Archive) SetTitle(id, title string) error {
 	if title == "" {
 		return errors.New("a title needs a text")
 	}
+	return write(titled(path), title)
+}
+
+// write writes text to the file at path, next to a conversation.
+func write(path, text string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(titled(path), []byte(title), 0o600)
+	return os.WriteFile(path, []byte(text), 0o600)
 }
 
 // Title returns the title the conversation id, as List names it, was given
 // with SetTitle, "" without one.
 func (a *Archive) Title(id string) (string, error) {
+	title, _, err := a.beside(id, titleSuffix)
+	return title, err
+}
+
+// beside returns what the file with the ending kind next to the
+// conversation id says, and whether there is one.
+func (a *Archive) beside(id, kind string) (string, bool, error) {
 	path, err := a.path(id)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	b, err := os.ReadFile(titled(path))
+	b, err := os.ReadFile(besides(path, kind))
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
+		return "", false, nil
 	}
-	return string(b), err
+	return string(b), err == nil, err
+}
+
+// SetEffort gives the conversation id, as List names it, an effort of its
+// own, "" too: how much the model thinks in it. What an effort is, is not
+// for the archive to know. The conversation needs not be archived yet.
+func (a *Archive) SetEffort(id, effort string) error {
+	path, err := a.path(id)
+	if err != nil {
+		return err
+	}
+	return write(besides(path, effortSuffix), effort)
+}
+
+// Effort returns the effort the conversation id, as List names it, was given
+// with SetEffort, and whether it was given one.
+func (a *Archive) Effort(id string) (string, bool, error) {
+	return a.beside(id, effortSuffix)
 }
 
 // Records returns every record of the conversation id, as List names it, in

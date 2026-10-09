@@ -243,6 +243,15 @@ func (u *ui) Unsteer(ctx context.Context, id string) (string, error) {
 // Cancel stops the answer on its way in the session id.
 func (u *ui) Cancel(ctx context.Context, id string) error { return u.sessions.Cancel(ctx, id) }
 
+// Efforts returns the efforts the model the node answers with takes, as
+// models.dev lists them, and whether it lists the model.
+func (u *ui) Efforts() ([]string, bool) { return u.Owner.Efforts(u.providers()) }
+
+// SetSessionEffort makes effort how much the model thinks in the session id.
+func (u *ui) SetSessionEffort(ctx context.Context, id, effort string) error {
+	return u.sessions.SetEffort(ctx, id, effort)
+}
+
 // Sessions lists the sessions of the node.
 func (u *ui) Sessions(ctx context.Context) ([]plugin.SessionInfo, error) { return u.sessions.List(ctx) }
 

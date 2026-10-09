@@ -27,6 +27,7 @@ var own = []command{
 	{"stop", "stop the node", (*Model).stop},
 	{"setup", "set up the node", (*Model).setup},
 	{"model", "choose the model of the provider", (*Model).openModel},
+	{"effort", "choose how much the model thinks before it answers", (*Model).openEffort},
 	{"settings", "the configuration", (*Model).openSettings},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
@@ -120,6 +121,7 @@ func (m *Model) handleSuggestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.input.SetValue("/" + found[selected].name)
 		m.suggest = 0
 	case "enter":
+		m.remember("/" + found[selected].name)
 		m.input.Reset()
 		m.suggest = 0
 		return found[selected].run(m), true

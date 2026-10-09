@@ -56,10 +56,6 @@ var maxSearched, maxWalked = 10000, 100000
 // open opens a file for reading; tests replace it to get in the way.
 var open = func(path string) (io.ReadCloser, error) { return os.Open(path) }
 
-// pathAbout is what every tool says about a path. Where a tool may go is
-// told in the prompt of the agent, once for all of them.
-const pathAbout = `absolute or starting with "~", the home directory`
-
 // Plugin contributes the tools for files, which ask g for every path, and
 // what the owner is shown of their calls.
 func Plugin(g *guard.Guard) plugin.Plugin {
@@ -84,16 +80,20 @@ func Plugin(g *guard.Guard) plugin.Plugin {
 
 // tools are the six tools.
 func tools(g *guard.Guard) []plugin.Tool {
-	path := param{"path", "string", "the file, " + pathAbout, false}
+	path := param{"path", "string", "the file", false}
 	return []plugin.Tool{
 		tool(g, Read,
 			fmt.Sprintf("Read a text file: at most %d lines or %d KiB per call. ", maxReadLines, maxReadBytes>>10)+
 				"When there is more, a note at the end says which lines of how many it returned and where to continue. "+
-				"Leave out limit unless you want only a part of the file you know: every piece costs a call.",
+				"Leave out limit unless you want only a part of the file you know: every piece costs a call. "+
+				"A picture (PNG, JPEG, GIF or WebP) is shown to you as an image, in its own size: look at it this way. "+
+				"With size and region you see it smaller, or only a part of it.",
 			[]param{path,
 				{"offset", "integer", "the first line, counted from 1", true},
-				{"limit", "integer", "how many lines at most", true}},
-			without(read)),
+				{"limit", "integer", "how many lines at most", true},
+				{"size", "integer", "of a picture: the longer side in pixels it is shown with at most; leave out for what the effort allows", true},
+				{"region", "string", `of a picture: only the part "x,y,width,height", in its own pixels`, true}},
+			read),
 		tool(g, Write,
 			fmt.Sprintf("Create a file or replace all of its content; missing directories are created. At most %d MiB. ", maxWriteBytes>>20)+
 				"To change a part of a file use "+Edit+".",
@@ -108,11 +108,11 @@ func tools(g *guard.Guard) []plugin.Tool {
 			without(edit)),
 		tool(g, List,
 			fmt.Sprintf("List a directory: directories end in /, files come with their size. At most %d entries; what the tool may not read is left out.", maxListed),
-			[]param{{"path", "string", "the directory, " + pathAbout, false}},
+			[]param{{"path", "string", "the directory", false}},
 			without(list)),
 		tool(g, Delete,
 			"Delete a file or an empty directory, or with recursive a directory and everything in it.",
-			[]param{{"path", "string", "the file or directory, " + pathAbout, false},
+			[]param{{"path", "string", "the file or directory", false},
 				{"recursive", "boolean", "delete a directory with its content", true}},
 			without(remove)),
 		tool(g, Search,
@@ -120,7 +120,7 @@ func tools(g *guard.Guard) []plugin.Tool {
 				"in one file or every file below a directory, hidden directories left out. "+
 				fmt.Sprintf("Returns path:line: text, at most %d lines from at most %d files of at most %d it looks at; files over %d MiB are skipped. ", maxMatches, maxSearched, maxWalked, maxWriteBytes>>20)+
 				"Search first to find where something is, then read only the lines around it.",
-			[]param{{"path", "string", "the file or directory, " + pathAbout, false},
+			[]param{{"path", "string", "the file or directory", false},
 				{"pattern", "string", "the regular expression a line has to match", false},
 				{"glob", "string", `only files whose name matches this, like "*.go"`, true}},
 			search),
@@ -202,9 +202,12 @@ type readArgs struct {
 	Path   string `json:"path"`
 	Offset int    `json:"offset"`
 	Limit  int    `json:"limit"`
+	// Of a picture.
+	Size   int    `json:"size"`
+	Region string `json:"region"`
 }
 
-func read(c *guard.Checker, args readArgs) (string, error) {
+func read(ctx context.Context, c *guard.Checker, args readArgs) (string, error) {
 	real, err := c.Check(guard.Read, args.Path)
 	if err != nil {
 		return "", err
@@ -222,6 +225,9 @@ func read(c *guard.Checker, args readArgs) (string, error) {
 		return "", err
 	}
 	defer f.Close()
+	if isPicture(real) {
+		return readPicture(ctx, f, args, info.Size())
+	}
 
 	first, limit := max(args.Offset, 1), args.Limit
 	if limit < 1 || limit > maxReadLines {

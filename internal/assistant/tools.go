@@ -75,6 +75,29 @@ func PeerTools(network *peers.Network, selfID func() string) []agent.Tool {
 	}
 }
 
+// companions are what ask_peer says of the tools that go with it, by their
+// names: it says it only where they are allowed too, see named.
+var companions = []struct{ tool, text string }{
+	{toolAnswer, "Instead of its answer the peer may ask back what it needs to go on: answer that with " + toolAnswer + "."},
+	{toolTellPeer, "To tell a peer something without asking, like thanks, use " + toolTellPeer + ": a request makes its agent work."},
+}
+
+// named is tools with what ask_peer says of the tools that go with it, as
+// far as they are among them: the LLM is not told of a tool it does not have.
+func named(tools []agent.Tool) []agent.Tool {
+	at := slices.IndexFunc(tools, func(t agent.Tool) bool { return t.Name == toolAskPeer })
+	if at < 0 {
+		return tools
+	}
+	tools = slices.Clone(tools)
+	for _, c := range companions {
+		if slices.ContainsFunc(tools, func(t agent.Tool) bool { return t.Name == c.tool }) {
+			tools[at].Description += " " + c.text
+		}
+	}
+	return tools
+}
+
 // pick returns the tools the entries of allowed name, which is a list from the
 // configuration: config.AllTools stands for every tool, and an entry with
 // settings configures its tool. What is not a tool, a tool that is listed
@@ -262,8 +285,6 @@ func refused(err error, name string) string {
 func askPeer(network *peers.Network, selfID func() string) agent.Tool {
 	return agent.NewTool(toolAskPeer,
 		"Send a request to the agent of a peer, which starts for it, and return its answer. "+
-			"Instead of its answer the peer may ask back what it needs to go on: answer that with "+toolAnswer+". "+
-			"To tell a peer something without asking, like thanks, use "+toolTellPeer+": a request makes its agent work. "+
 			"A peer that is not connected gets nothing until your owner confirms the connection and a human at the peer accepts it. "+
 			"A peer that fails to answer gives an error ID instead of the cause: ask it about the ID once it answers again.",
 		[]agent.Param{
@@ -480,7 +501,12 @@ func HowItEnded(s Step) string {
 	if s.Err != nil {
 		return "✗ " + oneLine.Replace(firstLine(s.Err.Error()))
 	}
-	return "✓ " + s.Took.Round(time.Millisecond).String()
+	ended := "✓ " + s.Took.Round(time.Millisecond).String()
+	// A remark is not cut: the front end that shows it shortens its paths.
+	if line, _, _ := strings.Cut(s.Remark, "\n"); line != "" {
+		ended += " · " + oneLine.Replace(line)
+	}
+	return ended
 }
 
 // firstLine is the first line of a text, at most 120 bytes of it where a

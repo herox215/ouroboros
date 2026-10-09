@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,9 +141,33 @@ type Message struct {
 	// not sent back.
 	Via     string `json:"-"`
 	Instead string `json:"-"`
+	// Effort is the effort the call that brought an assistant message was
+	// asked with, and what the API took of it. It is not sent back.
+	Effort Took `json:"-"`
+	// Images are pictures the message shows the model along with Content: a
+	// tool that read a picture gives it here. They are sent, but not written
+	// where the message is saved, nor counted where its size is: see
+	// Client.Complete for how an API that takes no pictures in the result of
+	// a tool is sent them.
+	Images []Image `json:"-"`
 	// breakpoint makes the message a cache_control breakpoint: see
 	// breakpoints.
 	breakpoint bool
+	// sent makes the message written with its Images, as it is sent: see
+	// shown.
+	sent bool
+}
+
+// Image is a picture for the model: its media type, like "image/png", and
+// its bytes.
+type Image struct {
+	Type string
+	Data []byte
+}
+
+// URL is the picture as a data URL, which the APIs take in place of a link.
+func (i Image) URL() string {
+	return "data:" + i.Type + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
 }
 
 // ReasoningItems is the ReasoningField of what a provider with a form of its
@@ -208,7 +233,9 @@ func (r reasoning) first() (text, field string) {
 }
 
 // MarshalJSON writes the reasoning of m into the field it came in. The
-// content of a breakpoint is a part of text marked for the cache.
+// content of a breakpoint is a part of text marked for the cache, and that
+// of a message with pictures, as it is sent, its text and the pictures, each
+// a part.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type plain Message
 	out := struct {
@@ -225,20 +252,36 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	default:
 		out.reasoning.Reasoning = m.Reasoning
 	}
-	if !m.breakpoint {
+	images := m.Images
+	if !m.sent {
+		images = nil
+	}
+	if !m.breakpoint && len(images) == 0 {
 		return json.Marshal(out)
+	}
+	type url struct {
+		URL string `json:"url"`
 	}
 	type part struct {
 		Type         string            `json:"type"`
-		Text         string            `json:"text"`
-		CacheControl map[string]string `json:"cache_control"`
+		Text         *string           `json:"text,omitempty"`
+		ImageURL     *url              `json:"image_url,omitempty"`
+		CacheControl map[string]string `json:"cache_control,omitempty"`
+	}
+	text := part{Type: "text", Text: &m.Content}
+	if m.breakpoint {
+		text.CacheControl = map[string]string{"type": "ephemeral"}
+	}
+	parts := []part{text}
+	for _, image := range images {
+		parts = append(parts, part{Type: "image_url", ImageURL: &url{image.URL()}})
 	}
 	return json.Marshal(struct {
 		Role    string `json:"role"`
 		Content []part `json:"content"`
 		plain
 		reasoning
-	}{m.Role, []part{{"text", m.Content, map[string]string{"type": "ephemeral"}}}, out.plain, out.reasoning})
+	}{m.Role, parts, out.plain, out.reasoning})
 }
 
 // UnmarshalJSON reads a message with its reasoning from any of the fields.
@@ -340,7 +383,8 @@ type Client struct {
 	// refused are the optional parameters the API refused: they are not
 	// sent again.
 	refused [len(optional)]atomic.Bool
-	sent    sent // the last requests of the sessions, for a trace
+	efforts Efforts // the efforts the models took
+	sent    sent    // the last requests of the sessions, for a trace
 }
 
 // optional are the parameters of a completion that ouro sends to save, which
@@ -411,15 +455,18 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 	type options struct {
 		IncludeUsage bool `json:"include_usage"`
 	}
-	msgs = own(msgs)
+	msgs = shown(own(msgs))
+	effort := EffortOf(ctx)
+	efforts := c.efforts.Of(model, effort)
 	in := struct {
-		Model          string    `json:"model"`
-		Messages       []Message `json:"messages"`
-		Tools          []Tool    `json:"tools,omitempty"`
-		Stream         bool      `json:"stream"`
-		StreamOptions  *options  `json:"stream_options,omitempty"`
-		PromptCacheKey string    `json:"prompt_cache_key,omitempty"`
-	}{Model: model, Messages: msgs, Tools: tools, Stream: true}
+		Model           string    `json:"model"`
+		Messages        []Message `json:"messages"`
+		Tools           []Tool    `json:"tools,omitempty"`
+		Stream          bool      `json:"stream"`
+		StreamOptions   *options  `json:"stream_options,omitempty"`
+		PromptCacheKey  string    `json:"prompt_cache_key,omitempty"`
+		ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	}{Model: model, Messages: msgs, Tools: tools, Stream: true, ReasoningEffort: efforts[0]}
 	if !c.refused[streamOptions].Load() {
 		in.StreamOptions = &options{IncludeUsage: true}
 	}
@@ -433,6 +480,9 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 	t := traceOf(ctx)
 	if t != nil {
 		c.traceRequest(t, c.sessionOf(ctx), model, msgs, tools, in.StreamOptions != nil, in.PromptCacheKey != "", marked)
+		if in.ReasoningEffort != "" {
+			t("llm request: reasoning_effort %q", in.ReasoningEffort)
+		}
 	}
 	// Given up when nothing comes for timeout, from the request on.
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -462,6 +512,22 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 		}
 		msg, err = c.complete(ctx, in, func() { idle.Reset(timeout) })
 	}
+	// An API that does not know the effort may not say so: it is asked
+	// again with the next one that is near, and at last with none.
+	for _, next := range efforts[1:] {
+		if !badRequest(err) {
+			break
+		}
+		if t != nil {
+			t("llm request: the API refused reasoning_effort %q, asked again with %q", in.ReasoningEffort, next)
+		}
+		in.ReasoningEffort = next
+		msg, err = c.complete(ctx, in, func() { idle.Reset(timeout) })
+	}
+	if err == nil {
+		c.efforts.Took(model, effort, in.ReasoningEffort)
+		msg.Effort = Took{Asked: effort, Value: in.ReasoningEffort, Told: true}
+	}
 	if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, context.Canceled) {
 		return Message{}, cause
 	}
@@ -482,6 +548,31 @@ func own(msgs []Message) []Message {
 		}
 	}
 	return msgs
+}
+
+// shown returns msgs as they are sent with their pictures: those of the
+// results of tools moved to a message of the user right after them, as the
+// API takes the result of a tool only as text. msgs is not changed.
+func shown(msgs []Message) []Message {
+	if !slices.ContainsFunc(msgs, func(m Message) bool { return len(m.Images) > 0 }) {
+		return msgs
+	}
+	var out []Message
+	var images []Image
+	for i, m := range msgs {
+		if m.Role == "tool" {
+			images = append(images, m.Images...)
+			m.Images = nil
+		}
+		m.sent = true
+		out = append(out, m)
+		last := i == len(msgs)-1 || msgs[i+1].Role != "tool"
+		if last && len(images) > 0 {
+			out = append(out, Message{Role: "user", Content: "[The pictures the tools above returned.]", Images: images, sent: true})
+			images = nil
+		}
+	}
+	return out
 }
 
 // refuses reports whether err is the API refusing the parameter name.

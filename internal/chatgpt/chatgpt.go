@@ -102,6 +102,8 @@ func Provider(o Options) llm.Provider {
 		Models: o.models,
 		Model:  func(a llm.Access) agent.LLM { return &client{o: o, access: a} },
 		Logout: o.logout,
+		// The models of a ChatGPT plan are those of OpenAI.
+		Catalog: func(llm.Access) string { return "openai" },
 	}
 }
 

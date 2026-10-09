@@ -70,6 +70,7 @@ func (a *fakeAgent) Conversation(string) json.RawMessage                     { r
 func (a *fakeAgent) Resume(string, json.RawMessage) error                    { return nil }
 func (a *fakeAgent) Forget(string)                                           {}
 func (a *fakeAgent) Title(context.Context, []openai.Message) (string, error) { return "", nil }
+func (a *fakeAgent) Effort() string                                          { return "" }
 
 // fakeBackend is what the UI controls in the tests. Its sessions are those
 // of the node, in this process: their answers come from the fakeAgent.
@@ -77,12 +78,15 @@ type fakeBackend struct {
 	*fakeAgent
 	sessions *session.Service
 
-	status   Status
-	started  int
-	stopped  int
-	setups   int        // how often the setup was opened
-	setup    *fakeSetup // what it opens; one that knows the fake endpoint if nil
-	contents []Message  // what the context of every conversation is
+	status  Status
+	started int
+	// efforts are what the model takes, once effortsKnown says it is listed.
+	efforts      []string
+	effortsKnown bool
+	stopped      int
+	setups       int        // how often the setup was opened
+	setup        *fakeSetup // what it opens; one that knows the fake endpoint if nil
+	contents     []Message  // what the context of every conversation is
 
 	trust     Contacts
 	accepted  []string
@@ -309,6 +313,24 @@ func (f *fakeBackend) SetModel(access, model string) (bool, error) {
 func (f *fakeBackend) SetDebug(on bool) error {
 	f.debug = append(f.debug, on)
 	return f.fail["setdebug"]
+}
+
+// SetEffort saves effort in the status, as the node does.
+func (f *fakeBackend) Efforts() ([]string, bool) { return f.efforts, f.effortsKnown }
+
+func (f *fakeBackend) SetSessionEffort(ctx context.Context, id, effort string) error {
+	if err := f.fail["session effort"]; err != nil {
+		return err
+	}
+	return f.sessions.SetEffort(ctx, id, effort)
+}
+
+func (f *fakeBackend) SetEffort(effort string) error {
+	if err := f.fail["effort"]; err != nil {
+		return err
+	}
+	f.status.Effort = effort
+	return nil
 }
 
 // newBackend is a fakeBackend whose agent answers "pong", until the test ends.

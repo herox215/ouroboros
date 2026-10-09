@@ -117,7 +117,7 @@ func Tool(g *guard.Guard, unsandboxed func() (bool, error)) plugin.Tool {
 			"Every call starts anew in dir: cd and variables do not carry over. " +
 			"Unless the owner turned it off, it runs in a sandbox: it writes only where the tools for files may, " +
 			"reads nothing they may not, and reaches no other host unless the owner allows it with \"network\": true in the settings of bash. " +
-			"What the sandbox refuses does not pass when tried again: tell the user. " +
+			"What the sandbox refuses does not pass when tried again: tell the user, and do not look for another way. " +
 			"Use the tools for files to read, search and change files, and bash for builds, tests, git and other programs.",
 		Schema: `{"type":"object","properties":{` +
 			`"command":{"type":"string","description":"the command, as bash -c takes it"},` +

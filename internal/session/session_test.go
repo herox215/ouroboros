@@ -29,6 +29,7 @@ type fakeAgent struct {
 	resume   error
 	forgot   []string
 	title    func(ctx context.Context, conversation []openai.Message) (string, error)
+	effort   string // of the node
 }
 
 func (a *fakeAgent) Ready() error { return a.ready }
@@ -65,6 +66,12 @@ func (a *fakeAgent) Title(ctx context.Context, conversation []openai.Message) (s
 		return a.title(ctx, conversation)
 	}
 	return "", nil
+}
+
+func (a *fakeAgent) Effort() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.effort
 }
 
 func (a *fakeAgent) Forget(id string) {
@@ -120,7 +127,7 @@ func TestAnswerIsTold(t *testing.T) {
 	a := &fakeAgent{size: 42, cache: assistant.Cache{Tokens: 10, Cached: 5, AllTokens: 30, AllCached: 20}, run: func(_ context.Context, text string, observe func(assistant.Step), say func(string)) (string, error) {
 		say("I will look")
 		observe(assistant.Step{Tool: "read", Args: json.RawMessage(`{"path":"~/a"}`)})
-		observe(assistant.Step{Tool: "read", Args: json.RawMessage(`{"path":"~/a"}`), Done: true, Took: time.Second, Err: errors.New("no such file")})
+		observe(assistant.Step{Tool: "read", Args: json.RawMessage(`{"path":"~/a"}`), Done: true, Took: time.Second, Err: errors.New("no such file"), Remark: "said"})
 		<-gate
 		return "it is not there: " + text, nil
 	}}
@@ -141,7 +148,7 @@ func TestAnswerIsTold(t *testing.T) {
 	if kinds(got) != "message say step step" || got[0].Text != "where is a" || got[1].Text != "I will look" || got[0].Context != 42 || got[0].Cache != a.cache {
 		t.Fatalf("events %+v", got)
 	}
-	if st := got[3].AsStep(); st.Tool != "read" || !st.Done || st.Took != time.Second || st.Err.Error() != "no such file" || string(st.Args) != `{"path":"~/a"}` {
+	if st := got[3].AsStep(); st.Tool != "read" || !st.Done || st.Took != time.Second || st.Err.Error() != "no such file" || string(st.Args) != `{"path":"~/a"}` || st.Remark != "said" {
 		t.Fatalf("step %+v", st)
 	}
 	if st := got[2].AsStep(); st.Err != nil || st.Done {

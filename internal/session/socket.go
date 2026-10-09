@@ -35,6 +35,7 @@ var codes = map[string]error{
 	"stopped":    ErrStopped,
 	"no_session": ErrNoSession,
 	"empty":      ErrEmpty,
+	"no_effort":  ErrNoEffort,
 	"not_set_up": config.ErrIncomplete,
 }
 
@@ -51,6 +52,10 @@ type (
 	}
 	idRequest struct {
 		ID string `json:"id"`
+	}
+	effortRequest struct {
+		ID     string `json:"id"`
+		Effort string `json:"effort"`
 	}
 	unsteerResponse struct {
 		Text string `json:"text"`
@@ -101,6 +106,12 @@ func Handler(s *Service) http.Handler {
 		var in idRequest
 		if read(w, r, &in) {
 			reply(w, nil, s.Cancel(r.Context(), in.ID))
+		}
+	})
+	mux.HandleFunc("POST /effort", func(w http.ResponseWriter, r *http.Request) {
+		var in effortRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.SetEffort(r.Context(), in.ID, in.Effort))
 		}
 	})
 	mux.HandleFunc("POST /delete", func(w http.ResponseWriter, r *http.Request) {
@@ -312,6 +323,11 @@ func (c *Client) Unsteer(ctx context.Context, id string) (string, error) {
 // Cancel stops the answer on its way in the session id.
 func (c *Client) Cancel(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/cancel", idRequest{id}, nil)
+}
+
+// SetEffort makes effort how much the model thinks in the session id.
+func (c *Client) SetEffort(ctx context.Context, id, effort string) error {
+	return c.do(ctx, http.MethodPost, "/effort", effortRequest{id, effort}, nil)
 }
 
 // Delete removes the session id.

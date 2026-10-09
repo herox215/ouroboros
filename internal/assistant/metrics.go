@@ -22,6 +22,12 @@ type CallMetrics struct {
 	// Via is what answered the last call instead of the access and the
 	// model of the agent, "" if those did: see config.Config.Fallbacks.
 	Via string `json:"via,omitempty"`
+	// Effort is the effort the last call was asked with, and Took what the
+	// API took of it, like "high" for "max", "" for none, once Fell says
+	// that it took less or something else; as far as the provider told.
+	Effort string `json:"effort,omitempty"`
+	Took   string `json:"took,omitempty"`
+	Fell   bool   `json:"fell,omitempty"`
 }
 
 func (c Cache) withCall(call agent.Call) Cache {
@@ -35,6 +41,7 @@ func (c Cache) withCall(call agent.Call) Cache {
 		m.TPS = float64(call.Output) / call.Took.Seconds()
 	}
 	m.InPlan, m.Via = call.InPlan, call.Via
+	m.Effort, m.Took, m.Fell = call.Effort.Asked, call.Effort.Value, call.Effort.Fell()
 	m.CostKnown, m.CostUSD = false, 0
 	switch {
 	case call.InPlan:

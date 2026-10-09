@@ -138,6 +138,12 @@ func TestOwnerSetsUpTheNode(t *testing.T) {
 	if _, err := owner(t, broken).ToggleFallback("a", "m"); err == nil {
 		t.Fatal("a fallback for a configuration that cannot be read: want error")
 	}
+	if err := owner(t, broken).SetEffort("low"); err == nil {
+		t.Fatal("an effort for a configuration that cannot be read: want error")
+	}
+	if _, known := owner(t, broken).Efforts(llms(broken)); known {
+		t.Fatal("the efforts of a configuration that cannot be read are known")
+	}
 	if _, err := owner(t, broken).Fallbacks(); err == nil {
 		t.Fatal("the fallbacks of a configuration that cannot be read: want error")
 	}
@@ -524,6 +530,54 @@ func TestConfigToolsAreNotForPeers(t *testing.T) {
 	}
 }
 
+// The owner sets the effort, the status says it, and the log says so; an
+// effort that is none is refused.
+func TestOwnerSetsTheEffort(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.Env(t, s)
+	o := owner(t, s)
+	if err := o.SetEffort("high"); !errors.Is(err, config.ErrIncomplete) {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SetEffort("high"); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := o.Status(); err != nil || status.Effort != "high" {
+		t.Fatalf("status %+v, %v", status, err)
+	}
+	if err := o.SetEffort("huge"); err == nil {
+		t.Fatal("no such effort: want error")
+	}
+	log, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
+	if !strings.Contains(string(log), `the owner set the effort to "high"`) || strings.Contains(string(log), "huge") {
+		t.Fatalf("the log:\n%s", log)
+	}
+	if !slices.Contains(plugin.Efforts, "max") || plugin.Efforts[0] != "" || !slices.Contains(plugin.AllEfforts, "xhigh") {
+		t.Fatalf("efforts %q", plugin.Efforts)
+	}
+}
+
+// The efforts the model of the node takes are what models.dev lists of it,
+// as kept with the node: its access is known there by its endpoint.
+func TestOwnerEfforts(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.Env(t, s)
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+		t.Fatal(err)
+	}
+	listed := fmt.Sprintf(`{"at": %q, "providers": {%q: {"gpt-4o": {"efforts": ["low", "max"]}}}}`, time.Now().Format(time.RFC3339), s.BaseURL)
+	if err := os.WriteFile(home.Dir(s.Home).Catalog(), []byte(listed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	efforts, known := owner(t, s).Efforts(llms(s))
+	if !known || !slices.Equal(efforts, []string{"low", "max"}) {
+		t.Fatalf("efforts %q, %v", efforts, known)
+	}
+}
+
 // The owner turns the debug mode of the node on and off, and the log says so.
 func TestOwnerSetsDebug(t *testing.T) {
 	s := clitest.Settings(t)
@@ -615,5 +669,12 @@ func TestOwnerSavesAPicture(t *testing.T) {
 	}
 	if _, err := o.SavePicture([]byte("PNG"), "png"); err == nil {
 		t.Fatal("a workspace that cannot keep it")
+	}
+}
+
+// A Model reads the effort of a call from its context.
+func TestEffortOfACall(t *testing.T) {
+	if got := plugin.Effort(openai.WithEffort(context.Background(), "low")); got != "low" {
+		t.Fatalf("effort %q", got)
 	}
 }

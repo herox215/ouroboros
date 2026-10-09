@@ -21,6 +21,7 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/llm"
+	"ouroboros/internal/modelsdev"
 	"ouroboros/internal/safefile"
 )
 
@@ -454,6 +455,36 @@ func (s *Session) PickForPeers(id, model string) error {
 		c.PeerAccess, c.PeerModel = id, model
 		return nil
 	})
+}
+
+// ErrNoEffort is the error of SetEffort for an effort that is none of
+// config.Efforts.
+var ErrNoEffort = errors.New("no such effort")
+
+// SetEffort makes effort, one of config.AllEfforts, how much the model
+// thinks before it answers the owner, from the next call of it on.
+func (s *Session) SetEffort(effort string) error {
+	if !slices.Contains(config.AllEfforts, effort) {
+		return fmt.Errorf("%w: %q", ErrNoEffort, effort)
+	}
+	return config.Update(string(s.home), func(c *config.Config) error {
+		if !c.Complete() {
+			return config.ErrIncomplete
+		}
+		c.Effort = effort
+		return nil
+	})
+}
+
+// Efforts returns the efforts the model the node answers with takes, as
+// models.dev lists them in c, from the least to the most, and whether it
+// lists the model: one it lists takes none of them when the list is empty.
+func (s *Session) Efforts(c *modelsdev.Catalog) ([]string, bool) {
+	provider := s.book.Catalog(s.cfg.Access)
+	if provider == "" {
+		return nil, false
+	}
+	return c.Efforts(provider, s.cfg.Model)
 }
 
 // ErrInUse is the error of ToggleFallback for the model the node answers

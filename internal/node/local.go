@@ -44,6 +44,9 @@ type Status struct {
 	Port                  int // A2A port while running
 	// Debug says that the node is in debug mode, see home.Dir.Debug.
 	Debug bool
+	// Effort is how much the model thinks before it answers the owner, see
+	// config.Config.Effort.
+	Effort string
 }
 
 // Status reports how the node is configured and whether it is running.
@@ -52,7 +55,7 @@ func (l Local) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model, Debug: l.Home.Debug()}
+	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model, Debug: l.Home.Debug(), Effort: cfg.Effort}
 	if access, err := l.Home.Credentials().Get(cfg.Access); err == nil {
 		s.Provider = access.Label()
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -367,5 +368,85 @@ func TestCompleteIsTraced(t *testing.T) {
 		if strings.Contains(got, secret) {
 			t.Errorf("%q is told to the trace", secret)
 		}
+	}
+}
+
+// The pictures of a result of a tool, and those of a message of the user,
+// are parts after its text.
+func TestTranslateImages(t *testing.T) {
+	png := openai.Image{Type: "image/png", Data: []byte("p")}
+	_, input := translate([]openai.Message{
+		{Role: "user", Content: "look", Images: []openai.Image{png}},
+		{Role: "tool", ToolCallID: "c", Content: "a picture", Images: []openai.Image{png}},
+	})
+	want := []string{
+		`{"role":"user","content":[{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,cA=="}]}`,
+		`{"type":"function_call_output","call_id":"c","output":[{"type":"input_text","text":"a picture"},{"type":"input_image","image_url":"data:image/png;base64,cA=="}]}`,
+	}
+	for i := range want {
+		if string(input[i]) != want[i] {
+			t.Errorf("item %d:\n%s\nwant\n%s", i, input[i], want[i])
+		}
+	}
+}
+
+// The effort goes to the API as reasoning.effort, as it is named; "max",
+// which some models know, and else as "xhigh". One the model does not know
+// is asked again with the next that is near, and at last without; what it
+// took is what it is asked with from then on. Without an effort none is
+// sent.
+func TestCompleteSendsTheEffort(t *testing.T) {
+	srv, m := model(t)
+	var traced []string
+	var took openai.Took
+	ask := func(effort string) []string {
+		t.Helper()
+		before := len(srv.Seen().Requests)
+		ctx := openai.WithTrace(openai.WithEffort(context.Background(), effort), func(format string, args ...any) {
+			if line := fmt.Sprintf(format, args...); strings.Contains(line, "refused the reasoning effort") {
+				traced = append(traced, line)
+			}
+		})
+		msg, err := m.Complete(ctx, "m", []openai.Message{{Role: "user", Content: "hi"}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		took = msg.Effort
+		var sent []string
+		for _, body := range srv.Seen().Requests[before:] {
+			reasoning, _ := body["reasoning"].(map[string]any)
+			effort, ok := reasoning["effort"].(string)
+			if !ok {
+				effort = "-"
+			}
+			sent = append(sent, effort)
+		}
+		return sent
+	}
+	// The message says what the API took of the effort.
+	for _, tt := range []struct {
+		effort  string
+		efforts []string // that the API takes, nil for all
+		want    []string
+		took    string
+	}{
+		{"", nil, []string{"-"}, ""},
+		{"medium", nil, []string{"medium"}, "medium"},
+		{"max", nil, []string{"max"}, "max"},
+		{"none", []string{"low", "high"}, []string{"none", "minimal", "low"}, "low"},
+		{"none", []string{"low", "high"}, []string{"low"}, "low"}, // what it took the last time
+		{"max", []string{"low"}, []string{"max", "xhigh", "high", "-"}, ""},
+	} {
+		srv.Set(func(s *chatgpttest.State) { s.Efforts = tt.efforts })
+		if got := ask(tt.effort); !slices.Equal(got, tt.want) {
+			t.Errorf("%q: sent %q, want %q", tt.effort, got, tt.want)
+		}
+		if took != (openai.Took{Asked: tt.effort, Value: tt.took, Told: true}) {
+			t.Errorf("%q: took %+v", tt.effort, took)
+		}
+	}
+	// Every refusal is traced.
+	if len(traced) != 5 || traced[0] != `llm request: the API refused the reasoning effort "none", asked again with "minimal"` {
+		t.Fatalf("traced %q", traced)
 	}
 }

@@ -42,6 +42,10 @@ type Config struct {
 	// access it answers the owner with cannot answer for now: see Fallback.
 	// Without them, such an answer stops with why.
 	Fallbacks []Fallback `json:"fallbacks,omitempty"`
+	// Effort is how much the model thinks before it answers the owner, one
+	// of Efforts: "" leaves it to the model. Peers are answered as the model
+	// does by itself.
+	Effort string `json:"effort,omitempty"`
 	// BaseURL and APIKey are how a configuration from before there were
 	// accesses names its LLM: an OpenAI-compatible endpoint and the key for
 	// it. Such a configuration is still read. The node makes an access of
@@ -247,6 +251,15 @@ func (c Config) ID() string {
 	}
 	return id.ID()
 }
+
+// Efforts are the efforts the owner chooses from where the model is not
+// known, from the least to the most: "" leaves it to the model, "none" has
+// it not think at all.
+var Efforts = []string{"", "none", "low", "medium", "high", "max"}
+
+// AllEfforts are all efforts there are, from the least to the most: those a
+// model may know besides Efforts too, as its API names them.
+var AllEfforts = []string{"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // ErrIncomplete means that the node was not set up yet.
 var ErrIncomplete = errors.New("node is not configured")

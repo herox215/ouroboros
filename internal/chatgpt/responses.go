@@ -38,7 +38,8 @@ type client struct {
 	// noCacheKey says that the API refused the key of the cache of the
 	// conversation: it is not sent again.
 	noCacheKey atomic.Bool
-	sent       openai.Sent // the last requests of the sessions, for a trace
+	efforts    openai.Efforts // the efforts the models took
+	sent       openai.Sent    // the last requests of the sessions, for a trace
 }
 
 // sessionHeader is the header that tells the API which conversation a
@@ -61,7 +62,28 @@ type item struct {
 	Name      string  `json:"name,omitempty"`
 	Namespace string  `json:"namespace,omitempty"`
 	Arguments *string `json:"arguments,omitempty"`
-	Output    *string `json:"output,omitempty"`
+	Output    any     `json:"output,omitempty"` // a text, or parts with pictures
+}
+
+// part is a part of the content of a message, or of the output of a call:
+// a text or a picture.
+type part struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+// withImages is the text of m, and with pictures its text and the pictures,
+// each a part.
+func withImages(m openai.Message) any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+	parts := []part{{Type: "input_text", Text: m.Content}}
+	for _, image := range m.Images {
+		parts = append(parts, part{Type: "input_image", ImageURL: image.URL()})
+	}
+	return parts
 }
 
 // function is a tool of the agent, as the namespace lists it.
@@ -90,6 +112,12 @@ type request struct {
 	Store          bool              `json:"store"`
 	Stream         bool              `json:"stream"`
 	PromptCacheKey string            `json:"prompt_cache_key,omitempty"`
+	Reasoning      *reasoning        `json:"reasoning,omitempty"`
+}
+
+// reasoning is how much the model thinks before it answers.
+type reasoning struct {
+	Effort string `json:"effort"`
 }
 
 // translate turns the conversation msgs into the instructions and the input
@@ -112,7 +140,7 @@ func translate(msgs []openai.Message) (instructions string, input []json.RawMess
 				add(item{Role: "developer", Content: m.Content})
 			}
 		case "tool":
-			add(item{Type: "function_call_output", CallID: m.ToolCallID, Output: &m.Content})
+			add(item{Type: "function_call_output", CallID: m.ToolCallID, Output: withImages(m)})
 		case "assistant":
 			if m.ReasoningField == openai.ReasoningItems {
 				var thoughts []json.RawMessage
@@ -126,7 +154,7 @@ func translate(msgs []openai.Message) (instructions string, input []json.RawMess
 				add(item{Type: "function_call", CallID: call.ID, Name: call.Function.Name, Namespace: namespace, Arguments: &call.Function.Arguments})
 			}
 		default:
-			add(item{Role: "user", Content: m.Content})
+			add(item{Role: "user", Content: withImages(m)})
 		}
 	}
 	return instructions, input
@@ -138,6 +166,11 @@ func translate(msgs []openai.Message) (instructions string, input []json.RawMess
 func (c *client) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
 	in := request{Model: model, Stream: true}
 	in.Instructions, in.Input = translate(msgs)
+	effort := openai.EffortOf(ctx)
+	efforts := c.efforts.Of(model, effort)
+	if efforts[0] != "" {
+		in.Reasoning = &reasoning{efforts[0]}
+	}
 	if len(tools) > 0 {
 		g := group{Type: "namespace", Name: namespace, Description: "What the agent of this Ouroboros node can do."}
 		for _, t := range tools {
@@ -176,6 +209,18 @@ func (c *client) Complete(ctx context.Context, model string, msgs []openai.Messa
 				t("llm request: the API refused prompt_cache_key, asked again without it; it is not sent again while the node runs")
 			}
 			continue
+		case failed != nil && failed.Param == "reasoning.effort" && in.Reasoning != nil:
+			// The model does not know the effort: the next one that is
+			// near, and at last none.
+			next := efforts[slices.Index(efforts, in.Reasoning.Effort)+1]
+			if t != nil {
+				t("llm request: the API refused the reasoning effort %q, asked again with %q", in.Reasoning.Effort, next)
+			}
+			in.Reasoning = nil
+			if next != "" {
+				in.Reasoning = &reasoning{next}
+			}
+			continue
 		case failed != nil && failed.later() && try < len(backoff):
 			// It could not take the request right now: a little later.
 			select {
@@ -186,6 +231,14 @@ func (c *client) Complete(ctx context.Context, model string, msgs []openai.Messa
 			}
 		}
 		break
+	}
+	if err == nil {
+		took := ""
+		if in.Reasoning != nil {
+			took = in.Reasoning.Effort
+		}
+		c.efforts.Took(model, effort, took)
+		msg.Effort = openai.Took{Asked: effort, Value: took, Told: true}
 	}
 	if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, context.Canceled) {
 		return openai.Message{}, cause

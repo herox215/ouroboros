@@ -39,6 +39,10 @@ type Provider struct {
 	// It reads the credentials when it needs them, and renews them through a
 	// when they ran out: the agents are not built anew for that.
 	Model func(a Access) agent.LLM
+	// Catalog names the provider of the access a at models.dev, for what it
+	// lists of its models: its ID there, like "openai", or where its API is
+	// reached. May be nil, or return "", for a provider it does not list.
+	Catalog func(a Access) string
 	// Logout ends what the access a holds at the API, before it is removed.
 	// May be nil. What it fails with is told, and the access removed anyway.
 	Logout func(ctx context.Context, a Access) error
@@ -176,6 +180,16 @@ func (b Book) Models(ctx context.Context, id string) (Models, error) {
 		return Models{}, err
 	}
 	return p.Models(ctx, a)
+}
+
+// Catalog names the provider of the access id at models.dev, see
+// Provider.Catalog: "" for one it does not list, or an access that is none.
+func (b Book) Catalog(id string) string {
+	_, p, a, err := b.of(id)
+	if err != nil || p.Catalog == nil {
+		return ""
+	}
+	return p.Catalog(a)
 }
 
 // Logout ends what the access id holds at its API, as far as its provider

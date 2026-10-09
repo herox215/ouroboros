@@ -109,6 +109,7 @@ func copyMessages(ms []openai.Message) []openai.Message {
 	out := slices.Clone(ms)
 	for i := range out {
 		out[i].ToolCalls = slices.Clone(out[i].ToolCalls)
+		out[i].Images = slices.Clone(out[i].Images)
 	}
 	return out
 }

@@ -138,8 +138,9 @@ func TestProposeConfig(t *testing.T) {
 		string(list[0].Before) != `[]` || list[0].Reason != "so that peers can read the share" {
 		t.Fatalf("waiting: %+v", list)
 	}
-	// The agent is told the id, so that it can take the proposal back.
-	if end := strings.TrimPrefix(got, want); end != list[0].ID+": with "+toolWithdrawConfig+" you can take it back yourself while it waits." {
+	// The agent is told the id, so that it can take the proposal back; how,
+	// the prompt tells where it may.
+	if end := strings.TrimPrefix(got, want); end != list[0].ID+"." {
 		t.Fatalf("the id in the answer: %q", end)
 	}
 
@@ -400,10 +401,17 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 		t.Fatalf("a script of a peer: %q", got)
 	}
 
-	// The owner's agent is told what a proposal is.
+	// The owner's agent is told what a proposal is, and that it may take its
+	// own back, as far as it has the tools for that.
 	prompt, err := c.assistant.Ask(context.Background(), "p", "?system", nil)
-	if err != nil || !strings.Contains(prompt, configHint) {
+	if err != nil || !strings.Contains(prompt, configHint+withdrawHint) {
 		t.Fatalf("the prompt: %q, %v", prompt, err)
+	}
+	cfg.Tools = &config.Tools{H2A: config.Named(toolProposeConfig)}
+	c.save(cfg)
+	if prompt, err := c.assistant.Ask(context.Background(), "p", "?system", nil); err != nil || !strings.Contains(prompt, configHint) ||
+		strings.Contains(prompt, toolWithdrawConfig) {
+		t.Fatalf("the prompt without %s: %q, %v", toolWithdrawConfig, prompt, err)
 	}
 	cfg.Tools = &config.Tools{H2A: config.Named(toolGetConfig)}
 	c.save(cfg)

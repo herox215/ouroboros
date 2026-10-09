@@ -23,6 +23,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
+	"ouroboros/internal/modelsdev"
 	"ouroboros/internal/node"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
@@ -40,6 +41,7 @@ const Patience = time.Minute
 // with a command, as node.Local starts the real binary, it runs that command
 // for the node the environment describes. Call it from TestMain.
 func Main(m *testing.M) {
+	os.Setenv(modelsdev.Env, "off") // no test reaches models.dev
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		os.Exit(ouro(os.Args[1:]))
 	}
@@ -88,6 +90,7 @@ func freeUDPPort(t *testing.T) int {
 // ports and a fake LLM.
 func Settings(t *testing.T) cli.Settings {
 	t.Helper()
+	t.Setenv(modelsdev.Env, "off") // no test reaches models.dev
 	return cli.Settings{
 		Home:      t.TempDir(),
 		HTTPPort:  0,

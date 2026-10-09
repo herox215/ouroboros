@@ -353,6 +353,13 @@ func TestTokensAreLogged(t *testing.T) {
 	r.call(agent.Call{Done: true, ToolCalls: 1, Tokens: 12345, Cached: 10240})
 	r.call(agent.Call{Sent: 1024})
 	r.call(agent.Call{Done: true, Tokens: 1000, Cached: 999, Thought: 2048})
+	// What the API took of the effort is logged where it took less.
+	r.call(agent.Call{Sent: 10})
+	r.call(agent.Call{Done: true, Effort: openai.Took{Asked: "max", Value: "high", Told: true}})
+	r.call(agent.Call{Sent: 10})
+	r.call(agent.Call{Done: true, Effort: openai.Took{Asked: "low", Told: true}})
+	r.call(agent.Call{Sent: 10})
+	r.call(agent.Call{Done: true, Effort: openai.Took{Asked: "high", Value: "high", Told: true}})
 	r.end("ok", nil)
 	for i, line := range lines {
 		lines[i] = duration.ReplaceAllString(line, "${1}D")
@@ -361,7 +368,10 @@ func TestTokensAreLogged(t *testing.T) {
 		`chat c: message from the owner: "hi"`,
 		`chat c: llm call 1 took D: tool calls: 1 [12.3k tokens, 10.2k cached (82%)]`,
 		`chat c: llm call 2 took D: text [1.0k tokens, 999 cached (99%), thought 2.0 KiB]`,
-		`chat c: answered after D (llm calls: 2, tool calls: 0, sent 3.0 KiB, 13.3k tokens, 11.2k cached (84%)): "ok"`,
+		`chat c: llm call 3 took D: text [effort max taken as high]`,
+		`chat c: llm call 4 took D: text [effort low taken as none: the API takes no effort]`,
+		`chat c: llm call 5 took D: text`,
+		`chat c: answered after D (llm calls: 5, tool calls: 0, sent 3.0 KiB, 13.3k tokens, 11.2k cached (84%)): "ok"`,
 	})
 }
 

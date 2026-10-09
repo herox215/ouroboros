@@ -755,3 +755,51 @@ func TestTitles(t *testing.T) {
 		t.Errorf("the conversation is gone without its title: %v", err)
 	}
 }
+
+// A conversation is given an effort of its own, "" too, and it goes with it.
+func TestEfforts(t *testing.T) {
+	a := at(t)
+	id := Owner(owner.Session)
+	if effort, ok, err := a.Effort(id); err != nil || ok || effort != "" {
+		t.Fatalf("none: %q, %v, %v", effort, ok, err)
+	}
+	for _, want := range []string{"high", ""} {
+		if err := a.SetEffort(id, want); err != nil {
+			t.Fatal(err)
+		}
+		if effort, ok, err := a.Effort(id); err != nil || !ok || effort != want {
+			t.Fatalf("%q: %q, %v, %v", want, effort, ok, err)
+		}
+	}
+	a.Append(owner, question, nil)
+	a.SetTitle(id, "Roof")
+	if err := a.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := a.Effort(id); ok {
+		t.Error("the effort stayed after the conversation was deleted")
+	}
+	if title, _ := a.Title(id); title != "" {
+		t.Errorf("the title stayed: %q", title)
+	}
+
+	// What names no conversation, or cannot be written or read, fails.
+	if err := a.SetEffort("chat-1", "low"); err == nil || !strings.Contains(err.Error(), "names no session") {
+		t.Errorf("set: %v", err)
+	}
+	if _, _, err := a.Effort("chat-1"); err == nil || !strings.Contains(err.Error(), "names no session") {
+		t.Errorf("get: %v", err)
+	}
+	b := at(t)
+	b.Append(owner, question, nil)
+	os.MkdirAll(filepath.Join(b.dir, ownerDir, "chat-1.effort", "x"), 0o700)
+	if err := b.SetEffort(id, "low"); err == nil {
+		t.Error("an effort that is a directory should fail")
+	}
+	if _, ok, err := b.Effort(id); err == nil || ok {
+		t.Errorf("an effort that cannot be read: %v, %v", ok, err)
+	}
+	if err := b.Delete(id); err == nil {
+		t.Error("an effort that cannot be removed should fail")
+	}
+}

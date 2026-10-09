@@ -134,6 +134,18 @@ type Backend interface {
 	// of the node tells much more of every call of the LLM. Status says
 	// whether it is on.
 	SetDebug(on bool) error
+	// SetEffort makes effort, one of plugin.Efforts, how much the model
+	// thinks before it answers the owner in a session that has none of its
+	// own. Status says what it is.
+	SetEffort(effort string) error
+	// SetSessionEffort makes effort how much the model thinks in the
+	// session id, whatever the node says, from its next call on: an Event
+	// of the kind plugin.SessionEffort tells it.
+	SetSessionEffort(ctx context.Context, id, effort string) error
+	// Efforts returns the efforts the model the node answers with takes,
+	// as models.dev lists them, from the least to the most, and whether it
+	// lists the model at all: then /effort offers only those.
+	Efforts() ([]string, bool)
 	// Settings returns the configuration of the node for the settings
 	// screen (/settings), without its keys.
 	Settings() (Settings, error)
@@ -174,6 +186,7 @@ const (
 	screenContext
 	screenSettings // the configuration, for /settings
 	screenSessions // the sessions, for /session
+	screenEffort   // the slider of the effort, for /effort
 )
 
 // entry is one message in the conversation: from the user, from the agent, or
@@ -208,12 +221,17 @@ type conversation struct {
 	context   int                 // how long its context is, see Event.Context
 	cache     plugin.SessionCache // what the provider had cached, see Event.Cache
 	title     string              // named for its topic, else the first message of the owner
+	effort    string              // how much the model thinks in it, once efforted says it has its own
+	efforted  bool
 	last      time.Time
 	draft     string // what is typed in the input for it while another one is shown
 	watching  bool   // its events come in, or are asked for
 	// peer is the peer a conversation of a peer with the agent is with: it
 	// is only to read. "" for a session of the owner.
 	peer string
+	// images are the files of the pictures pasted into it, by their labels:
+	// the first is [Image_1].
+	images []string
 }
 
 // Model is the UI state.
@@ -245,10 +263,13 @@ type Model struct {
 	screen   screen
 	commands []command    // of the UI, then of the plugins
 	suggest  int          // the command selected of those suggested while one is typed
+	entered  []string     // what the owner entered, the latest last, for up and down
+	recall   recall       // where up and down are in it
 	plugins  pluginScreen // the screens the plugins contributed, and the one that is open
 	choice   int          // the action selected: accept or reject, or one of a screen
 
-	picker modelScreen // the models of the accesses, for /model
+	picker modelScreen  // the models of the accesses, for /model
+	effort effortScreen // the slider of the effort, for /effort
 
 	context contextScreen // the context of the conversation, for /context
 
@@ -495,6 +516,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		return m, m.mouse(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
+		if m.inDialog() {
+			return m, nil
+		}
 		if m.screen == screenContext {
 			m.wheel(&m.context.port, msg)
 			return m, nil
@@ -525,6 +549,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.config.input, cmd = m.config.input.Update(msg)
 			return m, cmd
 		}
+		if m.screen == screenContext && m.context.typing {
+			return m, m.context.typed(m, msg) // what is pasted into the search, and the blink of its cursor
+		}
 		if pasted, ok := msg.(tea.PasteMsg); ok {
 			return m, m.paste(pasted.Content)
 		}
@@ -553,10 +580,15 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.config.handleKey(m, msg)
 	case screenSessions:
 		return m.sessions.handleKey(m, msg)
+	case screenEffort:
+		return m.effort.handleKey(m, msg)
 	case screenHelp:
 		if msg.String() == "esc" {
 			m.screen = screenChat
 		}
+		return nil
+	}
+	if m.handleRecallKey(msg) {
 		return nil
 	}
 	if cmd, ok := m.handleSuggestionKey(msg); ok {
@@ -736,10 +768,11 @@ func (m *Model) send() tea.Cmd {
 	if text == "" {
 		return nil
 	}
+	m.remember(text)
 	if isCommandLine(text) {
 		return m.runCommand(text)
 	}
-	text = strings.TrimPrefix(text, "/") // of the two a message starts with
+	text = c.expand(strings.TrimPrefix(text, "/")) // of the two a message starts with; with the paths of its pictures
 	if !m.status.Configured {
 		m.setNotice("set up the node first: /setup", true)
 		return nil
@@ -782,11 +815,11 @@ func (m *Model) asked(msg askedMsg) {
 	c.pending = c.running
 	if c == m.chat {
 		if m.input.Value() == "" {
-			m.input.SetValue(msg.text)
+			m.input.SetValue(c.labelled(msg.text))
 		}
 		m.renderHistory(m.history.AtBottom())
 	} else if c.draft == "" {
-		c.draft = msg.text
+		c.draft = c.labelled(msg.text)
 	}
 	m.setNotice(msg.err.Error(), true)
 }
@@ -817,11 +850,13 @@ func (m *Model) unsteered(msg unsteeredMsg) {
 	if msg.text == "" {
 		return // the answer took it meanwhile
 	}
-	if c := m.chats[msg.id]; c != m.chat {
-		c.draft = strings.TrimSuffix(msg.text+"\n"+c.draft, "\n")
+	c := m.chats[msg.id]
+	text := c.labelled(msg.text)
+	if c != m.chat {
+		c.draft = strings.TrimSuffix(text+"\n"+c.draft, "\n")
 		return
 	}
-	m.input.SetValue(strings.TrimSuffix(msg.text+"\n"+m.input.Value(), "\n"))
+	m.input.SetValue(strings.TrimSuffix(text+"\n"+m.input.Value(), "\n"))
 }
 
 // started returns the call of e that the call ended, which done tells of,

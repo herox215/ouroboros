@@ -182,6 +182,13 @@ func TestUnreadableAccess(t *testing.T) {
 	if _, err := p.Model(access{err: boom}).Complete(context.Background(), "m", nil, nil); !errors.Is(err, boom) {
 		t.Errorf("the model tells %v", err)
 	}
+	// Nor is it known to models.dev, which knows a provider by its endpoint.
+	if got := p.Catalog(access{err: boom}); got != "" {
+		t.Errorf("catalog of an unreadable access %q", got)
+	}
+	if got := p.Catalog(access{c: client.Credentials("https://opencode.ai/zen/go/v1/", "sk")}); got != "https://opencode.ai/zen/go/v1" {
+		t.Errorf("catalog %q", got)
+	}
 	// A key the endpoint refuses is told as that.
 	url := openaitest.NewServer(t)
 	if _, err := p.Models(context.Background(), access{c: client.Credentials(url, "sk-bad")}); !errors.Is(err, plugin.ErrKeyRejected) {

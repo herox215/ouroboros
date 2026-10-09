@@ -26,7 +26,9 @@ type world struct {
 	node      string // the directory of the node
 	guard     *guard.Guard
 	protected []string
-	failing   error // what reading the configuration fails with
+	failing   error  // what reading the configuration fails with
+	effort    string // of the answers look has the agent give
+	remark    string // what read said for the owner when look had it run
 }
 
 func newWorld(t *testing.T) *world {
@@ -693,13 +695,15 @@ func TestSettings(t *testing.T) {
 	}
 }
 
-// What the LLM is told about the tools.
+// What the LLM is told about the tools. What a path is the prompt of the
+// agent says, once for all of them.
 func TestSchemas(t *testing.T) {
 	all := tools(&guard.Guard{})
 	var names []string
 	for _, tool := range all {
 		names = append(names, tool.Name)
-		if !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Schema, "absolute or starting with") {
+		if !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Schema, `"path":{"type":"string","description":"the `) ||
+			strings.Contains(tool.Schema, "absolute") {
 			t.Errorf("%s: %s / %s", tool.Name, tool.Schema, tool.Description)
 		}
 	}
@@ -708,7 +712,9 @@ func TestSchemas(t *testing.T) {
 	}
 	want := `{"type":"object","properties":{"limit":{"type":"integer","description":"how many lines at most"},` +
 		`"offset":{"type":"integer","description":"the first line, counted from 1"},` +
-		`"path":{"type":"string","description":"the file, absolute or starting with \"~\", the home directory"}},"required":["path"]}`
+		`"path":{"type":"string","description":"the file"},` +
+		`"region":{"type":"string","description":"of a picture: only the part \"x,y,width,height\", in its own pixels"},` +
+		`"size":{"type":"integer","description":"of a picture: the longer side in pixels it is shown with at most; leave out for what the effort allows"}},"required":["path"]}`
 	if all[0].Schema != want {
 		t.Errorf("read: %s", all[0].Schema)
 	}

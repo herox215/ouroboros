@@ -99,6 +99,10 @@ func (d Dir) HostID() (string, error) {
 // in, to show when an access does not answer.
 func (d Dir) Models() string { return d.Root().path("models.json") }
 
+// Catalog is the file what models.dev lists of the models is kept in: which
+// efforts they take, see modelsdev.
+func (d Dir) Catalog() string { return d.Root().path("catalog.json") }
+
 // SaveConfig writes the configuration. The identity of the node is not given
 // up by it: a configuration without a key, read before the key was generated,
 // keeps the one that was persisted since.

@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -177,10 +176,10 @@ func (s *modelScreen) forPeers(m *Model, access plugin.SetupAccess, model string
 	return access.ID == m.status.PeerAccess && model == m.status.PeerModel
 }
 
-// modelView shows the models of the accesses, the one in use marked and the
-// one selected ready to be set with enter.
+// modelView shows, in a dialog, the models of the accesses, the one in use
+// marked and the one selected ready to be set with enter.
 func (s *modelScreen) view(m *Model) string {
-	w, h := m.width, m.bodyHeight()
+	w, h := m.dialogSize()
 	lines := []string{boldStyle.Render("Model") + mutedStyle.Render("  "+m.modelText()), ""}
 	switch {
 	case s.busy != "":
@@ -188,9 +187,9 @@ func (s *modelScreen) view(m *Model) string {
 	case s.err != nil:
 		lines = append(lines, errStyle.Render("✗ "+s.err.Error()))
 	default:
-		lines = append(lines, s.list(m, w, max(1, h-5))...)
+		lines = append(lines, s.list(m, w, max(1, h-6))...) // border, title and count
 	}
-	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
+	return m.dialog(lines)
 }
 
 // modelList shows the models around the one selected, in at most height

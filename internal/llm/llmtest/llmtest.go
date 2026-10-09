@@ -149,6 +149,8 @@ func Provider(name string) llm.Provider {
 			return llm.Models{Chat: list, All: list, Default: list[0]}, nil
 		},
 		Model: func(a llm.Access) agent.LLM { return model{name, func() (string, error) { return token(a) }} },
+		// models.dev knows it by its name, as far as a test lists it there.
+		Catalog: func(llm.Access) string { return name },
 	}
 }
 
