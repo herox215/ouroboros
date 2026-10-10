@@ -97,3 +97,4 @@ internal/tui/mesh.go:186:11 CONDITIONALS_BOUNDARY  # a connection that did not b
 internal/tui/mesh.go:187:4 INVERT_LOOPCTRL  # the nerve cells after one that did not begin to grow did not either: going on finds each of them so and draws nothing
 internal/tui/mesh.go:201:39 CONDITIONALS_BOUNDARY  # the noise is a fraction with many digits, never exactly the share of the net that fires
 internal/tui/mesh.go:211:26 CONDITIONALS_BOUNDARY  # the way a signal has left is a fraction with many digits, never exactly 3 dots
+internal/tui/empty_animation.go:133:48 CONDITIONALS_BOUNDARY  # how far a time is into a glitch is the difference of two times of half a second and more, a multiple of 2^-53 at the finest, which the 0.34 of glitchFor is not: it is never exactly at its end
