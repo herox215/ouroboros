@@ -5,7 +5,6 @@ import (
 	"math"
 	"strings"
 	"testing"
-	"time"
 )
 
 // poseText writes the cells of a snake down: the braille dots, then for
@@ -64,24 +63,6 @@ func TestGoldenLogoPoses(t *testing.T) {
 		fmt.Fprintf(&b, "--- %+v\n%s", p, poseText(poseCells(p, 1, false, 44, 22)))
 	}
 	golden(t, "logo-poses", b.String())
-}
-
-// The body grows fast at first and slows down until it is grown.
-func TestSplashGrownEasesOut(t *testing.T) {
-	for _, c := range []struct {
-		at   time.Duration
-		want float64
-	}{
-		{0, 0},
-		{growDuration / 4, 0.4375},
-		{growDuration / 2, 0.75},
-		{growDuration, 1},
-		{2 * growDuration, 1},
-	} {
-		if got := splashGrown(c.at); math.Abs(got-c.want) > 1e-9 {
-			t.Errorf("grown at %v: %v, want %v", c.at, got, c.want)
-		}
-	}
 }
 
 // The edges of the head belong to it: the skull up to the jaw hinge, the shut

@@ -239,13 +239,24 @@ func TestReadPicturesThatCannotBeShown(t *testing.T) {
 	if err := os.Truncate(w.path("~/giant.png"), maxPictureBytes+1); err != nil {
 		t.Fatal(err)
 	}
+	// As large as a picture may be, it is looked at: these fail for what they are.
+	w.file("~/largest.png", "")
+	if err := os.Truncate(w.path("~/largest.png"), maxPictureBytes); err != nil {
+		t.Fatal(err)
+	}
+	header := "RIFF\x00\x00\x00\x00WEBPVP8 "
+	w.file("~/full.webp", header+strings.Repeat("x", maxShownBytes-len(header)))
+	if got := w.look("~/full.webp"); len(got.Images) != 1 || len(got.Images[0].Data) != maxShownBytes {
+		t.Errorf("a picture of all the bytes one may have: %q", got.Content)
+	}
 
 	for path, want := range map[string]string{
-		"~/old.bmp":    "~/old.bmp is a picture the model cannot be shown (image/bmp): only PNG, JPEG, GIF and WebP",
-		"~/broken.png": "~/broken.png cannot be read as a picture",
-		"~/cut.png":    "~/cut.png cannot be read as a picture",
-		"~/huge.webp":  "~/huge.webp is 5 MiB as it is shown, more than the 5 MiB a picture can have: ask for a smaller size or a region",
-		"~/giant.png":  "~/giant.png has 20 MiB: a picture of at most 20 MiB can be shown",
+		"~/old.bmp":     "~/old.bmp is a picture the model cannot be shown (image/bmp): only PNG, JPEG, GIF and WebP",
+		"~/broken.png":  "~/broken.png cannot be read as a picture",
+		"~/cut.png":     "~/cut.png cannot be read as a picture",
+		"~/huge.webp":   "~/huge.webp is 5 MiB as it is shown, more than the 5 MiB a picture can have: ask for a smaller size or a region",
+		"~/giant.png":   "~/giant.png has 20 MiB: a picture of at most 20 MiB can be shown",
+		"~/largest.png": "~/largest.png is a picture the model cannot be shown (application/octet-stream)",
 	} {
 		got := w.look(path)
 		if !strings.Contains(got.Content, "error: "+want) || got.Images != nil {
@@ -261,6 +272,7 @@ func TestReadPicturesThatCannotBeShown(t *testing.T) {
 		{readArgs{Path: "~/small.png", Region: "0,0,4"}, `~/small.png: the region "0,0,4" is no "x,y,width,height"`},
 		{readArgs{Path: "~/small.png", Region: "0,0,4,x"}, `~/small.png: the region "0,0,4,x" is no`},
 		{readArgs{Path: "~/small.png", Region: "0,0,0,4"}, `~/small.png: the region "0,0,0,4" is no`},
+		{readArgs{Path: "~/small.png", Region: "0,0,4,0"}, `~/small.png: the region "0,0,4,0" is no`},
 		{readArgs{Path: "~/small.png", Region: "0,0,4,-1"}, `~/small.png: the region "0,0,4,-1" is no`},
 		{readArgs{Path: "~/small.png", Region: "4,0,4,4"}, "~/small.png: the region 4,0,4,4 is outside of the picture, which is 4×4"},
 	} {
@@ -298,5 +310,19 @@ func TestShrink(t *testing.T) {
 	// Of a part, only what it covers.
 	if got := shrink(src, image.Rect(2, 0, 4, 2), 1, 1); !bytes.Equal(got.Pix, []uint8{225, 112, 0, 255}) {
 		t.Fatalf("the part shrunk to %v", got.Pix)
+	}
+	// Rows are taken together like columns.
+	tall := image.NewRGBA(image.Rect(0, 0, 2, 4))
+	for y, v := range []uint8{0, 100, 200, 250} {
+		for x := range 2 {
+			tall.Set(x, y, color.RGBA{v, v / 2, 0, 255})
+		}
+	}
+	if got := shrink(tall, tall.Bounds(), 1, 2); !bytes.Equal(got.Pix, want) {
+		t.Fatalf("rows shrunk to %v, want %v", got.Pix, want)
+	}
+	// Three of four pixels each way: none is left out, and none counts twice.
+	if got := shrink(tall, tall.Bounds(), 2, 3); !bytes.Equal(got.Pix, []uint8{0, 0, 0, 255, 0, 0, 0, 255, 100, 50, 0, 255, 100, 50, 0, 255, 225, 112, 0, 255, 225, 112, 0, 255}) {
+		t.Fatalf("to three rows: %v", got.Pix)
 	}
 }

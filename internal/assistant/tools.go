@@ -42,6 +42,10 @@ const toolSearch = "search"
 // plugin contributes.
 const ToolBash = "bash"
 
+// ToolRebuild is the tool that builds the source of ouro, which the update
+// plugin contributes.
+const ToolRebuild = "rebuild"
+
 // PeerTools are the tools with which an agent reaches other nodes. selfID
 // returns the ID of this node, which is not a peer of itself.
 //

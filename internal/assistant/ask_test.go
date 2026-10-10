@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -266,7 +267,7 @@ func TestAskRemembersAlsoWhenConfiguredAnew(t *testing.T) {
 
 	// The new agent is the one that is asked: it has the new model, name and tools.
 	got, err := a.Ask(ctx, "other", "?system", nil)
-	if err != nil || !strings.HasPrefix(got, `You are "you", the personal agent`) || !strings.HasSuffix(got, ownerStyle) || strings.Contains(got, toolAskPeer) {
+	if err != nil || !strings.HasPrefix(got, `You are "you", the personal agent`) || !strings.Contains(got, ownerStyle+" Today is ") || strings.Contains(got, toolAskPeer) {
 		t.Fatalf("prompt: %q, %v", got, err)
 	}
 	if got, err := a.Ask(ctx, "other", "@luna hello", nil); err != nil || got != "[gpt-4o-mini] turns=3 last=@luna hello" {
@@ -289,29 +290,65 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
 	file := agent.NewTool("edit", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
 	search := agent.NewTool(toolSearch, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	bash := agent.NewTool(ToolBash, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	rebuild := agent.NewTool(ToolRebuild, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
 	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
-		LLM:   overHTTP,
-		Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file, search) },
+		LLM: overHTTP,
+		Tools: func() []agent.Tool {
+			return append(PeerTools(nil, func() string { return "" }), file, search, bash, rebuild)
+		},
 	}, discard)
+	day := time.Date(2026, 10, 10, 23, 59, 0, 0, time.UTC)
+	old := now
+	now = func() time.Time { return day }
+	t.Cleanup(func() { now = old })
 	start := `You are "me", the personal agent of the owner of this Ouroboros node. `
+	end := scriptHint + ownerStyle + " Today is Saturday, 10 October 2026; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
 	for _, tt := range []struct {
 		tools []config.Entry
 		want  string
 	}{
-		{config.Named(), start + scriptHint + ownerStyle},
-		{config.Named(toolListPeers), start + scriptHint + ownerStyle},
-		{config.Named(toolAskPeer), start + askHint + scriptHint + ownerStyle},
-		{config.Named("edit"), start + filesHint + scriptHint + ownerStyle},
-		{config.Named("search"), start + filesHint + scriptHint + ownerStyle},
-		{config.Named("*"), start + askHint + filesHint + claimHint + scriptHint + ownerStyle},
+		{config.Named(), start + end},
+		{config.Named(toolListPeers), start + end},
+		{config.Named(toolAskPeer), start + askHint + end},
+		{config.Named("edit"), start + filesHint + workHint + end},
+		{config.Named("search"), start + filesHint + workHint + end},
+		{config.Named(ToolBash), start + workHint + end},
+		{config.Named(toolAskPeer, ToolBash), start + askHint + workHint + claimHint + end},
+		{config.Named(ToolRebuild), start + improveHint + end},
+		{config.Named(ToolUserQuestion), start + questionHint + end},
+		{config.Named("*"), start + askHint + filesHint + workHint + improveHint + claimHint + questionHint + end},
 	} {
 		cfg.Tools = &config.Tools{H2A: tt.tools}
 		if got, err := a.Ask(context.Background(), "chat", "?system", nil); err != nil || got != tt.want {
 			t.Errorf("with %s: %v\n got %q\nwant %q", tt.tools, err, got, tt.want)
 		}
 	}
+	// The day the prompt names is the one it is: the agent is built anew
+	// when it is over.
+	day = day.Add(time.Minute)
+	if got, err := a.Ask(context.Background(), "chat", "?system", nil); err != nil || !strings.Contains(got, " Today is Sunday, 11 October 2026;") {
+		t.Errorf("the day after: %q, %v", got, err)
+	}
 	if strings.Join(fileTools, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools for files: %v", fileTools)
+	}
+}
+
+// An agent with a workspace is told where it works, and that what the user
+// works on is elsewhere; one without is told nothing of it.
+func TestPromptNamesTheWorkspace(t *testing.T) {
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	load := func() (config.Config, error) { return cfg, nil }
+	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return nil }, Workspace: "/work/me"}
+	want := " You work in /work/me, a directory of your own: your commands start there unless they name a directory." +
+		" What the user works on is elsewhere: when they speak of a project and name no path, find it or ask, rather than looking for it there."
+	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || !strings.HasSuffix(got, want) {
+		t.Errorf("with a workspace: %q, %v", got, err)
+	}
+	b.Workspace = ""
+	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || strings.Contains(got, "You work in") {
+		t.Errorf("without a workspace: %q, %v", got, err)
 	}
 }
 

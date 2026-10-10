@@ -3,7 +3,6 @@ package tui
 import (
 	"math"
 	"strings"
-	"time"
 )
 
 // The ouroboros is drawn with braille dots, so every cell holds two by four
@@ -30,13 +29,6 @@ const (
 
 // logoLines is the finished logo: the tail rests in the open mouth.
 var logoLines = drawLogo(1, false)
-
-// splashGrown returns the share of the body grown at the time elapsed after
-// the start of the splash.
-func splashGrown(elapsed time.Duration) float64 {
-	grown := min(1, float64(elapsed)/float64(growDuration))
-	return 1 - (1-grown)*(1-grown) // ease out: the snake slows down before it bites
-}
 
 // drawLogo renders the ouroboros with the given share of the body grown.
 // Every frame has the same size, so the logo does not jump while it animates.

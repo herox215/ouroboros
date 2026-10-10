@@ -185,3 +185,54 @@ func TestEffortSliderIsCentered(t *testing.T) {
 		t.Errorf("too wide: %q", got)
 	}
 }
+
+// A net of five nerve cells that is grown, as it is drawn: its connections,
+// the signals that run along them, there and back, and the cells they reach,
+// for an effort that fires little, one that fires all the time, and auto,
+// which fires more and less in turn.
+func TestGoldenMesh(t *testing.T) {
+	n := neuralNet{w: 20, from: 5, to: 5,
+		nodes:   []dot{{0.5, 1.5}, {12.5, 9.5}, {24.5, 1.5}, {30.5, 9.5}, {38.5, 5.5}},
+		parents: [][]int{nil, {0}, {1}, {0, 2}, {3}}}
+	var b strings.Builder
+	for _, effort := range []string{"", "low", "max"} {
+		for _, tick := range []int{7, 20, 41, 66} {
+			fmt.Fprintf(&b, "--- %q at %d\n%s\n", effort, tick, strings.Join(n.view(effort, tick), "\n"))
+		}
+	}
+	// On its way from three nerve cells to five, both connections of the
+	// fourth grow at once.
+	n.from, n.to = 3, 5
+	for _, tick := range []int{2, 4} {
+		fmt.Fprintf(&b, "--- growing at %d\n%s\n", tick, strings.Join(n.view("max", tick), "\n"))
+	}
+	golden(t, "mesh", b.String())
+}
+
+// Where the nerve cells are placed is left to chance, but not how many: a
+// cell that is taken is tried again until all of them have theirs. From the
+// first that is no part of the tree on, one grows from two others now and
+// then.
+func TestMeshPlacesAllItsCells(t *testing.T) {
+	loops := 0
+	for range 50 {
+		narrow := neuralNet{w: 1}
+		narrow.growTo("max", 0)
+		if len(narrow.nodes) != meshRows {
+			t.Fatalf("%d nerve cells in %d cells", len(narrow.nodes), meshRows)
+		}
+		wide := neuralNet{w: 44}
+		wide.growTo("max", 0)
+		for i, parents := range wide.parents[1:treeCells] {
+			if len(parents) != 1 {
+				t.Fatalf("the nerve cell %d of the tree grows from %d others", i+1, len(parents))
+			}
+		}
+		if len(wide.parents[treeCells]) == 2 {
+			loops++
+		}
+	}
+	if loops == 0 || loops == 50 {
+		t.Fatalf("the first nerve cell after the tree grew from two others %d times of 50", loops)
+	}
+}

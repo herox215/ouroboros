@@ -27,14 +27,14 @@ func TestChatShowsTheContext(t *testing.T) {
 	b.says = []string{"I will ask beta"}
 	b.steps = []Step{{Text: "asking beta"}, {Text: "asking beta", Done: true}}
 	answered(t, m, say(t, m, "ask beta"))
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "alpha  · context 45.2 KiB ≈ 11.6k tokens") || strings.Contains(view, "cached") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, " context 45.2 KiB ≈ 11.6k tokens") || strings.Contains(view, "cached") {
 		t.Fatalf("after the answer:\n%s", view)
 	}
 	// Once the API told what it had cached, the chat shows it too: of the
 	// last call, and of the session.
 	b.cache = plugin.SessionCache{Tokens: 1000, Cached: 920, AllTokens: 3000, AllCached: 2520}
 	answered(t, m, say(t, m, "again"))
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "alpha  · context 45.2 KiB ≈ 11.6k tokens  · cached 92%, session 84%") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, " context 45.2 KiB ≈ 11.6k tokens  · cached 92%, session 84%") {
 		t.Fatalf("with the cache:\n%s", view)
 	}
 	run(m, "/new")
@@ -183,7 +183,7 @@ func TestContextScreenSearches(t *testing.T) {
 	press(m, "/")
 	view := ansi.Strip(m.View().Content)
 	if !m.context.typing || !strings.Contains(view, "/") || !strings.Contains(view, "  no match") ||
-		strings.TrimSpace(footer(m)) != "↑↓ previous/next match · enter keep · esc end search · ctrl+c quit" {
+		strings.TrimSpace(footer(m)) != "↑↓ previous/next match · enter keep · esc end search" {
 		t.Fatalf("/ should start a search:\n%s", view)
 	}
 	if press(m, "down") != nil || press(m, "up") != nil {
@@ -216,7 +216,7 @@ func TestContextScreenSearches(t *testing.T) {
 	press(m, "enter")
 	view = ansi.Strip(m.View().Content)
 	if m.context.typing || !strings.Contains(view, "/row 1") || !strings.Contains(view, "  1/10") ||
-		strings.TrimSpace(footer(m)) != "↑↓ previous/next match · j/k pgup/pgdn scroll · / search anew · esc end search · ctrl+c quit" {
+		strings.TrimSpace(footer(m)) != "↑↓ previous/next match · j/k pgup/pgdn scroll · / search anew · esc end search" {
 		t.Fatalf("enter should keep the search:\n%s", view)
 	}
 	press(m, "down")
@@ -243,7 +243,7 @@ func TestContextScreenSearches(t *testing.T) {
 	press(m, "esc")
 	view = ansi.Strip(m.View().Content)
 	if m.screen != screenContext || m.context.searching() || len(m.context.matches) != 0 || strings.Contains(view, "/row") ||
-		strings.TrimSpace(footer(m)) != "↑↓ pgup/pgdn scroll · / search · esc back · ctrl+c quit" || strings.Contains(m.View().Content, matchStyle.Render("row 1")) {
+		strings.TrimSpace(footer(m)) != "↑↓ pgup/pgdn scroll · / search · esc back" || strings.Contains(m.View().Content, matchStyle.Render("row 1")) {
 		t.Fatalf("esc should end the search:\n%s", view)
 	}
 	press(m, "esc")

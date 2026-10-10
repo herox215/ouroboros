@@ -220,6 +220,7 @@ func TestModelsToChooseFrom(t *testing.T) {
 		{[]string{"tts-1"}, []string{"tts-1"}, "tts-1"},
 		{[]string{"a", "gpt-4o-mini", "gpt-5-mini-2026"}, []string{"a", "gpt-4o-mini", "gpt-5-mini-2026"}, "gpt-5-mini-2026"},
 		{[]string{"b", "a"}, []string{"a", "b"}, "a"},
+		{[]string{"gpt-4.1-mini", "gpt-4o-mini"}, []string{"gpt-4.1-mini", "gpt-4o-mini"}, "gpt-4.1-mini"}, // the better one, also when it is the first
 	} {
 		models, err := p.Models(context.Background(), access{c: client.Credentials(list(tt.ids...), "")})
 		if err != nil || !reflect.DeepEqual(models.Chat, tt.chat) || models.Default != tt.def || len(models.All) != len(tt.ids) {

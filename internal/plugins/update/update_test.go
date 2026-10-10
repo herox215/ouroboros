@@ -18,7 +18,6 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	updateplugin "ouroboros/internal/plugins/update"
-	"ouroboros/internal/sandbox"
 	"ouroboros/internal/update"
 	"ouroboros/internal/update/updatetest"
 	"ouroboros/plugin"
@@ -121,17 +120,13 @@ func TestUpdateRestartsTheNode(t *testing.T) {
 	}
 }
 
-// source is a checkout that builds a binary with the given content and whose
-// tests run the shell command tests. It builds in the sandbox: a test that
-// builds is skipped in a sandbox already, where no other one starts.
-func source(t *testing.T, content, tests string) string {
+// source is a checkout that builds a binary with the given content, once the
+// shell command build passes.
+func source(t *testing.T, content, build string) string {
 	t.Helper()
-	if sandbox.Nested() {
-		t.Skip("in a sandbox already, where no other one starts")
-	}
 	src, _ := updatetest.NewRepo(t, "committed")
 	updatetest.Change(t, src, content)
-	updatetest.Tests(t, src, tests)
+	updatetest.Build(t, src, build)
 	return src
 }
 
@@ -153,11 +148,11 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 
 	tools := plugin.All[plugin.Tool](ctx)
 	at := slices.IndexFunc(tools, func(tool plugin.Tool) bool { return tool.Name == updateplugin.Rebuild })
-	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "in a sandbox without network") ||
-		!strings.Contains(tools[at].Description, "rebuild_without_sandbox and rebuild_without_tests") {
+	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "It only builds, and runs no tests") ||
+		strings.Contains(tools[at].Description, "sandbox") {
 		t.Fatalf("tools %+v", tools)
 	}
-	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild, Args: json.RawMessage(`{}`)}); got != "building and testing "+src {
+	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild, Args: json.RawMessage(`{}`)}); got != "building "+src {
 		t.Fatalf("shown %q", got)
 	}
 
@@ -171,7 +166,7 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 	}
 
 	got, err := tools[at].Run(context.Background(), json.RawMessage(`{}`))
-	if err != nil || !strings.HasPrefix(got, "built "+src+", its tests pass, and the build is installed as "+exe+". ") {
+	if err != nil || !strings.HasPrefix(got, "built "+src+" and installed the build as "+exe+". ") {
 		t.Fatalf("got %q, %v", got, err)
 	}
 	if built, _ := os.ReadFile(exe); string(built) != "v2" {
@@ -191,44 +186,6 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 	}
 	if !alive() {
 		t.Fatal("the build signalled an unrelated process")
-	}
-}
-
-// Whether a build may run without a sandbox, and be installed without its
-// tests, is the owner's word in the configuration, and nobody else's.
-func TestUnsandboxedIsTheOwnersWord(t *testing.T) {
-	s := clitest.Settings(t)
-	app, _ := clitest.NewApp(t, s, "")
-	updater, _ := cli.Service[*update.Updater](app)
-	if updater.Unsandboxed() || updater.Untested() {
-		t.Error("allowed without a configuration")
-	}
-	cfg := clitest.NodeConfig(s)
-	cfg.RebuildWithoutSandbox = true
-	config.Save(s.Home, cfg)
-	if !updater.Unsandboxed() || updater.Untested() {
-		t.Error("not allowed, although the owner said so")
-	}
-	cfg.RebuildWithoutSandbox, cfg.RebuildWithoutTests = false, true
-	config.Save(s.Home, cfg)
-	if updater.Unsandboxed() || !updater.Untested() {
-		t.Error("the tests are not left out, although the owner said so")
-	}
-	os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600)
-	if updater.Unsandboxed() || updater.Untested() {
-		t.Error("allowed by a configuration that cannot be read")
-	}
-}
-
-// A build installed without its tests says so to the agent.
-func TestRebuildToolWithoutTests(t *testing.T) {
-	src := source(t, "v2", "false")
-	s := clitest.Settings(t)
-	exe := filepath.Join(t.TempDir(), "ouro")
-	updater := &update.Updater{Source: src, Dir: filepath.Join(s.Home, "update"), Untested: func() bool { return true }}
-	got, err := updateplugin.Tool(home.Dir(s.Home), updater, func() (string, error) { return exe, nil })(context.Background())
-	if err != nil || !strings.HasPrefix(got, "built "+src+" and installed the build as "+exe+", without running the tests, as your owner set it. ") {
-		t.Fatalf("got %q, %v", got, err)
 	}
 }
 
@@ -254,19 +211,19 @@ func TestRebuildToolThatFails(t *testing.T) {
 		ctx = c
 		return nil
 	}))
-	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild}); got != "building and testing a checkout this build does not know" {
+	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild}); got != "building a checkout this build does not know" {
 		t.Fatalf("shown %q", got)
 	}
 
-	// Failing tests install nothing, and the agent gets what they printed.
-	src := source(t, "v2", "echo FAIL: TestOfTheAgent; exit 1")
+	// A failing build installs nothing, and the agent gets what it printed.
+	src := source(t, "v2", "echo ERROR: BuildOfTheAgent; exit 1")
 	got, err := tool(s, src, exe)()
 	if err == nil || got != "" || !strings.Contains(err.Error(), "; nothing was installed. The end of the output:\n") ||
-		!strings.Contains(err.Error(), "\nFAIL: TestOfTheAgent\n") {
-		t.Fatalf("failing tests: %q, %v", got, err)
+		!strings.Contains(err.Error(), "\nERROR: BuildOfTheAgent\n") {
+		t.Fatalf("a failing build: %q, %v", got, err)
 	}
 	if _, err := os.Stat(path); err == nil {
-		t.Fatal("a build whose tests fail was installed")
+		t.Fatal("a build that fails was installed")
 	}
 
 	src = source(t, "v2", "true")

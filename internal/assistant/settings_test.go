@@ -165,39 +165,22 @@ func TestProposeConfig(t *testing.T) {
 	}
 }
 
-// The agent proposes how rebuild builds: without a sandbox, and without the
-// tests. Nothing changes until the owner accepts it, and the bash sandbox is
-// no proposal.
-func TestProposeRebuild(t *testing.T) {
+// How rebuild builds is no field of the configuration, and the sandbox of
+// bash is no proposal.
+func TestProposeSwitch(t *testing.T) {
 	c := newConfigured(t)
-	got := c.tool(toolProposeConfig, propose{"rebuild_without_sandbox", true, "the owner asked for it"})
-	if !strings.HasPrefix(got, "Proposed, and nothing is changed yet: rebuild_without_sandbox is to become true instead of false.") {
-		t.Fatalf("without a sandbox: %q", got)
-	}
-	// A switch handed over as a text is taken as the switch.
-	got = c.tool(toolProposeConfig, propose{"rebuild_without_tests", "true", "the owner asked for it"})
-	if !strings.HasPrefix(got, "Proposed, and nothing is changed yet: rebuild_without_tests is to become true instead of false.") {
-		t.Fatalf("without the tests: %q", got)
-	}
-	if got := c.tool(toolProposeConfig, propose{"rebuild_without_tests", "maybe", "r"}); !strings.HasPrefix(got, "error: nothing was proposed: rebuild_without_tests: json: cannot unmarshal") {
-		t.Fatalf("no switch: %q", got)
+	for _, path := range []string{"rebuild_without_sandbox", "rebuild_without_tests"} {
+		if got := c.tool(toolProposeConfig, propose{path, true, "r"}); !strings.HasPrefix(got, `error: nothing was proposed: the configuration has no field "`+path+`" that can be proposed`) {
+			t.Fatalf("%s: %q", path, got)
+		}
 	}
 	if got := c.tool(toolProposeConfig, propose{"bash_without_sandbox", true, "r"}); !strings.HasPrefix(got, "error: nothing was proposed: bash_without_sandbox is set by the owner alone") {
 		t.Fatalf("bash: %q", got)
 	}
-	list := c.waiting()
-	if cfg := c.config(); len(list) != 2 || cfg.RebuildWithoutSandbox || cfg.RebuildWithoutTests {
-		t.Fatalf("waiting %+v with %+v", list, cfg)
+	if list := c.waiting(); len(list) != 0 {
+		t.Fatalf("waiting %+v", list)
 	}
-	for _, p := range list {
-		if _, err := c.proposals.Accept(c.dir, p.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if cfg := c.config(); !cfg.RebuildWithoutSandbox || !cfg.RebuildWithoutTests || cfg.BashWithoutSandbox {
-		t.Fatalf("accepted: %+v", cfg)
-	}
-	if got := c.tool(toolGetConfig, struct{}{}); !strings.Contains(got, `"rebuild_without_sandbox": true`) || !strings.Contains(got, `"rebuild_without_tests": true`) {
+	if got := c.tool(toolGetConfig, struct{}{}); strings.Contains(got, "rebuild") || !strings.Contains(got, `"bash_without_sandbox": false`) {
 		t.Fatalf("shown: %s", got)
 	}
 }
@@ -285,7 +268,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		want string
 	}{
 		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read)`},
-		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read, get_config, propose_config, withdraw_proposal)`},
+		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read, user_question, get_config, propose_config, withdraw_proposal)`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "read", "alow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: settings of the tool read: json: unknown field "alow"`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "list_peers", "allow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: the tool list_peers takes no settings`},
 		{propose{"tools.a2a", []string{"read", "read"}, "r"}, `error: nothing was proposed: tools.a2a: the tool "read" is listed twice`},
@@ -299,7 +282,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		{propose{"api_key", "sk-mine", "r"}, `error: nothing was proposed: api_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
 		{propose{"private_key", "mine", "r"}, `error: nothing was proposed: private_key is changed by the owner alone, with ouro start --setup: no proposal changes it`},
 		{propose{"base_url", "http://evil.example/v1", "r"}, `error: nothing was proposed: base_url is changed by the owner alone, with ouro start --setup: no proposal changes it`},
-		{propose{"tools", map[string]any{}, "r"}, `error: nothing was proposed: the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected, rebuild_without_sandbox, rebuild_without_tests`},
+		{propose{"tools", map[string]any{}, "r"}, `error: nothing was proposed: the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
 		{propose{"", "x", "r"}, `error: propose_config needs "path", "value" and "reason"`},
 		{propose{"name", nil, "r"}, `error: propose_config needs "path", "value" and "reason"`},
 		{propose{"name", "x", ""}, `error: propose_config needs "path", "value" and "reason"`},
@@ -388,7 +371,7 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 		t.Fatalf("every tool for peers: %q, %v", names(tools), err)
 	}
 	tools, err = c.builder.ownerTools(cfg)
-	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read,get_config,propose_config,withdraw_proposal" {
+	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read,user_question,get_config,propose_config,withdraw_proposal" {
 		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
 	}
 	// A script of a peer has neither.
@@ -419,8 +402,9 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 		t.Fatalf("the prompt without the tool: %q, %v", prompt, err)
 	}
 
-	// A blueprint without a node has neither tool.
-	if got := names((Builder{Tools: func() []agent.Tool { return nil }}).all()); got != "" {
+	// A blueprint without a node has neither tool: only the one that asks
+	// the owner.
+	if got := names((Builder{Tools: func() []agent.Tool { return nil }}).all()); got != ToolUserQuestion {
 		t.Fatalf("without a node: %q", got)
 	}
 }

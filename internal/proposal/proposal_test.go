@@ -187,7 +187,7 @@ func TestWhatIsNoProposal(t *testing.T) {
 		{"name", `3`, "name: json: cannot unmarshal number into Go value of type string"},
 		{"tools.a2a", `"read"`, "tools.a2a: json: cannot unmarshal string into Go value of type []config.Entry"},
 		{"api_key", `"sk-mine"`, "api_key is changed by the owner alone, with ouro start --setup: no proposal changes it"},
-		{"nope", `1`, `the configuration has no field "nope" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected, rebuild_without_sandbox, rebuild_without_tests`},
+		{"nope", `1`, `the configuration has no field "nope" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
 	} {
 		if p, err := n.store.Add(n.config(), tt.path, json.RawMessage(tt.value), ""); err == nil || err.Error() != tt.want || p.ID != "" {
 			t.Errorf("%s = %s: %+v, %v", tt.path, tt.value, p, err)

@@ -48,15 +48,17 @@ func TestCommands(t *testing.T) {
 }
 
 // suggested are the lines of the list of suggestions in the view, without
-// colors and with one space between the words.
+// colors and with one space between the words: what the panel over the chat
+// shows above the input.
 func suggested(m *Model) []string {
 	var lines []string
 	for _, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
-		if l = strings.Join(strings.Fields(l), " "); strings.HasPrefix(l, "/") || strings.HasPrefix(l, "› /") {
-			lines = append(lines, l)
+		// The panel lies two cells right of the border of the chat.
+		if cells := []rune(l); len(cells) > 4 && cells[2] == '│' {
+			lines = append(lines, strings.Join(strings.Fields(string(cells[3:len(cells)-3])), " "))
 		}
 	}
-	return lines
+	return lines[:max(0, len(lines)-inputHeight)]
 }
 
 // While a command is typed, a list above the input offers those that fit:
@@ -64,7 +66,7 @@ func suggested(m *Model) []string {
 func TestCommandSuggestions(t *testing.T) {
 	m, _ := newModel(t)
 	height := len(strings.Split(m.View().Content, "\n"))
-	if help := footer(m); !strings.Contains(help, "/help commands") || len(suggested(m)) != 0 {
+	if help := footer(m); strings.TrimSpace(help) != "" || len(suggested(m)) != 0 {
 		t.Fatalf("footer %q, suggested %q", help, suggested(m))
 	}
 	press(m, "/", "s")
@@ -72,7 +74,7 @@ func TestCommandSuggestions(t *testing.T) {
 	if got := suggested(m); !slices.Equal(got, want) {
 		t.Fatalf("suggested %q", got)
 	}
-	if help := strings.TrimSpace(footer(m)); help != "↑↓ select · tab complete · enter run · ctrl+c quit" {
+	if help := strings.TrimSpace(footer(m)); help != "↑↓ select · tab complete · enter run" {
 		t.Fatalf("footer %q", help)
 	}
 	// The list takes its rows from the conversation, not from the window.
@@ -122,7 +124,7 @@ func TestCommandSuggestions(t *testing.T) {
 	// Once the name is complete, or for a message, there is nothing to offer.
 	for _, text := range []string{"/stop now", "/x", "//", "hello"} {
 		m.input.SetValue(text)
-		if help := footer(m); !strings.Contains(help, "/help commands") || len(suggested(m)) != 0 {
+		if help := footer(m); strings.TrimSpace(help) != "" || len(suggested(m)) != 0 {
 			t.Fatalf("%q: footer %q, suggested %q", text, help, suggested(m))
 		}
 	}
@@ -135,12 +137,14 @@ func TestHelp(t *testing.T) {
 		t.Fatal("/help should list the commands")
 	}
 	view := ansi.Strip(m.View().Content)
+	// Descriptions can wrap within the narrower dialog.
+	helpText := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(m.helpView()), "│", " ")), " ")
 	for _, c := range own {
-		if !strings.Contains(view, "/"+c.name) || !strings.Contains(view, c.help) {
+		if !strings.Contains(view, "/"+c.name) || !strings.Contains(helpText, c.help) {
 			t.Fatalf("help lacks /%s:\n%s", c.name, view)
 		}
 	}
-	if help := strings.TrimSpace(footer(m)); help != "esc back · ctrl+c quit" {
+	if help := strings.TrimSpace(footer(m)); help != "esc back" {
 		t.Fatalf("footer %q", help)
 	}
 	if press(m, "x"); m.screen != screenHelp || m.input.Value() != "" {
@@ -166,7 +170,7 @@ func TestDebug(t *testing.T) {
 
 	b.status.Debug = true
 	m.Update(m.refreshStatus())
-	if h := header(); !strings.HasSuffix(h, " DEBUG MODE ") || ansi.StringWidth(h) != m.width || !strings.Contains(h, "ouroboros") {
+	if h := header(); !strings.HasSuffix(h, " DEBUG MODE ") || ansi.StringWidth(h) != m.width || !strings.HasPrefix(h, " alpha ") {
 		t.Fatalf("header %q", h)
 	}
 	settle(m, run(m, "/debug"))

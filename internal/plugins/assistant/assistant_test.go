@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
@@ -21,6 +22,40 @@ func TestArchivedPeerWithoutKey(t *testing.T) {
 	err := hook.After(context.Background(), agent.AnswerOutcome{Processing: agent.Processing{Conversation: agent.Conversation{ID: "c", Peer: true}}})
 	if err == nil {
 		t.Error("a peer without its key should not be archived")
+	}
+}
+
+// Statistics are archived with a conversation of the owner, where there are
+// any to ask for, and never with one of a peer.
+func TestArchivedStatistics(t *testing.T) {
+	archive := history.Open(t.TempDir())
+	owner := agent.AnswerOutcome{Processing: agent.Processing{Conversation: agent.Conversation{ID: "mine"}}}
+	peer := agent.AnswerOutcome{Processing: agent.Processing{Conversation: agent.Conversation{ID: "theirs", Peer: true, Origin: a2a.Origin{PublicKey: "key"}}}}
+	ended := func(id string) history.Record {
+		t.Helper()
+		records, err := archive.Records(id)
+		if err != nil || len(records) == 0 {
+			t.Fatalf("%s: %+v, %v", id, records, err)
+		}
+		return records[len(records)-1]
+	}
+	plain := assistantplugin.Archived(archive)
+	if err := plain.After(context.Background(), owner); err != nil || ended(history.Owner("mine")).Statistics != nil {
+		t.Errorf("without statistics: %v, %+v", err, ended(history.Owner("mine")))
+	}
+	var asked []string
+	counted := assistantplugin.Archived(archive, func(id string) history.Statistics {
+		asked = append(asked, id)
+		return history.Statistics{Context: 42}
+	})
+	if err := counted.After(context.Background(), owner); err != nil || ended(history.Owner("mine")).Statistics == nil || ended(history.Owner("mine")).Statistics.Context != 42 {
+		t.Errorf("with statistics: %v, %+v", err, ended(history.Owner("mine")))
+	}
+	if err := counted.After(context.Background(), peer); err != nil || ended(history.Party("key")+"/theirs").Statistics != nil {
+		t.Errorf("a peer: %v, %+v", err, ended(history.Party("key")+"/theirs"))
+	}
+	if strings.Join(asked, ",") != "mine" {
+		t.Errorf("statistics were asked for %v", asked)
 	}
 }
 

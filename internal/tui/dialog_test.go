@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -121,5 +122,114 @@ func TestDialogFitsALowWindow(t *testing.T) {
 	}
 	if bottom < 0 || bottom > m.bodyHeight() || lineWith(lines, "Effort") < 0 {
 		t.Fatalf("the dialog should keep its title and its border:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// Help uses the same centered overlay and preserves the chat beneath it.
+func TestHelpOpensInDialog(t *testing.T) {
+	for _, size := range [][2]int{{100, 32}, {60, 12}} {
+		m, _ := newModel(t)
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		fill(m, 80)
+		at := m.history.YOffset()
+		run(m, "/help")
+		if !m.inDialog() {
+			t.Fatal("help should open a dialog")
+		}
+		view := ansi.Strip(m.View().Content)
+		if len(strings.Split(view, "\n")) != size[1] || !strings.Contains(view, "Commands") {
+			t.Fatalf("dialog does not fit: %s", view)
+		}
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+		if m.history.YOffset() != at {
+			t.Fatal("help should hold the chat still")
+		}
+		press(m, "esc")
+		if m.inDialog() || m.screen != screenChat {
+			t.Fatal("esc should close help")
+		}
+	}
+}
+
+func TestDialogDoesNotWrap(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 32})
+	run(m, "/help")
+	view := ansi.Strip(m.helpView())
+	if strings.Contains(view, "much more") || !strings.Contains(view, "…") {
+		t.Fatalf("long descriptions should be truncated, not wrapped: %s", view)
+	}
+}
+
+// ctrl+k and /keys open the dialog that lists the keys of the chat.
+func TestKeysOpenInDialog(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m.input.SetValue("typed")
+	m.Update(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	if m.screen != screenKeys || !m.inDialog() || m.input.Value() != "typed" {
+		t.Fatalf("ctrl+k should open the keys and keep what is typed: screen %v, input %q", m.screen, m.input.Value())
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, k := range m.keybindings() {
+		if !strings.Contains(view, k.keys) || !strings.Contains(view, k.help) {
+			t.Fatalf("the dialog lacks %q:\n%s", k.keys, view)
+		}
+	}
+	if strings.Contains(view, "shift+tab") {
+		t.Fatal("shift+tab is a key of a UI of several profiles only")
+	}
+	if help := strings.TrimSpace(footer(m)); help != "esc back" {
+		t.Fatalf("footer %q", help)
+	}
+	if press(m, "x"); m.screen != screenKeys || m.input.Value() != "typed" {
+		t.Fatal("only esc leaves the keys")
+	}
+	if press(m, "esc"); m.screen != screenChat {
+		t.Fatal("esc should close the keys")
+	}
+
+	m.input.Reset()
+	if run(m, "/keys"); m.screen != screenKeys {
+		t.Fatal("/keys should open the keys")
+	}
+	m.profileOf = 2
+	if !strings.Contains(ansi.Strip(m.keysView()), "shift+tab") {
+		t.Fatal("several profiles: shift+tab shows the next")
+	}
+}
+
+// A dialog is as wide as its size says, whatever it is given: a line that is
+// too long is cut, not wrapped.
+func TestDialogCutsLongLines(t *testing.T) {
+	m, _ := newModel(t)
+	m.screen = screenKeys
+	w, _ := m.dialogSize()
+	rows := strings.Split(ansi.Strip(m.dialog([]string{strings.Repeat("x", 2*w), "short"})), "\n")
+	if len(rows) != 4 {
+		t.Fatalf("%d rows:\n%s", len(rows), strings.Join(rows, "\n"))
+	}
+	for _, row := range rows {
+		if lipgloss.Width(row) != w {
+			t.Fatalf("a row of %d cells in a dialog of %d: %q", lipgloss.Width(row), w, row)
+		}
+	}
+	if want := "│ " + strings.Repeat("x", w-5) + "… │"; rows[1] != want {
+		t.Fatalf("the long line: %q, want %q", rows[1], want)
+	}
+}
+
+// A UI of one profile names no other: its header counts none, and the keys
+// list none to show next.
+func TestOneProfileIsNotCounted(t *testing.T) {
+	m, _ := newModel(t)
+	for of, counted := range map[int]bool{0: false, 1: false, 2: true} {
+		m.profileAt, m.profileOf = 1, of
+		if got := strings.Contains(ansi.Strip(m.headerView()), fmt.Sprintf("[1/%d]", of)); got != counted {
+			t.Errorf("of %d profiles: the header counts them: %v", of, got)
+		}
+		if got := strings.Contains(ansi.Strip(m.keysView()), "shift+tab"); got != counted {
+			t.Errorf("of %d profiles: the keys list shift+tab: %v", of, got)
+		}
 	}
 }

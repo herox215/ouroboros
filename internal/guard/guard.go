@@ -46,8 +46,7 @@ var corePackages = []string{
 
 // buildPaths are what decides what a build of a checkout fetches and runs,
 // below the directory of the checkout, and where the plugins are handed
-// what only the frame may hand out: no tool changes them either. The
-// sandbox of rebuild holds only while they are as the owner left them.
+// what only the frame may hand out: no tool changes them either.
 var buildPaths = []string{
 	"go.mod", "go.sum", "go.work", "go.work.sum", "Makefile", "install.sh", "scripts", "internal/cli", "cmd",
 }

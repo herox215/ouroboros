@@ -37,11 +37,11 @@ func Change(t *testing.T, dir, content string) {
 	write(t, filepath.Join(dir, "install.sh"), script)
 }
 
-// Tests gives dir the tests that "make test" runs: the shell command recipe.
-// "make install" runs install.sh.
-func Tests(t *testing.T, dir, recipe string) {
+// Build gives dir the Makefile whose "make install" runs the shell command
+// recipe and then install.sh.
+func Build(t *testing.T, dir, recipe string) {
 	t.Helper()
-	write(t, filepath.Join(dir, "Makefile"), "install:\n\t@sh install.sh\ntest:\n\t@"+recipe+"\n")
+	write(t, filepath.Join(dir, "Makefile"), "install:\n\t@"+recipe+"\n\t@sh install.sh\n")
 }
 
 func write(t *testing.T, path, content string) {

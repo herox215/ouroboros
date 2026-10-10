@@ -117,6 +117,9 @@ func (m *Model) watched(msg watchedMsg) tea.Cmd {
 		c.watching = false
 		return m.rewatch(msg.id)
 	}
+	if m.resuming == c {
+		m.resuming = nil
+	}
 	m.replay(c, msg.past)
 	return next(msg.id, msg.live)
 }
@@ -203,6 +206,11 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.say(e)
 	case plugin.SessionStep:
 		c.step(e)
+	case plugin.SessionAsked:
+		c.ask(e)
+		if live && !e.Done && c != m.chat {
+			m.setNotice(m.agentName()+" asks you in “"+short(c.title, 40)+"” · /session", false)
+		}
 	case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled:
 		c.end(e)
 		if live && c != m.chat {
@@ -264,6 +272,7 @@ func (c *conversation) step(e Event) {
 // stopped.
 func (c *conversation) end(e Event) {
 	c.pending, c.running, c.doing, c.round = false, false, "", 0 // the loop of this answer is over
+	c.asking = nil
 	last := entry{text: e.Text, at: e.At}
 	switch e.Kind {
 	case plugin.SessionFailed:

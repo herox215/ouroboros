@@ -199,6 +199,14 @@ func TestTraceForOtherProviders(t *testing.T) {
 	if len(lines) != 1 || lines[0] != "llm response: HTTP 200 after 1.5s, headers {X-Request-Id: req_1}" {
 		t.Fatalf("told %q", lines)
 	}
+	// In whatever order the headers come, all but the unsafe one are told.
+	for range 20 {
+		lines = nil
+		TraceResponse(tell, &http.Response{StatusCode: 200, Header: http.Header{"A": {"1"}, "B": {"2"}, "Set-Cookie": {"secret"}, "X": {"3"}, "Y": {"4"}}}, time.Second)
+		if len(lines) != 1 || lines[0] != "llm response: HTTP 200 after 1s, headers {A: 1; B: 2; X: 3; Y: 4}" {
+			t.Fatalf("told %q", lines)
+		}
+	}
 	if Hash("a") != hash("a") || Hash("a") == Hash("b") {
 		t.Fatal("the hash of tools")
 	}

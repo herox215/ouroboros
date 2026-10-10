@@ -48,14 +48,14 @@ func TestSelectAndCopyTheHistory(t *testing.T) {
 	answered(t, m, say(t, m, "ping"))
 	// The history starts at row 3, right of the border and padding: line 1
 	// is "  ping", line 4 "  pong".
-	if mouseAt(m, tea.MouseClickMsg{X: 4, Y: 4, Button: tea.MouseLeft}) != nil {
+	if mouseAt(m, tea.MouseClickMsg{X: 4, Y: 3, Button: tea.MouseLeft}) != nil {
 		t.Fatal("a press copies nothing")
 	}
-	mouseAt(m, tea.MouseMotionMsg{X: 5, Y: 7, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseMotionMsg{X: 5, Y: 6, Button: tea.MouseLeft})
 	if !strings.Contains(m.View().Content, "\x1b[7m") {
 		t.Fatal("what is selected should be marked")
 	}
-	cmd := mouseAt(m, tea.MouseReleaseMsg{X: 5, Y: 7, Button: tea.MouseLeft})
+	cmd := mouseAt(m, tea.MouseReleaseMsg{X: 5, Y: 6, Button: tea.MouseLeft})
 	mine, agent := ansi.Strip(m.entryHead(m.chat.entries[0])), ansi.Strip(m.entryHead(m.chat.entries[1]))
 	want := "ping\n\n" + agent + "\n  po"
 	if got := terminalGot(t, cmd); got != want {
@@ -70,9 +70,9 @@ func TestSelectAndCopyTheHistory(t *testing.T) {
 	if m.selected != nil {
 		t.Fatal("a press below the history selects nothing")
 	}
-	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 7, Button: tea.MouseLeft})
-	mouseAt(m, tea.MouseMotionMsg{X: 1, Y: 1, Button: tea.MouseLeft})
-	if got := terminalGot(t, mouseAt(m, tea.MouseReleaseMsg{X: 1, Y: 1, Button: tea.MouseLeft})); got != mine+"\n  ping\n\n"+agent+"\n  p" {
+	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 6, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseMotionMsg{X: 1, Y: 0, Button: tea.MouseLeft})
+	if got := terminalGot(t, mouseAt(m, tea.MouseReleaseMsg{X: 1, Y: 0, Button: tea.MouseLeft})); got != mine+"\n  ping\n\n"+agent+"\n  p" {
 		t.Fatalf("backwards %q", got)
 	}
 	// A key drops the selection.
@@ -87,32 +87,32 @@ func TestClickSelectsNothing(t *testing.T) {
 	m, _ := newModel(t)
 	answered(t, m, say(t, m, "ping"))
 	// A release without a press, and a drag, change nothing.
-	if mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: 4}) != nil || mouseAt(m, tea.MouseMotionMsg{X: 4, Y: 4}) != nil || m.selected != nil {
+	if mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: 3}) != nil || mouseAt(m, tea.MouseMotionMsg{X: 4, Y: 3}) != nil || m.selected != nil {
 		t.Fatal("nothing is selected")
 	}
 	// A press on its own marks nothing: what is under the pointer does not
 	// flash before the drag begins.
-	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 4, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 3, Button: tea.MouseLeft})
 	if strings.Contains(m.View().Content, "\x1b[7m") {
 		t.Fatal("a press should mark nothing before the drag")
 	}
-	if mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: 4, Button: tea.MouseLeft}) != nil || m.selected != nil || m.pressed != nil || len(*copied) > 0 {
+	if mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: 3, Button: tea.MouseLeft}) != nil || m.selected != nil || m.pressed != nil || len(*copied) > 0 {
 		t.Fatal("a click selects nothing, and keeps nothing pressed")
 	}
 	// Dragged away and back, it is a click as well.
-	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 4, Button: tea.MouseLeft})
-	mouseAt(m, tea.MouseMotionMsg{X: 8, Y: 7, Button: tea.MouseLeft})
-	mouseAt(m, tea.MouseMotionMsg{X: 4, Y: 4, Button: tea.MouseLeft})
-	if mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: 4, Button: tea.MouseLeft}) != nil || m.selected != nil || len(*copied) > 0 {
+	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 3, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseMotionMsg{X: 8, Y: 6, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseMotionMsg{X: 4, Y: 3, Button: tea.MouseLeft})
+	if mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: 3, Button: tea.MouseLeft}) != nil || m.selected != nil || len(*copied) > 0 {
 		t.Fatal("dragged back to where it began, nothing is selected")
 	}
-	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 4, Button: tea.MouseRight})
+	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 3, Button: tea.MouseRight})
 	if m.selected != nil {
 		t.Fatal("the right button selects nothing")
 	}
 	// Past the end of a line nothing of it is marked.
-	mouseAt(m, tea.MouseClickMsg{X: 60, Y: 7, Button: tea.MouseLeft})
-	mouseAt(m, tea.MouseMotionMsg{X: 70, Y: 7, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseClickMsg{X: 60, Y: 6, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseMotionMsg{X: 70, Y: 6, Button: tea.MouseLeft})
 	if strings.Contains(m.View().Content, "\x1b[7m") {
 		t.Fatal("nothing should be marked past the end of a line")
 	}
@@ -123,7 +123,7 @@ func TestClickSelectsNothing(t *testing.T) {
 	}
 	// Not on the chat, the mouse selects nothing.
 	m.screen = screenHelp
-	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 4, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseClickMsg{X: 4, Y: 3, Button: tea.MouseLeft})
 	if m.selected != nil {
 		t.Fatal("the help is not the history")
 	}
@@ -182,11 +182,12 @@ func TestSelectionIsWhatTheScreenShows(t *testing.T) {
 		t.Fatalf("dragged below the history: got %q, want %q", got, want)
 	}
 
-	// /se offers three commands, in three rows the history gives up.
+	// /se offers three commands, in a panel that covers the two bottom rows
+	// of the history.
 	m.input.SetValue("/se")
-	hidden := len(m.suggestionLines(m.chatHeight() - 3))
-	if hidden != 3 {
-		t.Fatalf("%d suggestions", hidden)
+	hidden := m.givenUp()
+	if hidden != 2 {
+		t.Fatalf("%d rows covered", hidden)
 	}
 	if m.history.SetYOffset(5); m.history.AtBottom() {
 		t.Fatal("the history should be scrolled up")
@@ -216,23 +217,23 @@ func TestTheEdgesOfTheHistory(t *testing.T) {
 	right, below := historyLeft+m.history.Width(), historyTop+m.history.Height()
 	for _, at := range []struct{ x, y int }{{historyLeft, historyTop}, {right - 1, below - 1}} {
 		mouseAt(m, tea.MouseClickMsg{X: at.x, Y: at.y, Button: tea.MouseLeft})
-		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 5, Button: tea.MouseLeft})
+		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 4, Button: tea.MouseLeft})
 		if m.selected == nil {
 			t.Fatalf("a press at %d, %d is on the history", at.x, at.y)
 		}
 	}
 	for _, at := range []struct{ x, y int }{{historyLeft - 1, 4}, {right, 4}, {4, historyTop - 1}, {4, below}} {
 		mouseAt(m, tea.MouseClickMsg{X: at.x, Y: at.y, Button: tea.MouseLeft})
-		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 5, Button: tea.MouseLeft})
+		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 4, Button: tea.MouseLeft})
 		if m.selected != nil {
 			t.Fatalf("a press at %d, %d is not on the history", at.x, at.y)
 		}
 	}
 	// A press of the left button off the history, and one of the right
 	// button on it, begin no drag.
-	for _, press := range []tea.MouseClickMsg{{X: 4, Y: below + 2, Button: tea.MouseLeft}, {X: 4, Y: 4, Button: tea.MouseRight}} {
+	for _, press := range []tea.MouseClickMsg{{X: 4, Y: below + 2, Button: tea.MouseLeft}, {X: 4, Y: 3, Button: tea.MouseRight}} {
 		mouseAt(m, press)
-		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 5, Button: tea.MouseLeft})
+		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 4, Button: tea.MouseLeft})
 		if m.selected != nil {
 			t.Fatalf("%+v begins no drag", press)
 		}
@@ -256,8 +257,8 @@ func TestNoSelectionOffTheChat(t *testing.T) {
 		if m.screen != screenChat {
 			t.Fatalf("%s: the screen %v", name, m.screen)
 		}
-		mouseAt(m, tea.MouseClickMsg{X: 4, Y: 4, Button: tea.MouseLeft})
-		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 7, Button: tea.MouseLeft})
+		mouseAt(m, tea.MouseClickMsg{X: 4, Y: 3, Button: tea.MouseLeft})
+		mouseAt(m, tea.MouseMotionMsg{X: 6, Y: 6, Button: tea.MouseLeft})
 		if m.pressed != nil || m.selected != nil {
 			t.Fatalf("%s: the mouse should select nothing", name)
 		}
@@ -272,8 +273,8 @@ func TestMarkedFromTheEndOfALine(t *testing.T) {
 	m, _ := newModel(t)
 	answered(t, m, say(t, m, "ping"))
 	// "  ping" ends at column 6 of line 1, "  pong" is line 4.
-	mouseAt(m, tea.MouseClickMsg{X: 8, Y: 4, Button: tea.MouseLeft})
-	mouseAt(m, tea.MouseMotionMsg{X: 5, Y: 7, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseClickMsg{X: 8, Y: 3, Button: tea.MouseLeft})
+	mouseAt(m, tea.MouseMotionMsg{X: 5, Y: 6, Button: tea.MouseLeft})
 	lines := m.highlight(strings.Split(m.history.View(), "\n"))
 	marked := "\x1b[7m"
 	if strings.Contains(lines[1], marked) || !strings.Contains(lines[3], marked) ||
@@ -281,29 +282,31 @@ func TestMarkedFromTheEndOfALine(t *testing.T) {
 		t.Fatalf("marked %q", lines[:5])
 	}
 	agent := ansi.Strip(m.entryHead(m.chat.entries[1]))
-	if got := terminalGot(t, dragged(m, 4, 4, 4, historyTop+m.history.Height()-1)); got != "ping\n\n"+agent+"\n  pong" {
+	if got := terminalGot(t, dragged(m, 4, 3, 4, historyTop+m.history.Height()-1)); got != "ping\n\n"+agent+"\n  pong" {
 		t.Fatalf("copied %q", got)
 	}
 }
 
-// The suggestions of a command pasted while the button is down can hide all
-// of the history: the drag then ends on the line below the rows they hide.
-func TestDragWhileSuggestionsHideTheHistory(t *testing.T) {
+// The suggestions of a command pasted while the button is down cover the
+// bottom rows of the history: a drag onto them ends on the last row above.
+func TestDragWhileSuggestionsCoverTheHistory(t *testing.T) {
 	clipboardOf(t)
 	m, b := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
 	b.reply = numbered(1000)
 	answered(t, m, say(t, m, "ping"))
 	m.history.GotoTop()
+	height := m.history.Height()
 	mouseAt(m, tea.MouseClickMsg{X: 4, Y: historyTop, Button: tea.MouseLeft})
 	m.Update(tea.PasteMsg{Content: "/"})
-	hidden := len(m.suggestionLines(m.chatHeight() - 3))
-	if hidden <= m.history.Height() {
-		t.Fatalf("%d suggestions hide %d rows of %d", len(m.matching("/")), hidden, m.history.Height())
+	hidden := m.givenUp()
+	if hidden != 2 || height != 6 {
+		t.Fatalf("%d suggestions cover %d rows of %d", len(m.matching("/")), hidden, height)
 	}
-	mouseAt(m, tea.MouseMotionMsg{X: 4, Y: historyTop, Button: tea.MouseLeft})
-	got := terminalGot(t, mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: historyTop, Button: tea.MouseLeft}))
-	if lines := strings.Split(got, "\n"); len(lines) != hidden+1 {
-		t.Fatalf("copied %d lines for %d hidden: %q", len(lines), hidden, got)
+	below := historyTop + height - 1
+	mouseAt(m, tea.MouseMotionMsg{X: 4, Y: below, Button: tea.MouseLeft})
+	got := terminalGot(t, mouseAt(m, tea.MouseReleaseMsg{X: 4, Y: below, Button: tea.MouseLeft}))
+	if lines := strings.Split(got, "\n"); len(lines) != height-hidden {
+		t.Fatalf("copied %d lines of %d with %d covered: %q", len(lines), height, hidden, got)
 	}
 }

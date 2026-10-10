@@ -6,7 +6,7 @@
 # is checked is what gets committed, and neither the working tree nor the index
 # is changed. Nothing is formatted, fixed or staged for you.
 #
-#	OURO_HOOK_MUTATION=off       skip the mutation tests in the hook
+#	OURO_HOOK_MUTATION=on        run the mutation tests too, which the hook leaves out
 #	OURO_HOOK_MUTATION_TIME=N    stop them after N seconds (default 300)
 #	git commit --no-verify       skip the hook altogether
 set -eu
@@ -71,9 +71,10 @@ step "static analysis (staticcheck)" lint
 step "go vet and tests with the race detector" test
 step "statement coverage (100% of the production code)" cover-check
 
-# Mutation tests report, they do not reject: no threshold is agreed on.
-if [ "${OURO_HOOK_MUTATION:-on}" = off ]; then
-	echo "pre-commit: mutation tests skipped (OURO_HOOK_MUTATION=off)."
+# Mutation tests are slow, and run only when asked for. They report, they do
+# not reject: no threshold is agreed on.
+if [ "${OURO_HOOK_MUTATION:-off}" != on ]; then
+	echo "pre-commit: mutation tests left out (OURO_HOOK_MUTATION=on runs them)."
 else
 	packages=
 	for dir in $changed_dirs; do
@@ -89,7 +90,7 @@ else
 		# shellcheck disable=SC2086
 		if ! OURO_MUTATION_TIME=${OURO_HOOK_MUTATION_TIME:-300} scripts/mutation.sh $packages; then
 			echo "pre-commit: the mutation tests could not run (see above); the commit was rejected." >&2
-			echo "            Skip them for one commit with: OURO_HOOK_MUTATION=off git commit ..." >&2
+			echo "            Commit without them: leave out OURO_HOOK_MUTATION=on." >&2
 			exit 1
 		fi
 	fi

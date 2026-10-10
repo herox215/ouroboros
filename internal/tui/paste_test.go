@@ -265,3 +265,15 @@ func TestSummaryShowsThePictures(t *testing.T) {
 		t.Fatalf("the chat shows %q, want %q", ansi.Strip(shown), want)
 	}
 }
+
+// Every label of a picture there is takes its color in a muted text; one of
+// a picture there is not stays muted, and so does what follows it.
+func TestMutedColorsEveryLabel(t *testing.T) {
+	c := &conversation{images: []string{"a.png", "b.png"}}
+	got := c.muted("see [Image_9] and [Image_1] or [Image_2].")
+	want := mutedStyle.Render("see [Image_9] and ") + imageStyle.Render("[Image_1]") +
+		mutedStyle.Render(" or ") + imageStyle.Render("[Image_2]") + mutedStyle.Render(".")
+	if got != want {
+		t.Fatalf("muted %q, want %q", got, want)
+	}
+}

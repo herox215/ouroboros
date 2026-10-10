@@ -107,7 +107,7 @@ func TestProfilesShareThePort(t *testing.T) {
 	if got := get(t, s.Home.Socket()); got != "hello from Terra" {
 		t.Fatalf("the first one: %q", got)
 	}
-	for id, want := range map[string]string{lunaID.ID(): "hello from Luna", "0123456789ab": "the node runs no profile 0123456789ab"} {
+	for id, want := range map[string]string{terraID.ID(): "hello from Terra", lunaID.ID(): "hello from Luna", "0123456789ab": "the node runs no profile 0123456789ab"} {
 		req, _ := http.NewRequest(http.MethodGet, "http://ouro/", nil)
 		req.Header.Set(ProfileHeader, id)
 		resp, err := local(s.Home.Socket()).Do(req)

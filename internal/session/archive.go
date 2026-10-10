@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
 )
@@ -69,13 +70,22 @@ func (s *Service) load(id string) *session {
 	if err := s.agent.Resume(id, memory); err != nil {
 		s.archive.log("what the agent remembers of the session %s is lost: %v", id, err)
 	}
+	var usage Event
+	if len(events) > 0 {
+		usage = events[len(events)-1]
+	}
+	if restorer, ok := s.agent.(interface {
+		RestoreStatistics(string, int, assistant.Cache)
+	}); ok {
+		restorer.RestoreStatistics(id, usage.Context, usage.Cache)
+	}
 	last := records[len(records)-1].Time
 	title, err := s.archive.Title(history.Owner(id))
 	if err != nil {
 		s.archive.log("the title of the session %s cannot be read: %v", id, err)
 	}
 	if title != "" {
-		events = append(events, Event{Kind: Title, At: last.Local(), Text: title})
+		events = append(events, Event{Kind: Title, At: last.Local(), Text: title, Context: usage.Context, Cache: usage.Cache})
 	}
 	se := &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
 	s.effortOf(se)
@@ -93,6 +103,9 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 	var events []Event
 	var msgs []openai.Message
 	steps := map[string]Event{} // the calls of tools that started, by ID
+	start := 0
+	var size int
+	var cache assistant.Cache
 	for _, r := range records {
 		at := r.Time.Local()
 		switch r.Role {
@@ -124,6 +137,13 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 				events = append(events, step)
 			}
 		case "end":
+			if r.Statistics != nil {
+				size = r.Statistics.Context
+				var restored assistant.Cache
+				if json.Unmarshal(r.Statistics.Cache, &restored) == nil {
+					cache = restored
+				}
+			}
 			switch r.Outcome {
 			case history.Failed:
 				msgs = agent.Abandon(msgs)
@@ -132,6 +152,10 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 				msgs = agent.Abandon(msgs)
 				events = append(events, Event{Kind: Canceled, At: at})
 			}
+			for i := start; i < len(events); i++ {
+				events[i].Context, events[i].Cache = size, cache
+			}
+			start = len(events)
 		}
 	}
 	return events, msgs

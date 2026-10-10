@@ -13,10 +13,9 @@ import (
 // splashScreen is the state of the splash, which the UI opens with, and of
 // the frames that move it and the setup.
 type splashScreen struct {
-	show     bool
-	start    time.Time
-	elapsed  time.Duration
-	skyShift time.Duration // how much farther the stars are than the splash: see frame
+	show    bool
+	start   time.Time
+	elapsed time.Duration
 	// animating says that frames are coming, for the splash or the setup.
 	animating bool
 }
@@ -55,26 +54,22 @@ func (s *splashScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// Splash timeline: the stars come up, the body grows around the ring and the
-// jaw snaps shut on the tail with a burst of sparks. Then a glow runs along
-// the body, the colors start to flow, the name decodes itself letter by
-// letter, and the scene fades out.
+// Splash timeline: the name decodes itself letter by letter and the tagline
+// is typed. A shine sweeps across the name, and the scene fades out. A splash
+// that follows the setup starts at biteAt, where the snake of the setup bites
+// its tail.
 const (
-	splashDuration = 3200 * time.Millisecond
+	splashDuration = 2600 * time.Millisecond
 	splashFrame    = 33 * time.Millisecond
 	fadeIn         = 400 * time.Millisecond
 	fadeOut        = 350 * time.Millisecond
-	growDuration   = 1300 * time.Millisecond
 	biteAt         = 1450 * time.Millisecond
-	flashDuration  = 150 * time.Millisecond
-	pulseDuration  = 900 * time.Millisecond
-	sparkLife      = 700 * time.Millisecond
-	titleAt        = 1000 * time.Millisecond
+	titleAt        = 400 * time.Millisecond
 	letterGap      = 60 * time.Millisecond
 	scrambleFor    = 300 * time.Millisecond
-	shineAt        = 2100 * time.Millisecond
+	shineAt        = 1500 * time.Millisecond
 	shineDuration  = 600 * time.Millisecond
-	taglineAt      = 1900 * time.Millisecond
+	taglineAt      = 1300 * time.Millisecond
 	typeSpeed      = 22 * time.Millisecond // per character of the tagline
 )
 
@@ -84,8 +79,44 @@ const (
 	skipHint  = "press any key"
 )
 
-// titleFont draws the letters of the title, four by six pixels each.
+// titleFont draws the letters of the title, and of the name of the agent in
+// an empty chat, four by six pixels each.
 var titleFont = map[rune][6]string{
+	'a': {".##.", "#..#", "#..#", "####", "#..#", "#..#"},
+	'c': {".###", "#...", "#...", "#...", "#...", ".###"},
+	'd': {"###.", "#..#", "#..#", "#..#", "#..#", "###."},
+	'e': {"####", "#...", "###.", "#...", "#...", "####"},
+	'f': {"####", "#...", "###.", "#...", "#...", "#..."},
+	'g': {".###", "#...", "#...", "#.##", "#..#", ".###"},
+	'h': {"#..#", "#..#", "####", "#..#", "#..#", "#..#"},
+	'i': {"####", ".##.", ".##.", ".##.", ".##.", "####"},
+	'j': {"..##", "...#", "...#", "...#", "#..#", ".##."},
+	'k': {"#..#", "#.#.", "##..", "##..", "#.#.", "#..#"},
+	'l': {"#...", "#...", "#...", "#...", "#...", "####"},
+	'm': {"#..#", "####", "####", "#..#", "#..#", "#..#"},
+	'n': {"#..#", "##.#", "##.#", "#.##", "#.##", "#..#"},
+	'p': {"###.", "#..#", "#..#", "###.", "#...", "#..."},
+	'q': {".##.", "#..#", "#..#", "#..#", "#.##", ".###"},
+	't': {"####", ".##.", ".##.", ".##.", ".##.", ".##."},
+	'v': {"#..#", "#..#", "#..#", "#..#", ".##.", ".##."},
+	'w': {"#..#", "#..#", "#..#", "####", "####", "#..#"},
+	'x': {"#..#", "#..#", ".##.", ".##.", "#..#", "#..#"},
+	'y': {"#..#", "#..#", ".##.", ".##.", ".##.", ".##."},
+	'z': {"####", "...#", "..#.", ".#..", "#...", "####"},
+	'0': {".##.", "#..#", "#.##", "##.#", "#..#", ".##."},
+	'1': {"..#.", ".##.", "..#.", "..#.", "..#.", ".###"},
+	'2': {".##.", "#..#", "...#", "..#.", ".#..", "####"},
+	'3': {"###.", "...#", ".##.", "...#", "...#", "###."},
+	'4': {"#..#", "#..#", "####", "...#", "...#", "...#"},
+	'5': {"####", "#...", "###.", "...#", "...#", "###."},
+	'6': {".##.", "#...", "###.", "#..#", "#..#", ".##."},
+	'7': {"####", "...#", "..#.", "..#.", ".#..", ".#.."},
+	'8': {".##.", "#..#", ".##.", "#..#", "#..#", ".##."},
+	'9': {".##.", "#..#", "#..#", ".###", "...#", ".##."},
+	' ': {"....", "....", "....", "....", "....", "...."},
+	'-': {"....", "....", "####", "....", "....", "...."},
+	'_': {"....", "....", "....", "....", "....", "####"},
+	'.': {"....", "....", "....", "....", "....", ".##."},
 	'o': {".##.", "#..#", "#..#", "#..#", "#..#", ".##."},
 	'u': {"#..#", "#..#", "#..#", "#..#", "#..#", ".##."},
 	'r': {"###.", "#..#", "#..#", "###.", "#.#.", "#..#"},
@@ -99,18 +130,20 @@ var bigTitle = halfBlocks(titleText)
 
 const bigLetter = 5 // columns of a letter of bigTitle, with its gap
 
-func halfBlocks(text string) []string {
+func halfBlocks(text string) []string { return scaledHalfBlocks(text, 1) }
+
+func scaledHalfBlocks(text string, scale int) []string {
 	blocks := map[[2]bool]rune{{true, true}: '█', {true, false}: '▀', {false, true}: '▄', {false, false}: ' '}
-	lines := make([]string, 3)
+	lines := make([]string, 3*scale)
 	for row := range lines {
 		var b strings.Builder
 		for i, r := range text {
 			if i > 0 {
-				b.WriteByte(' ')
+				b.WriteString(strings.Repeat(" ", scale))
 			}
 			glyph := titleFont[r]
-			for x := range 4 {
-				b.WriteRune(blocks[[2]bool{glyph[row*2][x] == '#', glyph[row*2+1][x] == '#'}])
+			for x := range 4 * scale {
+				b.WriteRune(blocks[[2]bool{glyph[row*2/scale][x/scale] == '#', glyph[(row*2+1)/scale][x/scale] == '#'}])
 			}
 		}
 		lines[row] = b.String()
@@ -207,15 +240,6 @@ func (c *canvas) set(x, y int, r rune, fg color.RGBA, bold bool) {
 	c.cells[y*c.w+x] = cell{r, mix(c.back, fg, c.alpha), bold}
 }
 
-// clear blanks the cells from x0, y0 up to x1, y1, which are left out.
-func (c *canvas) clear(x0, y0, x1, y1 int) {
-	for y := max(0, y0); y < min(c.h, y1); y++ {
-		for x := max(0, x0); x < min(c.w, x1); x++ {
-			c.cells[y*c.w+x] = cell{}
-		}
-	}
-}
-
 // text draws s from x on, every rune in one cell.
 func (c *canvas) text(x, y int, s string, fg color.RGBA, bold bool) {
 	for i, r := range []rune(s) {
@@ -259,37 +283,26 @@ func colors(light bool) palette {
 	return darkPalette
 }
 
-// splashLayout returns the title the splash shows on a screen of w by h,
-// the columns of one of its letters, and where the logo goes: its left and
-// top cell, and the rows of the logo, the title and the tagline together.
-func splashLayout(w, h int) (title []string, letter, left, top, block int) {
+// splashLayout returns what the splash shows in the middle of a screen of w
+// by h: the title, the columns of one of its letters, its top row, and its
+// rows down to the tagline.
+func splashLayout(w, h int) (title []string, letter, top, block int) {
 	title, letter = bigTitle, bigLetter
-	if w < len([]rune(bigTitle[0]))+4 || h < logoRows+len(bigTitle)+5 {
+	if w < len([]rune(bigTitle[0]))+4 || h < len(bigTitle)+4 {
 		title, letter = []string{titleText}, 1
 	}
-	block = logoRows + 1 + len(title) + 2 // logo, gap, title, gap, tagline
-	return title, letter, (w - logoCols) / 2, (h - block) / 2, block
+	block = len(title) + 2 // title, gap, tagline
+	return title, letter, (h - block) / 2, block
 }
 
 // drawSplash renders the splash for a screen of w by h at the time elapsed
-// after its start. The stars are where they are at the time sky: a splash
-// that follows the setup keeps the sky of the setup.
-func drawSplash(w, h int, at, sky time.Duration, light bool) string {
+// after its start: the title in the middle of it, and nothing around it.
+func drawSplash(w, h int, at time.Duration, light bool) string {
 	p := colors(light)
 	c := &canvas{w: w, h: h, cells: make([]cell, w*h), back: p.back}
 	c.alpha = min(ramp(at, 0, fadeIn), ramp(splashDuration-at, 0, fadeOut))
-	title, letter, left, top, block := splashLayout(w, h)
-
-	drawStars(c, p, sky)
-	// The jaws close at the left of the snout.
-	biteX := float64(left) + (ringX+ringR*math.Cos(110*math.Pi/180))/2
-	biteY := float64(top) + (ringY-ringR*math.Sin(110*math.Pi/180))/4
-	drawSparks(c, p, biteX, biteY, at)
-	drawSnake(c, p, left, top, at)
-	// The text stays clear of the stars.
-	titleLeft := (w - len([]rune(title[0]))) / 2
-	c.clear(titleLeft-1, top+logoRows+1, w-titleLeft+1, top+block)
-	drawTitle(c, p, title, letter, top+logoRows+1, at)
+	title, letter, top, block := splashLayout(w, h)
+	drawTitle(c, p, title, letter, top, at)
 
 	typed := min(len(tagline), max(0, int((at-taglineAt)/typeSpeed)))
 	x := (w - len(tagline)) / 2
@@ -303,7 +316,7 @@ func drawSplash(w, h int, at, sky time.Duration, light bool) string {
 	return c.String()
 }
 
-// drawStars fills the sky with two layers of twinkling stars; the nearer one
+// drawStars fills the sky of the setup with two layers of twinkling stars; the nearer one
 // drifts faster.
 func drawStars(c *canvas, p palette, at time.Duration) {
 	s := at.Seconds()
@@ -321,47 +334,6 @@ func drawStars(c *canvas, p palette, at time.Duration) {
 				r := g[min(len(g)-1, int(twinkle*float64(len(g))))]
 				c.set(x, y, r, mix(p.back, p.star, 0.2+0.6*twinkle*(0.5+0.5*float64(layer))), false)
 			}
-		}
-	}
-}
-
-// drawSparks bursts sparks out of the bite, which slow down and die out.
-func drawSparks(c *canvas, p palette, x0, y0 float64, at time.Duration) {
-	if at < biteAt || at >= biteAt+sparkLife {
-		return
-	}
-	age := ramp(at, biteAt, sparkLife)
-	glyphs := []rune{'✦', '*', '+', '·'}
-	const count = 18
-	for i := range count {
-		n := hash(i, 7, 3)
-		dir := (float64(i) + float64(n%100)/100) / count * 2 * math.Pi
-		reach := (5 + float64(n>>8%50)/10) * (1 - (1-age)*(1-age))
-		x := int(math.Round(x0 + math.Cos(dir)*reach*2)) // a cell is twice as high as wide
-		y := int(math.Round(y0 - math.Sin(dir)*reach))
-		c.set(x, y, glyphs[int(age*float64(len(glyphs)))], mix(p.spark, p.back, age*age), false)
-	}
-}
-
-// drawSnake draws the ouroboros in the gradient. While it grows, the tip of
-// its tail shines like a comet; when it bites, it flashes, a glow runs from
-// its head to its tail, and its colors start to flow.
-func drawSnake(c *canvas, p palette, left, top int, at time.Duration) {
-	grown := splashGrown(at)
-	bitten := at >= biteAt
-	since := (at - biteAt).Seconds()
-	pulse := ramp(at, biteAt, pulseDuration)*1.3 - 0.15
-	for row, line := range logoCells(grown, bitten) {
-		for col, cl := range line {
-			if cl.dots == 0 {
-				continue
-			}
-			hue, glow := cl.along*0.9, 0.85*bell(grown-cl.along, 0.05)
-			if bitten {
-				hue -= since * 0.45
-				glow = max(0.7*(1-ramp(at, biteAt, flashDuration)), 0.8*bell(cl.along-pulse, 0.07))
-			}
-			c.set(left+col, top+row, 0x2800+cl.dots, mix(p.gradient(hue), p.glow, glow), false)
 		}
 	}
 }

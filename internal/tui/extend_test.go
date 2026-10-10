@@ -79,12 +79,12 @@ func TestPluginScreen(t *testing.T) {
 	}
 	m.Update(load())
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"● online", "Greetings", "beta says hello", "[wave]  wink ", "←→ select · enter run · esc back · ctrl+c quit"} {
+	for _, want := range []string{"● online", "Greetings", "beta says hello", "[wave]  wink ", "←→ select · enter run · esc back"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view lacks %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "No messages yet") {
+	if strings.Contains(view, nameRow(m.agentName())) {
 		t.Fatalf("the screen takes the place of the chat:\n%s", view)
 	}
 

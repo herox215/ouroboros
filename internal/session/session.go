@@ -51,6 +51,11 @@ const (
 	Say Kind = "say"
 	// Step is a call of a tool that starts, or with Done, that ended.
 	Step Kind = "step"
+	// Asked is a question the agent asks the owner on its way to the answer,
+	// in Args as an assistant.Question, and waits for: what the owner says
+	// next in the session answers it, see API.Steer. With Done the wait is
+	// over, and Text is what the owner answered, "" if they did not.
+	Asked Kind = "asked"
 	// Answer is the answer, which ends what the Message started.
 	Answer Kind = "answer"
 	// Failed is an answer that failed, with why in Text.
@@ -81,7 +86,8 @@ type Event struct {
 	Text string `json:"text,omitempty"`
 	// Tool, Args, Done, Took, Err and Remark are of a Step: the call of
 	// Tool with Args, and once Done, how long it took, why it failed, if it
-	// did, and what the tool said of it for the owner.
+	// did, and what the tool said of it for the owner. Args and Done are
+	// also of a question, see Asked.
 	Tool   string          `json:"tool,omitempty"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Done   bool            `json:"done,omitempty"`
@@ -95,6 +101,13 @@ type Event struct {
 	// Cache is how much of what the LLM was sent in the session the
 	// provider had cached when the Event happens, see assistant.Cache.
 	Cache assistant.Cache `json:"cache,omitzero"`
+}
+
+// AsQuestion is the question an Asked that is not Done tells of: what the
+// agent asks the owner, and the answers to choose from.
+func (e Event) AsQuestion() assistant.Question {
+	q, _ := assistant.ParseQuestion(e.Args) // the tool asks nothing it could not read
+	return q
 }
 
 // AsStep is the call of a tool a Step tells of, as the plugin of the tool
@@ -141,7 +154,9 @@ type API interface {
 	// which takes it as soon as it can without losing what the provider
 	// cached of the conversation: after the tools it waits for, else as the
 	// next message, once the answer is given. Until then it is queued.
-	// Without an answer on its way it is Ask.
+	// While the agent waits for the owner to answer a question, see Asked,
+	// text is that answer, and nothing is queued. Without an answer on its
+	// way it is Ask.
 	Steer(ctx context.Context, id, text string) error
 	// Unsteer takes back the last message that is queued in the session id
 	// and returns it: "" if none is, as when the answer took it meanwhile.
@@ -203,6 +218,9 @@ var (
 	ErrNoEffort = errors.New("no such effort")
 	// ErrEmpty means a message without text.
 	ErrEmpty = errors.New("the message is empty")
+	// errAsked means that the agent asked the owner while a question of it
+	// still waits for its answer.
+	errAsked = errors.New("a question to the user waits for its answer already: one at a time")
 )
 
 // maxTitle is how much of the first message the Title of a session has.
@@ -274,6 +292,7 @@ type session struct {
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc // of the answer on its way; nil without one
 	queue    []string           // the messages that wait for that answer to take them
+	asked    chan string        // takes what the owner answers the question that answer waits for; nil without one
 	restart  string             // the binary a tool of that answer asked to start anew from
 	// resumed is when the last answer ended of a session that was loaded
 	// from where it is kept, until the agent is told so with the next
@@ -440,6 +459,12 @@ func (s *Service) Steer(ctx context.Context, id, text string) error {
 	s.mu.Lock()
 	if se, ok := s.sessions[id]; ok && se.cancel != nil {
 		defer s.mu.Unlock()
+		if se.asked != nil {
+			// What the owner says now answers the question: ask tells it.
+			se.asked <- text
+			se.asked = nil
+			return nil
+		}
 		se.queue = append(se.queue, text)
 		s.emit(se, Event{Kind: Queued, Text: text})
 		return nil
@@ -464,6 +489,42 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 	se.queue = se.queue[:last]
 	s.emit(se, Event{Kind: Unqueued, Text: text})
 	return text, nil
+}
+
+// ask asks the owner question for the answer on its way in se, and waits
+// for what they say next in the session, see Steer: that is returned. The
+// question is told to those who watch the session, and so is how the wait
+// ended. It ends without an answer, with the error of ctx, when ctx does: the
+// answer was stopped, or the time of the tool that asks is over.
+func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage) (string, error) {
+	s.mu.Lock()
+	if se.asked != nil {
+		s.mu.Unlock()
+		return "", errAsked
+	}
+	asked := make(chan string, 1)
+	se.asked = asked
+	s.emit(se, Event{Kind: Asked, Args: question})
+	s.mu.Unlock()
+	var answer string
+	select {
+	case answer = <-asked:
+	case <-ctx.Done():
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if se.asked == asked {
+		se.asked = nil // nobody answers it any more
+	}
+	close(asked)
+	if answer == "" {
+		answer = <-asked // what the owner said just when ctx ended, if anything
+	}
+	s.emit(se, Event{Kind: Asked, Done: true, Text: answer})
+	if answer == "" {
+		return "", ctx.Err()
+	}
+	return answer, nil
 }
 
 // steered hands the answer on its way in se the messages that are queued
@@ -492,6 +553,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		})
 	}
 	ctx = agent.WithSteering(ctx, func() []string { return s.steered(se) })
+	ctx = agent.WithOwner(ctx, func(ctx context.Context, question json.RawMessage) (string, error) {
+		return s.ask(ctx, se, question)
+	})
 	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
 		e := Event{Kind: Step, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took, Remark: st.Remark}
@@ -877,7 +941,8 @@ func (s *Service) Close() {
 
 // Await asks for the answer to text in the session id of api and waits for
 // it: the answer, or the error it failed with. When ctx ends on the way, the
-// answer is stopped, and Await returns once it is, with the error of ctx.
+// answer is stopped, and Await returns once it is, with the error of ctx. A
+// question the agent asks the owner on the way is answered with Unattended.
 func Await(ctx context.Context, api API, id, text string) (string, error) {
 	// The answer is the node's: it is asked for, and followed, whether ctx
 	// ends or not.
@@ -904,6 +969,13 @@ func Await(ctx context.Context, api API, id, text string) (string, error) {
 				return "", errLost
 			}
 			switch e.Kind {
+			case Asked:
+				// Nobody sees the question here: the agent is told so, and
+				// does not wait for an answer that cannot come. Where it
+				// cannot be told, the question ends with the tool that asked.
+				if !e.Done {
+					api.Steer(keep, id, Unattended)
+				}
 			case Answer:
 				return e.Text, nil
 			case Failed:
@@ -914,6 +986,11 @@ func Await(ctx context.Context, api API, id, text string) (string, error) {
 		}
 	}
 }
+
+// Unattended is what a question of the agent to the owner is answered with
+// where nobody is shown it, as by Await.
+const Unattended = "Nobody can be asked here: this conversation shows no questions. " +
+	"Go on as you think best, and say in your answer what you assumed."
 
 // errLost means that the node was gone before the answer was given.
 var errLost = errors.New("the node stopped before the answer was given")

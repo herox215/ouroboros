@@ -98,6 +98,10 @@ type (
 	// SessionCache is how much of what the LLM was sent in a session the
 	// provider had cached, see SessionEvent.
 	SessionCache = assistant.Cache
+	// OwnerQuestion is what the agent asks the owner on its way to an
+	// answer, with the answers to choose from: a front end offers them, and
+	// to answer in own words instead. See SessionAsked.
+	OwnerQuestion = assistant.Question
 )
 
 // What a SessionEvent tells.
@@ -113,6 +117,11 @@ const (
 	SessionRestart  = session.Restart  // ouro starts anew from a new build, the binary in Text
 	SessionTitle    = session.Title    // the session is named for its topic, in Text
 	SessionEffort   = session.Effort   // how much the model thinks in the session, in Text
+	// SessionAsked is a question the agent asks the owner and waits for,
+	// see SessionEvent.AsQuestion: what the owner says next in the session,
+	// with Sessions.Steer, answers it. With Done the wait is over, and Text
+	// is what they answered, "" if they did not.
+	SessionAsked = session.Asked
 )
 
 var (

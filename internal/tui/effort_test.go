@@ -216,4 +216,12 @@ func TestNearest(t *testing.T) {
 			t.Errorf("nearest %q = %d, want %d", effort, got, want)
 		}
 	}
+	// In whatever order the choices are: the effort itself where it is, and
+	// else the most of them that is not more, which the default is for every other.
+	if got := nearest([]string{"high", "low"}, "high"); got != 0 {
+		t.Errorf("the effort itself is at %d", got)
+	}
+	if got := nearest([]string{"low", ""}, "minimal"); got != 1 {
+		t.Errorf("the default is at %d", got)
+	}
 }

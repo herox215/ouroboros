@@ -117,8 +117,7 @@ var providers = []plugin.ContextProvider{{Name: "compact"}, {Name: "compact"}, {
 // The settings are the configuration as it applies, without a key.
 func TestSettings(t *testing.T) {
 	cfg := clitest.NodeConfig(clitest.Settings(t))
-	cfg.APIKey, cfg.ContextProvider, cfg.RebuildWithoutSandbox, cfg.BashWithoutSandbox = "sk-secret", "compact", true, true
-	cfg.RebuildWithoutTests = true
+	cfg.APIKey, cfg.ContextProvider, cfg.BashWithoutSandbox = "sk-secret", "compact", true
 	cfg.Tools = &config.Tools{H2A: []config.Entry{{Tool: "*"}, {Tool: "read", Settings: json.RawMessage(`{}`)}},
 		A2A: []config.Entry{{Tool: "read", Settings: json.RawMessage(`{"allow":["~/share"]}`)}}}
 	o, _, _ := built(t, cfg)
@@ -132,18 +131,18 @@ func TestSettings(t *testing.T) {
 	// The access shows as what it is called and where it reaches, as the
 	// node made it of the endpoint of the configuration.
 	if s.Name != cfg.Name || s.Access != "localhost" || s.About != cfg.BaseURL || s.Model != cfg.Model || s.ID != cfg.ID() ||
-		s.ContextProvider != "compact" || !slices.Equal(s.ContextProviders, []string{"compact", "other"}) || !s.RebuildWithoutSandbox || !s.RebuildWithoutTests || !s.BashWithoutSandbox ||
+		s.ContextProvider != "compact" || !slices.Equal(s.ContextProviders, []string{"compact", "other"}) || !s.BashWithoutSandbox ||
 		!s.ProtectedDefault || !slices.Equal(s.Protected, config.DefaultProtected()) {
 		t.Fatalf("settings %+v", s)
 	}
 	owner, peers := s.Tools[plugin.ForOwner], s.Tools[plugin.ForPeers]
-	if !owner.All || owner.Unset || len(owner.Tools) != 5 {
+	if !owner.All || owner.Unset || len(owner.Tools) != 6 {
 		t.Fatalf("owner %+v", owner)
 	}
 	if read := owner.Tools[0]; read.Name != "read" || !read.Allowed || !read.Listed || !read.Configurable || read.Settings != "" || read.Description != "Read a file. Really." {
 		t.Errorf("read for the owner %+v", read)
 	}
-	if config := owner.Tools[2]; config.Name != "get_config" || !config.OwnerOnly || !config.Allowed {
+	if config := owner.Tools[3]; config.Name != "get_config" || !config.OwnerOnly || !config.Allowed {
 		t.Errorf("get_config for the owner %+v", config)
 	}
 	if peers.All || peers.Unset {
@@ -238,13 +237,7 @@ func TestChange(t *testing.T) {
 		t.Error("no provider")
 	}
 
-	if holds := change(plugin.Setting{Kind: plugin.SetRebuildWithoutSandbox, On: true}); !read().RebuildWithoutSandbox || !strings.Contains(holds, "next rebuild") {
-		t.Errorf("rebuild: %q", holds)
-	}
-	if holds := change(plugin.Setting{Kind: plugin.SetRebuildWithoutTests, On: true}); !read().RebuildWithoutTests || !strings.Contains(holds, "next rebuild") {
-		t.Errorf("rebuild without the tests: %q", holds)
-	}
-	if s := (plugin.Setting{Kind: plugin.SetRebuildWithoutTests}).String(); s != "rebuild without the tests" {
+	if s := (plugin.Setting{Kind: plugin.SetBashWithoutSandbox}).String(); s != "bash without a sandbox" {
 		t.Errorf("logged as %q", s)
 	}
 	if holds := change(plugin.Setting{Kind: plugin.SetBashWithoutSandbox, On: true}); !read().BashWithoutSandbox || !strings.Contains(holds, "next command of bash") {
@@ -288,7 +281,7 @@ func TestChange(t *testing.T) {
 
 	// The tools of the owner: all, and then all but read.
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read"})
-	if got := entries(plugin.ForOwner); got != `["list_peers","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all but read: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
@@ -318,18 +311,18 @@ func TestChange(t *testing.T) {
 		t.Errorf("without settings before *: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all named: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools}) // off already
 	// Turned on where it is listed first, it stays listed once.
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("listed first: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"allow":["~/y"]}`})
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: "{}"})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("settings taken away: %s", got)
 	}
 

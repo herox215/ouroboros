@@ -61,17 +61,36 @@ func TestProfileSwitchKeepsDraftAndRoutesLateEvents(t *testing.T) {
 	}
 }
 
+// The first frame of a newly shown profile already knows it is configured:
+// it must not flash the setup logo while the asynchronous status is pending.
+func TestFirstProfileSwitchLoadsStatusBeforeDrawing(t *testing.T) {
+	root, _, luna, _ := profiles(t)
+	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if luna.status.Configured {
+		t.Fatal("the unstarted profile already has its status")
+	}
+	root.Update(shiftTab) // do not run any of the returned asynchronous commands
+	if !luna.status.Configured || luna.status.Name != "Luna" {
+		t.Fatal("the first frame is missing the profile status")
+	}
+	view := ansi.Strip(root.View().Content)
+	if strings.Contains(view, "Type /setup") {
+		t.Fatalf("the first frame flashes the setup view:\n%s", view)
+	}
+}
+
 // The top tells which of the profiles of the node the UI shows, and the
 // title of the window names it; a UI of one profile tells neither.
 func TestHeaderTellsWhichProfile(t *testing.T) {
 	root, terra, luna, _ := profiles(t)
 	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if head := ansi.Strip(terra.headerView()); !strings.Contains(head, " ouroboros [1/2] ") || terra.View().WindowTitle != "ouro · alpha (1/2)" {
+	if head := ansi.Strip(terra.headerView()); !strings.Contains(head, " alpha [1/2] ") || terra.View().WindowTitle != "ouro · alpha (1/2)" {
 		t.Fatalf("Terra: %q, %q", head, terra.View().WindowTitle)
 	}
 	root.Update(shiftTab)
+	root.Update(headerMorphMsg{generation: root.profiles.morph.generation, at: root.profiles.morph.start.Add(headerMorphDuration)})
 	luna.Update(luna.refreshStatus())
-	if head := ansi.Strip(luna.headerView()); !strings.Contains(head, " ouroboros [2/2] ") || luna.View().WindowTitle != "ouro · Luna (2/2)" {
+	if head := ansi.Strip(luna.headerView()); !strings.Contains(head, " Luna [2/2] ") || luna.View().WindowTitle != "ouro · Luna (2/2)" {
 		t.Fatalf("Luna: %q, %q", head, luna.View().WindowTitle)
 	}
 	single, _ := newModel(t)

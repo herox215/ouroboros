@@ -45,15 +45,11 @@ type Settings struct {
 	// are the ones this build has.
 	ContextProvider  string
 	ContextProviders []string
-	// RebuildWithoutSandbox makes rebuild build without a sandbox, also
-	// where there is one, and RebuildWithoutTests install without running
-	// the tests; Sandbox says why there is none here, "" if there is.
-	RebuildWithoutSandbox bool
-	RebuildWithoutTests   bool
-	Sandbox               string
 	// BashWithoutSandbox lets bash run its commands without a sandbox,
-	// also where there is one.
+	// also where there is one; Sandbox says why there is none here, "" if
+	// there is.
 	BashWithoutSandbox bool
+	Sandbox            string
 	Plugins            []PluginState
 	// PluginsKept says why the plugins the configuration turns off run all
 	// the same, "" if they do not.
@@ -99,17 +95,15 @@ type SettingKind int
 
 // The kinds of a Setting.
 const (
-	SetName                  SettingKind = iota // Value
-	SetContextProvider                          // Value, "" for none
-	SetRebuildWithoutSandbox                    // On
-	SetPlugin                                   // Name, On; a missing one is forgotten
-	SetAllTools                                 // For, On
-	SetTool                                     // For, Name, On
-	SetToolSettings                             // For, Name, Value: a JSON object, "" for none
-	SetProtected                                // Value: one path a line; On resets to the default
-	SetDescription                              // Value, "" for the default
-	SetBashWithoutSandbox                       // On
-	SetRebuildWithoutTests                      // On
+	SetName               SettingKind = iota // Value
+	SetContextProvider                       // Value, "" for none
+	SetPlugin                                // Name, On; a missing one is forgotten
+	SetAllTools                              // For, On
+	SetTool                                  // For, Name, On
+	SetToolSettings                          // For, Name, Value: a JSON object, "" for none
+	SetProtected                             // Value: one path a line; On resets to the default
+	SetDescription                           // Value, "" for the default
+	SetBashWithoutSandbox                    // On
 )
 
 // Setting is one change the owner makes in the settings.
@@ -184,7 +178,7 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 	s := Settings{
 		Name: cfg.Name, Access: access.Label(), About: access.About, Model: cfg.Model, ID: cfg.ID(),
 		Description: cfg.About(), DescriptionDefault: cfg.Description == "",
-		ContextProvider: cfg.ContextProvider, RebuildWithoutSandbox: cfg.RebuildWithoutSandbox, RebuildWithoutTests: cfg.RebuildWithoutTests,
+		ContextProvider:    cfg.ContextProvider,
 		BashWithoutSandbox: cfg.BashWithoutSandbox,
 		PluginsKept:        o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
@@ -268,7 +262,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "rebuild without a sandbox", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "bash without a sandbox", "rebuild without the tests"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "bash without a sandbox"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -281,7 +275,6 @@ func (s Setting) String() string {
 // From when a change holds.
 const (
 	holdsNow     = "saved: it holds from the next message, for you and for peers"
-	holdsRebuild = "saved: it holds for the next rebuild"
 	holdsBash    = "saved: it holds for the next command of bash"
 	holdsRestart = "saved: it holds once ouro starts anew: quit and start ouro, /stop and /start the node"
 )
@@ -301,12 +294,6 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 		}
 		c.ContextProvider = s.Value
 		return holdsNow, nil
-	case SetRebuildWithoutSandbox:
-		c.RebuildWithoutSandbox = s.On
-		return holdsRebuild, nil
-	case SetRebuildWithoutTests:
-		c.RebuildWithoutTests = s.On
-		return holdsRebuild, nil
 	case SetBashWithoutSandbox:
 		c.BashWithoutSandbox = s.On
 		return holdsBash, nil

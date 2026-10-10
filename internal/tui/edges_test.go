@@ -29,10 +29,15 @@ func settle(m *Model, cmd tea.Cmd) {
 	m.Update(msg)
 }
 
-// footer is the last line of the view, without colors.
+// footer is what the last line of the view says on its right, without
+// colors: what there is to notice, and the keys.
 func footer(m *Model) string {
 	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-	return lines[len(lines)-1]
+	hint := ansi.Strip(m.footerHint())
+	if last := strings.TrimRight(lines[len(lines)-1], " "); !strings.HasSuffix(last, hint) {
+		return last
+	}
+	return hint
 }
 
 // shortRefresh makes the UI refresh at once instead of every ten seconds.

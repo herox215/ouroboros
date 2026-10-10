@@ -81,7 +81,7 @@ func TestSessionsScreen(t *testing.T) {
 		!strings.HasPrefix(lines[1], "wait for beta ") || !strings.HasPrefix(lines[2], "first question  ") {
 		t.Fatalf("sessions %q\n%s", lines, view(m))
 	}
-	if !strings.Contains(view(m), "3 sessions") || strings.TrimSpace(footer(m)) != "↑↓ select · enter show · d delete · tab yours/peers · esc back · ctrl+c quit" {
+	if !strings.Contains(view(m), "3 sessions") || strings.TrimSpace(footer(m)) != "↑↓ select · enter show · d delete · tab yours/peers · esc back" {
 		t.Fatalf("view:\n%s", view(m))
 	}
 	// Only the session whose answer is on its way moves.
@@ -479,7 +479,7 @@ func TestPeerConversations(t *testing.T) {
 	if m.screen != screenChat || c.peer != "beta" || c.pending || m.input.Value() != "" || mine.draft != "typed for mine" {
 		t.Fatalf("shown %+v, input %q", c, m.input.Value())
 	}
-	if v := view(m); !strings.Contains(v, "beta with alpha  · only to read") || !strings.Contains(v, "beta · 14:00") || !strings.Contains(v, "hello beta") {
+	if v := view(m); !strings.Contains(v, "beta · only to read") || !strings.Contains(v, "beta · 14:00") || !strings.Contains(v, "hello beta") {
 		t.Fatalf("view:\n%s", v)
 	}
 	m.input.SetValue("hi")

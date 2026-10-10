@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -764,6 +765,10 @@ func TestSetupScene(t *testing.T) {
 	if o.curled(start) != curlFrom || o.curled(start.Add(curlDuration)) <= curlFrom {
 		t.Fatal("the next page curls the snake up, bit by bit")
 	}
+	// Fast at first: after half the time three quarters of the way are done.
+	if got, want := o.curled(start.Add(curlDuration/2)), curlFrom+(o.curl.to-curlFrom)*0.75; !near(got, want) || o.curl.to <= curlFrom {
+		t.Fatalf("half the time curls it to %v, want %v", got, want)
+	}
 	// Frames move the scene on.
 	at := start.Add(time.Second)
 	if _, cmd := m.Update(splashMsg{at}); cmd == nil || o.at != at {
@@ -782,8 +787,13 @@ func TestSetupScene(t *testing.T) {
 	if saved.IsZero() || strings.Contains(m.View().Content, "Welcome") || strings.Contains(m.View().Content, "╭") {
 		t.Fatal("the dialog goes when the setup is saved")
 	}
-	if p, bright := o.pose(100, 30); p.turn != 0 || bright != setupDim {
+	if p, bright := o.pose(100, 30); p.turn != 0 || bright != setupDim || p.x != 100 {
 		t.Fatalf("the snake should not turn yet: %+v", p)
+	}
+	// A quarter of the way it has begun to turn, to shrink and to rise, slowly.
+	o.at = saved.Add(turnAt + turnDuration/4)
+	if p, bright := o.pose(100, 30); !near(p.turn, 2*math.Pi*0.15625) || !near(p.scale, 1.3731971153846156) || p.x != 100 || !near(p.y, 69.90985576923076) || !near(bright, 0.578125) {
+		t.Fatalf("a quarter of the way: %+v, %v", p, bright)
 	}
 	m.Update(splashMsg{saved.Add(turnAt + turnDuration/2)})
 	if p, bright := o.pose(100, 30); p.turn <= 0 || p.turn >= 2*math.Pi || bright <= setupDim || bright >= 1 {
@@ -794,18 +804,19 @@ func TestSetupScene(t *testing.T) {
 	if m.onboard == nil {
 		t.Fatal("the scene ended early")
 	}
-	// At the end the snake is the logo of the splash, at its place.
+	// At the end the snake is where the splash shows the name, as large as
+	// the logo.
 	o.at = end
+	if p, _ := o.pose(100, 20); math.Abs(p.scale-1) > 1e-9 || p.x != 100 || math.Abs(p.y-38) > 1e-9 {
+		t.Fatalf("on a low screen: %+v", p)
+	}
 	p, bright := o.pose(100, 30)
-	_, _, left, top, _ := splashLayout(100, 30)
-	if math.Abs(wrap(p.turn+1e-9)) > 1e-6 || p.scale != 1 || p.x != float64(left*2)+ringX || p.y != float64(top*4)+ringY || bright != 1 || o.curled(end) != bodyArc {
+	_, _, top, block := splashLayout(100, 30)
+	if math.Abs(wrap(p.turn+1e-9)) > 1e-6 || math.Abs(p.scale-1) > 1e-9 || p.x != 100 || math.Abs(p.y-float64(top*4+block*2)) > 1e-9 || bright != 1 || o.curled(end) != bodyArc {
 		t.Fatalf("got %+v, %v", p, bright)
 	}
-	if _, cmd := m.Update(splashMsg{end}); cmd == nil || m.onboard != nil || !m.splash.show || m.splash.elapsed != biteAt {
+	if _, cmd := m.Update(splashMsg{end}); cmd == nil || m.onboard != nil || !m.splash.show || m.splash.elapsed != biteAt || !m.splash.start.Equal(end.Add(-biteAt)) {
 		t.Fatal("the splash should take over")
-	}
-	if m.splash.skyShift != end.Sub(o.opened)-biteAt {
-		t.Fatalf("the stars should stay where they are: %v", m.splash.skyShift)
 	}
 }
 
@@ -911,6 +922,17 @@ func TestSetupScale(t *testing.T) {
 	if scale(1000, 1000) != 2.5 || scale(10, 5) != 0.6 {
 		t.Fatal("the scale should stay within its bounds")
 	}
+	// A screen of 100 by 30 is too low for more, one of 40 by 30 too narrow.
+	up, down := extent()
+	if !near(up, 50) || !near(down, 33.2) || !near(scale(100, 30), 120/83.2) || !near(scale(40, 30), 80/(2*(pose{curl: curlFrom}.ring().r+reach))) || scale(40, 30) >= scale(100, 30) {
+		t.Fatalf("the snake reaches %v up and %v down; scales %v and %v", up, down, scale(100, 30), scale(40, 30))
+	}
+	// At the welcome it lies in the middle of the screen, as large as fits.
+	o := &onboarding{}
+	o.curl.from, o.curl.to = curlFrom, curlFrom
+	if p, _ := o.pose(100, 30); !near(p.scale, 120/83.2) || p.x != 100 || !near(p.y, 60+(50-33.2)*120/83.2/2) {
+		t.Fatalf("at the welcome: %+v", p)
+	}
 	// Uncurled most, the snake fits on the screen.
 	for _, size := range [][2]int{{100, 30}, {80, 24}, {200, 60}} {
 		w, h := size[0], size[1]
@@ -1003,4 +1025,89 @@ func TestSetupCutsLongRows(t *testing.T) {
 		}
 	}
 	t.Fatalf("no row of the access in:\n%s", box)
+}
+
+// near reports whether two numbers of the scene are the same, but for what
+// is lost in computing them.
+func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+
+// boxAt is where the dialog of the setup lies in the view of m: the row and
+// the column of its top left corner, and how many rows it has.
+func boxAt(m *Model) (row, col, rows int) {
+	for i, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if at := strings.Index(l, "╭"); at >= 0 {
+			row, col = i, len([]rune(l[:at]))
+		}
+		if strings.Contains(l, "╰") {
+			rows = i - row + 1
+		}
+	}
+	return row, col, rows
+}
+
+// The dialog of the setup lies in the middle of the screen, around the ring
+// of the snake, which shows behind it; on a screen as low as the dialog it
+// starts at the top.
+func TestSetupDialogIsPlaced(t *testing.T) {
+	m, _, _ := onboard(t)
+	if m.onboard.input.Width() != boxWidth-8 {
+		t.Fatalf("the input is %d wide", m.onboard.input.Width())
+	}
+	if row, col, rows := boxAt(m); row != 11 || col != (100-boxWidth)/2 || rows != 14 {
+		t.Fatalf("the dialog is at row %d, column %d, with %d rows", row, col, rows)
+	}
+	snake := 0
+	for _, r := range ansi.Strip(m.View().Content) {
+		if r > 0x2800 && r <= 0x28ff {
+			snake++
+		}
+	}
+	if snake < 100 {
+		t.Fatalf("%d cells of the snake show", snake)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 14})
+	if row, col, rows := boxAt(m); row != 0 || col != (100-boxWidth)/2 || rows != 14 {
+		t.Fatalf("on a low screen the dialog is at row %d, column %d, with %d rows", row, col, rows)
+	}
+}
+
+// What a line of the dialog has no room for is cut: the dialog keeps its
+// width and its rows.
+func TestSetupDialogCutsLongLines(t *testing.T) {
+	o := &onboarding{setup: newFakeSetup(), step: stepRights}
+	f := o.setup.(*fakeSetup)
+	rows := lipgloss.Height(o.dialog("", false))
+	var many []string
+	for i := range 20 {
+		many = append(many, fmt.Sprintf("tool%d", i))
+	}
+	f.owner, f.peers, f.protected = many, many, many
+	v := ansi.Strip(o.dialog("", false))
+	if lipgloss.Height(v) != rows || lipgloss.Width(v) != boxWidth || strings.Count(v, "… ") != 3 {
+		t.Fatalf("%d rows, %d cells, want %d and %d:\n%s", lipgloss.Height(v), lipgloss.Width(v), rows, boxWidth, v)
+	}
+	o.models.Chat = []string{strings.Repeat("m", 40), "short"}
+	for _, line := range o.modelList(30) {
+		if lipgloss.Width(line) > 30 {
+			t.Errorf("a model on a line of %d cells: %q", lipgloss.Width(line), line)
+		}
+	}
+	if first := ansi.Strip(o.modelList(30)[0]); first != "▸ "+strings.Repeat("m", 27)+"…" {
+		t.Errorf("the long name: %q", first)
+	}
+}
+
+// The scene of the setup, as it is drawn: the sky drifts and twinkles behind
+// the snake, whose colors flow along its body, and the dialog lies in front
+// of them.
+func TestGoldenSetupScene(t *testing.T) {
+	m, _, _ := onboard(t)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 26})
+	o := m.onboard
+	var b strings.Builder
+	for _, after := range []time.Duration{700 * time.Millisecond, 2300 * time.Millisecond} {
+		m.Update(splashMsg{o.opened.Add(after)})
+		fmt.Fprintf(&b, "--- %v\n%s\n", after, m.View().Content)
+	}
+	golden(t, "setup-scene", b.String())
 }

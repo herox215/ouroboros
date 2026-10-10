@@ -17,20 +17,29 @@ const dialogWidth = 80
 // inDialog reports whether a dialog lies over the chat: the chat behind it
 // stays as it is, also when the wheel turns.
 func (m *Model) inDialog() bool {
-	return m.screen == screenEffort || m.screen == screenModel
+	return m.screen == screenEffort || m.screen == screenModel || m.screen == screenHelp || m.screen == screenKeys
 }
 
 // dialogSize is how wide and how high a dialog may be in the body, with its
 // border and padding: it leaves a margin of the chat around it.
 func (m *Model) dialogSize() (width, height int) {
-	return max(1, min(dialogWidth, m.width-4)), max(1, m.bodyHeight()-2)
+	width = dialogWidth
+	if m.screen == screenHelp {
+		width = m.width - 4
+	}
+	return max(1, min(width, m.width-4)), max(1, m.bodyHeight()-2)
 }
 
 // dialog renders lines in the box of a dialog, as wide as the body allows.
-// Lines that are too long wrap; what does not fit below is cut off, above
-// the border.
+// Lines that are too long are truncated; what does not fit below is cut
+// off above the border.
 func (m *Model) dialog(lines []string) string {
 	w, h := m.dialogSize()
+	clipped := make([]string, len(lines))
+	for i, line := range lines {
+		clipped[i] = ansi.Truncate(line, max(1, w-4), "…")
+	}
+	lines = clipped
 	inner := lipgloss.NewStyle().Width(max(1, w-4)).MaxHeight(max(1, h-2)).Render(strings.Join(lines, "\n"))
 	return box(true, m.light).Width(w).Render(inner)
 }

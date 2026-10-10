@@ -130,8 +130,9 @@ func TestMounts(t *testing.T) {
 	at := func(p string) string { return filepath.Join(dir, p) }
 	got, err := mounts(Policy{
 		Writable: []string{at("w"), at("w/ro/inner"), at("w/secrets/inner")},
-		ReadOnly: []string{at("w/ro"), at("w/sub/missing"), at("w/closed"), at("w/closed/inner/missing"), at("elsewhere/missing"), at("w/ro/link")},
-		Hidden:   []string{at("w/secret"), at("w/secrets"), at("w/none"), at("w/linked")},
+		// What mounts nothing comes first: the paths after it are still closed.
+		ReadOnly: []string{at("elsewhere/missing"), at("w/ro"), at("w/sub/missing"), at("w/closed"), at("w/closed/inner/missing"), at("w/ro/link")},
+		Hidden:   []string{at("w/none"), at("w/linked"), at("w/secret"), at("w/secrets")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +175,43 @@ func TestMounts(t *testing.T) {
 		if _, err := wrap(context.Background(), "/usr/bin/bwrap", Policy{Hidden: []string{filepath.Join(locked, "x")}}, "true", nil); err == nil {
 			t.Error("a policy that cannot be mounted should fail")
 		}
+	}
+}
+
+// A directory this user cannot change is closed as it is: a link or what is
+// missing in it mounts nothing, however many entries it has.
+func TestMountsLeaveWhatIsClosedAlready(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "bin/keep"), 0o700)
+	os.WriteFile(filepath.Join(dir, "bin/file"), nil, 0o600)
+	os.Symlink("/etc", filepath.Join(dir, "bin/go"))
+	p := Policy{Writable: []string{"/"}, ReadOnly: []string{filepath.Join(dir, "bin/go"), filepath.Join(dir, "bin/missing/deeper")}}
+	var asked []string
+	replace(t, &changeable, func(d string) bool { asked = append(asked, d); return false })
+	if got, err := mounts(p); err != nil || !slices.Equal(got, []string{"--bind", "/", "/"}) {
+		t.Errorf("mounts: %q, %v", got, err)
+	}
+	if bin := filepath.Join(dir, "bin"); !slices.Equal(asked, []string{bin, bin}) {
+		t.Errorf("asked for %q", asked)
+	}
+}
+
+// The owner of a directory can change it, even one closed to writing; a
+// directory of another user is changed only where it is open to writing.
+func TestChangeable(t *testing.T) {
+	dir := t.TempDir()
+	closed := filepath.Join(dir, "closed")
+	os.Mkdir(closed, 0o500)
+	for _, d := range []string{dir, closed, filepath.Join(dir, "missing")} {
+		if !changeable(d) {
+			t.Errorf("%s: not changeable", d)
+		}
+	}
+	if os.Geteuid() != 0 && changeable("/") {
+		t.Error("the root is changeable")
+	}
+	if !changeable(os.TempDir()) {
+		t.Error("the directory for temporary files is not changeable")
 	}
 }
 

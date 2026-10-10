@@ -30,9 +30,10 @@ func TestCallMetricsDisplay(t *testing.T) {
 	}
 	m := New(&fakeBackend{status: Status{Configured: true, Running: true, Name: "alpha"}}, nil, nil)
 	m.status = Status{Configured: true, Running: true, Name: "alpha"}
+	m.chat.entries = []entry{{text: "hello"}}
 	m.chat.cache.Metrics = assistant.CallMetrics{Calls: 1, TPS: 42, InPlan: true}
 	m.width, m.height = 160, 40
-	if got := m.chatView(); !strings.Contains(got, "42.0 TPS") || !strings.Contains(got, "included in plan") {
+	if got := m.footerView(); !strings.Contains(got, "42.0 TPS") || !strings.Contains(got, "included in plan") {
 		t.Fatalf("%s", got)
 	}
 	if got := m.context.view(m); !strings.Contains(got, "42.0 TPS · cost included in plan") {
@@ -40,10 +41,8 @@ func TestCallMetricsDisplay(t *testing.T) {
 	}
 }
 
-// The header says how fast the last call of the LLM in the session shown
-// wrote, after the model and its effort; a session without a call says
-// nothing of it.
-func TestHeaderShowsTPS(t *testing.T) {
+// TPS stays in the chat metrics, not duplicated beside the model in the header.
+func TestHeaderOmitsTPS(t *testing.T) {
 	m, b := newModel(t)
 	b.status.Running, b.status.Model, b.status.Effort = true, "flash", "high"
 	m.Update(m.refreshStatus())
@@ -52,7 +51,7 @@ func TestHeaderShowsTPS(t *testing.T) {
 	}
 	b.cache = plugin.SessionCache{Metrics: assistant.CallMetrics{Calls: 1, Output: 327, TPS: 104.52}}
 	answered(t, m, say(t, m, "hi"))
-	if head := ansi.Strip(m.headerView()); !strings.HasSuffix(head, ":0 · flash · effort high · 104.5 TPS") {
+	if head := ansi.Strip(m.headerView()); strings.Contains(head, "TPS") || !strings.HasSuffix(head, "online  flash · effort high") {
 		t.Fatalf("after a call: %s", head)
 	}
 	drive(t, m, run(m, "/new"), func() bool { return true })
@@ -70,7 +69,7 @@ func TestHeaderShowsTheEffortTaken(t *testing.T) {
 	m.Update(m.refreshStatus())
 	b.cache = plugin.SessionCache{Metrics: assistant.CallMetrics{Calls: 1, Effort: "max", Took: "high", Fell: true}}
 	answered(t, m, say(t, m, "hi"))
-	if head := ansi.Strip(m.headerView()); !strings.HasSuffix(head, "· flash · effort max → high") {
+	if head := ansi.Strip(m.headerView()); !strings.HasSuffix(head, "online  flash · effort max → high") {
 		t.Fatalf("taken as less: %s", head)
 	}
 	m.chat.cache.Metrics.Took = ""

@@ -711,3 +711,15 @@ func TestStepShowsHowItEndedOnlyOnceItEnded(t *testing.T) {
 		}
 	}
 }
+
+// A question of the agent is shown with its answers to choose from; once the
+// wait for its answer is over, it is what the owner answered.
+func TestQuestionIsShownWithItsOptions(t *testing.T) {
+	asked := plugin.SessionEvent{Kind: plugin.SessionAsked, Args: json.RawMessage(`{"question":"Which?","options":["a","b"],"recommended":"b"}`)}
+	if got := tuiplugin.Shown(nil, asked); got.Text != "Which?" || strings.Join(got.Options, ",") != "a,b" || got.Recommended != "b" || got.Done {
+		t.Errorf("asked: %+v", got)
+	}
+	if got := tuiplugin.Shown(nil, plugin.SessionEvent{Kind: plugin.SessionAsked, Done: true, Text: "b"}); got.Text != "b" || got.Options != nil || !got.Done {
+		t.Errorf("answered: %+v", got)
+	}
+}

@@ -292,6 +292,10 @@ func TestLoginFails(t *testing.T) {
 		"ran out": {func(s *chatgpttest.State) {
 			s.Token = func(c map[string]any) { c["exp"] = time.Now().Add(-time.Minute).Unix() }
 		}, "it ran out"},
+		// The second a token runs out in, it has run out.
+		"runs out now": {func(s *chatgpttest.State) {
+			s.Token = func(c map[string]any) { c["exp"] = time.Now().Unix() }
+		}, "it ran out"},
 		"nobody":            {func(s *chatgpttest.State) { s.Token = func(c map[string]any) { c["sub"] = "" } }, "it names nobody"},
 		"an odd audience":   {func(s *chatgpttest.State) { s.Token = func(c map[string]any) { c["aud"] = 7 } }, "it cannot be read"},
 		"no token at all":   {func(s *chatgpttest.State) { s.Sign = func(string) string { return "token" } }, "it is no signed token"},

@@ -143,7 +143,7 @@ else
 fi
 
 report=$out/report.txt
-awk -v accepted="$accepted" -v outside="$outside" '
+awk -v accepted="$accepted" -v outside="$outside" -v own="_$(go env GOOS).go" '
 BEGIN {
 	while ((getline line < accepted) > 0) { split(line, f, " "); equivalent[f[1] " " f[2]] = 1 }
 	while ((getline line < outside) > 0) { split(line, f, " "); unreached[f[1] " " f[2]] = 1 }
@@ -154,6 +154,8 @@ BEGIN {
 	total++
 	if (status == "LIVED" && ((where " " mutator) in equivalent)) { status = "EQUIVALENT"; seen[where " " mutator] = 1 }
 	if (status == "NOT COVERED" && ((where " " mutator) in unreached)) { status = "UNCOVERABLE"; reached[where " " mutator] = 1 }
+	# A file of this system alone is listed for the runs on the others, which never measure it.
+	if (status != "NOT COVERED" && substr(where, 1, index(where, ":") - 1) ~ (own "$")) reached[where " " mutator] = 1
 	count[status]++
 	if (status == "LIVED") lived[++l] = sprintf("  %s: %s", where, mutator)
 	if (status == "EQUIVALENT") same[++e] = sprintf("  %s: %s", where, mutator)

@@ -64,13 +64,6 @@ type Config struct {
 	// Tools says which tools the agent may use, by who it is talking to, and
 	// how far they go. Without it the owner gets every tool and peers get none.
 	Tools *Tools `json:"tools,omitempty"`
-	// RebuildWithoutSandbox makes the tool rebuild build and test without a
-	// sandbox, with network, also where there is one; without it rebuild
-	// builds nothing where there is none. RebuildWithoutTests makes it
-	// install a build without running the tests first. The owner sets them,
-	// or accepts a proposal of them.
-	RebuildWithoutSandbox bool `json:"rebuild_without_sandbox,omitempty"`
-	RebuildWithoutTests   bool `json:"rebuild_without_tests,omitempty"`
 	// BashWithoutSandbox lets the tool bash run its commands without a
 	// sandbox, wherever there is one: with network, and with nothing of the
 	// rules for files. Only the owner sets it: no proposal does.
@@ -348,13 +341,11 @@ const (
 	FieldOwner       = "tools.h2a"
 	FieldPeers       = "tools.a2a"
 	FieldProtected   = "tools.protected"
-	FieldUnsandboxed = "rebuild_without_sandbox"
-	FieldUntested    = "rebuild_without_tests"
 )
 
 // Fields are the fields the agent of the owner may propose a change of.
 func Fields() []string {
-	return []string{FieldName, FieldDescription, FieldModel, FieldOwner, FieldPeers, FieldProtected, FieldUnsandboxed, FieldUntested}
+	return []string{FieldName, FieldDescription, FieldModel, FieldOwner, FieldPeers, FieldProtected}
 }
 
 // reserved are the fields no proposal changes: who the node is, and where the
@@ -382,10 +373,6 @@ func (c Config) field(path string) (any, error) {
 		return append([]Entry{}, c.PeerTools()...), nil // none is an empty list, not null
 	case FieldProtected:
 		return c.Protected(), nil
-	case FieldUnsandboxed:
-		return c.RebuildWithoutSandbox, nil
-	case FieldUntested:
-		return c.RebuildWithoutTests, nil
 	}
 	if path == FieldBashUnsandboxed {
 		return nil, fmt.Errorf("%s is set by the owner alone, in config.json: no proposal changes it", path)
@@ -419,10 +406,8 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 		text  string
 		tools []Entry
 		paths []string
-		on    bool
 	)
-	into := map[string]any{FieldName: &text, FieldDescription: &text, FieldModel: &text, FieldOwner: &tools, FieldPeers: &tools, FieldProtected: &paths,
-		FieldUnsandboxed: &on, FieldUntested: &on}[path]
+	into := map[string]any{FieldName: &text, FieldDescription: &text, FieldModel: &text, FieldOwner: &tools, FieldPeers: &tools, FieldProtected: &paths}[path]
 	if err := json.Unmarshal(value, into); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
@@ -460,10 +445,6 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 		c.Tools.A2A = tools
 	case FieldProtected:
 		c.Tools.Protected = &paths
-	case FieldUnsandboxed:
-		c.RebuildWithoutSandbox = on
-	case FieldUntested:
-		c.RebuildWithoutTests = on
 	}
 	return nil
 }
@@ -475,16 +456,14 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 func (c Config) Public(provider string) json.RawMessage {
 	protected := c.Protected()
 	b, _ := json.MarshalIndent(struct {
-		ID                    string `json:"id"`
-		Name                  string `json:"name"`
-		Description           string `json:"description"`
-		Model                 string `json:"model"`
-		Provider              string `json:"provider"`
-		Tools                 Tools  `json:"tools"`
-		RebuildWithoutSandbox bool   `json:"rebuild_without_sandbox"`
-		RebuildWithoutTests   bool   `json:"rebuild_without_tests"`
-		BashWithoutSandbox    bool   `json:"bash_without_sandbox"`
+		ID                 string `json:"id"`
+		Name               string `json:"name"`
+		Description        string `json:"description"`
+		Model              string `json:"model"`
+		Provider           string `json:"provider"`
+		Tools              Tools  `json:"tools"`
+		BashWithoutSandbox bool   `json:"bash_without_sandbox"`
 	}{c.ID(), c.Name, c.About(), c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected},
-		c.RebuildWithoutSandbox, c.RebuildWithoutTests, c.BashWithoutSandbox}, "", "  ")
+		c.BashWithoutSandbox}, "", "  ")
 	return b
 }

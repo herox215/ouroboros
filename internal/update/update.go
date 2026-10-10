@@ -14,8 +14,6 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
-
-	"ouroboros/internal/sandbox"
 )
 
 // Repo is the git repository updates come from. The Makefile sets it to the
@@ -130,11 +128,6 @@ type Updater struct {
 	Exe      string    // binary to replace
 	Revision string    // commit Exe was built from
 	Out      io.Writer // git and build output
-	// Unsandboxed reports whether the owner lets Rebuild build without a
-	// sandbox, and Untested whether it installs without running the tests.
-	// Nil is no.
-	Unsandboxed func() bool
-	Untested    func() bool
 }
 
 // Latest returns the newest commit on main.
@@ -183,20 +176,11 @@ var ErrNoSource = errors.New("this ouro does not know its source: build it with 
 
 // Rebuild installs a build of the checkout at Source over Exe: of its files
 // as they are now, committed or not. Nothing is installed unless the build
-// and the tests of the checkout pass; the tests run unless Untested says
-// otherwise.
+// passes. The build goes to the stage: the checkout is not written.
 //
-// It goes in two steps. First the frame downloads the modules go.mod and
-// go.sum name, with network, and Go checks them against go.sum: nothing of
-// the checkout runs then. Then the build and the tests run in a sandbox,
-// without network and writing only to a temporary directory, the stage and
-// the build cache of Go, with the modules downloaded. When Unsandboxed says
-// so they run without one, with network, and the output says so. Where
-// there is no sandbox, Rebuild builds only then.
-//
-// Both steps run the Go that GoTool finds, in an environment the frame
-// fixes: no file of go env, no go.work, no other toolchain, modules only as
-// go.mod and go.sum say, and none from a version control system.
+// It runs the Go that GoTool finds, in an environment the frame fixes: no
+// file of go env, no go.work, no other toolchain, modules only as go.mod and
+// go.sum say, and none from a version control system.
 func (u Updater) Rebuild(ctx context.Context) error {
 	if u.Source == "" {
 		return ErrNoSource
@@ -205,89 +189,18 @@ func (u Updater) Rebuild(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	env := goEnv(gobin)
-	if _, err := u.runIn(ctx, u.Source, env, nil, gobin, "mod", "download"); err != nil {
-		return fmt.Errorf("downloading the modules go.mod names: %w", err)
-	}
-	// Without Out: the answer is not worth showing.
-	cache, err := Updater{Dir: u.Dir}.runIn(ctx, u.Source, env, nil, gobin, "env", "GOCACHE")
-	if err != nil {
-		return err
-	}
 	stage := filepath.Join(u.Dir, "stage")
 	if err := os.MkdirAll(stage, 0o700); err != nil {
 		return err
 	}
-	// The temporary directory has the same path at every rebuild: Go keeps
-	// the result of a test with the TMPDIR the test read, and with a new
-	// path every test would run again.
-	tmp := filepath.Join(u.Dir, "build")
-	if err := os.RemoveAll(tmp); err != nil {
+	if _, err := u.runIn(ctx, u.Source, goEnv(gobin), "make", "install", "BIN="+filepath.Join(stage, "ouro")); err != nil {
 		return err
-	}
-	if err := os.Mkdir(tmp, 0o700); err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmp)
-	cache = strings.TrimSpace(cache)
-	if err := os.MkdirAll(cache, 0o700); err != nil {
-		return err
-	}
-	env = append(env, "GOPROXY=off", "TMPDIR="+tmp)
-	box := &sandbox.Policy{Writable: []string{tmp, stage, cache}}
-	unsandboxed := u.Unsandboxed != nil && u.Unsandboxed()
-	if why := sandboxAvailable(); why != nil && !unsandboxed {
-		return fmt.Errorf("%w: %w", ErrNoSandbox, why)
-	}
-	if unsandboxed {
-		box = nil
-		u.say("warning: the owner lets the build run without a sandbox, with network\n")
-	}
-	// The build goes to the temporary directory: the checkout is not
-	// written.
-	steps := [][]string{{"make", "install", "BIN=" + filepath.Join(tmp, "ouro")}}
-	if u.Untested != nil && u.Untested() {
-		u.say("warning: the owner lets the build be installed without running the tests\n")
-	} else {
-		steps = append(steps, []string{"make", "test"})
-	}
-	for _, step := range steps {
-		if _, err := u.runIn(ctx, u.Source, env, box, step[0], step[1:]...); err != nil {
-			return err
-		}
 	}
 	return replace(filepath.Join(stage, "bin", "ouro"), u.Exe)
 }
 
-// say writes text to Out, if there is one.
-func (u Updater) say(text string) {
-	if u.Out != nil {
-		fmt.Fprint(u.Out, text)
-	}
-}
-
-// sandboxAvailable reports why there is no sandbox; tests replace it.
-var sandboxAvailable = sandbox.Available
-
-// ErrNoSandbox is the error of a rebuild on a system without a sandbox that
-// the owner did not allow to build without one.
-var ErrNoSandbox = errors.New("rebuild builds and tests in a sandbox, and there is none: " +
-	`only the owner can let it build without one, with "rebuild_without_sandbox": true in the configuration, ` +
-	`set in the settings or proposed to them`)
-
-// refusals are what the output of a command says of what a sandbox refused.
-var refusals = []string{"operation not permitted", "read-only file system", "network is unreachable"}
-
-// sandboxed is what the error of a step that failed in the sandbox adds,
-// when its output says that something was refused.
-const sandboxed = "; it ran in a sandbox: without network beyond localhost, without sockets of the file system, " +
-	"and writing only to a temporary directory, the stage and the build cache of Go. What the output says was not permitted, " +
-	"on a read-only file system or with an unreachable network was refused by the sandbox: that does not pass when tried again. " +
-	"Change what needs it, or tell the owner"
-
 // goEnv is the environment of the build with the go at gobin: that of this
-// process, with what decides where modules and tools come from fixed, and
-// without a directory of its own for the files of Go, which go to TMPDIR.
+// process, with what decides where modules and tools come from fixed.
 func goEnv(gobin string) []string {
 	fixed := []string{"GOFLAGS", "GOENV", "GOWORK", "GOTOOLCHAIN", "GOVCS", "GOROOT", "GOTMPDIR", "PATH",
 		"MAKEFLAGS", "MAKELEVEL", "MFLAGS"} // of a make that runs ouro, as the tests of ouro do
@@ -302,31 +215,21 @@ func goEnv(gobin string) []string {
 // run executes a command in dir and returns its output, which also goes to
 // Out. Its error carries the reason found in the output.
 func (u Updater) run(ctx context.Context, dir, name string, args ...string) (string, error) {
-	return u.runIn(ctx, dir, os.Environ(), nil, name, args...)
+	return u.runIn(ctx, dir, os.Environ(), name, args...)
 }
 
-// runIn is run with the environment env, in the sandbox of box unless it is
-// nil.
-func (u Updater) runIn(ctx context.Context, dir string, env []string, box *sandbox.Policy, name string, args ...string) (string, error) {
+// runIn is run with the environment env.
+func (u Updater) runIn(ctx context.Context, dir string, env []string, name string, args ...string) (string, error) {
 	var buf bytes.Buffer
 	var out io.Writer = &buf
 	if u.Out != nil {
 		out = io.MultiWriter(u.Out, &buf)
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
-	if box != nil {
-		var err error
-		if cmd, err = sandbox.Command(ctx, *box, name, args...); err != nil {
-			return "", err
-		}
-	}
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = out, out
 	// The build is staged next to the sources and installed by replace.
 	cmd.Env = append(slices.Clone(env), "PREFIX="+filepath.Join(u.Dir, "stage"), "OURO_REPO="+u.Repo, "OURO_SOURCE="+u.Source, "OURO_UPDATE=1")
-	if box != nil {
-		cmd.Env = append(cmd.Env, sandbox.Env+"=1")
-	}
 	// reason reads what git says in English, whatever language it speaks.
 	if name == "git" {
 		cmd.Env = append(cmd.Env, "LC_ALL=C")
@@ -337,18 +240,9 @@ func (u Updater) runIn(ctx context.Context, dir string, env []string, box *sandb
 		} else {
 			err = fmt.Errorf("%s: %w", filepath.Base(name), err)
 		}
-		if box != nil && refused(buf.String()) {
-			err = fmt.Errorf("%w%s", err, sandboxed)
-		}
 		return "", err
 	}
 	return buf.String(), nil
-}
-
-// refused reports whether output says that a sandbox refused something.
-func refused(output string) bool {
-	output = strings.ToLower(output)
-	return slices.ContainsFunc(refusals, func(r string) bool { return strings.Contains(output, r) })
 }
 
 // reason picks the line of a failed command's output that says why.

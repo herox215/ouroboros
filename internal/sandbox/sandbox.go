@@ -1,7 +1,6 @@
 // Package sandbox runs a command with writes only where it is allowed to, and
-// without network unless it is allowed that: what the tool rebuild builds and
-// tests runs there, and what the tool bash runs. Every process the command
-// starts is in the same sandbox.
+// without network unless it is allowed that: what the tool bash runs. Every
+// process the command starts is in the same sandbox.
 //
 // "Without network" means without a way off the machine: the command may
 // listen and connect on the loopback interface, as the tests of ouro start

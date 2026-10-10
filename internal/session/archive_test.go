@@ -185,6 +185,17 @@ func TestArchiveFails(t *testing.T) {
 	}
 }
 
+// A session archived without a message, as only its end is, is resumed with
+// nothing to show.
+func TestResumeWithoutEvents(t *testing.T) {
+	dir := t.TempDir()
+	history.Open(dir).Append(history.Who{Session: "s1"}, nil, nil)
+	s, _, _ := archived(t, &fakeAgent{}, dir, time.Now())
+	if past, _, err := s.Watch(context.Background(), "s1"); err != nil || len(past) != 0 {
+		t.Fatalf("past %+v, %v", past, err)
+	}
+}
+
 // A session is deleted from the archive and from what the agent remembers,
 // unless an answer is on its way in it.
 func TestDelete(t *testing.T) {

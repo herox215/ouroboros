@@ -55,6 +55,10 @@ func box(focused, light bool) lipgloss.Style {
 // background, so the line the cursor is on does not look like a black bar.
 func inputStyles(light bool) textarea.Styles {
 	s := textarea.DefaultStyles(!light)
+	s.Cursor.Color = lipgloss.Color("250")
+	if light {
+		s.Cursor.Color = lipgloss.Color("242")
+	}
 	s.Focused.CursorLine = lipgloss.NewStyle()
 	s.Blurred.CursorLine = lipgloss.NewStyle()
 	return s
@@ -108,7 +112,7 @@ func (m *Model) layout() {
 	inner := max(1, m.width-4)       // border and padding
 	m.input.SetWidth(inner)
 	m.history.SetWidth(inner)
-	m.history.SetHeight(max(1, m.chatHeight()-4)) // border, title and typing line
+	m.history.SetHeight(max(1, m.chatHeight()-3)) // border and typing line
 	m.renderHistory(atBottom)
 	m.context.size(m)
 }
@@ -118,7 +122,17 @@ func (m *Model) layout() {
 func (m *Model) renderHistory(toBottom bool) {
 	c := m.chat
 	if len(c.entries) == 0 {
-		m.history.SetContent(lipgloss.Wrap(mutedStyle.Render("No messages yet. Ask "+m.agentName()+" anything – it can ask the other nodes for you."), m.history.Width(), ""))
+		if m.resuming == c {
+			m.history.SetContent("")
+			return
+		}
+		art := emptyChat(m.agentName(), m.history.Width(), m.history.Height())
+		if a := &m.nameAnimation; a.active {
+			art = drawNameAnimation(m.agentName(), m.history.Width(), m.history.Height(), a.elapsed, m.light, a.look, 1, a.tagline)
+		}
+		m.history.SetContent(art)
+		m.stopGlide(&m.history)
+		m.history.GotoTop()
 		return
 	}
 	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
@@ -174,7 +188,7 @@ func (m *Model) renderHistory(toBottom bool) {
 	// The heads and the lines of the calls are wrapped here and not by the
 	// viewport, which would measure all of the history on every step of
 	// scrolling.
-	m.history.SetContent(lipgloss.Wrap(strings.Join(blocks, "\n\n"), m.history.Width(), ""))
+	m.history.SetContent(m.behind(lipgloss.Wrap(strings.Join(blocks, "\n\n"), m.history.Width(), "")))
 	if toBottom {
 		m.stopGlide(&m.history) // the bottom is where it goes now
 		m.history.GotoBottom()
@@ -272,7 +286,9 @@ func (m *Model) View() tea.View {
 	case screenRequests:
 		body = m.requests.view(m)
 	case screenHelp:
-		body = m.helpView()
+		body = m.overlay(m.helpView())
+	case screenKeys:
+		body = m.overlay(m.keysView())
 	case screenPlugin:
 		body = m.plugins.view(m)
 	case screenModel:
@@ -378,9 +394,9 @@ func shortKey(publicKey string) string {
 	return publicKey[:10] + "…"
 }
 
-// view shows the ouroboros animation centered on the screen.
+// view shows the title of the splash in the middle of the screen.
 func (s *splashScreen) view(m *Model) string {
-	return drawSplash(m.width, m.height, s.elapsed, s.elapsed+s.skyShift, m.light)
+	return drawSplash(m.width, m.height, s.elapsed, m.light)
 }
 
 // logoText joins the logo lines, each truncated to width.
@@ -425,15 +441,6 @@ func (m *Model) tookText(effort string) string {
 	return " → " + cmp.Or(took.Took, "not taken")
 }
 
-// speedText is how fast the last call of the LLM in the conversation shown
-// wrote, for the header: "" while it is not known.
-func (m *Model) speedText() string {
-	if tps := m.chat.cache.Metrics.TPS; tps > 0 {
-		return fmt.Sprintf(" · %.1f TPS", tps)
-	}
-	return ""
-}
-
 // chatEffort is how much the model thinks in the conversation shown: its
 // own effort, or that of the node.
 func (m *Model) chatEffort() string {
@@ -445,20 +452,27 @@ func (m *Model) chatEffort() string {
 
 func (m *Model) headerView() string {
 	s := m.status
-	title := boldStyle.Foreground(accent).Render(" ouroboros ")
+	// The profile is known by its name; one that has none yet by the program.
+	title := boldStyle.Foreground(accent).Render(" " + m.headerName() + " ")
 	if m.profileOf > 1 { // of how many profiles of the node this is the one shown
 		title += mutedStyle.Render(fmt.Sprintf("[%d/%d]", m.profileAt, m.profileOf))
+	}
+	// Which profile it is, and where it listens, is said only for debugging.
+	var id, where string
+	if s.Debug {
+		id = s.ID + " · "
+		where = fmt.Sprintf("%s:%d · ", id, s.Port)
 	}
 	var state string
 	switch {
 	case s.Running:
 		state = lipgloss.NewStyle().Foreground(good).Render("● online") +
-			mutedStyle.Render(fmt.Sprintf("  %s · %s · :%d · %s", s.ID, s.Name, s.Port, m.modelText())+m.speedText())
+			mutedStyle.Render("  "+where+m.modelText())
 	case !s.Configured:
 		state = lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  type /setup")
 	default:
 		state = lipgloss.NewStyle().Foreground(bad).Render("○ offline") +
-			mutedStyle.Render(fmt.Sprintf("  %s · %s · type /start", s.ID, s.Name))
+			mutedStyle.Render("  "+id+"type /start")
 	}
 	if m.requests.unread > 0 {
 		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.requests.unread))
@@ -476,15 +490,38 @@ func (m *Model) headerView() string {
 	return left + strings.Repeat(" ", m.width-lipgloss.Width(left)-lipgloss.Width(debug)) + debug
 }
 
+// chatTitle is what the footer says of the conversation on its left: whose
+// it is, if a peer's, how fast and at what cost the last call was, and how
+// much of the context it took. Who answers is in the header. A chat without
+// a word yet has none, nor has a node that is not set up.
+func (m *Model) chatTitle() string {
+	c := m.chat
+	if !m.status.Configured || len(c.entries) == 0 && c.peer == "" {
+		return ""
+	}
+	var parts []string
+	if c.peer != "" {
+		parts = append(parts, boldStyle.Foreground(accent).Render(c.peer)+mutedStyle.Render(" · only to read"))
+	}
+	if metrics := callMetrics(c.cache); metrics != "" {
+		parts = append(parts, mutedStyle.Render(metrics))
+	}
+	if c.context > 0 {
+		parts = append(parts, mutedStyle.Render("context "+contextSize(c.context)))
+	}
+	if c.cache.Tokens > 0 {
+		parts = append(parts, mutedStyle.Render("cached "+cacheRate(c.cache)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " " + strings.Join(parts, mutedStyle.Render("  · "))
+}
+
 func (m *Model) chatView() string {
 	w, h := m.width, m.chatHeight()
 	inner := max(1, w-4)
 	c := m.chat
-	// The commands that fit what is typed are listed between the
-	// conversation and the input, in rows the conversation gives up.
-	suggested := m.suggestionLines(h - 3)
-	h -= len(suggested)
-
 	var content string
 	if !m.status.Configured {
 		hint := mutedStyle.Render("Type /setup to set up your node and chat with its agent.")
@@ -495,29 +532,57 @@ func (m *Model) chatView() string {
 			content = hint
 		}
 	} else {
-		title := boldStyle.Foreground(peer).Render(m.agentName())
-		if c.peer != "" {
-			title = boldStyle.Foreground(accent).Render(c.peer) + mutedStyle.Render(" with ") + title + mutedStyle.Render("  · only to read")
-		}
-		if metrics := callMetrics(c.cache); metrics != "" {
-			title += mutedStyle.Render("  · " + metrics)
-		}
-		if c.context > 0 {
-			title += mutedStyle.Render("  · context " + contextSize(c.context))
-		}
-		if c.cache.Tokens > 0 {
-			title += mutedStyle.Render("  · cached " + cacheRate(c.cache))
-		}
-		title = ansi.Truncate(title, inner, "…")
 		history := m.highlight(strings.Split(m.history.View(), "\n"))
-		history = history[min(len(suggested), len(history)):] // the latest stays in view
-		history = m.fadeEdges(history, m.history.YOffset()+len(suggested) > 0, !m.history.AtBottom())
-		content = lipgloss.JoinVertical(lipgloss.Left, title, strings.Join(history, "\n"), m.waitView(inner))
+		history = m.fadeEdges(history, m.history.YOffset() > 0, !m.history.AtBottom())
+		content = lipgloss.JoinVertical(lipgloss.Left, strings.Join(history, "\n"), m.waitView(inner))
 	}
 	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
+	// Suggestions and answers lie over the bottom of the chat, in a panel.
+	// Its size and the positions of its history stay unchanged behind them.
+	panel := m.panel()
 	input := box(false, m.light).Width(w).Render(c.showLabels(m.input.View()))
-	parts := append([]string{chat}, suggested...)
-	return lipgloss.JoinVertical(lipgloss.Left, append(parts, input)...)
+	if panel == "" {
+		return lipgloss.JoinVertical(lipgloss.Left, chat, input)
+	}
+	back := strings.Split(lipgloss.JoinVertical(lipgloss.Left, chat, input), "\n")
+	style := lipgloss.NewStyle().Foreground(fadeColor(m.light))
+	for i, line := range back {
+		back[i] = style.Render(ansi.Strip(line))
+	}
+	height := m.bodyHeight()
+	canvas := lipgloss.NewCanvas(w, height)
+	canvas.Compose(lipgloss.NewCompositor(
+		lipgloss.NewLayer(strings.Join(back, "\n")),
+		lipgloss.NewLayer(panel).X(2).Y(m.panelTop(panel)).Z(1), // in the middle: it is four cells narrower
+	))
+	return lipgloss.NewStyle().Width(w).Height(height).MaxHeight(height).Render(canvas.Render())
+}
+
+// panel is the box that lies over the bottom of the chat: the commands that
+// fit what is typed, or the answers to a question of the agent, above the
+// input. Like the centered dialogs it has a border of its own and leaves the
+// faded frame of the chat to be seen around it. It is "" without either.
+func (m *Model) panel() string {
+	w, h := m.width, m.chatHeight()
+	suggested := m.suggestionLines(h - 6)
+	if a := m.chat.asking; len(suggested) == 0 && (a == nil || a.sent) {
+		return ""
+	}
+	panelWidth := max(1, w-4)
+	panelInner := max(1, panelWidth-4)
+	typing := m.inputView(panelInner, h-6-len(suggested))
+	lines := make([]string, len(suggested))
+	for i, line := range suggested {
+		lines[i] = ansi.Truncate(strings.TrimPrefix(line, "  "), panelInner, "…")
+	}
+	lines = append(lines, m.chat.showLabels(typing))
+	return box(true, m.light).Width(panelWidth).Render(strings.Join(lines, "\n"))
+}
+
+// panelTop is the row of the body panel begins at: a row of the box of the
+// input stays below it.
+func (m *Model) panelTop(panel string) int {
+	return max(0, m.bodyHeight()-lipgloss.Height(panel)-1)
 }
 
 // sgr is a sequence that sets how the text after it looks.
@@ -575,54 +640,86 @@ func cacheRate(c plugin.SessionCache) string {
 	return fmt.Sprintf("%d%%, session %d%%", c.Cached*100/c.Tokens, c.AllCached*100/max(c.AllTokens, 1))
 }
 
-func (m *Model) footerView() string {
-	help := "enter send · alt+enter new line · /help commands · ctrl+s sessions · pgup/pgdn scroll · ctrl+c quit"
+// footerHint is what the footer says on its right: the keys that do
+// something here, after what there is to notice.
+func (m *Model) footerHint() string {
+	help := ""
 	if m.chat.pending {
-		help = "esc stop · " + help
+		help = "esc stop"
+	}
+	if m.chat.asking != nil {
+		help = "↑↓ choose · enter answer"
+		if m.chat.pending {
+			help += " · esc stop"
+		}
 	}
 	if found, _ := m.suggestions(); len(found) > 0 {
-		help = "↑↓ select · tab complete · enter run · ctrl+c quit"
+		help = "↑↓ select · tab complete · enter run"
 	}
 	switch m.screen {
 	case screenRequests:
-		help = "↑↓ select · ←→ accept or reject · enter decide · esc back · ctrl+c quit"
-	case screenHelp:
-		help = "esc back · ctrl+c quit"
+		help = "↑↓ select · ←→ accept or reject · enter decide · esc back"
+	case screenHelp, screenKeys:
+		help = "esc back"
 	case screenEffort:
-		help = "←→ choose · enter set · esc back · ctrl+c quit"
+		help = "←→ choose · enter set · esc back"
 	case screenModel:
-		help = "↑↓ choose · enter set · p for peers · f fallback · esc back · ctrl+c quit"
+		help = "↑↓ choose · enter set · p for peers · f fallback · esc back"
 	case screenSessions:
-		help = "↑↓ select · enter show · d delete · tab yours/peers · esc back · ctrl+c quit"
+		help = "↑↓ select · enter show · d delete · tab yours/peers · esc back"
 	case screenContext:
-		help = "↑↓ pgup/pgdn scroll · / search · esc back · ctrl+c quit"
+		help = "↑↓ pgup/pgdn scroll · / search · esc back"
 		if m.context.searching() {
-			help = "↑↓ previous/next match · j/k pgup/pgdn scroll · / search anew · esc end search · ctrl+c quit"
+			help = "↑↓ previous/next match · j/k pgup/pgdn scroll · / search anew · esc end search"
 		}
 		if m.context.typing {
-			help = "↑↓ previous/next match · enter keep · esc end search · ctrl+c quit"
+			help = "↑↓ previous/next match · enter keep · esc end search"
 		}
 	case screenSettings:
-		help = "↑↓ select · enter open · esc back · ctrl+c quit"
+		help = "↑↓ select · enter open · esc back"
 		if m.config.opened {
-			help = "↑↓ select · ←→ choose · enter do · esc categories · ctrl+c quit"
+			help = "↑↓ select · ←→ choose · enter do · esc categories"
 		}
 		if m.config.editing != nil {
-			help = "enter save · esc keep what was · ctrl+c quit"
+			help = "enter save · esc keep what was"
 		}
 	case screenPlugin:
-		help = "esc back · ctrl+c quit"
+		help = "esc back"
 		if len(m.plugins.screens[m.plugins.open].Actions) > 0 {
 			help = "←→ select · enter run · " + help
 		}
 	}
-	line := mutedStyle.Render(help)
+	right := mutedStyle.Render(help)
 	if m.notice != "" {
 		style := lipgloss.NewStyle().Foreground(accent)
 		if m.noticeErr {
 			style = errStyle
 		}
-		line = style.Render(m.notice) + mutedStyle.Render("  │  ") + line
+		notice := style.Render(m.notice)
+		if help != "" {
+			notice += mutedStyle.Render("  │  ")
+		}
+		right = notice + right
 	}
-	return ansi.Truncate(" "+line, m.width, "…")
+	return right
+}
+
+// footerView is the line below the body: the conversation on the left, where
+// the chat is to be seen, and the hint on the right. The hint is shown whole
+// as long as the line holds it, the conversation in what it leaves of the
+// line.
+func (m *Model) footerView() string {
+	right := m.footerHint()
+	if right != "" {
+		right += " "
+	}
+	right = ansi.Truncate(right, m.width, "…")
+	left := ""
+	switch m.screen {
+	case screenChat, screenHelp, screenKeys, screenModel, screenEffort: // the dialogs lie over the chat
+		if room := m.width - lipgloss.Width(right) - 1; room > 0 {
+			left = ansi.Truncate(m.chatTitle(), room, "…")
+		}
+	}
+	return left + strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))) + right
 }

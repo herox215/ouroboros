@@ -32,7 +32,8 @@ cover:
 	go tool covdata textfmt -i=.cover -o=cover.out
 	go tool covdata percent -i=.cover
 
-# Everything the pre-commit hook runs, on the working tree. See "Checks" in the README.
+# Every check, on the working tree: what the pre-commit hook runs, and the
+# mutation tests. See "Checks" in the README.
 check: fmt-check lint test cover-check mutation
 
 # Is every Go file formatted? Changes no file.

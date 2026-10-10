@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/history"
 	"ouroboros/internal/home"
+	"ouroboros/internal/node"
 	"ouroboros/internal/openai"
 )
 
@@ -435,5 +437,27 @@ func TestClientPeers(t *testing.T) {
 	}
 	if _, err := c.Read(ctx, list[0].ID); !errors.Is(err, ErrNoSession) {
 		t.Fatalf("read deleted: %v", err)
+	}
+}
+
+// The client of a profile names it to the node, by the ID its directory is
+// named after; the client of the node itself names none.
+func TestClientNamesItsProfile(t *testing.T) {
+	var mu sync.Mutex
+	var named []string
+	n := serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		named = append(named, r.Header.Get(node.ProfileHeader))
+		mu.Unlock()
+		w.Write([]byte("[]"))
+	}))
+	profile := home.Dir(filepath.Join(string(n.dir), "profiles", "0123456789ab"))
+	for _, dir := range []home.Dir{n.dir, profile} {
+		if _, err := NewClient(dir).List(context.Background()); err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+	}
+	if !slices.Equal(named, []string{"", "0123456789ab"}) {
+		t.Fatalf("named %q", named)
 	}
 }

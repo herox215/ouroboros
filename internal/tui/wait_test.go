@@ -115,3 +115,19 @@ func TestWaitIsShownOnAPicture(t *testing.T) {
 		t.Fatalf("after the last picture comes the first:\n%s", m.waitView(96))
 	}
 }
+
+// A tool that began a moment ago is not named yet: the agent is thinking
+// until it has run for a while.
+func TestToolIsNamedAfterAWhile(t *testing.T) {
+	m, _ := newModel(t)
+	at := time.Unix(100, 0)
+	m.now = func() time.Time { return at }
+	m.chat.doing, m.chat.since = "reading a file", at.Add(-299*time.Millisecond)
+	if got := m.waiting(); got != "alpha is thinking" {
+		t.Fatalf("after 299ms: %q", got)
+	}
+	m.chat.since = at.Add(-300 * time.Millisecond)
+	if got := m.waiting(); got != "reading a file" {
+		t.Fatalf("after 300ms: %q", got)
+	}
+}

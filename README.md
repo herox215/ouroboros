@@ -20,9 +20,10 @@ ouro update               # build and install the newest main
 ## Terminal UI
 
 Running `ouro` without arguments opens the terminal UI. On start it shows the ouroboros
-splash for about three seconds: stars drift by, the serpent curls around in a gradient until it bites its
-tail with a burst of sparks, a glow runs along its body, and the name decodes itself letter by letter. On a light
-background it takes darker colors. Any key (except `ctrl+c`) skips it. Without a terminal (pipes, CI, redirects)
+splash for about three seconds: the name decodes itself letter by letter in the middle of the screen,
+the tagline is typed below it, and a shine sweeps across the name. A terminal too narrow for the big name
+shows it in plain letters.
+On a light background the splash takes darker colors. Any key (except `ctrl+c`) skips it. Without a terminal (pipes, CI, redirects)
 `ouro` prints the usage instead, so scripts keep working.
 
 On the first run there is no node to chat with yet, and the UI opens with the setup instead: the access to
@@ -30,8 +31,8 @@ the LLM, the model, the name of the node and what your agent may do. For the acc
 the provider asks what it needs: the one for OpenAI-compatible APIs the endpoint and the API key, the one for
 ChatGPT opens the page to sign in on. Behind the dialog
 the snake lies uncurled on the starry sky, and with every page it curls up a little more. Once the setup is
-saved, its tail reaches its mouth, it turns once and shrinks into the logo, and the splash takes over where
-the jaws snap shut. `esc` goes back a page, and on the first page it quits; any key skips the end. The key is
+saved, its tail reaches its mouth, it turns once and shrinks to the name of the splash, and the splash takes
+over. `esc` goes back a page, and on the first page it quits; any key skips the end. The key is
 never shown, and a key that is saved is only offered for the endpoint it was entered for. `/setup` opens the same
 setup later with what the node has: it starts with the accesses of the node, to pick one, add one, sign in to
 one again, rename or remove one. There `esc` on the first page goes back to the chat. The node keeps
@@ -71,12 +72,12 @@ shows something new. A new conversation (`/new`) has none until its first call, 
 goes on after a restart. Once the API tells how many of the tokens it was sent it had cached, the chat shows
 that too: `· cached 92%, session 84%`, of the last call and of all calls in the session since the node started.
 A call that goes on from the one before should find most of its tokens cached; a low rate costs time and money.
-The chat and `/context` also show TPS for the last model call: API-reported output tokens divided by
+The footer of the chat and `/context` also show TPS for the last model call: API-reported output tokens divided by
 the full request duration, including request latency but excluding tool execution. Missing output usage
 is shown as `TPS unknown`. Costs use the API-reported USD `usage.cost`, when available; ChatGPT access
 shows `cost included in plan`. Missing costs are unknown, never assumed to be zero. The session total
 is accumulated since the node started and marked `(partial)` if any calls have unknown costs. No
-model-price estimate is currently applied. On narrow terminals the chat title is truncated; `/context`
+model-price estimate is currently applied. On narrow terminals the footer cuts them off; `/context`
 provides the detailed metrics.
 `/context` shows what the context is: the system prompt, every tool with its schema
 and the conversation so far, message by message with its size. It is laid out to be read, not as a chat: every
@@ -141,6 +142,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `f` a [fallback](#fallbacks), `esc` back |
 | `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
 | `/help` | list the commands, those of the plugins too |
+| `/keys` | list the keys of the chat in a dialog, `esc` back |
 | `/quit` | quit |
 | commands of plugins | open a screen (`esc` back) or run what the plugin added |
 
@@ -149,11 +151,13 @@ Keys only move around:
 | Key | What it does |
 |---|---|
 | any key | skip the ouroboros splash (except `ctrl+c`) |
-| `enter` / `alt+enter` | send / a new line |
+| `enter` | send |
+| `shift+enter` / `ctrl+j` | a new line |
 | `↑` `↓` | bring back what you entered while the UI is open, messages and commands, the latest first. Below the latest is what you had typed, and below that an empty input, from which `↑` brings it back again. A line you change is what you type from then on. In an input of several lines they move between its lines first |
 | `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions); with nothing queued, bring back what you entered |
 | `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
+| `ctrl+k` | the keys of the chat in a dialog, like `/keys`, but what is typed stays in the input |
 | `pgup` `pgdn` | scroll the chat |
 | `esc` | on a screen: back to the chat. In the chat: stop the answer on its way in the conversation shown, like `/cancel` |
 | `ctrl+c` | quit, everywhere |
@@ -289,8 +293,10 @@ and a model of its own.
   until no profile answers, and no profile takes a new message meanwhile. A front end that lets go of the node
   it started stops it once no profile answers.
 - **The UI shows them all.** `shift+tab` shows the next profile, with all it showed: its conversation, what
-  you typed there, its screen. The header names the profile shown, and the footer says so once you switch. `/settings`, `/model`, `/contacts` and the
-  rest are of the profile shown. `ouro` opens on the first profile, `ouro --profile Luna` on Luna.
+  you typed there, its screen. The name in the header morphs into the new profile's name in a short wave of
+  dots; another switch continues from what is on screen. The footer says which profile is shown. `/settings`,
+  `/model`, `/contacts` and the rest are of the profile shown. `ouro` opens on the first profile,
+  `ouro --profile Luna` on Luna.
 - **The command line names one.** `ouro --profile PROFILE COMMAND` runs a command for the profile that
   `PROFILE` names: its ID, the start of its ID that no other one has, or its name, whatever the case of its
   letters (`--profile=PROFILE` too). While there are several, a command that is about one of them fails
@@ -318,9 +324,10 @@ restarted: an answer on its way is stopped; the [sessions](#sessions) are kept.
 It needs `git` and `make`; sources and build live in `~/.config/ouroboros/update/`.
 
 Your agent has the tool `rebuild` for the other direction: it builds the checkout the binary was built from
-(`make install` records it) with its files as they are now, committed or not, and runs `make test` there. Only
-when the build and every test pass, the binary is replaced; otherwise nothing is installed and the agent gets
-the end of the output. That is how a change your agent made to the plugins of ouro
+(`make install` records it) with its files as they are now, committed or not. Only
+when the build passes, the binary is replaced; otherwise nothing is installed and the agent gets
+the end of the output. It runs no tests, so that a build is quick: the agent runs those it needs itself.
+That is how a change your agent made to the plugins of ouro
 with its tools for files takes effect. The tool runs in the node, which cannot stop itself while the answer is
 on its way. So the node starts anew with the new build once the agent has answered and no other answer is on
 its way; it takes no new message until then. It hands over to the new build in the same process: the lock on
@@ -328,53 +335,19 @@ its way; it takes no new message until then. It hands over to the new build in t
 connects meanwhile waits until the new node answers. The new node finds the [sessions](#sessions) in the archive,
 and what the agent remembers of them. The terminal UI starts anew as
 well, on the same terminal and without the splash, and shows the same conversation. The tool is for you only:
-a peer is refused even if `a2a` lists it. Take
+a peer is refused even if `a2a` lists it. An agent that has it tells you at the end of an answer where ouro
+held it back, by a tool it lacks or one that is slow or misleading, and what it would change: it proposes the
+change, and makes it only when you ask for it. Take
 `rebuild` out of `h2a` if your agent should not build what it wrote. A binary installed by `ouro update` keeps
 the checkout of the one it replaced.
 
-**`rebuild` builds in a sandbox.** What the agent wrote runs when the tests run, so the build has two steps:
-
-1. **Download, with network, by the frame.** `go mod download` fetches exactly the modules `go.mod` and
-   `go.sum` name, and Go checks every one against `go.sum`. Nothing of the checkout runs in this step.
-2. **Build and test, without network, in the sandbox.** `make install` and `make test` run there with the
-   modules from step 1. They may listen and connect on the loopback interface (the tests start nodes there)
-   and nothing beyond it, they cannot connect to a socket of the file system (such as that of Docker), and they
-   write only to a temporary directory below `update/`, to `update/stage` and to the build cache of Go. The
-   binary is built in the temporary directory, not in the checkout. Everything they start is in the same
-   sandbox.
-
-Both steps run the Go that `rebuild` finds first in `PATH`, in `OURO_GO_DIR` or `~/.local/go`, or in
-`/usr/local/go`, in an environment the frame fixes: `GOFLAGS=-mod=readonly`, `GOENV=off` (no file of
-`go env`), `GOWORK=off` (no `go.work`, also not above the checkout), `GOTOOLCHAIN=local` (no other
+**`rebuild` builds as you**, with `make install`: with network, and without a sandbox. The binary is built
+in `update/stage`, not in the checkout. It runs the Go that it finds first in `PATH`, in `OURO_GO_DIR` or
+`~/.local/go`, or in `/usr/local/go`, in an environment the frame fixes: `GOFLAGS=-mod=readonly`, `GOENV=off`
+(no file of `go env`), `GOWORK=off` (no `go.work`, also not above the checkout), `GOTOOLCHAIN=local` (no other
 toolchain; the Go found has to be as new as `go.mod` asks), `GOVCS=*:off` (modules only from the proxy, no
-`git`) and no `GOROOT`; in step 2 also `GOPROXY=off`. `GOPROXY`, `GOPRIVATE` and the like of the environment
-ouro was started in hold for step 1: they are yours.
-
-| System | Sandbox |
-|---|---|
-| macOS | `sandbox-exec` with a profile that refuses the network beyond localhost, sockets of the file system and writing elsewhere |
-| Linux | [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap` in `/usr/bin` or `/bin`, the package `bubblewrap`): the file system read only but for the three directories, a `/dev` of its own, a network namespace of its own with the loopback interface alone, and a filter of seccomp that refuses sockets of the family `AF_UNIX` and `io_uring` |
-
-On Linux, bubblewrap is the one way that works where unprivileged user namespaces are confined, as on Ubuntu
-24.04 and later, where its profile of AppArmor allows them; Debian, Fedora and Arch allow them anyway.
-Landlock (Linux 5.13 and later) is no sandbox for this on its own: it limits TCP by port, not by address, so
-the loopback interface cannot be told from the network, and it does not limit connecting to a socket of the
-file system.
-
-**Without a sandbox** (bubblewrap is missing or cannot run), `rebuild` builds nothing and tells the agent
-why. You can let it build without a sandbox, with network, with `"rebuild_without_sandbox": true`; this
-holds wherever there is a sandbox too. With `"rebuild_without_tests": true` it installs a build once it
-builds, without running `make test`. Both are switches of the agents in `/settings`, and the output of a
-build starts with a warning for each that is on. Your agent sees them with `get_config` and may propose
-them (say "let rebuild run without the tests and without a sandbox"), but a proposal changes nothing until
-you accept it in `/pending`. The tools for files never write `config.json`.
-
-When something fails in the sandbox and its output says that something was not permitted, that a file system
-is read only or that the network is unreachable, the agent is told that the sandbox refused it, and that
-trying again does not help.
-
-Sandboxes do not nest: in a process that runs in one, `rebuild` finds none. The tests of ouro that need one
-are skipped there, so `make test` passes in the sandbox too.
+`git`) and no `GOROOT`. `GOPROXY`, `GOPRIVATE` and the like of the environment ouro was started in hold: they
+are yours.
 
 Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:11434/v1` (Ollama, no key),
 `http://localhost:1234/v1` (LM Studio), `https://openrouter.ai/api/v1`.
@@ -408,8 +381,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
 `history_sessions`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
-`withdraw_proposal`), one that runs commands ([`bash`](#commands)) and one that builds and installs its own
-source ([`rebuild`](#updates)). It uses them in **scripts**: the LLM is
+`withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that builds and installs its own
+source ([`rebuild`](#updates)) and one that asks you a question (`user_question`, see below). It uses them in **scripts**: the LLM is
 offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
 Which of them it may use depends on who it is talking to, and is set in `config.json`. This is what the
 setup writes:
@@ -491,7 +464,7 @@ Three things limit a tool for files, and the first that speaks wins:
      `plugin.Owner` to a plugin.
    - The Go that [`rebuild`](#updates) builds with is read and never changed, and no `go` is put where it looks
      for one: the installation of the `go` it finds, a file `go` in every directory of `PATH`, `OURO_GO_DIR` or
-     `~/.local/go`, and `/usr/local/go`. Step 1 of `rebuild` runs that `go` with network.
+     `~/.local/go`, and `/usr/local/go`. `rebuild` runs that `go` with network.
    - `/` and your home directory are never deleted.
 2. **`protected`**: paths no tool for files touches, for you and for peers. The default holds the usual places
    of keys and credentials and nothing else: profiles of browsers, files like `.env` and whatever else is
@@ -516,10 +489,9 @@ What these tools do not protect: the running binary (it is replaced by `ouro upd
 file), and files your agent reaches in other ways, of which there are none today.
 
 **Known risk.** The rules above hold for the tools for files of the binary that runs. With `write` and
-[`rebuild`](#updates) your agent can change a plugin and install the result. The build and its tests run in a
-sandbox without network, but the build that is installed runs as you, with whatever the changed plugin does:
-the core it could not edit no longer limits it, and neither does the sandbox. The tests are a check that the
-build works, not that it is harmless.
+[`rebuild`](#updates) your agent can change a plugin and install the result. The build runs as you, with
+network, and so does the build that is installed, with whatever the changed plugin does: the core it could not
+edit no longer limits it. Nothing checks that a build is harmless, or that it works.
 
 ### Commands
 
@@ -535,7 +507,7 @@ than 0 is a result, not an error. Every call starts anew: `cd` and variables do 
 | input | none | it reads nothing, as from `/dev/null` |
 | environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `TZ` and the variables of Go (`GOPATH`, `GOROOT`, `GOCACHE`, `GOMODCACHE`, `GOPROXY`, `GOPRIVATE`, `GOFLAGS`, `GOTOOLCHAIN`), and those named in `env` | the rest of the environment of the node, its keys among it, is not passed on |
 
-**A command runs in a sandbox**, the [one of `rebuild`](#updates), with the rules of the
+**A command runs in a sandbox**, with the rules of the
 [tools for files](#files) as far as a sandbox can hold them. The guard never sees the paths of a command,
 so the system holds them for every process it starts:
 
@@ -545,11 +517,22 @@ so the system holds them for every process it starts:
   core and what decides how it is built are read and never written, and what of them is missing is not
   created. A symbolic link among them counts as itself and as where it leads.
 - The rest is writable, or with `allow` only what it names. Reading is not limited beyond the first point.
-- No other host, unless `network` is set: the loopback interface alone, as for `rebuild`. With network,
+- No other host, unless `network` is set: the loopback interface alone. With network,
   still no socket of the file system, such as that of Docker; on macOS but the one that resolves names.
 
 What the sandbox refused does not pass when tried again; the result says so when the output says that
 something was not permitted, on a read-only file system or without network.
+
+| System | Sandbox |
+|---|---|
+| macOS | `sandbox-exec` with a profile that refuses the network beyond localhost, sockets of the file system and writing elsewhere |
+| Linux | [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap` in `/usr/bin` or `/bin`, the package `bubblewrap`): the file system read only but for what a command may write, a `/dev` of its own, a network namespace of its own with the loopback interface alone, and a filter of seccomp that refuses sockets of the family `AF_UNIX` and `io_uring` |
+
+On Linux, bubblewrap is the one way that works where unprivileged user namespaces are confined, as on Ubuntu
+24.04 and later, where its profile of AppArmor allows them; Debian, Fedora and Arch allow them anyway.
+Landlock (Linux 5.13 and later) is no sandbox for this on its own: it limits TCP by port, not by address, so
+the loopback interface cannot be told from the network, and it does not limit connecting to a socket of the
+file system.
 
 ```json
 "h2a": ["*", {"tool": "bash", "allow": ["~/projects", "~/Library/Caches/go-build", "~/go"], "network": true, "env": ["GITHUB_TOKEN"]}]
@@ -736,7 +719,7 @@ owner's alone, like every command of the UI: no agent and no peer reaches it.
 | Category | Shows | Changes |
 |---|---|---|
 | The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node | the name and the description (empty is the default); the accesses in `/setup`, the model in `/model`, both opened from here |
-| The agents | the context provider and those this build has; whether `rebuild` may build without a sandbox, and whether there is one; whether `bash` runs its commands without one | all three |
+| The agents | the context provider and those this build has; whether `bash` runs its commands without a sandbox, and whether there is one | both |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with its settings | all tools, each tool, its settings |
 | Tools for peers | `a2a`, the same; a tool for your agent alone is shown as such and cannot be allowed | the same |
@@ -752,8 +735,7 @@ categories. A text, like the name, a path or the settings of a tool (a JSON obje
   build does not have, a plugin turned off that another one needs, a description of more than one line or
   300 characters. What fails changes nothing, and the footer says why.
 - **The footer says from when a change holds.** The name, the tools, the paths and the context provider hold
-  from the next message, for you and for peers. The description holds for the next one who reads the card. Whether `rebuild` may build without a sandbox holds for the
-  next rebuild, whether `bash` runs without one for its next command. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
+  from the next message, for you and for peers. The description holds for the next one who reads the card. Whether `bash` runs without a sandbox holds for its next command. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
   `/start` the node. Until then its line says that it runs, or that it does not.
 - **All tools.** Turning a tool off while all tools are allowed lists every other tool by its name instead
   of `*`, so that nothing else changes; from then on a tool of a plugin turned on later is not allowed by
@@ -800,9 +782,21 @@ it is a model of another provider, see [Providers and accesses](#providers-and-a
 
 | Tool | Does |
 |---|---|
-| `get_config()` | returns the configuration as JSON: ID, name, description, model, `provider` (what the access in use is called) and `tools`. The key of the node and what the accesses sign in with are not in it, and neither is the ID of the access. What is not set shows with the default that holds (`description`, `h2a`, `a2a`, `protected`), and so do the switches of `rebuild` and `bash` |
-| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a`, `tools.protected`, `rebuild_without_sandbox` or `rebuild_without_tests`, with a sentence on why. The proposal waits for you, and the agent is told its id |
+| `get_config()` | returns the configuration as JSON: ID, name, description, model, `provider` (what the access in use is called) and `tools`. The key of the node and what the accesses sign in with are not in it, and neither is the ID of the access. What is not set shows with the default that holds (`description`, `h2a`, `a2a`, `protected`), and so does the switch of `bash` |
+| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you, and the agent is told its id |
 | `withdraw_proposal(id?)` | takes back one of the agent's own proposals before you decided on it: with `id` the one it names, without an id it lists what waits, with their ids. Nothing is changed by it, and what you decided on is out of reach |
+| `user_question(question, options?, recommended?)` | asks you `question` and waits for your answer, which it returns: with 2 to 6 `options` to choose from, one of them `recommended` if the agent has a preference, or without any, for you to write it |
+
+**The agent can ask you on the way.** When it cannot go on without a decision of yours, it asks with
+`user_question` instead of guessing or ending its answer with the question, as its prompt tells it: the
+question shows in the conversation, and where the input is you
+choose an answer with the arrow keys and enter, the one the agent recommends selected. A question
+without answers to choose from shows the input alone. The last row,
+"Chat about it", is the input: select it, or just start typing, and what you send is the answer in your own
+words. The agent waits as long as its script may run (10 minutes), and esc stops the answer as ever. A
+question in a conversation that is not shown is told in the footer. Where nobody is shown the question,
+as with `ouro chat "msg"`, the agent is told so and goes on with what it thinks best. Take `user_question`
+out of `tools.h2a` if you do not want to be asked.
 
 **Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a
 proposal changes nothing: it waits among the requests in the terminal UI (`/pending`), where you see the field, what
@@ -1270,7 +1264,7 @@ internal/credentials the accesses of the node, in credentials.json: what it sign
 internal/chatgpt     the provider that signs in with ChatGPT: the login, its tokens, the Responses API (+ chatgpttest fake)
 internal/node        the local node: Server runs it, Local controls the background one
 internal/session     the sessions of the owner: the Service the node runs them in, and the client of its socket
-internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, get_config, propose_config, withdraw_proposal as functions of its scripts; what the owner's agent does goes to the log
+internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, user_question, get_config, propose_config, withdraw_proposal as functions of its scripts; what the owner's agent does goes to the log
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
@@ -1286,7 +1280,7 @@ internal/diagnosis   why answers to peers failed, by category, for the agent to 
 internal/history     the archive of every conversation, and how the agent searches and reads it
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
-internal/update      self-update: from the newest main, or from the checkout as it is, in the sandbox
+internal/update      self-update: from the newest main, or from the checkout as it is
 internal/sandbox     runs a command writing only where it may, without network unless allowed: sandbox-exec, bubblewrap
 scripts, hooks       the local quality checks and the pre-commit hook, see [Checks](#checks)
 ```
@@ -1657,7 +1651,7 @@ diagnostics of the last answer.
 ## Checks
 
 The quality checks run on your machine: there is no CI. One command runs all of them, and a Git hook
-runs them before every commit.
+runs them before every commit, all but the mutation tests.
 
 ```sh
 make check   # everything below, on the working tree
@@ -1742,8 +1736,10 @@ Scope and limits:
   expression has none, so its mutants are always *not covered*, whatever the tests do. Such a mutant is
   applied by hand to a copy of the package, a test that kills it is made sure of, and it is listed in
   `mutation-uncoverable.txt` as `file:line:column MUTATION  # reason`: it is then reported as accepted.
-- **Packages that send signals to process IDs are not mutated**, today `internal/daemon` and `cmd/ouro` (its
-  test kills the node). A mutant there lets a PID of 0 or -1 through, and the code under test then signals its
+  So is code of one system alone, like `sandbox_linux.go`, on the others, where it is not built: it is listed
+  for the runs there, and a run on its own system tries these mutants and does not call their lines stale.
+- **Packages that send signals to process IDs are not mutated**, today `internal/daemon`,
+  `internal/plugins/shell` and `cmd/ouro` (its test kills the node). A mutant there lets a PID of 0 or -1 through, and the code under test then signals its
   own process group (that happened when the checks were set up: the run terminated itself) or every process
   you own. `scripts/mutation.sh` finds these packages by the calls (`syscall.Kill`, `unix.Kill`,
   `os.FindProcess`), in code and tests, and names them in the report. Such code needs its assertions reviewed
@@ -1796,13 +1792,14 @@ that run it, so it changes along with the branch you are on.
   there: unstaged changes and untracked files play no part, and neither your working tree nor the index is
   changed. Nothing is formatted, fixed or staged for you.
 - **It runs** `fmt-check`, `lint`, `test` and `cover-check`, and rejects the commit when one fails, with the
-  findings and the command to run that check alone. Then it runs the mutation tests **for the packages whose
-  Go files are staged**, for at most 5 minutes, and prints the survivors without rejecting the commit.
+  findings and the command to run that check alone. The mutation tests it leaves out. With
+  `OURO_HOOK_MUTATION=on` it runs them too, **for the packages whose Go files are staged**, for at most
+  5 minutes, and prints the survivors without rejecting the commit.
 - A commit that stages no Go code and nothing of the checks themselves (only `README.md`, say) is not checked.
 
 | Variable | Effect |
 |---|---|
-| `OURO_HOOK_MUTATION=off` | no mutation tests in the hook |
+| `OURO_HOOK_MUTATION=on` | the mutation tests in the hook too |
 | `OURO_HOOK_MUTATION_TIME=600` | stop them after that many seconds instead of 300; the packages left over are named |
 | `OURO_GO_DIR=/opt/go` | where Go is, if not in `PATH` or `~/.local/go` |
 
@@ -1821,15 +1818,16 @@ the second. With every core busy, `make test` takes 75 to 105 s instead of 34 s.
 | `make mutation`, whole module | 24 min |
 | `make mutation PKGS=…`, one package | under 1 min for the small ones; `internal/config` 75 s, `internal/discovery` 90 s, `internal/a2a` 3.5 min; `internal/tui` more than 3 min |
 | `make check` | 25 min |
-| the hook, without the mutation tests | 1.5 min |
-| the hook, with them | 5 s more for a small package, never more than 5 min more |
+| the hook | 1.5 min |
+| the hook, with the mutation tests | 5 s more for a small package, never more than 5 min more |
 
 The hook takes longer than `make test` and `make cover-check` together because it runs them on a copy of the
 staged files, where no earlier test result can be reused.
 
 Mutation tests are slow by nature: every mutant is compiled and tested on its own, about 1000 of them. That
-is why the hook only mutates the packages a commit changes and stops after 5 minutes, and why the whole
-module is left to `make mutation` and `make check`. A mutant that makes its tests hang costs up to 90 s.
+is why the hook leaves them out unless it is asked for them, why it then only mutates the packages a commit
+changes and stops after 5 minutes, and why the whole module is left to `make mutation` and `make check`. A
+mutant that makes its tests hang costs up to 90 s.
 
 ### Troubleshooting
 
@@ -1848,7 +1846,7 @@ module is left to `make mutation` and `make check`. A mutant that makes its test
 | a test fails with `node did not start` | should not happen any more: a node built with the race detector needs 0.7 s to come up and several seconds on a busy machine, so starting waits up to a minute, and ends at once when the process dies. If it does, the log named in the message says why the node ended |
 | a test fails only while the machine is busy | a wait in that test is too short; say which one. The checks were run with every core busy without a failure, but only a few times |
 | mutants are all `TIMED OUT` | the machine is busy: run them again when it is not. A mutant gets 90 s, or three times what the unchanged tests take (`mutant_time` in `scripts/mutation.sh`) |
-| the mutation tests take too long before a commit | `OURO_HOOK_MUTATION=off git commit …`, then `make mutation PKGS=…` later |
+| the mutation tests take too long before a commit | commit without `OURO_HOOK_MUTATION=on`, then `make mutation PKGS=…` later |
 | it has to go in now | `git commit --no-verify`, and run `make check` afterwards |
 
 ## License

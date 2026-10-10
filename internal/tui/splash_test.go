@@ -44,69 +44,62 @@ func golden(t *testing.T, name, got string) {
 var splashMoments = []time.Duration{
 	0,
 	fadeIn / 2,
-	fadeIn,
 	titleAt - scrambleFor,
+	fadeIn,
 	titleAt + letterGap/2,
-	growDuration,
-	biteAt - time.Millisecond,
-	biteAt,
-	biteAt + flashDuration/2,
-	1700 * time.Millisecond,
+	titleAt + letterGap*9,
 	taglineAt,
 	taglineAt + typeSpeed*5,
-	biteAt + sparkLife - time.Millisecond,
-	biteAt + sparkLife,
+	biteAt - time.Millisecond,
+	biteAt,
 	shineAt + shineDuration/2,
-	2900 * time.Millisecond,
+	2200 * time.Millisecond,
 	splashDuration - fadeOut/2,
 	splashDuration,
 }
 
 // The splash is drawn the same as it was looked at, frame by frame: on a
-// screen just large enough for all of it, on one too narrow for the big
-// title, on one too low for the hint, and on one smaller than the logo,
-// where the sparks and the snake run over the edges.
+// screen large enough for the big title, on one too narrow for it, on one
+// just high enough for it, on one too low for the hint, and on one narrower
+// than the plain title.
 func TestGoldenSplashFrames(t *testing.T) {
 	for _, s := range []struct {
 		name string
 		w, h int
 	}{
-		{"splash-50x24", 50, 24},
-		{"splash-40x24", 40, 24},
-		{"splash-70x21", 70, 21},
-		{"splash-20x8", 20, 8},
+		{"splash-48x23", 48, 23},
+		{"splash-47x21", 47, 21},
+		{"splash-48x7", 48, 7},
+		{"splash-48x4", 48, 4},
+		{"splash-6x4", 6, 4},
 	} {
 		var b strings.Builder
 		for _, at := range splashMoments {
-			fmt.Fprintf(&b, "--- %v\n%s\n", at, drawSplash(s.w, s.h, at, at, false))
+			fmt.Fprintf(&b, "--- %v\n%s\n", at, drawSplash(s.w, s.h, at, false))
 		}
 		golden(t, s.name, b.String())
 	}
 }
 
-// The stars are where the sky time puts them, whatever the time of the splash.
-func TestGoldenSplashSky(t *testing.T) {
-	golden(t, "splash-sky", drawSplash(60, 26, biteAt, 7*time.Second, false))
-}
-
-// The big title needs a screen 48 columns wide and 24 rows high; on a
-// smaller one the title is in plain letters.
+// The big title needs a screen 48 columns wide and 7 rows high; on a smaller
+// one the title is in plain letters. It is in the middle of the screen.
 func TestSplashLayoutFitsTheScreen(t *testing.T) {
 	for _, c := range []struct {
-		w, h                     int
-		big                      bool
-		letter, left, top, block int
+		w, h               int
+		big                bool
+		letter, top, block int
 	}{
-		{48, 24, true, bigLetter, 9, 1, 22},
-		{47, 24, false, 1, 8, 2, 20},
-		{48, 23, false, 1, 9, 1, 20},
-		{100, 30, true, bigLetter, 35, 4, 22},
-		{20, 8, false, 1, -5, -6, 20},
+		{48, 23, true, bigLetter, 9, 5},
+		{47, 21, false, 1, 9, 3},
+		{48, 7, true, bigLetter, 1, 5},
+		{48, 6, false, 1, 1, 3},
+		{100, 30, true, bigLetter, 12, 5},
+		{6, 2, false, 1, 0, 3},
 	} {
-		title, letter, left, top, block := splashLayout(c.w, c.h)
-		if big := len(title) == len(bigTitle); big != c.big || letter != c.letter || left != c.left || top != c.top || block != c.block {
-			t.Errorf("%dx%d: big %v, letter %d, left %d, top %d, block %d; want %v, %d, %d, %d, %d",
-				c.w, c.h, big, letter, left, top, block, c.big, c.letter, c.left, c.top, c.block)
+		title, letter, top, block := splashLayout(c.w, c.h)
+		if big := len(title) == len(bigTitle); big != c.big || letter != c.letter || top != c.top || block != c.block {
+			t.Errorf("%dx%d: big %v, letter %d, top %d, block %d; want %v, %d, %d, %d",
+				c.w, c.h, big, letter, top, block, c.big, c.letter, c.top, c.block)
 		}
 	}
 }
@@ -114,8 +107,8 @@ func TestSplashLayoutFitsTheScreen(t *testing.T) {
 // The hint to skip is on the last row when there is a free row between it
 // and the tagline.
 func TestSplashHintNeedsARowOfItsOwn(t *testing.T) {
-	for h, want := range map[int]bool{21: false, 22: true} {
-		lines := strings.Split(ansi.Strip(drawSplash(40, h, fadeIn, fadeIn, false)), "\n")
+	for h, want := range map[int]bool{4: false, 5: true, 20: true, 21: true} {
+		lines := strings.Split(ansi.Strip(drawSplash(40, h, fadeIn, false)), "\n")
 		if got := strings.Contains(lines[h-1], skipHint); got != want {
 			t.Errorf("40x%d: hint shown %v, want %v:\n%s", h, got, want, strings.Join(lines, "\n"))
 		}

@@ -331,14 +331,13 @@ func fades(t *testing.T, m *Model, shown []string, port string) string {
 
 // The history fades out over two lines at an edge of the box where more of it
 // is beyond: at the bottom only at the top, scrolled up at both edges, at the
-// top only at the bottom, and the lines between stay as they are. The
-// commands offered for what is typed take the rows at the top of the history,
-// so that more of it is above then, also at its top.
+// top only at the bottom, and the lines between stay as they are. Behind the
+// panel of the commands offered for what is typed all of the chat fades.
 func TestHistoryFadesAtItsEdges(t *testing.T) {
 	m, _ := newModel(t)
 	fill(m, 80)
 	faded := func() string {
-		return fades(t, m, strings.Split(m.chatView(), "\n")[2:], m.history.View()) // below the border and the title
+		return fades(t, m, strings.Split(m.chatView(), "\n")[1:], m.history.View()) // below the border
 	}
 	n := m.history.Height()
 	if got, want := faded(), "ed"+strings.Repeat(".", n-2); got != want {
@@ -353,10 +352,15 @@ func TestHistoryFadesAtItsEdges(t *testing.T) {
 		t.Fatalf("at the top only the bottom should fade: %s, want %s", got, want)
 	}
 	press(m, "/", "s")
-	k := len(suggested(m))
-	shown := strings.Join(strings.Split(m.history.View(), "\n")[k:], "\n")
-	if got, want := fades(t, m, strings.Split(m.chatView(), "\n")[2:], shown), "ed"+strings.Repeat(".", n-k-4)+"de"; k == 0 || got != want {
-		t.Fatalf("with %d commands offered at the top both edges should fade: %s, want %s", k, got, want)
+	edge := lipgloss.NewStyle().Foreground(fadeColor(m.light))
+	top := m.panelTop(m.panel())
+	if top != n-3 {
+		t.Fatalf("the panel of five commands begins at row %d of a history of %d", top, n)
+	}
+	for i, line := range strings.Split(m.chatView(), "\n")[:top] {
+		if line != edge.Render(ansi.Strip(line)) {
+			t.Fatalf("row %d behind the panel should fade: %q", i, line)
+		}
 	}
 	if got := m.fadeEdges([]string{"a", "b", "c"}, true, true); !slices.Equal(got, []string{"a", "b", "c"}) {
 		t.Fatalf("a history of three lines should not fade: %q", got)
@@ -375,5 +379,58 @@ func TestFaintKeepsColors(t *testing.T) {
 	want := "\x1b[2ma\x1b[31m\x1b[2mb\x1b[m\x1b[2mc\x1b[22m"
 	if got != want {
 		t.Fatalf("faint = %q, want %q", got, want)
+	}
+}
+
+// The status of the node leaves a conversation where it is scrolled to: only
+// the empty chat is drawn anew for it.
+func TestStatusKeepsTheHistoryInPlace(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 80)
+	scroll(t, m, press(m, "pgup"))
+	at := m.history.YOffset()
+	m.Update(m.refreshStatus())
+	if m.history.YOffset() != at || m.history.AtBottom() {
+		t.Fatalf("the history went from %d to %d", at, m.history.YOffset())
+	}
+}
+
+// A glide takes longer the further it goes, up or down, but never longer
+// than glideMost.
+func TestGlideTakesLongerForALongerWay(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 80)
+	for _, tt := range []struct {
+		from, to int
+		want     time.Duration
+	}{
+		{20, 23, 105 * time.Millisecond},
+		{20, 17, 105 * time.Millisecond},
+		{0, 100, 240 * time.Millisecond},
+		{100, 0, 240 * time.Millisecond},
+	} {
+		m.glide = nil
+		m.history.SetYOffset(tt.from)
+		m.glideTo(&m.history, tt.to)
+		if m.glide == nil || m.glide.duration != tt.want {
+			t.Errorf("from %d to %d: %+v, want %s", tt.from, tt.to, m.glide, tt.want)
+		}
+	}
+}
+
+// A glide is fast at first and comes slowly to rest: after half its time
+// seven eighths of the way are behind it.
+func TestGlideEasesOutOverItsTime(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 80)
+	start := time.Now()
+	for _, tt := range []struct {
+		after time.Duration
+		at    int
+	}{{0, 0}, {60 * time.Millisecond, 46}, {120 * time.Millisecond, 70}, {180 * time.Millisecond, 79}, {240 * time.Millisecond, 80}} {
+		m.glide = &glide{view: &m.history, from: 0, target: 80, start: start, duration: 240 * time.Millisecond}
+		if more := m.glideOn(start.Add(tt.after)); m.history.YOffset() != tt.at || more != (tt.after < 240*time.Millisecond) {
+			t.Errorf("after %s: at line %d, want %d; more frames: %v", tt.after, m.history.YOffset(), tt.at, more)
+		}
 	}
 }

@@ -47,8 +47,7 @@ type Setup interface {
 
 // The setup is a scene like the splash. The snake lies behind the dialog, a
 // little more curled up with every step, until its tail is in its mouth.
-// Then it turns once, shrinks to the logo and the splash takes over: the jaws
-// snap shut on the tail.
+// Then it turns once, shrinks to the name and the splash takes over.
 const (
 	curlFrom     = 255 * math.Pi / 180 // how far the body is curled up at the welcome
 	curlLast     = 328 * math.Pi / 180 // at the last step: the tail is just short of the mouth
@@ -611,7 +610,7 @@ func (m *Model) setupSaved(msg savedMsg) tea.Cmd {
 }
 
 // frame advances the scene to the time at. When the snake has turned and
-// shrunk to the logo, the splash takes over where the jaws snap shut.
+// shrunk to the name, the splash takes over.
 func (m *Model) frame(at time.Time) {
 	o := m.onboard
 	o.at = at
@@ -622,7 +621,6 @@ func (m *Model) frame(at time.Time) {
 	m.splash.show = true
 	m.splash.start = at.Add(-biteAt)
 	m.splash.elapsed = biteAt
-	m.splash.skyShift = at.Sub(o.opened) - biteAt
 }
 
 // closeSetup leaves the setup for the chat.
@@ -650,7 +648,7 @@ func extent() (up, down float64) {
 }
 
 // pose is where the snake lies at the time of the last frame: behind the
-// dialog, and once the setup is saved on its way to the logo of the splash.
+// dialog, and once the setup is saved on its way to the name of the splash.
 func (o *onboarding) pose(w, h int) (p pose, bright float64) {
 	s := scale(w, h)
 	// The center of the ring once curled up, so that the snake is in the
@@ -662,11 +660,13 @@ func (o *onboarding) pose(w, h int) (p pose, bright float64) {
 	}
 	f := ramp(o.at.Sub(o.saved), turnAt, turnDuration)
 	f = f * f * (3 - 2*f) // ease in and out
-	_, _, left, top, _ := splashLayout(w, h)
+	// It shrinks to the name of the splash.
+	_, _, top, block := splashLayout(w, h)
+	y := float64(top*4 + block*2)
 	p.turn = 2 * math.Pi * f
 	p.scale = s + (1-s)*f
-	p.x += (float64(left*2) + ringX - p.x) * f
-	p.y += (float64(top*4) + ringY - p.y) * f
+	p.x += (float64(w) - p.x) * f
+	p.y += (y - p.y) * f
 	return p, setupDim + (1-setupDim)*f
 }
 

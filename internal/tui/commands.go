@@ -11,7 +11,7 @@ import (
 // A command is what the owner types into the message input with a slash in
 // front, like /new. It runs in the UI and never goes to the agent: only the
 // owner runs commands. Everything the UI does is a command; keys only move
-// around, scroll and quit (ctrl+c).
+// around, scroll and quit (ctrl+c): /keys and ctrl+k list them.
 type command struct {
 	name string // without the slash
 	help string
@@ -32,6 +32,7 @@ var own = []command{
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
 	{"pending", "decide on what is pending: connection requests and proposals", (*Model).openRequests},
+	{"keys", "list the keys (ctrl+k does too)", (*Model).openKeys},
 	{"help", "list the commands", func(m *Model) tea.Cmd { m.screen = screenHelp; return nil }},
 	{"quit", "quit (ctrl+c does too)", (*Model).leave},
 }
@@ -190,7 +191,6 @@ func (m *Model) toggleDebug() tea.Cmd {
 
 // helpView lists the commands.
 func (m *Model) helpView() string {
-	w, h := m.width, m.bodyHeight()
 	width := 0
 	for _, c := range m.commands {
 		width = max(width, len(c.name))
@@ -200,7 +200,7 @@ func (m *Model) helpView() string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(accent).Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help))
 	}
 	lines = append(lines, "", mutedStyle.Render("Type them into the message input. A message that starts with a slash takes two: //etc"))
-	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
+	return m.dialog(lines)
 }
 
 // choices shows names in a row, the one at selected marked.

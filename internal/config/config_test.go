@@ -397,14 +397,13 @@ func TestFiles(t *testing.T) {
 // A field is read as it applies, with the default that holds for what is not
 // set, and written from JSON of its type.
 func TestFields(t *testing.T) {
-	if got := Fields(); !reflect.DeepEqual(got, []string{"name", "description", "model", "tools.h2a", "tools.a2a", "tools.protected", "rebuild_without_sandbox", "rebuild_without_tests"}) {
+	if got := Fields(); !reflect.DeepEqual(got, []string{"name", "description", "model", "tools.h2a", "tools.a2a", "tools.protected"}) {
 		t.Fatalf("the fields: %v", got)
 	}
 	c := Config{Name: "alpha", Model: "gpt", BaseURL: "http://x", APIKey: "sk", PrivateKey: "key"}
 	protected, _ := json.Marshal(DefaultProtected())
 	for path, want := range map[string]string{
 		"name": `"alpha"`, "description": `"Ouroboros instance named alpha"`, "model": `"gpt"`, "tools.h2a": `["*"]`, "tools.a2a": `[]`, "tools.protected": string(protected),
-		"rebuild_without_sandbox": `false`, "rebuild_without_tests": `false`,
 	} {
 		if got, err := c.Field(path); err != nil || string(got) != want {
 			t.Errorf("%s = %s, %v; want %s", path, got, err, want)
@@ -428,8 +427,6 @@ func TestFields(t *testing.T) {
 		{"tools.a2a", `[]`, `[]`},
 		{"tools.protected", `["~/x"]`, `["~/x"]`},
 		{"tools.protected", `[]`, `[]`},
-		{"rebuild_without_sandbox", `true`, `true`},
-		{"rebuild_without_tests", `true`, `true`},
 	} {
 		changed := c
 		if err := changed.SetField(tt.path, json.RawMessage(tt.value)); err != nil {
@@ -459,16 +456,10 @@ func TestFields(t *testing.T) {
 	if err := changed.SetField("name", json.RawMessage(`"x"`)); err != nil || changed.Tools == nil || len(*changed.Tools.Protected) != 0 {
 		t.Errorf("the tools are gone: %+v, %v", changed.Tools, err)
 	}
-	// A node without tools gets none for a new name, nor for a switch.
+	// A node without tools gets none for a new name.
 	plain := c
 	if err := plain.SetField("name", json.RawMessage(`"x"`)); err != nil || plain.Tools != nil {
 		t.Errorf("got %+v, %v", plain.Tools, err)
-	}
-	if err := plain.SetField(FieldUntested, json.RawMessage(`true`)); err != nil || plain.Tools != nil || !plain.RebuildWithoutTests || plain.RebuildWithoutSandbox {
-		t.Errorf("got %+v, %v", plain, err)
-	}
-	if err := plain.SetField(FieldUntested, json.RawMessage(`false`)); err != nil || plain.RebuildWithoutTests {
-		t.Errorf("switched off: %+v, %v", plain, err)
 	}
 
 	for _, tt := range []struct{ path, value, want string }{
@@ -489,10 +480,10 @@ func TestFields(t *testing.T) {
 		{"api_key", `"mine"`, "api_key is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"base_url", `"http://evil"`, "base_url is changed by the owner alone, with ouro start --setup: no proposal changes it"},
 		{"access", `"other"`, "access is changed by the owner alone, with ouro start --setup: no proposal changes it"},
-		{"tools", `{}`, `the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected, rebuild_without_sandbox, rebuild_without_tests`},
-		{"", `1`, `the configuration has no field "" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected, rebuild_without_sandbox, rebuild_without_tests`},
-		{FieldUnsandboxed, `"yes"`, "rebuild_without_sandbox: json: cannot unmarshal string into Go value of type bool"},
-		{FieldUntested, `1`, "rebuild_without_tests: json: cannot unmarshal number into Go value of type bool"},
+		{"tools", `{}`, `the configuration has no field "tools" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
+		{"", `1`, `the configuration has no field "" that can be proposed: there are name, description, model, tools.h2a, tools.a2a, tools.protected`},
+		{"rebuild_without_sandbox", `true`, `the configuration has no field "rebuild_without_sandbox" that can be proposed`},
+		{"rebuild_without_tests", `true`, `the configuration has no field "rebuild_without_tests" that can be proposed`},
 		{FieldBashUnsandboxed, `true`, "bash_without_sandbox is set by the owner alone, in config.json: no proposal changes it"},
 	} {
 		changed := c
@@ -576,13 +567,13 @@ func TestPublic(t *testing.T) {
 	if !strings.Contains(got, "\n  \"tools\": {\n    \"h2a\": [\n") {
 		t.Fatalf("not written for reading: %s", got)
 	}
-	if !strings.Contains(got, "\n  \"rebuild_without_sandbox\": false,\n  \"rebuild_without_tests\": false,\n  \"bash_without_sandbox\": false\n") {
-		t.Fatalf("whether rebuild may build without a sandbox: %s", got)
+	if !strings.Contains(got, "\n  \"bash_without_sandbox\": false\n") || strings.Contains(got, "rebuild") {
+		t.Fatalf("whether bash may run without a sandbox: %s", got)
 	}
 	c.Tools = &Tools{H2A: Named("read"), A2A: Named("list_peers"), Protected: &[]string{"~/x"}}
-	c.RebuildWithoutSandbox, c.RebuildWithoutTests, c.BashWithoutSandbox = true, true, true
+	c.BashWithoutSandbox = true
 	if got := string(c.Public("")); !strings.Contains(got, `"read"`) || !strings.Contains(got, `"list_peers"`) || !strings.Contains(got, `"~/x"`) || strings.Contains(got, ".ssh") ||
-		!strings.Contains(got, `"rebuild_without_sandbox": true`) || !strings.Contains(got, `"rebuild_without_tests": true`) || !strings.Contains(got, `"bash_without_sandbox": true`) {
+		!strings.Contains(got, `"bash_without_sandbox": true`) {
 		t.Fatalf("what is set: %s", got)
 	}
 }

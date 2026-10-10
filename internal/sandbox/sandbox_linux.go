@@ -121,7 +121,9 @@ type mount struct {
 // a symbolic link, as the mount would go where it leads: the directory above
 // it that exists is mounted read only instead, and what is in it but links
 // writable again, so that nothing new is created there and no link changed.
-// What a link leads to, a policy names besides, see reals.
+// What a link leads to, a policy names besides, see reals. A directory this
+// user cannot change needs none of that, and one like /usr/bin has thousands
+// of entries, each a mount that bubblewrap takes its time for.
 func mounts(p Policy) ([]string, error) {
 	closed := slices.Concat(p.ReadOnly, p.Hidden)
 	var all []mount
@@ -152,6 +154,9 @@ func mounts(p Policy) ([]string, error) {
 			if _, err = os.Lstat(dir); err != nil {
 				dir = filepath.Dir(dir)
 			}
+		}
+		if !changeable(dir) {
+			continue // nothing is created there and no link changed as it is
 		}
 		all = append(all, mount{dir, []string{"--ro-bind", dir, dir}})
 		entries, err := os.ReadDir(dir)
@@ -191,6 +196,16 @@ func mounts(p Policy) ([]string, error) {
 		}
 	}
 	return flags, nil
+}
+
+// changeable reports whether this user can change what is in dir: by
+// writing there, or as its owner, who can make it writable. Tests replace it.
+var changeable = func(dir string) bool {
+	var st unix.Stat_t
+	if err := unix.Stat(dir, &st); err != nil {
+		return true
+	}
+	return int(st.Uid) == os.Geteuid() || unix.Faccessat(unix.AT_FDCWD, dir, unix.W_OK, unix.AT_EACCESS) == nil
 }
 
 // depth is how many directories path is below the root.

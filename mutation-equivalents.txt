@@ -13,60 +13,87 @@
 # behaviour does not belong here: it needs a test.
 
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
-internal/agent/agent.go:796:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
+internal/agent/agent.go:928:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
 internal/kernel/kernel.go:429:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
-internal/update/update.go:118:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
-internal/plugins/files/files.go:227:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
+internal/update/update.go:116:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
+internal/plugins/files/files.go:233:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
 internal/script/script.go:551:26 CONDITIONALS_BOUNDARY  # a heap that did not grow is far from the limit either way: now == start is refused by both forms
 internal/script/script.go:551:47 CONDITIONALS_BOUNDARY  # the heap is sampled every few milliseconds and never stands at exactly the limit
 internal/proposal/proposal.go:128:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
-internal/agent/agent.go:541:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
-internal/agent/agent.go:734:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:739:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:786:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
+internal/agent/agent.go:621:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
+internal/agent/agent.go:845:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:850:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:918:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
 internal/script/script.go:209:19 INVERT_LOGICAL  # what is kept is only given back by a script that neither failed nor gave back what is no data
 internal/script/script.go:458:44 CONDITIONALS_BOUNDARY  # with no room left, the head of 0 bytes of a line adds nothing
 internal/script/script.go:500:8 CONDITIONALS_BOUNDARY  # what the interpreter prints is valid UTF-8, whose first byte begins a character
 internal/script/script.go:675:14 CONDITIONALS_BOUNDARY  # used comes from a clock that only counts up: two sessions never have the same
-internal/agent/agent.go:359:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
-internal/openai/client.go:496:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
-internal/tui/wait.go:41:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
-internal/discovery/discovery.go:245:11 INVERT_LOGICAL  # the system gives every address of an interface as an *net.IPNet, so ok is always true and the mask decides alone
-internal/discovery/discovery.go:245:36 INVERT_LOGICAL  # the system gives an IPv4 address a mask of 4 bytes and an IPv6 address one of 16: both tests always agree
-internal/history/history.go:425:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
-internal/openai/trace.go:145:10 CONDITIONALS_BOUNDARY  # two different messages as JSON objects differ before the end of the shorter: neither is the start of the other
-internal/plugins/files/files.go:547:83 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
-internal/plugins/files/files.go:547:83 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
-internal/plugins/files/files.go:612:4 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
-internal/session/archive.go:107:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/tui/commands.go:140:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
-internal/tui/logo.go:141:19 CONDITIONALS_BOUNDARY  # a pixel exactly reach from the ring line is outside the body (at most 4) and the head (at most 7.4) either way
-internal/tui/logo.go:144:14 CONDITIONALS_BOUNDARY  # with nothing grown, the pixels at u == 0 get a thickness of NaN and stay not solid, as they were
-internal/tui/logo.go:144:23 CONDITIONALS_BOUNDARY  # u comes from atan2 at pixel centers and is never exactly the length of the body
-internal/tui/logo.go:146:31 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the ring line is never exactly the thickness there
-internal/tui/logo.go:148:9 CONDITIONALS_BOUNDARY  # at the tip of the snout (f == 1) the jaws have no width, so the head covers nothing there either way
-internal/tui/logo.go:161:25 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the ring line is never exactly 0.2
-internal/tui/logo.go:162:9 CONDITIONALS_BOUNDARY  # at the tip of the snout (f == 1) the eye is more than 10 pixels away, so nothing changes
-internal/tui/logo.go:164:12 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the eye is never exactly 1.9
-internal/tui/logo.go:165:21 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the eye is never exactly 0.6
-internal/tui/logo.go:186:37 CONDITIONALS_BOUNDARY  # f comes from atan2 at pixel centers and is never exactly 1, the snout
-internal/tui/logo.go:192:9 CONDITIONALS_BOUNDARY  # a cell without dots gets an along of NaN instead of 0, and the along of a cell without dots is never read
+internal/agent/agent.go:436:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
+internal/openai/client.go:499:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
+internal/tui/wait.go:42:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
+internal/discovery/discovery.go:252:11 INVERT_LOGICAL  # the system gives every address of an interface as an *net.IPNet, so ok is always true and the mask decides alone
+internal/discovery/discovery.go:252:36 INVERT_LOGICAL  # the system gives an IPv4 address a mask of 4 bytes and an IPv6 address one of 16: both tests always agree
+internal/history/history.go:438:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
+internal/plugins/files/files.go:553:83 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
+internal/plugins/files/files.go:553:83 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
+internal/plugins/files/files.go:618:4 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
+internal/session/archive.go:120:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/tui/commands.go:141:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
+internal/tui/logo.go:133:19 CONDITIONALS_BOUNDARY  # a pixel exactly reach from the ring line is outside the body (at most 4) and the head (at most 7.4) either way
+internal/tui/logo.go:136:14 CONDITIONALS_BOUNDARY  # with nothing grown, the pixels at u == 0 get a thickness of NaN and stay not solid, as they were
+internal/tui/logo.go:136:23 CONDITIONALS_BOUNDARY  # u comes from atan2 at pixel centers and is never exactly the length of the body
+internal/tui/logo.go:138:31 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the ring line is never exactly the thickness there
+internal/tui/logo.go:140:9 CONDITIONALS_BOUNDARY  # at the tip of the snout (f == 1) the jaws have no width, so the head covers nothing there either way
+internal/tui/logo.go:155:26 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the ring line is never exactly 0.2
+internal/tui/logo.go:154:9 CONDITIONALS_BOUNDARY  # at the tip of the snout (f == 1) the eye is more than 10 pixels away, so nothing changes
+internal/tui/logo.go:180:37 CONDITIONALS_BOUNDARY  # f comes from atan2 at pixel centers and is never exactly 1, the snout
+internal/tui/logo.go:186:9 CONDITIONALS_BOUNDARY  # a cell without dots gets an along of NaN instead of 0, and the along of a cell without dots is never read
 internal/tui/markdown.go:164:32 CONDITIONALS_BOUNDARY  # a table given the width it has anyway is drawn the same
 internal/tui/markdown.go:44:44 INVERT_LOGICAL  # only a list item has a list as its parent, and a list item always has one
 internal/tui/selection.go:126:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1 or a column of the selection plus one
 internal/tui/selection.go:152:19 CONDITIONALS_BOUNDARY  # a line that ends where the selection does is marked to the same column either way
 internal/tui/selection.go:152:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1 or a column of the selection plus one
 internal/tui/selection.go:40:67 CONDITIONALS_BOUNDARY  # two spots of the same line and column are the same, swapped or not
-internal/tui/selection.go:72:49 ARITHMETIC_BASE  # the rows differ only where the suggestions hide all of the history, and then no row is on it either way
-internal/tui/selection.go:72:49 INVERT_NEGATIVES  # the rows differ only where the suggestions hide all of the history, and then no row is on it either way
-internal/tui/settings.go:503:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
-internal/tui/settings.go:520:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
-internal/tui/splash.go:330:8 CONDITIONALS_BOUNDARY  # at the bite all sparks lie in the cell of the bite, and the shut jaws are drawn over that cell
-internal/tui/view.go:213:9 CONDITIONALS_BOUNDARY  # the message of the owner at mine never has a summary
-internal/tui/view.go:231:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✓ " is never at its start
-internal/tui/view.go:234:43 CONDITIONALS_BOUNDARY  # a call is shown by what it does before what became of it: " ✗ " is never at its start
-internal/tui/view.go:470:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
-internal/session/session.go:546:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
-internal/history/history.go:725:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
+internal/tui/settings.go:486:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
+internal/tui/settings.go:503:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
+internal/tui/view.go:486:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
+internal/session/session.go:610:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
+internal/history/history.go:738:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
-internal/tui/tui.go:742:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/tui/tui.go:777:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/assistant/metrics.go:40:17 CONDITIONALS_BOUNDARY  # no tokens written in a time above zero are 0 tokens a second, which the TPS is set to before
+internal/openai/client.go:519:4 INVERT_LOOPCTRL  # an answer that is no bad request stays none for every effort that is left: going on asks nothing more and ends with the loop
+internal/discovery/discovery.go:253:5 INVERT_LOOPCTRL  # Linux lists the IPv4 addresses of an interface before those of IPv6, so nothing follows the address it stops at; on macOS, where IPv6 comes first, the tests notice
+internal/tui/logo.go:158:40 CONDITIONALS_BOUNDARY  # the center of a pixel is never exactly on the ellipse of the eye
+internal/tui/logo.go:159:30 CONDITIONALS_BOUNDARY  # the center of a pixel is never exactly 0.45 beside the middle of the eye
+internal/tui/logo.go:159:53 CONDITIONALS_BOUNDARY  # the center of a pixel is never exactly 1.2 above or below the middle of the eye
+internal/tui/logo.go:198:7 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the ring line is never exactly 0.2
+internal/tui/logo.go:200:15 CONDITIONALS_BOUNDARY  # the seam is the remainder of fractions with many digits, never exactly 0.85
+internal/tui/logo.go:202:36 CONDITIONALS_BOUNDARY  # the rib is the remainder of fractions with many digits, never exactly 0.8
+internal/tui/logo.go:239:12 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the ring line is never exactly 1.3, where a fang begins
+internal/tui/logo.go:239:26 CONDITIONALS_BOUNDARY  # the distance of a pixel center from the ring line is never exactly -1.7, where a fang ends
+internal/tui/logo.go:239:64 CONDITIONALS_BOUNDARY  # the center of a pixel is never exactly on the edge of a fang
+internal/tui/dialog.go:28:19 ARITHMETIC_BASE  # the help is as wide as the body allows: wider than that it is cut to the same width by the minimum below
+internal/tui/dialog.go:28:19 INVERT_NEGATIVES  # the help is as wide as the body allows: wider than that it is cut to the same width by the minimum below
+internal/tui/effort.go:88:59 CONDITIONALS_BOUNDARY  # a choice at the place of the effort in the order is the effort itself, which is found before the loop
+internal/tui/header_morph.go:41:14 INCREMENT_DECREMENT  # the generation only tells the switches apart: counted down it is as unique as counted up
+internal/tui/header_morph.go:86:13 CONDITIONALS_BOUNDARY  # with no time elapsed every letter is still the old one and the width that of the old name: the name it returns at once
+internal/tui/header_morph.go:89:13 CONDITIONALS_BOUNDARY  # at the end every letter is the new one and the width that of the new name: the name it returns at once
+internal/tui/question.go:148:44 ARITHMETIC_BASE  # the row selected is one of the list, so the first row shown is never past the last window of rows; with no rows both are 0
+internal/tui/question.go:148:44 INVERT_NEGATIVES  # the row selected is one of the list, so the first row shown is never past the last window of rows; with no rows both are 0
+internal/plugins/files/picture.go:66:53 CONDITIONALS_BOUNDARY  # an effort without a size of its own sets the size to 0, which is no size: nothing is made smaller, and nothing said of it
+internal/plugins/files/picture.go:125:32 CONDITIONALS_BOUNDARY  # a picture whose longer side is the size asked for keeps both sides when it is made that size
+internal/plugins/files/picture.go:126:8 CONDITIONALS_BOUNDARY  # a square is made the same size by its width as by its height
+internal/plugins/files/picture.go:170:46 ARITHMETIC_BASE  # a picture is never made larger, so the next row begins at least one further: the lower bound of one row never decides, and less of it neither
+internal/plugins/files/picture.go:170:55 ARITHMETIC_BASE  # a picture is never made larger, so the next row begins at least one further: the lower bound of one row never decides, and less of it neither
+internal/plugins/files/picture.go:172:47 ARITHMETIC_BASE  # a picture is never made larger, so the next column begins at least one further: the lower bound of one column never decides, and less of it neither
+internal/plugins/files/picture.go:172:56 ARITHMETIC_BASE  # a picture is never made larger, so the next column begins at least one further: the lower bound of one column never decides, and less of it neither
+internal/tui/dialog.go:43:45 ARITHMETIC_BASE  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
+internal/tui/dialog.go:43:45 INVERT_NEGATIVES  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
+internal/tui/tui.go:647:50 CONDITIONALS_BOUNDARY  # up in an empty input with nothing queued brings back what was entered and never comes here
+internal/tui/view.go:720:56 CONDITIONALS_BOUNDARY  # with no room the conversation is cut to nothing: the footer is the hint alone either way
+internal/tui/mesh.go:122:12 CONDITIONALS_BOUNDARY  # of two free cells as far from the nerve cells before, either is as good: which of them is taken is left to chance either way
+internal/tui/mesh.go:186:11 CONDITIONALS_BOUNDARY  # a connection that did not begin to grow has its tip on the nerve cell it grows from, which is drawn over it
+internal/tui/mesh.go:187:4 INVERT_LOOPCTRL  # the nerve cells after one that did not begin to grow did not either: going on finds each of them so and draws nothing
+internal/tui/mesh.go:201:39 CONDITIONALS_BOUNDARY  # the noise is a fraction with many digits, never exactly the share of the net that fires
+internal/tui/mesh.go:211:26 CONDITIONALS_BOUNDARY  # the way a signal has left is a fraction with many digits, never exactly 3 dots

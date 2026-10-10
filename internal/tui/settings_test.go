@@ -132,8 +132,6 @@ func TestSettingsShow(t *testing.T) {
 		{nodeSection, "Description", "Ouroboros instance named alpha", "the default; public: anyone reads it in the agent card"},
 		{nodeSection, "Node ID", "abc123def456", "the fingerprint of the key of the node, which nothing here changes"},
 		{agentsSection, "Context provider", "none", "what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it"},
-		{agentsSection, "Rebuild without a sandbox", "no", "rebuild builds and tests in a sandbox: without network, writing only where the build goes"},
-		{agentsSection, "Rebuild without the tests", "no", "rebuild installs a build only once make test passes"},
 		{agentsSection, "Bash without a sandbox", "no", "bash runs its commands in a sandbox: without network, and only where the tools for files may write"},
 		{pluginsSection, "base", "on", "it runs the commands of ouro"},
 		{pluginsSection, "history", "on", ""},
@@ -168,8 +166,8 @@ func TestSettingsShow(t *testing.T) {
 
 	// Another configuration.
 	s := someSettings()
-	s.About, s.ContextProvider, s.RebuildWithoutSandbox, s.Sandbox = "", "compact", true, "bubblewrap is not installed"
-	s.BashWithoutSandbox, s.RebuildWithoutTests = true, true
+	s.About, s.ContextProvider, s.Sandbox = "", "compact", "bubblewrap is not installed"
+	s.BashWithoutSandbox = true
 	s.PluginsKept, s.ProtectedDefault = "plugin peers needs a scanner", false
 	s.Description, s.DescriptionDefault = "knows the way", false
 	s.Tools[ForPeersIndex()].All = true
@@ -178,8 +176,6 @@ func TestSettingsShow(t *testing.T) {
 		{nodeSection, "Access", "Example"},
 		{nodeSection, "Description", "knows the way"},
 		{agentsSection, "Context provider", "compact"},
-		{agentsSection, "Rebuild without a sandbox", "yes, with network"},
-		{agentsSection, "Rebuild without the tests", "yes"},
 		{agentsSection, "Bash without a sandbox", "yes"},
 		{pluginsSection, "Turned off", "none: all run"},
 		{peersSection, "All tools", "yes"},
@@ -191,13 +187,6 @@ func TestSettingsShow(t *testing.T) {
 	}
 	if r := value(t, m, nodeSection, "Description"); r.note != "public: anyone reads it in the agent card; empty is the default" {
 		t.Errorf("description: %q", r.note)
-	}
-	if r := value(t, m, agentsSection, "Rebuild without a sandbox"); r.note != "rebuild builds and tests as you: with network, and with all you may write in reach"+
-		"; there is no sandbox here (bubblewrap is not installed), so without yes rebuild builds nothing" {
-		t.Errorf("sandbox: %q", r.note)
-	}
-	if r := value(t, m, agentsSection, "Rebuild without the tests"); !strings.HasPrefix(r.note, "rebuild installs a build once it builds, without running the tests") {
-		t.Errorf("tests: %q", r.note)
 	}
 	if r := value(t, m, agentsSection, "Bash without a sandbox"); r.note != "bash runs its commands as you: with network, the secrets of the node and the source of the core in reach"+
 		"; there is no sandbox here (bubblewrap is not installed), so without yes bash runs nothing" {
@@ -221,8 +210,6 @@ func TestSettingsChange(t *testing.T) {
 	}{
 		{agentsSection, "Context provider", "compact", Setting{Kind: plugin.SetContextProvider, Value: "compact"}},
 		{agentsSection, "Context provider", "none", Setting{Kind: plugin.SetContextProvider}},
-		{agentsSection, "Rebuild without a sandbox", "allow", Setting{Kind: plugin.SetRebuildWithoutSandbox, On: true}},
-		{agentsSection, "Rebuild without the tests", "allow", Setting{Kind: plugin.SetRebuildWithoutTests, On: true}},
 		{agentsSection, "Bash without a sandbox", "allow", Setting{Kind: plugin.SetBashWithoutSandbox, On: true}},
 		{pluginsSection, "history", "turn off", Setting{Kind: plugin.SetPlugin, Name: "history"}},
 		{pluginsSection, "tailscale", "turn on", Setting{Kind: plugin.SetPlugin, Name: "tailscale", On: true}},
@@ -245,8 +232,7 @@ func TestSettingsChange(t *testing.T) {
 	}
 
 	s := someSettings()
-	s.RebuildWithoutSandbox, s.BashWithoutSandbox, s.ProtectedDefault = true, true, false
-	s.RebuildWithoutTests = true
+	s.BashWithoutSandbox, s.ProtectedDefault = true, false
 	s.Tools[ForPeersIndex()].All = true
 	b.settings = s
 	deliver(m, m.config.reload(m))
@@ -254,8 +240,6 @@ func TestSettingsChange(t *testing.T) {
 		section, label, action string
 		want                   Setting
 	}{
-		{agentsSection, "Rebuild without a sandbox", "refuse", Setting{Kind: plugin.SetRebuildWithoutSandbox}},
-		{agentsSection, "Rebuild without the tests", "refuse", Setting{Kind: plugin.SetRebuildWithoutTests}},
 		{agentsSection, "Bash without a sandbox", "refuse", Setting{Kind: plugin.SetBashWithoutSandbox}},
 		{peersSection, "All tools", "turn off", Setting{Kind: plugin.SetAllTools, For: plugin.ForPeers}},
 		{protectedSection, "The default", "use it", Setting{Kind: plugin.SetProtected, On: true}},
@@ -400,7 +384,7 @@ func TestSettingsKeys(t *testing.T) {
 		t.Errorf("another line starts at its first action: %d", m.choice)
 	}
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "› Rebuild without a sandbox") || !strings.Contains(view, "[allow]") {
+	if !strings.Contains(view, "› Bash without a sandbox") || !strings.Contains(view, "[allow]") {
 		t.Errorf("selected:\n%s", view)
 	}
 	// A line without actions does nothing.

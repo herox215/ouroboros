@@ -227,6 +227,10 @@ func (u *ui) event(e plugin.SessionEvent) tui.Event {
 			shown.Text = plugin.ToolDetail(u.ctx, s, shown.Text)
 		}
 	}
+	if e.Kind == plugin.SessionAsked && !e.Done {
+		q := e.AsQuestion()
+		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended
+	}
 	return shown
 }
 

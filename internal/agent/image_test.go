@@ -94,9 +94,14 @@ func TestLastImages(t *testing.T) {
 	if len(msgs[0].Images) != 2 || len(msgs[1].Images) != 3 {
 		t.Fatal("lastImages should not change what it is handed")
 	}
-	exactly := msgs[3:]
+	exactly := []openai.Message{{Images: images(0, maxImages-3)}, {Images: images(5, 3)}}
 	if got := lastImages(exactly); &got[0] != &exactly[0] {
 		t.Fatal("a conversation with maxImages pictures should stay as it is")
+	}
+	// The first message is looked at as well.
+	first := lastImages([]openai.Message{{Images: images(0, maxImages+1)}})
+	if !slices.EqualFunc(first[0].Images, images(1, maxImages), sameImage) {
+		t.Fatalf("the first message keeps %v", first[0].Images)
 	}
 }
 

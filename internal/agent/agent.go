@@ -127,6 +127,7 @@ type (
 	observerKey struct{}
 	spentKey    struct{}
 	steeringKey struct{}
+	ownerKey    struct{}
 	answerKey   struct{}
 	imagesKey   struct{}
 	remarkKey   struct{}
@@ -211,6 +212,29 @@ func (a *Answer) Context() context.Context { return a.ctx }
 // stays as it is.
 func WithSteering(ctx context.Context, steer func() []string) context.Context {
 	return context.WithValue(ctx, steeringKey{}, steer)
+}
+
+// ErrNoOwner means that nobody is there to be asked: the conversation is
+// not one of the owner in a session.
+var ErrNoOwner = errors.New("there is no owner to ask in this conversation")
+
+// WithOwner returns a context under which a tool can ask the owner of the
+// conversation a question: ask is handed the question, as the tool wrote it,
+// and returns what the owner answered once they did. It ends with the error
+// of the context it is given when that ends first.
+func WithOwner(ctx context.Context, ask func(ctx context.Context, question json.RawMessage) (string, error)) context.Context {
+	return context.WithValue(ctx, ownerKey{}, ask)
+}
+
+// AskOwner asks the owner of the conversation of ctx question and waits for
+// the answer: see WithOwner. Without an owner to ask it fails with
+// ErrNoOwner.
+func AskOwner(ctx context.Context, question json.RawMessage) (string, error) {
+	ask, ok := ctx.Value(ownerKey{}).(func(context.Context, json.RawMessage) (string, error))
+	if !ok {
+		return "", ErrNoOwner
+	}
+	return ask(ctx, question)
 }
 
 // Steered returns what the user of the answer that ctx belongs to said since

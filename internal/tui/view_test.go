@@ -3,7 +3,6 @@ package tui
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -57,15 +56,6 @@ func TestShortKey(t *testing.T) {
 	}
 }
 
-// The stars of the splash are as far ahead of it as the setup left them.
-func TestSplashViewShiftsTheSky(t *testing.T) {
-	m, _ := newModel(t)
-	m.splash.elapsed, m.splash.skyShift = 3*time.Second, 20*time.Second
-	if m.splash.view(m) != drawSplash(m.width, m.height, 3*time.Second, 23*time.Second, m.light) {
-		t.Fatal("the sky should be shifted ahead")
-	}
-}
-
 // In the debug mode the header is as wide as the screen, the mark on its
 // right; a screen too narrow for more shows only the mark.
 func TestDebugHeaderFillsTheLine(t *testing.T) {
@@ -110,13 +100,79 @@ func TestLogoNeedsRoom(t *testing.T) {
 }
 
 // In a low window the suggestions of a command take the rows of the
-// conversation they need, and leave it its title: the screen stays as high
+// conversation they need, and leave it one line: the screen stays as high
 // as the window.
 func TestSuggestionsInALowWindow(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
 	m.input.SetValue("/")
-	if rows := strings.Count(m.View().Content, "\n") + 1; rows != 16 || !strings.Contains(view(m), "│ alpha") || len(m.suggestionLines(m.chatHeight()-3)) != m.chatHeight()-3 {
+	if rows := strings.Count(m.View().Content, "\n") + 1; rows != 16 || strings.Contains(view(m), "│ alpha") || len(m.suggestionLines(m.chatHeight()-3)) != m.chatHeight()-3 {
 		t.Fatalf("%d rows:\n%s", rows, view(m))
+	}
+}
+
+// The footer names the conversation on its left only once there is a word
+// in it and something to say of it.
+func TestChatTitleNeedsAConversation(t *testing.T) {
+	m, _ := newModel(t)
+	m.chat.context = 1200
+	if got := m.chatTitle(); got != "" {
+		t.Errorf("a chat without a word: %q", got)
+	}
+	fill(m, 1)
+	if got := ansi.Strip(m.chatTitle()); !strings.HasPrefix(got, " context ") {
+		t.Errorf("with a word: %q", got)
+	}
+	m.status.Configured = false
+	if got := m.chatTitle(); got != "" {
+		t.Errorf("a node that is not set up: %q", got)
+	}
+	m.status.Configured, m.chat.context = true, 0
+	if got := m.chatTitle(); got != "" {
+		t.Errorf("nothing known of the context: %q", got)
+	}
+}
+
+// The footer is one line as wide as the window: the hint whole on the
+// right, a cell before the edge, and the conversation in what it leaves.
+func TestFooterFitsTheWindow(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 1)
+	m.chat.context, m.chat.pending = 1200, true
+	title, hint := ansi.Strip(m.chatTitle()), "esc stop "
+	wide := lipgloss.Width(title)
+	for _, width := range []int{100, len(hint) + wide + 1, len(hint) + wide, len(hint) + 3, len(hint) + 1, len(hint)} {
+		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+		got := ansi.Strip(m.footerView())
+		if lipgloss.Width(got) != width || !strings.HasSuffix(got, hint) {
+			t.Fatalf("at %d cells: %q", width, got)
+		}
+		left := strings.TrimRight(strings.TrimSuffix(got, hint), " ")
+		switch room := width - len(hint) - 1; {
+		case room >= wide:
+			if left != title {
+				t.Errorf("at %d cells the conversation is %q", width, left)
+			}
+		case room > 0:
+			if lipgloss.Width(left) != room || !strings.HasSuffix(left, "…") {
+				t.Errorf("at %d cells the conversation is cut to %q", width, left)
+			}
+		default:
+			if left != "" {
+				t.Errorf("at %d cells there is no room for %q", width, left)
+			}
+		}
+	}
+	// What there is to notice comes before the hint, apart from it; alone,
+	// it stands alone.
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.setNotice("look", false)
+	notice := lipgloss.NewStyle().Foreground(accent).Render("look")
+	if got := m.footerHint(); got != notice+mutedStyle.Render("  │  ")+mutedStyle.Render("esc stop") {
+		t.Errorf("a notice with a hint: %q", got)
+	}
+	m.chat.pending = false
+	if got := m.footerHint(); got != notice+mutedStyle.Render("") {
+		t.Errorf("a notice alone: %q", got)
 	}
 }

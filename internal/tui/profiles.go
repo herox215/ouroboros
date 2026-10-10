@@ -18,6 +18,7 @@ type profileViews struct {
 	shown   int
 	started []bool
 	size    tea.WindowSizeMsg // of the terminal, for one that is shown anew
+	morph   headerMorph       // the name in the header, shared across switches
 }
 
 // profileMsg is a message of what the Model of a profile started: it goes to
@@ -31,13 +32,19 @@ type profileMsg struct {
 // node, starting with models[shown]. Each model is told which of the profiles
 // it is, so that it shows that at the top.
 func WithProfiles(models []*Model, shown int) *Model {
+	p := &profileViews{models: models, shown: shown, started: make([]bool, len(models))}
 	for i, m := range models {
 		m.profileAt, m.profileOf = i+1, len(models)
+		m.among = p
 	}
-	return &Model{profiles: &profileViews{models: models, shown: shown, started: make([]bool, len(models))}}
+	return &Model{profiles: p}
 }
 
 func (p *profileViews) current() *Model { return p.models[p.shown] }
+
+// shown reports whether the UI is the one on the screen: of the UIs of
+// several profiles, only the one shown is.
+func (m *Model) shown() bool { return m.among == nil || m.among.current() == m }
 
 // init starts the Model shown.
 func (p *profileViews) init() tea.Cmd {
@@ -50,6 +57,8 @@ func (p *profileViews) init() tea.Cmd {
 // the rest. shift+tab shows the next one.
 func (p *profileViews) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case headerMorphMsg:
+		return p.morph.update(msg)
 	case profileMsg:
 		_, cmd := p.models[msg.profile].Update(msg.msg)
 		return tagged(msg.profile, cmd)
@@ -73,6 +82,7 @@ func (p *profileViews) update(msg tea.Msg) tea.Cmd {
 // next shows the next profile, which is started if it was not yet: without
 // the splash, which the first one showed.
 func (p *profileViews) next() tea.Cmd {
+	from := p.current().headerName()
 	p.shown = (p.shown + 1) % len(p.models)
 	m := p.current()
 	var cmd tea.Cmd
@@ -81,14 +91,21 @@ func (p *profileViews) next() tea.Cmd {
 		cmd = m.Init()
 		m.splash.show = false
 	}
-	_, resized := m.Update(p.size)
 	who, err := m.backend.Status()
+	if err == nil {
+		// The first frame must not mistake an unloaded status for a node
+		// that needs setup. The asynchronous refresh arrives later.
+		m.Update(statusMsg{status: who})
+	}
+	_, resized := m.Update(p.size)
 	if err != nil {
 		m.setNotice("profile "+strconv.Itoa(p.shown+1)+" · shift+tab shows the next", false)
 	} else {
 		m.setNotice("profile "+cmp.Or(who.Name, who.ID)+" ("+who.ID+") · shift+tab shows the next", false)
 	}
-	return tagged(p.shown, tea.Batch(cmd, resized))
+	// These frames belong to the shared header, not to either profile.
+	morph := p.morph.begin(from, cmp.Or(m.status.Name, "ouroboros"), m.now())
+	return tea.Batch(tagged(p.shown, tea.Batch(cmd, resized)), morph)
 }
 
 // tagged is cmd, whose messages go to the Model of profile: the messages of

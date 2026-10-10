@@ -93,6 +93,15 @@ type Record struct {
 	// Outcome is Answered, Failed or Canceled. Why an answer failed is not
 	// kept: a peer reads its archive, and must not learn the cause from it.
 	Outcome string `json:"outcome,omitempty"`
+	// Statistics preserves the last reported usage across process restarts.
+	Statistics *Statistics `json:"statistics,omitempty"`
+}
+
+// Statistics is the context size and provider usage reported when an answer ended.
+// Cache is JSON so the archive need not depend on the assistant.
+type Statistics struct {
+	Context int             `json:"context,omitempty"`
+	Cache   json.RawMessage `json:"cache,omitempty"`
 }
 
 // Call is a call of a tool the model asked for.
@@ -174,7 +183,7 @@ var (
 // Append keeps the messages of one answer of the conversation of who, and
 // how it ended: err is the error of the answer. A conversation that goes on,
 // also in another process, goes on in its file.
-func (a *Archive) Append(who Who, msgs []openai.Message, err error) error {
+func (a *Archive) Append(who Who, msgs []openai.Message, err error, statistics ...Statistics) error {
 	dir := a.partyDir(who)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -222,7 +231,11 @@ func (a *Archive) Append(who Who, msgs []openai.Message, err error) error {
 		}
 		add(r)
 	}
-	add(Record{Role: "end", Outcome: outcome(err)})
+	end := Record{Role: "end", Outcome: outcome(err)}
+	if len(statistics) > 0 {
+		end.Statistics = &statistics[0]
+	}
+	add(end)
 	if _, err := f.Write(out.Bytes()); err != nil {
 		a.forget(path)
 		return err

@@ -185,3 +185,14 @@ func TestFetchKeyPinsTheFirstContact(t *testing.T) {
 		t.Fatalf("another node at the address: %v", err)
 	}
 }
+
+// A connection for one node names it to whoever answers, so that a node of
+// several profiles knows which of them is meant; one for anyone names none.
+func TestPinnedNamesTheNode(t *testing.T) {
+	if got := pinned(anyone).ServerName; got != "" {
+		t.Errorf("for anyone the connection names %q", got)
+	}
+	if got := pinned("the key").ServerName; got != ServerName("the key") {
+		t.Errorf("for a node the connection names %q", got)
+	}
+}

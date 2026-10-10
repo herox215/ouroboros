@@ -171,6 +171,12 @@ type Event struct {
 	// Cache is how much of what the LLM was sent in the session the
 	// provider had cached.
 	Cache plugin.SessionCache
+	// Options and Recommended are of a question the agent asks the owner,
+	// plugin.SessionAsked, whose Text is the question: the answers to
+	// choose from, and the one of them the agent would choose, "" for none.
+	// Once Done, Text is what the owner answered, "" if they did not.
+	Options     []string
+	Recommended string
 }
 
 // screen is the top-level view: the chat, the connection requests, the list
@@ -187,6 +193,7 @@ const (
 	screenSettings // the configuration, for /settings
 	screenSessions // the sessions, for /session
 	screenEffort   // the slider of the effort, for /effort
+	screenKeys     // the keys of the chat, for /keys and ctrl+k
 )
 
 // entry is one message in the conversation: from the user, from the agent, or
@@ -215,6 +222,7 @@ type conversation struct {
 	queued    []string            // the messages that wait for the answer on its way to take them
 	running   bool                // the node has said an answer is on its way
 	doing     string              // what the agent is waiting for, like "asking beta"
+	asking    *asking             // what the agent asks the owner and waits for; nil without a question
 	since     time.Time           // when it began to wait for that
 	art       int                 // which of arts a wait is shown with: the next for every message
 	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
@@ -239,8 +247,10 @@ type Model struct {
 	profiles *profileViews
 
 	// profileAt is which of the profileOf profiles of the node this UI shows:
-	// 0 for a UI of one.
+	// 0 for a UI of one. among are the UIs of all of them, of which one is
+	// shown: nil for a UI of one.
 	profileAt, profileOf int
+	among                *profileViews
 
 	backend Backend
 	now     func() time.Time
@@ -254,7 +264,8 @@ type Model struct {
 	notice    string
 	noticeErr bool
 
-	restarts string // the binary the UI quit for ouro to start anew from
+	resuming *conversation // the resumed chat waits for its history before showing empty artwork
+	restarts string        // the binary the UI quit for ouro to start anew from
 
 	sessions sessionsScreen // the list of the sessions, for /session
 	ticks    int            // of the spinner, which the sessions screen animates with
@@ -285,6 +296,9 @@ type Model struct {
 	selected      *selection // what the mouse selected of the history
 	pressed       *spot      // where the mouse went down, before the drag began
 	spinner       spinner.Model
+
+	// nameAnimation is how the name of the agent moves in an empty chat.
+	nameAnimation nameAnimation
 }
 
 // New returns the UI for backend, with the screens and commands the plugins
@@ -292,12 +306,12 @@ type Model struct {
 // says in its footer when it opens: see bind.
 func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Model {
 	input := textarea.New()
-	input.Placeholder = "Message, or /help for the commands… (Enter sends, Alt+Enter new line)"
+	input.Placeholder = "Message, or /help for the commands…"
 	input.ShowLineNumbers = false
 	input.Prompt = ""
 	input.SetHeight(inputHeight)
 	input.SetStyles(inputStyles(false))
-	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "shift+enter", "ctrl+j"))
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"))
 
 	history := viewport.New()
 	history.KeyMap = viewport.KeyMap{} // keys go to the input; scrolling is handled explicitly
@@ -412,6 +426,11 @@ func (m *Model) refresh() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer func() {
+		if m.profiles == nil {
+			m.syncNameAnimation()
+		}
+	}()
 	if m.profiles != nil {
 		return m, m.profiles.update(msg)
 	}
@@ -509,6 +528,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		if msg.ID == m.spinner.ID() {
 			m.ticks++
+			if a := &m.nameAnimation; a.active || !a.fading.IsZero() {
+				a.elapsed = m.now().Sub(a.start)
+				if !a.active && a.faded(m.now()) == 0 {
+					a.fading = time.Time{}
+				}
+				m.renderHistory(false)
+			}
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -582,11 +608,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.sessions.handleKey(m, msg)
 	case screenEffort:
 		return m.effort.handleKey(m, msg)
-	case screenHelp:
+	case screenHelp, screenKeys:
 		if msg.String() == "esc" {
 			m.screen = screenChat
 		}
 		return nil
+	}
+	if cmd, ok := m.handleQuestionKey(msg); ok {
+		return cmd
 	}
 	if m.handleRecallKey(msg) {
 		return nil
@@ -597,6 +626,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+s":
 		return m.openSessions() // what is typed stays with the session shown
+	case "ctrl+k":
+		return m.openKeys() // what is typed stays in the input
 	case "pgup":
 		return m.scrollBy(&m.history, -m.history.Height())
 	case "pgdown":
@@ -622,6 +653,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.input, cmd = m.input.Update(msg)
 	if m.input.Value() != typed {
 		m.suggest = 0 // other commands fit now
+		m.chat.asking.write()
 	}
 	return cmd
 }
@@ -813,6 +845,7 @@ func (m *Model) asked(msg askedMsg) {
 	}
 	c := m.chats[msg.id]
 	c.pending = c.running
+	c.asking.unsent()
 	if c == m.chat {
 		if m.input.Value() == "" {
 			m.input.SetValue(c.labelled(msg.text))
@@ -923,6 +956,7 @@ func (m *Model) Resume(id string) {
 	}
 	delete(m.chats, m.chat.contextID)
 	m.chat = m.conversation(id)
+	m.resuming = m.chat
 	m.splash.show = false
 	m.renderHistory(true)
 	m.setNotice("restarted with the new build", false)

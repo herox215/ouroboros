@@ -16,9 +16,9 @@ import (
 // Nothing is marked before the drag begins, so a press alone leaves no mark
 // under the pointer.
 
-// The history starts below the header, the top of the box and its title, and
-// right of the border and padding of the box.
-const historyTop, historyLeft = 3, 2
+// The history starts below the header and the top of the box, and right of
+// the border and padding of the box.
+const historyTop, historyLeft = 2, 2
 
 // spot is a cell of the content of the history: its line and column.
 type spot struct{ line, col int }
@@ -62,14 +62,14 @@ func (s *selection) cols(line int) (from, to int, ok bool) {
 // historySpot is the cell of the history at x and y on the screen, the rows
 // above and below the history taken as its first and its last.
 func (m *Model) historySpot(x, y int) spot {
-	hidden := len(m.suggestionLines(m.chatHeight() - 3)) // the rows the history gives up to them
+	hidden := m.givenUp() // the bottom rows covered by the panel
 	row := min(max(0, y-historyTop), max(0, m.history.Height()-hidden-1))
-	return spot{m.history.YOffset() + hidden + row, max(0, x-historyLeft)}
+	return spot{m.history.YOffset() + row, max(0, x-historyLeft)}
 }
 
 // onHistory tells if x and y are on the history of the chat.
 func (m *Model) onHistory(x, y int) bool {
-	hidden := len(m.suggestionLines(m.chatHeight() - 3))
+	hidden := m.givenUp()
 	return x >= historyLeft && x < historyLeft+m.history.Width() &&
 		y >= historyTop && y < historyTop+m.history.Height()-hidden
 }

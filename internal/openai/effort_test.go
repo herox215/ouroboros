@@ -3,6 +3,8 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -122,5 +124,18 @@ func TestEffortChanges(t *testing.T) {
 	effort = "high"
 	if EffortOf(of) != "high" {
 		t.Fatalf("changed: %q", EffortOf(of))
+	}
+}
+
+// A bad request is what the API refuses with HTTP 400 or 422, and nothing
+// else it fails with.
+func TestBadRequest(t *testing.T) {
+	for status, want := range map[int]bool{http.StatusBadRequest: true, http.StatusUnprocessableEntity: true, http.StatusUnauthorized: false, http.StatusInternalServerError: false} {
+		if got := badRequest(fmt.Errorf("asked: %w", &APIError{Status: status})); got != want {
+			t.Errorf("HTTP %d is a bad request: %v", status, got)
+		}
+	}
+	if badRequest(errors.New("no answer")) {
+		t.Error("an error that is not of the API is no bad request")
 	}
 }

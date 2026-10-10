@@ -201,7 +201,12 @@ func shownEvent(e plugin.SessionEvent) Event {
 	if e.Kind == plugin.SessionStep {
 		text = e.Tool
 	}
-	return Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
+	shown := Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
+	if e.Kind == plugin.SessionAsked && !e.Done {
+		q := e.AsQuestion()
+		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended
+	}
+	return shown
 }
 
 func (f *fakeBackend) Steer(ctx context.Context, id, text string) error {
@@ -471,7 +476,7 @@ func TestSplashShowsLogoUntilKey(t *testing.T) {
 			t.Fatalf("splash should show %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "No messages yet") {
+	if strings.Contains(view, nameRow(m.agentName())) {
 		t.Fatal("splash should hide the normal view")
 	}
 
@@ -481,7 +486,7 @@ func TestSplashShowsLogoUntilKey(t *testing.T) {
 	if m.splash.show {
 		t.Fatal("a key should close the splash")
 	}
-	if view := m.View().Content; !strings.Contains(view, "No messages yet") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, nameRow(m.agentName())) {
 		t.Fatal("after the splash the normal view should be shown")
 	}
 }
@@ -498,26 +503,8 @@ func TestSplashClosesAfterTimeout(t *testing.T) {
 	if m.splash.show {
 		t.Fatal("the splash should close when its time is up")
 	}
-	if view := m.View().Content; !strings.Contains(view, "No messages yet") {
+	if !strings.Contains(view(m), nameRow(m.agentName())) {
 		t.Fatal("after the splash the normal view should be shown")
-	}
-}
-
-func TestSplashFramesKeepTheirSize(t *testing.T) {
-	width := ansi.StringWidth(logoLines[0])
-	for at := time.Duration(0); at <= splashDuration; at += splashFrame {
-		frame := drawLogo(splashGrown(at), at >= biteAt)
-		if len(frame) != len(logoLines) {
-			t.Fatalf("frame at %v has %d lines, want %d", at, len(frame), len(logoLines))
-		}
-		for _, l := range frame {
-			if ansi.StringWidth(l) != width {
-				t.Fatalf("frame at %v has a line of width %d, want %d", at, ansi.StringWidth(l), width)
-			}
-		}
-	}
-	if slices.Equal(drawLogo(splashGrown(0), false), drawLogo(splashGrown(splashDuration), true)) {
-		t.Fatal("the splash should animate")
 	}
 }
 
@@ -527,7 +514,7 @@ func TestSplashSceneFillsTheScreen(t *testing.T) {
 			w, h := size[0], size[1]
 			seen := map[string]bool{}
 			for at := time.Duration(0); at <= splashDuration; at += splashFrame {
-				frame := drawSplash(w, h, at, at, light)
+				frame := drawSplash(w, h, at, light)
 				seen[frame] = true
 				lines := strings.Split(frame, "\n")
 				if len(lines) != h {
@@ -545,21 +532,21 @@ func TestSplashSceneFillsTheScreen(t *testing.T) {
 		}
 	}
 	// A narrow screen gets the title in plain letters.
-	if end := ansi.Strip(drawSplash(40, 24, splashDuration-fadeOut, splashDuration-fadeOut, false)); !strings.Contains(end, titleText) || strings.Contains(end, bigTitle[0]) {
+	if end := ansi.Strip(drawSplash(40, 24, splashDuration-fadeOut, false)); !strings.Contains(end, titleText) || strings.Contains(end, bigTitle[0]) {
 		t.Fatalf("narrow splash:\n%s", end)
 	}
 	// The colors follow the background.
-	if drawSplash(100, 30, biteAt, biteAt, false) == drawSplash(100, 30, biteAt, biteAt, true) {
+	if drawSplash(100, 30, biteAt, false) == drawSplash(100, 30, biteAt, true) {
 		t.Fatal("a light background should get other colors")
 	}
 }
 
 func TestSplashTagIsTyped(t *testing.T) {
-	half := ansi.Strip(drawSplash(100, 30, taglineAt+typeSpeed*6, taglineAt+typeSpeed*6, false))
+	half := ansi.Strip(drawSplash(100, 30, taglineAt+typeSpeed*6, false))
 	if !strings.Contains(half, "a tiny▌") || strings.Contains(half, tagline) {
 		t.Fatalf("the tagline should be typed letter by letter:\n%s", half)
 	}
-	if early := ansi.Strip(drawSplash(100, 30, titleAt-scrambleFor, titleAt-scrambleFor, false)); strings.Contains(early, "▀▄▄▀") {
+	if early := ansi.Strip(drawSplash(100, 30, titleAt-scrambleFor, false)); strings.Contains(early, "▀▄▄▀") {
 		t.Fatalf("the title should not be there before it decodes:\n%s", early)
 	}
 }
@@ -606,8 +593,8 @@ func TestChatIsFocusedOnStart(t *testing.T) {
 
 func TestViewIsTheChatOnly(t *testing.T) {
 	m, _ := newModel(t)
-	view := m.View().Content
-	for _, want := range []string{"● online", "alpha", "No messages yet"} {
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{"● online", "alpha", nameRow(m.agentName())} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q", want)
 		}
@@ -914,7 +901,7 @@ func TestEscapeStopsTheAnswer(t *testing.T) {
 	drive(t, m, run(m, "/new"), func() bool { return true })
 	second := m.chat
 	drive(t, m, say(t, m, "pong"), func() bool { return second.doing == "asking beta" })
-	if !strings.Contains(m.View().Content, "esc stop · enter send") {
+	if !strings.Contains(m.View().Content, "esc stop") {
 		t.Fatalf("the footer should say what esc does:\n%s", m.View().Content)
 	}
 	cmd := press(m, "esc")
@@ -1382,7 +1369,7 @@ func TestEmptyChatFollowsTheName(t *testing.T) {
 	m, b := newModel(t)
 	b.status.Name = "beta"
 	m.Update(m.refreshStatus())
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Ask beta anything") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, nameRow("beta")) {
 		t.Fatalf("the empty chat does not name the agent:\n%s", view)
 	}
 }

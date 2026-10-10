@@ -155,6 +155,10 @@ func TestProfiles(t *testing.T) {
 	if err := app.Run(ctx, []string{"--profile", "Luna", "status"}); err != nil || !strings.Contains(out.Take(), "name=Luna") {
 		t.Fatalf("status of Luna: %v", err)
 	}
+	// Named without a command, a profile is run like ouro without one.
+	if err := app.Run(ctx, []string{"--profile", "Luna"}); err != nil || !strings.HasPrefix(out.Take(), "ouro – tiny A2A agent node") {
+		t.Fatalf("Luna without a command: %v", err)
+	}
 	terraSessions, lunaSessions := session.NewClient(terra), session.NewClient(luna)
 	terraList, err := terraSessions.List(ctx)
 	if err != nil {
@@ -270,7 +274,8 @@ func TestProfilesThatCannotStart(t *testing.T) {
 		}
 		_, err := cli.New(s, term)
 		*cli.Standard = standard
-		if err == nil || !strings.Contains(err.Error(), want) {
+		// The first profile is the node itself: its error names no profile.
+		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "the profile in ") != (i > 0) {
 			t.Errorf("a plugin that cannot start: %v, want %q", err, want)
 		}
 	}

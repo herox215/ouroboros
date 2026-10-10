@@ -92,6 +92,8 @@ func (a art) row(w, t int) []rune {
 func (m *Model) waiting() string {
 	c := m.chat
 	switch {
+	case c.asking != nil:
+		return m.agentName() + " waits for your answer"
 	case c.doing != "" && m.now().Sub(c.since) >= toolShown:
 		return c.doing
 	case c.doing != "" || c.pending:

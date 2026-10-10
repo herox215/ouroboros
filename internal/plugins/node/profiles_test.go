@@ -5,12 +5,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
 	"ouroboros/internal/home"
+	"ouroboros/internal/session"
 )
 
 // The profiles of a node are listed, added while it is stopped and renamed.
@@ -77,5 +79,18 @@ func TestProfileCommandReportsErrors(t *testing.T) {
 	os.WriteFile(filepath.Join(string(dir), "config.json"), []byte("{"), 0o600)
 	if err := commands(dir, nil).profile(context.Background(), nil); err == nil {
 		t.Error("a profile that cannot be read should fail")
+	}
+}
+
+// A profile that joins others shares one process with all of them: its own
+// sessions and those of each one it joined, however many.
+func TestJoinSharesTheSessionsOfAll(t *testing.T) {
+	profile := func() *Profile { return &Profile{commands: &nodeCommands{sessions: session.New(nil)}} }
+	first, second, third := profile(), profile(), profile()
+	first.Join(second)
+	first.Join(third)
+	want := []*session.Service{first.commands.sessions, second.commands.sessions, third.commands.sessions}
+	if !slices.Equal(first.joined, want) || len(first.commands.server.Profiles) != 2 {
+		t.Fatalf("joined %d sessions and %d profiles", len(first.joined), len(first.commands.server.Profiles))
 	}
 }

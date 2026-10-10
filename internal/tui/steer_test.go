@@ -50,9 +50,13 @@ func TestSteering(t *testing.T) {
 
 	// What is typed keeps up for itself.
 	m.input.SetValue("typing")
-	press(m, "up")
-	if b.unsteers != 0 {
+	if cmd := press(m, "up"); cmd != nil || b.unsteers != 0 {
 		t.Fatal("up is the input's while something is typed, or nothing waits")
+	}
+	// In the lines typed it moves the cursor.
+	m.input.SetValue("one\ntwo")
+	if press(m, "up"); m.input.Line() != 0 || m.input.Value() != "one\ntwo" || b.unsteers != 0 {
+		t.Errorf("up in the second line: at line %d of %q", m.input.Line(), m.input.Value())
 	}
 	m.input.Reset()
 	drive(t, m, press(m, "up"), func() bool { return m.input.Value() == "and that" && len(c.queued) == 1 })
@@ -145,5 +149,13 @@ func TestQueueEvents(t *testing.T) {
 	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "a"}, true)
 	if strings.Join(c.queued, ",") != "b" || len(c.entries) != 1 {
 		t.Fatalf("queued %q, entries %+v", c.queued, c.entries)
+	}
+}
+
+// With nothing queued, up in an empty input asks no message back.
+func TestUpWithNothingQueued(t *testing.T) {
+	m, b := newModel(t)
+	if cmd := press(m, "up"); cmd != nil || b.unsteers != 0 {
+		t.Fatalf("up asked back: %v, %d", cmd != nil, b.unsteers)
 	}
 }

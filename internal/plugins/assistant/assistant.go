@@ -3,6 +3,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"ouroboros/internal/agent"
@@ -31,7 +32,11 @@ type services struct {
 // of the owner are kept there, and the history plugin searches it.
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("assistant", func(ctx *plugin.Context, _ struct{}) (services, error) {
-		archived := Archived(history.Open(dir.History()))
+		var bot *assistant.Assistant
+		archived := Archived(history.Open(dir.History()), func(id string) history.Statistics {
+			cache, _ := json.Marshal(bot.Cache(id))
+			return history.Statistics{Context: bot.Context(id), Cache: cache}
+		})
 		// The accesses of the node, with the providers the plugins contributed.
 		book := llm.Book{Store: dir.Credentials(), Providers: func() []llm.Provider { return plugin.All[plugin.Provider](ctx) }}
 		builder := assistant.Builder{
@@ -45,7 +50,8 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Failures:  dir.Failures(),
 			Workspace: dir.WorkingDir(),
 		}.WithConfig(dir.Config, dir.Proposals())
-		return services{builder, assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug)}, nil
+		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug)
+		return services{builder, bot}, nil
 	})
 }
 
@@ -53,7 +59,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 // owner and of every peer, the latter by its key. It comes before the hooks
 // of the plugins. A failure is its diagnostic, and leaves the answer as it
 // is.
-func Archived(archive *history.Archive) agent.AnswerHook {
+func Archived(archive *history.Archive, statistics ...func(string) history.Statistics) agent.AnswerHook {
 	return agent.AnswerHook{Name: "archive", After: func(_ context.Context, o agent.AnswerOutcome) error {
 		who := history.Who{Session: o.Conversation.ID}
 		if o.Conversation.Peer {
@@ -61,6 +67,9 @@ func Archived(archive *history.Archive) agent.AnswerHook {
 				return errors.New("a conversation of a peer without its key is not archived")
 			}
 			who.Peer = o.Conversation.Origin.PublicKey
+		}
+		if !o.Conversation.Peer && len(statistics) > 0 {
+			return archive.Append(who, o.Messages, o.Err, statistics[0](who.Session))
 		}
 		return archive.Append(who, o.Messages, o.Err)
 	}}
