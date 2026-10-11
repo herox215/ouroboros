@@ -106,7 +106,7 @@ func TestOwner(t *testing.T) {
 	if out, _ = clitest.Run(t, s, "", "chat", call("history_read", map[string]any{"session": "../x"})); !strings.Contains(out, "error: there is no session") {
 		t.Errorf("read no session: %q", out)
 	}
-	if out, _ = clitest.Run(t, s, "", "chat", call("history_read", map[string]any{"from": "one"})); !strings.Contains(out, "error: invalid arguments") {
+	if out, _ = clitest.Run(t, s, "", "chat", call("history_read", map[string]any{"from": "one"})); !strings.Contains(out, `error: history_read: invalid arguments: "from" is a whole number, not a string`) {
 		t.Errorf("invalid arguments: %q", out)
 	}
 	if !strings.Contains(logged(t, s.Home), "history_read for the owner, scope a named session, failed: there is no session") {

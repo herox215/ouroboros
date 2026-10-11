@@ -101,10 +101,11 @@ func TestRunForTheOwner(t *testing.T) {
 		t.Fatalf("caught: %s", got)
 	}
 	got, err = a.Ask(ctx, "chat", runs("who()\nnote({})"), nil)
-	if got := result(t, got, err); got != "error: the script failed: Error: test error\n\tat script:2:5" {
+	// who() alone gives back nothing but what it printed of itself.
+	if got := result(t, got, err); got != "error: the script failed: Error: test error\n\tat script:2:5\nIt printed before:\nthe owner in chat" {
 		t.Fatalf("not caught: %q", got)
 	}
-	for args, want := range map[string]string{`{}`: `error: run needs "script"`, `{"script": ""}`: `error: run needs "script"`, `{"script": 1}`: "error: run: invalid arguments"} {
+	for args, want := range map[string]string{`{}`: `error: run needs "script"`, `{"script": ""}`: `error: run needs "script"`, `{"script": 1}`: `error: run: invalid arguments: "script" is a string, not a number`} {
 		got, err = a.Ask(ctx, "chat", "!"+toolRun+" "+args, nil)
 		if got := result(t, got, err); got != want {
 			t.Fatalf("%s: %q", args, got)
@@ -202,12 +203,12 @@ func TestRunDescription(t *testing.T) {
 	if !strings.Contains(run.Description, want) {
 		t.Fatalf("got:\n%s", run.Description)
 	}
-	if want := "Limits: 10m0s, 64 calls, 64 KiB of source; 16 KiB of print and 16 KiB of the value come back, " +
-		"4 KiB each once the results of an answer have more than 64 KiB. What is left out is kept in printed and returned. "; !strings.Contains(run.Description, want) {
+	if want := "Limits: 10m0s, 64 calls, 64 KiB of source; 32 KiB of print and 32 KiB of the value come back, " +
+		"4 KiB each once the results of an answer have more than 128 KiB. What is left out is kept in printed and returned. "; !strings.Contains(run.Description, want) {
 		t.Fatalf("the limits are not what the tool says: %s", run.Description)
 	}
-	if script.MaxCalls != 64 || script.MaxSource != 64<<10 || script.MaxResult != 16<<10 || script.MaxPrint != 16<<10 ||
-		script.Tight != 4<<10 || agent.Budget != 64<<10 {
+	if script.MaxCalls != 64 || script.MaxSource != 64<<10 || script.MaxResult != 32<<10 || script.MaxPrint != 32<<10 ||
+		script.Tight != 4<<10 || agent.Budget != 128<<10 {
 		t.Fatal("the limits changed: the README names them")
 	}
 	if out, err := run.Run(context.Background(), json.RawMessage(`{"script": "Object.keys(tools)"}`)); err != nil || out != `["greet","delete","list_peers","odd","broken"]` {
@@ -271,9 +272,9 @@ func (l *scriptsLLM) Complete(_ context.Context, _ string, msgs []openai.Message
 // Once the results of an answer are beyond the budget, a script gives back
 // less of what it prints.
 func TestRunGivesBackLessBeyondTheBudget(t *testing.T) {
-	// 4 times 16000 and 1536 bytes: Budget exactly, which is not beyond it.
+	// 8 times 16000 and 3072 bytes: Budget exactly, which is not beyond it.
 	var scripts scriptsLLM
-	for i, n := range []int{16000, 16000, 16000, 16000, 1536, 16000, 16000} {
+	for i, n := range []int{16000, 16000, 16000, 16000, 16000, 16000, 16000, 16000, 3072, 16000, 16000} {
 		scripts = append(scripts, fmt.Sprintf(`print("%c".repeat(%d))`, 'a'+i, n)) // none repeats another
 	}
 	a := agent.New(&scripts, "m", "sys", withRun(nil, script.NewSessions()))
@@ -286,7 +287,7 @@ func TestRunGivesBackLessBeyondTheBudget(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(printed, []int{16000, 16000, 16000, 16000, 1536, 16000, script.Tight}) {
+	if !slices.Equal(printed, []int{16000, 16000, 16000, 16000, 16000, 16000, 16000, 16000, 3072, 16000, script.Tight}) {
 		t.Fatalf("printed %v", printed)
 	}
 }
@@ -322,5 +323,69 @@ func TestFirstLine(t *testing.T) {
 		if got := firstLine(in); got != want {
 			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// directLLM calls the functions of run as tools of its own, one after the
+// other with the arguments given, and then answers with what it was given
+// back.
+type directLLM struct {
+	calls   [][2]string
+	results []string
+}
+
+func (l *directLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if last := msgs[len(msgs)-1]; last.Role == "tool" {
+		l.results = append(l.results, last.Content)
+	}
+	if len(l.calls) == 0 {
+		return openai.Message{Content: "done"}, nil
+	}
+	c := l.calls[0]
+	l.calls = l.calls[1:]
+	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "c", Function: openai.FunctionCall{Name: c[0], Arguments: c[1]}}}}, nil
+}
+
+// A function of run that the LLM calls as a tool of its own runs in a
+// script of run, as one call of run, and the LLM is told to call it there.
+// What run does not have stays unknown.
+func TestRunTakesWhatTheLLMCallsDirectly(t *testing.T) {
+	echo := agent.NewTool("delete", "", []agent.Param{{Name: "path"}}, func(_ context.Context, args struct {
+		Path string `json:"path"`
+	}) (string, error) {
+		return "deleted " + args.Path, nil
+	})
+	llm := &directLLM{calls: [][2]string{
+		{"delete", `{"path": "a b"}`},
+		{"delete", ``},
+		{"delete", `[1]`},
+		{"nope", `{}`},
+	}}
+	a := agent.New(llm, "m", "sys", withRun([]agent.Tool{echo}, script.NewSessions()))
+	var steps []string
+	if _, err := a.Run(context.Background(), "c1", "go", agent.Observer{Step: func(s agent.Step) {
+		if !s.Done {
+			steps = append(steps, s.Tool+" "+string(s.Args))
+		}
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	note := "\n[ran inside the tool run: delete is a function of run, call it there]"
+	want := []string{
+		"deleted a b" + note,
+		"deleted " + note,
+		"error: delete: invalid arguments: they are an object, not an array" + note,
+		"error: unknown tool nope",
+	}
+	if strings.Join(llm.results, "|") != strings.Join(want, "|") {
+		t.Fatalf("results:\n%q\nwant:\n%q", llm.results, want)
+	}
+	wantSteps := []string{
+		`run {"script":"tools[\"delete\"]({\"path\":\"a\\u2028b\"})"}`, `delete {"path":"a b"}`,
+		`run {"script":"tools[\"delete\"]({})"}`, `delete {}`,
+		"nope {}",
+	}
+	if strings.Join(steps, "\n") != strings.Join(wantSteps, "\n") {
+		t.Fatalf("steps:\n%s\nwant:\n%s", strings.Join(steps, "\n"), strings.Join(wantSteps, "\n"))
 	}
 }

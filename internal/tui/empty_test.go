@@ -10,7 +10,7 @@ import (
 
 // nameRow is the first row of name as an empty chat draws it at full size,
 // without the blanks at its ends: what a view shows of the name, if it does.
-func nameRow(name string) string { return strings.TrimSpace(nameArt(name, 2)[0]) }
+func nameRow(name string) string { return strings.TrimSpace(nameArt(name, nameScale)[0]) }
 
 // The name is in the middle of the viewport, whatever its size: in the
 // largest size of the font that fits, and in plain letters where none does.
@@ -19,7 +19,7 @@ func TestEmptyChatCentered(t *testing.T) {
 		w, h  int
 		scale int // 0 for the plain name
 	}{
-		{80, 21, 2}, {38, 6, 2}, {37, 6, 1}, {38, 5, 1}, {40, 10, 2}, {19, 3, 1}, {18, 3, 0}, {19, 2, 0}, {12, 4, 0}, {1, 1, 0},
+		{80, 21, 1}, {38, 6, 1}, {37, 6, 0}, {38, 5, 0}, {40, 10, 1}, {19, 3, 0}, {18, 3, 0}, {19, 2, 0}, {12, 4, 0}, {1, 1, 0},
 	} {
 		view := ansi.Strip(emptyChat("Luna", c.w, c.h))
 		lines := strings.Split(view, "\n")
@@ -35,7 +35,7 @@ func TestEmptyChatCentered(t *testing.T) {
 		if c.scale > 0 {
 			rows = nameArt("Luna", c.scale)
 		}
-		if art := fitName("Luna", c.w, c.h); len(art) != 3*c.scale {
+		if art := fitName("Luna", c.w, c.h); len(art) != 6*c.scale {
 			t.Fatalf("%dx%d: %d rows, want the size %d", c.w, c.h, len(art), c.scale)
 		}
 		// What is left over is halved: of an odd rest the larger half is below and to the right.
@@ -86,8 +86,8 @@ func TestEmptyChatUsesCurrentProfileAndDisappears(t *testing.T) {
 	b.status.Name = "Luna"
 	m.Update(m.refreshStatus())
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
-	marker := strings.TrimSpace(nameArt("Luna", 2)[2])
-	if view := view(m); !strings.Contains(view, marker) || strings.Contains(view, "No messages yet") {
+	marker := strings.TrimSpace(nameArt("Luna", nameScale)[2])
+	if view := ansi.Strip(view(m)); !strings.Contains(view, marker) || strings.Contains(view, "No messages yet") {
 		t.Fatalf("empty profile chat:\n%s", view)
 	}
 	if line := strings.Split(ansi.Strip(m.chatView()), "\n")[1]; strings.Contains(line, "Luna") {
@@ -107,13 +107,13 @@ func TestEmptyChatFitsTheNameToTheWindow(t *testing.T) {
 	b.status.Name = "herox215"
 	m.Update(m.refreshStatus())
 	for width, want := range map[int]string{
-		82: strings.TrimSpace(nameArt("herox215", 2)[5]),
-		81: strings.TrimSpace(nameArt("herox215", 1)[2]),
-		43: strings.TrimSpace(nameArt("herox215", 1)[2]),
+		86: strings.TrimSpace(nameArt("herox215", nameScale)[5]),
+		82: strings.TrimSpace(nameArt("herox215", nameScale)[5]),
+		81: "herox215",
 		42: "herox215",
 	} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
-		if view := view(m); !strings.Contains(view, want) {
+		if view := ansi.Strip(view(m)); !strings.Contains(view, want) {
 			t.Errorf("%d columns: no %q:\n%s", width, want, view)
 		}
 	}
@@ -123,10 +123,9 @@ func TestNameArtUsesSplashFont(t *testing.T) {
 	if got := nameArt("Ouroboros", 1); strings.Join(got, "\n") != strings.Join(bigTitle, "\n") {
 		t.Fatalf("the name is not in the font of the splash title:\n%s", strings.Join(got, "\n"))
 	}
-	// At twice the size a pixel is a cell high and two wide: every row of
-	// the title is two rows, and every column two columns.
+	// At twice the size every block of the title is two rows of two cells.
 	big := nameArt("Ouroboros", 2)
-	if len(big) != 6 {
+	if len(big) != 2*len(bigTitle) {
 		t.Fatalf("%d rows", len(big))
 	}
 	for y, row := range big {
@@ -135,12 +134,7 @@ func TestNameArtUsesSplashFont(t *testing.T) {
 			t.Fatalf("row %d has %d columns", y, len(cells))
 		}
 		for x, r := range cells {
-			half := []rune(bigTitle[y/2])[x/2]
-			want := ' '
-			if half == '█' || half == [2]rune{'▀', '▄'}[y%2] {
-				want = '█'
-			}
-			if r != want {
+			if want := []rune(bigTitle[y/2])[x/2]; r != want {
 				t.Fatalf("row %d, column %d: %q, want %q:\n%s", y, x, r, want, strings.Join(big, "\n"))
 			}
 		}

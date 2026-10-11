@@ -124,26 +124,36 @@ var titleFont = map[rune][6]string{
 	's': {".###", "#...", ".##.", "...#", "...#", "###."},
 }
 
-// bigTitle is the title in the font: two pixel rows share a cell as half
-// blocks, and a blank column follows every letter.
-var bigTitle = halfBlocks(titleText)
+// bigTitle is the title in the font, and bigGlyph and bigLetter are its
+// measures: the columns of one letter, and of one letter with the blank
+// blocks that follow it.
+var bigTitle = blockArt(titleText, 1)
 
-const bigLetter = 5 // columns of a letter of bigTitle, with its gap
+const (
+	bigGlyph  = 8
+	bigLetter = 10
+)
 
-func halfBlocks(text string) []string { return scaledHalfBlocks(text, 1) }
-
-func scaledHalfBlocks(text string, scale int) []string {
-	blocks := map[[2]bool]rune{{true, true}: '█', {true, false}: '▀', {false, true}: '▄', {false, false}: ' '}
-	lines := make([]string, 3*scale)
+// blockArt draws text in the font of the title: a pixel of a letter is a
+// block two cells wide and one cell high, which is a square of the screen,
+// and scale times as large. The terminal paints a block as the background of
+// its cells, which it fills to their edges, where the halves of a block glyph
+// leave the seams of the font between the rows of a title.
+func blockArt(text string, scale int) []string {
+	lines := make([]string, 6*scale)
 	for row := range lines {
 		var b strings.Builder
 		for i, r := range text {
 			if i > 0 {
-				b.WriteString(strings.Repeat(" ", scale))
+				b.WriteString(strings.Repeat(" ", 2*scale))
 			}
 			glyph := titleFont[r]
-			for x := range 4 * scale {
-				b.WriteRune(blocks[[2]bool{glyph[row*2/scale][x/scale] == '#', glyph[(row*2+1)/scale][x/scale] == '#'}])
+			for x := range 8 * scale {
+				if glyph[row/scale][x/(2*scale)] == '#' {
+					b.WriteRune('█')
+					continue
+				}
+				b.WriteRune(' ')
 			}
 		}
 		lines[row] = b.String()
@@ -217,10 +227,14 @@ func hash(x, y, z int) uint32 {
 	return h ^ h>>16
 }
 
-// cell is one character of the splash. A cell without a rune is blank.
+// cell is one cell of the splash. A cell without a rune is blank. The cell
+// of a block of the title also carries a background color: the terminal fills
+// a background into its cell exactly, where the ink a block glyph shows leaves
+// the seams of the font between two rows of the title.
 type cell struct {
 	r    rune
 	fg   color.RGBA
+	bg   color.RGBA
 	bold bool
 }
 
@@ -237,7 +251,18 @@ func (c *canvas) set(x, y int, r rune, fg color.RGBA, bold bool) {
 	if x < 0 || y < 0 || x >= c.w || y >= c.h {
 		return
 	}
-	c.cells[y*c.w+x] = cell{r, mix(c.back, fg, c.alpha), bold}
+	c.cells[y*c.w+x] = cell{r: r, fg: mix(c.back, fg, c.alpha), bold: bold}
+}
+
+// block paints a whole cell in one color, for a pixel of the title: the glyph
+// in that color and the background of the same color together fill the cell,
+// so that two rows of blocks show no seam between them.
+func (c *canvas) block(x, y int, col color.RGBA) {
+	if x < 0 || y < 0 || x >= c.w || y >= c.h {
+		return
+	}
+	col = mix(c.back, col, c.alpha)
+	c.cells[y*c.w+x] = cell{r: '█', fg: col, bg: col}
 }
 
 // text draws s from x on, every rune in one cell.
@@ -257,7 +282,7 @@ func (c *canvas) String() string {
 		row := c.cells[y*c.w : (y+1)*c.w]
 		for x := 0; x < len(row); {
 			end := x + 1
-			for end < len(row) && row[end].fg == row[x].fg && row[end].bold == row[x].bold {
+			for end < len(row) && row[end].fg == row[x].fg && row[end].bg == row[x].bg && row[end].bold == row[x].bold {
 				end++
 			}
 			run := make([]rune, end-x)
@@ -266,9 +291,14 @@ func (c *canvas) String() string {
 			}
 			if row[x].r == 0 {
 				b.WriteString(string(run))
-			} else {
-				b.WriteString(lipgloss.NewStyle().Foreground(row[x].fg).Bold(row[x].bold).Render(string(run)))
+				x = end
+				continue
 			}
+			style := lipgloss.NewStyle().Foreground(row[x].fg).Bold(row[x].bold)
+			if row[x].bg != (color.RGBA{}) {
+				style = style.Background(row[x].bg)
+			}
+			b.WriteString(style.Render(string(run)))
 			x = end
 		}
 	}
@@ -349,7 +379,7 @@ func drawTitle(c *canvas, p palette, title []string, letter, top int, at time.Du
 	for row, line := range title {
 		for x, r := range []rune(line) {
 			reveal := titleAt + time.Duration(x/letter)*letterGap
-			if at < reveal-scrambleFor || x%letter == bigLetter-1 {
+			if at < reveal-scrambleFor || x%letter >= bigGlyph {
 				continue // not yet, or the gap after a letter
 			}
 			hue := float64(x)/float64(width)*0.8 - at.Seconds()*0.3
@@ -358,8 +388,11 @@ func drawTitle(c *canvas, p palette, title []string, letter, top int, at time.Du
 				c.set(left+x, top+row, scramble[n%uint32(len(scramble))], mix(p.back, p.gradient(hue), 0.6), false)
 				continue
 			}
-			if r != ' ' {
-				c.set(left+x, top+row, r, mix(p.gradient(hue), p.glow, 0.9*bell(float64(x)-shine, 2.5)), true)
+			col := mix(p.gradient(hue), p.glow, 0.9*bell(float64(x)-shine, 5))
+			if r == '█' {
+				c.block(left+x, top+row, col)
+			} else if r != ' ' {
+				c.set(left+x, top+row, r, col, true)
 			}
 		}
 	}

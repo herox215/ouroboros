@@ -599,7 +599,7 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 	tuiplugin.Use(t, func(m *tui.Model) error {
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 		m.Update(key(' ')) // skips the splash
-		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "● online") })
+		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "gpt-") })
 		drive(t, m, typed(m, "!again"), func() bool { _, ok := m.Restarts(); return ok })
 		shown = m.Current()
 		return nil

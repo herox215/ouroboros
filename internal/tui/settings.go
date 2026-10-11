@@ -181,9 +181,9 @@ func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		case "esc":
 			m.screen = screenChat
 		case "up", "k":
-			c.category = max(0, c.category-1)
+			c.category = cycle(c.category, -1, len(sections))
 		case "down", "j":
-			c.category = min(len(sections)-1, c.category+1)
+			c.category = cycle(c.category, 1, len(sections))
 		case "enter":
 			if len(c.rows) > 0 {
 				c.opened, c.sel, m.choice, c.top = true, 0, 0, 0
@@ -195,9 +195,9 @@ func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		c.opened, c.top = false, 0
 	case "up", "k":
-		c.sel, m.choice = max(0, c.sel-1), 0
+		c.sel, m.choice = cycle(c.sel, -1, len(c.shown(m))), 0
 	case "down", "j":
-		c.sel, m.choice = min(max(len(c.shown(m))-1, 0), c.sel+1), 0
+		c.sel, m.choice = cycle(c.sel, 1, len(c.shown(m))), 0
 	case "left", "h":
 		m.choice = max(0, m.choice-1)
 	case "right", "l":

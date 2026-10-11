@@ -463,16 +463,15 @@ func (m *Model) headerView() string {
 		id = s.ID + " · "
 		where = fmt.Sprintf("%s:%d · ", id, s.Port)
 	}
+	// Whether the node is online is not said: while the UI is open it is.
 	var state string
 	switch {
 	case s.Running:
-		state = lipgloss.NewStyle().Foreground(good).Render("● online") +
-			mutedStyle.Render("  "+where+m.modelText())
+		state = mutedStyle.Render(where + m.modelText())
 	case !s.Configured:
 		state = lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  type /setup")
 	default:
-		state = lipgloss.NewStyle().Foreground(bad).Render("○ offline") +
-			mutedStyle.Render("  "+id+"type /start")
+		state = mutedStyle.Render(id + "type /start")
 	}
 	if m.requests.unread > 0 {
 		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.requests.unread))

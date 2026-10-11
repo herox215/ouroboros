@@ -187,8 +187,6 @@ func TestErrors(t *testing.T) {
 		"var x = ;":                   "the script is not valid JavaScript: SyntaxError: script: Line 1:9 Unexpected token ;",
 		"}":                           "the script is not valid JavaScript: SyntaxError: script: Line 1:1 Unexpected token }",
 		"return 1 +":                  "the script is not valid JavaScript: SyntaxError: script: Line 2:1 Unexpected token }",
-		`const home = await list({path: "~"})`: "the script is not valid JavaScript: SyntaxError: script: Line 1:20 Unexpected identifier: " +
-			"the tools return their result right away, so call them without await",
 		"function f() { return f() }\nreturn f()": "the script was stopped: more than 1024 calls within each other, at f (script:1:",
 		strings.Repeat(" ", MaxSource) + ";":      "the script has 65537 bytes: at most 65536 are run",
 	} {
@@ -390,5 +388,46 @@ func TestLimitOfMemoryCountsTheGrowth(t *testing.T) {
 		})
 	if err != nil || got != "done" {
 		t.Fatalf("after a collection: got %q, %v", got, err)
+	}
+}
+
+// The tools return their result right away: an await before one is left
+// out, not in a string or a comment, and a script that is no JavaScript
+// without it either stays an error.
+func TestAwaitIsLeftOut(t *testing.T) {
+	for source, want := range map[string]string{
+		`const s = await echo({a: 1}); s`:                                `echo:{"a":1}`,
+		"const s = await echo({t: \"await x\"}) // await\n/* await */ s": `echo:{"t":"await x"}`,
+		"return (await echo({t: 'it\\'s await'})) + `${'await'}`":        `echo:{"t":"it's await"}await`,
+		"var awaited = 1; await echo({n: awaited})":                      `echo:{"n":1}`,
+	} {
+		if got, _, err := run(t, source); err != nil || strings.SplitN(got, "\n", 2)[0] != want {
+			t.Errorf("%q = %q, %v; want %q", source, got, err, want)
+		}
+	}
+	for _, source := range []string{"await echo({a: 1}) +", "await echo({}) /* never ends"} {
+		if got, _, err := run(t, source); err == nil || got != "" || !strings.HasPrefix(err.Error(), "the script is not valid JavaScript: SyntaxError") {
+			t.Errorf("%q = %q, %v", source, got, err)
+		}
+	}
+}
+
+// A call of a tool that is a statement of its own, and not the last one,
+// prints what it returns, as only the value of the last statement comes
+// back; nothing else is printed for the script.
+func TestALostResultIsPrinted(t *testing.T) {
+	got, _, err := run(t, `echo({a: 1}); tools.delete({b: 2}); [1].push(2); Math.max(1, 2); [echo][0]({d: 4}); echo({c: 3})`)
+	if want := "echo:{\"a\":1}\ndelete:{\"b\":2}\necho:{\"c\":3}"; err != nil || got != want {
+		t.Fatalf("got %q, %v; want %q", got, err, want)
+	}
+	// An empty result prints nothing.
+	s, r := NewSession(), &recorder{}
+	if got, err := s.Run(context.Background(), "begin({}); 1", []string{"begin"}, func(context.Context, string, json.RawMessage) (string, error) { return "", nil }); err != nil || got != "1" {
+		t.Fatalf("empty: %q, %v", got, err)
+	}
+	// A script with return at its top level is a function body: its calls
+	// print nothing of themselves.
+	if got, err := s.Run(context.Background(), "echo({a: 1}); return 2", r.names(), r.call); err != nil || got != "2" {
+		t.Fatalf("with return: %q, %v", got, err)
 	}
 }

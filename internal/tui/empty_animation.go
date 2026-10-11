@@ -185,9 +185,10 @@ func drawNameAnimation(name string, width, height int, elapsed time.Duration, li
 				fg = p.body[tint>>8%uint32(len(p.body))]
 			}
 			if torn != 0 && hash(x, y, torn)%9 == 0 {
-				r = '▒'
+				c.set(left+x+jump, top+y, '▒', fg, false)
+				continue
 			}
-			c.set(left+x+jump, top+y, r, fg, false)
+			c.block(left+x+jump, top+y, fg)
 		}
 	}
 	if row, ok := emptyTaglineRow(width, height, len(art), selected...); ok {

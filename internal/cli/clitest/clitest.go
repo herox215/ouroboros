@@ -5,6 +5,7 @@ package clitest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"ouroboros/internal/openai/openaitest"
 	"ouroboros/internal/peers"
 	sessionplugin "ouroboros/internal/plugins/session"
+	"ouroboros/internal/sandbox"
 	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
@@ -337,8 +339,23 @@ func Serve(t *testing.T, s cli.Settings, extra ...plugin.Plugin) *Node {
 		n.err = app.Run(ctx, []string{"serve"})
 	}()
 	t.Cleanup(func() { n.Stop() })
-	if _, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), Patience); !ok {
-		t.Fatal("node did not start")
+	running := make(chan bool, 1)
+	go func() {
+		_, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), Patience)
+		running <- ok
+	}()
+	select {
+	case ok := <-running:
+		if !ok {
+			t.Fatal("node did not start")
+		}
+	case <-n.done:
+		// The sandbox of the tool bash allows no socket of the file system,
+		// and a node does not run without its own.
+		if sandbox.Nested() && errors.Is(n.err, syscall.EPERM) {
+			t.Skipf("a node cannot run in the sandbox of bash, which allows no socket of the file system: %v", n.err)
+		}
+		t.Fatalf("node did not start: %v", n.err)
 	}
 	return n
 }

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -62,6 +63,10 @@ func NewTool[T any](name, description string, params []Param, run func(ctx conte
 
 // RunFunc is what runs a Tool: it gets the arguments of a call as JSON.
 type RunFunc = agent.RunFunc
+
+// Decode decodes the arguments raw of a call of the tool name into v, and
+// takes a number written as a string as the number: see agent.Decode.
+func Decode(name string, raw json.RawMessage, v any) error { return agent.Decode(name, raw, v) }
 
 // Configurable returns t as a tool the owner can give settings in the
 // configuration, next to its name: {"tool": "read", "allow": ["~/share"]}. S

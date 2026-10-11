@@ -83,3 +83,102 @@ func TestConfigurable(t *testing.T) {
 		t.Errorf("the error of the tool is lost: %v", err)
 	}
 }
+
+// The error of arguments that cannot be decoded says what is wrong with
+// them.
+func TestInvalidArguments(t *testing.T) {
+	type args struct {
+		S  string            `json:"s"`
+		B  bool              `json:"b"`
+		I  int               `json:"i"`
+		U  uint              `json:"u"`
+		F  float64           `json:"f"`
+		L  []string          `json:"l"`
+		M  map[string]string `json:"m"`
+		P  *int              `json:"p"`
+		In struct {
+			X int `json:"x"`
+		} `json:"in"`
+	}
+	for raw, want := range map[string]string{
+		`{"s": 1}`:           `"s" is a string, not a number`,
+		`{"s": true}`:        `"s" is a string, not true or false`,
+		`{"b": "yes"}`:       `"b" is true or false, not a string`,
+		`{"i": 1.5}`:         `"i" is a whole number, not number 1.5`,
+		`{"u": -1}`:          `"u" is a whole number of at least 0, not number -1`,
+		`{"f": [1]}`:         `"f" is a number, not an array`,
+		`{"l": {}}`:          `"l" is an array, not an object`,
+		`{"m": []}`:          `"m" is an object, not an array`,
+		`{"p": "1"}`:         `"p" is a whole number, not a string`,
+		`{"in": {"x": "1"}}`: `"in.x" is a whole number, not a string`,
+		`[]`:                 "they are an object, not an array",
+		`"x"`:                "they are an object, not a string",
+		`{`:                  "they are a JSON object",
+	} {
+		var a args
+		err := json.Unmarshal([]byte(raw), &a)
+		if got := InvalidArguments("t", err).Error(); got != "t: invalid arguments: "+want {
+			t.Errorf("%s: %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// A number written as a string is taken as the number, also within an
+// object; a string that is no number, or no object to find it in, is an
+// error.
+func TestDecodeTakesNumbersAsStrings(t *testing.T) {
+	type args struct {
+		Path   string  `json:"path"`
+		Offset int     `json:"offset"`
+		Limit  uint    `json:"limit"`
+		Scale  float64 `json:"scale"`
+		In     struct {
+			X int `json:"x"`
+		} `json:"in"`
+	}
+	var got args
+	if err := Decode("read", json.RawMessage(`{"path": "a", "offset": "295", "limit": " 90 ", "scale": "1.5", "in": {"x": "-2"}}`), &got); err != nil ||
+		got.Path != "a" || got.Offset != 295 || got.Limit != 90 || got.Scale != 1.5 || got.In.X != -2 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	for raw, want := range map[string]string{
+		`{"offset": "one"}`: `read: invalid arguments: "offset" is a whole number, not a string`,
+		`{"offset": "1.5"}`: `read: invalid arguments: "offset" is a whole number, not number 1.5`,
+		`{"limit": "-1"}`:   `read: invalid arguments: "limit" is a whole number of at least 0, not number -1`,
+		`{"path": 1}`:       `read: invalid arguments: "path" is a string, not a number`,
+		`[1]`:               `read: invalid arguments: they are an object, not an array`,
+		`{"offset": "1"`:    `read: invalid arguments: they are a JSON object`,
+	} {
+		var a args
+		if err := Decode("read", json.RawMessage(raw), &a); err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %q", raw, err, want)
+		}
+	}
+	var flag struct {
+		On bool `json:"on"`
+	}
+	if err := Decode("t", json.RawMessage(`{"on": "true"}`), &flag); err == nil || err.Error() != `t: invalid arguments: "on" is true or false, not a string` {
+		t.Errorf("true as a string: %v", err)
+	}
+	var number int
+	if err := Decode("t", json.RawMessage(`"5"`), &number); err == nil {
+		t.Error("a number as a string instead of the arguments: no error")
+	}
+	// A string that cannot be found again, as in an array, stays an error.
+	var list struct {
+		N []int `json:"n"`
+	}
+	if err := Decode("t", json.RawMessage(`{"n": ["1"]}`), &list); err == nil {
+		t.Error("a number as a string in an array: no error")
+	}
+	// More numbers as strings than Decode takes.
+	var many map[string]int
+	raw := "{"
+	for i := range maxQuoted + 1 {
+		raw += fmt.Sprintf(`"k%02d": "%d",`, i, i)
+	}
+	raw = raw[:len(raw)-1] + "}"
+	if err := Decode("t", json.RawMessage(raw), &many); err == nil {
+		t.Error("too many numbers as strings: no error")
+	}
+}

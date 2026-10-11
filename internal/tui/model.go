@@ -105,9 +105,9 @@ func (s *modelScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		m.screen = screenChat
 	case "up", "k":
-		s.sel = max(0, s.sel-1)
+		s.sel = cycle(s.sel, -1, len(s.choices))
 	case "down", "j":
-		s.sel = min(max(len(s.choices)-1, 0), s.sel+1)
+		s.sel = cycle(s.sel, 1, len(s.choices))
 	case "enter", "p", "f":
 		if s.busy != "" || s.err != nil || s.sel >= len(s.choices) {
 			return nil

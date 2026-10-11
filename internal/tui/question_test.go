@@ -71,7 +71,7 @@ func TestQuestion(t *testing.T) {
 			t.Fatalf("no %q in:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Message, or /help") || !fits(m) || m.givenUp() != 0 {
+	if strings.Contains(view, "Keep on dreaming") || !fits(m) || m.givenUp() != 0 {
 		t.Fatalf("the input is not there to write in, and the chat fits (gives up %d):\n%s", m.givenUp(), view)
 	}
 	if got := m.waiting(); got != "alpha waits for your answer" {
@@ -86,14 +86,18 @@ func TestQuestion(t *testing.T) {
 	if got := texts(m); got != ">go|Which database?" {
 		t.Fatalf("the conversation: %s", got)
 	}
-	// Up and down stay within the rows; the last is the one for own words,
-	// which shows the input, and up in an empty input leaves it again.
-	press(m, "up", "up")
+	// Up and down go around the rows; the last is the one for own words,
+	// which shows the input, and up in an empty input takes it again.
+	press(m, "up")
 	if c.asking.sel != 0 {
 		t.Fatalf("at the top: %d", c.asking.sel)
 	}
-	press(m, "down", "down", "down")
-	if view := ansi.Strip(m.chatView()); !c.asking.own() || !strings.Contains(view, "› Chat about it") || !strings.Contains(view, "Message, or /help") || !fits(m) || m.givenUp() != 3 {
+	press(m, "up")
+	if !c.asking.own() {
+		t.Fatalf("up at the first goes to own words: %d", c.asking.sel)
+	}
+	press(m, "down", "down")
+	if view := ansi.Strip(m.chatView()); !c.asking.own() || !strings.Contains(view, "› Chat about it") || !strings.Contains(view, "Keep on dreaming") || !fits(m) || m.givenUp() != 3 {
 		t.Fatalf("own words (gives up %d):\n%s", m.givenUp(), view)
 	}
 	if cmd := press(m, "enter"); cmd != nil || c.asking == nil {
@@ -208,7 +212,7 @@ func TestQuestionWithoutOptions(t *testing.T) {
 	}
 	c := m.chat
 	drive(t, m, say(t, m, "go"), func() bool { return c.asking != nil })
-	if view := ansi.Strip(m.inputView(96, 20)); !c.asking.own() || !strings.HasPrefix(view, "? What is it called?\n") || !strings.Contains(view, "Message, or /help") || strings.Contains(view, ownWords) {
+	if view := ansi.Strip(m.inputView(96, 20)); !c.asking.own() || !strings.HasPrefix(view, "? What is it called?\n") || !strings.Contains(view, "Keep on dreaming") || strings.Contains(view, ownWords) {
 		t.Fatalf("the input alone:\n%s", view)
 	}
 	// There is no row to go up or down to.

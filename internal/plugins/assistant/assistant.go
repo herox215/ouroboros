@@ -11,6 +11,7 @@ import (
 	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 	"ouroboros/internal/llm"
+	"ouroboros/internal/update"
 	"ouroboros/plugin"
 )
 
@@ -49,6 +50,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Tools:     func() []agent.Tool { return plugin.All[plugin.Tool](ctx) },
 			Failures:  dir.Failures(),
 			Workspace: dir.WorkingDir(),
+			Source:    update.Source,
 		}.WithConfig(dir.Config, dir.Proposals())
 		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug)
 		return services{builder, bot}, nil

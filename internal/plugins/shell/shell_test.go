@@ -208,7 +208,7 @@ func TestRunRefuses(t *testing.T) {
 		{ctx, `{"command": "true", "dir": "~/.ssh"}`, `reading ~/.ssh is refused: ~/.ssh is in "protected"`},
 		{ctx, `{"command": "true", "dir": "~/file"}`, "~/file is no directory"},
 		{ctx, `{"command": "true", "dir": "~/missing"}`, "~/missing is no directory"},
-		{ctx, `{"command": "true", "dir": "relative"}`, `the path "relative" has to be absolute`},
+		{ctx, `{"command": "true", "dir": "~relative"}`, `the path "~relative" has to be absolute`},
 	} {
 		if _, err := w.tool("{}").Run(tt.ctx, json.RawMessage(tt.args)); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: %v, want %q", tt.args, err, tt.want)

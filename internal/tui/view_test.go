@@ -73,7 +73,7 @@ func TestDebugHeaderFillsTheLine(t *testing.T) {
 	if header := ansi.Strip(m.headerView()); header != debug {
 		t.Fatalf("only the mark: %q", header)
 	}
-	m.Update(tea.WindowSizeMsg{Width: 40, Height: 30})
+	m.Update(tea.WindowSizeMsg{Width: 30, Height: 30})
 	if header := ansi.Strip(m.headerView()); !strings.Contains(header, "…") {
 		t.Fatalf("the rest should be cut: %q", header)
 	}

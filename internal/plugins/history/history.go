@@ -108,7 +108,7 @@ func (h *archive) tools() []plugin.Tool {
 				`"scope":{"type":"string","enum":["current","all"],"description":"current (the default): this conversation; all: every conversation of the owner"},` +
 				`"limit":{"type":"integer","description":"how many hits at most, ` + strconv.Itoa(history.DefaultHits) + ` if left out"}},` +
 				`"required":["query"]}`,
-			Run: run(func(ctx context.Context, args searchArgs) (string, error) {
+			Run: run(Search, func(ctx context.Context, args searchArgs) (string, error) {
 				w, err := who(ctx)
 				if err != nil {
 					return "", err
@@ -134,7 +134,7 @@ func (h *archive) tools() []plugin.Tool {
 				`"session":{"type":"string","description":"the session, as ` + Search + ` and ` + Sessions + ` name it; this conversation if left out"},` +
 				`"from":{"type":"integer","description":"the first record, 1 if left out"},` +
 				`"count":{"type":"integer","description":"how many records at most, ` + strconv.Itoa(history.DefaultRecords) + ` if left out"}}}`,
-			Run: run(func(ctx context.Context, args readArgs) (string, error) {
+			Run: run(Read, func(ctx context.Context, args readArgs) (string, error) {
 				w, err := who(ctx)
 				if err != nil {
 					return "", err
@@ -153,7 +153,7 @@ func (h *archive) tools() []plugin.Tool {
 			Description: about + fmt.Sprintf("List the archived conversations, the most recent first, with when they started "+
 				"and their first message: for the owner all of theirs (at most %d), for a peer the one it is in.", history.MaxSessions),
 			Schema: `{"type":"object","properties":{}}`,
-			Run: run(func(ctx context.Context, _ struct{}) (string, error) {
+			Run: run(Sessions, func(ctx context.Context, _ struct{}) (string, error) {
 				w, err := who(ctx)
 				if err != nil {
 					return "", err
@@ -166,12 +166,12 @@ func (h *archive) tools() []plugin.Tool {
 	}
 }
 
-// run makes f the run of a tool whose arguments are decoded into T.
-func run[T any](f func(ctx context.Context, args T) (string, error)) plugin.RunFunc {
+// run makes f the run of the tool name, whose arguments are decoded into T.
+func run[T any](name string, f func(ctx context.Context, args T) (string, error)) plugin.RunFunc {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args T
-		if err := json.Unmarshal(raw, &args); err != nil {
-			return "", errors.New("invalid arguments")
+		if err := plugin.Decode(name, raw, &args); err != nil {
+			return "", err
 		}
 		return f(ctx, args)
 	}

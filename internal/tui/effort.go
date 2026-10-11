@@ -95,10 +95,10 @@ func nearest(choices []string, effort string) int {
 func (s *effortScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "left", "h":
-		s.at = max(0, s.at-1)
+		s.at = cycle(s.at, -1, len(s.choices))
 		s.net.growTo(s.choices[s.at], m.ticks)
 	case "right", "l":
-		s.at = min(len(s.choices)-1, s.at+1)
+		s.at = cycle(s.at, 1, len(s.choices))
 		s.net.growTo(s.choices[s.at], m.ticks)
 	case "esc":
 		m.screen = screenChat

@@ -121,7 +121,7 @@ func Tool(g *guard.Guard, unsandboxed func() (bool, error)) plugin.Tool {
 			"Use the tools for files to read, search and change files, and bash for builds, tests, git and other programs.",
 		Schema: `{"type":"object","properties":{` +
 			`"command":{"type":"string","description":"the command, as bash -c takes it"},` +
-			`"dir":{"type":"string","description":"the directory it runs in, absolute or starting with \"~\", the home directory; the home directory if missing"},` +
+			`"dir":{"type":"string","description":"the directory it runs in: absolute, starting with \"~\", the home directory, or relative to the directory commands start in, where it runs if missing"},` +
 			fmt.Sprintf(`"timeout":{"type":"integer","description":"how many seconds it may run, %d if missing, at most what is left of the script"}`, int(DefaultTimeout/time.Second)) +
 			`},"required":["command"]}`,
 		OwnerOnly: true,
@@ -142,8 +142,8 @@ func Tool(g *guard.Guard, unsandboxed func() (bool, error)) plugin.Tool {
 		}
 		return func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var a args
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return "", fmt.Errorf("%s: invalid arguments", assistant.ToolBash)
+			if err := plugin.Decode(assistant.ToolBash, raw, &a); err != nil {
+				return "", err
 			}
 			return run(ctx, g, unsandboxed, s, a)
 		}, nil

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -190,8 +191,8 @@ func TestRead(t *testing.T) {
 	fails(t, got, err, "~ is not a file; a directory is read with list")
 	got, err = w.run(owner, Read, `{"path": 1}`)
 	fails(t, got, err, "read: invalid arguments")
-	got, err = w.run(owner, Read, readArgs{Path: "notes.md"})
-	fails(t, got, err, `the path "notes.md" has to be absolute or start with ~`)
+	got, err = w.run(owner, Read, readArgs{Path: "~user/notes.md"})
+	fails(t, got, err, `the path "~user/notes.md" has to be absolute or start with ~`)
 
 	// What never ends is not read.
 	if err := syscall.Mkfifo(w.path("~/pipe"), 0o644); err != nil {
@@ -775,7 +776,7 @@ func TestSearch(t *testing.T) {
 		`{"path": "~/src", "pattern": "("}`:              "the pattern is no regular expression",
 		`{"path": "~/src", "pattern": "x", "glob": "["}`: `the glob "[" is no pattern of file names`,
 		`{"path": "~/none", "pattern": "x"}`:             "no such file or directory",
-		`{"path": "src", "pattern": "x"}`:                "absolute",
+		`{"path": "~src", "pattern": "x"}`:               "absolute",
 	} {
 		got, err := w.run(owner, "search", args)
 		fails(t, got, err, want)
@@ -914,4 +915,133 @@ func TestSearchLeavesOutWhatCannotBeRead(t *testing.T) {
 	}
 	got, err := w.run(owner, "search", map[string]any{"path": "~/src/locked", "pattern": "x"})
 	fails(t, got, err, "permission denied")
+}
+
+// An edit whose "old" is not in the file says where it parts from the
+// file, so that the LLM can fix it without reading the file again.
+func TestEditSaysWhereOldParts(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/a.go", "func f() {\n\tif x {\n\t\tt.Fatalf(\"no:\\n%s\", x)\n\t}\n}\n")
+	for old, want := range map[string]string{
+		// A line break where the file has a backslash and an n.
+		"\tif x {\n\t\tt.Fatalf(\"no:\n%s\", x)": `; 1 of its lines match from line 2 of the file on, then line 3 of the file is "\t\tt.Fatalf(\"no:\\n%s\", x)", ` +
+			`where "old" has "\t\tt.Fatalf(\"no:"; in a string of JavaScript a backslash starts an escape`,
+		// Spaces where the file has tabs.
+		"  if x {\n    t.Fatalf(\"no:\\n%s\", x)": "; its lines are lines 2 to 3 of the file, but not with the same spaces and tabs",
+		// The end of the file.
+		"}\n}\nmore":      `; 2 of its lines match from line 4 of the file on, then line 6 of the file is "", where "old" has "more"`,
+		"nothing like it": "; not even its first line is in the file",
+	} {
+		got, err := w.run(owner, Edit, editArgs{Path: "~/a.go", Old: old, New: "x"})
+		if err == nil || got != "" || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v\nwant %q", old, err, want)
+		}
+	}
+}
+
+// With "all", edit replaces every time "old" occurs, and says in which
+// lines; once, it is as without it.
+func TestEditAll(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/a.go", "x := \"old\"\n// \"old\"\n\ny := \"old\"\n")
+	got, err := w.run(owner, Edit, map[string]any{"path": "~/a.go", "old": `"old"`, "new": "\"new\"\n", "all": true})
+	if err != nil || got != "edited ~/a.go: replaced 3 times, in the lines 1, 3, 6" || w.content("~/a.go") != "x := \"new\"\n\n// \"new\"\n\n\ny := \"new\"\n\n" {
+		t.Fatalf("got %q, %v: %q", got, err, w.content("~/a.go"))
+	}
+	if got, err := w.run(owner, Edit, map[string]any{"path": "~/a.go", "old": "x :=", "new": "z :=", "all": true}); err != nil || !strings.HasPrefix(got, "edited ~/a.go; lines 1 to") {
+		t.Fatalf("once: %q, %v", got, err)
+	}
+	got, err = w.run(owner, Edit, map[string]any{"path": "~/a.go", "old": `"new"`, "new": "x"})
+	fails(t, got, err, `"old" occurs 3 times in ~/a.go: it has to match exactly once, so take more of the text around it, or replace it every time with "all"`)
+}
+
+// With context, search shows the lines around every match too, as grep -C
+// does: places that touch are one, places apart are split by --.
+func TestSearchWithContext(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/c.txt", "a\nhit 1\nb\nc\nd\ne\nhit 2\nf\nhit 3\ng\n")
+	got, err := w.run(owner, "search", map[string]any{"path": "~/c.txt", "pattern": "hit", "context": 1})
+	want := "~/c.txt-1- a\n~/c.txt:2: hit 1\n~/c.txt-3- b\n--\n~/c.txt-6- e\n~/c.txt:7: hit 2\n~/c.txt-8- f\n~/c.txt:9: hit 3\n~/c.txt-10- g"
+	if err != nil || got != want {
+		t.Fatalf("got\n%s\n%v\nwant\n%s", got, err, want)
+	}
+	// One place that holds two matches.
+	got, err = w.run(owner, "search", map[string]any{"path": "~/c.txt", "pattern": "hit [23]", "context": 3})
+	if err != nil || strings.Count(got, "--") != 0 || !strings.HasPrefix(got, "~/c.txt-4- c\n") || !strings.HasSuffix(got, "~/c.txt-10- g") {
+		t.Fatalf("one place: %q, %v", got, err)
+	}
+	// At most maxPlaces places.
+	w.file("~/many.txt", strings.Repeat("hit\n\n\n\n", maxPlaces+1))
+	got, err = w.run(owner, "search", map[string]any{"path": "~/many.txt", "pattern": "hit", "context": 1})
+	if err != nil || !strings.HasSuffix(got, fmt.Sprintf("[these are the first %d places, and there are more: narrow the path, the pattern or the glob]", maxPlaces)) {
+		t.Fatalf("places: %q, %v", got, err)
+	}
+	// The limit counts the places of every file.
+	w.file("~/two/a.txt", strings.Repeat("hit\n\n\n\n", maxPlaces-1))
+	w.file("~/two/b.txt", strings.Repeat("hit\n\n\n\n", 3))
+	got, err = w.run(owner, "search", map[string]any{"path": "~/two", "pattern": "hit", "context": 1})
+	if err != nil || strings.Count(got, "\n--\n") != maxPlaces || !strings.Contains(got, "~/two/b.txt:1: hit") || strings.Contains(got, "~/two/b.txt:5: hit") ||
+		!strings.HasSuffix(got, "places, and there are more: narrow the path, the pattern or the glob]") {
+		t.Fatalf("places of two files: %q, %v", got, err)
+	}
+	// Beyond maxAround bytes, a place is only its matching lines.
+	filler := strings.Repeat(strings.Repeat("x", 99)+"\n", 45)
+	w.file("~/big.txt", strings.Repeat(filler+"hit\n", 5)+filler)
+	got, err = w.run(owner, "search", map[string]any{"path": "~/big.txt", "pattern": "hit", "context": 20})
+	places := strings.Split(got, "\n--\n")
+	if err != nil || !strings.HasPrefix(places[0], "~/big.txt-26- ") || len(got) > maxAround+500 ||
+		!regexp.MustCompile(`^\[[1-4] more matching lines, beyond what one search shows, in ~/big.txt \([1-4]\): search there with a narrower pattern\]$`).MatchString(places[len(places)-1]) {
+		t.Fatalf("beyond the bytes: %d places, %d bytes, %v\n%s", len(places), len(got), err, places[len(places)-1])
+	}
+	for _, context := range []int{-1, maxContext + 1} {
+		got, err = w.run(owner, "search", map[string]any{"path": "~/c.txt", "pattern": "hit", "context": context})
+		fails(t, got, err, "context is a number of lines from 0 to 30")
+	}
+}
+
+// Beyond maxAround bytes, search says how many more matches are in which
+// file, instead of lines that would not come back from a script.
+func TestSearchFitsItsBytes(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/fit/a.txt", strings.Repeat("hit "+strings.Repeat("x", 200)+"\n", 100))
+	w.file("~/fit/b.txt", "hit\n")
+	got, err := w.run(owner, "search", map[string]any{"path": "~/fit", "pattern": "hit"})
+	lines := strings.Split(got, "\n")
+	last := lines[len(lines)-1]
+	if err != nil || len(got) > maxAround+300 || !strings.HasPrefix(lines[0], "~/fit/a.txt:1: hit") ||
+		!regexp.MustCompile(`^\[\d+ more matching lines, beyond what one search shows, in ~/fit/a.txt \(\d+\), ~/fit/b.txt \(1\): search there with a narrower pattern\]$`).MatchString(last) {
+		t.Fatalf("%d bytes, %v, the end: %s", len(got), err, last)
+	}
+}
+
+// With from and to, edit replaces those lines, whatever their text: no old
+// has to be written as the file has it.
+func TestEditLines(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/l.go", "a\nb \"\\n\"\nb \"\\n\"\nd\n")
+	got, err := w.run(owner, Edit, map[string]any{"path": "~/l.go", "from": 3, "to": 3, "new": "c"})
+	if err != nil || w.content("~/l.go") != "a\nb \"\\n\"\nc\nd\n" || !strings.HasPrefix(got, "edited ~/l.go; lines 1 to 4 of 4 are now:") {
+		t.Fatalf("one line: %q, %v: %q", got, err, w.content("~/l.go"))
+	}
+	if _, err := w.run(owner, Edit, map[string]any{"path": "~/l.go", "from": 1, "to": 2, "new": "x\ny\nz\n"}); err != nil || w.content("~/l.go") != "x\ny\nz\nc\nd\n" {
+		t.Fatalf("more lines: %v: %q", err, w.content("~/l.go"))
+	}
+	if _, err := w.run(owner, Edit, map[string]any{"path": "~/l.go", "from": 4, "to": 5, "new": ""}); err != nil || w.content("~/l.go") != "x\ny\nz\n" {
+		t.Fatalf("taken out: %v: %q", err, w.content("~/l.go"))
+	}
+	w.file("~/end", "a\nb")
+	if _, err := w.run(owner, Edit, map[string]any{"path": "~/end", "from": 2, "to": 2, "new": "c"}); err != nil || w.content("~/end") != "a\nc" {
+		t.Fatalf("the last line, without a break: %v: %q", err, w.content("~/end"))
+	}
+	for args, want := range map[string]string{
+		`{"path": "~/l.go", "from": 0, "to": 1, "new": "x"}`:             "~/l.go: the lines 0 to 1 are not lines of the file, which has 3",
+		`{"path": "~/l.go", "from": 2, "to": 1, "new": "x"}`:             "the lines 2 to 1 are not lines",
+		`{"path": "~/l.go", "from": 3, "to": 4, "new": "x"}`:             "the lines 3 to 4 are not lines",
+		`{"path": "~/l.go", "from": 1, "to": 1, "old": "x", "new": "y"}`: `edit takes "old" or "from" and "to", not both`,
+		`{"path": "~/l.go", "to": 1, "all": true, "new": "y"}`:           `edit takes "old" or "from" and "to", not both`,
+		`{"path": "~/l.go", "new": "y"}`:                                 `edit needs "old", the text to replace, or "from" and "to", the lines to replace`,
+	} {
+		got, err := w.run(owner, Edit, args)
+		fails(t, got, err, want)
+	}
 }

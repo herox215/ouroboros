@@ -77,14 +77,14 @@ func TestPrint(t *testing.T) {
 	line := strings.Repeat("x", 1000)
 	s, r := NewSession(), &recorder{}
 	got, err := s.Run(context.Background(), fmt.Sprintf(`[1, 2].forEach(function() { for (var i = 0; i < 100; i++) print(%q) })`, line), r.names(), r.call)
-	if want := "\n(184184" + note + "\n[kept for the next script: printed (string of 200200 bytes)]"; !strings.HasSuffix(got, want) || strings.Count(got, line) != 16 {
+	if want := "\n(168168" + note + "\n[kept for the next script: printed (string of 200200 bytes)]"; !strings.HasSuffix(got, want) || strings.Count(got, line) != 32 {
 		t.Errorf("too much: %d bytes, %v: %q", len(got), err, got[len(got)-100:])
 	}
 	if got := runIn(t, s, r, "printed.length"); got != "200200" {
 		t.Errorf("kept: %q", got)
 	}
 	if got, _, err := run(t, `print("x".repeat(`+fmt.Sprint(MaxPrint)+`)); 1`); err != nil ||
-		got != strings.Repeat("x", MaxPrint)+"\n(1"+note+"\n1\n[kept for the next script: printed (string of 16385 bytes)]" {
+		got != strings.Repeat("x", MaxPrint)+"\n(1"+note+"\n1\n[kept for the next script: printed (string of 32769 bytes)]" {
 		t.Errorf("one line too long: %.40q, %v", got[MaxPrint-10:], err)
 	}
 	// Of very much, the start is kept; under a tightened context less is
@@ -270,7 +270,7 @@ func TestKept(t *testing.T) {
 	if got := runIn(t, s, r, "typeof before"); got != "undefined" {
 		t.Fatalf("after the memory: %q", got)
 	}
-	if MaxPrint != 16<<10 {
+	if MaxPrint != 32<<10 {
 		t.Fatal("the README names the limit")
 	}
 }

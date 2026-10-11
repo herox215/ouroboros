@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -46,6 +47,9 @@ const (
 	maxListed     = 1000      // entries one call of list returns
 	maxMatches    = 200       // lines one call of search returns
 	maxMatchBytes = 300       // bytes of a line search shows
+	maxContext    = 30        // lines search shows before and after a match at most
+	maxPlaces     = 30        // places with their lines around them one call of search returns
+	maxAround     = 12 << 10  // bytes of search with context: the places beyond show only their matches
 )
 
 // maxSearched is how many files one call of search looks into, and
@@ -100,11 +104,18 @@ func tools(g *guard.Guard) []plugin.Tool {
 			[]param{path, {"content", "string", "the whole content of the file", false}},
 			without(write)),
 		tool(g, Edit,
-			`Replace the text "old" in a file by "new". "old" has to match exactly once: take enough of the text around the change. `+
+			`Replace the text "old" in a file by "new". "old" has to match exactly once: take enough of the text around the change; `+
+				`with "all" every time it occurs, like a text that is shown and the tests that expect it. `+
+				"In a script, write old and new as String.raw`…`: a backslash of the file, as in \"\\n\", then stays one; "+
+				"a text with a backtick (Markdown, a struct tag of Go) goes in a string of quotes instead, with \\\\ for each backslash. "+
+				"Or replace the lines from to to by new, with no old to match: of several in one file, do the last first, as the lines after an edit move. "+
 				"Returns the changed lines with a few around them: check them before the next edit.",
 			[]param{path,
 				{"old", "string", "the text to replace, exactly as in the file", false},
-				{"new", "string", "the text to put in its place", false}},
+				{"new", "string", "the text to put in its place", false},
+				{"all", "boolean", "replace every time old occurs, not only once", true},
+				{"from", "integer", "instead of old: the first line to replace, as read and search number them", true},
+				{"to", "integer", "with from: the last line to replace", true}},
 			without(edit)),
 		tool(g, List,
 			fmt.Sprintf("List a directory: directories end in /, files come with their size. At most %d entries; what the tool may not read is left out.", maxListed),
@@ -119,10 +130,13 @@ func tools(g *guard.Guard) []plugin.Tool {
 			"Find the lines of text files that match a regular expression (RE2; (?i) at its start ignores case), "+
 				"in one file or every file below a directory, hidden directories left out. "+
 				fmt.Sprintf("Returns path:line: text, at most %d lines from at most %d files of at most %d it looks at; files over %d MiB are skipped. ", maxMatches, maxSearched, maxWalked, maxWriteBytes>>20)+
-				"Search first to find where something is, then read only the lines around it.",
+				"Search first to find where something is, then read that file, whole unless it is very long: every piece costs a call; "+
+				fmt.Sprintf("with context it returns them too, as grep -C: the lines around a match as path-line- text, places apart split by --, at most %d places. ", maxPlaces)+
+				fmt.Sprintf("Of what is beyond %d KiB it says only how many matches are in which file: search there with a narrower pattern. ", maxAround>>10),
 			[]param{{"path", "string", "the file or directory", false},
 				{"pattern", "string", "the regular expression a line has to match", false},
-				{"glob", "string", `only files whose name matches this, like "*.go"`, true}},
+				{"glob", "string", `only files whose name matches this, like "*.go"`, true},
+				{"context", "integer", fmt.Sprintf("how many lines before and after every match to show too, at most %d", maxContext), true}},
 			search),
 	}
 }
@@ -158,8 +172,8 @@ func tool[T any](g *guard.Guard, name, description string, params []param, run f
 			}
 			return func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var args T
-				if err := json.Unmarshal(raw, &args); err != nil {
-					return "", fmt.Errorf("%s: invalid arguments", name)
+				if err := plugin.Decode(name, raw, &args); err != nil {
+					return "", err
 				}
 				_, peer := plugin.OriginFrom(ctx)
 				c, err := g.Checker(guard.Access{Tool: name, Allow: s.Allow, Deny: s.Deny, Peer: peer})
@@ -347,11 +361,18 @@ type editArgs struct {
 	Path string `json:"path"`
 	Old  string `json:"old"`
 	New  string `json:"new"`
+	All  bool   `json:"all"`
+	From int    `json:"from"`
+	To   int    `json:"to"`
 }
 
 func edit(c *guard.Checker, args editArgs) (string, error) {
-	if args.Old == "" {
-		return "", errors.New(Edit + ` needs "old", the text to replace`)
+	byLines := args.From != 0 || args.To != 0
+	switch {
+	case byLines && (args.Old != "" || args.All):
+		return "", errors.New(Edit + ` takes "old" or "from" and "to", not both`)
+	case !byLines && args.Old == "":
+		return "", errors.New(Edit + ` needs "old", the text to replace, or "from" and "to", the lines to replace`)
 	}
 	real, err := c.Check(guard.Write, args.Path)
 	if err != nil {
@@ -371,22 +392,114 @@ func edit(c *guard.Checker, args editArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if byLines {
+		at, end, err := lineSpan(string(content), args.From, args.To)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", args.Path, err)
+		}
+		put := args.New
+		if put != "" && !strings.HasSuffix(put, "\n") && strings.HasSuffix(string(content[at:end]), "\n") {
+			put += "\n"
+		}
+		args.Old, args.New = string(content[at:end]), put
+	}
 	n := strings.Count(string(content), args.Old)
 	if n == 0 {
-		return "", fmt.Errorf(`"old" does not occur in %s: it has to match the text of the file exactly`, args.Path)
+		return "", fmt.Errorf(`"old" does not occur in %s: it has to match the text of the file exactly%s`, args.Path, mismatch(string(content), args.Old))
 	}
-	if n > 1 {
-		return "", fmt.Errorf(`"old" occurs %d times in %s: it has to match exactly once, so take more of the text around it`, n, args.Path)
+	if n > 1 && !args.All && !byLines {
+		return "", fmt.Errorf(`"old" occurs %d times in %s: it has to match exactly once, so take more of the text around it, or replace it every time with "all"`, n, args.Path)
 	}
 	at := strings.Index(string(content), args.Old)
+	if byLines {
+		// The lines asked for, though their text may occur elsewhere too.
+		at, _, _ = lineSpan(string(content), args.From, args.To)
+		n = 1
+	}
 	edited := string(content[:at]) + args.New + string(content[at+len(args.Old):])
+	if args.All {
+		edited = strings.ReplaceAll(string(content), args.Old, args.New)
+	}
 	if len(edited) > maxWriteBytes {
 		return "", fmt.Errorf("%s would have %d bytes: a file is written with at most %d", args.Path, len(edited), maxWriteBytes)
 	}
 	if err := safefile.Write(real, []byte(edited), info.Mode().Perm()); err != nil {
 		return "", err
 	}
+	if n > 1 {
+		return replaced(args.Path, string(content), args.Old, args.New), nil
+	}
 	return changed(args.Path, edited, at, args.New), nil
+}
+
+// mismatch says where old, which does not occur in content, parts from it:
+// the line of content where most of the lines of old match in a row, and the
+// first one that does not, so that the LLM can fix old without reading the
+// file again.
+func mismatch(content, old string) string {
+	lines := strings.Split(content, "\n")
+	want := strings.Split(old, "\n")
+	best, from := 0, -1
+	for i := range lines {
+		n := 0
+		for n < len(want) && i+n < len(lines) && strings.TrimSpace(lines[i+n]) == strings.TrimSpace(want[n]) {
+			n++
+		}
+		if n > best {
+			best, from = n, i
+		}
+	}
+	if from < 0 {
+		return "; not even its first line is in the file"
+	}
+	at := from + best
+	if best == len(want) {
+		return fmt.Sprintf("; its lines are lines %d to %d of the file, but not with the same spaces and tabs at their start or end: copy them from there", from+1, at)
+	}
+	file := "(the end of the file)"
+	if at < len(lines) {
+		file = fmt.Sprintf("%q", lines[at])
+	}
+	hint := ""
+	if strings.Contains(file, `\\`) {
+		hint = `; in a string of JavaScript a backslash starts an escape, so write \\ for each one, and \\n for the two characters \n`
+	}
+	return fmt.Sprintf("; %d of its lines match from line %d of the file on, then line %d of the file is %s, where \"old\" has %q%s",
+		best, from+1, at+1, file, want[best], hint)
+}
+
+// lineSpan returns where the lines from to to of content are, as numbers
+// of bytes: from the start of the first to the end of the last, its line
+// break included.
+func lineSpan(content string, from, to int) (at, end int, err error) {
+	lines := strings.SplitAfter(content, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if from < 1 || to < from || to > len(lines) {
+		return 0, 0, fmt.Errorf("the lines %d to %d are not lines of the file, which has %d: from and to count from 1, and to is not before from", from, to, len(lines))
+	}
+	for _, line := range lines[:from-1] {
+		at += len(line)
+	}
+	end = at
+	for _, line := range lines[from-1 : to] {
+		end += len(line)
+	}
+	return at, end, nil
+}
+
+// replaced tells what an edit of every old in content left behind: the
+// lines it changed, as they are now.
+func replaced(path, content, old, put string) string {
+	var lines []string
+	more := strings.Count(put, "\n") - strings.Count(old, "\n") // lines each place adds
+	for from := 0; strings.Contains(content[from:], old); {
+		at := from + strings.Index(content[from:], old)
+		lines = append(lines, fmt.Sprint(strings.Count(content[:at], "\n")+more*len(lines)+1))
+		from = at + len(old)
+	}
+	return fmt.Sprintf("edited %s: replaced %d times, in the lines %s", path, len(lines), strings.Join(lines, ", "))
 }
 
 // changed tells what an edit left behind: the lines of edited that put, put
@@ -493,6 +606,7 @@ type searchArgs struct {
 	Path    string `json:"path"`
 	Pattern string `json:"pattern"`
 	Glob    string `json:"glob"`
+	Context int    `json:"context"`
 }
 
 // errSearched ends a search that looked into maxSearched files, and
@@ -511,6 +625,15 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 	if _, err := filepath.Match(args.Glob, ""); err != nil {
 		return "", fmt.Errorf("the glob %q is no pattern of file names", args.Glob)
 	}
+	if args.Context < 0 || args.Context > maxContext {
+		return "", fmt.Errorf("context is a number of lines from 0 to %d", maxContext)
+	}
+	// What one call returns at most: matching lines, or places with lines
+	// around them.
+	limit, what := maxMatches, "matching lines"
+	if args.Context > 0 {
+		limit, what = maxPlaces, "places"
+	}
 	root, err := c.Check(guard.Read, args.Path)
 	if err != nil {
 		return "", err
@@ -518,7 +641,7 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 	if _, err := os.Stat(root); err != nil {
 		return "", err
 	}
-	var lines []string
+	var lines, hits []string // hits: the matching lines of each place, with context
 	searched, walked := 0, 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
@@ -550,14 +673,15 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 		}
 		searched++
 		shown, _ := filepath.Rel(root, path)
-		found, err := searchFile(real, filepath.Join(args.Path, shown), re, maxMatches+1-len(lines))
+		found, matched, err := searchFile(real, filepath.Join(args.Path, shown), re, limit+1-len(lines), args.Context)
 		if err != nil {
 			return nil // a file that is no text has no lines to match
 		}
-		lines = append(lines, found...)
-		if len(lines) > maxMatches {
-			lines = append(lines[:maxMatches], fmt.Sprintf("[these are the first %d matching lines, and there are more: "+
-				"narrow the path, the pattern or the glob]", maxMatches))
+		lines, hits = append(lines, found...), append(hits, matched...)
+		if len(lines) > limit {
+			hits = hits[:min(len(hits), limit)]
+			lines = append(lines[:limit], fmt.Sprintf("[these are the first %d %s, and there are more: "+
+				"narrow the path, the pattern or the glob]", limit, what))
 			return filepath.SkipAll
 		}
 		return nil
@@ -575,8 +699,57 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 	if len(lines) == 0 {
 		return "(no line matches)", nil
 	}
-	return strings.Join(lines, "\n"), nil
+	if args.Context > 0 {
+		return fit(lines, hits, "\n--\n"), nil
+	}
+	// Every line is a match, up to the notes of the search, which start
+	// with [ where a path cannot.
+	notes := slices.IndexFunc(lines, func(line string) bool { return strings.HasPrefix(line, "[") })
+	if notes < 0 {
+		notes = len(lines)
+	}
+	return fit(lines, lines[:notes], "\n"), nil
 }
+
+// fit joins what a search found, split by sep, as far as it fits into
+// maxAround bytes: the first one always. Of the matches beyond, it says how
+// many there are in which file, so that the LLM knows where else to look.
+// matched are the matching lines of each block of found, one per line; the
+// blocks after them are the notes of the search, which end it.
+func fit(found, matched []string, sep string) string {
+	var out []string
+	var files []string         // with matches beyond, in the order found
+	beyond := map[string]int{} // matches beyond, by file
+	size := 0
+	for i, block := range found {
+		if i < len(matched) && (len(files) > 0 || size+len(block) > maxAround && i > 0) {
+			for _, line := range strings.Split(matched[i], "\n") {
+				file := line[:matchAt.FindStringIndex(line)[0]]
+				if beyond[file] == 0 {
+					files = append(files, file)
+				}
+				beyond[file]++
+			}
+			continue
+		}
+		out = append(out, block)
+		size += len(block)
+	}
+	if len(files) > 0 {
+		var where []string
+		n := 0
+		for _, file := range files {
+			where = append(where, fmt.Sprintf("%s (%d)", file, beyond[file]))
+			n += beyond[file]
+		}
+		out = append(out, fmt.Sprintf("[%d more matching lines, beyond what one search shows, in %s: search there with a narrower pattern]", n, strings.Join(where, ", ")))
+	}
+	return strings.Join(out, sep)
+}
+
+// matchAt finds where the path of a matching line of search ends: at
+// :line: .
+var matchAt = regexp.MustCompile(`:[0-9]+: `)
 
 // matches reports whether the name of a file matches glob, which is valid.
 func matches(glob, name string) bool {
@@ -585,46 +758,77 @@ func matches(glob, name string) bool {
 }
 
 // searchFile returns at most limit lines of the file at real that match re,
-// as shown:line: text. A file that is no text, or too big to be read with
-// read, is an error.
-func searchFile(real, shown string, re *regexp.Regexp, limit int) ([]string, error) {
+// as shown:line: text, or with context that many lines around each, as
+// shown-line- text, at most limit places of lines that touch, each one
+// string. A file that is no text, or too big to be read with read, is an
+// error.
+func searchFile(real, shown string, re *regexp.Regexp, limit, context int) (found, hits []string, err error) {
 	info, err := os.Stat(real)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Only a file: a pipe or a device would never end.
 	if !info.Mode().IsRegular() || info.Size() > maxWriteBytes {
-		return nil, fmt.Errorf("%s is not searched", shown)
+		return nil, nil, fmt.Errorf("%s is not searched", shown)
 	}
 	f, err := open(real)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	content, err := io.ReadAll(f)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
-		return nil, fmt.Errorf("%s is not a text file", shown)
+		return nil, nil, fmt.Errorf("%s is not a text file", shown)
 	}
 	if len(content) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	var found []string
 	text, _ := strings.CutSuffix(string(content), "\n")
-	for n, line := range strings.Split(text, "\n") {
-		if len(found) == limit {
-			break
-		}
-		if !re.MatchString(line) {
-			continue
-		}
-		line = strings.TrimSuffix(line, "\r")
+	all := strings.Split(text, "\n")
+	show := func(n int, mark string) string {
+		line := strings.TrimSuffix(all[n], "\r")
 		if len(line) > maxMatchBytes {
 			line = strings.ToValidUTF8(line[:maxMatchBytes], "") + "…"
 		}
-		found = append(found, fmt.Sprintf("%s:%d: %s", shown, n+1, line))
+		return fmt.Sprintf("%s%s%d%s %s", shown, mark, n+1, mark, line)
 	}
-	return found, nil
+	end := -1 // the last line of the place found last
+	for n, line := range all {
+		if !re.MatchString(line) {
+			continue
+		}
+		if context == 0 {
+			if len(found) == limit {
+				break
+			}
+			found = append(found, show(n, ":"))
+			continue
+		}
+		from, to := max(0, n-context, end+1), min(len(all)-1, n+context)
+		if end < 0 || from > end+1 {
+			if len(found) == limit {
+				break
+			}
+			found, hits = append(found, ""), append(hits, "")
+		}
+		for i := from; i <= to; i++ {
+			mark := "-"
+			if re.MatchString(all[i]) {
+				mark = ":"
+			}
+			if i > from || found[len(found)-1] != "" {
+				found[len(found)-1] += "\n"
+			}
+			found[len(found)-1] += show(i, mark)
+		}
+		if hits[len(hits)-1] != "" {
+			hits[len(hits)-1] += "\n"
+		}
+		hits[len(hits)-1] += show(n, ":")
+		end = max(end, to)
+	}
+	return found, hits, nil
 }

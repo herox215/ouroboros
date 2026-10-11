@@ -158,6 +158,60 @@ func TestRebuildInstallsTheWorkingTree(t *testing.T) {
 	expectFile(t, exe, "v2")
 }
 
+// A build that does not put its binary into the stage fails: the binary an
+// earlier build left there is not installed in its place.
+func TestRebuildInstallsNoEarlierBuild(t *testing.T) {
+	src, _ := updatetest.NewRepo(t, "v1")
+	os.WriteFile(filepath.Join(src, "Makefile"), []byte("install:\n\t@true\n"), 0o644)
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "stage", "bin"), 0o700)
+	os.WriteFile(filepath.Join(dir, "stage", "bin", "ouro"), []byte("old"), 0o755)
+	exe := filepath.Join(t.TempDir(), "ouro")
+	if err := (update.Updater{Source: src, Dir: dir, Exe: exe}).Rebuild(context.Background()); err == nil {
+		t.Error("a build without a binary should fail")
+	}
+	if _, err := os.Stat(exe); err == nil {
+		t.Error("the earlier build was installed")
+	}
+}
+
+// A stage that cannot be cleared fails the update and the rebuild before they
+// build: a directory where the binary of an earlier build would be.
+func TestStageThatCannotBeCleared(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "stage", "ouro", "in"), 0o700)
+	exe := filepath.Join(t.TempDir(), "ouro")
+	repo, _ := updatetest.NewRepo(t, "v1")
+	if _, updated, err := (update.Updater{Repo: repo, Dir: dir, Exe: exe, Revision: "old"}).Run(context.Background()); err == nil || updated {
+		t.Errorf("Run = %v, %v; want an error", updated, err)
+	}
+	fakeGo(t)
+	if err := (update.Updater{Source: repo, Dir: dir, Exe: exe}).Rebuild(context.Background()); err == nil {
+		t.Error("Rebuild should fail")
+	}
+	if _, err := os.Stat(exe); err == nil {
+		t.Error("something was installed")
+	}
+}
+
+// The Makefile of ouro installs into a stage whose path has spaces, as the
+// one under "Application Support" on macOS.
+func TestMakeInstallsIntoAPathWithSpaces(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("no make")
+	}
+	stage := filepath.Join(t.TempDir(), "Application Support", "stage")
+	os.MkdirAll(stage, 0o700)
+	os.WriteFile(filepath.Join(stage, "ouro"), []byte("new"), 0o755)
+	// -o build: the binary is there, nothing is built.
+	cmd := exec.Command("make", "-o", "build", "install", "BIN="+filepath.Join(stage, "ouro"), "PREFIX="+stage)
+	cmd.Dir = filepath.Join("..", "..")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("make install: %v\n%s", err, out)
+	}
+	expectFile(t, filepath.Join(stage, "bin", "ouro"), "new")
+}
+
 // fakeGo puts a go first in PATH.
 func fakeGo(t *testing.T) {
 	t.Helper()
@@ -313,5 +367,46 @@ func TestCheckouts(t *testing.T) {
 	update.Source = "/src/ouro"
 	if got := update.Checkouts(); len(got) != 1 || got[0] != "/src/ouro" {
 		t.Errorf("with a source: %q", got)
+	}
+}
+
+// With Tests, Rebuild runs the tests of those packages first, in the
+// environment of the build and without the variables of the node that asks:
+// if one fails, nothing is built. A package is a path in the checkout,
+// never a flag.
+func TestRebuildTestsFirst(t *testing.T) {
+	t.Setenv("OURO_HOME", "/the/node")
+	src, _ := updatetest.NewRepo(t, "v1")
+	for name, content := range map[string]string{
+		"Makefile":       "install:\n\t@sh install.sh\n",
+		"go.mod":         "module fake\n\ngo 1.21\n",
+		"good/good.go":   "package good\n",
+		"good/a_test.go": "package good\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestEnv(t *testing.T) {\n\tif os.Getenv(\"OURO_HOME\") != \"\" || os.Getenv(\"GOFLAGS\") != \"-mod=readonly\" {\n\t\tt.Fatal(os.Environ())\n\t}\n}\n",
+		"bad/bad.go":     "package bad\n",
+		"bad/a_test.go":  "package bad\n\nimport \"testing\"\n\nfunc TestFails(t *testing.T) { t.Fatal(\"broken on purpose\") }\n",
+	} {
+		os.MkdirAll(filepath.Dir(filepath.Join(src, name)), 0o755)
+		os.WriteFile(filepath.Join(src, name), []byte(content), 0o644)
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(t.TempDir(), "ouro")
+	if err := (update.Updater{Source: src, Dir: dir, Exe: exe, Tests: []string{"./good/"}}).Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, exe, "v1")
+
+	var out strings.Builder
+	other := filepath.Join(t.TempDir(), "ouro")
+	err := (update.Updater{Source: src, Dir: dir, Exe: other, Out: &out, Tests: []string{"./good/", "./bad/"}}).Rebuild(context.Background())
+	if err == nil || !strings.HasPrefix(err.Error(), "the tests failed, so nothing was built: ") || !strings.Contains(out.String(), "broken on purpose") {
+		t.Fatalf("failing tests: %v\n%s", err, out.String())
+	}
+	if _, err := os.Stat(other); err == nil {
+		t.Error("built although a test failed")
+	}
+	for _, pkg := range []string{"../elsewhere", "./a/../../b", "-exec=sh", "internal/tui", "./a b"} {
+		if err := (update.Updater{Source: src, Dir: dir, Exe: other, Tests: []string{pkg}}).Rebuild(context.Background()); !errors.Is(err, update.ErrTestPackage) {
+			t.Errorf("%q: %v", pkg, err)
+		}
 	}
 }

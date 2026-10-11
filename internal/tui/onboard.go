@@ -415,9 +415,9 @@ func (m *Model) onboardKey(msg tea.KeyPressMsg) tea.Cmd {
 	case stepModel:
 		switch msg.String() {
 		case "up", "k":
-			o.model = max(0, o.model-1)
+			o.model = cycle(o.model, -1, len(o.models.Chat))
 		case "down", "j":
-			o.model = min(len(o.models.Chat)-1, o.model+1)
+			o.model = cycle(o.model, 1, len(o.models.Chat))
 		}
 		return nil
 	case stepAccess:
@@ -427,9 +427,9 @@ func (m *Model) onboardKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch msg.String() {
 	case "up", "k":
-		o.sel = max(0, o.sel-1)
+		o.sel = cycle(o.sel, -1, rows)
 	case "down", "j":
-		o.sel = min(rows-1, o.sel+1)
+		o.sel = cycle(o.sel, 1, rows)
 	}
 	if o.step != stepAccess || o.sel >= len(o.accesses) {
 		return nil

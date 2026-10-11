@@ -61,7 +61,7 @@ func TestProfilesInOneUI(t *testing.T) {
 		if !shows(m, "profile Luna ("+lunaID.ID()+") · shift+tab shows the next")() {
 			t.Errorf("no word of the profile:\n%s", ansi.Strip(m.View().Content))
 		}
-		drive(t, m, cmd, shows(m, " Luna [2/2] ● online")) // the header names the profile shown
+		drive(t, m, cmd, shows(m, " Luna [2/2] localhost / gpt-")) // the header names the profile shown
 		drive(t, m, typed(m, "hello Luna"), shows(m, "last=hello Luna"))
 		if m.Profile() != lunaID.ID() {
 			t.Errorf("the UI shows %q", m.Profile())

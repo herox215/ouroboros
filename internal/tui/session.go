@@ -436,9 +436,9 @@ func (l *sessionsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		m.screen = screenChat
 	case "up", "k":
-		l.sel = max(0, l.sel-1)
+		l.sel = cycle(l.sel, -1, len(rows))
 	case "down", "j":
-		l.sel = min(len(rows)-1, l.sel+1)
+		l.sel = cycle(l.sel, 1, len(rows))
 	case "enter":
 		if c := rows[min(l.sel, len(rows)-1)]; c.peer != "" {
 			return m.showPeer(c)

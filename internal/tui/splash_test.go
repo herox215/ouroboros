@@ -89,11 +89,12 @@ func TestSplashLayoutFitsTheScreen(t *testing.T) {
 		big                bool
 		letter, top, block int
 	}{
-		{48, 23, true, bigLetter, 9, 5},
+		{48, 23, false, 1, 10, 3},
 		{47, 21, false, 1, 9, 3},
-		{48, 7, true, bigLetter, 1, 5},
+		{92, 23, true, bigLetter, 7, 8},
+		{48, 7, false, 1, 2, 3},
 		{48, 6, false, 1, 1, 3},
-		{100, 30, true, bigLetter, 12, 5},
+		{100, 30, true, bigLetter, 11, 8},
 		{6, 2, false, 1, 0, 3},
 	} {
 		title, letter, top, block := splashLayout(c.w, c.h)

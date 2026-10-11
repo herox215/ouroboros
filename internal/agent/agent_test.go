@@ -210,6 +210,49 @@ func TestToolErrorsAreToldToTheLLM(t *testing.T) {
 	}
 }
 
+// A tool that is a function inside another is not called on its own: the
+// LLM is told the tool to call it in.
+func TestUnknownToolNamesTheToolItIsIn(t *testing.T) {
+	run := Tool{Name: "run", Functions: []string{"read", "nope"}, Run: func(context.Context, json.RawMessage) (string, error) {
+		return "", nil
+	}}
+	got, err := New(&fakeLLM{}, "gpt", "sys", run).Run(context.Background(), "c1", "call nope", Observer{})
+	want := "echo error: unknown tool nope: nope is a function inside the tool run, not a tool of its own: call run and call nope in it"
+	if err != nil || got != want {
+		t.Errorf("got %q, %v; want %q", got, err, want)
+	}
+}
+
+// A tool that forwards the functions inside it runs a call of one of them
+// that the LLM made as a tool of its own, and the LLM is told where to call
+// it; so is an error of the tool.
+func TestForwardedFunctionRunsInItsTool(t *testing.T) {
+	var got []string
+	run := Tool{Name: "run", Functions: []string{"read", "fail", "bad"},
+		Forward: func(name string, args json.RawMessage) (json.RawMessage, error) {
+			if name == "bad" {
+				return nil, errors.New("bad: invalid arguments")
+			}
+			return json.RawMessage(`{"call":"` + name + `"}`), nil
+		},
+		Run: func(_ context.Context, args json.RawMessage) (string, error) {
+			got = append(got, string(args))
+			if strings.Contains(string(args), "fail") {
+				return "", errors.New("boom")
+			}
+			return "ran", nil
+		}}
+	note := "\n[ran inside the tool run: %s is a function of run, call it there]"
+	for name, want := range map[string]string{"read": "echo ran" + fmt.Sprintf(note, "read"), "fail": "echo error: boom" + fmt.Sprintf(note, "fail"), "bad": "echo error: bad: invalid arguments" + fmt.Sprintf(note, "bad")} {
+		if answer, err := New(&fakeLLM{}, "gpt", "sys", run).Run(context.Background(), "c1", "call "+name, Observer{}); err != nil || answer != want {
+			t.Errorf("%s: %q, %v; want %q", name, answer, err, want)
+		}
+	}
+	if strings.Join(got, " ") != `{"call":"read"} {"call":"fail"}` && strings.Join(got, " ") != `{"call":"fail"} {"call":"read"}` {
+		t.Errorf("run got %q", got)
+	}
+}
+
 // loopLLM asks for a tool on every turn and records the last message of
 // every request.
 type loopLLM struct {

@@ -7,11 +7,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// nameScales are the sizes an empty chat draws the name of the agent in, the
-// largest first: twice the title of the splash, and the title itself.
-var nameScales = [...]int{2, 1}
+// nameScale is the size an empty chat draws the name of the agent in: the
+// size of the title of the splash, at which a pixel of the font is a block of
+// two cells.
+const nameScale = 1
 
-const emptyTagline = "keep on building"
+const emptyTagline = "keep on dreaming"
 
 var emptyTaglines = [...]string{
 	emptyTagline, "stay curious", "make it happen", "build something great",
@@ -43,30 +44,57 @@ func nameArt(name string, scale int) []string {
 			return nil
 		}
 	}
-	return scaledHalfBlocks(text, scale)
+	return blockArt(text, scale)
 }
 
-// fitName draws name in the largest size all of which width by height
-// show. It has no rows where even the smallest would be cut off.
+// fitName draws name where the size of the empty chat shows all of it. It has
+// no rows where the artwork would be cut off.
 func fitName(name string, width, height int) []string {
-	for _, scale := range nameScales {
-		art := nameArt(name, scale)
-		if len(art) > 0 && len(art) <= height && len([]rune(art[0])) <= width {
-			return art
-		}
+	art := nameArt(name, nameScale)
+	if len(art) > 0 && len(art) <= height && len([]rune(art[0])) <= width {
+		return art
 	}
 	return nil
+}
+
+// blockStyle draws the blocks of the artwork of an empty chat in the muted
+// color of its text.
+var blockStyle = lipgloss.NewStyle().Foreground(muted).Background(muted)
+
+// artText draws the rows of the artwork of the name as the chat shows them:
+// a block is a cell the terminal fills in the color of the artwork.
+func artText(rows []string) string {
+	var b strings.Builder
+	for i, row := range rows {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		runes := []rune(row)
+		for x := 0; x < len(runes); {
+			end := x
+			for end < len(runes) && runes[end] == runes[x] {
+				end++
+			}
+			run := string(runes[x:end])
+			if runes[x] == '█' {
+				run = blockStyle.Render(run)
+			}
+			b.WriteString(run)
+			x = end
+		}
+	}
+	return b.String()
 }
 
 // emptyChat fills the viewport so the name stays centered on resize. A
 // terminal too small for the artwork shows the actual name on one line
 // instead of clipping it.
 func emptyChat(name string, width, height int, selected ...string) string {
-	text := ansi.Truncate(name, width, "")
+	text := mutedStyle.Render(ansi.Truncate(name, width, ""))
 	if art := fitName(name, width, height); art != nil {
-		text = strings.Join(art, "\n")
+		text = artText(art)
 	}
-	view := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, mutedStyle.Render(text))
+	view := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, text)
 	if row, ok := emptyTaglineRow(width, height, strings.Count(text, "\n")+1, selected...); ok {
 		lines := strings.Split(view, "\n")
 		lines[row] = lipgloss.PlaceHorizontal(width, lipgloss.Center, mutedStyle.Render(taglineText(selected)))

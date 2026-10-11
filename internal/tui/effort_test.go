@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 
@@ -36,9 +35,9 @@ func TestEffort(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.headerView()), "effort medium") {
 		t.Errorf("the header should show the effort: %s", ansi.Strip(m.headerView()))
 	}
-	press(m, "right", "right", "right", "l")
+	press(m, "right", "right", "right", "l", "right", "right", "right", "right")
 	if m.effort.at != 5 {
-		t.Fatalf("the slider should stop at the most: %d", m.effort.at)
+		t.Fatalf("the slider should come around to the most: %d", m.effort.at)
 	}
 	press(m, "left", "h")
 	deliver(m, press(m, "enter"))
@@ -47,9 +46,9 @@ func TestEffort(t *testing.T) {
 	}
 
 	run(m, "/effort")
-	press(m, "left", "left", "left", "left", "left")
+	press(m, "left", "left", "left")
 	if m.effort.at != 0 || !strings.Contains(ansi.Strip(m.View().Content), efforts["auto"]) {
-		t.Fatalf("the slider should stop at auto: %d", m.effort.at)
+		t.Fatalf("the slider should come to auto: %d", m.effort.at)
 	}
 	deliver(m, press(m, "enter"))
 	m.Update(m.refreshStatus())
@@ -113,8 +112,10 @@ func TestEffortPerSession(t *testing.T) {
 	set := func(effort string) {
 		t.Helper()
 		run(m, "/effort")
-		press(m, "left", "left", "left", "left", "left")
-		for range slices.Index(plugin.Efforts, effort) {
+		for range len(m.effort.choices) {
+			if m.effort.choices[m.effort.at] == effort {
+				break
+			}
 			press(m, "right")
 		}
 		deliver(m, press(m, "enter"))
@@ -176,7 +177,7 @@ func TestEffortsTheModelTakes(t *testing.T) {
 	if m.effort.at != 1 {
 		t.Fatalf("medium is shown at low: %d", m.effort.at)
 	}
-	press(m, "right", "right", "right", "right")
+	press(m, "right", "right")
 	deliver(m, press(m, "enter"))
 	if m.chat.effort != "max" || b.status.Effort != "max" {
 		t.Fatalf("chosen %q, node %q", m.chat.effort, b.status.Effort)

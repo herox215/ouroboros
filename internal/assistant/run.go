@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -102,7 +103,7 @@ func withRun(tools []agent.Tool, sessions *script.Sessions) agent.Tool {
 		byName[t.Name] = t
 		names = append(names, t.Name)
 	}
-	return agent.NewTool(toolRun, runDescription(signatures(tools)),
+	run := agent.NewTool(toolRun, runDescription(signatures(tools)),
 		[]agent.Param{{Name: "script", Description: "JavaScript"}},
 		func(ctx context.Context, args runArgs) (string, error) {
 			if args.Script == "" {
@@ -115,4 +116,27 @@ func withRun(tools []agent.Tool, sessions *script.Sessions) agent.Tool {
 				return agent.Invoke(ctx, byName[name], args)
 			})
 		})
+	run.Functions = names
+	run.Forward = forward
+	return run
+}
+
+// forward returns the arguments of run for a call of the tool name with
+// args that the LLM made as a tool of its own: a script that calls it.
+// The arguments are written anew, so that they are JavaScript as well as
+// JSON: json.Marshal escapes the line separators that JSON allows in a
+// string and older JavaScript does not.
+func forward(name string, args json.RawMessage) (json.RawMessage, error) {
+	if len(bytes.TrimSpace(args)) == 0 {
+		args = json.RawMessage("{}")
+	}
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.UseNumber()
+	var object map[string]any
+	if err := dec.Decode(&object); err != nil || object == nil {
+		return nil, agent.InvalidArguments(name, err)
+	}
+	params, _ := json.Marshal(object) // values that were just read: cannot fail
+	quoted, _ := json.Marshal(name)
+	return json.Marshal(runArgs{Script: "tools[" + string(quoted) + "](" + string(params) + ")"})
 }

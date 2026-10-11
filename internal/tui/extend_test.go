@@ -79,7 +79,7 @@ func TestPluginScreen(t *testing.T) {
 	}
 	m.Update(load())
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"● online", "Greetings", "beta says hello", "[wave]  wink ", "←→ select · enter run · esc back"} {
+	for _, want := range []string{"Greetings", "beta says hello", "[wave]  wink ", "←→ select · enter run · esc back"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view lacks %q:\n%s", want, view)
 		}

@@ -213,7 +213,7 @@ func TestHeaderAndSmallWindows(t *testing.T) {
 	m, b := newModel(t)
 	b.status.Running = false
 	m.Update(m.refreshStatus())
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "○ offline") || !strings.Contains(view, "type /start") {
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "online") || strings.Contains(view, "offline") || !strings.Contains(view, "type /start") {
 		t.Fatalf("view:\n%s", view)
 	}
 	// A window too small for the logo shows the hint alone.

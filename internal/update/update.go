@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -128,7 +130,18 @@ type Updater struct {
 	Exe      string    // binary to replace
 	Revision string    // commit Exe was built from
 	Out      io.Writer // git and build output
+	// Tests are the packages of Source whose tests Rebuild runs before it
+	// builds, like ./internal/tui/: if one fails, nothing is built.
+	Tests []string
 }
+
+// testPackage is what a package of Tests looks like: a path in the
+// checkout, and nothing go test would take as a flag.
+var testPackage = regexp.MustCompile(`^\./[A-Za-z0-9_/.-]*$`)
+
+// ErrTestPackage is the error of a package of Tests that is no path in the
+// checkout.
+var ErrTestPackage = errors.New(`a package to test is a path in the checkout, like "./internal/tui/"`)
 
 // Latest returns the newest commit on main.
 func (u Updater) Latest(ctx context.Context) (string, error) {
@@ -156,6 +169,9 @@ func (u Updater) Run(ctx context.Context) (rev string, updated bool, err error) 
 	if err := os.MkdirAll(src, 0o700); err != nil {
 		return rev, false, err
 	}
+	if err := clearStage(stage); err != nil {
+		return rev, false, err
+	}
 	steps := [][]string{
 		{"git", "init", "-q"},
 		{"git", "fetch", "--depth", "1", u.Repo, rev},
@@ -175,8 +191,9 @@ func (u Updater) Run(ctx context.Context) (rev string, updated bool, err error) 
 var ErrNoSource = errors.New("this ouro does not know its source: build it with \"make install\" in a checkout")
 
 // Rebuild installs a build of the checkout at Source over Exe: of its files
-// as they are now, committed or not. Nothing is installed unless the build
-// passes. The build goes to the stage: the checkout is not written.
+// as they are now, committed or not. Nothing is installed unless the tests
+// of Tests and the build pass. The build goes to the stage: the checkout is
+// not written.
 //
 // It runs the Go that GoTool finds, in an environment the frame fixes: no
 // file of go env, no go.work, no other toolchain, modules only as go.mod and
@@ -193,10 +210,37 @@ func (u Updater) Rebuild(ctx context.Context) error {
 	if err := os.MkdirAll(stage, 0o700); err != nil {
 		return err
 	}
+	if err := clearStage(stage); err != nil {
+		return err
+	}
+	if len(u.Tests) > 0 {
+		for _, pkg := range u.Tests {
+			if !testPackage.MatchString(pkg) || strings.Contains(pkg, "..") {
+				return fmt.Errorf("%w: not %q", ErrTestPackage, pkg)
+			}
+		}
+		// The tests run as the build does, not for the node that runs them.
+		env := slices.DeleteFunc(goEnv(gobin), func(kv string) bool { return strings.HasPrefix(kv, "OURO_") })
+		if _, err := u.runIn(ctx, u.Source, env, gobin, append([]string{"test", "-count=1"}, u.Tests...)...); err != nil {
+			return fmt.Errorf("the tests failed, so nothing was built: %w", err)
+		}
+	}
 	if _, err := u.runIn(ctx, u.Source, goEnv(gobin), "make", "install", "BIN="+filepath.Join(stage, "ouro")); err != nil {
 		return err
 	}
 	return replace(filepath.Join(stage, "bin", "ouro"), u.Exe)
+}
+
+// clearStage removes what an earlier build left in the stage: a build that
+// does not put its binary where it is installed from fails then, instead of
+// installing the one of the build before.
+func clearStage(stage string) error {
+	for _, path := range []string{filepath.Join(stage, "ouro"), filepath.Join(stage, "bin", "ouro")} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // goEnv is the environment of the build with the go at gobin: that of this

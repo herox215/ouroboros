@@ -34,13 +34,16 @@ const (
 		`Until then nobody knows why: tell the user so, and do not promise or make up an explanation. `
 	// filesHint is added for an owner whose agent has a tool for files.
 	filesHint = `You can work with the files of this machine as far as the user allows it: a tool that refuses a path names the rule. ` +
-		`Tell the user, and do not look for another way to the file. ` + pathHint + ` `
+		`Tell the user, and do not look for another way to the file. ` + ownerPathHint + ` `
 	// peerFilesHint is added for peers whose questions the agent may use a
 	// tool for files for.
 	peerFilesHint = ` Where the tools for files may go is set by your owner: a refused path names the rule, and there is no way around it. ` + pathHint
-	// pathHint is what a path is to the tools for files, said once for all
-	// of them.
+	// pathHint is what a path of a peer is to the tools for files, said
+	// once for all of them.
 	pathHint = `A path is whole: absolute, or starting with "~", the home directory.`
+	// ownerPathHint is what a path of the owner is to them.
+	ownerPathHint = `A path is absolute, starts with "~", the home directory, or is relative to your workspace, where your commands start, ` +
+		`and never to the directory you give a command.`
 	// workHint is added for an owner whose agent has a tool for files or
 	// bash: how it goes about what the user gives it to do.
 	workHint = `When the user asks for something to be done, do it, and go on until it is done: ` +
@@ -73,7 +76,8 @@ const (
 		`Give the answers you expect as options, and none where only their own words answer. Ask nothing you can find out yourself. `
 	// scriptHint is added for an agent that has tools: they are functions of
 	// its scripts.
-	scriptHint = `You act through ` + toolRun + ` alone: every tool this prompt names is a function in its scripts. `
+	scriptHint = `You act through ` + toolRun + ` alone: every tool this prompt names is a function in its scripts, ` +
+		`never a tool to call on its own. `
 	ownerStyle = `Answer in the language of the user. Be helpful and concise.`
 
 	peerPrompt = `You are %q, an Ouroboros agent reachable via A2A. Be helpful and concise.`
@@ -108,6 +112,10 @@ type Builder struct {
 	// profile; "" for none, where they work from the home directory of
 	// the owner.
 	Workspace string
+	// Source is the checkout of ouro that the tool rebuild builds, which the
+	// prompt of an agent with that tool names; "" if the build does not know
+	// it.
+	Source string
 	// ContextProviders and AnswerHooks are read after plugin startup.
 	ContextProviders func() []agent.ContextProvider
 	AnswerHooks      func() []agent.AnswerHook
@@ -236,7 +244,9 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
 	}
-	prompt := fmt.Sprintf(ownerPrompt, cfg.Name)
+	// How the agent acts comes first: it calls its tools as tools of their
+	// own when it reads this late.
+	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint
 	if has(toolAskPeer) {
 		prompt += askHint
 	}
@@ -248,6 +258,9 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	}
 	if has(ToolRebuild) {
 		prompt += improveHint
+		if b.Source != "" {
+			prompt += "Your source, the checkout " + ToolRebuild + " builds, is " + b.Source + ". "
+		}
 	}
 	if has(toolAskPeer) && has(append(slices.Clone(fileTools), ToolBash)...) {
 		prompt += claimHint
@@ -261,7 +274,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	if has(ToolUserQuestion) {
 		prompt += questionHint
 	}
-	return b.build(cfg, prompt+scriptHint+ownerStyle+machineHint(today()), withRun(allowed, sessions))
+	return b.build(cfg, prompt+ownerStyle+machineHint(today()), withRun(allowed, sessions))
 }
 
 // now is the time; tests replace it.

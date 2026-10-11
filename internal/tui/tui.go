@@ -306,7 +306,7 @@ type Model struct {
 // says in its footer when it opens: see bind.
 func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Model {
 	input := textarea.New()
-	input.Placeholder = "Message, or /help for the commands…"
+	input.Placeholder = "Keep on dreaming"
 	input.ShowLineNumbers = false
 	input.Prompt = ""
 	input.SetHeight(inputHeight)
@@ -718,7 +718,7 @@ func (r *requestsScreen) selectAt(m *Model, i int) {
 		r.sel = 0
 		return
 	}
-	r.sel = min(max(i, 0), r.trust.waiting()-1)
+	r.sel = cycle(i, 0, r.trust.waiting())
 }
 
 func (r *requestsScreen) decide(m *Model, accept bool) tea.Cmd {

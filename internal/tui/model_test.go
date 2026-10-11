@@ -44,14 +44,13 @@ func TestModelScreenChoosesAModel(t *testing.T) {
 		t.Fatalf("the access and the model in use should show:\n%s", view)
 	}
 
-	// Down to the second model, enter saves it. Up does not go past the first.
+	// Down to the second model, enter saves it. Up at the first goes around
+	// to the last.
 	press(m, "up")
-	press(m, "down")
-	press(m, "up")
-	if m.picker.sel != 0 {
-		t.Fatalf("up should select the first model: %d", m.picker.sel)
+	if m.picker.sel != len(m.picker.choices)-1 {
+		t.Fatalf("up should go around to the last model: %d", m.picker.sel)
 	}
-	press(m, "down")
+	press(m, "down", "down")
 	m.Update(press(m, "enter")())
 	if len(b.set) != 1 || b.set[0] != "a1 gpt-4o-mini" || m.notice != "model changed to gpt-4o-mini" || m.noticeErr {
 		t.Fatalf("set %v, notice %q", b.set, m.notice)
@@ -110,14 +109,15 @@ func TestModelScreenSwitchesTheProvider(t *testing.T) {
 	if !strings.Contains(switchedNote, "prompt cache starts anew") || !strings.Contains(switchedNote, "cost more or take longer") {
 		t.Fatalf("the note does not say what the switch means: %q", switchedNote)
 	}
-	// Down does not go past the last model.
-	press(m, "down", "down", "down", "down", "j")
-	if m.picker.sel != 3 {
-		t.Fatalf("selected %d", m.picker.sel)
+	// Down at the last model goes to the first, and up back to the last.
+	m.picker.sel = len(m.picker.choices) - 1
+	press(m, "down")
+	if m.picker.sel != 0 {
+		t.Fatalf("down around the end: %d", m.picker.sel)
 	}
 	press(m, "k")
-	if m.picker.sel != 2 {
-		t.Fatalf("selected %d", m.picker.sel)
+	if m.picker.sel != len(m.picker.choices)-1 {
+		t.Fatalf("up around the start: %d", m.picker.sel)
 	}
 }
 

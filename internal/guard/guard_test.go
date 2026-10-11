@@ -32,6 +32,7 @@ func newWorld(t *testing.T) *world {
 	w := &world{t: t, root: root, home: filepath.Join(root, "home"), protected: []string{"~/.ssh"}}
 	w.node = filepath.Join(w.home, ".config", "ouroboros")
 	t.Setenv("HOME", w.home)
+	w.protected = []string{"~/.ssh"}
 	w.file(w.node+"/config.json", "{}")
 	w.file(w.node+"/config.json.lock", "")
 	w.file(w.node+"/contacts.json", "{}")
@@ -228,15 +229,44 @@ func TestRulesThatCannotBeRead(t *testing.T) {
 	}
 }
 
-// A path the tool is given has to be absolute or below "~".
+// A path the tool is given is absolute, below "~" or, for the owner,
+// relative to the workspace: the home directory without one. A peer names
+// its paths in full.
 func TestPathsOfTheTool(t *testing.T) {
 	w := newWorld(t)
 	a := Access{Tool: "read"}
-	for _, path := range []string{"", "notes.md", "./notes.md", "~user/notes.md", "../x"} {
+	for path, want := range map[string]string{"notes.md": w.home + "/notes.md", "./share/hello.txt": w.home + "/share/hello.txt", "share/../notes.md": w.home + "/notes.md", ".": w.home} {
+		if got, err := w.check(a, Read, path); err != nil || got != want {
+			t.Errorf("%q: %q, %v; want %q", path, got, err, want)
+		}
+	}
+	if got, err := w.check(a, Read, "../home/.ssh/id_ed25519"); err == nil || got != "" || !strings.Contains(err.Error(), `"protected"`) {
+		t.Errorf("a relative path that leads to a rule: %q, %v", got, err)
+	}
+	for _, path := range []string{"", "~user/notes.md"} {
 		if got, err := w.check(a, Read, path); err == nil || got != "" || err.Error() != `the path "`+path+`" has to be absolute or start with ~` {
 			t.Errorf("%q: %q, %v", path, got, err)
 		}
 	}
+	peer := Access{Tool: "read", Allow: &[]string{"/"}, Peer: true}
+	if got, err := w.check(peer, Read, "notes.md"); err == nil || got != "" || err.Error() != `the path "notes.md" has to be absolute or start with ~: a peer names a path in full` {
+		t.Errorf("a peer: %q, %v", got, err)
+	}
+	g := *w.guard
+	g.Workspace = w.home + "/share"
+	if c, err := g.Checker(a); err != nil {
+		t.Fatal(err)
+	} else if got, err := c.Check(Read, "hello.txt"); err != nil || got != w.home+"/share/hello.txt" {
+		t.Errorf("in the workspace: %q, %v", got, err)
+	}
+	t.Setenv("HOME", "")
+	w.protected = nil // "~/.ssh" needs the home directory too
+	if c, err := w.guard.Checker(a); err != nil {
+		t.Fatal(err)
+	} else if got, err := c.Check(Read, "notes.md"); err == nil || got != "" || !strings.HasSuffix(err.Error(), "; the workspace a relative path starts from is not known") {
+		t.Errorf("without a home directory: %q, %v", got, err)
+	}
+	t.Setenv("HOME", w.home)
 	if got, err := w.check(a, Read, "~/notes.md/x"); err == nil || got != "" || !strings.Contains(err.Error(), "not a directory") {
 		t.Errorf("below a file: %q, %v", got, err)
 	}

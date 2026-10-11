@@ -32,7 +32,7 @@ func colorsOf(frame string) map[[2]int]string {
 		fg := ""
 		for x := 0; len(line) > 0; {
 			if found := sgrParams.FindStringSubmatch(line); found != nil {
-				fg, line = found[1], line[len(found[0]):]
+				fg, line = foreground(found[1]), line[len(found[0]):]
 				continue
 			}
 			r, size := utf8.DecodeRuneInString(line)
@@ -43,6 +43,15 @@ func colorsOf(frame string) map[[2]int]string {
 		}
 	}
 	return colors
+}
+
+// foreground is the parameters that color a cell, without the background a
+// block of the name fills its cell with.
+func foreground(params string) string {
+	if i := strings.Index(params, "48;2;"); i >= 0 {
+		return strings.TrimSuffix(params[:i], ";")
+	}
+	return params
 }
 
 // told is c as the terminal is told it.
@@ -278,7 +287,7 @@ func TestNameAnimationIsDrawnWithTheTicks(t *testing.T) {
 		if w, h := m.history.Width(), m.history.Height(); w != 76 || h != 20 || m.history.GetContent() != drawNameAnimation("Luna", w, h, elapsed, light, a.look, 1, a.tagline) {
 			t.Fatalf("after %v in %dx%d, light %v:\n%s", elapsed, w, h, light, ansi.Strip(m.history.GetContent()))
 		}
-		if !strings.Contains(view(m), nameRow("Luna")) {
+		if !strings.Contains(ansi.Strip(view(m)), nameRow("Luna")) {
 			t.Fatalf("the chat does not show the name:\n%s", view(m))
 		}
 	}

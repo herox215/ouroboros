@@ -49,7 +49,7 @@ const (
 	// Budget is how many bytes the results of tools of one answer may have
 	// before the LLM is told with every call how much it gathered, and the
 	// tools are to give back less: see Spent.
-	Budget = 64 << 10
+	Budget = 128 << 10
 
 	// minRepeated is how many bytes of lines a result of a tool has to repeat
 	// of an earlier result of the same answer before they are left out of it.
@@ -727,20 +727,52 @@ func unrepeated(result string, msgs []openai.Message) string {
 	return out.String()
 }
 
+// unknown is the error for a call of the tool name, which the agent does not
+// have: it names the tool to call it in, if one of the tools calls it inside.
+func (a *Agent) unknown(name string) error {
+	if t, ok := a.inside(name); ok {
+		return fmt.Errorf("unknown tool %s: %s is a function inside the tool %s, not a tool of its own: call %s and call %s in it", name, name, t.Name, t.Name, name)
+	}
+	return errors.New("unknown tool " + name)
+}
+
+// inside returns the tool that calls the tool name inside, if one does.
+func (a *Agent) inside(name string) (Tool, bool) {
+	for _, t := range a.tools {
+		if slices.Contains(t.Functions, name) {
+			return t, true
+		}
+	}
+	return Tool{}, false
+}
+
 // call runs one tool call and returns its result as a message for the LLM.
+// A call of a function inside a tool that forwards it runs in that tool, and
+// the LLM is told to call it there.
 func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
-	tool, ok := a.tools[call.Function.Name]
+	name, args := call.Function.Name, json.RawMessage(call.Function.Arguments)
+	tool, ok := a.tools[name]
+	note := ""
+	if t, in := a.inside(name); !ok && in && t.Forward != nil {
+		note = fmt.Sprintf("\n[ran inside the tool %s: %s is a function of %s, call it there]", t.Name, name, t.Name)
+		forward, err := t.Forward(name, args)
+		if err != nil {
+			return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error() + note}
+		}
+		tool, args, ok = t, forward, true
+	}
 	if !ok {
-		tool = Tool{Name: call.Function.Name, Run: func(context.Context, json.RawMessage) (string, error) {
-			return "", errors.New("unknown tool " + call.Function.Name)
+		err := a.unknown(name)
+		tool = Tool{Name: name, Run: func(context.Context, json.RawMessage) (string, error) {
+			return "", err
 		}}
 	}
 	shown := &shownImages{}
-	content, err := Invoke(context.WithValue(ctx, imagesKey{}, shown), tool, json.RawMessage(call.Function.Arguments))
+	content, err := Invoke(context.WithValue(ctx, imagesKey{}, shown), tool, args)
 	if err != nil {
-		return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error()}
+		return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error() + note}
 	}
-	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content, Images: shown.images}
+	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content + note, Images: shown.images}
 }
 
 // Invoke runs tool with args within the conversation of ctx and reports the

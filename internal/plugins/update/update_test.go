@@ -148,8 +148,8 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 
 	tools := plugin.All[plugin.Tool](ctx)
 	at := slices.IndexFunc(tools, func(tool plugin.Tool) bool { return tool.Name == updateplugin.Rebuild })
-	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "It only builds, and runs no tests") ||
-		strings.Contains(tools[at].Description, "sandbox") {
+	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "name the packages you changed in test, and their tests run first, outside the sandbox") ||
+		!strings.Contains(tools[at].Schema, `"test":{"type":"array"`) {
 		t.Fatalf("tools %+v", tools)
 	}
 	if got := plugin.ToolLine(ctx, plugin.Step{Tool: updateplugin.Rebuild, Args: json.RawMessage(`{}`)}); got != "building "+src {
@@ -165,9 +165,22 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 		t.Fatal("a peer had the source built")
 	}
 
+	if got, err := tools[at].Run(context.Background(), json.RawMessage(`{"test": "./a/"}`)); err == nil || got != "" ||
+		err.Error() != `rebuild: invalid arguments: "test" is an array, not a string` {
+		t.Fatalf("a package that is no list: %q, %v", got, err)
+	}
+
 	got, err := tools[at].Run(context.Background(), json.RawMessage(`{}`))
 	if err != nil || !strings.HasPrefix(got, "built "+src+" and installed the build as "+exe+". ") {
 		t.Fatalf("got %q, %v", got, err)
+	}
+	// With packages to test, their tests run first, and the tool says so.
+	os.WriteFile(filepath.Join(src, "go.mod"), []byte("module fake\n\ngo 1.21\n"), 0o644)
+	os.MkdirAll(filepath.Join(src, "p"), 0o755)
+	os.WriteFile(filepath.Join(src, "p", "p_test.go"), []byte("package p\n\nimport \"testing\"\n\nfunc TestP(t *testing.T) {}\n"), 0o644)
+	got, err = tools[at].Run(context.Background(), json.RawMessage(`{"test": ["./p/"]}`))
+	if err != nil || !strings.HasPrefix(got, "the tests of ./p/ passed; built "+src+" and installed the build as "+exe+". ") {
+		t.Fatalf("with tests: %q, %v", got, err)
 	}
 	if built, _ := os.ReadFile(exe); string(built) != "v2" {
 		t.Fatalf("binary %q", built)

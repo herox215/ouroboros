@@ -326,7 +326,10 @@ It needs `git` and `make`; sources and build live in `~/.config/ouroboros/update
 Your agent has the tool `rebuild` for the other direction: it builds the checkout the binary was built from
 (`make install` records it) with its files as they are now, committed or not. Only
 when the build passes, the binary is replaced; otherwise nothing is installed and the agent gets
-the end of the output. It runs no tests, so that a build is quick: the agent runs those it needs itself.
+the end of the output. It runs no tests unless it is told which: with `test`, like `rebuild({test: ["./internal/tui/"]})`,
+it first runs the tests of those packages, whole, as it builds: outside the sandbox, so that the tests that start a
+node run too, and in the environment of the build, without the variables of the node. If one fails, nothing is
+built. A package is a path in the checkout that starts with `./`, never a flag of `go test`.
 That is how a change your agent made to the plugins of ouro
 with its tools for files takes effect. The tool runs in the node, which cannot stop itself while the answer is
 on its way. So the node starts anew with the new build once the agent has answered and no other answer is on
@@ -380,7 +383,7 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
-`history_sessions`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
+`history_sessions`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
 `withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that builds and installs its own
 source ([`rebuild`](#updates)) and one that asks you a question (`user_question`, see below). It uses them in **scripts**: the LLM is
 offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
@@ -418,12 +421,14 @@ restart. A node that runs keeps answering peers as before while the file cannot 
 |---|---|---|
 | `read(path, offset?, limit?)` | returns the text of a file; the whole file comes as it is, a part with a note that says which lines of how many it is and, when there is more, at which line to continue | 2000 lines or 256 KiB per call, a line has less than 256 KiB; what is not text (UTF-8 without NUL) is refused |
 | `write(path, content)` | creates the file or replaces all of it, in one step, and creates missing directories | 1 MiB |
-| `edit(path, old, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once; returns the changed lines with 3 lines around them, at most 50 | the file has at most 1 MiB, before and after |
+| `edit(path, old, new, all?)`, `edit(path, from, to, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once, or with `all: true` every time it occurs, which returns the lines it changed; or the lines `from` to `to` by `new`, with no text to match; returns the changed lines with 3 lines around them, at most 50. An `old` that does not occur is answered with where it parts from the file: the line of the file and the line of `old` | the file has at most 1 MiB, before and after |
 | `list(path)` | the entries of a directory: directories end in `/`, files come with their size | 1000 entries; what the tool may not read is not listed |
 | `delete(path, recursive?)` | removes a file or an empty directory; one with content only with `recursive: true` | stops, with nothing deleted, before anything it may not delete |
-| `search(path, pattern, glob?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go` | 200 lines of at most 300 bytes, 10000 files, 100000 files and directories looked at (also those the glob leaves out); hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out |
+| `search(path, pattern, glob?, context?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go` | 200 lines of at most 300 bytes, 10000 files, 100000 files and directories looked at (also those the glob leaves out); hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out; with `context` the lines around each match too, as `grep -C`, at most 30 places. Beyond 12 KiB it says only how many matches are in which file |
 
-A path is absolute or starts with `~`, your home directory. Each of the six tools takes the settings `allow`
+A path is absolute or starts with `~`, your home directory. For your agent it may also be relative: it then
+starts in the workspace of the [profile](#profiles), where its commands start (`.` is the workspace). A peer
+names every path in full. Each of the six tools takes the settings `allow`
 and `deny`: paths the tool may go to, and paths within those it may not. A path is a file, or a directory with
 everything below it; there are no patterns. A shared directory for peers, and your own agent held back:
 
@@ -495,8 +500,8 @@ edit no longer limits it. Nothing checks that a build is harmless, or that it wo
 
 ### Commands
 
-`bash(command, dir?, timeout?)` runs `command` with `/bin/bash -c` in `dir` (absolute or below `~`, the
-workspace of the [profile](#profiles) without it), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
+`bash(command, dir?, timeout?)` runs `command` with `/bin/bash -c` in `dir` (absolute, below `~` or relative to the
+workspace; the workspace of the [profile](#profiles) without it), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
 an error. It returns `exit N` and below it what the command printed, its output and its errors as they came;
 of more than 64 KiB the first and the last 32 KiB, with how much was left out between them. A status other
 than 0 is a result, not an error. Every call starts anew: `cd` and variables do not carry over.
@@ -522,6 +527,9 @@ so the system holds them for every process it starts:
 
 What the sandbox refused does not pass when tried again; the result says so when the output says that
 something was not permitted, on a read-only file system or without network.
+A node needs a socket of the file system, so the tests of ouro that start one cannot run in the sandbox:
+they are skipped there at once (`SKIP`, with the reason), and run outside of it, as `make check` and
+[`rebuild`](#updates) with `test` do.
 
 | System | Sandbox |
 |---|---|
@@ -582,11 +590,17 @@ for (const peer of connected) {
 
 - What a script gives back goes to the LLM: what it printed with `print` (or `console.log`), one line per call,
   and after that the value of its last statement, a string as it is, everything else as JSON. A statement
-  without a value, like `var a = 1`, gives back nothing. Of what is printed, 16 KiB are handed on and the rest
+  without a value, like `var a = 1`, gives back nothing. Of what is printed, 32 KiB are handed on and the rest
   is left out, and the LLM is told how much. All that was printed (up to 4 MiB) is then kept in the variable
-  `printed`, so that the next script can look into it instead of reading again. Of a value beyond 16 KiB its
+  `printed`, so that the next script can look into it instead of reading again. Of a value beyond 32 KiB its
   start is handed on, and the value itself is kept in `returned`. A script that fails
   gives back its error and what it printed before.
+- **A result is not lost.** A call of a tool that is a statement of its own at the top level, and not the
+  last one, like `read({path: "a"}); read({path: "b"})`, prints what it returns, unless that is empty: only
+  the value of the last statement would come back otherwise. A script with `return` at its top level is a
+  function body, whose calls print nothing of themselves.
+- **`await` is left out.** The tools return their result right away, so `await read({…})` is `read({…})`: a
+  script that is no JavaScript only because of an `await` outside a function runs without it.
 - What a script gives back ends with a line of what the interpreter keeps for the next script, like
   `[kept for the next script: files (array of 312), walk (function), notes (string of 1532 bytes)]`: every
   name on `globalThis` that is not a standard object or a tool, at most 30 of them. A getter is not called
@@ -613,6 +627,11 @@ for (const peer of connected) {
   `h2a` or `a2a` is an error. A tool runs under the conversation the script was started in: for the same
   peer, as many hops away, so every rule a tool enforces holds inside a script. In the terminal UI and in
   the log the calls of a script show one by one (`asking beta…`, `writing notes.md…`).
+- **A function called as a tool.** An LLM that calls a function of its scripts as a tool of its own, like
+  `read` instead of `run`, is not refused: the call runs as a script of `run` that calls the function with
+  the arguments the LLM gave, `tools["read"]({…})`, with the same lists, settings and limits as any script.
+  What it gives back ends with a line that says to call the function in `run`. A name that is no function
+  of `run` stays an unknown tool.
 - **A peer without a tool runs no script.** As long as `a2a` lists no tool, the agent that answers peers
   has no tool at all, not even `run`: a script may keep your node busy, see below. With one tool in `a2a`
   peers run scripts with it.
@@ -644,8 +663,8 @@ answer in [`ouro.log`](#the-log) says what it cost.
 | time | 600 s | the script is stopped, and so are the tools it is waiting for; a tool that does not end is waited for 2 s longer and then left behind |
 | calls of tools | 64 | the script is stopped at the next call |
 | size of the script | 64 KiB | it is not run |
-| size of the result | 16 KiB, 4 KiB once the results of the answer have more than 64 KiB | the start is handed on, and the value is kept in `returned` |
-| what it prints | 16 KiB, 4 KiB once the results of the answer have more than 64 KiB | the rest is left out, the LLM is told how much, and all of it is kept in `printed` |
+| size of the result | 32 KiB, 4 KiB once the results of the answer have more than 128 KiB | the start is handed on, and the value is kept in `returned` |
+| what it prints | 32 KiB, 4 KiB once the results of the answer have more than 128 KiB | the rest is left out, the LLM is told how much, and all of it is kept in `printed` |
 | calls of functions within each other | 1024 | the script is stopped |
 | memory | 256 MiB, see below | the script is stopped |
 
@@ -710,6 +729,50 @@ plugin takes the tools away, and the node archives all the same.
   never what was searched or found.
 
 Before the archive, nothing was archived: conversations from before are not in it.
+
+### Skills
+
+A **skill** is what you tell your agent once about a kind of task: how to write a review, what to look at in
+a ticket, how to release a version. The plugin `skills` (`internal/plugins/skills`) gives your agent the tool
+`skill`, which loads one. A skill is a directory in `skills/` in the directory of the node, with a file
+`SKILL.md` in the format of [Agent Skills](https://agentskills.io):
+
+```markdown
+---
+name: review
+description: How to review a change. Use when the owner asks for a review.
+---
+
+Read the whole diff before you comment. …
+```
+
+- **What the LLM sees.** The description of `skill` lists the name and the description of every skill the
+  agent may load, one line each. What a skill says comes only when the agent loads it: `skill({name:
+  "review"})`. A skill may have further files next to `SKILL.md`; `skill({name: "review", file:
+  "checklist.md"})` reads one, also for an agent without the [tools for files](#files). No path and no link
+  leads out of the directory of the skill; a file has at most 256 KiB of text.
+- **The name** is that of the directory: lowercase letters, digits and single hyphens. `SKILL.md` starts
+  with a frontmatter between two lines `---` with `name` and `description`, each on a line of its own;
+  further keys are ignored. A `SKILL.md` that is not so is an error, like a tool that is not there: the
+  node does not start, the chat does not answer, and the error names the skill.
+- **Which skills an agent may load** is a setting of `skill` in `h2a` and `a2a`, `allow`, with their names.
+  Without it your agent loads every skill and the agent that answers peers none:
+
+  ```json
+  "tools": {
+    "h2a": ["*", {"tool": "skill", "allow": ["review", "release"]}],
+    "a2a": [{"tool": "skill", "allow": ["faq"]}]
+  }
+  ```
+
+  A name in `allow` that is no skill is an error.
+- **When a skill is seen.** The skills are read when the agent is built: a new skill is offered once the
+  configuration changed or the node started again. What a skill says is read at every call, so a change
+  to `SKILL.md` holds at once.
+- **The agent cannot write a skill.** The tools for files never change the directory of the node, so no
+  skill comes from the agent, nor from a peer that talked it into something. A command of `bash` that runs
+  [without the sandbox](#commands) is not held by that.
+- **The log** records every call: the skill, the file and for whom, never what the skill says.
 
 ### Settings
 
@@ -1256,8 +1319,35 @@ cmd/ouro             entry point
 plugin               what a plugin is written against: the one package it imports (+ example, a plugin to copy)
 internal/cli         the list of plugins that make up ouro, and the frame they do not get
 internal/plugins     the standard plugins, one package each: commands, setup dialog, wiring
+  assistant          builds the agents of the node
+  base               the console and the dispatcher of the commands of all plugins
+  chatgpt, openai,   the providers of LLMs: ChatGPT, OpenAI-compatible APIs, OpenCode Go
+    opencode
+  discovery,         finds the nodes online, on the network and on the tailnet
+    tailscale
+  files              the tools for files: read, write, edit, list, delete, search
+  history            the tools history_search, history_read, history_sessions
+  node               the commands start, stop, serve and the setup dialog
+  peers              the network of peers and the tools that reach them (list_peers, ask_peer, …)
+  session            the sessions of the owner
+  shell              the tool bash
+  skills             the tool skill: the skills of the owner
+  talk               the commands list, ask and chat
+  tui                the terminal UI as a plugin; the UI itself is internal/tui
+  update             the command update and the tool rebuild
 internal/kernel      plugin kernel: services, contributions, start order by declared dependencies
 internal/tui         terminal UI (Bubble Tea), with the splash and the setup
+  tui.go             the Model: what a key does, the input and its placeholder (New)
+  view.go            what is drawn: the header (headerView), the chat and its line of context and cache (chatTitle), the footer (footerView)
+  question.go        the input (inputView), and a question of the agent in it
+  commands.go        the slash commands of the UI and /help
+  session.go         the conversations and the screen of /session
+  context.go, contents.go  the screen of /context
+  settings.go, model.go, effort.go  the screens of /settings, /model, /effort
+  onboard.go         the setup
+  empty.go, empty_animation.go  the empty chat: the name and its tagline
+  splash.go, logo.go, mesh.go  the splash and its pictures
+  markdown.go        how an answer is formatted
 internal/setup       the setup of the node: its accesses, model, name; the terminal and the UI both use it
 internal/llm         what a provider of an LLM is: how it signs in, lists its models and answers, and the one access it reaches
 internal/credentials the accesses of the node, in credentials.json: what it signs in to its LLMs with

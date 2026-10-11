@@ -157,6 +157,10 @@ func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposal
 // History is the directory the conversations of the agents are archived in.
 func (d Dir) History() string { return d.path("history") }
 
+// Skills is the directory of the skills the owner wrote for the agents of
+// the node, one directory per skill. The profiles share it.
+func (d Dir) Skills() string { return d.Root().path("skills") }
+
 // Failures opens the list of the answers to peers that failed.
 func (d Dir) Failures() *diagnosis.Store { return diagnosis.Open(d.path("failures.json")) }
 

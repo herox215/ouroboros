@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/home"
@@ -44,14 +45,26 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			updater: &update.Updater{Repo: update.Repo, Source: update.Source, Dir: dir.UpdateDir(), Revision: update.Revision()},
 		}
 		plugin.Add(ctx, plugin.Command{Name: "update", Help: "build and install the newest version", Run: c.run})
-		plugin.Add(ctx, plugin.NewTool(Rebuild,
-			"Build ouro, the program you are part of, from its source in "+sourceName(update.Source)+" as it is now, and install it: "+
-				"this is how a change of the source takes effect. It only builds, and runs no tests: run them yourself where they matter. "+
-				"Only when the build passes is the binary replaced; "+
-				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. "+
-				"Once you have answered, the node starts anew with the new build and the conversation goes on there, "+
+		plugin.Add(ctx, plugin.Tool{
+			Name: Rebuild,
+			Description: "Build ouro, the program you are part of, from its source in " + sourceName(update.Source) + " as it is now, and install it: " +
+				"this is how a change of the source takes effect. The build is the check of a change of text; " +
+				"for a change of logic name the packages you changed in test, and their tests run first, outside the sandbox, so that also those that start a node run: " +
+				"never all of them, coverage or mutation tests. " +
+				"Only when the tests and the build pass is the binary replaced; " +
+				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. " +
+				"Once you have answered, the node starts anew with the new build and the conversation goes on there, " +
 				"and so does the terminal UI. Only for the owner of the node.",
-			nil, c.rebuild))
+			Schema: `{"type":"object","properties":{"test":{"type":"array","items":{"type":"string"},` +
+				`"description":"the packages whose tests run before the build, like [\"./internal/tui/\"]"}}}`,
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var args rebuildArgs
+				if err := plugin.Decode(Rebuild, raw, &args); err != nil {
+					return "", err
+				}
+				return c.rebuild(ctx, args)
+			},
+		})
 		plugin.Add(ctx, plugin.ToolView{Tool: Rebuild, Show: func(json.RawMessage) string {
 			return "building " + sourceName(update.Source)
 		}, Detail: assistant.HowItEnded})
@@ -103,13 +116,19 @@ func sourceName(source string) string {
 // the answer is given, see plugin.Restart; where nobody does that, a running
 // node is restarted at once. A peer never gets that far, whatever the
 // configuration allows it.
-func (c *updateCommand) rebuild(ctx context.Context, _ struct{}) (string, error) {
+// rebuildArgs are the arguments of the tool rebuild.
+type rebuildArgs struct {
+	Test []string `json:"test"`
+}
+
+func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, error) {
 	if _, peer := plugin.OriginFrom(ctx); peer {
 		return "", errors.New(Rebuild + " is for the owner of the node only")
 	}
 	var out bytes.Buffer
 	u := *c.updater
 	u.Out = &out
+	u.Tests = args.Test
 	if u.Exe == "" {
 		exe, err := c.local.Executable()
 		if err != nil {
@@ -124,6 +143,9 @@ func (c *updateCommand) rebuild(ctx context.Context, _ struct{}) (string, error)
 		return "", fmt.Errorf("%w; nothing was installed. The end of the output:\n%s", err, tail(out.Bytes()))
 	}
 	done := "built " + u.Source + " and installed the build as " + u.Exe + ". "
+	if len(u.Tests) > 0 {
+		done = "the tests of " + strings.Join(u.Tests, ", ") + " passed; " + done
+	}
 	// The node this runs in cannot stop itself while the answer is on its
 	// way: it takes its own place once the answer is given.
 	if plugin.Restart(ctx, u.Exe) {

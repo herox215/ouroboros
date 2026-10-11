@@ -71,6 +71,7 @@ import (
 	peersplugin "ouroboros/internal/plugins/peers"
 	sessionplugin "ouroboros/internal/plugins/session"
 	shellplugin "ouroboros/internal/plugins/shell"
+	skillsplugin "ouroboros/internal/plugins/skills"
 	"ouroboros/internal/plugins/tailscale"
 	"ouroboros/internal/plugins/talk"
 	"ouroboros/internal/plugins/tui"
@@ -175,6 +176,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		filesplugin.Plugin(files),
 		shellplugin.Plugin(dir, files),
 		historyplugin.Plugin(dir),
+		skillsplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
 		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),
 		opencodeplugin.Plugin(opencodeplugin.Options{BaseURL: s.OpenCodeGo}),

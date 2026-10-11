@@ -94,8 +94,9 @@ func TestSessionsScreen(t *testing.T) {
 		t.Fatalf("the answer on its way should move: %q, then %q", before, after)
 	}
 
-	// Down to the session on its way, and show it.
-	press(m, "up", "down")
+	// Up goes around to the last, and down from there to the session on
+	// its way, which is then shown.
+	press(m, "up", "down", "down")
 	if !strings.HasPrefix(sessionLines(m)[1], "▸ wait for beta") {
 		t.Fatalf("sessions %q", sessionLines(m))
 	}
@@ -111,9 +112,9 @@ func TestSessionsScreen(t *testing.T) {
 		t.Fatalf("view:\n%s", view(m))
 	}
 
-	// Back to the new one: what was typed there is back.
+	// Up goes around to the one shown, where what was typed is back.
 	m.Update(ctrlS)
-	press(m, "up", "up", "up")
+	press(m, "up")
 	m.Update(press(m, "enter"))
 	if m.input.Value() != "half a thought" || len(m.chat.entries) != 0 {
 		t.Fatalf("input %q, entries %+v", m.input.Value(), m.chat.entries)

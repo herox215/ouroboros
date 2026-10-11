@@ -7,6 +7,7 @@
 package script
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,8 +31,8 @@ const (
 	MaxTime   = 10 * time.Minute // from its start to its result: a build or its tests may take a while
 	MaxCalls  = 64               // calls of tools
 	MaxSource = 64 << 10         // bytes of the script
-	MaxResult = 16 << 10         // bytes of what it returns that are handed on
-	MaxPrint  = 16 << 10         // bytes of what it prints that are handed on
+	MaxResult = 32 << 10         // bytes of what it returns that are handed on
+	MaxPrint  = 32 << 10         // bytes of what it prints that are handed on: a source file of usual size
 	MaxDepth  = 1024             // calls of functions within each other
 	MaxHeap   = 256 << 20        // bytes the heap of the process may grow by while it runs
 
@@ -151,11 +152,15 @@ func (s *Session) Run(ctx context.Context, source string, tools []string, call C
 			return "", fmt.Errorf("%s is a word of JavaScript, so %s({…}) does not call the tool: write tools.%s({…})", name, name, name)
 		}
 	}
-	program, err := compile(source)
-	if err != nil {
-		if awaits.MatchString(source) {
-			return "", fmt.Errorf("the script is not valid JavaScript: %w: the tools return their result right away, so call them without await", err)
+	program, err := compile(source, tools)
+	if err != nil && awaits.MatchString(source) {
+		// The tools return their result right away: an await before one
+		// changes nothing but keeps the script from being one.
+		if without, again := compile(unawaited(source), tools); again == nil {
+			program, err = without, nil
 		}
+	}
+	if err != nil {
 		return "", fmt.Errorf("the script is not valid JavaScript: %w", err)
 	}
 	select {
@@ -421,9 +426,55 @@ func (r *realm) install(ctx context.Context, tools []string, call Call, out *out
 // await in it is a syntax error, which the models read as anything but that.
 var awaits = regexp.MustCompile(`(^|[^.\w$])await\b`)
 
+// unawaited returns source with every await that is a word of its own,
+// outside strings and comments, made blanks: lines and columns stay where
+// they were, for the errors.
+func unawaited(source string) string {
+	code := []byte(source)
+	var quote byte // the quote of the string the scan is in, if any
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'' || c == '`':
+			quote = c
+		case c == '/' && i+1 < len(code) && code[i+1] == '/':
+			for i < len(code) && code[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(code) && code[i+1] == '*':
+			end := bytes.Index(code[i+2:], []byte("*/"))
+			if end < 0 {
+				return string(code)
+			}
+			i += end + 3
+		case bytes.HasPrefix(code[i:], []byte("await")) &&
+			(i == 0 || !word(code[i-1])) && (i+len("await") == len(code) || !word(code[i+len("await")])):
+			copy(code[i:], "     ")
+			i += len("await") - 1
+		}
+	}
+	return string(code)
+}
+
+// word reports whether c is part of a name in JavaScript.
+func word(c byte) bool {
+	return c == '_' || c == '$' || c == '.' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+}
+
 // compile returns the program of source. Its declarations at the top level
-// are those of var, so that the next script may declare them again.
-func compile(source string) (*goja.Program, error) {
+// are those of var, so that the next script may declare them again. A call
+// of one of tools that is a statement of its own at the top level, and not
+// the last one, prints what it returns: its result would be lost otherwise,
+// as only the value of the last statement comes back. The columns of its
+// line after the call are further on in an error then, by the length of
+// shown.
+func compile(source string, tools []string) (*goja.Program, error) {
 	parsed, err := parser.ParseFile(nil, "script", source, 0)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Illegal return statement") {
@@ -434,14 +485,46 @@ func compile(source string) (*goja.Program, error) {
 		return goja.Compile("script", "(function(){"+source+"\n})()", false)
 	}
 	code := []byte(source)
-	for _, statement := range parsed.Body {
-		if d, ok := statement.(*ast.LexicalDeclaration); ok {
-			at := int(d.Idx) - 1
-			word := d.Token.String() // let or const
+	var lost []ast.Expression // calls of tools whose result is lost
+	for i, statement := range parsed.Body {
+		switch s := statement.(type) {
+		case *ast.LexicalDeclaration:
+			at := int(s.Idx) - 1
+			word := s.Token.String() // let or const
 			copy(code[at:], "var"+strings.Repeat(" ", len(word)-len("var")))
+		case *ast.ExpressionStatement:
+			if i < len(parsed.Body)-1 && callsTool(s.Expression, tools) {
+				lost = append(lost, s.Expression)
+			}
 		}
 	}
+	for _, call := range slices.Backward(lost) {
+		from, to := int(call.Idx0())-1, int(call.Idx1())-1
+		code = slices.Concat(code[:from], []byte(shown), code[from:to], []byte(")"), code[to:])
+	}
 	return goja.Compile("script", string(code), false)
+}
+
+// shown is what compile puts before a call whose result would be lost: it
+// prints the result unless it is empty, without a name of its own that a
+// script would see.
+const shown = `((r) => r === "" || print(r))(`
+
+// callsTool reports whether e is a call of one of tools, by its name or as
+// tools.NAME.
+func callsTool(e ast.Expression, tools []string) bool {
+	call, ok := e.(*ast.CallExpression)
+	if !ok {
+		return false
+	}
+	switch callee := call.Callee.(type) {
+	case *ast.Identifier:
+		return slices.Contains(tools, callee.Name.String())
+	case *ast.DotExpression:
+		object, ok := callee.Left.(*ast.Identifier)
+		return ok && object.Name == "tools" && slices.Contains(tools, callee.Identifier.Name.String())
+	}
+	return false
 }
 
 // output is what a script printed.

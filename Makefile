@@ -64,9 +64,11 @@ hooks:
 unhooks:
 	@scripts/install-hooks.sh --uninstall
 
+# basename, not notdir: notdir splits a path with spaces into words, as
+# "Application Support" of the stage that rebuild installs from.
 install: build
 	mkdir -p "$(PREFIX)/bin"
-	install -m755 "$(BIN)" "$(PREFIX)/bin/$(notdir $(BIN))"
+	install -m755 "$(BIN)" "$(PREFIX)/bin/$$(basename "$(BIN)")"
 
 clean:
 	rm -rf $(BIN) .cover cover.out .mutation

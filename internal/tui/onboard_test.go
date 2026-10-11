@@ -295,11 +295,13 @@ func TestSetupWalksThroughThePages(t *testing.T) {
 	if v := shown(m); m.onboard.step != stepModel || m.onboard.login != nil || !strings.Contains(v, "2/4 · Model") || !strings.Contains(v, "▸ b") || !strings.Contains(v, "2 of 3") {
 		t.Fatalf("models:\n%s", v)
 	}
-	press(m, "up", "k", "x")
-	if m.onboard.model != 0 {
+	// Up at the first model goes around to the last, and down once around
+	// comes back to it.
+	press(m, "up", "k")
+	if m.onboard.model != 2 {
 		t.Fatalf("selected %d", m.onboard.model)
 	}
-	press(m, "down", "j", "down", "down")
+	press(m, "down", "down", "down")
 	if m.onboard.model != 2 {
 		t.Fatalf("selected %d", m.onboard.model)
 	}
@@ -419,12 +421,16 @@ func TestSetupShowsTheAccesses(t *testing.T) {
 			t.Fatalf("no %q in:\n%s", want, v)
 		}
 	}
-	// The selection stays in the list, which ends with the row that adds.
-	press(m, "up", "k")
+	// Up at the first is the row that adds one, and down from it the first.
+	press(m, "up")
+	if m.onboard.sel != 2 {
+		t.Fatalf("selected %d", m.onboard.sel)
+	}
+	press(m, "down")
 	if m.onboard.sel != 0 {
 		t.Fatalf("selected %d", m.onboard.sel)
 	}
-	press(m, "down", "j", "down", "down")
+	press(m, "down", "down")
 	if m.onboard.sel != 2 {
 		t.Fatalf("selected %d", m.onboard.sel)
 	}
@@ -555,7 +561,7 @@ func TestSetupAddsAnAccess(t *testing.T) {
 	if v := shown(m); m.onboard.step != stepProvider || !strings.Contains(v, "1/4 · Provider") || !strings.Contains(v, "▸ Custom Provider") || !strings.Contains(v, "  ChatGPT") {
 		t.Fatalf("providers:\n%s", v)
 	}
-	press(m, "up", "down", "down", "j", "k", "j")
+	press(m, "up", "down", "down")
 	if m.onboard.sel != 1 {
 		t.Fatalf("selected %d", m.onboard.sel)
 	}
@@ -792,7 +798,7 @@ func TestSetupScene(t *testing.T) {
 	}
 	// A quarter of the way it has begun to turn, to shrink and to rise, slowly.
 	o.at = saved.Add(turnAt + turnDuration/4)
-	if p, bright := o.pose(100, 30); !near(p.turn, 2*math.Pi*0.15625) || !near(p.scale, 1.3731971153846156) || p.x != 100 || !near(p.y, 69.90985576923076) || !near(bright, 0.578125) {
+	if p, bright := o.pose(100, 30); !near(p.turn, 2*math.Pi*0.15625) || !near(p.scale, 1.3731971153846156) || p.x != 100 || !near(p.y, 70.22235576923076) || !near(bright, 0.578125) {
 		t.Fatalf("a quarter of the way: %+v, %v", p, bright)
 	}
 	m.Update(splashMsg{saved.Add(turnAt + turnDuration/2)})
@@ -807,7 +813,8 @@ func TestSetupScene(t *testing.T) {
 	// At the end the snake is where the splash shows the name, as large as
 	// the logo.
 	o.at = end
-	if p, _ := o.pose(100, 20); math.Abs(p.scale-1) > 1e-9 || p.x != 100 || math.Abs(p.y-38) > 1e-9 {
+	_, _, lowTop, lowBlock := splashLayout(100, 20)
+	if p, _ := o.pose(100, 20); math.Abs(p.scale-1) > 1e-9 || p.x != 100 || math.Abs(p.y-float64(lowTop*4+lowBlock*2)) > 1e-9 {
 		t.Fatalf("on a low screen: %+v", p)
 	}
 	p, bright := o.pose(100, 30)

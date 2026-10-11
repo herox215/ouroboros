@@ -243,7 +243,7 @@ func TestAskPeerNeedsPeerAndMessage(t *testing.T) {
 			t.Errorf("ask_peer(%q, %q) = %q, %v", args[0], args[1], got, err)
 		}
 	}
-	if _, err := s.tools()[toolAskPeer].Run(context.Background(), json.RawMessage(`{"peer": 1}`)); err == nil || err.Error() != "ask_peer: invalid arguments" {
+	if _, err := s.tools()[toolAskPeer].Run(context.Background(), json.RawMessage(`{"peer": 1}`)); err == nil || err.Error() != `ask_peer: invalid arguments: "peer" is a string, not a number` {
 		t.Fatalf("arguments that are no text: %v", err)
 	}
 	if got := luna.messages(); got != "" {

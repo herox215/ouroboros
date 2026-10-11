@@ -82,12 +82,12 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		if a.own() && m.input.Value() != "" {
 			return nil, false
 		}
-		a.sel = max(0, a.sel-1)
+		a.sel = cycle(a.sel, -1, len(a.options)+1)
 	case "down":
 		if a.own() {
 			return nil, false
 		}
-		a.sel++
+		a.sel = cycle(a.sel, 1, len(a.options)+1)
 	case "enter":
 		if a.own() {
 			return nil, false // what is written is sent, and answers

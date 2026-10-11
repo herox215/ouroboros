@@ -326,21 +326,13 @@ func TestSettingsEdit(t *testing.T) {
 // open from here.
 func TestSettingsKeys(t *testing.T) {
 	m, b := openSettings(t, someSettings())
-	if press(m, "up"); m.config.category != 0 || m.config.opened {
-		t.Errorf("above the first category: %d", m.config.category)
+	if press(m, "up"); m.config.category != len(sections)-1 || m.config.opened {
+		t.Errorf("up at the first category goes around to the last: %d", m.config.category)
 	}
-	if press(m, "down"); m.config.category != 1 {
-		t.Errorf("down: %d", m.config.category)
+	if press(m, "down"); m.config.category != 0 {
+		t.Errorf("down from the last: %d", m.config.category)
 	}
-	if press(m, "up"); m.config.category != 0 {
-		t.Errorf("up: %d", m.config.category)
-	}
-	for range len(sections) + 3 {
-		press(m, "down")
-	}
-	if m.config.category != len(sections)-1 {
-		t.Errorf("below the last category: %d", m.config.category)
-	}
+	m.config.category = len(sections) - 1
 	m.config.sel, m.choice = 2, 1
 	if press(m, "enter"); !m.config.opened || m.config.sel != 0 || m.choice != 0 {
 		t.Errorf("opened %v at %d, choice %d", m.config.opened, m.config.sel, m.choice)
@@ -353,20 +345,17 @@ func TestSettingsKeys(t *testing.T) {
 	}
 
 	pick(t, m, nodeSection, "Name", "change")
-	if press(m, "up"); m.config.sel != 0 {
-		t.Errorf("above the first: %d", m.config.sel)
+	if press(m, "up"); m.config.sel != len(m.config.shown(m))-1 {
+		t.Errorf("up at the first row goes around to the last: %d", m.config.sel)
 	}
-	if press(m, "down"); m.config.sel != 1 {
-		t.Errorf("down: %d", m.config.sel)
-	}
-	if press(m, "up"); m.config.sel != 0 {
-		t.Errorf("up: %d", m.config.sel)
+	if press(m, "down"); m.config.sel != 0 {
+		t.Errorf("down from the last: %d", m.config.sel)
 	}
 	press(m, "left")
 	if press(m, "right"); m.choice != 0 {
 		t.Errorf("beyond the only action: %d", m.choice)
 	}
-	for range len(m.config.rows) + 3 {
+	for range len(m.config.shown(m)) - 1 {
 		press(m, "down")
 	}
 	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 5 {
@@ -494,15 +483,21 @@ func TestSettingsNoJump(t *testing.T) {
 		t.Errorf("the note of the row left behind is gone:\n%s", shown())
 	}
 	// To the last row, which the window follows to and stops at.
-	press(m, "down", "down", "down")
+	for range len(m.config.shown(m)) {
+		if strings.Contains(shown(), "› Node ID") {
+			break
+		}
+		press(m, "down")
+	}
 	if !strings.Contains(shown(), "› Node ID") {
 		t.Errorf("the selection is not on the last row:\n%s", shown())
 	}
 	node, key := where("Node ID"), where("Model")
-	press(m, "down")
+	press(m, "up")
 	if where("Node ID") != node || where("Model") != key {
-		t.Errorf("the lines moved while the last row was selected:\n%s", shown())
+		t.Errorf("the lines moved when the selection went back one:\n%s", shown())
 	}
+	press(m, "down")
 	if !strings.Contains(shown(), "the fingerprint of the key of the node") {
 		t.Errorf("the note of the row selected is cut off:\n%s", shown())
 	}

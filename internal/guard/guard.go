@@ -99,8 +99,9 @@ func (r *Refusal) Error() string {
 
 // Guard holds what is fixed for the node.
 type Guard struct {
-	// Workspace is where commands start that name no directory; "" for
-	// the home directory of the user.
+	// Workspace is where commands start that name no directory, and where
+	// a relative path of the owner starts; "" for the home directory of the
+	// user.
 	Workspace string
 	// Home is the directory of the node. Nothing in it is changed.
 	Home string
@@ -120,6 +121,7 @@ type Guard struct {
 // Checker decides about paths for one call of a tool.
 type Checker struct {
 	access    Access
+	base      string // where a relative path starts, "" if it is refused
 	home      string
 	userHome  string // "" if it is not known
 	secrets   []secret
@@ -148,9 +150,17 @@ func (g *Guard) Checker(a Access) (*Checker, error) {
 	if c.home, err = resolve(g.Home, true); err != nil {
 		return nil, err
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
 		if c.userHome, err = resolve(home, true); err != nil {
 			return nil, err
+		}
+	}
+	// A peer names its paths in full: the workspace is the owner's.
+	if !a.Peer {
+		c.base = g.Workspace
+		if c.base == "" && homeErr == nil {
+			c.base = home
 		}
 	}
 	for _, path := range g.Secrets {
@@ -283,11 +293,11 @@ func Valid(paths []string) error {
 	return nil
 }
 
-// Check decides whether the tool may do op with path. It returns the path to
-// work on, with every symbolic link resolved, or a *Refusal. What is deleted
+// Check decides whether the tool may do op with path, which for the owner may
+// be relative to the workspace. It returns the path to work on, with every symbolic link resolved, or a *Refusal. What is deleted
 // is the path itself, so a link at its end is not followed for Delete.
 func (c *Checker) Check(op Op, path string) (string, error) {
-	abs, err := expand(path)
+	abs, err := c.expand(path)
 	if err != nil {
 		return "", err
 	}
@@ -430,9 +440,25 @@ func within(path, root string) bool {
 	return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/")
 }
 
+// expand returns path of a call with "~" replaced by the home directory of
+// the user, and a relative path joined to where the owner's start.
+func (c *Checker) expand(path string) (string, error) {
+	if c.base != "" && path != "" && !strings.HasPrefix(path, "~") && !filepath.IsAbs(path) {
+		return filepath.Join(c.base, path), nil
+	}
+	abs, err := expand(path)
+	if err != nil && c.base == "" && !c.access.Peer {
+		return "", fmt.Errorf("%w; the workspace a relative path starts from is not known", err)
+	}
+	if err != nil && c.access.Peer {
+		return "", fmt.Errorf("%w: a peer names a path in full", err)
+	}
+	return abs, err
+}
+
 // expand returns path with "~" replaced by the home directory of the user.
-// A path has to be absolute or start there: a node has no place of its own
-// that a relative one could start from.
+// A path of the configuration has to be absolute or start there: it holds
+// for every conversation, and only the owner's have a place to start from.
 func expand(path string) (string, error) {
 	if path == "~" || strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()

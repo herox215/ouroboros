@@ -302,8 +302,8 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	old := now
 	now = func() time.Time { return day }
 	t.Cleanup(func() { now = old })
-	start := `You are "me", the personal agent of the owner of this Ouroboros node. `
-	end := scriptHint + ownerStyle + " Today is Saturday, 10 October 2026; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
+	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + scriptHint
+	end := ownerStyle + " Today is Saturday, 10 October 2026; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
 	for _, tt := range []struct {
 		tools []config.Entry
 		want  string
@@ -349,6 +349,23 @@ func TestPromptNamesTheWorkspace(t *testing.T) {
 	b.Workspace = ""
 	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || strings.Contains(got, "You work in") {
 		t.Errorf("without a workspace: %q, %v", got, err)
+	}
+}
+
+// An agent that may rebuild ouro is told where its source is, when the
+// build knows it; one that may not is told nothing of it.
+func TestPromptNamesTheSource(t *testing.T) {
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	load := func() (config.Config, error) { return cfg, nil }
+	rebuild := agent.NewTool(ToolRebuild, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return []agent.Tool{rebuild} }, Source: "/src/ouro"}
+	want := improveHint + "Your source, the checkout rebuild builds, is /src/ouro. "
+	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || !strings.Contains(got, want) {
+		t.Errorf("with a source: %q, %v", got, err)
+	}
+	cfg.Tools = &config.Tools{H2A: config.Named()}
+	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || strings.Contains(got, "/src/ouro") {
+		t.Errorf("without rebuild: %q, %v", got, err)
 	}
 }
 
