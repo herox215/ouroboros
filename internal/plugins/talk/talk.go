@@ -73,7 +73,11 @@ func (c *talkCommands) ask(ctx context.Context, args []string) error {
 	send := func(text string) (string, error) { return c.network.Send(ctx, node, contextID, text) }
 
 	if len(args) > 1 {
-		reply, err := send(strings.Join(args[1:], " "))
+		text := strings.Join(args[1:], " ")
+		if strings.TrimSpace(text) == "" {
+			return errors.New("the message is empty") // a peer is not asked for nothing
+		}
+		reply, err := send(text)
 		if errors.Is(err, plugin.ErrPending) {
 			return fmt.Errorf("connection request sent to %s, waiting for approval", plugin.Label(node))
 		}
@@ -88,10 +92,11 @@ func (c *talkCommands) ask(ctx context.Context, args []string) error {
 	})
 }
 
-// interrupted returns ctx, ended by Ctrl-C or a request to terminate the
-// process; tests replace it.
+// interrupted returns ctx, ended by Ctrl-C, a request to terminate the
+// process or the terminal closing under it: the chat then lets go of the
+// node it started rather than dying with it running; tests replace it.
 var interrupted = func(ctx context.Context) (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	return signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 }
 
 // chat talks to the agent of the owner: once with the given message,
@@ -132,9 +137,21 @@ func (c *talkCommands) chat(ctx context.Context, args []string) (err error) {
 }
 
 func (c *talkCommands) print(reply string, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return errStopped
+	}
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(c.term.Out, reply)
 	return nil
 }
+
+// errStopped is the error of an answer that was stopped, as by Ctrl-C: it
+// says so in words, and is context.Canceled.
+var errStopped error = stopped{}
+
+type stopped struct{}
+
+func (stopped) Error() string { return "the answer was stopped" }
+func (stopped) Unwrap() error { return context.Canceled }

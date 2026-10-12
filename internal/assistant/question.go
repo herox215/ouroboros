@@ -38,7 +38,8 @@ type Question struct {
 // the same; what is recommended is one of them.
 func ParseQuestion(args json.RawMessage) (Question, error) {
 	var q Question
-	if err := json.Unmarshal(args, &q); err != nil {
+	// options written as a string of JSON are taken, as Decode takes them
+	if err := agent.Decode(ToolUserQuestion, args, &q); err != nil {
 		return Question{}, errors.New(ToolUserQuestion + `: invalid arguments: "question" is a string, "options" an array of strings`)
 	}
 	q.Question = strings.TrimSpace(q.Question)

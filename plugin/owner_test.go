@@ -438,6 +438,20 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 	if out, err := clitest.Run(t, beta, "", "list"); err != nil || !strings.Contains(out, "omega") || strings.Contains(out, "alpha") {
 		t.Fatalf("beta finds: %q, %v", out, err)
 	}
+	// A name another profile has, whatever its case, is not taken.
+	if _, err := home.Dir(alpha.Home).AddProfile("zweite"); err != nil {
+		t.Fatal(err)
+	}
+	propose(t, alpha, "name", "ZWEITE", "another name")
+	list, _ = o.Proposals()
+	if err := o.AcceptProposal(list[0].ID); err == nil || err.Error() != `there is a profile called "ZWEITE" already` {
+		t.Fatalf("the name of another profile: %v", err)
+	}
+	os.WriteFile(filepath.Join(alpha.Home, "proposals.json"), []byte("{"), 0o600)
+	if err := o.AcceptProposal(list[0].ID); err == nil {
+		t.Fatal("proposals that cannot be read")
+	}
+	os.Remove(filepath.Join(alpha.Home, "proposals.json"))
 
 	// A refused proposal is gone and changed nothing.
 	propose(t, alpha, "tools.a2a", []string{"*"}, "everything for everybody")

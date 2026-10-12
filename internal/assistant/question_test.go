@@ -21,6 +21,11 @@ func TestParseQuestion(t *testing.T) {
 	if q, err := ParseQuestion(json.RawMessage(`{"question":"?","options":["1","2","3","4","5","6"]}`)); err != nil || len(q.Options) != MaxOptions || q.Recommended != "" {
 		t.Fatalf("the most options, none recommended: %+v, %v", q, err)
 	}
+	// Options written as a string of JSON, as models write them when they
+	// call user_question as a tool of its own, are taken.
+	if q, err := ParseQuestion(json.RawMessage(`{"question":"Which?","options":"[\"a\", \"b\"]","recommended":"a"}`)); err != nil || strings.Join(q.Options, "|") != "a|b" || q.Recommended != "a" {
+		t.Fatalf("options as a string: %+v, %v", q, err)
+	}
 	// A question without options is one the owner answers in own words.
 	if q, err := ParseQuestion(json.RawMessage(`{"question":"What is it called?"}`)); err != nil || q.Question != "What is it called?" || len(q.Options) != 0 {
 		t.Fatalf("no options: %+v, %v", q, err)

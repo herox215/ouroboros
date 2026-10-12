@@ -368,6 +368,36 @@ func TestListen(t *testing.T) {
 		t.Fatalf("port %d, taken is %d", port(other), port(asked))
 	}
 
+	// A port another program holds for IPv4 alone is taken, though IPv6
+	// of it would be free.
+	v4, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v4.Close()
+	beside, err := listen(port(v4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer beside.Close()
+	if port(beside) == port(v4) {
+		t.Fatalf("port %d is held for IPv4 by another", port(v4))
+	}
+	// A port that is free for IPv4 and then taken falls back too.
+	replace(t, &netListen, func(network, addr string) (net.Listener, error) {
+		if network == "tcp" && addr != ":0" {
+			return nil, errTest
+		}
+		return net.Listen(network, addr)
+	})
+	gone, _ := net.Listen("tcp", ":0")
+	gone.Close()
+	if ln, err := listen(port(gone)); err != nil || port(ln) == port(gone) {
+		t.Fatalf("taken after the probe: %v", err)
+	} else {
+		ln.Close()
+	}
+
 	// Without any port there is no node.
 	replace(t, &netListen, func(string, string) (net.Listener, error) { return nil, errTest })
 	for _, p := range []int{0, port(asked)} {

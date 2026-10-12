@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -62,9 +63,24 @@ func (s Service) Start(exe string, args ...string) (Process, error) {
 	}
 	p, ok := waitRunning(s.PIDFile, patience, exited)
 	if !ok {
+		if why := failure(s.LogFile); why != "" {
+			return Process{}, fmt.Errorf("node did not start: %s (see %s)", why, s.LogFile)
+		}
 		return Process{}, fmt.Errorf("node did not start, see %s", s.LogFile)
 	}
 	return p, nil
+}
+
+// failure is why a node that did not start said so in the log, as its last
+// line, which starts with ✗; "" if it said nothing.
+func failure(log string) string {
+	b, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	why, _ := strings.CutPrefix(lines[len(lines)-1], "✗ ")
+	if why == lines[len(lines)-1] {
+		return ""
+	}
+	return why
 }
 
 // Stop stops the service and reports whether it was running.

@@ -19,7 +19,7 @@ func TestWho(t *testing.T) {
 	var logs []string
 	h := &archive{history.Open(filepath.Join(t.TempDir(), "history")), func(format string, args ...any) { logs = append(logs, format) }}
 	for _, tool := range h.tools() {
-		if _, err := tool.Run(context.Background(), json.RawMessage(`{"query":"x"}`)); err == nil || !strings.Contains(err.Error(), "only reachable within a conversation") {
+		if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "only reachable within a conversation") {
 			t.Errorf("%s outside a conversation: %v", tool.Name, err)
 		}
 	}

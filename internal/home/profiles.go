@@ -134,11 +134,15 @@ func (d Dir) RenameProfile(name string) error {
 
 // checkName says what is wrong with name as the name of a profile.
 func checkName(name string) error {
-	if name == "" || strings.ContainsAny(name, "\n\r\t") {
-		return errors.New("a profile needs a name of one line")
+	if err := config.ValidName(config.FieldName, name); err != nil {
+		return fmt.Errorf("a profile needs a name of one line: %w", err)
 	}
 	return nil
 }
+
+// NameFree fails if another profile of the node than d is called name,
+// whatever the case of its letters, or has it as its ID.
+func (d Dir) NameFree(name string) error { return d.Root().unusedName(name, d) }
 
 // unusedName fails if a profile of the node other than except is called
 // name, whatever the case of its letters, or has it as its ID: a profile is
@@ -185,7 +189,7 @@ func (d Dir) SelectProfile(target string) (Dir, error) {
 	case 1:
 		return found[0], nil
 	case 0:
-		return "", fmt.Errorf("the node has no profile %q: ouro profile list lists them", target)
+		return "", fmt.Errorf("the node has no profile %q: ouro profile lists them", target)
 	}
 	return "", fmt.Errorf("%q starts the ID of several profiles: name one of them by more of it", target)
 }

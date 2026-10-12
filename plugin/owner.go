@@ -3,10 +3,12 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"ouroboros/internal/config"
@@ -136,6 +138,19 @@ func (o *Owner) Proposals() ([]Proposal, error) {
 // The agents of the node are built from the changed configuration with the
 // next message they get: no restart is needed.
 func (o *Owner) AcceptProposal(id string) error {
+	// A name is that of a profile too, which no other profile has.
+	list, err := o.home.Proposals().List()
+	if err != nil {
+		return err
+	}
+	for _, p := range list {
+		var name string
+		if p.ID == id && p.Path == config.FieldName && json.Unmarshal(p.Value, &name) == nil {
+			if err := o.home.NameFree(strings.TrimSpace(name)); err != nil {
+				return err
+			}
+		}
+	}
 	p, err := o.home.Proposals().Accept(string(o.home), id)
 	if err == nil {
 		o.home.Log("the owner accepted a proposal: %s is now %s", p.Path, p.Value)

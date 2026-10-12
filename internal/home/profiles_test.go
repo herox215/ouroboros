@@ -116,7 +116,7 @@ func TestAddProfileFails(t *testing.T) {
 	root := node(t)
 	luna, _ := root.AddProfile("Luna")
 	id, _ := luna.Identity()
-	for _, name := range []string{"", "  ", "a\nb", "luna", "TERRA", id.ID()} {
+	for _, name := range []string{"", "  ", "a\nb", "\x1b[31mred", "luna", "TERRA", id.ID()} {
 		if _, err := root.AddProfile(name); err == nil {
 			t.Errorf("%q should fail", name)
 		}

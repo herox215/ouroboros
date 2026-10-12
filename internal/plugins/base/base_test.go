@@ -24,6 +24,11 @@ func TestUsage(t *testing.T) {
 		if err != nil || !strings.Contains(out, "ouro start") {
 			t.Fatalf("%v: got %q, %v", args, out, err)
 		}
+		// A synopsis too long for its column has its help below it, in the
+		// column of the others, not glued to it.
+		if !strings.Contains(out, "PROFILE NAME]\n"+strings.Repeat(" ", 26)+"list the profiles") {
+			t.Errorf("%v: the help of profile is out of its column: %q", args, out)
+		}
 	}
 }
 

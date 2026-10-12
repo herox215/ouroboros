@@ -103,6 +103,10 @@ func TestNodeLifecycle(t *testing.T) {
 		t.Fatalf("ask by ID prefix: %q, %v", out, err)
 	}
 
+	if out, err := clitest.Run(t, s, "", "ask", id[:4], "  "); err == nil || err.Error() != "the message is empty" {
+		t.Fatalf("an empty message: %q, %v", out, err)
+	}
+
 	out, err = clitest.Run(t, s, "one\n\ntwo\n", "ask", "alpha")
 	if err != nil || !strings.Contains(out, "turns=1 last=one") || !strings.Contains(out, "turns=3 last=two") {
 		t.Fatalf("interactive ask should keep history: %q, %v", out, err)
@@ -222,7 +226,7 @@ func TestChatIsLogged(t *testing.T) {
 	}
 
 	talk.Interrupt(t)
-	if _, err := clitest.Run(t, s, "", "chat", "stop"); !errors.Is(err, context.Canceled) {
+	if _, err := clitest.Run(t, s, "", "chat", "stop"); !errors.Is(err, context.Canceled) || err.Error() != "the answer was stopped" {
 		t.Fatalf("interrupted: %v", err)
 	}
 	if !regexp.MustCompile(`: message from the owner: "stop"\n.*: canceled after [^ ]+ \(llm calls: 0, tool calls: 0, sent 0.0 KiB\)\n$`).MatchString(logged()) {

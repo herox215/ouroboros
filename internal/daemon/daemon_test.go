@@ -445,6 +445,11 @@ func TestServiceStartFails(t *testing.T) {
 	if time.Since(start) >= patience {
 		t.Fatal("a node that ended was waited for")
 	}
+	// What it said of why, in the last line of the log, is told.
+	if _, err := s.Start("/bin/sh", "-c", "echo '✗ access \"x\": no such access' >&2"); err == nil ||
+		err.Error() != `node did not start: access "x": no such access (see `+s.LogFile+`)` {
+		t.Fatalf("a node that said why: %v", err)
+	}
 }
 
 // Two nodes started at once: one gets the file, the other one ends. Whoever

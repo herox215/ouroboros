@@ -358,7 +358,17 @@ func keep(failures *diagnosis.Store, logger *log.Logger) func(a2a.Failure) {
 }
 
 // listen opens the A2A port, falling back to a free port if it is taken.
+// It is taken also when another program holds it for IPv4 alone: macOS then
+// opens it for IPv6, and peers on the network, which come by IPv4, would
+// reach that program.
 func listen(port int) (net.Listener, error) {
+	if port != 0 {
+		probe, err := netListen("tcp4", fmt.Sprintf(":%d", port))
+		if err != nil {
+			return netListen("tcp", ":0")
+		}
+		probe.Close()
+	}
 	ln, err := netListen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil && port != 0 {
 		return netListen("tcp", ":0")

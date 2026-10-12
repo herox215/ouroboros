@@ -28,6 +28,17 @@ type wizard struct {
 // run asks for the access, the model and the node name and saves the
 // configuration.
 func (w *wizard) run(ctx context.Context, cfg config.Config) (config.Config, error) {
+	got, err := w.ask(ctx, cfg)
+	if errors.Is(err, io.EOF) {
+		// The input ended before the setup had its answers, as without a
+		// terminal.
+		return got, fmt.Errorf("the setup needs answers and the input ended: run ouro start in a terminal (%w)", err)
+	}
+	return got, err
+}
+
+// ask asks the questions of the setup, see run.
+func (w *wizard) ask(ctx context.Context, cfg config.Config) (config.Config, error) {
 	s := setup.New(w.home, w.providers, cfg)
 	d := &lines{term: w.term, out: &serial{w: w.term.Out}}
 	models, err := w.access(ctx, s, d)

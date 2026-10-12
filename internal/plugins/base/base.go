@@ -82,11 +82,23 @@ func (d *Dispatcher) find(name string) (plugin.Command, bool) {
 	return plugin.Command{}, false
 }
 
+// usageColumn is the width of the synopsis of a command in the usage.
+const usageColumn = 19
+
 // usage lists the commands.
 func (d *Dispatcher) usage() error {
 	var b strings.Builder
 	b.WriteString("ouro – tiny A2A agent node for any OpenAI-compatible LLM API\n\n")
-	line := func(synopsis, help string) { fmt.Fprintf(&b, "  ouro %-19s%s\n", synopsis, help) }
+	// A synopsis too long for its column puts its help on a line of its own,
+	// below it in the column of the others.
+	line := func(synopsis, help string) {
+		if len(synopsis) >= usageColumn {
+			fmt.Fprintf(&b, "  ouro %s\n  %-*s", synopsis, usageColumn+5, "")
+		} else {
+			fmt.Fprintf(&b, "  ouro %-*s", usageColumn, synopsis)
+		}
+		fmt.Fprintf(&b, "%s\n", help)
+	}
 	if fronts := plugin.All[plugin.FrontEnd](d.ctx); len(fronts) == 1 {
 		line("", fronts[0].Help+" (default)")
 	}
