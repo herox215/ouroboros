@@ -338,6 +338,27 @@ func TestSecretDirectories(t *testing.T) {
 }
 
 // The state of the node is read and never changed.
+// The sockets the nodes are reached through are not changed, by any tool.
+func TestSocketsOfTheNodes(t *testing.T) {
+	w := newWorld(t)
+	w.file(w.root+"/sockets/abc.sock", "")
+	w.guard.Sockets = w.root + "/sockets"
+	rule := "it holds the sockets the nodes are reached through: no tool changes it"
+	w.refused(Access{Tool: "delete"}, Delete, w.root+"/sockets/abc.sock", rule)
+	w.refused(Access{Tool: "write"}, Write, w.root+"/sockets/new", rule)
+	w.allowed(Access{Tool: "read"}, Read, w.root+"/sockets/abc.sock", w.root+"/sockets/abc.sock")
+	p, err := w.guard.Box(Access{Tool: "bash"}, false)
+	if err != nil || !slices.Contains(p.ReadOnly, w.root+"/sockets") {
+		t.Fatalf("the sandbox: %+v, %v", p, err)
+	}
+	// One that cannot be resolved touches nothing.
+	w.guard.Sockets = w.root + "/loop"
+	w.link("loop", w.root+"/loop")
+	if _, err := w.guard.Checker(Access{Tool: "read"}); err == nil {
+		t.Fatal("a directory of sockets that leads nowhere")
+	}
+}
+
 func TestStateOfTheNode(t *testing.T) {
 	w := newWorld(t)
 	w.link(w.node, w.home+"/share/node")
@@ -478,7 +499,7 @@ func TestSourceOfTheCore(t *testing.T) {
 		}
 		w.allowed(a, Read, src+"/"+pkg+"/new.go", src+"/"+pkg+"/new.go")
 	}
-	if len(corePackages) != 10 || corePackages[9] != "internal/guard" || !slices.Contains(corePackages, "internal/sandbox") {
+	if len(corePackages) != 11 || corePackages[9] != "internal/guard" || corePackages[10] != "internal/printable" || !slices.Contains(corePackages, "internal/sandbox") {
 		t.Errorf("the packages of the core: %v", corePackages)
 	}
 	w.refused(a, Write, "~/share/id/identity.go", ruleCore)
@@ -598,9 +619,21 @@ func TestBox(t *testing.T) {
 
 	// What "allow" names is writable as far as it exists; a peer without
 	// it writes nothing.
+	// The owner's commands write temporary files too.
+	t.Setenv("TMPDIR", w.home+"/tmp")
 	p, err = w.guard.Box(Access{Tool: "bash", Allow: paths("~/share", "~/missing", w.root)}, false)
 	if err != nil || !slices.Equal(p.Writable, []string{w.home + "/share", w.root}) || p.Network {
+		t.Errorf("with allow, without the temporary files: %+v, %v", p, err)
+	}
+	w.file(w.home+"/tmp/x", "")
+	w.file(w.home+"/work/x", "")
+	w.guard.Workspace = w.home + "/work"
+	p, err = w.guard.Box(Access{Tool: "bash", Allow: paths("~/share")}, false)
+	if err != nil || !slices.Equal(p.Writable, []string{w.home + "/share", w.home + "/tmp", w.home + "/work"}) {
 		t.Errorf("with allow: %+v, %v", p, err)
+	}
+	if p, err := w.guard.Box(Access{Tool: "bash", Allow: paths("~/share"), Peer: true}, false); err != nil || !slices.Equal(p.Writable, []string{w.home + "/share"}) {
+		t.Errorf("a peer with allow: %+v, %v", p, err)
 	}
 	if p, err := w.guard.Box(Access{Tool: "bash", Peer: true}, false); err != nil || len(p.Writable) != 0 {
 		t.Errorf("for a peer: %+v, %v", p, err)
@@ -624,4 +657,92 @@ func TestBox(t *testing.T) {
 	if _, err := w.guard.Box(Access{}, false); !errors.Is(err, errTest) {
 		t.Errorf("a configuration that cannot be read: %v", err)
 	}
+}
+
+// A file system that does not tell names apart by their case, like that of
+// macOS, opens a file by any case of its name: the rules hold for every one.
+func TestCaseOfNames(t *testing.T) {
+	w := newWorld(t)
+	w.file(w.home+"/prot/inner/x", "x")
+	if _, err := os.Lstat(w.home + "/PROT"); err != nil {
+		t.Skip("the file system tells names apart by their case")
+	}
+	w.protected = []string{"~/.ssh", "~/prot"}
+	rule := `~/prot is in "protected" of the configuration, which no tool touches`
+	owner := Access{Tool: "read"}
+	for _, op := range []Op{Read, Write, Delete} {
+		w.refused(owner, op, "~/PROT/inner/x", rule)
+		w.refused(owner, op, "~/Prot/INNER", rule)
+		w.refused(owner, op, "~/.SSH/id_ed25519", ruleSSH)
+	}
+	w.refused(owner, Write, w.node+"/../"+filepath.Base(w.node)+"/CONTACTS.json", ruleState)
+	w.refused(owner, Delete, strings.ToUpper(w.home), ruleRoot)
+	// A protected path that is not there yet is protected however it is
+	// written, and so is one whose directory cannot be read.
+	w.protected = []string{"~/.netrc", "~/locked/x"}
+	w.refused(owner, Write, "~/.NETRC", `~/.netrc is in "protected" of the configuration, which no tool touches`)
+	w.file(w.home+"/locked/x", "")
+	os.Chmod(w.home+"/locked", 0o300)
+	w.refused(owner, Read, "~/locked/X", `~/locked/x is in "protected" of the configuration, which no tool touches`)
+	os.Chmod(w.home+"/locked", 0o755)
+	os.RemoveAll(w.home + "/locked")
+	w.protected = []string{"~/.ssh", "~/prot"}
+	// What is not there yet is taken as it is written.
+	w.allowed(owner, Write, "~/Share/new.txt", w.home+"/share/new.txt")
+	w.allowed(owner, Write, "~/share/NEW/x", w.home+"/share/NEW/x")
+
+	// A name the directory has in another form, as macOS has "ä" written
+	// as "a" and the dots, is the same.
+	w.file(w.home+"/share/\u00e4", "")
+	if _, err := os.Lstat(w.home + "/share/a\u0308"); err == nil {
+		w.allowed(owner, Read, "~/share/a\u0308", w.home+"/share/\u00e4")
+	}
+
+	// A directory that cannot be read, or has the name no more, leaves it
+	// as it is written.
+	w.file(w.home+"/locked/x", "")
+	if err := os.Chmod(w.home+"/locked", 0o300); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(w.home+"/locked", 0o755)
+	w.allowed(owner, Read, "~/locked/X", w.home+"/locked/X")
+	// Of many directories the first are forgotten.
+	for i := range maxListings {
+		names.dirs[strconv.Itoa(i)] = listing{}
+	}
+	w.file(w.home+"/fresh/x", "")
+	w.allowed(owner, Read, "~/FRESH/x", w.home+"/fresh/x")
+	if len(names.dirs) >= maxListings {
+		t.Errorf("%d directories are kept", len(names.dirs))
+	}
+	defer func(read func(string) ([]string, error)) { readNames = read }(readNames)
+	readNames = func(string) ([]string, error) { return nil, errTest }
+	clear(names.dirs)
+	w.allowed(owner, Read, "~/share/HELLO.txt", w.home+"/share/HELLO.txt")
+	readNames = func(string) ([]string, error) { return []string{"gone"}, nil }
+	clear(names.dirs)
+	w.allowed(owner, Read, "~/share/HELLO.txt", w.home+"/share/HELLO.txt")
+}
+
+// A hard link is the file it links: one to a file that is protected or
+// denied is refused as that file is.
+func TestHardLinks(t *testing.T) {
+	w := newWorld(t)
+	w.file(w.home+"/.netrc", "machine x")
+	w.file(w.home+"/tax/2026.txt", "1234")
+	w.protected = []string{"~/.netrc", "~/tax"}
+	for _, link := range [][2]string{{"/.netrc", "/share/netrc"}, {"/tax/2026.txt", "/share/2026.txt"}} {
+		if err := os.Link(w.home+link[0], w.home+link[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := Access{Tool: "read"}
+	w.refused(owner, Read, "~/share/netrc", `~/.netrc is in "protected" of the configuration, which no tool touches`)
+	// Of a directory, what it holds is not told by its file: what is linked
+	// from it is not known.
+	w.allowed(owner, Read, "~/share/2026.txt", w.home+"/share/2026.txt")
+	w.protected = nil
+	denied := Access{Tool: "read", Deny: []string{"~/.netrc"}}
+	w.refused(denied, Read, "~/share/netrc", `~/.netrc is in "deny" of the tool read`)
+	w.allowed(denied, Read, "~/share/hello.txt", w.home+"/share/hello.txt")
 }

@@ -188,7 +188,9 @@ func TestRead(t *testing.T) {
 	got, err = w.run(owner, Read, readArgs{Path: "~/missing"})
 	fails(t, got, err, "no such file")
 	got, err = w.run(owner, Read, readArgs{Path: "~"})
-	fails(t, got, err, "~ is not a file; a directory is read with list")
+	fails(t, got, err, "~ is a directory, which is read with list")
+	got, err = w.run(owner, "read", map[string]any{"path": "/dev/null"})
+	fails(t, got, err, "/dev/null is not a file but a device, a pipe or a socket, which read does not read")
 	got, err = w.run(owner, Read, `{"path": 1}`)
 	fails(t, got, err, "read: invalid arguments")
 	got, err = w.run(owner, Read, readArgs{Path: "~user/notes.md"})
@@ -225,10 +227,35 @@ func TestReadInPieces(t *testing.T) {
 		t.Errorf("the rest: %q, %v", got, err)
 	}
 
-	// A line that fills a call alone is too long, wherever it is.
-	w.file("~/wide", "short\n"+strings.Repeat("x", maxReadBytes)+"\nshort\n")
-	got, err := w.run(owner, Read, readArgs{Path: "~/wide", Offset: 3})
-	fails(t, got, err, "line 2 of ~/wide has 256 KiB or more: too long to read")
+	// A line that fills a call alone is too long to read, and the lines
+	// after it are read past it.
+	w.file("~/wide", "short\n"+strings.Repeat("ä", maxReadBytes)+"\nshort\n")
+	got, err := w.run(owner, Read, readArgs{Path: "~/wide", Offset: 2})
+	fails(t, got, err, "line 2 of ~/wide has 256 KiB or more: too long to read; the lines after it are read with offset 3")
+	if got, err := w.run(owner, Read, readArgs{Path: "~/wide", Offset: 3}); err != nil || got != "short\n[these were the lines 3 to 3 of 3, the end of the file]" {
+		t.Errorf("past a long line: %q, %v", got, err)
+	}
+	w.file("~/wideend", "short\n"+strings.Repeat("x", maxReadBytes+1))
+	if got, err := w.run(owner, Read, readArgs{Path: "~/wideend", Offset: 3}); err == nil || err.Error() != "~/wideend has only 2 lines" {
+		t.Errorf("a long last line: %q, %v", got, err)
+	}
+	w.file("~/widenul", "short\n"+strings.Repeat("x", maxReadBytes)+"\x00\nshort\n")
+	w.file("~/widenul2", "short\n\x00"+strings.Repeat("x", 2*maxReadBytes)+"\nshort\n")
+	for _, path := range []string{"~/widenul", "~/widenul2"} {
+		got, err = w.run(owner, Read, readArgs{Path: path, Offset: 3})
+		fails(t, got, err, path+" is not a text file")
+	}
+	// A file that cannot be read on while a long line is passed over.
+	func() {
+		defer func(o func(string) (io.ReadCloser, error)) { open = o }(open)
+		open = func(string) (io.ReadCloser, error) {
+			return io.NopCloser(io.MultiReader(strings.NewReader("short\n"+strings.Repeat("x", 2*maxReadBytes)), iotest.ErrReader(errTest))), nil
+		}
+		got, err := w.run(owner, Read, readArgs{Path: "~/wide", Offset: 3})
+		if !errors.Is(err, errTest) || got != "" {
+			t.Errorf("an error on the way: %q, %v", got, err)
+		}
+	}()
 	// After the lines returned a long line is only counted.
 	w.file("~/widelater", "short\n"+strings.Repeat("x", 2*maxReadBytes)+"\nshort")
 	if got, err := w.run(owner, Read, readArgs{Path: "~/widelater", Limit: 1}); err != nil || got != "short\n[these were the lines 1 to 1 of 3: continue with offset 2]" {
@@ -313,7 +340,11 @@ func TestWrite(t *testing.T) {
 	got, err = w.run(owner, Write, `{"path": "~/x", "content": 1}`)
 	fails(t, got, err, "write: invalid arguments")
 	got, err = w.run(owner, Write, writeArgs{Path: "~/new", Content: "x"})
-	fails(t, got, err, "rename")
+	fails(t, got, err, "~/new is a directory: write writes a file")
+	w.file("~/locked/x", "")
+	w.mode("~/locked", 0o500)
+	got, err = w.run(owner, Write, writeArgs{Path: "~/locked/y", Content: "x"})
+	fails(t, got, err, "permission denied")
 	got, err = w.run(owner, Write, writeArgs{Path: "~/big/x", Content: "x"})
 	fails(t, got, err, "not a directory")
 	os.Mkdir(w.path("~/locked"), 0o755)
@@ -672,7 +703,7 @@ func TestSettings(t *testing.T) {
 			t.Errorf("%s: %v", tool.Name, err)
 		}
 		// Listed by its name alone the tool goes everywhere for the owner and nowhere for a peer.
-		if _, err := tool.Run(a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"}), json.RawMessage(`{"path": "~/x", "old": "x", "pattern": "x"}`)); err == nil || !strings.Contains(err.Error(), `has no "allow" for peers`) {
+		if _, err := tool.Run(a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"}), argsOf(tool.Name)); err == nil || !strings.Contains(err.Error(), `has no "allow" for peers`) {
 			t.Errorf("%s for a peer: %v", tool.Name, err)
 		}
 	}
@@ -687,7 +718,7 @@ func TestSettings(t *testing.T) {
 	// Without the rules no tool does anything.
 	w.failing = errTest
 	for _, tool := range tools(w.guard) {
-		if got, err := tool.Run(context.Background(), json.RawMessage(`{"path": "~/x", "old": "x", "content": "y"}`)); !errors.Is(err, errTest) || got != "" {
+		if got, err := tool.Run(context.Background(), argsOf(tool.Name)); !errors.Is(err, errTest) || got != "" {
 			t.Errorf("%s: %q, %v", tool.Name, got, err)
 		}
 	}
@@ -759,11 +790,12 @@ func TestSearch(t *testing.T) {
 		// Hidden directories are left out, hidden files are not, what is no text is.
 		{map[string]any{"path": "~/src/", "pattern": "^model"}, "~/src/.env:1: model=secret\n~/src/notes.txt:1: model"},
 		{map[string]any{"path": "~/src/view.go", "pattern": "brain"}, `~/src/view.go:4: var model = "brain"`},
-		{map[string]any{"path": "~/src/view.go", "pattern": "brain", "glob": "*.txt"}, "(no line matches)"},
+		{map[string]any{"path": "~/src/view.go", "pattern": "brain", "glob": "*.txt"}, `(no file of ~/src/view.go is searched with the glob "*.txt")`},
+		// A glob that starts with ! leaves out what it matches.
+		{map[string]any{"path": "~/src", "pattern": "(?i)model", "glob": "!*.go"}, "~/src/.env:1: model=secret\n~/src/notes.txt:1: model"},
 		{map[string]any{"path": "~/src", "pattern": "nothing"}, "(no line matches)"},
 		{map[string]any{"path": "~/empty", "pattern": "^$"}, "(no line matches)"},
 		{map[string]any{"path": "~/src/notes.txt", "pattern": "^$"}, "(no line matches)"},
-		{map[string]any{"path": "~/src/lead.bin", "pattern": "model"}, "(no line matches)"},
 		// A hidden directory that is searched itself is searched.
 		{map[string]any{"path": "~/src/.git", "pattern": "model"}, "~/src/.git/config:1: model"},
 	} {
@@ -772,11 +804,15 @@ func TestSearch(t *testing.T) {
 		}
 	}
 	for args, want := range map[string]string{
-		`{"path": "~/src"}`:                              `search needs "pattern"`,
-		`{"path": "~/src", "pattern": "("}`:              "the pattern is no regular expression",
-		`{"path": "~/src", "pattern": "x", "glob": "["}`: `the glob "[" is no pattern of file names`,
-		`{"path": "~/none", "pattern": "x"}`:             "no such file or directory",
-		`{"path": "~src", "pattern": "x"}`:               "absolute",
+		`{"path": "~/src"}`:                               `search needs "pattern"`,
+		`{"path": "~/src", "pattern": "("}`:               "the pattern is no regular expression",
+		`{"path": "~/src", "pattern": "x", "glob": "["}`:  `the glob "[" is no pattern of file names`,
+		`{"path": "~/src", "pattern": "x", "glob": "!["}`: `the glob "![" is no pattern of file names`,
+		`{"path": "~/none", "pattern": "x"}`:              "no such file or directory",
+		`{"path": "~src", "pattern": "x"}`:                "absolute",
+		// A file asked for is told why it has no lines to match.
+		`{"path": "~/src/lead.bin", "pattern": "model"}`: "~/src/lead.bin is not a text file",
+		`{"path": "/dev/null", "pattern": "x"}`:          "/dev/null is no file: search reads files",
 	} {
 		got, err := w.run(owner, "search", args)
 		fails(t, got, err, want)
@@ -829,9 +865,19 @@ func TestSearchIsCut(t *testing.T) {
 	if want := "~/long.txt:1: " + strings.Repeat("ä", maxMatchBytes/2) + "…"; err != nil || got != want {
 		t.Errorf("long: %q, %v", got, err)
 	}
-	if got, err := w.run(owner, "search", map[string]any{"path": "~/big.txt", "pattern": "x"}); err != nil || got != "(no line matches)" {
-		t.Errorf("big: %q, %v", got, err)
+	// A big file named itself is searched, up to maxSearchFile; in a
+	// directory it is left out.
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/big.txt", "pattern": "^x"}); err != nil || !strings.HasPrefix(got, "~/big.txt:1: xxx") {
+		t.Errorf("big: %.40q, %v", got, err)
 	}
+	w.file("~/bigdir/big.txt", strings.Repeat("x", maxWriteBytes+1))
+	if got, err := w.run(owner, "search", map[string]any{"path": "~/bigdir", "pattern": "x"}); err != nil || got != "(no line matches)" {
+		t.Errorf("big in a directory: %.40q, %v", got, err)
+	}
+	defer func(n int64) { maxSearchFile = n }(maxSearchFile)
+	maxSearchFile = maxWriteBytes
+	got, err = w.run(owner, "search", map[string]any{"path": "~/big.txt", "pattern": "x"})
+	fails(t, got, err, "~/big.txt has 1048577 bytes, and search reads files up to 1048576: read it in parts with read")
 	// Up to the limits, nothing is cut.
 	w.file("~/enough.txt", strings.Repeat("x\n", maxMatches))
 	if got, err := w.run(owner, "search", map[string]any{"path": "~/enough.txt", "pattern": "x"}); err != nil ||
@@ -993,6 +1039,20 @@ func TestSearchWithContext(t *testing.T) {
 		!regexp.MustCompile(`^\[[1-4] more matching lines, beyond what one search shows, in ~/big.txt \([1-4]\): search there with a narrower pattern\]$`).MatchString(places[len(places)-1]) {
 		t.Fatalf("beyond the bytes: %d places, %d bytes, %v\n%s", len(places), len(got), err, places[len(places)-1])
 	}
+	// Matches that go on and on are cut into places of maxPlaceLines lines,
+	// so that one place does not hold all of a file.
+	w.file("~/on.txt", strings.Repeat("m\n", 20000))
+	got, err = w.run(owner, "search", map[string]any{"path": "~/on.txt", "pattern": "m", "context": 1})
+	if places := strings.Split(got, "\n--\n"); err != nil || len(got) > maxAround+maxPlaceLines*20 || !strings.HasPrefix(places[0], "~/on.txt:1: m\n") ||
+		strings.Count(places[0], "\n") != maxPlaceLines-1 || !strings.Contains(got, fmt.Sprintf("~/on.txt:%d: m", maxPlaceLines+1)) {
+		t.Fatalf("on and on: %d bytes, %v\n%.500s", len(got), err, got)
+	}
+	// A line that ends in \r\n matches as it is shown.
+	w.file("~/crlf.txt", "end here\r\nnot\r\n")
+	got, err = w.run(owner, "search", map[string]any{"path": "~/crlf.txt", "pattern": "here$", "context": 1})
+	if err != nil || got != "~/crlf.txt:1: end here\n~/crlf.txt-2- not" {
+		t.Fatalf("crlf: %q, %v", got, err)
+	}
 	for _, context := range []int{-1, maxContext + 1} {
 		got, err = w.run(owner, "search", map[string]any{"path": "~/c.txt", "pattern": "hit", "context": context})
 		fails(t, got, err, "context is a number of lines from 0 to 30")
@@ -1011,6 +1071,19 @@ func TestSearchFitsItsBytes(t *testing.T) {
 	if err != nil || len(got) > maxAround+300 || !strings.HasPrefix(lines[0], "~/fit/a.txt:1: hit") ||
 		!regexp.MustCompile(`^\[\d+ more matching lines, beyond what one search shows, in ~/fit/a.txt \(\d+\), ~/fit/b.txt \(1\): search there with a narrower pattern\]$`).MatchString(last) {
 		t.Fatalf("%d bytes, %v, the end: %s", len(got), err, last)
+	}
+}
+
+// A search that stopped at its limit and is cut to its bytes says one thing
+// of what is not shown: how many more matching lines there are at least.
+func TestSearchCutAtTheLimitAndItsBytes(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/many.txt", strings.Repeat("match "+strings.Repeat("x", 120)+"\n", 300))
+	got, err := w.run(owner, "search", map[string]any{"path": "~/many.txt", "pattern": "match"})
+	lines := strings.Split(got, "\n")
+	if err != nil || strings.Contains(got, "these are the first") ||
+		!regexp.MustCompile(`^\[at least \d+ more matching lines, beyond what one search shows, in ~/many.txt \(\d+\): search there with a narrower pattern\]$`).MatchString(lines[len(lines)-1]) {
+		t.Fatalf("%v, the end: %s", err, lines[len(lines)-1])
 	}
 }
 
@@ -1044,4 +1117,36 @@ func TestEditLines(t *testing.T) {
 		got, err := w.run(owner, Edit, args)
 		fails(t, got, err, want)
 	}
+}
+
+// In a file whose lines end in \r\n, "old" with \n matches, as read shows
+// the lines, and what is put in keeps their ends.
+func TestEditCRLF(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/crlf.txt", "alpha\r\nbeta\r\ngamma\r\n")
+	if _, err := w.run(owner, Edit, editArgs{Path: "~/crlf.txt", Old: "alpha\nbeta", New: "A\nB\r\nC"}); err != nil || w.content("~/crlf.txt") != "A\r\nB\r\nC\r\ngamma\r\n" {
+		t.Fatalf("%v: %q", err, w.content("~/crlf.txt"))
+	}
+	got, err := w.run(owner, Edit, editArgs{Path: "~/crlf.txt", Old: "C\ndelta", New: "x"})
+	fails(t, got, err, `"old" does not occur`)
+	// So do the lines replaced by their numbers.
+	if _, err := w.run(owner, Edit, map[string]any{"path": "~/crlf.txt", "from": 1, "to": 2, "new": "one\ntwo"}); err != nil || w.content("~/crlf.txt") != "one\r\ntwo\r\nC\r\ngamma\r\n" {
+		t.Fatalf("lines: %v: %q", err, w.content("~/crlf.txt"))
+	}
+}
+
+// argsOf are arguments of a call of the tool name that do what it does with
+// ~/x.
+func argsOf(name string) json.RawMessage {
+	return json.RawMessage(map[string]string{
+		Read: `{"path": "~/x"}`, Write: `{"path": "~/x", "content": "y"}`, Edit: `{"path": "~/x", "old": "x", "new": "y"}`,
+		List: `{"path": "~/x"}`, Delete: `{"path": "~/x"}`, Search: `{"path": "~/x", "pattern": "x"}`,
+	}[name])
+}
+
+// An argument a tool does not have is named, with those it has.
+func TestUnknownArguments(t *testing.T) {
+	w := newWorld(t)
+	got, err := w.run(owner, Read, `{"file": "~/x"}`)
+	fails(t, got, err, `read: invalid arguments: it has no "file"; it takes path, offset, limit, size, region`)
 }

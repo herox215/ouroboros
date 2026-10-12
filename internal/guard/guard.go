@@ -19,10 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"ouroboros/internal/sandbox"
 )
@@ -41,7 +43,7 @@ const goMod = "go.mod"
 var corePackages = []string{
 	"internal/identity", "internal/a2a", "internal/contacts", "internal/config", "internal/home",
 	"internal/update", "internal/sandbox", "internal/safefile", "internal/peers",
-	"internal/guard",
+	"internal/guard", "internal/printable",
 }
 
 // buildPaths are what decides what a build of a checkout fetches and runs,
@@ -105,6 +107,10 @@ type Guard struct {
 	Workspace string
 	// Home is the directory of the node. Nothing in it is changed.
 	Home string
+	// Sockets is where the sockets of nodes are that have none in their
+	// directory, see home.SocketDir; "" for none. Nothing in it is changed
+	// either: the node is reached through it.
+	Sockets string
 	// Secrets are the files that are neither read nor changed, each with
 	// everything below it.
 	Secrets []string
@@ -123,6 +129,7 @@ type Checker struct {
 	access    Access
 	base      string // where a relative path starts, "" if it is refused
 	home      string
+	sockets   string // "" for none
 	userHome  string // "" if it is not known
 	secrets   []secret
 	toolchain []string
@@ -131,9 +138,13 @@ type Checker struct {
 	deny      []rule
 }
 
-// rule is a path of the configuration: as it is written there, and where it
-// leads.
-type rule struct{ written, real string }
+// rule is a path of the configuration: as it is written there, where it
+// leads, and the file there, by which a hard link to it is recognised (nil
+// if there is none).
+type rule struct {
+	written, real string
+	info          fs.FileInfo
+}
 
 // secret is a file that is not read: where it is, and the file itself, by
 // which a hard link to it is recognised.
@@ -149,6 +160,11 @@ func (g *Guard) Checker(a Access) (*Checker, error) {
 	var err error
 	if c.home, err = resolve(g.Home, true); err != nil {
 		return nil, err
+	}
+	if g.Sockets != "" {
+		if c.sockets, err = resolve(g.Sockets, true); err != nil {
+			return nil, err
+		}
 	}
 	home, homeErr := os.UserHomeDir()
 	if homeErr == nil {
@@ -207,7 +223,8 @@ func (g *Guard) Checker(a Access) (*Checker, error) {
 // of Checkouts, not every directory whose go.mod names the module; / and the
 // home directory are not kept from being deleted, only what the rules keep
 // in them; a path that "allow" names and that does not exist is not
-// writable.
+// writable. With "allow", the owner's commands may write the workspace and
+// the directory of temporary files too.
 func (g *Guard) Box(a Access, network bool) (sandbox.Policy, error) {
 	p := sandbox.Policy{Network: network}
 	protected, err := g.Protected()
@@ -230,6 +247,15 @@ func (g *Guard) Box(a Access, network bool) (sandbox.Policy, error) {
 		if err != nil {
 			return p, err
 		}
+		// The owner's commands write in the workspace, where they start,
+		// and their temporary files where the system keeps them, as builds
+		// and tests do.
+		if !a.Peer {
+			allow = append(allow, os.TempDir())
+			if g.Workspace != "" {
+				allow = append(allow, g.Workspace)
+			}
+		}
 		for _, path := range allow {
 			if _, err := os.Stat(path); err == nil {
 				p.Writable = append(p.Writable, path)
@@ -239,6 +265,9 @@ func (g *Guard) Box(a Access, network bool) (sandbox.Policy, error) {
 		p.Writable = []string{"/"}
 	}
 	p.ReadOnly = []string{g.Home}
+	if g.Sockets != "" {
+		p.ReadOnly = append(p.ReadOnly, g.Sockets)
+	}
 	if g.Toolchain != nil {
 		p.ReadOnly = append(p.ReadOnly, g.Toolchain()...)
 	}
@@ -277,7 +306,8 @@ func rules(paths []string) ([]rule, error) {
 		if err != nil {
 			return nil, err
 		}
-		list = append(list, rule{written, real})
+		info, _ := os.Stat(real)
+		list = append(list, rule{written, real, info})
 	}
 	return list, nil
 }
@@ -314,35 +344,40 @@ func (c *Checker) Check(op Op, path string) (string, error) {
 // refuses returns the rule that keeps the tool from doing op with the
 // resolved path real, or "" if none does.
 func (c *Checker) refuses(op Op, real string) string {
+	// real has no link left to follow, except the one that is deleted.
+	file, _ := os.Lstat(real)
 	// 1. The core.
-	if c.secret(real) {
+	if c.secret(real, file) {
 		return "it holds the secrets of this node, which no tool reads or changes"
 	}
-	if op != Read && within(real, c.home) {
+	if op != Read && near(real, c.home) {
 		return "it is in the directory of this node, where the node keeps its state: no tool changes it"
+	}
+	if op != Read && c.sockets != "" && near(real, c.sockets) {
+		return "it holds the sockets the nodes are reached through: no tool changes it"
 	}
 	if op != Read {
 		if rule := inCheckout(real); rule != "" {
 			return rule
 		}
 		for _, t := range c.toolchain {
-			if within(real, t) {
+			if near(real, t) {
 				return "it is part of the Go that rebuild builds ouroboros with, which no tool changes"
 			}
 		}
 	}
-	if op == Delete && (real == "/" || real == c.userHome) {
+	if op == Delete && (real == "/" || strings.EqualFold(real, c.userHome)) {
 		return "the root of the file system and the home directory are never deleted"
 	}
 	// 2. What the owner protects from every tool.
 	for _, p := range c.protected {
-		if within(real, p.real) {
+		if near(real, p.real) || same(file, p.info) {
 			return fmt.Sprintf(`%s is in "protected" of the configuration, which no tool touches`, p.written)
 		}
 	}
 	// 3. What the owner allows this tool in this kind of conversation.
 	for _, d := range c.deny {
-		if within(real, d.real) {
+		if near(real, d.real) || same(file, d.info) {
 			return fmt.Sprintf(`%s is in "deny" of the tool %s`, d.written, c.access.Tool)
 		}
 	}
@@ -360,22 +395,22 @@ func (c *Checker) refuses(op Op, real string) string {
 	return fmt.Sprintf(`it is not in "allow" of the tool %s`, c.access.Tool)
 }
 
-// secret reports whether real is one of the files that are not read, or
-// another name of one, or below one that is a directory.
-func (c *Checker) secret(real string) bool {
+// secret reports whether real, whose file is file, is one of the files that
+// are not read, or another name of one, or below one that is a directory.
+func (c *Checker) secret(real string, file fs.FileInfo) bool {
 	for _, s := range c.secrets {
-		if within(real, s.real) {
-			return true
-		}
-		if s.info == nil {
-			continue
-		}
-		// real has no link left to follow, except the one that is deleted.
-		if info, err := os.Lstat(real); err == nil && os.SameFile(info, s.info) {
+		if near(real, s.real) || same(file, s.info) {
 			return true
 		}
 	}
 	return false
+}
+
+// same reports whether file, which may be nil, is the file of a rule: of
+// one that is a file, a hard link to it is the same. A directory has no
+// other name.
+func same(file, rule fs.FileInfo) bool {
+	return file != nil && rule != nil && !rule.IsDir() && os.SameFile(file, rule)
 }
 
 // inCheckout returns the rule that keeps real as it is in a checkout of
@@ -388,12 +423,12 @@ func inCheckout(real string) string {
 		if moduleAt(filepath.Join(dir, goMod)) == Module {
 			rel, _ := filepath.Rel(dir, real) // real is below dir: cannot fail
 			for _, pkg := range corePackages {
-				if within(rel, pkg) {
+				if near(rel, pkg) {
 					return "it is source of the core of ouroboros, which no tool changes"
 				}
 			}
 			for _, b := range buildPaths {
-				if within(rel, b) {
+				if near(rel, b) {
 					return "it decides how ouroboros is built and what the build fetches and runs, which no tool changes"
 				}
 			}
@@ -435,6 +470,16 @@ func moduleOf(content []byte) string {
 	return ""
 }
 
+// near reports whether path is root or below it, whatever the case of
+// their letters: a rule that keeps a tool away holds for every way of
+// writing a path, also for one that does not exist yet or whose directory
+// cannot be read, where it cannot be told how the file system writes it.
+// On a file system that tells names apart by their case it keeps a tool
+// from a little more, never from less.
+func near(path, root string) bool {
+	return within(path, root) || within(strings.ToLower(path), strings.ToLower(root))
+}
+
 // within reports whether path is root or below it.
 func within(path, root string) bool {
 	return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/")
@@ -474,8 +519,9 @@ func expand(path string) (string, error) {
 }
 
 // resolve returns where the absolute path leads: without symbolic links, "."
-// and "..". What does not exist yet is taken as it is written, for it is no
-// link. With followLast unset a link at the very end is kept.
+// and "..", and with every name that exists as its directory has it. What
+// does not exist yet is taken as it is written, for it is no link. With
+// followLast unset a link at the very end is kept.
 func resolve(path string, followLast bool) (string, error) {
 	rest := strings.Split(path, "/")
 	real, links := "/", 0
@@ -486,8 +532,10 @@ func resolve(path string, followLast bool) (string, error) {
 			real = filepath.Dir(real)
 			continue
 		}
-		// An empty name and "." are the directory itself, like any name that
-		// is no link.
+		// An empty name and "." are the directory itself.
+		if name == "" || name == "." {
+			continue
+		}
 		next := filepath.Join(real, name)
 		info, err := os.Lstat(next)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -497,6 +545,7 @@ func resolve(path string, followLast bool) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		next = filepath.Join(real, onDisk(real, name, info))
 		if info.Mode()&fs.ModeSymlink == 0 || (len(rest) == 0 && !followLast) {
 			real = next
 			continue
@@ -514,4 +563,86 @@ func resolve(path string, followLast bool) (string, error) {
 		rest = append(strings.Split(target, "/"), rest...)
 	}
 	return real, nil
+}
+
+// readNames reads the names in a directory; tests replace it to get in the
+// way.
+var readNames = func(dir string) ([]string, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.Readdirnames(-1)
+}
+
+// names are the names of the directories asked last, kept while a directory
+// is not changed: a tool asks about many paths in the same directories, some
+// of them with thousands of entries.
+var names = struct {
+	sync.Mutex
+	dirs map[string]listing
+}{dirs: map[string]listing{}}
+
+// maxListings is how many directories names keeps at most.
+const maxListings = 256
+
+// listing is what a directory held when it was last read.
+type listing struct {
+	info  fs.FileInfo // of the directory, to tell that it changed
+	names map[string]bool
+}
+
+// has reports whether the directory dir has an entry of exactly this name,
+// and else returns its names.
+func has(dir, name string) (bool, []string) {
+	info, err := os.Stat(dir)
+	names.Lock()
+	l, ok := names.dirs[dir]
+	names.Unlock()
+	if err != nil || !ok || !os.SameFile(l.info, info) || !l.info.ModTime().Equal(info.ModTime()) {
+		list, err := readNames(dir)
+		if err != nil {
+			return true, nil
+		}
+		l = listing{info, map[string]bool{}}
+		for _, n := range list {
+			l.names[n] = true
+		}
+		names.Lock()
+		if len(names.dirs) >= maxListings {
+			clear(names.dirs)
+		}
+		names.dirs[dir] = l
+		names.Unlock()
+	}
+	if l.names[name] {
+		return true, nil
+	}
+	return false, slices.Collect(maps.Keys(l.names))
+}
+
+// onDisk is the name the directory dir has for its entry name, whose file is
+// info. A file system that tells names apart by their case and the form of
+// their letters has it as it is written. One that does not, like that of
+// macOS, opens "prot" for "PROT" too, and a rule for the one would not hold
+// for the other: there it is the name of the entry that is the same file,
+// of those that differ from name in case alone first.
+func onDisk(dir, name string, info fs.FileInfo) string {
+	found, others := has(dir, name)
+	if found {
+		return name
+	}
+	slices.Sort(others)
+	for _, alike := range []bool{true, false} {
+		for _, n := range others {
+			if strings.EqualFold(n, name) != alike {
+				continue
+			}
+			if other, err := os.Lstat(filepath.Join(dir, n)); err == nil && os.SameFile(other, info) {
+				return n
+			}
+		}
+	}
+	return name
 }

@@ -163,7 +163,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 	dir := home.Dir(s.Home)
 	network := &peers.Network{Contacts: dir.Contacts(), Client: node.Local{Home: dir}.Client}
 	// What no tool for files does, whatever the configuration says.
-	files := &guard.Guard{Home: string(dir.Root()), Secrets: dir.Secrets(), Protected: func() ([]string, error) {
+	files := &guard.Guard{Home: string(dir.Root()), Sockets: home.SocketDir(), Secrets: dir.Secrets(), Protected: func() ([]string, error) {
 		cfg, err := dir.Config()
 		return cfg.Protected(), err
 	}, Toolchain: update.GoPaths, Checkouts: update.Checkouts, Workspace: dir.WorkingDir()}

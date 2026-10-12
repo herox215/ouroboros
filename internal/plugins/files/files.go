@@ -39,23 +39,28 @@ const (
 
 // The limits of the tools.
 const (
-	maxReadLines  = 2000      // lines one call of read returns
-	maxReadBytes  = 256 << 10 // bytes one call of read returns
-	maxWriteBytes = 1 << 20   // bytes of a file that write or edit leave behind
-	editContext   = 3         // lines edit shows before and after what it changed
-	maxEditLines  = 50        // lines edit shows at most
-	maxListed     = 1000      // entries one call of list returns
-	maxMatches    = 200       // lines one call of search returns
-	maxMatchBytes = 300       // bytes of a line search shows
-	maxContext    = 30        // lines search shows before and after a match at most
-	maxPlaces     = 30        // places with their lines around them one call of search returns
-	maxAround     = 12 << 10  // bytes of search with context: the places beyond show only their matches
+	maxReadLines  = 2000             // lines one call of read returns
+	maxReadBytes  = 256 << 10        // bytes one call of read returns
+	maxWriteBytes = 1 << 20          // bytes of a file that write or edit leave behind
+	editContext   = 3                // lines edit shows before and after what it changed
+	maxEditLines  = 50               // lines edit shows at most
+	maxListed     = 1000             // entries one call of list returns
+	maxMatches    = 200              // lines one call of search returns
+	maxMatchBytes = 300              // bytes of a line search shows
+	maxContext    = 30               // lines search shows before and after a match at most
+	maxPlaces     = 30               // places with their lines around them one call of search returns
+	maxPlaceLines = 2*maxContext + 1 // lines of one place: matches that go on beyond start the next
+	maxAround     = 12 << 10         // bytes of search with context: the places beyond show only their matches
 )
 
 // maxSearched is how many files one call of search looks into, and
 // maxWalked how many files and directories it looks at, whether their names
 // match the glob or not; tests lower them.
 var maxSearched, maxWalked = 10000, 100000
+
+// maxSearchFile is how many bytes of a file search reads when the file is
+// named itself, like a log; tests lower it.
+var maxSearchFile int64 = 64 << 20
 
 // open opens a file for reading; tests replace it to get in the way.
 var open = func(path string) (io.ReadCloser, error) { return os.Open(path) }
@@ -89,6 +94,7 @@ func tools(g *guard.Guard) []plugin.Tool {
 		tool(g, Read,
 			fmt.Sprintf("Read a text file: at most %d lines or %d KiB per call. ", maxReadLines, maxReadBytes>>10)+
 				"When there is more, a note at the end says which lines of how many it returned and where to continue. "+
+				"The text comes as it is: without line numbers, and with the \\r of lines that end in \\r\\n. "+
 				"Leave out limit unless you want only a part of the file you know: every piece costs a call. "+
 				"A picture (PNG, JPEG, GIF or WebP) is shown to you as an image, in its own size: look at it this way. "+
 				"With size and region you see it smaller, or only a part of it.",
@@ -109,7 +115,8 @@ func tools(g *guard.Guard) []plugin.Tool {
 				"In a script, write old and new as String.raw`…`: a backslash of the file, as in \"\\n\", then stays one; "+
 				"a text with a backtick (Markdown, a struct tag of Go) goes in a string of quotes instead, with \\\\ for each backslash. "+
 				"Or replace the lines from to to by new, with no old to match: of several in one file, do the last first, as the lines after an edit move. "+
-				"Returns the changed lines with a few around them: check them before the next edit.",
+				"Returns the changed lines with a few around them: check them before the next edit. "+
+				fmt.Sprintf("A file of more than %d MiB is not edited: change it with bash, like sed.", maxWriteBytes>>20),
 			[]param{path,
 				{"old", "string", "the text to replace, exactly as in the file", false},
 				{"new", "string", "the text to put in its place", false},
@@ -118,7 +125,7 @@ func tools(g *guard.Guard) []plugin.Tool {
 				{"to", "integer", "with from: the last line to replace", true}},
 			without(edit)),
 		tool(g, List,
-			fmt.Sprintf("List a directory: directories end in /, files come with their size. At most %d entries; what the tool may not read is left out.", maxListed),
+			fmt.Sprintf("List a directory, as text, an entry a line: directories end in /, files come with their size. At most %d entries; what the tool may not read is left out.", maxListed),
 			[]param{{"path", "string", "the directory", false}},
 			without(list)),
 		tool(g, Delete,
@@ -135,7 +142,7 @@ func tools(g *guard.Guard) []plugin.Tool {
 				fmt.Sprintf("Of what is beyond %d KiB it says only how many matches are in which file: search there with a narrower pattern. ", maxAround>>10),
 			[]param{{"path", "string", "the file or directory", false},
 				{"pattern", "string", "the regular expression a line has to match", false},
-				{"glob", "string", `only files whose name matches this, like "*.go"`, true},
+				{"glob", "string", `only files whose name matches this, like "*.go"; with ! in front, all but those, like "!*_test.go"`, true},
 				{"context", "integer", fmt.Sprintf("how many lines before and after every match to show too, at most %d", maxContext), true}},
 			search),
 	}
@@ -146,9 +153,9 @@ func tools(g *guard.Guard) []plugin.Tool {
 type settings struct {
 	// Allow are the paths the tool may go to. Missing is everything for the
 	// owner and nothing for a peer.
-	Allow *[]string `json:"allow"`
+	Allow *[]string `json:"allow" about:"the paths the tool may go to" unset:"everything for your agent, nothing for a peer"`
 	// Deny are paths within those the tool does not go to.
-	Deny []string `json:"deny"`
+	Deny []string `json:"deny" about:"paths within those the tool does not go to" unset:"none"`
 }
 
 // param is an argument of a tool.
@@ -231,8 +238,11 @@ func read(ctx context.Context, c *guard.Checker, args readArgs) (string, error) 
 		return "", err
 	}
 	// Only a file: a pipe or a device would never end.
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory, which is read with %s", args.Path, List)
+	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%s is not a file; a directory is read with %s", args.Path, List)
+		return "", fmt.Errorf("%s is not a file but a device, a pipe or a socket, which read does not read", args.Path)
 	}
 	f, err := open(real)
 	if err != nil {
@@ -259,8 +269,30 @@ func read(ctx context.Context, c *guard.Checker, args readArgs) (string, error) 
 			break
 		}
 		line, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) && lines+1 >= first {
+			return "", fmt.Errorf("line %d of %s has %d KiB or more: too long to read; the lines after it are read with offset %d",
+				lines+1, args.Path, maxReadBytes>>10, lines+2)
+		}
+		// A line before those asked for is passed over, however long; a
+		// character of it may be split between its pieces.
 		if errors.Is(err, bufio.ErrBufferFull) {
-			return "", fmt.Errorf("line %d of %s has %d KiB or more: too long to read", lines+1, args.Path, maxReadBytes>>10)
+			for errors.Is(err, bufio.ErrBufferFull) {
+				if bytes.IndexByte(line, 0) >= 0 {
+					return "", fmt.Errorf("%s is not a text file", args.Path)
+				}
+				line, err = r.ReadSlice('\n')
+			}
+			lines++
+			if bytes.IndexByte(line, 0) >= 0 {
+				return "", fmt.Errorf("%s is not a text file", args.Path)
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return "", err
+			}
+			continue
 		}
 		if len(line) > 0 {
 			lines++
@@ -346,6 +378,9 @@ func write(c *guard.Checker, args writeArgs) (string, error) {
 	// A file that is replaced keeps its mode.
 	done, perm := "created", fs.FileMode(0o644)
 	if info, err := os.Stat(real); err == nil {
+		if info.IsDir() {
+			return "", fmt.Errorf("%s is a directory: write writes a file", args.Path)
+		}
 		done, perm = "replaced", info.Mode().Perm()
 	}
 	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
@@ -401,9 +436,21 @@ func edit(c *guard.Checker, args editArgs) (string, error) {
 		if put != "" && !strings.HasSuffix(put, "\n") && strings.HasSuffix(string(content[at:end]), "\n") {
 			put += "\n"
 		}
+		// Lines that end in \r\n are replaced by lines that do.
+		if strings.HasSuffix(string(content[at:end]), "\r\n") {
+			put = strings.NewReplacer("\r\n", "\r\n", "\n", "\r\n").Replace(put)
+		}
 		args.Old, args.New = string(content[at:end]), put
 	}
 	n := strings.Count(string(content), args.Old)
+	// In a file whose lines end in \r\n, "old" matches with \n as read
+	// shows them, and "new" gets their ends.
+	if n == 0 && !byLines && strings.Contains(string(content), "\r\n") && !strings.Contains(args.Old, "\r") {
+		crlf := strings.NewReplacer("\r\n", "\r\n", "\n", "\r\n")
+		if m := strings.Count(string(content), crlf.Replace(args.Old)); m > 0 {
+			args.Old, args.New, n = crlf.Replace(args.Old), crlf.Replace(args.New), m
+		}
+	}
 	if n == 0 {
 		return "", fmt.Errorf(`"old" does not occur in %s: it has to match the text of the file exactly%s`, args.Path, mismatch(string(content), args.Old))
 	}
@@ -622,7 +669,10 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 	if err != nil {
 		return "", fmt.Errorf("the pattern is no regular expression: %w", err)
 	}
-	if _, err := filepath.Match(args.Glob, ""); err != nil {
+	// A glob that starts with ! leaves out the files it matches.
+	exclude := strings.HasPrefix(args.Glob, "!")
+	glob := strings.TrimPrefix(args.Glob, "!")
+	if _, err := filepath.Match(glob, ""); err != nil {
 		return "", fmt.Errorf("the glob %q is no pattern of file names", args.Glob)
 	}
 	if args.Context < 0 || args.Context > maxContext {
@@ -665,7 +715,7 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 			}
 			return nil
 		}
-		if err != nil || (args.Glob != "" && !matches(args.Glob, d.Name())) {
+		if err != nil || (glob != "" && matches(glob, d.Name()) == exclude) {
 			return nil
 		}
 		if searched == maxSearched {
@@ -673,14 +723,23 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 		}
 		searched++
 		shown, _ := filepath.Rel(root, path)
-		found, matched, err := searchFile(real, filepath.Join(args.Path, shown), re, limit+1-len(lines), args.Context)
+		// A file named itself is read up to maxSearchFile, one of a
+		// directory up to what write writes.
+		most := int64(maxWriteBytes)
+		if path == root {
+			most = maxSearchFile
+		}
+		found, matched, err := searchFile(real, filepath.Join(args.Path, shown), re, limit+1-len(lines), args.Context, most)
+		if err != nil && path == root {
+			return err // the file asked for is told why it has no lines
+		}
 		if err != nil {
 			return nil // a file that is no text has no lines to match
 		}
 		lines, hits = append(lines, found...), append(hits, matched...)
 		if len(lines) > limit {
 			hits = hits[:min(len(hits), limit)]
-			lines = append(lines[:limit], fmt.Sprintf("[these are the first %d %s, and there are more: "+
+			lines = append(lines[:limit], fmt.Sprintf(limitNote+"%d %s, and there are more: "+
 				"narrow the path, the pattern or the glob]", limit, what))
 			return filepath.SkipAll
 		}
@@ -696,6 +755,9 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 	case err != nil:
 		return "", err
 	}
+	if len(lines) == 0 && searched == 0 && args.Glob != "" {
+		return fmt.Sprintf("(no file of %s is searched with the glob %q)", args.Path, args.Glob), nil
+	}
 	if len(lines) == 0 {
 		return "(no line matches)", nil
 	}
@@ -710,6 +772,10 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 	}
 	return fit(lines, lines[:notes], "\n"), nil
 }
+
+// limitNote starts the note of a search that stopped at its limit of lines
+// or places.
+const limitNote = "[these are the first "
 
 // fit joins what a search found, split by sep, as far as it fits into
 // maxAround bytes: the first one always. Of the matches beyond, it says how
@@ -742,7 +808,13 @@ func fit(found, matched []string, sep string) string {
 			where = append(where, fmt.Sprintf("%s (%d)", file, beyond[file]))
 			n += beyond[file]
 		}
-		out = append(out, fmt.Sprintf("[%d more matching lines, beyond what one search shows, in %s: search there with a narrower pattern]", n, strings.Join(where, ", ")))
+		// The note that the search stopped at its limit speaks of lines
+		// that are not shown: this one says it for them, as at least.
+		more := ""
+		if i := slices.IndexFunc(out, func(b string) bool { return strings.HasPrefix(b, limitNote) }); i >= 0 {
+			out, more = slices.Delete(out, i, i+1), "at least "
+		}
+		out = append(out, fmt.Sprintf("[%s%d more matching lines, beyond what one search shows, in %s: search there with a narrower pattern]", more, n, strings.Join(where, ", ")))
 	}
 	return strings.Join(out, sep)
 }
@@ -760,16 +832,19 @@ func matches(glob, name string) bool {
 // searchFile returns at most limit lines of the file at real that match re,
 // as shown:line: text, or with context that many lines around each, as
 // shown-line- text, at most limit places of lines that touch, each one
-// string. A file that is no text, or too big to be read with read, is an
+// string. A file that is no text, or of more than most bytes, is an
 // error.
-func searchFile(real, shown string, re *regexp.Regexp, limit, context int) (found, hits []string, err error) {
+func searchFile(real, shown string, re *regexp.Regexp, limit, context int, most int64) (found, hits []string, err error) {
 	info, err := os.Stat(real)
 	if err != nil {
 		return nil, nil, err
 	}
 	// Only a file: a pipe or a device would never end.
-	if !info.Mode().IsRegular() || info.Size() > maxWriteBytes {
-		return nil, nil, fmt.Errorf("%s is not searched", shown)
+	if !info.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%s is no file: search reads files", shown)
+	}
+	if info.Size() > most {
+		return nil, nil, fmt.Errorf("%s has %d bytes, and search reads files up to %d: read it in parts with read", shown, info.Size(), most)
 	}
 	f, err := open(real)
 	if err != nil {
@@ -795,9 +870,12 @@ func searchFile(real, shown string, re *regexp.Regexp, limit, context int) (foun
 		}
 		return fmt.Sprintf("%s%s%d%s %s", shown, mark, n+1, mark, line)
 	}
-	end := -1 // the last line of the place found last
-	for n, line := range all {
-		if !re.MatchString(line) {
+	// A line that ends in \r\n matches as it is shown, without the \r.
+	match := func(n int) bool { return re.MatchString(strings.TrimSuffix(all[n], "\r")) }
+	end := -1  // the last line of the place found last
+	place := 0 // the lines of that place
+	for n := range all {
+		if !match(n) {
 			continue
 		}
 		if context == 0 {
@@ -808,17 +886,19 @@ func searchFile(real, shown string, re *regexp.Regexp, limit, context int) (foun
 			continue
 		}
 		from, to := max(0, n-context, end+1), min(len(all)-1, n+context)
-		if end < 0 || from > end+1 {
+		// Matches that go on and on are places of maxPlaceLines lines.
+		if end < 0 || from > end+1 || place >= maxPlaceLines {
 			if len(found) == limit {
 				break
 			}
-			found, hits = append(found, ""), append(hits, "")
+			found, hits, place = append(found, ""), append(hits, ""), 0
 		}
 		for i := from; i <= to; i++ {
 			mark := "-"
-			if re.MatchString(all[i]) {
+			if match(i) {
 				mark = ":"
 			}
+			place++
 			if i > from || found[len(found)-1] != "" {
 				found[len(found)-1] += "\n"
 			}
