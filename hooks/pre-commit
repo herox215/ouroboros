@@ -6,8 +6,8 @@
 # is checked is what gets committed, and neither the working tree nor the index
 # is changed. Nothing is formatted, fixed or staged for you.
 #
-#	OURO_HOOK_MUTATION=on        run the mutation tests too, which the hook leaves out
-#	OURO_HOOK_MUTATION_TIME=N    stop them after N seconds (default 300)
+# The mutation tests are left to hooks/pre-push, which runs them for main.
+#
 #	git commit --no-verify       skip the hook altogether
 set -eu
 
@@ -26,9 +26,6 @@ if [ -z "$relevant" ]; then
 	exit 0
 fi
 
-# The packages whose Go files change: the mutation tests are limited to them.
-changed_dirs=$(printf '%s\n' "$staged" | sed -n 's|/[^/]*\.go$||p' | sort -u)
-
 snapshot=$(mktemp -d "${TMPDIR:-/tmp}/ouro-pre-commit.XXXXXX")
 trap 'rm -rf "$snapshot"' EXIT
 trap 'exit 130' INT TERM HUP
@@ -42,8 +39,7 @@ unset $(git rev-parse --local-env-vars)
 
 # The pinned tools are built once, in the checkout, not once per commit.
 OURO_TOOLS_DIR=${OURO_TOOLS_DIR:-$top/.tools}
-OURO_MUTATION_DIR=$top/.mutation
-export OURO_TOOLS_DIR OURO_MUTATION_DIR
+export OURO_TOOLS_DIR
 
 cd "$snapshot/tree"
 
@@ -70,30 +66,5 @@ step "formatting (gofmt)" fmt-check
 step "static analysis (staticcheck)" lint
 step "go vet and tests with the race detector" test
 step "statement coverage (100% of the production code)" cover-check
-
-# Mutation tests are slow, and run only when asked for. They report, they do
-# not reject: no threshold is agreed on.
-if [ "${OURO_HOOK_MUTATION:-off}" != on ]; then
-	echo "pre-commit: mutation tests left out (OURO_HOOK_MUTATION=on runs them)."
-else
-	packages=
-	for dir in $changed_dirs; do
-		# A package that is deleted by this commit has nothing left to mutate.
-		if [ -d "$dir" ]; then
-			packages="$packages $dir"
-		fi
-	done
-	if [ -z "$packages" ]; then
-		echo "pre-commit: no Go package changed, mutation tests skipped."
-	else
-		echo "pre-commit: mutation tests of the changed packages:$packages ..."
-		# shellcheck disable=SC2086
-		if ! OURO_MUTATION_TIME=${OURO_HOOK_MUTATION_TIME:-300} scripts/mutation.sh $packages; then
-			echo "pre-commit: the mutation tests could not run (see above); the commit was rejected." >&2
-			echo "            Commit without them: leave out OURO_HOOK_MUTATION=on." >&2
-			exit 1
-		fi
-	fi
-fi
 
 echo "pre-commit: ok, $(($(date +%s) - start))s."

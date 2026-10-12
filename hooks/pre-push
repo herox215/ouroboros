@@ -1,0 +1,84 @@
+#!/bin/sh
+# Runs the mutation tests when commits are pushed to main, for the packages
+# those commits change. Installed per clone with "make hooks". Other branches
+# are pushed without them.
+#
+# The tests run on a copy of the pushed commit, not on the working tree.
+#
+#	OURO_HOOK_MUTATION=off       leave the mutation tests out of this push
+#	OURO_HOOK_MUTATION_TIME=N    stop them after N seconds (default 300)
+#	git push --no-verify         skip the hook altogether
+set -eu
+
+remote=$1
+top=$(git rev-parse --show-toplevel)
+zero=0000000000000000000000000000000000000000
+
+if [ "${OURO_HOOK_MUTATION:-on}" = off ]; then
+	echo "pre-push: mutation tests left out (OURO_HOOK_MUTATION=off)."
+	exit 0
+fi
+
+# Git names every ref that is pushed on its own line of stdin.
+pushed=
+while read -r local_ref local_sha remote_ref remote_sha; do
+	[ "$remote_ref" = refs/heads/main ] || continue
+	# Deleting main pushes no code.
+	case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+	pushed=$local_sha
+	base=$remote_sha
+done
+
+if [ -z "$pushed" ]; then
+	exit 0
+fi
+
+# What main gets that the remote does not have yet. Without the old tip of
+# main here, the commits on no branch of the remote are taken.
+if [ "$base" != "$zero" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+	changed=$(git diff --name-only "$base" "$pushed")
+else
+	changed=$(git log --format= --name-only "$pushed" --not --remotes="$remote")
+fi
+
+packages=
+for dir in $(printf '%s\n' "$changed" | sed -n 's|/[^/]*\.go$||p' | sort -u); do
+	# A package that the pushed commit deletes has nothing left to mutate.
+	if git cat-file -e "$pushed:$dir" 2>/dev/null; then
+		packages="$packages $dir"
+	fi
+done
+if [ -z "$packages" ]; then
+	echo "pre-push: no Go package changed on main, mutation tests skipped."
+	exit 0
+fi
+
+snapshot=$(mktemp -d "${TMPDIR:-/tmp}/ouro-pre-push.XXXXXX")
+trap 'rm -rf "$snapshot"' EXIT
+trap 'exit 130' INT TERM HUP
+
+mkdir "$snapshot/tree"
+git archive "$pushed" | tar -x -C "$snapshot/tree"
+
+# Git runs hooks with GIT_DIR and friends set. Tests that run git themselves
+# would act on this repository instead of their own.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
+# The pinned tools are built once, in the checkout, not once per push.
+OURO_TOOLS_DIR=${OURO_TOOLS_DIR:-$top/.tools}
+OURO_MUTATION_DIR=$top/.mutation
+export OURO_TOOLS_DIR OURO_MUTATION_DIR
+
+cd "$snapshot/tree"
+
+# They report, they do not reject: no threshold is agreed on.
+start=$(date +%s)
+echo "pre-push: mutation tests of the packages changed on main:$packages ..."
+# shellcheck disable=SC2086
+if ! OURO_MUTATION_TIME=${OURO_HOOK_MUTATION_TIME:-300} scripts/mutation.sh $packages; then
+	echo "pre-push: the mutation tests could not run (see above); the push was rejected." >&2
+	echo "          Push without them: OURO_HOOK_MUTATION=off git push" >&2
+	exit 1
+fi
+echo "pre-push: ok, $(($(date +%s) - start))s."

@@ -1517,7 +1517,7 @@ internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
 internal/update      self-update: from the newest main, or from the checkout as it is
 internal/sandbox     runs a command writing only where it may, without network unless allowed: sandbox-exec, bubblewrap
-scripts, hooks       the local quality checks and the pre-commit hook, see [Checks](#checks)
+scripts, hooks       the local quality checks and the Git hooks, see [Checks](#checks)
 ```
 
 ### Extending
@@ -1885,12 +1885,12 @@ diagnostics of the last answer.
 
 ## Checks
 
-The quality checks run on your machine: there is no CI. One command runs all of them, and a Git hook
-runs them before every commit, all but the mutation tests.
+The quality checks run on your machine: there is no CI. One command runs all of them. A Git hook runs
+them before every commit, all but the mutation tests. Those run when main is pushed.
 
 ```sh
 make check   # everything below, on the working tree
-make hooks   # once per clone: run the checks before every commit
+make hooks   # once per clone: the checks before every commit, the mutation tests before a push to main
 ```
 
 | Command | Checks | Fails when |
@@ -1910,7 +1910,7 @@ make hooks   # once per clone: run the checks before every commit
   `OURO_GO_DIR` for another place) and in `/usr/local/go/bin`. `gofmt`, `go vet` and the coverage tools come
   with it.
 - **make**, **git** and a POSIX shell with `awk`, `sed`, `grep`. `timeout` (coreutils) is used to limit the
-  mutation tests in the hook; without it they run to the end.
+  mutation tests in the pre-push hook; without it they run to the end.
 - **Linux or macOS**, with pseudo-terminals (`/dev/ptmx`): the end-to-end test runs `ouro` at one. The macOS
   half of that test is written but was never run; the checks were set up and measured on Linux.
 - **Network on the first run**: `staticcheck` and `gremlins` are built from source with `go install pkg@version`
@@ -2006,35 +2006,39 @@ package next to it. How to read it:
 Every survivor and every mutant not covered is either killed by a test or listed in one of the two files.
 The counts change with every commit and are not kept here: the first line of the report has them.
 
-### Git hook
+### Git hooks
 
 ```sh
-make hooks           # install the pre-commit hook into this clone
-make hooks CHAIN=1   # the same, keeping a pre-commit hook that is already there
-make unhooks         # remove it again
+make hooks           # install the pre-commit and pre-push hooks into this clone
+make hooks CHAIN=1   # the same, keeping hooks that are already there
+make unhooks         # remove them again
 ```
 
-The hook is `hooks/pre-commit`, versioned with the code. `make hooks` writes a few lines to `.git/hooks/pre-commit`
-that run it, so it changes along with the branch you are on.
+The hooks are `hooks/pre-commit` and `hooks/pre-push`, versioned with the code. `make hooks` writes a few
+lines to `.git/hooks/pre-commit` and `.git/hooks/pre-push` that run them, so they change along with the branch
+you are on.
 
-- **It is local.** Every clone needs its own `make hooks` (the worktrees of a clone share it).
-  `git commit --no-verify` skips it. Nothing on the server enforces it: it is not merge protection, and a
+- **They are local.** Every clone needs its own `make hooks` (the worktrees of a clone share them).
+  `--no-verify` skips them. Nothing on the server enforces them: they are not merge protection, and a
   commit that never saw the checks can be pushed.
-- **An existing setup is kept.** If there already is a pre-commit hook, or `core.hooksPath` points somewhere
-  else, `make hooks` installs nothing and says how to run both. With `CHAIN=1` the existing hook is moved to
-  `pre-commit.local` and runs first; `make unhooks` moves it back. Other hooks are not touched.
-- **It checks what you commit.** The staged files are copied to a temporary directory and the checks run
+- **An existing setup is kept.** If there already is a pre-commit or pre-push hook, or `core.hooksPath` points
+  somewhere else, `make hooks` installs nothing and says how to run both. With `CHAIN=1` the existing hook is
+  moved to `pre-commit.local` or `pre-push.local` and runs first; `make unhooks` moves it back. Other hooks are
+  not touched.
+- **pre-commit checks what you commit.** The staged files are copied to a temporary directory and the checks run
   there: unstaged changes and untracked files play no part, and neither your working tree nor the index is
   changed. Nothing is formatted, fixed or staged for you.
-- **It runs** `fmt-check`, `lint`, `test` and `cover-check`, and rejects the commit when one fails, with the
-  findings and the command to run that check alone. The mutation tests it leaves out. With
-  `OURO_HOOK_MUTATION=on` it runs them too, **for the packages whose Go files are staged**, for at most
-  5 minutes, and prints the survivors without rejecting the commit.
+- **pre-commit runs** `fmt-check`, `lint`, `test` and `cover-check`, and rejects the commit when one fails,
+  with the findings and the command to run that check alone. The mutation tests it leaves out.
 - A commit that stages no Go code and nothing of the checks themselves (only `README.md`, say) is not checked.
+- **pre-push runs the mutation tests when main is pushed**, on a copy of the pushed commit, **for the packages
+  whose Go files the push changes on main**, for at most 5 minutes. It prints the survivors and does not reject
+  the push; only when the mutation tests cannot run at all is the push rejected. A push to any other branch
+  runs nothing.
 
 | Variable | Effect |
 |---|---|
-| `OURO_HOOK_MUTATION=on` | the mutation tests in the hook too |
+| `OURO_HOOK_MUTATION=off` | leave the mutation tests out of this push to main |
 | `OURO_HOOK_MUTATION_TIME=600` | stop them after that many seconds instead of 300; the packages left over are named |
 | `OURO_GO_DIR=/opt/go` | where Go is, if not in `PATH` or `~/.local/go` |
 
@@ -2053,15 +2057,15 @@ the second. With every core busy, `make test` takes 75 to 105 s instead of 34 s.
 | `make mutation`, whole module | 24 min |
 | `make mutation PKGS=…`, one package | under 1 min for the small ones; `internal/config` 75 s, `internal/discovery` 90 s, `internal/a2a` 3.5 min; `internal/tui` more than 3 min |
 | `make check` | 25 min |
-| the hook | 1.5 min |
-| the hook, with the mutation tests | 5 s more for a small package, never more than 5 min more |
+| the pre-commit hook | 1.5 min |
+| the pre-push hook, to main | 5 s for a small package, never more than 5 min |
 
 The hook takes longer than `make test` and `make cover-check` together because it runs them on a copy of the
 staged files, where no earlier test result can be reused.
 
 Mutation tests are slow by nature: every mutant is compiled and tested on its own, about 1000 of them. That
-is why the hook leaves them out unless it is asked for them, why it then only mutates the packages a commit
-changes and stops after 5 minutes, and why the whole module is left to `make mutation` and `make check`. A
+is why they run only before a push to main, why they then only mutate the packages the push changes and
+stop after 5 minutes, and why the whole module is left to `make mutation` and `make check`. A
 mutant that makes its tests hang costs up to 90 s.
 
 ### Troubleshooting
@@ -2072,7 +2076,7 @@ mutant that makes its tests hang costs up to 90 s.
 | `make check` works, plain `go test` says `command not found` | `make` and the hook find a Go outside `PATH` themselves, your shell does not: `export PATH="$HOME/.local/go/bin:$PATH"` |
 | `could not build staticcheck` / `gremlins` | the first run downloads them: check the network, then `make tools` |
 | a tool behaves oddly after an update of Go | `rm -rf .tools && make tools` |
-| the hook does not run | `make hooks` in this clone; `git config core.hooksPath` has to be empty |
+| a hook does not run | `make hooks` in this clone; `git config core.hooksPath` has to be empty |
 | `make hooks` refuses | a hook setup is already there; the message names it and the two ways to keep both |
 | the hook passes or fails, `make check` does the opposite | the hook checks the staged files, `make check` the working tree: `git status` shows the difference |
 | a path in the hook's output starts with `/tmp/ouro-pre-commit.` | that is the copy of the staged files; the same path is in your checkout |
@@ -2081,7 +2085,7 @@ mutant that makes its tests hang costs up to 90 s.
 | a test fails with `node did not start` | should not happen any more: a node built with the race detector needs 0.7 s to come up and several seconds on a busy machine, so starting waits up to a minute, and ends at once when the process dies. If it does, the log named in the message says why the node ended |
 | a test fails only while the machine is busy | a wait in that test is too short; say which one. The checks were run with every core busy without a failure, but only a few times |
 | mutants are all `TIMED OUT` | the machine is busy: run them again when it is not. A mutant gets 90 s, or three times what the unchanged tests take (`mutant_time` in `scripts/mutation.sh`) |
-| the mutation tests take too long before a commit | commit without `OURO_HOOK_MUTATION=on`, then `make mutation PKGS=…` later |
+| the mutation tests take too long before a push to main | `OURO_HOOK_MUTATION=off git push`, then `make mutation PKGS=…` later |
 | it has to go in now | `git commit --no-verify`, and run `make check` afterwards |
 
 ## License

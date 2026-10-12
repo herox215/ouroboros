@@ -57,7 +57,7 @@ tools:
 	@scripts/tool.sh staticcheck >/dev/null
 	@scripts/tool.sh gremlins >/dev/null
 
-# Install the pre-commit hook into this checkout, or remove it again.
+# Install the pre-commit and pre-push hooks into this checkout, or remove them again.
 hooks:
 	@scripts/install-hooks.sh $(if $(CHAIN),--chain)
 
