@@ -302,12 +302,14 @@ func (c *client) complete(ctx context.Context, session string, in request, alive
 		}
 		return openai.Message{}, err
 	}
-	return readStream(resp.Body, alive, t)
+	return readStream(resp.Body, alive, t, openai.AnsweringOf(ctx))
 }
 
 // event is one event of the stream of a response.
 type event struct {
 	Type string `json:"type"`
+	// Delta is the piece of text "response.output_text.delta" brings.
+	Delta string `json:"delta"`
 	// Item is the item an "response.output_item.done" brings.
 	Item json.RawMessage `json:"item"`
 	// Response is the response as "response.completed", "response.failed"
@@ -350,7 +352,7 @@ type output struct {
 // kept as the API sent it to go back with the next request. Only a stream
 // that ends with "response.completed" is an answer. A trace t, if not nil,
 // is told what the API said besides the message.
-func readStream(body io.Reader, alive func(), t func(string, ...any)) (openai.Message, error) {
+func readStream(body io.Reader, alive func(), t func(string, ...any), answering func(text string)) (openai.Message, error) {
 	events := 0
 	msg := openai.Message{Role: "assistant"}
 	var content strings.Builder
@@ -369,6 +371,10 @@ func readStream(body io.Reader, alive func(), t func(string, ...any)) (openai.Me
 			return openai.Message{}, fmt.Errorf("chatgpt: the stream has an event that is no JSON: %w", err)
 		}
 		switch e.Type {
+		case "response.output_text.delta":
+			if answering != nil && e.Delta != "" {
+				answering(e.Delta) // a front end shows the answer as it comes
+			}
 		case "response.output_item.done":
 			var o output
 			if err := json.Unmarshal(e.Item, &o); err != nil {

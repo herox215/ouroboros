@@ -671,14 +671,14 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 		msg.Usage = out.Usage.read()
 		return msg, nil
 	}
-	return readStream(resp.Body, alive, t)
+	return readStream(resp.Body, alive, t, thoughtOf(ctx), AnsweringOf(ctx))
 }
 
 // readStream puts together the message a stream of server-sent events tells
 // in pieces. The usage comes after the choice is finished, in an event of its
 // own or in the last one: the stream is read on until it came, or until it
 // ends. A trace t, if not nil, is told what the API said besides the message.
-func readStream(body io.Reader, alive func(), t trace) (Message, error) {
+func readStream(body io.Reader, alive func(), t trace, thought, answering func(text string)) (Message, error) {
 	var said *answered
 	events := 0
 	if t != nil {
@@ -687,7 +687,7 @@ func readStream(body io.Reader, alive func(), t trace) (Message, error) {
 	}
 	var msg Message
 	var calls []ToolCall
-	var content, thought strings.Builder
+	var content, thoughts strings.Builder
 	var used *usage
 	chosen, finished := false, false
 	lines := bufio.NewScanner(body)
@@ -744,8 +744,14 @@ func readStream(body io.Reader, alive func(), t trace) (Message, error) {
 			d := choice.Delta
 			msg.Role = cmp.Or(d.Role, msg.Role)
 			content.WriteString(d.Content)
+			if answering != nil && d.Content != "" {
+				answering(d.Content) // a front end shows the answer as it comes
+			}
 			text, field := d.first()
-			thought.WriteString(text)
+			thoughts.WriteString(text)
+			if thought != nil && text != "" {
+				thought(text) // a front end shows the thinking as it comes
+			}
 			msg.ReasoningField = cmp.Or(msg.ReasoningField, field)
 			for _, part := range d.ToolCalls {
 				// Without an index, a part with an ID starts a call and one
@@ -781,7 +787,7 @@ func readStream(body io.Reader, alive func(), t trace) (Message, error) {
 	for i := range calls {
 		calls[i].Type = cmp.Or(calls[i].Type, "function")
 	}
-	msg.Content, msg.Reasoning, msg.ToolCalls = content.String(), thought.String(), calls
+	msg.Content, msg.Reasoning, msg.ToolCalls = content.String(), thoughts.String(), calls
 	msg.Usage = used.read()
 	return msg, nil
 }

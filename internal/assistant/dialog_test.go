@@ -98,7 +98,7 @@ func TestPeerAsksBackAndIsAnswered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(llm.results) != 6 || len(tasks) != 1 || !strings.HasPrefix(llm.results[4], "luna has no such question open") {
+	if len(llm.results) != 6 || len(tasks) != 1 || !strings.HasPrefix(llm.results[4], "error: luna never asked this answer a question") {
 		t.Fatalf("results %q, %d runs at luna", llm.results, len(tasks))
 	}
 	first := llm.results[0]
@@ -110,8 +110,9 @@ func TestPeerAsksBackAndIsAnswered(t *testing.T) {
 	if !strings.Contains(llm.results[1], "\n\nsure?\n\n") || llm.results[2] != "clean up: removed a.txt (yes)" || llm.results[3] != "luna was told. Nothing answers a note." {
 		t.Fatalf("results %q", llm.results)
 	}
-	// The request, two questions, three answers and the note are one task.
-	if want := tasks[0] + " " + fmt.Sprint(a2a.MaxExchanges-7); llm.results[5] != want || got != "done: "+want {
+	// The request, two questions, three answers and the note are one task; the question
+	// that was no question was never sent and costs nothing.
+	if want := tasks[0] + " " + fmt.Sprint(a2a.MaxExchanges-6); llm.results[5] != want || got != "done: "+want {
 		t.Fatalf("the task: %q, want %q", llm.results[5], want)
 	}
 	if got, want := luna.messages(), "c1/"+luna.ID+": clean up"; got != want {
@@ -161,6 +162,30 @@ func TestUnansweredQuestionIsGivenUp(t *testing.T) {
 	case err := <-ended:
 		t.Fatalf("given up without an answer that ended: %v", err)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// A note to a peer that asked nothing of this answer is sent all the same,
+// but the agent is told that it has no message of it to go on, so that it
+// does not tell the peer, or its owner, of a question the peer never asked.
+func TestANoteToAPeerThatAskedNothing(t *testing.T) {
+	luna := serveNode(t, "luna")
+	s := newSelf(t, luna.Node)
+	s.connect(t, luna)
+	luna.answers(func(_ context.Context, _, text string) (string, error) { return "ok: " + text, nil })
+	var note string
+	llm := &steps{step: func(n int, last string) (string, any) {
+		if n > 0 {
+			note = last
+			return "", nil
+		}
+		return toolTellPeer, tellPeerArgs{Peer: "luna", Message: "thanks"}
+	}}
+	if _, err := agent.New(llm, "m", "sys", PeerTools(s.network, s.id.ID)...).Respond(context.Background(), "c1", "thank luna"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(note, "luna was told. Nothing answers a note.") || !strings.Contains(note, "asked you nothing") {
+		t.Fatalf("a note nobody asked for: %q", note)
 	}
 }
 

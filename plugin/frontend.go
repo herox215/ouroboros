@@ -134,18 +134,20 @@ type (
 
 // What a SessionEvent tells.
 const (
-	SessionMessage  = session.Message  // a message of the owner: an answer starts, or goes on with it
-	SessionQueued   = session.Queued   // a message that waits for the answer on its way to take it
-	SessionUnqueued = session.Unqueued // the last message that waits, taken back
-	SessionSay      = session.Say      // what the agent says along with the tools it asks for
-	SessionStep     = session.Step     // a call of a tool, see SessionEvent.AsStep and ToolLine
-	SessionAnswer   = session.Answer   // the answer
-	SessionFailed   = session.Failed   // an answer that failed
-	SessionCanceled = session.Canceled // an answer that was stopped
-	SessionRestart  = session.Restart  // ouro starts anew from a new build, the binary in Text
-	SessionTitle    = session.Title    // the session is named for its topic, in Text
-	SessionEffort   = session.Effort   // how much the model thinks in the session, in Text
-	SessionJobs     = session.Jobs     // the commands that run in the background for the answer, a line each in Text
+	SessionMessage   = session.Message   // a message of the owner: an answer starts, or goes on with it
+	SessionQueued    = session.Queued    // a message that waits for the answer on its way to take it
+	SessionUnqueued  = session.Unqueued  // the last message that waits, taken back
+	SessionSay       = session.Say       // what the agent says along with the tools it asks for
+	SessionThought   = session.Thought   // what the model thinks before it writes, a piece of it in Text
+	SessionAnswering = session.Answering // a piece of the answer the model is writing, in Text
+	SessionStep      = session.Step      // a call of a tool, see SessionEvent.AsStep and ToolLine
+	SessionAnswer    = session.Answer    // the answer
+	SessionFailed    = session.Failed    // an answer that failed
+	SessionCanceled  = session.Canceled  // an answer that was stopped
+	SessionRestart   = session.Restart   // ouro starts anew from a new build, the binary in Text
+	SessionTitle     = session.Title     // the session is named for its topic, in Text
+	SessionEffort    = session.Effort    // how much the model thinks in the session, in Text
+	SessionJobs      = session.Jobs      // the commands that run in the background for the answer, a line each in Text
 	// SessionAsked is a question the agent asks the owner and waits for,
 	// see SessionEvent.AsQuestion: what the owner says next in the session,
 	// with Sessions.Steer, answers it. With Done the wait is over, and Text

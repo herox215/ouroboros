@@ -248,6 +248,31 @@ type taskKey struct{}
 // by its ID: whether it was answered.
 type questionKey string
 
+// askedKey is what an answer keeps the questions it was really given under,
+// by their ID: what answer_peer may answer.
+type askedKey string
+
+// spokenKey is what an answer keeps the peers it really talked to under, by
+// their ID: one it asked, or one that answered it.
+type spokenKey string
+
+// mark notes for the answer that it has a message of kind key, which is what
+// makes a later message of that kind honest: an agent cannot answer a
+// question it was never given, and cannot act on a message of a peer it never
+// talked to.
+func mark(ctx context.Context, key any) {
+	if answer := agent.AnswerOf(ctx); answer != nil {
+		answer.Value(key, func() any { return &atomic.Bool{} }).(*atomic.Bool).Store(true)
+	}
+}
+
+// kept tells whether the answer has a message of kind key: true outside an
+// answer, where nothing is kept and nothing can be contradicted.
+func kept(ctx context.Context, key any) bool {
+	answer := agent.AnswerOf(ctx)
+	return answer == nil || answer.Value(key, func() any { return &atomic.Bool{} }).(*atomic.Bool).Load()
+}
+
 // inTask returns ctx for a message to a peer: it belongs to the task of the
 // answer, which starts with the first message unless the answer is itself
 // for a peer, whose task it is then.
@@ -267,6 +292,11 @@ func told(ctx context.Context, network *peers.Network, node discovery.Node, cont
 		return r.Text
 	}
 	name := peers.Label(node)
+	// What the peer says here is what this answer knows of it: the question
+	// it asks back is the only one answer_peer may answer, and the peer is one
+	// this answer has talked to.
+	mark(ctx, spokenKey(node.ID))
+	mark(ctx, askedKey(r.Question))
 	if answer := agent.AnswerOf(ctx); answer != nil {
 		answered := answer.Value(questionKey(r.Question), func() any { return &atomic.Bool{} }).(*atomic.Bool)
 		context.AfterFunc(answer.Context(), func() {
@@ -373,6 +403,13 @@ func answerPeer(network *peers.Network) agent.Tool {
 				return "", err
 			}
 			name := peers.Label(node)
+			// A question this answer was never given is no question to answer:
+			// the peer asked nothing, and nothing may be sent in its name.
+			if !kept(ctx, askedKey(args.Question)) {
+				return "", fmt.Errorf("%s never asked this answer a question, so %q is none and nothing was sent. "+
+					"If you have no result of %s where it asked back, it asked you nothing at all: do not answer it, "+
+					"and tell your user that instead of what you took for its question", name, args.Question, toolAskPeer)
+			}
 			contextID := agent.ContextID(ctx) + "/" + node.ID
 			if answer := agent.AnswerOf(ctx); answer != nil {
 				answer.Value(questionKey(args.Question), func() any { return &atomic.Bool{} }).(*atomic.Bool).Store(true)
@@ -417,7 +454,16 @@ func tellPeer(network *peers.Network) agent.Tool {
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("%s was told. Nothing answers a note.", name), nil
+			if kept(ctx, spokenKey(node.ID)) {
+				return fmt.Sprintf("%s was told. Nothing answers a note.", name), nil
+			}
+			// A note is allowed, as the owner may well ask for one: but the
+			// agent is told that it has no message of this peer to go on, so
+			// that it does not act on one it only believes it got.
+			return fmt.Sprintf("%s was told. Nothing answers a note. "+
+				"Note: %s asked you nothing in this answer and you asked it nothing, so you tell it without its asking. "+
+				"If what you tell it rests on a message from it that you cannot find among your results, look for it with %s "+
+				"before you go on: it may never have been sent.", name, name, "history_search"), nil
 		})
 }
 

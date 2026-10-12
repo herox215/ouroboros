@@ -126,6 +126,7 @@ type fakeBackend struct {
 	unsteers int
 
 	peers []plugin.SessionInfo // the conversations of peers
+	hits  []string             // the sessions whose content a filter was found in
 	read  map[string][]Event   // what happened in them
 }
 
@@ -256,6 +257,12 @@ func (f *fakeBackend) Delete(ctx context.Context, id string) error {
 	}
 	return f.sessions.Delete(ctx, id)
 }
+
+// Find returns the sessions whose content holds query.
+func (f *fakeBackend) Find(ctx context.Context, query string) ([]string, error) {
+	return f.hits, nil
+}
+
 func (f *fakeBackend) Peers(ctx context.Context) ([]plugin.SessionInfo, error) {
 	if err := f.fail["peers"]; err != nil {
 		return nil, err
@@ -408,6 +415,10 @@ func press(m *Model, keys ...string) tea.Cmd {
 			msg.Code = tea.KeyLeft
 		case "right":
 			msg.Code = tea.KeyRight
+		case "backspace":
+			msg.Code = tea.KeyBackspace
+		case "ctrl+d":
+			msg.Code, msg.Mod = 'd', tea.ModCtrl
 		default:
 			msg.Code, msg.Text = rune(k[0]), k
 		}
@@ -802,8 +813,7 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 
 	want := []entry{{mine: true, text: "fix it"},
 		{text: "I read both", calls: []call{{text: "reading a.go ✓ 3ms", done: true}, {text: "reading b.go ✗ no such file", done: true}}},
-		{calls: []call{{text: "running a script ✓ 9ms", done: true}, {text: "writing c.go ✓ 1ms", done: true}}},
-		{text: ""}}
+		{calls: []call{{text: "running a script ✓ 9ms", done: true}, {text: "writing c.go ✓ 1ms", done: true}}}} // the answer said nothing at the end and leaves no entry of its own
 	if !sameEntries(m.chat.entries, want) {
 		t.Fatalf("the loop in the history: %+v", m.chat.entries)
 	}

@@ -345,9 +345,22 @@ func TestNothingIsLeftRunning(t *testing.T) {
 			t.Errorf("%s: %q, %v", command, got, err)
 		}
 	}
-	time.Sleep(1500 * time.Millisecond)
-	if got := w.content("~/share/late"); got != "<none>" {
-		t.Errorf("what the commands left ran on: %q", got)
+	// What was left is stopped, so it writes nothing: the file stays away,
+	// or one stopped as it opened the file to append to it leaves it empty.
+	// What says late is watched for until well after the sleep of the
+	// command, so that a slow one is not missed under the load of a run
+	// with coverage.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		got := w.content("~/share/late")
+		if strings.Contains(got, "late") {
+			t.Errorf("what the commands left ran on: %q", got)
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	// One that left the group keeps the pipe of the output open: the
@@ -355,8 +368,8 @@ func TestNothingIsLeftRunning(t *testing.T) {
 	old := grace
 	grace = 100 * time.Millisecond
 	t.Cleanup(func() { grace = old })
-	escape := `perl -MPOSIX -e 'exit if fork; POSIX::setsid(); sleep 2'; echo done`
-	if got, err := w.bash(context.Background(), `{"allow": ["~/share"]}`, map[string]any{"command": escape}); err != nil || !strings.Contains(got, "done") {
+	detached := `perl -MPOSIX -e 'exit if fork; POSIX::setsid(); sleep 2'; echo done`
+	if got, err := w.bash(context.Background(), `{"allow": ["~/share"]}`, map[string]any{"command": detached}); err != nil || !strings.Contains(got, "done") {
 		t.Errorf("one that left the group: %q, %v", got, err)
 	}
 

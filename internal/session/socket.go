@@ -137,6 +137,10 @@ func Handler(s *Service) http.Handler {
 		list, err := s.Peers(r.Context())
 		reply(w, list, err)
 	})
+	mux.HandleFunc("GET /find", func(w http.ResponseWriter, r *http.Request) {
+		list, err := s.Find(r.Context(), r.URL.Query().Get("q"))
+		reply(w, list, err)
+	})
 	mux.HandleFunc("GET /jobs", func(w http.ResponseWriter, r *http.Request) {
 		jobs, _ := s.Jobs(r.Context()) // a Service always knows its jobs
 		reply(w, jobs, nil)
@@ -379,6 +383,14 @@ func (c *Client) List(ctx context.Context) ([]Info, error) {
 func (c *Client) Peers(ctx context.Context) ([]Info, error) {
 	var list []Info
 	err := c.do(ctx, http.MethodGet, "/peers", nil, &list)
+	return list, err
+}
+
+// Find returns the sessions whose content holds query, as List and Peers
+// name them.
+func (c *Client) Find(ctx context.Context, query string) ([]string, error) {
+	var list []string
+	err := c.do(ctx, http.MethodGet, "/find?q="+url.QueryEscape(query), nil, &list)
 	return list, err
 }
 

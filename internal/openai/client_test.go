@@ -252,6 +252,25 @@ func TestCompleteStreams(t *testing.T) {
 	}
 }
 
+// What the model writes comes to the sink of ctx in the pieces the stream
+// brings it in, before the message holds the whole of it.
+func TestCompleteStreamsAnswer(t *testing.T) {
+	c := newServer(t, sse(
+		`{"choices":[{"delta":{"role":"assistant","content":"Hel"}}]}`,
+		`{"choices":[{"delta":{"content":"lo"}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+	))
+	var pieces []string
+	ctx := WithAnswering(context.Background(), func(text string) { pieces = append(pieces, text) })
+	got, err := c.Complete(ctx, "gpt", []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil || got.Content != "Hello" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if len(pieces) != 2 || pieces[0] != "Hel" || pieces[1] != "lo" {
+		t.Errorf("the sink was told %q", pieces)
+	}
+}
+
 // What the model thought comes in pieces in one of several fields, and an API
 // that sends it in two of them at once has it counted once.
 func TestCompleteStreamsReasoning(t *testing.T) {

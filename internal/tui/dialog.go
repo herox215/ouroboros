@@ -14,20 +14,34 @@ import (
 // dialogWidth is how wide a dialog is at most, with its border and padding.
 const dialogWidth = 80
 
+// The dialog of the conversations stays smaller than the others: it is a
+// short list to pick one from, and what is typed filters it.
+const (
+	sessionsWidth = 64 // with its border and padding
+	sessionsRows  = 8  // how many conversations it lists at once
+)
+
 // inDialog reports whether a dialog lies over the chat: the chat behind it
 // stays as it is, also when the wheel turns.
 func (m *Model) inDialog() bool {
-	return m.screen == screenEffort || m.screen == screenJobs || m.screen == screenModel || m.screen == screenHelp || m.screen == screenKeys || m.screen == screenSettings
+	switch m.screen {
+	case screenEffort, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions:
+		return true
+	}
+	return false
 }
 
 // dialogSize is how wide and how high a dialog may be in the body, with its
 // border and padding: it leaves a margin of the chat around it.
 func (m *Model) dialogSize() (width, height int) {
-	width = dialogWidth
-	if m.screen == screenHelp {
+	width, height = dialogWidth, m.bodyHeight()-2
+	switch m.screen {
+	case screenHelp: // the commands, each with what it does
 		width = m.width - 4
+	case screenSessions: // as high as the list it shows, not as high as the chat
+		width, height = sessionsWidth, sessionsRows+7
 	}
-	return max(1, min(width, m.width-4)), max(1, m.bodyHeight()-2)
+	return max(1, min(width, m.width-4)), max(1, min(height, m.bodyHeight()-2))
 }
 
 // dialog renders lines in the box of a dialog, as wide as the body allows.
@@ -65,12 +79,22 @@ func (m *Model) centered(lines ...string) []string {
 func (m *Model) overlay(dialog string) string {
 	w, h := m.width, m.bodyHeight()
 	back := strings.Split(m.chatView(), "\n")
+	dw, dh := lipgloss.Width(dialog), lipgloss.Height(dialog)
+	x := max(0, (w-dw)/2)
+	y := max(0, (h-dh)/2)
+	// What the dialog covers is blank behind it: the canvas lets the blank
+	// cells of a layer through, so the chat would show through the dialog.
+	for i := y; i < min(len(back), y+dh); i++ {
+		line := []rune(ansi.Strip(back[i]))
+		for len(line) < w {
+			line = append(line, ' ')
+		}
+		back[i] = string(line[:x]) + strings.Repeat(" ", dw) + string(line[min(x+dw, len(line)):])
+	}
 	style := lipgloss.NewStyle().Foreground(fadeColor(m.light))
 	for i, l := range back {
 		back[i] = style.Render(ansi.Strip(l))
 	}
-	x := max(0, (w-lipgloss.Width(dialog))/2)
-	y := max(0, (h-lipgloss.Height(dialog))/2)
 	canvas := lipgloss.NewCanvas(w, h)
 	canvas.Compose(lipgloss.NewCompositor(
 		lipgloss.NewLayer(strings.Join(back, "\n")),

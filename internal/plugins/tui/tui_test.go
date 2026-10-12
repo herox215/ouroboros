@@ -128,7 +128,17 @@ func TestShowEndsWithItsContext(t *testing.T) {
 func TestTUIBackendAsk(t *testing.T) {
 	alpha, _ := clitest.TwoNodes(t)
 	u := backend(t, alpha)
-	events := answer(t, u, "ctx", "@beta hello")
+	// The pieces of the answer the model writes come before it, and make it
+	// up; the rounds are told apart without them.
+	var events []tui.Event
+	var pieces strings.Builder
+	for _, e := range answer(t, u, "ctx", "@beta hello") {
+		if e.Kind == plugin.SessionAnswering {
+			pieces.WriteString(e.Text)
+			continue
+		}
+		events = append(events, e)
+	}
 	var kinds []string
 	for _, e := range events {
 		kinds = append(kinds, string(e.Kind))
@@ -145,6 +155,9 @@ func TestTUIBackendAsk(t *testing.T) {
 	}
 	if reply := events[6]; !strings.Contains(reply.Text, "not connected") || reply.Context == 0 {
 		t.Fatalf("answer %+v", reply)
+	}
+	if pieces.String() != events[6].Text {
+		t.Fatalf("pieces %q of the answer %q", pieces.String(), events[6].Text)
 	}
 	// The context of the conversation is what the LLM is sent next, message
 	// by message: the call of a tool with its arguments.

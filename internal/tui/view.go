@@ -3,10 +3,12 @@ package tui
 import (
 	"cmp"
 	"fmt"
+	"hash/fnv"
 	"image/color"
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -135,15 +137,24 @@ func (m *Model) renderHistory(toBottom bool) {
 		m.history.GotoTop()
 		return
 	}
-	body := lipgloss.NewStyle().Width(m.history.Width()).PaddingLeft(2)
-	// What the agent says is markdown, and shown formatted.
+	width := m.history.Width()
+	body := lipgloss.NewStyle().Width(width).PaddingLeft(2)
+	// What the agent says is markdown, and shown formatted. Every block is
+	// wrapped here and not by the viewport, which would measure all of the
+	// history on every step of scrolling.
 	render := func(s string) string {
-		return "  " + strings.ReplaceAll(renderMarkdown(s, m.history.Width()-2), "\n", "\n  ")
+		return "  " + strings.ReplaceAll(renderMarkdown(s, width-2), "\n", "\n  ")
 	}
+	wrap := func(s string) string { return lipgloss.Wrap(s, width, "") }
 	summaries := c.summaries()
-	var blocks []string
-	words := false // the last block is the words of a round of an answer that is in
-	for i, e := range c.entries {
+	// one adds what the chat shows of the entry i to blocks and says whether
+	// the last block there is the words of a round of an answer that is in,
+	// below which the line of its calls goes.
+	one := func(i int, blocks []string, words bool) ([]string, bool) {
+		e := c.entries[i]
+		if !m.thoughtsHidden && e.thought != "" {
+			blocks, words = append(blocks, wrap(thoughtBlock(e.thought, width))), false
+		}
 		// A round of the loop is its words; the calls of all the rounds of
 		// an answer are one line below its last words, also while the
 		// answer is on its way: what the agent waits for is below the
@@ -151,11 +162,11 @@ func (m *Model) renderHistory(toBottom bool) {
 		// screen (/context).
 		if len(e.calls) > 0 {
 			if e.text != "" {
-				blocks, words = append(blocks, render(e.text)), true
+				blocks, words = append(blocks, wrap(render(e.text))), true
 			}
 			if used := summaries[i]; used != "" {
 				// The line goes right below the last words of the answer.
-				line := c.muted("  ↳ " + used)
+				line := wrap(c.muted("  ↳ " + used))
 				if words {
 					blocks[len(blocks)-1] += "\n" + line
 				} else {
@@ -163,9 +174,14 @@ func (m *Model) renderHistory(toBottom bool) {
 				}
 				words = false
 			}
-			continue
+			return blocks, words
 		}
-		words = false
+		// Nothing of it to show: an entry without words and without a call of
+		// its own would leave a block of only its head, which reads as a
+		// message that got lost.
+		if strings.TrimSpace(e.text) == "" && !e.mine && !e.failed {
+			return blocks, words
+		}
 		head := m.entryHead(e)
 		text := render(e.text)
 		if e.mine {
@@ -174,7 +190,28 @@ func (m *Model) renderHistory(toBottom bool) {
 		if e.failed {
 			text = body.Foreground(bad).Render("✗ " + e.text)
 		}
-		blocks = append(blocks, head+"\n"+text)
+		return append(blocks, wrap(head+"\n"+text)), false
+	}
+	// What an answer has written stays as it is: the entries that cannot
+	// change anymore are drawn once and kept, so that an answer on its way
+	// costs only its own words, however long the conversation is.
+	settled, kept := c.settled(), c.shown.n
+	blocks := c.shown.blocks
+	if c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || kept > settled {
+		kept, blocks = 0, nil
+	}
+	words := false // the last block is the words of a round of an answer that is in
+	for i := kept; i < settled; i++ {
+		blocks, words = one(i, blocks, words)
+	}
+	c.shown = rendered{n: settled, width: width, thoughts: !m.thoughtsHidden, blocks: blocks}
+	for i := settled; i < len(c.entries); i++ {
+		blocks, words = one(i, blocks, words)
+	}
+	// The answer the model is still writing, as far as the stream has brought
+	// it; the Answer of the end replaces it with the whole of it.
+	if c.pending && c.partial != "" {
+		blocks = append(blocks, wrap(render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
 	}
 	// What waits for the answer on its way to take it comes last.
 	for i, text := range c.queued {
@@ -183,16 +220,115 @@ func (m *Model) renderHistory(toBottom bool) {
 			state += ", ↑ takes it back"
 		}
 		head := boldStyle.Foreground(accent).Render("you") + mutedStyle.Render(state)
-		blocks = append(blocks, head+"\n"+body.Faint(true).Render(c.showLabels(c.labelled(text))))
+		blocks = append(blocks, wrap(head+"\n"+body.Faint(true).Render(c.showLabels(c.labelled(text)))))
 	}
-	// The heads and the lines of the calls are wrapped here and not by the
-	// viewport, which would measure all of the history on every step of
-	// scrolling.
-	m.history.SetContent(m.behind(lipgloss.Wrap(strings.Join(blocks, "\n\n"), m.history.Width(), "")))
+	m.history.SetContent(m.behind(strings.Join(blocks, "\n\n")))
 	if toBottom {
 		m.stopGlide(&m.history) // the bottom is where it goes now
 		m.history.GotoBottom()
 	}
+}
+
+// rendered are the entries of a conversation as the chat shows them, the
+// first n of them, wrapped for the width they were drawn at.
+type rendered struct {
+	n        int      // of the entries, how many are in blocks
+	width    int      // the width of the chat they are wrapped for
+	thoughts bool     // whether what the model thought was shown then
+	blocks   []string // what the chat shows of them, a block for every entry
+}
+
+// settled is how many of the entries of c are shown as they will stay: all of
+// them but those of the answer that is on its way, whose words, calls and line
+// of calls still change.
+func (c *conversation) settled() int {
+	if !c.pending {
+		return len(c.entries)
+	}
+	for i := len(c.entries) - 1; i >= 0; i-- {
+		if c.entries[i].mine {
+			return i
+		}
+	}
+	return 0
+}
+
+// The glyphs the newest word of the answer is threaded in with, of the same
+// width as the letters they stand for: narrow ones for the letters of Latin,
+// wide ones for those of Chinese, Japanese and Korean.
+const (
+	narrowGlyphs = "▚▞▌▐░▒▓╱╲│┼╪▖▗▘▝"
+	wideGlyphs   = "線索縲繧螻雜亂紋風錯綜纏綿"
+)
+
+// threadIn shows the answer as far as the stream brought it, with its newest
+// word still coming in: at frame 0 all of its letters are glyphs, and fewer
+// with every frame until the word stands. What is no letter stays as it is, so
+// that the markdown of the answer keeps its shape.
+func threadIn(text string, frame int) string {
+	if frame >= settleFrames {
+		return text
+	}
+	i := strings.LastIndexFunc(text, unicode.IsSpace)
+	word := text[i+1:]
+	if word == "" {
+		return text
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(word))
+	at := h.Sum32()
+	rs := []rune(word)
+	for j, r := range rs {
+		seed := at + uint32(j)*2654435761 + uint32(frame)*40503
+		// What is settled stays: of the letters, fewer are noise the further
+		// the animation is.
+		if (!unicode.IsLetter(r) && !unicode.IsDigit(r)) || seed%settleFrames >= settleFrames-uint32(frame) {
+			continue
+		}
+		rs[j] = glyph(seed, wideRune(r))
+	}
+	return text[:i+1] + string(rs)
+}
+
+// glyph is one of the glyphs of the noise, by the same seed that decided that
+// this letter is noise.
+func glyph(seed uint32, wide bool) rune {
+	pool := []rune(narrowGlyphs)
+	if wide {
+		pool = []rune(wideGlyphs)
+	}
+	return pool[seed%uint32(len(pool))]
+}
+
+// wideRune is whether r takes two cells of the terminal: the glyph that stands
+// for it has to take the same room, or the line jumps while the word comes in.
+func wideRune(r rune) bool {
+	return r >= 0x1100 && (r <= 0x115f || r >= 0x2e80 && r <= 0xa4cf || r >= 0xac00 && r <= 0xd7a3 ||
+		r >= 0xf900 && r <= 0xfaff || r >= 0xfe30 && r <= 0xfe6f || r >= 0xff00 && r <= 0xff60 ||
+		r >= 0xffe0 && r <= 0xffe6 || r >= 0x20000)
+}
+
+// thoughtKey is the key that shows what the model thought, and hides it
+// again.
+const thoughtKey = "ctrl+t"
+
+// maxThought is how many of its lines the chat shows of the thinking of a
+// round of the loop: the whole of it would push the words away, and the
+// answer is what belongs to the chat.
+const maxThought = 3
+
+// thoughtBlock is what the model thought before a round of the loop, as the
+// chat shows it: its last lines, faint, under a head that says what they are.
+func thoughtBlock(text string, width int) string {
+	one := strings.Join(strings.Fields(text), " ")
+	lines := strings.Split(lipgloss.Wrap(one, max(20, width-4), ""), "\n")
+	lines = lines[max(0, len(lines)-maxThought):]
+	faint := lipgloss.NewStyle().Faint(true)
+	out := []string{mutedStyle.Render("· thought")}
+	for _, l := range lines {
+		out = append(out, faint.Render("  "+l))
+	}
+	return strings.Join(out, "\n")
 }
 
 // summaries says for every answer, by the index of the round of the loop the
@@ -298,7 +434,7 @@ func (m *Model) View() tea.View {
 	case screenSettings:
 		body = m.overlay(m.config.view(m))
 	case screenSessions:
-		body = m.sessions.view(m)
+		body = m.overlay(m.sessions.view(m))
 	case screenEffort:
 		body = m.overlay(m.effort.view(m))
 	case screenJobs:
@@ -684,7 +820,7 @@ func (m *Model) footerHint() string {
 	case screenModel:
 		help = "↑↓ choose · enter set · p for peers · f fallback · esc back"
 	case screenSessions:
-		help = "↑↓ select · enter show · d delete · tab yours/peers · esc back"
+		help = "type to filter · ↑↓ select · enter show · ctrl+d delete · tab yours/peers · esc back"
 	case screenContext:
 		help = "↑↓ pgup/pgdn scroll · / search · esc back"
 		if m.context.searching() {
@@ -740,7 +876,7 @@ func (m *Model) footerView() string {
 	right = ansi.Truncate(right, m.width, "…")
 	left := ""
 	switch m.screen {
-	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings: // the dialogs lie over the chat
+	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings, screenSessions: // the dialogs lie over the chat
 		if room := m.width - lipgloss.Width(right) - 1; room > 0 {
 			left = ansi.Truncate(m.chatTitle(), room, "…")
 		}

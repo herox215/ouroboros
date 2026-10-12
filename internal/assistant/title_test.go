@@ -49,7 +49,7 @@ func TestTitle(t *testing.T) {
 	conversation := []openai.Message{
 		{Role: "user", Content: "Wie plane ich den Garten?"},
 		{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "run"}}}},
-		{Role: "tool", ToolCallID: "1", Content: "secret of a tool"},
+		{Role: "tool", ToolCallID: "1", Content: "what a tool answered"},
 		{Role: "assistant", Content: long},
 		{Role: "user", Content: long},
 		{Role: "user", Content: long},
@@ -68,13 +68,14 @@ func TestTitle(t *testing.T) {
 		t.Fatalf("sent %+v to %q with %v", llm.sent, llm.model, llm.tools)
 	}
 	cut := strings.Repeat("ä", titleMessage/2) + "…"
-	if want := "user: Wie plane ich den Garten?\n\nassistant: " + cut + strings.Repeat("\n\nuser: "+cut, 2) + "\n\nuser: " + strings.Repeat("x", 1921) + "\n\n"; llm.sent[1].Content != want || len(want) != titleTalk {
+	want := "user: Wie plane ich den Garten?\n\nassistant: " + cut + strings.Repeat("\n\nuser: "+cut, 2) + "\n\nuser: " + strings.Repeat("x", 1921) + "\n\n"
+	if content := "<conversation>\n" + want + "</conversation>\n\n" + titleAsk; content != llm.sent[1].Content || len(want) != titleTalk {
 		t.Fatalf("talk %q", llm.sent[1].Content)
 	}
 	// A message of titleMessage bytes is whole.
 	whole := strings.Repeat("x", titleMessage)
 	a.Title(context.Background(), []openai.Message{{Role: "user", Content: whole}})
-	if llm.sent[1].Content != "user: "+whole+"\n\n" {
+	if want := "<conversation>\nuser: " + whole + "\n\n</conversation>\n\n" + titleAsk; llm.sent[1].Content != want {
 		t.Fatalf("whole message %q", llm.sent[1].Content)
 	}
 
@@ -135,12 +136,16 @@ func TestTopic(t *testing.T) {
 		"  `NONE`  ":             "",
 		"":                       "",
 		"« Plan »":               "Plan",
-		"<function_calls>\n<x>":  "",
-		"<3 Gardens":             "<3 Gardens",
-		"I don't have access to `history_sessions` or `history_search` tools — no such": "",
-		"The command completed successfully with the following output:":                 "",
+		// What stands between < and > names no topic, whatever the tag is.
+		"<garden-notes>\n<x>": "",
+		"<3 Gardens":          "<3 Gardens",
+		// A whole sentence is an answer, however it is worded.
+		"Das lässt sich aus den Dateien hier leider nicht eindeutig sagen": "",
+		"What I found in the files of this project is the following:":      "",
 		"Ich schaue nach…": "",
-		"one two three four five six seven eight nine ten": "one two three four five six seven eight nine ten",
+		// What has more words than the most a title has is an answer.
+		"one two three four five six seven eight nine ten": "",
+		"one two three four five six seven eight":          "one two three four five six seven eight",
 	} {
 		if got := topic(reply); got != want {
 			t.Errorf("topic(%q) = %q, want %q", reply, got, want)

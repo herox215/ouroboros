@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -54,6 +55,11 @@ const (
 	DefaultRecords = 20
 	// MaxSessions is how many sessions a listing names at most.
 	MaxSessions = 50
+
+	// matchChunk is how much of a session Match looks at at once.
+	matchChunk = 1 << 20
+	// maxMatchWorkers is how many sessions Match reads at once at most.
+	maxMatchWorkers = 8
 
 	maxSearchBytes = 16 << 10 // of the hits of one search
 	maxReadBytes   = 32 << 10 // of the records of one read
@@ -126,6 +132,10 @@ type Archive struct {
 
 	mu    sync.Mutex
 	known map[string]position // by path, where its file ended the last time
+	// lastQuery is what Match looked for last, and lastHits what it found
+	// then: a query that goes on from it is looked for only in those again.
+	lastQuery string
+	lastHits  []string
 }
 
 // position is how far a file is known: its size, and the last sequence
@@ -649,9 +659,9 @@ type Entry struct {
 	Title    string
 }
 
-// List returns every conversation in the archive, of the owner and of every
-// peer, the most recent first.
-func (a *Archive) List() ([]Entry, error) {
+// every returns the conversations of every party in the archive, the most
+// recently changed first.
+func (a *Archive) every() ([]session, error) {
 	parties, err := os.ReadDir(a.dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -659,7 +669,7 @@ func (a *Archive) List() ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Entry
+	var out []session
 	for _, p := range parties {
 		if !p.IsDir() || p.Name() != ownerDir && !strings.HasPrefix(p.Name(), peerPrefix) {
 			continue
@@ -668,12 +678,137 @@ func (a *Archive) List() ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, s := range in {
-			_, title := describe(s.path)
-			out = append(out, Entry{p.Name() + "/" + s.name, s.modified, s.size, title})
+		out = append(out, in...)
+	}
+	slices.SortStableFunc(out, func(x, y session) int {
+		return cmp.Or(y.modified.Compare(x.modified), strings.Compare(x.name, y.name))
+	})
+	return out, nil
+}
+
+// listed is how the archive names the conversation s in a listing: the party
+// it belongs to and its file.
+func listed(s session) string { return filepath.Base(filepath.Dir(s.path)) + "/" + s.name }
+
+// Match returns the conversations, as List names them, whose records contain
+// every word of query, ignoring case: what a list of sessions is filtered by
+// besides the title of a session, what was said in it. A conversation ends
+// its scan at its first hit, and the conversations are read side by side, so
+// one that does not contain query costs its size in reading and nothing
+// else. What was searched last is kept: a query that goes on from it, as
+// typed text does, is looked for only in what matched then, as every word of
+// the one before is in the new one.
+func (a *Archive) Match(query string) ([]string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	all, err := a.every()
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	only := a.lastHits
+	a.mu.Unlock()
+	if len(only) > 0 && strings.HasPrefix(query, a.lastQuery) {
+		in := make(map[string]bool, len(only))
+		for _, id := range only {
+			in[id] = true
+		}
+		all = slices.DeleteFunc(all, func(s session) bool { return !in[listed(s)] })
+	}
+	var words [][]byte
+	for _, w := range strings.Fields(strings.ToLower(query)) {
+		words = append(words, []byte(w))
+	}
+	var mu sync.Mutex
+	var hits []string
+	var firstErr error
+	workers := min(runtime.NumCPU(), len(all), maxMatchWorkers)
+	sem := make(chan struct{}, max(1, workers))
+	var wg sync.WaitGroup
+	for _, s := range all {
+		wg.Add(1)
+		go func(s session) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ok, err := holds(s.path, words)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+			if ok {
+				hits = append(hits, listed(s))
+			}
+		}(s)
+	}
+	wg.Wait()
+	slices.Sort(hits)
+	a.mu.Lock()
+	a.lastQuery, a.lastHits = query, hits
+	a.mu.Unlock()
+	return hits, firstErr
+}
+
+// holds reports whether the file at path contains every one of needles,
+// which are lower case: it reads it in chunks and ends as soon as all of
+// them are in. A hit across the end of a chunk is not missed, as its start is
+// read again with the next one.
+func holds(path string, needles [][]byte) (bool, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	tail := make([][]byte, len(needles)) // of each, what is left of the last chunk
+	in := make([]bool, len(needles))     // whether it is found
+	found := 0
+	buf := make([]byte, matchChunk)
+	br := bufio.NewReaderSize(f, matchChunk)
+	for {
+		n, err := br.Read(buf)
+		if n > 0 {
+			for i, needle := range needles {
+				if in[i] {
+					continue
+				}
+				if bytes.Contains(bytes.ToLower(append(tail[i], buf[:n]...)), needle) {
+					in[i], found = true, found+1
+					continue
+				}
+				keep := min(len(needle)-1, matchChunk) // of a chunk, for a hit across its end
+				tail[i] = append(tail[i][:0], buf[max(0, n-keep):n]...)
+			}
+			if found == len(needles) {
+				return true, nil
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return false, nil
+			}
+			return false, err
 		}
 	}
-	slices.SortStableFunc(out, func(x, y Entry) int { return y.Modified.Compare(x.Modified) })
+}
+
+// List returns every conversation in the archive, of the owner and of every
+// peer, the most recent first.
+func (a *Archive) List() ([]Entry, error) {
+	in, err := a.every()
+	if err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, s := range in {
+		_, title := describe(s.path)
+		out = append(out, Entry{listed(s), s.modified, s.size, title})
+	}
 	return out, nil
 }
 

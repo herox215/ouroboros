@@ -18,18 +18,20 @@ import (
 // view is what m shows, without colors.
 func view(m *Model) string { return ansi.Strip(m.View().Content) }
 
-// sessionLines are the lines of the sessions screen that list a session,
+// sessionLines are the lines of the sessions dialog that list a session,
 // without the border and the spaces around them.
 func sessionLines(m *Model) []string {
 	var lines []string
 	listing := false
-	for _, l := range strings.Split(view(m), "\n") {
-		l = strings.TrimSpace(strings.Trim(strings.TrimSpace(l), "│"))
+	for _, l := range strings.Split(ansi.Strip(m.sessions.view(m)), "\n") {
+		l = strings.Trim(l, " │")
 		switch {
 		case strings.HasPrefix(l, "Sessions"):
 			listing = true
 		case strings.HasSuffix(l, " sessions") || strings.HasSuffix(l, "1 session") || strings.HasSuffix(l, " conversation") || strings.HasSuffix(l, " conversations"):
 			listing = false
+		case listing && strings.HasPrefix(l, "find "): // what is typed filters the list
+		case listing && strings.HasPrefix(l, "nothing here"):
 		case listing && l != "":
 			lines = append(lines, l)
 		}
@@ -81,7 +83,7 @@ func TestSessionsScreen(t *testing.T) {
 		!strings.HasPrefix(lines[1], "wait for beta ") || !strings.HasPrefix(lines[2], "first question  ") {
 		t.Fatalf("sessions %q\n%s", lines, view(m))
 	}
-	if !strings.Contains(view(m), "3 sessions") || strings.TrimSpace(footer(m)) != "↑↓ select · enter show · d delete · tab yours/peers · esc back" {
+	if !strings.Contains(view(m), "3 sessions") || strings.TrimSpace(footer(m)) != "type to filter · ↑↓ select · enter show · ctrl+d delete · tab yours/peers · esc back" {
 		t.Fatalf("view:\n%s", view(m))
 	}
 	// Only the session whose answer is on its way moves.
@@ -401,21 +403,21 @@ func TestDeleteSession(t *testing.T) {
 	drive(t, m, run(m, "/new"), func() bool { return m.chat != second })
 
 	m.Update(ctrlS)
-	if cmd := press(m, "d"); cmd != nil || m.notice != "nothing to delete here yet" {
+	if cmd := press(m, "ctrl+d"); cmd != nil || m.notice != "nothing to delete here yet" {
 		t.Fatalf("a new conversation: %q", m.notice)
 	}
-	if cmd := press(m, "down", "d", "d"); cmd != nil || m.notice != "an answer is on its way there: /cancel it first" || !m.noticeErr {
+	if cmd := press(m, "down", "ctrl+d", "ctrl+d"); cmd != nil || m.notice != "an answer is on its way there: /cancel it first" || !m.noticeErr {
 		t.Fatalf("on its way: %q", m.notice)
 	}
-	if cmd := press(m, "down", "d"); cmd != nil || m.sessions.deleting != first || m.notice != "press d again to delete “first question” with its history" {
-		t.Fatalf("first d: %q", m.notice)
+	if cmd := press(m, "down", "ctrl+d"); cmd != nil || m.sessions.deleting != first || m.notice != "press ctrl+d again to delete “first question” with its history" {
+		t.Fatalf("first ctrl+d: %q", m.notice)
 	}
-	if cmd := press(m, "up", "down", "d"); cmd != nil || m.sessions.deleting != first {
+	if cmd := press(m, "up", "down", "ctrl+d"); cmd != nil || m.sessions.deleting != first {
 		t.Fatal("a key in between starts over")
 	}
-	cmd := press(m, "d")
+	cmd := press(m, "ctrl+d")
 	if cmd == nil {
-		t.Fatal("the second d deletes")
+		t.Fatal("the second ctrl+d deletes")
 	}
 	m.Update(cmd())
 	if _, ok := m.chats[first.contextID]; ok || m.notice != "deleted “first question”" || m.sessions.sel != 1 {
@@ -439,8 +441,8 @@ func TestDeleteSession(t *testing.T) {
 	m.switchTo(second)
 	m.input.SetValue("typed")
 	m.Update(ctrlS)
-	press(m, "d")
-	_, watch := m.Update(press(m, "d")())
+	press(m, "ctrl+d")
+	_, watch := m.Update(press(m, "ctrl+d")())
 	drive(t, m, watch, func() bool { return true })
 	if m.chat == second || m.chat.contextID == second.contextID || m.input.Value() != "typed" || len(m.chat.entries) != 0 {
 		t.Fatalf("shown %+v, input %q", m.chat, m.input.Value())
@@ -451,8 +453,8 @@ func TestDeleteSession(t *testing.T) {
 	drive(t, m, say(t, m, "third"), func() bool { return !m.chat.pending && m.chat.title != "" })
 	b.fail = map[string]error{"delete": errors.New("the node is not running")}
 	m.Update(ctrlS)
-	press(m, "d")
-	m.Update(press(m, "d")())
+	press(m, "ctrl+d")
+	m.Update(press(m, "ctrl+d")())
 	if m.notice != "not deleted: the node is not running" || !m.noticeErr || m.chats[m.chat.contextID] == nil {
 		t.Fatalf("notice %q", m.notice)
 	}
@@ -526,10 +528,10 @@ func TestPeerConversations(t *testing.T) {
 
 	// Deleted, the one shown gives way to a new session.
 	m.Update(ctrlS)
-	if cmd := press(m, "d"); cmd != nil || m.notice != "press d again to delete the conversation of beta “hello alpha”" {
-		t.Fatalf("first d: %q", m.notice)
+	if cmd := press(m, "ctrl+d"); cmd != nil || m.notice != "press ctrl+d again to delete the conversation of beta “hello alpha”" {
+		t.Fatalf("first ctrl+d: %q", m.notice)
 	}
-	_, watch := m.Update(press(m, "d")())
+	_, watch := m.Update(press(m, "ctrl+d")())
 	drive(t, m, watch, func() bool { return true })
 	if len(b.peers) != 1 || len(m.sessions.peers) != 1 || m.chat.peer != "" || m.chat == mine || m.notice != "deleted “hello alpha”" {
 		t.Fatalf("peers %+v, shown %+v, notice %q", m.sessions.peers, m.chat, m.notice)
@@ -552,7 +554,7 @@ func TestPeerConversations(t *testing.T) {
 	m.Update(ctrlS)
 	m.Update(m.sessions.loadPeers(m))
 	press(m, "tab")
-	if cmd := press(m, "d", "enter", "up"); cmd != nil || len(sessionLines(m)) != 0 || !strings.Contains(view(m), "0 conversations") {
+	if cmd := press(m, "ctrl+d", "enter", "up"); cmd != nil || len(sessionLines(m)) != 0 || !strings.Contains(view(m), "0 conversations") {
 		t.Fatalf("empty:\n%s", view(m))
 	}
 	press(m, "esc")
@@ -639,7 +641,7 @@ func TestSessionSelectionStopsAtTheLast(t *testing.T) {
 	if m.sessions.sel != 1 {
 		t.Fatalf("selected %d", m.sessions.sel)
 	}
-	for _, key := range []string{"d", "enter"} {
+	for _, key := range []string{"ctrl+d", "enter"} {
 		m.screen, m.sessions.sel = screenSessions, 5
 		press(m, key)
 	}
@@ -650,6 +652,25 @@ func TestSessionSelectionStopsAtTheLast(t *testing.T) {
 	m.screen, m.sessions.peerTab, m.sessions.sel = screenSessions, true, 5
 	if cmd := press(m, "enter"); cmd == nil {
 		t.Fatal("the last conversation of a peer should be read")
+	}
+}
+
+// An answer without words leaves nothing in the chat: not even its head, which
+// would read as a message that got lost.
+func TestEmptyAnswerLeavesNothing(t *testing.T) {
+	m, _ := newModel(t)
+	m.chat.add(entry{text: "hi", at: m.now()})
+	m.apply(m.chat, Event{Kind: plugin.SessionAnswer, Text: " "}, true)
+	if len(m.chat.entries) != 1 {
+		t.Fatalf("an answer without words left an entry: %+v", m.chat.entries)
+	}
+	m.chat.add(entry{at: m.now()}) // of a history that holds no words either
+	m.renderHistory(true)
+	empty := m.history.GetContent()
+	m.chat.entries = m.chat.entries[:1]
+	m.renderHistory(true)
+	if empty != m.history.GetContent() {
+		t.Fatalf("an entry without words is shown:\n%s", ansi.Strip(empty))
 	}
 }
 
@@ -664,7 +685,7 @@ func TestRunningFrame(t *testing.T) {
 	}
 }
 
-// Of many sessions, the screen lists those around the one selected, as many
+// Of many sessions, the dialog lists those around the one selected, as many
 // as fit.
 func TestSessionsListFollowsTheSelection(t *testing.T) {
 	m, _ := newModel(t)
@@ -688,22 +709,88 @@ func TestSessionsListFollowsTheSelection(t *testing.T) {
 	}
 	// The session shown, new, is the first row; s00 the second.
 	m.sessions.sel = 10
-	if got := strings.Join(titles(), " "); got != "s05 s06 s07 s08 ▸s09 s10 s11 s12" {
+	if got := strings.Join(titles(), " "); got != "s06 s07 s08 ▸s09 s10 s11" {
 		t.Fatalf("around the middle: %s", got)
 	}
 	m.sessions.sel = 20
-	if got := strings.Join(titles(), " "); got != "s12 s13 s14 s15 s16 s17 s18 ▸s19" {
+	if got := strings.Join(titles(), " "); got != "s14 s15 s16 s17 s18 ▸s19" {
 		t.Fatalf("at the last: %s", got)
 	}
 }
 
-// A title too long for the screen is cut to what is left of the line.
+// What is typed in the dialog filters the list as it is typed: enter shows
+// what is left of it, backspace takes a letter back, esc the whole filter
+// and only then goes back to the chat.
+func TestSessionsFilter(t *testing.T) {
+	m, _ := newModel(t)
+	at := time.Now()
+	for _, title := range []string{"the cache of the prompt", "beta and the mesh"} {
+		c := m.conversation("id-" + title)
+		c.title, c.last = title, at
+	}
+	m.Update(ctrlS)
+	if lines := sessionLines(m); len(lines) != 3 {
+		t.Fatalf("listed %q", lines)
+	}
+	press(m, "m", "e", "s", "h")
+	if lines := sessionLines(m); len(lines) != 1 || !strings.HasPrefix(lines[0], "▸ beta and the mesh") { // what is left is selected
+		t.Fatalf("filtered %q", lines)
+	}
+	if v := view(m); !strings.Contains(v, "find mesh") || !strings.Contains(v, "1 of 3 sessions") {
+		t.Fatalf("view:\n%s", v)
+	}
+	press(m, "backspace", "backspace", "backspace", "backspace")
+	if lines := sessionLines(m); len(lines) != 3 || !strings.Contains(view(m), "3 sessions") {
+		t.Fatalf("emptied %q", lines)
+	}
+	press(m, "c", "a", "c", "h", "enter")
+	if m.screen != screenChat || m.chat.title != "the cache of the prompt" {
+		t.Fatalf("screen %v, shown %q", m.screen, m.chat.title)
+	}
+	// Nothing matches: the dialog says so and stays open.
+	m.Update(ctrlS)
+	press(m, "z", "z", "z")
+	if len(sessionLines(m)) != 0 || !strings.Contains(view(m), "nothing here has “zzz” in it") {
+		t.Fatalf("nothing:\n%s", view(m))
+	}
+	if press(m, "esc"); m.sessions.filter != "" || m.screen != screenSessions {
+		t.Fatal("esc takes the filter back first")
+	}
+	if press(m, "esc"); m.screen != screenChat {
+		t.Fatal("and then goes back to the chat")
+	}
+}
+
+// What is typed filters the list by what was said in a session too: the node
+// gives the sessions whose content holds it, and the list keeps them besides
+// those whose title does.
+func TestSessionsFilterSearchesTheContent(t *testing.T) {
+	m, f := newModel(t)
+	f.hits = []string{"said"}
+	c := m.conversation("said")
+	c.title, c.last = "the mesh of the peers", time.Now()
+	m.Update(ctrlS)
+	cmd := press(m, "q", "q", "q")
+	if lines := sessionLines(m); len(lines) != 0 { // no title holds it, not even that of the chat
+		t.Fatalf("before the node answers: %q", lines)
+	}
+	m.Update(cmd()) // what the node found for what is typed
+	if lines := sessionLines(m); len(lines) != 1 || !strings.Contains(lines[0], "the mesh of the peers") {
+		t.Fatalf("with the hits of the node: %q", lines)
+	}
+	press(m, "esc") // the filter is taken back, and with it what was found for it
+	if m.sessions.hits != nil || m.sessions.hitsFor != "" || len(sessionLines(m)) != 2 {
+		t.Fatalf("emptied: %v, %q", m.sessions.hits, sessionLines(m))
+	}
+}
+
+// A title too long for the dialog is cut to what is left of the line.
 func TestSessionTitleIsCut(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 30})
 	m.chat.title = "a title much too long for the narrow screen"
 	m.Update(ctrlS)
-	if lines := sessionLines(m); !slices.Contains(lines, "▸ a title much too long …  · shown") {
+	if lines := sessionLines(m); !slices.Contains(lines, "▸ a title much too l…  · shown") {
 		t.Fatalf("listed %q", lines)
 	}
 }
@@ -740,5 +827,88 @@ func TestBlankRoundsLeaveNoSpace(t *testing.T) {
 	lines := strings.Split(ansi.Strip(m.history.GetContent()), "\n")
 	if len(lines) != 4 || strings.TrimSpace(lines[2]) != "" || strings.TrimSpace(lines[3]) != "↳ Used 3 tools" {
 		t.Fatalf("the history:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// What an answer has written is drawn once and kept: only what is on its way
+// is drawn again, and everything at another width.
+func TestRenderedEntriesAreKept(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	c.entries = []entry{{mine: true, text: "one"}, {text: "two"}}
+	m.renderHistory(true)
+	if c.shown.n != 2 || len(c.shown.blocks) == 0 {
+		t.Fatalf("an answer that is over is kept whole: %+v", c.shown)
+	}
+	c.shown.blocks[0] = "kept"
+	c.entries = append(c.entries, entry{mine: true, text: "three"})
+	c.pending = true
+	m.renderHistory(true)
+	if !strings.Contains(ansi.Strip(m.history.GetContent()), "kept") {
+		t.Fatal("what an answer wrote is drawn again")
+	}
+	if c.shown.n != 2 {
+		t.Fatalf("the answer on its way is not kept: %d", c.shown.n)
+	}
+	m.history.SetWidth(m.history.Width() - 10)
+	m.renderHistory(true)
+	if strings.Contains(ansi.Strip(m.history.GetContent()), "kept") {
+		t.Fatal("at another width everything is drawn anew")
+	}
+}
+
+// A word of the answer is threaded in: it shows as glyphs of its own width
+// and settles into its letters over the frames that follow.
+func TestNewWordIsThreadedIn(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "hi"}, true)
+	m.apply(c, Event{Kind: plugin.SessionAnswering, Text: "one two"}, true)
+	m.renderHistory(true)
+	first := ansi.Strip(m.history.GetContent())
+	if strings.Contains(first, "two") || !strings.Contains(first, "one") {
+		t.Fatalf("the newest word comes in as noise:\n%s", first)
+	}
+	for i := 0; i < settleFrames; i++ {
+		m.renderHistory(true)
+	}
+	if shown := ansi.Strip(m.history.GetContent()); !strings.Contains(shown, "two") {
+		t.Fatalf("the word does not come to rest:\n%s", shown)
+	}
+	// A word of Chinese is noise of the same width, or the line would jump.
+	if got := threadIn("两个", 0); strings.Contains(got, "两") {
+		t.Fatalf("the word shows as itself: %q", got)
+	}
+	if w := ansi.StringWidth(threadIn("两个", 0)); w != 4 {
+		t.Fatalf("noise of a wide word takes %d cells, not 4", w)
+	}
+}
+
+// The answer grows in the chat as its pieces come, and a round that ends
+// with tools takes back what it wrote meanwhile; the Answer of the end
+// replaces the whole of it.
+func TestAnswerGrowsAsItIsWritten(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "tell me"}, true)
+	m.apply(c, Event{Kind: plugin.SessionAnswering, Text: "it was "}, true)
+	m.apply(c, Event{Kind: plugin.SessionAnswering, Text: "a dark"}, true)
+	if c.partial != "it was a dark" || !m.streaming {
+		t.Fatalf("partial %q, streaming %v", c.partial, m.streaming)
+	}
+	for i := 0; i <= settleFrames; i++ { // the newest word first comes to rest
+		m.renderHistory(true)
+	}
+	if shown := ansi.Strip(m.history.GetContent()); !strings.Contains(shown, "it was a dark") {
+		t.Fatalf("the chat while the answer grows:\n%s", shown)
+	}
+	m.apply(c, Event{Kind: plugin.SessionStep, Text: "reading a file"}, true)
+	if c.partial != "" {
+		t.Fatalf("a round with tools leaves nothing of its words: %q", c.partial)
+	}
+	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "the end"}, true)
+	m.renderHistory(true)
+	if shown := ansi.Strip(m.history.GetContent()); !strings.Contains(shown, "the end") || strings.Contains(shown, "it was a dark") {
+		t.Fatalf("the chat after the answer:\n%s", shown)
 	}
 }

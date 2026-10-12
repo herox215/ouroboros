@@ -36,6 +36,42 @@ func traceOf(ctx context.Context) trace {
 	return t
 }
 
+// thoughtKey marks the sink a stream tells what its model thinks.
+type thoughtKey struct{}
+
+// WithThought returns a context whose calls of the LLM tell sink every piece
+// of what the model thinks before it writes, as the stream brings it: for a
+// front end that shows the thinking as it happens. A provider that keeps its
+// thinking to itself, as the responses API of OpenAI does, tells nothing.
+func WithThought(ctx context.Context, sink func(text string)) context.Context {
+	return context.WithValue(ctx, thoughtKey{}, sink)
+}
+
+// thoughtOf returns the sink of ctx for what the model thinks, nil if it has
+// none.
+func thoughtOf(ctx context.Context) func(text string) {
+	sink, _ := ctx.Value(thoughtKey{}).(func(text string))
+	return sink
+}
+
+// answerKey marks the sink a stream tells what its model writes.
+type answerKey struct{}
+
+// WithAnswering returns a context whose calls of the LLM tell sink every piece
+// of the answer it writes, as the stream brings it: for a front end that shows
+// the answer while it is on its way. The whole of it comes with the message
+// all the same, so a front end shows the pieces only until then.
+func WithAnswering(ctx context.Context, sink func(text string)) context.Context {
+	return context.WithValue(ctx, answerKey{}, sink)
+}
+
+// AnsweringOf returns the sink of ctx for what the model writes, nil if it has
+// none.
+func AnsweringOf(ctx context.Context) func(text string) {
+	sink, _ := ctx.Value(answerKey{}).(func(text string))
+	return sink
+}
+
 // maxTraced is how many bytes of a text a line of a trace takes.
 const maxTraced = 200
 

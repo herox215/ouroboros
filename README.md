@@ -50,6 +50,20 @@ answer is still on its way, as far as it has come; what the agent waits for at t
 below the input (`asking beta`), once the call has run for 0.3 s: one that ends sooner, as most commands
 and reads do, leaves the agent thinking, so the line does not flicker. What each call was, with its
 arguments and its result, is on the context screen (`/context`).
+What the model thinks before it writes comes in as the stream brings it, and the chat shows the last
+lines of it, faint, above the words of its round, under `· thought`; `ctrl+t` hides it again. A
+provider that keeps its thinking to itself, as the responses API of OpenAI does, sends none of it,
+and then there is nothing to show. Front ends get it as the session event `thought`, a piece each.
+The answer itself grows in the chat as the stream brings it, with a mark at its end, and the answer of
+the end replaces it with the whole of it; a round of the loop that ends with tools takes back what it had
+written meanwhile. Front ends get it as the session event `answering`, a piece of 32 characters each:
+those pieces are not recorded in the session, as the Answer holds all of them, and the UI draws them
+together 20 times a second rather than one per piece. Of the conversation it keeps what it has drawn of
+the entries that cannot change anymore and builds only the answer on its way anew, so that a long one
+costs the same per frame as a short one. Its newest word is threaded in: it shows
+as glyphs of its own width and settles into its letters over three frames, so that
+the answer seems to be written rather than to appear in blocks. While they come, the line below the input says
+`<agent> is writing` instead of `is thinking`.
 What the agent says is markdown, as the models write it, and the chat shows it formatted: headings, bold,
 italic, code in a line and in blocks, lists, quotes, tables and links, in the colors of the terminal theme and
 without the marks. A line break is kept, as models write poems and addresses line by line. What you write is shown as you wrote it.
@@ -134,7 +148,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | Command | What it does |
 |---|---|
 | `/new` | new conversation; the one shown goes on in the background |
-| `/session` | the conversations of the node, the latest first, the one shown marked: `↑` `↓` select, `enter` shows the one selected, `d` twice deletes it, `tab` switches to the conversations of peers, `esc` back; see [Sessions](#sessions) |
+| `/session` | the conversations of the node in a dialog over the chat, the latest first, the one shown marked: type to filter the list, `↑` `↓` select, `enter` shows the one selected, `ctrl+d` twice deletes it, `tab` switches to the conversations of peers, `esc` takes back what is typed and then goes back; see [Sessions](#sessions) |
 | `/cancel` | stop the answer that is on its way in the conversation shown |
 | `/jobs` | the commands the agent runs in the background for the answers on their way, in your conversations and in those of peers, each with where it runs and for how long, the list kept up to date: `↑` `↓` select, `enter` stops the one selected, `esc` back; see [Commands](#commands) |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
@@ -162,6 +176,7 @@ Keys only move around:
 | `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `ctrl+k` | the keys of the chat in a dialog, like `/keys`, but what is typed stays in the input |
+| `ctrl+t` | what the model thought above the words of its round, shown or hidden again |
 | `ctrl+j` | the jobs of the conversation shown, and the services below them, in a list on the right, and the chat and the input narrower for it; a job too long for a line goes on in the next, and while the list is shown the footer says `ctrl+j hide`. Again: the list is hidden, and the jobs are named in the line of the wait below the chat again |
 | `pgup` `pgdn` | scroll the chat |
 | `esc` | on a screen: back to the chat. In the chat: close the list of commands with the command typed; without one, stop the answer on its way in the conversation shown, like `/cancel` |
@@ -217,9 +232,11 @@ So an answer does not depend on the UI:
   log and in the history. Open the UI again and the conversation is there, the answer too. A node the UI
   started stops once no answer is on its way.
 - **Several conversations at once.** `/new` starts a new conversation and leaves the one before going on.
-  `/session` (or `ctrl+s`) lists the conversations of the node: each with its title and when something last
-  happened in it, and behind those whose answer is on its way a small animation. The
-  one shown is marked. `enter` shows the one selected, with an answer on its way as usual. When an answer
+  `/session` (or `ctrl+s`) lists the conversations of the node in a dialog over the chat: each with its
+  title and when something last happened in it, and behind those whose answer is on its way a small
+  animation. The one shown is marked. What you type filters the list as you type it, by title and by the
+  name of the peer; `backspace` takes a letter back, `esc` the whole filter and only then closes the dialog.
+  `enter` shows the one selected, with an answer on its way as usual. When an answer
   comes in in a conversation that is not shown, the footer says so (`answered in “…” · /session`). What you
   typed stays with the conversation you typed it in; `ctrl+s` takes you to the list without clearing it.
 - **Titles.** A conversation is named for its topic. With each of your first three messages, while the
@@ -275,11 +292,12 @@ one where you left it.
 - **What the agent is told.** With the first message after the node started anew, the agent is told so, and
   how long ago the last answer was: what tools gave back before may be outdated, and the variables of its
   [scripts](#scripts) are gone. You do not see that note.
-- **Nothing is deleted by itself.** `d` pressed twice on `/session` deletes the session selected, unless an
-  answer is on its way there: from the archive, and what your agent remembers of it.
+- **Nothing is deleted by itself.** `ctrl+d` pressed twice on `/session` deletes the session selected,
+  unless an answer is on its way there: from the archive, and what your agent remembers of it. Deleting is
+  not a letter, since every letter filters the list.
 - **The conversations of peers.** `tab` on `/session` lists how peers talked with your agent, each with the
   name of the peer (as your contacts name it) and its first message. `enter` shows one, only to read: you
-  cannot write there. `d` pressed twice deletes it, and your agent forgets it. They start anew for the peer
+  cannot write there. `ctrl+d` pressed twice deletes it, and your agent forgets it. They start anew for the peer
   after a restart; only yours go on.
 
 ### Profiles
@@ -811,7 +829,7 @@ plugin takes the tools away, and the node archives all the same.
 - **What is kept of a script.** The LLM calls [`run`](#scripts), so what is archived of a script is the
   script and what it gave back to the LLM, not every call it made inside.
 - **Nothing is deleted by itself.** `/session` lists every archived conversation, yours and, after `tab`,
-  those of peers; `d` pressed twice deletes one, see [Sessions](#sessions). A conversation archived again
+  those of peers; `ctrl+d` pressed twice deletes one, see [Sessions](#sessions). A conversation archived again
   after that starts anew.
 - **When writing fails** (a full disk, a directory in the way), the answer is given all the same, and the
   log says `plugin archive after failed` with the cause.
@@ -1236,6 +1254,10 @@ no prompt decides it:
 | **answer** | `answer_peer` | nothing new: the agent that asked the question goes on. It answers exactly the question whose ID it names |
 | **note** | `tell_peer` | nothing: it is kept, and the agent reads it when it is asked the next time. Thanks are a note |
 | **result** | the answer of the agent | nothing: it ends the request it belongs to |
+
+An agent answers only a question it was really given: `answer_peer` with an ID no peer ever asked it sends
+nothing and says so, and a note to a peer it never talked to is sent, but the agent is told that it has no
+message of that peer to go on. Both are kept per answer, as that is how long a question stays open.
 
 - **No agent waits for one that waits for it.** A question is no request of its own, which the two agents
   would wait on forever: it travels as the answer to the request, and the answer to it as a message of its

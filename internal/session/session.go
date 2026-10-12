@@ -49,6 +49,15 @@ const (
 	// said nothing: it begins a round of the loop to the answer, before the
 	// Steps of those tools.
 	Say Kind = "say"
+	// Thought is what the model thinks before it writes, in Text, a piece of
+	// it per Event as the stream brings it: what a front end shows while the
+	// answer is on its way. A provider that keeps its thinking to itself
+	// tells no Thought.
+	Thought Kind = "thought"
+	// Answering is a piece of the answer the model is writing, in Text, as
+	// the stream brings it: what a front end shows while the answer grows,
+	// until Answer brings the whole of it.
+	Answering Kind = "answering"
 	// Step is a call of a tool that starts, or with Done, that ended.
 	Step Kind = "step"
 	// Asked is a question the agent asks the owner on its way to the answer,
@@ -189,6 +198,10 @@ type API interface {
 	// Peers describes the conversations of peers with the agent of the
 	// node, the latest first. They are only to read and delete.
 	Peers(ctx context.Context) ([]Info, error)
+	// Find returns the sessions whose content holds query, ignoring case,
+	// as List and Peers name them: for a list filtered by what was said in
+	// a session and not only by what it is titled.
+	Find(ctx context.Context, query string) ([]string, error)
 	// Read returns what happened in the conversation of a peer id, as Peers
 	// names it.
 	Read(ctx context.Context, id string) ([]Event, error)
@@ -562,6 +575,66 @@ func (s *Service) steered(se *session) []string {
 	return texts
 }
 
+// thoughtPiece is how much of what the model thinks goes into one Event: one
+// for every word would make a front end redraw far more than it shows.
+const thoughtPiece = 400
+
+// answerPiece is how much of the answer goes into one Event. Unlike the
+// thinking it is not recorded and reaches the front ends as it comes, which
+// they draw on their own clock rather than per piece.
+const answerPiece = 32
+
+// thoughts tells what the model of the answer in se thinks, in pieces of at
+// most thoughtPiece, as the stream brings them; the second function sends
+// what is left of a piece when the answer ends.
+func (s *Service) thoughts(se *session) (func(string), func()) {
+	var left strings.Builder
+	tell := func(text string) {
+		left.WriteString(text)
+		if left.Len() < thoughtPiece {
+			return
+		}
+		s.add(se, Event{Kind: Thought, Text: left.String()})
+		left.Reset()
+	}
+	return tell, func() {
+		if left.Len() > 0 {
+			s.add(se, Event{Kind: Thought, Text: left.String()})
+			left.Reset()
+		}
+	}
+}
+
+// answering tells what the model of the answer in se writes, in pieces of
+// answerPiece as the stream brings them, before the Event of the Answer brings
+// the whole of it; the second function drops what is not sent yet, which a
+// round of the loop does as it ends with tools.
+func (s *Service) answering(se *session) (func(string), func()) {
+	var left strings.Builder
+	tell := func(text string) {
+		left.WriteString(text)
+		if left.Len() < answerPiece {
+			return
+		}
+		piece := left.String()
+		left.Reset()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.transient(se, Event{Kind: Answering, Text: piece})
+	}
+	return tell, left.Reset
+}
+
+// transient hands e to those who watch se without recording it: what it tells
+// is part of what follows, as the pieces of an answer are of its Answer, and
+// who joins later reads the answer instead of them. s.mu is held.
+func (s *Service) transient(se *session, e Event) {
+	e.At = s.now().Round(0)
+	e.Context = s.agent.Context(se.id)
+	e.Cache = s.agent.Cache(se.id)
+	s.tell(se, e)
+}
+
 // answer runs the answer to text in se and tells what happens on the way.
 // With restartable a tool may ask for ouro to start anew. It ends once named
 // is closed: the session is named, or not, on the way.
@@ -600,13 +673,22 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		return s.ask(ctx, se, question)
 	})
 	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
+	thought, rest := s.thoughts(se)
+	ctx = openai.WithThought(ctx, thought)
+	defer rest()
+	writing, drop := s.answering(se)
+	ctx = openai.WithAnswering(ctx, writing)
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
+		drop() // what a round wrote before its tools is not the answer
 		e := Event{Kind: Step, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took, Remark: st.Remark}
 		if st.Err != nil {
 			e.Err = st.Err.Error()
 		}
 		s.add(se, e)
-	}, func(said string) { s.add(se, Event{Kind: Say, Text: said}) })
+	}, func(said string) {
+		drop() // its words come as a Say, and the next round begins the answer anew
+		s.add(se, Event{Kind: Say, Text: said})
+	})
 	<-named
 	end := Event{Kind: Answer, Text: reply}
 	switch {

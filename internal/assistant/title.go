@@ -84,8 +84,8 @@ func (a *Assistant) Title(ctx context.Context, conversation []openai.Message) (s
 func topic(reply string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(reply), "\n")
 	line = strings.Trim(strings.TrimSpace(line), "\"'“”„«»`*.")
-	// A model that answers with the markup of a call of a tool, like
-	// <function_calls>, names no topic.
+	// A model that answers with the markup of a call of a tool, all it says
+	// between < and >, names no topic.
 	if strings.EqualFold(line, untold) || strings.HasPrefix(line, "<") && strings.HasSuffix(line, ">") {
 		return ""
 	}

@@ -94,6 +94,9 @@ type Backend interface {
 	// Peers lists the conversations of peers with the agent of the node,
 	// the latest first: only to read and delete.
 	Peers(ctx context.Context) ([]plugin.SessionInfo, error)
+	// Find returns the sessions whose content holds query, ignoring case,
+	// as Sessions and Peers name them.
+	Find(ctx context.Context, query string) ([]string, error)
 	// Read returns what happened in the conversation of a peer id.
 	Read(ctx context.Context, id string) ([]Event, error)
 	// Contents returns what the next call of the LLM in the session id is
@@ -219,6 +222,10 @@ type entry struct {
 	at     time.Time
 	failed bool
 	calls  []call // of a round of the loop; none for a message
+	// thought is what the model thought before this round of the loop, as
+	// the events of Thought brought it; "" for a round that thought nothing
+	// and for a provider that keeps its thinking to itself.
+	thought string
 }
 
 // call is a tool call of the loop as the history shows it.
@@ -233,23 +240,30 @@ type call struct {
 type conversation struct {
 	contextID string
 	entries   []entry
-	pending   bool                // request submitted or answer on its way: what is sent meanwhile is queued
-	queued    []string            // the messages that wait for the answer on its way to take them
-	running   bool                // the node has said an answer is on its way
-	doing     string              // what the agent is waiting for, like "asking beta"
-	asking    *asking             // what the agent asks the owner and waits for; nil without a question
-	jobs      []string            // the commands that run in the background for the answer, like "job 1 · npm run dev"
-	since     time.Time           // when it began to wait for that
-	art       int                 // which of arts a wait is shown with: the next for every message
-	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
-	context   int                 // how long its context is, see Event.Context
-	cache     plugin.SessionCache // what the provider had cached, see Event.Cache
-	title     string              // named for its topic, else the first message of the owner
-	effort    string              // how much the model thinks in it, once efforted says it has its own
-	efforted  bool
-	last      time.Time
-	draft     string // what is typed in the input for it while another one is shown
-	watching  bool   // its events come in, or are asked for
+	// shown are the entries as the chat shows them, as far as they cannot
+	// change anymore: see renderHistory.
+	shown rendered
+	// partial is the answer on its way, as far as the events of Answering
+	// brought it; the Answer of the end replaces it with the whole of it.
+	partial  string
+	thread   thread              // how far its newest word is drawn in, see advance
+	pending  bool                // request submitted or answer on its way: what is sent meanwhile is queued
+	queued   []string            // the messages that wait for the answer on its way to take them
+	running  bool                // the node has said an answer is on its way
+	doing    string              // what the agent is waiting for, like "asking beta"
+	asking   *asking             // what the agent asks the owner and waits for; nil without a question
+	jobs     []string            // the commands that run in the background for the answer, like "job 1 · npm run dev"
+	since    time.Time           // when it began to wait for that
+	art      int                 // which of arts a wait is shown with: the next for every message
+	round    int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
+	context  int                 // how long its context is, see Event.Context
+	cache    plugin.SessionCache // what the provider had cached, see Event.Cache
+	title    string              // named for its topic, else the first message of the owner
+	effort   string              // how much the model thinks in it, once efforted says it has its own
+	efforted bool
+	last     time.Time
+	draft    string // what is typed in the input for it while another one is shown
+	watching bool   // its events come in, or are asked for
 	// peer is the peer a conversation of a peer with the agent is with: it
 	// is only to read. "" for a session of the owner.
 	peer string
@@ -286,6 +300,10 @@ type Model struct {
 	sessions sessionsScreen // the list of the sessions, for /session
 	ticks    int            // of the spinner, which the sessions screen animates with
 
+	// streaming is whether the chat is on its clock for the answer that is
+	// being written: the pieces of it come per token and are drawn together.
+	streaming bool
+
 	requests requestsScreen // what waits for a decision, for /pending
 	screen   screen
 	commands []command    // of the UI, then of the plugins
@@ -298,6 +316,9 @@ type Model struct {
 	picker modelScreen  // the models of the accesses, for /model
 	effort effortScreen // the slider of the effort, for /effort
 	jobs   jobsScreen   // the commands that run in the background, for /jobs
+	// thoughtsHidden is whether what the model thought is hidden in the
+	// chat, which ctrl+t turns off and on; by default it is shown.
+	thoughtsHidden bool
 	// jobsShown is whether the jobs of the session shown are listed on the
 	// right of the chat, for ctrl+j, instead of in the line of the wait.
 	jobsShown bool
@@ -546,6 +567,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.jobsTicked(msg)
 	case peersMsg:
 		m.sessions.peersLoaded(m, msg)
+	case findMsg:
+		m.sessions.found(m, msg)
 	case readMsg:
 		m.read(msg)
 	case bodyMsg:
@@ -573,6 +596,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case answerMsg:
+		if !m.streaming || !m.chat.pending || m.chat.partial == "" {
+			m.streaming = false // the answer is over, or wrote nothing since
+			return m, nil
+		}
+		following := m.followsEnd()
+		m.renderHistory(false)
+		var glide tea.Cmd
+		if following {
+			glide = m.glideTo(&m.history, topLine(&m.history))
+		}
+		return m, tea.Batch(answerTick(), glide)
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		return m, m.mouse(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
@@ -622,6 +657,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.context.typed(m, msg) // what is pasted into the search, and the blink of its cursor
 		}
 		if pasted, ok := msg.(tea.PasteMsg); ok {
+			if m.screen == screenSessions { // what is pasted filters the list
+				m.sessions.filter += strings.SplitN(pasted.Content, "\n", 2)[0]
+				m.sessions.sel = m.sessions.pick(m)
+				return m, nil
+			}
 			return m, m.paste(pasted.Content)
 		}
 		m.input, cmd = m.input.Update(msg)
@@ -675,6 +715,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.openKeys() // what is typed stays in the input
 	case jobsKey:
 		return m.toggleJobs()
+	case thoughtKey:
+		m.thoughtsHidden = !m.thoughtsHidden
+		m.renderHistory(m.followsEnd())
+		return nil
 	case "pgup":
 		return m.scrollBy(&m.history, -m.history.Height())
 	case "pgdown":

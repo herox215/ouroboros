@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -264,6 +265,24 @@ func (s *Service) Peers(context.Context) ([]Info, error) {
 		}
 	}
 	return list, err
+}
+
+// Find returns the sessions whose content holds query, as List and Peers
+// name them: what a front end filters its list of sessions by besides the
+// title of a session.
+func (s *Service) Find(_ context.Context, query string) ([]string, error) {
+	s.mu.Lock()
+	a := s.archive
+	s.mu.Unlock()
+	if a == nil {
+		return nil, nil
+	}
+	hits, err := a.Match(query)
+	for i, id := range hits { // a session of the owner is named as List names it, without its party
+		hits[i] = strings.TrimPrefix(id, "owner/")
+	}
+	slices.Sort(hits)
+	return hits, err
 }
 
 // Read returns what happened in the conversation of a peer id, as Peers

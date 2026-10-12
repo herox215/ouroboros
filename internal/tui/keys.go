@@ -25,6 +25,7 @@ func (m *Model) keybindings() []keybinding {
 		{"ctrl+s", "the conversations, like /session; what is typed stays"},
 		{"ctrl+k", "these keys, like /keys"},
 		{jobsKey, "the jobs in a list on the right, or hidden again"},
+		{thoughtKey, "what the model thought, shown or hidden again"},
 		{"pgup pgdn", "scroll the chat"},
 	}
 	if m.profileOf > 1 {

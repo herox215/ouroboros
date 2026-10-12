@@ -266,6 +266,12 @@ func (u *ui) Delete(ctx context.Context, id string) error { return u.sessions.De
 // Peers lists the conversations of peers the node has.
 func (u *ui) Peers(ctx context.Context) ([]plugin.SessionInfo, error) { return u.sessions.Peers(ctx) }
 
+// Find returns the sessions whose content holds query, as Sessions and Peers
+// name them.
+func (u *ui) Find(ctx context.Context, query string) ([]string, error) {
+	return u.sessions.Find(ctx, query)
+}
+
 // Jobs lists the commands that run in the background for the answers on
 // their way.
 func (u *ui) Jobs(ctx context.Context) ([]plugin.Job, error) { return u.sessions.Jobs(ctx) }

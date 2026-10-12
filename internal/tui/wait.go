@@ -106,6 +106,8 @@ func (m *Model) waitingFor() string {
 	switch {
 	case c.asking != nil:
 		return m.agentName() + " waits for your answer"
+	case c.partial != "":
+		return m.agentName() + " is writing"
 	case c.doing != "" && m.now().Sub(c.since) >= toolShown:
 		return c.doing
 	case c.doing != "" || c.pending:

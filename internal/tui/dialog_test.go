@@ -199,6 +199,35 @@ func TestKeysOpenInDialog(t *testing.T) {
 	}
 }
 
+// ctrl+s and /session list the conversations in a dialog over the chat, like
+// the model and the settings: what is typed stays, and the chat stays behind.
+func TestSessionsOpenInDialog(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m.chat.title = "about the cache"
+	m.chat.add(entry{mine: true, text: "how does the cache work?", at: m.now()})
+	m.input.SetValue("typed")
+	at := m.history.YOffset()
+	m.Update(ctrlS)
+	if !m.inDialog() || m.input.Value() != "typed" {
+		t.Fatalf("ctrl+s should open the conversations as a dialog and keep what is typed: screen %v, input %q", m.screen, m.input.Value())
+	}
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "Sessions") || !strings.Contains(view, "▸ about the cache  · shown") {
+		t.Fatalf("the conversations should be a dialog over the chat:\n%s", view)
+	}
+	if footer(m) == "" {
+		t.Fatal("the footer should say what the dialog does")
+	}
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.history.YOffset() != at {
+		t.Fatal("the dialog should hold the chat still")
+	}
+	if press(m, "esc"); m.screen != screenChat || m.inDialog() {
+		t.Fatal("esc should close the conversations")
+	}
+}
+
 // A dialog is as wide as its size says, whatever it is given: a line that is
 // too long is cut, not wrapped.
 func TestDialogCutsLongLines(t *testing.T) {
