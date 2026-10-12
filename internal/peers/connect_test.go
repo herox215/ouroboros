@@ -3,6 +3,8 @@ package peers
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -277,6 +279,38 @@ func TestOnlineTakesNoAddress(t *testing.T) {
 	}
 	if n, err := network.Online(context.Background(), "10.0.0.7:4000"); err == nil {
 		t.Fatalf("an address: %+v", n)
+	}
+}
+
+// A trusted peer that is not online is told as such, not as a node nobody
+// knows; one that cannot be told by what names it is not.
+func TestOnlineTellsATrustedPeerThatIsNot(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := contacts.Open(filepath.Join(dir, "contacts.json"))
+	luna, lyra := identity.Generate(), identity.Generate()
+	if err := errors.Join(store.AddTrusted(luna.Public(), "luna", ""), store.AddTrusted(lyra.Public(), "", "")); err != nil {
+		t.Fatal(err)
+	}
+	network := &Network{Finder: finder{{ID: "abc123", Name: "alpha"}}, Contacts: store}
+	for target, want := range map[string]string{
+		"luna":        "luna is a peer you trust, but its node is not online right now: try it again later",
+		luna.ID()[:6]: "luna is a peer you trust, but its node is not online right now: try it again later",
+		lyra.ID():     lyra.ID() + " is a peer you trust, but its node is not online right now: try it again later",
+		"nobody":      `no node "nobody" found (see: ouro list)`,
+	} {
+		if _, err := network.Online(ctx, target); err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", target, err, want)
+		}
+	}
+	// What names more than one trusted peer names none.
+	if _, err := (&Network{Finder: finder{}, Contacts: store}).Online(ctx, ""); err == nil || err.Error() != `no node "" found (see: ouro list)` {
+		t.Errorf("two peers: %v", err)
+	}
+	// Contacts that cannot be read know no peer.
+	os.WriteFile(filepath.Join(dir, "contacts.json"), []byte("{"), 0o600)
+	if _, err := network.Online(ctx, "luna"); err == nil || !strings.HasPrefix(err.Error(), `no node "luna" found`) {
+		t.Errorf("contacts that cannot be read: %v", err)
 	}
 }
 

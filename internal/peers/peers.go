@@ -95,7 +95,8 @@ func (s State) String() string {
 	return "not connected"
 }
 
-// Peer is a node that is online, as seen from this node.
+// Peer is a node that is online, or a trusted one that is not, as seen from
+// this node.
 type Peer struct {
 	discovery.Node
 	State State
@@ -111,7 +112,9 @@ func (n *Network) Find(ctx context.Context) ([]discovery.Node, error) {
 	return n.Finder.Find(ctx)
 }
 
-// Peers returns the nodes that are online with their connection to this node.
+// Peers returns the nodes that are online with their connection to this
+// node, and after them the trusted peers that are not online, as
+// Unreachable: they are known by what the contacts keep of them.
 func (n *Network) Peers(ctx context.Context) ([]Peer, error) {
 	nodes, err := n.Find(ctx)
 	if err != nil {
@@ -141,6 +144,11 @@ func (n *Network) Peers(ctx context.Context) ([]Peer, error) {
 		}
 	}
 	wg.Wait()
+	for _, c := range known.Trusted {
+		if !slices.ContainsFunc(nodes, func(node discovery.Node) bool { return node.PublicKey == c.PublicKey }) {
+			peers = append(peers, Peer{Node: discovery.Node{ID: identity.IDOf(c.PublicKey), Name: c.Name, PublicKey: c.PublicKey}, State: Unreachable})
+		}
+	}
 	return peers, nil
 }
 
@@ -168,7 +176,34 @@ func (n *Network) Online(ctx context.Context, target string) (discovery.Node, er
 	if err != nil {
 		return discovery.Node{}, err
 	}
-	return match(nodes, target)
+	node, err := match(nodes, target)
+	if err != nil && n.offline(target) != "" {
+		return node, fmt.Errorf("%s is a peer you trust, but its node is not online right now: try it again later", n.offline(target))
+	}
+	return node, err
+}
+
+// offline returns the name of the trusted peer that target names alone, by
+// its name, ID or the start of its ID, "" if none does: Online asks it of a
+// target that is not online.
+func (n *Network) offline(target string) string {
+	if n.Contacts == nil {
+		return ""
+	}
+	known, err := n.Contacts.Snapshot()
+	if err != nil {
+		return ""
+	}
+	var names []string
+	for _, c := range known.Trusted {
+		if c.Name == target || strings.HasPrefix(identity.IDOf(c.PublicKey), target) {
+			names = append(names, cmp.Or(c.Name, identity.IDOf(c.PublicKey)))
+		}
+	}
+	if len(names) != 1 {
+		return ""
+	}
+	return names[0]
 }
 
 func match(nodes []discovery.Node, target string) (discovery.Node, error) {
