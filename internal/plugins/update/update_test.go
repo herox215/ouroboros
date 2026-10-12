@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"ouroboros/internal/a2a"
 	"ouroboros/internal/cli"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
@@ -78,6 +78,46 @@ func TestUpdateReplacesTheBinaryOfTheNode(t *testing.T) {
 	run, _ = command(t, s, repo, func() (string, error) { return "", unknown })
 	if err := run(); !errors.Is(err, unknown) {
 		t.Fatalf("a binary that cannot be found: %v", err)
+	}
+}
+
+// rollback installs the binary from before the update again, and a second
+// one the update.
+func TestRollback(t *testing.T) {
+	s := clitest.Settings(t)
+	repo, _ := updatetest.NewRepo(t, "v2")
+	exe := filepath.Join(t.TempDir(), "ouro")
+	os.WriteFile(exe, []byte("v1"), 0o755)
+	self := func() (string, error) { return exe, nil }
+	back := func() (string, error) {
+		var out bytes.Buffer
+		err := updateplugin.Rollback(home.Dir(s.Home), &out, &update.Updater{}, self)(context.Background(), nil)
+		return out.String(), err
+	}
+	if _, err := back(); !errors.Is(err, update.ErrNoPrevious) {
+		t.Fatalf("before an update: %v", err)
+	}
+	run, _ := command(t, s, repo, self)
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"v1", "v2"} {
+		if out, err := back(); err != nil || out != "● back to the build before\n" {
+			t.Fatalf("rollback: %v, %q", err, out)
+		}
+		if got, _ := os.ReadFile(exe); string(got) != want {
+			t.Fatalf("binary %q, want %q", got, want)
+		}
+	}
+
+	unknown := errors.New("no binary")
+	if err := updateplugin.Rollback(home.Dir(s.Home), io.Discard, &update.Updater{}, func() (string, error) { return "", unknown })(context.Background(), nil); !errors.Is(err, unknown) {
+		t.Fatalf("a binary that cannot be found: %v", err)
+	}
+	// A node that runs but cannot be stopped is not replaced silently.
+	clitest.Ghost(t, s)
+	if err := updateplugin.Rollback(home.Dir(s.Home), io.Discard, &update.Updater{Exe: exe}, nil)(context.Background(), nil); err == nil {
+		t.Fatal("a node that cannot be stopped: no error")
 	}
 }
 
@@ -156,13 +196,9 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 		t.Fatalf("shown %q", got)
 	}
 
-	// A peer builds nothing, whatever the configuration lets it call.
-	peer := a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"})
-	if got, err := tools[at].Run(peer, json.RawMessage(`{}`)); err == nil || got != "" || !strings.Contains(err.Error(), "for the owner") {
-		t.Fatalf("for a peer: %q, %v", got, err)
-	}
-	if _, err := os.Stat(exe); err == nil {
-		t.Fatal("a peer had the source built")
+	// A peer gets it only from a list of its own in tools.peers.
+	if !tools[at].Trusted || tools[at].OwnerOnly {
+		t.Fatalf("for peers: %+v", tools[at])
 	}
 
 	if got, err := tools[at].Run(context.Background(), json.RawMessage(`{"test": "./a/"}`)); err == nil || got != "" ||
@@ -196,6 +232,16 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 	got, err = tools[at].Run(inNode, json.RawMessage(`{}`))
 	if err != nil || restart != exe || !strings.HasSuffix(got, "The node starts anew with it once you have answered, and this conversation goes on there.") {
 		t.Fatalf("in the node: %q, %v, restart %q", got, err, restart)
+	}
+	// With continue the conversation goes on by itself there.
+	goesOn := false
+	inNode = plugin.WithGoOn(inNode, func() { goesOn = true })
+	got, err = tools[at].Run(inNode, json.RawMessage(`{"continue": true}`))
+	if err != nil || !goesOn || !strings.HasSuffix(got, "there you are told to go on: end this answer with what is left to do, and do it then.") {
+		t.Fatalf("going on: %q, %v, %v", got, err, goesOn)
+	}
+	if !strings.Contains(tools[at].Schema, `"continue":{"type":"boolean"`) {
+		t.Fatalf("schema %s", tools[at].Schema)
 	}
 	if !alive() {
 		t.Fatal("the build signalled an unrelated process")

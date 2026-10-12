@@ -300,7 +300,8 @@ func reason(output string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
-// replace installs the binary at src as dst. A running dst keeps its old file.
+// replace installs the binary at src as dst, and keeps the binary that was
+// dst as Previous(dst), for Back. A running dst keeps its old file.
 func replace(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -314,10 +315,46 @@ func replace(src, dst string) error {
 	}
 	_, err = io.Copy(out, in)
 	if err = errors.Join(err, out.Close()); err == nil {
-		err = os.Rename(tmp, dst)
+		err = keepPrevious(dst)
+	}
+	if err == nil {
+		if err = rename(tmp, dst); err != nil {
+			rename(Previous(dst), dst) // dst is what it was
+		}
 	}
 	if err != nil {
 		os.Remove(tmp)
 	}
 	return err
+}
+
+// rename renames a file; tests replace it to make it fail.
+var rename = os.Rename
+
+// Previous is where the binary exe was before its last build or update is
+// kept: Back installs it again.
+func Previous(exe string) string { return exe + ".previous" }
+
+// keepPrevious keeps the binary dst as Previous(dst), if there is one.
+func keepPrevious(dst string) error {
+	if err := rename(dst, Previous(dst)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// ErrNoPrevious means that there is no build to go back to.
+var ErrNoPrevious = errors.New("there is no build before this one to go back to")
+
+// Back installs the binary exe was before its last build or update again,
+// and keeps the one it replaces in its place: a second Back undoes the
+// first.
+func Back(exe string) error {
+	if _, err := os.Stat(Previous(exe)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return ErrNoPrevious
+		}
+		return err
+	}
+	return replace(Previous(exe), exe)
 }

@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -45,6 +44,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			updater: &update.Updater{Repo: update.Repo, Source: update.Source, Dir: dir.UpdateDir(), Revision: update.Revision()},
 		}
 		plugin.Add(ctx, plugin.Command{Name: "update", Help: "build and install the newest version", Run: c.run})
+		plugin.Add(ctx, plugin.Command{Name: "rollback", Help: "install the build before the last update or rebuild again", Run: c.rollback})
 		plugin.Add(ctx, plugin.Tool{
 			Name: Rebuild,
 			Description: "Build ouro, the program you are part of, from its source in " + sourceName(update.Source) + " as it is now, and install it: " +
@@ -54,9 +54,12 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				"Only when the tests and the build pass is the binary replaced; " +
 				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. " +
 				"Once you have answered, the node starts anew with the new build and the conversation goes on there, " +
-				"and so does the terminal UI. Only for the owner of the node.",
+				"and so does the terminal UI. What you built is yours to use only in the new build: " +
+				"with continue: true you are told to go on there by yourself, so end this answer with what is left to do.",
 			Schema: `{"type":"object","properties":{"test":{"type":"array","items":{"type":"string"},` +
-				`"description":"the packages whose tests run before the build, like [\"./internal/tui/\"]"}}}`,
+				`"description":"the packages whose tests run before the build, like [\"./internal/tui/\"]"},` +
+				`"continue":{"type":"boolean","description":"go on by yourself in the new build, to use what you built"}}}`,
+			Trusted: true,
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var args rebuildArgs
 				if err := plugin.Decode(Rebuild, raw, &args); err != nil {
@@ -104,6 +107,27 @@ func (c *updateCommand) run(ctx context.Context, _ []string) (err error) {
 	return nil
 }
 
+// rollback installs the binary from before the last update or rebuild again,
+// as when a build an agent made does not do what it should, and restarts the
+// node if it is running. A second rollback goes forward again.
+func (c *updateCommand) rollback(context.Context, []string) error {
+	exe := c.updater.Exe
+	if exe == "" {
+		var err error
+		if exe, err = c.local.Executable(); err != nil {
+			return err
+		}
+	}
+	if err := update.Back(exe); err != nil {
+		return err
+	}
+	if err := c.restart(exe); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.term.Out, "● back to the build before")
+	return nil
+}
+
 // sourceName names the checkout source to the agent and the owner.
 func sourceName(source string) string {
 	if source == "" {
@@ -112,19 +136,18 @@ func sourceName(source string) string {
 	return source
 }
 
-// rebuild installs a build of the source over the running binary. The node whose session asked for it starts anew with it once
-// the answer is given, see plugin.Restart; where nobody does that, a running
-// node is restarted at once. A peer never gets that far, whatever the
-// configuration allows it.
 // rebuildArgs are the arguments of the tool rebuild.
 type rebuildArgs struct {
-	Test []string `json:"test"`
+	Test     []string `json:"test"`
+	Continue bool     `json:"continue"`
 }
 
+// rebuild installs a build of the source over the running binary. The node
+// whose answer asked for it, to the owner or to a peer the owner listed the
+// tool for in tools.peers, starts anew with it once no answer is on its way,
+// see plugin.Restart; where nobody does that, a running node is restarted at
+// once.
 func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, error) {
-	if _, peer := plugin.OriginFrom(ctx); peer {
-		return "", errors.New(Rebuild + " is for the owner of the node only")
-	}
 	var out bytes.Buffer
 	u := *c.updater
 	u.Out = &out
@@ -149,6 +172,10 @@ func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, 
 	// The node this runs in cannot stop itself while the answer is on its
 	// way: it takes its own place once the answer is given.
 	if plugin.Restart(ctx, u.Exe) {
+		if args.Continue && plugin.GoOn(ctx) {
+			return done + "The node starts anew with it once you have answered, and there you are told to go on: " +
+				"end this answer with what is left to do, and do it then.", nil
+		}
 		return done + "The node starts anew with it once you have answered, and this conversation goes on there.", nil
 	}
 	if err := c.restart(u.Exe); err != nil {

@@ -62,21 +62,68 @@ func TestReplaceFailureKeepsOldBinary(t *testing.T) {
 	}
 	unchanged("blocked temporary file")
 
-	// The new binary cannot take the place of what is there: a directory
-	// that is not empty.
-	dir := filepath.Join(t.TempDir(), "ouro")
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	os.Remove(exe + ".new")
+
+	// The binary before cannot be kept: a directory that is not empty is
+	// where it would go.
+	if err := os.MkdirAll(filepath.Join(Previous(exe), "keep"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	write(filepath.Join(dir, "keep"), "old")
-	if err := replace(src, dir); err == nil {
-		t.Error("directory: want an error")
+	if err := replace(src, exe); err == nil {
+		t.Error("blocked previous: want an error")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "keep")); err != nil {
-		t.Errorf("directory: %v", err)
+	unchanged("blocked previous")
+	if _, err := os.Stat(exe + ".new"); err == nil {
+		t.Error("blocked previous: left a temporary file")
 	}
-	if _, err := os.Stat(dir + ".new"); err == nil {
-		t.Error("directory: left a temporary file")
+	os.RemoveAll(Previous(exe))
+
+	// The new binary cannot take the place of the old one: the old one is
+	// put back.
+	renames := 0
+	rename = func(from, to string) error {
+		if renames++; renames == 2 {
+			return os.ErrPermission
+		}
+		return os.Rename(from, to)
+	}
+	t.Cleanup(func() { rename = os.Rename })
+	if err := replace(src, exe); err == nil {
+		t.Error("blocked binary: want an error")
+	}
+	unchanged("blocked binary")
+	if _, err := os.Stat(exe + ".new"); err == nil {
+		t.Error("blocked binary: left a temporary file")
+	}
+}
+
+// Back installs the binary before the last replacement again, and a second
+// Back the one after it.
+func TestBack(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "ouro")
+	if err := Back(exe); err != ErrNoPrevious {
+		t.Fatalf("without a binary before: %v", err)
+	}
+	os.WriteFile(exe, []byte("v1"), 0o755)
+	built := filepath.Join(dir, "built")
+	os.WriteFile(built, []byte("v2"), 0o755)
+	if err := replace(built, exe); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"v1", "v2"} {
+		if err := Back(exe); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(exe); string(got) != want {
+			t.Fatalf("binary %q, want %q", got, want)
+		}
+	}
+	// What cannot be looked at is an error of its own.
+	os.Chmod(dir, 0o200)
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if err := Back(exe); err == nil || err == ErrNoPrevious {
+		t.Errorf("unreadable: %v", err)
 	}
 }
 
