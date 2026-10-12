@@ -86,7 +86,7 @@ type skill struct {
 // settings are the settings of the tool: the skills it may load. Without
 // them it loads every skill for the owner and none for a peer.
 type settings struct {
-	Allow *[]string `json:"allow"`
+	Allow *[]string `json:"allow" about:"the skills it may load, by name" unset:"every skill for your agent, none for a peer"`
 }
 
 type loadArgs struct {
@@ -104,6 +104,7 @@ func (l library) tool() plugin.Tool {
 			`"required":["name"]}`,
 		Run:       l.run(nil),
 		Configure: l.configure,
+		Options:   plugin.OptionsOf[settings](),
 	}
 }
 
@@ -190,6 +191,9 @@ func (l library) run(allow *[]string) plugin.RunFunc {
 // load returns the instructions of the skill args names, or the file of it
 // args names.
 func (l library) load(args loadArgs, allow *[]string, peer bool) (string, error) {
+	if args.Name == "" {
+		return "", errors.New(`skill needs "name", the name of the skill to load`)
+	}
 	if !validName.MatchString(args.Name) {
 		return "", fmt.Errorf("there is no skill %q", args.Name)
 	}
@@ -297,10 +301,10 @@ func read(root string) (skill, string, error) {
 	}
 	k, body, err := parse(content)
 	if err != nil {
-		return skill{}, "", fmt.Errorf("skill %s: %s: %w", name, file, err)
+		return skill{}, "", fmt.Errorf("skill %s: %s: %w", name, filepath.Join(root, file), err)
 	}
 	if k.Name != name {
-		return skill{}, "", fmt.Errorf("skill %s: %s names it %q: the name is that of its directory", name, file, k.Name)
+		return skill{}, "", fmt.Errorf("skill %s: %s names it %q: the name is that of its directory", name, filepath.Join(root, file), k.Name)
 	}
 	return k, body, nil
 }

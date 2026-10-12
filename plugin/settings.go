@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
 	"ouroboros/internal/credentials"
+	"ouroboros/internal/identity"
 	"ouroboros/internal/kernel"
 	"ouroboros/internal/sandbox"
 )
@@ -50,11 +53,17 @@ type Settings struct {
 	// there is.
 	BashWithoutSandbox bool
 	Sandbox            string
-	Plugins            []PluginState
+	// Improves says that the agent builds into ouro what a task needs and
+	// ouro lacks, instead of proposing it, see config.SelfImprove.
+	Improves bool
+	Plugins  []PluginState
 	// PluginsKept says why the plugins the configuration turns off run all
 	// the same, "" if they do not.
 	PluginsKept string
 	Tools       [2]ToolList // by Audience
+	// Peers are the peers the owner trusts, and those that have a list of
+	// tools of their own in the configuration, tools.peers, by name.
+	Peers []PeerTools
 	// Protected are the paths no tool for files touches; ProtectedDefault
 	// says that the configuration has none and the default holds.
 	Protected        []string
@@ -80,6 +89,15 @@ type ToolList struct {
 	Tools []ToolState
 }
 
+// PeerTools is a peer as the owner gives it tools.
+type PeerTools struct {
+	ID, Name string // Name is "" for one that is no contact
+	// Own says that the peer has a list of its own, List: else the list
+	// for peers applies to it.
+	Own  bool
+	List ToolList
+}
+
 // ToolState is a tool in a list.
 type ToolState struct {
 	Name, Description string
@@ -88,6 +106,20 @@ type ToolState struct {
 	Settings          string // its settings as a JSON object, "" for none
 	Configurable      bool   // it takes settings
 	OwnerOnly         bool   // never for peers
+	Trusted           bool   // for a peer only in a list of its own, tools.peers
+	// Options are the settings it takes one by one, with what they are set
+	// to in Settings.
+	Options []ToolOption
+}
+
+// ToolOption is a setting of a tool, and what it is set to.
+type ToolOption struct {
+	Option
+	Set bool // the settings of the tool have it; else Unset holds
+	// Value is what it is set to: the text, the number as it is written,
+	// "true" or "false"; List the texts of a list.
+	Value string
+	List  []string
 }
 
 // SettingKind is what a Setting changes.
@@ -104,12 +136,17 @@ const (
 	SetProtected                             // Value: one path a line; On resets to the default
 	SetDescription                           // Value, "" for the default
 	SetBashWithoutSandbox                    // On
+	SetImproves                              // On: build, off: propose
+	SetPeerList                              // Peer, On: a list of its own, as the one for peers; off: none
 )
 
 // Setting is one change the owner makes in the settings.
 type Setting struct {
-	Kind  SettingKind
-	For   Audience
+	Kind SettingKind
+	For  Audience
+	// Peer is the ID of the peer whose own list of tools a change of tools
+	// for peers is of, "" for the list of all peers.
+	Peer  string
 	Name  string
 	On    bool
 	Value string
@@ -179,8 +216,8 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 		Name: cfg.Name, Access: access.Label(), About: access.About, Model: cfg.Model, ID: cfg.ID(),
 		Description: cfg.About(), DescriptionDefault: cfg.Description == "",
 		ContextProvider:    cfg.ContextProvider,
-		BashWithoutSandbox: cfg.BashWithoutSandbox,
-		PluginsKept:        o.plugins.kept, Protected: cfg.Protected(),
+		BashWithoutSandbox: cfg.BashWithoutSandbox, Improves: cfg.Improves(),
+		PluginsKept: o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
 	}
 	for _, p := range providers {
@@ -212,7 +249,59 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 	all := o.builder(tools).Available()
 	s.Tools[ForOwner] = toolList(all, cfg.OwnerTools(), cfg.Tools == nil || cfg.Tools.H2A == nil, false)
 	s.Tools[ForPeers] = toolList(all, cfg.PeerTools(), cfg.Tools == nil || cfg.Tools.A2A == nil, true)
+	s.Peers = o.peerTools(cfg, all)
 	return s, nil
+}
+
+// peerTools are the trusted peers and those with a list of their own in cfg,
+// with the tools of all as they apply to each.
+func (o *Owner) peerTools(cfg config.Config, all []agent.Tool) []PeerTools {
+	var out []PeerTools
+	add := func(id, name string) {
+		if slices.ContainsFunc(out, func(p PeerTools) bool { return p.ID == id }) {
+			return
+		}
+		entries, own := cfg.ToolsOf(id)
+		l := toolList(all, entries, false, true)
+		if own {
+			l = ownList(all, entries)
+		}
+		out = append(out, PeerTools{ID: id, Name: name, Own: own, List: l})
+	}
+	if o.net != nil && o.net.Contacts != nil {
+		data, _ := o.net.Contacts.Snapshot() // contacts that cannot be read are none
+		for _, c := range data.Trusted {
+			add(identity.IDOf(c.PublicKey), c.Name)
+		}
+	}
+	if cfg.Tools != nil {
+		for _, id := range slices.Sorted(maps.Keys(cfg.Tools.Peers)) {
+			add(id, "")
+		}
+	}
+	return out
+}
+
+// ownList is the list of tools of a single peer, entries: a trusted tool
+// is allowed in it by its name, and never by "*".
+func ownList(all []agent.Tool, entries []config.Entry) ToolList {
+	l := toolList(all, entries, false, true)
+	for i, t := range all {
+		if t.Trusted {
+			_, named := listed(entries, t.Name)
+			l.Tools[i].Trusted, l.Tools[i].Allowed = false, named
+		}
+	}
+	return l
+}
+
+// listed is the entry of the tool name in entries, if there is one.
+func listed(entries []config.Entry, name string) (config.Entry, bool) {
+	at := slices.IndexFunc(entries, func(e config.Entry) bool { return e.Tool == name })
+	if at < 0 {
+		return config.Entry{}, false
+	}
+	return entries[at], true
 }
 
 // toolList is the list entries of the tools all as it applies.
@@ -227,14 +316,39 @@ func toolList(all []agent.Tool, entries []config.Entry, unset, peers bool) ToolL
 	}
 	for _, t := range all {
 		e, named := listed[t.Name]
-		state := ToolState{Name: t.Name, Description: t.Description, Listed: named, Configurable: t.Configure != nil, OwnerOnly: t.OwnerOnly}
-		state.Allowed = (named || l.All) && !(peers && t.OwnerOnly)
+		state := ToolState{Name: t.Name, Description: t.Description, Listed: named, Configurable: t.Configure != nil, OwnerOnly: t.OwnerOnly, Trusted: t.Trusted}
+		state.Allowed = (named || l.All) && !(peers && (t.OwnerOnly || t.Trusted))
 		if settings := string(e.Settings); settings != "{}" { // none at all is ""
 			state.Settings = settings
 		}
+		state.Options = options(t.Options, e.Settings)
 		l.Tools = append(l.Tools, state)
 	}
 	return l
+}
+
+// options are the options of a tool as settings set them.
+func options(of []agent.Option, settings json.RawMessage) []ToolOption {
+	var set map[string]json.RawMessage
+	_ = json.Unmarshal(settings, &set) // the node reads only settings that are an object
+	var out []ToolOption
+	for _, o := range of {
+		state := ToolOption{Option: o}
+		raw, ok := set[o.Name]
+		if ok && string(raw) != "null" {
+			state.Set = true
+			var text string
+			switch {
+			case json.Unmarshal(raw, &state.List) == nil && o.Kind == agent.OptionList:
+			case json.Unmarshal(raw, &text) == nil:
+				state.Value = text
+			default:
+				state.Value = string(raw) // a number, true or false
+			}
+		}
+		out = append(out, state)
+	}
+	return out
 }
 
 // Change makes the change s of the configuration of the node and returns
@@ -244,6 +358,15 @@ func toolList(all []agent.Tool, entries []config.Entry, unset, peers bool) ToolL
 // answering is refused, and nothing is written. The keys are no setting:
 // the setup changes them.
 func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (string, error) {
+	// A name is that of a profile too: no two profiles of the node have
+	// the same, whatever the case of its letters.
+	if s.Kind == SetName {
+		if err := o.home.RenameProfile(s.Value); err != nil {
+			return "", err
+		}
+		o.home.Log("the owner changed the settings: %s", s)
+		return "saved: the node is called so from now on, also on the network", nil
+	}
 	b := o.builder(tools)
 	var holds string
 	err := config.Update(string(o.home), func(c *config.Config) error {
@@ -262,11 +385,16 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "bash without a sandbox"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "bash without a sandbox", "the changes of ouro", "the own list of tools"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
-	if s.Kind >= SetAllTools && s.Kind <= SetToolSettings {
+	switch {
+	case s.Kind == SetPeerList:
+		what += " of the peer " + s.Peer
+	case s.Kind >= SetAllTools && s.Kind <= SetToolSettings && s.Peer != "":
+		what += " for the peer " + s.Peer
+	case s.Kind >= SetAllTools && s.Kind <= SetToolSettings:
 		what += [...]string{" of the owner", " for peers"}[s.For]
 	}
 	return what
@@ -282,9 +410,6 @@ const (
 // change makes the change s of c, with the tools all and providers.
 func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers []ContextProvider) (string, error) {
 	switch s.Kind {
-	case SetName:
-		name, _ := json.Marshal(strings.TrimSpace(s.Value)) // a text: cannot fail
-		return "saved: the node is called so from now on, also on the network", c.SetField(config.FieldName, name)
 	case SetDescription:
 		description, _ := json.Marshal(strings.TrimSpace(s.Value)) // a text: cannot fail
 		return "saved: the card of the node says so from now on, for anyone who reads it", c.SetField(config.FieldDescription, description)
@@ -297,14 +422,47 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 	case SetBashWithoutSandbox:
 		c.BashWithoutSandbox = s.On
 		return holdsBash, nil
+	case SetImproves:
+		c.SelfImprove = config.SelfImprovePropose
+		if s.On {
+			c.SelfImprove = "" // the default
+		}
+		return holdsNow, nil
 	case SetPlugin:
 		return holdsRestart, o.switchPlugin(c, s.Name, s.On)
 	case SetAllTools, SetTool, SetToolSettings:
-		entries, err := changeTools(listOf(c, s.For), s, all)
+		if s.Peer != "" {
+			s.For = ForPeers
+			if _, own := c.ToolsOf(s.Peer); !own {
+				return "", fmt.Errorf("the peer %s has no list of its own: give it one first", s.Peer)
+			}
+		}
+		entries, err := changeTools(listOf(c, s.For, s.Peer), s, all)
 		if err != nil {
 			return "", err
 		}
-		setList(c, s.For, entries)
+		setList(c, s.For, s.Peer, entries)
+		return holdsNow, nil
+	case SetPeerList:
+		if !nodeID.MatchString(s.Peer) {
+			return "", fmt.Errorf("%q is no ID of a node, which is 12 hex digits", s.Peer)
+		}
+		tools := copyTools(c)
+		lists := maps.Clone(tools.Peers)
+		if s.On {
+			if lists == nil {
+				lists = map[string][]config.Entry{}
+			}
+			if _, ok := lists[s.Peer]; !ok {
+				lists[s.Peer] = append([]config.Entry{}, c.PeerTools()...)
+			}
+		} else {
+			delete(lists, s.Peer)
+		}
+		if len(lists) == 0 {
+			lists = nil
+		}
+		tools.Peers = lists
 		return holdsNow, nil
 	case SetProtected:
 		if s.On {
@@ -367,23 +525,36 @@ func copyTools(c *config.Config) *config.Tools {
 	return c.Tools
 }
 
-// listOf is the list of tools for who in c, as it applies.
-func listOf(c *config.Config, who Audience) []config.Entry {
-	if who == ForOwner {
+// nodeID is what the ID of a node is.
+var nodeID = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+// listOf is the list of tools for who in c, as it applies, or the own list
+// of the peer if it is not "".
+func listOf(c *config.Config, who Audience, peer string) []config.Entry {
+	switch {
+	case peer != "":
+		entries, _ := c.ToolsOf(peer)
+		return slices.Clone(entries)
+	case who == ForOwner:
 		return slices.Clone(c.OwnerTools())
 	}
 	return slices.Clone(c.PeerTools())
 }
 
-// setList makes entries the list of tools for who in c.
-func setList(c *config.Config, who Audience, entries []config.Entry) {
+// setList makes entries the list of tools for who in c, or the own list of
+// the peer if it is not "".
+func setList(c *config.Config, who Audience, peer string, entries []config.Entry) {
 	if entries == nil {
 		entries = []config.Entry{} // none is an empty list: null would be the default
 	}
 	tools := copyTools(c)
-	if who == ForOwner {
+	switch {
+	case peer != "":
+		tools.Peers = maps.Clone(tools.Peers)
+		tools.Peers[peer] = entries
+	case who == ForOwner:
 		tools.H2A = entries
-	} else {
+	default:
 		tools.A2A = entries
 	}
 }
@@ -395,8 +566,13 @@ func changeTools(entries []config.Entry, s Setting, all []agent.Tool) ([]config.
 	if s.Kind == SetAllTools {
 		switch {
 		case s.On && !every:
-			// A name next to "*" says nothing: the tools with settings stay.
-			kept := slices.DeleteFunc(entries, func(e config.Entry) bool { return e.Settings == nil })
+			// A name next to "*" says nothing: the tools with settings stay,
+			// and in the list of a single peer the trusted ones, which "*"
+			// does not give.
+			kept := slices.DeleteFunc(entries, func(e config.Entry) bool {
+				trusted := s.Peer != "" && slices.ContainsFunc(all, func(t agent.Tool) bool { return t.Name == e.Tool && t.Trusted })
+				return e.Settings == nil && !trusted
+			})
 			return append([]config.Entry{{Tool: config.AllTools}}, kept...), nil
 		case !s.On && every:
 			return named(entries, all, peers, ""), nil
@@ -409,6 +585,9 @@ func changeTools(entries []config.Entry, s Setting, all []agent.Tool) ([]config.
 	}
 	if peers && all[at].OwnerOnly {
 		return nil, fmt.Errorf("%s is for your agent alone: no peer gets it", s.Name)
+	}
+	if peers && all[at].Trusted && s.Peer == "" {
+		return nil, fmt.Errorf("%s is for a peer with a list of its own alone: give it to the peer under Tools of single peers", s.Name)
 	}
 	listed := slices.IndexFunc(entries, func(e config.Entry) bool { return e.Tool == s.Name })
 	if s.Kind == SetTool {
@@ -443,7 +622,7 @@ func changeTools(entries []config.Entry, s Setting, all []agent.Tool) ([]config.
 func named(entries []config.Entry, all []agent.Tool, peers bool, except string) []config.Entry {
 	out := slices.DeleteFunc(entries, func(e config.Entry) bool { return e.Tool == config.AllTools || e.Tool == except })
 	for _, t := range all {
-		if t.Name == except || peers && t.OwnerOnly || slices.ContainsFunc(out, func(e config.Entry) bool { return e.Tool == t.Name }) {
+		if t.Name == except || peers && (t.OwnerOnly || t.Trusted) || slices.ContainsFunc(out, func(e config.Entry) bool { return e.Tool == t.Name }) {
 			continue
 		}
 		out = append(out, config.Entry{Tool: t.Name})

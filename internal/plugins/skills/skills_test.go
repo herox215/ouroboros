@@ -131,6 +131,7 @@ func TestLoad(t *testing.T) {
 		{"peer without allow", peer, `{}`, `{"name": "review"}`, "", "allows by name"},
 		{"peer allowed", peer, `{"allow": ["review"]}`, `{"name": "review"}`, "The skill review:\n\nRead the diff first.", ""},
 		{"unknown", context.Background(), `{}`, `{"name": "notes"}`, "", `there is no skill "notes"`},
+		{"no name", context.Background(), `{}`, `{}`, "", `skill needs "name", the name of the skill to load`},
 		{"path as name", context.Background(), `{}`, `{"name": "../review"}`, "", "there is no skill"},
 		{"out of the skill", context.Background(), `{}`, `{"name": "review", "file": "../pirate/SKILL.md"}`, "", "not a file of the skill"},
 		{"absolute", context.Background(), `{}`, `{"name": "review", "file": "/etc/hosts"}`, "", "within the skill"},

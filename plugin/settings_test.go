@@ -99,7 +99,8 @@ func TestActivate(t *testing.T) {
 	}
 }
 
-// The tools of the tests: read takes settings, list_peers none.
+// The tools of the tests: read takes settings, list_peers none, and build is
+// for a peer only in a list of its own.
 func tools() []plugin.Tool {
 	type settings struct {
 		Allow []string `json:"allow"`
@@ -109,7 +110,9 @@ func tools() []plugin.Tool {
 			return func(context.Context, json.RawMessage) (string, error) { return "", nil }, nil
 		})
 	list := plugin.NewTool("list_peers", "List the peers.", nil, func(context.Context, struct{}) (string, error) { return "", nil })
-	return []plugin.Tool{read, list}
+	build := plugin.NewTool("build", "Build it.", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	build.Trusted = true
+	return []plugin.Tool{read, list, build}
 }
 
 var providers = []plugin.ContextProvider{{Name: "compact"}, {Name: "compact"}, {Name: "other"}}
@@ -136,13 +139,19 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("settings %+v", s)
 	}
 	owner, peers := s.Tools[plugin.ForOwner], s.Tools[plugin.ForPeers]
-	if !owner.All || owner.Unset || len(owner.Tools) != 6 {
+	if !owner.All || owner.Unset || len(owner.Tools) != 7 {
 		t.Fatalf("owner %+v", owner)
+	}
+	if build := owner.Tools[2]; build.Name != "build" || !build.Trusted || !build.Allowed {
+		t.Errorf("build for the owner %+v", build)
+	}
+	if build := s.Tools[plugin.ForPeers].Tools[2]; build.Name != "build" || !build.Trusted || build.Allowed {
+		t.Errorf("build for peers %+v", build)
 	}
 	if read := owner.Tools[0]; read.Name != "read" || !read.Allowed || !read.Listed || !read.Configurable || read.Settings != "" || read.Description != "Read a file. Really." {
 		t.Errorf("read for the owner %+v", read)
 	}
-	if config := owner.Tools[3]; config.Name != "get_config" || !config.OwnerOnly || !config.Allowed {
+	if config := owner.Tools[4]; config.Name != "get_config" || !config.OwnerOnly || !config.Allowed {
 		t.Errorf("get_config for the owner %+v", config)
 	}
 	if peers.All || peers.Unset {
@@ -244,6 +253,21 @@ func TestChange(t *testing.T) {
 		t.Errorf("bash: %q", holds)
 	}
 
+	// The changes of ouro the agent builds, or proposes; building is the
+	// default, which the configuration does not write.
+	if s := (plugin.Setting{Kind: plugin.SetImproves}).String(); s != "the changes of ouro" {
+		t.Errorf("logged as %q", s)
+	}
+	if change(plugin.Setting{Kind: plugin.SetImproves}); read().SelfImprove != config.SelfImprovePropose {
+		t.Errorf("proposing: %q", read().SelfImprove)
+	}
+	if s, _ := o.Settings(nil, nil); s.Improves {
+		t.Error("the settings say the agent builds")
+	}
+	if holds := change(plugin.Setting{Kind: plugin.SetImproves, On: true}); read().SelfImprove != "" || !strings.Contains(holds, "next message") {
+		t.Errorf("building: %q, %q", read().SelfImprove, holds)
+	}
+
 	if holds := change(plugin.Setting{Kind: plugin.SetPlugin, Name: "free"}); !slices.Equal(read().PluginsOff(), []string{"free"}) || !strings.Contains(holds, "once ouro starts anew") {
 		t.Errorf("plugin off: %v, %q", read().PluginsOff(), holds)
 	}
@@ -281,7 +305,7 @@ func TestChange(t *testing.T) {
 
 	// The tools of the owner: all, and then all but read.
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read"})
-	if got := entries(plugin.ForOwner); got != `["list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all but read: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
@@ -311,18 +335,18 @@ func TestChange(t *testing.T) {
 		t.Errorf("without settings before *: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all named: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools}) // off already
 	// Turned on where it is listed first, it stays listed once.
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("listed first: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"allow":["~/y"]}`})
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: "{}"})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("settings taken away: %s", got)
 	}
 
@@ -344,6 +368,7 @@ func TestChange(t *testing.T) {
 		t.Errorf("peers, none: %s", got)
 	}
 	refused(plugin.Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Name: "get_config", On: true}, "get_config is for your agent alone: no peer gets it")
+	refused(plugin.Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Name: "build", On: true}, "build is for a peer with a list of its own alone")
 	refused(plugin.Setting{Kind: plugin.SetTool, Name: "nope", On: true}, `there is no tool "nope"`)
 	refused(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: "allow ~/x"}, "the settings of a tool are a JSON object")
 	refused(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"deny": ["~/x"]}`}, "settings of the tool read")
@@ -377,5 +402,90 @@ func TestChange(t *testing.T) {
 	}
 	if strings.Contains(string(b), "~/share") || strings.Contains(string(b), "beta") {
 		t.Errorf("the log has a value:\n%s", b)
+	}
+}
+
+// The settings of a tool are shown one by one, as they are set.
+func TestSettingsOptions(t *testing.T) {
+	cfg := clitest.NodeConfig(clitest.Settings(t))
+	cfg.Tools = &config.Tools{A2A: []config.Entry{{Tool: "read", Settings: json.RawMessage(`{"allow":["~/share","~/x"]}`)}}}
+	o, _, _ := built(t, cfg)
+	s, err := o.Settings(tools(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Tools[plugin.ForPeers].Tools[0].Options; len(got) != 1 || got[0].Name != "allow" || got[0].Kind != plugin.OptionList ||
+		!got[0].Set || !slices.Equal(got[0].List, []string{"~/share", "~/x"}) {
+		t.Errorf("read for peers: %+v", got)
+	}
+	if got := s.Tools[plugin.ForOwner].Tools[0].Options; len(got) != 1 || got[0].Set || got[0].List != nil {
+		t.Errorf("read for the owner: %+v", got)
+	}
+	if got := s.Tools[plugin.ForOwner].Tools[1].Options; got != nil {
+		t.Errorf("list_peers takes no settings: %+v", got)
+	}
+}
+
+// A single peer gets a list of its own, starting as the one for peers, with
+// trusted tools in it by their name; without it, the one for peers applies.
+func TestPeerLists(t *testing.T) {
+	o, dir, _ := built(t, off())
+	const peer = "abcdefabcdef"
+	change := func(s plugin.Setting) {
+		t.Helper()
+		if _, err := o.Change(s, tools(), providers); err != nil {
+			t.Fatalf("%+v: %v", s, err)
+		}
+	}
+	lists := func() string {
+		t.Helper()
+		cfg, err := config.Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Tools == nil {
+			return "null"
+		}
+		b, _ := json.Marshal(cfg.Tools.Peers)
+		return string(b)
+	}
+	if _, err := o.Change(plugin.Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Peer: peer, Name: "read", On: true}, tools(), providers); err == nil {
+		t.Error("a tool for a peer without a list of its own")
+	}
+	if _, err := o.Change(plugin.Setting{Kind: plugin.SetPeerList, Peer: "luna", On: true}, tools(), providers); err == nil || !strings.Contains(err.Error(), "no ID of a node") {
+		t.Errorf("a peer by a name: %v", err)
+	}
+	change(plugin.Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Name: "list_peers", On: true})
+	change(plugin.Setting{Kind: plugin.SetPeerList, Peer: peer, On: true})
+	if got := lists(); got != `{"abcdefabcdef":["list_peers"]}` {
+		t.Fatalf("a list of its own: %s", got)
+	}
+	change(plugin.Setting{Kind: plugin.SetTool, Peer: peer, Name: "build", On: true})
+	change(plugin.Setting{Kind: plugin.SetToolSettings, Peer: peer, Name: "read", Value: `{"allow":["~/x"]}`})
+	change(plugin.Setting{Kind: plugin.SetAllTools, Peer: peer, On: true})
+	if got := lists(); got != `{"abcdefabcdef":["*","build",{"allow":["~/x"],"tool":"read"}]}` {
+		t.Fatalf("trusted, with settings, and all: %s", got)
+	}
+	s, err := o.Settings(tools(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Peers) != 1 || s.Peers[0].ID != peer || !s.Peers[0].Own {
+		t.Fatalf("peers %+v", s.Peers)
+	}
+	l := s.Peers[0].List
+	if read, build := l.Tools[0], l.Tools[2]; !l.All || !read.Allowed || !read.Options[0].Set || !build.Allowed || build.Trusted {
+		t.Errorf("the list of the peer %+v", l)
+	}
+	change(plugin.Setting{Kind: plugin.SetTool, Peer: peer, Name: "build"})
+	if s, _ = o.Settings(tools(), nil); s.Peers[0].List.Tools[2].Allowed {
+		t.Errorf("build refused: %+v", s.Peers[0].List.Tools[2])
+	}
+	change(plugin.Setting{Kind: plugin.SetPeerList, Peer: peer})
+	if got := lists(); got != "null" {
+		t.Errorf("no list of its own: %s", got)
+	}
+	if s, _ = o.Settings(tools(), nil); len(s.Peers) != 0 {
+		t.Errorf("peers %+v", s.Peers)
 	}
 }

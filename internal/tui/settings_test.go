@@ -59,6 +59,7 @@ func openSettings(t *testing.T, s Settings) (*Model, *fakeBackend) {
 // action called name.
 func pick(t *testing.T, m *Model, section, label, name string) {
 	t.Helper()
+	m.config.peer, m.config.tool, m.config.back = "", "", nil
 	for i, s := range sections {
 		if s == section {
 			m.config.category, m.config.opened = i, true
@@ -83,6 +84,9 @@ func pick(t *testing.T, m *Model, section, label, name string) {
 	t.Fatalf("no row %s %s", section, label)
 }
 
+// dialogView is the settings dialog alone, without the chat behind it.
+func dialogView(m *Model) string { return ansi.Strip(m.config.view(m)) }
+
 // do runs the action selected and what follows it.
 func do(m *Model) { deliver(m, press(m, "enter")) }
 
@@ -104,7 +108,7 @@ func TestSettingsShow(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"│ Settings", "› The node", "the name, the description, the access to the LLM, the model", "  The agents", "  Plugins",
+		"│ Settings", "› The node", contents[nodeSection], "  The agents", "  Plugins",
 		"  Tools of your agent", "  Tools for peers", "what your agent may do when a peer asks it",
 		"  Protected paths", "the paths no tool for files touches", "↑↓ select · enter open · esc back",
 	} {
@@ -118,8 +122,8 @@ func TestSettingsShow(t *testing.T) {
 	press(m, "enter")
 	view = ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"│ Settings › The node", "The access and the model are changed with the setup and /model.",
-		"› Name", "alpha", "Example · https://api.example/v1", "↑↓ select · ←→ choose · enter do · esc categories",
+		"│ Settings › The node", "The access and the models are changed with the setup and /model, the effort with /effort.",
+		"› Name", "alpha", "Example · https://api.example/v1", "↑↓ select · ←→ choose · enter do · esc back",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("lacks %q:\n%s", want, view)
@@ -141,7 +145,7 @@ func TestSettingsShow(t *testing.T) {
 		{ownerSection, "All tools", "yes, the default", "every tool, also those of plugins turned on later"},
 		{ownerSection, "read", "allowed, as all tools are", "Read a text file."},
 		{peersSection, "All tools", "no", "every tool but those for your agent alone, also those of plugins turned on later"},
-		{peersSection, "read", "allowed", `settings {"allow":["~/share"]} · Read a text file.`},
+		{peersSection, "read", "allowed", "Read a text file."},
 		{peersSection, "list_peers", "not allowed", "List the peers."},
 		{peersSection, "get_config", "for your agent alone", "Show the configuration."},
 		{protectedSection, "The default", "in use", "the usual places of keys and credentials"},
@@ -200,6 +204,18 @@ func TestSettingsShow(t *testing.T) {
 // ForPeersIndex is where the tools for peers are in Settings.Tools.
 func ForPeersIndex() int { return int(plugin.ForPeers) }
 
+// A tool that a peer gets only from a list of its own in tools.peers is shown
+// for peers as that, and cannot be allowed for all of them.
+func TestSettingsShowATrustedTool(t *testing.T) {
+	s := someSettings()
+	peers := &s.Tools[ForPeersIndex()]
+	peers.Tools = append(peers.Tools, plugin.ToolState{Name: "bash", Description: "Run a command.", Trusted: true})
+	m, _ := openSettings(t, s)
+	if r := value(t, m, peersSection, "bash"); r.value != "for a peer with a list of its own alone" || len(r.actions) != 0 {
+		t.Errorf("bash for peers: %q, %d actions", r.value, len(r.actions))
+	}
+}
+
 // Every action makes its change, the footer says from when it holds, and the
 // configuration is read anew.
 func TestSettingsChange(t *testing.T) {
@@ -211,6 +227,7 @@ func TestSettingsChange(t *testing.T) {
 		{agentsSection, "Context provider", "compact", Setting{Kind: plugin.SetContextProvider, Value: "compact"}},
 		{agentsSection, "Context provider", "none", Setting{Kind: plugin.SetContextProvider}},
 		{agentsSection, "Bash without a sandbox", "allow", Setting{Kind: plugin.SetBashWithoutSandbox, On: true}},
+		{agentsSection, "Changes of ouro", "build", Setting{Kind: plugin.SetImproves, On: true}},
 		{pluginsSection, "history", "turn off", Setting{Kind: plugin.SetPlugin, Name: "history"}},
 		{pluginsSection, "tailscale", "turn on", Setting{Kind: plugin.SetPlugin, Name: "tailscale", On: true}},
 		{pluginsSection, "old", "forget", Setting{Kind: plugin.SetPlugin, Name: "old", On: true}},
@@ -232,15 +249,19 @@ func TestSettingsChange(t *testing.T) {
 	}
 
 	s := someSettings()
-	s.BashWithoutSandbox, s.ProtectedDefault = true, false
+	s.BashWithoutSandbox, s.ProtectedDefault, s.Improves = true, false, true
 	s.Tools[ForPeersIndex()].All = true
 	b.settings = s
 	deliver(m, m.config.reload(m))
+	if r := value(t, m, agentsSection, "Changes of ouro"); r.value != "builds them, the default" {
+		t.Errorf("changes of ouro: %q", r.value)
+	}
 	for _, tt := range []struct {
 		section, label, action string
 		want                   Setting
 	}{
 		{agentsSection, "Bash without a sandbox", "refuse", Setting{Kind: plugin.SetBashWithoutSandbox}},
+		{agentsSection, "Changes of ouro", "propose", Setting{Kind: plugin.SetImproves}},
 		{peersSection, "All tools", "turn off", Setting{Kind: plugin.SetAllTools, For: plugin.ForPeers}},
 		{protectedSection, "The default", "use it", Setting{Kind: plugin.SetProtected, On: true}},
 	} {
@@ -290,8 +311,6 @@ func TestSettingsEdit(t *testing.T) {
 		section, label, action, typed string
 		want                          Setting
 	}{
-		{peersSection, "read", "settings", `{"allow": ["~/x"]}`, Setting{Kind: plugin.SetToolSettings, For: plugin.ForPeers, Name: "read", Value: `{"allow": ["~/x"]}`}},
-		{ownerSection, "read", "settings", "", Setting{Kind: plugin.SetToolSettings, Name: "read", Value: ""}},
 		{protectedSection, "Add a path", "change", "~/keys", Setting{Kind: plugin.SetProtected, Value: "~/.ssh\n~/.gnupg\n~/keys"}},
 		{nodeSection, "Description", "change", "knows the way", Setting{Kind: plugin.SetDescription, Value: "knows the way"}},
 	} {
@@ -310,15 +329,6 @@ func TestSettingsEdit(t *testing.T) {
 		t.Errorf("the description: %q", m.config.input.Value())
 	}
 	press(m, "esc")
-	pick(t, m, ownerSection, "read", "settings")
-	if press(m, "enter"); m.config.input.Value() != "{}" {
-		t.Errorf("settings of a tool without any: %q", m.config.input.Value())
-	}
-	press(m, "esc")
-	pick(t, m, peersSection, "read", "settings")
-	if press(m, "enter"); m.config.input.Value() != `{"allow":["~/share"]}` {
-		t.Errorf("settings of a tool: %q", m.config.input.Value())
-	}
 }
 
 // The keys move between categories, between the lines of one and between
@@ -358,7 +368,7 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.config.shown(m)) - 1 {
 		press(m, "down")
 	}
-	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 5 {
+	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 9 {
 		t.Errorf("below the last: %d of %d", m.config.sel, len(m.config.shown(m)))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
@@ -421,18 +431,18 @@ func TestSettingsScrollAndFail(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 11})
 	m.config.category = len(sections) - 1
-	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "› Protected paths") || strings.Contains(view, "The node") {
+	view := dialogView(m)
+	if !strings.Contains(view, "› Protected paths") || strings.Contains(view, "The node") || !strings.Contains(view, "↑ more") {
 		t.Errorf("the categories scrolled:\n%s", view)
 	}
 	pick(t, m, protectedSection, "The default", "")
-	view = ansi.Strip(m.View().Content)
+	view = dialogView(m)
 	if !strings.Contains(view, "› The default") || strings.Contains(view, "~/.ssh") {
 		t.Errorf("scrolled:\n%s", view)
 	}
 	pick(t, m, nodeSection, "Name", "change")
 	press(m, "enter")
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› Name") || !strings.Contains(view, "enter saves") {
+	if view := dialogView(m); !strings.Contains(view, "› Name") || !strings.Contains(view, "enter saves") {
 		t.Errorf("editing on a small screen:\n%s", view)
 	}
 
@@ -459,9 +469,9 @@ func TestSettingsScrollAndFail(t *testing.T) {
 // when it would leave it.
 func TestSettingsNoJump(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	pick(t, m, nodeSection, "Name", "change")
-	shown := func() string { return ansi.Strip(m.View().Content) }
+	shown := func() string { return dialogView(m) }
 	where := func(what string) int {
 		t.Helper()
 		for i, l := range strings.Split(shown(), "\n") {
@@ -564,15 +574,15 @@ func TestSettingsFitTheBox(t *testing.T) {
 	}
 	press(m, "enter")
 	m.config.input.CursorEnd()
-	view = ansi.Strip(m.View().Content)
+	view = dialogView(m)
 	lines := strings.Split(view, "\n")
 	input := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "│ > ") })
-	if input < 0 || strings.Trim(lines[input+1], " │") != "" {
+	if input < 0 || !strings.HasPrefix(lines[input+1], "╰") {
 		t.Errorf("the input takes more than its line:\n%s", view)
 	}
 	press(m, "esc")
 	pick(t, m, peersSection, "list_peers", "")
-	for _, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+	for _, l := range strings.Split(dialogView(m), "\n") {
 		if regexp.MustCompile(`\bw\d\d\b`).MatchString(l) && !strings.HasPrefix(l, "│     w") {
 			t.Errorf("a line of the note is not indented: %q", l)
 		}
@@ -595,9 +605,254 @@ func TestSettingsWindowMovesAtTheEdge(t *testing.T) {
 	}
 	m.config.top = 0
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: h})
-	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-	box := lines[:len(lines)-1] // the footer
-	if m.config.top != 0 || !strings.Contains(box[len(box)-2], "[open /setup]") {
+	box := strings.Split(dialogView(m), "\n")
+	if m.config.top != 0 || !strings.Contains(box[len(box)-3], "[open /setup]") || !strings.Contains(box[len(box)-2], "↓ more") {
 		t.Fatalf("at a height of %d, line %d is at the top:\n%s", h, m.config.top, strings.Join(box, "\n"))
+	}
+}
+
+// withOptions are someSettings where read has settings one by one: allow,
+// not set, and deny, set; and a peer with a list of its own and one without.
+func withOptions() Settings {
+	s := someSettings()
+	options := []plugin.ToolOption{
+		{Option: plugin.Option{Name: "allow", Kind: plugin.OptionList, About: "the paths it may go to", Unset: "everything"}},
+		{Option: plugin.Option{Name: "deny", Kind: plugin.OptionList, About: "paths it does not go to", Unset: "none"}, Set: true, List: []string{"~/a", "~/b"}},
+		{Option: plugin.Option{Name: "network", Kind: plugin.OptionSwitch, About: "it reaches other hosts", Unset: "no"}},
+		{Option: plugin.Option{Name: "times", Kind: plugin.OptionNumber, About: "how often"}, Set: true, Value: "2"},
+	}
+	read := &s.Tools[plugin.ForOwner].Tools[0]
+	read.Options, read.Settings = options, `{"deny":["~/a","~/b"],"times":2}`
+	own := s.Tools[plugin.ForPeers]
+	own.Tools = append(slices.Clone(own.Tools), plugin.ToolState{Name: "bash", Description: "Run a command.", Allowed: true, Listed: true})
+	s.Peers = []plugin.PeerTools{
+		{ID: "abcdefabcdef", Name: "luna", Own: true, List: own},
+		{ID: "123456123456", Name: "sol", List: s.Tools[plugin.ForPeers]},
+	}
+	return s
+}
+
+// A tool shows its settings below its line, each by its name, and what holds
+// while one is not set.
+func TestSettingsShowTheSettingsOfATool(t *testing.T) {
+	m, _ := openSettings(t, withOptions())
+	pick(t, m, ownerSection, "read", "")
+	view := dialogView(m)
+	for _, want := range []string{"• allow    everything (default)", "• deny     ~/a, ~/b", "• network  no (default)", "• times    2", "[refuse]  settings"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("lacks %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "{") {
+		t.Errorf("the settings are shown as JSON:\n%s", view)
+	}
+	// A tool that is not allowed has no settings to show.
+	if r := value(t, m, peersSection, "list_peers"); r.details != nil || len(r.actions) != 1 {
+		t.Errorf("list_peers for peers: %+v", r)
+	}
+}
+
+// The settings of a tool open on a level of their own, where each is set by
+// itself; esc goes back to the tool.
+func TestSettingsOfATool(t *testing.T) {
+	m, b := openSettings(t, withOptions())
+	pick(t, m, ownerSection, "read", "settings")
+	do(m)
+	if m.config.tool != "read" {
+		t.Fatalf("not opened: %q", m.config.tool)
+	}
+	view := dialogView(m)
+	for _, want := range []string{"Settings › Tools of your agent › read", "› allow    everything (default)", "the paths it may go to", "· ~/a", "· ~/b", "As JSON"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("lacks %q:\n%s", want, view)
+		}
+	}
+	at := func(label, action string) {
+		t.Helper()
+		for i, r := range m.config.shown(m) {
+			if r.label != label {
+				continue
+			}
+			for j, a := range r.actions {
+				if a.name == action {
+					m.config.sel, m.choice = i, j
+					return
+				}
+			}
+		}
+		t.Fatalf("no %s %s in %+v", label, action, m.config.shown(m))
+	}
+	setting := func(value string) Setting {
+		return Setting{Kind: plugin.SetToolSettings, Name: "read", Value: value}
+	}
+	for _, tt := range []struct {
+		label, action, typed string
+		want                 Setting
+	}{
+		{"allow", "add", " ~/share ", setting(`{"allow":["~/share"],"deny":["~/a","~/b"],"times":2}`)},
+		{"allow", "set to none", "", setting(`{"allow":[],"deny":["~/a","~/b"],"times":2}`)},
+		{"deny", "add", "~/c", setting(`{"deny":["~/a","~/b","~/c"],"times":2}`)},
+		{"deny", "reset", "", setting(`{"times":2}`)},
+		{"~/a", "remove", "", setting(`{"deny":["~/b"],"times":2}`)},
+		{"network", "turn on", "", setting(`{"deny":["~/a","~/b"],"network":true,"times":2}`)},
+		{"times", "change", "3", setting(`{"deny":["~/a","~/b"],"times":3}`)},
+		{"times", "change", "often", setting(`{"deny":["~/a","~/b"],"times":"often"}`)},
+		{"As JSON", "change", "{}", setting("{}")},
+	} {
+		b.changes = nil
+		at(tt.label, tt.action)
+		cmd := press(m, "enter")
+		if m.config.editing != nil {
+			m.config.input.SetValue(tt.typed)
+			cmd = press(m, "enter")
+		}
+		deliver(m, cmd)
+		if len(b.changes) != 1 || b.changes[0] != tt.want {
+			t.Errorf("%s %s: %+v", tt.label, tt.action, b.changes)
+		}
+		if m.config.tool != "read" {
+			t.Fatalf("%s %s left the settings of the tool", tt.label, tt.action)
+		}
+	}
+	// The last setting reset takes the settings away.
+	s := withOptions()
+	read := &s.Tools[plugin.ForOwner].Tools[0]
+	read.Options = read.Options[3:]
+	read.Settings = `{"times":2}`
+	b.settings, b.changes = s, nil
+	deliver(m, m.config.reload(m))
+	at("times", "reset")
+	do(m)
+	if len(b.changes) != 1 || b.changes[0] != setting("") {
+		t.Errorf("reset the last: %+v", b.changes)
+	}
+	if press(m, "esc"); m.config.tool != "" || m.config.selectedRow(m).label != "read" {
+		t.Errorf("back at %q, %q", m.config.tool, m.config.selectedRow(m).label)
+	}
+	// A tool that is no more closes its settings.
+	pick(t, m, ownerSection, "read", "settings")
+	do(m)
+	b.settings = someSettings()
+	b.settings.Tools[plugin.ForOwner].Tools = b.settings.Tools[plugin.ForOwner].Tools[1:]
+	deliver(m, m.config.reload(m))
+	if m.config.tool != "" || !m.config.opened {
+		t.Errorf("still open: %q", m.config.tool)
+	}
+}
+
+// A single peer gets a list of its own, which opens like a category and
+// whose changes are of that peer alone.
+func TestSettingsSinglePeers(t *testing.T) {
+	m, b := openSettings(t, withOptions())
+	if r := value(t, m, singleSection, "luna"); r.value != "a list of its own: 2 tools" || r.note != "node abcdefabcdef" {
+		t.Errorf("luna: %+v", r)
+	}
+	if r := value(t, m, singleSection, "sol"); r.value != "the tools for peers" {
+		t.Errorf("sol: %+v", r)
+	}
+	for _, tt := range []struct {
+		label, action string
+		want          Setting
+	}{
+		{"luna", "remove the list", Setting{Kind: plugin.SetPeerList, Peer: "abcdefabcdef"}},
+		{"sol", "give it a list", Setting{Kind: plugin.SetPeerList, Peer: "123456123456", On: true}},
+	} {
+		b.changes = nil
+		pick(t, m, singleSection, tt.label, tt.action)
+		do(m)
+		if len(b.changes) != 1 || b.changes[0] != tt.want {
+			t.Errorf("%s %s: %+v", tt.label, tt.action, b.changes)
+		}
+	}
+	b.changes = nil
+	pick(t, m, singleSection, "Add a peer", "by its ID")
+	press(m, "enter")
+	m.config.input.SetValue(" 0123456789ab ")
+	if do(m); len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetPeerList, Peer: "0123456789ab", On: true}) {
+		t.Errorf("added: %+v", b.changes)
+	}
+
+	pick(t, m, singleSection, "luna", "open")
+	do(m)
+	if view := dialogView(m); !strings.Contains(view, "Settings › Tools of single peers › luna") || !strings.Contains(view, "bash") {
+		t.Errorf("the list of luna:\n%s", view)
+	}
+	for _, tt := range []struct {
+		label string
+		want  Setting
+	}{
+		{"bash", Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Peer: "abcdefabcdef", Name: "bash"}},
+		{"All tools", Setting{Kind: plugin.SetAllTools, For: plugin.ForPeers, Peer: "abcdefabcdef", On: true}},
+	} {
+		b.changes = nil
+		for i, r := range m.config.shown(m) {
+			if r.label == tt.label {
+				m.config.sel, m.choice = i, 0
+			}
+		}
+		if do(m); len(b.changes) != 1 || b.changes[0] != tt.want {
+			t.Errorf("%s: %+v", tt.label, b.changes)
+		}
+	}
+	if press(m, "esc"); m.config.peer != "" || m.config.selectedRow(m).label != "luna" {
+		t.Errorf("back at %q, %q", m.config.peer, m.config.selectedRow(m).label)
+	}
+	if press(m, "esc"); m.config.opened {
+		t.Error("esc in a category stays in it")
+	}
+}
+
+// The node shows the model for peers, the fallbacks, the effort and the
+// debug mode, which open or turn from here.
+func TestSettingsModelRows(t *testing.T) {
+	m, b := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	b.settings, b.done = someSettings(), "saved"
+	m.status.PeerModel, m.status.Effort = "small", "high" // as the status says
+	b.fallbacks = []Fallback{{Access: "a", Model: "one"}, {Access: "b", Model: "two"}}
+	deliver(m, run(m, "/settings"))
+	for label, want := range map[string]string{"Model for peers": "small", "Fallbacks": "one → two", "Effort": "high", "Debug mode": "off"} {
+		pick(t, m, nodeSection, label, "")
+		if r := m.config.selectedRow(m); r.value != want {
+			t.Errorf("%s: %q", label, r.value)
+		}
+	}
+	pick(t, m, nodeSection, "Debug mode", "turn on")
+	if do(m); !slices.Equal(b.debug, []bool{true}) {
+		t.Errorf("debug: %v", b.debug)
+	}
+}
+
+// A tool that is refused and allowed again gets its settings back: it does
+// not go everywhere they kept it from.
+func TestSettingsOfARefusedTool(t *testing.T) {
+	m, b := openSettings(t, someSettings())
+	pick(t, m, peersSection, "read", "refuse")
+	do(m)
+	if len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Name: "read"}) {
+		t.Fatalf("refused: %+v", b.changes)
+	}
+	s := someSettings()
+	peers := &s.Tools[ForPeersIndex()]
+	for i := range peers.Tools {
+		if peers.Tools[i].Name == "read" {
+			peers.Tools[i].Allowed, peers.Tools[i].Settings = false, ""
+		}
+	}
+	b.settings = s
+	deliver(m, m.config.reload(m))
+	b.changes = nil
+	pick(t, m, peersSection, "read", "allow")
+	do(m)
+	if len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetToolSettings, For: plugin.ForPeers, Name: "read", Value: `{"allow":["~/share"]}`}) {
+		t.Fatalf("allowed again: %+v", b.changes)
+	}
+	// Once more it is allowed as a tool without settings.
+	deliver(m, m.config.reload(m))
+	b.changes = nil
+	pick(t, m, peersSection, "read", "allow")
+	do(m)
+	if len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Name: "read", On: true}) {
+		t.Fatalf("allowed without settings: %+v", b.changes)
 	}
 }
