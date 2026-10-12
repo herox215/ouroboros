@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"strings"
 
+	"ouroboros/internal/config"
 	"ouroboros/internal/identity"
+	"ouroboros/internal/printable"
 )
 
 // Client talks to another node. Requests are signed with Identity so the peer
@@ -298,6 +300,8 @@ func fetchCard(ctx context.Context, baseURL string, p pin) (AgentCard, string, e
 	if err := json.Unmarshal(body, &card); err != nil {
 		return card, "", fmt.Errorf("a2a: invalid agent card: %w", err)
 	}
+	// What a node says of itself is shown in terminals, and to the LLM.
+	card.Name, card.Description = printable.Line(card.Name, config.MaxName), printable.Line(card.Description, config.MaxDescription)
 	if card.Name == "" {
 		return card, "", errors.New("a2a: agent card has no name")
 	}

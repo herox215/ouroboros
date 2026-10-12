@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"ouroboros/internal/config"
 	"ouroboros/internal/identity"
+	"ouroboros/internal/printable"
 )
 
 const maxBodyBytes = 1 << 20
@@ -335,8 +337,10 @@ func (s *Server) admit(from Caller, peer Peer) *Error {
 	if !s.strangers.allow(from.host, time.Now()) {
 		return &Error{CodeTooManyRequests, "too many connection requests from your address, try again later"}
 	}
-	// A request that was not recorded is not pending: nobody would decide on it.
-	if err := s.Trust.AddIncoming(from.PublicKey, peer.Name, peer.Model, from.Addr); err != nil {
+	// A request that was not recorded is not pending: nobody would decide on
+	// it. What a stranger calls itself is shown to the owner, as text.
+	name, model := printable.Line(peer.Name, config.MaxName), printable.Line(peer.Model, config.MaxName)
+	if err := s.Trust.AddIncoming(from.PublicKey, name, model, from.Addr); err != nil {
 		return s.trustFailed(from, err)
 	}
 	return &Error{CodePending, "connection request is waiting for approval"}
@@ -350,7 +354,7 @@ func (s *Server) accept(_ context.Context, from Caller, params json.RawMessage) 
 	}
 	asked, err := s.Trust.HadOutgoing(from.PublicKey)
 	if err == nil && asked {
-		err = s.Trust.AddTrusted(from.PublicKey, p.Peer.Name, p.Peer.Model)
+		err = s.Trust.AddTrusted(from.PublicKey, printable.Line(p.Peer.Name, config.MaxName), printable.Line(p.Peer.Model, config.MaxName))
 	}
 	if err != nil {
 		return nil, s.trustFailed(from, err)

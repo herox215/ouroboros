@@ -92,6 +92,17 @@ func TestDiscoverFindsNode(t *testing.T) {
 	}
 }
 
+// What a node says of itself is found fit to be shown in a terminal: a
+// name that would steer it is not.
+func TestDiscoverShowsNamesAsText(t *testing.T) {
+	self := node("\x1b]0;pwned\x07evil\nnode")
+	self.Model = "\x1b[2Jgpt"
+	nodes, err := Discover(context.Background(), serve(t, 0, self), wait)
+	if err != nil || len(nodes) != 1 || nodes[0].Name != "]0;pwnedevil node" || nodes[0].Model != "[2Jgpt" {
+		t.Fatalf("got %+v, %v", nodes, err)
+	}
+}
+
 func TestDiscoverNothing(t *testing.T) {
 	conn, _ := net.ListenUDP("udp4", nil) // reserve a port nobody answers on
 	port := conn.LocalAddr().(*net.UDPAddr).Port

@@ -208,6 +208,18 @@ func TestRequestWithoutMessage(t *testing.T) {
 	if len(d.Incoming) != 1 || d.Incoming[0].PublicKey != bob.id.Public() || d.Incoming[0].Name != "node" || d.Incoming[0].Addr == "" {
 		t.Fatalf("alice incoming: %+v", d.Incoming)
 	}
+	// What a stranger calls itself is kept as text: nothing in it steers the
+	// terminal of the owner.
+	dave := newNode(t, "dave")
+	sly := dave.client()
+	sly.Name = "\x1b]0;pwned\x07carol\nnode"
+	if err := sly.Request(ctx, alice.srv.URL, alice.id.Public()); !IsPending(err) {
+		t.Fatalf("a stranger with a name that steers: %v", err)
+	}
+	if d, _ := alice.trust.Snapshot(); len(d.Incoming) != 2 || d.Incoming[1].Name != "]0;pwnedcarol node" {
+		t.Fatalf("alice incoming: %+v", d.Incoming)
+	}
+	alice.trust.Reject(dave.id.Public())
 
 	// Once alice trusts bob, it says so, and nothing waits any more.
 	alice.trust.Approve(bob.id.Public())

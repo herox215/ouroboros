@@ -21,7 +21,9 @@ import (
 	"syscall"
 	"time"
 
+	"ouroboros/internal/config"
 	"ouroboros/internal/identity"
+	"ouroboros/internal/printable"
 )
 
 const probe = "OURO?"
@@ -319,6 +321,8 @@ func collect(conn *net.UDPConn, answers chan<- Node) error {
 			continue
 		}
 		node.Host = addr.IP.String()
+		// What a node says of itself is shown in terminals.
+		node.Name, node.Model = printable.Line(node.Name, config.MaxName), printable.Line(node.Model, config.MaxName)
 		answers <- node
 	}
 }
