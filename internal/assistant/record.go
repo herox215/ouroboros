@@ -189,6 +189,9 @@ func (r *record) call(c agent.Call) {
 		}
 	}
 	var cost []string
+	if c.Retried != "" {
+		cost = append(cost, "asked again, as it broke off: "+r.text(c.Retried))
+	}
 	if c.Via != "" {
 		cost = append(cost, "by the fallback "+r.plain(c.Via)+", as the one before it said "+r.text(c.Instead))
 	}

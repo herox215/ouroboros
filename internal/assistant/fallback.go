@@ -107,11 +107,15 @@ func (f *fallbacks) stick(i int, why string) {
 // withFallbacks returns first, the LLM of the access of cfg, with the
 // fallbacks cfg lists behind it. A fallback whose access is gone, or whose
 // provider is not part of this ouro, is left out.
+//
+// Every access asks again when a call broke off on its way, before the next
+// one is asked: see retrying.
 func (b Builder) withFallbacks(first agent.LLM, cfg config.Config) agent.LLM {
+	first = retrying{first, wait}
 	links := []link{{first, cfg.Model, b.label(cfg.Access)}}
 	for _, f := range cfg.Fallbacks {
 		if llm, err := b.LLM(f.Access); err == nil {
-			links = append(links, link{llm, f.Model, b.label(f.Access)})
+			links = append(links, link{retrying{llm, wait}, f.Model, b.label(f.Access)})
 		}
 	}
 	if len(links) == 1 {
@@ -138,4 +142,48 @@ func (b Builder) fallbacksOf(cfg config.Config) string {
 	}
 	told, _ := json.Marshal(list) // texts: cannot fail
 	return string(told)
+}
+
+// retryAfter are how long an access waits before it asks again, once for
+// each: a call that broke off on its way is likely answered when it is
+// asked again, see openai.IsTransient. A connection a gateway closed is
+// open again at once; one that is overloaded needs a moment.
+var retryAfter = []time.Duration{time.Second, 4 * time.Second}
+
+// retrying is an LLM that asks again when a call broke off on its way,
+// after each of retryAfter, as long as ctx goes on. An answer says why it
+// was asked again, see openai.Message; the error of a call that was never
+// answered says how often it was asked.
+type retrying struct {
+	agent.LLM
+	wait func(ctx context.Context, d time.Duration) error
+}
+
+func (r retrying) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+	msg, err := r.LLM.Complete(ctx, model, msgs, tools)
+	var why []string
+	for _, d := range retryAfter {
+		if !openai.IsTransient(err) || r.wait(ctx, d) != nil {
+			break
+		}
+		why = append(why, err.Error())
+		msg, err = r.LLM.Complete(ctx, model, msgs, tools)
+	}
+	if err != nil && len(why) > 0 {
+		return msg, fmt.Errorf("%w (asked %d times, as it broke off)", err, len(why)+1)
+	}
+	msg.Retried = append(why, msg.Retried...)
+	return msg, err
+}
+
+// wait waits for d, or until ctx ends, with its error.
+func wait(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

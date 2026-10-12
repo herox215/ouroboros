@@ -221,7 +221,8 @@ func TestFallbacksOf(t *testing.T) {
 	}
 	first := &accessLLM{}
 	b := Builder{LLM: func(string) (agent.LLM, error) { return nil, errors.New("gone") }}
-	if got := b.withFallbacks(first, cfg); got != agent.LLM(first) {
+	// The access asks again when a call broke off, see retrying.
+	if got, ok := b.withFallbacks(first, cfg).(retrying); !ok || got.LLM != agent.LLM(first) {
 		t.Fatalf("without a fallback that is there: %T", got)
 	}
 	b.LLM = func(access string) (agent.LLM, error) { return &accessLLM{name: access}, nil }
@@ -232,5 +233,34 @@ func TestFallbacksOf(t *testing.T) {
 	}
 	if !slices.Equal(links, []string{"big of z", "m of a", "n of b"}) || f.now().IsZero() {
 		t.Fatalf("links %v", links)
+	}
+	for _, l := range f.links {
+		if _, ok := l.llm.(retrying); !ok {
+			t.Errorf("%s of %s does not ask again: %T", l.model, l.label, l.llm)
+		}
+	}
+}
+
+// A conversation is named through the fallbacks too, when the access cannot
+// answer for now.
+func TestTitleFallsBack(t *testing.T) {
+	llms := map[string]*accessLLM{"a": {name: "A", err: errDown}, "b": {name: "B"}}
+	cfg := config.Config{Access: "a", Model: "big", Name: "me", Fallbacks: []config.Fallback{{Access: "b", Model: "mid"}}}
+	// An access that is down is not asked again here.
+	old := retryAfter
+	retryAfter = nil
+	defer func() { retryAfter = old }()
+	a := New(func() (config.Config, error) { return cfg, nil }, Builder{
+		LLM:   func(access string) (agent.LLM, error) { return llms[access], nil },
+		Tools: func() []agent.Tool { return nil },
+	}, discard)
+	hi := []openai.Message{{Role: "user", Content: "plan the garden"}}
+	if got, err := a.Title(context.Background(), hi); err != nil || got != "mid of B" {
+		t.Fatalf("title %q, %v", got, err)
+	}
+	// One that is asked wrong is told as it is.
+	llms["a"].err = errAsked
+	if _, err := a.Title(context.Background(), hi); err != errAsked {
+		t.Fatalf("asked wrong: %v", err)
 	}
 }

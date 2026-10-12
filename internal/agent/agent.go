@@ -18,6 +18,9 @@ import (
 	"ouroboros/internal/openai"
 )
 
+// emptyNote is what a model that answered with nothing at all is told.
+const emptyNote = "[Your last message was empty, which is no answer: go on with the task, or answer with what is done and what is not.]"
+
 const (
 	maxContexts = 256               // conversations kept in memory
 	maxRounds   = 100               // LLM calls per answer; stops an agent that keeps calling tools
@@ -105,6 +108,9 @@ type Call struct {
 	// Via is what answered instead of the access and the model of the agent,
 	// and Instead why those could not: see openai.Message.
 	Via, Instead string
+	// Retried is why the call was asked again, each time, see
+	// openai.Message; "" if it was not.
+	Retried string
 	// Effort is what the API took of the effort, see openai.Message.
 	Effort    openai.Took
 	Done      bool
@@ -413,6 +419,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			contributions = append(contributions, copyMessages(extra)...)
 		}
 	}
+	nudged := false // an empty message was answered with emptyNote
 	for round := range maxRounds {
 		// An answer that was stopped while a tool ran asks the LLM no more.
 		if err := ctx.Err(); err != nil {
@@ -449,7 +456,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
 		if observe.Call != nil {
-			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Via: msg.Via, Instead: msg.Instead, Effort: msg.Effort, Done: true, Took: time.Since(start),
+			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Via: msg.Via, Instead: msg.Instead, Retried: strings.Join(msg.Retried, "; "), Effort: msg.Effort, Done: true, Took: time.Since(start),
 				ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
 		}
 		if err != nil {
@@ -459,6 +466,13 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		history = append(history, msg)
 		if err := emit(msg); err != nil {
 			return abandon(err)
+		}
+		// A model that says nothing at all, as small ones do after a long
+		// result, is asked once to go on: nothing is no answer.
+		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged {
+			nudged = true
+			history = append(history, openai.Message{Role: "user", Content: emptyNote})
+			continue
 		}
 		if len(msg.ToolCalls) == 0 {
 			a.memory.remember(contextID, history)
@@ -582,7 +596,9 @@ func notes(round, spent int) string {
 	if spent > Budget {
 		notes = append(notes, gathered(spent))
 	}
-	if round >= askRounds && round < warnRounds {
+	// Once: an agent that knows what to do and does it, as one that builds
+	// what it needs, is not kept from it with every call.
+	if round == askRounds {
 		notes = append(notes, searching(round))
 	}
 	if round >= warnRounds {
@@ -600,13 +616,13 @@ func remaining(round int) string {
 		round+1, maxRounds)
 }
 
-// searching is what the LLM is told when round, counted from 0, is askRounds
-// or later.
+// searching is what the LLM is told when round, counted from 0, is
+// askRounds.
 func searching(round int) string {
 	return fmt.Sprintf("[Not from the user: this is call %d of the LLM for this answer. "+
-		"If you have not yet found what you are looking for, stop searching: "+
+		"If you are still looking for what the user means, stop searching: "+
 		"tell the user in a few words what you checked and what you found, and ask what exactly they mean. "+
-		"If you have found it, go on and finish.]", round+1)
+		"If you know what to do, go on until it is done.]", round+1)
 }
 
 // repeated returns the result of call when it is the same as each of the

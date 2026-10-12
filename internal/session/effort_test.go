@@ -143,7 +143,7 @@ func TestEffortIsKept(t *testing.T) {
 	asked(t, s, "s1", "again")
 	asked(t, s, "empty", "first")
 	// The agent is told that ouro started anew along with the first message.
-	if got := e.all(); !strings.HasPrefix(got, "one:high [Not from the owner") || !strings.HasSuffix(got, "again:high first:") {
+	if got := e.all(); !strings.HasPrefix(got, "one:high [A note of ouro") || !strings.HasSuffix(got, "again:high first:") {
 		t.Fatalf("efforts %q", got)
 	}
 

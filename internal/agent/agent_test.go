@@ -277,12 +277,12 @@ func TestEndlessToolCallsAreStopped(t *testing.T) {
 	if len(h) != 2+2*maxRounds || h[0].Content != "go" || h[len(h)-1].Content != abandoned {
 		t.Fatalf("an abandoned answer is remembered as far as it got: %d messages", len(h))
 	}
-	// From askRounds on, the calls are told to ask rather than search on,
-	// and the last ones how many there are, after the result of the tool.
+	// At askRounds the call is told once to ask rather than search on, and
+	// the last ones how many there are, after the result of the tool.
 	for i, last := range llm.lasts {
 		told := strings.Contains(last, fmt.Sprintf("this is call %d of at most %d", i+1, maxRounds))
-		asked := strings.Contains(last, fmt.Sprintf("this is call %d of the LLM for this answer. If you have not yet found", i+1))
-		if told != (i >= warnRounds) || asked != (i >= askRounds && i < warnRounds) || strings.Contains(last, "Not from the user") != (told || asked) {
+		asked := strings.Contains(last, fmt.Sprintf("this is call %d of the LLM for this answer. If you are still looking", i+1))
+		if told != (i >= warnRounds) || asked != (i == askRounds) || strings.Contains(last, "Not from the user") != (told || asked) {
 			t.Fatalf("call %d: %q", i+1, last)
 		}
 	}
@@ -875,5 +875,35 @@ func TestSteeringEndsARowOfTheSameCall(t *testing.T) {
 	})
 	if _, err := a.Run(ctx, "c1", "go", Observer{}); err != nil || ran != 3 {
 		t.Fatalf("ran %d times, %v", ran, err)
+	}
+}
+
+// emptyLLM answers with nothing the first times it is asked, then with
+// what it was told last.
+type emptyLLM struct {
+	empty int
+	msgs  []openai.Message
+}
+
+func (e *emptyLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	e.msgs = msgs
+	if e.empty > 0 {
+		e.empty--
+		return openai.Message{Content: " \n"}, nil
+	}
+	return openai.Message{Content: "done: " + msgs[len(msgs)-1].Content}, nil
+}
+
+// A model that says nothing at all is asked once to go on; a second time
+// nothing is the answer.
+func TestEmptyAnswerIsAskedAgain(t *testing.T) {
+	llm := &emptyLLM{empty: 1}
+	got, err := New(llm, "gpt", "alpha").Respond(context.Background(), "c1", "fix it")
+	if err != nil || got != "done: "+emptyNote {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	llm = &emptyLLM{empty: 2}
+	if got, err := New(llm, "gpt", "alpha").Respond(context.Background(), "c1", "fix it"); err != nil || strings.TrimSpace(got) != "" || len(llm.msgs) != 4 {
+		t.Fatalf("twice: %q, %v, %d messages", got, err, len(llm.msgs))
 	}
 }

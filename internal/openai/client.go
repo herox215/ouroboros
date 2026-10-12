@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"ouroboros/internal/credentials"
@@ -141,6 +142,9 @@ type Message struct {
 	// not sent back.
 	Via     string `json:"-"`
 	Instead string `json:"-"`
+	// Retried are why the call was asked again before it was answered, one
+	// for each time: see IsTransient. They are not sent back.
+	Retried []string `json:"-"`
 	// Effort is the effort the call that brought an assistant message was
 	// asked with, and what the API took of it. It is not sent back.
 	Effort Took `json:"-"`
@@ -372,6 +376,27 @@ func IsUnavailable(err error) bool {
 	}
 	var network net.Error
 	return errors.As(err, &network)
+}
+
+// IsTransient reports whether err says that a call broke off on its way,
+// and asked again it is likely answered: the connection was closed or reset
+// before the answer was in, as a gateway does that closes a connection it
+// kept open meanwhile, or a gateway or the service is overloaded for a
+// moment (HTTP 502, 503, 504 or 529). A call that was stopped, that waited
+// too long, or that was refused for what it asked, is none.
+func IsTransient(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if api := (*APIError)(nil); errors.As(err, &api) {
+		switch api.Status {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
+			return true
+		}
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE)
 }
 
 // Client talks to an OpenAI-compatible API.
