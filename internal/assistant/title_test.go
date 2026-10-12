@@ -20,10 +20,13 @@ type titleLLM struct {
 	sent  []openai.Message
 	tools []openai.Tool
 	calls int
+	// effort is what the last call was asked to think.
+	effort string
 }
 
-func (l *titleLLM) Complete(_ context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+func (l *titleLLM) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
 	l.calls++
+	l.effort = openai.EffortOf(ctx)
 	l.model, l.sent, l.tools = model, msgs, tools
 	return openai.Message{Role: "assistant", Content: l.reply}, l.err
 }
@@ -57,6 +60,9 @@ func TestTitle(t *testing.T) {
 	got, err := a.Title(context.Background(), conversation)
 	if err != nil || got != "Den Garten planen" {
 		t.Fatalf("title %q, %v", got, err)
+	}
+	if llm.effort != titleEffort {
+		t.Errorf("asked with the effort %q", llm.effort)
 	}
 	if llm.model != "m" || llm.tools != nil || len(llm.sent) != 2 || llm.sent[0].Role != "system" || llm.sent[0].Content != titlePrompt || llm.sent[1].Role != "user" {
 		t.Fatalf("sent %+v to %q with %v", llm.sent, llm.model, llm.tools)
@@ -129,6 +135,12 @@ func TestTopic(t *testing.T) {
 		"  `NONE`  ":             "",
 		"":                       "",
 		"« Plan »":               "Plan",
+		"<function_calls>\n<x>":  "",
+		"<3 Gardens":             "<3 Gardens",
+		"I don't have access to `history_sessions` or `history_search` tools — no such": "",
+		"The command completed successfully with the following output:":                 "",
+		"Ich schaue nach…": "",
+		"one two three four five six seven eight nine ten": "one two three four five six seven eight nine ten",
 	} {
 		if got := topic(reply); got != want {
 			t.Errorf("topic(%q) = %q, want %q", reply, got, want)
