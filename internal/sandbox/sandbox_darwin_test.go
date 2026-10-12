@@ -26,7 +26,7 @@ func TestWithoutSandboxExec(t *testing.T) {
 // read only and hidden comes after what is writable, so that it wins.
 func TestProfile(t *testing.T) {
 	p := profile(Policy{Writable: []string{`/a "b"\c`}})
-	if !strings.Contains(p, `(subpath "/a \"b\"\\c")`) || !strings.HasPrefix(p, "(version 1)\n(allow default)\n(deny network*)\n") {
+	if !strings.Contains(p, `(subpath "/a \"b\"\\c")`) || !strings.HasPrefix(p, "(version 1)\n(allow default)\n(deny signal)\n(allow signal (target same-sandbox))\n(deny network*)\n") {
 		t.Errorf("profile:\n%s", p)
 	}
 	if strings.Contains(p, "(deny file-read*") || strings.Count(p, "(deny file-write*") != 1 {

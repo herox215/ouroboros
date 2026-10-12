@@ -17,7 +17,8 @@ import (
 // under the pointer.
 
 // The history starts below the header and the top of the box, and right of
-// the border and padding of the box.
+// the border and padding of the box, and of the list of the jobs if it is
+// shown.
 const historyTop, historyLeft = 2, 2
 
 // spot is a cell of the content of the history: its line and column.

@@ -22,6 +22,9 @@ type (
 	Tool = agent.Tool
 	// Param is a text argument of a Tool.
 	Param = agent.Param
+	// Option is a setting a Tool takes, which the owner sets on the
+	// settings screen: see Configurable and OptionsOf.
+	Option = agent.Option
 
 	// Method is a JSON-RPC method added to the node, for a plugin on a
 	// connected peer to run with Network.Call. Its Handle runs only for a
@@ -61,12 +64,25 @@ func NewTool[T any](name, description string, params []Param, run func(ctx conte
 	return agent.NewTool(name, description, params, run)
 }
 
+// Serving is what a plugin does as the node serves in this process: Start
+// before it serves, and Stop once it stops, after the answers on their way
+// ended and before the process ends or is replaced by a new build. A
+// plugin that starts processes of its own stops them here: nothing else
+// does, as a front end starts the same plugins without serving. Either may
+// be nil.
+type Serving struct {
+	Start func()
+	Stop  func()
+}
+
 // RunFunc is what runs a Tool: it gets the arguments of a call as JSON.
 type RunFunc = agent.RunFunc
 
-// Decode decodes the arguments raw of a call of the tool name into v, and
-// takes a number written as a string as the number: see agent.Decode.
-func Decode(name string, raw json.RawMessage, v any) error { return agent.Decode(name, raw, v) }
+// Decode decodes the arguments raw of a call of the tool name into v, a
+// pointer to a struct, and takes a number written as a string as the
+// number: see agent.Decode. An argument that is no field of it is an error
+// that names the fields, see agent.DecodeAll.
+func Decode(name string, raw json.RawMessage, v any) error { return agent.DecodeAll(name, raw, v) }
 
 // Configurable returns t as a tool the owner can give settings in the
 // configuration, next to its name: {"tool": "read", "allow": ["~/share"]}. S
@@ -79,6 +95,19 @@ func Decode(name string, raw json.RawMessage, v any) error { return agent.Decode
 func Configurable[S any](t Tool, with func(settings S) (RunFunc, error)) Tool {
 	return agent.Configurable(t, with)
 }
+
+// The kinds of an Option.
+const (
+	OptionText   = agent.OptionText
+	OptionNumber = agent.OptionNumber
+	OptionSwitch = agent.OptionSwitch
+	OptionList   = agent.OptionList
+)
+
+// OptionsOf are the options of the settings S, for a Tool whose Configure is
+// its own: the tags about and unset of a field say what it does and what
+// holds while it is not set. See agent.OptionsOf.
+func OptionsOf[S any]() []Option { return agent.OptionsOf[S]() }
 
 // Image is a picture a Tool shows the LLM: its media type, like
 // "image/png", and its bytes.

@@ -205,6 +205,13 @@ func TestTUIBackendAsk(t *testing.T) {
 	if events, err := u.Read(context.Background(), list[0].ID); err != nil || len(events) != 3 || events[0].Text != "hello" || events[2].Text != "searching the history" {
 		t.Fatalf("read %+v, %v", events, err)
 	}
+	// No command runs in the background, so none is stopped.
+	if jobs, err := u.Jobs(context.Background()); err != nil || len(jobs) != 0 {
+		t.Fatalf("jobs %+v, %v", jobs, err)
+	}
+	if err := u.StopJob(context.Background(), "ctx", 1); !errors.Is(err, session.ErrNoJob) {
+		t.Fatalf("stop: %v", err)
+	}
 	// A session is deleted.
 	if err := u.Delete(context.Background(), "ctx"); err != nil {
 		t.Fatal(err)

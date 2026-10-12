@@ -2,6 +2,7 @@ package tui
 
 import (
 	"math"
+	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -84,12 +85,23 @@ func (a art) row(w, t int) []rune {
 }
 
 // waiting is what the agent of the session shown is waiting for, as the chat
-// says it; "" when no answer is on its way.
+// says it, with the jobs that run in the background for the answer unless
+// they are listed on the left; "" when no answer is on its way.
+func (m *Model) waiting() string {
+	label := m.waitingFor()
+	if label != "" && len(m.chat.jobs) > 0 && !m.jobsShown {
+		label += " · " + strings.Join(m.chat.jobs, " · ")
+	}
+	return label
+}
+
+// waitingFor is what the agent of the session shown is waiting for, "" when
+// no answer is on its way.
 //
 // A tool shows once it has run for a while: one that ends at once, as most
 // commands and reads do, would flash its name for a moment and make the line
 // flicker, so the agent is thinking until then.
-func (m *Model) waiting() string {
+func (m *Model) waitingFor() string {
 	c := m.chat
 	switch {
 	case c.asking != nil:

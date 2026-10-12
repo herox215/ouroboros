@@ -17,7 +17,7 @@ const dialogWidth = 80
 // inDialog reports whether a dialog lies over the chat: the chat behind it
 // stays as it is, also when the wheel turns.
 func (m *Model) inDialog() bool {
-	return m.screen == screenEffort || m.screen == screenModel || m.screen == screenHelp || m.screen == screenKeys
+	return m.screen == screenEffort || m.screen == screenJobs || m.screen == screenModel || m.screen == screenHelp || m.screen == screenKeys || m.screen == screenSettings
 }
 
 // dialogSize is how wide and how high a dialog may be in the body, with its

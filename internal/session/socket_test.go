@@ -175,6 +175,44 @@ func TestClient(t *testing.T) {
 
 // A front end that started the node lets it stop once no answer is on its
 // way, and waits until it stopped.
+// A node that stops while it is let go of, as by ouro stop, is let go of
+// without an error; one that answers nothing and runs on is an error.
+func TestClientReleaseOfANodeThatStops(t *testing.T) {
+	var n *fakeNode
+	n = serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.stop() // the node is gone before it answers
+		panic(http.ErrAbortHandler)
+	}))
+	if err := NewClient(n.dir).Release(context.Background()); err != nil {
+		t.Fatalf("a node that stopped: %v", err)
+	}
+	broken := serve(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) }))
+	if err := NewClient(broken.dir).Release(context.Background()); err == nil {
+		t.Fatal("a node that runs on and answers nothing")
+	}
+}
+
+// A node the owner started is not stopped by a front end that lets go of
+// it, though that one started it before.
+func TestClientKeep(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	n := serve(t, Handler(s))
+	stops := make(chan struct{}, 8)
+	s.Attach(func() { stops <- struct{}{} }, nil)
+	c := NewClient(n.dir)
+	ctx := context.Background()
+	if err := c.Keep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Release(ctx); err != nil || s.Releases() {
+		t.Fatalf("released: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if len(stops) != 0 {
+		t.Fatal("a node the owner keeps was stopped")
+	}
+}
+
 func TestClientRelease(t *testing.T) {
 	gate := make(chan struct{})
 	a := &fakeAgent{run: func(context.Context, string, func(assistant.Step), func(string)) (string, error) {

@@ -131,3 +131,27 @@ func TestToolIsNamedAfterAWhile(t *testing.T) {
 		t.Fatalf("after 300ms: %q", got)
 	}
 }
+
+// The jobs that run in the background for the answer follow what the agent
+// waits for, until they end, or the answer does.
+func TestJobsAreShown(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "serve it"}, true)
+	m.apply(c, Event{Kind: plugin.SessionJobs, Text: "job 1 · npm run dev\njob 2 · go test ./..."}, true)
+	if got := m.waiting(); got != "alpha is thinking · job 1 · npm run dev · job 2 · go test ./..." {
+		t.Fatalf("with jobs: %q", got)
+	}
+	if !strings.Contains(ansi.Strip(m.waitView(120)), " alpha is thinking · job 1 · npm run dev") {
+		t.Fatalf("view:\n%s", m.waitView(120))
+	}
+	m.apply(c, Event{Kind: plugin.SessionJobs}, true)
+	if got := m.waiting(); got != "alpha is thinking" {
+		t.Fatalf("once they ended: %q", got)
+	}
+	m.apply(c, Event{Kind: plugin.SessionJobs, Text: "job 3 · sleep 9"}, true)
+	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "done"}, true)
+	if c.jobs != nil || m.waiting() != "" {
+		t.Fatalf("after the answer: %q, %q", c.jobs, m.waiting())
+	}
+}

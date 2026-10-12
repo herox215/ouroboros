@@ -74,6 +74,10 @@ const (
 	// session that has one gets it with what happened in it so far, last.
 	// Without one the session has the effort of the node.
 	Effort Kind = "effort"
+	// Jobs are the commands that run in the background for the answer on
+	// its way, one per line in Text, "" once none does. They end with the
+	// answer at the latest: then Jobs is "" before it ends, if it was not.
+	Jobs Kind = "jobs"
 )
 
 // Event is one thing that happened in a session. It is plain data, written
@@ -191,6 +195,20 @@ type API interface {
 	// Contents returns what the next call of the LLM in the session id is
 	// sent, message by message. With an error it returns what it has of it.
 	Contents(ctx context.Context, id string) ([]Line, error)
+	// Jobs are the commands that run in the background for the answers on
+	// their way, the oldest first: in the sessions and in the
+	// conversations of peers.
+	Jobs(ctx context.Context) ([]Job, error)
+	// StopJob stops the job n of the answer on its way in the session or
+	// conversation of a peer id, as Jobs names them, with everything it
+	// started. It fails with ErrNoJob if that job does not run.
+	StopJob(ctx context.Context, id string, n int) error
+	// Services are the services that run past the answers, like servers,
+	// the oldest first: those of the owner and those of peers.
+	Services(ctx context.Context) ([]ServiceInfo, error)
+	// StopService stops the service id, as Services names it, with
+	// everything it started. It fails with ErrNoService if it does not run.
+	StopService(ctx context.Context, id string) error
 	// Open makes sure the node that holds the sessions runs, and reports
 	// whether it was started for it.
 	Open(ctx context.Context) (started bool, err error)
@@ -264,9 +282,11 @@ type Service struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session
-	archive  *archive // where the sessions are kept; nil keeps none, see Archive
-	closed   bool     // by Close
-	node     *process // s.mu is held to read it
+	jobs     map[string]running // of the answers on their way, by session or conversation of a peer, see Jobs
+	services func() []Services  // that run past the answers, see ServicesFrom
+	archive  *archive           // where the sessions are kept; nil keeps none, see Archive
+	closed   bool               // by Close
+	node     *process           // s.mu is held to read it
 }
 
 // process is what the sessions know of the process of the node they run in:
@@ -278,6 +298,7 @@ type process struct {
 	mu        sync.Mutex
 	answering int  // answers on their way
 	release   bool // stop the node once no answer is on its way
+	kept      bool // the owner wants the node to run: no front end stops it
 	successor string
 	// stopNode and replace are what the node does once it is to stop or to
 	// be replaced by successor, see Attach.
@@ -294,6 +315,7 @@ type session struct {
 	queue    []string           // the messages that wait for that answer to take them
 	asked    chan string        // takes what the owner answers the question that answer waits for; nil without one
 	restart  string             // the binary a tool of that answer asked to start anew from
+	goOn     bool               // the session goes on by itself in that build, see GoOn
 	// resumed is when the last answer ended of a session that was loaded
 	// from where it is kept, until the agent is told so with the next
 	// message; zero otherwise.
@@ -311,7 +333,7 @@ type session struct {
 // New returns the Service of the sessions with agent.
 func New(agent Assistant) *Service {
 	ctx, stop := context.WithCancel(context.Background())
-	return &Service{agent: agent, now: time.Now, ctx: ctx, stop: stop, sessions: map[string]*session{}, node: &process{}}
+	return &Service{agent: agent, now: time.Now, ctx: ctx, stop: stop, sessions: map[string]*session{}, jobs: map[string]running{}, node: &process{}}
 }
 
 // Share lets the Services of the profiles of one node run in one process,
@@ -551,7 +573,28 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			defer s.mu.Unlock()
 			se.restart = exe
 		})
+		ctx = WithGoOn(ctx, func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			se.goOn = true
+		})
 	}
+	// What a tool tells of the jobs of the answer once it is over is not
+	// told: they end with it.
+	var jobs string
+	over := false
+	ctx = WithJobs(ctx, func(running []Job, stop func(int) bool) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if over {
+			return
+		}
+		s.setJobs(se.id, running, stop)
+		if text := jobLines(running); text != jobs {
+			jobs = text
+			s.emit(se, Event{Kind: Jobs, Text: text})
+		}
+	})
 	ctx = agent.WithSteering(ctx, func() []string { return s.steered(se) })
 	ctx = agent.WithOwner(ctx, func(ctx context.Context, question json.RawMessage) (string, error) {
 		return s.ask(ctx, se, question)
@@ -580,6 +623,11 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.answering--
+	over = true
+	delete(s.jobs, se.id)
+	if jobs != "" {
+		s.emit(se, Event{Kind: Jobs})
+	}
 	// The answer is archived already: who learns of its end finds it there.
 	s.emit(se, end)
 	if se.restart != "" {
@@ -587,8 +635,14 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		if p.successor == "" { // the first build asked for is the one
 			p.successor = se.restart
 		}
+		if se.goOn && s.archive != nil {
+			if err := s.archive.GoOn(history.Owner(se.id)); err != nil {
+				s.archive.log("the session %s does not go on by itself in the new build: %v", se.id, err)
+			}
+		}
 		se.restart = ""
 	}
+	se.goOn = false
 	// What was queued too late for this answer is the next message, unless
 	// the node takes none: then it is lost with the process.
 	if len(se.queue) > 0 && !s.closed && p.successor == "" {
@@ -917,10 +971,22 @@ func (s *Service) Releases() bool {
 	p := s.process()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.kept {
+		return false
+	}
 	p.release = true
 	stops := p.answering == 0 && p.successor == "" && p.stopNode != nil
 	p.settle()
 	return stops
+}
+
+// Keep makes the node run on: the owner started it, as with ouro start, and
+// a front end that started it before and lets go of it does not stop it.
+func (s *Service) Keep() {
+	p := s.process()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.kept, p.release = true, false
 }
 
 // Close stops the answers on their way and returns once they ended. The

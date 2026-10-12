@@ -157,6 +157,10 @@ func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposal
 // History is the directory the conversations of the agents are archived in.
 func (d Dir) History() string { return d.path("history") }
 
+// Services is the file of the services of the profile that run, by which
+// what a node that ended without stopping them left of them is stopped.
+func (d Dir) Services() string { return d.path("services.json") }
+
 // Skills is the directory of the skills the owner wrote for the agents of
 // the node, one directory per skill. The profiles share it.
 func (d Dir) Skills() string { return d.Root().path("skills") }

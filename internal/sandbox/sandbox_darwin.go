@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // devices are what a command may write besides what its policy allows: what
@@ -27,6 +29,22 @@ func available() error {
 	return nil
 }
 
+// stop kills the group until it is empty: a process that was being forked
+// as it was killed may have missed it. A group of nothing but processes that
+// ended and wait to be collected is given up on after a while.
+func stop(pgid int) bool {
+	if syscall.Kill(-pgid, syscall.SIGKILL) != nil {
+		return false
+	}
+	for range 50 {
+		time.Sleep(10 * time.Millisecond)
+		if syscall.Kill(-pgid, syscall.SIGKILL) != nil {
+			break
+		}
+	}
+	return true
+}
+
 func command(ctx context.Context, p Policy, path string, args []string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, sandboxExec, append([]string{"-p", profile(p), path}, args...)...), nil
 }
@@ -34,12 +52,15 @@ func command(ctx context.Context, p Policy, path string, args []string) (*exec.C
 // profile is the profile of sandbox-exec that keeps a command to what p
 // allows, with the devices.
 //
-// A rule that comes later wins over one before it. "local ip" is not used for
+// A rule that comes later wins over one before it. Signals reach only the
+// processes of the same sandbox. "local ip" is not used for
 // what goes out: it lets every connection out. A path the profile names need
 // not exist: what does not is not created either.
 func profile(p Policy) string {
 	var b strings.Builder
-	b.WriteString("(version 1)\n(allow default)\n")
+	// A command signals what it started, and no other process of the user:
+	// pkill would reach the editor, the servers and the node itself.
+	b.WriteString("(version 1)\n(allow default)\n(deny signal)\n(allow signal (target same-sandbox))\n")
 	if p.Network {
 		fmt.Fprintf(&b, "(deny network-outbound (remote unix-socket))\n"+
 			"(allow network-outbound (remote unix-socket (path-literal %s)))\n", quote(resolver))

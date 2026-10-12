@@ -62,13 +62,14 @@ func TestOwnerRunsCommands(t *testing.T) {
 	}
 }
 
-// bash is for the owner alone: no peer gets it, also not with every tool.
+// bash is no tool for all peers: only the list of one peer in tools.peers
+// gives it.
 func TestNoToolForPeers(t *testing.T) {
 	s := clitest.Settings(t)
 	cfg := clitest.NodeConfig(s)
 	cfg.Tools = &config.Tools{A2A: config.Named("bash")}
 	config.Save(s.Home, cfg)
-	if _, err := clitest.Run(t, s, "", "serve"); err == nil || !strings.Contains(err.Error(), "the tool bash is for the owner of the node only") {
+	if _, err := clitest.Run(t, s, "", "serve"); err == nil || !strings.Contains(err.Error(), "the tool bash is no tool for all peers: list it in tools.peers") {
 		t.Errorf("bash for peers: %v", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -72,6 +73,17 @@ func child(dirs []string) {
 	}
 	try("read hidden directory", err)
 	try("write hidden directory", os.WriteFile(filepath.Join(inside, "secrets", "new"), []byte("x"), 0o600))
+
+	// On macOS the process that started the sandbox is outside it, and its
+	// own child is in it; on Linux the sandbox has processes of its own.
+	if runtime.GOOS == "darwin" {
+		try("signal outside", syscall.Kill(os.Getppid(), 0))
+		own := exec.Command("sleep", "10")
+		if err := own.Start(); err == nil {
+			try("signal own child", own.Process.Kill())
+			own.Wait()
+		}
+	}
 
 	start := time.Now()
 	_, err = net.DialTimeout("tcp", "192.0.2.1:80", 2*time.Second)
@@ -192,6 +204,9 @@ func TestSandbox(t *testing.T) {
 		"replace read only link", "write through read only link",
 		"read hidden", "write hidden", "read hidden directory", "write hidden directory",
 	})
+	if runtime.GOOS == "darwin" {
+		check(t, got, []string{"signal own child: ok\n"}, []string{"signal outside"})
+	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 1 {
 		t.Errorf("written outside: %v", entries)
 	}

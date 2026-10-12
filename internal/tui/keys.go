@@ -17,20 +17,21 @@ type keybinding struct {
 func (m *Model) keybindings() []keybinding {
 	keys := []keybinding{
 		{"enter", "send"},
-		{"shift+enter / ctrl+j", "a new line"},
+		{"shift+enter", "a new line"},
 		{"↑ ↓", "bring back what you entered, the latest first"},
 		{"↑ in an empty input", "take back the last message that is queued"},
 		{"tab", "complete the command that is typed"},
 		{"ctrl+v", "paste the clipboard, a picture too"},
 		{"ctrl+s", "the conversations, like /session; what is typed stays"},
 		{"ctrl+k", "these keys, like /keys"},
+		{jobsKey, "the jobs in a list on the right, or hidden again"},
 		{"pgup pgdn", "scroll the chat"},
 	}
 	if m.profileOf > 1 {
 		keys = append(keys, keybinding{"shift+tab", "show the next profile"})
 	}
 	return append(keys,
-		keybinding{"esc", "stop the answer on its way; on a screen: back"},
+		keybinding{"esc", "close the commands, or stop the answer; else back"},
 		keybinding{"ctrl+c", "quit, everywhere"},
 	)
 }

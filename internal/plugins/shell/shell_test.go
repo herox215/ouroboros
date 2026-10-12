@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -27,8 +30,10 @@ type world struct {
 	node        string // the directory of the node
 	guard       *guard.Guard
 	protected   []string
-	failing     error // what reading the configuration fails with
-	unsandboxed bool  // what the configuration says of the sandbox
+	failing     error    // what reading the configuration fails with
+	unsandboxed bool     // what the configuration says of the sandbox
+	told        []string // what the owner was told of the jobs of an answer, see answer
+	toldMu      sync.Mutex
 }
 
 func newWorld(t *testing.T) *world {
@@ -137,8 +142,13 @@ func TestSandboxKeepsTheRules(t *testing.T) {
 			t.Errorf("reading %s: %q, %v", path, got, err)
 		}
 	}
-	got, err = w.bash(ctx, `{"allow": ["~/share"]}`, map[string]any{"command": "echo x > ~/elsewhere; echo y > ~/share/y"})
-	if err != nil || !strings.HasPrefix(got, "exit 0\n") || w.content("~/elsewhere") != "<none>" || w.content("~/share/y") != "y\n" {
+	// With allow, the owner's commands write the temporary files too.
+	if err := os.MkdirAll(w.path("~/tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", w.path("~/tmp"))
+	got, err = w.bash(ctx, `{"allow": ["~/share"]}`, map[string]any{"command": "echo x > ~/elsewhere; echo y > ~/share/y; echo z > \"$TMPDIR/z\""})
+	if err != nil || !strings.HasPrefix(got, "exit 0\n") || w.content("~/elsewhere") != "<none>" || w.content("~/share/y") != "y\n" || w.content("~/tmp/z") != "z\n" {
 		t.Errorf("with allow: %q, %v", got, err)
 	}
 	got, err = w.bash(ctx, `{"deny": ["~/share"]}`, map[string]any{"command": "cat ~/share/hello.txt"})
@@ -189,7 +199,8 @@ func TestWithoutSandbox(t *testing.T) {
 	}
 }
 
-// A call that cannot run fails, and so does one for a peer.
+// A call that cannot run fails, and so does one for a peer without a
+// sandbox.
 func TestRunRefuses(t *testing.T) {
 	w := newWorld(t)
 	w.unsandboxed = true
@@ -203,7 +214,7 @@ func TestRunRefuses(t *testing.T) {
 	}{
 		{ctx, `{}`, `bash needs "command"`},
 		{ctx, `{"command": 1}`, "bash: invalid arguments"},
-		{peer, `{"command": "true"}`, "bash is for the owner of the node alone"},
+		{peer, `{"command": "true"}`, "bash runs the commands of a peer in a sandbox alone, and the owner turned it off"},
 		{ctx, `{"command": "true", "timeout": -1}`, "timeout is a number of seconds"},
 		{ctx, `{"command": "true", "dir": "~/.ssh"}`, `reading ~/.ssh is refused: ~/.ssh is in "protected"`},
 		{ctx, `{"command": "true", "dir": "~/file"}`, "~/file is no directory"},
@@ -274,10 +285,120 @@ func TestSettings(t *testing.T) {
 		}
 	}
 	tool := Tool(w.guard, nil)
-	if tool.Name != "bash" || !tool.OwnerOnly || !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Description, "64 KiB") || !strings.Contains(tool.Description, `"network": true in the settings of bash`) ||
+	if tool.Name != "bash" || tool.OwnerOnly || !tool.Trusted || !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Description, "64 KiB") || !strings.Contains(tool.Description, `"network": true in the settings of bash`) ||
 		!strings.Contains(tool.Schema, `"timeout":{"type":"integer","description":"how many seconds it may run, 60 if missing`) {
 		t.Errorf("tool: %+v", tool)
 	}
+}
+
+// A peer the owner listed bash for runs commands only where "allow" lets it
+// write: in the first of those paths, or in one below them.
+func TestForAPeer(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/work/a.txt", "a")
+	peer := a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"})
+	for settings, want := range map[string]string{
+		`{}`:                 `bash has no "allow" for this peer, so it runs nothing`,
+		`{"allow": []}`:      `bash has no "allow" for this peer, so it runs nothing`,
+		`{"allow": ["~/x"]}`: "~/x is no directory",
+	} {
+		if _, err := w.bash(peer, settings, map[string]any{"command": "true"}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", settings, err, want)
+		}
+	}
+	for dir, want := range map[string]string{
+		"~/share": `reading ~/share is refused: it is not in "allow" of the tool bash`,
+		"work":    "a peer names a path in full",
+	} {
+		if _, err := w.bash(peer, `{"allow": ["~/work"]}`, map[string]any{"command": "true", "dir": dir}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("in %s: %v, want %q", dir, err, want)
+		}
+	}
+
+	needSandbox(t)
+	got, err := w.bash(peer, `{"allow": ["~/work"]}`, map[string]any{"command": "pwd; echo b > b.txt; echo x > ../share/x.txt"})
+	if err != nil || !strings.HasPrefix(got, "exit 1\n"+w.path("~/work")+"\n") {
+		t.Errorf("got %q, %v", got, err)
+	}
+	if w.content("~/work/b.txt") != "b\n" || w.content("~/share/x.txt") != "<none>" {
+		t.Errorf("wrote %q and %q", w.content("~/work/b.txt"), w.content("~/share/x.txt"))
+	}
+}
+
+// What a command leaves running in the sandbox, in the background, is
+// stopped once it ended, and the agent is told so; without the sandbox it
+// runs on. The output of one that left the group is not waited for.
+func TestNothingIsLeftRunning(t *testing.T) {
+	needSandbox(t)
+	w := newWorld(t)
+	late := w.path("~/share/late")
+	writeLate := "(sleep 1; echo late >> " + late + ")"
+	for command, left := range map[string]bool{
+		"true":           false,
+		writeLate + " &": true,
+		"nohup sh -c '" + writeLate + "' >/dev/null 2>&1 & (" + writeLate + " &)": true,
+	} {
+		got, err := w.bash(context.Background(), `{"allow": ["~/share"]}`, map[string]any{"command": command})
+		// On Linux the sandbox ends them itself, and nobody is told.
+		told := left && runtime.GOOS != "linux"
+		if err != nil || !strings.HasPrefix(got, "exit 0\n") || strings.Contains(got, leftRunning) != told {
+			t.Errorf("%s: %q, %v", command, got, err)
+		}
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if got := w.content("~/share/late"); got != "<none>" {
+		t.Errorf("what the commands left ran on: %q", got)
+	}
+
+	// One that left the group keeps the pipe of the output open: the
+	// command ends all the same, after grace.
+	old := grace
+	grace = 100 * time.Millisecond
+	t.Cleanup(func() { grace = old })
+	escape := `perl -MPOSIX -e 'exit if fork; POSIX::setsid(); sleep 2'; echo done`
+	if got, err := w.bash(context.Background(), `{"allow": ["~/share"]}`, map[string]any{"command": escape}); err != nil || !strings.Contains(got, "done") {
+		t.Errorf("one that left the group: %q, %v", got, err)
+	}
+
+	w.unsandboxed = true
+	got, err := w.bash(context.Background(), "{}", map[string]any{"command": "sleep 30 & echo $!"})
+	pid, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(got, "exit 0\n")))
+	if err != nil || strings.Contains(got, leftRunning) || !running(pid) {
+		t.Errorf("without a sandbox: %q, %v", got, err)
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+
+	// A command that cannot start, and output that has no pipe, fail.
+	old2 := shell
+	shell = filepath.Join(t.TempDir(), "bash")
+	if _, err := w.bash(context.Background(), "{}", map[string]any{"command": "true"}); err == nil {
+		t.Error("without bash: no error")
+	}
+	shell = old2
+	pipe = func() (*os.File, *os.File, error) { return nil, nil, errTest }
+	t.Cleanup(func() { pipe = os.Pipe })
+	if _, err := w.bash(context.Background(), "{}", map[string]any{"command": "true"}); !errors.Is(err, errTest) {
+		t.Errorf("without a pipe: %v", err)
+	}
+}
+
+// running reports whether the process pid runs, once a kill had a moment: a
+// zombie its parent has not collected yet runs no more.
+func running(pid int) bool {
+	for range 50 {
+		if syscall.Kill(pid, 0) != nil || zombie(pid) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
+}
+
+// zombie reports whether the process pid has ended and waits to be
+// collected.
+func zombie(pid int) bool {
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return err != nil || strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
 }
 
 // A command that runs too long is stopped with everything it started, and
@@ -292,7 +413,8 @@ func TestTimeout(t *testing.T) {
 	start := time.Now()
 	// bash may yet tell that what it started was killed, or not.
 	_, err := w.bash(context.Background(), "{}", map[string]any{"command": "echo started; (sleep 30; echo late > " + pid + ".late) & echo $! > " + pid + "; wait", "timeout": 1})
-	if err == nil || !strings.HasPrefix(err.Error(), "the command was stopped after 1s; what it printed:\nstarted\n") || time.Since(start) > 5*time.Second {
+	if err == nil || !strings.HasPrefix(err.Error(), "the command was stopped after 1s; what it printed:\nstarted\n") || time.Since(start) > 5*time.Second ||
+		!strings.HasSuffix(err.Error(), `[its time was up: run it again with a larger "timeout", as far as the script has time left, or with "background": true]`) {
 		t.Errorf("stopped: %v after %s", err, time.Since(start))
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -353,6 +475,8 @@ func TestEnvironmentAndRefusals(t *testing.T) {
 	for out, want := range map[string]bool{
 		"mkdir: x: Operation not permitted": true, "x: Read-only file system": true, "connect: Network is unreachable": true,
 		"curl: (6) Could not resolve host: example.com": true, "FAIL: TestX": false,
+		"socket.gaierror: [Errno 8] nodename nor servname provided, or not known": true,
+		"dial tcp: lookup x: Temporary failure in name resolution":                true,
 	} {
 		if refused(out) != want {
 			t.Errorf("%q: %v", out, !want)
@@ -363,14 +487,42 @@ func TestEnvironmentAndRefusals(t *testing.T) {
 // The owner is shown the first line of the command.
 func TestShow(t *testing.T) {
 	for args, want := range map[string]string{
-		`{"command": "go test ./..."}`:     "running go test ./...",
-		`{"command": "  cd x\ngo test\n"}`: "running cd x …",
-		`{"command": ""}`:                  "",
-		`{"command": 1}`:                   "",
-		`{}`:                               "",
+		`{"command": "go test ./..."}`:                   "running go test ./...",
+		`{"command": "  cd x\ngo test\n"}`:               "running cd x …",
+		`{"command": "npm run dev", "background": true}`: "running in the background npm run dev",
+		`{"job": 2}`:               "looking at job 2",
+		`{"job": 2, "stop": true}`: "stopping job 2",
+		`{"command": ""}`:          "",
+		`{"command": 1}`:           "",
+		`{}`:                       "",
 	} {
 		if got := Show(json.RawMessage(args)); got != want {
 			t.Errorf("%s: %q, want %q", args, got, want)
 		}
+	}
+}
+
+// A pipe fails when one of its commands does, so that tail does not hide a
+// test that failed; output that says tests failed is pointed out when the
+// command hid it anyway, and a command a pipe ended early is explained.
+func TestHonestResults(t *testing.T) {
+	needSandbox(t)
+	w := newWorld(t)
+	ctx := context.Background()
+	got, err := w.bash(ctx, "{}", map[string]any{"command": "printf 'ok\\n--- FAIL: TestX\\nFAIL\\tpkg\\n'; exit 1 | tail -1; false | tail -1"})
+	if err != nil || !strings.HasPrefix(got, "exit 1\n") {
+		t.Errorf("a pipe that failed: %q, %v", got, err)
+	}
+	got, err = w.bash(ctx, "{}", map[string]any{"command": "printf -- '--- FAIL: TestX\\nFAIL\\tpkg 0.1s\\n' || true"})
+	if err != nil || !strings.HasPrefix(got, "exit 0\n") || !strings.Contains(got, "[the output says that tests failed, though the command ended with exit 0") {
+		t.Errorf("failed tests hidden: %q, %v", got, err)
+	}
+	got, err = w.bash(ctx, "{}", map[string]any{"command": "echo '=== RUN TestX'; echo '--- PASS: TestX'; echo ok"})
+	if err != nil || strings.Contains(got, "[the output says") {
+		t.Errorf("tests that passed: %q, %v", got, err)
+	}
+	got, err = w.bash(ctx, "{}", map[string]any{"command": "yes | head -2"})
+	if err != nil || !strings.HasPrefix(got, "exit 141\ny\ny\n") || !strings.Contains(got, "[exit 141 is a command of a pipe that was ended") {
+		t.Errorf("a pipe head ended: %q, %v", got, err)
 	}
 }

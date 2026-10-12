@@ -99,6 +99,15 @@ type Backend interface {
 	// Contents returns what the next call of the LLM in the session id is
 	// sent, message by message. With an error it returns what it has of it.
 	Contents(ctx context.Context, id string) ([]Message, error)
+	// Jobs lists the commands that run in the background for the answers
+	// on their way, in the sessions and in the conversations of peers.
+	Jobs(ctx context.Context) ([]plugin.Job, error)
+	// StopJob stops the job n of the session or conversation of a peer id.
+	StopJob(ctx context.Context, id string, n int) error
+	// Services lists the services that run past the answers.
+	Services(ctx context.Context) ([]plugin.ServiceInfo, error)
+	// StopService stops the service id.
+	StopService(ctx context.Context, id string) error
 	Contacts() (Contacts, error)
 	// Accept and Reject decide on a connection request. They fail with
 	// plugin.ErrNotSaved if the decision could not be stored.
@@ -165,6 +174,10 @@ type Event struct {
 	Text string
 	Done bool
 	At   time.Time
+	// Tool is the name of the tool of a call, and Failed says that the
+	// call ended with an error.
+	Tool   string
+	Failed bool
 	// Context is how long the context of the session is: what the last call
 	// of the LLM in it sent, in bytes. 0 if none was made.
 	Context int
@@ -194,6 +207,7 @@ const (
 	screenSessions // the sessions, for /session
 	screenEffort   // the slider of the effort, for /effort
 	screenKeys     // the keys of the chat, for /keys and ctrl+k
+	screenJobs     // the commands that run in the background, for /jobs
 )
 
 // entry is one message in the conversation: from the user, from the agent, or
@@ -209,8 +223,9 @@ type entry struct {
 
 // call is a tool call of the loop as the history shows it.
 type call struct {
-	text string // like "asking beta"; once done, with what became of it: "asking beta ✓ 1.2s"
-	done bool
+	text   string // like "asking beta"; once done, with what became of it: "asking beta ✓ 1.2s"; "" for a call nothing is shown of
+	done   bool
+	failed bool // it ended with an error
 }
 
 // conversation is a session of the chat with the agent of this node, as far
@@ -223,6 +238,7 @@ type conversation struct {
 	running   bool                // the node has said an answer is on its way
 	doing     string              // what the agent is waiting for, like "asking beta"
 	asking    *asking             // what the agent asks the owner and waits for; nil without a question
+	jobs      []string            // the commands that run in the background for the answer, like "job 1 · npm run dev"
 	since     time.Time           // when it began to wait for that
 	art       int                 // which of arts a wait is shown with: the next for every message
 	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
@@ -281,6 +297,20 @@ type Model struct {
 
 	picker modelScreen  // the models of the accesses, for /model
 	effort effortScreen // the slider of the effort, for /effort
+	jobs   jobsScreen   // the commands that run in the background, for /jobs
+	// jobsShown is whether the jobs of the session shown are listed on the
+	// right of the chat, for ctrl+j, instead of in the line of the wait.
+	jobsShown bool
+	// jobsLevel is how far the list of the jobs has faded in, from 0 for not
+	// at all to jobsFrames for whole; jobsFading is whether it is on its way.
+	jobsLevel  int
+	jobsFading bool
+	// services are the services that run past the answers, as the list of
+	// the jobs shows them: asked for anew every jobsEvery while it is
+	// shown. servicesAsked counts how often it was shown: what was asked
+	// for before is dropped.
+	services      []plugin.ServiceInfo
+	servicesAsked int
 
 	context contextScreen // the context of the conversation, for /context
 
@@ -311,7 +341,7 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 	input.Prompt = ""
 	input.SetHeight(inputHeight)
 	input.SetStyles(inputStyles(false))
-	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"))
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 
 	history := viewport.New()
 	history.KeyMap = viewport.KeyMap{} // keys go to the input; scrolling is handled explicitly
@@ -510,6 +540,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.sessionsLoaded(msg)
 	case deletedMsg:
 		return m, m.deleted(msg)
+	case jobsMsg:
+		return m, m.jobsLoaded(msg)
+	case jobsTick:
+		return m, m.jobsTicked(msg)
 	case peersMsg:
 		m.sessions.peersLoaded(m, msg)
 	case readMsg:
@@ -550,6 +584,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.wheel(&m.history, msg)
+		return m, nil
+	case jobsFadeMsg:
+		return m, m.jobsFaded()
+	case servicesMsg:
+		return m, m.servicesLoaded(msg)
+	case servicesTick:
+		if msg.asked == m.servicesAsked && m.jobsShown {
+			return m, m.loadServices()
+		}
 		return m, nil
 	case scrollMsg:
 		// A frame of a glide: see scrollBy.
@@ -608,6 +651,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.sessions.handleKey(m, msg)
 	case screenEffort:
 		return m.effort.handleKey(m, msg)
+	case screenJobs:
+		return m.jobs.handleKey(m, msg)
 	case screenHelp, screenKeys:
 		if msg.String() == "esc" {
 			m.screen = screenChat
@@ -628,6 +673,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.openSessions() // what is typed stays with the session shown
 	case "ctrl+k":
 		return m.openKeys() // what is typed stays in the input
+	case jobsKey:
+		return m.toggleJobs()
 	case "pgup":
 		return m.scrollBy(&m.history, -m.history.Height())
 	case "pgdown":
@@ -707,7 +754,8 @@ func (m *Model) openRequests() tea.Cmd {
 	m.requests.sel, m.choice = 0, accept
 	m.requests.unread = 0
 	m.requests.seen = m.requests.trust.waiting()
-	return nil
+	// What came since the last refresh is shown now, not in a while.
+	return m.loadContacts
 }
 
 func (r *requestsScreen) selectAt(m *Model, i int) {

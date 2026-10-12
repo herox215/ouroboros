@@ -10,14 +10,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
 
+	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
 	"ouroboros/internal/guard"
@@ -55,56 +59,85 @@ var passed = []string{
 }
 
 // refusals are what the output of a command says of what a sandbox refused.
-var refusals = []string{"operation not permitted", "read-only file system", "network is unreachable", "could not resolve host"}
+// A name that cannot be resolved is said in the words of the resolver of
+// macOS and of Linux too, as Python and Go say it.
+var refusals = []string{"operation not permitted", "read-only file system", "network is unreachable", "could not resolve host",
+	"nodename nor servname provided", "temporary failure in name resolution"}
 
 // Plugin contributes bash, which asks g for the sandbox of every command and
 // reads in the configuration of the node in dir whether to run it in one,
 // and what the owner is shown of its calls.
 func Plugin(dir home.Dir, g *guard.Guard) plugin.Plugin {
 	return plugin.New("shell", func(ctx *plugin.Context, _ struct{}) error {
-		plugin.Add(ctx, Tool(g, func() (bool, error) {
+		unsandboxed := func() (bool, error) {
 			cfg, err := dir.Config()
 			return cfg.BashWithoutSandbox, err
-		}))
+		}
+		plugin.Add(ctx, Tool(g, unsandboxed))
 		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolBash, Show: Show, Detail: assistant.HowItEnded})
+		// The services of the profile: the node that serves it ends what a
+		// node before left of them, and stops them all when it stops.
+		sv := &supervisor{file: dir.Services(), logf: dir.Log}
+		plugin.Add(ctx, ServiceTool(sv, g, unsandboxed))
+		plugin.Add(ctx, plugin.ToolView{Tool: ToolService, Show: ShowService, Detail: assistant.HowItEnded})
+		plugin.Add(ctx, plugin.Services{List: sv.list, Stop: sv.stopID})
+		plugin.Add(ctx, plugin.Serving{Start: sv.start, Stop: sv.stopAll})
 		return nil
 	})
 }
 
 // Show is what the owner is shown of a call of bash: the first line of its
-// command.
-func Show(args json.RawMessage) string {
-	var call struct {
-		Command string `json:"command"`
-	}
-	if json.Unmarshal(args, &call) != nil || call.Command == "" {
+// command, or the job it looks at.
+func Show(raw json.RawMessage) string {
+	var call args
+	if json.Unmarshal(raw, &call) != nil {
 		return ""
 	}
-	line, _, more := strings.Cut(strings.TrimSpace(call.Command), "\n")
+	switch {
+	case call.Job != 0 && call.Stop:
+		return fmt.Sprintf("stopping job %d", call.Job)
+	case call.Job != 0:
+		return fmt.Sprintf("looking at job %d", call.Job)
+	case call.Command == "":
+		return ""
+	}
+	line := firstLine(call.Command)
+	if call.Background {
+		return "running in the background " + line
+	}
+	return "running " + line
+}
+
+// firstLine is the first line of command, with "…" if more follow.
+func firstLine(command string) string {
+	line, _, more := strings.Cut(strings.TrimSpace(command), "\n")
 	if more {
 		line += " …"
 	}
-	return "running " + line
+	return line
 }
 
 // settings are what the owner can say about bash in the configuration.
 type settings struct {
 	// Allow are the paths a command may write. Missing is everything the
 	// tools for files may write.
-	Allow *[]string `json:"allow"`
+	Allow *[]string `json:"allow" about:"the paths a command may write" unset:"everything the tools for files may write"`
 	// Deny are paths within those it neither reads nor writes.
-	Deny []string `json:"deny"`
+	Deny []string `json:"deny" about:"paths within those a command neither reads nor writes" unset:"none"`
 	// Network lets a command in the sandbox reach other hosts.
-	Network bool `json:"network"`
+	Network bool `json:"network" about:"a command in the sandbox reaches other hosts" unset:"no"`
 	// Env are the variables of the environment a command gets besides
 	// passed.
-	Env []string `json:"env"`
+	Env []string `json:"env" about:"the variables of the environment a command gets besides the usual ones, by name" unset:"none"`
 }
 
 type args struct {
-	Command string `json:"command"`
-	Dir     string `json:"dir"`
-	Timeout int    `json:"timeout"`
+	Command    string `json:"command"`
+	Dir        string `json:"dir"`
+	Timeout    int    `json:"timeout"`
+	Background bool   `json:"background"`
+	Job        int    `json:"job"`
+	Stop       bool   `json:"stop"`
 }
 
 // Tool returns bash, which asks g for the sandbox of every command, and
@@ -118,13 +151,21 @@ func Tool(g *guard.Guard, unsandboxed func() (bool, error)) plugin.Tool {
 			"Unless the owner turned it off, it runs in a sandbox: it writes only where the tools for files may, " +
 			"reads nothing they may not, and reaches no other host unless the owner allows it with \"network\": true in the settings of bash. " +
 			"What the sandbox refuses does not pass when tried again: tell the user, and do not look for another way. " +
-			"Use the tools for files to read, search and change files, and bash for builds, tests, git and other programs.",
+			"Use the tools for files to read, search and change files, and bash for builds, tests, git and other programs. " +
+			"A command ends with everything it started, also with & or nohup. " +
+			"It runs with pipefail: a pipe fails when any command of it fails, so that | tail does not hide a test that failed. " +
+			"What has to keep running while you go on, like a server you test against, runs with \"background\": true, as a job of this answer: " +
+			"the call returns its number at once, {\"job\": n} shows what it printed since you last looked, and {\"job\": n, \"stop\": true} stops it. " +
+			"It ends with the answer at the latest.",
 		Schema: `{"type":"object","properties":{` +
-			`"command":{"type":"string","description":"the command, as bash -c takes it"},` +
+			`"command":{"type":"string","description":"the command, as bash -c takes it; needed but with \"job\""},` +
 			`"dir":{"type":"string","description":"the directory it runs in: absolute, starting with \"~\", the home directory, or relative to the directory commands start in, where it runs if missing"},` +
-			fmt.Sprintf(`"timeout":{"type":"integer","description":"how many seconds it may run, %d if missing, at most what is left of the script"}`, int(DefaultTimeout/time.Second)) +
-			`},"required":["command"]}`,
-		OwnerOnly: true,
+			fmt.Sprintf(`"timeout":{"type":"integer","description":"how many seconds it may run, %d if missing, at most what is left of the script; in the background as long as the answer if missing; with \"job\" how many seconds to wait for the job to end"},`, int(DefaultTimeout/time.Second)) +
+			`"background":{"type":"boolean","description":"run the command as a job that keeps running, and return at once"},` +
+			`"job":{"type":"integer","description":"the number of a job: shows how it does, without \"command\""},` +
+			`"stop":{"type":"boolean","description":"with \"job\": stop the job"}` +
+			`}}`,
+		Trusted: true,
 	}
 	return plugin.Configurable(t, func(s settings) (plugin.RunFunc, error) {
 		if s.Allow != nil {
@@ -150,85 +191,417 @@ func Tool(g *guard.Guard, unsandboxed func() (bool, error)) plugin.Tool {
 	})
 }
 
-// run runs the command of a with the settings s.
+// run runs the command of a with the settings s, or looks at the job a
+// names.
 func run(ctx context.Context, g *guard.Guard, unsandboxed func() (bool, error), s settings, a args) (string, error) {
-	if a.Command == "" {
-		return "", errors.New(assistant.ToolBash + ` needs "command"`)
-	}
-	if _, peer := plugin.OriginFrom(ctx); peer {
-		return "", errors.New(assistant.ToolBash + " is for the owner of the node alone")
-	}
 	if a.Timeout < 0 {
 		return "", errors.New("timeout is a number of seconds")
 	}
-	without, err := unsandboxed()
-	if err != nil {
-		return "", fmt.Errorf("the configuration cannot be read, so no command runs: %w", err)
+	if a.Job != 0 {
+		return look(ctx, a)
 	}
-	access := guard.Access{Tool: assistant.ToolBash, Allow: s.Allow, Deny: s.Deny}
-	// "allow" says where a command writes; it reads everywhere else too.
-	dir, err := workDir(g, guard.Access{Tool: assistant.ToolBash, Deny: s.Deny}, a.Dir)
+	if a.Stop {
+		return "", errors.New(`"stop" goes with "job", the job to stop`)
+	}
+	if a.Command == "" {
+		return "", errors.New(assistant.ToolBash + ` needs "command"`)
+	}
+	var started *jobs
+	if a.Background {
+		if started = jobsOf(ctx); started == nil {
+			return "", errors.New(assistant.ToolBash + " runs a command in the background within an answer alone")
+		}
+	}
+	dir, access, without, err := prepare(ctx, assistant.ToolBash, g, unsandboxed, s, a.Dir)
 	if err != nil {
 		return "", err
 	}
 
-	timeout := DefaultTimeout
-	if a.Timeout > 0 {
-		timeout = time.Duration(a.Timeout) * time.Second
+	var cancel context.CancelFunc
+	if a.Background {
+		// It runs until it ends, or its time is up, or the answer is.
+		ctx, cancel = context.WithCancel(started.ctx)
+		if a.Timeout > 0 {
+			ctx, cancel = context.WithTimeout(started.ctx, time.Duration(a.Timeout)*time.Second)
+		}
+	} else {
+		timeout := DefaultTimeout
+		if a.Timeout > 0 {
+			timeout = time.Duration(a.Timeout) * time.Second
+		}
+		// The command ends before its script, so that the script gets its
+		// result.
+		if deadline, ok := ctx.Deadline(); ok {
+			timeout = min(timeout, time.Until(deadline)-grace)
+		}
+		if timeout <= 0 {
+			return "", errors.New("the script has no time left for a command")
+		}
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 	}
-	// The command ends before its script, so that the script gets its
-	// result.
-	if deadline, ok := ctx.Deadline(); ok {
-		timeout = min(timeout, time.Until(deadline)-grace)
+	p, err := launch(ctx, cancel, dir, s, a.Command, g, access, without, nil)
+	if err != nil {
+		cancel()
+		return "", err
 	}
-	if timeout <= 0 {
-		return "", errors.New("the script has no time left for a command")
+	if a.Background {
+		n, err := started.add(p)
+		if err != nil {
+			cancel()
+			<-p.done
+			return "", err
+		}
+		return fmt.Sprintf(`job %d runs in the background: {"job": %[1]d} shows what it printed since, `+
+			`with "timeout" waiting that many seconds for it to end; {"job": %[1]d, "stop": true} stops it. `+
+			`It ends with this answer at the latest`, n), nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	<-p.done
+	result, stopped := p.ending()
+	if stopped {
+		return "", errors.New("the command was " + result)
+	}
+	return result, nil
+}
 
+// prepare is what a command of the tool for the conversation of ctx runs
+// with: the directory dir as the settings s allow it, the home directory or
+// the workspace if it is "", the access of its sandbox, and whether it runs
+// without one.
+func prepare(ctx context.Context, tool string, g *guard.Guard, unsandboxed func() (bool, error), s settings, dir string) (string, guard.Access, bool, error) {
+	without, err := unsandboxed()
+	if err != nil {
+		return "", guard.Access{}, false, fmt.Errorf("the configuration cannot be read, so no command runs: %w", err)
+	}
+	// A peer the owner listed the tool for in tools.peers runs its commands
+	// in the sandbox alone, in a directory it may write.
+	_, peer := plugin.OriginFrom(ctx)
+	if peer && without {
+		return "", guard.Access{}, false, errors.New(tool + " runs the commands of a peer in a sandbox alone, and the owner turned it off")
+	}
+	access := guard.Access{Tool: tool, Allow: s.Allow, Deny: s.Deny, Peer: peer}
+	// "allow" says where a command writes; it reads everywhere else too.
+	read := guard.Access{Tool: tool, Deny: s.Deny}
+	if peer {
+		if s.Allow == nil || len(*s.Allow) == 0 {
+			return "", guard.Access{}, false, errors.New(tool + ` has no "allow" for this peer, so it runs nothing`)
+		}
+		if dir == "" {
+			dir = (*s.Allow)[0]
+		}
+		read = access
+	}
+	dir, err = workDir(g, read, dir)
+	return dir, access, without, err
+}
+
+// launch starts command in dir, in the sandbox access and the settings s
+// make, unless it runs without one, until ctx ends; cancel is called once
+// it ended. A service runs command as such, see serviceScript.
+func launch(ctx context.Context, cancel context.CancelFunc, dir string, s settings, command string, g *guard.Guard, access guard.Access, without bool, svc *serviceStart) (*process, error) {
 	var cmd *exec.Cmd
 	env := environment(os.Environ(), s.Env)
+	// A pipe fails when one of its commands does: what the agent pipes
+	// into tail or grep does not hide that it failed.
+	args := []string{"-o", "pipefail", "-c", command}
+	if svc != nil {
+		args = []string{"-c", serviceScript, "ouro-service", command}
+	}
 	if without {
-		cmd = exec.CommandContext(ctx, shell, "-c", a.Command)
+		cmd = exec.CommandContext(ctx, shell, args...)
 	} else {
 		p, err := g.Box(access, s.Network)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		if cmd, err = sandbox.Command(ctx, p, shell, "-c", a.Command); errors.Is(err, sandbox.ErrUnavailable) {
-			return "", fmt.Errorf("%s runs its commands in a sandbox, and there is none: %w; "+
+		if cmd, err = sandbox.Command(ctx, p, shell, args...); errors.Is(err, sandbox.ErrUnavailable) {
+			return nil, fmt.Errorf("%s runs its commands in a sandbox, and there is none: %w; "+
 				`only the owner can let it run without one, with "%s": true in the configuration`, assistant.ToolBash, err, config.FieldBashUnsandboxed)
 		} else if err != nil {
-			return "", err
+			return nil, err
 		}
 		env = append(env, sandbox.Env+"=1")
 	}
-	out := &output{}
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, out, out
+	// What it prints goes through a pipe of its own, not one exec copies
+	// from: the command has ended once its process did, also when what it
+	// started keeps the pipe open.
+	r, w, err := pipe()
+	if err != nil {
+		return nil, err
+	}
+	if svc != nil {
+		// The tag goes to everything it starts; the end of the pipe the
+		// service watches comes after what the sandbox passes on.
+		env = append(env, serviceEnv+"="+svc.tag, fmt.Sprintf("%s=%d", watchEnv, 3+len(cmd.ExtraFiles)))
+		cmd.ExtraFiles = append(cmd.ExtraFiles, svc.watch)
+	}
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, w, w
 	// The command and everything it starts are one group, which is stopped
 	// as one.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = grace
 
-	start := time.Now()
-	err = cmd.Run()
-	var exit *exec.ExitError
-	switch {
-	case ctx.Err() != nil:
-		return "", fmt.Errorf("the command was stopped after %s; what it printed:\n%s", time.Since(start).Round(time.Second), out)
-	case errors.As(err, &exit):
-	case err != nil:
-		return "", err
+	p := &process{cmd: cmd, command: command, cancel: cancel, without: without, start: time.Now(), done: make(chan struct{}), out: &output{}}
+	if svc != nil {
+		p.log = svc.log
 	}
-	result := fmt.Sprintf("exit %d\n%s", cmd.ProcessState.ExitCode(), out)
-	if !without && cmd.ProcessState.ExitCode() != 0 && refused(out.String()) {
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
+		r.Close()
+		return nil, err
+	}
+	copied := make(chan struct{})
+	go func() {
+		io.Copy(p, r)
+		close(copied)
+	}()
+	go func() {
+		cmd.Wait()
+		p.took, p.stopped = time.Since(p.start), ctx.Err() != nil
+		p.late = errors.Is(ctx.Err(), context.DeadlineExceeded)
+		// What a command that was stopped left is what it waited for.
+		if !without && sandbox.Stop(cmd.Process.Pid) && !p.stopped {
+			p.left = leftRunning
+		}
+		// What left the group may keep the pipe open: it is not waited for.
+		select {
+		case <-copied:
+		case <-time.After(grace):
+		}
+		r.Close()
+		<-copied
+		cancel()
+		close(p.done)
+	}()
+	return p, nil
+}
+
+// process is a command that was started.
+type process struct {
+	cmd     *exec.Cmd
+	command string
+	cancel  context.CancelFunc // stops it
+	without bool               // it runs without a sandbox
+	start   time.Time
+	done    chan struct{} // closed once it ended, and its output with it
+
+	// Once done is closed: how long it ran, whether it was stopped, and
+	// what the agent is told of what it left running.
+	took    time.Duration
+	stopped bool
+	late    bool // it was stopped as its time was up
+	left    string
+
+	mu  sync.Mutex
+	out *output // what it printed since it was last asked
+	log *ring   // what a service printed last, instead of out
+}
+
+// Write keeps what the command printed.
+func (p *process) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.log != nil {
+		return p.log.Write(b)
+	}
+	return p.out.Write(b)
+}
+
+// take returns what the command printed since it was last asked.
+func (p *process) take() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := p.out.String()
+	p.out = &output{}
+	return out
+}
+
+// ending is how the command ended, once it did, with what it printed since
+// it was last asked, and whether it was stopped.
+func (p *process) ending() (string, bool) {
+	out := p.take()
+	if p.stopped {
+		note := ""
+		if p.late {
+			note = "\n[its time was up: run it again with a larger \"timeout\", as far as the script has time left, or with \"background\": true]"
+		}
+		return fmt.Sprintf("stopped after %s; what it printed:\n%s%s", p.took.Round(time.Second), out, note), true
+	}
+	code := p.cmd.ProcessState.ExitCode()
+	result := fmt.Sprintf("exit %d\n%s%s", code, out, p.left)
+	switch {
+	case code == 141:
+		result += "\n[exit 141 is a command of a pipe that was ended as the command after it stopped reading, as head does: " +
+			"what it printed before is complete as far as it goes]"
+	case code == 0 && failedTests.MatchString(out):
+		result += "\n[the output says that tests failed, though the command ended with exit 0: " +
+			"what it piped into, or ran after them, hid it. Take the tests as failed, and say so]"
+	}
+	if !p.without && code != 0 && refused(out) {
 		result += "\n[it ran in a sandbox: what the output says was not permitted, on a read-only file system or " +
 			"without network was refused by the sandbox, and does not pass when tried again. Tell the user, who sets what bash may]"
 	}
-	return result, nil
+	return result, false
 }
+
+// failedTests finds where the output of a command says that tests failed:
+// of go test, pytest and jest.
+var failedTests = regexp.MustCompile(`(?m)^(--- FAIL: |FAIL\s|FAILED |Tests:.*\d+ failed)`)
+
+// MaxJobs is how many commands of an answer run in the background at once.
+const MaxJobs = 8
+
+// jobs are the commands an answer started in the background, the first as
+// job 1. They end with the answer at the latest, with ctx.
+type jobs struct {
+	ctx context.Context
+	mu  sync.Mutex
+	all []*process
+}
+
+type jobsKey struct{}
+
+// jobsOf returns the jobs of the answer ctx is in, nil outside of one.
+func jobsOf(ctx context.Context) *jobs {
+	answer := agent.AnswerOf(ctx)
+	if answer == nil {
+		return nil
+	}
+	return answer.Value(jobsKey{}, func() any { return &jobs{ctx: answer.Context()} }).(*jobs)
+}
+
+// add makes p a job and returns its number, unless MaxJobs run. The owner
+// is told the jobs that run now, and again once p ended.
+func (j *jobs) add(p *process) (int, error) {
+	n, err := j.append(p)
+	if err != nil {
+		return 0, err
+	}
+	j.report()
+	go func() {
+		<-p.done
+		j.report()
+	}()
+	return n, nil
+}
+
+// append makes p a job and returns its number, unless MaxJobs run.
+func (j *jobs) append(p *process) (int, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if len(j.own()) >= MaxJobs {
+		return 0, fmt.Errorf("%d commands run in the background already: stop one first", MaxJobs)
+	}
+	j.all = append(j.all, p)
+	return len(j.all), nil
+}
+
+// own are the jobs of the answer that run, as the owner is shown them:
+// their number, the first line of their command and when they started.
+// j.mu is held.
+func (j *jobs) own() []plugin.Job {
+	var all []plugin.Job
+	for i, p := range j.all {
+		select {
+		case <-p.done:
+		default:
+			all = append(all, plugin.Job{N: i + 1, Command: firstLine(p.command), Since: p.start})
+		}
+	}
+	return all
+}
+
+// report tells the owner the jobs that run: under j.mu, so that what the
+// owner is told last is what runs.
+func (j *jobs) report() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	plugin.TellJobs(j.ctx, j.own(), j.stop)
+}
+
+// stop stops job n, for the owner, and reports whether it ran.
+func (j *jobs) stop(n int) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if n < 1 || n > len(j.all) {
+		return false
+	}
+	p := j.all[n-1]
+	select {
+	case <-p.done:
+		return false
+	default:
+		p.cancel()
+		return true
+	}
+}
+
+// job returns job n.
+func (j *jobs) job(n int) (*process, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if n < 1 || n > len(j.all) {
+		if len(j.all) == 0 {
+			return nil, fmt.Errorf("there is no job %d: this answer started no command in the background", n)
+		}
+		return nil, fmt.Errorf("there is no job %d: this answer started jobs 1 to %d", n, len(j.all))
+	}
+	return j.all[n-1], nil
+}
+
+// look tells how the job of a does, with what it printed since it was last
+// asked: once it ended, once "timeout" seconds passed, or at once; one that
+// a stops it first.
+func look(ctx context.Context, a args) (string, error) {
+	if a.Command != "" {
+		return "", errors.New(`"job" goes without "command": a job runs one command`)
+	}
+	var p *process
+	var err error
+	started := jobsOf(ctx)
+	if started == nil {
+		return "", errors.New("there are no jobs outside of an answer")
+	}
+	p, err = started.job(a.Job)
+	if err != nil {
+		return "", err
+	}
+	if a.Stop {
+		p.cancel()
+		<-p.done
+	} else if a.Timeout > 0 {
+		wait := time.Duration(a.Timeout) * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			wait = min(wait, time.Until(deadline)-grace)
+		}
+		timer := time.NewTimer(max(wait, 0))
+		defer timer.Stop()
+		select {
+		case <-p.done:
+		case <-timer.C:
+		}
+	}
+	select {
+	case <-p.done:
+		result, stopped := p.ending()
+		if stopped {
+			return fmt.Sprintf("job %d was %s", a.Job, result), nil
+		}
+		return fmt.Sprintf("job %d ended: %s", a.Job, result), nil
+	default:
+		return fmt.Sprintf("job %d runs, for %s; what it printed since:\n%s", a.Job, time.Since(p.start).Round(time.Second), p.take()), nil
+	}
+}
+
+// leftRunning is what the agent is told when a command in the sandbox left
+// processes running, which were stopped with it: what it started in the
+// background, with & or nohup. On Linux the sandbox stops also what left
+// the group, with setsid; on macOS that keeps running.
+const leftRunning = "\n[the command left processes running, like one started with & or nohup: they were stopped, " +
+	`as a command ends with everything it started. What has to keep running, like a server, runs with "background": true]`
+
+// pipe makes the pipe of what a command prints; tests replace it.
+var pipe = os.Pipe
 
 // workDir is the directory a command runs in: dir, as g allows reading it
 // for access, or the home directory of the user.

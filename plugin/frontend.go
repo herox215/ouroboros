@@ -68,6 +68,25 @@ func WithRestart(ctx context.Context, restart func(exe string)) context.Context 
 // starts anew as well. It reports false if nobody does that, like for a peer.
 func Restart(ctx context.Context, exe string) bool { return session.AskRestart(ctx, exe) }
 
+// GoOn asks the node that holds the conversation of ctx to go on with it by
+// itself once it started anew from the build Restart asked for: the agent is
+// told to go on, as if the owner said so. It reports false if nobody does
+// that, like for a peer, whose next message goes on with it.
+func GoOn(ctx context.Context) bool { return session.AskGoOn(ctx) }
+
+// TellJobs tells the owner which commands a tool runs in the background for
+// the answer of ctx, with N, Command and Since of each, and stop, which
+// stops the job n and reports whether it ran: see SessionJobs and
+// Sessions.Jobs. None once they ended. It reports false if nobody is told.
+func TellJobs(ctx context.Context, running []Job, stop func(n int) bool) bool {
+	return session.TellJobs(ctx, running, stop)
+}
+
+// WithGoOn returns ctx in which a tool can ask the conversation to go on by
+// itself in the new build: goOn is called, see GoOn. The node hands such a
+// ctx to the answers of the sessions of the owner.
+func WithGoOn(ctx context.Context, goOn func()) context.Context { return session.WithGoOn(ctx, goOn) }
+
 // Restarting is the error a command ends with whose process is to be
 // started anew, like a front end or a node that is replaced by a new build:
 // the process runs Exe in its place, with its arguments and Env as its
@@ -92,6 +111,15 @@ type (
 	SessionKind = session.Kind
 	// SessionInfo describes a session for a list of them.
 	SessionInfo = session.Info
+	// Job is a command a tool runs in the background for an answer, see
+	// Sessions.Jobs.
+	Job = session.Job
+	// ServiceInfo is a service a tool keeps running past the answers, see
+	// Sessions.Services.
+	ServiceInfo = session.ServiceInfo
+	// Services are the services a tool keeps running: a tool contributes
+	// them with Add, and Sessions.Services lists them.
+	Services = session.Services
 	// ContextLine is a message of the context of a session, see
 	// Sessions.Contents.
 	ContextLine = session.Line
@@ -117,6 +145,7 @@ const (
 	SessionRestart  = session.Restart  // ouro starts anew from a new build, the binary in Text
 	SessionTitle    = session.Title    // the session is named for its topic, in Text
 	SessionEffort   = session.Effort   // how much the model thinks in the session, in Text
+	SessionJobs     = session.Jobs     // the commands that run in the background for the answer, a line each in Text
 	// SessionAsked is a question the agent asks the owner and waits for,
 	// see SessionEvent.AsQuestion: what the owner says next in the session,
 	// with Sessions.Steer, answers it. With Done the wait is over, and Text
@@ -127,6 +156,11 @@ const (
 var (
 	// ErrBusy means that an answer is on its way in the session already.
 	ErrBusy = session.ErrBusy
+	// ErrNoJob means a job that does not run, see Sessions.StopJob.
+	ErrNoJob = session.ErrNoJob
+	// ErrNoService means a service that does not run, see
+	// Sessions.StopService.
+	ErrNoService = session.ErrNoService
 	// ErrNotRunning means that the node that holds the sessions does not
 	// run: Sessions.Open starts it.
 	ErrNotRunning = session.ErrNotRunning

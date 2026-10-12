@@ -262,6 +262,21 @@ func (f *fakeBackend) Peers(ctx context.Context) ([]plugin.SessionInfo, error) {
 	}
 	return f.peers, nil
 }
+func (f *fakeBackend) Jobs(ctx context.Context) ([]plugin.Job, error) {
+	if err := f.fail["jobs"]; err != nil {
+		return nil, err
+	}
+	return f.sessions.Jobs(ctx)
+}
+func (f *fakeBackend) Services(ctx context.Context) ([]plugin.ServiceInfo, error) {
+	return f.sessions.Services(ctx)
+}
+func (f *fakeBackend) StopService(ctx context.Context, id string) error {
+	return f.sessions.StopService(ctx, id)
+}
+func (f *fakeBackend) StopJob(ctx context.Context, id string, n int) error {
+	return f.sessions.StopJob(ctx, id, n)
+}
 func (f *fakeBackend) Read(ctx context.Context, id string) ([]Event, error) {
 	if err := f.fail["read"]; err != nil {
 		return nil, err
@@ -672,7 +687,7 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	c := m.chat
 	// The call these words belong to goes below them.
 	want := []entry{{mine: true, text: "ask beta for the time"},
-		{text: "I will ask beta", calls: []call{{"asking beta", true}}}, {text: "beta says it is noon"}}
+		{text: "I will ask beta", calls: []call{{text: "asking beta", done: true}}}, {text: "beta says it is noon"}}
 	if !sameEntries(c.entries, want) {
 		t.Fatalf("the loop belongs in the history: %+v", c.entries)
 	}
@@ -786,8 +801,8 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	drive(t, m, nil, func() bool { return !m.chat.pending })
 
 	want := []entry{{mine: true, text: "fix it"},
-		{text: "I read both", calls: []call{{"reading a.go ✓ 3ms", true}, {"reading b.go ✗ no such file", true}}},
-		{calls: []call{{"running a script ✓ 9ms", true}, {"writing c.go ✓ 1ms", true}}},
+		{text: "I read both", calls: []call{{text: "reading a.go ✓ 3ms", done: true}, {text: "reading b.go ✗ no such file", done: true}}},
+		{calls: []call{{text: "running a script ✓ 9ms", done: true}, {text: "writing c.go ✓ 1ms", done: true}}},
 		{text: ""}}
 	if !sameEntries(m.chat.entries, want) {
 		t.Fatalf("the loop in the history: %+v", m.chat.entries)

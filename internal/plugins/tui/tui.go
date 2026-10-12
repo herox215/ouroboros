@@ -222,6 +222,7 @@ func (u *ui) event(e plugin.SessionEvent) tui.Event {
 	shown := tui.Event{Kind: e.Kind, Text: e.Text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
 	if e.Kind == plugin.SessionStep {
 		s := e.AsStep()
+		shown.Tool, shown.Failed = s.Tool, s.Done && s.Err != nil
 		shown.Text = plugin.ToolLine(u.ctx, s)
 		if shown.Text != "" && s.Done {
 			shown.Text = plugin.ToolDetail(u.ctx, s, shown.Text)
@@ -264,6 +265,25 @@ func (u *ui) Delete(ctx context.Context, id string) error { return u.sessions.De
 
 // Peers lists the conversations of peers the node has.
 func (u *ui) Peers(ctx context.Context) ([]plugin.SessionInfo, error) { return u.sessions.Peers(ctx) }
+
+// Jobs lists the commands that run in the background for the answers on
+// their way.
+func (u *ui) Jobs(ctx context.Context) ([]plugin.Job, error) { return u.sessions.Jobs(ctx) }
+
+// StopJob stops the job n of the session or conversation of a peer id.
+func (u *ui) StopJob(ctx context.Context, id string, n int) error {
+	return u.sessions.StopJob(ctx, id, n)
+}
+
+// Services lists the services that run past the answers.
+func (u *ui) Services(ctx context.Context) ([]plugin.ServiceInfo, error) {
+	return u.sessions.Services(ctx)
+}
+
+// StopService stops the service id.
+func (u *ui) StopService(ctx context.Context, id string) error {
+	return u.sessions.StopService(ctx, id)
+}
 
 // Read returns what happened in the conversation of a peer id, as the UI
 // shows it.

@@ -36,6 +36,8 @@ var codes = map[string]error{
 	"no_session": ErrNoSession,
 	"empty":      ErrEmpty,
 	"no_effort":  ErrNoEffort,
+	"no_job":     ErrNoJob,
+	"no_service": ErrNoService,
 	"not_set_up": config.ErrIncomplete,
 }
 
@@ -51,6 +53,13 @@ type (
 		Text string `json:"text"`
 	}
 	idRequest struct {
+		ID string `json:"id"`
+	}
+	jobRequest struct {
+		ID string `json:"id"`
+		N  int    `json:"n"`
+	}
+	serviceRequest struct {
 		ID string `json:"id"`
 	}
 	effortRequest struct {
@@ -128,6 +137,26 @@ func Handler(s *Service) http.Handler {
 		list, err := s.Peers(r.Context())
 		reply(w, list, err)
 	})
+	mux.HandleFunc("GET /jobs", func(w http.ResponseWriter, r *http.Request) {
+		jobs, _ := s.Jobs(r.Context()) // a Service always knows its jobs
+		reply(w, jobs, nil)
+	})
+	mux.HandleFunc("POST /stopjob", func(w http.ResponseWriter, r *http.Request) {
+		var in jobRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.StopJob(r.Context(), in.ID, in.N))
+		}
+	})
+	mux.HandleFunc("GET /services", func(w http.ResponseWriter, r *http.Request) {
+		services, _ := s.Services(r.Context()) // a Service always knows its services
+		reply(w, services, nil)
+	})
+	mux.HandleFunc("POST /stopservice", func(w http.ResponseWriter, r *http.Request) {
+		var in serviceRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.StopService(r.Context(), in.ID))
+		}
+	})
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
 		events, err := s.Read(r.Context(), r.URL.Query().Get("id"))
 		reply(w, events, err)
@@ -146,6 +175,10 @@ func Handler(s *Service) http.Handler {
 	})
 	mux.HandleFunc("POST /release", func(w http.ResponseWriter, r *http.Request) {
 		reply(w, releaseResponse{s.Releases()}, nil)
+	})
+	mux.HandleFunc("POST /keep", func(w http.ResponseWriter, r *http.Request) {
+		s.Keep()
+		reply(w, struct{}{}, nil)
 	})
 	mux.HandleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) {
 		past, live, err := s.Watch(r.Context(), r.URL.Query().Get("id"))
@@ -349,6 +382,32 @@ func (c *Client) Peers(ctx context.Context) ([]Info, error) {
 	return list, err
 }
 
+// Jobs are the commands that run in the background for the answers on
+// their way, the oldest first.
+func (c *Client) Jobs(ctx context.Context) ([]Job, error) {
+	var jobs []Job
+	err := c.do(ctx, http.MethodGet, "/jobs", nil, &jobs)
+	return jobs, err
+}
+
+// StopJob stops the job n of the answer on its way in the session or
+// conversation of a peer id.
+func (c *Client) StopJob(ctx context.Context, id string, n int) error {
+	return c.do(ctx, http.MethodPost, "/stopjob", jobRequest{id, n}, nil)
+}
+
+// Services are the services that run past the answers, the oldest first.
+func (c *Client) Services(ctx context.Context) ([]ServiceInfo, error) {
+	var services []ServiceInfo
+	err := c.do(ctx, http.MethodGet, "/services", nil, &services)
+	return services, err
+}
+
+// StopService stops the service id.
+func (c *Client) StopService(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodPost, "/stopservice", serviceRequest{id}, nil)
+}
+
 // Read returns what happened in the conversation of a peer id.
 func (c *Client) Read(ctx context.Context, id string) ([]Event, error) {
 	var events []Event
@@ -410,6 +469,12 @@ func (c *Client) Open(context.Context) (bool, error) {
 	return err == nil, err
 }
 
+// Keep makes the node that runs run on, also when the front end that
+// started it lets go of it: see Service.Keep.
+func (c *Client) Keep(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/keep", struct{}{}, nil)
+}
+
 // Release lets the node stop once no answer is on its way, and waits until it
 // stopped unless an answer keeps it running. A node that does not run is
 // stopped already.
@@ -418,6 +483,18 @@ func (c *Client) Release(ctx context.Context) error {
 	err := c.do(ctx, http.MethodPost, "/release", struct{}{}, &out)
 	if errors.Is(err, ErrNotRunning) {
 		return nil
+	}
+	// A node that stops on the way, as by ouro stop, is let go of: it
+	// gives up its PID file a moment after its socket.
+	if err != nil {
+		for deadline := time.Now().Add(time.Second); ; time.Sleep(pollInterval) {
+			if _, running := c.local.Running(); !running {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return err
+			}
+		}
 	}
 	if err != nil || !out.Stopping {
 		return err

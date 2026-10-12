@@ -33,8 +33,10 @@ type services struct {
 // assistant: those in the archive of the node too, and the conversations of
 // peers in it to read. A peer is named as the contacts in dir name it.
 func Plugin(dir home.Dir) plugin.Plugin {
-	return plugin.NewService("sessions", func(_ *plugin.Context, n needs) (services, error) {
-		return services{In(dir, n.Assistant), session.NewClient(dir)}, nil
+	return plugin.NewService("sessions", func(ctx *plugin.Context, n needs) (services, error) {
+		s := In(dir, n.Assistant)
+		s.ServicesFrom(func() []session.Services { return plugin.All[plugin.Services](ctx) })
+		return services{s, session.NewClient(dir)}, nil
 	})
 }
 

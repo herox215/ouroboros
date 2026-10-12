@@ -111,6 +111,15 @@ func TestCommandSuggestions(t *testing.T) {
 	}
 	press(m, "esc")
 
+	// Esc closes the list with what was typed of the command, and leaves the
+	// answer on its way alone.
+	m.chat.pending = true
+	press(m, "/", "m", "o", "esc")
+	if m.input.Value() != "" || len(suggested(m)) != 0 || !m.chat.pending {
+		t.Fatalf("input %q, suggested %q, pending %v", m.input.Value(), suggested(m), m.chat.pending)
+	}
+	m.chat.pending = false
+
 	// More commands than the list has rows: it scrolls to the one selected.
 	m.input.SetValue("/")
 	if got := suggested(m); len(got) != maxSuggestions || got[0] != "› /new start a new conversation; the one shown goes on" {

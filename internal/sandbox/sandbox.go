@@ -52,6 +52,13 @@ const Env = "OURO_SANDBOX"
 // sandbox can be started.
 func Nested() bool { return os.Getenv(Env) != "" }
 
+// Stop stops what is left of the group of processes pgid of a command in the
+// sandbox once it ended, and reports whether anything was: what it started
+// in the background, with & or nohup. On Linux it finds nothing, as the
+// sandbox ended all of it with the command, in a namespace of processes of
+// its own; on macOS what left the group, with setsid, is out of its reach.
+func Stop(pgid int) bool { return stop(pgid) }
+
 // ErrUnavailable is the error of a system on which no sandbox can be had.
 var ErrUnavailable = errors.New("no sandbox is available on this system")
 

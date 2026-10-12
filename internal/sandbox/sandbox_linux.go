@@ -66,6 +66,10 @@ func available() error {
 	return nil
 }
 
+// stop finds nothing: the namespace of processes of the command ended all
+// it started, see wrap.
+func stop(int) bool { return false }
+
 func command(ctx context.Context, p Policy, path string, args []string) (*exec.Cmd, error) {
 	return wrap(ctx, find(), p, path, args) // Available found it
 }
@@ -93,7 +97,9 @@ func wrap(ctx context.Context, b string, p Policy, path string, args []string) (
 		w.Write(prog)
 		w.Close()
 	}()
-	flags := []string{"--die-with-parent"}
+	// The command has a namespace of processes of its own: once it ends,
+	// what it started ends with it, also what left its group.
+	flags := []string{"--die-with-parent", "--unshare-pid"}
 	if !p.Network {
 		flags = append(flags, "--unshare-net")
 	}

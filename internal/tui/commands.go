@@ -23,6 +23,7 @@ var own = []command{
 	{"new", "start a new conversation; the one shown goes on", (*Model).newConversation},
 	{"session", "list the conversations and switch to one", (*Model).openSessions},
 	{"cancel", "stop the answer on its way in this conversation", (*Model).cancel},
+	{"jobs", "list the commands that run in the background, also for peers, and stop one", (*Model).openJobs},
 	{"start", "start the node", (*Model).start},
 	{"stop", "stop the node", (*Model).stop},
 	{"setup", "set up the node", (*Model).setup},
@@ -106,8 +107,9 @@ func (m *Model) suggestions() ([]command, int) {
 }
 
 // handleSuggestionKey handles the keys of the list of suggestions: up and
-// down select a command, tab completes the input to it, and enter runs it.
-// It reports whether the key was one of them.
+// down select a command, tab completes the input to it, enter runs it, and
+// esc closes the list with the command typed, leaving the answer on its way
+// alone. It reports whether the key was one of them.
 func (m *Model) handleSuggestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	found, selected := m.suggestions()
 	if len(found) == 0 {
@@ -120,6 +122,9 @@ func (m *Model) handleSuggestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.suggest = (selected + 1) % len(found)
 	case "tab":
 		m.input.SetValue("/" + found[selected].name)
+		m.suggest = 0
+	case "esc":
+		m.input.Reset()
 		m.suggest = 0
 	case "enter":
 		m.remember("/" + found[selected].name)

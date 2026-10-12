@@ -11,6 +11,8 @@ import (
 
 func available() error { return fmt.Errorf("%w on %s", ErrUnavailable, runtime.GOOS) }
 
+func stop(int) bool { return false } // no sandbox started a command
+
 func command(context.Context, Policy, string, []string) (*exec.Cmd, error) {
 	return nil, available()
 }

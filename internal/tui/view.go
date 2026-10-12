@@ -109,7 +109,7 @@ func (m *Model) chatHeight() int { return max(4, m.bodyHeight()-inputHeight-2) }
 func (m *Model) layout() {
 	atBottom := m.history.AtBottom()
 	m.selected, m.pressed = nil, nil // its lines are wrapped anew
-	inner := max(1, m.width-4)       // border and padding
+	inner := max(1, m.chatWidth()-4) // border and padding
 	m.input.SetWidth(inner)
 	m.history.SetWidth(inner)
 	m.history.SetHeight(max(1, m.chatHeight()-3)) // border and typing line
@@ -232,7 +232,7 @@ func (c *conversation) summary(calls []call) string {
 	failed := 0
 	var pictures []string
 	for _, call := range calls {
-		if strings.Contains(call.text, " ✗ ") {
+		if call.failed || strings.Contains(call.text, " ✗ ") {
 			failed++
 		}
 		// How large a picture was shown, as the tool that read it said.
@@ -296,11 +296,13 @@ func (m *Model) View() tea.View {
 	case screenContext:
 		body = m.context.view(m)
 	case screenSettings:
-		body = m.config.view(m)
+		body = m.overlay(m.config.view(m))
 	case screenSessions:
 		body = m.sessions.view(m)
 	case screenEffort:
 		body = m.overlay(m.effort.view(m))
+	case screenJobs:
+		body = m.overlay(m.jobs.view(m))
 	default:
 		body = m.chatView()
 	}
@@ -517,8 +519,23 @@ func (m *Model) chatTitle() string {
 	return " " + strings.Join(parts, mutedStyle.Render("  · "))
 }
 
+// chatWidth is how wide the chat and the input are: what the list of the
+// jobs leaves of the width, if it is shown.
+func (m *Model) chatWidth() int { return max(1, m.width-m.jobsWidth()) }
+
+// chatView is the chat with the input below it, and the list of the jobs on
+// the right of both if it is shown.
 func (m *Model) chatView() string {
-	w, h := m.width, m.chatHeight()
+	chat := m.chatColumn()
+	if m.jobsWidth() == 0 {
+		return chat
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, chat, m.jobsList())
+}
+
+// chatColumn is the chat with the input below it.
+func (m *Model) chatColumn() string {
+	w, h := m.chatWidth(), m.chatHeight()
 	inner := max(1, w-4)
 	c := m.chat
 	var content string
@@ -562,7 +579,7 @@ func (m *Model) chatView() string {
 // input. Like the centered dialogs it has a border of its own and leaves the
 // faded frame of the chat to be seen around it. It is "" without either.
 func (m *Model) panel() string {
-	w, h := m.width, m.chatHeight()
+	w, h := m.chatWidth(), m.chatHeight()
 	suggested := m.suggestionLines(h - 6)
 	if a := m.chat.asking; len(suggested) == 0 && (a == nil || a.sent) {
 		return ""
@@ -662,6 +679,8 @@ func (m *Model) footerHint() string {
 		help = "esc back"
 	case screenEffort:
 		help = "←→ choose · enter set · esc back"
+	case screenJobs:
+		help = "↑↓ select · enter stop · esc back"
 	case screenModel:
 		help = "↑↓ choose · enter set · p for peers · f fallback · esc back"
 	case screenSessions:
@@ -677,7 +696,7 @@ func (m *Model) footerHint() string {
 	case screenSettings:
 		help = "↑↓ select · enter open · esc back"
 		if m.config.opened {
-			help = "↑↓ select · ←→ choose · enter do · esc categories"
+			help = "↑↓ select · ←→ choose · enter do · esc back"
 		}
 		if m.config.editing != nil {
 			help = "enter save · esc keep what was"
@@ -687,6 +706,12 @@ func (m *Model) footerHint() string {
 		if len(m.plugins.screens[m.plugins.open].Actions) > 0 {
 			help = "←→ select · enter run · " + help
 		}
+	}
+	if m.screen == screenChat && m.jobsShown { // the key that hides the list again
+		if help != "" {
+			help += " · "
+		}
+		help += jobsKey + " hide"
 	}
 	right := mutedStyle.Render(help)
 	if m.notice != "" {
@@ -715,7 +740,7 @@ func (m *Model) footerView() string {
 	right = ansi.Truncate(right, m.width, "…")
 	left := ""
 	switch m.screen {
-	case screenChat, screenHelp, screenKeys, screenModel, screenEffort: // the dialogs lie over the chat
+	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings: // the dialogs lie over the chat
 		if room := m.width - lipgloss.Width(right) - 1; room > 0 {
 			left = ansi.Truncate(m.chatTitle(), room, "…")
 		}
