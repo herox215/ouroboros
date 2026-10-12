@@ -2,6 +2,8 @@
 package config
 
 import (
+	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"ouroboros/internal/identity"
+	"ouroboros/internal/printable"
 	"ouroboros/internal/safefile"
 )
 
@@ -68,8 +71,34 @@ type Config struct {
 	// sandbox, wherever there is one: with network, and with nothing of the
 	// rules for files. Only the owner sets it: no proposal does.
 	BashWithoutSandbox bool `json:"bash_without_sandbox,omitempty"`
+	// SelfImprove says what the agent of the owner does where ouro lacks what
+	// a task needs, if it may build ouro: SelfImproveBuild, the default, or
+	// SelfImprovePropose. Only the owner sets it: no proposal does.
+	SelfImprove string `json:"self_improve,omitempty"`
 	// Plugins says which plugins of the build are turned off.
 	Plugins *Plugins `json:"plugins,omitempty"`
+}
+
+// What SelfImprove says.
+const (
+	// SelfImproveBuild lets the agent build into ouro what a task needs and
+	// ouro lacks, when that is the better way than a workaround.
+	SelfImproveBuild = "build"
+	// SelfImprovePropose lets it propose that change and no more: it changes
+	// ouro only when the owner asks.
+	SelfImprovePropose = "propose"
+)
+
+// Improves says whether the agent of the owner builds into ouro what a task
+// needs and ouro lacks, see SelfImprove.
+func (c Config) Improves() bool { return c.SelfImprove != SelfImprovePropose }
+
+// ValidSelfImprove reports a value of self_improve that is none of its own.
+func ValidSelfImprove(value string) error {
+	if value != "" && value != SelfImproveBuild && value != SelfImprovePropose {
+		return fmt.Errorf("self_improve is %q or %q, not %q", SelfImproveBuild, SelfImprovePropose, value)
+	}
+	return nil
 }
 
 // Plugins are the plugins of the build the owner turned off, by name. They
@@ -97,6 +126,10 @@ type Tools struct {
 	H2A []Entry `json:"h2a"`
 	// A2A (agent to agent) applies when a peer asks. Missing allows none.
 	A2A []Entry `json:"a2a"`
+	// Peers are lists of tools of single peers, by the ID of the node of
+	// each: the list of a peer here applies to it in place of A2A. Only such
+	// a list gives a peer a trusted tool, like bash or rebuild.
+	Peers map[string][]Entry `json:"peers,omitempty"`
 	// Protected are paths no tool for files touches, for anybody. Missing (a
 	// configuration from before there were such tools) stands for
 	// DefaultProtected; an empty list is the owner's decision to protect
@@ -192,6 +225,17 @@ func (c Config) PeerTools() []Entry {
 	return c.Tools.A2A
 }
 
+// ToolsOf are the tools the agent may use for the peer whose node has the
+// ID id, and whether they are the list of that peer alone, in Tools.Peers.
+func (c Config) ToolsOf(id string) ([]Entry, bool) {
+	if c.Tools != nil {
+		if entries, ok := c.Tools.Peers[id]; ok {
+			return entries, true
+		}
+	}
+	return c.PeerTools(), false
+}
+
 // Protected are the paths no tool for files touches.
 func (c Config) Protected() []string {
 	if c.Tools == nil || c.Tools.Protected == nil {
@@ -225,6 +269,24 @@ func ValidDescription(s string) error {
 	}
 	if strings.ContainsFunc(s, unicode.IsControl) {
 		return errors.New("description is one line, without tabs or other control characters")
+	}
+	return nil
+}
+
+// MaxName is how many characters the name of a node has at most.
+const MaxName = 64
+
+// ValidName reports whether s can be the name of a node or of a model. A
+// name goes to peers, which show it in a line: it is one line of printable
+// text, of at most MaxName characters for a node.
+func ValidName(field, s string) error {
+	switch {
+	case strings.TrimSpace(s) == "":
+		return fmt.Errorf("%s cannot be empty", field)
+	case printable.Line(s, len(s)) != s:
+		return fmt.Errorf("%s is one line, without tabs or other control characters", field)
+	case field == FieldName && utf8.RuneCountInString(s) > MaxName:
+		return fmt.Errorf("%s has %d characters, at most %d are allowed", field, utf8.RuneCountInString(s), MaxName)
 	}
 	return nil
 }
@@ -282,17 +344,30 @@ func (c Config) Complete() bool {
 	return (c.Access != "" || c.BaseURL != "") && c.Model != "" && c.Name != ""
 }
 
-// Load reads the configuration from dir. A missing file yields an empty Config.
+// Load reads the configuration from dir. A missing file yields an empty
+// Config. A file that is no configuration is named in the error, with the
+// line of a mistake in its JSON.
 func Load(dir string) (Config, error) {
 	var c Config
-	b, err := os.ReadFile(filepath.Join(dir, fileName))
+	path := filepath.Join(dir, fileName)
+	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return c, nil
 	}
 	if err != nil {
 		return c, err
 	}
-	return c, json.Unmarshal(b, &c)
+	if err := json.Unmarshal(b, &c); err != nil {
+		var syntax *json.SyntaxError
+		if errors.As(err, &syntax) {
+			path += fmt.Sprintf(", line %d", 1+bytes.Count(b[:syntax.Offset], []byte("\n")))
+		}
+		return c, fmt.Errorf("%s: %w", path, err)
+	}
+	if !slices.Contains(AllEfforts, c.Effort) {
+		return c, fmt.Errorf("%s: effort %q is none of %s", path, c.Effort, strings.Join(AllEfforts[1:], ", "))
+	}
+	return c, nil
 }
 
 // Save writes the configuration to dir, readable only by the owner. The file
@@ -415,8 +490,10 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 		if err := ValidDescription(text); err != nil {
 			return err
 		}
-	} else if into == &text && text == "" {
-		return fmt.Errorf("%s cannot be empty", path)
+	} else if into == &text {
+		if err := ValidName(path, text); err != nil {
+			return err
+		}
 	}
 	// Null is no list: the default it would stand for is written out instead.
 	if (into == &tools && tools == nil) || (into == &paths && paths == nil) {
@@ -455,6 +532,10 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 // called, as the node tells it.
 func (c Config) Public(provider string) json.RawMessage {
 	protected := c.Protected()
+	tools := Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}
+	if c.Tools != nil {
+		tools.Peers = c.Tools.Peers
+	}
 	b, _ := json.MarshalIndent(struct {
 		ID                 string `json:"id"`
 		Name               string `json:"name"`
@@ -463,7 +544,8 @@ func (c Config) Public(provider string) json.RawMessage {
 		Provider           string `json:"provider"`
 		Tools              Tools  `json:"tools"`
 		BashWithoutSandbox bool   `json:"bash_without_sandbox"`
-	}{c.ID(), c.Name, c.About(), c.Model, provider, Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected},
-		c.BashWithoutSandbox}, "", "  ")
+		SelfImprove        string `json:"self_improve"`
+	}{c.ID(), c.Name, c.About(), c.Model, provider, tools,
+		c.BashWithoutSandbox, cmp.Or(c.SelfImprove, SelfImproveBuild)}, "", "  ")
 	return b
 }

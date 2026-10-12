@@ -191,12 +191,19 @@ func TestListPeers(t *testing.T) {
 		t.Fatalf("for nova: %q, %v", got, err)
 	}
 
+	// The trusted peers that are not online are listed all the same.
+	offline := "luna (id " + luna.ID + ", trusted, but not reachable right now)\n" +
+		"vega (id " + identity.IDOf(vega.PublicKey) + ", trusted, but not reachable right now)"
 	s.found.nodes = []discovery.Node{s.node()}
-	if got, err := list.Run(context.Background(), json.RawMessage(`{}`)); err != nil || got != "No peers are online." {
+	if got, err := list.Run(context.Background(), json.RawMessage(`{}`)); err != nil || got != offline {
 		t.Fatalf("alone: %q, %v", got, err)
 	}
+	alone := newSelf(t)
+	if got, err := alone.tools()[toolListPeers].Run(context.Background(), json.RawMessage(`{}`)); err != nil || got != "No peers are online." {
+		t.Fatalf("no peers: %q, %v", got, err)
+	}
 	s.found.nodes = nil
-	if got, err := list.Run(context.Background(), json.RawMessage(`{}`)); err != nil || got != "No peers are online." {
+	if got, err := list.Run(context.Background(), json.RawMessage(`{}`)); err != nil || got != offline {
 		t.Fatalf("nobody found: %q, %v", got, err)
 	}
 

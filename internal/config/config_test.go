@@ -325,9 +325,19 @@ func TestEntries(t *testing.T) {
 		`{"tool": "", "allow": []}`: `a tool with settings needs its name as "tool"`,
 	} {
 		os.WriteFile(filepath.Join(dir, fileName), []byte(`{"tools": {"a2a": [`+entry+`]}}`), 0o600)
-		if _, err := Load(dir); err == nil || err.Error() != want {
+		if _, err := Load(dir); err == nil || err.Error() != filepath.Join(dir, fileName)+": "+want {
 			t.Errorf("%s: %v", entry, err)
 		}
+	}
+	// An effort that is none is an error.
+	os.WriteFile(filepath.Join(dir, fileName), []byte(`{"effort": "ultra"}`), 0o600)
+	if _, err := Load(dir); err == nil || err.Error() != filepath.Join(dir, fileName)+`: effort "ultra" is none of none, minimal, low, medium, high, xhigh, max` {
+		t.Errorf("effort: %v", err)
+	}
+	// A file that is no JSON is named, with the line of the mistake.
+	os.WriteFile(filepath.Join(dir, fileName), []byte("{\n  \"name\": \"x\",\n  bad\n}"), 0o600)
+	if _, err := Load(dir); err == nil || err.Error() != filepath.Join(dir, fileName)+", line 3: invalid character 'b' looking for beginning of object key string" {
+		t.Errorf("no JSON: %v", err)
 	}
 	// An entry that is read anew forgets the settings it had.
 	e := Entry{Tool: "read", Settings: json.RawMessage(`{}`)}
@@ -458,6 +468,9 @@ func TestFields(t *testing.T) {
 	}
 	// A node without tools gets none for a new name.
 	plain := c
+	if err := plain.SetField("model", json.RawMessage(`"`+strings.Repeat("m", MaxName+1)+`"`)); err != nil {
+		t.Errorf("a long model: %v", err)
+	}
 	if err := plain.SetField("name", json.RawMessage(`"x"`)); err != nil || plain.Tools != nil {
 		t.Errorf("got %+v, %v", plain.Tools, err)
 	}
@@ -465,6 +478,12 @@ func TestFields(t *testing.T) {
 	for _, tt := range []struct{ path, value, want string }{
 		{"name", `""`, "name cannot be empty"},
 		{"model", `""`, "model cannot be empty"},
+		{"name", `"   "`, "name cannot be empty"},
+		{"name", `"a\tb"`, "name is one line, without tabs or other control characters"},
+		{"name", `"\u001b]0;pwned\u0007"`, "name is one line, without tabs or other control characters"},
+		{"name", `"` + strings.Repeat("ä", MaxName+1) + `"`, "name has 65 characters, at most 64 are allowed"},
+		{"model", `"a\nb"`, "model is one line, without tabs or other control characters"},
+		{"model", `" "`, "model cannot be empty"},
 		{"description", `"two\nlines"`, "description is one line"},
 		{"description", `"a\ttab"`, "description is one line"},
 		{"description", `3`, "description: json: cannot unmarshal number"},
@@ -567,14 +586,22 @@ func TestPublic(t *testing.T) {
 	if !strings.Contains(got, "\n  \"tools\": {\n    \"h2a\": [\n") {
 		t.Fatalf("not written for reading: %s", got)
 	}
-	if !strings.Contains(got, "\n  \"bash_without_sandbox\": false\n") || strings.Contains(got, "rebuild") {
-		t.Fatalf("whether bash may run without a sandbox: %s", got)
+	if !strings.Contains(got, "\n  \"bash_without_sandbox\": false,\n  \"self_improve\": \"build\"\n") || strings.Contains(got, "rebuild") || strings.Contains(got, `"peers"`) {
+		t.Fatalf("whether bash may run without a sandbox, and what the agent does where ouro lacks something: %s", got)
 	}
-	c.Tools = &Tools{H2A: Named("read"), A2A: Named("list_peers"), Protected: &[]string{"~/x"}}
-	c.BashWithoutSandbox = true
+	c.Tools = &Tools{H2A: Named("read"), A2A: Named("list_peers"), Peers: map[string][]Entry{"e982c39668a3": Named("bash")}, Protected: &[]string{"~/x"}}
+	c.BashWithoutSandbox, c.SelfImprove = true, SelfImprovePropose
 	if got := string(c.Public("")); !strings.Contains(got, `"read"`) || !strings.Contains(got, `"list_peers"`) || !strings.Contains(got, `"~/x"`) || strings.Contains(got, ".ssh") ||
-		!strings.Contains(got, `"bash_without_sandbox": true`) {
+		!strings.Contains(got, `"bash_without_sandbox": true`) || !strings.Contains(got, `"self_improve": "propose"`) || !strings.Contains(got, `"e982c39668a3": [`) {
 		t.Fatalf("what is set: %s", got)
+	}
+	if c.Improves() || !(Config{}).Improves() || !(Config{SelfImprove: SelfImproveBuild}).Improves() {
+		t.Error("Improves")
+	}
+	for value, ok := range map[string]bool{"": true, "build": true, "propose": true, "ask": false} {
+		if err := ValidSelfImprove(value); (err == nil) != ok {
+			t.Errorf("ValidSelfImprove(%q): %v", value, err)
+		}
 	}
 }
 
