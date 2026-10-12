@@ -15,6 +15,7 @@ ouro ask <ID|name> "hi"   # write to a node directly; without a message → inte
 ouro tui                  # same as ouro, kept for scripts
 ouro stop
 ouro update               # build and install the newest main
+ouro rollback             # the build before the last update or rebuild again
 ```
 
 ## Terminal UI
@@ -51,7 +52,7 @@ and reads do, leaves the agent thinking, so the line does not flicker. What each
 arguments and its result, is on the context screen (`/context`).
 What the agent says is markdown, as the models write it, and the chat shows it formatted: headings, bold,
 italic, code in a line and in blocks, lists, quotes, tables and links, in the colors of the terminal theme and
-without the marks. What you write is shown as you wrote it.
+without the marks. A line break is kept, as models write poems and addresses line by line. What you write is shown as you wrote it.
 The wheel scrolls at once, a line a step, under the hand: a touchpad sends many steps for a fast stroke and
 few for a slow one, and nothing moves on after the fingers stop. The page keys and, on `/context`, the arrows,
 `home` and `end` glide instead: they carry the view to where they mean over a tenth to a quarter of a
@@ -64,8 +65,8 @@ history and drag, and once you release, the text selected is on the clipboard, w
 alone marks nothing, so a click leaves no mark. It is put
 there through the terminal (OSC 52, which also works over SSH) and on the clipboard of the system. A key drops
 the selection.
-Next to the name of your agent, the chat shows how long the context of the conversation is:
-`lucagent  · context 45.2 KiB ≈ 11.6k tokens`. That is what the last call of the LLM sent, the prompt, the
+In its footer, the chat shows how long the context of the conversation is:
+`context 45.2 KiB ≈ 11.6k tokens`. That is what the last call of the LLM sent, the prompt, the
 tools and the conversation so far as JSON; the tokens are an estimate at 4 bytes a token. It grows with
 every step of an answer, since each sends the whole conversation again, and is updated whenever the loop
 shows something new. A new conversation (`/new`) has none until its first call, and neither has one that
@@ -135,12 +136,15 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/new` | new conversation; the one shown goes on in the background |
 | `/session` | the conversations of the node, the latest first, the one shown marked: `↑` `↓` select, `enter` shows the one selected, `d` twice deletes it, `tab` switches to the conversations of peers, `esc` back; see [Sessions](#sessions) |
 | `/cancel` | stop the answer that is on its way in the conversation shown |
+| `/jobs` | the commands the agent runs in the background for the answers on their way, in your conversations and in those of peers, each with where it runs and for how long, the list kept up to date: `↑` `↓` select, `enter` stops the one selected, `esc` back; see [Commands](#commands) |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup; for a node that is set up it starts with its accesses: `enter` uses the one selected, `l` signs in to it again, `r` renames it, `d` removes it, the last row adds another one, see [Providers and accesses](#providers-and-accesses) |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back. `/` searches it: every match is marked as you type, without regard to case and across the ends of lines; `↑` `↓` go from match to match, `enter` keeps the search, `esc` ends it |
-| `/settings` | the configuration in one place, by categories: the node, the agents, the plugins, the tools of your agent and of peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
+| `/settings` | the configuration in one place, in a dialog over the chat, by categories: the node, the agents, the plugins, the tools of your agent, of peers and of single peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
 | `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `f` a [fallback](#fallbacks), `esc` back |
 | `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
+| `/effort` | how much the model thinks before it answers in the conversation shown, see [Sessions](#sessions) |
+| `/debug` | turn the debug mode on or off: the log of the node then tells much more |
 | `/help` | list the commands, those of the plugins too |
 | `/keys` | list the keys of the chat in a dialog, `esc` back |
 | `/quit` | quit |
@@ -152,20 +156,23 @@ Keys only move around:
 |---|---|
 | any key | skip the ouroboros splash (except `ctrl+c`) |
 | `enter` | send |
-| `shift+enter` / `ctrl+j` | a new line |
+| `shift+enter` | a new line |
 | `↑` `↓` | bring back what you entered while the UI is open, messages and commands, the latest first. Below the latest is what you had typed, and below that an empty input, from which `↑` brings it back again. A line you change is what you type from then on. In an input of several lines they move between its lines first |
 | `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions); with nothing queued, bring back what you entered |
 | `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `ctrl+k` | the keys of the chat in a dialog, like `/keys`, but what is typed stays in the input |
+| `ctrl+j` | the jobs of the conversation shown, and the services below them, in a list on the right, and the chat and the input narrower for it; a job too long for a line goes on in the next, and while the list is shown the footer says `ctrl+j hide`. Again: the list is hidden, and the jobs are named in the line of the wait below the chat again |
 | `pgup` `pgdn` | scroll the chat |
-| `esc` | on a screen: back to the chat. In the chat: stop the answer on its way in the conversation shown, like `/cancel` |
+| `esc` | on a screen: back to the chat. In the chat: close the list of commands with the command typed; without one, stop the answer on its way in the conversation shown, like `/cancel` |
 | `ctrl+c` | quit, everywhere |
 
 ### Pictures
 
 A picture gets into a message as the **path of its file**, in double quotes, which the agent reads with its
 tools. Nothing is sent by pasting: the path is typed where the cursor is, and the message is yours to send.
+The input and the chat show each picture as a label of its own, `[Image_1]`, `[Image_2]` and on, numbered within
+the conversation; what the agent is sent has the paths.
 
 - **A file**, dropped on the terminal or pasted as text: the terminal writes its path, plain, in quotes, with
   its spaces escaped or as a `file://` URI, one or several, and the chat types each as `"/the/path.png"`. In
@@ -219,8 +226,9 @@ So an answer does not depend on the UI:
   answer runs, the model of the node is asked for a title of a few words from what you and the agent said
   so far, without the calls of tools. A greeting alone has no topic yet: then it is asked again with the
   next message. Until there is a title, the start of your first message names the conversation. The title
-  is shown at once and kept in the archive; the call is part of no conversation and not in the log. An
-  answer that is in before the title waits for it, 20 seconds at most.
+  is shown at once and kept in the archive; the call is part of no conversation and not in the log, and asks the
+  model to think little (`low`), whatever the effort of the conversation. An answer that is in before the title
+  waits for it, 20 seconds at most.
 - **Effort per conversation.** `/effort` sets how much the model thinks before it answers (`auto`, `none`,
   `low`, `medium`, `high`, `max`) for the conversation shown, from its next call of the LLM on, also in the
   answer on its way. Its dialog shows a slider, and above it a net of nerve cells that thinks as hard as the
@@ -295,7 +303,7 @@ and a model of its own.
 - **The UI shows them all.** `shift+tab` shows the next profile, with all it showed: its conversation, what
   you typed there, its screen. The name in the header morphs into the new profile's name in a short wave of
   dots; another switch continues from what is on screen. The footer says which profile is shown. `/settings`,
-  `/model`, `/contacts` and the rest are of the profile shown. `ouro` opens on the first profile,
+  `/model`, `/pending` and the rest are of the profile shown. `ouro` opens on the first profile,
   `ouro --profile Luna` on Luna.
 - **The command line names one.** `ouro --profile PROFILE COMMAND` runs a command for the profile that
   `PROFILE` names: its ID, the start of its ID that no other one has, or its name, whatever the case of its
@@ -337,12 +345,24 @@ its way; it takes no new message until then. It hands over to the new build in t
 `ouro.pid` and the socket stay open across it, so no other node starts in between, and a front end that
 connects meanwhile waits until the new node answers. The new node finds the [sessions](#sessions) in the archive,
 and what the agent remembers of them. The terminal UI starts anew as
-well, on the same terminal and without the splash, and shows the same conversation. The tool is for you only:
-a peer is refused even if `a2a` lists it. An agent that has it tells you at the end of an answer where ouro
-held it back, by a tool it lacks or one that is slow or misleading, and what it would change: it proposes the
-change, and makes it only when you ask for it. Take
+well, on the same terminal and without the splash, and shows the same conversation. What the agent built it
+can use only there, so with `continue: true` the conversation goes on by itself in the new build: the agent is
+told to go on, in place of a message of yours, once. The tool is for you, and
+for a peer only where its own list in `tools.peers` names it, see [Peers you trust to build](#peers-you-trust-to-build):
+`"*"` never gives it to a peer, and listing it in `a2a` is an error.
+
+**ouro grows with its tasks.** Where a task needs something ouro cannot do, your agent weighs building it
+into ouro against a workaround, builds it when that is the better way, also for the tasks to come, and tells
+you what it changed. Where ouro held it back otherwise, by a tool that is slow or misleading, it says so at the
+end of its answer, with the change it would make. That is `"self_improve": "build"`, the default. With
+`"self_improve": "propose"` in `config.json` (or `Changes of ouro` in `/settings`) it proposes every change and
+makes it only when you ask for it. No proposal of the agent changes the setting. Take
 `rebuild` out of `h2a` if your agent should not build what it wrote. A binary installed by `ouro update` keeps
 the checkout of the one it replaced.
+
+**Back to the build before.** `ouro update` and `rebuild` keep the binary they replace next to it, as
+`ouro.previous`. `ouro rollback` installs it again and restarts a running node; the one it replaces is kept in
+its place, so a second `ouro rollback` goes forward again.
 
 **`rebuild` builds as you**, with `make install`: with network, and without a sandbox. The binary is built
 in `update/stage`, not in the checkout. It runs the Go that it finds first in `PATH`, in `OURO_GO_DIR` or
@@ -364,7 +384,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Channels | JSON-RPC `channel/open` on `POST /` with `Upgrade: ouro-channel/1`: the node answers `101 Switching Protocols` and the TLS connection of the request carries messages in both directions until one side closes it, see [Channels](#channels). Not part of A2A |
 | Discovery | UDP probe to multicast `239.255.41.38`, the broadcast address of every network, localhost and the peers of the tailnet on port 41338; nodes answer the sender and the group, so only port 41338 needs to be open. Where no interface carries multicast (a network namespace with the loopback interface alone), a node hears the probes sent to its host; a datagram the system does not hand over, as a sandbox does with one of another host, is passed over |
 | Agents | two per node, built from one blueprint, both in the node: yours answers the [sessions](#sessions) of `ouro` and `ouro chat`, the other one peers. Which tools each may use is set in `config.json`, see [Tools](#tools); at most 100 LLM calls per answer, from the 81st on with a note to the LLM of how many it has left; the LLM has one tool, `run`, and uses the others in a [script](#scripts) |
-| Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, in a message of its own after the results, which stay as they are and as the provider cached them, and a script hands on at most 4 KiB of what it prints and of what it returns. From the 16th call of the LLM in an answer on, it is told with every call to stop searching and ask the user what exactly is meant, unless it has found what it looks for; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives every API the conversation as `prompt_cache_key`, so that a gateway sends its calls to the same cache. A Claude model (its name has `claude`) caches only up to `cache_control` breakpoints: ouro sets them at the system prompt and at the last 3 messages with content. An API that refuses one of these parameters (HTTP 400 that names it) is asked again without it, and not sent it again. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another. What is cut off is not lost: the [history](#history) keeps every conversation in full |
+| Memory | a conversation is cut in steps: beyond 80 messages or 256 KiB it is cut to the last 40 messages and 128 KiB, at a message of the owner, so that its start stays the same between the cuts and the provider can cache it; always the whole of the last answer, however many tool calls it took; up to 256 conversations. A result of a tool leaves out runs of lines (1 KiB or more) that an earlier result of the same answer has, with a line that says so. Once the results of an answer have more than 64 KiB, the LLM is told so with every call, in a message of its own after the results, which stay as they are and as the provider cached them, and a script hands on at most 4 KiB of what it prints and of what it returns. At the 16th call of the LLM in an answer, it is told once to stop searching and ask the user what exactly is meant, unless it knows what to do, and then to go on until it is done; the same call of a tool asked for a third time in a row is not run, and the LLM is told so. What the LLM thought is sent back within an answer; once it is at least half of what came after its start, it is left out when the answer ends, and always at a cut. ouro asks the API for the tokens of every call (`stream_options`) and gives every API the conversation as `prompt_cache_key`, so that a gateway sends its calls to the same cache. A Claude model (its name has `claude`) caches only up to `cache_control` breakpoints: ouro sets them at the system prompt and at the last 3 messages with content. An API that refuses one of these parameters (HTTP 400 that names it) is asked again without it, and not sent it again. An answer that fails or is stopped is kept as far as it got, so that asked again the agent goes on from there; why it failed is not kept; a conversation of a peer is its `contextId` together with its key, so no peer continues or reads the conversation of another. What is cut off is not lost: the [history](#history) keeps every conversation in full |
 | Card | the description in the agent card is what you wrote in `/settings` (`description` in `config.json`, one line of at most 300 characters), or `Ouroboros instance named <name>` without one; anyone can read it, so nothing private belongs there. `list_peers` shows your agent the cards of connected peers. `capabilities.streaming` is `false`: in A2A it stands for `message/stream` (the answer to a message as server-sent events), which a node does not have. That peers can open channels is listed under `capabilities.extensions`; which channels is not, as anyone can read the card |
 | Trust | nodes talk over TLS 1.3 with a self-signed certificate made from the node's Ed25519 key; the connection is pinned to the key the node is known by, and requests are signed for that key; a message only goes to a peer both owners agreed to connect to, and a node asks another to connect with `contact/request`, which carries no message |
 | LLM | answers are asked for as a stream (`"stream": true`), so a gateway that gives up on a request without data for a while (HTTP 504) keeps waiting while the model thinks; an API that does not stream answers in one piece, which is taken as well. A completion is given up after 5 minutes without data, a list of the models after 5 minutes |
@@ -405,12 +425,14 @@ setup writes:
 |---|---|---|
 | `h2a` (human to agent) | you ask your agent | every tool |
 | `a2a` (agent to agent) | a connected peer asks your agent | no tool, and no scripts (see [Scripts](#scripts)) |
+| `peers` | the peer whose ID names a list there asks your agent: its list, in place of `a2a` | `a2a` for every peer, see [Peers you trust to build](#peers-you-trust-to-build) |
 | `protected` | a tool for files is used, by anybody | the list above; `[]` protects nothing |
 
 An entry of `h2a` and `a2a` is the name of a tool, or an object with the name as `"tool"` and **settings** for
 that tool next to it. `"*"` stands for every tool, `[]` for none; an object next to `"*"` narrows that one tool.
 A name that is not a tool, a tool that is listed twice, a setting the tool does not have and a setting of the
-wrong type are errors: the node does not start, the chat does not answer. A change holds at once: your agent
+wrong type are errors: in `a2a` and `peers` the node does not start, in `h2a` your agent does not answer and
+says why. A change holds at once: your agent
 and the node read `config.json` with every message and build their agents anew when it changed, without a
 restart. A node that runs keeps answering peers as before while the file cannot be used, and says why in
 `ouro.log`.
@@ -419,12 +441,12 @@ restart. A node that runs keeps answering peers as before while the file cannot 
 
 | Tool | Does | Limits |
 |---|---|---|
-| `read(path, offset?, limit?)` | returns the text of a file; the whole file comes as it is, a part with a note that says which lines of how many it is and, when there is more, at which line to continue | 2000 lines or 256 KiB per call, a line has less than 256 KiB; what is not text (UTF-8 without NUL) is refused |
+| `read(path, offset?, limit?)` | returns the text of a file; the whole file comes as it is, a part with a note that says which lines of how many it is and, when there is more, at which line to continue | 2000 lines or 256 KiB per call, a line has less than 256 KiB: a longer one is not read, and the lines after it are read with an offset past it; what is not text (UTF-8 without NUL) is refused |
 | `write(path, content)` | creates the file or replaces all of it, in one step, and creates missing directories | 1 MiB |
-| `edit(path, old, new, all?)`, `edit(path, from, to, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once, or with `all: true` every time it occurs, which returns the lines it changed; or the lines `from` to `to` by `new`, with no text to match; returns the changed lines with 3 lines around them, at most 50. An `old` that does not occur is answered with where it parts from the file: the line of the file and the line of `old` | the file has at most 1 MiB, before and after |
+| `edit(path, old, new, all?)`, `edit(path, from, to, new)` | replaces `old` by `new`; `old` has to match exactly, and exactly once, or with `all: true` every time it occurs, which returns the lines it changed; or the lines `from` to `to` by `new`, with no text to match; returns the changed lines with 3 lines around them, at most 50. An `old` that does not occur is answered with where it parts from the file: the line of the file and the line of `old`. In a file whose lines end in `\r\n`, an `old` with `\n` matches, as `read` shows the lines, and `new` gets their ends | the file has at most 1 MiB, before and after |
 | `list(path)` | the entries of a directory: directories end in `/`, files come with their size | 1000 entries; what the tool may not read is not listed |
 | `delete(path, recursive?)` | removes a file or an empty directory; one with content only with `recursive: true` | stops, with nothing deleted, before anything it may not delete |
-| `search(path, pattern, glob?, context?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go` | 200 lines of at most 300 bytes, 10000 files, 100000 files and directories looked at (also those the glob leaves out); hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out; with `context` the lines around each match too, as `grep -C`, at most 30 places. Beyond 12 KiB it says only how many matches are in which file |
+| `search(path, pattern, glob?, context?)` | the lines that match a regular expression ([RE2](https://github.com/google/re2/wiki/Syntax), `(?i)` ignores case) as `path:line: text`, in a file or in every file below a directory; `glob` keeps to file names like `*.go`, and with `!` in front leaves them out, like `!*_test.go` | 200 lines of at most 300 bytes, 10000 files, 100000 files and directories looked at (also those the glob leaves out); hidden directories below the path, files of more than 1 MiB, what is not text and what the tool may not read are left out; with `context` the lines around each match too, as `grep -C`, at most 30 places of at most 61 lines each: matches that go on beyond start the next place. Beyond 12 KiB it says only how many matches are in which file. A file named itself is searched up to 64 MiB, like a log, and one that is not searched says why. A line that ends in `\r\n` matches without the `\r` |
 
 A path is absolute or starts with `~`, your home directory. For your agent it may also be relative: it then
 starts in the workspace of the [profile](#profiles), where its commands start (`.` is the workspace). A peer
@@ -460,7 +482,7 @@ Three things limit a tool for files, and the first that speaks wins:
      never changed.
    - The source of the core is read and never changed: in every directory whose `go.mod` names the module
      `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `update`, `sandbox`,
-     `safefile`, `peers` and `guard`. They hold the keys and the secrets, decide whom the node trusts and keep
+     `safefile`, `peers`, `guard` and `printable`. They hold the keys and the secrets, decide whom the node trusts and keep
      the rules of the tools and of `rebuild`. The plugins and the other packages in the same checkout stay
      writable.
    - What decides how a checkout is built, what the build fetches and runs, and where the frame hands out what
@@ -473,14 +495,20 @@ Three things limit a tool for files, and the first that speaks wins:
    - `/` and your home directory are never deleted.
 2. **`protected`**: paths no tool for files touches, for you and for peers. The default holds the usual places
    of keys and credentials and nothing else: profiles of browsers, files like `.env` and whatever else is
-   secret on your machine are not in it. Add what you need. A configuration from before there were these
+   secret on your machine are not in it. Add what you need. A hard link to a file that is protected, or denied, is
+   refused as that file is; one to a file in a protected directory is not known as such, and neither is one to
+   a `config.json` the node has written anew since, which keeps what the file held then. The sandbox of `bash`
+   creates no hard link to any of them. A configuration from before there were these
    tools has no `protected` and gets the default; `"protected": []` is your decision to protect nothing.
-3. **`allow` and `deny`** of the tool in `h2a` or `a2a`. `deny` wins over `allow`. Without `allow` a tool
+3. **`allow` and `deny`** of the tool in `h2a` or `a2a`. `deny` wins over `allow`. They hold for the tool they are set for alone: a file that `read`
+denies is still found by `search`, listed by `list` and quoted by a failed `edit`, unless those deny it too, or it is `protected`. Without `allow` a tool
    goes everywhere for you and **nowhere for a peer**: all of the file system for a peer has to be written
    out, as `"allow": ["/"]`.
 
-A path is checked where it leads, with every symbolic link and every `..` resolved, and the tool then works
-on that path: no link out of a shared directory leads around a rule. A refusal names the rule, so that your
+A path is checked where it leads, with every symbolic link and every `..` resolved, and with every name as its
+directory has it, and the tool then works on that path: no link out of a shared directory leads around a rule, and
+on a file system that does not tell names apart by their case, as that of macOS, `~/.SSH` is `~/.ssh` for the rules
+too. A refusal names the rule, so that your
 agent can tell you why.
 
 **Known risk.** Your agent has `read` and `ask_peer` at once. The answer of a peer is text in its
@@ -501,10 +529,15 @@ edit no longer limits it. Nothing checks that a build is harmless, or that it wo
 ### Commands
 
 `bash(command, dir?, timeout?)` runs `command` with `/bin/bash -c` in `dir` (absolute, below `~` or relative to the
-workspace; the workspace of the [profile](#profiles) without it), for your agent alone: no peer gets it, also not with `"*"`, and listing it in `a2a` is
+workspace; the workspace of the [profile](#profiles) without it), for your agent, and for a peer only where its own
+list in `tools.peers` names it: `"*"` never gives it to a peer, and listing it in `a2a` is
 an error. It returns `exit N` and below it what the command printed, its output and its errors as they came;
 of more than 64 KiB the first and the last 32 KiB, with how much was left out between them. A status other
 than 0 is a result, not an error. Every call starts anew: `cd` and variables do not carry over.
+A command runs with `pipefail`: a pipe fails when any of its commands does, so that `go test ./... | tail` is
+`exit 1` when a test failed. Below the output bash adds a note where the status misleads: `exit 141` for a
+command a pipe ended early, as `yes | head` does, and, for `exit 0` with output that says tests failed (of
+`go test`, pytest or jest), that what came after the tests hid it.
 
 | Limit of a command | Value | Beyond it |
 |---|---|---|
@@ -533,8 +566,61 @@ they are skipped there at once (`SKIP`, with the reason), and run outside of it,
 
 | System | Sandbox |
 |---|---|
-| macOS | `sandbox-exec` with a profile that refuses the network beyond localhost, sockets of the file system and writing elsewhere |
-| Linux | [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap` in `/usr/bin` or `/bin`, the package `bubblewrap`): the file system read only but for what a command may write, a `/dev` of its own, a network namespace of its own with the loopback interface alone, and a filter of seccomp that refuses sockets of the family `AF_UNIX` and `io_uring` |
+| macOS | `sandbox-exec` with a profile that refuses the network beyond localhost, sockets of the file system, writing elsewhere and signals to processes it did not start; once the command ended, what is left of its group of processes is stopped |
+| Linux | [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap` in `/usr/bin` or `/bin`, the package `bubblewrap`): the file system read only but for what a command may write, a `/dev` of its own, a network namespace of its own with the loopback interface alone, a namespace of processes of its own, which ends with the command, and a filter of seccomp that refuses sockets of the family `AF_UNIX` and `io_uring` |
+
+**A command ends with everything it started.** What it leaves running in the background, a server started with
+`&` or `nohup` say, is stopped once it ended, and the agent is told so: it would run on unseen, with nobody to
+stop it, and what it serves on the loopback interface in reach of every program of the machine. Without a
+sandbox nothing is stopped.
+
+**What has to run on runs as a job.** A server the agent tests against, a watcher, a long build: `bash` with
+`"background": true` starts the command as a job of the answer and returns its number at once. The agent
+goes on, and looks at the job when it needs to:
+
+| Call | Does |
+|---|---|
+| `{"command": "npm run dev", "background": true}` | starts job 1, in the sandbox like every command; with `timeout`, it runs that many seconds at most |
+| `{"job": 1}` | whether it runs, and what it printed since the agent last looked (the start and the end of it, as of every command) |
+| `{"job": 1, "timeout": 30}` | the same, once it ended or 30 seconds passed |
+| `{"job": 1, "stop": true}` | stops it, with everything it started |
+
+A job ends with the answer at the latest: given, failed or stopped with `/cancel`. At most 8 run at once. While
+an answer is on its way, the chat shows its jobs after what the agent waits for, as
+`alpha is thinking · job 1 · npm run dev`, until they end; front ends get them as the session event `jobs`.
+`/jobs` lists the jobs of every answer on its way, also those of the peers you listed `bash` for, and stops
+the one you select: the agent learns so once it looks at it. A front end of its own asks the socket of the
+node: `GET /jobs`, and `POST /stopjob` with `{"id": …, "n": …}`.
+
+**What is to run past the answer is a service.** The tool `service` keeps a command running after the answer
+that started it, like a dev server, a watcher or a mock API you use later; bash stays for what ends, and for a
+server the agent tests against while it answers.
+
+| Call | Does |
+|---|---|
+| `{"action": "start", "name": "web", "command": "npm run dev", "port": 5173}` | starts it, and returns once its port answers, with what it printed |
+| `{"action": "status", "name": "web"}` | whether it runs, until when, and its last lines |
+| `{"action": "logs", "name": "web", "lines": 100}` | more of its last lines, kept up to 64 KiB |
+| `{"action": "stop", "name": "web"}` | stops it, with everything it started |
+| `{"action": "list"}` | the services of whom the conversation is for |
+
+A service runs in the sandbox of bash, with the settings of `service` in the configuration, which are those of
+bash, and is reached on localhost alone unless `network` is on. It ends when its command ends, when it is
+stopped, when its time is up (`hours`: 8 by default and 24 at most for yours, 1 and 4 for a peer's), or when the
+node stops or is rebuilt: never later. You have at most 4 at once, a peer 2. A service is known by its name, of
+small letters, digits and `-`, and belongs to whom it runs for: your agent sees and stops yours, a peer's agent
+only that peer's, and a peer gets `service` only when you list it for peers, with `allow`, as bash. You see and
+stop all of them, below the jobs, in `/jobs` and in the list of `ctrl+j`; a front end of its own asks the socket
+of the node: `GET /services`, and `POST /stopservice` with `{"id": …}`.
+
+Nothing a service starts outlives it. It runs as a group of processes of its own, which is asked to end and
+killed 3 seconds later; what it starts is followed in the table of the processes every 0.1 seconds, so that a
+process that left the group, with `setsid`, is killed too, and on Linux every process of it has its tag in its
+environment, by which it is found even if it was never seen. It watches a pipe the node holds: when the node is
+killed or crashes, the pipe closes, and the service ends its group itself; what left the group is noted in
+`services.json` of the profile, and killed when the node starts again, known by its number and when it started.
+On macOS a program that turns itself into a daemon, forking twice within a few milliseconds and leaving the
+group, escapes that: it is not seen in time, and macOS shows the environment of no other process.
 
 On Linux, bubblewrap is the one way that works where unprivileged user namespaces are confined, as on Ubuntu
 24.04 and later, where its profile of AppArmor allows them; Debian, Fedora and Arch allow them anyway.
@@ -548,7 +634,7 @@ file system.
 
 | Setting | Means | Without it |
 |---|---|---|
-| `allow` | the paths a command may write, each with everything below it; one that does not exist is not writable | everywhere the rules above leave writable |
+| `allow` | the paths a command may write, each with everything below it; one that does not exist is not writable. Your agent's commands may write its workspace, where they start, and the directory of temporary files (`TMPDIR`) too, as builds and tests do | everywhere the rules above leave writable |
 | `deny` | paths within those that a command neither reads nor writes | none |
 | `network` | `true` lets a command reach other hosts | `false` |
 | `env` | the names of further variables of the environment it gets | none |
@@ -561,7 +647,9 @@ The sandbox holds less than the guard of the tools for files:
 - **On Linux a path that is missing, or a link**, cannot be covered: the directory it is in is mounted read
   only, and what is in it writable again, so nothing new is created there. In your home directory that is
   whenever a protected path such as `~/.aws` does not exist.
-- A process that leaves the group of the command (`setsid`, a daemon) is not stopped with it.
+- **On macOS a process that leaves the group of the command** (`setsid`, which macOS has as no command, but
+  Perl or Python call) is not stopped with it. It runs on in the sandbox: without network, and writing only
+  where the command could. On Linux it ends with the command.
 
 **Without a sandbox.** Where there is none (bubblewrap is missing or cannot run, or ouro runs in a sandbox
 already), `bash` runs nothing and tells the agent why. You, and only you, can let it run its commands without
@@ -601,6 +689,8 @@ for (const peer of connected) {
   function body, whose calls print nothing of themselves.
 - **`await` is left out.** The tools return their result right away, so `await read({…})` is `read({…})`: a
   script that is no JavaScript only because of an `await` outside a function runs without it.
+  A script that ends in a promise, as an `async` function returns one, gives back what it was fulfilled with,
+  and fails with what it was rejected with.
 - What a script gives back ends with a line of what the interpreter keeps for the next script, like
   `[kept for the next script: files (array of 312), walk (function), notes (string of 1532 bytes)]`: every
   name on `globalThis` that is not a standard object or a tool, at most 30 of them. A getter is not called
@@ -776,22 +866,27 @@ Read the whole diff before you comment. …
 
 ### Settings
 
-`/settings` in the terminal UI shows the configuration of the node in one place, and changes it. It is the
-owner's alone, like every command of the UI: no agent and no peer reaches it.
+`/settings` in the terminal UI shows the configuration of the node in one place, in a dialog over the chat
+like `/model` and `/effort`, and changes it. It is the owner's alone, like every command of the UI: no agent
+and no peer reaches it.
 
 | Category | Shows | Changes |
 |---|---|---|
-| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node | the name and the description (empty is the default); the accesses in `/setup`, the model in `/model`, both opened from here |
-| The agents | the context provider and those this build has; whether `bash` runs its commands without a sandbox, and whether there is one | both |
+| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode | the name and the description (empty is the default); the debug mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
+| The agents | the context provider and those this build has; whether `bash` runs its commands without a sandbox, and whether there is one; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it | all three |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
-| Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with its settings | all tools, each tool, its settings |
-| Tools for peers | `a2a`, the same; a tool for your agent alone is shown as such and cannot be allowed | the same |
+| Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |
+| Tools for peers | `a2a`, the same; a tool for your agent alone, and one for a peer with a list of its own alone, is shown as such and cannot be allowed | the same |
+| Tools of single peers | `tools.peers`: every peer you trust, and every list there, with whether it has a list of its own | give a peer a list of its own (it starts as the one for peers) or take it away, add one by the ID of its node; its list opens like the tools for peers, where a trusted tool like `bash` is allowed by its name |
 | Protected paths | `protected`, the paths no tool for files touches, or that the default holds | remove a path, add one, go back to the default |
 
 It opens with the list of the categories: `↑` `↓` select one, `enter` opens it, `esc` goes back to the chat.
-In a category, `↑` `↓` select a line, `←` `→` what to do with it, `enter` does it, and `esc` goes back to the
-categories. A text, like the name, a path or the settings of a tool (a JSON object like
-`{"allow": ["~/share"]}`), is typed in a line below the list: `enter` saves it, `esc` keeps what was.
+In a category, `↑` `↓` select a line, `←` `→` what to do with it, `enter` does it, and `esc` goes back one
+level. `settings` on a tool opens its settings: each on a line, with what it does and what holds while it
+is not set. A switch is turned on or off, a list gets an entry or loses one, `reset` goes back to what holds
+unset, and `As JSON` changes all of them at once as the configuration keeps them (a JSON object like
+`{"allow": ["~/share"]}`). A text, like the name, a path or an entry of a list, is typed in a line below the
+list: `enter` saves it, `esc` keeps what was.
 
 - **Every change is checked before it is written**, the way the node checks its configuration when it starts:
   an unknown tool, a setting a tool does not take, a protected path that is none, a context provider this
@@ -806,7 +901,8 @@ categories. A text, like the name, a path or the settings of a tool (a JSON obje
   For peers, `*` and every plugin turned on give them its tools: the line says so.
 - **Secrets.** The key of the node and what the accesses sign in with are not shown, and not changed here:
   the setup changes the accesses. The log records that a setting was changed, and which, never a value.
-- `/setup` and `/model` work as before; `/settings` opens them for the access and the model.
+- `/setup`, `/model` and `/effort` work as before; `/settings` opens them for the access, the models and the
+  effort.
 - **A provider stays on while it is used.** A provider is the plugin of its name (`openai`, `chatgpt`): it
   cannot be turned off while an access of the node signs in with it. Remove the access in `/setup` first.
 
@@ -962,6 +1058,12 @@ The names here are examples: which models an access has is what its provider lis
 
 #### Fallbacks
 
+**A call that breaks off on its way is asked again** first, by every access: when the connection is closed or
+reset before the answer is in (as a gateway does that closes a connection it kept open), or a gateway or the
+service is overloaded for a moment (HTTP 502, 503, 504, 529), a second after and four seconds after that. The
+log says so with the call; only when the third does not get through either does a fallback take over, or the
+answer stop with why.
+
 A fallback is a model of an access that answers you when the one before it **cannot answer for now**. `f` on
 a model in `/model` makes it the last of the fallbacks, marked `fallback 1`, `fallback 2` … in their order,
 and `f` on a fallback takes it out again. Without fallbacks nothing changes: the answer stops with why.
@@ -1104,8 +1206,10 @@ agent cannot be sent to a `host:port` somebody put into its head. Only you addre
 
 `list_peers` tells for each node how far the connection has come: `connected`, `connection requested`,
 `not connected`, or `trusted, but not reachable right now`. The last is a peer you connected to whose node
-did not prove to hold its key within 2 seconds: it is gone, slow, or someone else answers at its address.
-It stays your peer and needs no confirmation; the agent tries it again later.
+did not prove to hold its key within 2 seconds, or whose node is not found at all: it is gone, slow, or
+someone else answers at its address. It stays your peer and needs no confirmation; the agent tries it again
+later. A trusted peer whose node is not found is listed after the others, by what your contacts keep of it, and
+`ouro ask` and `ask_peer` say that it is not online rather than that no node of that name is known.
 
 ### Dialogs between peers
 
@@ -1162,6 +1266,47 @@ The dialog works between nodes of any host, over the same signed and pinned requ
 an extension of A2A, carried in the `metadata` of the messages (`ouroboros.kind`, `ouroboros.question`,
 `ouroboros.task`): a node that does not know it gets plain requests and gives plain answers. A front end
 that cannot answer a question, like `ouro ask`, gets it as what the agent said, and gives it up.
+
+### Peers you trust to build
+
+Two agents can build something together, like a way to send files that ouro does not have yet: one asks,
+the other answers in the same conversation, and each changes and builds its own ouro until both do the same.
+For that the agent that answers a peer needs what your agent has: `bash` and `rebuild`. No peer gets them
+through `a2a` or `"*"`. You give them to one peer, by the ID of its node as `list_peers` shows it, in a list of
+its own:
+
+```json
+"tools": {
+  "a2a": ["list_peers"],
+  "peers": {
+    "e982c39668a3": [
+      "list_peers", "ask_back", "rebuild",
+      {"tool": "read",  "allow": ["~/src/ouro", "~/peer-work"]},
+      {"tool": "write", "allow": ["~/src/ouro", "~/peer-work"]},
+      {"tool": "edit",  "allow": ["~/src/ouro", "~/peer-work"]},
+      {"tool": "bash",  "allow": ["~/src/ouro", "~/peer-work", "~/Library/Caches/go-build", "~/go"]}
+    ]
+  }
+}
+```
+
+- **The list of the peer applies to it alone**, in place of `a2a`; it is checked like `a2a`, and a key that is
+  no ID of a node is an error. Every other peer is answered as before.
+- **`bash` of a peer runs in the sandbox, always**, and writes only where its `allow` says, which it needs: it
+  starts in the first of those paths. With `bash_without_sandbox` it runs nothing for a peer. Unlike yours, it
+  does not write the directory of temporary files, which every program of yours shares: for `go test` and
+  `go build` give it a directory of its own in `allow`, like `~/peer-work/tmp`, which its commands name as
+  `TMPDIR` (`TMPDIR=~/peer-work/tmp go test ./...`).
+- **`rebuild` of a peer** builds the checkout as yours does: the tests it names run outside the sandbox, and the
+  build runs as you. The node starts anew with it once no answer is on its way, to you or to a peer; the
+  conversation with the peer goes on there, as the archive kept it. The agent knows from its prompt that you
+  trust that peer to work on ouro with it, and to change only what the two agree on.
+- **What happened stays readable**: the conversation of the peer, with every call of a tool, is in the `Peers`
+  tab of `/session`. `ouro rollback` goes back to the build before, see [Updates](#updates).
+
+**Known risk.** A peer with `rebuild` runs code on your machine: what its agent and yours write, as tests and
+as the build, runs as you, with network. The core stays read-only, the rest is in reach. Give it to a peer whose
+owner you trust as far as you trust yourself, and take it back by removing its list.
 
 ### When a peer could not answer
 
@@ -1578,7 +1723,7 @@ adds, as it may call every method.
 |---|---|---|
 | a command | `plugin.Add` a `plugin.Command` | `internal/plugins/talk` |
 | a tool for the agents | `plugin.Add` a `plugin.Tool` (`plugin.NewTool`) | `internal/plugins/peers` |
-| a tool with settings in `config.json` | wrap the `plugin.Tool` in `plugin.Configurable`, with a struct that has a JSON field per setting | `internal/plugins/files` |
+| a tool with settings in `config.json` | wrap the `plugin.Tool` in `plugin.Configurable`, with a struct that has a JSON field per setting; its tags `about` and `unset` say in `/settings` what a setting does and what holds while it is not set | `internal/plugins/files` |
 | what the terminal UI shows of a tool call | `plugin.Add` a `plugin.ToolView` | `plugin/example`, `internal/plugins/peers` |
 | a screen of the terminal UI | `plugin.Add` a `plugin.Screen` | `plugin/example` |
 | a command of the terminal UI | `plugin.Add` a `plugin.Slash`, or list a `plugin.Action` in `Screen.Actions` | `plugin/example` |
