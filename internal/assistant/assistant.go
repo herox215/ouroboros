@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -51,9 +53,18 @@ const (
 		`Change code the way the code around it is written. ` +
 		`What you find changed and did not change yourself is the work of the user: look at it before you overwrite or delete it. ` +
 		`Write the tests a change needs and no more, and do not run again what passed without a reason. `
-	// improveHint is added for an owner whose agent may build ouro anew: it
-	// says what it would change of ouro, and leaves the change to the user.
+	// improveHint is added for an owner whose agent may build ouro anew and
+	// improve it (config.SelfImproveBuild): what a task needs and ouro
+	// lacks, it may build.
 	improveHint = `You are part of ouro, a program you can change and build anew with ` + ToolRebuild + `. ` +
+		`When a task needs something ouro cannot do, or does badly, building it into ouro is one way to do the task: ` +
+		`weigh it against a workaround, and build it when it is the better way, also for the tasks to come; then tell the user what you changed. ` +
+		`When you notice on the way that ouro holds you back otherwise, by a tool that is slow or misleading, ` +
+		`or by something in this prompt that led you wrong, say so at the end of your answer in a sentence or two, with the change you would make. `
+	// proposeHint is added in its place for an owner who wants the changes
+	// proposed (config.SelfImprovePropose): the agent says what it would
+	// change of ouro, and leaves the change to the user.
+	proposeHint = `You are part of ouro, a program you can change and build anew with ` + ToolRebuild + `. ` +
 		`When you notice on the way that it holds you back, by a tool you lack, by one that is slow or misleading, ` +
 		`or by something in this prompt that led you wrong, say so at the end of your answer in a sentence or two, with the change you would make. ` +
 		`Propose it and no more: change ouro only when the user asks for it. `
@@ -85,6 +96,11 @@ const (
 	toolsHint = ` You are answering the agent of another person, not your owner. ` +
 		`Use your tools when they help to answer. You cannot send the peer you are answering a request: ` +
 		`what only it can know and you need to go on, you ask it back with ` + toolAskBack + `, if you have that, instead of guessing.`
+	// buildHint is added for a peer whose agent may build ouro anew: the
+	// owner trusts that peer to work on ouro with it.
+	buildHint = ` Your owner trusts this peer to work with you on ouro, the program you are part of: ` +
+		`you may change its source and build it anew with ` + ToolRebuild + ` where you and the peer agree that what it asks needs it. ` +
+		`Change nothing else, and tell the peer what you changed.`
 	// explainHint is added for peers when the agent can look up failed answers.
 	explainHint = ` When the peer asks about an error ID it was given because an earlier message could not be answered, ` +
 		`look it up with ` + toolExplainError + ` and explain in plain words what went wrong. ` +
@@ -204,16 +220,30 @@ func (a *Assistant) WithDebug(debug func() bool) *Assistant {
 
 // ForPeers returns the agent that answers the peers of the node configured by
 // cfg, with the tools its owner allows for them, and with the access and the
-// model the owner chose for them, see config.Config.PeerLLM.
+// model the owner chose for them, see config.Config.PeerLLM. A peer with a
+// list of tools of its own in tools.peers is answered by the agent of ForPeer.
 func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
-	return b.forPeers(cfg, script.NewSessions())
+	return b.forPeers(cfg, "", script.NewSessions())
 }
 
-// forPeers is ForPeers with the scripts of the conversations in sessions.
-func (b Builder) forPeers(cfg config.Config, sessions *script.Sessions) (*agent.Agent, error) {
+// ForPeer returns the agent that answers the peer whose node has the ID id:
+// with the tools of its own list in tools.peers, or as ForPeers.
+func (b Builder) ForPeer(cfg config.Config, id string) (*agent.Agent, error) {
+	return b.forPeers(cfg, id, script.NewSessions())
+}
+
+// forPeers is ForPeer with the scripts of the conversations in sessions. The
+// agent of every peer without a list of its own, id "", checks the lists of
+// all of them.
+func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Sessions) (*agent.Agent, error) {
 	cfg.Access, cfg.Model, _ = cfg.PeerLLM()
 	cfg.Fallbacks = nil // of the owner: no peer makes the node answer through another access
-	allowed, err := b.peerTools(cfg)
+	if id == "" {
+		if err := b.checkPeers(cfg); err != nil {
+			return nil, err
+		}
+	}
+	allowed, err := b.peerTools(cfg, id)
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +254,17 @@ func (b Builder) forPeers(cfg config.Config, sessions *script.Sessions) (*agent.
 		return b.build(cfg, prompt)
 	}
 	prompt += toolsHint
-	if slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(fileTools, t.Name) }) {
+	has := func(names ...string) bool {
+		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
+	}
+	if has(fileTools...) {
 		prompt += peerFilesHint
+	}
+	if has(ToolRebuild) {
+		prompt += buildHint
+		if b.Source != "" {
+			prompt += " Your source, the checkout " + ToolRebuild + " builds, is " + b.Source + "."
+		}
 	}
 	if b.Failures != nil {
 		prompt += explainHint
@@ -239,6 +278,9 @@ func (b Builder) forPeers(cfg config.Config, sessions *script.Sessions) (*agent.
 func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.Agent, error) {
 	allowed, err := b.ownerTools(cfg)
 	if err != nil {
+		return nil, err
+	}
+	if err := config.ValidSelfImprove(cfg.SelfImprove); err != nil {
 		return nil, err
 	}
 	has := func(names ...string) bool {
@@ -257,7 +299,11 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 		prompt += workHint
 	}
 	if has(ToolRebuild) {
-		prompt += improveHint
+		if cfg.Improves() {
+			prompt += improveHint
+		} else {
+			prompt += proposeHint
+		}
 		if b.Source != "" {
 			prompt += "Your source, the checkout " + ToolRebuild + " builds, is " + b.Source + ". "
 		}
@@ -291,18 +337,45 @@ func machineHint(day string) string {
 	return " Today is " + day + "; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
 }
 
-// peerTools are the tools the owner allows the agent that answers peers.
-func (b Builder) peerTools(cfg config.Config) ([]agent.Tool, error) {
-	allowed, err := pick(b.all(), cfg.PeerTools(), true)
+// peerTools are the tools the owner allows the agent that answers the peer
+// whose node has the ID id: those of its own list in tools.peers, or those
+// of tools.a2a, which "" stands for.
+func (b Builder) peerTools(cfg config.Config, id string) ([]agent.Tool, error) {
+	entries, own := cfg.ToolsOf(id)
+	of, list := forPeers, "tools.a2a"
+	if own {
+		of, list = forOnePeer, "tools.peers."+id
+	}
+	allowed, err := pick(b.all(), entries, of)
 	if err != nil {
-		return nil, fmt.Errorf("tools.a2a: %w", err)
+		return nil, fmt.Errorf("%s: %w", list, err)
 	}
 	return named(allowed), nil
 }
 
+// nodeID is what the ID of a node is, as list_peers shows it.
+var nodeID = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+// checkPeers reports the first list of tools.peers that is not one of the
+// ID of a node, or no list of tools.
+func (b Builder) checkPeers(cfg config.Config) error {
+	if cfg.Tools == nil {
+		return nil
+	}
+	for _, id := range slices.Sorted(maps.Keys(cfg.Tools.Peers)) {
+		if !nodeID.MatchString(id) {
+			return fmt.Errorf("tools.peers: %q is no ID of a node, which is 12 hex digits as list_peers shows them", id)
+		}
+		if _, err := b.peerTools(cfg, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ownerTools are the tools the owner allows the own agent.
 func (b Builder) ownerTools(cfg config.Config) ([]agent.Tool, error) {
-	allowed, err := pick(b.all(), cfg.OwnerTools(), false)
+	allowed, err := pick(b.all(), cfg.OwnerTools(), forOwner)
 	if err != nil {
 		return nil, fmt.Errorf("tools.h2a: %w", err)
 	}

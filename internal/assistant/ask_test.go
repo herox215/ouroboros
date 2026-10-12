@@ -363,6 +363,16 @@ func TestPromptNamesTheSource(t *testing.T) {
 	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || !strings.Contains(got, want) {
 		t.Errorf("with a source: %q, %v", got, err)
 	}
+	// An owner who wants changes of ouro proposed gets them proposed.
+	cfg.SelfImprove = config.SelfImprovePropose
+	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || !strings.Contains(got, proposeHint) || strings.Contains(got, improveHint) {
+		t.Errorf("proposing: %q, %v", got, err)
+	}
+	cfg.SelfImprove = "ask"
+	if err := New(load, b, discard).Ready(); err == nil || !strings.Contains(err.Error(), `self_improve is "build" or "propose", not "ask"`) {
+		t.Errorf("a value of its own: %v", err)
+	}
+	cfg.SelfImprove = ""
 	cfg.Tools = &config.Tools{H2A: config.Named()}
 	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || strings.Contains(got, "/src/ouro") {
 		t.Errorf("without rebuild: %q, %v", got, err)
@@ -390,7 +400,7 @@ func TestAskPeerNamesOnlyTheToolsThereAre(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		peer, err := b.peerTools(cfg)
+		peer, err := b.peerTools(cfg, "")
 		if err != nil {
 			t.Fatal(err)
 		}
