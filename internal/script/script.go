@@ -201,6 +201,9 @@ func (s *Session) Run(ctx context.Context, source string, tools []string, call C
 		// object whose methods are part of the script.
 		var o outcome
 		value, err := vm.RunProgram(program)
+		if err == nil {
+			value, err = settled(value)
+		}
 		if o.err = err; err == nil {
 			var cut bool
 			o.result, o.nothing, cut, o.value = text(value, r.stringify, returned)
@@ -246,7 +249,7 @@ func (s *Session) Run(ctx context.Context, source string, tools []string, call C
 	s.turn <- struct{}{}
 	switch {
 	case o.err != nil:
-		return "", printed(failure(o.err), out)
+		return "", printed(known(failure(o.err), tools, source), out)
 	case o.value != nil:
 		return "", printed(o.value, out)
 	}
@@ -426,9 +429,10 @@ func (r *realm) install(ctx context.Context, tools []string, call Call, out *out
 // await in it is a syntax error, which the models read as anything but that.
 var awaits = regexp.MustCompile(`(^|[^.\w$])await\b`)
 
-// unawaited returns source with every await that is a word of its own,
-// outside strings and comments, made blanks: lines and columns stay where
-// they were, for the errors.
+// unawaited returns source with every await and async that is a word of its
+// own, outside strings and comments, made blanks: lines and columns stay
+// where they were, for the errors. Without async, a function of the script
+// returns what it returns, not a promise of it, as the tools do.
 func unawaited(source string) string {
 	code := []byte(source)
 	var quote byte // the quote of the string the scan is in, if any
@@ -453,13 +457,20 @@ func unawaited(source string) string {
 				return string(code)
 			}
 			i += end + 3
-		case bytes.HasPrefix(code[i:], []byte("await")) &&
-			(i == 0 || !word(code[i-1])) && (i+len("await") == len(code) || !word(code[i+len("await")])):
+		case keyword(code, i):
 			copy(code[i:], "     ")
 			i += len("await") - 1
 		}
 	}
 	return string(code)
+}
+
+// keyword reports whether await or async, which are as long, is a word of
+// its own at i of code.
+func keyword(code []byte, i int) bool {
+	end := i + len("await")
+	return (bytes.HasPrefix(code[i:], []byte("await")) || bytes.HasPrefix(code[i:], []byte("async"))) &&
+		(i == 0 || !word(code[i-1])) && (end == len(code) || !word(code[end]))
 }
 
 // word reports whether c is part of a name in JavaScript.
@@ -689,6 +700,31 @@ func text(value goja.Value, stringify goja.Callable, limit int) (string, bool, b
 	return result, false, false, nil
 }
 
+// settled is what a script gave back that is a promise, as an async
+// function returns one: what it was fulfilled with, or why it was rejected,
+// as if the script had thrown it. The interpreter has run what the promises
+// waited for once the script ended.
+func settled(value goja.Value) (goja.Value, error) {
+	p, ok := value.Export().(*goja.Promise)
+	if !ok {
+		return value, nil
+	}
+	switch p.State() {
+	case goja.PromiseStateFulfilled:
+		return p.Result(), nil
+	case goja.PromiseStateRejected:
+		reason := p.Result().String()
+		if obj, ok := p.Result().(*goja.Object); ok {
+			if stack := obj.Get("stack"); stack != nil && !goja.IsUndefined(stack) {
+				reason = stack.String()
+			}
+		}
+		return nil, errors.New(reason)
+	}
+	return nil, errors.New("the script gave back a promise that never settled: the tools are functions that " +
+		"return their result at once, so call them without await, and return the result itself")
+}
+
 // failure is the error of a script that did not get to its end, as the LLM
 // reads it: with the line of the script it happened in.
 func failure(err error) error {
@@ -716,6 +752,20 @@ func failure(err error) error {
 		}
 	}
 	return fmt.Errorf("the script failed: %s", strings.Join(lines, "\n"))
+}
+
+// undefined finds the name a script used that is defined nowhere.
+var undefined = regexp.MustCompile(`ReferenceError: ([\p{L}\p{N}_$]+) is not defined`)
+
+// known adds to the error of a script that called a function defined
+// nowhere the functions it has for its tools: a model guesses one, like
+// readFile for read.
+func known(err error, tools []string, source string) error {
+	m := undefined.FindStringSubmatch(err.Error())
+	if m == nil || len(tools) == 0 || !strings.Contains(source, m[1]+"(") {
+		return err
+	}
+	return fmt.Errorf("%w\n[the functions for the tools are: %s]", err, strings.Join(tools, ", "))
 }
 
 // position is where in its compiled form a script was, which the interpreter

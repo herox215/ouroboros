@@ -396,10 +396,12 @@ func TestLimitOfMemoryCountsTheGrowth(t *testing.T) {
 // without it either stays an error.
 func TestAwaitIsLeftOut(t *testing.T) {
 	for source, want := range map[string]string{
-		`const s = await echo({a: 1}); s`:                                `echo:{"a":1}`,
-		"const s = await echo({t: \"await x\"}) // await\n/* await */ s": `echo:{"t":"await x"}`,
-		"return (await echo({t: 'it\\'s await'})) + `${'await'}`":        `echo:{"t":"it's await"}await`,
-		"var awaited = 1; await echo({n: awaited})":                      `echo:{"n":1}`,
+		`const s = await echo({a: 1}); s`:                                          `echo:{"a":1}`,
+		"const s = await echo({t: \"await x\"}) // await\n/* await */ s":           `echo:{"t":"await x"}`,
+		"return (await echo({t: 'it\\'s await'})) + `${'await'}`":                  `echo:{"t":"it's await"}await`,
+		"var awaited = 1; await echo({n: awaited})":                                `echo:{"n":1}`,
+		"async function h() { return await echo({a: 2}) }\nconst r = await h(); r": `echo:{"a":2}`,
+		"const f = async (x) => echo(x); await f({b: 3})":                          `echo:{"b":3}`,
 	} {
 		if got, _, err := run(t, source); err != nil || strings.SplitN(got, "\n", 2)[0] != want {
 			t.Errorf("%q = %q, %v; want %q", source, got, err, want)
@@ -429,5 +431,43 @@ func TestALostResultIsPrinted(t *testing.T) {
 	// print nothing of themselves.
 	if got, err := s.Run(context.Background(), "echo({a: 1}); return 2", r.names(), r.call); err != nil || got != "2" {
 		t.Fatalf("with return: %q, %v", got, err)
+	}
+}
+
+// A script that ends in a promise, as an async function returns one, gives
+// back what it was fulfilled with, or fails as it was rejected.
+func TestPromisesAreSettled(t *testing.T) {
+	for source, want := range map[string]string{
+		`(async () => { const out = echo({a: 1}); return out + "!" })()`: `echo:{"a":1}!`,
+		`async function main() { return {n: 2} } main()`:                 `{"n":2}`,
+		`Promise.resolve()`: "(the script returned nothing)",
+	} {
+		if got, _, err := run(t, source); err != nil || strings.SplitN(got, "\n", 2)[0] != want {
+			t.Errorf("%q = %q, %v; want %q", source, got, err, want)
+		}
+	}
+	for source, want := range map[string]string{
+		`(async () => { throw new Error("async boom") })()`: "the script failed: Error: async boom\n\tat script:1:22",
+		`Promise.reject("no")`:                              "the script failed: no",
+		`new Promise(() => {})`:                             "the script failed: the script gave back a promise that never settled",
+	} {
+		if got, _, err := run(t, source); err == nil || got != "" || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%q = %q, %v; want %q", source, got, err, want)
+		}
+	}
+}
+
+// A name defined nowhere is told along with the functions for the tools.
+func TestUndefinedNamesTheTools(t *testing.T) {
+	if got, _, err := run(t, "readFile({path: 'x'})"); err == nil || got != "" ||
+		!strings.HasPrefix(err.Error(), "the script failed: ReferenceError: readFile is not defined") ||
+		!strings.HasSuffix(err.Error(), "\n[the functions for the tools are: echo, fail, delete, list_peers]") {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if _, err := Run(context.Background(), "nothing()", nil, nil); err == nil || strings.Contains(err.Error(), "functions") {
+		t.Fatalf("without tools: %v", err)
+	}
+	if _, _, err := run(t, "throw new Error('x')"); err == nil || strings.Contains(err.Error(), "functions") {
+		t.Fatalf("another error: %v", err)
 	}
 }

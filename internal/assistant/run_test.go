@@ -374,7 +374,7 @@ func TestRunTakesWhatTheLLMCallsDirectly(t *testing.T) {
 	want := []string{
 		"deleted a b" + note,
 		"deleted " + note,
-		"error: delete: invalid arguments: they are an object, not an array" + note,
+		"error: delete: invalid arguments: they are one object of named values, not an array" + note,
 		"error: unknown tool nope",
 	}
 	if strings.Join(llm.results, "|") != strings.Join(want, "|") {

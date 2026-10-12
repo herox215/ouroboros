@@ -33,8 +33,9 @@ func runDescription(functions string) string {
 	} else {
 		d += ":\n" + functions + "\n"
 	}
-	d += `A function takes one object and returns the text of its result, like ask_peer({peer: "beta", message: "…"}); ` +
-		"one that fails throws an Error. A function named like a word of JavaScript is tools.NAME, like tools.delete({path: \"…\"}). " +
+	d += `A function takes one object and returns the text of its result at once, like ask_peer({peer: "beta", message: "…"}); ` +
+		"one that fails throws an Error. The text is a string also where it holds JSON, which JSON.parse makes data of; " +
+		"nothing is a promise, so write no async, await, .then or .catch. A function named like a word of JavaScript is tools.NAME, like tools.delete({path: \"…\"}). " +
 		"Besides these there are no files, network, timers or require. " +
 		"The scripts of a conversation share one interpreter: what a script declares at its top level, const and let too, " +
 		"and what it puts on globalThis is kept for the next script under its name, so keep nothing twice; " +
