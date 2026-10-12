@@ -349,7 +349,7 @@ func TestSearchBounds(t *testing.T) {
 	}
 	a.Append(owner, msgs, nil)
 	if out, hits, _ := a.Search(owner, "needle", false, 0); hits != DefaultHits ||
-		!strings.HasSuffix(out, "[more hits in this conversation are not shown: search for something more precise]") {
+		!strings.HasSuffix(out, "[more hits are not shown; searched this conversation: search for something more precise]") {
 		t.Errorf("default: %d, %q", hits, out)
 	}
 	if _, hits, _ := a.Search(owner, "needle", false, 1000); hits != MaxHits {

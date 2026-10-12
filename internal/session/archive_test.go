@@ -115,7 +115,7 @@ func TestArchivedSession(t *testing.T) {
 
 	asked(t, s, "s1", "and now?")
 	asked(t, s, "s1", "and then?")
-	if len(told) != 2 || !strings.HasPrefix(told[0], "[Not from the owner: ouro started anew since the last answer of this conversation, 3 hours ago.") ||
+	if len(told) != 2 || !strings.HasPrefix(told[0], "[A note of ouro, which the owner did not write: ouro started anew since the last answer of this conversation, 3 hours ago.") ||
 		!strings.HasSuffix(told[0], "]\n\nand now?") || told[1] != "and then?" {
 		t.Fatalf("the agent was told %q", told)
 	}
@@ -352,6 +352,10 @@ func TestAgo(t *testing.T) {
 		if got := ago(d); got != want {
 			t.Errorf("%v: %q", d, got)
 		}
+	}
+	// A note of before the words changed is taken out as well.
+	if got := unnoted("[Not from the owner: ouro started anew, a minute ago.]\n\nhi"); got != "hi" {
+		t.Errorf("an earlier note: %q", got)
 	}
 	if got := unnoted("[Not from the owner: ouro started anew, never closed"); got != "[Not from the owner: ouro started anew, never closed" {
 		t.Errorf("unnoted %q", got)

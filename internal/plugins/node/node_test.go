@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"ouroboros/internal/a2a"
@@ -180,7 +181,7 @@ func TestStartAndStop(t *testing.T) {
 func TestStartThatFails(t *testing.T) {
 	// The setup ends with the input.
 	s := clitest.Settings(t)
-	if out, err := clitest.Run(t, s, "", "start"); err == nil || strings.Contains(out, "online") {
+	if out, err := clitest.Run(t, s, "", "start"); err == nil || strings.Contains(out, "online") || !strings.Contains(err.Error(), "run ouro start in a terminal") {
 		t.Fatalf("setup without answers: %q, %v", out, err)
 	}
 	// A key that is none: the node has no identity to start with.
@@ -323,7 +324,7 @@ func TestServeKeepsTheSessions(t *testing.T) {
 		t.Fatalf("the new node has %+v, %v", list, err)
 	}
 	reply, err := plugin.Await(context.Background(), sessions, "c1", "and now?")
-	if err != nil || !strings.Contains(reply, "turns=5 last=[Not from the owner: ouro started anew since the last answer of this conversation, less than a minute ago.") ||
+	if err != nil || !strings.Contains(reply, "turns=5 last=[A note of ouro, which the owner did not write: ouro started anew since the last answer of this conversation, less than a minute ago.") ||
 		!strings.HasSuffix(reply, "]\n\nand now?") {
 		t.Fatalf("the agent of the new node should remember: %q, %v", reply, err)
 	}
@@ -343,7 +344,50 @@ func TestServeKeepsTheSessions(t *testing.T) {
 	if err != nil || !slices.Equal(asked, []string{"!again", "and now?"}) || past[len(past)-1].Kind != plugin.SessionAnswer {
 		t.Fatalf("past %+v, %v", past, err)
 	}
-	if reply, err := plugin.Await(context.Background(), sessions, "c1", "still there?"); err != nil || !strings.Contains(reply, "turns=7 last=[Not from the owner: ") {
+	if reply, err := plugin.Await(context.Background(), sessions, "c1", "still there?"); err != nil || !strings.Contains(reply, "turns=7 last=[A note of ouro, which the owner did not write: ") {
 		t.Fatalf("got %q, %v", reply, err)
+	}
+}
+
+// What the plugins do as the node serves runs before it serves, and once
+// it stopped, the answers on their way ended.
+func TestServeTellsThePlugins(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	var mu sync.Mutex
+	var told []string
+	tell := func(what string) func() {
+		return func() {
+			mu.Lock()
+			defer mu.Unlock()
+			told = append(told, what)
+		}
+	}
+	list := append(clitest.Plugins(s, cli.Terminal{In: strings.NewReader(""), Out: io.Discard}),
+		plugin.New("serving", func(ctx *plugin.Context, _ struct{}) error {
+			plugin.Add(ctx, plugin.Serving{Start: tell("start"), Stop: tell("stop")})
+			return nil
+		}))
+	app, err := cli.NewWith(list...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- app.Run(ctx, []string{"serve"}) }()
+	if _, ok := daemon.WaitRunning(filepath.Join(s.Home, "ouro.pid"), clitest.Patience); !ok {
+		t.Fatal("node did not start")
+	}
+	mu.Lock()
+	if !slices.Equal(told, []string{"start"}) {
+		t.Errorf("while it serves: %v", told)
+	}
+	mu.Unlock()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(told, []string{"start", "stop"}) {
+		t.Errorf("once it stopped: %v", told)
 	}
 }

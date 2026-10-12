@@ -19,6 +19,7 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/plugins/base"
 	"ouroboros/internal/session"
 	"ouroboros/plugin"
@@ -62,6 +63,7 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 			term:     n.Console,
 			sessions: n.Sessions,
 			local:    node.Local{Home: dir},
+			serving:  []func() []plugin.Serving{func() []plugin.Serving { return plugin.All[plugin.Serving](ctx) }},
 			wizard:   &wizard{term: n.Console, home: dir, providers: func() []plugin.Provider { return plugin.All[plugin.Provider](ctx) }},
 			server: node.Server{
 				Home: dir, HTTPPort: o.HTTPPort, DiscoPort: o.DiscoPort, Version: o.Version, Log: dir.LogTo(o.Log),
@@ -74,8 +76,16 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 					}
 					answering.Store(peers)
 					n.Sessions.ForgetPeers(peers.Forget) // a conversation the owner deletes
+					// A conversation goes on in a new build as it was.
+					peers.Recall(func(ctx context.Context, contextID string) []openai.Message {
+						origin, _ := a2a.OriginFrom(ctx)
+						return n.Sessions.Recall(origin.PublicKey, contextID)
+					})
 					return func(ctx context.Context, contextID, text string) (string, error) {
-						return peers.Respond(ctx, conversation(ctx, contextID), text)
+						// An answer of a peer keeps the node as one of the owner does.
+						return n.Sessions.Peer(ctx, contextID, func(ctx context.Context) (string, error) {
+							return peers.Respond(ctx, conversation(ctx, contextID), text)
+						})
 					}, nil
 				},
 				// What a peer tells without asking is kept, and starts no agent.
@@ -89,6 +99,13 @@ func Plugin(dir home.Dir, o Options) plugin.Plugin {
 					// The answers on their way are stopped with the node,
 					// and the log says what they waited for.
 					n.Sessions.Close()
+					// Then what the plugins keep running, such as services:
+					// nothing of the node outlives it.
+					for _, s := range plugin.All[plugin.Serving](ctx) {
+						if s.Stop != nil {
+							s.Stop()
+						}
+					}
 					if o.OnStop != nil {
 						o.OnStop()
 					}
@@ -124,6 +141,12 @@ type nodeCommands struct {
 	local    node.Local
 	wizard   *wizard
 	server   node.Server
+	// joined are the sessions of the profiles the node runs, sessions
+	// among them; nil for a node of one profile.
+	joined []*session.Service
+	// serving are what the plugins of the profiles the node runs do as it
+	// serves, see plugin.Serving: this profile's first.
+	serving []func() []plugin.Serving
 }
 
 func (c *nodeCommands) start(ctx context.Context, args []string) error {
@@ -135,6 +158,10 @@ func (c *nodeCommands) start(ctx context.Context, args []string) error {
 		setup = true
 	}
 	if p, ok := c.local.Running(); ok {
+		// A node a front end started stops with it, unless the owner
+		// wants it to run. A node of an older build knows no keeping, and
+		// runs as it did.
+		session.NewClient(c.local.Home).Keep(ctx)
 		fmt.Fprintf(c.term.Out, "● already running (pid %d, port %d)\n", p.PID, p.Port)
 		return nil
 	}
@@ -205,6 +232,23 @@ func (c *nodeCommands) serve(ctx context.Context, _ []string) error {
 		successor = exe
 		end()
 	})
+	// What asked to go on by itself in this build goes on.
+	profiles := c.joined
+	if profiles == nil {
+		profiles = []*session.Service{c.sessions}
+	}
+	// What the plugins of a node that ended without stopping left is
+	// cleaned up before anything goes on.
+	for _, all := range c.serving {
+		for _, s := range all() {
+			if s.Start != nil {
+				s.Start()
+			}
+		}
+	}
+	for _, s := range profiles {
+		s.GoOn()
+	}
 	server := c.server
 	server.Successor = func() string {
 		mu.Lock()
@@ -236,5 +280,7 @@ func (p *Profile) Join(other *Profile) {
 		p.joined = []*session.Service{p.commands.sessions}
 	}
 	p.joined = append(p.joined, other.commands.sessions)
+	p.commands.joined = p.joined
+	p.commands.serving = append(p.commands.serving, other.commands.serving...)
 	session.Share(p.joined...)
 }

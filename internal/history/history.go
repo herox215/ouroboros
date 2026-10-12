@@ -70,6 +70,7 @@ const (
 	suffix       = ".jsonl"
 	titleSuffix  = ".title"
 	effortSuffix = ".effort"
+	goOnSuffix   = ".goon"
 )
 
 // The outcomes of an answer, in the record that ends it.
@@ -446,7 +447,7 @@ func (a *Archive) Search(who Who, query string, all bool, limit int) (string, in
 		return fmt.Sprintf("no record of %s contains %q", scope, query), 0, nil
 	}
 	if more {
-		fmt.Fprintf(&out, "[more hits in %s are not shown: search for something more precise]", scope)
+		fmt.Fprintf(&out, "[more hits are not shown; searched %s: search for something more precise]", scope)
 	} else {
 		fmt.Fprintf(&out, "[%s in %s]", count(hits, "hit"), scope)
 	}
@@ -702,7 +703,7 @@ func (a *Archive) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	for _, beside := range []string{titleSuffix, effortSuffix} {
+	for _, beside := range []string{titleSuffix, effortSuffix, goOnSuffix} {
 		if err := os.Remove(besides(path, beside)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
@@ -719,6 +720,30 @@ func (a *Archive) Delete(id string) error {
 // besides is the file with the ending kind next to the conversation in the
 // file at path, like its title.
 func besides(path, kind string) string { return strings.TrimSuffix(path, suffix) + kind }
+
+// GoOn marks the conversation id, as List names it, to go on by itself once
+// ouro started anew, see GoingOn.
+func (a *Archive) GoOn(id string) error {
+	path, err := a.path(id)
+	if err != nil {
+		return err
+	}
+	return write(besides(path, goOnSuffix), "")
+}
+
+// GoingOn returns the conversations of the owner GoOn marked, as List names
+// them, and takes the marks away: each goes on once.
+func (a *Archive) GoingOn() ([]string, error) {
+	marks, _ := filepath.Glob(filepath.Join(a.dir, ownerDir, "*"+goOnSuffix)) // the pattern is valid
+	var ids []string
+	for _, mark := range marks {
+		if err := os.Remove(mark); err != nil {
+			return ids, err
+		}
+		ids = append(ids, ownerDir+"/"+strings.TrimSuffix(filepath.Base(mark), goOnSuffix))
+	}
+	return ids, nil
+}
 
 // titled is the file of the title of the conversation in the file at path.
 func titled(path string) string { return besides(path, titleSuffix) }

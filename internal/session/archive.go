@@ -52,6 +52,31 @@ func (s *Service) ForgetPeers(forget func(contextID string)) {
 	}
 }
 
+// goOnText is what a session that goes on by itself in a new build is told,
+// in place of a message of the owner.
+const goOnText = "[Not from the owner: ouro runs the build you asked for now. Go on with what you were doing.]"
+
+// GoOn lets the sessions of the owner go on that asked to once ouro started
+// anew from the build they asked for, see AskGoOn: each is told goOnText,
+// once. A node calls it when it starts.
+func (s *Service) GoOn() {
+	s.mu.Lock()
+	a := s.archive
+	s.mu.Unlock()
+	if a == nil {
+		return
+	}
+	ids, err := a.GoingOn()
+	if err != nil {
+		a.log("which sessions go on by themselves cannot be read: %v", err)
+	}
+	for _, id := range ids {
+		if err := s.Ask(context.Background(), strings.TrimPrefix(id, "owner/"), goOnText); err != nil {
+			a.log("the session %s does not go on by itself: %v", id, err)
+		}
+	}
+}
+
 // load returns the session id of the owner as it is archived, nil if it is
 // not: its events, and the agent remembers it. s.mu is held.
 func (s *Service) load(id string) *session {
@@ -172,13 +197,19 @@ func args(arguments string) json.RawMessage {
 }
 
 // noted starts a message of the owner as the agent is told it after ouro
-// started anew, see resumed.
-const noted = "[Not from the owner: ouro started anew"
+// started anew, see resumed. It says plainly that the owner wrote what comes
+// after it: a note that began "Not from the owner" was taken by models for a
+// mark of the whole message, and the owner for a stranger. Messages of
+// before it begin with earlier.
+const (
+	noted   = "[A note of ouro, which the owner did not write: ouro started anew"
+	earlier = "[Not from the owner: ouro started anew"
+)
 
 // unnoted is a message of the owner as it is shown: without what the agent
 // was told along with it.
 func unnoted(text string) string {
-	if !strings.HasPrefix(text, noted) {
+	if !strings.HasPrefix(text, noted) && !strings.HasPrefix(text, earlier) {
 		return text
 	}
 	if _, rest, ok := strings.Cut(text, "]\n\n"); ok {
@@ -192,7 +223,7 @@ func unnoted(text string) string {
 // ended at last: what tools gave back before may no longer be so.
 func resumed(last, now time.Time) string {
 	return fmt.Sprintf(noted+" since the last answer of this conversation, %s ago. "+
-		"What tools gave back before may be outdated, and the variables of scripts are gone.]\n\n", ago(now.Sub(last)))
+		"What tools gave back before may be outdated, and the variables of scripts are gone. What follows is the message of the owner.]\n\n", ago(now.Sub(last)))
 }
 
 // ago is how long d is, for people.
