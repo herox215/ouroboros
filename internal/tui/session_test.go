@@ -196,10 +196,14 @@ func TestSessionsAreWatchedAgain(t *testing.T) {
 	answered(t, m, say(t, m, "ping"))
 	c := m.chat
 
-	// The node stops: the events end.
+	// The node stops: the events end, and with them the answer on its way.
+	c.pending, c.running, c.doing = true, true, "asking beta"
 	_, cmd := m.Update(unwatchedMsg{c.contextID})
 	if c.watching || cmd == nil {
 		t.Fatal("the session should be watched again")
+	}
+	if c.pending || c.running || c.doing != "" || strings.Contains(view(m), "thinking") {
+		t.Fatalf("the answer is still on its way:\n%s", view(m))
 	}
 	msg := cmd()
 	if msg != (rewatchMsg{c.contextID}) {
@@ -258,7 +262,7 @@ func TestWhen(t *testing.T) {
 
 // The sessions screen lists those without a message first, then the latest;
 // sessions of the same time in the order of their IDs. A call of a tool
-// nothing is shown of is left out of the history.
+// nothing is shown of counts, the script that calls the tools does not.
 func TestSessionRows(t *testing.T) {
 	m, _ := newModel(t)
 	at := time.Date(2026, 10, 7, 9, 0, 0, 0, time.Local)
@@ -279,8 +283,14 @@ func TestSessionRows(t *testing.T) {
 	}
 
 	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionMessage, Text: "hi"}})
-	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep}})
+	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: "run"}})
 	if len(shown.entries) != 1 || shown.round != 0 {
+		t.Fatalf("the script is a tool: %+v", shown.entries)
+	}
+	// A call nothing is shown of counts all the same.
+	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: "bash"}})
+	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: "bash", Done: true, Failed: true}})
+	if len(shown.entries) != 2 || shown.summaries()[1] != "Used 1 tool, 1 failed" {
 		t.Fatalf("entries %+v", shown.entries)
 	}
 }
@@ -712,5 +722,23 @@ func TestOpeningTheSessionsAsksForThePeers(t *testing.T) {
 	}
 	if len(m.sessions.peers) != 1 || m.sessions.peers[0].peer != "luna" || m.screen != screenSessions {
 		t.Fatalf("peers %+v", m.sessions.peers)
+	}
+}
+
+// A round the agent said only blank lines in leaves no empty block in the
+// chat: its calls go into the line below the message.
+func TestBlankRoundsLeaveNoSpace(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "pack it"}, true)
+	for range 3 {
+		m.apply(c, Event{Kind: plugin.SessionSay, Text: "\n\n"}, true)
+		m.apply(c, Event{Kind: plugin.SessionStep, Text: "reading a file"}, true)
+		m.apply(c, Event{Kind: plugin.SessionStep, Text: "reading a file", Done: true}, true)
+	}
+	m.renderHistory(true)
+	lines := strings.Split(ansi.Strip(m.history.GetContent()), "\n")
+	if len(lines) != 4 || strings.TrimSpace(lines[2]) != "" || strings.TrimSpace(lines[3]) != "↳ Used 3 tools" {
+		t.Fatalf("the history:\n%s", strings.Join(lines, "\n"))
 	}
 }

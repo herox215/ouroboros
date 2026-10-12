@@ -136,13 +136,19 @@ func next(id string, live <-chan Event) tea.Cmd {
 }
 
 // unwatched watches a session again whose events stopped coming, unless
-// it was deleted.
+// it was deleted. An answer that was on its way is not any more as far as
+// the UI knows, as when the node stopped: what became of it is in what the
+// session shows once it is watched again.
 func (m *Model) unwatched(id string) tea.Cmd {
 	c, ok := m.chats[id]
 	if !ok {
 		return nil
 	}
 	c.watching = false
+	c.pending, c.running, c.doing, c.round, c.asking, c.jobs = false, false, "", 0, nil, nil
+	if c == m.chat {
+		m.renderHistory(m.followsEnd())
+	}
 	return m.rewatch(id)
 }
 
@@ -220,6 +226,11 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 			}
 			m.setNotice(verb+" in “"+short(c.title, 40)+"” · /session", e.Kind != plugin.SessionAnswer)
 		}
+	case plugin.SessionJobs:
+		c.jobs = nil
+		if e.Text != "" {
+			c.jobs = strings.Split(e.Text, "\n")
+		}
 	case plugin.SessionTitle:
 		c.title = e.Text
 	case plugin.SessionEffort:
@@ -236,10 +247,12 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 // say begins a round of the loop: what the agent says along with the tools
 // it asks for, which is not the answer, becomes part of the conversation, and
 // the calls of those tools go below these words. A round the agent said
-// nothing of gets its entry with its first call that is shown.
+// nothing of gets its entry with its first call that is shown. Words that are
+// only blank, as some models say them along with their tools, are nothing:
+// they would leave an empty block in the chat.
 func (c *conversation) say(e Event) {
 	c.round, c.doing = 0, ""
-	if e.Text != "" {
+	if strings.TrimSpace(e.Text) != "" {
 		c.add(entry{text: e.Text, at: e.At})
 		c.round = len(c.entries)
 	}
@@ -248,9 +261,10 @@ func (c *conversation) say(e Event) {
 // step notes what the agent is waiting for while the answer is pending. A
 // call that starts goes into the entry of its round, which a round the agent
 // said nothing of gets now; one that ended takes the place of its start,
-// with what became of it. A call nothing is shown of is left out.
+// with what became of it. A call nothing is shown of counts all the same;
+// the script that calls the tools is no tool of its own.
 func (c *conversation) step(e Event) {
-	if e.Text == "" {
+	if e.Tool == toolRun {
 		return
 	}
 	if c.round == 0 {
@@ -261,7 +275,7 @@ func (c *conversation) step(e Event) {
 	if !e.Done {
 		r.calls = append(r.calls, call{text: e.Text})
 	} else if i := r.started(e.Text); i >= 0 {
-		r.calls[i] = call{text: e.Text, done: true}
+		r.calls[i] = call{text: e.Text, done: true, failed: e.Failed}
 	}
 	if doing := r.waitingFor(); doing != c.doing {
 		c.doing, c.since = doing, e.At
@@ -272,7 +286,7 @@ func (c *conversation) step(e Event) {
 // stopped.
 func (c *conversation) end(e Event) {
 	c.pending, c.running, c.doing, c.round = false, false, "", 0 // the loop of this answer is over
-	c.asking = nil
+	c.asking, c.jobs = nil, nil                                  // its jobs end with it
 	last := entry{text: e.Text, at: e.At}
 	switch e.Kind {
 	case plugin.SessionFailed:

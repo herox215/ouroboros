@@ -191,17 +191,21 @@ func (r mdRenderer) inline(n ast.Node, style lipgloss.Style) string {
 			value = util.ResolveNumericReferences(util.ResolveEntityNames(util.UnescapePunctuations(value)))
 		}
 		s := style.Render(string(value))
-		switch {
-		case n.HardLineBreak():
+		// A line break of the text is kept, as a chat shows it: models
+		// write poems, addresses and lists without marks line by line.
+		if n.HardLineBreak() || n.SoftLineBreak() {
 			s += "\n"
-		case n.SoftLineBreak():
-			s += " "
 		}
 		return s
 	case *ast.CodeSpan:
 		return r.inlines(n, style.Foreground(codeColor))
 	case *ast.Emphasis:
-		style = style.Italic(n.Level == 1).Bold(n.Level > 1)
+		// Within each other, as ***x*** is, they add up.
+		if n.Level == 1 {
+			style = style.Italic(true)
+		} else {
+			style = style.Bold(true)
+		}
 	case *east.Strikethrough:
 		return r.inlines(n, style.Strikethrough(true))
 	case *ast.Link:

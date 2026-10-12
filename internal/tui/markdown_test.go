@@ -26,7 +26,7 @@ func TestMarkdownBlocks(t *testing.T) {
 		"- loose\n\n- items\n\n> quoted\n>\n> twice\n\n```go\nfunc main() {}\n```\n\n    indented\n\n---\n\n" +
 		"<div>\nhtml\n</div>\n\n| Name | Value |\n|---|---|\n| a | **1** |\n"
 	want := strings.Join([]string{
-		"Title", "", "Small", "", "Some bold and italic, code, gone, soft", "hard.", "",
+		"Title", "", "Small", "", "Some bold and italic, code, gone,", "soft", "hard.", "",
 		"• one", "• two", "  • nested", "• ☑ done", "• ☐ open", "", "3. three", "4. four", "",
 		"• loose", "", "• items", "", "│ quoted", "│", "│ twice", "",
 		"  go", "  func main() {}", "", "  indented", "", strings.Repeat("─", 40), "",
@@ -35,6 +35,10 @@ func TestMarkdownBlocks(t *testing.T) {
 	}, "\n")
 	if got := plainMarkdown(src, 40); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	// Emphasis within emphasis adds up.
+	if both := renderMarkdown("***both***", 40); !strings.Contains(both, "\x1b[1;3m") {
+		t.Fatalf("bold and italic %q", both)
 	}
 	// The styles stand for the marks, also one inside another.
 	styled := renderMarkdown("**bold `code` on**", 40)

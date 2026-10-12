@@ -14,7 +14,7 @@ func TestChatNewlineKeys(t *testing.T) {
 	}{
 		{"alt+enter", tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}, "hello"},
 		{"shift+enter", tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}, "hello\n"},
-		{"ctrl+j", tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}, "hello\n"},
+		{"ctrl+j", tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}, "hello"}, // it shows the jobs
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newModel(t)
