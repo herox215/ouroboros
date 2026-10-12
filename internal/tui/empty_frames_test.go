@@ -31,21 +31,21 @@ func TestNameAnimationIsDrawnAsItWas(t *testing.T) {
 		shown float64
 		want  string
 	}{
-		{60, 12, nameShine, 0.3, 1, "45295c91"},
-		{60, 12, nameShine, 0.9, 1, "20f71f5e"},
-		{60, 12, nameShine, 1.4, 1, "a8b9f4f0"},
-		{60, 12, nameShine, 4.2, 0.5, "d764951e"},
-		{120, 30, nameShine, 0.9, 1, "72c50adc"},
-		{120, 30, nameShine, 2.1, 1, "6ed74031"},
-		{120, 30, nameShine, 6.3, 1, "a512bcbc"},
-		{60, 12, nameGlitch, torn - 0.01, 1, "d187a587"},
-		{60, 12, nameGlitch, torn + 0.01, 1, "bf161d9b"},
-		{60, 12, nameGlitch, torn + 0.1, 1, "42c4f77e"},
-		{60, 12, nameGlitch, torn + 0.2, 1, "82fb2b4d"},
-		{60, 12, nameGlitch, torn + 0.3, 1, "b0eaecc8"},
-		{120, 30, nameGlitch, glitchAt(1) + 0.1, 1, "39b26e08"},
-		{120, 30, nameGlitch, glitchAt(2) + 0.2, 0.5, "044a6de9"},
-		{120, 30, nameGlitch, glitchAt(3) + 0.3, 1, "8c0da080"},
+		{60, 12, nameShine, 0.3, 1, "e2e2cc19"},
+		{60, 12, nameShine, 0.9, 1, "5c030a15"},
+		{60, 12, nameShine, 1.4, 1, "2fc5a303"},
+		{60, 12, nameShine, 4.2, 0.5, "eae56286"},
+		{120, 30, nameShine, 0.9, 1, "c3266865"},
+		{120, 30, nameShine, 2.1, 1, "c7d8e991"},
+		{120, 30, nameShine, 6.3, 1, "c1ed4339"},
+		{60, 12, nameGlitch, torn - 0.01, 1, "bd4f8ff7"},
+		{60, 12, nameGlitch, torn + 0.01, 1, "92c54031"},
+		{60, 12, nameGlitch, torn + 0.1, 1, "70903178"},
+		{60, 12, nameGlitch, torn + 0.2, 1, "96a8ed49"},
+		{60, 12, nameGlitch, torn + 0.3, 1, "cbd7e49c"},
+		{120, 30, nameGlitch, glitchAt(1) + 0.1, 1, "a286fa3a"},
+		{120, 30, nameGlitch, glitchAt(2) + 0.2, 0.5, "0893f278"},
+		{120, 30, nameGlitch, glitchAt(3) + 0.3, 1, "228c4fe9"},
 	} {
 		frame := drawNameAnimation("Luna", tt.w, tt.h, seconds(tt.at), false, tt.look, tt.shown, "stay curious")
 		if got := drawn(frame); got != tt.want {
