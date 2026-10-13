@@ -11,7 +11,8 @@ import (
 
 // nameAnimation is how the name of the agent moves in an empty chat: the
 // gradient of the splash flows through it, as it does through the title
-// there, and it shines or glitches, as its look is. A visit of an
+// there, and it shines, glitches, waves, floats, flares, flickers or beams
+// a torch over itself, as its look is. A visit of an
 // empty chat begins it anew, in a look picked by chance, and the first
 // message of the chat fades the name out behind it.
 type nameAnimation struct {
@@ -90,6 +91,11 @@ type nameLook int
 const (
 	nameShine  nameLook = iota // a streak of light crosses the name
 	nameGlitch                 // the name is torn for a moment now and then
+	nameWave                   // bands of light roll through the name
+	nameFloat                  // the letters of the name bob up and down
+	nameFlare                  // a letter of the name lights up like a lamp
+	nameNeon                   // all of the name is lit, one letter flickers and throws sparks
+	nameBeam                   // a torch wanders over the name in the dark
 	nameLooks                  // how many there are
 )
 
@@ -121,6 +127,70 @@ const (
 	glitchJump  = 3 // columns a row jumps at most, in the font at its own size
 )
 
+// A wave rolls bands of light through the name: they travel from its left
+// to its right, leaning to the right like the shine, and every cell of the
+// name breathes between the nameMatte it rests in and the light of a crest.
+const (
+	waveSpeed  = 9.0  // columns a crest travels per second
+	waveLength = 1.4  // crests over the width of the name at once
+	waveHeight = 0.55 // how bright a crest is, from 0 to 1
+	waveLean   = 1.2  // columns a row is ahead of the one below it
+)
+
+// A float lets the letters of the name bob up and down, a row at most: a
+// wave of the bob travels through the letters, and every letter follows it
+// in its own time, so the name itself moves, gently.
+const (
+	floatPeriod = 2.8  // seconds a wave of the bob through the letters takes
+	floatBob    = 0.55 // rows a letter bobs at most
+)
+
+// A flare lights a letter of the name up like a lamp: it glows up and dims
+// again in its time, and the letters around it catch some of its light,
+// the nearer the more. The light goes round the name, a letter after the
+// other.
+const (
+	flareEvery  = 1.9 // seconds a letter holds the light
+	flareReach  = 0.7 // the share of its light the letters around it catch
+	flareSpread = 3.0 // columns the light falls off over, in the font at its size
+)
+
+// A neon lights all of the name up, and one letter of it, taken at random,
+// flickers like a defective tube: the whole letter stutters out and burns
+// again together. The letter is taken with the tagline the visit shows, and
+// stays with it. Where it stutters out, little sparks fly, like shorts at
+// the tube.
+const (
+	neonStep = 0.07 // seconds between two steps of the flicker
+	neonOdds = 5    // a cell burns this many steps of the flicker for one it stutters out
+	neonOut  = 0.07 // how bright a cell is where the tube is out
+)
+
+// A beam wanders over the name like a torch: a round spot of light that
+// travels from its left to its right, swaying a row up and down, and lights
+// the letters the nearer it stands to them. Outside of it the name rests in
+// the dark.
+const (
+	beamSpeed = 9.0 // columns the spot travels per second
+	beamWidth = 1.6 // columns the light falls off over
+	beamLead  = 5   // columns it starts before the name, and goes on behind it
+	beamRest  = 2.2 // seconds it rests before it sets out again
+	beamSway  = 0.8 // rows the spot sways up and down
+	beamSwayP = 4.2 // seconds a sway takes
+)
+
+// A spark of the defect burns for a few steps of the flicker: how many of
+// them one step that stutters out throws, how long one lives, how far it
+// flies at most from the middle of the letter, and what it shows, large to
+// small as it burns out.
+const (
+	sparkMany  = 3
+	sparkLife  = 3
+	sparkReach = 4
+)
+
+var sparkArt = [...]rune{'✦', '•', '·'}
+
 // glitchAt is when the glitch of the nth span of glitchEvery begins, in
 // seconds from the beginning of the animation.
 func glitchAt(n int) float64 {
@@ -139,20 +209,79 @@ func glitch(t float64) int {
 // lit returns how much of the shine is on the column x and the row y of a
 // name of w columns and h rows at the time t in seconds, from 0 to 1.
 func (l nameLook) lit(x, y, w, h int, t float64) float64 {
-	if l != nameShine {
+	if l == nameWave {
+		spacing := float64(w) / waveLength
+		at := t * waveSpeed
+		return waveHeight * (0.5 + 0.5*math.Sin(2*math.Pi*(float64(x)-at-float64(h-1-y)*waveLean)/spacing))
+	}
+	if l == nameShine {
+		scale := float64(h) / 3
+		every := (float64(w)+2*shineLead*scale)/(shineSpeed*scale) + shineRest
+		at := math.Mod(t, every)*shineSpeed*scale - shineLead*scale
+		ahead := (float64(h-1)/2 - float64(y)) * shineLean
+		return bell(float64(x)-at-ahead, shineWidth*scale)
+	}
+	if l != nameBeam {
 		return 0
 	}
+	// The spot of the torch wanders over the name, and sways a row up and
+	// down as it goes. Cells are taller than wide: a row weighs twice a
+	// column, so that the spot stays round.
 	scale := float64(h) / 3
-	every := (float64(w)+2*shineLead*scale)/(shineSpeed*scale) + shineRest
-	at := math.Mod(t, every)*shineSpeed*scale - shineLead*scale
-	ahead := (float64(h-1)/2 - float64(y)) * shineLean
-	return bell(float64(x)-at-ahead, shineWidth*scale)
+	every := (float64(w)+2*beamLead*scale)/(beamSpeed*scale) + beamRest
+	at := math.Mod(t, every)*beamSpeed*scale - beamLead*scale
+	mid := float64(h-1) / 2
+	sway := beamSway * scale * math.Sin(2*math.Pi*t/beamSwayP)
+	dx := (float64(x) - at) / (beamWidth * scale)
+	dy := 2 * (float64(y) - mid - sway) / (beamWidth * scale)
+	return bell(math.Sqrt(dx*dx+dy*dy), 1)
+}
+
+// letterSpans are the first and the last column of every letter of an
+// artwork: letters are apart by columns that every row of it leaves blank.
+func letterSpans(art []string) [][2]int {
+	var spans [][2]int
+	w := len([]rune(art[0]))
+	used := make([]bool, w)
+	for _, row := range art {
+		for x, r := range []rune(row) {
+			if r != ' ' {
+				used[x] = true
+			}
+		}
+	}
+	for x := 0; x < w; x++ {
+		if !used[x] {
+			continue
+		}
+		if n := len(spans); n > 0 && spans[n-1][1] == x-1 {
+			spans[n-1][1] = x
+		} else {
+			spans = append(spans, [2]int{x, x})
+		}
+	}
+	return spans
+}
+
+// neonFlicker is how the column x and the row y of the defect, the nth
+// letter of spans, flickers at t: 1 where the tube burns, and dim where it
+// stutters out. The whole letter flickers together, and cells outside of
+// it burn steadily.
+func neonFlicker(x, y, n int, spans [][2]int, t float64) float64 {
+	if n < 0 || x < spans[n][0] || x > spans[n][1] {
+		return 1
+	}
+	if hash(int(t/neonStep), n, 3)%neonOdds == 0 {
+		return neonOut
+	}
+	return 1
 }
 
 // drawNameAnimation draws name where emptyChat has it, in the middle of
 // width by height, with the gradient of the splash flowing through it and
 // look moving it: as far as they have come in the time elapsed. It fills all
-// of width by height, and nothing of the name moves but in a glitch. A name
+// of width by height, and nothing of the name moves but in a glitch or a
+// float. A name
 // too large for the artwork rests as emptyChat shows it. Of a name that
 // fades out the share shown is left.
 func drawNameAnimation(name string, width, height int, elapsed time.Duration, light bool, look nameLook, shown float64, selected ...string) string {
@@ -168,6 +297,51 @@ func drawNameAnimation(name string, width, height int, elapsed time.Duration, li
 	if look == nameGlitch {
 		torn = glitch(elapsed.Seconds())
 	}
+	// A float bobs the letters of the name up and down: one row at most, a
+	// wave of the bob through them.
+	bob := make([]int, w)
+	if look == nameFloat {
+		spans := letterSpans(art)
+		for i, span := range spans {
+			dy := int(math.Round(floatBob * math.Sin(2*math.Pi*(elapsed.Seconds()/floatPeriod-float64(i)/float64(len(spans))))))
+			for x := span[0]; x <= span[1]; x++ {
+				bob[x] = dy
+			}
+		}
+	}
+	// A flare lights a letter of the name up: the letter glows up and dims
+	// again, and the letters around it catch some of its light.
+	lamp := make([]float64, w)
+	if look == nameFlare {
+		spans := letterSpans(art)
+		into := math.Mod(elapsed.Seconds(), flareEvery*float64(len(spans)))
+		n := int(into/flareEvery) % len(spans)
+		share := math.Sin(math.Pi * (into/flareEvery - float64(n)))
+		span := spans[n]
+		scale := float64(len(art)) / 3
+		for x := 0; x < w; x++ {
+			if x < span[0] {
+				lamp[x] = flareReach * share * bell(float64(span[0]-x), flareSpread*scale)
+			} else if x > span[1] {
+				lamp[x] = flareReach * share * bell(float64(x-span[1]), flareSpread*scale)
+			} else {
+				lamp[x] = share
+			}
+		}
+	}
+	// A neon lights all of the name up, and the defect flickers on one
+	// letter of it, taken at random with the tagline the visit shows, and
+	// staying with it.
+	defect, neonSpans := -1, [][2]int{}
+	if look == nameNeon {
+		neonSpans = letterSpans(art)
+		tag := taglineText(selected)
+		seed := len(tag)
+		if len(tag) > 0 {
+			seed += int(tag[0])
+		}
+		defect = int(hash(seed, 0, 5)) % len(neonSpans)
+	}
 	for y, row := range art {
 		jump, tint := 0, hash(y, torn, 7)
 		if torn != 0 && tint%3 != 0 {
@@ -179,6 +353,12 @@ func drawNameAnimation(name string, width, height int, elapsed time.Duration, li
 				continue
 			}
 			lit := look.lit(x, y, w, len(art), elapsed.Seconds())
+			if look == nameFlare {
+				lit = lamp[x]
+			}
+			if look == nameNeon {
+				lit = neonFlicker(x, y, defect, neonSpans, elapsed.Seconds())
+			}
 			c.alpha = (nameMatte + (1-nameMatte)*lit) * shown
 			fg := mix(p.gradient(float64(x)/float64(w)*0.8-elapsed.Seconds()*0.36), p.glow, shineGlow*lit)
 			if jump != 0 {
@@ -188,7 +368,46 @@ func drawNameAnimation(name string, width, height int, elapsed time.Duration, li
 				c.set(left+x+jump, top+y, '▒', fg, false)
 				continue
 			}
-			c.block(left+x+jump, top+y, fg)
+			c.block(left+x+jump, top+y+bob[x], fg)
+		}
+	}
+	// Sparks fly where the defect stutters out, like shorts at the tube: a
+	// few of them a step that goes out throws, from the middle of the
+	// letter out, and dim as they burn. They stay in the gaps between and
+	// around the letters, never over one of them.
+	if look == nameNeon && defect >= 0 {
+		span, step := neonSpans[defect], int(elapsed.Seconds()/neonStep)
+		mid := left + (span[0]+span[1])/2
+		for age := 0; age < sparkLife; age++ {
+			born := step - age
+			if born < 0 || hash(born, defect, 3)%neonOdds != 0 {
+				continue
+			}
+			for i := 0; i < sparkMany; i++ {
+				h := hash(born, i, 11)
+				if h%3 == 0 {
+					continue
+				}
+				x := mid + (int(h>>4%uint32(2*sparkReach+1))-sparkReach)*(age+1)
+				y := top + len(art)/2 + (int(h>>12%uint32(2*sparkReach+1))-sparkReach)*(age+1)
+				if x < 0 || x >= width || y < 0 || y >= height {
+					continue
+				}
+				if y >= top && y < top+len(art) {
+					in := false
+					for _, s := range neonSpans {
+						if x >= left+s[0] && x <= left+s[1] {
+							in = true
+							break
+						}
+					}
+					if in {
+						continue
+					}
+				}
+				c.alpha = shown * (1 - 0.7*float64(age)/float64(sparkLife))
+				c.set(x, y, sparkArt[age], p.glow, false)
+			}
 		}
 	}
 	if row, ok := emptyTaglineRow(width, height, len(art), selected...); ok {
