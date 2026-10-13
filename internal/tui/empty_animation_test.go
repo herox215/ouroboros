@@ -559,6 +559,7 @@ func TestNameAnimationVisitLifecycle(t *testing.T) {
 // and from its beginning when the visit begins.
 func TestNameAnimationIsDrawnWithTheTicks(t *testing.T) {
 	m, b := newModel(t)
+	m.inputShown = false // the empty chat as it opens: without the box of the input
 	at := time.Unix(100, 0)
 	m.now = func() time.Time { return at }
 	b.status.Name = "Luna"
@@ -567,7 +568,7 @@ func TestNameAnimationIsDrawnWithTheTicks(t *testing.T) {
 	a := &m.nameAnimation
 	shows := func(elapsed time.Duration, light bool) {
 		t.Helper()
-		if w, h := m.history.Width(), m.history.Height(); w != 76 || h != 20 || m.history.GetContent() != drawNameAnimation("Luna", w, h, elapsed, light, a.look, 1, a.tagline) {
+		if w, h := m.history.Width(), m.history.Height(); w != 76 || h != 25 || m.history.GetContent() != drawNameAnimation("Luna", w, h, elapsed, light, a.look, 1, a.tagline) {
 			t.Fatalf("after %v in %dx%d, light %v:\n%s", elapsed, w, h, light, ansi.Strip(m.history.GetContent()))
 		}
 		if !strings.Contains(ansi.Strip(view(m)), nameRow("Luna")) {
@@ -588,7 +589,7 @@ func TestNameAnimationIsDrawnWithTheTicks(t *testing.T) {
 	// Another name, and another conversation, begin anew.
 	b.status.Name = "Terra"
 	m.Update(m.refreshStatus())
-	if a.name != "Terra" || a.start != at || a.elapsed != 0 || m.history.GetContent() != drawNameAnimation("Terra", 76, 20, 0, true, a.look, 1, a.tagline) {
+	if a.name != "Terra" || a.start != at || a.elapsed != 0 || m.history.GetContent() != drawNameAnimation("Terra", 76, 25, 0, true, a.look, 1, a.tagline) {
 		t.Fatalf("after another name: %+v", *a)
 	}
 	at = at.Add(time.Second)

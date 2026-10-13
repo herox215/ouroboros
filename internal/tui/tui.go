@@ -342,11 +342,23 @@ type Model struct {
 	onboard       *onboarding  // the setup, while it is open
 	light         bool         // the background of the terminal is light
 	input         textarea.Model
-	history       viewport.Model
-	glide         *glide     // the viewport on its way to a line, if one is
-	selected      *selection // what the mouse selected of the history
-	pressed       *spot      // where the mouse went down, before the drag began
-	spinner       spinner.Model
+	// inputShown is whether the box of the input is drawn under the chat: a
+	// key on the chat shows it, and with an empty input it hides again 3s
+	// after the last key. A question of the agent shows it meanwhile.
+	inputShown bool
+	// inputIdle is when the last key on the chat was: the empty input hides
+	// 3s after it.
+	inputIdle time.Time
+	// inputLevel is how far the box of the input has come in, from 0 for
+	// not at all to inputFrames for whole; inputFading is whether it is on
+	// its way in or out.
+	inputLevel  int
+	inputFading bool
+	history     viewport.Model
+	glide       *glide     // the viewport on its way to a line, if one is
+	selected    *selection // what the mouse selected of the history
+	pressed     *spot      // where the mouse went down, before the drag began
+	spinner     spinner.Model
 
 	// nameAnimation is how the name of the agent moves in an empty chat.
 	nameAnimation nameAnimation
@@ -394,6 +406,80 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		m.setNotice(strings.Join(problems, "; "), true)
 	}
 	return m
+}
+
+// inputIdleTime is how long an empty box of the input stays after the last
+// key on the chat.
+const inputIdleTime = 3 * time.Second
+
+// showInput brings the box of the input, from text typed on the chat, and
+// starts the clock of the idle input anew. A box that is not there yet
+// comes in.
+func (m *Model) showInput() tea.Cmd {
+	m.inputIdle = m.now()
+	if m.inputShown {
+		return nil
+	}
+	there := m.inputVisible() // with text or a question in it
+	m.inputShown = true
+	if there {
+		return nil
+	}
+	return m.fadeInput()
+}
+
+// typed reports whether a key writes text, and is no shortcut such as
+// ctrl+k, enter or the arrows, which have none.
+func typed(msg tea.KeyPressMsg) bool { return msg.Text != "" }
+
+// hideStaleInput takes the box of the input out again inputIdleTime after
+// the last key on the chat, if it is empty by then. The ticks of the
+// spinner look.
+func (m *Model) hideStaleInput() tea.Cmd {
+	if !m.inputShown || m.input.Value() != "" || m.now().Sub(m.inputIdle) < inputIdleTime {
+		return nil
+	}
+	m.inputShown = false
+	return m.fadeInput()
+}
+
+// The box of the input slides in from below and out again over inputFrames
+// frames, one every inputFrame, and the chat gives it its rows or takes them
+// back as it goes.
+const (
+	inputFrames = 10
+	inputFrame  = 25 * time.Millisecond
+)
+
+// inputFadeMsg is a frame of the box of the input on its way in or out.
+type inputFadeMsg struct{}
+
+// fadeInput starts the box of the input on its way to what inputVisible
+// says, unless it is on its way already: then the frames turn around.
+func (m *Model) fadeInput() tea.Cmd {
+	if m.inputFading {
+		return nil
+	}
+	m.inputFading = true
+	return tea.Tick(inputFrame, func(time.Time) tea.Msg { return inputFadeMsg{} })
+}
+
+// inputFaded takes the box of the input a frame further on its way, and asks
+// for the next until it is whole or gone.
+func (m *Model) inputFaded() tea.Cmd {
+	if m.inputVisible() {
+		m.inputLevel = min(inputFrames, m.inputLevel+1)
+	} else {
+		m.inputLevel = max(0, m.inputLevel-1)
+	}
+	if m.inputLevel == 0 || m.inputLevel == inputFrames {
+		m.inputFading = false
+	}
+	m.layout()
+	if !m.inputFading {
+		return nil
+	}
+	return tea.Tick(inputFrame, func(time.Time) tea.Msg { return inputFadeMsg{} })
 }
 
 type (
@@ -487,11 +573,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	// The line below the footer comes and goes with what is pending, and
 	// with it the room for everything above.
-	defer func(rows int) {
-		if m.pendingRows() != rows {
+	// So does the box of the input, with a question of the agent that waits
+	// in it.
+	defer func(rows int, shown bool) {
+		if m.pendingRows() != rows || m.inputVisible() != shown {
 			m.layout()
 		}
-	}(m.pendingRows())
+	}(m.pendingRows(), m.inputVisible())
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -583,8 +671,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refresh()
 	case spinner.TickMsg:
+		var hide tea.Cmd
 		if msg.ID == m.spinner.ID() {
 			m.ticks++
+			hide = m.hideStaleInput()
 			if a := &m.nameAnimation; a.active || !a.fading.IsZero() {
 				a.elapsed = m.now().Sub(a.start)
 				if !a.active && a.faded(m.now()) == 0 {
@@ -595,7 +685,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, hide)
+	case inputFadeMsg:
+		return m, m.inputFaded()
 	case answerMsg:
 		if !m.streaming || !m.chat.pending || m.chat.partial == "" {
 			m.streaming = false // the answer is over, or wrote nothing since
@@ -642,7 +734,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.splash.show {
 			return m, m.splash.handleKey(m, msg)
 		}
-		return m, m.handleKey(msg)
+		var show tea.Cmd
+		if m.screen == screenChat && (m.inputVisible() || typed(msg)) {
+			show = m.showInput()
+		}
+		return m, tea.Batch(m.handleKey(msg), show)
 	default:
 		var cmd tea.Cmd
 		if m.onboard != nil {

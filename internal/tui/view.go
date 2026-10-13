@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -104,11 +105,40 @@ func (r *requestsScreen) pendingView(m *Model) string {
 	return ansi.Truncate(" "+line, m.width, "…")
 }
 
-// chatHeight is the height of the conversation box above the input box.
-func (m *Model) chatHeight() int { return max(4, m.bodyHeight()-inputHeight-2) }
+// chatHeight is the height of the conversation box above the input box;
+// what the box of the input does not take of its room, the chat does.
+func (m *Model) chatHeight() int { return max(4, m.bodyHeight()-m.inputRows()) }
 
-// layout sizes the widgets after the window changed.
+// inputBoxRows is how high the box of the input is: its rows and border.
+const inputBoxRows = inputHeight + 2
+
+// inputRows is how many rows of the body the box of the input takes: all of
+// them once it is in, none while it is out, and on its way in or out the
+// ones it has come up so far, slowing down as it arrives.
+func (m *Model) inputRows() int {
+	t := float64(m.inputLevel) / inputFrames
+	return int(math.Round((1 - math.Pow(1-t, 3)) * inputBoxRows))
+}
+
+// inputVisible reports whether the box of the input is drawn under the
+// chat: from a key on the chat until it is empty and idle, and whenever it
+// holds text or a question of the agent waits in it.
+func (m *Model) inputVisible() bool {
+	if a := m.chat.asking; a != nil && !a.sent {
+		return true
+	}
+	return m.inputShown || m.input.Value() != ""
+}
+
+// layout sizes the widgets after the window changed. The box of the input,
+// unless it is on its way, is where inputVisible says at once.
 func (m *Model) layout() {
+	if !m.inputFading {
+		m.inputLevel = 0
+		if m.inputVisible() {
+			m.inputLevel = inputFrames
+		}
+	}
 	atBottom := m.history.AtBottom()
 	m.selected, m.pressed = nil, nil // its lines are wrapped anew
 	inner := max(1, m.chatWidth()-4) // border and padding
@@ -692,7 +722,14 @@ func (m *Model) chatColumn() string {
 	// Suggestions and answers lie over the bottom of the chat, in a panel.
 	// Its size and the positions of its history stay unchanged behind them.
 	panel := m.panel()
+	rows := m.inputRows()
+	if rows == 0 {
+		return chat
+	}
 	input := box(false, m.light).Width(w).Render(c.showLabels(m.input.View()))
+	if m.inputLevel < inputFrames {
+		input = m.arriving(input, rows)
+	}
 	if panel == "" {
 		return lipgloss.JoinVertical(lipgloss.Left, chat, input)
 	}
@@ -708,6 +745,21 @@ func (m *Model) chatColumn() string {
 		lipgloss.NewLayer(panel).X(2).Y(m.panelTop(panel)).Z(1), // in the middle: it is four cells narrower
 	))
 	return lipgloss.NewStyle().Width(w).Height(height).MaxHeight(height).Render(canvas.Render())
+}
+
+// arriving is the box of the input on its way: the rows of it that have come
+// up from below, the gray of a faded edge first, then dim, until it is in.
+func (m *Model) arriving(input string, rows int) string {
+	lines := strings.Split(input, "\n")[:rows]
+	t := float64(m.inputLevel) / inputFrames
+	for i, line := range lines {
+		if t < 0.5 {
+			lines[i] = lipgloss.NewStyle().Foreground(fadeColor(m.light)).Render(ansi.Strip(line))
+		} else {
+			lines[i] = faint(line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // panel is the box that lies over the bottom of the chat: the commands that
@@ -807,6 +859,10 @@ func (m *Model) footerHint() string {
 	}
 	if found, _ := m.suggestions(); len(found) > 0 {
 		help = "↑↓ select · tab complete · enter run"
+	}
+	// Without the box of the input it says, softly, that a key brings it.
+	if help == "" && m.screen == screenChat && !m.inputVisible() && m.chat.peer == "" {
+		help = "type to write"
 	}
 	switch m.screen {
 	case screenRequests:

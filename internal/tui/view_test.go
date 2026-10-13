@@ -106,6 +106,8 @@ func TestSuggestionsInALowWindow(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
 	m.input.SetValue("/")
+	m.inputShown = true
+	m.layout()
 	if rows := strings.Count(m.View().Content, "\n") + 1; rows != 16 || strings.Contains(view(m), "│ alpha") || len(m.suggestionLines(m.chatHeight()-3)) != m.chatHeight()-3 {
 		t.Fatalf("%d rows:\n%s", rows, view(m))
 	}

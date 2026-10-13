@@ -383,6 +383,8 @@ func newModelOn(t *testing.T, b *fakeBackend) *Model {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.splash.show = false // dismiss the start screen; its own test is below
 	m.Update(m.refreshStatus())
+	m.inputShown = true // the tests here take the box of the input as shown
+	m.layout()
 	return m
 }
 
