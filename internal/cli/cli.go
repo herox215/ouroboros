@@ -17,6 +17,7 @@
 //	node       start, stop, status, serve and the setup dialog
 //	talk       list, ask, chat
 //	tui        the terminal UI
+//	gui        the graphical UI
 //	update     update
 //
 // To add a plugin: write a package with a func that returns a plugin.Plugin,
@@ -66,6 +67,7 @@ import (
 	computerplugin "ouroboros/internal/plugins/computer"
 	"ouroboros/internal/plugins/discovery"
 	filesplugin "ouroboros/internal/plugins/files"
+	"ouroboros/internal/plugins/gui"
 	historyplugin "ouroboros/internal/plugins/history"
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
@@ -196,6 +198,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		}),
 		talk.Plugin(),
 		tui.Plugin(owner, func(u *tui.Profile) { p.ui = u }),
+		gui.Plugin(owner, func(g *gui.Profile) { p.gui = g }),
 		updateplugin.Plugin(dir),
 	}, fixed)
 }

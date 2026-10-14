@@ -13,6 +13,7 @@ ouro list                 # find nodes on the network
 ouro chat "ask beta …"    # one answer from your agent, for scripts; without a message → the terminal UI
 ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
+ouro gui                  # native Fyne demo: empty page with a profile picker
 ouro stop
 ouro update               # build and install the newest main
 ouro rollback             # the build before the last update or rebuild again
@@ -131,6 +132,16 @@ plugin says so itself, nothing else names it. An ouro built without it prints th
 without a command, and `ouro chat` talks line by line. If the list of plugins holds more than one front end,
 ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that open them (`ouro tui`, …),
 which keep working.
+
+The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
+It opens an empty Fyne demo with the active profile and a profile picker;
+`ouro --profile NAME gui` selects the initial profile. Switching is local to the window and does not
+change configuration or start the node. Profiles with the GUI plugin disabled are omitted.
+Native builds need CGO and the [Fyne prerequisites](https://docs.fyne.io/started/)
+(on Debian/Ubuntu: `build-essential libgl1-mesa-dev xorg-dev`). `make build` uses the Go
+toolchain’s default CGO setting. `CGO_ENABLED=0 make build` still produces a headless binary,
+whose `gui` command explains that a native build is needed. If the graphics driver leaves the
+window black on Linux, try `LIBGL_ALWAYS_SOFTWARE=1 ouro gui` to use Mesa software rendering.
 
 Other plugins add to the UI, see [Extending](#extending):
 

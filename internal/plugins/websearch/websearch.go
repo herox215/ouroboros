@@ -102,7 +102,7 @@ func (s *search) run(ctx context.Context, a args) (string, error) {
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("Exa search: %w", err)
+		return "", fmt.Errorf("the search of Exa: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -110,17 +110,17 @@ func (s *search) run(ctx context.Context, a args) (string, error) {
 		if after := resp.Header.Get("Retry-After"); after != "" {
 			hint = "; Retry-After: " + after
 		}
-		return "", fmt.Errorf("Exa's free search rate limit was reached%s; try again later", hint)
+		return "", fmt.Errorf("the free search rate limit of Exa was reached%s; try again later", hint)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Exa search returned HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("the search of Exa returned HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {
 		return "", fmt.Errorf("reading Exa search: %w", err)
 	}
 	if len(data) > maxResponse {
-		return "", errors.New("Exa search response exceeds 1 MiB")
+		return "", errors.New("the search response of Exa exceeds 1 MiB")
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		// Join the data lines of each event, including multi-line SSE data.
@@ -137,7 +137,7 @@ func (s *search) run(ctx context.Context, a args) (string, error) {
 			}
 			return result([]byte(strings.Join(lines, "\n")))
 		}
-		return "", errors.New("Exa returned no search response")
+		return "", errors.New("the search of Exa returned no response")
 	}
 	return result(data)
 }
@@ -160,10 +160,10 @@ func result(data []byte) (string, error) {
 		return "", fmt.Errorf("invalid Exa search response: %w", err)
 	}
 	if r.Error != nil {
-		return "", fmt.Errorf("Exa search error (%d): %s", r.Error.Code, bounded(r.Error.Message))
+		return "", fmt.Errorf("the search of Exa failed (%d): %s", r.Error.Code, bounded(r.Error.Message))
 	}
 	if r.Result == nil {
-		return "", errors.New("Exa returned no search result")
+		return "", errors.New("the search of Exa returned no result")
 	}
 	var texts []string
 	for _, c := range r.Result.Content {
@@ -173,7 +173,7 @@ func result(data []byte) (string, error) {
 	}
 	out := bounded(strings.Join(texts, "\n\n"))
 	if r.Result.IsError {
-		return "", fmt.Errorf("Exa search failed: %s", out)
+		return "", fmt.Errorf("the search of Exa failed: %s", out)
 	}
 	if strings.TrimSpace(out) == "" {
 		return "no search results found", nil

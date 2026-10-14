@@ -63,9 +63,9 @@ func TestSearchFailures(t *testing.T) {
 		{"unavailable", 503, "", "", "HTTP 503"},
 		{"invalid", 200, "not json", "application/json", "invalid Exa"},
 		{"rpc error", 200, `{"error":{"code":-32000,"message":"quota reached"}}`, "application/json", "quota reached"},
-		{"tool error", 200, `{"result":{"isError":true,"content":[{"type":"text","text":"failed"}]}}`, "application/json", "search failed"},
-		{"missing", 200, `{}`, "application/json", "no search result"},
-		{"empty stream", 200, ": ping\n\n", "text/event-stream", "no search response"},
+		{"tool error", 200, `{"result":{"isError":true,"content":[{"type":"text","text":"failed"}]}}`, "application/json", "Exa failed: failed"},
+		{"missing", 200, `{}`, "application/json", "returned no result"},
+		{"empty stream", 200, ": ping\n\n", "text/event-stream", "returned no response"},
 		{"large", 200, strings.Repeat("x", maxResponse+1), "application/json", "exceeds 1 MiB"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

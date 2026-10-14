@@ -123,7 +123,8 @@ func TestGreetingsScreen(t *testing.T) {
 	clitest.Finds(alpha, beta)
 	ctx := contributions(t, alpha)
 
-	screens := plugin.All[plugin.Screen](ctx)
+	// Other plugins of the standard ouro add screens of their own.
+	screens := slices.DeleteFunc(plugin.All[plugin.Screen](ctx), func(s plugin.Screen) bool { return s.Command != "greetings" })
 	if len(screens) != 1 || screens[0].Command != "greetings" || screens[0].Title != "Greetings" || len(screens[0].Actions) != 1 {
 		t.Fatalf("screens %+v", screens)
 	}

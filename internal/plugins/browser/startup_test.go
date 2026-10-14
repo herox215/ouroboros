@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/a2a"
 )
@@ -151,19 +152,32 @@ func TestRealStartupTab(t *testing.T) {
 	if _, err := call(ctx, b, settings{}, `{"action":"close"}`); err != nil {
 		t.Fatal(err)
 	}
+	// The browser answers closeTarget before the page is gone.
+	for deadline := time.Now().Add(5 * time.Second); pages(t, b) > 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("startup page still open")
+		}
+	}
+}
+
+// pages counts the pages open in the browser of b.
+func pages(t *testing.T, b *browser) int {
+	t.Helper()
 	var targets struct {
 		Infos []struct {
 			Type string `json:"type"`
 		} `json:"targetInfos"`
 	}
-	if err := b.proc.call(ctx, "", "Target.getTargets", nil, &targets); err != nil {
+	if err := b.proc.call(context.Background(), "", "Target.getTargets", nil, &targets); err != nil {
 		t.Fatal(err)
 	}
+	n := 0
 	for _, target := range targets.Infos {
 		if target.Type == "page" {
-			t.Fatal("startup page still open")
+			n++
 		}
 	}
+	return n
 }
 
 func TestStartupAttachmentRetry(t *testing.T) {

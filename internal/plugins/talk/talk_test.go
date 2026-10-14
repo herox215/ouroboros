@@ -77,8 +77,8 @@ func TestChatOpensTheFrontEndThatIsThere(t *testing.T) {
 	if out, err := chat(frontEnd("web")); err == nil || err.Error() != "web opened" || out != "" {
 		t.Fatalf("with a front end: %q, %v", out, err)
 	}
-	out, err := chat(frontEnd("web"), frontEnd("gui"))
-	if !errors.Is(err, plugin.ErrFrontEnds) || !strings.Contains(err.Error(), "ouro web, ouro gui") || out != "" {
+	out, err := chat(frontEnd("web"), frontEnd("desk"))
+	if !errors.Is(err, plugin.ErrFrontEnds) || !strings.Contains(err.Error(), "ouro web, ouro desk") || out != "" {
 		t.Fatalf("with two front ends: %q, %v", out, err)
 	}
 }

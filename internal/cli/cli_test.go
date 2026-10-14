@@ -82,7 +82,7 @@ func TestStandardOuro(t *testing.T) {
 	}
 	// The commands are listed in the order of the plugins.
 	at := -1
-	for _, command := range []string{"ouro start", "ouro stop", "ouro status", "ouro serve", "ouro list", "ouro chat", "ouro ask", "ouro tui", "ouro update"} {
+	for _, command := range []string{"ouro start", "ouro stop", "ouro status", "ouro serve", "ouro list", "ouro chat", "ouro ask", "ouro tui", "ouro gui", "ouro update"} {
 		next := strings.Index(out.String(), command)
 		if next <= at {
 			t.Fatalf("%q is missing or out of order in:\n%s", command, out.String())
@@ -96,7 +96,7 @@ func TestStandardOuro(t *testing.T) {
 func TestPluginsTurnedOff(t *testing.T) {
 	s := clitest.Settings(t)
 	cfg := clitest.NodeConfig(s)
-	cfg.Plugins = &config.Plugins{Off: []string{"talk", "update", "tui", "gone"}}
+	cfg.Plugins = &config.Plugins{Off: []string{"talk", "update", "tui", "gui", "gone"}}
 	config.Save(s.Home, cfg)
 	names := func() []string {
 		var names []string
@@ -106,7 +106,7 @@ func TestPluginsTurnedOff(t *testing.T) {
 		return names
 	}
 	got := names()
-	if slices.Contains(got, "talk") || slices.Contains(got, "update") || !slices.Contains(got, "tui") || !slices.Contains(got, "history") {
+	if slices.Contains(got, "talk") || slices.Contains(got, "update") || slices.Contains(got, "gui") || !slices.Contains(got, "tui") || !slices.Contains(got, "history") {
 		t.Fatalf("running %v", got)
 	}
 	if _, err := clitest.Run(t, s, "", "update"); err == nil {

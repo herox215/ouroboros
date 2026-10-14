@@ -9,6 +9,7 @@ import (
 
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
+	"ouroboros/internal/plugins/gui"
 	nodeplugin "ouroboros/internal/plugins/node"
 	tuiplugin "ouroboros/internal/plugins/tui"
 )
@@ -24,6 +25,7 @@ import (
 type profile struct {
 	node *nodeplugin.Profile
 	ui   *tuiplugin.Profile
+	gui  *gui.Profile
 }
 
 // newProfiles returns the app of the node of s, with the app of every
@@ -36,6 +38,7 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 	apps := map[home.Dir]*App{}
 	nodes := make([]*nodeplugin.Profile, len(dirs))
 	uis := make([]*tuiplugin.Profile, len(dirs))
+	guis := make([]*gui.Profile, 0, len(dirs))
 	for i, dir := range dirs {
 		if cfg, err := dir.Config(); err == nil && cfg.PrivateKey != "" {
 			workspace, err := dir.Workspace()
@@ -57,12 +60,18 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 			return nil, err
 		}
 		apps[dir], nodes[i], uis[i] = app, p.node, p.ui
+		if p.gui != nil { // a profile may turn the GUI off
+			guis = append(guis, p.gui)
+		}
 	}
 	for _, n := range nodes[1:] {
 		nodes[0].Join(n)
 	}
 	if !slices.Contains(uis, nil) { // no profile turned the UI off
 		tuiplugin.Together(uis)
+	}
+	if len(guis) > 0 {
+		gui.Together(guis)
 	}
 	first := apps[dirs[0]]
 	first.profiles, first.home = apps, dirs[0]
@@ -138,7 +147,7 @@ func nodeWide(args []string) bool {
 	switch args[0] {
 	case "start":
 		return len(args) == 1 // with --setup it sets up a profile
-	case "stop", node.ServeCommand, "update", "list", "profile", "tui", "help", "-h", "--help":
+	case "stop", node.ServeCommand, "update", "list", "profile", "tui", "gui", "help", "-h", "--help":
 		return true
 	}
 	return false

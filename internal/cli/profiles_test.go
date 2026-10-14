@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,6 +279,37 @@ func TestProfilesThatCannotStart(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "the profile in ") != (i > 0) {
 			t.Errorf("a plugin that cannot start: %v, want %q", err, want)
 		}
+	}
+}
+
+// GUI profiles are joined without those that turned it off, including when
+// the first profile or every profile turned it off. Starting needs no display.
+func TestProfilesWithoutTheGUI(t *testing.T) {
+	for _, off := range [][]bool{{false, false}, {false, true}, {true, false}, {true, true}} {
+		t.Run(fmt.Sprint(off), func(t *testing.T) {
+			s := clitest.Settings(t)
+			terra, luna := twoProfiles(t, s)
+			for i, dir := range []home.Dir{terra, luna} {
+				if off[i] {
+					if err := config.Update(string(dir), func(c *config.Config) error {
+						c.Plugins = &config.Plugins{Off: []string{"gui"}}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			app, err := cli.New(s, cli.Terminal{In: strings.NewReader(""), Out: &syncBuffer{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A disabled GUI must reach the dispatcher, not demand a profile.
+			if off[0] {
+				if err := app.Run(context.Background(), []string{"gui"}); err == nil || strings.Contains(err.Error(), "the node has several profiles") {
+					t.Fatalf("disabled GUI: %v", err)
+				}
+			}
+		})
 	}
 }
 
