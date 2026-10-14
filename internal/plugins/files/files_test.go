@@ -209,21 +209,21 @@ func TestRead(t *testing.T) {
 	fails(t, got, err, "permission denied")
 }
 
-// One call returns at most 256 KiB, in whole lines, and says where to go on.
+// Pages stay below the script output limit and say where to go on.
 func TestReadInPieces(t *testing.T) {
 	w := newWorld(t)
 	line := strings.Repeat("x", 1023) + "\n"
-	fits := strings.Repeat(line, maxReadBytes/len(line))
+	fits := strings.Repeat(line, maxReadPage/len(line))
 	w.file("~/fits", fits)
 	if got, err := w.run(owner, Read, readArgs{Path: "~/fits"}); err != nil || got != fits {
 		t.Errorf("a file of exactly the limit: %d bytes, %v", len(got), err)
 	}
 	w.file("~/more", fits+"last\nvery last\n")
-	note := "[these were the lines 1 to 256 of 258: continue with offset 257]"
+	note := "[these were the lines 1 to 24 of 26: continue with offset 25]"
 	if got, err := w.run(owner, Read, readArgs{Path: "~/more"}); err != nil || got != fits+note {
 		t.Errorf("a file of more than the limit: %d bytes, %v", len(got), err)
 	}
-	if got, err := w.run(owner, Read, readArgs{Path: "~/more", Offset: 257}); err != nil || got != "last\nvery last\n[these were the lines 257 to 258 of 258, the end of the file]" {
+	if got, err := w.run(owner, Read, readArgs{Path: "~/more", Offset: 25}); err != nil || got != "last\nvery last\n[these were the lines 25 to 26 of 26, the end of the file]" {
 		t.Errorf("the rest: %q, %v", got, err)
 	}
 
@@ -262,8 +262,47 @@ func TestReadInPieces(t *testing.T) {
 		t.Errorf("a long line after those returned: %q, %v", got, err)
 	}
 	w.file("~/justfits", "short\n"+strings.Repeat("x", maxReadBytes-1)+"\nshort\n")
-	if got, err := w.run(owner, Read, readArgs{Path: "~/justfits", Offset: 2, Limit: 1}); err != nil || len(got) < maxReadBytes {
-		t.Errorf("a line that just fits: %d bytes, %v", len(got), err)
+	if got, err := w.run(owner, Read, readArgs{Path: "~/justfits", Offset: 2, Limit: 1}); err != nil || !strings.HasPrefix(got, strings.Repeat("x", maxReadPage)) || len(got) >= 32<<10 {
+		t.Errorf("a line that just fits: %d bytes, %v; start %q, end %q", len(got), err, got[:min(len(got), 50)], got[max(0, len(got)-150):])
+	}
+}
+
+// Even a long UTF-8 line can be retrieved in full without splitting a character.
+func TestReadLongLinePages(t *testing.T) {
+	w := newWorld(t)
+	source := "x" + strings.Repeat("€", 20000)
+	w.file("~/page.html", source)
+	var joined strings.Builder
+	for column := 0; column < len(source); {
+		got, err := w.run(owner, Read, readArgs{Path: "~/page.html", Column: column})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) >= 32<<10 {
+			t.Fatalf("page exceeds script output limit: %d bytes", len(got))
+		}
+		chunk, note, ok := strings.Cut(got, "\n[")
+		if !ok || chunk == "" {
+			t.Fatalf("missing content or continuation: %q", got)
+		}
+		joined.WriteString(chunk)
+		column += len(chunk)
+		if column < len(source) {
+			want := fmt.Sprintf("continue with offset 1 and column %d]", column)
+			if !strings.HasSuffix(note, want) {
+				t.Fatalf("continuation: %q, want %q", note, want)
+			}
+		} else if !strings.Contains(note, "the end of the file") {
+			t.Fatalf("missing end: %q", note)
+		}
+	}
+	if joined.String() != source {
+		t.Fatal("pages lost or duplicated text")
+	}
+	for _, column := range []int{-1, 2, len(source)} {
+		if _, err := w.run(owner, Read, readArgs{Path: "~/page.html", Column: column}); err == nil {
+			t.Errorf("invalid column %d accepted", column)
+		}
 	}
 }
 
@@ -296,6 +335,13 @@ func TestReadWhatIsNoText(t *testing.T) {
 	}
 	if got, err := w.run(owner, Read, readArgs{Path: "~/utf8", Limit: 1}); !errors.Is(err, errTest) || got != "" {
 		t.Errorf("a file failing after the lines returned: %q, %v", got, err)
+	}
+	// And when it fails after the page of a long line.
+	open = func(string) (io.ReadCloser, error) {
+		return io.NopCloser(io.MultiReader(strings.NewReader(strings.Repeat("a", maxReadPage+1)+"\n"), iotest.ErrReader(errTest))), nil
+	}
+	if got, err := w.run(owner, Read, readArgs{Path: "~/utf8"}); !errors.Is(err, errTest) || got != "" {
+		t.Errorf("a file failing after the page of a long line: %q, %v", got, err)
 	}
 }
 
@@ -742,7 +788,8 @@ func TestSchemas(t *testing.T) {
 	if strings.Join(names, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools: %v", names)
 	}
-	want := `{"type":"object","properties":{"limit":{"type":"integer","description":"how many lines at most"},` +
+	want := `{"type":"object","properties":{"column":{"type":"integer","description":"bytes to skip in the first line, from a continuation note; default 0"},` +
+		`"limit":{"type":"integer","description":"how many lines at most"},` +
 		`"offset":{"type":"integer","description":"the first line, counted from 1"},` +
 		`"path":{"type":"string","description":"the file"},` +
 		`"region":{"type":"string","description":"of a picture: only the part \"x,y,width,height\", in its own pixels"},` +
@@ -763,7 +810,7 @@ func TestSchemas(t *testing.T) {
 		!strings.Contains(all[5].Description, "files over 1 MiB are skipped") {
 		t.Errorf("the limits of search: %s", all[5].Description)
 	}
-	if !strings.Contains(all[0].Description, "at most 2000 lines or 256 KiB per call") || !strings.Contains(all[1].Description, "At most 1 MiB.") ||
+	if !strings.Contains(all[0].Description, "at most 2000 lines or 24 KiB per call") || !strings.Contains(all[1].Description, "At most 1 MiB.") ||
 		!strings.Contains(all[3].Description, "At most 1000 entries") {
 		t.Errorf("the limits are not what the tools say: %s / %s / %s", all[0].Description, all[1].Description, all[3].Description)
 	}
@@ -1148,5 +1195,5 @@ func argsOf(name string) json.RawMessage {
 func TestUnknownArguments(t *testing.T) {
 	w := newWorld(t)
 	got, err := w.run(owner, Read, `{"file": "~/x"}`)
-	fails(t, got, err, `read: invalid arguments: it has no "file"; it takes path, offset, limit, size, region`)
+	fails(t, got, err, `read: invalid arguments: it has no "file"; it takes path, offset, column, limit, size, region`)
 }

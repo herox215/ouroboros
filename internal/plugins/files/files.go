@@ -40,7 +40,8 @@ const (
 // The limits of the tools.
 const (
 	maxReadLines  = 2000             // lines one call of read returns
-	maxReadBytes  = 256 << 10        // bytes one call of read returns
+	maxReadBytes  = 256 << 10        // bytes in one line of read
+	maxReadPage   = 24 << 10         // text bytes per page, below the script output limit
 	maxWriteBytes = 1 << 20          // bytes of a file that write or edit leave behind
 	editContext   = 3                // lines edit shows before and after what it changed
 	maxEditLines  = 50               // lines edit shows at most
@@ -92,14 +93,17 @@ func tools(g *guard.Guard) []plugin.Tool {
 	path := param{"path", "string", "the file", false}
 	return []plugin.Tool{
 		tool(g, Read,
-			fmt.Sprintf("Read a text file: at most %d lines or %d KiB per call. ", maxReadLines, maxReadBytes>>10)+
+			fmt.Sprintf("Read a text file: at most %d lines or %d KiB per call. ", maxReadLines, maxReadPage>>10)+
 				"When there is more, a note at the end says which lines of how many it returned and where to continue. "+
+				"A line longer than a page is returned in pieces: continue with the offset and column in the note. "+
+				"Print one page per script: combined output can still be cut by the script output limit. "+
 				"The text comes as it is: without line numbers, and with the \\r of lines that end in \\r\\n. "+
 				"Leave out limit unless you want only a part of the file you know: every piece costs a call. "+
 				"A picture (PNG, JPEG, GIF or WebP) is shown to you as an image, in its own size: look at it this way. "+
 				"With size and region you see it smaller, or only a part of it.",
 			[]param{path,
 				{"offset", "integer", "the first line, counted from 1", true},
+				{"column", "integer", "bytes to skip in the first line, from a continuation note; default 0", true},
 				{"limit", "integer", "how many lines at most", true},
 				{"size", "integer", "of a picture: the longer side in pixels it is shown with at most; leave out for what the effort allows", true},
 				{"region", "string", `of a picture: only the part "x,y,width,height", in its own pixels`, true}},
@@ -222,6 +226,7 @@ func schema(params []param) string {
 type readArgs struct {
 	Path   string `json:"path"`
 	Offset int    `json:"offset"`
+	Column int    `json:"column"`
 	Limit  int    `json:"limit"`
 	// Of a picture.
 	Size   int    `json:"size"`
@@ -253,6 +258,9 @@ func read(ctx context.Context, c *guard.Checker, args readArgs) (string, error) 
 		return readPicture(ctx, f, args, info.Size())
 	}
 
+	if args.Column < 0 {
+		return "", errors.New("column must not be negative")
+	}
 	first, limit := max(args.Offset, 1), args.Limit
 	if limit < 1 || limit > maxReadLines {
 		limit = maxReadLines
@@ -300,7 +308,27 @@ func read(ctx context.Context, c *guard.Checker, args readArgs) (string, error) 
 				return "", fmt.Errorf("%s is not a text file", args.Path)
 			}
 			if lines >= first {
-				if text.Len()+len(line) > maxReadBytes {
+				if lines == first && args.Column > 0 {
+					if args.Column >= len(line) || !utf8.RuneStart(line[args.Column]) {
+						return "", fmt.Errorf("column %d is not a character position in line %d", args.Column, first)
+					}
+					line = line[args.Column:]
+				}
+				if taken == 0 && len(line) > maxReadPage {
+					end := maxReadPage
+					for !utf8.RuneStart(line[end]) {
+						end--
+					}
+					// Counting the rest may reuse the reader buffer behind line.
+					chunk := string(line[:end])
+					rest, err := countLines(r)
+					if err != nil {
+						return "", err
+					}
+					return fmt.Sprintf("%s\n[these were bytes %d to %d of line %d of %d: continue with offset %d and column %d]",
+						chunk, args.Column+1, args.Column+end, lines, lines+rest, lines, args.Column+end), nil
+				}
+				if text.Len()+len(line) > maxReadPage {
 					more = true
 				} else {
 					text.Write(line)
@@ -332,7 +360,7 @@ func read(ctx context.Context, c *guard.Checker, args readArgs) (string, error) 
 			content, first, last, lines+rest, last+1), nil
 	}
 	// The whole file comes as it is: a script of run may take it for data.
-	if first == 1 {
+	if first == 1 && args.Column == 0 {
 		return text.String(), nil
 	}
 	return fmt.Sprintf("%s\n[these were the lines %d to %d of %d, the end of the file]", content, first, last, lines), nil
