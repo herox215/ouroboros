@@ -246,6 +246,8 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		if live && !e.Done && c != m.chat {
 			m.setNotice(m.agentName()+" asks you in “"+short(c.title, 40)+"” · /session", false)
 		}
+	case plugin.SessionCalling:
+		c.calling = e.Text
 	case plugin.SessionAnswering:
 		c.partial += e.Text
 		if live && c == m.chat && !m.streaming { // from here the chat draws it
@@ -288,7 +290,7 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 // only blank, as some models say them along with their tools, are nothing:
 // they would leave an empty block in the chat.
 func (c *conversation) say(e Event) {
-	c.round, c.doing, c.partial = 0, "", ""
+	c.round, c.doing, c.partial, c.calling = 0, "", "", ""
 	if strings.TrimSpace(e.Text) != "" {
 		c.add(entry{text: e.Text, at: e.At})
 		c.round = len(c.entries)
@@ -315,7 +317,7 @@ func (c *conversation) step(e Event) {
 	if e.Tool == toolRun {
 		return
 	}
-	c.partial = "" // what a round wrote before its tools is not the answer
+	c.partial, c.calling = "", "" // what a round wrote before its tools is not the answer
 	if c.round == 0 {
 		c.add(entry{at: e.At})
 		c.round = len(c.entries)
@@ -334,8 +336,8 @@ func (c *conversation) step(e Event) {
 // end shows how the answer ended: the answer, why it failed, or that it was
 // stopped.
 func (c *conversation) end(e Event) {
-	c.pending, c.running, c.doing, c.round = false, false, "", 0   // the loop of this answer is over
-	c.asking, c.jobs, c.partial, c.thread = nil, nil, "", thread{} // its jobs end with it, and with
+	c.pending, c.running, c.doing, c.round = false, false, "", 0                  // the loop of this answer is over
+	c.asking, c.jobs, c.partial, c.thread, c.calling = nil, nil, "", thread{}, "" // its jobs end with it, and with
 	// them the clock the answer was drawn on: its next frame sees pending gone
 	last := entry{text: e.Text, at: e.At}
 	switch e.Kind {

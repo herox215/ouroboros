@@ -72,6 +72,26 @@ func AnsweringOf(ctx context.Context) func(text string) {
 	return sink
 }
 
+// callingKey marks the sink a stream tells how much of calls of tools its
+// model has written.
+type callingKey struct{}
+
+// WithCalling returns a context whose calls of the LLM tell sink how many
+// bytes of calls of tools the model has written so far in the call, as the
+// stream brings them: for a front end that shows that the model writes while
+// none of it is text, as when it writes a script of some KiB. A stream that
+// brings a call in one piece tells it once.
+func WithCalling(ctx context.Context, sink func(bytes int)) context.Context {
+	return context.WithValue(ctx, callingKey{}, sink)
+}
+
+// CallingOf returns the sink of ctx for how much of calls of tools the model
+// has written, nil if it has none.
+func CallingOf(ctx context.Context) func(bytes int) {
+	sink, _ := ctx.Value(callingKey{}).(func(bytes int))
+	return sink
+}
+
 // maxTraced is how many bytes of a text a line of a trace takes.
 const maxTraced = 200
 

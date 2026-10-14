@@ -370,9 +370,17 @@ func TestCompleteStreamsToolCalls(t *testing.T) {
 			`{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"list","arguments":"{}"}}]}}]}`,
 			"[DONE]"),
 	} {
-		got, err := newServer(t, h).Complete(context.Background(), "gpt", nil, nil)
+		var written []int
+		ctx := WithCalling(context.Background(), func(bytes int) { written = append(written, bytes) })
+		got, err := newServer(t, h).Complete(ctx, "gpt", nil, nil)
 		if err != nil || got.Content != "" || !slices.Equal(got.ToolCalls, want) {
 			t.Errorf("%s: got %+v, %v", name, got, err)
+		}
+		// How much of the calls is written grows with every piece, names
+		// and arguments of all of them.
+		if all := len("read") + len(`{"path": "/x"}`) + len("list") + len(`{}`); len(written) < 3 || written[len(written)-1] != all ||
+			!slices.IsSorted(written) {
+			t.Errorf("%s: the sink was told %v", name, written)
 		}
 	}
 }

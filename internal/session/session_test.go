@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -792,5 +793,39 @@ func TestSuggestionAfterTheAnswer(t *testing.T) {
 	close(later)
 	if got := until(t, live, Suggestion); kinds(got) != "suggestion" || got[0].Text != "late" {
 		t.Fatalf("events %+v", got)
+	}
+}
+
+// What the model wrote is sent as soon as it goes on with a call of a tool,
+// also when it is less than a piece, and how much of the call it has written
+// is told at first and every callingStep bytes, and anew with the next call
+// of the LLM.
+func TestCallingFlushesTheAnswer(t *testing.T) {
+	s := New(&fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		write, calling := openai.AnsweringOf(ctx), openai.CallingOf(ctx)
+		write("Ich ergänze den Look. Hell, Dunk")
+		write("el")
+		for _, n := range []int{10, 100, 10 + callingStep, 20 + callingStep, 10 + 2*callingStep, 5} {
+			calling(n)
+		}
+		return "pong", nil
+	}})
+	defer s.Close()
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "hi")
+	var told []string
+	for _, e := range until(t, live, Answer) {
+		switch e.Kind {
+		case Answering:
+			told = append(told, "answering "+e.Text)
+		case Calling:
+			told = append(told, fmt.Sprint("calling ", e.N))
+		}
+	}
+	want := []string{"answering Ich ergänze den Look. Hell, Dunk", "answering el",
+		"calling 10", fmt.Sprint("calling ", 10+callingStep), fmt.Sprint("calling ", 10+2*callingStep), "calling 5"}
+	if !slices.Equal(told, want) {
+		t.Fatalf("told\n%q\nwant\n%q", told, want)
 	}
 }

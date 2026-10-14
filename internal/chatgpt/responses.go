@@ -302,13 +302,14 @@ func (c *client) complete(ctx context.Context, session string, in request, alive
 		}
 		return openai.Message{}, err
 	}
-	return readStream(resp.Body, alive, t, openai.AnsweringOf(ctx))
+	return readStream(resp.Body, alive, t, openai.AnsweringOf(ctx), openai.CallingOf(ctx))
 }
 
 // event is one event of the stream of a response.
 type event struct {
 	Type string `json:"type"`
-	// Delta is the piece of text "response.output_text.delta" brings.
+	// Delta is the piece of text "response.output_text.delta" brings, and
+	// the piece of the arguments of a call "response.function_call_arguments.delta" does.
 	Delta string `json:"delta"`
 	// Item is the item an "response.output_item.done" brings.
 	Item json.RawMessage `json:"item"`
@@ -352,7 +353,8 @@ type output struct {
 // kept as the API sent it to go back with the next request. Only a stream
 // that ends with "response.completed" is an answer. A trace t, if not nil,
 // is told what the API said besides the message.
-func readStream(body io.Reader, alive func(), t func(string, ...any), answering func(text string)) (openai.Message, error) {
+func readStream(body io.Reader, alive func(), t func(string, ...any), answering func(text string), calling func(bytes int)) (openai.Message, error) {
+	written := 0 // of calls of tools, see openai.WithCalling
 	events := 0
 	msg := openai.Message{Role: "assistant"}
 	var content strings.Builder
@@ -374,6 +376,11 @@ func readStream(body io.Reader, alive func(), t func(string, ...any), answering 
 		case "response.output_text.delta":
 			if answering != nil && e.Delta != "" {
 				answering(e.Delta) // a front end shows the answer as it comes
+			}
+		case "response.function_call_arguments.delta":
+			if calling != nil && e.Delta != "" {
+				written += len(e.Delta)
+				calling(written) // a front end shows that the model writes a call
 			}
 		case "response.output_item.done":
 			var o output

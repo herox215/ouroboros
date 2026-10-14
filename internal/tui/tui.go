@@ -263,7 +263,10 @@ type conversation struct {
 	shown rendered
 	// partial is the answer on its way, as far as the events of Answering
 	// brought it; the Answer of the end replaces it with the whole of it.
-	partial  string
+	partial string
+	// calling is how much of a call of a tool the model writes, like
+	// "3.2 KiB", as the events of Calling tell it; "" while it writes none.
+	calling  string
 	thread   thread              // how far its newest word is drawn in, see advance
 	pending  bool                // request submitted or answer on its way: what is sent meanwhile is queued
 	queued   []string            // the messages that wait for the answer on its way to take them

@@ -233,11 +233,22 @@ func (u *ui) event(e plugin.SessionEvent) tui.Event {
 	if e.Kind == plugin.SessionTask {
 		shown.Text, shown.Failed = taskLine(e), e.Err != ""
 	}
+	if e.Kind == plugin.SessionCalling {
+		shown.Text = size(e.N)
+	}
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended
 	}
 	return shown
+}
+
+// size is n bytes as the chat tells them: "512 bytes", "3.2 KiB".
+func size(n int) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d bytes", n)
+	}
+	return fmt.Sprintf("%.1f KiB", float64(n)/1024)
 }
 
 // taskLine is what the chat shows of the report of a task the agent

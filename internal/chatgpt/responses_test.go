@@ -450,3 +450,28 @@ func TestCompleteSendsTheEffort(t *testing.T) {
 		t.Fatalf("traced %q", traced)
 	}
 }
+
+// While the model writes the arguments of a call, the sink of ctx is told
+// how much of them there is; the call itself comes whole with its item.
+func TestReadStreamTellsTheCalling(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"Ich ergänze"}`,
+		`data: {"type":"response.function_call_arguments.delta","delta":"{\"script\":"}`,
+		`data: {"type":"response.function_call_arguments.delta","delta":"\"1+1\"}"}`,
+		`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"c","name":"run","arguments":"{\"script\":\"1+1\"}"}}`,
+		`data: {"type":"response.completed","response":{"id":"r"}}`,
+	}, "\n\n")
+	var written []int
+	var said []string
+	got, err := readStream(strings.NewReader(body), func() {}, nil, func(text string) { said = append(said, text) }, func(n int) { written = append(written, n) })
+	if err != nil || len(got.ToolCalls) != 1 || got.ToolCalls[0].Function.Arguments != `{"script":"1+1"}` {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if !slices.Equal(written, []int{len(`{"script":`), len(`{"script":"1+1"}`)}) || !slices.Equal(said, []string{"Ich ergänze"}) {
+		t.Fatalf("told %v, said %q", written, said)
+	}
+	// Without a sink it reads the same.
+	if _, err := readStream(strings.NewReader(body), func() {}, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}

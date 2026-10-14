@@ -140,6 +140,7 @@ const (
 	SessionSay       = session.Say       // what the agent says along with the tools it asks for
 	SessionThought   = session.Thought   // what the model thinks before it writes, a piece of it in Text
 	SessionAnswering = session.Answering // a piece of the answer the model is writing, in Text
+	SessionCalling   = session.Calling   // how much of calls of tools the model has written, N bytes
 	SessionStep      = session.Step      // a call of a tool, see SessionEvent.AsStep and ToolLine
 	SessionAnswer    = session.Answer    // the answer
 	SessionFailed    = session.Failed    // an answer that failed

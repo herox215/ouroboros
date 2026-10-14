@@ -671,14 +671,15 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 		msg.Usage = out.Usage.read()
 		return msg, nil
 	}
-	return readStream(resp.Body, alive, t, thoughtOf(ctx), AnsweringOf(ctx))
+	return readStream(resp.Body, alive, t, thoughtOf(ctx), AnsweringOf(ctx), CallingOf(ctx))
 }
 
 // readStream puts together the message a stream of server-sent events tells
 // in pieces. The usage comes after the choice is finished, in an event of its
 // own or in the last one: the stream is read on until it came, or until it
 // ends. A trace t, if not nil, is told what the API said besides the message.
-func readStream(body io.Reader, alive func(), t trace, thought, answering func(text string)) (Message, error) {
+func readStream(body io.Reader, alive func(), t trace, thought, answering func(text string), calling func(bytes int)) (Message, error) {
+	written := 0 // of calls of tools, see WithCalling
 	var said *answered
 	events := 0
 	if t != nil {
@@ -774,6 +775,10 @@ func readStream(body io.Reader, alive func(), t trace, thought, answering func(t
 				call.Type = cmp.Or(part.Type, call.Type)
 				call.Function.Name += part.Function.Name
 				call.Function.Arguments += part.Function.Arguments
+				if n := len(part.Function.Name) + len(part.Function.Arguments); calling != nil && n > 0 {
+					written += n
+					calling(written) // a front end shows that the model writes a call
+				}
 			}
 			finished = finished || choice.FinishReason != ""
 		}

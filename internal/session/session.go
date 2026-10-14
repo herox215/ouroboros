@@ -97,6 +97,10 @@ const (
 	// is reviewed, see assistant.Signal. It changes nothing by itself, and
 	// is not kept with the session.
 	Suggestion Kind = "suggestion"
+	// Calling is how much of calls of tools the model has written in the call
+	// of the LLM on its way, N bytes, as the stream brings them: it tells
+	// that the model writes when none of it is text. It is not recorded.
+	Calling Kind = "calling"
 	// Tasks are the tasks the agent delegated that run in the background,
 	// one per line in Text as "task N · what it is", "" once none does.
 	// Cancel stops them with the answer.
@@ -121,7 +125,7 @@ type Event struct {
 	Took   time.Duration   `json:"took,omitempty"`
 	Err    string          `json:"err,omitempty"`
 	Remark string          `json:"remark,omitempty"`
-	// N is the number of a Task.
+	// N is the number of a Task, and the bytes of Calling.
 	N int `json:"n,omitempty"`
 	// Context is how long the context of the session is when the Event
 	// happens: what the last call of the LLM in it sent, in bytes, 0 if
@@ -654,22 +658,55 @@ func (s *Service) thoughts(se *session) (func(string), func()) {
 
 // answering tells what the model of the answer in se writes, in pieces of
 // answerPiece as the stream brings them, before the Event of the Answer brings
-// the whole of it; the second function drops what is not sent yet, which a
-// round of the loop does as it ends with tools.
-func (s *Service) answering(se *session) (func(string), func()) {
+// the whole of it. The second function drops what is not sent yet, which a
+// round of the loop does as it ends with tools; the third sends it, as when
+// the model goes on with a call of a tool and writes no more text that would
+// fill the piece.
+func (s *Service) answering(se *session) (func(string), func(), func()) {
 	var left strings.Builder
-	tell := func(text string) {
-		left.WriteString(text)
-		if left.Len() < answerPiece {
-			return
-		}
+	send := func() {
 		piece := left.String()
 		left.Reset()
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.transient(se, Event{Kind: Answering, Text: piece})
 	}
-	return tell, left.Reset
+	tell := func(text string) {
+		left.WriteString(text)
+		if left.Len() >= answerPiece {
+			send()
+		}
+	}
+	flush := func() {
+		if left.Len() > 0 {
+			send()
+		}
+	}
+	return tell, left.Reset, flush
+}
+
+// callingStep is by how many bytes a call of a tool the model writes grows
+// before the front ends are told again, see Calling.
+const callingStep = 512
+
+// calling tells how much of calls of tools the model of the answer in se has
+// written, see openai.WithCalling: at first and then every callingStep bytes,
+// and anew with the next call of the LLM. What the model wrote and thought
+// before is sent first, as it writes no more of it in this call.
+func (s *Service) calling(se *session, flush ...func()) func(int) {
+	told := -1
+	return func(bytes int) {
+		for _, f := range flush {
+			f()
+		}
+		if told >= 0 && bytes >= told && bytes-told < callingStep {
+			return
+		}
+		told = bytes
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.transient(se, Event{Kind: Calling, N: bytes})
+	}
 }
 
 // transient hands e to those who watch se without recording it: what it tells
@@ -735,8 +772,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	thought, rest := s.thoughts(se)
 	ctx = openai.WithThought(ctx, thought)
 	defer rest()
-	writing, drop := s.answering(se)
+	writing, drop, flush := s.answering(se)
 	ctx = openai.WithAnswering(ctx, writing)
+	ctx = openai.WithCalling(ctx, s.calling(se, flush, rest))
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
 		drop() // what a round wrote before its tools is not the answer
 		e := Event{Kind: Step, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took, Remark: st.Remark}

@@ -132,12 +132,25 @@ func TestTUIBackendAsk(t *testing.T) {
 	// up; the rounds are told apart without them.
 	var events []tui.Event
 	var pieces strings.Builder
+	var calling []string
 	for _, e := range answer(t, u, "ctx", "@beta hello") {
-		if e.Kind == plugin.SessionAnswering {
+		switch e.Kind {
+		case plugin.SessionAnswering:
 			pieces.WriteString(e.Text)
+			continue
+		case plugin.SessionCalling:
+			calling = append(calling, e.Text)
 			continue
 		}
 		events = append(events, e)
+	}
+	// While the model writes the call of ask_peer, the UI is told how much
+	// of it there is.
+	if len(calling) == 0 || !strings.HasSuffix(calling[0], " bytes") {
+		t.Fatalf("calling %q", calling)
+	}
+	if got := tuiplugin.Size(3277); got != "3.2 KiB" {
+		t.Fatalf("a call of some KiB: %q", got)
 	}
 	var kinds []string
 	for _, e := range events {

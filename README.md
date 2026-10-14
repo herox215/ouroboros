@@ -71,7 +71,11 @@ the entries that cannot change anymore and builds only the answer on its way ane
 costs the same per frame as a short one. Its newest word is threaded in: it shows
 as glyphs of its own width and settles into its letters over three frames, so that
 the answer seems to be written rather than to appear in blocks. While they come, the line below the input says
-`<agent> is writing` instead of `is thinking`.
+`<agent> is writing` instead of `is thinking`. What the model wrote before it goes on with a call of a tool is
+shown at once, also the last words that did not fill a piece. The call itself shows nothing until it is
+written, which for a script of some KiB may take a minute: meanwhile the line says how much of it there is,
+`<agent> is writing a call · 3.2 KiB`, anew every 512 bytes. Front ends get it as the session event `calling`,
+with the bytes in `n`, not recorded either. A provider that brings a call in one piece tells nothing of it.
 What the agent says is markdown, as the models write it, and the chat shows it formatted: headings, bold,
 italic, code in a line and in blocks, lists, quotes, tables and links, in the colors of the terminal theme and
 without the marks. A line break is kept, as models write poems and addresses line by line. What you write is shown as you wrote it.
