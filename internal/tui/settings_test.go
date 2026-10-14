@@ -108,35 +108,39 @@ func TestSettingsShow(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"│ Settings", "› The node", contents[nodeSection], "  The agents", "  Plugins",
-		"  Tools of your agent", "  Tools for peers", "what your agent may do when a peer asks it",
-		"  Protected paths", "the paths no tool for files touches", "↑↓ select · enter open · esc back",
+		"│ Settings", "› The node", "  The agents", "  Plugins",
+		"  Tools of your agent", "  Tools for peers",
+		"  Protected paths", "↑↓ select · ←→ choose · enter open · esc back",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the categories lack %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "https://api.example/v1") || strings.Contains(view, "[") || strings.Index(view, "The node") > strings.Index(view, "The agents") {
+	for _, description := range contents {
+		if strings.Contains(view, description) {
+			t.Errorf("a category description is shown normally: %q\n%s", description, view)
+		}
+	}
+	if strings.Contains(view, "https://api.example/v1") || strings.Index(view, "The node") > strings.Index(view, "The agents") {
 		t.Errorf("the categories, in their order, and no line of one:\n%s", view)
 	}
 	press(m, "enter")
 	view = ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"│ Settings › The node", "The access and the models are changed with the setup and /model, the effort with /effort.",
+		"│ Settings › The node",
 		"› Name", "alpha", "Example · https://api.example/v1", "↑↓ select · ←→ choose · enter do · esc back",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("lacks %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "The agents") || strings.Contains(view, "Context provider") {
+	if strings.Contains(view, about[nodeSection]) || strings.Contains(view, "The agents") || strings.Contains(view, "Context provider") {
 		t.Errorf("a category shows its own lines alone:\n%s", view)
 	}
 	for _, tt := range []struct{ section, label, value, note string }{
 		{nodeSection, "Description", "Ouroboros instance named alpha", "the default; public: anyone reads it in the agent card"},
 		{nodeSection, "Node ID", "abc123def456", "the fingerprint of the key of the node, which nothing here changes"},
 		{agentsSection, "Context provider", "none", "what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it"},
-		{agentsSection, "Bash without a sandbox", "no", "bash runs its commands in a sandbox: without network, and only where the tools for files may write"},
 		{pluginsSection, "base", "on", "it runs the commands of ouro"},
 		{pluginsSection, "history", "on", ""},
 		{pluginsSection, "tailscale", "off", "runs until ouro starts anew"},
@@ -158,7 +162,7 @@ func TestSettingsShow(t *testing.T) {
 		t.Errorf("one line shows what can be done with it:\n%s", view)
 	}
 	pick(t, m, pluginsSection, "tailscale", "turn on")
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "│ Settings › Plugins") || !strings.Contains(view, "runs until ouro starts anew") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "│ Settings › Plugins") || strings.Contains(view, "runs until ouro starts anew") {
 		t.Errorf("the plugins:\n%s", view)
 	}
 	if r := value(t, m, peersSection, "get_config"); len(r.actions) != 0 {
@@ -170,8 +174,7 @@ func TestSettingsShow(t *testing.T) {
 
 	// Another configuration.
 	s := someSettings()
-	s.About, s.ContextProvider, s.Sandbox = "", "compact", "bubblewrap is not installed"
-	s.BashWithoutSandbox = true
+	s.About, s.ContextProvider = "", "compact"
 	s.PluginsKept, s.ProtectedDefault = "plugin peers needs a scanner", false
 	s.Description, s.DescriptionDefault = "knows the way", false
 	s.Tools[ForPeersIndex()].All = true
@@ -180,7 +183,6 @@ func TestSettingsShow(t *testing.T) {
 		{nodeSection, "Access", "Example"},
 		{nodeSection, "Description", "knows the way"},
 		{agentsSection, "Context provider", "compact"},
-		{agentsSection, "Bash without a sandbox", "yes"},
 		{pluginsSection, "Turned off", "none: all run"},
 		{peersSection, "All tools", "yes"},
 		{protectedSection, "The default", "not in use"},
@@ -191,10 +193,6 @@ func TestSettingsShow(t *testing.T) {
 	}
 	if r := value(t, m, nodeSection, "Description"); r.note != "public: anyone reads it in the agent card; empty is the default" {
 		t.Errorf("description: %q", r.note)
-	}
-	if r := value(t, m, agentsSection, "Bash without a sandbox"); r.note != "bash runs its commands as you: with network, the secrets of the node and the source of the core in reach"+
-		"; there is no sandbox here (bubblewrap is not installed), so without yes bash runs nothing" {
-		t.Errorf("bash: %q", r.note)
 	}
 	if r := value(t, m, pluginsSection, "Turned off"); !r.warn || !strings.Contains(r.note, "plugin peers needs a scanner") {
 		t.Errorf("kept: %+v", r)
@@ -226,7 +224,6 @@ func TestSettingsChange(t *testing.T) {
 	}{
 		{agentsSection, "Context provider", "compact", Setting{Kind: plugin.SetContextProvider, Value: "compact"}},
 		{agentsSection, "Context provider", "none", Setting{Kind: plugin.SetContextProvider}},
-		{agentsSection, "Bash without a sandbox", "allow", Setting{Kind: plugin.SetBashWithoutSandbox, On: true}},
 		{agentsSection, "Changes of ouro", "build", Setting{Kind: plugin.SetImproves, On: true}},
 		{pluginsSection, "history", "turn off", Setting{Kind: plugin.SetPlugin, Name: "history"}},
 		{pluginsSection, "tailscale", "turn on", Setting{Kind: plugin.SetPlugin, Name: "tailscale", On: true}},
@@ -249,7 +246,7 @@ func TestSettingsChange(t *testing.T) {
 	}
 
 	s := someSettings()
-	s.BashWithoutSandbox, s.ProtectedDefault, s.Improves = true, false, true
+	s.ProtectedDefault, s.Improves = false, true
 	s.Tools[ForPeersIndex()].All = true
 	b.settings = s
 	deliver(m, m.config.reload(m))
@@ -260,7 +257,6 @@ func TestSettingsChange(t *testing.T) {
 		section, label, action string
 		want                   Setting
 	}{
-		{agentsSection, "Bash without a sandbox", "refuse", Setting{Kind: plugin.SetBashWithoutSandbox}},
 		{agentsSection, "Changes of ouro", "propose", Setting{Kind: plugin.SetImproves}},
 		{peersSection, "All tools", "turn off", Setting{Kind: plugin.SetAllTools, For: plugin.ForPeers}},
 		{protectedSection, "The default", "use it", Setting{Kind: plugin.SetProtected, On: true}},
@@ -343,7 +339,7 @@ func TestSettingsKeys(t *testing.T) {
 		t.Errorf("down from the last: %d", m.config.category)
 	}
 	m.config.category = len(sections) - 1
-	m.config.sel, m.choice = 2, 1
+	m.config.sel, m.choice = 2, 0
 	if press(m, "enter"); !m.config.opened || m.config.sel != 0 || m.choice != 0 {
 		t.Errorf("opened %v at %d, choice %d", m.config.opened, m.config.sel, m.choice)
 	}
@@ -362,8 +358,11 @@ func TestSettingsKeys(t *testing.T) {
 		t.Errorf("down from the last: %d", m.config.sel)
 	}
 	press(m, "left")
-	if press(m, "right"); m.choice != 0 {
-		t.Errorf("beyond the only action: %d", m.choice)
+	if press(m, "right"); m.choice != 1 {
+		t.Errorf("right chooses Info: %d", m.choice)
+	}
+	if press(m, "right"); m.choice != 1 {
+		t.Errorf("beyond the last action: %d", m.choice)
 	}
 	for range len(m.config.shown(m)) - 1 {
 		press(m, "down")
@@ -383,13 +382,8 @@ func TestSettingsKeys(t *testing.T) {
 		t.Errorf("another line starts at its first action: %d", m.choice)
 	}
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "› Bash without a sandbox") || !strings.Contains(view, "[allow]") {
+	if !strings.Contains(view, "› Changes of ouro") || !strings.Contains(view, "[build]") {
 		t.Errorf("selected:\n%s", view)
-	}
-	// A line without actions does nothing.
-	pick(t, m, nodeSection, "Node ID", "")
-	if cmd := press(m, "enter"); cmd != nil {
-		t.Error("a line without actions did something")
 	}
 
 	pick(t, m, nodeSection, "Model", "open /model")
@@ -414,7 +408,7 @@ func TestSettingsKeys(t *testing.T) {
 	m.config.sel, m.choice = len(m.config.shown(m))-1, 1
 	b.settings = Settings{Name: "alpha"}
 	deliver(m, m.config.reload(m))
-	if m.config.sel != 1 || len(m.config.shown(m)) != 2 || m.choice != 0 {
+	if m.config.sel != 1 || len(m.config.shown(m)) != 2 || m.choice != 1 {
 		t.Errorf("after reading anew: %d of %d, choice %d", m.config.sel, len(m.config.shown(m)), m.choice)
 	}
 	if press(m, "esc"); m.screen != screenSettings || m.config.opened {
@@ -489,8 +483,8 @@ func TestSettingsNoJump(t *testing.T) {
 	if press(m, "down"); where("Name") != name || where("Description") != key {
 		t.Errorf("the lines moved when the selection did:\n%s", shown())
 	}
-	if !strings.Contains(shown(), "what the node is called on the network") {
-		t.Errorf("the note of the row left behind is gone:\n%s", shown())
+	if strings.Contains(shown(), "what the node is called on the network") {
+		t.Errorf("the note of the row left behind is shown:\n%s", shown())
 	}
 	// To the last row, which the window follows to and stops at.
 	for range len(m.config.shown(m)) {
@@ -508,8 +502,8 @@ func TestSettingsNoJump(t *testing.T) {
 		t.Errorf("the lines moved when the selection went back one:\n%s", shown())
 	}
 	press(m, "down")
-	if !strings.Contains(shown(), "the fingerprint of the key of the node") {
-		t.Errorf("the note of the row selected is cut off:\n%s", shown())
+	if strings.Contains(shown(), "the fingerprint of the key of the node") {
+		t.Errorf("the note of the row selected is shown:\n%s", shown())
 	}
 	// Back to the categories starts at their first line.
 	if press(m, "esc"); m.config.top != 0 {
@@ -535,7 +529,7 @@ func TestFirstSentence(t *testing.T) {
 }
 
 // What does not fit in the box is cut off or wrapped within it: the lines of
-// the categories, the rows, their notes, and what is typed into a setting.
+// the categories, the rows, Info text, and what is typed into a setting.
 func TestSettingsFitTheBox(t *testing.T) {
 	line := func(v, of string) string {
 		t.Helper()
@@ -547,16 +541,17 @@ func TestSettingsFitTheBox(t *testing.T) {
 		t.Fatalf("no line with %q:\n%s", of, v)
 		return ""
 	}
-	// The categories say what is in them in one column.
+	// Category names fit without their descriptions.
 	m, _ := openSettings(t, someSettings())
 	view := ansi.Strip(m.View().Content)
-	at := func(l, s string) int { return ansi.StringWidth(l[:strings.Index(l, s)]) }
-	if node, agents := line(view, "› The node"), line(view, "  The agents"); at(node, contents[nodeSection]) != at(agents, contents[agentsSection]) {
-		t.Errorf("the categories are not aligned:\n%s", view)
+	for _, description := range contents {
+		if strings.Contains(view, description) {
+			t.Errorf("a category description is shown: %q\n%s", description, view)
+		}
 	}
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 40})
-	if l := line(ansi.Strip(m.View().Content), "› The node"); !strings.HasSuffix(strings.TrimRight(l, " │"), "…") {
-		t.Errorf("the category is not cut off: %q", l)
+	if l := line(dialogView(m), "› The node"); ansi.StringWidth(l) > 36 {
+		t.Errorf("the category exceeds the box: %q", l)
 	}
 
 	s := someSettings()
@@ -581,10 +576,15 @@ func TestSettingsFitTheBox(t *testing.T) {
 		t.Errorf("the input takes more than its line:\n%s", view)
 	}
 	press(m, "esc")
-	pick(t, m, peersSection, "list_peers", "")
-	for _, l := range strings.Split(dialogView(m), "\n") {
-		if regexp.MustCompile(`\bw\d\d\b`).MatchString(l) && !strings.HasPrefix(l, "│     w") {
-			t.Errorf("a line of the note is not indented: %q", l)
+	pick(t, m, peersSection, "list_peers", "Info")
+	do(m)
+	view = dialogView(m)
+	if !strings.Contains(view, "w00") || !strings.Contains(view, "w39") {
+		t.Errorf("Info text is not wrapped in full:\n%s", view)
+	}
+	for _, l := range strings.Split(view, "\n") {
+		if regexp.MustCompile(`\bw\d\d\b`).MatchString(l) && ansi.StringWidth(l) > 56 {
+			t.Errorf("a line of Info exceeds the box: %q", l)
 		}
 	}
 }
@@ -662,10 +662,13 @@ func TestSettingsOfATool(t *testing.T) {
 		t.Fatalf("not opened: %q", m.config.tool)
 	}
 	view := dialogView(m)
-	for _, want := range []string{"Settings › Tools of your agent › read", "› allow    everything (default)", "the paths it may go to", "· ~/a", "· ~/b", "As JSON"} {
+	for _, want := range []string{"Settings › Tools of your agent › read", "› allow    everything (default)", "· ~/a", "· ~/b", "As JSON"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("lacks %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "the paths it may go to") {
+		t.Errorf("a tool option note is shown normally:\n%s", view)
 	}
 	at := func(label, action string) {
 		t.Helper()
@@ -854,5 +857,128 @@ func TestSettingsOfARefusedTool(t *testing.T) {
 	do(m)
 	if len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetTool, For: plugin.ForPeers, Name: "read", On: true}) {
 		t.Fatalf("allowed without settings: %+v", b.changes)
+	}
+}
+
+// Info is appended to the actions of rows with notes, without changing the
+// stored actions or adding it again when the page is read anew.
+func TestSettingsInfoActions(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	for _, section := range sections {
+		for i, s := range sections {
+			if s == section {
+				m.config.category, m.config.opened = i, true
+			}
+		}
+		page := m.config.page(m)
+		for range 2 {
+			shown := m.config.shown(m)
+			for i, r := range shown {
+				want := len(page[i].actions)
+				if r.note != "" {
+					want++
+				}
+				if len(r.actions) != want {
+					t.Fatalf("%s %s: %d actions, want %d", section, r.label, len(r.actions), want)
+				}
+				for j, a := range page[i].actions {
+					if r.actions[j].name != a.name {
+						t.Errorf("%s %s: action %d changed", section, r.label, j)
+					}
+				}
+				if r.note != "" && r.actions[len(r.actions)-1].name != "Info" {
+					t.Errorf("%s %s: Info is not last", section, r.label)
+				}
+			}
+		}
+	}
+}
+
+// Info is a read-only level: both return keys keep the same row and action,
+// even when the row has no other action or its note is a warning.
+func TestSettingsInfo(t *testing.T) {
+	for _, tt := range []struct{ section, label string }{
+		{nodeSection, "Name"},
+		{nodeSection, "Node ID"},
+		{pluginsSection, "base"},
+		{pluginsSection, "tailscale"},
+		{peersSection, "get_config"},
+	} {
+		t.Run(tt.label, func(t *testing.T) {
+			m, b := openSettings(t, someSettings())
+			pick(t, m, tt.section, tt.label, "Info")
+			checkSettingsInfo(t, m, b)
+		})
+	}
+}
+
+// Tool options have Info too, but entries of their lists have no note.
+func TestSettingsToolOptionInfo(t *testing.T) {
+	for _, label := range []string{"allow", "deny", "network", "times", "As JSON"} {
+		t.Run(label, func(t *testing.T) {
+			m, b := openSettings(t, withOptions())
+			pick(t, m, ownerSection, "read", "settings")
+			do(m)
+			for i, r := range m.config.shown(m) {
+				if r.sub {
+					if len(r.actions) != 1 || r.actions[0].name != "remove" {
+						t.Errorf("list entry %s: %+v", r.label, r.actions)
+					}
+				}
+				if r.label == label {
+					m.config.sel, m.choice = i, len(r.actions)-1
+				}
+			}
+			if m.config.selectedRow(m).label != label {
+				t.Fatalf("no option %s", label)
+			}
+			checkSettingsInfo(t, m, b)
+		})
+	}
+}
+
+func checkSettingsInfo(t *testing.T, m *Model, b *fakeBackend) {
+	t.Helper()
+	r := m.config.selectedRow(m)
+	if r.note == "" || r.actions[m.choice].name != "Info" {
+		t.Fatalf("not on Info: %+v, choice %d", r, m.choice)
+	}
+	category, sel, choice := m.config.category, m.config.sel, m.choice
+	peer, tool, back := m.config.peer, m.config.tool, slices.Clone(m.config.back)
+	// Any attempt to reload would replace the current page with an error.
+	b.fail = map[string]error{"settings": errors.New("Info must not reload")}
+	m.notice = "unchanged"
+	for _, key := range []string{"esc", "enter"} {
+		if strings.Contains(dialogView(m), r.note) {
+			t.Errorf("the note is shown before Info: %q", r.note)
+		}
+		if cmd := press(m, "enter"); cmd != nil {
+			t.Fatal("Info returned a backend command")
+		}
+		if m.config.info == nil || m.config.info.label != r.label || m.config.info.note != r.note || m.config.info.warn != r.warn {
+			t.Fatalf("Info: %+v", m.config.info)
+		}
+		view := dialogView(m)
+		for _, want := range []string{r.label + " · Info"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("Info lacks %q:\n%s", want, view)
+			}
+		}
+		if !strings.Contains(strings.Join(strings.Fields(strings.ReplaceAll(view, "│", " ")), " "), strings.Join(strings.Fields(r.note), " ")) {
+			t.Errorf("Info lacks its note %q:\n%s", r.note, view)
+		}
+		press(m, "down", "right", "x")
+		if m.config.info == nil {
+			t.Fatal("another key closed Info")
+		}
+		if cmd := press(m, key); cmd != nil || m.config.info != nil {
+			t.Fatalf("%s did not return from Info", key)
+		}
+		if m.screen != screenSettings || !m.config.opened || m.config.category != category || m.config.sel != sel || m.choice != choice || m.config.peer != peer || m.config.tool != tool || !slices.Equal(m.config.back, back) {
+			t.Errorf("%s changed the level or selection", key)
+		}
+		if len(b.changes) != 0 || len(b.debug) != 0 || b.setups != 0 || m.config.editing != nil || m.config.err != nil {
+			t.Errorf("Info changed settings or notice: %+v, %q", b.changes, m.notice)
+		}
 	}
 }

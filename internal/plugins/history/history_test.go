@@ -64,6 +64,7 @@ func TestOwner(t *testing.T) {
 		call("history_search", map[string]any{"query": "roof", "scope": "everywhere"}),
 		call("history_sessions", nil),
 		call("history_read", map[string]any{"from": 1, "count": 1}),
+		call("history_read", map[string]any{"from": 1, "count": 1, "offset": 1}),
 	), "chat")
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +76,7 @@ func TestOwner(t *testing.T) {
 		`error: scope is current or all, not "everywhere"`,
 		`(this conversation) · started `, ` · "the roof is red"`, "[2 sessions]",
 		"· user\nthe garden is green\n[records 1 to 1 of ",
+		"last=1 · answer 1 · ",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("lacks %q:\n%s", want, out)

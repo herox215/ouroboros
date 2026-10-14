@@ -931,12 +931,15 @@ func (m *Model) footerHint() string {
 			help = "↑↓ previous/next match · enter keep · esc end search"
 		}
 	case screenSettings:
-		help = "↑↓ select · enter open · esc back"
+		help = "↑↓ select · ←→ choose · enter open · esc back"
 		if m.config.opened {
 			help = "↑↓ select · ←→ choose · enter do · esc back"
 		}
 		if m.config.editing != nil {
 			help = "enter save · esc keep what was"
+		}
+		if m.config.info != nil {
+			help = "↑↓ scroll · enter / esc back"
 		}
 	case screenPlugin:
 		help = "esc back"

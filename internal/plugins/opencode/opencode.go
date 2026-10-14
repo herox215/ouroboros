@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"ouroboros/internal/llm"
 	"ouroboros/internal/openai"
 	"ouroboros/plugin"
 )
@@ -66,6 +67,13 @@ func Provider(o Options) plugin.Provider {
 				return plugin.Models{}, err
 			}
 			return models(ctx, baseURL, key)
+		},
+		Usage: func(ctx context.Context, a plugin.Access) ([]llm.UsageWindow, error) {
+			baseURL, key, err := saved(a)
+			if err != nil {
+				return nil, errors.New("cannot read OpenCode Go usage credentials")
+			}
+			return usage(ctx, baseURL, key)
 		},
 		Model: func(a plugin.Access) plugin.Model {
 			baseURL, key, err := saved(a)

@@ -61,7 +61,9 @@ import (
 	"ouroboros/internal/peers"
 	"ouroboros/internal/plugins/assistant"
 	"ouroboros/internal/plugins/base"
+	browserplugin "ouroboros/internal/plugins/browser"
 	chatgptplugin "ouroboros/internal/plugins/chatgpt"
+	computerplugin "ouroboros/internal/plugins/computer"
 	"ouroboros/internal/plugins/discovery"
 	filesplugin "ouroboros/internal/plugins/files"
 	historyplugin "ouroboros/internal/plugins/history"
@@ -76,6 +78,7 @@ import (
 	"ouroboros/internal/plugins/talk"
 	"ouroboros/internal/plugins/tui"
 	updateplugin "ouroboros/internal/plugins/update"
+	"ouroboros/internal/plugins/websearch"
 	"ouroboros/internal/proposal"
 	"ouroboros/internal/setup"
 	"ouroboros/internal/suggestion"
@@ -167,7 +170,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 	files := &guard.Guard{Home: string(dir.Root()), Sockets: home.SocketDir(), Secrets: dir.Secrets(), Protected: func() ([]string, error) {
 		cfg, err := dir.Config()
 		return cfg.Protected(), err
-	}, Toolchain: update.GoPaths, Checkouts: update.Checkouts, Workspace: dir.WorkingDir()}
+	}, Toolchain: update.GoPaths, Workspace: dir.WorkingDir()}
 	owner := plugin.OwnerOf(dir, network)
 	return plugin.Activate(owner, []plugin.Plugin{
 		base.Plugin(dir, t),
@@ -176,6 +179,9 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		peersplugin.Plugin(dir, network),
 		filesplugin.Plugin(files),
 		shellplugin.Plugin(dir, files),
+		browserplugin.Plugin(dir.Browser()),
+		websearch.Plugin(),
+		computerplugin.Plugin(),
 		historyplugin.Plugin(dir),
 		skillsplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),

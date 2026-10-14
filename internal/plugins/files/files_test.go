@@ -418,8 +418,6 @@ func TestWriteAndEditAreRefused(t *testing.T) {
 		{owner, "~/.ssh/id_ed25519", `~/.ssh is in "protected"`},
 		{owner, "~/.config/ouroboros/config.json", "the secrets of this node"},
 		{owner, "~/.config/ouroboros/contacts.json", "the directory of this node"},
-		{owner, "~/src/internal/a2a/a2a.go", "source of the core"},
-		{owner, "~/src/go.mod", "it decides how ouroboros is built"},
 		{who{settings: `{"deny": ["~/share"]}`}, "~/share/inbox/x", `~/share is in "deny" of the tool`},
 		{peer(`{}`), "~/share/inbox/x", `no "allow" for peers`},
 		{peer(`{"allow": ["~/share/inbox"], "deny": ["~/share/inbox/keep"]}`), "~/share/inbox/keep/x", `~/share/inbox/keep is in "deny"`},
@@ -443,12 +441,15 @@ func TestWriteAndEditAreRefused(t *testing.T) {
 	if got, err := w.run(in, Edit, editArgs{Path: "~/share/inbox/x", Old: "new", New: "newer"}); err != nil || w.content("~/share/inbox/x") != "newer" {
 		t.Errorf("a peer edits where it may: %q, %v", got, err)
 	}
-	// A plugin of the checkout is written, its go.mod not even as it is.
-	if _, err := w.run(owner, Write, writeArgs{Path: "~/src/internal/plugins/mine/mine.go", Content: "package mine // changed\n"}); err != nil {
-		t.Errorf("a plugin: %v", err)
+	// The source of ouro is written, its core and its go.mod too.
+	for _, path := range []string{"~/src/internal/plugins/mine/mine.go", "~/src/internal/a2a/a2a.go"} {
+		if _, err := w.run(owner, Write, writeArgs{Path: path, Content: "package mine // changed\n"}); err != nil {
+			t.Errorf("%s: %v", path, err)
+		}
 	}
-	got, err := w.run(owner, Edit, editArgs{Path: "~/src/go.mod", Old: "go 1.27", New: "go 1.28"})
-	refused(t, got, err, "it decides how ouroboros is built")
+	if _, err := w.run(owner, Edit, editArgs{Path: "~/src/go.mod", Old: "go 1.27", New: "go 1.28"}); err != nil || w.content("~/src/go.mod") != "module ouroboros\n\ngo 1.28\n" {
+		t.Errorf("go.mod: %v", err)
+	}
 }
 
 func TestEdit(t *testing.T) {
@@ -708,23 +709,12 @@ func TestDeleteRecursiveKeepsWhatItMayNot(t *testing.T) {
 	w.mode("~/tree/b/keep", 0o755)
 	intact("across a closed directory")
 
-	// The node and the core of a checkout are below what is deleted.
+	// The node is below what is deleted.
 	got, err = w.run(owner, Delete, deleteArgs{Path: "~/.config", Recursive: true})
 	refused(t, got, err, "the directory of this node")
 	if w.content("~/.config/ouroboros/contacts.json") != "{}" {
 		t.Fatal("the state of the node was deleted")
 	}
-	w.file("~/tree/go.mod", "module ouroboros\n")
-	w.file("~/tree/internal/guard/guard.go", "package guard\n")
-	got, err = w.run(owner, Delete, deleteArgs{Path: "~/tree/internal", Recursive: true})
-	refused(t, got, err, "source of the core")
-	got, err = w.run(owner, Delete, deleteArgs{Path: "~/tree", Recursive: true})
-	refused(t, got, err, "it decides how ouroboros is built")
-	intact("a checkout")
-	if w.content("~/tree/internal/guard/guard.go") != "package guard\n" {
-		t.Fatal("the core was deleted")
-	}
-
 	// A peer deletes within what it may.
 	if got, err := w.run(peer(`{"allow": ["~/tree/a"]}`), Delete, deleteArgs{Path: "~/tree/a", Recursive: true}); err != nil || got != "deleted ~/tree/a" || w.content("~/tree/a/x") != "<none>" {
 		t.Errorf("a peer where it may: %q, %v", got, err)

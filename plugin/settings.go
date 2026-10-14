@@ -15,7 +15,6 @@ import (
 	"ouroboros/internal/credentials"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/kernel"
-	"ouroboros/internal/sandbox"
 )
 
 // What the owner sees and changes with /settings: the configuration of the
@@ -48,11 +47,6 @@ type Settings struct {
 	// are the ones this build has.
 	ContextProvider  string
 	ContextProviders []string
-	// BashWithoutSandbox lets bash run its commands without a sandbox,
-	// also where there is one; Sandbox says why there is none here, "" if
-	// there is.
-	BashWithoutSandbox bool
-	Sandbox            string
 	// Improves says that the agent builds into ouro what a task needs and
 	// ouro lacks, instead of proposing it, see config.SelfImprove.
 	Improves bool
@@ -127,17 +121,16 @@ type SettingKind int
 
 // The kinds of a Setting.
 const (
-	SetName               SettingKind = iota // Value
-	SetContextProvider                       // Value, "" for none
-	SetPlugin                                // Name, On; a missing one is forgotten
-	SetAllTools                              // For, On
-	SetTool                                  // For, Name, On
-	SetToolSettings                          // For, Name, Value: a JSON object, "" for none
-	SetProtected                             // Value: one path a line; On resets to the default
-	SetDescription                           // Value, "" for the default
-	SetBashWithoutSandbox                    // On
-	SetImproves                              // On: build, off: propose
-	SetPeerList                              // Peer, On: a list of its own, as the one for peers; off: none
+	SetName            SettingKind = iota // Value
+	SetContextProvider                    // Value, "" for none
+	SetPlugin                             // Name, On; a missing one is forgotten
+	SetAllTools                           // For, On
+	SetTool                               // For, Name, On
+	SetToolSettings                       // For, Name, Value: a JSON object, "" for none
+	SetProtected                          // Value: one path a line; On resets to the default
+	SetDescription                        // Value, "" for the default
+	SetImproves                           // On: build, off: propose
+	SetPeerList                           // Peer, On: a list of its own, as the one for peers; off: none
 )
 
 // Setting is one change the owner makes in the settings.
@@ -215,18 +208,15 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 	s := Settings{
 		Name: cfg.Name, Access: access.Label(), About: access.About, Model: cfg.Model, ID: cfg.ID(),
 		Description: cfg.About(), DescriptionDefault: cfg.Description == "",
-		ContextProvider:    cfg.ContextProvider,
-		BashWithoutSandbox: cfg.BashWithoutSandbox, Improves: cfg.Improves(),
-		PluginsKept: o.plugins.kept, Protected: cfg.Protected(),
+		ContextProvider: cfg.ContextProvider,
+		Improves:        cfg.Improves(),
+		PluginsKept:     o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
 	}
 	for _, p := range providers {
 		if !slices.Contains(s.ContextProviders, p.Name) {
 			s.ContextProviders = append(s.ContextProviders, p.Name)
 		}
-	}
-	if err := sandbox.Available(); err != nil {
-		s.Sandbox = strings.TrimPrefix(err.Error(), sandbox.ErrUnavailable.Error()+": ")
 	}
 	off := cfg.PluginsOff()
 	on := o.plugins.on(off)
@@ -385,7 +375,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "bash without a sandbox", "the changes of ouro", "the own list of tools"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -403,7 +393,6 @@ func (s Setting) String() string {
 // From when a change holds.
 const (
 	holdsNow     = "saved: it holds from the next message, for you and for peers"
-	holdsBash    = "saved: it holds for the next command of bash"
 	holdsRestart = "saved: it holds once ouro starts anew: quit and start ouro, /stop and /start the node"
 )
 
@@ -419,9 +408,6 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 		}
 		c.ContextProvider = s.Value
 		return holdsNow, nil
-	case SetBashWithoutSandbox:
-		c.BashWithoutSandbox = s.On
-		return holdsBash, nil
 	case SetImproves:
 		c.SelfImprove = config.SelfImprovePropose
 		if s.On {

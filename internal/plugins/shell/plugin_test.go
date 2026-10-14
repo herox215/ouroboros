@@ -2,14 +2,12 @@ package shell_test
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
-	"ouroboros/internal/sandbox"
 	"ouroboros/plugin"
 )
 
@@ -19,8 +17,7 @@ func call(tool string, args map[string]any) string {
 	return "!" + tool + " " + string(b)
 }
 
-// The agent of the owner runs commands, in a sandbox unless the owner turned
-// it off.
+// The agent of the owner runs commands as the owner, in no sandbox.
 func TestOwnerRunsCommands(t *testing.T) {
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -28,37 +25,13 @@ func TestOwnerRunsCommands(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	s := clitest.Settings(t)
-	cfg := clitest.NodeConfig(s)
-	if err := config.Save(s.Home, cfg); err != nil {
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
 		t.Fatal(err)
-	}
-	chat := func(args map[string]any) string {
-		t.Helper()
-		out, err := clitest.Run(t, s, "", "chat", call("bash", args))
-		if err != nil {
-			t.Fatalf("bash: %v", err)
-		}
-		return strings.TrimSuffix(strings.TrimPrefix(out, "[gpt-4o] turns=3 last="), "\n")
 	}
 	state := filepath.Join(s.Home, "state")
-	if sandbox.Available() == nil {
-		if got := chat(map[string]any{"command": "echo $" + sandbox.Env + "; pwd"}); got != "exit 0\n1\n"+home+"\n" {
-			t.Errorf("in the sandbox: %q", got)
-		}
-		if got := chat(map[string]any{"command": "echo x > " + state}); !strings.HasPrefix(got, "exit 1\n") {
-			t.Errorf("writing the state of the node: %q", got)
-		}
-		if _, err := os.Stat(state); err == nil {
-			t.Error("the command wrote the state of the node")
-		}
-	}
-
-	cfg.BashWithoutSandbox = true
-	if err := config.Save(s.Home, cfg); err != nil {
-		t.Fatal(err)
-	}
-	if got := chat(map[string]any{"command": "echo \"[$" + sandbox.Env + "]\" > " + state + "; cat " + state}); got != "exit 0\n[]\n" {
-		t.Errorf("without a sandbox: %q", got)
+	out, err := clitest.Run(t, s, "", "chat", call("bash", map[string]any{"command": "pwd; echo x > " + state + "; cat " + state}))
+	if got := strings.TrimSuffix(strings.TrimPrefix(out, "[gpt-4o] turns=3 last="), "\n"); err != nil || got != "exit 0\n"+home+"\nx\n" {
+		t.Errorf("bash: %q, %v", got, err)
 	}
 }
 

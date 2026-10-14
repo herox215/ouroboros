@@ -31,7 +31,7 @@ func (w *world) supervisor() *supervisor {
 // args in ctx.
 func (w *world) service(ctx context.Context, sv *supervisor, settings string, args map[string]any) (string, error) {
 	w.t.Helper()
-	tool, err := ServiceTool(sv, w.guard, func() (bool, error) { return w.unsandboxed, w.failing }).Configure(json.RawMessage(settings))
+	tool, err := ServiceTool(sv, w.guard).Configure(json.RawMessage(settings))
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -99,7 +99,6 @@ exec sleep 304`
 // listed and looked at, and stopped with everything it started, also what
 // left its group: nothing of it is left.
 func TestService(t *testing.T) {
-	needSandbox(t)
 	w := newWorld(t)
 	sv := w.supervisor()
 	port := freePort(t)
@@ -172,7 +171,6 @@ func TestService(t *testing.T) {
 // A service is asked to end and given its time for it before it is killed;
 // one that ends by itself says how; one whose time is up is stopped.
 func TestServiceEnds(t *testing.T) {
-	needSandbox(t)
 	w := newWorld(t)
 	sv := w.supervisor()
 	ctx := context.Background()
@@ -192,11 +190,11 @@ func TestServiceEnds(t *testing.T) {
 	if _, err := w.service(ctx, sv, "{}", map[string]any{"action": "start", "name": "short", "command": "sleep 30"}); err != nil {
 		t.Errorf("the name of one that ended: %v", err)
 	}
-	dir, access, without, err := prepare(ctx, ToolService, w.guard, func() (bool, error) { return false, nil }, settings{}, "")
+	dir, err := prepare(ctx, ToolService, w.guard, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := sv.launch("brief", "", "sleep 30", dir, 0, 300*time.Millisecond, settings{}, w.guard, access, without)
+	s, err := sv.launch("brief", "", "sleep 30", dir, 0, 300*time.Millisecond, settings{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +208,6 @@ func TestServiceEnds(t *testing.T) {
 // service ends its group itself; what left the group, and what a node
 // before noted, is ended by its tag when the node starts again.
 func TestServiceOutlivesNoNode(t *testing.T) {
-	needSandbox(t)
 	w := newWorld(t)
 	sv := w.supervisor()
 	if _, err := w.service(context.Background(), sv, "{}", map[string]any{"action": "start", "name": "orphan",
@@ -267,7 +264,6 @@ func TestServiceOutlivesNoNode(t *testing.T) {
 // When the node stops, every service stops with it, and none starts any
 // more.
 func TestServicesStopWithTheNode(t *testing.T) {
-	needSandbox(t)
 	w := newWorld(t)
 	sv := w.supervisor()
 	ctx := context.Background()
@@ -299,63 +295,25 @@ func TestServicesStopWithTheNode(t *testing.T) {
 	}
 }
 
-// The services of a peer are its own: neither the owner's agent nor
-// another peer sees or stops them, nor it theirs. A peer has fewer and
-// shorter ones, and needs "allow" as with bash.
+// A peer starts no service, as there is no sandbox to hold it, and neither
+// sees nor stops those of the owner.
 func TestServicesOfPeers(t *testing.T) {
-	needSandbox(t)
 	w := newWorld(t)
 	sv := w.supervisor()
 	owner := context.Background()
 	peer := a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer-key"})
-	other := a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "other-key"})
-	allow := `{"allow": ["~/share"]}`
 	if _, err := w.service(peer, sv, "{}", map[string]any{"action": "start", "name": "p", "command": "sleep 9"}); err == nil ||
-		err.Error() != `service has no "allow" for this peer, so it runs nothing` {
-		t.Errorf("a peer without allow: %v", err)
+		err.Error() != "service runs no command of a peer: it runs in no sandbox" {
+		t.Errorf("a peer starts: %v", err)
 	}
 	if _, err := w.service(owner, sv, "{}", map[string]any{"action": "start", "name": "web", "command": "sleep 30"}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := w.service(peer, sv, allow, map[string]any{"action": "start", "name": "web", "command": "pwd; sleep 30"})
-	if err != nil || !strings.Contains(got, "until "+time.Now().Add(PeerServiceTime).Format("15:04")) || !strings.Contains(got, w.path("~/share")) {
-		t.Fatalf("a peer's service of the same name: %q, %v", got, err)
-	}
-	if got, _ := w.service(other, sv, allow, map[string]any{"action": "list"}); got != "no service runs" {
-		t.Errorf("another peer sees: %q", got)
-	}
-	if _, err := w.service(other, sv, allow, map[string]any{"action": "stop", "name": "web"}); err == nil {
-		t.Error("another peer stopped a service")
-	}
-	if got, _ := w.service(peer, sv, allow, map[string]any{"action": "list"}); strings.Count(got, "\n") != 0 || !strings.Contains(got, "pwd; sleep 30") {
+	if got, _ := w.service(peer, sv, "{}", map[string]any{"action": "list"}); got != "no service runs" {
 		t.Errorf("the peer sees: %q", got)
 	}
-	if _, err := w.service(peer, sv, allow, map[string]any{"action": "start", "name": "long", "command": "sleep 9", "hours": 5}); err == nil ||
-		err.Error() != "a service runs 4 hours at most" {
-		t.Errorf("too long: %v", err)
-	}
-	if _, err := w.service(peer, sv, allow, map[string]any{"action": "start", "name": "two", "command": "sleep 30"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.service(peer, sv, allow, map[string]any{"action": "start", "name": "three", "command": "sleep 30"}); err == nil ||
-		err.Error() != "2 services run already: stop one first" {
-		t.Errorf("too many: %v", err)
-	}
-	// The owner's agent stops its own, the peer's runs on.
-	if got, _ := w.service(owner, sv, "{}", map[string]any{"action": "stop", "name": "web"}); !strings.Contains(got, "you stopped it") {
-		t.Errorf("the owner stops: %q", got)
-	}
-	if got, _ := w.service(peer, sv, allow, map[string]any{"action": "status", "name": "web"}); !strings.HasPrefix(got, "service web runs") {
-		t.Errorf("the peer's: %q", got)
-	}
-	peers := 0
-	for _, s := range sv.list() {
-		if s.PeerKey == "peer-key" {
-			peers++
-		}
-	}
-	if peers != 2 {
-		t.Errorf("the front end lists %d of the peer", peers)
+	if _, err := w.service(peer, sv, "{}", map[string]any{"action": "stop", "name": "web"}); err == nil {
+		t.Error("the peer stopped the owner's service")
 	}
 }
 

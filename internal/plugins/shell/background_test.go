@@ -93,11 +93,10 @@ func (w *world) answer(settings string, calls ...map[string]any) []string {
 // what it printed since it was last asked, waits for it to end, stops it,
 // and the answer ends with all it left running.
 func TestBackground(t *testing.T) {
-	needSandbox(t)
 	w := newWorld(t)
 	loop := "echo up; until [ -f stop ]; do sleep 0.1; done; echo bye"
 	late := "sleep 1; echo late > late"
-	got := w.answer(`{"allow": ["~/share"]}`,
+	got := w.answer("{}",
 		map[string]any{"command": loop, "background": true, "dir": "~/share"},
 		map[string]any{"job": 1, "timeout": 1},
 		map[string]any{"command": "touch stop", "dir": "~/share"},
@@ -164,7 +163,6 @@ func TestBackground(t *testing.T) {
 // once.
 func TestJobs(t *testing.T) {
 	w := newWorld(t)
-	w.unsandboxed = true
 	ctx := context.Background()
 	if _, err := w.bash(ctx, "{}", map[string]any{"command": "true", "background": true}); err == nil || err.Error() != "bash runs a command in the background within an answer alone" {
 		t.Errorf("outside of an answer: %v", err)

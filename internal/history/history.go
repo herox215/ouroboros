@@ -39,6 +39,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"ouroboros/internal/openai"
 )
@@ -62,10 +63,10 @@ const (
 	maxMatchWorkers = 8
 
 	maxSearchBytes = 16 << 10 // of the hits of one search
-	maxReadBytes   = 32 << 10 // of the records of one read
+	MaxReadBytes   = 16 << 10 // of one read, including its continuation note
 	excerpt        = 80       // bytes on each side of a hit
 	maxTitle       = 80       // bytes of the first message that names a session
-	cutNote        = 100      // bytes left for the note on a record that is cut
+	readNote       = 256      // bytes reserved for the continuation note
 )
 
 // The parties of an archive: the directory of the owner, and the start of
@@ -517,10 +518,14 @@ func oneLine(text string) string {
 
 // Read returns the records of the conversation session of the party of who,
 // from the sequence number from on (1 for 0): count of them (DefaultRecords
-// for 0, at most MaxRecords) and at most maxReadBytes, with a note where to
-// go on. Without session it is the current conversation; a peer may name no
-// other.
-func (a *Archive) Read(who Who, session string, from, count int) (string, error) {
+// for 0, at most MaxRecords) and at most MaxReadBytes including the note where
+// to go on. Offset skips bytes of the first formatted record, on a UTF-8
+// boundary. Without session it is the current conversation; a peer may name
+// no other.
+func (a *Archive) Read(who Who, session string, from, count, offset int) (string, error) {
+	if offset < 0 {
+		return "", errors.New("offset must not be negative")
+	}
 	current := Name(who.Session)
 	if session == "" {
 		session = current
@@ -538,27 +543,39 @@ func (a *Archive) Read(who Who, session string, from, count int) (string, error)
 	count = min(count, MaxRecords)
 	var out strings.Builder
 	first, last, total, full := 0, 0, 0, false
+	nextOffset := 0
+	var offsetErr error
 	err := records(a.file(who, session), func(r Record) bool {
 		total = r.Seq // the records after those returned are counted on
 		if r.Seq < from || full {
 			return true
 		}
 		text := show(r)
-		if len(text) > maxReadBytes-out.Len() {
+		if first == 0 {
+			if offset >= len(text) || !utf8.RuneStart(text[offset]) {
+				offsetErr = errors.New("offset must be within the first record, on a UTF-8 boundary")
+				return false
+			}
+			text = text[offset:]
+		}
+		if len(text) > MaxReadBytes-readNote-out.Len() {
 			if first > 0 {
 				full = true // for the next read
 				return true
 			}
-			// A record that does not fit alone is cut.
-			keep := maxReadBytes - cutNote
-			text = strings.ToValidUTF8(text[:keep], "") + fmt.Sprintf("\n[cut: %d more bytes of this record]\n", len(text)-keep)
+			keep := MaxReadBytes - readNote
+			for !utf8.RuneStart(text[keep]) {
+				keep--
+			}
+			nextOffset = offset + keep
+			text = text[:keep]
 		}
 		if first == 0 {
 			first = r.Seq
 		}
 		last = r.Seq
 		out.WriteString(text)
-		full = last-first+1 == count
+		full = nextOffset > 0 || last-first+1 == count
 		return true
 	})
 	if errors.Is(err, fs.ErrNotExist) {
@@ -570,10 +587,15 @@ func (a *Archive) Read(who Who, session string, from, count int) (string, error)
 	if err != nil {
 		return "", err
 	}
+	if offsetErr != nil {
+		return "", offsetErr
+	}
 	if first == 0 {
 		return fmt.Sprintf("the session has %d records: there is none from %d on", total, from), nil
 	}
-	if last < total {
+	if nextOffset > 0 {
+		fmt.Fprintf(&out, "\n[records %d to %d of %d: continue with from %d, offset %d]", first, last, total, last, nextOffset)
+	} else if last < total {
 		fmt.Fprintf(&out, "[records %d to %d of %d: continue with from %d]", first, last, total, last+1)
 	} else {
 		fmt.Fprintf(&out, "[records %d to %d of %d]", first, last, total)

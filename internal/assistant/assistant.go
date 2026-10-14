@@ -54,6 +54,8 @@ const (
 		`do not stop at a plan or at an offer to go on. ` +
 		`Change code the way the code around it is written. ` +
 		`What you find changed and did not change yourself is the work of the user: look at it before you overwrite or delete it. ` +
+		`Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, ` +
+		`unless you still need information to make those changes safely. ` +
 		`Write the tests a change needs and no more, and do not run again what passed without a reason. `
 	// improveHint is added for an owner whose agent may build ouro anew and
 	// improve it (config.SelfImproveBuild): what a task needs and ouro

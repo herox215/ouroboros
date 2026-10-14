@@ -424,7 +424,7 @@ func TestRead(t *testing.T) {
 	a.Append(owner, answer("read my notes", "notes", "Done."), nil)
 	a.Append(owner, question, context.Canceled)
 
-	out, err := a.Read(owner, "", 0, 0)
+	out, err := a.Read(owner, "", 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,75 +443,65 @@ func TestRead(t *testing.T) {
 	if !strings.HasSuffix(out, "[records 1 to 7 of 7]") {
 		t.Errorf("end: %q", out)
 	}
-	out, _ = a.Read(owner, "chat-1", 2, 2)
+	out, _ = a.Read(owner, "chat-1", 2, 2, 0)
 	if !strings.HasPrefix(out, "#2 ") || strings.Contains(out, "#4 ") || !strings.HasSuffix(out, "[records 2 to 3 of 7: continue with from 4]") {
 		t.Errorf("a part: %q", out)
 	}
 	f, _ := os.OpenFile(a.file(owner, "chat-1"), os.O_APPEND|os.O_WRONLY, 0)
 	f.WriteString("{}\nnot json\n")
 	f.Close()
-	if out, _ := a.Read(owner, "", 7, 0); !strings.HasPrefix(out, "#7 ") || !strings.HasSuffix(out, "[records 7 to 7 of 7]") {
+	if out, _ := a.Read(owner, "", 7, 0, 0); !strings.HasPrefix(out, "#7 ") || !strings.HasSuffix(out, "[records 7 to 7 of 7]") {
 		t.Errorf("lines that are no records: %q", out)
 	}
-	if out, _ := a.Read(owner, "", 0, 1); !strings.HasSuffix(out, "[records 1 to 1 of 7: continue with from 2]") {
+	if out, _ := a.Read(owner, "", 0, 1, 0); !strings.HasSuffix(out, "[records 1 to 1 of 7: continue with from 2]") {
 		t.Errorf("one record: %q", out)
 	}
-	if out, _ := a.Read(owner, "", 8, 0); out != "the session has 7 records: there is none from 8 on" {
+	if out, _ := a.Read(owner, "", 8, 0, 0); out != "the session has 7 records: there is none from 8 on" {
 		t.Errorf("beyond: %q", out)
 	}
-	if out, err := a.Read(Who{Session: "new"}, "", 0, 0); err != nil || out != "nothing of this conversation is archived yet" {
+	if out, err := a.Read(Who{Session: "new"}, "", 0, 0, 0); err != nil || out != "nothing of this conversation is archived yet" {
 		t.Errorf("not archived yet: %q, %v", out, err)
 	}
 	for _, session := range []string{"chat-9", "../owner/chat-1", ""} {
 		if session == "" {
 			continue
 		}
-		if _, err := a.Read(Who{Session: "new"}, session, 0, 0); err == nil || !strings.Contains(err.Error(), "there is no session") {
+		if _, err := a.Read(Who{Session: "new"}, session, 0, 0, 0); err == nil || !strings.Contains(err.Error(), "there is no session") {
 			t.Errorf("%q: %v", session, err)
 		}
 	}
 
-	// Many records: at most MaxRecords, and maxReadBytes.
+	// Many records: at most MaxRecords, and MaxReadBytes.
 	b := at(t)
 	var msgs []openai.Message
 	for i := range 2 * MaxRecords {
 		msgs = append(msgs, openai.Message{Role: "user", Content: fmt.Sprint(i)})
 	}
 	b.Append(owner, msgs, nil)
-	if out, _ := b.Read(owner, "", 0, 10000); !strings.HasSuffix(out, fmt.Sprintf("[records 1 to %d of %d: continue with from %d]", MaxRecords, 2*MaxRecords+1, MaxRecords+1)) {
+	if out, _ := b.Read(owner, "", 0, 10000, 0); !strings.HasSuffix(out, fmt.Sprintf("[records 1 to %d of %d: continue with from %d]", MaxRecords, 2*MaxRecords+1, MaxRecords+1)) {
 		t.Errorf("at most %d: %q", MaxRecords, out[len(out)-80:])
 	}
-	if out, _ := b.Read(owner, "", 0, 0); !strings.HasSuffix(out, fmt.Sprintf("[records 1 to %d of %d: continue with from %d]", DefaultRecords, 2*MaxRecords+1, DefaultRecords+1)) {
+	if out, _ := b.Read(owner, "", 0, 0, 0); !strings.HasSuffix(out, fmt.Sprintf("[records 1 to %d of %d: continue with from %d]", DefaultRecords, 2*MaxRecords+1, DefaultRecords+1)) {
 		t.Errorf("default: %q", out[len(out)-80:])
 	}
 	c := at(t)
-	c.Append(owner, []openai.Message{{Role: "user", Content: strings.Repeat("x", 20<<10)}, {Role: "user", Content: strings.Repeat("y", 20<<10)}, {Role: "user", Content: "z"}}, nil)
-	out, _ = c.Read(owner, "", 0, 0)
-	if len(out) > maxReadBytes+100 || strings.Contains(out, "yyy") || !strings.HasSuffix(out, "[records 1 to 1 of 4: continue with from 2]") {
+	c.Append(owner, []openai.Message{{Role: "user", Content: strings.Repeat("x", 10<<10)}, {Role: "user", Content: strings.Repeat("y", 10<<10)}, {Role: "user", Content: "z"}}, nil)
+	out, _ = c.Read(owner, "", 0, 0, 0)
+	if len(out) > MaxReadBytes || strings.Contains(out, "yyy") || !strings.HasSuffix(out, "[records 1 to 1 of 4: continue with from 2]") {
 		t.Errorf("bytes: %d, %q", len(out), out[len(out)-80:])
 	}
-	// What fills maxReadBytes exactly is given.
+	// What fills the payload budget exactly is given.
 	head := len(show(Record{Seq: 1, Answer: 1, Time: time.Date(2026, 10, 6, 12, 1, 0, 0, time.UTC), Role: "user"}))
 	f2 := at(t)
-	f2.Append(owner, []openai.Message{{Role: "user", Content: strings.Repeat("x", maxReadBytes-head-1)}}, nil)
-	if out, _ := f2.Read(owner, "", 0, 1); !strings.HasSuffix(out, "x\n[records 1 to 1 of 2: continue with from 2]") || strings.Contains(out, "[cut") {
+	f2.Append(owner, []openai.Message{{Role: "user", Content: strings.Repeat("x", MaxReadBytes-readNote-head-1)}}, nil)
+	if out, _ := f2.Read(owner, "", 0, 1, 0); !strings.HasSuffix(out, "x\n[records 1 to 1 of 2: continue with from 2]") || strings.Contains(out, "[cut") {
 		t.Errorf("exactly full: %q", out[len(out)-80:])
-	}
-
-	// A record that does not fit alone is cut, on a whole character.
-	d := at(t)
-	d.Append(owner, []openai.Message{{Role: "user", Content: strings.Repeat("ä", 40<<10)}}, nil)
-	out, _ = d.Read(owner, "", 0, 0)
-	record := show(Record{Seq: 1, Answer: 1, Time: time.Date(2026, 10, 6, 12, 1, 0, 0, time.UTC), Role: "user", Content: strings.Repeat("ä", 40<<10)})
-	cut := fmt.Sprintf("\n[cut: %d more bytes of this record]\n", len(record)-(maxReadBytes-cutNote))
-	if len(out) > maxReadBytes+100 || !strings.Contains(out, cut) || !strings.HasSuffix(out, "[records 1 to 2 of 2]") || !strings.Contains(out, "ää\n[cut") {
-		t.Errorf("cut: %d, %q", len(out), out[len(out)-120:])
 	}
 
 	// A conversation that cannot be read fails.
 	e := at(t)
 	os.MkdirAll(e.file(owner, "chat-1"), 0o700)
-	if _, err := e.Read(owner, "", 0, 0); err == nil {
+	if _, err := e.Read(owner, "", 0, 0, 0); err == nil {
 		t.Error("a conversation that is a directory should fail")
 	}
 }
@@ -521,18 +511,18 @@ func TestReadScope(t *testing.T) {
 	a := at(t)
 	a.Append(owner, question, nil)
 	a.Append(peerA, answer("peer a asks", "x", "y"), nil)
-	if out, err := a.Read(peerA, "", 0, 0); err != nil || !strings.Contains(out, "peer a asks") {
+	if out, err := a.Read(peerA, "", 0, 0, 0); err != nil || !strings.Contains(out, "peer a asks") {
 		t.Fatalf("own: %q, %v", out, err)
 	}
-	if out, err := a.Read(peerA, Name(peerA.Session), 0, 0); err != nil || !strings.Contains(out, "peer a asks") {
+	if out, err := a.Read(peerA, Name(peerA.Session), 0, 0, 0); err != nil || !strings.Contains(out, "peer a asks") {
 		t.Fatalf("own, named: %q, %v", out, err)
 	}
 	for _, session := range []string{"chat-1", "../owner/chat-1"} {
-		if _, err := a.Read(peerA, session, 0, 0); !errors.Is(err, ErrScope) {
+		if _, err := a.Read(peerA, session, 0, 0, 0); !errors.Is(err, ErrScope) {
 			t.Errorf("%q: %v", session, err)
 		}
 	}
-	if out, _ := a.Read(peerB, "", 0, 0); out != "nothing of this conversation is archived yet" {
+	if out, _ := a.Read(peerB, "", 0, 0, 0); out != "nothing of this conversation is archived yet" {
 		t.Errorf("another peer, same conversation ID: %q", out)
 	}
 }
@@ -623,7 +613,7 @@ func TestListAndDelete(t *testing.T) {
 	if err := a.Delete(entries[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := a.Read(peerA, "", 0, 0); out != "nothing of this conversation is archived yet" {
+	if out, _ := a.Read(peerA, "", 0, 0, 0); out != "nothing of this conversation is archived yet" {
 		t.Errorf("deleted: %q", out)
 	}
 	// Archived again, it starts anew.

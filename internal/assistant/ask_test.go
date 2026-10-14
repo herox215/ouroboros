@@ -321,8 +321,19 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		{config.Named("*"), start + askHint + filesHint + workHint + improveHint + claimHint + questionHint + delegateHint + end},
 	} {
 		cfg.Tools = &config.Tools{H2A: tt.tools}
-		if got, err := a.Ask(context.Background(), "chat", "?system", nil); err != nil || got != tt.want {
+		got, err := a.Ask(context.Background(), "chat", "?system", nil)
+		if err != nil || got != tt.want {
 			t.Errorf("with %s: %v\n got %q\nwant %q", tt.tools, err, got, tt.want)
+		}
+		// Check the workflow independently of workHint, so removing the
+		// rule cannot silently change both the prompt and its expectation.
+		wantWorkflow := slices.ContainsFunc(tt.tools, func(e config.Entry) bool {
+			return e.Tool == "edit" || e.Tool == toolSearch || e.Tool == ToolBash || e.Tool == "*"
+		})
+		workflow := "Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, " +
+			"unless you still need information to make those changes safely."
+		if strings.Contains(got, workflow) != wantWorkflow {
+			t.Errorf("with %s: workflow rule present = %v, want %v", tt.tools, strings.Contains(got, workflow), wantWorkflow)
 		}
 	}
 	// The day the prompt names is the one it is: the agent is built anew

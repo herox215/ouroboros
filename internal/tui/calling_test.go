@@ -18,7 +18,7 @@ func TestCallingIsShown(t *testing.T) {
 		t.Fatalf("writing: %q", got)
 	}
 	m.apply(c, Event{Kind: plugin.SessionCalling, Text: "3.2 KiB"}, true)
-	if got := m.waiting(); got != "alpha is writing a call · 3.2 KiB" {
+	if got := m.waiting(); got != "alpha is preparing an action · 3.2 KiB" {
 		t.Fatalf("calling: %q", got)
 	}
 	m.apply(c, Event{Kind: plugin.SessionSay, Text: "Ich ergänze den Look."}, true)

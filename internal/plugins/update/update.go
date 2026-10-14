@@ -49,7 +49,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Name: Rebuild,
 			Description: "Build ouro, the program you are part of, from its source in " + sourceName(update.Source) + " as it is now, and install it: " +
 				"this is how a change of the source takes effect. The build is the check of a change of text; " +
-				"for a change of logic name the packages you changed in test, and their tests run first, outside the sandbox, so that also those that start a node run: " +
+				"for a change of logic name the packages you changed in test, and their tests run first: " +
 				"never all of them, coverage or mutation tests. " +
 				"Only when the tests and the build pass is the binary replaced; " +
 				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. " +

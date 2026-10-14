@@ -119,7 +119,8 @@ func (d Dir) SaveConfig(c config.Config) error {
 
 // Secrets are the files that hold the secrets of the node, which no tool of
 // an agent reads: the configuration with the key of the node, the accesses
-// with the keys of the APIs, and the files they are locked with.
+// with the keys of the APIs, the files they are locked with, and the profile
+// of the browser with what it is signed in to.
 //
 // Of a node with several profiles, what the other profiles keep is no
 // business of the agent of d either: their directories, or the files of the
@@ -128,6 +129,7 @@ func (d Dir) SaveConfig(c config.Config) error {
 func (d Dir) Secrets() []string {
 	root := d.Root()
 	files := append(config.Files(string(root)), credentials.Files(string(root))...)
+	files = append(files, d.Browser())
 	profiles, _ := d.Profiles()
 	for _, p := range profiles {
 		switch {
@@ -137,7 +139,7 @@ func (d Dir) Secrets() []string {
 			}
 			continue
 		case p == root:
-			files = append(files, p.path("contacts.json"), p.path("proposals.json"), p.path("failures.json"), p.History(), p.UpdateDir())
+			files = append(files, p.path("contacts.json"), p.path("proposals.json"), p.path("failures.json"), p.History(), p.UpdateDir(), p.Browser())
 		default:
 			files = append(files, string(p))
 		}
@@ -161,6 +163,10 @@ func (d Dir) Suggestions() *suggestion.Store { return suggestion.Open(d.path("su
 
 // History is the directory the conversations of the agents are archived in.
 func (d Dir) History() string { return d.path("history") }
+
+// Browser is the directory of the profile of the browser the agents of the
+// profile use: what they signed in to, their cookies.
+func (d Dir) Browser() string { return d.path("browser") }
 
 // Services is the file of the services of the profile that run, by which
 // what a node that ended without stopping them left of them is stopped.

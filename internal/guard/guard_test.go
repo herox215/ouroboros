@@ -102,8 +102,6 @@ func paths(p ...string) *[]string { return &p }
 const (
 	ruleSecret = "it holds the secrets of this node, which no tool reads or changes"
 	ruleState  = "it is in the directory of this node, where the node keeps its state: no tool changes it"
-	ruleCore   = "it is source of the core of ouroboros, which no tool changes"
-	ruleBuild  = "it decides how ouroboros is built and what the build fetches and runs, which no tool changes"
 	ruleRoot   = "the root of the file system and the home directory are never deleted"
 
 	ruleToolchain = "it is part of the Go that rebuild builds ouroboros with, which no tool changes"
@@ -476,57 +474,18 @@ func TestLinksAndDots(t *testing.T) {
 	}
 }
 
-// The core of ouroboros is not changed in any checkout of it, nor what
-// decides how it is built; the plugins next to it are.
-func TestSourceOfTheCore(t *testing.T) {
+// The source of ouroboros is changed like any other file: the core and what
+// decides how it is built too.
+func TestSourceOfOuro(t *testing.T) {
 	w := newWorld(t)
 	src := w.home + "/src/ouro"
-	w.file(src+"/go.mod", "// the module\nmodule ouroboros // this one\n\ngo 1.27.0\n")
-	w.file(src+"/internal/a2a/a2a.go", "package a2a")
-	w.file(src+"/internal/plugins/files/files.go", "package files")
-	w.file(src+"/internal/go.mod", "module elsewhere\n")
-	w.file(w.home+"/src/other/go.mod", "module other\n")
-	w.file(w.home+"/src/other/internal/a2a/a2a.go", "package a2a")
-	w.link(src+"/internal/identity", w.home+"/share/id")
+	w.file(src+"/go.mod", "module ouroboros\n")
+	w.file(src+"/internal/guard/guard.go", "package guard")
 	a := Access{Tool: "edit"}
-
-	for _, pkg := range corePackages {
+	for _, path := range []string{"internal/guard/guard.go", "internal/a2a/new.go", "go.mod", "Makefile", "internal/cli/cli.go"} {
 		for _, op := range []Op{Write, Delete} {
-			w.refused(a, op, src+"/"+pkg, ruleCore)
-			w.refused(a, op, src+"/"+pkg+"/new.go", ruleCore)
-			w.refused(a, op, src+"/"+pkg+"/sub/new.go", ruleCore)
-			w.allowed(a, op, src+"/"+pkg+"x/new.go", src+"/"+pkg+"x/new.go")
+			w.allowed(a, op, src+"/"+path, src+"/"+path)
 		}
-		w.allowed(a, Read, src+"/"+pkg+"/new.go", src+"/"+pkg+"/new.go")
-	}
-	if len(corePackages) != 11 || corePackages[9] != "internal/guard" || corePackages[10] != "internal/printable" || !slices.Contains(corePackages, "internal/sandbox") {
-		t.Errorf("the packages of the core: %v", corePackages)
-	}
-	w.refused(a, Write, "~/share/id/identity.go", ruleCore)
-	for _, pkg := range []string{"internal/daemon", "internal/kernel"} {
-		w.allowed(a, Write, src+"/"+pkg+"/new.go", src+"/"+pkg+"/new.go")
-	}
-
-	// What decides what a build fetches and runs, and where the frame
-	// hands out what plugins do not get.
-	for _, path := range buildPaths {
-		for _, op := range []Op{Write, Delete} {
-			w.refused(a, op, src+"/"+path, ruleBuild)
-			w.allowed(a, op, w.home+"/src/other/"+path, w.home+"/src/other/"+path)
-		}
-		w.allowed(a, Read, src+"/"+path, src+"/"+path)
-	}
-	for _, path := range []string{"internal/cli/cli.go", "cmd/ouro/main.go", "scripts/new.sh"} {
-		w.refused(a, Write, src+"/"+path, ruleBuild)
-	}
-	if len(buildPaths) != 9 {
-		t.Errorf("what decides the build: %v", buildPaths)
-	}
-	for _, op := range []Op{Write, Delete} {
-		w.allowed(a, op, src+"/internal/plugins/files/files.go", src+"/internal/plugins/files/files.go")
-		w.allowed(a, op, src+"/internal", src+"/internal")
-		w.allowed(a, op, src+"/Makefile.local", src+"/Makefile.local")
-		w.allowed(a, op, w.home+"/src/other/internal/a2a/a2a.go", w.home+"/src/other/internal/a2a/a2a.go")
 	}
 }
 
@@ -558,27 +517,6 @@ func TestToolchain(t *testing.T) {
 	w.allowed(a, Write, "~/other", w.home+"/other")
 }
 
-func TestModuleOf(t *testing.T) {
-	for content, want := range map[string]string{
-		"module ouroboros\n":                       "ouroboros",
-		"go 1.27\n\nmodule ouroboros":              "ouroboros",
-		"module \"ouroboros\"\n":                   "ouroboros",
-		"module `ouroboros`\n":                     "ouroboros",
-		"module (\n\touroboros\n)\n":               "ouroboros",
-		"module example.com/x // module ouroboros": "example.com/x",
-		"// module ouroboros\nmodule x\n":          "x",
-		"require module v1\n":                      "v1",
-		"":                                         "",
-		"go 1.27\n":                                "",
-		"module":                                   "",
-		"module (":                                 "",
-	} {
-		if got := moduleOf([]byte(content)); got != want {
-			t.Errorf("moduleOf(%q) = %q, want %q", content, got, want)
-		}
-	}
-}
-
 func TestRefusalNamesTheRule(t *testing.T) {
 	err := &Refusal{Op: Write, Path: "~/x", Rule: "no"}
 	if err.Error() != "writing ~/x is refused: no" {
@@ -591,13 +529,11 @@ func TestRefusalNamesTheRule(t *testing.T) {
 
 // The sandbox of a command holds the rules for files: the secrets, what is
 // protected and what the tool is denied are neither read nor written, the
-// node, the Go of rebuild and what is fixed in the checkouts it knows are not
-// written, and the rest is writable as "allow" says.
+// node and the Go of rebuild are not written, and the rest is writable as
+// "allow" says.
 func TestBox(t *testing.T) {
 	w := newWorld(t)
-	w.file(w.home+"/src/go.mod", "module ouroboros\n")
 	w.guard.Toolchain = func() []string { return []string{w.home + "/go", w.home + "/bin/go"} }
-	w.guard.Checkouts = func() []string { return []string{w.home + "/src"} }
 	p, err := w.guard.Box(Access{Tool: "bash", Deny: []string{"~/share"}}, true)
 	if err != nil {
 		t.Fatal(err)
@@ -610,9 +546,6 @@ func TestBox(t *testing.T) {
 		t.Errorf("hidden: %q", p.Hidden)
 	}
 	readOnly := []string{w.node, w.home + "/go", w.home + "/bin/go"}
-	for _, rel := range slices.Concat(corePackages, buildPaths) {
-		readOnly = append(readOnly, w.home+"/src/"+rel)
-	}
 	if !slices.Equal(p.ReadOnly, readOnly) {
 		t.Errorf("read only: %q", p.ReadOnly)
 	}
@@ -638,9 +571,9 @@ func TestBox(t *testing.T) {
 	if p, err := w.guard.Box(Access{Tool: "bash", Peer: true}, false); err != nil || len(p.Writable) != 0 {
 		t.Errorf("for a peer: %+v, %v", p, err)
 	}
-	w.guard.Toolchain, w.guard.Checkouts = nil, nil
+	w.guard.Toolchain = nil
 	if p, err := w.guard.Box(Access{Tool: "bash"}, false); err != nil || !slices.Equal(p.ReadOnly, []string{w.node}) {
-		t.Errorf("without toolchain and checkouts: %+v, %v", p, err)
+		t.Errorf("without toolchain: %+v, %v", p, err)
 	}
 
 	// Rules that cannot be read run nothing.

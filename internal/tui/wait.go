@@ -113,7 +113,7 @@ func (m *Model) waitingFor() string {
 	case c.calling != "":
 		// Nothing of a call shows until it is written: what grows is
 		// what tells that the model is at work.
-		return m.agentName() + " is writing a call · " + c.calling
+		return m.agentName() + " is preparing an action · " + c.calling
 	case c.partial != "":
 		return m.agentName() + " is writing"
 	case c.doing != "" && m.now().Sub(c.since) >= toolShown:

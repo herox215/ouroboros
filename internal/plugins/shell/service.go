@@ -49,11 +49,12 @@ const watchEnv = "OURO_WATCH_FD"
 // serviceScript runs the command of a service, its first argument, and ends
 // with it, with its exit status. Next to it a watcher waits for the pipe of
 // the node to close, which happens once the node is gone, and then ends the
-// whole group. The command does not get the pipe. Asked to end, the script
+// whole group. Neither the command gets the pipe, nor the watcher the output,
+// which it would keep open past the end of the command. Asked to end, the script
 // waits for the command to end, so that it is killed only once its time to
 // end is over.
 const serviceScript = `f=$` + watchEnv + `
-eval "( read -r _ <&$f; kill -KILL 0 ) &"
+eval "( read -r _ <&$f; kill -KILL 0 ) >/dev/null 2>&1 &"
 eval "bash -c \"\$1\" ouro-service $f<&- &"
 c=$!
 trap 'kill -TERM $c 2>/dev/null' TERM
@@ -203,7 +204,7 @@ func (sv *supervisor) note() {
 
 // launch starts the service name of peer with command in dir, as start
 // prepared it, and waits for its port.
-func (sv *supervisor) launch(name, peer, command, dir string, port int, d time.Duration, s settings, g *guard.Guard, access guard.Access, without bool) (*service, error) {
+func (sv *supervisor) launch(name, peer, command, dir string, port int, d time.Duration, s settings) (*service, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -212,7 +213,7 @@ func (sv *supervisor) launch(name, peer, command, dir string, port int, d time.D
 	tag := newTag()
 	start := &serviceStart{tag: tag, watch: r, log: &ring{}}
 	ctx, cancel := context.WithCancel(context.Background())
-	p, err := launch(ctx, cancel, dir, s, command, g, access, without, start)
+	p, err := launch(ctx, cancel, dir, s, command, start)
 	if err != nil {
 		w.Close()
 		cancel()
@@ -382,14 +383,14 @@ type serviceArgs struct {
 	Lines   int     `json:"lines"`
 }
 
-// ServiceTool returns the tool for the services of sv, which asks g for the
-// sandbox of every one, and unsandboxed whether to run it without one.
-func ServiceTool(sv *supervisor, g *guard.Guard, unsandboxed func() (bool, error)) plugin.Tool {
+// ServiceTool returns the tool for the services of sv, which asks g where
+// one may start.
+func ServiceTool(sv *supervisor, g *guard.Guard) plugin.Tool {
 	t := plugin.Tool{
 		Name: ToolService,
 		Description: "Keep a command running past this answer, as a service: a server, a watcher, a mock API the user or you use later. " +
 			"Not for builds, tests or what is needed only while you answer: bash runs those, with \"background\": true for a server you test against now. " +
-			"A service runs in the sandbox of bash, and is reached on localhost only unless the owner allows the network. " +
+			"A service runs as bash does, in no sandbox: a program with windows opens on the screen. " +
 			"It ends when its command ends, when it is stopped, when its time is up, or when the node stops or is rebuilt: never longer. " +
 			"Nothing it starts outlives it, also with &, nohup or setsid: do not try to keep anything running another way. " +
 			"Tell the user so, and when it ends, and do not say it runs without looking with \"status\". " +
@@ -410,20 +411,17 @@ func ServiceTool(sv *supervisor, g *guard.Guard, unsandboxed func() (bool, error
 		Trusted: true,
 	}
 	return plugin.Configurable(t, func(s settings) (plugin.RunFunc, error) {
-		if s.Allow != nil {
-			if err := guard.Valid(*s.Allow); err != nil {
-				return nil, err
+		for _, name := range s.Env {
+			if name == "" || strings.ContainsAny(name, "= ") {
+				return nil, fmt.Errorf("%q in env is no name of a variable", name)
 			}
-		}
-		if err := guard.Valid(s.Deny); err != nil {
-			return nil, err
 		}
 		return func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var a serviceArgs
 			if err := plugin.Decode(ToolService, raw, &a); err != nil {
 				return "", err
 			}
-			return sv.run(ctx, g, unsandboxed, s, a)
+			return sv.run(ctx, g, s, a)
 		}, nil
 	})
 }
@@ -440,7 +438,7 @@ func hours(d time.Duration) string {
 }
 
 // run does what a asks for, for whom the conversation of ctx is.
-func (sv *supervisor) run(ctx context.Context, g *guard.Guard, unsandboxed func() (bool, error), s settings, a serviceArgs) (string, error) {
+func (sv *supervisor) run(ctx context.Context, g *guard.Guard, s settings, a serviceArgs) (string, error) {
 	origin, isPeer := plugin.OriginFrom(ctx)
 	peer := ""
 	if isPeer {
@@ -454,7 +452,7 @@ func (sv *supervisor) run(ctx context.Context, g *guard.Guard, unsandboxed func(
 	}
 	switch a.Action {
 	case "start":
-		return sv.startFor(ctx, peer, g, unsandboxed, s, a)
+		return sv.startFor(ctx, peer, g, s, a)
 	case "status", "logs", "stop":
 	default:
 		return "", fmt.Errorf(`%s does "start", "status", "logs", "stop" or "list", not %q`, ToolService, a.Action)
@@ -483,7 +481,7 @@ func (sv *supervisor) run(ctx context.Context, g *guard.Guard, unsandboxed func(
 }
 
 // startFor starts the service a describes for peer.
-func (sv *supervisor) startFor(ctx context.Context, peer string, g *guard.Guard, unsandboxed func() (bool, error), s settings, a serviceArgs) (string, error) {
+func (sv *supervisor) startFor(ctx context.Context, peer string, g *guard.Guard, s settings, a serviceArgs) (string, error) {
 	if strings.TrimSpace(a.Command) == "" {
 		return "", fmt.Errorf(`%s needs "command" to start a service`, ToolService)
 	}
@@ -503,7 +501,7 @@ func (sv *supervisor) startFor(ctx context.Context, peer string, g *guard.Guard,
 	if d > most {
 		return "", fmt.Errorf("a service runs %s at most", hours(most))
 	}
-	dir, access, without, err := prepare(ctx, ToolService, g, unsandboxed, s, a.Dir)
+	dir, err := prepare(ctx, ToolService, g, a.Dir)
 	if err != nil {
 		return "", err
 	}
@@ -517,7 +515,7 @@ func (sv *supervisor) startFor(ctx context.Context, peer string, g *guard.Guard,
 	if a.Port > 0 && answers(a.Port) {
 		return "", fmt.Errorf("something listens on port %d already: choose another port, or ask the user about what listens there", a.Port)
 	}
-	svc, err := sv.launch(a.Name, peer, a.Command, dir, a.Port, d, s, g, access, without)
+	svc, err := sv.launch(a.Name, peer, a.Command, dir, a.Port, d, s)
 	if err != nil {
 		return "", err
 	}

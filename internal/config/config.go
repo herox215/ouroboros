@@ -67,10 +67,6 @@ type Config struct {
 	// Tools says which tools the agent may use, by who it is talking to, and
 	// how far they go. Without it the owner gets every tool and peers get none.
 	Tools *Tools `json:"tools,omitempty"`
-	// BashWithoutSandbox lets the tool bash run its commands without a
-	// sandbox, wherever there is one: with network, and with nothing of the
-	// rules for files. Only the owner sets it: no proposal does.
-	BashWithoutSandbox bool `json:"bash_without_sandbox,omitempty"`
 	// SelfImprove says what the agent of the owner does where ouro lacks what
 	// a task needs, if it may build ouro: SelfImproveBuild, the default, or
 	// SelfImprovePropose. Only the owner sets it: no proposal does.
@@ -428,10 +424,6 @@ func Fields() []string {
 // them to another server.
 var reserved = []string{"private_key", "access", "api_key", "base_url"}
 
-// FieldBashUnsandboxed is the field that lets bash run without a sandbox,
-// which no proposal changes either.
-const FieldBashUnsandboxed = "bash_without_sandbox"
-
 // field returns the value of the field path as it applies: one that is not
 // set has the default that holds for it.
 func (c Config) field(path string) (any, error) {
@@ -448,9 +440,6 @@ func (c Config) field(path string) (any, error) {
 		return append([]Entry{}, c.PeerTools()...), nil // none is an empty list, not null
 	case FieldProtected:
 		return c.Protected(), nil
-	}
-	if path == FieldBashUnsandboxed {
-		return nil, fmt.Errorf("%s is set by the owner alone, in config.json: no proposal changes it", path)
 	}
 	if slices.Contains(reserved, path) {
 		return nil, fmt.Errorf("%s is changed by the owner alone, with ouro start --setup: no proposal changes it", path)
@@ -537,15 +526,14 @@ func (c Config) Public(provider string) json.RawMessage {
 		tools.Peers = c.Tools.Peers
 	}
 	b, _ := json.MarshalIndent(struct {
-		ID                 string `json:"id"`
-		Name               string `json:"name"`
-		Description        string `json:"description"`
-		Model              string `json:"model"`
-		Provider           string `json:"provider"`
-		Tools              Tools  `json:"tools"`
-		BashWithoutSandbox bool   `json:"bash_without_sandbox"`
-		SelfImprove        string `json:"self_improve"`
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Model       string `json:"model"`
+		Provider    string `json:"provider"`
+		Tools       Tools  `json:"tools"`
+		SelfImprove string `json:"self_improve"`
 	}{c.ID(), c.Name, c.About(), c.Model, provider, tools,
-		c.BashWithoutSandbox, cmp.Or(c.SelfImprove, SelfImproveBuild)}, "", "  ")
+		cmp.Or(c.SelfImprove, SelfImproveBuild)}, "", "  ")
 	return b
 }

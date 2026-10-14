@@ -52,6 +52,7 @@ func Plugin(owner *plugin.Owner, profile func(*Profile)) plugin.Plugin {
 			return u.run(c)
 		}})
 		plugin.Add(ctx, plugin.FrontEnd{Name: name, Help: help, Run: u.run})
+		plugin.Add(ctx, u.usageScreen())
 		if profile != nil {
 			profile(&Profile{u})
 		}

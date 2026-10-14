@@ -26,15 +26,6 @@ var Repo = "https://github.com/herox215/ouroboros.git"
 // Makefile sets it; a build by Run keeps the one of the binary it replaces.
 var Source string
 
-// Checkouts are the checkouts of ouroboros the binary knows: the one it was
-// built from, if it knows it.
-func Checkouts() []string {
-	if Source == "" {
-		return nil
-	}
-	return []string{Source}
-}
-
 const branch = "main"
 
 // Revision is the commit the running binary was built from, or "" if unknown.

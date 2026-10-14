@@ -188,7 +188,7 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 
 	tools := plugin.All[plugin.Tool](ctx)
 	at := slices.IndexFunc(tools, func(tool plugin.Tool) bool { return tool.Name == updateplugin.Rebuild })
-	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "name the packages you changed in test, and their tests run first, outside the sandbox") ||
+	if at < 0 || !strings.Contains(tools[at].Description, "source in "+src+" as it is now") || !strings.Contains(tools[at].Description, "name the packages you changed in test, and their tests run first") ||
 		!strings.Contains(tools[at].Schema, `"test":{"type":"array"`) {
 		t.Fatalf("tools %+v", tools)
 	}

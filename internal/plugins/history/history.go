@@ -84,6 +84,7 @@ type readArgs struct {
 	Session string `json:"session"`
 	From    int    `json:"from"`
 	Count   int    `json:"count"`
+	Offset  int    `json:"offset"`
 }
 
 // about is what the tools that find conversations say of the archive. The
@@ -129,17 +130,19 @@ func (h *archive) tools() []plugin.Tool {
 		{
 			Name: Read,
 			Description: fmt.Sprintf("Read the records of an archived conversation in order, from a record number on: "+
-				"at most %d per call, and fewer when they are long; a note at the end says where to continue. ", history.MaxRecords) + hint,
+				"at most %d records and %d KiB per call including the note at the end that says where to continue. "+
+				"A long record is returned in pieces: use from and offset from the note to read the rest. ", history.MaxRecords, history.MaxReadBytes>>10) + hint,
 			Schema: `{"type":"object","properties":{` +
 				`"session":{"type":"string","description":"the session, as ` + Search + ` and ` + Sessions + ` name it; this conversation if left out"},` +
 				`"from":{"type":"integer","description":"the first record, 1 if left out"},` +
-				`"count":{"type":"integer","description":"how many records at most, ` + strconv.Itoa(history.DefaultRecords) + ` if left out"}}}`,
+				`"count":{"type":"integer","description":"how many records at most, ` + strconv.Itoa(history.DefaultRecords) + ` if left out"},` +
+				`"offset":{"type":"integer","description":"bytes to skip in the first formatted record, from the continuation note; 0 if left out"}}}`,
 			Run: run(Read, func(ctx context.Context, args readArgs) (string, error) {
 				w, err := who(ctx)
 				if err != nil {
 					return "", err
 				}
-				out, err := h.archive.Read(w, args.Session, args.From, args.Count)
+				out, err := h.archive.Read(w, args.Session, args.From, args.Count, args.Offset)
 				scope := "current"
 				if args.Session != "" {
 					scope = "a named session"

@@ -165,22 +165,19 @@ func TestProposeConfig(t *testing.T) {
 	}
 }
 
-// How rebuild builds is no field of the configuration, and the sandbox of
-// bash is no proposal.
+// How rebuild builds is no field of the configuration, and neither is a
+// sandbox of bash, which runs in none.
 func TestProposeSwitch(t *testing.T) {
 	c := newConfigured(t)
-	for _, path := range []string{"rebuild_without_sandbox", "rebuild_without_tests"} {
+	for _, path := range []string{"rebuild_without_sandbox", "rebuild_without_tests", "bash_without_sandbox"} {
 		if got := c.tool(toolProposeConfig, propose{path, true, "r"}); !strings.HasPrefix(got, `error: nothing was proposed: the configuration has no field "`+path+`" that can be proposed`) {
 			t.Fatalf("%s: %q", path, got)
 		}
 	}
-	if got := c.tool(toolProposeConfig, propose{"bash_without_sandbox", true, "r"}); !strings.HasPrefix(got, "error: nothing was proposed: bash_without_sandbox is set by the owner alone") {
-		t.Fatalf("bash: %q", got)
-	}
 	if list := c.waiting(); len(list) != 0 {
 		t.Fatalf("waiting %+v", list)
 	}
-	if got := c.tool(toolGetConfig, struct{}{}); strings.Contains(got, "rebuild") || !strings.Contains(got, `"bash_without_sandbox": false`) {
+	if got := c.tool(toolGetConfig, struct{}{}); strings.Contains(got, "rebuild") || strings.Contains(got, "sandbox") {
 		t.Fatalf("shown: %s", got)
 	}
 }

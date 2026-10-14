@@ -273,7 +273,8 @@ func TestWorkspacesAndSecrets(t *testing.T) {
 		t.Fatalf("workspace of the only profile %s", w)
 	}
 	shared := append(config.Files(string(root)), credentials.Files(string(root))...)
-	if got := root.Secrets(); !slices.Equal(got, shared) {
+	own := append(slices.Clone(shared), root.Browser())
+	if got := root.Secrets(); !slices.Equal(got, own) {
 		t.Fatalf("secrets of one profile %v", got)
 	}
 	luna, _ := root.AddProfile("Luna")
@@ -284,11 +285,11 @@ func TestWorkspacesAndSecrets(t *testing.T) {
 	if w := luna.WorkingDir(); w != filepath.Join(workspaces, lunaID.ID()) {
 		t.Fatalf("workspace %s", w)
 	}
-	if got := root.Secrets(); !slices.Equal(got, append(slices.Clone(shared), string(luna), filepath.Join(workspaces, lunaID.ID()))) {
+	if got := root.Secrets(); !slices.Equal(got, append(slices.Clone(own), string(luna), filepath.Join(workspaces, lunaID.ID()))) {
 		t.Fatalf("secrets of the first one %v", got)
 	}
-	want := append(slices.Clone(shared), filepath.Join(string(root), "contacts.json"), filepath.Join(string(root), "proposals.json"),
-		filepath.Join(string(root), "failures.json"), root.History(), root.UpdateDir(), filepath.Join(workspaces, terraID.ID()))
+	want := append(slices.Clone(shared), luna.Browser(), filepath.Join(string(root), "contacts.json"), filepath.Join(string(root), "proposals.json"),
+		filepath.Join(string(root), "failures.json"), root.History(), root.UpdateDir(), root.Browser(), filepath.Join(workspaces, terraID.ID()))
 	want = append(want, config.Files(string(luna))...)
 	if got := luna.Secrets(); !slices.Equal(got, want) {
 		t.Fatalf("secrets of another one\n%v\nwant\n%v", got, want)
@@ -296,7 +297,7 @@ func TestWorkspacesAndSecrets(t *testing.T) {
 	// A profile without an identity has no workspace to keep from the
 	// others, and works where it did.
 	os.WriteFile(filepath.Join(string(luna), "config.json"), []byte(`{"private_key":"nonsense"}`), 0o600)
-	if got := root.Secrets(); !slices.Equal(got, append(slices.Clone(shared), string(luna))) {
+	if got := root.Secrets(); !slices.Equal(got, append(slices.Clone(own), string(luna))) {
 		t.Fatalf("secrets %v", got)
 	}
 	if luna.WorkingDir() != "" {

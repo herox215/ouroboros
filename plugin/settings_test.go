@@ -14,7 +14,6 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/credentials"
 	"ouroboros/internal/home"
-	"ouroboros/internal/sandbox"
 	"ouroboros/plugin"
 )
 
@@ -120,7 +119,7 @@ var providers = []plugin.ContextProvider{{Name: "compact"}, {Name: "compact"}, {
 // The settings are the configuration as it applies, without a key.
 func TestSettings(t *testing.T) {
 	cfg := clitest.NodeConfig(clitest.Settings(t))
-	cfg.APIKey, cfg.ContextProvider, cfg.BashWithoutSandbox = "sk-secret", "compact", true
+	cfg.APIKey, cfg.ContextProvider = "sk-secret", "compact"
 	cfg.Tools = &config.Tools{H2A: []config.Entry{{Tool: "*"}, {Tool: "read", Settings: json.RawMessage(`{}`)}},
 		A2A: []config.Entry{{Tool: "read", Settings: json.RawMessage(`{"allow":["~/share"]}`)}}}
 	o, _, _ := built(t, cfg)
@@ -134,7 +133,7 @@ func TestSettings(t *testing.T) {
 	// The access shows as what it is called and where it reaches, as the
 	// node made it of the endpoint of the configuration.
 	if s.Name != cfg.Name || s.Access != "localhost" || s.About != cfg.BaseURL || s.Model != cfg.Model || s.ID != cfg.ID() ||
-		s.ContextProvider != "compact" || !slices.Equal(s.ContextProviders, []string{"compact", "other"}) || !s.BashWithoutSandbox ||
+		s.ContextProvider != "compact" || !slices.Equal(s.ContextProviders, []string{"compact", "other"}) ||
 		!s.ProtectedDefault || !slices.Equal(s.Protected, config.DefaultProtected()) {
 		t.Fatalf("settings %+v", s)
 	}
@@ -163,12 +162,6 @@ func TestSettings(t *testing.T) {
 	if list := peers.Tools[1]; list.Allowed || list.Configurable {
 		t.Errorf("list_peers for peers %+v", list)
 	}
-	// Where there is no sandbox, the settings say why.
-	t.Setenv(sandbox.Env, "1")
-	if s, _ := o.Settings(nil, nil); s.Sandbox != "this process runs in a sandbox already, and sandboxes do not nest" {
-		t.Errorf("sandbox %q", s.Sandbox)
-	}
-	t.Setenv(sandbox.Env, "")
 	cfg.Tools.A2A = config.Named("*")
 	o, _, _ = built(t, cfg)
 	s, _ = o.Settings(tools(), nil)
@@ -244,13 +237,6 @@ func TestChange(t *testing.T) {
 	refused(plugin.Setting{Kind: plugin.SetContextProvider, Value: "nope"}, `this build has no context provider "nope"`)
 	if change(plugin.Setting{Kind: plugin.SetContextProvider}); read().ContextProvider != "" {
 		t.Error("no provider")
-	}
-
-	if s := (plugin.Setting{Kind: plugin.SetBashWithoutSandbox}).String(); s != "bash without a sandbox" {
-		t.Errorf("logged as %q", s)
-	}
-	if holds := change(plugin.Setting{Kind: plugin.SetBashWithoutSandbox, On: true}); !read().BashWithoutSandbox || !strings.Contains(holds, "next command of bash") {
-		t.Errorf("bash: %q", holds)
 	}
 
 	// The changes of ouro the agent builds, or proposes; building is the

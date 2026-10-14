@@ -63,9 +63,9 @@ type row struct {
 	section string // the category it is in
 	label   string
 	value   string
-	note    string // what it means, muted below it
-	warn    bool   // the note is a warning
-	// details are more lines below the note, like the settings of a tool:
+	note    string // what Info explains
+	warn    bool   // the explanation is a warning
+	// details are more lines below the value, like the settings of a tool:
 	// each a name and what it is set to.
 	details []detail
 	sub     bool // it belongs to the row above it, like an entry of a list
@@ -104,6 +104,8 @@ type settingsScreen struct {
 	back      []int           // the row selected on each level above the one open
 	sel       int             // the row selected, of those shown
 	top       int             // the line of what is shown the screen starts at
+	infoTop   int             // the first line of the explanation shown
+	info      *row            // the explanation opened with Info
 	editing   *edit           // the text that is typed, if one is
 	input     textinput.Model // where it is typed
 	// refused are the settings of the tools that were refused while the
@@ -123,7 +125,7 @@ func (m *Model) openSettings() tea.Cmd {
 	c := &m.config
 	c.category, c.opened, c.peer, c.tool, c.back = 0, false, "", "", nil
 	c.sel, m.choice, c.top = 0, 0, 0
-	c.editing = nil
+	c.editing, c.info = nil, nil
 	return c.reload(m)
 }
 
@@ -159,6 +161,20 @@ func (c *settingsScreen) section() string { return sections[c.category] }
 // shown are the rows of what is open: the category selected, the list of a
 // single peer in it, or the settings of a tool in either.
 func (c *settingsScreen) shown(m *Model) []row {
+	out := c.page(m)
+	for i := range out {
+		r := out[i]
+		if r.note != "" {
+			out[i].actions = append(slices.Clone(r.actions), action{"Info", func(m *Model) tea.Cmd {
+				m.config.info, m.config.infoTop = &r, 0
+				return nil
+			}})
+		}
+	}
+	return out
+}
+
+func (c *settingsScreen) page(m *Model) []row {
 	switch {
 	case c.tool != "":
 		if t := c.toolState(); t != nil {
@@ -285,6 +301,17 @@ func (c *settingsScreen) startEdit(m *Model, label, value string, change func(st
 
 // handleKey handles keys on the settings screen.
 func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	if c.info != nil {
+		switch msg.String() {
+		case "esc", "enter":
+			c.info = nil
+		case "up", "k":
+			c.infoTop = max(0, c.infoTop-1)
+		case "down", "j":
+			c.infoTop++
+		}
+		return nil
+	}
 	if c.editing != nil {
 		switch msg.String() {
 		case "esc":
@@ -305,10 +332,21 @@ func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		case "esc":
 			m.screen = screenChat
 		case "up", "k":
+			m.choice = 0
 			c.category = cycle(c.category, -1, len(sections))
 		case "down", "j":
+			m.choice = 0
 			c.category = cycle(c.category, 1, len(sections))
-		case "enter", "right", "l":
+		case "left", "h":
+			m.choice = 0
+		case "right", "l":
+			m.choice = 1
+		case "enter":
+			if m.choice == 1 {
+				c.infoTop = 0
+				c.info = &row{label: c.section(), note: contents[c.section()] + ". " + about[c.section()]}
+				return nil
+			}
 			if len(c.rows) > 0 {
 				c.opened, c.sel, m.choice, c.top, c.back = true, 0, 0, 0, nil
 			}
@@ -351,7 +389,7 @@ var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
-	agentsSection:    "the context provider, bash without a sandbox, the debug mode",
+	agentsSection:    "the context provider, the debug mode",
 	pluginsSection:   "which plugins are turned on",
 	ownerSection:     "what your agent may do when you ask it",
 	peersSection:     "what your agent may do when a peer asks it",
@@ -410,18 +448,8 @@ func rows(s Settings) []row {
 	}
 	add(agentsSection, "Context provider", provider,
 		"what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it", choices...)
-	allowed, note := "no", "bash runs its commands in a sandbox: without network, and only where the tools for files may write"
-	toggle := set("allow", Setting{Kind: plugin.SetBashWithoutSandbox, On: true})
-	if s.BashWithoutSandbox {
-		allowed, note = "yes", "bash runs its commands as you: with network, the secrets of the node and the source of the core in reach"
-		toggle = set("refuse", Setting{Kind: plugin.SetBashWithoutSandbox})
-	}
-	if s.Sandbox != "" {
-		note += "; there is no sandbox here (" + s.Sandbox + "), so without yes bash runs nothing"
-	}
-	add(agentsSection, "Bash without a sandbox", allowed, note, toggle)
 	improves, note := "proposes them", "your agent says what it would build into ouro, and builds it when you ask"
-	toggle = set("build", Setting{Kind: plugin.SetImproves, On: true})
+	toggle := set("build", Setting{Kind: plugin.SetImproves, On: true})
 	if s.Improves {
 		improves, note = "builds them, the default", "where ouro lacks what a task needs, your agent builds it when that is the better way, and tells you"
 		toggle = set("propose", Setting{Kind: plugin.SetImproves})
@@ -771,8 +799,8 @@ func (m *Model) settingsSize() (width, height int) {
 	return max(1, min(settingsWidth, m.width-4)), max(1, m.bodyHeight()-2)
 }
 
-// title is the head of what is open: where it is, and what it says of it.
-func (c *settingsScreen) title(m *Model, inner int) []string {
+// title is the path of what is open, without explanatory text.
+func (c *settingsScreen) title() []string {
 	path := []string{"Settings"}
 	if c.opened {
 		path = append(path, c.section())
@@ -786,23 +814,7 @@ func (c *settingsScreen) title(m *Model, inner int) []string {
 	for i, p := range path {
 		path[i] = boldStyle.Render(p)
 	}
-	head := []string{strings.Join(path, mutedStyle.Render(" › "))}
-	var says string
-	switch {
-	case !c.opened:
-		says = "The configuration of the node. Every change is saved at once."
-	case c.tool != "":
-		says = "What " + c.tool + " may do, setting by setting. A change holds from the next message."
-		if t := c.toolState(); t != nil {
-			says = firstSentence(t.Description) + " " + says
-		}
-	case c.peer != "":
-		says = "The tools your agent may use when this peer asks it, in place of those for peers. A trusted tool like bash is given by its name."
-	default:
-		says = about[c.section()]
-	}
-	head = append(head, wrapped(says, "", inner, mutedStyle)...)
-	return append(head, "")
+	return []string{strings.Join(path, mutedStyle.Render(" › ")), ""}
 }
 
 // view shows, in a dialog over the chat, the list of categories or the
@@ -813,10 +825,23 @@ func (c *settingsScreen) title(m *Model, inner int) []string {
 func (c *settingsScreen) view(m *Model) string {
 	w, h := m.settingsSize()
 	inner := max(10, w-4)
-	head := c.title(m, inner)
+	head := c.title()
 	var lines []string
 	at, height := 0, 1 // where what is selected is, and how many lines it takes
 	selected := lipgloss.NewStyle().Foreground(accent)
+	if c.info != nil {
+		style := mutedStyle
+		if c.info.warn {
+			style = lipgloss.NewStyle().Foreground(warn)
+		}
+		text := wrapped(c.info.note, "", inner, style)
+		room := max(1, h-6)
+		c.infoTop = min(c.infoTop, max(0, len(text)-room))
+		lines = []string{boldStyle.Render(ansi.Truncate(c.info.label+" · Info", inner, "…")), ""}
+		lines = append(lines, text[c.infoTop:min(len(text), c.infoTop+room)]...)
+		body := lipgloss.NewStyle().Width(inner).MaxHeight(max(1, h-2)).Render(strings.Join(lines, "\n"))
+		return box(true, m.light).Width(w).Render(body)
+	}
 	switch {
 	case c.err != nil:
 		lines = append(lines, errStyle.Render("✗ "+c.err.Error()))
@@ -833,7 +858,13 @@ func (c *settingsScreen) view(m *Model) string {
 				at = len(lines)
 				marker, name = selected.Render("› "), selected.Bold(true).Width(nameWidth+2).Render(s)
 			}
-			lines = append(lines, ansi.Truncate(marker+name+mutedStyle.Render(contents[s]), inner, "…"))
+			lines = append(lines, ansi.Truncate(marker+name, inner, "…"))
+			doing := ""
+			if i == c.category {
+				doing = choices([]string{"open", "Info"}, m.choice)
+				height = 2
+			}
+			lines = append(lines, "    "+doing)
 		}
 	default:
 		shown := c.shown(m)
@@ -862,11 +893,6 @@ func (c *settingsScreen) view(m *Model) string {
 				label = style.Render(ansi.Truncate(r.label, max(inner-6, 1), "…"))
 			}
 			lines = append(lines, ansi.Truncate(marker+mutedStyle.Render(indent)+label+r.value, inner, "…"))
-			note := mutedStyle
-			if r.warn {
-				note = lipgloss.NewStyle().Foreground(warn)
-			}
-			lines = append(lines, wrapped(r.note, "    ", inner, note)...)
 			lines = append(lines, details(r.details, inner)...)
 			// What can be done with a line holds a line of its own on every
 			// row, empty on those not selected: the rows below it stay where

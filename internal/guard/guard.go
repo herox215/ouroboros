@@ -7,10 +7,9 @@
 // Three things limit a tool, and the first that speaks wins:
 //
 //  1. The core, fixed here: the secrets of the node are neither read nor
-//     changed, and neither the state of the node, nor the source of the core
-//     of ouroboros, nor what decides how it is built, nor the Go it is built
-//     with is changed. That an agent cannot rewrite the frame it runs in is
-//     a rule of the frame, not of a prompt and not of the configuration.
+//     changed, and neither the state of the node nor the Go it is built with
+//     is changed. The source of ouroboros is not kept: the agent may change
+//     all of it, and rebuild builds what it changed.
 //  2. "protected" in the configuration: paths no tool touches for anybody.
 //  3. "allow" and "deny" of the tool for the kind of conversation it runs in.
 package guard
@@ -28,30 +27,6 @@ import (
 
 	"ouroboros/internal/sandbox"
 )
-
-// Module is the name of the Go module of ouroboros. A directory whose go.mod
-// names it is a checkout of the source.
-const Module = "ouroboros"
-
-// goMod is the file that names the module of a checkout.
-const goMod = "go.mod"
-
-// corePackages are the packages of the core, below the directory of a
-// checkout: those that hold the keys and the secrets, decide whom the node
-// trusts, and keep the rules of the tools and of rebuild. No tool changes
-// them; the plugins and the other packages next to them stay writable.
-var corePackages = []string{
-	"internal/identity", "internal/a2a", "internal/contacts", "internal/config", "internal/home",
-	"internal/update", "internal/sandbox", "internal/safefile", "internal/peers",
-	"internal/guard", "internal/printable",
-}
-
-// buildPaths are what decides what a build of a checkout fetches and runs,
-// below the directory of the checkout, and where the plugins are handed
-// what only the frame may hand out: no tool changes them either.
-var buildPaths = []string{
-	"go.mod", "go.sum", "go.work", "go.work.sum", "Makefile", "install.sh", "scripts", "internal/cli", "cmd",
-}
 
 // maxLinks is how many symbolic links one path may lead through, like the
 // limit of the kernel: a circle of links ends there.
@@ -119,9 +94,6 @@ type Guard struct {
 	// Toolchain returns the paths of the Go that builds ouro, which are
 	// read and never changed, each with everything below it. May be nil.
 	Toolchain func() []string
-	// Checkouts returns the checkouts of ouroboros a sandbox keeps as the
-	// rules for checkouts say, see Box. May be nil.
-	Checkouts func() []string
 }
 
 // Checker decides about paths for one call of a tool.
@@ -219,9 +191,8 @@ func (g *Guard) Checker(a Access) (*Checker, error) {
 // guard is not asked about: it holds the rules of the guard for what is
 // written and read, as far as a sandbox can.
 //
-// It knows no rule a guard decides when a path is asked: a checkout is one
-// of Checkouts, not every directory whose go.mod names the module; / and the
-// home directory are not kept from being deleted, only what the rules keep
+// It knows no rule a guard decides when a path is asked: / and the home
+// directory are not kept from being deleted, only what the rules keep
 // in them; a path that "allow" names and that does not exist is not
 // writable. With "allow", the owner's commands may write the workspace and
 // the directory of temporary files too.
@@ -270,13 +241,6 @@ func (g *Guard) Box(a Access, network bool) (sandbox.Policy, error) {
 	}
 	if g.Toolchain != nil {
 		p.ReadOnly = append(p.ReadOnly, g.Toolchain()...)
-	}
-	if g.Checkouts != nil {
-		for _, dir := range g.Checkouts() {
-			for _, rel := range slices.Concat(corePackages, buildPaths) {
-				p.ReadOnly = append(p.ReadOnly, filepath.Join(dir, rel))
-			}
-		}
 	}
 	return p, nil
 }
@@ -357,9 +321,6 @@ func (c *Checker) refuses(op Op, real string) string {
 		return "it holds the sockets the nodes are reached through: no tool changes it"
 	}
 	if op != Read {
-		if rule := inCheckout(real); rule != "" {
-			return rule
-		}
 		for _, t := range c.toolchain {
 			if near(real, t) {
 				return "it is part of the Go that rebuild builds ouroboros with, which no tool changes"
@@ -411,63 +372,6 @@ func (c *Checker) secret(real string, file fs.FileInfo) bool {
 // other name.
 func same(file, rule fs.FileInfo) bool {
 	return file != nil && rule != nil && !rule.IsDir() && os.SameFile(file, rule)
-}
-
-// inCheckout returns the rule that keeps real as it is in a checkout of
-// ouroboros: in a package of the core, or among what decides how it is
-// built. "" if none does. Every directory above it is asked, not only the
-// nearest with a go.mod: a go.mod written in between does not take real out
-// of its checkout.
-func inCheckout(real string) string {
-	for dir := filepath.Dir(real); ; dir = filepath.Dir(dir) {
-		if moduleAt(filepath.Join(dir, goMod)) == Module {
-			rel, _ := filepath.Rel(dir, real) // real is below dir: cannot fail
-			for _, pkg := range corePackages {
-				if near(rel, pkg) {
-					return "it is source of the core of ouroboros, which no tool changes"
-				}
-			}
-			for _, b := range buildPaths {
-				if near(rel, b) {
-					return "it decides how ouroboros is built and what the build fetches and runs, which no tool changes"
-				}
-			}
-		}
-		if dir == "/" {
-			return ""
-		}
-	}
-}
-
-// moduleAt is the module the go.mod at path names, "" if there is none.
-func moduleAt(path string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return moduleOf(b)
-}
-
-// moduleOf is the module a go.mod with this content names.
-func moduleOf(content []byte) string {
-	var words []string
-	for line := range strings.Lines(string(content)) {
-		line, _, _ = strings.Cut(line, "//")
-		words = append(words, strings.Fields(line)...)
-	}
-	for i, word := range words {
-		if word != "module" {
-			continue
-		}
-		rest := words[i+1:]
-		if len(rest) > 0 && rest[0] == "(" {
-			rest = rest[1:]
-		}
-		if len(rest) > 0 {
-			return strings.Trim(rest[0], "\"`")
-		}
-	}
-	return ""
 }
 
 // near reports whether path is root or below it, whatever the case of

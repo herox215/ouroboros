@@ -366,8 +366,7 @@ Your agent has the tool `rebuild` for the other direction: it builds the checkou
 (`make install` records it) with its files as they are now, committed or not. Only
 when the build passes, the binary is replaced; otherwise nothing is installed and the agent gets
 the end of the output. It runs no tests unless it is told which: with `test`, like `rebuild({test: ["./internal/tui/"]})`,
-it first runs the tests of those packages, whole, as it builds: outside the sandbox, so that the tests that start a
-node run too, and in the environment of the build, without the variables of the node. If one fails, nothing is
+it first runs the tests of those packages, whole, as it builds, and in the environment of the build, without the variables of the node. If one fails, nothing is
 built. A package is a path in the checkout that starts with `./`, never a flag of `go test`.
 That is how a change your agent made to the plugins of ouro
 with its tools for files takes effect. The tool runs in the node, which cannot stop itself while the answer is
@@ -421,7 +420,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | LLM | answers are asked for as a stream (`"stream": true`), so a gateway that gives up on a request without data for a while (HTTP 504) keeps waiting while the model thinks; an API that does not stream answers in one piece, which is taken as well. A completion is given up after 5 minutes without data, a list of the models after 5 minutes |
 | Limits | at most 64 connection requests wait for a decision: when the list is full, the one that waited longest makes room for a new one (trusted peers are never dropped). What your agent proposes waits in the same list but never takes the place of a request: with 64 waiting it is not recorded. At most 16 changes of the configuration your agent proposed wait for a decision. The tools for files and a script have limits of their own, see [Files](#files) and [Scripts](#scripts). One address gets 10 messages per minute from nodes that are not connected; further ones are refused with error `-32005` and leave no request (at most 1024 addresses are counted per minute, unknown nodes from any further address are refused). Against replays the node remembers every nonce for at least 4 minutes, at most 16384 per 4 minutes; beyond that it refuses requests rather than forget a nonce early. A connected peer has at most 8 channels open to a node at a time, a further one is refused with error `-32006`; a channel without a message in either direction for 5 minutes is closed; a message of a channel has at most 1 MiB; the channels of a peer that was removed from `contacts.json` or refused are closed within a second, and all channels when the node stops |
 | Errors | a peer whose message your agent failed to answer is only told `the agent could not answer (error <ID>)`; the cause is in `ouro.log` under that ID, and only you (`ouro ask <your node>`) get to read it directly. The peer can ask your agent about the ID later, see [When a peer could not answer](#when-a-peer-could-not-answer) |
-| Files | `~/.config/ouroboros/` – `config.json` (0600), `credentials.json` (0600, what the node signs in to its LLMs with, see [Providers and accesses](#providers-and-accesses)), `models.json` (0600, the models the accesses last listed), `catalog.json` (0600, the efforts of the models as models.dev lists them), `host-id` (0600, an opaque ID of this installation, made on first use), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.sock` (0600, see [Sessions](#sessions)), `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`, and `history/` (0700, see [History](#history) and [Sessions](#sessions)). `config.json`, `credentials.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `credentials.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
+| Files | `~/.config/ouroboros/` – `config.json` (0600), `credentials.json` (0600, what the node signs in to its LLMs with, see [Providers and accesses](#providers-and-accesses)), `models.json` (0600, the models the accesses last listed), `catalog.json` (0600, the efforts of the models as models.dev lists them), `host-id` (0600, an opaque ID of this installation, made on first use), `contacts.json` (0600), `proposals.json` (0600), `failures.json` (0600), `ouro.pid`, `ouro.sock` (0600, see [Sessions](#sessions)), `ouro.log` (0600) with `ouro.log.1` (0600) and `ouro.log.lock`, `update/`, `history/` (0700, see [History](#history) and [Sessions](#sessions)) and `browser/` (0700, the profile of the [browser](#browser)). `config.json`, `credentials.json`, `contacts.json` and `proposals.json` are replaced in one step (temporary file, then rename), so a crash never leaves half a file; changes are serialized by a lock on `config.json.lock` / `credentials.json.lock` / `contacts.json.lock` / `proposals.json.lock`. `ouro.log` holds what the node does and [what your agent does for you](#the-log); at 10 MiB it moves to `ouro.log.1`, see there |
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, `OURO_MODELS_DEV` (see [Sessions](#sessions)), and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as what the
@@ -435,7 +434,7 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
 `history_sessions`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
-`withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that builds and installs its own
+`withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that builds and installs its own
 source ([`rebuild`](#updates)), one that asks you a question (`user_question`, see below) and one that hands tasks to
 helpers (`delegate`, see below). It uses them in **scripts**: the LLM is
 offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
@@ -512,15 +511,8 @@ Three things limit a tool for files, and the first that speaks wins:
    - Everything else in the directory of the node (`contacts.json`, `proposals.json`, `failures.json`,
      `ouro.pid`, `ouro.sock`, `ouro.log`, `ouro.log.1`, `update/`, `history/`) is read and
      never changed.
-   - The source of the core is read and never changed: in every directory whose `go.mod` names the module
-     `ouroboros`, the packages `internal/identity`, `a2a`, `contacts`, `config`, `home`, `update`, `sandbox`,
-     `safefile`, `peers`, `guard` and `printable`. They hold the keys and the secrets, decide whom the node trusts and keep
-     the rules of the tools and of `rebuild`. The plugins and the other packages in the same checkout stay
-     writable.
-   - What decides how a checkout is built, what the build fetches and runs, and where the frame hands out what
-     no plugin gets, is read and never changed: `go.mod`, `go.sum`, `go.work`, `go.work.sum`, `Makefile`,
-     `install.sh`, `scripts/`, `cmd/` and `internal/cli/`. A new dependency therefore takes you; so does handing
-     `plugin.Owner` to a plugin.
+   - The source of ouro is not kept: your agent may change all of it, the core and how it is built too
+     (`go.mod`, `Makefile`, `internal/cli/` and the rest), and [`rebuild`](#updates) builds what it changed.
    - The Go that [`rebuild`](#updates) builds with is read and never changed, and no `go` is put where it looks
      for one: the installation of the `go` it finds, a file `go` in every directory of `PATH`, `OURO_GO_DIR` or
      `~/.local/go`, and `/usr/local/go`. `rebuild` runs that `go` with network.
@@ -529,8 +521,7 @@ Three things limit a tool for files, and the first that speaks wins:
    of keys and credentials and nothing else: profiles of browsers, files like `.env` and whatever else is
    secret on your machine are not in it. Add what you need. A hard link to a file that is protected, or denied, is
    refused as that file is; one to a file in a protected directory is not known as such, and neither is one to
-   a `config.json` the node has written anew since, which keeps what the file held then. The sandbox of `bash`
-   creates no hard link to any of them. A configuration from before there were these
+   a `config.json` the node has written anew since, which keeps what the file held then. A configuration from before there were these
    tools has no `protected` and gets the default; `"protected": []` is your decision to protect nothing.
 3. **`allow` and `deny`** of the tool in `h2a` or `a2a`. `deny` wins over `allow`. They hold for the tool they are set for alone: a file that `read`
 denies is still found by `search`, listed by `list` and quoted by a failed `edit`, unless those deny it too, or it is `protected`. Without `allow` a tool
@@ -554,9 +545,9 @@ What these tools do not protect: the running binary (it is replaced by `ouro upd
 file), and files your agent reaches in other ways, of which there are none today.
 
 **Known risk.** The rules above hold for the tools for files of the binary that runs. With `write` and
-[`rebuild`](#updates) your agent can change a plugin and install the result. The build runs as you, with
-network, and so does the build that is installed, with whatever the changed plugin does: the core it could not
-edit no longer limits it. Nothing checks that a build is harmless, or that it works.
+[`rebuild`](#updates) your agent can change any part of ouro, the rules above among them, and install the
+result. The build runs as you, with network, and so does the build that is installed. Nothing checks that a
+build is harmless, or that it works.
 
 ### Commands
 
@@ -575,36 +566,16 @@ command a pipe ended early, as `yes | head` does, and, for `exit 0` with output 
 |---|---|---|
 | time | 60 s, or `timeout` seconds; at most what is left of its [script](#scripts) less 2 s | the command is stopped with everything it started, and what it printed so far comes along with the error |
 | input | none | it reads nothing, as from `/dev/null` |
-| environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `TZ` and the variables of Go (`GOPATH`, `GOROOT`, `GOCACHE`, `GOMODCACHE`, `GOPROXY`, `GOPRIVATE`, `GOFLAGS`, `GOTOOLCHAIN`), and those named in `env` | the rest of the environment of the node, its keys among it, is not passed on |
+| environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `TZ`, those of the desktop (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`) and the variables of Go (`GOPATH`, `GOROOT`, `GOCACHE`, `GOMODCACHE`, `GOPROXY`, `GOPRIVATE`, `GOFLAGS`, `GOTOOLCHAIN`), and those named in `env` | the rest of the environment of the node, its keys among it, is not passed on |
 
-**A command runs in a sandbox**, with the rules of the
-[tools for files](#files) as far as a sandbox can hold them. The guard never sees the paths of a command,
-so the system holds them for every process it starts:
+**A command runs as you, in no sandbox**: with network, every file you reach, the secrets of the node and the
+source of the core among them, and your desktop, so that a program with windows, like a game started with
+`godot --path .`, opens on the screen. The guard of the [tools for files](#files) checks only the directory a
+command starts in. `bash` and `service` run nothing for a peer: there is no sandbox to hold its commands.
 
-- The secrets of the node, what is `protected` and what `deny` of `bash` names are neither read nor written.
-  On Linux a file of them is covered by an empty one, a directory by an empty one in memory.
-- The directory of the node, the Go of `rebuild` and, in the checkout ouro was built from, the source of the
-  core and what decides how it is built are read and never written, and what of them is missing is not
-  created. A symbolic link among them counts as itself and as where it leads.
-- The rest is writable, or with `allow` only what it names. Reading is not limited beyond the first point.
-- No other host, unless `network` is set: the loopback interface alone. With network,
-  still no socket of the file system, such as that of Docker; on macOS but the one that resolves names.
-
-What the sandbox refused does not pass when tried again; the result says so when the output says that
-something was not permitted, on a read-only file system or without network.
-A node needs a socket of the file system, so the tests of ouro that start one cannot run in the sandbox:
-they are skipped there at once (`SKIP`, with the reason), and run outside of it, as `make check` and
-[`rebuild`](#updates) with `test` do.
-
-| System | Sandbox |
-|---|---|
-| macOS | `sandbox-exec` with a profile that refuses the network beyond localhost, sockets of the file system, writing elsewhere and signals to processes it did not start; once the command ended, what is left of its group of processes is stopped |
-| Linux | [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap` in `/usr/bin` or `/bin`, the package `bubblewrap`): the file system read only but for what a command may write, a `/dev` of its own, a network namespace of its own with the loopback interface alone, a namespace of processes of its own, which ends with the command, and a filter of seccomp that refuses sockets of the family `AF_UNIX` and `io_uring` |
-
-**A command ends with everything it started.** What it leaves running in the background, a server started with
-`&` or `nohup` say, is stopped once it ended, and the agent is told so: it would run on unseen, with nobody to
-stop it, and what it serves on the loopback interface in reach of every program of the machine. Without a
-sandbox nothing is stopped.
+**What a command leaves running is not stopped.** A server started with `&` or `nohup` runs on once the command
+ended, unseen and with nobody to stop it; when its time is up or it is stopped, its group of processes is
+killed.
 
 **What has to run on runs as a job.** A server the agent tests against, a watcher, a long build: `bash` with
 `"background": true` starts the command as a job of the answer and returns its number at once. The agent
@@ -612,7 +583,7 @@ goes on, and looks at the job when it needs to:
 
 | Call | Does |
 |---|---|
-| `{"command": "npm run dev", "background": true}` | starts job 1, in the sandbox like every command; with `timeout`, it runs that many seconds at most |
+| `{"command": "npm run dev", "background": true}` | starts job 1; with `timeout`, it runs that many seconds at most |
 | `{"job": 1}` | whether it runs, and what it printed since the agent last looked (the start and the end of it, as of every command) |
 | `{"job": 1, "timeout": 30}` | the same, once it ended or 30 seconds passed |
 | `{"job": 1, "stop": true}` | stops it, with everything it started |
@@ -621,7 +592,7 @@ A job ends with the answer at the latest: given, failed or stopped with `/cancel
 an answer is on its way, the chat shows its jobs after what the agent waits for, as
 `alpha is thinking · job 1 · npm run dev`, until they end; front ends get them as the session event `jobs`.
 The tasks the agent [delegated](#tools) come as the event `tasks`, and the report of one that ended as `task`.
-`/jobs` lists the jobs of every answer on its way, also those of the peers you listed `bash` for, and stops
+`/jobs` lists the jobs of every answer on its way, and stops
 the one you select: the agent learns so once it looks at it. A front end of its own asks the socket of the
 node: `GET /jobs`, and `POST /stopjob` with `{"id": …, "n": …}`.
 
@@ -637,12 +608,11 @@ server the agent tests against while it answers.
 | `{"action": "stop", "name": "web"}` | stops it, with everything it started |
 | `{"action": "list"}` | the services of whom the conversation is for |
 
-A service runs in the sandbox of bash, with the settings of `service` in the configuration, which are those of
-bash, and is reached on localhost alone unless `network` is on. It ends when its command ends, when it is
+A service runs as bash does, in no sandbox, with the settings of `service` in the configuration, which are those
+of bash. It ends when its command ends, when it is
 stopped, when its time is up (`hours`: 8 by default and 24 at most for yours, 1 and 4 for a peer's), or when the
-node stops or is rebuilt: never later. You have at most 4 at once, a peer 2. A service is known by its name, of
-small letters, digits and `-`, and belongs to whom it runs for: your agent sees and stops yours, a peer's agent
-only that peer's, and a peer gets `service` only when you list it for peers, with `allow`, as bash. You see and
+node stops or is rebuilt: never later. You have at most 4 at once. A service is known by its name, of
+small letters, digits and `-`; a peer starts none, as with bash. You see and
 stop all of them, below the jobs, in `/jobs` and in the list of `ctrl+j`; a front end of its own asks the socket
 of the node: `GET /services`, and `POST /stopservice` with `{"id": …}`.
 
@@ -655,40 +625,13 @@ killed or crashes, the pipe closes, and the service ends its group itself; what 
 On macOS a program that turns itself into a daemon, forking twice within a few milliseconds and leaving the
 group, escapes that: it is not seen in time, and macOS shows the environment of no other process.
 
-On Linux, bubblewrap is the one way that works where unprivileged user namespaces are confined, as on Ubuntu
-24.04 and later, where its profile of AppArmor allows them; Debian, Fedora and Arch allow them anyway.
-Landlock (Linux 5.13 and later) is no sandbox for this on its own: it limits TCP by port, not by address, so
-the loopback interface cannot be told from the network, and it does not limit connecting to a socket of the
-file system.
-
 ```json
-"h2a": ["*", {"tool": "bash", "allow": ["~/projects", "~/Library/Caches/go-build", "~/go"], "network": true, "env": ["GITHUB_TOKEN"]}]
+"h2a": ["*", {"tool": "bash", "env": ["GITHUB_TOKEN"]}]
 ```
 
 | Setting | Means | Without it |
 |---|---|---|
-| `allow` | the paths a command may write, each with everything below it; one that does not exist is not writable. Your agent's commands may write its workspace, where they start, and the directory of temporary files (`TMPDIR`) too, as builds and tests do | everywhere the rules above leave writable |
-| `deny` | paths within those that a command neither reads nor writes | none |
-| `network` | `true` lets a command reach other hosts | `false` |
 | `env` | the names of further variables of the environment it gets | none |
-
-The sandbox holds less than the guard of the tools for files:
-
-- **A checkout is the one ouro was built from**, not every directory whose `go.mod` names the module. In
-  another one a command may change the core; `rebuild` builds only the first.
-- **`/` and your home directory** are not kept from being deleted, only what the rules keep in them.
-- **On Linux a path that is missing, or a link**, cannot be covered: the directory it is in is mounted read
-  only, and what is in it writable again, so nothing new is created there. In your home directory that is
-  whenever a protected path such as `~/.aws` does not exist.
-- **On macOS a process that leaves the group of the command** (`setsid`, which macOS has as no command, but
-  Perl or Python call) is not stopped with it. It runs on in the sandbox: without network, and writing only
-  where the command could. On Linux it ends with the command.
-
-**Without a sandbox.** Where there is none (bubblewrap is missing or cannot run, or ouro runs in a sandbox
-already), `bash` runs nothing and tells the agent why. You, and only you, can let it run its commands without
-one, also where there is one, with `"bash_without_sandbox": true` in `config.json` or in `/settings`. A
-command then runs as you: with network, the secrets of the node and the source of the core in reach, and
-none of the rules of the tools for files. The agent sees the setting with `get_config` and cannot propose it.
 
 ### Scripts
 
@@ -806,6 +749,122 @@ meanwhile. What a conversation keeps between its scripts counts for none of them
 keep what their scripts built, and nothing limits how much that is. Whoever may run scripts on your node may
 therefore slow it down or bring it down: list a tool in `a2a` only for peers you would let do that.
 
+### Browser
+
+`browser` uses the web as a person does, for pages that `bash` with `curl` does not get far with: those that are
+built by their scripts, that you sign in to, where you click and fill in forms. It drives a browser of the
+Chromium kind, the first one it finds of Chromium, Google Chrome, Brave and Microsoft Edge, and runs without
+a window unless asked. It takes `action` and what that action needs:
+
+| Action | Does |
+|---|---|
+| `open(url, new_tab?)`, `open(element, new_tab?)` | goes to a page of `http` or `https` (a URL without one gets `https`), or to where link or image `[n]` leads, waits until it loaded, at most 20 s, and returns it as `read` does; with `new_tab` in a new tab, which is the current one then. An image opened so is shown alone, as the browser shows a picture |
+| `read(offset?)` | the page as text, with headings, lists and what is hidden left out; what can be acted on is in it as `[n]` with what it is, like `[4] link "Next" → /page/2`, `[7] input "Email" = "a@b.c"`, `[9] select "Color" = "Red" (options: Red \| Blue)` or `[12] image "A snake" 1200×800 → https://…/snake.jpg`. A picture counts from 24×24 pixels on, also one in a link, which comes right after it; of a smaller one, or one that did not load, only its text is shown, as `[image "Logo"]`, and one that is part of the page has no address: `(in the page)`. 24 KiB per call, with a note where to go on with `offset` |
+| `click(element)` | clicks `[n]` with the mouse, in its middle once it is scrolled into view. One that another element covers, like a banner, is clicked by script, and the answer says so |
+| `type(element, text, enter?)` | replaces what `[n]` holds by `text`, and presses Enter after it with `enter`; of a select, `text` chooses the option by its text or value |
+| `key(key)` | presses `Enter`, `Tab`, `Escape`, `Backspace`, `Delete`, an arrow key (`ArrowUp` …), `PageUp`, `PageDown`, `Home`, `End` or `Space` |
+| `scroll(direction?)` | scrolls most of a screen `down`, or `up` |
+| `back` | goes back a page |
+| `screenshot` | shows the LLM what is on the screen of the tab, 1280×900, as an image |
+| `dialog(accept, text?)` | answers the dialog the page shows: `alert`, `confirm`, `prompt` or the question whether to leave it; `accept: true` is OK, `false` Cancel, and `text` what is entered into a prompt |
+| `console` | what the page wrote to its console since the last `console`, its errors with where they were thrown, and the requests of the browser that failed, like `[error] Failed to load resource: … 404 (…/logo.png)`. The browser keeps the last 200 lines of each tab, of at most 1 KiB each; a call returns the last 24 KiB of them and says how many were left out |
+| `tabs` | the tabs of the conversation, like `[2] "snake.jpg (1200×800)" https://…/snake.jpg (current)` |
+| `switch(tab)` | makes tab `[n]` the current one; with a window the browser shows it |
+| `close` | closes the current tab; the one opened before it is the current one then |
+
+`click`, `type`, `key` and `back` wait for a page they start to load and say where the tab is then; the numbers
+of `read` hold until the next `read`, which the agent calls in the same script:
+`browser({action: "click", element: 4}); browser({action: "read"})`.
+
+While a page shows a dialog it does nothing else, and nothing that is asked of it comes back. So the tool
+watches for one: the action that a dialog interrupts returns at once with what the dialog says and how to
+answer it, like `click: the page shows a confirm "Delete it?" and waits for an answer: …`, and so does every
+action after, until `dialog` answered it.
+
+- **Tabs per conversation.** Every conversation, and every helper of [`delegate`](#tools), has tabs of its
+  own, so that they do not get in each other's way, and the actions go to its current tab.
+- **The profile of the node.** The browser keeps what the agent signs in to, its cookies and what pages store
+  in `browser/` of the [profile](#profiles), apart from your own browser: it does not see your sessions, and
+  you sign it in where you want it to be signed in. It is one of the secrets of the node: no tool for files
+  reads it, but a command of `bash`, which runs as you, does.
+- **With a window.** `open` with `visible: true` starts the browser with its window, for you to watch or to
+  step in, to sign in or to solve a captcha; `visible: false` without. A browser that runs the other way is
+  ended for it and started again: the tabs open again at the pages they were on, without what was typed in
+  them and not sent. The setting `visible` says how the browser starts when no call says so:
+  `{"tool": "browser", "visible": true}`. A browser with a window runs until the node stops, one without is
+  ended after 10 minutes without a call and started again with the next.
+- **What pages see.** The browser does not tell them that it is automated (`navigator.webdriver` is `false`),
+  and without a window it does not say so in its user agent: it takes the one it has with a window, which it
+  learns by starting once more the first time, for each browser and each update of it. It speaks the
+  languages of the user, as `LC_ALL`, `LC_MESSAGES` or `LANG` name them, German say, and then English, and
+  keeps the time zone of the system. What it does not hide: without a window it draws with a GPU in software,
+  and its screen is smaller than its window. A page that asks whether you are a person is best answered by
+  you: with `visible: true`, and the profile keeps what that page then knows of the browser.
+- **What it does not do.** It opens no files (`file:`), downloads nothing and sees nothing of a frame within a
+  page. It reaches what this machine reaches, the local network and `localhost` too.
+- **Peers.** `browser` is not in the `a2a` the setup writes. A peer it is given to gets its tabs in a browser
+  context of its own for each conversation, which shares nothing with the profile or with other
+  conversations and is thrown away with its last tab. Only you decide whether the browser shows its window: a
+  peer's `visible` is refused.
+- **What it reads is written by others.** A page can say anything, also what looks like an instruction: the
+  description of the tool tells the LLM not to follow such.
+
+It needs no port: ouro talks to the browser through a pipe (`--remote-debugging-pipe`), which no other program
+can reach, and the browser ends with the process of ouro, however that ends.
+
+### Computer
+
+`computer` uses the apps of your computer as a person does, for what no other tool reaches: it looks at
+their windows, clicks, types and presses keys. It drives them through
+[cua-driver](https://github.com/trycua/cua), which reads what a window shows through its accessibility
+tree (AT-SPI on Linux, AX on macOS) and sends it input; on Omarchy it is `pacman -S cua-driver-bin`. ouro
+starts it as an MCP server of its own (`cua-driver mcp`) with the first call, tells it to send no
+telemetry, and ends it after 10 minutes without a call and when the node stops. It takes `action` and what
+that action needs:
+
+| Action | Does |
+|---|---|
+| `windows` | the windows of the apps not blocked, front ones first, like `window 7: firefox "Snakes" 1280×900`, and the names of the apps of the others |
+| `open(app)` | launches an app not blocked by the same policy as window actions, by its name alone: no path, no URL, no arguments |
+| `look(window, query?)` | what can be acted on in the window, as `[n] role "label" = "value"`, indented as it is nested, and a screenshot for the LLM; with `query` only the elements whose text has it, and what holds them. 24 KiB per call |
+| `click(window, element)`, `click(window, x, y)` | clicks `[n]` of the last `look` at the window, or a point of its screenshot; `count: 2` double-clicks, `button` is `left`, `right` or `middle` |
+| `type(window, text, element?, enter?)` | types `text` into the window, into `[n]` if given, and presses Enter after it with `enter` |
+| `key(window, key)` | presses a key, like `Return`, `Escape` or `Down`, or keys together, like `ctrl+s` |
+| `scroll(window, direction?, amount?, element?)` | scrolls `down`, `up`, `left` or `right`, 3 lines unless `amount` says otherwise |
+
+The numbers of `look` hold until the next `look` at the same window, which the agent calls after an action
+to see what it did: `computer({action: "click", window: 7, element: 4}); computer({action: "look", window: 7})`.
+
+- **For you alone, except the apps you block.** No peer gets the tool: listing it in `a2a` is an error.
+  `blocked_apps` lists the apps it may neither use nor launch, by the names `windows` shows, matched
+  case-insensitively: `{"tool": "computer", "blocked_apps": ["firefox", "gimp"]}` blocks those apps.
+  With `"blocked_apps": []`, or without the setting, it may use every app except terminals;
+  `"blocked_apps": ["*"]` blocks every app. `open` follows the same policy as window actions.
+  The former `apps` allow list is no longer a valid setting: remove it and explicitly list apps you
+  want to block under `blocked_apps`; do not copy allowed apps into the deny list.
+- **Never a terminal.** Whatever `blocked_apps` says, it does not use or launch a terminal, as Alacritty, kitty, foot, Ghostty,
+  GNOME Console or iTerm: there it could do anything, also what the guard of the tools for files keeps it
+  from. An app not blocked can still start others or reach far, a file manager say: block what you would
+  not let it use while you watch.
+- **In front of you.** It brings the window it acts on to the front, where the system lets it, so that you see what it does. With
+  `"background": true` it acts on windows where they are, behind others or on another workspace, as far as
+  cua-driver can on the system: on Wayland input goes to the window that has the focus.
+- **What it reads is written by others.** A window shows anything, also what looks like an instruction: the
+  description of the tool tells the LLM not to follow such, not to type passwords and to leave dialogs about
+  permissions and payments to you.
+- **What it needs.** cua-driver from `PATH`, or where `driver` in the settings says. On Linux it needs the
+  session of your desktop: the node has to run with its `WAYLAND_DISPLAY` or `DISPLAY` and the bus of
+  AT-SPI, as it does when you start it from a terminal of the desktop. On macOS cua-driver asks once for
+  Accessibility and Screen Recording (`cua-driver permissions grant`), for its app CuaDriver, which then runs
+  on as a daemon: not for the terminal ouro runs in, which would hand them to every command run there. On
+  Linux the driver runs in the process ouro starts and ends with it. Whether a window shows a screenshot
+  depends on the system: `look` says when it has none, and why.
+- **Hyprland.** cua-driver counts its support for Hyprland as experimental; ouro switches it on
+  (`CUA_DRIVER_RS_ENABLE_WAYLAND=1`). With cua-driver 0.35.4 `windows` and `look` work there, with a
+  screenshot also of a window on another workspace, but input does not reliably reach a native Wayland
+  window: a click may end with an outcome that is unknown, and bringing a window to the front needs a plugin
+  of cua-driver for Hyprland that its installer does not install.
+
 ### History
 
 The node archives every conversation in full: the messages of the user, what the model answers along with
@@ -819,7 +878,7 @@ plugin takes the tools away, and the node archives all the same.
 | Tool | Does | Limits |
 |---|---|---|
 | `history_search(query, scope?, limit?)` | the records that contain a text, ignoring case: per hit the session, the time, the number of the record, its role and the text around the hit. `scope` is `current` (the default) or `all` | 20 hits, at most 50 with `limit`, and 16 KiB |
-| `history_read(session?, from?, count?)` | the records of a conversation in order, from a number on, with a note where to continue; without `session` the current conversation | 20 records, at most 200 with `count`, and 32 KiB; a record that does not fit alone is cut |
+| `history_read(session?, from?, count?, offset?)` | the records of a conversation in order, from a number on, with a note where to continue; without `session` the current conversation. A long record comes in pieces: continue with `from` and the byte `offset` in the note (0 if left out) | 20 records, at most 200 with `count`, and 16 KiB including the note; no record content is discarded |
 | `history_sessions()` | the archived conversations, the most recent first, with when they started and their title, or else their first message | 50 |
 
 - **Who reaches what.** For you, `current` is the conversation you are in, and `all` every one of yours. A
@@ -893,8 +952,8 @@ Read the whole diff before you comment. …
   configuration changed or the node started again. What a skill says is read at every call, so a change
   to `SKILL.md` holds at once.
 - **The agent cannot write a skill.** The tools for files never change the directory of the node, so no
-  skill comes from the agent, nor from a peer that talked it into something. A command of `bash` that runs
-  [without the sandbox](#commands) is not held by that.
+  skill comes from the agent, nor from a peer that talked it into something. A command of `bash`, which runs
+  [in no sandbox](#commands), is not held by that.
 - **The log** records every call: the skill, the file and for whom, never what the skill says.
 
 ### Settings
@@ -906,7 +965,7 @@ and no peer reaches it.
 | Category | Shows | Changes |
 |---|---|---|
 | The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode | the name and the description (empty is the default); the debug mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
-| The agents | the context provider and those this build has; whether `bash` runs its commands without a sandbox, and whether there is one; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it | all three |
+| The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it | both |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |
 | Tools for peers | `a2a`, the same; a tool for your agent alone, and one for a peer with a list of its own alone, is shown as such and cannot be allowed | the same |
@@ -926,7 +985,7 @@ list: `enter` saves it, `esc` keeps what was.
   build does not have, a plugin turned off that another one needs, a description of more than one line or
   300 characters. What fails changes nothing, and the footer says why.
 - **The footer says from when a change holds.** The name, the tools, the paths and the context provider hold
-  from the next message, for you and for peers. The description holds for the next one who reads the card. Whether `bash` runs without a sandbox holds for its next command. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
+  from the next message, for you and for peers. The description holds for the next one who reads the card. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
   `/start` the node. Until then its line says that it runs, or that it does not.
 - **All tools.** Turning a tool off while all tools are allowed lists every other tool by its name instead
   of `*`, so that nothing else changes; from then on a tool of a plugin turned on later is not allowed by
@@ -1347,20 +1406,17 @@ its own:
 
 - **The list of the peer applies to it alone**, in place of `a2a`; it is checked like `a2a`, and a key that is
   no ID of a node is an error. Every other peer is answered as before.
-- **`bash` of a peer runs in the sandbox, always**, and writes only where its `allow` says, which it needs: it
-  starts in the first of those paths. With `bash_without_sandbox` it runs nothing for a peer. Unlike yours, it
-  does not write the directory of temporary files, which every program of yours shares: for `go test` and
-  `go build` give it a directory of its own in `allow`, like `~/peer-work/tmp`, which its commands name as
-  `TMPDIR` (`TMPDIR=~/peer-work/tmp go test ./...`).
-- **`rebuild` of a peer** builds the checkout as yours does: the tests it names run outside the sandbox, and the
-  build runs as you. The node starts anew with it once no answer is on its way, to you or to a peer; the
+- **`bash` and `service` run nothing for a peer**, also when its list names them: they run in no sandbox,
+  which would hold the commands of a peer.
+- **`rebuild` of a peer** builds the checkout as yours does: the tests it names and the
+  build run as you. The node starts anew with it once no answer is on its way, to you or to a peer; the
   conversation with the peer goes on there, as the archive kept it. The agent knows from its prompt that you
   trust that peer to work on ouro with it, and to change only what the two agree on.
 - **What happened stays readable**: the conversation of the peer, with every call of a tool, is in the `Peers`
   tab of `/session`. `ouro rollback` goes back to the build before, see [Updates](#updates).
 
 **Known risk.** A peer with `rebuild` runs code on your machine: what its agent and yours write, as tests and
-as the build, runs as you, with network. The core stays read-only, the rest is in reach. Give it to a peer whose
+as the build, runs as you, with network. All of ouro is in reach, the rules of its tools too. Give it to a peer whose
 owner you trust as far as you trust yourself, and take it back by removing its list.
 
 ### When a peer could not answer
@@ -1579,7 +1635,7 @@ internal/chatgpt     the provider that signs in with ChatGPT: the login, its tok
 internal/node        the local node: Server runs it, Local controls the background one
 internal/session     the sessions of the owner: the Service the node runs them in, and the client of its socket
 internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, user_question, delegate, get_config, propose_config, withdraw_proposal as functions of its scripts; what the owner's agent does goes to the log
-internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
+internal/guard       which files a tool may touch: the secrets and the node that are fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them
 internal/home        the node's directory: config, credentials, identity, contacts, failed answers, PID and log file, which it rotates
@@ -1595,7 +1651,7 @@ internal/history     the archive of every conversation, and how the agent search
 internal/identity    Ed25519 key pair of a node
 internal/config      persisted configuration
 internal/update      self-update: from the newest main, or from the checkout as it is
-internal/sandbox     runs a command writing only where it may, without network unless allowed: sandbox-exec, bubblewrap
+internal/sandbox     runs a command writing only where it may, without network unless allowed: sandbox-exec, bubblewrap; bash uses it no more
 scripts, hooks       the local quality checks and the Git hooks, see [Checks](#checks)
 ```
 
