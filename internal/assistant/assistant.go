@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/script"
+	"ouroboros/internal/suggestion"
 )
 
 // The prompts; %q is the name of the node. They name tools, so keep them in
@@ -152,8 +154,19 @@ type Builder struct {
 	// function of a script, it is there only for a peer the owner allows a
 	// tool. May be nil.
 	Failures *diagnosis.Store
+	// suggestions keeps what the reviews of answers suggest, for the owner
+	// to take or drop, see WithSuggestions. May be nil.
+	suggestions *suggestion.Store
 	// node is set by WithConfig.
 	node *node
+}
+
+// WithSuggestions keeps what the reviews of answers suggest in store, for the
+// owner to take or drop: taking one has the agent change ouro, so no plugin
+// gets a way to it through the blueprint.
+func (b Builder) WithSuggestions(store *suggestion.Store) Builder {
+	b.suggestions = store
+	return b
 }
 
 // Accesses is what the blueprint needs to know of the accesses of the node.
@@ -198,6 +211,9 @@ type Assistant struct {
 	answering sync.Mutex
 	answers   map[*record]context.CancelFunc // that are on their way
 	open      sync.WaitGroup                 // of answers whose last line is not written
+
+	reviewing sync.Mutex
+	last      map[string]answered // the last answer by conversation, for a follow-up
 }
 
 // setup is the part of the configuration an agent is built from.
@@ -471,6 +487,16 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			}
 		})
 	}
+	suggest := Reviewer(ctx)
+	task := strings.HasPrefix(text, suggestedIntro)
+	if suggest != nil {
+		if before, follow, ok := a.followed(contextID, text, time.Now()); ok {
+			if a.log != nil {
+				a.log("chat %s: signals of the answer before: %s", contextID, r.plain(follow.Text))
+			}
+			go a.reviewed(contextID, append(before.signals, follow), before.trail, a.reviewTools(cfg), suggest)
+		}
+	}
 	asked := ctx
 	ctx = agent.WithSteering(ctx, func() []string {
 		texts := agent.Steered(asked)
@@ -505,8 +531,70 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			}
 		},
 	})
-	r.end(reply, err)
+	signals, trail := r.end(reply, err)
+	if suggest == nil || trail == nil { // not reviewed, or canceled
+		return reply, err
+	}
+	a.keep(contextID, answered{time.Now(), signals, trail, task})
+	if len(signals) > 0 && !task {
+		go a.reviewed(contextID, signals, trail, a.reviewTools(cfg), suggest)
+	}
 	return reply, err
+}
+
+// toolsOf are the tools of ouro as a review is told them: those the owner of
+// cfg allows the agent, a line each, as the LLM calls them in scripts of run,
+// and the names of those the owner withholds.
+type toolsOf struct{ allowed, withheld []string }
+
+// reviewTools are the tools of ouro for a review of an answer with cfg. The
+// agent of that answer was built with them: they are none that fail.
+func (a *Assistant) reviewTools(cfg config.Config) toolsOf {
+	var tools toolsOf
+	allowed, _ := a.builder.ownerTools(cfg)
+	for _, t := range allowed {
+		tools.allowed = append(tools.allowed, t.Name+": "+firstSentence(t.Description))
+	}
+	for _, t := range a.builder.all() {
+		if !slices.ContainsFunc(allowed, func(u agent.Tool) bool { return u.Name == t.Name }) {
+			tools.withheld = append(tools.withheld, t.Name)
+		}
+	}
+	return tools
+}
+
+// reviewed reviews the answer in the conversation chat, see review, logs what
+// came of it and hands what it proposes to suggest.
+func (a *Assistant) reviewed(chat string, signals []Signal, trail []string, tools toolsOf, suggest func(string)) {
+	// It does not hold up the answer, and is not stopped with it: the answer
+	// is given. Nothing of the answer streams to it either, so its thinking
+	// is not shown as that of the answer.
+	ctx, cancel := context.WithTimeout(context.Background(), reviewTime)
+	defer cancel()
+	text, err := a.review(ctx, signals, trail, tools)
+	log := func(format string, args ...any) {
+		if a.log != nil {
+			a.log("chat %s: "+format, append([]any{chat}, args...)...)
+		}
+	}
+	switch {
+	case err != nil:
+		log("review failed: %v", err)
+	case text == "":
+		log("review: nothing to change")
+	default:
+		log("review: %s", strconv.Quote(text))
+		if store := a.builder.suggestions; store != nil {
+			measured := make([]string, len(signals))
+			for i, s := range signals {
+				measured[i] = s.Text
+			}
+			if _, err := store.Add(text, measured, chat); err != nil {
+				log("the suggestion is not kept: %v", err)
+			}
+		}
+		suggest(text)
+	}
 }
 
 // Effort is how much the model thinks before it answers the owner where the
@@ -662,7 +750,10 @@ func (a *Assistant) RestoreStatistics(contextID string, size int, cache Cache) {
 
 // Forget makes the agent forget the conversation contextID, as if it was
 // never had.
-func (a *Assistant) Forget(contextID string) { a.memory.Forget(contextID) }
+func (a *Assistant) Forget(contextID string) {
+	a.memory.Forget(contextID)
+	a.forget(contextID)
+}
 
 // current returns the agent for the configuration as it is now. The agent is
 // kept between questions, and rebuilt when the node is configured anew or the

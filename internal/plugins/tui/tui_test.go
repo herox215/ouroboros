@@ -421,6 +421,18 @@ func TestTUIBackendContacts(t *testing.T) {
 		t.Fatalf("unreadable proposals: %+v, %v", got, err)
 	}
 	os.Remove(filepath.Join(s.Home, "proposals.json"))
+	// And with them what the reviews suggested.
+	if _, err := home.Dir(s.Home).Suggestions().Add("add grep", nil, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := u.Contacts(); err != nil || len(got.Suggestions) != 1 || got.Suggestions[0].Text != "add grep" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	os.WriteFile(filepath.Join(s.Home, "suggestions.json"), []byte("nope"), 0o600)
+	if got, err := u.Contacts(); err == nil || len(got.Incoming) != 0 {
+		t.Fatalf("unreadable suggestions: %+v, %v", got, err)
+	}
+	os.Remove(filepath.Join(s.Home, "suggestions.json"))
 	os.WriteFile(filepath.Join(s.Home, "contacts.json"), []byte("nope"), 0o600)
 	if got, err := u.Contacts(); err == nil || len(got.Proposals) != 0 {
 		t.Fatalf("unreadable contacts: %+v, %v", got, err)

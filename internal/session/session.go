@@ -92,6 +92,11 @@ const (
 	// its way goes on with it. N is the number of the task, Remark what it
 	// was, Text what its helper answered and Err why it failed, if it did.
 	Task Kind = "task"
+	// Suggestion is what the review of an answer proposes to change of ouro,
+	// in Text, once the answer ended: an answer with signals of doing badly
+	// is reviewed, see assistant.Signal. It changes nothing by itself, and
+	// is not kept with the session.
+	Suggestion Kind = "suggestion"
 	// Tasks are the tasks the agent delegated that run in the background,
 	// one per line in Text as "task N · what it is", "" once none does.
 	// Cancel stops them with the answer.
@@ -710,6 +715,17 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			s.emit(se, Event{Kind: Jobs, Text: text})
 		}
 	})
+	// What the review of the answer proposes comes after its end.
+	var suggested string
+	ctx = assistant.WithReview(ctx, func(text string) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !over {
+			suggested = text
+			return
+		}
+		s.emit(se, Event{Kind: Suggestion, Text: text})
+	})
 	ctx = agent.WithSteering(ctx, func() []string { return s.steered(se) })
 	ctx = assistant.WithTasks(ctx, delegating{s, se})
 	ctx = agent.WithOwner(ctx, func(ctx context.Context, question json.RawMessage) (string, error) {
@@ -755,6 +771,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	}
 	// The answer is archived already: who learns of its end finds it there.
 	s.emit(se, end)
+	if suggested != "" {
+		s.emit(se, Event{Kind: Suggestion, Text: suggested})
+	}
 	if se.restart != "" {
 		s.emit(se, Event{Kind: Restart, Text: se.restart})
 		if p.successor == "" { // the first build asked for is the one

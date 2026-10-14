@@ -179,6 +179,7 @@ func TestOwnerFallsBack(t *testing.T) {
 	equal(t, "a fallback answered", log.take(), []string{
 		`chat c1: message from the owner: "hi"`,
 		`chat c1: llm call 1 took D: text [by the fallback mid of L, as the one before it said "openai: HTTP 429: quota"]`,
+		`chat c1: signals: 1 call of the LLM answered by a fallback`,
 		`chat c1: answered after D (llm calls: 1, tool calls: 0, sent N): "mid of B"`,
 	})
 	if via := a.Cache("c1").Metrics.Via; via != "mid of L" {

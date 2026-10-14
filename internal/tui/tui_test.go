@@ -311,6 +311,19 @@ func (f *fakeBackend) RefuseProposal(id string) error {
 	f.rejected = append(f.rejected, "proposal "+id)
 	return f.rejectErr
 }
+func (f *fakeBackend) TakeSuggestion(id string) (plugin.Suggestion, error) {
+	f.accepted = append(f.accepted, "suggestion "+id)
+	for _, s := range f.trust.Suggestions {
+		if s.ID == id {
+			return s, f.acceptErr
+		}
+	}
+	return plugin.Suggestion{}, plugin.ErrNoSuggestion
+}
+func (f *fakeBackend) DropSuggestion(id string) error {
+	f.rejected = append(f.rejected, "suggestion "+id)
+	return f.rejectErr
+}
 func (f *fakeBackend) Models(ctx context.Context) ([]Models, error) { return f.offers, f.modelsErr }
 func (f *fakeBackend) Fallbacks() ([]Fallback, error)               { return f.fallbacks, f.fail["fallbacks"] }
 func (f *fakeBackend) ToggleFallback(access, model string) ([]Fallback, error) {

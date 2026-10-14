@@ -99,6 +99,11 @@ func (r *requestsScreen) pendingView(m *Model) string {
 	for _, p := range r.trust.Proposals {
 		what = append(what, "your agent proposes to change "+p.Field)
 	}
+	if n := len(r.trust.Suggestions); n == 1 {
+		what = append(what, "a review suggests a change of ouro")
+	} else if n > 1 {
+		what = append(what, fmt.Sprintf("reviews suggest %d changes of ouro", n))
+	}
 	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d pending", r.trust.waiting())) +
 		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/pending") +
 		mutedStyle.Render(" to decide · "+strings.Join(what, ", "))
@@ -190,6 +195,13 @@ func (m *Model) renderHistory(toBottom bool) {
 				line = lipgloss.NewStyle().Foreground(bad).Render("◆ " + e.text)
 			}
 			return append(blocks, wrap("  "+line)), false
+		}
+		// What the review of an answer proposes is a faint line below it:
+		// a thought of the agent, not part of the conversation, which waits
+		// in /pending to be taken or dropped.
+		if e.suggestion {
+			lines := strings.Split(lipgloss.Wrap(e.text, max(20, width-4), ""), "\n")
+			return append(blocks, mutedStyle.Render("  ✦ "+strings.Join(lines, "\n    ")+" · /pending")), false
 		}
 		if !m.thoughtsHidden && e.thought != "" {
 			blocks, words = append(blocks, wrap(thoughtBlock(e.thought, width))), false
@@ -502,7 +514,8 @@ func (m *Model) windowTitle() string {
 }
 
 // requestsView lists what is waiting for a decision: the connection requests,
-// and the changes of the configuration the agent proposed.
+// the changes of the configuration the agent proposed, and the changes of
+// ouro the reviews of answers suggested.
 func (r *requestsScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
 	lines := []string{boldStyle.Render("Connection requests"), ""}
@@ -559,6 +572,22 @@ func (r *requestsScreen) view(m *Model) string {
 			lines = append(lines, "    "+errStyle.Render("the configuration was changed since: accepting drops this without applying it"))
 		}
 		lines = append(lines, decide(len(r.trust.Incoming)+i)...)
+	}
+	if len(r.trust.Suggestions) > 0 {
+		lines = append(lines, "", boldStyle.Render("Changes of ouro the reviews of answers suggest"),
+			mutedStyle.Render("accept: your agent makes it in a new conversation · reject: it is dropped"), "")
+	}
+	for i, s := range r.trust.Suggestions {
+		at := len(r.trust.Incoming) + len(r.trust.Proposals) + i
+		// The text is what an LLM says; what was measured is what the node says.
+		lines = append(lines, selected(at)+boldStyle.Render("suggestion")+"  "+mutedStyle.Render("· "+s.At.Format("15:04")))
+		for _, l := range strings.Split(lipgloss.Wrap(s.Text, max(20, w-8), ""), "\n") {
+			lines = append(lines, "    "+l)
+		}
+		if len(s.Signals) > 0 {
+			lines = append(lines, "    "+mutedStyle.Render("measured: "+strings.Join(s.Signals, "; ")))
+		}
+		lines = append(lines, decide(at)...)
 	}
 	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
 }

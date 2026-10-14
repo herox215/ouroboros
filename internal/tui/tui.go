@@ -53,10 +53,13 @@ type Contacts struct {
 	Outgoing []plugin.Request
 	// Proposals are listed after Incoming, and selected like them.
 	Proposals []plugin.Proposal
+	// Suggestions are the changes of ouro the reviews of answers suggested,
+	// listed after Proposals and selected like them.
+	Suggestions []plugin.Suggestion
 }
 
 // waiting is how many entries wait for a decision.
-func (c Contacts) waiting() int { return len(c.Incoming) + len(c.Proposals) }
+func (c Contacts) waiting() int { return len(c.Incoming) + len(c.Proposals) + len(c.Suggestions) }
 
 // Backend is what the UI controls.
 type Backend interface {
@@ -121,6 +124,11 @@ type Backend interface {
 	// if the configuration changed since it was proposed.
 	AcceptProposal(id string) error
 	RefuseProposal(id string) error
+	// TakeSuggestion and DropSuggestion decide on a change of ouro the
+	// review of an answer suggested: either drops it from those that wait,
+	// and TakeSuggestion returns it, for the agent to make.
+	TakeSuggestion(id string) (plugin.Suggestion, error)
+	DropSuggestion(id string) error
 	// Setup starts the setup of the node.
 	Setup() (Setup, error)
 	// Models lists the models of every access of the node, for the model
@@ -220,11 +228,14 @@ type entry struct {
 	mine bool
 	// task is the report of a task the agent delegated, which its answer
 	// takes like a message of the owner: text is its line.
-	task   bool
-	text   string
-	at     time.Time
-	failed bool
-	calls  []call // of a round of the loop; none for a message
+	task bool
+	// suggestion is what the review of the answer before it proposes to
+	// change of ouro: text is its line.
+	suggestion bool
+	text       string
+	at         time.Time
+	failed     bool
+	calls      []call // of a round of the loop; none for a message
 	// thought is what the model thought before this round of the loop, as
 	// the events of Thought brought it; "" for a round that thought nothing
 	// and for a provider that keeps its thinking to itself.
@@ -649,6 +660,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.watch(m.chats[msg.id])
 	case askedMsg:
 		m.asked(msg)
+	case takenMsg:
+		return m, m.taken(msg)
 	case unsteeredMsg:
 		m.unsteered(msg)
 	case pastedMsg:
@@ -921,6 +934,9 @@ func (r *requestsScreen) decide(m *Model, accept bool) tea.Cmd {
 	if r.sel >= r.trust.waiting() {
 		return nil
 	}
+	if proposals := len(r.trust.Incoming) + len(r.trust.Proposals); r.sel >= proposals {
+		return r.decideSuggestion(m, r.trust.Suggestions[r.sel-proposals], accept)
+	}
 	if r.sel >= len(r.trust.Incoming) {
 		return r.decideProposal(m, r.trust.Proposals[r.sel-len(r.trust.Incoming)], accept)
 	}
@@ -966,6 +982,42 @@ func (r *requestsScreen) decideProposal(m *Model, p plugin.Proposal, accept bool
 		}
 		return actionMsg{done: p.Field + " changed"}
 	}
+}
+
+// decideSuggestion takes or drops a change of ouro a review suggested. One
+// that is taken is the task of a new conversation, see taken.
+func (r *requestsScreen) decideSuggestion(m *Model, s plugin.Suggestion, accept bool) tea.Cmd {
+	return func() tea.Msg {
+		if !accept {
+			if err := m.backend.DropSuggestion(s.ID); err != nil {
+				return actionMsg{err: err}
+			}
+			return actionMsg{done: "suggestion dropped"}
+		}
+		taken, err := m.backend.TakeSuggestion(s.ID)
+		return takenMsg{taken, err}
+	}
+}
+
+// takenMsg is a suggestion the owner took, for the agent to make.
+type takenMsg struct {
+	suggestion plugin.Suggestion
+	err        error
+}
+
+// taken has the agent make the suggestion the owner took, in a new
+// conversation: the one shown goes on.
+func (m *Model) taken(msg takenMsg) tea.Cmd {
+	if msg.err != nil {
+		m.setNotice(msg.err.Error(), true)
+		return m.refresh()
+	}
+	m.screen = screenChat
+	watch := m.newConversation()
+	m.input.SetValue(plugin.SuggestedTask(msg.suggestion))
+	send := m.send()
+	m.setNotice(m.agentName()+" makes the suggestion", false)
+	return tea.Batch(watch, send, m.refresh())
 }
 
 func (r *requestsScreen) apply(m *Model, trust Contacts) {

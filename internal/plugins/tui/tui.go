@@ -402,5 +402,9 @@ func (u *ui) Contacts() (tui.Contacts, error) {
 	if err != nil {
 		return tui.Contacts{}, err
 	}
-	return tui.Contacts{Incoming: incoming, Outgoing: outgoing, Proposals: proposals}, nil
+	suggestions, err := u.Suggestions()
+	if err != nil {
+		return tui.Contacts{}, err
+	}
+	return tui.Contacts{Incoming: incoming, Outgoing: outgoing, Proposals: proposals, Suggestions: suggestions}, nil
 }

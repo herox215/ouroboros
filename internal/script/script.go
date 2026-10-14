@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime/metrics"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -587,6 +588,27 @@ func (o *output) String() string {
 	return fmt.Sprintf("%s(%d more bytes were printed and left out. %s is kept in %s, a string: "+
 		"look into it, like %s.indexOf(…) or %s.slice(…), and print only what you need)",
 		shown, left, upper(kept), Printed, Printed, Printed)
+}
+
+// leftOut finds what String and text say they left out of what a script
+// printed, and of the value it returned.
+var leftOut = regexp.MustCompile(`\((\d+) more bytes were printed and left out\. |\(the value has (\d+) bytes, of which the first (\d+) came back\. `)
+
+// LeftOut is how many bytes the result of a script left out of what it
+// printed and returned, as it says: 0 if it left out nothing.
+func LeftOut(result string) int {
+	n := 0
+	for _, m := range leftOut.FindAllStringSubmatch(result, -1) {
+		if m[1] != "" {
+			left, _ := strconv.Atoi(m[1])
+			n += left
+		} else {
+			all, _ := strconv.Atoi(m[2])
+			shown, _ := strconv.Atoi(m[3])
+			n += all - shown
+		}
+	}
+	return n
 }
 
 // upper is s with its first letter in upper case.

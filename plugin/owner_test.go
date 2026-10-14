@@ -692,3 +692,40 @@ func TestEffortOfACall(t *testing.T) {
 		t.Fatalf("effort %q", got)
 	}
 }
+
+// What the reviews suggested waits until the owner takes or drops it, and
+// either is in the log.
+func TestOwnerDecidesOnSuggestions(t *testing.T) {
+	s := clitest.Settings(t)
+	o := owner(t, s)
+	if list, err := o.Suggestions(); err != nil || len(list) != 0 {
+		t.Fatalf("nothing suggested: %+v, %v", list, err)
+	}
+	store := home.Dir(s.Home).Suggestions()
+	a, _ := store.Add("let bash run long commands as jobs", []string{"bash took 42s"}, "s1")
+	b, _ := store.Add("say which files are near", nil, "s2")
+	if list, err := o.Suggestions(); err != nil || len(list) != 2 || list[0].ID != a.ID || list[1].ID != b.ID {
+		t.Fatalf("waiting: %+v, %v", list, err)
+	}
+	if got, err := o.TakeSuggestion(a.ID); err != nil || got.Text != a.Text || got.Signals[0] != "bash took 42s" {
+		t.Fatalf("taken %+v, %v", got, err)
+	}
+	if err := o.DropSuggestion(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := o.Suggestions(); err != nil || len(list) != 0 {
+		t.Fatalf("still waiting: %+v, %v", list, err)
+	}
+	if _, err := o.TakeSuggestion(a.ID); !errors.Is(err, plugin.ErrNoSuggestion) {
+		t.Fatalf("taken twice: %v", err)
+	}
+	if err := o.DropSuggestion("gone"); !errors.Is(err, plugin.ErrNoSuggestion) {
+		t.Fatalf("dropped what is none: %v", err)
+	}
+	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
+	for _, want := range []string{`the owner took a suggestion: "let bash run long commands as jobs"`, `the owner dropped a suggestion: "say which files are near"`} {
+		if !strings.Contains(string(logged), want) {
+			t.Fatalf("the log lacks %q: %s", want, logged)
+		}
+	}
+}

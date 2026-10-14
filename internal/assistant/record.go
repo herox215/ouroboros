@@ -57,6 +57,11 @@ type record struct {
 	calling time.Time // when the call of the LLM that is under way started; zero if none is
 	tools   []flight  // under way, in the order they started
 	closed  bool      // the last line is written
+	// measured is what the signals of the answer are made of, see Signal.
+	measured measures
+	// trail are the lines written of the answer, without those of the
+	// debug mode: what a review of it reads, see Assistant.review.
+	trail []string
 }
 
 // flight is a tool call that is under way.
@@ -78,22 +83,37 @@ func newRecord(ctx context.Context, log func(format string, args ...any), chat s
 // line writes one line of the conversation.
 func (r *record) line(format string, args ...any) {
 	r.log("chat %s: "+format, append([]any{r.chat}, args...)...)
+	if !strings.HasPrefix(format, "debug ") {
+		r.trail = append(r.trail, fmt.Sprintf(format, args...))
+	}
 }
 
 // end writes how the answer ended: with reply, or with err. An answer whose
 // context ended is canceled, whatever it returned: the owner does not get it.
-func (r *record) end(reply string, err error) {
+// It returns the signals of an answer that was not canceled, and the lines
+// written of it: none of one that was.
+func (r *record) end(reply string, err error) (signals []Signal, trail []string) {
 	r.stop()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped() {
-		return
+		return nil, nil
+	}
+	defer func() { trail = slices.Clone(r.trail) }()
+	signals = r.measured.signals(time.Since(r.start), r.calls, r.tokens, r.cached, reply, err)
+	if len(signals) > 0 {
+		texts := make([]string, len(signals))
+		for i, s := range signals {
+			texts[i] = r.plain(s.Text)
+		}
+		r.line("signals: %s", strings.Join(texts, "; "))
 	}
 	if err != nil {
 		r.close("failed after %s (%s): %s", took(time.Since(r.start)), r.counts(), r.text(err.Error()))
-		return
+		return signals, nil
 	}
 	r.close("answered after %s (%s): %s", took(time.Since(r.start)), r.counts(), r.text(reply))
+	return signals, nil
 }
 
 // cancel writes that the answer was canceled, see canceled.
@@ -190,9 +210,11 @@ func (r *record) call(c agent.Call) {
 	}
 	var cost []string
 	if c.Retried != "" {
+		r.measured.retried++
 		cost = append(cost, "asked again, as it broke off: "+r.text(c.Retried))
 	}
 	if c.Via != "" {
+		r.measured.fallback++
 		cost = append(cost, "by the fallback "+r.plain(c.Via)+", as the one before it said "+r.text(c.Instead))
 	}
 	if c.Tokens > 0 {
@@ -244,6 +266,7 @@ func (r *record) step(s agent.Step) {
 	}
 	if !s.Done {
 		r.tools = append(r.tools, flight{s.Tool, s.Args, time.Now()})
+		r.measured.start(s.Tool)
 		return
 	}
 	// The call that ends is the last of its kind that started: a tool a
@@ -255,11 +278,20 @@ func (r *record) step(s agent.Step) {
 		}
 	}
 	r.tooled++
+	r.measured.step(s.Tool, string(s.Args), s.Took, s.Err != nil)
+	if s.Tool == toolRun {
+		r.measured.result(s.Result)
+	}
 	outcome := fmt.Sprintf("ok (%d bytes)", len(s.Result))
 	if s.Err != nil {
 		outcome = "error " + r.text(s.Err.Error())
 	}
 	r.line("tool %s %s took %s: %s", r.plain(s.Tool), r.args(s.Tool, s.Args), took(s.Took), outcome)
+	// A script that ran is the calls in the lines before it: to a review
+	// its line reads as one more.
+	if s.Tool == toolRun && s.Err == nil {
+		r.trail = r.trail[:len(r.trail)-1]
+	}
 }
 
 // text is s as the log takes a text: without secrets, shortened and quoted.

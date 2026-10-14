@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/home"
@@ -20,6 +21,7 @@ import (
 	"ouroboros/internal/peers"
 	"ouroboros/internal/proposal"
 	"ouroboros/internal/setup"
+	"ouroboros/internal/suggestion"
 )
 
 // Owner is what the owner of the node does at a front end and nowhere else:
@@ -86,6 +88,8 @@ var (
 	ErrStale = proposal.ErrStale
 	// ErrNoProposal means there is no such proposal to decide on.
 	ErrNoProposal = proposal.ErrGone
+	// ErrNoSuggestion means there is no such suggestion to take or drop.
+	ErrNoSuggestion = suggestion.ErrGone
 	// ErrLastAccess means the only access of the node was to be removed.
 	ErrLastAccess = setup.ErrLastAccess
 )
@@ -161,6 +165,40 @@ func (o *Owner) AcceptProposal(id string) error {
 // RefuseProposal drops the proposal id. Nothing is changed.
 func (o *Owner) RefuseProposal(id string) error {
 	_, err := o.home.Proposals().Refuse(id)
+	return err
+}
+
+// Suggestion is a change of ouro the review of an answer suggested, which
+// waits for the owner to take or drop it. Text is the text of an LLM;
+// Signals are what the node measured of the answer.
+type Suggestion = suggestion.Suggestion
+
+// SuggestedTask is what a front end asks the agent of the owner to make the
+// suggestion s the owner took: in a session of its own, as the answer to it
+// is not reviewed.
+func SuggestedTask(s Suggestion) string { return assistant.SuggestedTask(s.Text, s.Signals) }
+
+// Suggestions returns the changes of ouro the reviews of answers suggested
+// that wait for the owner, the oldest first.
+func (o *Owner) Suggestions() ([]Suggestion, error) { return o.home.Suggestions().List() }
+
+// TakeSuggestion drops the suggestion id from those that wait and returns
+// it, for the owner to have the agent make the change: taking it changes
+// nothing by itself.
+func (o *Owner) TakeSuggestion(id string) (Suggestion, error) {
+	s, err := o.home.Suggestions().Remove(id)
+	if err == nil {
+		o.home.Log("the owner took a suggestion: %q", s.Text)
+	}
+	return s, err
+}
+
+// DropSuggestion drops the suggestion id. Nothing is changed.
+func (o *Owner) DropSuggestion(id string) error {
+	s, err := o.home.Suggestions().Remove(id)
+	if err == nil {
+		o.home.Log("the owner dropped a suggestion: %q", s.Text)
+	}
 	return err
 }
 

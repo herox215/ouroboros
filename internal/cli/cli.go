@@ -78,6 +78,7 @@ import (
 	updateplugin "ouroboros/internal/plugins/update"
 	"ouroboros/internal/proposal"
 	"ouroboros/internal/setup"
+	"ouroboros/internal/suggestion"
 	"ouroboros/internal/update"
 	"ouroboros/plugin"
 )
@@ -228,6 +229,7 @@ func seal(k *kernel.Kernel) {
 	kernel.Seal[llm.Book](k)          // opens the credentials for every provider
 	kernel.Seal[guard.Guard](k)       // decides which files a tool touches
 	kernel.Seal[proposal.Store](k)    // what the agent proposed; accepting it changes the configuration
+	kernel.Seal[suggestion.Store](k)  // what the reviews suggested; taking one has the agent change ouro
 }
 
 // App runs ouro commands. It is a kernel with plugins and has no logic of its

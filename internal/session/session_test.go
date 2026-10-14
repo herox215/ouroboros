@@ -767,3 +767,30 @@ func TestQueueIsLostWhenRestarting(t *testing.T) {
 		t.Fatalf("past %+v", past)
 	}
 }
+
+// What the review of an answer proposes comes after the end of the answer,
+// also when it is in before.
+func TestSuggestionAfterTheAnswer(t *testing.T) {
+	later := make(chan struct{})
+	s := New(&fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		suggest := assistant.Reviewer(ctx)
+		suggest("early")
+		go func() {
+			<-later
+			suggest("late")
+		}()
+		return "pong", nil
+	}})
+	defer s.Close()
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "hi")
+	got := until(t, live, Suggestion)
+	if kinds(got) != "message answer suggestion" || got[2].Text != "early" {
+		t.Fatalf("events %+v", got)
+	}
+	close(later)
+	if got := until(t, live, Suggestion); kinds(got) != "suggestion" || got[0].Text != "late" {
+		t.Fatalf("events %+v", got)
+	}
+}

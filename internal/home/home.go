@@ -26,6 +26,7 @@ import (
 	"ouroboros/internal/openai"
 	"ouroboros/internal/proposal"
 	"ouroboros/internal/safefile"
+	"ouroboros/internal/suggestion"
 )
 
 // Dir is the path of the directory.
@@ -153,6 +154,10 @@ func (d Dir) Contacts() *contacts.Store { return contacts.Open(d.path("contacts.
 // Proposals opens the list of the changes of the configuration the agent of
 // the owner proposed, which wait for the owner to decide.
 func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposals.json")) }
+
+// Suggestions opens the list of the changes of ouro the reviews of answers
+// suggested, which wait for the owner.
+func (d Dir) Suggestions() *suggestion.Store { return suggestion.Open(d.path("suggestions.json")) }
 
 // History is the directory the conversations of the agents are archived in.
 func (d Dir) History() string { return d.path("history") }

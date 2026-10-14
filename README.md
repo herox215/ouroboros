@@ -50,6 +50,14 @@ answer is still on its way, as far as it has come; what the agent waits for at t
 below the input (`asking beta`), once the call has run for 0.3 s: one that ends sooner, as most commands
 and reads do, leaves the agent thinking, so the line does not flicker. What each call was, with its
 arguments and its result, is on the context screen (`/context`).
+An answer that ouro could have done better, by the [signals](#the-log) of the log, is looked back on once it is
+given, and what the review would change of ouro follows it as a faint line, like `✦ bash waited 42s for the
+build: let it run as a job · /pending`. It changes nothing by itself: it waits in `/pending`, where accepting it
+opens a new conversation that asks your agent to make it, after checking it against the source, as the review read
+only the log; the conversation shown goes on. The answer to it is not reviewed again, so that reviews do not
+suggest what to make of their own suggestions. Rejecting it drops it. Front ends get it as the session event
+`suggestion`; the chat does not keep it with the session, `/pending` does, in `suggestions.json` of the node, at
+most 16, the same text once.
 What the model thinks before it writes comes in as the stream brings it, and the chat shows the last
 lines of it, faint, above the words of its round, under `· thought`; `ctrl+t` hides it again. A
 provider that keeps its thinking to itself, as the responses API of OpenAI does, sends none of it,
@@ -156,7 +164,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back. `/` searches it: every match is marked as you type, without regard to case and across the ends of lines; `↑` `↓` go from match to match, `enter` keeps the search, `esc` ends it |
 | `/settings` | the configuration in one place, in a dialog over the chat, by categories: the node, the agents, the plugins, the tools of your agent, of peers and of single peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
 | `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `f` a [fallback](#fallbacks), `esc` back |
-| `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, and [changes of the configuration](#configuration) it proposes. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back |
+| `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, [changes of the configuration](#configuration) it proposes, and changes of ouro the [reviews](#the-log) of answers suggest. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back. Accepting a suggestion has your agent make it in a new conversation |
 | `/effort` | how much the model thinks before it answers in the conversation shown, see [Sessions](#sessions) |
 | `/debug` | turn the debug mode on or off: the log of the node then tells much more |
 | `/help` | list the commands, those of the plugins too |
@@ -1398,6 +1406,30 @@ file. After a conversation that went wrong, the log says what the agent did and 
   calls of tools follows them as `said "…"`; a call that ends in `text` has no text in its line, because that
   text is the answer and is in the last line. The calls of a [script](#scripts) are recorded like the others,
   before the line of `run`.
+- **Signals**: before the end of an answer that ouro could have done better, a line `signals: …` says what the
+  numbers show, like `bash took 42s; read ran 3 times with {"path":"a"}; 18 calls of the LLM`. A signal is a
+  tool call of 30 s or more, an answer that worked 3 minutes
+  or more, 3 tool calls or more that failed, the same tool with the same arguments 3 times or more, 15 calls of
+  the LLM or more, a result of a [script](#scripts) that was cut, as the agent has to get what was left out with
+  another step, a call that broke off and was asked again or that a [fallback](#fallbacks) answered, less
+  than half of the tokens cached from the third call on, an answer that gave up after too many calls, and one
+  without words. What
+  waits for someone else, `user_question`, `ask_peer` and `ask_back`, is never slow, and its time is not counted
+  to the answer. A script counts by the tools it calls: they are slow, fail or repeat, and `run` fails by
+  itself only when none of them did. An answer without a signal has no such line.
+- **Follow-up**: a short message of the owner, of at most 60 characters, within 15 minutes of an answer, like
+  `did anything happen?` or `?`, is a signal of that answer, as an answer that only said what it would do looks
+  well in the log. The line `signals of the answer before: the owner wrote next, 2m0s later: "?"` follows the
+  message, and the answer before is reviewed with it. Only the message right after an answer follows up on it.
+- **Review**: an answer of the owner with signals is looked back on once it is given, or once a follow-up comes. The LLM of the agent, with
+  its fallbacks, is sent the tools of the agent, the lines of the log of the answer (without the scripts that
+  ran, and of a long one the first and as many of the last as fit in 12 KB) and the signals, and asked for the one
+  change of ouro that would have made it better: a tool that is missing, slow or misleading, a default, or the
+  prompt. What comes from the task or the provider is no change. The line `review: "…"` has what it proposes,
+  `review: nothing to change` that it found nothing, `review failed: …` why it could not. What it proposes
+  is shown in the chat and waits in `/pending`, see [Terminal UI](#terminal-ui); it changes nothing by itself.
+  Whether the owner took or dropped it is logged too: `the owner took a suggestion: "…"`. A node that stops right
+  after the answer, as `ouro chat` stops one it started, stops the review with it.
 - **Canceled**: when you type `/cancel` in the UI, interrupt `ouro chat` with Ctrl-C or stop the node, the call
   the agent was waiting for is recorded as `canceled` with the time it had run, and then the answer. Ctrl-C
   while `ouro chat` waits for an answer stops that answer; in the chat line by line you can then go on. The node

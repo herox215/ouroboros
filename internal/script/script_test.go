@@ -476,3 +476,19 @@ func TestUndefinedNamesTheTools(t *testing.T) {
 		t.Fatalf("another error: %v", err)
 	}
 }
+
+// LeftOut reads what a script left out of what it printed and of what it
+// returned from the result, as the script says it.
+func TestLeftOut(t *testing.T) {
+	s, r := NewSession(), &recorder{}
+	got, err := s.Run(context.Background(), `print("x".repeat(`+fmt.Sprint(MaxPrint+100)+`)); "y".repeat(`+fmt.Sprint(MaxResult+7)+`)`, r.names(), r.call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := LeftOut(got); n != 101+7 { // the line break that print adds is printed too
+		t.Fatalf("left out %d of %.200q", n, got[len(got)-400:])
+	}
+	if got, _ := s.Run(context.Background(), `print("x"); "y"`, r.names(), r.call); LeftOut(got) != 0 {
+		t.Fatalf("left out of %q", got)
+	}
+}

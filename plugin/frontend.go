@@ -150,6 +150,9 @@ const (
 	SessionJobs      = session.Jobs      // the commands that run in the background for the answer, a line each in Text
 	SessionTask      = session.Task      // the report of a task the agent delegated, taken like a message: N, Remark, Text, Err
 	SessionTasks     = session.Tasks     // the tasks the agent delegated that run, a line each in Text
+	// SessionSuggestion is what the review of an answer proposes to change
+	// of ouro, in Text, after the answer ended. It changes nothing.
+	SessionSuggestion = session.Suggestion
 	// SessionAsked is a question the agent asks the owner and waits for,
 	// see SessionEvent.AsQuestion: what the owner says next in the session,
 	// with Sessions.Steer, answers it. With Done the wait is over, and Text
