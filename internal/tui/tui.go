@@ -217,7 +217,10 @@ const (
 // one round of the loop to its answer: what the agent said, if anything, and
 // the tool calls it asked for.
 type entry struct {
-	mine   bool
+	mine bool
+	// task is the report of a task the agent delegated, which its answer
+	// takes like a message of the owner: text is its line.
+	task   bool
 	text   string
 	at     time.Time
 	failed bool
@@ -227,6 +230,10 @@ type entry struct {
 	// and for a provider that keeps its thinking to itself.
 	thought string
 }
+
+// asks reports whether e is what an answer is to: a message of the owner,
+// or the report of a task.
+func (e entry) asks() bool { return e.mine || e.task }
 
 // call is a tool call of the loop as the history shows it.
 type call struct {
@@ -253,6 +260,7 @@ type conversation struct {
 	doing    string              // what the agent is waiting for, like "asking beta"
 	asking   *asking             // what the agent asks the owner and waits for; nil without a question
 	jobs     []string            // the commands that run in the background for the answer, like "job 1 · npm run dev"
+	tasks    []string            // the tasks the agent delegated that run, like "task 2 · find the callers"
 	since    time.Time           // when it began to wait for that
 	art      int                 // which of arts a wait is shown with: the next for every message
 	round    int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
@@ -821,8 +829,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.scrollBy(&m.history, m.history.Height())
 	case "esc":
 		// In the chat there is nothing to go back from: it stops the answer
-		// on its way here, as /cancel does.
-		if m.chat.pending {
+		// on its way here, and the tasks the agent delegated, as /cancel does.
+		if m.chat.pending || len(m.chat.tasks) > 0 {
 			return m.cancel()
 		}
 		return nil

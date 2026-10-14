@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -228,11 +230,24 @@ func (u *ui) event(e plugin.SessionEvent) tui.Event {
 			shown.Text = plugin.ToolDetail(u.ctx, s, shown.Text)
 		}
 	}
+	if e.Kind == plugin.SessionTask {
+		shown.Text, shown.Failed = taskLine(e), e.Err != ""
+	}
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended
 	}
 	return shown
+}
+
+// taskLine is what the chat shows of the report of a task the agent
+// delegated: its number and what it was, and how it ended.
+func taskLine(e plugin.SessionEvent) string {
+	line := fmt.Sprintf("task %d · %s", e.N, e.Remark)
+	if e.Err != "" {
+		return line + " ✗ " + strings.Join(strings.Fields(e.Err), " ")
+	}
+	return line + " ✓ " + e.Took.Round(time.Second).String()
 }
 
 // Steer gives text to the answer on its way in the session id.

@@ -62,6 +62,13 @@ func Tighten(ctx context.Context) context.Context {
 	return context.WithValue(ctx, tightKey{}, true)
 }
 
+// Untighten returns a context under which a script hands on what it prints,
+// and what it returns, as far as the limits allow, whatever Tighten made of
+// ctx: for an answer of its own within the one that was tightened.
+func Untighten(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tightKey{}, false)
+}
+
 // Changed by tests, which do not wait ten minutes or fill the memory.
 var (
 	maxTime = MaxTime

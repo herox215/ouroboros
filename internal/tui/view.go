@@ -182,6 +182,15 @@ func (m *Model) renderHistory(toBottom bool) {
 	// below which the line of its calls goes.
 	one := func(i int, blocks []string, words bool) ([]string, bool) {
 		e := c.entries[i]
+		// The report of a task is a line of its own: what the agent makes
+		// of it is its answer.
+		if e.task {
+			line := mutedStyle.Render("◆ " + e.text)
+			if e.failed {
+				line = lipgloss.NewStyle().Foreground(bad).Render("◆ " + e.text)
+			}
+			return append(blocks, wrap("  "+line)), false
+		}
 		if !m.thoughtsHidden && e.thought != "" {
 			blocks, words = append(blocks, wrap(thoughtBlock(e.thought, width))), false
 		}
@@ -276,7 +285,7 @@ func (c *conversation) settled() int {
 		return len(c.entries)
 	}
 	for i := len(c.entries) - 1; i >= 0; i-- {
-		if c.entries[i].mine {
+		if c.entries[i].asks() {
 			return i
 		}
 	}
@@ -376,7 +385,7 @@ func (c *conversation) summaries() map[int]string {
 		calls, last = nil, -1
 	}
 	for i, e := range c.entries {
-		if e.mine {
+		if e.asks() {
 			end()
 			continue
 		}
@@ -669,6 +678,13 @@ func (m *Model) chatTitle() string {
 	var parts []string
 	if c.peer != "" {
 		parts = append(parts, boldStyle.Foreground(accent).Render(c.peer)+mutedStyle.Render(" · only to read"))
+	}
+	if n := len(c.tasks); n > 0 {
+		running := "1 task runs"
+		if n > 1 {
+			running = fmt.Sprintf("%d tasks run", n)
+		}
+		parts = append(parts, boldStyle.Foreground(accent).Render(running)+mutedStyle.Render(" · esc stops"))
 	}
 	if metrics := callMetrics(c.cache); metrics != "" {
 		parts = append(parts, mutedStyle.Render(metrics))

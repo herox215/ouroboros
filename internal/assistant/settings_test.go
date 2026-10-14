@@ -268,7 +268,7 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		want string
 	}{
 		{propose{"tools.a2a", []string{"ask_peers"}, "r"}, `error: nothing was proposed: tools.a2a: unknown tool "ask_peers" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read)`},
-		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read, user_question, get_config, propose_config, withdraw_proposal)`},
+		{propose{"tools.h2a", []string{"nope"}, "r"}, `error: nothing was proposed: tools.h2a: unknown tool "nope" (there are: list_peers, ask_peer, answer_peer, tell_peer, ask_back, read, user_question, delegate, get_config, propose_config, withdraw_proposal)`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "read", "alow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: settings of the tool read: json: unknown field "alow"`},
 		{propose{"tools.a2a", []any{map[string]any{"tool": "list_peers", "allow": []string{"~"}}}, "r"}, `error: nothing was proposed: tools.a2a: the tool list_peers takes no settings`},
 		{propose{"tools.a2a", []string{"read", "read"}, "r"}, `error: nothing was proposed: tools.a2a: the tool "read" is listed twice`},
@@ -371,7 +371,7 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 		t.Fatalf("every tool for peers: %q, %v", names(tools), err)
 	}
 	tools, err = c.builder.ownerTools(cfg)
-	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read,user_question,get_config,propose_config,withdraw_proposal" {
+	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read,user_question,delegate,get_config,propose_config,withdraw_proposal" {
 		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
 	}
 	// A script of a peer has neither.
@@ -403,8 +403,8 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	}
 
 	// A blueprint without a node has neither tool: only the one that asks
-	// the owner.
-	if got := names((Builder{Tools: func() []agent.Tool { return nil }}).all()); got != ToolUserQuestion {
+	// the owner and the one that hands tasks to helpers.
+	if got := names((Builder{Tools: func() []agent.Tool { return nil }}).all()); got != ToolUserQuestion+","+ToolDelegate {
 		t.Fatalf("without a node: %q", got)
 	}
 }

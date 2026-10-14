@@ -139,7 +139,7 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("settings %+v", s)
 	}
 	owner, peers := s.Tools[plugin.ForOwner], s.Tools[plugin.ForPeers]
-	if !owner.All || owner.Unset || len(owner.Tools) != 7 {
+	if !owner.All || owner.Unset || len(owner.Tools) != 8 {
 		t.Fatalf("owner %+v", owner)
 	}
 	if build := owner.Tools[2]; build.Name != "build" || !build.Trusted || !build.Allowed {
@@ -151,7 +151,7 @@ func TestSettings(t *testing.T) {
 	if read := owner.Tools[0]; read.Name != "read" || !read.Allowed || !read.Listed || !read.Configurable || read.Settings != "" || read.Description != "Read a file. Really." {
 		t.Errorf("read for the owner %+v", read)
 	}
-	if config := owner.Tools[4]; config.Name != "get_config" || !config.OwnerOnly || !config.Allowed {
+	if config := owner.Tools[5]; config.Name != "get_config" || !config.OwnerOnly || !config.Allowed {
 		t.Errorf("get_config for the owner %+v", config)
 	}
 	if peers.All || peers.Unset {
@@ -305,7 +305,7 @@ func TestChange(t *testing.T) {
 
 	// The tools of the owner: all, and then all but read.
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read"})
-	if got := entries(plugin.ForOwner); got != `["list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["list_peers","build","user_question","delegate","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all but read: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
@@ -335,18 +335,18 @@ func TestChange(t *testing.T) {
 		t.Errorf("without settings before *: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","delegate","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("all named: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools}) // off already
 	// Turned on where it is listed first, it stays listed once.
 	change(plugin.Setting{Kind: plugin.SetTool, Name: "read", On: true})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","delegate","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("listed first: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"allow":["~/y"]}`})
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: "{}"})
-	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","get_config","propose_config","withdraw_proposal"]` {
+	if got := entries(plugin.ForOwner); got != `["read","list_peers","build","user_question","delegate","get_config","propose_config","withdraw_proposal"]` {
 		t.Errorf("settings taken away: %s", got)
 	}
 

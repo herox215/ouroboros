@@ -87,6 +87,15 @@ const (
 	// its way, one per line in Text, "" once none does. They end with the
 	// answer at the latest: then Jobs is "" before it ends, if it was not.
 	Jobs Kind = "jobs"
+	// Task is the report of a task the agent delegated that ended, as the
+	// agent takes it: like a Message, an answer to it starts, or the one on
+	// its way goes on with it. N is the number of the task, Remark what it
+	// was, Text what its helper answered and Err why it failed, if it did.
+	Task Kind = "task"
+	// Tasks are the tasks the agent delegated that run in the background,
+	// one per line in Text as "task N · what it is", "" once none does.
+	// Cancel stops them with the answer.
+	Tasks Kind = "tasks"
 )
 
 // Event is one thing that happened in a session. It is plain data, written
@@ -107,6 +116,8 @@ type Event struct {
 	Took   time.Duration   `json:"took,omitempty"`
 	Err    string          `json:"err,omitempty"`
 	Remark string          `json:"remark,omitempty"`
+	// N is the number of a Task.
+	N int `json:"n,omitempty"`
 	// Context is how long the context of the session is when the Event
 	// happens: what the last call of the LLM in it sent, in bytes, 0 if
 	// none was made yet.
@@ -325,7 +336,7 @@ type session struct {
 	events   []Event
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc // of the answer on its way; nil without one
-	queue    []string           // the messages that wait for that answer to take them
+	queue    []queued           // the messages that wait for that answer to take them
 	asked    chan string        // takes what the owner answers the question that answer waits for; nil without one
 	restart  string             // the binary a tool of that answer asked to start anew from
 	goOn     bool               // the session goes on by itself in that build, see GoOn
@@ -341,6 +352,18 @@ type session struct {
 	// says that the owner set it: else the agent says.
 	effort   string
 	efforted bool
+	// tasks are the tasks the agent delegated that run, the last of which
+	// had the number delegated.
+	tasks     []*task
+	delegated int
+}
+
+// queued is a message that waits for the answer on its way to take it: one
+// of the owner, or the report of a task that ended, with the Event that
+// tells of it once it is taken.
+type queued struct {
+	text string
+	task *Event
 }
 
 // New returns the Service of the sessions with agent.
@@ -407,7 +430,7 @@ func (s *Service) lookup(id string) *session {
 
 // forget drops se once nothing is in it and nobody watches it. s.mu is held.
 func (s *Service) forget(se *session) {
-	if len(se.events) == 0 && len(se.watchers) == 0 && se.cancel == nil && !se.efforted {
+	if len(se.events) == 0 && len(se.watchers) == 0 && se.cancel == nil && len(se.tasks) == 0 && !se.efforted {
 		delete(s.sessions, se.id)
 	}
 }
@@ -452,20 +475,19 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	if se.cancel != nil {
 		return ErrBusy
 	}
-	s.begin(se, p, text)
+	s.begin(se, p, append(se.queue, queued{text: text})...)
+	se.queue = nil
 	return nil
 }
 
-// begin starts the answer to texts, the messages of the owner, in se. s.mu
-// and the mu of p, the process of s, are held.
-func (s *Service) begin(se *session, p *process, texts ...string) {
+// begin starts the answer to messages, of the owner and of tasks that
+// ended, in se. s.mu and the mu of p, the process of s, are held.
+func (s *Service) begin(se *session, p *process, messages ...queued) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	se.cancel = cancel
 	p.answering++
 	p.release = false // somebody wants the node
-	for _, text := range texts {
-		s.emit(se, Event{Kind: Message, Text: text})
-	}
+	texts := s.taken(se, messages)
 	text := strings.Join(texts, "\n\n")
 	named := make(chan struct{})
 	if se.title == "" && se.tries < titleTries {
@@ -500,7 +522,7 @@ func (s *Service) Steer(ctx context.Context, id, text string) error {
 			se.asked = nil
 			return nil
 		}
-		se.queue = append(se.queue, text)
+		se.queue = append(se.queue, queued{text: text})
 		s.emit(se, Event{Kind: Queued, Text: text})
 		return nil
 	}
@@ -516,12 +538,19 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	se, ok := s.sessions[id]
-	if !ok || len(se.queue) == 0 {
+	if !ok {
 		return "", nil
 	}
+	// What a task reports is not the owner's to take back.
 	last := len(se.queue) - 1
-	text := se.queue[last]
-	se.queue = se.queue[:last]
+	for last >= 0 && se.queue[last].task != nil {
+		last--
+	}
+	if last < 0 {
+		return "", nil
+	}
+	text := se.queue[last].text
+	se.queue = slices.Delete(se.queue, last, last+1)
 	s.emit(se, Event{Kind: Unqueued, Text: text})
 	return text, nil
 }
@@ -563,14 +592,27 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 }
 
 // steered hands the answer on its way in se the messages that are queued
-// for it: each is a Message now.
+// for it: see taken.
 func (s *Service) steered(se *session) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	texts := se.queue
+	texts := s.taken(se, se.queue)
 	se.queue = nil
-	for _, text := range texts {
-		s.emit(se, Event{Kind: Message, Text: text})
+	return texts
+}
+
+// taken tells that the answer in se takes messages, each a Message of the
+// owner or the Task whose report it is, and returns their texts. s.mu is
+// held.
+func (s *Service) taken(se *session, messages []queued) []string {
+	texts := make([]string, len(messages))
+	for i, m := range messages {
+		texts[i] = m.text
+		if m.task != nil {
+			s.emit(se, *m.task)
+			continue
+		}
+		s.emit(se, Event{Kind: Message, Text: m.text})
 	}
 	return texts
 }
@@ -669,6 +711,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 	})
 	ctx = agent.WithSteering(ctx, func() []string { return s.steered(se) })
+	ctx = assistant.WithTasks(ctx, delegating{s, se})
 	ctx = agent.WithOwner(ctx, func(ctx context.Context, question json.RawMessage) (string, error) {
 		return s.ask(ctx, se, question)
 	})
@@ -728,9 +771,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	// What was queued too late for this answer is the next message, unless
 	// the node takes none: then it is lost with the process.
 	if len(se.queue) > 0 && !s.closed && p.successor == "" {
-		texts := se.queue
+		messages := se.queue
 		se.queue = nil
-		s.begin(se, p, texts...)
+		s.begin(se, p, messages...)
 	}
 	p.settle()
 }
@@ -917,21 +960,30 @@ func (s *Service) effortOf(se *session) {
 	se.effort, se.efforted = effort, ok
 }
 
-// Cancel stops the answer on its way in the session id.
+// Cancel stops the answer on its way in the session id, and the tasks the
+// agent delegated in it.
 func (s *Service) Cancel(_ context.Context, id string) error {
 	if err := valid(id); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if se, ok := s.sessions[id]; ok && se.cancel != nil {
+	se, ok := s.sessions[id]
+	if !ok {
+		return nil
+	}
+	if se.cancel != nil {
 		se.cancel()
+	}
+	for _, t := range se.tasks {
+		t.cancel()
 	}
 	return nil
 }
 
-// Delete removes the session id, unless an answer is on its way in it. Those
-// who watch it are let go: watched again, it is empty.
+// Delete removes the session id, unless an answer is on its way in it or a
+// task the agent delegated runs there. Those who watch it are let go:
+// watched again, it is empty.
 func (s *Service) Delete(_ context.Context, id string) error {
 	if peerID(id) {
 		return s.deletePeer(id)
@@ -943,7 +995,7 @@ func (s *Service) Delete(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	found := false
 	if se, ok := s.sessions[id]; ok && len(se.events) > 0 {
-		if se.cancel != nil {
+		if se.cancel != nil || len(se.tasks) > 0 {
 			return ErrBusy
 		}
 		found = true

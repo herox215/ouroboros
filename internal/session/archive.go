@@ -137,6 +137,10 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 		switch r.Role {
 		case "user":
 			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content})
+			if ended, ok := assistant.AsTaskReport(unnoted(r.Content)); ok {
+				events = append(events, Event{Kind: Task, At: at, N: ended.N, Remark: ended.Title, Text: ended.Answer, Err: ended.Err})
+				continue
+			}
 			events = append(events, Event{Kind: Message, At: at, Text: unnoted(r.Content)})
 		case "assistant":
 			m := openai.Message{Role: "assistant", Content: r.Content}

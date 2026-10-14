@@ -63,6 +63,11 @@ func TestResultBeyondTheLimit(t *testing.T) {
 	if err != nil || !strings.HasPrefix(got, strings.Repeat("x", Tight)+"\n(the value has 4097 bytes, of which the first 4096 came back.") {
 		t.Fatalf("tight: %.80q, %v", got, err)
 	}
+	// Untightened, a context hands on as much as any.
+	got, err = s.Run(Untighten(Tighten(context.Background())), `return "x".repeat(`+fmt.Sprint(Tight+1)+`)`, r.names(), r.call)
+	if err != nil || !strings.HasPrefix(got, strings.Repeat("x", Tight+1)+"\n[kept") {
+		t.Fatalf("untightened: %.80q, %v", got, err)
+	}
 }
 
 // What a script returns goes to the LLM: a string as it is, everything else

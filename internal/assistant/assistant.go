@@ -286,6 +286,10 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
 	}
+	// A helper gets the other tools the owner allows, as they are set up.
+	if at := slices.IndexFunc(allowed, func(t agent.Tool) bool { return t.Name == ToolDelegate }); at >= 0 {
+		allowed[at] = b.delegate(cfg, allowed)
+	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.
 	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint
@@ -319,6 +323,9 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	}
 	if has(ToolUserQuestion) {
 		prompt += questionHint
+	}
+	if has(ToolDelegate) {
+		prompt += delegateHint
 	}
 	return b.build(cfg, prompt+ownerStyle+machineHint(today()), withRun(allowed, sessions))
 }
@@ -384,14 +391,14 @@ func (b Builder) ownerTools(cfg config.Config) ([]agent.Tool, error) {
 
 // Available are the tools the owner picks from for the lists of the
 // configuration: what the plugins contributed, the tool that asks the owner,
-// and the tools for the configuration of the node if the blueprint has one.
+// the one that hands tasks to helpers, and the tools for the configuration of the node if the blueprint has one.
 func (b Builder) Available() []agent.Tool { return b.all() }
 
 // all are the tools the owner picks from: what the plugins contributed, the
-// tool that asks the owner, and the tools for the configuration of the node,
-// if the blueprint has one.
+// tool that asks the owner, the one that hands tasks to helpers, and the
+// tools for the configuration of the node, if the blueprint has one.
 func (b Builder) all() []agent.Tool {
-	return append(append(slices.Clone(b.Tools()), userQuestion()), b.configTools()...)
+	return append(append(slices.Clone(b.Tools()), userQuestion(), delegateTool()), b.configTools()...)
 }
 
 // build makes an agent on the LLM of cfg.
@@ -404,16 +411,22 @@ func (b Builder) build(cfg config.Config, prompt string, tools ...agent.Tool) (*
 	if b.AnswerHooks != nil {
 		hooks = b.AnswerHooks()
 	}
-	if b.Workspace != "" {
-		prompt += " You work in " + b.Workspace + ", a directory of your own: your commands start there unless they name a directory." +
-			" What the user works on is elsewhere: when they speak of a project and name no path, find it or ask, rather than looking for it there."
-	}
+	prompt += b.workspaceHint()
 	llm, err := b.LLM(cfg.Access)
 	if err != nil {
 		return nil, err
 	}
 	llm = b.withFallbacks(llm, cfg)
 	return agent.New(llm, cfg.Model, prompt, tools...).WithExtensions(cfg.ContextProvider, providers, hooks)
+}
+
+// workspaceHint tells an agent where it works, "" without a workspace.
+func (b Builder) workspaceHint() string {
+	if b.Workspace == "" {
+		return ""
+	}
+	return " You work in " + b.Workspace + ", a directory of your own: your commands start there unless they name a directory." +
+		" What the user works on is elsewhere: when they speak of a project and name no path, find it or ask, rather than looking for it there."
 }
 
 // Ready reports whether the assistant can answer: config.ErrIncomplete if the

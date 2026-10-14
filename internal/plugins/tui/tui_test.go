@@ -743,3 +743,16 @@ func TestQuestionIsShownWithItsOptions(t *testing.T) {
 		t.Errorf("answered: %+v", got)
 	}
 }
+
+// The report of a task the agent delegated is shown as a line: its number,
+// what it was and how it ended.
+func TestTaskIsShownAsALine(t *testing.T) {
+	ended := plugin.SessionEvent{Kind: plugin.SessionTask, N: 2, Remark: "find the callers", Text: "they are…", Took: 2500 * time.Millisecond}
+	if got := tuiplugin.Shown(nil, ended); got.Text != "task 2 · find the callers ✓ 3s" || got.Failed {
+		t.Errorf("ended: %+v", got)
+	}
+	failed := plugin.SessionEvent{Kind: plugin.SessionTask, N: 3, Remark: "read", Err: "it broke\n  badly"}
+	if got := tuiplugin.Shown(nil, failed); got.Text != "task 3 · read ✗ it broke badly" || !got.Failed {
+		t.Errorf("failed: %+v", got)
+	}
+}

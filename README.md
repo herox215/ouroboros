@@ -149,7 +149,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 |---|---|
 | `/new` | new conversation; the one shown goes on in the background |
 | `/session` | the conversations of the node in a dialog over the chat, the latest first, the one shown marked: type to filter the list, `↑` `↓` select, `enter` shows the one selected, `ctrl+d` twice deletes it, `tab` switches to the conversations of peers, `esc` takes back what is typed and then goes back; see [Sessions](#sessions) |
-| `/cancel` | stop the answer that is on its way in the conversation shown |
+| `/cancel` | stop the answer that is on its way in the conversation shown, and the tasks its agent delegated |
 | `/jobs` | the commands the agent runs in the background for the answers on their way, in your conversations and in those of peers, each with where it runs and for how long, the list kept up to date: `↑` `↓` select, `enter` stops the one selected, `esc` back; see [Commands](#commands) |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup; for a node that is set up it starts with its accesses: `enter` uses the one selected, `l` signs in to it again, `r` renames it, `d` removes it, the last row adds another one, see [Providers and accesses](#providers-and-accesses) |
@@ -179,7 +179,7 @@ Keys only move around:
 | `ctrl+t` | what the model thought above the words of its round, shown or hidden again |
 | `ctrl+j` | the jobs of the conversation shown, and the services below them, in a list on the right, and the chat and the input narrower for it; a job too long for a line goes on in the next, and while the list is shown the footer says `ctrl+j hide`. Again: the list is hidden, and the jobs are named in the line of the wait below the chat again |
 | `pgup` `pgdn` | scroll the chat |
-| `esc` | on a screen: back to the chat. In the chat: close the list of commands with the command typed; without one, stop the answer on its way in the conversation shown, like `/cancel` |
+| `esc` | on a screen: back to the chat. In the chat: close the list of commands with the command typed; without one, stop the answer on its way in the conversation shown and the tasks its agent delegated, like `/cancel` |
 | `ctrl+c` | quit, everywhere |
 
 ### Pictures
@@ -268,8 +268,9 @@ So an answer does not depend on the UI:
 - **Two front ends** see the same: the UI lists the conversations `ouro chat` had too.
 - `/cancel` stops the answer on its way in the conversation shown, and so does `esc` in the chat: the call
   of the LLM and the tools that can be stopped end, the conversation stays as far as it got, and the next
-  message goes on from there. What a tool already did is not undone. The other conversations go on.
-  Stopping the node stops every answer.
+  message goes on from there. What a tool already did is not undone. The [tasks](#tools) the agent
+  delegated in it stop too, also once its answer is over, and are not reported. The other conversations go
+  on. Stopping the node stops every answer and every task.
 - **Steering.** What you send while an answer is on its way is queued, and shown as that below the
   conversation. The agent takes it as soon as the tools it waits for have run, as a message of yours after
   their results, or, if the answer is given before, as your next message. Either way it goes at the end of
@@ -423,7 +424,8 @@ The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `wr
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
 `history_sessions`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
 `withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that builds and installs its own
-source ([`rebuild`](#updates)) and one that asks you a question (`user_question`, see below). It uses them in **scripts**: the LLM is
+source ([`rebuild`](#updates)), one that asks you a question (`user_question`, see below) and one that hands tasks to
+helpers (`delegate`, see below). It uses them in **scripts**: the LLM is
 offered one tool, `run`, and every tool the agent may use is a function in it, see [Scripts](#scripts).
 Which of them it may use depends on who it is talking to, and is set in `config.json`. This is what the
 setup writes:
@@ -606,6 +608,7 @@ goes on, and looks at the job when it needs to:
 A job ends with the answer at the latest: given, failed or stopped with `/cancel`. At most 8 run at once. While
 an answer is on its way, the chat shows its jobs after what the agent waits for, as
 `alpha is thinking · job 1 · npm run dev`, until they end; front ends get them as the session event `jobs`.
+The tasks the agent [delegated](#tools) come as the event `tasks`, and the report of one that ended as `task`.
 `/jobs` lists the jobs of every answer on its way, also those of the peers you listed `bash` for, and stops
 the one you select: the agent learns so once it looks at it. A front end of its own asks the socket of the
 node: `GET /jobs`, and `POST /stopjob` with `{"id": …, "n": …}`.
@@ -963,6 +966,7 @@ it is a model of another provider, see [Providers and accesses](#providers-and-a
 | `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you, and the agent is told its id |
 | `withdraw_proposal(id?)` | takes back one of the agent's own proposals before you decided on it: with `id` the one it names, without an id it lists what waits, with their ids. Nothing is changed by it, and what you decided on is out of reach |
 | `user_question(question, options?, recommended?)` | asks you `question` and waits for your answer, which it returns: with 2 to 6 `options` to choose from, one of them `recommended` if the agent has a preference, or without any, for you to write it |
+| `delegate(tasks)` | starts 1 to 4 tasks in the background, each done by a helper, and returns at once with their numbers; the report of each comes as a message once it ended. A task is `{task, tools?}`: `tools` narrows what the helper may use |
 
 **The agent can ask you on the way.** When it cannot go on without a decision of yours, it asks with
 `user_question` instead of guessing or ending its answer with the question, as its prompt tells it: the
@@ -974,6 +978,23 @@ words. The agent waits as long as its script may run (10 minutes), and esc stops
 question in a conversation that is not shown is told in the footer. Where nobody is shown the question,
 as with `ouro chat "msg"`, the agent is told so and goes on with what it thinks best. Take `user_question`
 out of `tools.h2a` if you do not want to be asked.
+
+**The agent can hand work to helpers.** With `delegate` it starts tasks in the background, each done by a
+helper of its own: a split piece of work, or a long search it keeps out of the conversation. The call returns at
+once, and you can go on writing meanwhile. At most 4 tasks run at once in a conversation, and the line below the
+chat says how many run (`2 tasks run · esc stops`); `ctrl+j` lists them next to the jobs. Once a task ended, its
+report is a line in the chat (`◆ task 2 · find the callers ✓ 2m40s`, or `✗` and why it failed) and the agent
+takes it as it takes what you write: an answer on its way goes on with it after its current round, and
+otherwise an answer starts for it. What a helper reports is told to the agent as its report, not as what you
+said. A helper is an agent of yours, not a peer: it answers with the model, the access and the effort of the
+conversation, with your tools as `tools.h2a` sets them up, under the same rules for paths and commands, and
+starts in the same workspace. It gets neither the tools to ask you, to reach peers, to build ouro or to change
+the configuration, nor `delegate`, so it hands nothing on. It sees only its task, nothing of the conversation,
+and forgets it once it answered; what it said along the way is neither shown nor archived, only its report.
+A task keeps the node running as an answer does, and a new build waits for it; `esc` and `/cancel` stop the
+tasks of the conversation along with its answer, and a stopped task is not reported. A conversation in which a
+task runs is not deleted. Where nothing runs past the answer, `delegate` waits for its tasks and returns what
+each ended with. Take `delegate` out of `tools.h2a` if your agent is not to use helpers.
 
 **Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a
 proposal changes nothing: it waits among the requests in the terminal UI (`/pending`), where you see the field, what
@@ -1521,7 +1542,7 @@ internal/credentials the accesses of the node, in credentials.json: what it sign
 internal/chatgpt     the provider that signs in with ChatGPT: the login, its tokens, the Responses API (+ chatgpttest fake)
 internal/node        the local node: Server runs it, Local controls the background one
 internal/session     the sessions of the owner: the Service the node runs them in, and the client of its socket
-internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, user_question, get_config, propose_config, withdraw_proposal as functions of its scripts; what the owner's agent does goes to the log
+internal/assistant   blueprint of the agents (owner and peers): run, the one tool of the LLM, and the tools list_peers, ask_peer, explain_error, user_question, delegate, get_config, propose_config, withdraw_proposal as functions of its scripts; what the owner's agent does goes to the log
 internal/guard       which files a tool may touch: the core that is fixed, protected, allow and deny
 internal/script      runs a script of the LLM (JavaScript, goja) with the tools of its agent as functions
 internal/peers       the other nodes: who is online, who is connected, how to talk to them

@@ -77,7 +77,7 @@ func TestRunForTheOwner(t *testing.T) {
 	observe := func(s Step) { steps = append(steps, fmt.Sprintf("%s %s %v", s.Tool, s.Args, s.Done)) }
 
 	got, err := a.Ask(ctx, "chat", runs(`return [who(), note({text: "a"}), tools.note({text: "b"}), typeof run, typeof tools.run, Object.keys(tools)]`), observe)
-	if got := result(t, got, err); got != `["the owner in chat","a","b","undefined","undefined",["who","note","user_question"]]` {
+	if got := result(t, got, err); got != `["the owner in chat","a","b","undefined","undefined",["who","note","user_question","delegate"]]` {
 		t.Fatalf("got %s", got)
 	}
 	call := `run {"script":"return [who(), note({text: \"a\"}), tools.note({text: \"b\"}), typeof run, typeof tools.run, Object.keys(tools)]"}`

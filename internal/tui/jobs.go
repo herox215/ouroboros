@@ -199,6 +199,12 @@ func (m *Model) jobsList() string {
 	for _, job := range m.chat.jobs {
 		lines = append(lines, wrap(job)...)
 	}
+	if len(m.chat.tasks) > 0 {
+		lines = append(lines, "", boldStyle.Render("Tasks"))
+	}
+	for _, task := range m.chat.tasks {
+		lines = append(lines, wrap(task)...)
+	}
 	if len(m.services) > 0 {
 		lines = append(lines, "", boldStyle.Render("Services"))
 	}

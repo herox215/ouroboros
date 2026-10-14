@@ -148,6 +148,8 @@ const (
 	SessionTitle     = session.Title     // the session is named for its topic, in Text
 	SessionEffort    = session.Effort    // how much the model thinks in the session, in Text
 	SessionJobs      = session.Jobs      // the commands that run in the background for the answer, a line each in Text
+	SessionTask      = session.Task      // the report of a task the agent delegated, taken like a message: N, Remark, Text, Err
+	SessionTasks     = session.Tasks     // the tasks the agent delegated that run, a line each in Text
 	// SessionAsked is a question the agent asks the owner and waits for,
 	// see SessionEvent.AsQuestion: what the owner says next in the session,
 	// with Sessions.Steer, answers it. With Done the wait is over, and Text

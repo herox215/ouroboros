@@ -317,7 +317,8 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		{config.Named(toolAskPeer, ToolBash), start + askHint + workHint + claimHint + end},
 		{config.Named(ToolRebuild), start + improveHint + end},
 		{config.Named(ToolUserQuestion), start + questionHint + end},
-		{config.Named("*"), start + askHint + filesHint + workHint + improveHint + claimHint + questionHint + end},
+		{config.Named(ToolDelegate), start + delegateHint + end},
+		{config.Named("*"), start + askHint + filesHint + workHint + improveHint + claimHint + questionHint + delegateHint + end},
 	} {
 		cfg.Tools = &config.Tools{H2A: tt.tools}
 		if got, err := a.Ask(context.Background(), "chat", "?system", nil); err != nil || got != tt.want {

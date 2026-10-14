@@ -85,12 +85,16 @@ func (a art) row(w, t int) []rune {
 }
 
 // waiting is what the agent of the session shown is waiting for, as the chat
-// says it, with the jobs that run in the background for the answer unless
-// they are listed on the left; "" when no answer is on its way.
+// says it, with the jobs that run in the background for the answer and the
+// tasks it delegated, unless they are listed on the right; "" when no
+// answer is on its way.
 func (m *Model) waiting() string {
 	label := m.waitingFor()
 	if label != "" && len(m.chat.jobs) > 0 && !m.jobsShown {
 		label += " · " + strings.Join(m.chat.jobs, " · ")
+	}
+	if label != "" && len(m.chat.tasks) > 0 && !m.jobsShown {
+		label += " · " + strings.Join(m.chat.tasks, " · ")
 	}
 	return label
 }

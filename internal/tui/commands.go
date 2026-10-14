@@ -22,7 +22,7 @@ type command struct {
 var own = []command{
 	{"new", "start a new conversation; the one shown goes on", (*Model).newConversation},
 	{"session", "list the conversations and switch to one", (*Model).openSessions},
-	{"cancel", "stop the answer on its way in this conversation", (*Model).cancel},
+	{"cancel", "stop the answer and the tasks on their way here", (*Model).cancel},
 	{"jobs", "list the commands that run in the background, also for peers, and stop one", (*Model).openJobs},
 	{"start", "start the node", (*Model).start},
 	{"stop", "stop the node", (*Model).stop},

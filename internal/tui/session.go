@@ -218,6 +218,19 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
 		c.title = cmp.Or(c.title, e.Text)
+	case plugin.SessionTask:
+		// The report of a task starts an answer, or goes into the one on its
+		// way, as a message of the owner does.
+		c.add(entry{task: true, text: e.Text, failed: e.Failed, at: e.At})
+		if live && !c.pending {
+			c.art++
+		}
+		c.pending, c.running, c.round, c.doing = true, true, 0, ""
+	case plugin.SessionTasks:
+		c.tasks = nil
+		if e.Text != "" {
+			c.tasks = strings.Split(e.Text, "\n")
+		}
 	case plugin.SessionQueued:
 		c.queued = append(c.queued, e.Text)
 	case plugin.SessionUnqueued:
@@ -693,15 +706,23 @@ func (m *Model) deleted(msg deletedMsg) tea.Cmd {
 	return cmd
 }
 
-// cancel stops the answer on its way in the session shown.
+// cancel stops the answer on its way in the session shown, and the tasks
+// the agent delegated in it.
 func (m *Model) cancel() tea.Cmd {
-	if !m.chat.pending {
+	if !m.chat.pending && len(m.chat.tasks) == 0 {
 		m.setNotice("no answer is on its way here", false)
 		return nil
 	}
 	id := m.chat.contextID
-	m.setNotice("stopping the answer…", false)
-	return func() tea.Msg { return actionMsg{"answer stopped", m.backend.Cancel(m.ctx, id)} }
+	what := "answer"
+	switch {
+	case !m.chat.pending:
+		what = "tasks"
+	case len(m.chat.tasks) > 0:
+		what = "answer and the tasks"
+	}
+	m.setNotice("stopping the "+what+"…", false)
+	return func() tea.Msg { return actionMsg{what + " stopped", m.backend.Cancel(m.ctx, id)} }
 }
 
 // running are the frames of what runs behind the title of a session whose
