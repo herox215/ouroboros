@@ -3,12 +3,23 @@ package websearch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+// withoutEngines makes the fallback find nothing at once: a test about the
+// search of Exa asks no search engine, and none of these tests reaches the
+// network.
+func withoutEngines(t *testing.T) {
+	t.Helper()
+	old := engines
+	engines = []engine{answering("test", nil, errors.New("no engine is asked in a test"))}
+	t.Cleanup(func() { engines = old })
+}
 
 func TestSearch(t *testing.T) {
 	for _, stream := range []bool{false, true} {
@@ -69,6 +80,7 @@ func TestSearchFailures(t *testing.T) {
 		{"large", 200, strings.Repeat("x", maxResponse+1), "application/json", "exceeds 1 MiB"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			withoutEngines(t)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", tc.contentType)
 				w.Header().Set("Retry-After", "60")
@@ -86,6 +98,7 @@ func TestSearchFailures(t *testing.T) {
 }
 
 func TestSearchArgumentsAndCancellation(t *testing.T) {
+	withoutEngines(t)
 	s := &search{client: http.DefaultClient, endpoint: "http://127.0.0.1:1"}
 	for _, raw := range []string{
 		`{"query":" "}`, `{"query":"ouro","limit":-1}`, `{"query":"ouro","limit":11}`,

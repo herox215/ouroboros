@@ -780,6 +780,26 @@ meanwhile. What a conversation keeps between its scripts counts for none of them
 keep what their scripts built, and nothing limits how much that is. Whoever may run scripts on your node may
 therefore slow it down or bring it down: list a tool in `a2a` only for peers you would let do that.
 
+### Web search
+
+`web_search(query, limit?)` returns source URLs and excerpts (at most 24 KiB, five results by
+default, at most ten). The search backend is a tool setting, not an argument the agent chooses
+for each query. Change it in `/settings` under the settings of `web_search`, separately for
+your own conversations and any peers allowed to use it. Existing configurations keep using
+Exa's free, keyless endpoint with DuckDuckGo/Brave fallback.
+
+For a self-hosted SearXNG instance, use these tool settings (or the corresponding entry in
+`tools.h2a` in the profile configuration):
+
+```json
+{"tool": "web_search", "provider": "searxng", "endpoint": "http://search.lan:8080/search"}
+```
+
+Enable JSON output in SearXNG (`search.formats` must include `json`). Queries are sent to
+the configured instance. An explicitly configured self-hosted search does not fall back
+to a public service when it fails. Search results are untrusted page content, never
+instructions; open the source URLs to verify important claims.
+
 ### Browser
 
 `browser` uses the web as a person does, for pages that `bash` with `curl` does not get far with: those that are
