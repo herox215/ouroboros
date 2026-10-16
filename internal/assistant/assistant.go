@@ -110,7 +110,11 @@ const (
 		`never a tool to call on its own. `
 	// researchHint also applies to browser-only research and delegated comparisons.
 	researchHint = `For short comparison questions, stop researching once a few reliable primary sources support the central claims and the requested comparison can be answered. ` +
-		`Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth. `
+		`Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth. ` +
+		`For feasibility checks, request a few search results and small, bounded webpage excerpts rather than collecting large raw responses. ` +
+		`Use the tools' output budget parameters and browser offsets to read more only where needed. ` +
+		`Start with about 2 KiB of text per source, leaving room for notes within the script's current output budget, and expand only when necessary. ` +
+		`Keep the combined output of a script, including notes and other results, safely below its output limit; individual tool limits do not bound a batch. `
 	// validationHint applies even with browser-only tools: opening a page is
 	// not evidence that its interactions work. Helpers need the same rule.
 	validationHint = `When testing whether something works, distinguish reachability from verified functionality. ` +

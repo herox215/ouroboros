@@ -158,6 +158,9 @@ func camoPath(t *camoTab, action string) string {
 }
 
 func (b *camoBackend) run(ctx context.Context, key, target string, a args) (string, error) {
+	if _, err := pageBudget(a.budget()); err != nil {
+		return "", err
+	}
 	switch {
 	case a.Action == "dialog", a.Action == "console":
 		return "", fmt.Errorf("the native Camofox REST API does not support browser action %q", a.Action)
@@ -222,14 +225,14 @@ func (b *camoBackend) run(ctx context.Context, key, target string, a args) (stri
 		}
 		c.tabs = append(c.tabs, &camoTab{id: created.TabID, url: target})
 		c.current = len(c.tabs) - 1
-		return b.read(ctx, c, c.tabs[c.current], 0)
+		return b.read(ctx, c, c.tabs[c.current], 0, a.budget())
 	}
 	if len(c.tabs) == 0 {
 		return "", errors.New("the Camofox browser has no current tab: open a URL first")
 	}
 	t := c.tabs[c.current]
 	if a.Action == "read" {
-		return b.read(ctx, c, t, a.Offset)
+		return b.read(ctx, c, t, a.Offset, a.budget())
 	}
 	if a.Action == "screenshot" {
 		data, err := b.request(ctx, http.MethodGet, camoPath(t, "screenshot"), c.user, nil, nil)
@@ -305,7 +308,7 @@ func (b *camoBackend) run(ctx context.Context, key, target string, a args) (stri
 	}
 	// Unlike CDP's where(), REST has no independent title/view endpoint.
 	// Returning a fresh native snapshot also makes new refs available.
-	text, err := b.read(ctx, c, t, 0)
+	text, err := b.read(ctx, c, t, 0, a.budget())
 	if err != nil {
 		return "", fmt.Errorf("the Camofox %s succeeded, but reading the resulting page failed: %w", a.Action, err)
 	}
@@ -402,7 +405,11 @@ func camoWindowContent(text string, offset, total int, more bool, next int) (str
 	return string(utf16.Decode(content)), nil
 }
 
-func (b *camoBackend) read(ctx context.Context, c *camoConversation, t *camoTab, offset int) (string, error) {
+func (b *camoBackend) read(ctx context.Context, c *camoConversation, t *camoTab, offset int, budgets ...int) (string, error) {
+	budget, err := pageBudget(budgets...)
+	if err != nil {
+		return "", err
+	}
 	if offset < 0 {
 		return "", errors.New("read offset must not be negative")
 	}
@@ -485,7 +492,7 @@ func (b *camoBackend) read(ctx context.Context, c *camoConversation, t *camoTab,
 	if offset > len(text) || (offset < len(text) && !utf8.RuneStart(text[offset])) {
 		return "", fmt.Errorf("invalid byte offset %d for snapshot of %d bytes", offset, len(text))
 	}
-	end := min(offset+maxPage, len(text))
+	end := min(offset+budget, len(text))
 	for end > offset && end < len(text) && !utf8.RuneStart(text[end]) {
 		end--
 	}
