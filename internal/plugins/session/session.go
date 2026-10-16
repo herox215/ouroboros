@@ -35,6 +35,7 @@ type services struct {
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("sessions", func(ctx *plugin.Context, n needs) (services, error) {
 		s := In(dir, n.Assistant)
+		ctx.OnStop(s.Close)
 		s.ServicesFrom(func() []session.Services { return plugin.All[plugin.Services](ctx) })
 		return services{s, session.NewClient(dir)}, nil
 	})
@@ -43,6 +44,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 // In returns the Service of the sessions of the node in dir, with a.
 func In(dir home.Dir, a *assistant.Assistant) *session.Service {
 	s := session.New(a)
+	s.Workspace = dir.WorkingDir()
 	s.Archive(history.Open(dir.History()), dir.Log, func(party string) string {
 		data, _ := dir.Contacts().Snapshot() // a peer that is not known is named by its party
 		for _, c := range data.Trusted {

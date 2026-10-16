@@ -1,8 +1,6 @@
 package history
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -28,7 +26,9 @@ func TestGoOn(t *testing.T) {
 	}
 
 	a.GoOn("owner/s3")
-	os.WriteFile(filepath.Join(dir, "owner", "s3.jsonl"), nil, 0o600)
+	if err := a.Append(Who{Session: "s3"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.Delete("owner/s3"); err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +36,22 @@ func TestGoOn(t *testing.T) {
 		t.Fatalf("a deleted session goes on: %v", got)
 	}
 
-	// A mark that cannot be taken away is an error, and it is not returned
-	// as gone.
+	// A failed consumption rolls back all marks.
 	a.GoOn("owner/s4")
-	os.Chmod(filepath.Join(dir, "owner"), 0o500)
-	t.Cleanup(func() { os.Chmod(filepath.Join(dir, "owner"), 0o700) })
+	db, err := a.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("CREATE TRIGGER keep_mark BEFORE UPDATE OF goon ON history_sessions WHEN old.goon=1 AND new.goon=0 BEGIN SELECT RAISE(ABORT,'broken'); END"); err != nil {
+		t.Fatal(err)
+	}
 	if got, err := a.GoingOn(); err == nil || len(got) != 0 {
-		t.Fatalf("a mark that stays: %v, %v", got, err)
+		t.Fatalf("failed consume: %v %v", got, err)
+	}
+	if _, err = db.Exec("DROP TRIGGER keep_mark"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := a.GoingOn(); err != nil || !slices.Equal(got, []string{"owner/s4"}) {
+		t.Fatalf("retry: %v %v", got, err)
 	}
 }

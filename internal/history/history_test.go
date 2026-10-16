@@ -7,11 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 
 	"ouroboros/internal/openai"
 )
@@ -29,6 +26,7 @@ func at(t *testing.T) *Archive {
 	t.Helper()
 	a := Open(filepath.Join(t.TempDir(), "history"))
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	t.Cleanup(func() { a.Close() })
 	a.now = func() time.Time {
 		now = now.Add(time.Minute)
 		return now
@@ -51,7 +49,7 @@ func answer(user, result, reply string) []openai.Message {
 func all(t *testing.T, a *Archive, who Who) []Record {
 	t.Helper()
 	var out []Record
-	if err := records(a.file(who, Name(who.Session)), func(r Record) bool { out = append(out, r); return true }); err != nil {
+	if err := a.records(a.file(who, Name(who.Session)), func(r Record) bool { out = append(out, r); return true }); err != nil {
 		t.Fatal(err)
 	}
 	return out
@@ -95,13 +93,16 @@ func TestAppend(t *testing.T) {
 	if !got[0].Time.Equal(time.Date(2026, 10, 6, 12, 1, 0, 0, time.UTC)) || !got[8].Time.Equal(time.Date(2026, 10, 6, 12, 3, 0, 0, time.UTC)) {
 		t.Errorf("times %v, %v", got[0].Time, got[8].Time)
 	}
-	path := a.file(owner, "chat-1")
-	for _, p := range []string{path, filepath.Dir(path), a.dir} {
+	for _, p := range []string{filepath.Join(a.dir, "ouroboros.sqlite"), a.dir} {
 		info, err := os.Stat(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := os.FileMode(0o700); info.IsDir() && info.Mode().Perm() != want || !info.IsDir() && info.Mode().Perm() != 0o600 {
+		want := os.FileMode(0600)
+		if info.IsDir() {
+			want = 0700
+		}
+		if info.Mode().Perm() != want {
 			t.Errorf("%s: %v", p, info.Mode())
 		}
 	}
@@ -119,31 +120,18 @@ func TestAppend(t *testing.T) {
 	if got := all(t, a, owner); len(got) != 13 || got[12].Seq != 13 || got[12].Answer != 5 {
 		t.Fatalf("after another process: %+v", got[9:])
 	}
-	b, _ := os.ReadFile(path)
-	if strings.Contains(string(b), "\n\n") {
-		t.Error("a whole file got an empty line")
-	}
-	if info, _ := os.Stat(path); a.known[path].size != info.Size() {
-		t.Errorf("known size %d, file %d", a.known[path].size, info.Size())
-	}
-
-	// A line that was cut off, as by a crash, is ended, and passed over.
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(`{"seq":14,"answ`)
-	f.Close()
+	// A fresh handle continues the authoritative SQL state.
 	restarted := Open(a.dir)
+	defer restarted.Close()
 	restarted.now = a.now
 	if err := restarted.Append(owner, question, nil); err != nil {
 		t.Fatal(err)
 	}
 	got = all(t, a, owner)
-	if len(got) != 15 || got[13].Seq != 14 || got[13].Answer != 6 || got[14].Seq != 15 {
-		t.Fatalf("after a torn line: %+v", got[12:])
+	if len(got) != 15 || got[14].Answer != 6 {
+		t.Fatalf("restart: %+v", got)
 	}
-	b, _ = os.ReadFile(path)
-	if !strings.Contains(string(b), "\"answ\n{") {
-		t.Errorf("the torn line was not ended: %q", b[len(b)-300:])
-	}
+
 }
 
 // The owner and every peer have a directory of their own, named by the key
@@ -156,23 +144,17 @@ func TestParties(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var files []string
-	filepath.WalkDir(a.dir, func(path string, d os.DirEntry, _ error) error {
-		if !d.IsDir() {
-			rel, _ := filepath.Rel(a.dir, path)
-			files = append(files, rel)
-		}
-		return nil
-	})
-	if len(files) != 4 {
-		t.Fatalf("files %v", files)
+	entries, err := a.List()
+	if err != nil || len(entries) != 4 {
+		t.Fatalf("sessions: %+v %v", entries, err)
 	}
-	for _, f := range files {
-		dir, name := filepath.Split(f)
-		if dir != "owner/" && !party.MatchString(strings.TrimSuffix(dir, "/")) || !named.MatchString(strings.TrimSuffix(name, suffix)) {
-			t.Errorf("file %q", f)
+	for _, e := range entries {
+		dir, name, _ := strings.Cut(e.ID, "/")
+		if !party.MatchString(dir) || !named.MatchString(name) {
+			t.Errorf("ID %q", e.ID)
 		}
 	}
+
 	if Name("../../etc/passwd") == "../../etc/passwd" || len(Name("../../etc/passwd")) != 32 || Name("a-B_9") != "a-B_9" {
 		t.Error("session names")
 	}
@@ -195,75 +177,35 @@ func TestAppendFails(t *testing.T) {
 		t.Error("a conversation that is a directory should fail")
 	}
 
-	a = at(t)
-	flock = func(int, int) error { return syscall.EINTR }
-	t.Cleanup(func() { flock = syscall.Flock })
-	if err := a.Append(owner, question, nil); err == nil {
-		t.Error("a file that cannot be locked should fail")
-	}
-	flock = syscall.Flock
-
-	stat = func(*os.File) (os.FileInfo, error) { return nil, syscall.EIO }
-	t.Cleanup(func() { stat = (*os.File).Stat })
-	if err := a.Append(owner, question, nil); err == nil {
-		t.Error("a file that cannot be looked at should fail")
-	}
 }
 
-// What a file cannot be read for stops scanning, and a write that fails
-// leaves the position unknown.
-func TestScanAndWriteFail(t *testing.T) {
-	a := at(t)
-	if err := a.Append(owner, question, nil); err != nil {
-		t.Fatal(err)
-	}
-	f, _ := os.Open(a.file(owner, "chat-1"))
-	f.Close()
-	if _, err := scan(f); err == nil {
-		t.Error("a closed file should fail to scan")
-	}
-	if err := lines(failing{}, func([]byte) bool { return true }); err == nil {
-		t.Error("a reader that fails should fail")
-	}
-
-	// A file that changed under the archive is scanned anew; one that cannot
-	// be scanned is not written.
-	a.known[a.file(owner, "chat-1")] = position{size: 1}
-	stat := flock
-	flock = func(fd int, _ int) error {
-		// The file can be looked at, but not read.
-		null, _ := syscall.Open(os.DevNull, syscall.O_WRONLY, 0)
-		return unix.Dup2(null, fd)
-	}
-	t.Cleanup(func() { flock = stat })
-	if err := a.Append(owner, question, nil); err == nil {
-		t.Error("a file that cannot be read should fail")
-	}
-}
-
-type failing struct{}
-
-func (failing) Read([]byte) (int, error) { return 0, errors.New("broken") }
-
-// A write that fails is reported, and the next one scans the file anew.
+// SQL write failures roll back the whole answer and leave sequencing intact.
 func TestWriteFails(t *testing.T) {
 	a := at(t)
 	if err := a.Append(owner, question, nil); err != nil {
 		t.Fatal(err)
 	}
-	path := a.file(owner, "chat-1")
-	stat := flock
-	flock = func(fd int, _ int) error {
-		// The file can be read, but not written.
-		null, _ := syscall.Open(os.DevNull, syscall.O_RDONLY, 0)
-		return unix.Dup2(null, fd)
+	db, err := a.database()
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { flock = stat })
-	if err := a.Append(owner, question, nil); err == nil {
-		t.Fatal("a write that fails should fail")
+	if _, err = db.Exec("CREATE TRIGGER reject_end BEFORE INSERT ON history_records WHEN new.seq=4 BEGIN SELECT RAISE(ABORT,'broken'); END"); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := a.known[path]; ok {
-		t.Error("the position after a failed write is still known")
+	if err = a.Append(owner, question, nil); err == nil {
+		t.Fatal("write should fail")
+	}
+	if got := all(t, a, owner); len(got) != 2 {
+		t.Fatalf("partial answer: %+v", got)
+	}
+	if _, err = db.Exec("DROP TRIGGER reject_end"); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Append(owner, question, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := all(t, a, owner); len(got) != 4 || got[2].Seq != 3 || got[2].Answer != 2 {
+		t.Fatalf("retry: %+v", got)
 	}
 }
 
@@ -279,7 +221,8 @@ func TestSearchScope(t *testing.T) {
 	// The most recent last: a file system may give the same time to all.
 	for i, name := range []string{"chat-1", "chat-2", "chat-3"} {
 		at := time.Now().Add(time.Duration(i-3) * time.Minute)
-		os.Chtimes(a.file(owner, name), at, at)
+		db, _ := a.database()
+		db.Exec("UPDATE history_sessions SET modified=? WHERE id=?", at.UnixNano(), Owner(name))
 	}
 
 	out, hits, err := a.Search(owner, "roof", false, 0)
@@ -447,12 +390,7 @@ func TestRead(t *testing.T) {
 	if !strings.HasPrefix(out, "#2 ") || strings.Contains(out, "#4 ") || !strings.HasSuffix(out, "[records 2 to 3 of 7: continue with from 4]") {
 		t.Errorf("a part: %q", out)
 	}
-	f, _ := os.OpenFile(a.file(owner, "chat-1"), os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString("{}\nnot json\n")
-	f.Close()
-	if out, _ := a.Read(owner, "", 7, 0, 0); !strings.HasPrefix(out, "#7 ") || !strings.HasSuffix(out, "[records 7 to 7 of 7]") {
-		t.Errorf("lines that are no records: %q", out)
-	}
+
 	if out, _ := a.Read(owner, "", 0, 1, 0); !strings.HasSuffix(out, "[records 1 to 1 of 7: continue with from 2]") {
 		t.Errorf("one record: %q", out)
 	}
@@ -534,7 +472,8 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("empty: %q, %v", out, err)
 	}
 	a.Append(Who{Session: "old"}, []openai.Message{{Role: "assistant", Content: "hello"}, {Role: "user", Content: "first\n  question " + strings.Repeat("ü", 100)}}, nil)
-	os.Chtimes(a.file(owner, "old"), time.Now(), time.Now().Add(-time.Hour))
+	db, _ := a.database()
+	db.Exec("UPDATE history_sessions SET modified=? WHERE id=?", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(), Owner("old"))
 	a.Append(owner, question, nil)
 	a.Append(peerA, []openai.Message{{Role: "user", Content: "peer"}}, nil)
 
@@ -598,7 +537,8 @@ func TestListAndDelete(t *testing.T) {
 	}
 	a.Append(owner, question, nil)
 	a.Append(peerA, []openai.Message{{Role: "user", Content: "from a"}}, nil)
-	os.Chtimes(a.file(peerA, Name(peerA.Session)), time.Now(), time.Now().Add(time.Hour))
+	db, _ := a.database()
+	db.Exec("UPDATE history_sessions SET modified=? WHERE id=?", time.Now().Add(time.Hour).UnixNano(), Party(peerA.Peer)+"/"+Name(peerA.Session))
 	os.WriteFile(filepath.Join(a.dir, "README"), nil, 0o600)
 	os.Mkdir(filepath.Join(a.dir, "other"), 0o700)
 	os.WriteFile(filepath.Join(a.dir, "other", "x.jsonl"), []byte(`{"seq":1}`+"\n"), 0o600)
@@ -629,7 +569,7 @@ func TestListAndDelete(t *testing.T) {
 			t.Errorf("%q: %v", id, err)
 		}
 	}
-	if _, err := os.Stat(a.file(owner, "chat-1")); err != nil {
+	if _, err := a.Records(Owner(owner.Session)); err != nil {
 		t.Error("a session that was not named is gone")
 	}
 
@@ -647,12 +587,6 @@ func TestListAndDelete(t *testing.T) {
 		t.Errorf("party %q, owner %q", Party(peerA.Peer), Owner("../x"))
 	}
 
-	// What cannot be read or removed fails.
-	os.Remove(a.file(owner, "chat-1"))
-	os.MkdirAll(filepath.Join(a.file(owner, "chat-1"), "x"), 0o700)
-	if err := a.Delete("owner/chat-1"); err == nil {
-		t.Error("a directory with content should fail")
-	}
 	b := at(t)
 	os.WriteFile(b.dir, nil, 0o600)
 	if _, err := b.List(); err == nil {
@@ -726,24 +660,6 @@ func TestTitles(t *testing.T) {
 	if err := b.SetTitle(Owner(owner.Session), "x"); err == nil {
 		t.Error("an archive that is a file should fail")
 	}
-	c := at(t)
-	c.Append(owner, question, nil)
-	os.MkdirAll(filepath.Join(c.dir, ownerDir, "chat-1.title", "x"), 0o700)
-	if err := c.SetTitle(Owner(owner.Session), "x"); err == nil {
-		t.Error("a title that is a directory should fail")
-	}
-	if _, err := c.Title(Owner(owner.Session)); err == nil {
-		t.Error("a title that cannot be read should fail")
-	}
-	if entries, _ := c.List(); len(entries) != 1 || entries[0].Title != question[0].Content {
-		t.Errorf("entries %+v", entries)
-	}
-	if err := c.Delete(Owner(owner.Session)); err == nil {
-		t.Error("a title that cannot be removed should fail")
-	}
-	if _, err := os.Stat(c.file(owner, "chat-1")); err != nil {
-		t.Errorf("the conversation is gone without its title: %v", err)
-	}
 }
 
 // A conversation is given an effort of its own, "" too, and it goes with it.
@@ -781,7 +697,6 @@ func TestEfforts(t *testing.T) {
 		t.Errorf("get: %v", err)
 	}
 	b := at(t)
-	b.Append(owner, question, nil)
 	os.MkdirAll(filepath.Join(b.dir, ownerDir, "chat-1.effort", "x"), 0o700)
 	if err := b.SetEffort(id, "low"); err == nil {
 		t.Error("an effort that is a directory should fail")

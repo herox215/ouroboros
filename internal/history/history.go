@@ -1,29 +1,14 @@
-// Package history keeps every conversation of the agents in full, on disk,
-// for the agent to search and read again: what the memory of a conversation
-// cuts off, and the conversations before /new.
-//
-// An archive is a directory with one directory per party: owner for the
-// conversations of the owner, and peer-<fingerprint> for those of each peer,
-// named by its authenticated key. In it every conversation is one file of
-// JSON lines, a Record each, appended to after every answer. Who reads finds
-// only what is in scope for it: the owner its current conversation or all of
-// its own, a peer its current conversation and nothing else.
-//
-// A conversation may have a title besides, named for its topic (see
-// SetTitle), and an effort of its own (see SetEffort): each is kept in a
-// file of its own next to it. The title names it in place of its first
-// message.
-//
-// Nothing is deleted by the archive itself: the owner deletes a session with
-// Delete.
+// Package history keeps complete conversation archives and persistent session
+// metadata in SQLite. Legacy JSONL archives are imported lazily, transactionally,
+// without modifying the originals. Access remains scoped by authenticated party.
+
 package history
 
 import (
 	"bufio"
-	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -33,11 +18,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
+
 	"time"
 	"unicode/utf8"
 
@@ -57,11 +41,6 @@ const (
 	// MaxSessions is how many sessions a listing names at most.
 	MaxSessions = 50
 
-	// matchChunk is how much of a session Match looks at at once.
-	matchChunk = 1 << 20
-	// maxMatchWorkers is how many sessions Match reads at once at most.
-	maxMatchWorkers = 8
-
 	maxSearchBytes = 16 << 10 // of the hits of one search
 	MaxReadBytes   = 16 << 10 // of one read, including its continuation note
 	excerpt        = 80       // bytes on each side of a hit
@@ -72,12 +51,13 @@ const (
 // The parties of an archive: the directory of the owner, and the start of
 // the directory of each peer.
 const (
-	ownerDir     = "owner"
-	peerPrefix   = "peer-"
-	suffix       = ".jsonl"
-	titleSuffix  = ".title"
-	effortSuffix = ".effort"
-	goOnSuffix   = ".goon"
+	ownerDir        = "owner"
+	peerPrefix      = "peer-"
+	suffix          = ".jsonl"
+	titleSuffix     = ".title"
+	effortSuffix    = ".effort"
+	directorySuffix = ".directory"
+	goOnSuffix      = ".goon"
 )
 
 // The outcomes of an answer, in the record that ends it.
@@ -94,10 +74,11 @@ type Record struct {
 	Time   time.Time `json:"time"`   // when the answer ended
 	// Role is that of the message: user, assistant or tool, and end for the
 	// record that closes an answer with its Outcome.
-	Role       string `json:"role"`
-	Content    string `json:"content,omitempty"`
-	ToolCalls  []Call `json:"tool_calls,omitempty"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role       string               `json:"role"`
+	Content    string               `json:"content,omitempty"`
+	Source     openai.MessageSource `json:"source,omitzero"`
+	ToolCalls  []Call               `json:"tool_calls,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
 	// Outcome is Answered, Failed or Canceled. Why an answer failed is not
 	// kept: a peer reads its archive, and must not learn the cause from it.
 	Outcome string `json:"outcome,omitempty"`
@@ -130,25 +111,16 @@ type Who struct {
 type Archive struct {
 	dir string
 	now func() time.Time
-
-	mu    sync.Mutex
-	known map[string]position // by path, where its file ended the last time
-	// lastQuery is what Match looked for last, and lastHits what it found
-	// then: a query that goes on from it is looked for only in those again.
-	lastQuery string
-	lastHits  []string
+	mu  sync.Mutex
+	db  *sql.DB
 }
 
-// position is how far a file is known: its size, and the last sequence
-// number and answer in it.
-type position struct {
-	size        int64
-	seq, answer int
-}
-
-// Open returns the archive in dir, which is created when something is kept.
+// Open returns a lazy archive handle. Its first write (or read of an existing
+// directory) opens SQLite in dir and imports any legacy archive. Reads of a
+// missing directory do not create it. Operation errors include
+// initialization failures; Open retains its historical no-error signature.
 func Open(dir string) *Archive {
-	return &Archive{dir: dir, now: time.Now, known: map[string]position{}}
+	return &Archive{dir: dir, now: time.Now}
 }
 
 // named is what a session name may be: a context ID as ouro makes them, of
@@ -185,77 +157,60 @@ func (a *Archive) file(who Who, session string) string {
 	return filepath.Join(a.partyDir(who), session+suffix)
 }
 
-// flock locks a file and stat looks at it; tests replace them to make them
-// fail.
-var (
-	flock = syscall.Flock
-	stat  = (*os.File).Stat
-)
-
-// Append keeps the messages of one answer of the conversation of who, and
-// how it ended: err is the error of the answer. A conversation that goes on,
-// also in another process, goes on in its file.
-func (a *Archive) Append(who Who, msgs []openai.Message, err error, statistics ...Statistics) error {
-	dir := a.partyDir(who)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+// Append atomically keeps one complete answer, continuing the SQL sequence.
+func (a *Archive) Append(who Who, msgs []openai.Message, answerErr error, statistics ...Statistics) error {
+	db, err := a.database()
+	if err != nil {
 		return err
 	}
-	path := a.file(who, Name(who.Session))
-	f, err2 := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
-	if err2 != nil {
-		return err2
-	}
-	defer f.Close()
-	if err := flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
 		return err
 	}
-	info, err2 := stat(f)
-	if err2 != nil {
-		return err2
+	defer tx.Rollback()
+	id := filepath.Base(a.partyDir(who)) + "/" + Name(who.Session)
+	// A write before the read serializes concurrent appenders, also across handles.
+	if _, err = tx.Exec("INSERT INTO history_sessions(id) VALUES(?) ON CONFLICT(id) DO UPDATE SET deleted=0", id); err != nil {
+		return err
 	}
-	a.mu.Lock()
-	at, ok := a.known[path]
-	a.mu.Unlock()
-	var out bytes.Buffer
-	if !ok || at.size != info.Size() {
-		// Another process went on with it, or this one does not know it yet.
-		s, err := scan(f)
-		if err != nil {
-			return err
-		}
-		if !s.whole {
-			out.WriteByte('\n') // a line that was cut off ends here
-		}
-		at = s.position
+	var seq, answer, ordinal int
+	if err = tx.QueryRow("SELECT coalesce(max(seq),0),coalesce(max(answer),0),coalesce(max(ordinal),0) FROM history_records WHERE session_id=?", id).Scan(&seq, &answer, &ordinal); err != nil {
+		return err
 	}
-	answer, now := at.answer+1, a.now().UTC()
-	seq := at.seq
-	add := func(r Record) {
+	answer++
+	now := a.now().UTC()
+	var size int64
+	add := func(r Record) error {
 		seq++
+		ordinal++
 		r.Seq, r.Answer, r.Time = seq, answer, now
-		b, _ := json.Marshal(r) // texts: cannot fail
-		out.Write(append(b, '\n'))
+		b, e := json.Marshal(r)
+		if e != nil {
+			return e
+		}
+		size += int64(len(b) + 1)
+		return insertRecord(tx, id, ordinal, r, b)
 	}
 	for _, m := range msgs {
-		r := Record{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
+		r := Record{Role: m.Role, Content: m.Content, Source: m.Source, ToolCallID: m.ToolCallID}
 		for _, c := range m.ToolCalls {
 			r.ToolCalls = append(r.ToolCalls, Call{c.ID, c.Function.Name, c.Function.Arguments})
 		}
-		add(r)
+		if err = add(r); err != nil {
+			return err
+		}
 	}
-	end := Record{Role: "end", Outcome: outcome(err)}
+	end := Record{Role: "end", Outcome: outcome(answerErr)}
 	if len(statistics) > 0 {
 		end.Statistics = &statistics[0]
 	}
-	add(end)
-	if _, err := f.Write(out.Bytes()); err != nil {
-		a.forget(path)
+	if err = add(end); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	a.known[path] = position{info.Size() + int64(out.Len()), seq, answer}
-	a.mu.Unlock()
-	return nil
+	if _, err = tx.Exec("UPDATE history_sessions SET archived=1,modified=?,size=size+? WHERE id=?", now.UnixNano(), size, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // outcome is how an answer with the error err ended.
@@ -267,37 +222,6 @@ func outcome(err error) string {
 		return Canceled
 	}
 	return Failed
-}
-
-func (a *Archive) forget(path string) {
-	a.mu.Lock()
-	delete(a.known, path)
-	a.mu.Unlock()
-}
-
-// scanned is how far a file goes, and whether it ends with a whole line.
-type scanned struct {
-	position
-	whole bool
-}
-
-// scan reads where the file f ends: its size, and the last sequence number
-// and answer in it. A line that is no record is passed over.
-func scan(f *os.File) (scanned, error) {
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return scanned{}, err
-	}
-	at := scanned{whole: true}
-	err := lines(f, func(line []byte) bool {
-		at.size += int64(len(line))
-		at.whole = bytes.HasSuffix(line, []byte("\n"))
-		var r Record
-		if json.Unmarshal(line, &r) == nil {
-			at.seq, at.answer = max(at.seq, r.Seq), max(at.answer, r.Answer)
-		}
-		return true
-	})
-	return at, err
 }
 
 // lines hands each line of r to each, with its line break, until each
@@ -350,46 +274,14 @@ type session struct {
 // sessions are the sessions of the party of who, the most recently changed
 // first; for a peer only its current one.
 func (a *Archive) sessions(who Who) ([]session, error) {
-	if who.Peer != "" {
-		name := Name(who.Session)
-		path := a.file(who, name)
-		info, err := os.Stat(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return []session{{name, path, info.ModTime(), info.Size()}}, nil
-	}
-	return list(a.partyDir(who))
-}
-
-// list returns the sessions in dir, the most recently changed first.
-func list(dir string) ([]session, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+	in, err := a.every()
 	if err != nil {
 		return nil, err
 	}
-	var out []session
-	for _, e := range entries {
-		name, ok := strings.CutSuffix(e.Name(), suffix)
-		if !ok || !e.Type().IsRegular() || !named.MatchString(name) {
-			continue
-		}
-		s := session{name: name, path: filepath.Join(dir, e.Name())}
-		if info, err := e.Info(); err == nil { // not if it was deleted meanwhile
-			s.modified, s.size = info.ModTime(), info.Size()
-		}
-		out = append(out, s)
-	}
-	slices.SortStableFunc(out, func(x, y session) int {
-		return cmp.Or(y.modified.Compare(x.modified), strings.Compare(x.name, y.name))
-	})
-	return out, nil
+	dir := a.partyDir(who)
+	return slices.DeleteFunc(in, func(s session) bool {
+		return filepath.Dir(s.path) != dir || who.Peer != "" && s.name != Name(who.Session)
+	}), nil
 }
 
 // when is how a time is shown.
@@ -429,7 +321,7 @@ func (a *Archive) Search(who Who, query string, all bool, limit int) (string, in
 	var out strings.Builder
 	hits, more := 0, false
 	for _, s := range in {
-		err := records(s.path, func(r Record) bool {
+		err := a.searchRecords(s.path, needle, func(r Record) bool {
 			found, ok := match(r, needle)
 			if !ok {
 				return true
@@ -545,7 +437,7 @@ func (a *Archive) Read(who Who, session string, from, count, offset int) (string
 	first, last, total, full := 0, 0, 0, false
 	nextOffset := 0
 	var offsetErr error
-	err := records(a.file(who, session), func(r Record) bool {
+	err := a.records(a.file(who, session), func(r Record) bool {
 		total = r.Seq // the records after those returned are counted on
 		if r.Seq < from || full {
 			return true
@@ -638,7 +530,7 @@ func (a *Archive) Sessions(who Who) (string, int, error) {
 	shown := min(len(in), MaxSessions)
 	for _, s := range in[:shown] {
 		// A line is bounded by the title, so the listing is by MaxSessions.
-		started, title := describe(s.path)
+		started, title := a.describe(s.path)
 		fmt.Fprintf(&out, "%s · started %s · last %s · %q\n", label(s.name, current), started, when(s.modified), title)
 	}
 	if shown < len(in) {
@@ -652,11 +544,9 @@ func (a *Archive) Sessions(who Who) (string, int, error) {
 // describe returns when the conversation at path started and its title: the
 // one it was given, or else its first message of the user, as far as they are
 // there.
-func describe(path string) (started, title string) {
-	if b, err := os.ReadFile(titled(path)); err == nil {
-		title = string(b)
-	}
-	records(path, func(r Record) bool {
+func (a *Archive) describe(path string) (started, title string) {
+	title, _, _ = a.beside(a.id(path), titleSuffix)
+	a.records(path, func(r Record) bool {
 		if started == "" {
 			started = when(r.Time)
 		}
@@ -683,152 +573,84 @@ type Entry struct {
 
 // every returns the conversations of every party in the archive, the most
 // recently changed first.
-func (a *Archive) every() ([]session, error) {
-	parties, err := os.ReadDir(a.dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+func (a *Archive) every() ([]session, error) { return a.allSessions(true) }
+
+// Metadata-only sessions belong in the application listing, but not in
+// transcript search or the archived-conversation listing.
+func (a *Archive) allSessions(archivedOnly bool) ([]session, error) {
+	db, err := a.readDatabase()
+	if err != nil || db == nil {
+		return nil, err
 	}
+	query := "SELECT id,modified,size FROM history_sessions WHERE deleted=0"
+	if archivedOnly {
+		query += " AND archived=1"
+	}
+	rows, err := db.Query(query + " ORDER BY modified DESC,id")
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var out []session
-	for _, p := range parties {
-		if !p.IsDir() || p.Name() != ownerDir && !strings.HasPrefix(p.Name(), peerPrefix) {
-			continue
-		}
-		in, err := list(filepath.Join(a.dir, p.Name()))
-		if err != nil {
+	for rows.Next() {
+		var id string
+		var stamp, size int64
+		if err = rows.Scan(&id, &stamp, &size); err != nil {
 			return nil, err
 		}
-		out = append(out, in...)
+		out = append(out, session{filepath.Base(id), filepath.Join(a.dir, id) + suffix, time.Unix(0, stamp), size})
 	}
-	slices.SortStableFunc(out, func(x, y session) int {
-		return cmp.Or(y.modified.Compare(x.modified), strings.Compare(x.name, y.name))
-	})
-	return out, nil
+	return out, rows.Err()
 }
 
 // listed is how the archive names the conversation s in a listing: the party
 // it belongs to and its file.
 func listed(s session) string { return filepath.Base(filepath.Dir(s.path)) + "/" + s.name }
 
-// Match returns the conversations, as List names them, whose records contain
-// every word of query, ignoring case: what a list of sessions is filtered by
-// besides the title of a session, what was said in it. A conversation ends
-// its scan at its first hit, and the conversations are read side by side, so
-// one that does not contain query costs its size in reading and nothing
-// else. What was searched last is kept: a query that goes on from it, as
-// typed text does, is looked for only in what matched then, as every word of
-// the one before is in the new one.
+// Match returns the conversations whose serialized records contain every word
+// of query, ignoring case. Words may occur in separate records. It takes no
+// cached shortcut, so appends and deletions from other handles remain visible.
 func (a *Archive) Match(query string) ([]string, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
+	words := strings.Fields(strings.ToLower(query))
+	if len(words) == 0 {
 		return nil, nil
 	}
-	all, err := a.every()
+	in, err := a.every()
 	if err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	only := a.lastHits
-	a.mu.Unlock()
-	if len(only) > 0 && strings.HasPrefix(query, a.lastQuery) {
-		in := make(map[string]bool, len(only))
-		for _, id := range only {
-			in[id] = true
-		}
-		all = slices.DeleteFunc(all, func(s session) bool { return !in[listed(s)] })
-	}
-	var words [][]byte
-	for _, w := range strings.Fields(strings.ToLower(query)) {
-		words = append(words, []byte(w))
-	}
-	var mu sync.Mutex
 	var hits []string
-	var firstErr error
-	workers := min(runtime.NumCPU(), len(all), maxMatchWorkers)
-	sem := make(chan struct{}, max(1, workers))
-	var wg sync.WaitGroup
-	for _, s := range all {
-		wg.Add(1)
-		go func(s session) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			ok, err := holds(s.path, words)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil && firstErr == nil {
-				firstErr = err
+	for _, s := range in {
+		found := make([]bool, len(words))
+		err = a.records(s.path, func(r Record) bool {
+			b, _ := json.Marshal(r)
+			text := strings.ToLower(string(b))
+			for i, w := range words {
+				found[i] = found[i] || strings.Contains(text, w)
 			}
-			if ok {
-				hits = append(hits, listed(s))
-			}
-		}(s)
-	}
-	wg.Wait()
-	slices.Sort(hits)
-	a.mu.Lock()
-	a.lastQuery, a.lastHits = query, hits
-	a.mu.Unlock()
-	return hits, firstErr
-}
-
-// holds reports whether the file at path contains every one of needles,
-// which are lower case: it reads it in chunks and ends as soon as all of
-// them are in. A hit across the end of a chunk is not missed, as its start is
-// read again with the next one.
-func holds(path string, needles [][]byte) (bool, error) {
-	f, err := os.Open(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	tail := make([][]byte, len(needles)) // of each, what is left of the last chunk
-	in := make([]bool, len(needles))     // whether it is found
-	found := 0
-	buf := make([]byte, matchChunk)
-	br := bufio.NewReaderSize(f, matchChunk)
-	for {
-		n, err := br.Read(buf)
-		if n > 0 {
-			for i, needle := range needles {
-				if in[i] {
-					continue
-				}
-				if bytes.Contains(bytes.ToLower(append(tail[i], buf[:n]...)), needle) {
-					in[i], found = true, found+1
-					continue
-				}
-				keep := min(len(needle)-1, matchChunk) // of a chunk, for a hit across its end
-				tail[i] = append(tail[i][:0], buf[max(0, n-keep):n]...)
-			}
-			if found == len(needles) {
-				return true, nil
-			}
-		}
+			return true
+		})
 		if err != nil {
-			if err == io.EOF {
-				return false, nil
-			}
-			return false, err
+			return nil, err
+		}
+		if !slices.Contains(found, false) {
+			hits = append(hits, listed(s))
 		}
 	}
+	slices.Sort(hits)
+	return hits, nil
 }
 
-// List returns every conversation in the archive, of the owner and of every
-// peer, the most recent first.
+// List returns every conversation in the archive, including metadata-only
+// sessions, of the owner and of every peer, the most recent first.
 func (a *Archive) List() ([]Entry, error) {
-	in, err := a.every()
+	in, err := a.allSessions(false)
 	if err != nil {
 		return nil, err
 	}
 	var out []Entry
 	for _, s := range in {
-		_, title := describe(s.path)
+		_, title := a.describe(s.path)
 		out = append(out, Entry{listed(s), s.modified, s.size, title})
 	}
 	return out, nil
@@ -856,54 +678,93 @@ func (a *Archive) path(id string) (string, error) {
 
 // Delete removes the conversation id, as List names it, from the archive.
 func (a *Archive) Delete(id string) error {
-	path, err := a.path(id)
+	if _, err := a.path(id); err != nil {
+		return err
+	}
+	db, err := a.readDatabase()
 	if err != nil {
 		return err
 	}
-	for _, beside := range []string{titleSuffix, effortSuffix, goOnSuffix} {
-		if err := os.Remove(besides(path, beside)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if db == nil {
+		return fmt.Errorf("%w: %s", ErrNotArchived, id)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("UPDATE history_sessions SET deleted=1,archived=0,title=NULL,effort=NULL,directory=NULL,goon=0,size=0 WHERE id=? AND archived=1 AND deleted=0", id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// Legacy Delete removed sidecars even when no answer existed.
+		if _, err = tx.Exec("UPDATE history_sessions SET deleted=1,title=NULL,effort=NULL,directory=NULL,goon=0 WHERE id=?", id); err != nil {
 			return err
 		}
 	}
-	if err := os.Remove(path); errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%w: %s", ErrNotArchived, id)
-	} else if err != nil {
+	if _, err = tx.Exec("DELETE FROM history_records WHERE session_id=?", id); err != nil {
 		return err
 	}
-	a.forget(path)
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotArchived, id)
+	}
 	return nil
 }
 
-// besides is the file with the ending kind next to the conversation in the
-// file at path, like its title.
-func besides(path, kind string) string { return strings.TrimSuffix(path, suffix) + kind }
-
 // GoOn marks the conversation id, as List names it, to go on by itself once
 // ouro started anew, see GoingOn.
-func (a *Archive) GoOn(id string) error {
-	path, err := a.path(id)
-	if err != nil {
-		return err
-	}
-	return write(besides(path, goOnSuffix), "")
-}
+func (a *Archive) GoOn(id string) error { return a.setBeside(id, goOnSuffix, "") }
 
-// GoingOn returns the conversations of the owner GoOn marked, as List names
-// them, and takes the marks away: each goes on once.
+// GoingOn atomically consumes the owner's restart marks, including marks set
+// before the first archived answer. Peer marks are not consumed here.
 func (a *Archive) GoingOn() ([]string, error) {
-	marks, _ := filepath.Glob(filepath.Join(a.dir, ownerDir, "*"+goOnSuffix)) // the pattern is valid
+	db, err := a.readDatabase()
+	if err != nil || db == nil {
+		return nil, err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	// Acquire the writer lock before selecting marks.
+	if _, err = tx.Exec("UPDATE history_sessions SET goon=goon WHERE 0"); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query("SELECT id FROM history_sessions WHERE goon=1 AND deleted=0 AND id LIKE 'owner/%' ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
 	var ids []string
-	for _, mark := range marks {
-		if err := os.Remove(mark); err != nil {
-			return ids, err
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
 		}
-		ids = append(ids, ownerDir+"/"+strings.TrimSuffix(filepath.Base(mark), goOnSuffix))
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec("UPDATE history_sessions SET goon=0 WHERE id LIKE 'owner/%'"); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
 	}
 	return ids, nil
 }
-
-// titled is the file of the title of the conversation in the file at path.
-func titled(path string) string { return besides(path, titleSuffix) }
 
 // MaxTitle is how long a title SetTitle keeps may be, in bytes.
 const MaxTitle = 80
@@ -923,15 +784,7 @@ func (a *Archive) SetTitle(id, title string) error {
 	if title == "" {
 		return errors.New("a title needs a text")
 	}
-	return write(titled(path), title)
-}
-
-// write writes text to the file at path, next to a conversation.
-func write(path, text string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(text), 0o600)
+	return a.setBeside(a.id(path), titleSuffix, title)
 }
 
 // Title returns the title the conversation id, as List names it, was given
@@ -941,18 +794,22 @@ func (a *Archive) Title(id string) (string, error) {
 	return title, err
 }
 
-// beside returns what the file with the ending kind next to the
-// conversation id says, and whether there is one.
+// beside returns persistent metadata, distinguishing unset from empty.
 func (a *Archive) beside(id, kind string) (string, bool, error) {
-	path, err := a.path(id)
-	if err != nil {
+	if _, err := a.path(id); err != nil {
 		return "", false, err
 	}
-	b, err := os.ReadFile(besides(path, kind))
-	if errors.Is(err, fs.ErrNotExist) {
+	column := metadataColumn(kind)
+	db, err := a.readDatabase()
+	if err != nil || db == nil {
+		return "", false, err
+	}
+	var value sql.NullString
+	err = db.QueryRow("SELECT "+column+" FROM history_sessions WHERE id=? AND deleted=0", id).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
-	return string(b), err == nil, err
+	return value.String, value.Valid, err
 }
 
 // SetEffort gives the conversation id, as List names it, an effort of its
@@ -963,7 +820,7 @@ func (a *Archive) SetEffort(id, effort string) error {
 	if err != nil {
 		return err
 	}
-	return write(besides(path, effortSuffix), effort)
+	return a.setBeside(a.id(path), effortSuffix, effort)
 }
 
 // Effort returns the effort the conversation id, as List names it, was given
@@ -980,7 +837,7 @@ func (a *Archive) Records(id string) ([]Record, error) {
 		return nil, err
 	}
 	var out []Record
-	err = records(path, func(r Record) bool { out = append(out, r); return true })
+	err = a.records(path, func(r Record) bool { out = append(out, r); return true })
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", ErrNotArchived, id)
 	}

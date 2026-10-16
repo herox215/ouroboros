@@ -21,7 +21,7 @@ func TestReadContinuation(t *testing.T) {
 				{Role: "assistant", Content: "the next record"},
 			}, nil)
 			var want strings.Builder
-			if err := records(a.file(who, Name(who.Session)), func(r Record) bool {
+			if err := a.records(a.file(who, Name(who.Session)), func(r Record) bool {
 				want.WriteString(show(r))
 				return true
 			}); err != nil {

@@ -35,6 +35,7 @@ const (
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.New("history", func(ctx *plugin.Context, _ struct{}) error {
 		h := &archive{history.Open(dir.History()), dir.Log}
+		ctx.OnStop(func() { h.archive.Close() })
 		for _, tool := range h.tools() {
 			plugin.Add(ctx, tool)
 		}

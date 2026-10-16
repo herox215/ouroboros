@@ -277,7 +277,7 @@ So an answer does not depend on the UI:
   through it, more, faster and hotter for each effort more. Nothing runs
   through it for `none`, and for `auto` it thinks more and less in turn. Other conversations keep theirs, so two can answer at once with different efforts. What
   you choose is also the effort of the node (`effort` in `config.json`): a new conversation, and one that never
-  had its own, starts with it. A conversation keeps its effort in `history/owner/<session>.effort`. The header
+  had its own, starts with it. A conversation keeps its effort in the SQLite session metadata. The header
   shows the effort of the conversation shown. Which efforts a model takes comes from
   [models.dev](https://models.dev): for a model it lists, `/effort` offers those alone, by the names its API
   knows (`low`, `high`, `max` for DeepSeek V4.1 Flash at OpenCode Go, `xhigh` for OpenAI), and only `auto`
@@ -305,7 +305,7 @@ crash, a reboot, `ouro update` or a build of `rebuild`, `/session` lists them as
 one where you left it.
 
 - **One place.** Every answer is archived once it ended, answered, failed or stopped, in
-  `history/owner/<session>.jsonl`. The node does so with or without the `history` plugin, which only gives
+  `history/ouroboros.sqlite`. The node does so with or without the `history` plugin, which only gives
   your agent the tools to search it. A crash costs at most the answer on its way.
 - **Loaded when needed.** A session from before the node started is loaded once it is shown, asked something
   or its context looked at: what happened in it, and what your agent remembers of it, cut like any
@@ -899,14 +899,14 @@ plugin takes the tools away, and the node archives all the same.
   them, like any tool.
 - **What a hit is worth.** The tools say so to the model: what another conversation holds may be outdated,
   and is a hint, not a fact.
-- **Where it is.** `history/owner/<session>.jsonl` holds a conversation of yours, and
-  `history/peer-<fingerprint>/<session>.jsonl` one of a peer, named by a hash of its key. A file is a JSON
-  object per line: the number of the record within the conversation, the answer it belongs to, the time the
-  answer ended, the role, the text, and the calls with their names and arguments. The last record of an
-  answer says whether it was answered, failed or canceled; why it failed is not kept, as a peer reads its
-  own conversation. A conversation that goes on after a restart goes on in its file. The title of a
-  conversation of yours is in `history/owner/<session>.title`, and goes with it. Directories are 0700,
-  files 0600.
+- **Where it is.** `history/ouroboros.sqlite` is the per-profile SQLite database shared by sessions,
+  history and explicit memories. Conversations retain their owner/peer boundary. Records keep their
+  sequence, answer, timestamp, role, content and tool calls; the last record says whether the answer
+  finished, failed or was canceled, without exposing failure diagnostics to peers. Titles, effort,
+  project directory and restart continuation markers are session metadata. Full-text indexes are kept
+  transactionally with the data. The database uses a pure-Go driver; no database service is needed.
+  Existing JSONL archives and metadata sidecars are imported without deleting the original files.
+  Those legacy files remain backup copies, not the active archive; keep them private as well.
 - **The archive holds what your agent saw.** Everything a tool gave back is in it, such as the content of a
   file the agent read, on disk below `~/.config/ouroboros/history/`, until you delete it. The tools for
   files read that directory and never change it, like the rest of the [directory of the node](#files);

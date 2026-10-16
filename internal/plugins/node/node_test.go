@@ -316,7 +316,7 @@ func TestServeKeepsTheSessions(t *testing.T) {
 			t.Setenv(k, v)
 		}
 	}
-	if info, err := os.Stat(filepath.Join(home.Dir(s.Home).History(), "owner", "c1.jsonl")); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(filepath.Join(home.Dir(s.Home).History(), "ouroboros.sqlite")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("the session archived: %v, %v", info, err)
 	}
 	next := clitest.Serve(t, s)

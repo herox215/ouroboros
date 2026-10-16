@@ -2,14 +2,12 @@ package peers_test
 
 import (
 	"context"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
+	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 )
 
@@ -176,15 +174,25 @@ func TestPeerAsksBackAcrossNodes(t *testing.T) {
 		t.Fatalf("a note: %q, %v", out, err)
 	}
 	// beta kept the note among its conversations with alpha, and no agent
-	// answered it.
-	var kept []string
-	filepath.WalkDir(home.Dir(beta.Home).History(), func(path string, d fs.DirEntry, _ error) error {
-		if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), "thanks for asking") {
-			kept = append(kept, string(b))
-		}
-		return nil
-	})
-	if len(kept) != 1 || !strings.Contains(kept[0], `[A note from the peer, which asks for no answer:]\nthanks for asking`) || strings.Contains(kept[0], `"role":"assistant"`) {
-		t.Fatalf("beta kept %q", kept)
+	// answered it: it stands in the one conversation of beta's archive that
+	// holds the note, and no answer of an agent does.
+	archive := history.Open(home.Dir(beta.Home).History())
+	kept, err := archive.Match("thanks for asking")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 {
+		t.Fatalf("beta kept the note in %q", kept)
+	}
+	party, session, ok := strings.Cut(kept[0], "/")
+	if !ok || party != history.Party(clitest.PublicKey(t, alpha)) {
+		t.Fatalf("the note is not kept where alpha is: %q", kept)
+	}
+	text, err := archive.Read(history.Who{Session: session, Peer: clitest.PublicKey(t, alpha)}, "", 1, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "· user\n[A note from the peer, which asks for no answer:]\nthanks for asking") || strings.Contains(text, "· assistant\n") {
+		t.Fatalf("the note as beta kept it: %q", text)
 	}
 }
