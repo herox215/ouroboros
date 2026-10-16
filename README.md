@@ -2126,6 +2126,20 @@ make hooks   # once per clone: the checks before every commit, the mutation test
 
 `make cover` only measures and prints the percentages; `make tools` builds the two tools ahead of time.
 
+The agent tool `check_sanity({})` runs the whole Go test suite without cached results,
+with race detection and statement coverage, followed by native GUI and JavaScript
+frontend tests. It reports named failures, skips and uncovered source ranges ranked
+by missing statements. Full logs and the coverage profile remain in the private
+temporary directory named in its result. The default overall timeout is eight
+minutes (`timeout_minutes`: 1–60). `gui: false` explicitly skips both GUI checks.
+Missing GUI libraries or Node are reported as problems, not silently skipped.
+This uses the checkout the running binary was built from, not the conversation
+directory, and installs nothing. Coverage is raw (including test-helper packages),
+excludes subprocess execution and the separate tagged GUI run, and can be incomplete
+after test failures. It identifies candidates for new tests, not assertion quality
+or branch coverage. Other platforms/build tags, lint and mutation tests are outside
+this tool’s scope; `make check` remains the comprehensive quality gate.
+
 ### Prerequisites
 
 - **Go** as named in `go.mod`. It is found in `PATH`, in `~/.local/go/bin` (where `./install.sh` puts it; set

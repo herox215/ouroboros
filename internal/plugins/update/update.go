@@ -12,6 +12,7 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
+	"ouroboros/internal/sanity"
 	"ouroboros/internal/update"
 	"ouroboros/plugin"
 )
@@ -54,7 +55,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				"Only when the tests and the build pass is the binary replaced; " +
 				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. " +
 				"Once you have answered, the node starts anew with the new build and the conversation goes on there, " +
-				"and so does the terminal UI. What you built is yours to use only in the new build: " +
+				"and so does the front end that showed it. What you built is yours to use only in the new build: " +
 				"with continue: true you are told to go on there by yourself, so end this answer with what is left to do.",
 			Schema: `{"type":"object","properties":{"test":{"type":"array","items":{"type":"string"},` +
 				`"description":"the packages whose tests run before the build, like [\"./internal/tui/\"]"},` +
@@ -71,6 +72,24 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		plugin.Add(ctx, plugin.ToolView{Tool: Rebuild, Show: func(json.RawMessage) string {
 			return "building " + sourceName(update.Source)
 		}, Detail: assistant.HowItEnded})
+		plugin.Add(ctx, plugin.Tool{
+			Name:        "check_sanity",
+			Description: "Run all Ouroboros Go tests with race detection and coverage, then native GUI and JavaScript frontend tests. Report failing packages/tests, skips and uncovered source line ranges that may need tests. Runs the source checkout of this build, not the current conversation directory. Keeps full logs/profile in a temporary directory; does not install a build. Expensive: use when explicitly requested, not after every edit. Coverage measures statements, not assertion quality or all branches; failures can leave it incomplete. Missing GUI dependencies are reported as failures, never silently skipped.",
+			Schema:      `{"type":"object","properties":{"timeout_minutes":{"type":"integer","minimum":1,"maximum":60,"description":"overall timeout in minutes, default 8"},"gui":{"type":"boolean","description":"include native GUI and frontend tests, default true; false reports these as skipped"}},"additionalProperties":false}`,
+			Trusted:     true,
+			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				var args sanity.Options
+				if err := plugin.Decode("check_sanity", raw, &args); err != nil {
+					return "", err
+				}
+				goTool, err := update.GoTool()
+				if err != nil {
+					return "", err
+				}
+				return sanity.Run(ctx, c.updater.Source, goTool, args)
+			},
+		})
+		plugin.Add(ctx, plugin.ToolView{Tool: "check_sanity", Show: func(json.RawMessage) string { return "checking tests and coverage in " + sourceName(c.updater.Source) }, Detail: assistant.HowItEnded})
 		return services{c.updater}, nil
 	})
 }
