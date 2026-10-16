@@ -68,7 +68,7 @@ func TestLaserRevealsNameAndRestsWithoutBeamOrParticles(t *testing.T) {
 		if !strings.Contains(middle, "▀") || !strings.ContainsAny(middle, "✦•·") {
 			t.Fatal("cut has no beam or sparks")
 		}
-		if frame(0.5) != frame(0.5) {
+		if again := frame(0.5); frame(0.5) != again {
 			t.Fatal("rendering depends on frame history")
 		}
 		for _, later := range []float64{doneAt + 3, doneAt + 30, doneAt + 3600} {

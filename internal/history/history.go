@@ -1,7 +1,6 @@
 // Package history keeps complete conversation archives and persistent session
 // metadata in SQLite. Legacy JSONL archives are imported lazily, transactionally,
 // without modifying the originals. Access remains scoped by authenticated party.
-
 package history
 
 import (

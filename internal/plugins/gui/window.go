@@ -2,7 +2,6 @@ package gui
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"fmt"
 	"sort"
@@ -12,9 +11,6 @@ import (
 
 	"ouroboros/plugin"
 )
-
-//go:embed frontend/*
-var assets embed.FS
 
 // State is the read-only profile snapshot handed to the window.
 type State struct {

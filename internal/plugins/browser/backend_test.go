@@ -207,7 +207,7 @@ func TestRemoteDiscoveryNeverFallsBack(t *testing.T) {
 	}
 	destination := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("followed redirect") }))
 	defer destination.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, 302) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, http.StatusFound) }))
 	defer server.Close()
 	_, err := backendCall(context.Background(), newBrowser(f), settings{Provider: "cdp", Endpoint: server.URL}, `{"action":"read"}`)
 	if err == nil {

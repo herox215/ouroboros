@@ -109,7 +109,7 @@ func (b *camoBackend) request(ctx context.Context, method, path, user string, pa
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, errors.New("Camofox request failed (check endpoint and connectivity)")
+		return nil, errors.New("the Camofox request failed (check endpoint and connectivity)")
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
@@ -117,7 +117,7 @@ func (b *camoBackend) request(ctx context.Context, method, path, user string, pa
 		return nil, err
 	}
 	if len(data) > maxResponse {
-		return nil, errors.New("Camofox response exceeds 16 MiB")
+		return nil, errors.New("the Camofox response exceeds 16 MiB")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var failure struct {
@@ -131,7 +131,7 @@ func (b *camoBackend) request(ctx context.Context, method, path, user string, pa
 		if b.settings.Token != "" {
 			message = strings.ReplaceAll(message, b.settings.Token, "[redacted]")
 		}
-		return nil, fmt.Errorf("Camofox %s returned HTTP %d: %s", method, resp.StatusCode, message)
+		return nil, fmt.Errorf("the Camofox %s request returned HTTP %d: %s", method, resp.StatusCode, message)
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -143,7 +143,7 @@ func (b *camoBackend) request(ctx context.Context, method, path, user string, pa
 		}
 		json.Unmarshal(data, &failed)
 		if failed.Error != "" || (failed.OK != nil && !*failed.OK) {
-			return nil, errors.New("Camofox reported an unsuccessful operation")
+			return nil, errors.New("the Camofox server reported an unsuccessful operation")
 		}
 	}
 	return data, nil
@@ -160,9 +160,9 @@ func camoPath(t *camoTab, action string) string {
 func (b *camoBackend) run(ctx context.Context, key, target string, a args) (string, error) {
 	switch {
 	case a.Action == "dialog", a.Action == "console":
-		return "", fmt.Errorf("Camofox native REST does not support browser action %q", a.Action)
+		return "", fmt.Errorf("the native Camofox REST API does not support browser action %q", a.Action)
 	case a.Action == "open" && a.Element != 0:
-		return "", errors.New("Camofox native REST cannot resolve a snapshot ref to a link/image URL for open; use click, or open with an explicit URL")
+		return "", errors.New("the native Camofox REST API cannot resolve a snapshot ref to a link/image URL for open; use click, or open with an explicit URL")
 	}
 	c := b.conversation(key)
 	if err := waitLock(ctx, c.mu.TryLock); err != nil {
@@ -218,14 +218,14 @@ func (b *camoBackend) run(ctx context.Context, key, target string, a args) (stri
 			return "", err
 		}
 		if !camoID.MatchString(created.TabID) {
-			return "", errors.New("Camofox create response lacks a safe tabId")
+			return "", errors.New("the Camofox create response lacks a safe tabId")
 		}
 		c.tabs = append(c.tabs, &camoTab{id: created.TabID, url: target})
 		c.current = len(c.tabs) - 1
 		return b.read(ctx, c, c.tabs[c.current], 0)
 	}
 	if len(c.tabs) == 0 {
-		return "", errors.New("Camofox has no current tab: open a URL first")
+		return "", errors.New("the Camofox browser has no current tab: open a URL first")
 	}
 	t := c.tabs[c.current]
 	if a.Action == "read" {
@@ -238,7 +238,7 @@ func (b *camoBackend) run(ctx context.Context, key, target string, a args) (stri
 		}
 		dimensions, err := png.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
-			return "", errors.New("Camofox screenshot was not a valid PNG")
+			return "", errors.New("the Camofox screenshot was not a valid PNG")
 		}
 		if !plugin.ShowImage(ctx, plugin.Image{Type: "image/png", Data: data}) {
 			return "", errors.New("a screenshot is shown only to an agent that answers")
@@ -283,7 +283,7 @@ func (b *camoBackend) run(ctx context.Context, key, target string, a args) (stri
 		params["amount"] = 720 // native default viewport height
 	case "back":
 	default:
-		return "", fmt.Errorf("Camofox does not support browser action %q", a.Action)
+		return "", fmt.Errorf("the Camofox backend does not support browser action %q", a.Action)
 	}
 	// An interrupted mutation may still have taken effect on the server.
 	// Invalidate refs before sending; never replay an action automatically.
@@ -297,7 +297,7 @@ func (b *camoBackend) run(ctx context.Context, key, target string, a args) (stri
 	}
 	if a.Action == "click" {
 		if err := b.reconcileTabs(ctx, c); err != nil {
-			return "", fmt.Errorf("Camofox click succeeded, but listing resulting tabs failed: %w", err)
+			return "", fmt.Errorf("the Camofox click succeeded, but listing resulting tabs failed: %w", err)
 		}
 		if !slices.Contains(c.tabs, t) {
 			return "Camofox click; the current tab was closed (use tabs to find remaining tabs)", nil
@@ -307,7 +307,7 @@ func (b *camoBackend) run(ctx context.Context, key, target string, a args) (stri
 	// Returning a fresh native snapshot also makes new refs available.
 	text, err := b.read(ctx, c, t, 0)
 	if err != nil {
-		return "", fmt.Errorf("Camofox %s succeeded, but reading the resulting page failed: %w", a.Action, err)
+		return "", fmt.Errorf("the Camofox %s succeeded, but reading the resulting page failed: %w", a.Action, err)
 	}
 	return "Camofox " + a.Action + "; " + text, nil
 }
@@ -328,10 +328,10 @@ func (b *camoBackend) reconcileTabs(ctx context.Context, c *camoConversation) er
 	remote := make(map[string]string, len(result.Tabs))
 	for _, tab := range result.Tabs {
 		if !camoID.MatchString(tab.ID) {
-			return errors.New("Camofox tabs response lacks a safe tabId")
+			return errors.New("the Camofox tabs response lacks a safe tabId")
 		}
 		if _, exists := remote[tab.ID]; exists {
-			return errors.New("Camofox tabs response has duplicate tabId")
+			return errors.New("the Camofox tabs response has a duplicate tabId")
 		}
 		remote[tab.ID] = tab.URL
 	}
@@ -426,7 +426,7 @@ func (b *camoBackend) read(ctx context.Context, c *camoConversation, t *camoTab,
 				return "", err
 			}
 			if snapshot.Snapshot == nil {
-				return "", errors.New("Camofox response lacks snapshot")
+				return "", errors.New("the Camofox response lacks a snapshot")
 			}
 			chunk := *snapshot.Snapshot
 			if snapshot.Truncated && snapshot.TotalChars > 80000 {
@@ -441,7 +441,7 @@ func (b *camoBackend) read(ctx context.Context, c *camoConversation, t *camoTab,
 				t.url = snapshot.URL
 			}
 			if text.Len() > 2<<20 {
-				return "", errors.New("Camofox snapshot exceeds 2 MiB")
+				return "", errors.New("the Camofox snapshot exceeds 2 MiB")
 			}
 			if !snapshot.HasMore {
 				if snapshot.Truncated && snapshot.TotalChars <= 80000 {
@@ -450,7 +450,7 @@ func (b *camoBackend) read(ctx context.Context, c *camoConversation, t *camoTab,
 				break
 			}
 			if snapshot.NextOffset <= serverOffset {
-				return "", errors.New("Camofox snapshot pagination did not advance")
+				return "", errors.New("the Camofox snapshot pagination did not advance")
 			}
 			serverOffset = snapshot.NextOffset
 		}

@@ -377,7 +377,7 @@ func TestCamofoxNoRedirectOrMalformedSnapshot(t *testing.T) {
 	defer destination.Close()
 	f.mu.Lock()
 	f.hook = func(w http.ResponseWriter, r *http.Request) bool {
-		http.Redirect(w, r, destination.URL, 302)
+		http.Redirect(w, r, destination.URL, http.StatusFound)
 		return true
 	}
 	f.mu.Unlock()
