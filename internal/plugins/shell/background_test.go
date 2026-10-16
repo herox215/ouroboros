@@ -117,10 +117,10 @@ func TestBackground(t *testing.T) {
 		map[string]any{"command": late, "background": true, "dir": "~/share"},
 	)
 	want := []string{
-		`job 1 runs in the background: {"job": 1} shows what it printed since`,
+		`job 1 runs in the background: completion will be reported automatically`,
 		"job 1 runs, for 1s; what it printed since:\nup\n",
 		"exit 0\n",
-		"job 1 ended: exit 0\nbye\n",
+		"job 1 ended: exit 0\n", // output may already have arrived as an automatic report
 		"job 1 ended: exit 0\n",
 		"job 2 runs in the background",
 		"job 2 was stopped after 0s; what it printed:\n",

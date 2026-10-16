@@ -195,7 +195,7 @@ func TestSettings(t *testing.T) {
 		}
 	}
 	tool := Tool(w.guard)
-	if tool.Name != "bash" || tool.OwnerOnly || !tool.Trusted || !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Description, "64 KiB") || !strings.Contains(tool.Description, "in no sandbox") ||
+	if tool.Name != "bash" || tool.OwnerOnly || !tool.Trusted || !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Description, "16 KiB") || !strings.Contains(tool.Description, "in no sandbox") ||
 		!strings.Contains(tool.Schema, `"timeout":{"type":"integer","description":"how many seconds it may run, 60 if missing`) {
 		t.Errorf("tool: %+v", tool)
 	}
