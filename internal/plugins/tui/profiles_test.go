@@ -61,7 +61,7 @@ func TestProfilesInOneUI(t *testing.T) {
 		if !shows(m, "profile Luna ("+lunaID.ID()+") · shift+tab shows the next")() {
 			t.Errorf("no word of the profile:\n%s", ansi.Strip(m.View().Content))
 		}
-		drive(t, m, cmd, shows(m, " Luna [2/2] localhost / gpt-")) // the header names the profile shown
+		drive(t, m, cmd, func() bool { return shows(m, " Luna [2/2]")() && shows(m, "localhost / gpt-")() }) // the header names the profile shown
 		drive(t, m, typed(m, "hello Luna"), shows(m, "last=hello Luna"))
 		if m.Profile() != lunaID.ID() {
 			t.Errorf("the UI shows %q", m.Profile())
@@ -78,7 +78,9 @@ func TestProfilesInOneUI(t *testing.T) {
 	if list, err := session.NewClient(luna).List(context.Background()); err != nil || len(list) != 1 {
 		t.Fatalf("Luna has %+v, %v", list, err)
 	}
-	if list, err := session.NewClient(terra).List(context.Background()); err != nil || len(list) != 0 {
+	// Opening Terra deliberately creates a persistent empty session, even
+	// though the message was sent only in Luna.
+	if list, err := session.NewClient(terra).List(context.Background()); err != nil || len(list) != 1 || list[0].Title != "" {
 		t.Fatalf("Terra has %+v, %v", list, err)
 	}
 

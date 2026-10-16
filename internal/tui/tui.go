@@ -182,6 +182,8 @@ type Event struct {
 	// for, the answer, why it failed, or the binary ouro starts anew from.
 	// Of a call of a tool it is what is shown of it, like "asking beta", ""
 	// for nothing; once Done, it may say more, like how long the call took.
+	// For kind "directory", it is the absolute project path, or empty to use
+	// the session workspace again.
 	Text string
 	Done bool
 	At   time.Time
@@ -286,6 +288,9 @@ type conversation struct {
 	last     time.Time
 	draft    string // what is typed in the input for it while another one is shown
 	watching bool   // its events come in, or are asked for
+	// directory is the absolute project path; empty uses the session workspace.
+	directory string
+	fresh     bool // created by this UI; its initial directory has not been stored yet
 	// peer is the peer a conversation of a peer with the agent is with: it
 	// is only to read. "" for a session of the owner.
 	peer string
@@ -304,8 +309,9 @@ type Model struct {
 	profileAt, profileOf int
 	among                *profileViews
 
-	backend Backend
-	now     func() time.Time
+	initialDirectory string // the start path for new conversations
+	backend          Backend
+	now              func() time.Time
 	// ctx ends when the user quits; what the UI asks of the backend stops with it.
 	ctx  context.Context
 	quit context.CancelFunc
@@ -414,7 +420,7 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 	m.input.Focus() // the input is where everything is typed, commands too
-	m.chat = m.conversation(plugin.NewID())
+	m.chat = m.newChat()
 	var problems []string
 	m.plugins.screens, slashes, problems = bind(ownNames(), screens, slashes)
 	m.commands = append(m.commands, own...)
@@ -665,6 +671,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.asked(msg)
 	case takenMsg:
 		return m, m.taken(msg)
+	case acceptedAllMsg:
+		return m, m.acceptedAll(msg)
 	case unsteeredMsg:
 		m.unsteered(msg)
 	case pastedMsg:
@@ -872,10 +880,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 // requestsScreen is the state of the screen of what waits for a decision:
 // the connection requests and the proposals.
 type requestsScreen struct {
-	trust  Contacts // what waits
-	sel    int      // the entry selected
-	unread int      // what came since the screen was last open
-	seen   int      // how much waited when it was last looked at
+	acceptingAll bool     // a bulk decision is on its way
+	trust        Contacts // what waits
+	sel          int      // the entry selected
+	unread       int      // what came since the screen was last open
+	seen         int      // how much waited when it was last looked at
 }
 
 // handleRequestKey handles keys on the connection requests screen: up and
@@ -893,6 +902,8 @@ func (r *requestsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		m.choice = accept
 	case "right", "l":
 		m.choice = reject
+	case "a":
+		return r.acceptAll(m)
 	case "enter":
 		return r.decide(m, m.choice == accept)
 	}
@@ -930,10 +941,16 @@ func (r *requestsScreen) selectAt(m *Model, i int) {
 		r.sel = 0
 		return
 	}
-	r.sel = cycle(i, 0, r.trust.waiting())
+	r.sel = cycle(i, 0, r.trust.waiting()+1) // the last entry accepts all
 }
 
 func (r *requestsScreen) decide(m *Model, accept bool) tea.Cmd {
+	if r.acceptingAll {
+		return nil
+	}
+	if r.trust.waiting() > 0 && r.sel == r.trust.waiting() {
+		return r.acceptAll(m)
+	}
 	if r.sel >= r.trust.waiting() {
 		return nil
 	}
@@ -1024,6 +1041,13 @@ func (m *Model) taken(msg takenMsg) tea.Cmd {
 }
 
 func (r *requestsScreen) apply(m *Model, trust Contacts) {
+	// A removed item must not turn an individual decision into Accept all.
+	all := r.trust.waiting() > 0 && r.sel == r.trust.waiting()
+	if all {
+		r.sel = trust.waiting()
+	} else if r.sel >= trust.waiting() {
+		r.sel = 0
+	}
 	r.trust = trust
 	if trust.waiting() > r.seen {
 		r.unread += trust.waiting() - r.seen
@@ -1069,7 +1093,9 @@ func (m *Model) send() tea.Cmd {
 		// The answer on its way takes it as soon as it can: until then it is
 		// queued, as the node says.
 		m.input.Reset()
-		return func() tea.Msg { return askedMsg{id, text, m.backend.Steer(m.ctx, id, text)} }
+		return func() tea.Msg {
+			return askedMsg{id, text, m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
+		}
 	}
 	// The message shows once the node says it is on its way; the agent is
 	// thinking from now on.
@@ -1077,7 +1103,9 @@ func (m *Model) send() tea.Cmd {
 	c.art++
 	m.input.Reset()
 	m.renderHistory(true)
-	ask := func() tea.Msg { return askedMsg{id, text, m.backend.Ask(m.ctx, id, text)} }
+	ask := func() tea.Msg {
+		return askedMsg{id, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
+	}
 	return tea.Batch(ask, m.watch(c))
 }
 
@@ -1207,6 +1235,7 @@ func (m *Model) Resume(id string) {
 	}
 	delete(m.chats, m.chat.contextID)
 	m.chat = m.conversation(id)
+	m.chat.fresh = false
 	m.resuming = m.chat
 	m.splash.show = false
 	m.renderHistory(true)
@@ -1218,7 +1247,7 @@ func (m *Model) Resume(id string) {
 // /session.
 func (m *Model) newConversation() tea.Cmd {
 	m.chat.draft = m.input.Value()
-	m.chat = m.conversation(plugin.NewID())
+	m.chat = m.newChat()
 	m.input.Reset()
 	m.renderHistory(true)
 	m.setNotice("new conversation", false)

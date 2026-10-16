@@ -106,7 +106,7 @@ func TestPluginsTurnedOff(t *testing.T) {
 		return names
 	}
 	got := names()
-	if slices.Contains(got, "talk") || slices.Contains(got, "update") || slices.Contains(got, "gui") || !slices.Contains(got, "tui") || !slices.Contains(got, "history") {
+	if slices.Contains(got, "talk") || slices.Contains(got, "update") || slices.Contains(got, "gui") || !slices.Contains(got, "tui") || !slices.Contains(got, "history") || !slices.Contains(got, "memory") {
 		t.Fatalf("running %v", got)
 	}
 	if _, err := clitest.Run(t, s, "", "update"); err == nil {
@@ -323,7 +323,7 @@ func TestPluginsImportOnlyThePluginPackage(t *testing.T) {
 		allowed []string
 	}{
 		"the example plugin": {[]string{"plugin", "example"}, []string{"ouroboros/plugin"}},
-		"the tui plugin":     {[]string{"internal", "plugins", "tui"}, []string{"ouroboros/plugin", "ouroboros/internal/tui"}},
+		"the tui plugin":     {[]string{"internal", "plugins", "tui"}, []string{"ouroboros/plugin", "ouroboros/internal/tui", "ouroboros/internal/workdir"}},
 		"the terminal UI":    {[]string{"internal", "tui"}, []string{"ouroboros/plugin"}},
 	} {
 		found := imports(t, test.dir...)

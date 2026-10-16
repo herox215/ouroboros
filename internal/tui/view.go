@@ -519,6 +519,18 @@ func (m *Model) windowTitle() string {
 func (r *requestsScreen) view(m *Model) string {
 	w, h := m.width, m.bodyHeight()
 	lines := []string{boldStyle.Render("Connection requests"), ""}
+	if r.trust.waiting() > 0 {
+		marker := "  "
+		if r.sel == r.trust.waiting() {
+			marker = lipgloss.NewStyle().Foreground(accent).Render("› ")
+		}
+		label := "Accept all"
+		if r.acceptingAll {
+			label = "Accepting all…"
+		}
+		lines = append(lines, marker+boldStyle.Render(label),
+			mutedStyle.Render("a: accept all · confirms connections and configuration; suggestions go into one new chat"), "")
+	}
 	if len(r.trust.Incoming) == 0 {
 		lines = append(lines, mutedStyle.Render("No pending requests."))
 	}
@@ -681,6 +693,9 @@ func (m *Model) headerView() string {
 	}
 	if m.requests.unread > 0 {
 		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.requests.unread))
+	}
+	if m.chat.directory != "" {
+		title += mutedStyle.Render(" · " + m.chat.directory)
 	}
 	if !s.Debug {
 		return ansi.Truncate(title+" "+state, m.width, "…")

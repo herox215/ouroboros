@@ -19,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"ouroboros/internal/tui"
+	"ouroboros/internal/workdir"
 	"ouroboros/plugin"
 )
 
@@ -110,6 +111,7 @@ var show = func(ctx context.Context, m *tui.Model) error {
 func (u *ui) run(ctx context.Context) error {
 	wasRunning := u.Running()
 	m := u.model()
+	m.SetInitialDirectory(workdir.Of(ctx))
 	r, err := resumed()
 	if err != nil {
 		return err
@@ -282,6 +284,12 @@ func (u *ui) Efforts() ([]string, bool) { return u.Owner.Efforts(u.providers()) 
 // SetSessionEffort makes effort how much the model thinks in the session id.
 func (u *ui) SetSessionEffort(ctx context.Context, id, effort string) error {
 	return u.sessions.SetEffort(ctx, id, effort)
+}
+
+// SetSessionDirectory changes the project directory of the session id. The
+// sessions service validates it and rejects changes while an answer is busy.
+func (u *ui) SetSessionDirectory(ctx context.Context, id, path string) error {
+	return u.sessions.SetDirectory(ctx, id, path)
 }
 
 // Sessions lists the sessions of the node.

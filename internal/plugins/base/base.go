@@ -73,6 +73,16 @@ func (d *Dispatcher) open(ctx context.Context) error {
 	return front.Run(ctx)
 }
 
+// HasCommand reports whether a plugin contributed the command name.
+func (d *Dispatcher) HasCommand(name string) bool {
+	switch name {
+	case "help", "-h", "--help":
+		return true
+	}
+	_, ok := d.find(name)
+	return ok
+}
+
 func (d *Dispatcher) find(name string) (plugin.Command, bool) {
 	for _, c := range plugin.All[plugin.Command](d.ctx) {
 		if c.Name == name {

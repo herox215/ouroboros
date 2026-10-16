@@ -34,6 +34,16 @@ automatically.
 
 ## Terminal UI
 
+Running `ouro` without arguments opens the terminal UI. New conversations use the current
+terminal directory as their project. `ouro /path/to/project` (or `ouro tui /path/to/project`)
+selects another start directory. In a conversation, `/cd PATH` changes its project, `/cd`
+shows it, and `/cd --workspace` returns to the agent's own profile workspace. The header
+shows the selected project; it is saved per conversation and restored when reopened.
+Paths with spaces may be quoted. Relative file paths and commands without an explicit
+directory use the project, while temporary agent files belong in its separate workspace.
+A project change is refused while an answer or delegated task is running; selecting a
+project does not change file access permissions.
+
 Running `ouro` without arguments opens the terminal UI. On start it shows the ouroboros
 splash for about three seconds: the name decodes itself letter by letter in the middle of the screen,
 the tagline is typed below it, and a shine sweeps across the name. A terminal too narrow for the big name

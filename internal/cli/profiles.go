@@ -9,6 +9,7 @@ import (
 
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
+	desktopplugin "ouroboros/internal/plugins/desktop"
 	"ouroboros/internal/plugins/gui"
 	nodeplugin "ouroboros/internal/plugins/node"
 	tuiplugin "ouroboros/internal/plugins/tui"
@@ -23,9 +24,10 @@ import (
 // profile is what runs one profile of a node, as its plugins hand it over
 // once they are started.
 type profile struct {
-	node *nodeplugin.Profile
-	ui   *tuiplugin.Profile
-	gui  *gui.Profile
+	node    *nodeplugin.Profile
+	ui      *tuiplugin.Profile
+	gui     *gui.Profile
+	desktop *desktopplugin.Profile
 }
 
 // newProfiles returns the app of the node of s, with the app of every
@@ -39,6 +41,7 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 	nodes := make([]*nodeplugin.Profile, len(dirs))
 	uis := make([]*tuiplugin.Profile, len(dirs))
 	guis := make([]*gui.Profile, 0, len(dirs))
+	desktops := make([]*desktopplugin.Profile, 0, len(dirs))
 	for i, dir := range dirs {
 		if cfg, err := dir.Config(); err == nil && cfg.PrivateKey != "" {
 			workspace, err := dir.Workspace()
@@ -60,6 +63,9 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 			return nil, err
 		}
 		apps[dir], nodes[i], uis[i] = app, p.node, p.ui
+		if p.desktop != nil {
+			desktops = append(desktops, p.desktop)
+		}
 		if p.gui != nil { // a profile may turn the GUI off
 			guis = append(guis, p.gui)
 		}
@@ -73,6 +79,7 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 	if len(guis) > 0 {
 		gui.Together(guis)
 	}
+	desktopplugin.Together(desktops)
 	first := apps[dirs[0]]
 	first.profiles, first.home = apps, dirs[0]
 	return first, nil
@@ -99,7 +106,7 @@ func (a *App) forProfile(args []string) (*App, []string, error) {
 	switch {
 	case a.profiles == nil && target != "":
 		return nil, nil, errors.New("this ouro runs no profiles")
-	case a.profiles == nil, target == "" && (len(a.profiles) == 1 || nodeWide(args)):
+	case a.profiles == nil, target == "" && (len(a.profiles) == 1 || nodeWide(args) || a.directoryArgument(args)):
 		return a, args, nil
 	case target == "":
 		return nil, nil, fmt.Errorf("the node has several profiles: name the one to run it for, as in ouro --profile PROFILE %s (ouro profile lists them)",

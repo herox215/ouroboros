@@ -9,6 +9,7 @@
 //	peers      the network of nodes and the tools to reach it
 //	files      the tools for files
 //	history    the archive of the conversations, and the tools to search it
+//	memory     explicit memories, their sources, and project-scoped search
 //	openai     the provider for OpenAI-compatible APIs
 //	opencode-go  the provider for OpenCode Go, by its API key alone
 //	chatgpt    the provider that signs in with ChatGPT
@@ -65,10 +66,12 @@ import (
 	browserplugin "ouroboros/internal/plugins/browser"
 	chatgptplugin "ouroboros/internal/plugins/chatgpt"
 	computerplugin "ouroboros/internal/plugins/computer"
+	desktopplugin "ouroboros/internal/plugins/desktop"
 	"ouroboros/internal/plugins/discovery"
 	filesplugin "ouroboros/internal/plugins/files"
 	"ouroboros/internal/plugins/gui"
 	historyplugin "ouroboros/internal/plugins/history"
+	memoryplugin "ouroboros/internal/plugins/memory"
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
 	opencodeplugin "ouroboros/internal/plugins/opencode"
@@ -185,6 +188,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		websearch.Plugin(),
 		computerplugin.Plugin(),
 		historyplugin.Plugin(dir),
+		memoryplugin.Plugin(dir),
 		skillsplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
 		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),
@@ -197,6 +201,10 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 			Profile: func(n *nodeplugin.Profile) { p.node = n },
 		}),
 		talk.Plugin(),
+		desktopplugin.Plugin(desktopplugin.Options{
+			Profile: func(d *desktopplugin.Profile) { p.desktop = d },
+			Log:     func(err error) { dir.Log("desktop tray: %v", err) },
+		}),
 		tui.Plugin(owner, func(u *tui.Profile) { p.ui = u }),
 		gui.Plugin(owner, func(g *gui.Profile) { p.gui = g }),
 		updateplugin.Plugin(dir),
@@ -273,6 +281,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	ctx, args, err = app.startDirectory(ctx, args)
+	if err != nil {
+		return err
+	}
 	return app.dispatch(ctx, args)
 }
 
@@ -281,6 +293,11 @@ func (a *App) dispatch(ctx context.Context, args []string) error {
 	d, ok := Service[*base.Dispatcher](a)
 	if !ok {
 		return errors.New("no plugin runs commands: the base plugin is missing")
+	}
+	// Only the owner chat command is CLI input. Other commands (including
+	// servers) must not attribute later API requests to this process.
+	if len(args) > 0 && args[0] == "chat" {
+		ctx = plugin.WithMessageSource(ctx, plugin.MessageSource{Interface: "cli"})
 	}
 	return d.Run(ctx, args)
 }

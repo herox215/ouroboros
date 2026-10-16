@@ -40,10 +40,11 @@ type (
 	// watchedMsg is what happened in a session so far, and where what
 	// happens from now on comes from: see Backend.Watch.
 	watchedMsg struct {
-		id   string
-		past []Event
-		live <-chan Event
-		err  error
+		id           string
+		past         []Event
+		live         <-chan Event
+		err          error
+		directorySet bool // the initial directory was stored, even if Watch failed
 	}
 	// eventMsg is what happened in a session just now.
 	eventMsg struct {
@@ -113,10 +114,18 @@ func (m *Model) watch(c *conversation) tea.Cmd {
 		return nil
 	}
 	c.watching = true
-	id := c.contextID
+	id, path, fresh := c.contextID, c.directory, c.fresh
 	return func() tea.Msg {
-		past, live, err := m.backend.Watch(m.ctx, id)
-		return watchedMsg{id, past, live, err}
+		msg := watchedMsg{id: id}
+		if backend, ok := m.backend.(directoryBackend); ok && fresh && path != "" {
+			if err := backend.SetSessionDirectory(m.ctx, id, path); err != nil {
+				msg.err = err
+				return msg
+			}
+			msg.directorySet = true
+		}
+		msg.past, msg.live, msg.err = m.backend.Watch(m.ctx, id)
+		return msg
 	}
 }
 
@@ -124,6 +133,9 @@ func (m *Model) watch(c *conversation) tea.Cmd {
 // cannot be watched, as the node does not run, is tried again later.
 func (m *Model) watched(msg watchedMsg) tea.Cmd {
 	c := m.conversation(msg.id)
+	if msg.directorySet {
+		c.fresh = false
+	}
 	if msg.err != nil {
 		c.watching = false
 		return m.rewatch(msg.id)
@@ -272,6 +284,8 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.add(entry{suggestion: true, text: e.Text, at: e.At})
 	case plugin.SessionTitle:
 		c.title = e.Text
+	case "directory":
+		c.directory = e.Text
 	case plugin.SessionEffort:
 		c.effort, c.efforted = e.Text, true
 	case plugin.SessionRestart:
@@ -702,7 +716,7 @@ func (m *Model) deleted(msg deletedMsg) tea.Cmd {
 	m.setNotice("deleted “"+short(c.title, 40)+"”", false)
 	var cmd tea.Cmd
 	if c == m.chat { // what is typed stays
-		m.chat = m.conversation(plugin.NewID())
+		m.chat = m.newChat()
 		m.renderHistory(true)
 		cmd = m.watch(m.chat)
 	}

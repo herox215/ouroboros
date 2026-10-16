@@ -21,6 +21,7 @@ type command struct {
 // own are the commands of the UI. Plugins add theirs, see bind.
 var own = []command{
 	{"new", "start a new conversation; the one shown goes on", (*Model).newConversation},
+	{"cd", "show or change the project directory; --workspace resets it", (*Model).showDirectory},
 	{"session", "list the conversations and switch to one", (*Model).openSessions},
 	{"cancel", "stop the answer and the tasks on their way here", (*Model).cancel},
 	{"jobs", "list the commands that run in the background, also for peers, and stop one", (*Model).openJobs},
@@ -56,7 +57,8 @@ func isCommandLine(text string) bool {
 // runCommand runs the command line the owner typed. The input keeps a
 // command it does not know, to be corrected.
 func (m *Model) runCommand(line string) tea.Cmd {
-	fields := strings.Fields(strings.TrimPrefix(line, "/"))
+	text := strings.TrimSpace(strings.TrimPrefix(line, "/"))
+	fields := strings.Fields(text)
 	if len(fields) == 0 {
 		m.setNotice("type a command after the slash: /help lists them", true)
 		return nil
@@ -64,6 +66,9 @@ func (m *Model) runCommand(line string) tea.Cmd {
 	for _, c := range m.commands {
 		if c.name != fields[0] {
 			continue
+		}
+		if c.name == "cd" {
+			return m.changeDirectory(strings.TrimSpace(strings.TrimPrefix(text, c.name)))
 		}
 		if len(fields) > 1 {
 			m.setNotice("/"+c.name+" takes no arguments", true)
