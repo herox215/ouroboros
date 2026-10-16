@@ -190,7 +190,7 @@ func TestRequestsScreen(t *testing.T) {
 	for _, step := range []struct {
 		key  string
 		want int
-	}{{"down", 1}, {"j", 1}, {"up", 0}, {"k", 0}, {"j", 1}} {
+	}{{"down", 1}, {"j", 2}, {"up", 1}, {"k", 0}, {"j", 1}} {
 		if press(m, step.key); m.requests.sel != step.want {
 			t.Fatalf("after %s: selected %d, want %d", step.key, m.requests.sel, step.want)
 		}

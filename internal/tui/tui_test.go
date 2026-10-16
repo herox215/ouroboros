@@ -1252,8 +1252,8 @@ func TestProposals(t *testing.T) {
 	if len(b.accepted) != 1 || b.accepted[0] != "proposal p1" || m.notice != "tools.a2a changed" || m.noticeErr {
 		t.Fatalf("accepted %v, notice %q", b.accepted, m.notice)
 	}
-	// Further down to the second, which is the last, and refuse it.
-	press(m, "j", "j", "j")
+	// Further down to the second proposal, and refuse it.
+	press(m, "j")
 	if m.requests.sel != 2 {
 		t.Fatalf("selected %d", m.requests.sel)
 	}
