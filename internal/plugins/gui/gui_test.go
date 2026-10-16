@@ -3,11 +3,9 @@ package gui
 import (
 	"context"
 	"errors"
+	"os"
+	"slices"
 	"testing"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/test"
-	"fyne.io/fyne/v2/widget"
 
 	"ouroboros/internal/kernel"
 	"ouroboros/plugin"
@@ -40,7 +38,7 @@ func TestCommand(t *testing.T) {
 	var ctx *plugin.Context
 	var p *Profile
 	k := kernel.New()
-	if err := k.Start(Plugin(nil, func(g *Profile) { p = g }), plugin.New("spy", func(c *plugin.Context, _ struct{}) error { ctx = c; return nil })); err != nil {
+	if err := k.Start(sessionProvider(&testSessions{}), Plugin(nil, func(g *Profile) { p = g }), plugin.New("spy", func(c *plugin.Context, _ struct{}) error { ctx = c; return nil })); err != nil {
 		t.Fatal(err)
 	}
 	commands := plugin.All[plugin.Command](ctx)
@@ -76,44 +74,72 @@ func TestCommand(t *testing.T) {
 	}
 }
 
-func TestPicker(t *testing.T) {
-	a := test.NewApp()
-	defer a.Quit()
-	root := content(page{choices: []choice{{"Luna", "aaa"}, {"Other", "bbb"}}, selected: 1})
-	var picker *widget.Select
-	var labels []*widget.Label
-	var walk func(fyne.CanvasObject)
-	walk = func(o fyne.CanvasObject) {
-		switch v := o.(type) {
-		case *fyne.Container:
-			for _, child := range v.Objects {
-				walk(child)
-			}
-		case *widget.Select:
-			picker = v
-		case *widget.Label:
-			labels = append(labels, v)
+func TestWindowState(t *testing.T) {
+	p := page{choices: []choice{{"Luna", "aaa"}, {"Other", "bbb"}}, selected: 1}
+	state := newWindow(p).InitialState()
+	if state.Selected != 1 || len(state.Profiles) != 2 || state.Profiles[0].Name != "Luna" || state.Profiles[1].ID != "bbb" {
+		t.Fatalf("state: %+v", state)
+	}
+	// The window owns its snapshot, not the frame's slice.
+	p.choices[0].name = "Changed"
+	if state.Profiles[0].Name != "Luna" {
+		t.Fatal("window retained the frame's mutable choices")
+	}
+}
+
+// The window of the process this one makes room for goes on with the profile
+// and the session that process showed.
+func TestRunGoesOnWithTheHandedOverSession(t *testing.T) {
+	a, b := fake("Luna", "aaa"), fake("Other", "bbb")
+	Together([]*Profile{a, b})
+	old := show
+	t.Cleanup(func() { show = old })
+	var got page
+	called := false
+	show = func(_ context.Context, p page) error { called, got = true, p; return nil }
+	t.Setenv(resumeEnv, `{"profile":"bbb","session":"owner/s1"}`)
+	if err := a.run(context.Background(), nil); err != nil || !called {
+		t.Fatalf("run: %v, shown %v", err, called)
+	}
+	if got.session != "owner/s1" || got.selected != 1 {
+		t.Fatalf("window: %+v", got)
+	}
+	t.Setenv(resumeEnv, `{"profile":"unknown","session":"owner/s2"}`)
+	if err := a.run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.session != "owner/s2" || got.selected != 0 {
+		t.Fatalf("a profile that is gone keeps the selection: %+v", got)
+	}
+}
+
+func TestResumed(t *testing.T) {
+	if r, err := resumed(); err != nil || r != nil {
+		t.Fatalf("nothing handed over: %+v %v", r, err)
+	}
+	t.Setenv(resumeEnv, `{"profile":"bbb","session":"owner/s1"}`)
+	r, err := resumed()
+	if err != nil || r.Profile != "bbb" || r.Session != "owner/s1" {
+		t.Fatalf("handover: %+v %v", r, err)
+	}
+	if v, ok := os.LookupEnv(resumeEnv); ok {
+		t.Fatalf("the node would see %q", v)
+	}
+	for _, bad := range []string{"not json", `{"profile":"bbb"}`, `{"session":""}`} {
+		t.Setenv(resumeEnv, bad)
+		if _, err := resumed(); err == nil {
+			t.Fatalf("accepted %q", bad)
 		}
 	}
-	walk(root)
-	has := func(text string) bool {
-		for _, l := range labels {
-			if l.Text == text {
-				return true
-			}
-		}
-		return false
+}
+
+func TestHandOver(t *testing.T) {
+	err := handOver("/new/ouro", resume{Profile: "aaa", Session: "owner/s1"})
+	r, ok := errors.AsType[*plugin.Restarting](err)
+	if !ok || r.Exe != "/new/ouro" {
+		t.Fatalf("handover: %v", err)
 	}
-	if picker.SelectedIndex() != 1 || !has("Active profile: Other") || !has("bbb") {
-		t.Fatal("wrong initial profile")
-	}
-	picker.SetSelectedIndex(0)
-	if !has("Active profile: Luna") || !has("aaa") {
-		t.Fatal("profile did not switch")
-	}
-	labels = nil
-	walk(content(page{choices: []choice{{"Not set up", ""}}}))
-	if !picker.Disabled() || !has("Profile not set up yet") {
-		t.Fatal("single unset profile")
+	if !slices.Contains(r.Env, resumeEnv+`={"profile":"aaa","session":"owner/s1"}`) {
+		t.Fatalf("env: %v", r.Env)
 	}
 }

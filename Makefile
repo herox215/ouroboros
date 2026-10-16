@@ -12,17 +12,22 @@ LDFLAGS := -s -w $(if $(OURO_REPO),-X ouroboros/internal/update.Repo=$(OURO_REPO
 # A go that is already in PATH wins.
 export PATH := $(PATH):$(or $(OURO_GO_DIR),$(HOME)/.local/go)/bin:/usr/local/go/bin
 
-.PHONY: build test cover install clean \
+.PHONY: build test test-gui cover install clean \
 	check fmt-check vet lint cover-check mutation tools hooks unhooks
 
 build:
-	go build -trimpath -ldflags="$(LDFLAGS)" -o "$(BIN)" ./cmd/ouro
+	go build -tags "production,webkit2_41" -trimpath -ldflags="$(LDFLAGS)" -o "$(BIN)" ./cmd/ouro
 
 vet:
 	go vet ./...
 
 test: vet
 	go test -race ./...
+
+# Optional native GUI checks need the desktop libraries and Node for the frontend tests.
+test-gui:
+	go test -race -tags "production,webkit2_41" ./internal/plugins/gui
+	node --test internal/plugins/gui/frontend_test.mjs
 
 # Coverage including the end-to-end test, which runs the real binary. The unit
 # tests and that binary write into one directory; cover.out is both merged.

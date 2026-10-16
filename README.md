@@ -13,7 +13,7 @@ ouro list                 # find nodes on the network
 ouro chat "ask beta …"    # one answer from your agent, for scripts; without a message → the terminal UI
 ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
-ouro gui                  # native Fyne demo: empty page with a profile picker
+ouro gui                  # native Wails GUI: chat, create sessions, switch profiles
 ouro stop
 ouro update               # build and install the newest main
 ouro rollback             # the build before the last update or rebuild again
@@ -134,14 +134,46 @@ ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that o
 which keep working.
 
 The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
-It opens an empty Fyne demo with the active profile and a profile picker;
+It opens a Wails v2 window with a profile picker and all archived sessions of that profile;
 `ouro --profile NAME gui` selects the initial profile. Switching is local to the window and does not
-change configuration or start the node. Profiles with the GUI plugin disabled are omitted.
-Native builds need CGO and the [Fyne prerequisites](https://docs.fyne.io/started/)
-(on Debian/Ubuntu: `build-essential libgl1-mesa-dev xorg-dev`). `make build` uses the Go
-toolchain’s default CGO setting. `CGO_ENABLED=0 make build` still produces a headless binary,
-whose `gui` command explains that a native build is needed. If the graphics driver leaves the
-window black on Linux, try `LIBGL_ALWAYS_SOFTWARE=1 ouro gui` to use Mesa software rendering.
+change configuration. Profiles with the GUI plugin disabled are omitted. The window starts the
+node through the same sessions API as the TUI when needed, and releases nodes it started on close;
+running answers continue in the node.
+The frontend is plain HTML/CSS/JavaScript embedded in the executable: no Node, npm,
+Wails CLI, separate web server, or frontend build is needed. The Go binding supplies
+the profiles and session list (owner and peer conversations, newest first).
+The sidebar groups sessions by date and filters titles and IDs locally; it does not search
+message contents. The GUI opens chats through the same session service as the TUI: owner sessions use
+`Watch`, peer conversations use `Read`, and live events update the selected chat. Tool results
+and arguments are not included in the GUI transcript payload; opening a tool call requests
+its saved result separately. Long texts show an 8,000-character preview until expanded.
+Create an owner session with **Neue Session**, or select an existing one to continue it.
+The message field sends with Enter; Shift+Enter inserts a newline. Sending uses `Ask`, and
+`Steer` while an answer is running (including replies to agent questions). Peer conversations
+remain read-only. Refresh reloads the session list. Like the TUI, opening an owner session
+restores it in the node and watches its events; when a tool asks ouro to start anew from a
+new build, the window closes, and the new process opens one again showing the profile and
+the session the window before showed. There are no configuration operations.
+
+Native builds need CGO and the [Wails prerequisites](https://wails.io/docs/gettingstarted/installation/).
+On Linux the build uses GTK 3 and **WebKitGTK 4.1** (Debian/Ubuntu:
+`build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev`; Arch:
+`base-devel pkgconf gtk3 webkit2gtk-4.1`). On macOS install the Xcode command-line tools.
+`make build` supplies Wails' `production` tag and the Linux `webkit2_41` tag;
+installation, update and rebuild use this same build recipe. When the executable is in the
+source checkout, `./ouro gui` checks this recipe through Go’s build cache before opening
+the window. Changed build inputs (including uncommitted code and embedded frontend files)
+are rebuilt into a staging directory; only a successful, different build replaces the
+binary and restarts it with the same arguments and environment. A build failure stops
+the launch rather than opening a stale GUI. Installed copies outside the checkout do
+not perform this development check. A direct native Go build
+must likewise use `go build -tags production,webkit2_41 ./cmd/ouro`.
+`CGO_ENABLED=0 make build` still produces a headless binary, whose `gui` command explains
+that a native build is needed. Plain `go test` does not require desktop libraries; native
+GUI tests can also run with `go test -tags production,webkit2_41 ./internal/plugins/gui`.
+Frontend tests run with `node --test internal/plugins/gui/frontend_test.mjs`; Node is needed
+only for these tests, not to build or run ouro. `make test-gui` runs both native GUI
+and frontend tests.
 
 Other plugins add to the UI, see [Extending](#extending):
 

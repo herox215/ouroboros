@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'">
+  <title>Ouroboros · Sessions</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Zum Sitzungsinhalt</a>
+  <aside id="sidebar" class="sidebar" aria-label="Sessionnavigation">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">O</span> Ouroboros <span class="brand-caption">Chat</span></div>
+    <section class="profile-card" aria-labelledby="profile-label">
+      <label id="profile-label" for="profile">Profil</label>
+      <select id="profile" disabled></select>
+      <p id="active" aria-live="polite"></p>
+      <p id="identity"></p>
+    </section>
+    <div class="sessions-heading">
+      <h2 id="sessions-heading">Sitzungen</h2>
+      <button id="refresh" type="button">Aktualisieren</button>
+    </div>
+    <button id="new-session" type="button" disabled>Neue Session</button>
+    <div class="search-field">
+      <label class="sr-only" for="session-search">Sitzungen durchsuchen</label>
+      <input id="session-search" type="search" placeholder="Sitzungen durchsuchen …" autocomplete="off" aria-controls="sessions">
+    </div>
+    <div id="sessions" aria-labelledby="sessions-heading"></div>
+    <div class="sidebar-footer">
+      <button id="settings" class="settings-button" type="button" aria-label="Modelleinstellungen öffnen" title="Modelleinstellungen" aria-haspopup="dialog"><span aria-hidden="true">⚙</span></button>
+    </div>
+  </aside>
+  <main id="main" tabindex="-1" aria-labelledby="session-title">
+    <header class="session-header">
+      <button id="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true">◀ Sitzungen ausblenden</button>
+      <div class="session-heading">
+        <p class="eyebrow">Sessions</p>
+        <h1 id="session-title">Sitzung auswählen</h1>
+        <p id="session-meta"></p>
+      </div>
+      <span class="readonly-badge">Sessions</span>
+    </header>
+    <div class="transcript-wrap">
+      <p id="error" role="alert" hidden></p>
+      <p id="session-status" role="status">Wähle eine Sitzung, um den Chat zu öffnen.</p>
+      <noscript><p>Bitte aktiviere JavaScript, um die Sessions zu öffnen.</p></noscript>
+      <div id="content" aria-label="Sitzungsverlauf"></div>
+      <form id="composer" class="composer" aria-label="Nachricht verfassen">
+        <section id="question-panel" class="question-panel" aria-labelledby="question-heading" aria-live="polite" hidden>
+          <h2 id="question-heading">Deine Entscheidung</h2>
+          <p id="question-text"></p>
+          <div id="question-options" role="group" aria-label="Antwortmöglichkeiten"></div>
+          <p id="question-hint"></p>
+        </section>
+        <label for="draft">Nachricht / eigene Antwort</label>
+        <textarea id="draft" rows="4" placeholder="Nachricht schreiben …" aria-describedby="composer-hint" disabled></textarea>
+        <div class="composer-actions">
+          <p id="composer-hint">Enter sendet · Shift+Enter für eine neue Zeile</p>
+          <button id="send" type="submit" disabled>Senden</button>
+        </div>
+        <p id="send-status" role="status"></p>
+        <p id="send-error" role="alert" hidden></p>
+      </form>
+    </div>
+  </main>
+</body>
+</html>
