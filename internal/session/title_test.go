@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -202,13 +200,12 @@ func TestTitleWithoutArchive(t *testing.T) {
 // stopped; the session goes on without a title.
 func TestTitleFails(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "owner", "s1.title"), 0o700) // no file to read or write
-	history.Open(dir).Append(history.Who{Session: "s1"}, []openai.Message{{Role: "user", Content: "hi"}}, nil)
 	n := newNamer()
 	s, _, l := archived(t, &fakeAgent{title: n.title}, dir, time.Now())
+	s.archive.Archive = unavailableArchive(t)
 	ctx := context.Background()
 	past, live, _ := s.Watch(ctx, "s1")
-	if kinds(past) != "message" || !l.has("the title of the session s1 cannot be read") {
+	if len(past) != 0 || !l.has("the title of the session s1 cannot be read") {
 		t.Fatalf("past %+v, log %q", past, l.lines)
 	}
 	s.Ask(ctx, "s1", "plan my garden")

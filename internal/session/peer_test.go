@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"ouroboros/internal/history"
@@ -70,10 +68,7 @@ func TestRecall(t *testing.T) {
 	if got := s.Recall("other", "c"); got != nil || len(logged) != 0 {
 		t.Fatalf("of another peer: %+v, log %v", got, logged)
 	}
-	path := filepath.Join(dir, history.Party("key"), "c.jsonl")
-	if err := os.Chmod(path, 0); err != nil {
-		t.Fatal(err)
-	}
+	s.archive.Archive = unavailableArchive(t)
 	if got := s.Recall("key", "c"); got != nil || len(logged) != 1 {
 		t.Fatalf("unreadable: %+v, log %v", got, logged)
 	}

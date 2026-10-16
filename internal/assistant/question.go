@@ -80,6 +80,7 @@ func userQuestion() agent.Tool {
 			"With options they choose one with a key, the one you recommend selected, and you get it as you wrote it; " +
 			"they can always answer in their own words instead, so add no option for that. Without options they write the answer. " +
 			`Like ` + ToolUserQuestion + `({question: "Which database?", options: ["SQLite", "Postgres"], recommended: "SQLite"}). ` +
+			"When the sending interface is known, the result is JSON with the unchanged answer in answer and its origin in source.interface. " +
 			"Ask nothing you can find out yourself. " +
 			"It waits as long as the script may run: without an answer by then, put the question in your answer instead.",
 		Schema: `{"type":"object","properties":{` +
@@ -97,11 +98,17 @@ func userQuestion() agent.Tool {
 				return "", err
 			}
 			asked, _ := json.Marshal(q) // strings only: cannot fail
-			answer, err := agent.AskOwner(ctx, asked)
+			answer, err := agent.AskOwnerReply(ctx, asked)
 			if errors.Is(err, agent.ErrNoOwner) {
 				return "", errors.New("nobody can be asked here: put the question in your answer instead")
 			}
-			return answer, err
+			if err != nil || answer.Source.Interface == "" {
+				return answer.Text, err
+			}
+			// The model can use the reply's origin, but it is not part of
+			// the answer value (not even for a selected option).
+			result, err := json.Marshal(answer)
+			return string(result), err
 		},
 	}
 }

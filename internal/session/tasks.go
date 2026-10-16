@@ -9,6 +9,7 @@ import (
 
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/workdir"
 )
 
 // task is a task the agent delegated that runs in the background of its
@@ -46,6 +47,7 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 	started := make([]int, len(tasks))
 	for i, t := range tasks {
 		ctx, cancel := context.WithCancel(s.ctx)
+		ctx = workdir.With(ctx, se.directory)
 		ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 		se.delegated++
 		running := &task{n: se.delegated, title: t.Title, cancel: cancel}

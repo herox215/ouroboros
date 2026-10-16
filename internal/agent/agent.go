@@ -78,6 +78,8 @@ type LLM interface {
 // Step reports a tool call: once when it starts and again, with Done set,
 // when its result is in, together with how long the call took.
 type Step struct {
+	// ID identifies the archived tool call; empty for nested calls of a script.
+	ID     string
 	Tool   string
 	Args   json.RawMessage
 	Done   bool
@@ -129,14 +131,16 @@ type Observer struct {
 }
 
 type (
-	contextKey  struct{}
-	observerKey struct{}
-	spentKey    struct{}
-	steeringKey struct{}
-	ownerKey    struct{}
-	answerKey   struct{}
-	imagesKey   struct{}
-	remarkKey   struct{}
+	contextKey         struct{}
+	observerKey        struct{}
+	spentKey           struct{}
+	steeringKey        struct{}
+	messageSteeringKey struct{}
+	inputMessagesKey   struct{}
+	ownerKey           struct{}
+	answerKey          struct{}
+	imagesKey          struct{}
+	remarkKey          struct{}
 )
 
 // remark is what a tool says of its call for the owner.
@@ -185,8 +189,9 @@ func Show(ctx context.Context, images ...openai.Image) bool {
 // keep from one call to the next, like the task its messages to peers
 // belong to, and a context that ends with the answer, however it ends.
 type Answer struct {
-	values sync.Map
-	ctx    context.Context
+	reports reports
+	values  sync.Map
+	ctx     context.Context
 }
 
 // AnswerOf returns the answer a tool is run for under ctx, nil outside of
@@ -229,24 +234,38 @@ var ErrNoOwner = errors.New("there is no owner to ask in this conversation")
 // and returns what the owner answered once they did. It ends with the error
 // of the context it is given when that ends first.
 func WithOwner(ctx context.Context, ask func(ctx context.Context, question json.RawMessage) (string, error)) context.Context {
-	return context.WithValue(ctx, ownerKey{}, ask)
+	return WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (OwnerReply, error) {
+		text, err := ask(ctx, question)
+		return OwnerReply{Text: text}, err
+	})
 }
 
 // AskOwner asks the owner of the conversation of ctx question and waits for
 // the answer: see WithOwner. Without an owner to ask it fails with
 // ErrNoOwner.
 func AskOwner(ctx context.Context, question json.RawMessage) (string, error) {
-	ask, ok := ctx.Value(ownerKey{}).(func(context.Context, json.RawMessage) (string, error))
-	if !ok {
-		return "", ErrNoOwner
-	}
-	return ask(ctx, question)
+	reply, err := AskOwnerReply(ctx, question)
+	return reply.Text, err
+}
+
+// WithoutOwner returns a context under which nobody is asked: AskOwner fails
+// with ErrNoOwner, whatever ctx had. It is for work the owner does not
+// follow, like that of a helper.
+func WithoutOwner(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ownerKey{}, nil)
 }
 
 // Steered returns what the user of the answer that ctx belongs to said since
 // it was asked the last time: see WithSteering. Who is told does not hear it
 // again.
 func Steered(ctx context.Context) []string {
+	if steer, ok := ctx.Value(messageSteeringKey{}).(func() []openai.Message); ok && steer != nil {
+		var texts []string
+		for _, m := range steer() {
+			texts = append(texts, m.Content)
+		}
+		return texts
+	}
 	if steer, ok := ctx.Value(steeringKey{}).(func() []string); ok {
 		return steer()
 	}
@@ -332,6 +351,14 @@ func (a *Agent) WithMemory(m *Memory) *Agent {
 	return a
 }
 
+// WithSystem returns a copy with a system prompt for one answer. Memory and
+// immutable tool definitions are shared; concurrent conversations are unaffected.
+func (a *Agent) WithSystem(system string) *Agent {
+	copy := *a
+	copy.system = openai.Message{Role: "system", Content: system}
+	return &copy
+}
+
 // Prompt returns what the agent sends with every call of the LLM before the
 // conversation: its system prompt and its tools.
 func (a *Agent) Prompt() (system string, tools []openai.Tool) {
@@ -359,8 +386,13 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	spent := &atomic.Int64{}
 	ctx = context.WithValue(ctx, spentKey{}, spent)
 	// What the user told meanwhile without asking comes before what it asks.
-	history := append(append(a.memory.history(contextID), a.memory.noted(contextID)...), openai.Message{Role: "user", Content: text})
-	asked := len(history) - 1 // where this answer starts
+	history := append(a.memory.history(contextID), a.memory.noted(contextID)...)
+	asked := len(history) // where this answer starts
+	input, ok := ctx.Value(inputMessagesKey{}).([]openai.Message)
+	if !ok {
+		input = []openai.Message{{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx)}}
+	}
+	history = append(history, copyMessages(input)...)
 	origin, peer := a2a.OriginFrom(ctx)
 	processing := Processing{a.llm, a.model, Conversation{contextID, peer, origin}}
 	var contributions, events []openai.Message
@@ -399,8 +431,10 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		a.memory.remember(contextID, Abandon(history))
 		return "", err
 	}
-	if err := emit(history[asked]); err != nil {
-		return abandon(err)
+	for _, m := range history[asked:] {
+		if err := emit(m); err != nil {
+			return abandon(err)
+		}
 	}
 	for _, h := range a.extensions.hooks {
 		if h.Before != nil {
@@ -418,6 +452,20 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			}
 			contributions = append(contributions, copyMessages(extra)...)
 		}
+	}
+	// Deliver only at round boundaries, never between a tool call and its
+	// result. Completion is channel-driven; there is no timer or LLM polling.
+	report := func() (bool, error) {
+		texts := AnswerOf(ctx).reported()
+		for _, text := range texts {
+			said := openai.Message{Role: "user", Content: text}
+			if err := emit(said); err != nil {
+				return false, err
+			}
+			spent.Add(int64(len(text)))
+			history = append(history, said)
+		}
+		return len(texts) > 0, nil
 	}
 	nudged := false // an empty message was answered with emptyNote
 	for round := range maxRounds {
@@ -446,6 +494,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		if err := ctx.Err(); err != nil {
 			return abandon(err)
 		}
+		msgs = openai.MessagesForModel(msgs)
 		a.inspect(contextID, Inspection{Messages: msgs, Tools: a.specs})
 		sent := 0
 		if observe.Call != nil {
@@ -463,6 +512,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			return abandon(err)
 		}
 		msg.Role = "assistant"
+		msg.Source = openai.MessageSource{}
 		history = append(history, msg)
 		if err := emit(msg); err != nil {
 			return abandon(err)
@@ -475,6 +525,13 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			continue
 		}
 		if len(msg.ToolCalls) == 0 {
+			// A job may have finished while the model was answering. Let it
+			// account for that result before ending the answer.
+			if delivered, err := report(); err != nil {
+				return abandon(err)
+			} else if delivered {
+				continue
+			}
 			a.memory.remember(contextID, history)
 			return msg.Content, nil
 		}
@@ -491,9 +548,11 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			spent.Add(int64(len(result.Content)))
 			history = append(history, result)
 		}
+		if _, err := report(); err != nil {
+			return abandon(err)
+		}
 		// What the user said meanwhile follows the results.
-		for _, text := range Steered(ctx) {
-			said := openai.Message{Role: "user", Content: text}
+		for _, said := range steeredMessages(ctx) {
 			if err := emit(said); err != nil {
 				return abandon(err)
 			}
@@ -513,7 +572,7 @@ const maxNotes = 32
 // told of it as of an answer that is nothing but that message, so that it is
 // kept where answers are.
 func (a *Agent) Note(ctx context.Context, contextID, text string) error {
-	note := openai.Message{Role: "user", Content: text}
+	note := openai.Message{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx)}
 	a.memory.note(contextID, note)
 	origin, peer := a2a.OriginFrom(ctx)
 	told := AnswerOutcome{Processing{a.llm, a.model, Conversation{contextID, peer, origin}}, []openai.Message{note}, "", nil}
@@ -784,7 +843,7 @@ func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
 		}}
 	}
 	shown := &shownImages{}
-	content, err := Invoke(context.WithValue(ctx, imagesKey{}, shown), tool, args)
+	content, err := invoke(context.WithValue(ctx, imagesKey{}, shown), tool, args, call.ID)
 	if err != nil {
 		return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error() + note}
 	}
@@ -795,8 +854,12 @@ func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
 // call to whoever observes that conversation, like a call the LLM asked for.
 // It is for a tool that runs other tools of its agent, such as a script.
 func Invoke(ctx context.Context, tool Tool, args json.RawMessage) (string, error) {
+	return invoke(ctx, tool, args, "")
+}
+
+func invoke(ctx context.Context, tool Tool, args json.RawMessage, id string) (string, error) {
 	observe, _ := ctx.Value(observerKey{}).(Observer)
-	step := Step{Tool: tool.Name, Args: args}
+	step := Step{ID: id, Tool: tool.Name, Args: args}
 	if observe.Step != nil {
 		observe.Step(step)
 	}

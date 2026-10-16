@@ -91,7 +91,7 @@ func TestClient(t *testing.T) {
 		t.Fatalf("new: %q, %v", id, err)
 	}
 	past, live, err := c.Watch(ctx, id)
-	if err != nil || len(past) != 0 {
+	if err != nil || kinds(past) != "directory" || past[0].Text != "" {
 		t.Fatalf("watch: %+v, %v", past, err)
 	}
 	if err := c.Ask(ctx, id, "ping"); err != nil {
@@ -101,7 +101,7 @@ func TestClient(t *testing.T) {
 	if kinds(got) != "message say step answer" || got[3].Text != "pong" || got[2].AsStep().Err.Error() != "gone" || got[3].Context != 7 {
 		t.Fatalf("events %+v", got)
 	}
-	if past, _, _ := c.Watch(ctx, id); kinds(past) != "message say step answer" || !past[3].At.Equal(got[3].At) {
+	if past, _, _ := c.Watch(ctx, id); kinds(past) != "message say step answer directory" || !past[3].At.Equal(got[3].At) {
 		t.Fatalf("past %+v", past)
 	}
 	if list, err := c.List(ctx); err != nil || len(list) != 1 || list[0].ID != id || list[0].Title != "ping" {

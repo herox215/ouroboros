@@ -72,7 +72,7 @@ func (s *Service) GoOn() {
 		a.log("which sessions go on by themselves cannot be read: %v", err)
 	}
 	for _, id := range ids {
-		if err := s.Ask(context.Background(), strings.TrimPrefix(id, "owner/"), goOnText); err != nil {
+		if err := s.askInput(context.Background(), strings.TrimPrefix(id, "owner/"), goOnText, true); err != nil {
 			a.log("the session %s does not go on by itself: %v", id, err)
 		}
 	}
@@ -89,7 +89,22 @@ func (s *Service) load(id string) *session {
 		s.archive.log("the session %s cannot be read from the archive: %v", id, err)
 	}
 	if len(records) == 0 {
-		return nil
+		// Metadata can precede the first message. Do not resume an empty
+		// conversation or announce a restart when its first message arrives.
+		title, titleErr := s.archive.Title(history.Owner(id))
+		if titleErr != nil {
+			s.archive.log("the title of the session %s cannot be read: %v", id, titleErr)
+		}
+		se := &session{id: id, title: title, watchers: map[chan Event]struct{}{}}
+		s.effortOf(se)
+		s.directoryOf(se)
+		if title != "" {
+			se.events = append(se.events, Event{Kind: Title, Text: title})
+		}
+		if err != nil && title == "" && !se.efforted && !se.directed {
+			return nil
+		}
+		return se
 	}
 	events, msgs := replay(records)
 	memory, _ := json.Marshal(msgs) // messages are always written
@@ -115,6 +130,7 @@ func (s *Service) load(id string) *session {
 	}
 	se := &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
 	s.effortOf(se)
+	s.directoryOf(se)
 	return se
 }
 
@@ -136,12 +152,12 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 		at := r.Time.Local()
 		switch r.Role {
 		case "user":
-			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content})
+			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source})
 			if ended, ok := assistant.AsTaskReport(unnoted(r.Content)); ok {
 				events = append(events, Event{Kind: Task, At: at, N: ended.N, Remark: ended.Title, Text: ended.Answer, Err: ended.Err})
 				continue
 			}
-			events = append(events, Event{Kind: Message, At: at, Text: unnoted(r.Content)})
+			events = append(events, Event{Kind: Message, At: at, Text: unnoted(r.Content), Source: r.Source.Normalized()})
 		case "assistant":
 			m := openai.Message{Role: "assistant", Content: r.Content}
 			if len(r.ToolCalls) == 0 {
@@ -152,7 +168,7 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			events = append(events, Event{Kind: Say, At: at, Text: r.Content})
 			for _, c := range r.ToolCalls {
 				m.ToolCalls = append(m.ToolCalls, openai.ToolCall{ID: c.ID, Type: "function", Function: openai.FunctionCall{Name: c.Name, Arguments: c.Arguments}})
-				step := Event{Kind: Step, At: at, Tool: c.Name, Args: args(c.Arguments)}
+				step := Event{Kind: Step, At: at, CallID: c.ID, Tool: c.Name, Args: args(c.Arguments)}
 				steps[c.ID] = step
 				events = append(events, step)
 			}

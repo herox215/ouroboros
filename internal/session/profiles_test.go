@@ -49,6 +49,15 @@ func TestShare(t *testing.T) {
 	if err := other.Ask(ctx, "new", "new work"); !errors.Is(err, ErrRestarting) {
 		t.Fatalf("new work during the replacement: %v", err)
 	}
+	// What is said to the answer on its way is not queued for a handover:
+	// the queue of the answer would be dropped with the process, so it is
+	// refused instead of lost.
+	if err := other.Steer(ctx, "other", "late during the replacement"); !errors.Is(err, ErrRestarting) {
+		t.Fatalf("queued during the replacement instead of refused: %v", err)
+	}
+	if text, err := other.Unsteer(ctx, "other"); text != "" || err != nil {
+		t.Fatalf("unsteer during the replacement: %q, %v", text, err)
+	}
 	select {
 	case <-replaced:
 		t.Fatal("the answer of the other profile was cut off")

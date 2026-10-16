@@ -16,6 +16,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
+	"ouroboros/internal/openai"
 )
 
 // The front ends reach the Service of the node over its socket (see
@@ -49,8 +50,9 @@ type failure struct {
 
 type (
 	askRequest struct {
-		ID   string `json:"id"`
-		Text string `json:"text"`
+		ID     string        `json:"id"`
+		Text   string        `json:"text"`
+		Source MessageSource `json:"source,omitzero"`
 	}
 	idRequest struct {
 		ID string `json:"id"`
@@ -61,6 +63,10 @@ type (
 	}
 	serviceRequest struct {
 		ID string `json:"id"`
+	}
+	directoryRequest struct {
+		ID   string `json:"id"`
+		Path string `json:"path"`
 	}
 	effortRequest struct {
 		ID     string `json:"id"`
@@ -88,6 +94,14 @@ type (
 // Handler serves s on the socket of the node.
 func Handler(s *Service) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /running-sessions", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.RunningSessions(r.Context())
+		reply(w, out, err)
+	})
+	mux.HandleFunc("GET /activity", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.Activity(r.Context())
+		reply(w, out, err)
+	})
 	mux.HandleFunc("POST /new", func(w http.ResponseWriter, r *http.Request) {
 		id, _ := s.New(r.Context()) // a Service always has one
 		reply(w, newResponse{id}, nil)
@@ -95,13 +109,13 @@ func Handler(s *Service) http.Handler {
 	mux.HandleFunc("POST /ask", func(w http.ResponseWriter, r *http.Request) {
 		var in askRequest
 		if read(w, r, &in) {
-			reply(w, nil, s.Ask(r.Context(), in.ID, in.Text))
+			reply(w, nil, s.Ask(WithMessageSource(r.Context(), in.Source), in.ID, in.Text))
 		}
 	})
 	mux.HandleFunc("POST /steer", func(w http.ResponseWriter, r *http.Request) {
 		var in askRequest
 		if read(w, r, &in) {
-			reply(w, nil, s.Steer(r.Context(), in.ID, in.Text))
+			reply(w, nil, s.Steer(WithMessageSource(r.Context(), in.Source), in.ID, in.Text))
 		}
 	})
 	mux.HandleFunc("POST /unsteer", func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +129,12 @@ func Handler(s *Service) http.Handler {
 		var in idRequest
 		if read(w, r, &in) {
 			reply(w, nil, s.Cancel(r.Context(), in.ID))
+		}
+	})
+	mux.HandleFunc("POST /directory", func(w http.ResponseWriter, r *http.Request) {
+		var in directoryRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.SetDirectory(r.Context(), in.ID, in.Path))
 		}
 	})
 	mux.HandleFunc("POST /effort", func(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +184,10 @@ func Handler(s *Service) http.Handler {
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
 		events, err := s.Read(r.Context(), r.URL.Query().Get("id"))
 		reply(w, events, err)
+	})
+	mux.HandleFunc("GET /tool-result", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.ToolResult(r.Context(), r.URL.Query().Get("id"), r.URL.Query().Get("call_id"))
+		reply(w, out, err)
 	})
 	mux.HandleFunc("GET /contents", func(w http.ResponseWriter, r *http.Request) {
 		lines, err := s.Contents(r.Context(), r.URL.Query().Get("id"))
@@ -342,12 +366,12 @@ func (c *Client) New(ctx context.Context) (string, error) {
 
 // Ask starts the answer to text in the session id.
 func (c *Client) Ask(ctx context.Context, id, text string) error {
-	return c.do(ctx, http.MethodPost, "/ask", askRequest{id, text}, nil)
+	return c.do(ctx, http.MethodPost, "/ask", askRequest{ID: id, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // Steer gives text to the answer on its way in the session id.
 func (c *Client) Steer(ctx context.Context, id, text string) error {
-	return c.do(ctx, http.MethodPost, "/steer", askRequest{id, text}, nil)
+	return c.do(ctx, http.MethodPost, "/steer", askRequest{ID: id, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // Unsteer takes back the last message that is queued in the session id.
@@ -360,6 +384,11 @@ func (c *Client) Unsteer(ctx context.Context, id string) (string, error) {
 // Cancel stops the answer on its way in the session id.
 func (c *Client) Cancel(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/cancel", idRequest{id}, nil)
+}
+
+// SetDirectory sets or resets the project directory of the session id.
+func (c *Client) SetDirectory(ctx context.Context, id, path string) error {
+	return c.do(ctx, http.MethodPost, "/directory", directoryRequest{id, path}, nil)
 }
 
 // SetEffort makes effort how much the model thinks in the session id.
@@ -425,6 +454,13 @@ func (c *Client) Read(ctx context.Context, id string) ([]Event, error) {
 	var events []Event
 	err := c.do(ctx, http.MethodGet, "/read?id="+url.QueryEscape(id), nil, &events)
 	return events, err
+}
+
+// ToolResult loads the arguments and result of one archived tool call.
+func (c *Client) ToolResult(ctx context.Context, id, callID string) (ToolResult, error) {
+	var out ToolResult
+	err := c.do(ctx, http.MethodGet, "/tool-result?id="+url.QueryEscape(id)+"&call_id="+url.QueryEscape(callID), nil, &out)
+	return out, err
 }
 
 // Contents returns what the next call of the LLM in the session id is sent.

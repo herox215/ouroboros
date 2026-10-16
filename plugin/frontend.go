@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/pasteboard"
 	"ouroboros/internal/session"
 )
@@ -103,6 +104,20 @@ func (r *Restarting) Error() string { return "ouro is to be started anew from " 
 // happens in them, and a front end shows that as it is told. An answer goes
 // on when the front end is closed. Await asks and waits for one answer.
 type Sessions = session.API
+
+// MessageSource identifies the interface sending one owner message.
+type MessageSource = openai.MessageSource
+
+// WithMessageSource attributes an Ask or Steer call, not the whole session.
+func WithMessageSource(ctx context.Context, source MessageSource) context.Context {
+	return openai.WithMessageSource(ctx, source)
+}
+
+// SessionToolDetails optionally loads archived tool arguments and output on demand.
+type SessionToolDetails = session.ToolDetails
+
+// SessionToolResult holds one tool call's arguments and archived output.
+type SessionToolResult = session.ToolResult
 
 type (
 	// SessionEvent is one thing that happened in a session, see Sessions.

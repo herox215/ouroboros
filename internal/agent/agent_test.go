@@ -185,7 +185,7 @@ func TestToolCall(t *testing.T) {
 	if len(llm.tools) != 1 || llm.tools[0].Function.Name != "shout" {
 		t.Fatalf("tools offered: %+v", llm.tools)
 	}
-	if len(steps) != 2 || steps[0].Done || !steps[1].Done || steps[1].Result != `LOUD c1 {"x":1}` {
+	if len(steps) != 2 || steps[0].ID != "c1" || steps[1].ID != "c1" || steps[0].Done || !steps[1].Done || steps[1].Result != `LOUD c1 {"x":1}` {
 		t.Fatalf("steps %+v", steps)
 	}
 	// system, user, assistant call, tool result

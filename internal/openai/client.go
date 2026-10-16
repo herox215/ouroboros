@@ -123,6 +123,8 @@ func SessionOf(ctx context.Context) string {
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Source is owner-origin metadata, kept locally but never sent as an API field.
+	Source MessageSource `json:"source,omitzero"`
 	// Reasoning is what the model thought before it wrote an assistant
 	// message, and ReasoningField the field of the API it came in. Sent back
 	// in that field ("reasoning" if none), the model goes on from what it
@@ -477,6 +479,7 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 // model caches only up to breakpoints, which are set, see breakpoints. An API
 // that refuses one of these parameters is asked without it from then on.
 func (c *Client) Complete(ctx context.Context, model string, msgs []Message, tools []Tool) (Message, error) {
+	msgs = MessagesForModel(msgs)
 	type options struct {
 		IncludeUsage bool `json:"include_usage"`
 	}

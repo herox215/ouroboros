@@ -7,6 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
 )
 
 // The agent may ask the owner a question on its way to an answer, with
@@ -105,7 +107,9 @@ func (m *Model) choose(option string) tea.Cmd {
 	c := m.chat
 	c.asking.sent = true
 	id := c.contextID
-	return func() tea.Msg { return askedMsg{id, option, m.backend.Steer(m.ctx, id, option)} }
+	return func() tea.Msg {
+		return askedMsg{id, option, m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, option)}
+	}
 }
 
 // inputView is what the box of the input shows, width cells wide: the

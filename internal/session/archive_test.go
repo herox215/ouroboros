@@ -230,7 +230,7 @@ func TestDelete(t *testing.T) {
 	if _, ok := <-watching; ok {
 		t.Error("who watches it is let go")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "owner", "s1.jsonl")); !os.IsNotExist(err) {
+	if _, err := arch.Records(history.Owner("s1")); !errors.Is(err, history.ErrNotArchived) {
 		t.Errorf("still archived: %v", err)
 	}
 	if list, _ := s.List(ctx); len(list) != 1 || list[0].ID != "busy" {
@@ -256,8 +256,7 @@ func TestDelete(t *testing.T) {
 
 	// What cannot be deleted is said.
 	arch.Append(history.Who{Session: "stuck"}, []openai.Message{{Role: "user", Content: "hi"}}, nil)
-	os.Chmod(filepath.Join(dir, "owner"), 0o500)
-	t.Cleanup(func() { os.Chmod(filepath.Join(dir, "owner"), 0o700) })
+	s.archive.Archive = unavailableArchive(t)
 	if err := s.Delete(ctx, "stuck"); err == nil || errors.Is(err, ErrNoSession) {
 		t.Errorf("not deleted: %v", err)
 	}
@@ -325,11 +324,11 @@ func TestPeers(t *testing.T) {
 		t.Errorf("ask: %v", err)
 	}
 
-	os.Chmod(filepath.Join(dir, party), 0o500)
+	s.archive.Archive = unavailableArchive(t)
 	if err := s.Delete(ctx, id); err == nil || errors.Is(err, ErrNoSession) {
 		t.Errorf("not deleted: %v", err)
 	}
-	os.Chmod(filepath.Join(dir, party), 0o700)
+	s.archive.Archive = arch
 	if err := s.Delete(ctx, id); err != nil {
 		t.Fatal(err)
 	}

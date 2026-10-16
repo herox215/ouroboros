@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +71,7 @@ func TestEffortPerSession(t *testing.T) {
 	}
 
 	// Who watches anew is told the effort last; a session without one is
-	// told none. Only what was said makes a session listed.
+	// told none. Explicit metadata also makes a session listed.
 	// It tells the context and the cache as the last Event did, so that
 	// what is shown of them stays.
 	if past, _, _ := s.Watch(ctx, "s1"); past[len(past)-1].Kind != Effort || past[len(past)-1].Text != "low" ||
@@ -84,7 +82,7 @@ func TestEffortPerSession(t *testing.T) {
 	if past, _, _ := s.Watch(ctx, "s3"); len(past) != 0 {
 		t.Fatalf("past %+v", past)
 	}
-	if list, _ := s.List(ctx); len(list) != 2 {
+	if list, _ := s.List(ctx); len(list) != 3 {
 		t.Fatalf("list %+v", list)
 	}
 	// A session that only has an effort is kept, though nobody watches it.
@@ -148,7 +146,7 @@ func TestEffortIsKept(t *testing.T) {
 	}
 
 	// What cannot be written or read is logged; the session goes on.
-	os.MkdirAll(filepath.Join(dir, "owner", "broken.effort", "x"), 0o700)
+	s.archive.Archive = unavailableArchive(t)
 	if err := s.SetEffort(ctx, "broken", "low"); err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +155,7 @@ func TestEffortIsKept(t *testing.T) {
 	}
 	s.Close()
 	s, _, l = archived(t, e.agent("medium", nil), dir, time.Now())
+	s.archive.Archive = unavailableArchive(t)
 	if past, _, _ := s.Watch(ctx, "broken"); len(past) != 0 || !l.has("the effort of the session broken cannot be read") {
 		t.Fatalf("past %+v, log %q", past, l.lines)
 	}

@@ -29,6 +29,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/workdir"
 )
 
 // Kind is what an Event tells.
@@ -83,6 +84,8 @@ const (
 	// session that has one gets it with what happened in it so far, last.
 	// Without one the session has the effort of the node.
 	Effort Kind = "effort"
+	// Directory is the absolute project directory, or empty for the default workspace.
+	Directory Kind = "directory"
 	// Jobs are the commands that run in the background for the answer on
 	// its way, one per line in Text, "" once none does. They end with the
 	// answer at the latest: then Jobs is "" before it ends, if it was not.
@@ -115,10 +118,14 @@ type Event struct {
 	// Text is the message, what the agent said, the answer, why it failed,
 	// or the binary of a Restart.
 	Text string `json:"text,omitempty"`
+	// Source identifies the interface that sent a Message or Queued event.
+	Source MessageSource `json:"source,omitzero"`
 	// Tool, Args, Done, Took, Err and Remark are of a Step: the call of
 	// Tool with Args, and once Done, how long it took, why it failed, if it
 	// did, and what the tool said of it for the owner. Args and Done are
 	// also of a question, see Asked.
+	// CallID identifies the archived top-level call for lazy ToolDetails.
+	CallID string          `json:"call_id,omitempty"`
 	Tool   string          `json:"tool,omitempty"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Done   bool            `json:"done,omitempty"`
@@ -146,7 +153,7 @@ func (e Event) AsQuestion() assistant.Question {
 // AsStep is the call of a tool a Step tells of, as the plugin of the tool
 // shows it, see plugin.ToolLine.
 func (e Event) AsStep() assistant.Step {
-	s := assistant.Step{Tool: e.Tool, Args: e.Args, Done: e.Done, Took: e.Took, Remark: e.Remark}
+	s := assistant.Step{ID: e.CallID, Tool: e.Tool, Args: e.Args, Done: e.Done, Took: e.Took, Remark: e.Remark}
 	if e.Err != "" {
 		s.Err = errors.New(e.Err)
 	}
@@ -207,6 +214,9 @@ type API interface {
 	// says: the Event Effort tells it. It fails with ErrNoEffort for one
 	// that is none.
 	SetEffort(ctx context.Context, id, effort string) error
+	// SetDirectory sets or resets the project directory. It fails with ErrBusy
+	// while an answer or a delegated task runs, and rejects nonexistent directories.
+	SetDirectory(ctx context.Context, id, path string) error
 	// List describes the sessions that have a message, the one with the
 	// latest Event first: also those the node keeps from before it started.
 	List(ctx context.Context) ([]Info, error)
@@ -306,20 +316,24 @@ type Assistant interface {
 
 // Service holds the sessions of the owner in the process of the node.
 type Service struct {
-	agent Assistant
-	now   func() time.Time
+	// Workspace is the profile's private directory, used to resolve relative
+	// project changes when no project is selected. Set before serving clients.
+	Workspace string
+	agent     Assistant
+	now       func() time.Time
 
 	ctx     context.Context // of every answer: ends with Close
 	stop    context.CancelFunc
 	answers sync.WaitGroup // on their way
 
-	mu       sync.Mutex
-	sessions map[string]*session
-	jobs     map[string]running // of the answers on their way, by session or conversation of a peer, see Jobs
-	services func() []Services  // that run past the answers, see ServicesFrom
-	archive  *archive           // where the sessions are kept; nil keeps none, see Archive
-	closed   bool               // by Close
-	node     *process           // s.mu is held to read it
+	mu               sync.Mutex
+	sessions         map[string]*session
+	initialDirectory string             // for new sessions and resolving relative project paths
+	jobs             map[string]running // of the answers on their way, by session or conversation of a peer, see Jobs
+	services         func() []Services  // that run past the answers, see ServicesFrom
+	archive          *archive           // where the sessions are kept; nil keeps none, see Archive
+	closed           bool               // by Close
+	node             *process           // s.mu is held to read it
 }
 
 // process is what the sessions know of the process of the node they run in:
@@ -346,7 +360,7 @@ type session struct {
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc // of the answer on its way; nil without one
 	queue    []queued           // the messages that wait for that answer to take them
-	asked    chan string        // takes what the owner answers the question that answer waits for; nil without one
+	asked    chan queued        // takes what the owner answers the question that answer waits for; nil without one
 	restart  string             // the binary a tool of that answer asked to start anew from
 	goOn     bool               // the session goes on by itself in that build, see GoOn
 	// resumed is when the last answer ended of a session that was loaded
@@ -359,8 +373,10 @@ type session struct {
 	tries int
 	// effort is how much the model thinks in the session, once efforted
 	// says that the owner set it: else the agent says.
-	effort   string
-	efforted bool
+	effort    string
+	efforted  bool
+	directory string
+	directed  bool // distinguishes an explicit reset from no saved directory
 	// tasks are the tasks the agent delegated that run, the last of which
 	// had the number delegated.
 	tasks     []*task
@@ -371,8 +387,10 @@ type session struct {
 // of the owner, or the report of a task that ended, with the Event that
 // tells of it once it is taken.
 type queued struct {
-	text string
-	task *Event
+	text      string
+	source    MessageSource
+	generated bool // backend input, not a message from an interface
+	task      *Event
 }
 
 // New returns the Service of the sessions with agent.
@@ -419,6 +437,11 @@ func (s *Service) get(id string) *session {
 	if se == nil {
 		se = &session{id: id, watchers: map[chan Event]struct{}{}}
 		s.effortOf(se) // set before anything was said in it
+		s.directoryOf(se)
+		if !se.directed && s.initialDirectory != "" {
+			se.directory, se.directed = s.initialDirectory, true
+			s.keepDirectory(se)
+		}
 		s.sessions[id] = se
 	}
 	return se
@@ -439,7 +462,7 @@ func (s *Service) lookup(id string) *session {
 
 // forget drops se once nothing is in it and nobody watches it. s.mu is held.
 func (s *Service) forget(se *session) {
-	if len(se.events) == 0 && len(se.watchers) == 0 && se.cancel == nil && len(se.tasks) == 0 && !se.efforted {
+	if len(se.events) == 0 && len(se.watchers) == 0 && se.cancel == nil && len(se.tasks) == 0 && !se.efforted && !se.directed {
 		delete(s.sessions, se.id)
 	}
 }
@@ -456,10 +479,33 @@ func valid(id string) error {
 }
 
 // New returns the ID of a new session.
-func (s *Service) New(context.Context) (string, error) { return a2a.NewID(), nil }
+func (s *Service) New(context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "", ErrStopped
+	}
+	id := a2a.NewID()
+	se := s.get(id)
+	// Creating a session is intentional, unlike merely watching an unknown
+	// ID. Keep even an empty directory so a later startup default cannot
+	// silently change this session. The metadata setter creates its row.
+	if s.archive != nil {
+		if err := s.archive.SetDirectory(history.Owner(id), se.directory); err != nil {
+			delete(s.sessions, id)
+			return "", fmt.Errorf("the new session cannot be kept: %w", err)
+		}
+	}
+	se.directed = true
+	return id, nil
+}
 
 // Ask starts the answer to text in the session id.
-func (s *Service) Ask(_ context.Context, id, text string) error {
+func (s *Service) Ask(ctx context.Context, id, text string) error {
+	return s.askInput(ctx, id, text, false)
+}
+
+func (s *Service) askInput(ctx context.Context, id, text string, generated bool) error {
 	if err := valid(id); err != nil {
 		return err
 	}
@@ -484,7 +530,7 @@ func (s *Service) Ask(_ context.Context, id, text string) error {
 	if se.cancel != nil {
 		return ErrBusy
 	}
-	s.begin(se, p, append(se.queue, queued{text: text})...)
+	s.begin(se, p, append(se.queue, queued{text: text, source: openai.MessageSourceFrom(ctx), generated: generated})...)
 	se.queue = nil
 	return nil
 }
@@ -496,7 +542,11 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 	se.cancel = cancel
 	p.answering++
 	p.release = false // somebody wants the node
-	texts := s.taken(se, messages)
+	inputs := s.taken(se, messages)
+	texts := make([]string, len(inputs))
+	for i, m := range inputs {
+		texts[i] = m.Content
+	}
 	text := strings.Join(texts, "\n\n")
 	named := make(chan struct{})
 	if se.title == "" && se.tries < titleTries {
@@ -506,9 +556,14 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 		close(named)
 	}
 	if !se.resumed.IsZero() {
-		text = resumed(se.resumed, s.now()) + text
+		note := resumed(se.resumed, s.now())
+		text = note + text
+		if len(inputs) > 0 {
+			inputs[0].Content = note + inputs[0].Content
+		}
 		se.resumed = time.Time{}
 	}
+	ctx = agent.WithInputMessages(ctx, inputs)
 	s.answers.Add(1)
 	go s.answer(ctx, se, text, p.replace != nil, named)
 }
@@ -527,12 +582,22 @@ func (s *Service) Steer(ctx context.Context, id, text string) error {
 		defer s.mu.Unlock()
 		if se.asked != nil {
 			// What the owner says now answers the question: ask tells it.
-			se.asked <- text
+			se.asked <- queued{text: text, source: openai.MessageSourceFrom(ctx)}
 			se.asked = nil
 			return nil
 		}
-		se.queue = append(se.queue, queued{text: text})
-		s.emit(se, Event{Kind: Queued, Text: text})
+		// Once a new build takes the node's place, the queue of the answer
+		// would be dropped with the process: refuse here, as askInput does
+		// where no answer is on its way, instead of losing the message.
+		p := s.node
+		p.mu.Lock()
+		handing := p.successor != ""
+		p.mu.Unlock()
+		if handing {
+			return ErrRestarting
+		}
+		se.queue = append(se.queue, queued{text: text, source: openai.MessageSourceFrom(ctx).Normalized()})
+		s.emit(se, Event{Kind: Queued, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()})
 		return nil
 	}
 	s.mu.Unlock()
@@ -559,8 +624,9 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 		return "", nil
 	}
 	text := se.queue[last].text
+	source := se.queue[last].source
 	se.queue = slices.Delete(se.queue, last, last+1)
-	s.emit(se, Event{Kind: Unqueued, Text: text})
+	s.emit(se, Event{Kind: Unqueued, Text: text, Source: source})
 	return text, nil
 }
 
@@ -569,17 +635,17 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 // question is told to those who watch the session, and so is how the wait
 // ended. It ends without an answer, with the error of ctx, when ctx does: the
 // answer was stopped, or the time of the tool that asks is over.
-func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage) (string, error) {
+func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage) (agent.OwnerReply, error) {
 	s.mu.Lock()
 	if se.asked != nil {
 		s.mu.Unlock()
-		return "", errAsked
+		return agent.OwnerReply{}, errAsked
 	}
-	asked := make(chan string, 1)
+	asked := make(chan queued, 1)
 	se.asked = asked
 	s.emit(se, Event{Kind: Asked, Args: question})
 	s.mu.Unlock()
-	var answer string
+	var answer queued
 	select {
 	case answer = <-asked:
 	case <-ctx.Done():
@@ -590,19 +656,19 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 		se.asked = nil // nobody answers it any more
 	}
 	close(asked)
-	if answer == "" {
+	if answer.text == "" {
 		answer = <-asked // what the owner said just when ctx ended, if anything
 	}
-	s.emit(se, Event{Kind: Asked, Done: true, Text: answer})
-	if answer == "" {
-		return "", ctx.Err()
+	s.emit(se, Event{Kind: Asked, Done: true, Text: answer.text, Source: answer.source.Normalized()})
+	if answer.text == "" {
+		return agent.OwnerReply{}, ctx.Err()
 	}
-	return answer, nil
+	return agent.OwnerReply{Text: answer.text, Source: answer.source.Normalized()}, nil
 }
 
 // steered hands the answer on its way in se the messages that are queued
 // for it: see taken.
-func (s *Service) steered(se *session) []string {
+func (s *Service) steered(se *session) []openai.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	texts := s.taken(se, se.queue)
@@ -613,15 +679,18 @@ func (s *Service) steered(se *session) []string {
 // taken tells that the answer in se takes messages, each a Message of the
 // owner or the Task whose report it is, and returns their texts. s.mu is
 // held.
-func (s *Service) taken(se *session, messages []queued) []string {
-	texts := make([]string, len(messages))
+func (s *Service) taken(se *session, messages []queued) []openai.Message {
+	texts := make([]openai.Message, len(messages))
 	for i, m := range messages {
-		texts[i] = m.text
+		texts[i] = openai.Message{Role: "user", Content: m.text, Source: m.source}
 		if m.task != nil {
 			s.emit(se, *m.task)
 			continue
 		}
-		s.emit(se, Event{Kind: Message, Text: m.text})
+		if !m.generated {
+			texts[i].Source = m.source.Normalized()
+		}
+		s.emit(se, Event{Kind: Message, Text: m.text, Source: texts[i].Source})
 	}
 	return texts
 }
@@ -724,6 +793,9 @@ func (s *Service) transient(se *session, e Event) {
 // is closed: the session is named, or not, on the way.
 func (s *Service) answer(ctx context.Context, se *session, text string, restartable bool, named <-chan struct{}) {
 	defer s.answers.Done()
+	s.mu.Lock()
+	ctx = workdir.With(ctx, se.directory)
+	s.mu.Unlock()
 	if restartable {
 		ctx = WithRestart(ctx, func(exe string) {
 			s.mu.Lock()
@@ -763,9 +835,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.emit(se, Event{Kind: Suggestion, Text: text})
 	})
-	ctx = agent.WithSteering(ctx, func() []string { return s.steered(se) })
+	ctx = agent.WithMessageSteering(ctx, func() []openai.Message { return s.steered(se) })
 	ctx = assistant.WithTasks(ctx, delegating{s, se})
-	ctx = agent.WithOwner(ctx, func(ctx context.Context, question json.RawMessage) (string, error) {
+	ctx = agent.WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (agent.OwnerReply, error) {
 		return s.ask(ctx, se, question)
 	})
 	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
@@ -777,7 +849,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	ctx = openai.WithCalling(ctx, s.calling(se, flush, rest))
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
 		drop() // what a round wrote before its tools is not the answer
-		e := Event{Kind: Step, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took, Remark: st.Remark}
+		e := Event{Kind: Step, CallID: st.ID, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took, Remark: st.Remark}
 		if st.Err != nil {
 			e.Err = st.Err.Error()
 		}
@@ -870,7 +942,7 @@ func said(events []Event) []openai.Message {
 	for _, e := range events {
 		switch e.Kind {
 		case Message:
-			msgs = append(msgs, openai.Message{Role: "user", Content: e.Text})
+			msgs = append(msgs, openai.Message{Role: "user", Content: e.Text, Source: e.Source})
 		case Answer:
 			msgs = append(msgs, openai.Message{Role: "assistant", Content: e.Text})
 		}
@@ -951,6 +1023,9 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 		s.forget(se)
 	})
 	past := slices.Clone(se.events)
+	if se.directed {
+		past = append(past, s.directoryEvent(se))
+	}
 	if se.efforted {
 		past = append(past, s.effortEvent(se))
 	}
@@ -1051,7 +1126,7 @@ func (s *Service) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	found := false
-	if se, ok := s.sessions[id]; ok && len(se.events) > 0 {
+	if se, ok := s.sessions[id]; ok && (len(se.events) > 0 || se.efforted || se.directed) {
 		if se.cancel != nil || len(se.tasks) > 0 {
 			return ErrBusy
 		}
@@ -1076,14 +1151,17 @@ func (s *Service) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-// List describes the sessions that have a message, the latest first: those
-// in memory and those kept.
+// List describes sessions with messages or explicitly kept metadata, the
+// latest first: those in memory and those kept.
 func (s *Service) List(context.Context) ([]Info, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var list []Info
 	for _, se := range s.sessions {
 		if len(se.events) == 0 {
+			if se.efforted || se.directed {
+				list = append(list, Info{ID: se.id, Title: se.title})
+			}
 			continue
 		}
 		title := cmp.Or(se.title, se.events[0].Text)
@@ -1099,7 +1177,15 @@ func (s *Service) List(context.Context) ([]Info, error) {
 		}
 		for _, e := range entries {
 			id, ok := strings.CutPrefix(e.ID, "owner/")
-			if se, known := s.sessions[id]; ok && (!known || len(se.events) == 0) {
+			if !ok {
+				continue
+			}
+			if i := slices.IndexFunc(list, func(info Info) bool { return info.ID == id }); i >= 0 {
+				// Metadata-only sessions have no conversation timestamp.
+				if list[i].Last.IsZero() {
+					list[i].Title, list[i].Last = e.Title, e.Modified
+				}
+			} else {
 				list = append(list, Info{ID: id, Title: e.Title, Last: e.Modified})
 			}
 		}
@@ -1116,14 +1202,23 @@ func (s *Service) List(context.Context) ([]Info, error) {
 // Contents returns what the next call of the LLM in the session id is sent:
 // the system prompt, every tool with its schema and the conversation so far,
 // and what the plugins that prepared it reported.
-func (s *Service) Contents(_ context.Context, id string) ([]Line, error) {
+func (s *Service) Contents(ctx context.Context, id string) ([]Line, error) {
 	if err := valid(id); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
-	s.lookup(id) // the agent remembers a session that is kept once it is loaded
+	se := s.get(id) // load both the conversation and its project directory
+	ctx = workdir.With(ctx, se.directory)
 	s.mu.Unlock()
-	c, err := s.agent.Contents(id)
+	var c assistant.Contents
+	var err error
+	if a, ok := s.agent.(interface {
+		ContentsContext(context.Context, string) (assistant.Contents, error)
+	}); ok {
+		c, err = a.ContentsContext(ctx, id)
+	} else {
+		c, err = s.agent.Contents(id)
+	}
 	var lines []Line
 	if c.System != "" {
 		lines = append(lines, Line{Role: "system", Text: c.System})
@@ -1194,6 +1289,11 @@ func (s *Service) Close() {
 	s.mu.Unlock()
 	s.stop()
 	s.answers.Wait()
+	if s.archive != nil {
+		if err := s.archive.Close(); err != nil {
+			s.archive.log("the session archive cannot be closed: %v", err)
+		}
+	}
 }
 
 // Await asks for the answer to text in the session id of api and waits for

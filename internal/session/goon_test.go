@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,9 +66,8 @@ func TestGoOn(t *testing.T) {
 	// Without an archive nothing goes on, and what cannot be marked, read or
 	// asked is logged.
 	service(t, a).GoOn()
-	broken := t.TempDir()
-	os.WriteFile(filepath.Join(broken, "owner"), nil, 0o600) // no directory for the mark
-	s, replaced = inNode(broken)
+	s, replaced = inNode(t.TempDir())
+	s.archive.Archive = unavailableArchive(t)
 	s.Ask(context.Background(), "s1", "build")
 	<-replaced
 	logs := func(want string) {
@@ -87,8 +84,7 @@ func TestGoOn(t *testing.T) {
 	stopped.GoOn()
 	logs("the session owner/s2 does not go on by itself")
 	history.Open(dir).GoOn("owner/s3")
-	os.Chmod(filepath.Join(dir, "owner"), 0o500)
-	t.Cleanup(func() { os.Chmod(filepath.Join(dir, "owner"), 0o700) })
+	next.archive.Archive = unavailableArchive(t)
 	next.GoOn()
 	logs("which sessions go on by themselves cannot be read")
 }

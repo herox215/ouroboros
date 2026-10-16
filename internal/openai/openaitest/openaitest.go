@@ -63,7 +63,7 @@ func NewServerWithKey(t testing.TB, key string) string {
 			Stream   bool             `json:"stream"`
 		}
 		json.NewDecoder(r.Body).Decode(&in)
-		last := in.Messages[len(in.Messages)-1]
+		last := withoutOriginContext(in.Messages[len(in.Messages)-1])
 		msg := openai.Message{Role: "assistant", Content: fmt.Sprintf("[%s] turns=%d last=%s", in.Model, len(in.Messages)-1, last.Content)}
 		if last.Content == "?system" {
 			msg.Content = in.Messages[0].Content
@@ -97,6 +97,22 @@ func NewServerWithKey(t testing.TB, key string) string {
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// withoutOriginContext keeps the fake command language and echo about the user's
+// text, not the provider-only attribution. Work on a copy so tests that inspect
+// the request can still assert its origin context.
+func withoutOriginContext(msg openai.Message) openai.Message {
+	if msg.Role == "user" {
+		for _, source := range []string{"cli", "tui", "gui", "api", "unknown"} {
+			prefix := openai.MessagesForModel([]openai.Message{{Role: "user", Source: openai.MessageSource{Interface: source}}})[0].Content
+			if text, ok := strings.CutPrefix(msg.Content, prefix); ok {
+				msg.Content = text
+				break
+			}
+		}
+	}
+	return msg
 }
 
 // function reports whether tools offer run with the function name in its
