@@ -335,7 +335,7 @@ func (b Builder) helper(cfg config.Config, tools []agent.Tool) (*agent.Agent, er
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(tools, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
 	}
-	prompt := fmt.Sprintf(helperPrompt, cfg.Name) + scriptHint + validationHint
+	prompt := fmt.Sprintf(helperPrompt, cfg.Name) + scriptHint + validationHint + researchHint
 	if has(fileTools...) {
 		prompt += filesHint
 	}

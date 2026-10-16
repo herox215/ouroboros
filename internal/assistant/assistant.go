@@ -62,6 +62,9 @@ const (
 		`Change code the way the code around it is written. ` +
 		`When writing or proposing tool descriptions, including parameter descriptions, write them in English regardless of the conversation language. ` +
 		`What you find changed and did not change yourself is the work of the user: look at it before you overwrite or delete it. ` +
+		`When recovering a damaged repository file, first use git log and git show to find and recover the complete known-good version verbatim, rather than piecing it together from fragments. ` +
+		`If Git has no complete version, check the conversation archive for the original; if neither source has it, state the gap before reconstructing. ` +
+		`Preserve unrelated local changes, verify the recovered file is complete against the original source, and run the relevant tests; passing tests alone does not prove completeness. ` +
 		`Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, ` +
 		`unless you still need information to make those changes safely. ` +
 		`Write the tests a change needs and no more, and do not run again what passed without a reason. ` +
@@ -105,6 +108,9 @@ const (
 	// its scripts.
 	scriptHint = `You act through ` + toolRun + ` alone: every tool this prompt names is a function in its scripts, ` +
 		`never a tool to call on its own. `
+	// researchHint also applies to browser-only research and delegated comparisons.
+	researchHint = `For short comparison questions, stop researching once a few reliable primary sources support the central claims and the requested comparison can be answered. ` +
+		`Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth. `
 	// validationHint applies even with browser-only tools: opening a page is
 	// not evidence that its interactions work. Helpers need the same rule.
 	validationHint = `When testing whether something works, distinguish reachability from verified functionality. ` +
@@ -338,7 +344,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.
-	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint + validationHint
+	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint + validationHint + researchHint
 	if has(toolAskPeer) {
 		prompt += askHint
 	}
