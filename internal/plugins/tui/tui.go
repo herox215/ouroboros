@@ -355,6 +355,32 @@ func (u *ui) Settings() (tui.Settings, error) {
 	return u.Owner.Settings(plugin.All[plugin.Tool](u.ctx), plugin.All[plugin.ContextProvider](u.ctx))
 }
 
+// Gateways reads contributions at use time, after all plugins have started.
+func (u *ui) Gateways(ctx context.Context) ([]plugin.GatewaySettings, error) {
+	out := []plugin.GatewaySettings{}
+	for _, g := range plugin.All[plugin.Gateway](u.ctx) {
+		if g.Settings == nil {
+			continue
+		}
+		s, err := g.Settings(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.Name, s.Title = g.Name, g.Title
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func (u *ui) SaveGateway(ctx context.Context, name string, change plugin.GatewayChange) error {
+	for _, g := range plugin.All[plugin.Gateway](u.ctx) {
+		if g.Name == name && g.Save != nil {
+			return g.Save(ctx, change)
+		}
+	}
+	return fmt.Errorf("gateway %q is not available", name)
+}
+
 // ChangeSetting makes a change the owner made on the settings screen.
 func (u *ui) ChangeSetting(s tui.Setting) (string, error) {
 	return u.Owner.Change(s, plugin.All[plugin.Tool](u.ctx), plugin.All[plugin.ContextProvider](u.ctx))

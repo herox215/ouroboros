@@ -130,6 +130,11 @@ type fakeBackend struct {
 	read  map[string][]Event   // what happened in them
 }
 
+func (f *fakeBackend) Gateways(ctx context.Context) ([]plugin.GatewaySettings, error) {
+	return nil, nil
+}
+func (f *fakeBackend) SaveGateway(context.Context, string, plugin.GatewayChange) error { return nil }
+
 func (f *fakeBackend) Settings() (Settings, error) { return f.settings, f.fail["settings"] }
 func (f *fakeBackend) ChangeSetting(s Setting) (string, error) {
 	f.changes = append(f.changes, s)

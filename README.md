@@ -2390,5 +2390,6 @@ mutant that makes its tests hang costs up to 90 s.
 ## License
 
 Ouroboros is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`); the copyright notice is in
-[NOTICE](NOTICE). The binary links third-party modules under the MIT, BSD-2-Clause, BSD-3-Clause and Apache-2.0 licenses, listed with
-their license texts in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Pass all three files on with the binary.
+[NOTICE](NOTICE). The binary links third-party modules under their respective licenses, listed with
+their license texts in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Pass all three files on with the binary
+and satisfy the listed dependencies' redistribution requirements, including any source-code availability requirements.

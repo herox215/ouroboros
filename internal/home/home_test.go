@@ -151,7 +151,7 @@ func TestFiles(t *testing.T) {
 		t.Errorf("contacts: %v", err)
 	}
 
-	want := []string{"config.json", "config.json.lock", "credentials.json", "credentials.json.lock", "browser"}
+	want := []string{"config.json", "config.json.lock", "credentials.json", "credentials.json.lock", "browser", "gateways"}
 	for i := range want {
 		want[i] = filepath.Join(string(d), want[i])
 	}

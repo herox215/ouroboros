@@ -49,6 +49,7 @@ type (
 type settingsMsg struct {
 	settings  Settings
 	fallbacks []Fallback
+	gateways  []plugin.GatewaySettings
 	err       error
 }
 
@@ -89,25 +90,29 @@ type action struct {
 type edit struct {
 	label  string
 	change func(value string) Setting
+	submit func(string) tea.Cmd
 }
 
 // settingsScreen is the state of the settings screen.
 type settingsScreen struct {
-	values    Settings        // the configuration
-	fallbacks []Fallback      // of the model, which /model changes
-	err       error           // why it is not there
-	rows      []row           // what the categories show of it
-	category  int             // the category selected, of sections
-	opened    bool            // its rows are shown, not the list of categories
-	peer      string          // the ID of the peer whose own list of tools is open
-	tool      string          // the tool whose settings are open
-	back      []int           // the row selected on each level above the one open
-	sel       int             // the row selected, of those shown
-	top       int             // the line of what is shown the screen starts at
-	infoTop   int             // the first line of the explanation shown
-	info      *row            // the explanation opened with Info
-	editing   *edit           // the text that is typed, if one is
-	input     textinput.Model // where it is typed
+	gateways     []plugin.GatewaySettings
+	gateway      string
+	gatewayDraft plugin.GatewayChange
+	values       Settings        // the configuration
+	fallbacks    []Fallback      // of the model, which /model changes
+	err          error           // why it is not there
+	rows         []row           // what the categories show of it
+	category     int             // the category selected, of sections
+	opened       bool            // its rows are shown, not the list of categories
+	peer         string          // the ID of the peer whose own list of tools is open
+	tool         string          // the tool whose settings are open
+	back         []int           // the row selected on each level above the one open
+	sel          int             // the row selected, of those shown
+	top          int             // the line of what is shown the screen starts at
+	infoTop      int             // the first line of the explanation shown
+	info         *row            // the explanation opened with Info
+	editing      *edit           // the text that is typed, if one is
+	input        textinput.Model // where it is typed
 	// refused are the settings of the tools that were refused while the
 	// UI is open, by who, peer and name: a tool that is allowed again gets
 	// them back, rather than going everywhere its settings kept it from.
@@ -126,6 +131,9 @@ func (m *Model) openSettings() tea.Cmd {
 	c.category, c.opened, c.peer, c.tool, c.back = 0, false, "", "", nil
 	c.sel, m.choice, c.top = 0, 0, 0
 	c.editing, c.info = nil, nil
+	c.input.SetValue("")
+	c.gateway = ""
+	c.gatewayDraft = plugin.GatewayChange{}
 	return c.reload(m)
 }
 
@@ -133,11 +141,16 @@ func (m *Model) openSettings() tea.Cmd {
 func (c *settingsScreen) load(m *Model) tea.Msg {
 	s, err := m.backend.Settings()
 	fallbacks, _ := m.backend.Fallbacks() // none that can be read are none
-	return settingsMsg{s, fallbacks, err}
+	gateways, gatewayErr := m.backend.Gateways(m.ctx)
+	if err == nil {
+		err = gatewayErr
+	}
+	return settingsMsg{settings: s, fallbacks: fallbacks, gateways: gateways, err: err}
 }
 
 // loaded takes the configuration that was read.
 func (c *settingsScreen) loaded(m *Model, msg settingsMsg) {
+	c.gateways = msg.gateways
 	c.values, c.fallbacks, c.err, c.rows = msg.settings, msg.fallbacks, msg.err, nil
 	if msg.err == nil {
 		c.rows = rows(msg.settings)
@@ -176,6 +189,8 @@ func (c *settingsScreen) shown(m *Model) []row {
 
 func (c *settingsScreen) page(m *Model) []row {
 	switch {
+	case c.gateway != "":
+		return c.gatewayPage(m)
 	case c.tool != "":
 		if t := c.toolState(); t != nil {
 			return toolPage(c.section(), c.audience(), c.peer, *t)
@@ -186,6 +201,9 @@ func (c *settingsScreen) page(m *Model) []row {
 			return toolRows(c.section(), plugin.ForPeers, p.ID, p.List)
 		}
 		return nil
+	}
+	if c.section() == gatewaysSection {
+		return c.gatewayRows(m)
 	}
 	var out []row
 	for _, r := range c.rows {
@@ -256,6 +274,10 @@ func (c *settingsScreen) enter(m *Model, peer, tool string) tea.Cmd {
 // leave goes a level up, to the row that was selected there.
 func (c *settingsScreen) leave(m *Model) {
 	switch {
+	case c.gateway != "":
+		c.gateway = ""
+		c.gatewayDraft = plugin.GatewayChange{}
+		c.input.SetValue("")
 	case c.tool != "":
 		c.tool = ""
 	case c.peer != "":
@@ -290,7 +312,7 @@ func (c *settingsScreen) changed(m *Model, msg changedMsg) tea.Cmd {
 
 // startEdit lets the owner type the text of label, starting from value.
 func (c *settingsScreen) startEdit(m *Model, label, value string, change func(string) Setting) tea.Cmd {
-	c.editing = &edit{label, change}
+	c.editing = &edit{label: label, change: change}
 	c.input = textinput.New()
 	c.input.SetValue(value)
 	c.input.CursorEnd()
@@ -315,13 +337,23 @@ func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if c.editing != nil {
 		switch msg.String() {
 		case "esc":
+			c.clearGatewaySecrets()
+			if c.gateway != "" {
+				c.input.SetValue("")
+			}
 			c.editing = nil
 			m.setNotice("nothing changed", false)
 			return nil
 		case "enter":
-			s := c.editing.change(c.input.Value())
+			value, editing := c.input.Value(), c.editing
+			if c.gateway != "" || c.input.EchoMode == textinput.EchoPassword {
+				c.input.SetValue("")
+			}
 			c.editing = nil
-			return c.change(m, s)
+			if editing.submit != nil {
+				return editing.submit(value)
+			}
+			return c.change(m, editing.change(value))
 		}
 		var cmd tea.Cmd
 		c.input, cmd = c.input.Update(msg)
@@ -381,13 +413,15 @@ const (
 	peersSection     = "Tools for peers"
 	singleSection    = "Tools of single peers"
 	protectedSection = "Protected paths"
+	gatewaysSection  = "Gateways"
 )
 
 // sections are the categories in the order the settings screen lists them.
-var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection, peersSection, singleSection, protectedSection}
+var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
 
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
+	gatewaysSection:  "external messaging access for this profile",
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
 	agentsSection:    "the context provider, the debug mode",
 	pluginsSection:   "which plugins are turned on",
@@ -399,6 +433,7 @@ var contents = map[string]string{
 
 // about is what an open category says of its lines.
 var about = map[string]string{
+	gatewaysSection:  "Allowlisted users are delegated this profile’s agent tools, INCLUDING permission answers, not just chat. Empty denies all.",
 	nodeSection:      "The access and the models are changed with the setup and /model, the effort with /effort.",
 	agentsSection:    "A change holds from the next message, for you and for peers.",
 	pluginsSection:   "Plugins are part of the build. Turning one on or off holds once ouro starts anew: quit and start ouro, /stop and /start the node.",
@@ -810,6 +845,13 @@ func (c *settingsScreen) title() []string {
 	}
 	if c.tool != "" {
 		path = append(path, c.tool)
+	}
+	if c.gateway != "" {
+		for _, g := range c.gateways {
+			if g.Name == c.gateway {
+				path = append(path, cmp.Or(g.Title, g.Name))
+			}
+		}
 	}
 	for i, p := range path {
 		path[i] = boldStyle.Render(p)

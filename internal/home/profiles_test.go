@@ -273,7 +273,7 @@ func TestWorkspacesAndSecrets(t *testing.T) {
 		t.Fatalf("workspace of the only profile %s", w)
 	}
 	shared := append(config.Files(string(root)), credentials.Files(string(root))...)
-	own := append(slices.Clone(shared), root.Browser())
+	own := append(slices.Clone(shared), root.Browser(), root.Gateways())
 	if got := root.Secrets(); !slices.Equal(got, own) {
 		t.Fatalf("secrets of one profile %v", got)
 	}
@@ -288,8 +288,8 @@ func TestWorkspacesAndSecrets(t *testing.T) {
 	if got := root.Secrets(); !slices.Equal(got, append(slices.Clone(own), string(luna), filepath.Join(workspaces, lunaID.ID()))) {
 		t.Fatalf("secrets of the first one %v", got)
 	}
-	want := append(slices.Clone(shared), luna.Browser(), filepath.Join(string(root), "contacts.json"), filepath.Join(string(root), "proposals.json"),
-		filepath.Join(string(root), "failures.json"), root.History(), root.UpdateDir(), root.Browser(), filepath.Join(workspaces, terraID.ID()))
+	want := append(slices.Clone(shared), luna.Browser(), luna.Gateways(), filepath.Join(string(root), "contacts.json"), filepath.Join(string(root), "proposals.json"),
+		filepath.Join(string(root), "failures.json"), root.History(), root.UpdateDir(), root.Browser(), root.Gateways(), filepath.Join(workspaces, terraID.ID()))
 	want = append(want, config.Files(string(luna))...)
 	if got := luna.Secrets(); !slices.Equal(got, want) {
 		t.Fatalf("secrets of another one\n%v\nwant\n%v", got, want)

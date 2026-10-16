@@ -169,6 +169,10 @@ type Backend interface {
 	// Settings returns the configuration of the node for the settings
 	// screen (/settings), without its keys.
 	Settings() (Settings, error)
+	// Gateways reads public settings dynamically from this profile's plugins.
+	Gateways(ctx context.Context) ([]plugin.GatewaySettings, error)
+	// SaveGateway passes a transient credential change to one contribution.
+	SaveGateway(context.Context, string, plugin.GatewayChange) error
 	// ChangeSetting makes one change of the configuration, once the node
 	// checked it, and says from when it holds.
 	ChangeSetting(s Setting) (string, error)
@@ -802,6 +806,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.notice = ""
 	m.selected, m.pressed = nil, nil
 	if msg.String() == "ctrl+c" {
+		if m.screen == screenSettings {
+			m.config.input.SetValue("")
+			m.config.editing = nil
+			m.config.clearGatewaySecrets()
+		}
 		return m.leave()
 	}
 	switch m.screen {

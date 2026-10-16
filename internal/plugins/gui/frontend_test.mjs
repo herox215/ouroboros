@@ -7,8 +7,11 @@ const source = await readFile(new URL('./frontend/app.js', import.meta.url), 'ut
 const dialogSource = await readFile(new URL('./frontend/model-dialog.js', import.meta.url), 'utf8');
 const dialogURL = 'data:text/javascript;base64,' + Buffer.from(dialogSource).toString('base64');
 const { createModelDialog } = await import(dialogURL);
+const settingsSource = await readFile(new URL('./frontend/settings-dialog.js', import.meta.url), 'utf8');
+const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource).toString('base64');
+const { createSettingsDialog } = await import(settingsURL);
 const { mount, start, browse, dateGroup } = await import(
-  'data:text/javascript;base64,' + Buffer.from(source.replace("'./model-dialog.js'", JSON.stringify(dialogURL))).toString('base64')
+  'data:text/javascript;base64,' + Buffer.from(source.replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL))).toString('base64')
 );
 
 class Element extends EventTarget {
@@ -100,7 +103,7 @@ function documentFixture() {
       return elements[id];
     },
     createElement(tagName) {
-      assert.ok(['option', 'section', 'h2', 'h3', 'pre', 'p', 'button', 'span', 'details', 'summary', 'dialog', 'form', 'label', 'select', 'div'].includes(tagName));
+      assert.ok(['option', 'section', 'h2', 'h3', 'pre', 'p', 'button', 'span', 'details', 'summary', 'dialog', 'form', 'label', 'select', 'div', 'input'].includes(tagName));
       return new Element(tagName);
     },
   };
@@ -1162,7 +1165,7 @@ test('reopening while a choice is sending keeps it locked; disconnect clears the
 });
 
 function dialogElements(doc) {
-  const dialog = doc.body.children.at(-1);
+  const dialog = doc.body.children.find(e => e.children[0]?.textContent === 'Modell einstellen');
   const form = dialog.children[2];
   return { dialog, form, access: form.children[0].children[0], model: form.children[1].children[0],
     status: form.children[2], error: form.children[3], cancel: form.children[4].children[0], save: form.children[4].children[1] };
@@ -1277,7 +1280,7 @@ test('a running save refuses a second submit and Escape, and locks the dialog', 
   assert.equal(el.cancel.disabled, false);
 });
 
-test('settings icon opens the model dialog for the selected profile', async () => {
+test('settings icon navigates to the model dialog for the selected profile', async () => {
   const doc = documentFixture();
   const loaded = [];
   await start({
@@ -1286,10 +1289,59 @@ test('settings icon opens the model dialog for the selected profile', async () =
     Models: async index => { loaded.push(index); return { accesses: [] }; },
   }, doc);
   doc.settings.dispatchEvent(new Event('click'));
+  const settings = doc.body.children.at(-1);
+  assert.equal(settings.open, true);
+  settings.children.find(e => e.textContent === 'Model').dispatchEvent(new Event('click'));
   await settle();
   assert.deepEqual(loaded, [1]);
   assert.equal(dialogElements(doc).dialog.open, true);
   assert.match(dialogElements(doc).status.textContent, /Keine Zugänge/);
+});
+
+test('gateway navigation saves to captured profile, masks and clears credentials, and logs out', async () => {
+  const doc = documentFixture(), saved = [], loaded = [];
+  const picker = createSettingsDialog({
+    Gateways: async index => { loaded.push(index); return [{ Name: 'fixture', Title: 'Matrix', Enabled: true, UserID: '@owner:example', AllowedUsers: ['@friend:example'], LoggedIn: true, Status: 'Ready' }]; },
+    SaveGateway: async (...args) => { saved.push([args[0], args[1], { ...args[2] }]); },
+  }, { open() { assert.fail('unexpected model picker'); } }, doc);
+  picker.open(1, 'Work');
+  const dialog = doc.body.children.at(-1);
+  const click = text => dialog.children.find(e => e.textContent === text).dispatchEvent(new Event('click'));
+  click('Gateways'); await settle(); click('Matrix');
+  let form = dialog.children.at(-1);
+  let password = form.children[3].children[0];
+  assert.equal(password.type, 'password');
+  password.value = 'secret';
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  assert.equal(password.value, '');
+  await settle();
+  assert.equal(saved[0][0], 1); assert.equal(saved[0][1], 'fixture');
+  assert.equal(saved[0][2].Password, 'secret'); assert.deepEqual(saved[0][2].AllowedUsers, ['@friend:example']);
+  click('Matrix'); form = dialog.children.at(-1); password = form.children[3].children[0];
+  password.value = 'discard'; form.children.find(e => e.textContent === 'Cancel').dispatchEvent(new Event('click'));
+  assert.equal(password.value, ''); await settle(); assert.equal(saved.length, 1);
+  click('Matrix'); form = dialog.children.at(-1);
+  form.children.find(e => e.textContent === 'Logout').dispatchEvent(new Event('click')); await settle();
+  assert.equal(saved[1][2].Logout, true); assert.equal(saved[1][2].Password, '');
+  assert.ok(loaded.every(index => index === 1));
+  click('Matrix'); password = dialog.children.at(-1).children[3].children[0]; password.value = 'close';
+  dialog.close(); assert.equal(password.value, '');
+});
+
+test('gateway failures do not display credential-bearing backend errors', async () => {
+  const doc = documentFixture();
+  const picker = createSettingsDialog({
+    Gateways: async () => [{ Name: 'fixture' }],
+    SaveGateway: async () => { throw Error('secret'); },
+  }, {}, doc);
+  picker.open(0); const dialog = doc.body.children.at(-1);
+  dialog.children.find(e => e.textContent === 'Gateways').dispatchEvent(new Event('click')); await settle();
+  dialog.children.find(e => e.textContent === 'fixture').dispatchEvent(new Event('click'));
+  const form = dialog.children.at(-1), password = form.children[3].children[0]; password.value = 'secret';
+  form.dispatchEvent(new Event('submit', { cancelable: true })); await settle();
+  assert.equal(password.value, '');
+  assert.match(dialog.children.at(-1).textContent, /operation failed/);
+  assert.ok(!dialog.children.at(-1).textContent.includes('secret'));
 });
 
 test('start goes on with the session the window before showed', async () => {
@@ -1305,3 +1357,52 @@ test('start goes on with the session the window before showed', async () => {
 });
 
 
+
+test('gateway schema renders arbitrary fields without Matrix and clears all secrets', async () => {
+  const doc = documentFixture(), saved = [], payloads = [];
+  const item = { Name: 'custom', Status: 'Ready', Fields: [
+    { Key: 'token', Label: 'Bot token', Kind: 'secret', Value: 'ignore' },
+    { Key: 'region', Label: 'Region', Kind: 'text', Value: 'west' },
+    { Key: 'members', Label: 'Members', Kind: 'list', List: ['one'] },
+    { Key: 'quiet', Label: 'Quiet', Kind: 'bool', On: true },
+    { Key: 'other', Label: 'Other secret', Kind: 'secret' },
+  ] };
+  const picker = createSettingsDialog({
+    Gateways: async () => [item],
+    SaveGateway: async (profile, name, change) => { payloads.push(change); saved.push(JSON.parse(JSON.stringify(change))); },
+  }, {}, doc);
+  picker.open(2);
+  const dialog = doc.body.children.at(-1);
+  const click = text => dialog.children.find(e => e.textContent === text).dispatchEvent(new Event('click'));
+  click('Gateways'); await settle(); click('custom');
+  let form = dialog.children.at(-1);
+  const fields = () => form.children.filter(e => e.tagName === 'label').map(e => e.children[0]);
+  // Fixture tag names are kept as supplied by createElement.
+  let inputs = fields();
+  assert.equal(inputs.length, 6);
+  assert.equal(inputs[1].type, 'password'); assert.equal(inputs[1].value, '');
+  assert.equal(inputs[5].type, 'password');
+  assert.ok(!form.children.some(e => /Homeserver|User ID|Password/.test(e.textContent)));
+  assert.ok(form.children.some(e => /INCLUDING permission answers, not just chat/.test(e.textContent)));
+  inputs[0].checked = true; inputs[1].value = 'token-secret'; inputs[2].value = 'east';
+  inputs[3].value = 'two, three\nfour'; inputs[4].checked = false; inputs[5].value = 'other-secret';
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  assert.equal(inputs[1].value, ''); assert.equal(inputs[5].value, '');
+  await settle();
+  assert.deepEqual(saved[0].Values, { token: 'token-secret', region: 'east', quiet: 'false', other: 'other-secret' });
+  assert.deepEqual(saved[0].Lists, { members: ['two', 'three', 'four'] });
+  assert.equal(saved[0].Homeserver, undefined); assert.equal(saved[0].Password, undefined);
+  assert.equal(payloads[0].Values.token, ''); assert.equal(payloads[0].Values.other, '');
+  click('custom'); form = dialog.children.at(-1); inputs = fields();
+  inputs[1].value = inputs[5].value = 'discard';
+  form.children.find(e => e.textContent === 'Cancel').dispatchEvent(new Event('click'));
+  assert.equal(inputs[1].value, ''); assert.equal(inputs[5].value, ''); await settle();
+  assert.equal(saved.length, 1);
+  click('custom'); form = dialog.children.at(-1); inputs = fields();
+  inputs[1].value = inputs[5].value = 'logout';
+  form.children.find(e => e.textContent === 'Logout').dispatchEvent(new Event('click')); await settle();
+  assert.equal(saved[1].Logout, true); assert.equal(saved[1].Values.token, ''); assert.equal(saved[1].Values.other, '');
+  click('custom'); form = dialog.children.at(-1); inputs = fields();
+  inputs[1].value = inputs[5].value = 'close'; dialog.close();
+  assert.equal(inputs[1].value, ''); assert.equal(inputs[5].value, '');
+});
