@@ -45,7 +45,10 @@ const windowSize = "1280,900"
 type process struct {
 	*conn
 	visible bool
-	end     func() // ends the browser and waits for it
+	remote  bool // disconnect, never stop a hosted browser
+	ownedMu sync.Mutex
+	owned   map[string]bool // only contexts created by this connection
+	end     func()          // ends the browser and waits for it
 
 	startup string        // the launch page, captured before conversations create tabs
 	owner   *conversation // its first owner conversation; guarded by browser.mu

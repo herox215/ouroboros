@@ -783,9 +783,11 @@ therefore slow it down or bring it down: list a tool in `a2a` only for peers you
 ### Browser
 
 `browser` uses the web as a person does, for pages that `bash` with `curl` does not get far with: those that are
-built by their scripts, that you sign in to, where you click and fill in forms. It drives a browser of the
-Chromium kind, the first one it finds of Chromium, Google Chrome, Brave and Microsoft Edge, and runs without
-a window unless asked. It takes `action` and what that action needs:
+built by their scripts, that you sign in to, where you click and fill in forms. By default it drives a
+local browser of the Chromium kind, the first one it finds of Chromium, Google Chrome, Brave and Microsoft
+Edge, and runs without a window unless asked. A hosted backend can be selected in the tool settings;
+the profile, window and local-process details below describe the default local backend.
+It takes `action` and what that action needs:
 
 | Action | Does |
 |---|---|
@@ -840,8 +842,42 @@ action after, until `dialog` answered it.
 - **What it reads is written by others.** A page can say anything, also what looks like an instruction: the
   description of the tool tells the LLM not to follow such.
 
-It needs no port: ouro talks to the browser through a pipe (`--remote-debugging-pipe`), which no other program
-can reach, and the browser ends with the process of ouro, however that ends.
+The default local backend needs no port: ouro talks to the browser through a pipe
+(`--remote-debugging-pipe`), which no other program can reach, and the browser ends with the process
+of ouro, however that ends.
+
+#### Hosted browser backends
+
+The `browser` tool also accepts `provider` and `endpoint` in its settings. Select these
+under `/settings` for `browser`, or use a tool entry like (replace the example hostname
+with your server; the service can run on another machine reachable by the Ouro node):
+
+```json
+{"tool": "browser", "provider": "camofox", "endpoint": "http://browser.lan:9377"}
+```
+
+`camofox` uses the native [Camofox REST API](https://github.com/jo-inc/camofox-browser),
+not Chromium DevTools. It supports navigation, snapshots, clicking, typing, keys, scrolling,
+screenshots and tab management. The native adapter reports unsupported actions explicitly
+(`dialog`, `console`, and opening a link/image by element reference); use `click` or an explicit
+URL instead. Authentication/storage for Camofox is isolated per conversation and owned by
+the server, rather than the local Chromium profile. Alternatively, attach a remotely hosted
+Chromium-compatible browser:
+
+```json
+{"tool": "browser", "provider": "cdp", "endpoint": "http://browser.lan:9222"}
+```
+
+For CDP, `endpoint` can also be a browser-level `ws://` or `wss://` DevTools URL.
+Use `provider: "local"` (or leave the settings out) to keep the existing local Chromium.
+Hosted backends are contacted only when used, never merely to validate settings, and errors
+do not fall back to a local browser. The browser host controls networking, storage, display
+and browser lifetime; the local profile and window settings do not configure that host.
+Use only trusted endpoints: page contents, URLs and typed text are sent there. Keep remote
+browser APIs behind authentication and a trusted network or TLS, not exposed publicly.
+For bearer authentication, set `token_env` to the name of an environment variable available
+to the running Ouro node, for example `"token_env": "MY_BROWSER_TOKEN"`. Keep the token
+itself out of the tool settings, which are visible in configuration views.
 
 ### Computer
 

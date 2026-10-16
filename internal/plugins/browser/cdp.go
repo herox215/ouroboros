@@ -19,7 +19,8 @@ var errClosed = errors.New("the browser has closed")
 // of JSON that each end with a zero byte, the commands one way, their
 // replies and the events the other.
 type conn struct {
-	w io.WriteCloser
+	w     io.WriteCloser
+	write func(context.Context, []byte) error // optional message transport
 
 	mu       sync.Mutex // guards what follows
 	next     int64
@@ -156,7 +157,9 @@ func (c *conn) read(r io.Reader) {
 // decodes its result into result, unless that is nil.
 func (c *conn) call(ctx context.Context, session, method string, params any, result any) error {
 	ch := make(chan reply, 1)
-	c.mu.Lock()
+	if err := waitLock(ctx, c.mu.TryLock); err != nil {
+		return err
+	}
 	select {
 	case <-c.done:
 		c.mu.Unlock()
@@ -167,12 +170,20 @@ func (c *conn) call(ctx context.Context, session, method string, params any, res
 	id := c.next
 	c.pending[id] = ch
 	b, _ := json.Marshal(message{ID: id, Method: method, Params: params, SessionID: session}) // of plain values: cannot fail
-	_, err := c.w.Write(append(b, 0))
+	var err error
+	if c.write != nil {
+		err = c.write(ctx, append(b, 0))
+	} else {
+		_, err = c.w.Write(append(b, 0))
+	}
 	if err != nil {
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return errClosed
 	}
 	select {

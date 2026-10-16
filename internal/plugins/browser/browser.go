@@ -63,6 +63,10 @@ var start = launch
 
 // settings are what the owner can say about the tool in the configuration.
 type settings struct {
+	Provider string `json:"provider" about:"browser backend: local, cdp (remote Chromium), or camofox (native REST)" unset:"local Chromium"`
+	Endpoint string `json:"endpoint" about:"required for remote backends: CDP HTTP discovery URL or ws/wss browser URL; Camofox http/https base URL"`
+	TokenEnv string `json:"token_env" about:"environment variable containing the remote backend bearer token; never store tokens in tool settings"`
+	Token    string `json:"-"` // resolved only at runtime, never serialized
 	// Visible starts the browser with a window.
 	Visible bool `json:"visible" about:"the browser shows its window, unless a call of your agent says otherwise" unset:"no: it runs without one"`
 }
@@ -174,12 +178,15 @@ func (b *browser) tool() plugin.Tool {
 	}
 	return plugin.Configurable(plugin.Tool{Name: Tool, Description: description, Schema: schema(params)},
 		func(s settings) (plugin.RunFunc, error) {
+			if _, err := s.normalized(); err != nil {
+				return nil, err
+			}
 			return func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var a args
 				if err := plugin.Decode(Tool, raw, &a); err != nil {
 					return "", err
 				}
-				return b.run(ctx, s, a)
+				return b.configuredRun(ctx, s, a)
 			}, nil
 		})
 }
@@ -215,6 +222,11 @@ func schema(params []param) string {
 // ended when it is not used, and the tabs of the conversations in it.
 type browser struct {
 	profile string
+
+	remotes   browserBackends
+	backendMu sync.RWMutex // prevents switching endpoints during a call
+	active    settings
+	camo      *camoBackend
 
 	mu    sync.Mutex // guards what follows
 	proc  *process
@@ -260,7 +272,23 @@ func (b *browser) run(ctx context.Context, s settings, a args) (string, error) {
 			return "", err
 		}
 	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	s, err := s.normalized()
+	if err != nil {
+		return "", err
+	}
+	if s.Provider != "local" && a.Visible != nil {
+		return "", fmt.Errorf("%s does not support visible: display is controlled by the hosted server", s.Provider)
+	}
+	if err := b.selectBackend(ctx, s); err != nil {
+		return "", err
+	}
+	defer b.backendMu.RUnlock()
 	key := origin.PublicKey + "/" + plugin.ContextID(ctx)
+	if s.Provider == "camofox" {
+		return b.camo.run(ctx, key, target, a)
+	}
 	if a.Action == "close" {
 		return b.closeTab(key)
 	}
@@ -429,12 +457,18 @@ func (b *browser) conversation(ctx context.Context, key string, peer, setting bo
 		if visible != nil {
 			want = *visible
 		}
-		p, err := start(ctx, b.profile, want)
+		var p *process
+		var err error
+		if b.active.Provider == "cdp" {
+			p, err = connectCDP(ctx, b.active)
+		} else {
+			p, err = start(ctx, b.profile, want)
+		}
 		if err != nil {
 			b.mu.Unlock()
 			return nil, nil, err
 		}
-		if err := p.call(ctx, "", "Browser.setDownloadBehavior", map[string]any{"behavior": "deny"}, nil); err != nil {
+		if err := p.downloads(ctx, ""); err != nil {
 			p.end()
 			b.mu.Unlock()
 			return nil, nil, err
@@ -454,7 +488,9 @@ func (b *browser) conversation(ctx context.Context, key string, peer, setting bo
 	adopt := p.owner == c
 	// The other conversations go on while this one waits for its tabs.
 	b.mu.Unlock()
-	c.mu.Lock()
+	if err := waitLock(ctx, c.mu.TryLock); err != nil {
+		return nil, nil, err
+	}
 	if adopt && c.adopted != p {
 		if _, err := c.readyAt(ctx, p, p.startup); err != nil {
 			c.mu.Unlock()
@@ -480,14 +516,19 @@ func (c *conversation) readyAt(ctx context.Context, p *process, target string) (
 	if t.proc == p && !p.gone(t.session) {
 		return t, nil
 	}
-	if c.peer && c.proc != p {
+	if (c.peer || p.remote) && c.proc != p {
 		var created struct {
 			BrowserContextID string `json:"browserContextId"`
 		}
 		if err := p.call(ctx, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true}, &created); err != nil {
 			return nil, err
 		}
-		if err := p.call(ctx, "", "Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "browserContextId": created.BrowserContextID}, nil); err != nil {
+		if created.BrowserContextID == "" {
+			return nil, errors.New("browser did not create an isolated context")
+		}
+		p.ownContext(created.BrowserContextID)
+		if err := p.downloads(ctx, created.BrowserContextID); err != nil {
+			p.call(ctx, "", "Target.disposeBrowserContext", map[string]any{"browserContextId": created.BrowserContextID}, nil)
 			return nil, err
 		}
 		c.proc, c.context = p, created.BrowserContextID
@@ -619,6 +660,19 @@ func (b *browser) closeTab(key string) (string, error) {
 
 // close ends the browser.
 func (b *browser) close() {
+	b.remotes.close()
+	b.backendMu.Lock()
+	defer b.backendMu.Unlock()
+	b.closeBackend()
+	b.active = settings{}
+	b.convs = map[string]*conversation{}
+}
+
+func (b *browser) closeBackend() {
+	if b.camo != nil {
+		b.camo.close()
+		b.camo = nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.timer != nil {
