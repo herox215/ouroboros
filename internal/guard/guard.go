@@ -60,6 +60,9 @@ type Access struct {
 	Deny []string
 	// Peer says that the conversation comes from a peer, not from the owner.
 	Peer bool
+	// Directory overrides the base for relative owner paths for this call.
+	// It does not grant access and is ignored for peers.
+	Directory string
 }
 
 // Refusal is the error of a path a tool may not touch. It names the rule, so
@@ -147,6 +150,9 @@ func (g *Guard) Checker(a Access) (*Checker, error) {
 	// A peer names its paths in full: the workspace is the owner's.
 	if !a.Peer {
 		c.base = g.Workspace
+		if a.Directory != "" {
+			c.base = a.Directory
+		}
 		if c.base == "" && homeErr == nil {
 			c.base = home
 		}
