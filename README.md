@@ -19,6 +19,19 @@ ouro update               # build and install the newest main
 ouro rollback             # the build before the last update or rebuild again
 ```
 
+## Desktop status / Omarchy
+
+`ouro desktop status` exposes a privacy-safe, platform-independent JSON status;
+`ouro desktop waybar` renders it for a Waybar custom module and
+`ouro desktop open` opens the GUI. On Linux, the running node also registers a
+StatusNotifier tray icon (including on Omarchy/Quickshell); click for a small menu
+with running session titles and an explicit action to open the GUI.
+Optional Waybar custom-module configuration and
+installation instructions are in [integrations](integrations/README.md). Native
+macOS/Windows tray adapters are not yet included; they can use the same status
+and open commands. Desktop configuration and auto-start are never changed
+automatically.
+
 ## Terminal UI
 
 Running `ouro` without arguments opens the terminal UI. On start it shows the ouroboros

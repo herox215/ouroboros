@@ -1,0 +1,14 @@
+/* Import from your Waybar style.css; colors follow the active GTK theme. */
+#custom-ouroboros {
+  padding: 0 8px;
+}
+#custom-ouroboros.waiting {
+  color: @warning_color;
+  font-weight: bold;
+}
+#custom-ouroboros.error {
+  color: @error_color;
+}
+#custom-ouroboros.offline {
+  opacity: 0.5;
+}

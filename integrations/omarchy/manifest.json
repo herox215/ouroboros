@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "local.ouroboros",
+  "name": "Ouroboros",
+  "version": "1.0.0",
+  "description": "Native Ouroboros status and running sessions panel.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Ouroboros",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "executable": "ouro",
+      "profile": ""
+    },
+    "schema": [
+      {
+        "key": "executable",
+        "type": "string",
+        "label": "Ouroboros executable",
+        "defaultValue": "ouro"
+      },
+      {
+        "key": "profile",
+        "type": "string",
+        "label": "Profile (empty for default)",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

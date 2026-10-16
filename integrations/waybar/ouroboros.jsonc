@@ -1,0 +1,13 @@
+// Include this file from your Waybar config, then add "custom/ouroboros"
+// to modules-right (or modules-left/center). ouro must be on Waybar's PATH.
+{
+  "custom/ouroboros": {
+    "exec": "ouro desktop waybar",
+    "return-type": "json",
+    "interval": 3,
+    "exec-on-event": false,
+    "on-click": "ouro desktop open",
+    "format": "{}",
+    "tooltip": true
+  }
+}
