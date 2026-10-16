@@ -33,7 +33,7 @@ func noWait(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 // A call that broke off on its way is asked again, twice at most; the
 // answer says why. Any other error is not.
 func TestRetrying(t *testing.T) {
-	eof := &url.Error{Op: "Post", URL: "http://100.91.15.23:4000/v1/chat/completions", Err: io.EOF}
+	eof := &url.Error{Op: "Post", URL: "http://llm/v1/chat/completions", Err: io.EOF}
 	ctx := context.Background()
 
 	llm := &answers{errs: []error{eof}}
