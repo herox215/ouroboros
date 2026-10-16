@@ -41,7 +41,9 @@ func call(tool string, args map[string]any) string {
 func TestOwnerWorksWithFiles(t *testing.T) {
 	home := user(t)
 	s := clitest.Settings(t)
-	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+	owner := clitest.NodeConfig(s)
+	owner.Tools = &config.Tools{Ask: &[]config.Rule{}} // nobody is there to allow a delete
+	if err := config.Save(s.Home, owner); err != nil {
 		t.Fatal(err)
 	}
 	chat := func(tool string, args map[string]any) string {

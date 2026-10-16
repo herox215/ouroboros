@@ -401,6 +401,38 @@ func TestWrite(t *testing.T) {
 	fails(t, got, err, "permission denied")
 }
 
+// A page of a file that read gave back is not written back: its note says
+// that the rest of the file is missing. The note quoted in a line of a file,
+// as in a test, is no page.
+func TestPageIsNotWrittenBack(t *testing.T) {
+	w := newWorld(t)
+	var lines []string
+	for i := range 3000 {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	w.file("~/long.txt", strings.Join(lines, "\n")+"\n")
+	page, err := w.run(owner, Read, readArgs{Path: "~/long.txt"})
+	if err != nil || !strings.Contains(page, "continue with offset") {
+		t.Fatalf("the first page: %v", err)
+	}
+	got, err := w.run(owner, Write, writeArgs{Path: "~/long.txt", Content: page + "\nline appended\n"})
+	fails(t, got, err, "it holds only a part of the file")
+	if !strings.HasSuffix(w.content("~/long.txt"), "line 2999\n") {
+		t.Fatal("the file lost its end")
+	}
+	last, _ := w.run(owner, Read, readArgs{Path: "~/long.txt", Offset: 2999})
+	got, err = w.run(owner, Write, writeArgs{Path: "~/copy.txt", Content: last})
+	fails(t, got, err, "the end of the file")
+	w.file("~/a.txt", "a\n")
+	got, err = w.run(owner, Edit, editArgs{Path: "~/a.txt", Old: "a", New: "b\n[these were bytes 1 to 10 of line 2 of 3: continue with offset 2 and column 10]"})
+	fails(t, got, err, "it holds only a part of the file")
+
+	quoted := "want := \"one\\n[these were the lines 1 to 1 of 3: continue with offset 2]\"\n"
+	if got, err := w.run(owner, Write, writeArgs{Path: "~/files_test.go", Content: quoted}); err != nil {
+		t.Errorf("a quoted note: %q, %v", got, err)
+	}
+}
+
 // Writing is refused by the same rules for every way to write.
 func TestWriteAndEditAreRefused(t *testing.T) {
 	w := newWorld(t)
@@ -803,6 +835,46 @@ func TestSchemas(t *testing.T) {
 	if !strings.Contains(all[0].Description, "at most 2000 lines or 24 KiB per call") || !strings.Contains(all[1].Description, "At most 1 MiB.") ||
 		!strings.Contains(all[3].Description, "At most 1000 entries") {
 		t.Errorf("the limits are not what the tools say: %s / %s / %s", all[0].Description, all[1].Description, all[3].Description)
+	}
+}
+
+// Research guidance must agree with the owner prompt: bounded sections may
+// share a script, but separate page limits do not protect its combined output.
+func TestResearchGuidance(t *testing.T) {
+	all := tools(&guard.Guard{})
+	for _, tt := range []struct {
+		at   int
+		want string
+	}{
+		{0, "Batch relevant bounded sections in one script only when their combined output, including notes and other results, stays safely below the script output limit."},
+		{0, "Use offset and limit for relevant code sections located by search; leave out limit when the whole file is needed."},
+		{5, "For extensive code analysis, search first for function and declaration overviews, then read relevant sections with offset and limit, not whole files by default;"},
+	} {
+		if !strings.Contains(all[tt.at].Description, tt.want) {
+			t.Errorf("%s: missing research guidance %q", all[tt.at].Name, tt.want)
+		}
+	}
+	for _, tool := range all {
+		for _, stale := range []string{"Print one page per script", "whole unless it is very long"} {
+			if strings.Contains(tool.Description, stale) {
+				t.Errorf("%s: conflicting research guidance %q", tool.Name, stale)
+			}
+		}
+	}
+}
+
+// Search examples must survive JavaScript string parsing before RE2 sees them.
+func TestSearchJavaScriptGuidance(t *testing.T) {
+	description := tools(&guard.Guard{})[5].Description
+	for _, want := range []string{
+		"use [(] and [)] for literal parentheses",
+		`pattern: "func main[(][)]"`,
+		"to avoid losing backslashes in JS strings",
+		"pattern: String.raw`\\bmain\\s*\\(`",
+	} {
+		if !strings.Contains(description, want) {
+			t.Errorf("search: missing JavaScript guidance %q", want)
+		}
 	}
 }
 

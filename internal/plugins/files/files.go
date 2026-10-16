@@ -24,6 +24,7 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/guard"
 	"ouroboros/internal/safefile"
+	"ouroboros/internal/workdir"
 	"ouroboros/plugin"
 )
 
@@ -96,9 +97,9 @@ func tools(g *guard.Guard) []plugin.Tool {
 			fmt.Sprintf("Read a text file: at most %d lines or %d KiB per call. ", maxReadLines, maxReadPage>>10)+
 				"When there is more, a note at the end says which lines of how many it returned and where to continue. "+
 				"A line longer than a page is returned in pieces: continue with the offset and column in the note. "+
-				"Print one page per script: combined output can still be cut by the script output limit. "+
+				"Batch relevant bounded sections in one script only when their combined output, including notes and other results, stays safely below the script output limit. "+
 				"The text comes as it is: without line numbers, and with the \\r of lines that end in \\r\\n. "+
-				"Leave out limit unless you want only a part of the file you know: every piece costs a call. "+
+				"Use offset and limit for relevant code sections located by search; leave out limit when the whole file is needed. "+
 				"A picture (PNG, JPEG, GIF or WebP) is shown to you as an image, in its own size: look at it this way. "+
 				"With size and region you see it smaller, or only a part of it.",
 			[]param{path,
@@ -140,8 +141,10 @@ func tools(g *guard.Guard) []plugin.Tool {
 		tool(g, Search,
 			"Find the lines of text files that match a regular expression (RE2; (?i) at its start ignores case), "+
 				"in one file or every file below a directory, hidden directories left out. "+
+				"In JavaScript scripts, use [(] and [)] for literal parentheses, for example pattern: \"func main[(][)]\", to avoid losing backslashes in JS strings. "+
+				"For other regex escapes, use String.raw`…`, for example pattern: String.raw`\\bmain\\s*\\(`. "+
 				fmt.Sprintf("Returns path:line: text, at most %d lines from at most %d files of at most %d it looks at; files over %d MiB are skipped. ", maxMatches, maxSearched, maxWalked, maxWriteBytes>>20)+
-				"Search first to find where something is, then read that file, whole unless it is very long: every piece costs a call; "+
+				"For extensive code analysis, search first for function and declaration overviews, then read relevant sections with offset and limit, not whole files by default; "+
 				fmt.Sprintf("with context it returns them too, as grep -C: the lines around a match as path-line- text, places apart split by --, at most %d places. ", maxPlaces)+
 				fmt.Sprintf("Of what is beyond %d KiB it says only how many matches are in which file: search there with a narrower pattern. ", maxAround>>10),
 			[]param{{"path", "string", "the file or directory", false},
@@ -187,7 +190,7 @@ func tool[T any](g *guard.Guard, name, description string, params []param, run f
 					return "", err
 				}
 				_, peer := plugin.OriginFrom(ctx)
-				c, err := g.Checker(guard.Access{Tool: name, Allow: s.Allow, Deny: s.Deny, Peer: peer})
+				c, err := g.Checker(guard.Access{Tool: name, Allow: s.Allow, Deny: s.Deny, Peer: peer, Directory: workdir.Of(ctx)})
 				if err != nil {
 					return "", err
 				}
@@ -395,9 +398,27 @@ type writeArgs struct {
 	Content string `json:"content"`
 }
 
+// pageNote is the note read puts after a page of a file, in a line of its own.
+var pageNote = regexp.MustCompile(`(?m)^\[these were (?:the lines \d+ to \d+|bytes \d+ to \d+ of line \d+) of \d+` +
+	`(?::\s*continue with offset \d+(?: and column \d+)?|, the end of the file)\]\r?$`)
+
+// paged returns an error if text has the note read puts after a page: a text
+// with it is a page of a file read back, and written it would lose the rest of
+// the file, as a script that wrote back what read gave it did.
+func paged(text string) error {
+	if note := pageNote.FindString(text); note != "" {
+		return fmt.Errorf("the text has the note %q that %s puts after a page of a file: it holds only a part of the file, "+
+			"and writing it would lose the rest. Change the file with %s instead", strings.TrimSpace(note), Read, Edit)
+	}
+	return nil
+}
+
 func write(c *guard.Checker, args writeArgs) (string, error) {
 	if len(args.Content) > maxWriteBytes {
 		return "", fmt.Errorf("the content has %d bytes: a file is written with at most %d", len(args.Content), maxWriteBytes)
+	}
+	if err := paged(args.Content); err != nil {
+		return "", err
 	}
 	real, err := c.Check(guard.Write, args.Path)
 	if err != nil {
@@ -436,6 +457,9 @@ func edit(c *guard.Checker, args editArgs) (string, error) {
 		return "", errors.New(Edit + ` takes "old" or "from" and "to", not both`)
 	case !byLines && args.Old == "":
 		return "", errors.New(Edit + ` needs "old", the text to replace, or "from" and "to", the lines to replace`)
+	}
+	if err := paged(args.New); err != nil {
+		return "", err
 	}
 	real, err := c.Check(guard.Write, args.Path)
 	if err != nil {
