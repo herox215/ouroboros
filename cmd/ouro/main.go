@@ -16,6 +16,9 @@ import (
 )
 
 func main() {
+	if err := restart(localGUI(context.Background(), os.Args[1:])); err != nil {
+		fail(err)
+	}
 	settings, err := cli.SettingsFromEnv()
 	if err != nil {
 		fail(err)
