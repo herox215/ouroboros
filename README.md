@@ -444,7 +444,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
-`history_sessions`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
+`history_sessions`), for explicit [memories](#explicit-memories) (`memory_add`, `memory_update`,
+`memory_forget`, `memory_search`, `memory_read`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
 `withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that builds and installs its own
 source ([`rebuild`](#updates)), one that asks you a question (`user_question`, see below) and one that hands tasks to
 helpers (`delegate`, see below). It uses them in **scripts**: the LLM is
@@ -478,6 +479,25 @@ says why. A change holds at once: your agent
 and the node read `config.json` with every message and build their agents anew when it changed, without a
 restart. A node that runs keeps answering peers as before while the file cannot be used, and says why in
 `ouro.log`.
+
+### Explicit memories
+
+The optional `memory` plugin gives the owner an explicit, persistent memory, separate from the
+conversation archive. `memory_add` records a fact or preference with its source conversation;
+`memory_update` changes an entry only at its expected version, and `memory_forget` removes it
+from the active store and its search index. Remember only what the owner explicitly asks to keep;
+stored content is data, never a higher-priority instruction. Peers cannot use these tools.
+
+`memory_search` retrieves short ranked full-text matches; `memory_read` reads an entry by ID.
+The tool description asks the agent to search when a request may depend on earlier preferences,
+agreements or project conventions, and to search rather than guess when in doubt. This is a
+tool-driven lookup, not a guarantee of automatic recall or a semantic/embedding search.
+Project memories are associated with the trusted selected project directory; global memories are
+available across projects within the same profile. Other profiles remain separate.
+
+Sessions, history and memories share `history/ouroboros.sqlite`. Forgetting a memory does not erase
+its earlier mentions from conversation history. Deleting a conversation does not silently delete
+independent memories derived from it. Legacy JSONL backups may still contain old conversation text.
 
 ### Files
 
