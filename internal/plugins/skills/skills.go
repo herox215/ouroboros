@@ -14,8 +14,8 @@
 // loads them. Further files of a skill are read through the tool as well, so
 // that an agent without the tools for files can use them too.
 //
-// The directory of the node is never changed by the tools for files: the
-// agent can neither write a skill nor change one.
+// The tools for files cannot change the node directory. The owner can
+// create and update skills through the dedicated skill_write tool.
 package skills
 
 import (
@@ -54,7 +54,10 @@ var validName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 // logged in dir.
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.New("skills", func(ctx *plugin.Context, _ struct{}) error {
-		plugin.Add(ctx, library{dir.Skills(), dir.Log}.tool())
+		l := library{dir.Skills(), dir.Log}
+		plugin.Add(ctx, l.tool())
+		plugin.Add(ctx, l.writeTool())
+		plugin.Add(ctx, plugin.ToolView{Tool: Write, Show: showWrite, Detail: assistant.HowItEnded})
 		plugin.Add(ctx, plugin.ToolView{Tool: Tool, Show: show, Detail: assistant.HowItEnded})
 		return nil
 	})

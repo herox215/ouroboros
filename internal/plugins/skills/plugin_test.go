@@ -13,6 +13,24 @@ import (
 
 func TestMain(m *testing.M) { clitest.Main(m) }
 
+// The dedicated writer is registered and its result can be loaded through the CLI.
+func TestOwnerWritesASkill(t *testing.T) {
+	s := clitest.Settings(t)
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]string{"name": "demo", "content": "---\nname: demo\ndescription: A harmless test.\n---\nCheck the result."})
+	out, err := clitest.Run(t, s, "", "chat", "!skill_write "+string(args))
+	if err != nil || !strings.Contains(out, "Saved skill file") {
+		t.Fatalf("write: %q, %v", out, err)
+	}
+	args, _ = json.Marshal(map[string]string{"name": "demo"})
+	out, err = clitest.Run(t, s, "", "chat", "!skill "+string(args))
+	if err != nil || !strings.Contains(out, "Check the result.") {
+		t.Fatalf("load: %q, %v", out, err)
+	}
+}
+
 // The agent of the owner loads a skill of the node; the profiles share them.
 func TestOwnerLoadsASkill(t *testing.T) {
 	s := clitest.Settings(t)
