@@ -219,6 +219,37 @@ func TestRunDescription(t *testing.T) {
 	}
 }
 
+// The documented regex example keeps its backslashes through JavaScript and
+// the JSON arguments passed to the search tool.
+func TestRunDescriptionSearchPattern(t *testing.T) {
+	search := agent.NewTool("search", "", []agent.Param{{Name: "path"}, {Name: "pattern"}},
+		func(_ context.Context, args struct {
+			Path    string `json:"path"`
+			Pattern string `json:"pattern"`
+		}) (string, error) {
+			if args.Path != "." || args.Pattern != `\bname\s*\(` {
+				t.Fatalf("search arguments: %+v", args)
+			}
+			return "matched", nil
+		})
+	run := withRun([]agent.Tool{search}, script.NewSessions())
+	_, example, ok := strings.Cut(run.Description, "for example ")
+	if !ok || !strings.Contains(run.Description, "Pass regular expressions to search as String.raw`…`") {
+		t.Fatalf("no regex guidance: %s", run.Description)
+	}
+	example, _, ok = strings.Cut(example, ", so JavaScript")
+	if !ok {
+		t.Fatalf("no explanation of string escapes: %s", run.Description)
+	}
+	args, err := json.Marshal(runArgs{Script: example})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := run.Run(context.Background(), args); err != nil || got != "matched" {
+		t.Fatalf("documented example: %q, %v", got, err)
+	}
+}
+
 // The scripts of a conversation build on each other; another conversation
 // starts with nothing, and so does a peer in a conversation of the same name.
 func TestRunKeepsPerConversation(t *testing.T) {

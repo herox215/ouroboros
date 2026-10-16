@@ -79,6 +79,9 @@ func TestAsk(t *testing.T) {
 	if len(steps) != 4 || steps[0].Tool != toolRun || steps[3].Tool != toolRun {
 		t.Fatalf("steps %+v", steps)
 	}
+	if steps[0].ID == "" || steps[3].ID != steps[0].ID || steps[1].ID != "" || steps[2].ID != "" {
+		t.Fatalf("archived and nested call IDs: %+v", steps)
+	}
 	steps = steps[1:3]
 	// The call is reported when it starts and when its result is in, with
 	// its arguments and without the answer of the peer.
@@ -302,7 +305,7 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	old := now
 	now = func() time.Time { return day }
 	t.Cleanup(func() { now = old })
-	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + scriptHint
+	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + scriptHint + validationHint
 	end := ownerStyle + " Today is Saturday, 10 October 2026; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
 	for _, tt := range []struct {
 		tools []config.Entry
@@ -335,6 +338,28 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		if strings.Contains(got, workflow) != wantWorkflow {
 			t.Errorf("with %s: workflow rule present = %v, want %v", tt.tools, strings.Contains(got, workflow), wantWorkflow)
 		}
+		for _, research := range []string{
+			"For research, batch related read and search calls whose inputs you already know in one run, rather than returning to the model after each small excerpt.",
+			"For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit.",
+			"Read coherent sections large enough to answer the current question, within the script's output limits.",
+			"Keep the combined printed output of each batch, including search results and continuation notes, safely below the script output limit; a per-call page limit does not bound the batch.",
+			"Reuse findings already returned instead of rereading unchanged sections, unless a specific gap or change requires it.",
+			"Split the work when a result is needed to choose the next access or the combined output would be too large.",
+		} {
+			if strings.Contains(got, research) != wantWorkflow {
+				t.Errorf("with %s: research rule %q present = %v, want %v", tt.tools, research, strings.Contains(got, research), wantWorkflow)
+			}
+		}
+		for _, diagnosis := range []string{
+			"When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering:",
+			"check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate.",
+			"Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown,",
+			"rather than stopping at an unverified guess.",
+		} {
+			if strings.Contains(got, diagnosis) != wantWorkflow {
+				t.Errorf("with %s: diagnostic rule %q present = %v, want %v", tt.tools, diagnosis, strings.Contains(got, diagnosis), wantWorkflow)
+			}
+		}
 	}
 	// The day the prompt names is the one it is: the agent is built anew
 	// when it is over.
@@ -353,8 +378,8 @@ func TestPromptNamesTheWorkspace(t *testing.T) {
 	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
 	load := func() (config.Config, error) { return cfg, nil }
 	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return nil }, Workspace: "/work/me"}
-	want := " You work in /work/me, a directory of your own: your commands start there unless they name a directory." +
-		" What the user works on is elsewhere: when they speak of a project and name no path, find it or ask, rather than looking for it there."
+	want := " You work in /work/me, a directory of your own: your commands start there unless they name a directory or this conversation selects a project directory." +
+		" Keep temporary files and helper scripts in your own workspace, not in the project. When no project is selected and the user names no path, find it or ask."
 	if got, err := New(load, b, discard).Ask(context.Background(), "chat", "?system", nil); err != nil || !strings.HasSuffix(got, want) {
 		t.Errorf("with a workspace: %q, %v", got, err)
 	}

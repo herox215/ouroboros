@@ -37,6 +37,8 @@ func runDescription(functions string) string {
 		"one that fails throws an Error. The text is a string also where it holds JSON, which JSON.parse makes data of; " +
 		"nothing is a promise, so write no async, await, .then or .catch. A function named like a word of JavaScript is tools.NAME, like tools.delete({path: \"…\"}). " +
 		"Besides these there are no files, network, timers or require. " +
+		"Pass regular expressions to search as String.raw`…`, for example search({path: \".\", pattern: String.raw`\\bname\\s*\\(`}), " +
+		"so JavaScript keeps the backslashes for the search tool instead of interpreting them as string escapes. " +
 		"The scripts of a conversation share one interpreter: what a script declares at its top level, const and let too, " +
 		"and what it puts on globalThis is kept for the next script under its name, so keep nothing twice; " +
 		"the end of the result lists what is kept, like [kept for the next script: files (array of 312)]. " +

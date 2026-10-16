@@ -302,6 +302,32 @@ func TestOwnerDelegates(t *testing.T) {
 	}
 }
 
+// The scope rules must reach the owner's prompt when delegation is allowed,
+// independently of the shared hint used by the prompt assembly tests.
+func TestDelegationScopeGuidance(t *testing.T) {
+	cfg, b := scripted(t)
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	for _, tool := range []string{ToolDelegate, "*", "who"} {
+		t.Run(tool, func(t *testing.T) {
+			cfg.Tools = &config.Tools{H2A: config.Named(tool)}
+			got, err := a.Ask(context.Background(), "scope", "?system", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tool != "who"
+			for _, rule := range []string{
+				"For delegated code analysis, give each helper a clear scope with minimal overlap, and say what findings it should report.",
+				"First investigate the remaining areas outside the delegated scopes; do not repeat a helper's search or reading while it works.",
+				"Then use the helper reports to bring the analysis together, and check delegated code yourself only where a report leaves a specific uncertainty or finding to verify; do not broadly reread delegated paths or repeat the analysis.",
+			} {
+				if strings.Contains(got, rule) != want {
+					t.Errorf("scope rule %q present = %v, want %v", rule, strings.Contains(got, rule), want)
+				}
+			}
+		})
+	}
+}
+
 // started is what Start of a fake Tasks was handed, and starts as it is
 // told.
 type started struct {
