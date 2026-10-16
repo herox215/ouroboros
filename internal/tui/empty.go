@@ -17,6 +17,16 @@ const emptyTagline = "keep on dreaming"
 var emptyTaglines = [...]string{
 	emptyTagline, "stay curious", "make it happen", "build something great",
 	"one idea at a time", "turn ideas into reality", "keep moving forward",
+	"start something new", "trust your imagination", "small steps count",
+	"create your own path", "let curiosity lead", "dream it then do it",
+	"progress over perfection", "make room for wonder", "bring your ideas to life",
+	"dare to begin", "explore the possible", "every question opens a door",
+	"think beyond the obvious", "find joy in the process", "a little better every day",
+	"follow the spark", "good things take practice", "see where this takes you",
+	"stay open to surprise", "make something that matters", "take the next small step",
+	"your next idea starts here", "try learn repeat", "leave room for discovery",
+	"begin anywhere", "turn what if into what next", "keep your sense of wonder",
+	"give your ideas a chance", "there is more to discover", "the best way out is through",
 }
 
 // taglineText defaults to the original line for callers without a selection.

@@ -463,7 +463,7 @@ func TestNameAnimationGlitchTearsTheName(t *testing.T) {
 
 	was := pickNameLook
 	defer func() { pickNameLook = was }()
-	for _, look := range []nameLook{nameGlitch, nameShine, nameWave, nameFloat, nameFlare, nameNeon, nameBeam} {
+	for _, look := range []nameLook{nameGlitch, nameShine, nameWave, nameFloat, nameFlare, nameNeon, nameBeam, nameLaser, nameRain} {
 		pickNameLook = func(n int) int {
 			if n != int(nameLooks) {
 				t.Fatalf("a look out of %d", n)

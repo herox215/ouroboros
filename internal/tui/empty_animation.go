@@ -11,8 +11,9 @@ import (
 
 // nameAnimation is how the name of the agent moves in an empty chat: the
 // gradient of the splash flows through it, as it does through the title
-// there, and it shines, glitches, waves, floats, flares, flickers or beams
-// a torch over itself, as its look is. A visit of an
+// there, and it shines, glitches, waves, floats, flares, flickers, beams
+// a torch over itself, is engraved by a laser, stands in rain or is encircled
+// by an ASCII snake. A visit of an
 // empty chat begins it anew, in a look picked by chance, and the first
 // message of the chat fades the name out behind it.
 type nameAnimation struct {
@@ -96,6 +97,9 @@ const (
 	nameFlare                  // a letter of the name lights up like a lamp
 	nameNeon                   // all of the name is lit, one letter flickers and throws sparks
 	nameBeam                   // a torch wanders over the name in the dark
+	nameLaser                  // an off-screen laser engraves the letters and throws sparks
+	nameRain                   // rain falls behind the name and splashes at the bottom
+	nameSnake                  // an ASCII snake flies in, circles the name and leaves
 	nameLooks                  // how many there are
 )
 
@@ -293,6 +297,12 @@ func drawNameAnimation(name string, width, height int, elapsed time.Duration, li
 	c := &canvas{w: width, h: height, cells: make([]cell, width*height), back: p.back}
 	w := len([]rune(art[0]))
 	left, top := (width-w)/2, (height-len(art))/2
+	if look == nameRain {
+		drawNameRain(c, elapsed.Seconds(), shown)
+	}
+	if look == nameSnake {
+		drawNameSnake(c, p, w, len(art), elapsed.Seconds(), shown)
+	}
 	torn := 0
 	if look == nameGlitch {
 		torn = glitch(elapsed.Seconds())
@@ -342,7 +352,13 @@ func drawNameAnimation(name string, width, height int, elapsed time.Duration, li
 		}
 		defect = int(hash(seed, 0, 5)) % len(neonSpans)
 	}
+	if look == nameLaser {
+		drawNameLaser(c, p, art, left, top, elapsed.Seconds(), shown)
+	}
 	for y, row := range art {
+		if look == nameLaser {
+			break
+		}
 		jump, tint := 0, hash(y, torn, 7)
 		if torn != 0 && tint%3 != 0 {
 			jump = (int(tint>>4%(2*glitchJump+1)) - glitchJump) * len(art) / 3
