@@ -1,0 +1,181 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"ouroboros/internal/agent"
+	"ouroboros/internal/config"
+)
+
+// gated is a tool that counts its runs, as permitted returns it for cfg,
+// with what it keeps for good going to kept.
+func gated(t *testing.T, name string, cfg config.Config, kept *[]config.Call) (agent.Tool, *int) {
+	t.Helper()
+	runs := 0
+	tool := agent.Tool{Name: name, Run: func(context.Context, json.RawMessage) (string, error) {
+		runs++
+		return "done", nil
+	}}
+	b := Builder{}.WithAllowing(func(c config.Call) error {
+		*kept = append(*kept, c)
+		return nil
+	})
+	return b.permitted(cfg, []agent.Tool{tool})[0], &runs
+}
+
+// answering is a context whose owner answers every question with answer,
+// and keeps what they were asked in asked.
+func answering(answer string, asked *[]Question) context.Context {
+	return agent.WithOwner(context.Background(), func(_ context.Context, raw json.RawMessage) (string, error) {
+		var q Question
+		json.Unmarshal(raw, &q)
+		*asked = append(*asked, q)
+		return answer, nil
+	})
+}
+
+func TestPermitted(t *testing.T) {
+	rm := json.RawMessage(`{"command": "rm -rf build"}`)
+	for _, c := range []struct {
+		answer, err string
+		runs        int
+		kept        bool
+	}{
+		{AllowOnce, "", 1, false},
+		{AllowAlways, "", 1, true},
+		{AllowNot, "bash did not run: the owner did not allow it", 0, false},
+		{"not the build, it is mine", "bash did not run: asked whether it may, the owner said: not the build, it is mine", 0, false},
+	} {
+		var kept []config.Call
+		var asked []Question
+		tool, runs := gated(t, ToolBash, config.Config{}, &kept)
+		_, err := tool.Run(answering(c.answer, &asked), rm)
+		if c.err == "" && err != nil || c.err != "" && (err == nil || err.Error() != c.err) || *runs != c.runs {
+			t.Errorf("%q: %v, %d runs", c.answer, err, *runs)
+		}
+		if len(asked) != 1 || asked[0].Question != "Allow bash: rm -rf build" ||
+			strings.Join(asked[0].Options, "|") != AllowOnce+"|"+AllowAlways+"|"+AllowNot {
+			t.Errorf("%q: asked %+v", c.answer, asked)
+		}
+		if want := []config.Call{{Tool: ToolBash, Call: "rm -rf build"}}; c.kept != (len(kept) == 1 && kept[0] == want[0]) {
+			t.Errorf("%q: kept %+v", c.answer, kept)
+		}
+	}
+}
+
+// What no rule matches, and what the owner allowed for good, runs without a
+// question.
+func TestPermittedWithoutAsking(t *testing.T) {
+	cfg := config.Config{Tools: &config.Tools{Allowed: []config.Call{{Tool: ToolBash, Call: "rm -rf build"}}}}
+	for _, command := range []string{"rm -rf build", "git status", "rm notes.txt", "ls -rf"} {
+		var kept []config.Call
+		var asked []Question
+		tool, runs := gated(t, ToolBash, cfg, &kept)
+		args, _ := json.Marshal(map[string]string{"command": command})
+		if _, err := tool.Run(answering(AllowNot, &asked), args); err != nil || *runs != 1 || len(asked) != 0 {
+			t.Errorf("%q: %v, %d runs, asked %+v", command, err, *runs, asked)
+		}
+	}
+}
+
+// The default rules ask about what deletes, publishes or changes the system.
+func TestDefaultAsk(t *testing.T) {
+	for _, c := range []struct {
+		tool, call string
+		ask        bool
+	}{
+		{ToolBash, "rm -rf node_modules", true},
+		{ToolBash, "cd x && rm -f a.o", true},
+		{ToolBash, "git push origin main", true},
+		{ToolBash, "git reset --hard HEAD~1", true},
+		{ToolBash, "sudo pacman -Syu", true},
+		{ToolBash, "pip install requests", true},
+		{ToolBash, "systemctl --user restart x", true},
+		{ToolBash, "cat ~/.ssh/id_ed25519", true},
+		{ToolBash, "cat .env", true},
+		{ToolBash, "git status && go test ./...", false},
+		{ToolBash, "rm notes.txt", false},
+		{ToolBash, "npm install", false},
+		{"delete", `{"path":"~/x"}`, true},
+		{ToolRebuild, `{}`, true},
+		{"browser", `{"action":"type","element":3,"text":"hunter2"}`, true},
+		{"browser", `{"action":"click","element":3}`, false},
+		{"read", `{"path":"~/.env"}`, false},
+	} {
+		rule, err := matching(config.DefaultAsk(), config.Call{Tool: c.tool, Call: c.call})
+		if err != nil || (rule != nil) != c.ask {
+			t.Errorf("%s %s: %+v, %v", c.tool, c.call, rule, err)
+		}
+	}
+}
+
+// Where nobody can be asked, as for a peer or a helper, what needs the
+// owner's leave is refused.
+func TestPermittedWithoutOwner(t *testing.T) {
+	var kept []config.Call
+	tool, runs := gated(t, "delete", config.Config{}, &kept)
+	for _, ctx := range []context.Context{context.Background(), helping(answering(AllowOnce, new([]Question)))} {
+		_, err := tool.Run(ctx, json.RawMessage(`{"path": "~/x"}`))
+		if err == nil || !strings.Contains(err.Error(), "who cannot be asked here") || *runs != 0 {
+			t.Errorf("%v, %d runs", err, *runs)
+		}
+	}
+	// A question that ends without an answer runs nothing either.
+	asking := agent.WithOwner(context.Background(), func(context.Context, json.RawMessage) (string, error) {
+		return "", context.DeadlineExceeded
+	})
+	if _, err := tool.Run(asking, json.RawMessage(`{"path": "~/x"}`)); !errors.Is(err, context.DeadlineExceeded) || *runs != 0 {
+		t.Errorf("unanswered: %v, %d runs", err, *runs)
+	}
+}
+
+// A rule that is no regular expression stops every call it may be meant
+// for, and user_question, which asks the owner itself, is asked about never.
+func TestPermittedRules(t *testing.T) {
+	var kept []config.Call
+	broken := config.Config{Tools: &config.Tools{Ask: &[]config.Rule{{Match: "(rm"}}}}
+	tool, runs := gated(t, "list", broken, &kept)
+	if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "no regular expression") || *runs != 0 {
+		t.Errorf("broken rule: %v", err)
+	}
+	every := config.Config{Tools: &config.Tools{Ask: &[]config.Rule{{Match: ".*"}}}}
+	question, runs := gated(t, ToolUserQuestion, every, &kept)
+	if _, err := question.Run(context.Background(), json.RawMessage(`{}`)); err != nil || *runs != 1 {
+		t.Errorf("user_question: %v", err)
+	}
+	// The arguments of a tool other than bash are matched as JSON on one line.
+	if got := callText("browser", json.RawMessage("{\n  \"action\": \"type\",\n  \"text\": \"a b\"\n}")); got != `{"action":"type","text":"a b"}` {
+		t.Errorf("text of the call: %s", got)
+	}
+}
+
+// A call is refused while the rules cannot be read, and runs when the owner
+// allows it for good but keeping that fails, or there is nowhere to keep it.
+func TestPermittedFailing(t *testing.T) {
+	ran := 0
+	tool := agent.Tool{Name: "delete", Run: func(context.Context, json.RawMessage) (string, error) {
+		ran++
+		return "done", nil
+	}}
+	unreadable := Builder{}.WithConfig(func() (config.Config, error) { return config.Config{}, errors.New("broken") }, nil)
+	if _, err := unreadable.permitted(config.Config{}, []agent.Tool{tool})[0].Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "broken") || ran != 0 {
+		t.Fatalf("unreadable: %v", err)
+	}
+	failing := Builder{}.WithAllowing(func(config.Call) error { return errors.New("disk full") })
+	for _, b := range []Builder{failing, {}} {
+		if _, err := b.permitted(config.Config{}, []agent.Tool{tool})[0].Run(answering(AllowAlways, new([]Question)), json.RawMessage(`{"path":"x"}`)); err != nil {
+			t.Fatalf("allowed always: %v", err)
+		}
+	}
+	if ran != 2 {
+		t.Fatalf("ran %d times", ran)
+	}
+	// Arguments that are no JSON are matched as they are, on one line.
+	if got := callText("list", json.RawMessage("not\n json")); got != "not json" {
+		t.Errorf("text of the call: %q", got)
+	}
+}

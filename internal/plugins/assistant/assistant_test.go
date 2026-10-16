@@ -111,7 +111,9 @@ func TestScriptsUseTheToolsOfTheNode(t *testing.T) {
 	}}
 	clitest.StartNode(t, beta, cfg)
 	alpha := clitest.Settings(t)
-	clitest.StartNode(t, alpha, clitest.NodeConfig(alpha))
+	owner := clitest.NodeConfig(alpha)
+	owner.Tools = &config.Tools{Ask: &[]config.Rule{}} // nobody is there to allow a delete
+	clitest.StartNode(t, alpha, owner)
 	clitest.Finds(alpha, beta)
 	clitest.Trust(t, alpha, beta, "beta")
 	clitest.Trust(t, beta, alpha, "alpha")

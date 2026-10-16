@@ -131,6 +131,29 @@ type Tools struct {
 	// DefaultProtected; an empty list is the owner's decision to protect
 	// nothing.
 	Protected *[]string `json:"protected,omitempty"`
+	// Ask are the calls of tools the agent of the owner makes only once the
+	// owner allowed them, see Rule. Missing stands for DefaultAsk; an empty
+	// list is the owner's decision to be asked nothing.
+	Ask *[]Rule `json:"ask,omitempty"`
+	// Allowed are the calls the owner allowed for good when asked: they run
+	// without asking again.
+	Allowed []Call `json:"allowed,omitempty"`
+}
+
+// Rule says which calls of tools are asked about: those of the tool Tool,
+// of every tool if it is "", whose text matches the regular expression Match.
+// The text of a call of bash is its command, that of any other tool its
+// arguments as JSON on one line.
+type Rule struct {
+	Tool  string `json:"tool,omitempty"`
+	Match string `json:"match"`
+}
+
+// Call is one call of a tool: the tool and the text of the call, as a Rule
+// sees it.
+type Call struct {
+	Tool string `json:"tool"`
+	Call string `json:"call"`
 }
 
 // Entry is one tool in a list of Tools: its name alone, or an object with
@@ -198,11 +221,29 @@ func DefaultProtected() []string {
 	}
 }
 
+// DefaultAsk are the calls the agent of the owner asks about unless the owner
+// says otherwise: what deletes for good, what reaches beyond the machine or
+// changes the system, what reads keys, ouro building itself anew, and typing
+// into the pages of the browser, where forms are sent and people sign in.
+func DefaultAsk() []Rule {
+	return []Rule{
+		{Tool: "bash", Match: `\brm\s+-\w*[rf]`},
+		{Tool: "bash", Match: `\bgit\s+(push|reset\s+--hard|clean|branch\s+-D)`},
+		{Tool: "bash", Match: `\bsudo\b|\b(pacman|yay|apt|apt-get|brew|pip|pip3)\s+(install|remove|uninstall|-S|-R)|\bnpm\s+(install|i)\s+-g`},
+		{Tool: "bash", Match: `\b(systemctl|crontab|dd|mkfs)\b`},
+		{Tool: "bash", Match: `~/\.(ssh|gnupg|aws)|\.env\b`},
+		{Tool: "delete", Match: `.*`},
+		{Tool: "rebuild", Match: `.*`},
+		{Tool: "browser", Match: `"action":"type"`},
+	}
+}
+
 // DefaultTools is what the setup writes: every tool for the owner, none for
-// peers, and the paths that are protected, for the owner to see and change.
+// peers, and the paths that are protected and the calls that are asked
+// about, for the owner to see and change.
 func DefaultTools() *Tools {
-	protected := DefaultProtected()
-	return &Tools{H2A: Named(AllTools), A2A: []Entry{}, Protected: &protected}
+	protected, ask := DefaultProtected(), DefaultAsk()
+	return &Tools{H2A: Named(AllTools), A2A: []Entry{}, Protected: &protected, Ask: &ask}
 }
 
 // OwnerTools are the tools the agent may use for its owner.
@@ -238,6 +279,36 @@ func (c Config) Protected() []string {
 		return DefaultProtected()
 	}
 	return *c.Tools.Protected
+}
+
+// AskRules are the calls the agent of the owner asks about, see Tools.Ask.
+func (c Config) AskRules() []Rule {
+	if c.Tools == nil || c.Tools.Ask == nil {
+		return DefaultAsk()
+	}
+	return *c.Tools.Ask
+}
+
+// AllowedCalls are the calls the owner allowed for good, see Tools.Allowed.
+func (c Config) AllowedCalls() []Call {
+	if c.Tools == nil {
+		return nil
+	}
+	return c.Tools.Allowed
+}
+
+// Allow adds call to the calls the owner allowed for good, if it is not
+// among them yet.
+func (c *Config) Allow(call Call) {
+	if slices.Contains(c.AllowedCalls(), call) {
+		return
+	}
+	tools := Tools{}
+	if c.Tools != nil {
+		tools = *c.Tools // the Tools of the caller's copy are not changed
+	}
+	tools.Allowed = append(slices.Clone(tools.Allowed), call)
+	c.Tools = &tools
 }
 
 // MaxDescription is how many characters the description of a node has at
@@ -520,8 +591,8 @@ func (c *Config) SetField(path string, value json.RawMessage) error {
 // that hold for what is not set. provider is what the access in use is
 // called, as the node tells it.
 func (c Config) Public(provider string) json.RawMessage {
-	protected := c.Protected()
-	tools := Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected}
+	protected, ask := c.Protected(), c.AskRules()
+	tools := Tools{H2A: c.OwnerTools(), A2A: append([]Entry{}, c.PeerTools()...), Protected: &protected, Ask: &ask, Allowed: c.AllowedCalls()}
 	if c.Tools != nil {
 		tools.Peers = c.Tools.Peers
 	}

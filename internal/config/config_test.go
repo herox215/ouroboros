@@ -387,7 +387,7 @@ func TestProtected(t *testing.T) {
 	// What the setup writes.
 	tools := DefaultTools()
 	b, _ := json.Marshal(tools)
-	want := `{"h2a":["*"],"a2a":[],"protected":["~/.ssh","~/.gnupg","~/.aws","~/.kube","~/.config/gcloud","~/.docker/config.json","~/.netrc","~/.password-store","~/.local/share/keyrings"]}`
+	want := `{"h2a":["*"],"a2a":[],"protected":["~/.ssh","~/.gnupg","~/.aws","~/.kube","~/.config/gcloud","~/.docker/config.json","~/.netrc","~/.password-store","~/.local/share/keyrings"],"ask":[{"tool":"bash","match":"\\brm\\s+-\\w*[rf]"},{"tool":"bash","match":"\\bgit\\s+(push|reset\\s+--hard|clean|branch\\s+-D)"},{"tool":"bash","match":"\\bsudo\\b|\\b(pacman|yay|apt|apt-get|brew|pip|pip3)\\s+(install|remove|uninstall|-S|-R)|\\bnpm\\s+(install|i)\\s+-g"},{"tool":"bash","match":"\\b(systemctl|crontab|dd|mkfs)\\b"},{"tool":"bash","match":"~/\\.(ssh|gnupg|aws)|\\.env\\b"},{"tool":"delete","match":".*"},{"tool":"rebuild","match":".*"},{"tool":"browser","match":"\"action\":\"type\""}]}`
 	if string(b) != want {
 		t.Errorf("the default tools: %s", b)
 	}
@@ -585,7 +585,7 @@ func TestPublic(t *testing.T) {
 	if !strings.Contains(got, "\n  \"tools\": {\n    \"h2a\": [\n") {
 		t.Fatalf("not written for reading: %s", got)
 	}
-	if !strings.Contains(got, "\n  \"self_improve\": \"build\"\n") || strings.Contains(got, "rebuild") || strings.Contains(got, `"peers"`) {
+	if !strings.Contains(got, "\n  \"self_improve\": \"build\"\n") || strings.Contains(got, "rebuild_") || strings.Contains(got, `"peers"`) {
 		t.Fatalf("what the agent does where ouro lacks something: %s", got)
 	}
 	c.Tools = &Tools{H2A: Named("read"), A2A: Named("list_peers"), Peers: map[string][]Entry{"e982c39668a3": Named("bash")}, Protected: &[]string{"~/x"}}
@@ -635,5 +635,28 @@ func TestPeerLLM(t *testing.T) {
 	b, _ := json.Marshal(Config{Model: "m", Name: "n"})
 	if strings.Contains(string(b), "peer") {
 		t.Fatalf("a configuration without a choice for peers says nothing of it: %s", b)
+	}
+}
+
+// A call allowed for good is kept once, and the Tools of a copy stay as
+// they were.
+func TestAllow(t *testing.T) {
+	c := Config{Tools: &Tools{H2A: Named("bash")}}
+	copied := c
+	call := Call{Tool: "bash", Call: "git push"}
+	c.Allow(call)
+	c.Allow(call)
+	if got := c.AllowedCalls(); len(got) != 1 || got[0] != call || !reflect.DeepEqual(c.OwnerTools(), Named("bash")) {
+		t.Fatalf("allowed %+v, tools %+v", got, c.Tools)
+	}
+	if copied.AllowedCalls() != nil {
+		t.Fatalf("the copy was changed: %+v", copied.AllowedCalls())
+	}
+	if (Config{}).AllowedCalls() != nil || !reflect.DeepEqual((Config{}).AskRules(), DefaultAsk()) {
+		t.Fatal("the defaults")
+	}
+	empty := Config{Tools: &Tools{Ask: &[]Rule{}}}
+	if len(empty.AskRules()) != 0 {
+		t.Fatal("an empty list of rules is the owner's decision")
 	}
 }

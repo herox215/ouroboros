@@ -68,6 +68,15 @@ func (d Dir) Config() (config.Config, error) {
 	return c, err
 }
 
+// Allow keeps call among the calls the owner allowed for good, see
+// config.Tools.Allowed.
+func (d Dir) Allow(call config.Call) error {
+	return config.Update(string(d), func(c *config.Config) error {
+		c.Allow(call)
+		return nil
+	})
+}
+
 // LegacyAccess is the ID of the access that is made of the endpoint and the
 // key of a configuration from before there were accesses.
 const LegacyAccess = "default"
@@ -161,7 +170,8 @@ func (d Dir) Proposals() *proposal.Store { return proposal.Open(d.path("proposal
 // suggested, which wait for the owner.
 func (d Dir) Suggestions() *suggestion.Store { return suggestion.Open(d.path("suggestions.json")) }
 
-// History is the directory the conversations of the agents are archived in.
+// History is the directory of the shared SQLite store for conversations,
+// session metadata and explicit memories, and any legacy archive backups.
 func (d Dir) History() string { return d.path("history") }
 
 // Browser is the directory of the profile of the browser the agents of the

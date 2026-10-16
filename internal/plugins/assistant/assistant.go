@@ -34,7 +34,9 @@ type services struct {
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.NewService("assistant", func(ctx *plugin.Context, _ struct{}) (services, error) {
 		var bot *assistant.Assistant
-		archived := Archived(history.Open(dir.History()), func(id string) history.Statistics {
+		archive := history.Open(dir.History())
+		ctx.OnStop(func() { archive.Close() })
+		archived := Archived(archive, func(id string) history.Statistics {
 			cache, _ := json.Marshal(bot.Cache(id))
 			return history.Statistics{Context: bot.Context(id), Cache: cache}
 		})
@@ -51,7 +53,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Failures:  dir.Failures(),
 			Workspace: dir.WorkingDir(),
 			Source:    update.Source,
-		}.WithConfig(dir.Config, dir.Proposals()).WithSuggestions(dir.Suggestions())
+		}.WithConfig(dir.Config, dir.Proposals()).WithSuggestions(dir.Suggestions()).WithAllowing(dir.Allow)
 		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug)
 		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolDelegate, Show: assistant.Delegating, Detail: assistant.HowItEnded})
 		return services{builder, bot}, nil

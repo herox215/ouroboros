@@ -23,6 +23,7 @@ import (
 	"ouroboros/internal/openai"
 	"ouroboros/internal/script"
 	"ouroboros/internal/suggestion"
+	"ouroboros/internal/workdir"
 )
 
 // The prompts; %q is the name of the node. They name tools, so keep them in
@@ -46,24 +47,35 @@ const (
 	// once for all of them.
 	pathHint = `A path is whole: absolute, or starting with "~", the home directory.`
 	// ownerPathHint is what a path of the owner is to them.
-	ownerPathHint = `A path is absolute, starts with "~", the home directory, or is relative to your workspace, where your commands start, ` +
+	ownerPathHint = `A path is absolute, starts with "~", the home directory, or is relative to the conversation's project directory (your workspace when none is selected), where your commands start, ` +
 		`and never to the directory you give a command.`
 	// workHint is added for an owner whose agent has a tool for files or
 	// bash: how it goes about what the user gives it to do.
 	workHint = `When the user asks for something to be done, do it, and go on until it is done: ` +
-		`do not stop at a plan or at an offer to go on. ` +
+		`do not stop at a plan or at an offer to go on. Treat a hint that something you agreed to or promised before is missing, like a review of your answer naming it, as the order to make up for it: take its reversible local steps, to write, edit, build and test, without a new leave, and ask before only what cannot be undone or gates that the rules for what to ask already name. ` +
+		`For research, batch related read and search calls whose inputs you already know in one run, rather than returning to the model after each small excerpt. ` +
+		`For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit. ` +
+		`Read coherent sections large enough to answer the current question, within the script's output limits. ` +
+		`Keep the combined printed output of each batch, including search results and continuation notes, safely below the script output limit; a per-call page limit does not bound the batch. ` +
+		`Reuse findings already returned instead of rereading unchanged sections, unless a specific gap or change requires it. ` +
+		`Split the work when a result is needed to choose the next access or the combined output would be too large. ` +
 		`Change code the way the code around it is written. ` +
+		`When writing or proposing tool descriptions, including parameter descriptions, write them in English regardless of the conversation language. ` +
 		`What you find changed and did not change yourself is the work of the user: look at it before you overwrite or delete it. ` +
 		`Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, ` +
 		`unless you still need information to make those changes safely. ` +
-		`Write the tests a change needs and no more, and do not run again what passed without a reason. `
+		`Write the tests a change needs and no more, and do not run again what passed without a reason. ` +
+		`When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering: ` +
+		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
+		`Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown, ` +
+		`rather than stopping at an unverified guess. `
 	// improveHint is added for an owner whose agent may build ouro anew and
 	// improve it (config.SelfImproveBuild): what a task needs and ouro
 	// lacks, it may build.
 	improveHint = `You are part of ouro, a program you can change and build anew with ` + ToolRebuild + `. ` +
 		`When a task needs something ouro cannot do, or does badly, building it into ouro is one way to do the task: ` +
 		`weigh it against a workaround, and build it when it is the better way, also for the tasks to come; then tell the user what you changed. ` +
-		`When you notice on the way that ouro holds you back otherwise, by a tool that is slow or misleading, ` +
+		`Run rebuild only once the answer it belongs to is done and sent, not while a script of yours is still open or more of the answer still waits on this process: ouro ends with the answer of the old build, and a script loses what it kept when ouro starts anew. When you notice on the way that ouro holds you back otherwise, by a tool that is slow or misleading, ` +
 		`or by something in this prompt that led you wrong, say so at the end of your answer in a sentence or two, with the change you would make. `
 	// proposeHint is added in its place for an owner who wants the changes
 	// proposed (config.SelfImprovePropose): the agent says what it would
@@ -93,6 +105,13 @@ const (
 	// its scripts.
 	scriptHint = `You act through ` + toolRun + ` alone: every tool this prompt names is a function in its scripts, ` +
 		`never a tool to call on its own. `
+	// validationHint applies even with browser-only tools: opening a page is
+	// not evidence that its interactions work. Helpers need the same rule.
+	validationHint = `When testing whether something works, distinguish reachability from verified functionality. ` +
+		`Choose a representative operation for the requested capability and check its observable result before claiming it works. ` +
+		`For a browser function test, perform an interaction (such as following a link or submitting a form) and read the resulting page or state to verify the expected outcome; merely opening a page proves only reachability. ` +
+		`Use a harmless test fixture where possible, and do not perform consequential actions just to test. ` +
+		`Report what you actually tested, the observed result, and what remains unverified; if interaction cannot be checked, say so rather than claiming full functionality. `
 	ownerStyle = `Answer in the language of the user. Be helpful and concise.`
 
 	peerPrompt = `You are %q, an Ouroboros agent reachable via A2A. Be helpful and concise.`
@@ -104,7 +123,7 @@ const (
 	// owner trusts that peer to work on ouro with it.
 	buildHint = ` Your owner trusts this peer to work with you on ouro, the program you are part of: ` +
 		`you may change its source and build it anew with ` + ToolRebuild + ` where you and the peer agree that what it asks needs it. ` +
-		`Change nothing else, and tell the peer what you changed.`
+		`Change nothing else, and tell the peer what you changed. Ask for the new build only once the answer at hand is done and sent: ouro ends with the answer of the old build, and its conversation goes on in the new one.`
 	// explainHint is added for peers when the agent can look up failed answers.
 	explainHint = ` When the peer asks about an error ID it was given because an earlier message could not be answered, ` +
 		`look it up with ` + toolExplainError + ` and explain in plain words what went wrong. ` +
@@ -116,6 +135,8 @@ const (
 // front end shows of a call is for the plugin of the tool to say. With Done
 // come Took, how long the call took, and Err, why it failed, if it did.
 type Step struct {
+	// ID identifies the archived tool call; empty for nested calls of a script.
+	ID   string
 	Tool string
 	Args json.RawMessage
 	Done bool
@@ -161,6 +182,9 @@ type Builder struct {
 	suggestions *suggestion.Store
 	// node is set by WithConfig.
 	node *node
+	// allow keeps a call the owner allowed for good, see WithAllowing. May
+	// be nil.
+	allow func(config.Call) error
 }
 
 // WithSuggestions keeps what the reviews of answers suggest in store, for the
@@ -271,6 +295,7 @@ func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Session
 	if len(allowed) == 0 {
 		return b.build(cfg, prompt)
 	}
+	allowed = b.permitted(cfg, allowed) // nobody can be asked: what needs the owner's leave is refused
 	prompt += toolsHint
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
@@ -301,6 +326,9 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	if err := config.ValidSelfImprove(cfg.SelfImprove); err != nil {
 		return nil, err
 	}
+	// What the owner wants to be asked about first runs once they allowed
+	// it, for helpers too, which get these tools.
+	allowed = b.permitted(cfg, allowed)
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
 	}
@@ -310,7 +338,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.
-	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint
+	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint + validationHint
 	if has(toolAskPeer) {
 		prompt += askHint
 	}
@@ -443,8 +471,8 @@ func (b Builder) workspaceHint() string {
 	if b.Workspace == "" {
 		return ""
 	}
-	return " You work in " + b.Workspace + ", a directory of your own: your commands start there unless they name a directory." +
-		" What the user works on is elsewhere: when they speak of a project and name no path, find it or ask, rather than looking for it there."
+	return " You work in " + b.Workspace + ", a directory of your own: your commands start there unless they name a directory or this conversation selects a project directory." +
+		" Keep temporary files and helper scripts in your own workspace, not in the project. When no project is selected and the user names no path, find it or ask."
 }
 
 // Ready reports whether the assistant can answer: config.ErrIncomplete if the
@@ -500,13 +528,14 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		}
 	}
 	asked := ctx
-	ctx = agent.WithSteering(ctx, func() []string {
-		texts := agent.Steered(asked)
-		for _, text := range texts {
-			r.steered(text)
+	ctx = agent.WithMessageSteering(ctx, func() []openai.Message {
+		messages := agent.SteeredMessages(asked)
+		for _, message := range messages {
+			r.steered(message.Content)
 		}
-		return texts
+		return messages
 	})
+	bot = inDirectory(ctx, bot)
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {
 			if a.log != nil {
@@ -529,7 +558,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		Step: func(s agent.Step) {
 			r.step(s)
 			if observe != nil {
-				observe(Step{Tool: s.Tool, Args: s.Args, Done: s.Done, Took: s.Took, Err: s.Err, Remark: s.Remark})
+				observe(Step{ID: s.ID, Tool: s.Tool, Args: s.Args, Done: s.Done, Took: s.Took, Err: s.Err, Remark: s.Remark})
 			}
 		},
 	})
@@ -542,6 +571,17 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		go a.reviewed(contextID, signals, trail, a.reviewTools(cfg), suggest)
 	}
 	return reply, err
+}
+
+// inDirectory names the explicit project for this answer without changing the
+// cached agent used by other conversations. The directory comes from the owner,
+// not from a path mentioned in chat or returned by a peer.
+func inDirectory(ctx context.Context, bot *agent.Agent) *agent.Agent {
+	if directory := workdir.Of(ctx); directory != "" {
+		system, _ := bot.Prompt()
+		return bot.WithSystem(system + " The owner selected this conversation's project directory: " + strconv.Quote(directory) + ". Here means this project: relative file paths and commands without a directory start there. Your own profile workspace remains separate.")
+	}
+	return bot
 }
 
 // toolsOf are the tools of ouro as a review is told them: those the owner of
@@ -673,16 +713,24 @@ type Contents struct {
 // Without an agent for the configuration as it is, it
 // returns the conversation alone, with the error.
 func (a *Assistant) Contents(contextID string) (Contents, error) {
+	return a.ContentsContext(context.Background(), contextID)
+}
+
+// ContentsContext includes the project selected for this conversation.
+func (a *Assistant) ContentsContext(ctx context.Context, contextID string) (Contents, error) {
 	c := Contents{Messages: a.memory.Conversation(contextID)}
 	bot, _, err := a.current()
 	if err != nil {
 		return c, err
 	}
-	c.System, c.Tools = bot.Prompt()
+	c.System, c.Tools = inDirectory(ctx, bot).Prompt()
 	if bot.HasExtensions() {
 		if snapshot, ok := bot.Inspection(contextID); ok {
+			c.Messages = slices.Clone(snapshot.Messages)
+			if len(c.Messages) > 0 && c.Messages[0].Role == "system" {
+				c.Messages[0].Content = c.System
+			}
 			c.System = ""
-			c.Messages = snapshot.Messages
 			c.Tools = snapshot.Tools
 			return c, snapshot.Err
 		}

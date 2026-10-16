@@ -177,7 +177,7 @@ func TestProposeSwitch(t *testing.T) {
 	if list := c.waiting(); len(list) != 0 {
 		t.Fatalf("waiting %+v", list)
 	}
-	if got := c.tool(toolGetConfig, struct{}{}); strings.Contains(got, "rebuild") || strings.Contains(got, "sandbox") {
+	if got := c.tool(toolGetConfig, struct{}{}); strings.Contains(got, "rebuild_") || strings.Contains(got, "sandbox") {
 		t.Fatalf("shown: %s", got)
 	}
 }

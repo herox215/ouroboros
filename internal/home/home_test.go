@@ -504,3 +504,19 @@ func TestSocketOfTheLongestPath(t *testing.T) {
 		t.Fatalf("a path one byte longer: %q", got)
 	}
 }
+
+// A call allowed for good is kept in the configuration, beside what is there.
+func TestAllow(t *testing.T) {
+	d := Dir(t.TempDir())
+	if err := config.Save(string(d), config.Config{Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	call := config.Call{Tool: "bash", Call: "git push"}
+	if err := d.Allow(call); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(string(d))
+	if err != nil || c.Name != "alpha" || !reflect.DeepEqual(c.AllowedCalls(), []config.Call{call}) {
+		t.Fatalf("%+v, %v", c, err)
+	}
+}
