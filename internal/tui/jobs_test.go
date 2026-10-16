@@ -107,9 +107,8 @@ func TestJobsList(t *testing.T) {
 	wide := m.input.Width()
 
 	_, fade := m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	// It forms from noise: its room is taken at once, and empty before the
-	// first frame.
-	if m.jobsLevel != 0 || m.input.Width() != wide-30 || strings.Contains(ansi.Strip(m.View().Content), "Jobs") {
+	// Like the input, it gives up no room before the first frame.
+	if m.jobsLevel != 0 || m.input.Width() != wide || strings.Contains(ansi.Strip(m.View().Content), "Jobs") {
 		t.Fatalf("the list before it faded in: level %d\n%s", m.jobsLevel, m.View().Content)
 	}
 	fadeAll(m, fade)
@@ -139,7 +138,7 @@ func TestJobsList(t *testing.T) {
 	}
 
 	_, fade = m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	// It fades out: it keeps its room until it is gone.
+	// It slides out, giving the room back with every frame.
 	if m.jobsShown || m.input.Width() != wide-30 {
 		t.Fatalf("the list fading out: %v, input %d", m.jobsShown, m.input.Width())
 	}
@@ -175,36 +174,43 @@ func fadeAll(m *Model, cmd tea.Cmd) {
 
 func isFade(msg tea.Msg) bool { _, ok := msg.(jobsFadeMsg); return ok }
 
-// The list of the jobs slides in from the right as noise: at first there is
-// nothing of it, then its left part on the right, as noise, and at last the
-// list itself.
-func TestJobsListSlidesInAsNoise(t *testing.T) {
+// The list slides in and out like the input, giving up room with every
+// frame. Turning around while it moves starts no second sequence of frames.
+func TestJobsListSlidesLikeInput(t *testing.T) {
 	m, _ := newModel(t)
 	m.apply(m.chat, Event{Kind: plugin.SessionMessage, Text: "serve it"}, true)
 	m.apply(m.chat, Event{Kind: plugin.SessionJobs, Text: "job 1 · npm run dev"}, true)
-	m.jobsShown, m.jobsLevel = true, jobsFrames
-	list := m.jobsList() // whole
-	w := m.jobsWidth()
-	if whole := ansi.Strip(m.dissolve(list, jobsFrames)); whole != ansi.Strip(list) {
-		t.Fatalf("arrived:\n%s", whole)
-	}
-	if none := ansi.Strip(m.dissolve(list, 0)); strings.TrimSpace(none) != "" {
-		t.Fatalf("before it comes in:\n%s", none)
-	}
-	early := strings.Split(ansi.Strip(m.dissolve(list, 2)), "\n")
-	if !strings.HasPrefix(early[0], strings.Repeat(" ", w/4)) || strings.TrimSpace(early[0]) == "" {
-		t.Fatalf("on its way in, the left part of it on the right:\n%s", strings.Join(early, "\n"))
-	}
-	half := ansi.Strip(m.dissolve(list, jobsFrames/2))
-	if !strings.ContainsAny(half, string(noiseGlyphs)) || strings.Contains(half, "npm run dev") {
-		t.Fatalf("halfway:\n%s", half)
-	}
-	for level := range jobsFrames + 1 {
-		for _, l := range strings.Split(m.dissolve(list, level), "\n") {
-			if ansi.StringWidth(l) != w {
-				t.Fatalf("at %d a line is %d wide, not %d: %q", level, ansi.StringWidth(l), w, ansi.Strip(l))
+	wide := m.input.Width()
+	m.toggleJobs()
+	for level := 1; level <= jobsFrames; level++ {
+		m.Update(jobsFadeMsg{})
+		w := m.jobsWidth()
+		if m.input.Width() != wide-w || m.history.Width() != wide-w {
+			t.Fatalf("frame %d: chat and input should give up %d columns", level, w)
+		}
+		for _, line := range strings.Split(m.jobsList(), "\n") {
+			if ansi.StringWidth(line) != w {
+				t.Fatalf("frame %d: list width %d, want %d", level, ansi.StringWidth(line), w)
 			}
 		}
+		for _, line := range strings.Split(m.View().Content, "\n") {
+			if ansi.StringWidth(line) != m.width {
+				t.Fatalf("frame %d: view width %d, want %d", level, ansi.StringWidth(line), m.width)
+			}
+		}
+	}
+	m.toggleJobs()
+	m.Update(jobsFadeMsg{})
+	m.Update(jobsFadeMsg{})
+	w := m.jobsWidth()
+	if cmd := m.toggleJobs(); cmd == nil || !m.jobsFading || m.jobsLevel != jobsFrames-2 || m.jobsWidth() != w {
+		t.Fatal("turning around should keep the current frame and ask for services")
+	}
+	for m.jobsFading {
+		m.Update(jobsFadeMsg{})
+	}
+	if m.jobsWidth() != jobsListWidth {
+		t.Fatal("the list should be fully back in")
 	}
 }
 
