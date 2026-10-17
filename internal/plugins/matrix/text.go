@@ -11,6 +11,9 @@ func messageParts(text string) []string {
 		for n > 0 && !utf8.RuneStart(text[n]) {
 			n--
 		}
+		if n == 0 { // no rune starts before the limit: no UTF-8, split at it
+			n = limit
+		}
 		parts = append(parts, text[:n])
 		text = text[n:]
 	}

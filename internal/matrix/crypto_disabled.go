@@ -11,5 +11,5 @@ import (
 const CryptoAvailable = false
 
 func newCrypto(context.Context, *Client) (cryptography, error) {
-	return nil, errors.New("Matrix E2EE requires a build with -tags=goolm; plaintext fallback is disabled")
+	return nil, errors.New("the Matrix E2EE requires a build with -tags=goolm; plaintext fallback is disabled")
 }

@@ -92,3 +92,13 @@ func TestTypingGuardRevocation(t *testing.T) {
 		t.Fatal("typing escaped guard")
 	}
 }
+
+func TestTypingNeedsThePeerOfTheConversation(t *testing.T) {
+	conn := &typingConnection{}
+	entry := &conversation{Room: "!room:test", Identity: plugin.GatewayIdentity{Subject: "@owner:test"}}
+	states := typing{}
+	states.update(context.Background(), conn, entry, true, time.Now())
+	if len(conn.states) != 0 || len(states) != 0 {
+		t.Fatalf("typing without a peer: %v", conn.states)
+	}
+}

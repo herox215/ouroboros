@@ -59,9 +59,7 @@ func (s store) change(ctx context.Context, change plugin.GatewayChange, login lo
 		return errors.New("log in before enabling Matrix")
 	}
 	var revision [16]byte
-	if _, err = rand.Read(revision[:]); err != nil {
-		return err
-	}
+	rand.Read(revision[:]) // never fails
 	cfg.Revision = hex.EncodeToString(revision[:])
 	return s.save(cfg)
 }

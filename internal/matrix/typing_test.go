@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"maunium.net/go/mautrix/event"
 )
 
 func TestTypingTo(t *testing.T) {
@@ -49,5 +51,20 @@ func TestTypingTo(t *testing.T) {
 	}
 	if len(states) != 2 || !states[0] || states[1] {
 		t.Fatalf("typing requests: %v", states)
+	}
+}
+
+func TestTypingToUnverifiableRoom(t *testing.T) {
+	h := newHomeserver(t)
+	h.breakRoom("!broken:test", true)
+	h.room("!crowded:test", map[string]event.Membership{"@alice:test": event.MembershipJoin, "@eve:test": event.MembershipJoin})
+	c := testClient(t, h.server.URL)
+	for _, room := range []string{"!broken:test", "!crowded:test"} {
+		if err := c.TypingTo(context.Background(), room, "@alice:test", true); err == nil {
+			t.Fatalf("typing in %s", room)
+		}
+	}
+	if _, _, typing := h.requests(); len(typing) != 0 {
+		t.Fatalf("typing notifications %v", typing)
 	}
 }

@@ -16,7 +16,7 @@ type needs struct{ Sessions plugin.Sessions }
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.New("matrix", func(ctx *plugin.Context, n needs) error {
 		s := store{filepath.Join(dir.Gateways(), "matrix")}
-		c := &controller{store: s}
+		c := &controller{store: s, receive: receive}
 		c.connect = func(runCtx context.Context, cfg configuration) (connection, error) {
 			conversations, err := openConversations(s, n.Sessions)
 			if err != nil {
@@ -27,18 +27,6 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				return nil, err
 			}
 			return &sessionConnection{connection: transport, conversations: conversations, store: s, revision: cfg.Revision}, nil
-		}
-		c.receive = func(runCtx context.Context, conn connection, msg incoming) error {
-			// The controller passes a revocation guard around the active connection.
-			wrapped, ok := conn.(guardedConnection)
-			if !ok {
-				return plugin.ErrGatewayDenied
-			}
-			active, ok := wrapped.connection.(*sessionConnection)
-			if !ok {
-				return plugin.ErrGatewayDenied
-			}
-			return active.conversations.receive(runCtx, conn, msg)
 		}
 		plugin.Add(ctx, plugin.Gateway{Name: "matrix", Title: "Matrix",
 			Settings: func(context.Context) (plugin.GatewaySettings, error) { return s.snapshot() },
@@ -56,6 +44,21 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		ctx.OnStop(c.stop)
 		return nil
 	})
+}
+
+// receive hands a message to the conversations of the connection it came
+// over. The controller passes a revocation guard around the active connection:
+// a message that came any other way is refused.
+func receive(ctx context.Context, conn connection, msg incoming) error {
+	wrapped, ok := conn.(guardedConnection)
+	if !ok {
+		return plugin.ErrGatewayDenied
+	}
+	active, ok := wrapped.connection.(*sessionConnection)
+	if !ok {
+		return plugin.ErrGatewayDenied
+	}
+	return active.conversations.receive(ctx, conn, msg)
 }
 
 func (s *sessionConnection) Status() string {

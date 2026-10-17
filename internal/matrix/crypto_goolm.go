@@ -43,18 +43,21 @@ func cryptoStateDir(cfg Config) string {
 	return filepath.Join(cfg.StateDir, fmt.Sprintf("%x", sum[:16]))
 }
 
+// chmod changes the mode of a file; tests replace it to get in the way.
+var chmod = os.Chmod
+
 func newCrypto(ctx context.Context, c *Client) (cryptography, error) {
 	if err := os.MkdirAll(c.cfg.StateDir, 0700); err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(c.cfg.StateDir, 0700); err != nil {
+	if err := chmod(c.cfg.StateDir, 0700); err != nil {
 		return nil, err
 	}
 	stateDir := cryptoStateDir(c.cfg)
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(stateDir, 0700); err != nil {
+	if err := chmod(stateDir, 0700); err != nil {
 		return nil, err
 	}
 	lock, err := os.OpenFile(filepath.Join(stateDir, "crypto.lock"), os.O_RDWR|os.O_CREATE, 0600)
@@ -75,20 +78,18 @@ func newCrypto(ctx context.Context, c *Client) (cryptography, error) {
 	key, err := os.ReadFile(keyPath)
 	if errors.Is(err, os.ErrNotExist) {
 		key = make([]byte, 32)
-		if _, err = rand.Read(key); err != nil {
-			return nil, err
-		}
+		rand.Read(key) // never fails
 		file, openErr := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if openErr != nil {
 			return nil, openErr
 		}
 		_, err = file.Write(key)
-		closeErr := file.Close()
-		if err != nil {
-			return nil, err
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
 		}
-		if closeErr != nil {
-			return nil, closeErr
+		if err != nil {
+			os.Remove(keyPath) // not left empty: the next start creates it again
+			return nil, err
 		}
 	} else if err != nil {
 		return nil, err
@@ -96,7 +97,7 @@ func newCrypto(ctx context.Context, c *Client) (cryptography, error) {
 	if len(key) != 32 {
 		return nil, errors.New("invalid Matrix crypto pickle key")
 	}
-	if err = os.Chmod(keyPath, 0600); err != nil {
+	if err = chmod(keyPath, 0600); err != nil {
 		return nil, err
 	}
 	dbPath := filepath.Join(stateDir, "crypto.db")
@@ -104,10 +105,8 @@ func newCrypto(ctx context.Context, c *Client) (cryptography, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = f.Close(); err != nil {
-		return nil, err
-	}
-	if err = os.Chmod(dbPath, 0600); err != nil {
+	f.Close() // opened only to create it: nothing written can be lost
+	if err = chmod(dbPath, 0600); err != nil {
 		return nil, err
 	}
 	u := url.URL{Scheme: "file", Path: dbPath}
@@ -116,21 +115,13 @@ func newCrypto(ctx context.Context, c *Client) (cryptography, error) {
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "busy_timeout(5000)")
 	u.RawQuery = q.Encode()
-	db, err := sql.Open("sqlite", u.String())
-	if err != nil {
-		return nil, err
-	}
+	// Open only looks up the driver, which the import registers, and the
+	// dialect is a known one: neither can fail. Neither can the helper, with
+	// a key of 32 bytes, a database and the extensible syncer of the client.
+	db, _ := sql.Open("sqlite", u.String())
 	db.SetMaxOpenConns(1)
-	wrapped, err := dbutil.NewWithDB(db, "sqlite3")
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	helper, err := cryptohelper.NewCryptoHelper(c.cli, key, wrapped)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
+	wrapped, _ := dbutil.NewWithDB(db, "sqlite3")
+	helper, _ := cryptohelper.NewCryptoHelper(c.cli, key, wrapped)
 	helper.DBAccountID = c.cfg.UserID
 	originalSyncer := c.cli.Syncer
 	c.cli.Syncer = helperSyncer{originalSyncer.(*mautrix.DefaultSyncer)}

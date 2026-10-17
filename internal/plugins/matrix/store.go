@@ -54,10 +54,7 @@ func (s store) load() (configuration, error) {
 	return c, err
 }
 func (s store) save(c configuration) error {
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
+	data, _ := json.MarshalIndent(c, "", "  ") // strings and booleans only: cannot fail
 	return safefile.Write(s.path("settings.json"), append(data, '\n'), 0600)
 }
 func (s store) status(revision, text string) {

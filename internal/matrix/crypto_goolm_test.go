@@ -5,6 +5,7 @@ package matrix
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -29,7 +32,9 @@ type mockMatrix struct {
 	inbox  map[id.UserID][]*event.Event
 	sent   []*event.Event
 	extra  bool
-	sync   func(http.ResponseWriter, *http.Request)
+	// failQuery makes the homeserver fail to tell the devices of users.
+	failQuery bool
+	sync      func(http.ResponseWriter, *http.Request)
 }
 
 func newMock(t *testing.T) *mockMatrix {
@@ -76,6 +81,9 @@ func (m *mockMatrix) serve(w http.ResponseWriter, r *http.Request) {
 			m.otks[user][device][k] = v
 		}
 		encode(map[string]any{"one_time_key_counts": map[string]int{"signed_curve25519": len(m.otks[user][device])}})
+	case strings.HasSuffix(r.URL.Path, "/keys/query") && m.failQuery:
+		w.WriteHeader(http.StatusInternalServerError)
+		encode(map[string]string{"errcode": "M_UNKNOWN", "error": "device lists unavailable"})
 	case strings.HasSuffix(r.URL.Path, "/keys/query"):
 		var req mautrix.ReqQueryKeys
 		json.NewDecoder(r.Body).Decode(&req)
@@ -282,10 +290,19 @@ func TestRunSyncDropsHistoryAndPlaintext(t *testing.T) {
 	m.sync = func(w http.ResponseWriter, r *http.Request) {
 		n++
 		if n > 2 {
+			// Both syncs are handled.
+			cancel()
 			<-r.Context().Done()
 			return
 		}
 		encrypted, err := aliceCrypto.encrypt(ctx, "!dm:test", "@bot:test", "live secret")
+		if err != nil {
+			t.Error(err)
+			cancel()
+			return
+		}
+		// A room that was left is no room to answer in, whatever its state.
+		left, err := aliceCrypto.encrypt(ctx, "!left:test", "@bot:test", "left secret")
 		if err != nil {
 			t.Error(err)
 			cancel()
@@ -296,11 +313,15 @@ func TestRunSyncDropsHistoryAndPlaintext(t *testing.T) {
 		delete(m.inbox, "@bot:test")
 		m.mu.Unlock()
 		e := &event.Event{ID: id.EventID(fmt.Sprintf("$event%d", n)), Timestamp: time.Now().UnixMilli(), Sender: "@alice:test", Type: event.EventEncrypted, Content: event.Content{Parsed: encrypted}}
+		gone := &event.Event{ID: id.EventID(fmt.Sprintf("$left%d", n)), Timestamp: time.Now().UnixMilli(), Sender: "@alice:test", Type: event.EventEncrypted, Content: event.Content{Parsed: left}}
 		plain := &event.Event{ID: "$plaintext", Timestamp: time.Now().UnixMilli(), Sender: "@alice:test", Type: event.EventMessage, Content: event.Content{Parsed: &event.MessageEventContent{MsgType: event.MsgText, Body: "not allowed"}}}
-		json.NewEncoder(w).Encode(map[string]any{"next_batch": fmt.Sprintf("batch%d", n), "device_one_time_keys_count": map[string]int{"signed_curve25519": 50}, "to_device": map[string]any{"events": toDevice}, "rooms": map[string]any{"join": map[string]any{"!dm:test": map[string]any{"state": map[string]any{"events": safeEvents()}, "timeline": map[string]any{"events": []*event.Event{e, plain}}}}}})
+		json.NewEncoder(w).Encode(map[string]any{"next_batch": fmt.Sprintf("batch%d", n), "device_one_time_keys_count": map[string]int{"signed_curve25519": 50}, "to_device": map[string]any{"events": toDevice}, "rooms": map[string]any{
+			"join":  map[string]any{"!dm:test": map[string]any{"state": map[string]any{"events": safeEvents()}, "timeline": map[string]any{"events": []*event.Event{e, plain}}}},
+			"leave": map[string]any{"!left:test": map[string]any{"timeline": map[string]any{"events": []*event.Event{gone}}}},
+		}})
 	}
 	received := []Message{}
-	err := bot.Run(ctx, func(ctx context.Context, msg Message) { received = append(received, msg); cancel() })
+	err := bot.Run(ctx, func(ctx context.Context, msg Message) { received = append(received, msg) })
 	if err != nil && ctx.Err() == nil {
 		t.Fatal(err)
 	}
@@ -312,5 +333,249 @@ func TestRunSyncDropsHistoryAndPlaintext(t *testing.T) {
 	}
 	if err := bot.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// refuseChmod makes changing the mode of path fail until the returned
+// function puts chmod back.
+func refuseChmod(t *testing.T, path string) func() {
+	original := chmod
+	chmod = func(name string, mode os.FileMode) error {
+		if name == path {
+			return &os.PathError{Op: "chmod", Path: name, Err: syscall.EPERM}
+		}
+		return original(name, mode)
+	}
+	restore := func() { chmod = original }
+	t.Cleanup(restore)
+	return restore
+}
+
+func TestNewCryptoRefusesUnusableState(t *testing.T) {
+	file := func(t *testing.T, path string, data string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remove := func(path string) func() { return func() { os.RemoveAll(path) } }
+	for _, tc := range []struct {
+		name string
+		// prepare gets in the way in the crypto directory dir of c, and
+		// returns what clears the way again, or nil.
+		prepare func(t *testing.T, c *Client, dir string) func()
+		want    string
+	}{
+		{"state directory below a file", func(t *testing.T, c *Client, dir string) func() {
+			file(t, filepath.Join(c.cfg.StateDir, "file"), "")
+			c.cfg.StateDir = filepath.Join(c.cfg.StateDir, "file", "state")
+			return nil
+		}, "not a directory"},
+		{"state directory keeps its mode", func(t *testing.T, c *Client, dir string) func() {
+			return refuseChmod(t, c.cfg.StateDir)
+		}, "operation not permitted"},
+		{"crypto directory is a file", func(t *testing.T, c *Client, dir string) func() {
+			file(t, dir, "")
+			return remove(dir)
+		}, "not a directory"},
+		{"crypto directory keeps its mode", func(t *testing.T, c *Client, dir string) func() {
+			return refuseChmod(t, dir)
+		}, "operation not permitted"},
+		{"lock is a directory", func(t *testing.T, c *Client, dir string) func() {
+			os.MkdirAll(filepath.Join(dir, "crypto.lock"), 0700)
+			return remove(filepath.Join(dir, "crypto.lock"))
+		}, "is a directory"},
+		{"key is a directory", func(t *testing.T, c *Client, dir string) func() {
+			os.MkdirAll(filepath.Join(dir, "pickle.key"), 0700)
+			return remove(filepath.Join(dir, "pickle.key"))
+		}, "is a directory"},
+		{"key is a dangling link", func(t *testing.T, c *Client, dir string) func() {
+			os.MkdirAll(dir, 0700)
+			if err := os.Symlink(filepath.Join(dir, "elsewhere"), filepath.Join(dir, "pickle.key")); err != nil {
+				t.Fatal(err)
+			}
+			return func() {
+				if _, err := os.Lstat(filepath.Join(dir, "elsewhere")); err == nil {
+					t.Error("wrote the key through a link")
+				}
+				os.Remove(filepath.Join(dir, "pickle.key"))
+			}
+		}, "file exists"},
+		{"key is too short", func(t *testing.T, c *Client, dir string) func() {
+			os.MkdirAll(dir, 0700)
+			file(t, filepath.Join(dir, "pickle.key"), "short")
+			return remove(filepath.Join(dir, "pickle.key"))
+		}, "invalid Matrix crypto pickle key"},
+		{"key is too long", func(t *testing.T, c *Client, dir string) func() {
+			os.MkdirAll(dir, 0700)
+			file(t, filepath.Join(dir, "pickle.key"), strings.Repeat("k", 33))
+			return remove(filepath.Join(dir, "pickle.key"))
+		}, "invalid Matrix crypto pickle key"},
+		{"key keeps its mode", func(t *testing.T, c *Client, dir string) func() {
+			return refuseChmod(t, filepath.Join(dir, "pickle.key"))
+		}, "operation not permitted"},
+		{"database is a directory", func(t *testing.T, c *Client, dir string) func() {
+			os.MkdirAll(filepath.Join(dir, "crypto.db"), 0700)
+			return remove(filepath.Join(dir, "crypto.db"))
+		}, "is a directory"},
+		{"database keeps its mode", func(t *testing.T, c *Client, dir string) func() {
+			return refuseChmod(t, filepath.Join(dir, "crypto.db"))
+		}, "operation not permitted"},
+		{"database is no database", func(t *testing.T, c *Client, dir string) func() {
+			os.MkdirAll(dir, 0700)
+			file(t, filepath.Join(dir, "crypto.db"), strings.Repeat("no database ", 100))
+			return remove(filepath.Join(dir, "crypto.db"))
+		}, "initialize Matrix crypto"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMock(t)
+			c := m.client(t, "@bot:test", "BOT")
+			repair := tc.prepare(t, c, cryptoStateDir(c.cfg))
+			crypt, err := newCrypto(context.Background(), c)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error with %q", err, tc.want)
+			}
+			if crypt != nil {
+				t.Fatal("returned encryption with the error")
+			}
+			if repair == nil {
+				return
+			}
+			// Nothing of the failed start, not even the lock, is in the way
+			// of the next one.
+			repair()
+			setupCrypto(t, c)
+		})
+	}
+}
+
+func TestNewCryptoKeepsItsFilesPrivate(t *testing.T) {
+	m := newMock(t)
+	c := m.client(t, "@bot:test", "BOT")
+	dir := cryptoStateDir(c.cfg)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte(strings.Repeat("k", 32))
+	for path, data := range map[string][]byte{"pickle.key": key, "crypto.db": nil} {
+		if err := os.WriteFile(filepath.Join(dir, path), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{c.cfg.StateDir, dir} {
+		if err := os.Chmod(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setupCrypto(t, c)
+	for path, mode := range map[string]os.FileMode{c.cfg.StateDir: 0700, dir: 0700, filepath.Join(dir, "pickle.key"): 0600, filepath.Join(dir, "crypto.db"): 0600} {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != mode {
+			t.Errorf("%s: %v %v, want mode %v", path, info.Mode().Perm(), err, mode)
+		}
+	}
+	if kept, err := os.ReadFile(filepath.Join(dir, "pickle.key")); err != nil || string(kept) != string(key) {
+		t.Fatalf("replaced the key: %q %v", kept, err)
+	}
+}
+
+func TestNewCryptoNeedsTheKeyOnDisk(t *testing.T) {
+	m := newMock(t)
+	c := m.client(t, "@bot:test", "BOT")
+	var limit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	// While this holds, no file of the process can grow: the key cannot be
+	// written, as on a full disk.
+	none := limit
+	none.Cur = 0
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &none); err != nil {
+		t.Fatal(err)
+	}
+	crypt, err := newCrypto(context.Background(), c)
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(err, syscall.EFBIG) || crypt != nil {
+		t.Fatalf("started with a key that is not on disk: %v", err)
+	}
+	// No empty key is left in the way of the next start.
+	if _, err := os.Lstat(filepath.Join(cryptoStateDir(c.cfg), "pickle.key")); !os.IsNotExist(err) {
+		t.Fatalf("left the key behind: %v", err)
+	}
+	setupCrypto(t, c)
+}
+
+func TestSDKEncryptionFailuresSendNothing(t *testing.T) {
+	m := newMock(t)
+	bot := m.client(t, "@bot:test", "BOT")
+	botCrypto := setupCrypto(t, bot)
+	bot.running = true
+	// Nobody knows the devices of Alice when the homeserver cannot tell them.
+	m.mu.Lock()
+	m.failQuery = true
+	m.mu.Unlock()
+	if err := bot.Send(context.Background(), "!dm:test", "must not leave"); err == nil {
+		t.Fatal("sent without the devices of the peer")
+	}
+	m.mu.Lock()
+	m.failQuery = false
+	m.mu.Unlock()
+	// Without its store, the encryption cannot start a new session.
+	botCrypto.helper.Close()
+	if _, err := botCrypto.encrypt(context.Background(), "!dm:test", "@alice:test", "must not leave"); err == nil {
+		t.Fatal("encrypted without a session store")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.sent) != 0 || len(m.inbox) != 0 {
+		t.Fatalf("leaked %d messages and %d key shares", len(m.sent), len(m.inbox))
+	}
+}
+
+func TestSDKCloseReportsTheLockItCouldNotRelease(t *testing.T) {
+	m := newMock(t)
+	crypt, err := newCrypto(context.Background(), m.client(t, "@bot:test", "BOT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	crypt.(*sdkCrypto).lock.Close()
+	if err := crypt.close(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestSDKRefusesToForwardRoomKeys(t *testing.T) {
+	m := newMock(t)
+	bot := m.client(t, "@bot:test", "BOT")
+	alice := m.client(t, "@alice:test", "ALICE")
+	botCrypto := setupCrypto(t, bot)
+	setupCrypto(t, alice)
+	bot.running = true
+	if err := bot.Send(context.Background(), "!dm:test", "secret reply"); err != nil {
+		t.Fatal(err)
+	}
+	shares := func() int {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return len(m.inbox["@alice:test"])
+	}
+	m.mu.Lock()
+	session := m.sent[0].Content.AsEncrypted().SessionID
+	m.mu.Unlock()
+	shared := shares()
+	request := &event.RoomKeyRequestEventContent{Action: event.KeyRequestActionRequest, RequestingDeviceID: "ALICE", RequestID: "request",
+		Body: event.RequestedKeyInfo{Algorithm: id.AlgorithmMegolmV1, RoomID: "!dm:test", SessionID: session}}
+	mach := botCrypto.helper.Machine()
+	mach.HandleRoomKeyRequest(context.Background(), "@alice:test", request)
+	if shares() != shared {
+		t.Fatal("answered a request for a room key")
+	}
+	// Ensure the refusal did not just reflect a broken fixture: a policy
+	// that allows it forwards the key.
+	mach.AllowKeyShare = func(context.Context, *id.Device, event.RequestedKeyInfo) *crypto.KeyShareRejection { return nil }
+	mach.HandleRoomKeyRequest(context.Background(), "@alice:test", request)
+	if shares() == shared {
+		t.Fatal("the fixture cannot forward keys")
 	}
 }

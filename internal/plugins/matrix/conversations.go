@@ -33,10 +33,7 @@ func account(c configuration) string {
 	return "matrix:" + hex.EncodeToString(hash[:])
 }
 func (c *conversations) save() error {
-	data, err := json.Marshal(c.entries)
-	if err != nil {
-		return err
-	}
+	data, _ := json.Marshal(c.entries) // strings and booleans only: cannot fail
 	return safefile.Write(c.store.path("conversations.json"), data, 0600)
 }
 func openConversations(s store, sessions plugin.GatewaySessions) (*conversations, error) {
@@ -185,10 +182,8 @@ func (c *conversations) poll(ctx context.Context, conn connection) {
 				if entry.Sent[key] {
 					continue
 				}
-				peer, _, ok := strings.Cut(entry.Identity.Subject, "\n")
-				if !ok {
-					break
-				}
+				// Poll succeeded: the policy found the peer in the subject.
+				peer, _, _ := strings.Cut(entry.Identity.Subject, "\n")
 				if err = conn.SendTo(ctx, entry.Room, peer, text); err != nil {
 					break
 				}

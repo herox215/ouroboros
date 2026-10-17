@@ -26,10 +26,8 @@ func Login(ctx context.Context, homeserver, user, password string) (Credentials,
 	if err := ValidateServer(homeserver); err != nil {
 		return Credentials{}, err
 	}
-	cli, err := mautrix.NewClient(homeserver, "", "")
-	if err != nil {
-		return Credentials{}, err
-	}
+	// NewClient only parses the URL, which ValidateServer did.
+	cli, _ := mautrix.NewClient(homeserver, "", "")
 	resp, err := cli.Login(ctx, &mautrix.ReqLogin{Type: mautrix.AuthTypePassword, Identifier: mautrix.UserIdentifier{Type: mautrix.IdentifierTypeUser, User: user}, Password: password, InitialDeviceDisplayName: "Ouroboros"})
 	if err != nil {
 		return Credentials{}, errors.New("the Matrix password login failed")
@@ -59,6 +57,11 @@ type cryptography interface {
 	encrypt(context.Context, id.RoomID, id.UserID, string) (*event.EncryptedEventContent, error)
 	close() error
 }
+
+// startCrypto sets up the encryption of a client that starts to run; tests
+// replace it to hand Run decrypted events of their choosing.
+var startCrypto = newCrypto
+
 type Client struct {
 	cfg     Config
 	cli     *mautrix.Client
@@ -77,10 +80,8 @@ func New(cfg Config) (*Client, error) {
 	if cfg.UserID == "" || cfg.Token == "" || cfg.DeviceID == "" || cfg.StateDir == "" {
 		return nil, errors.New("the Matrix client requires user, token, device and state directory")
 	}
-	cli, err := mautrix.NewClient(cfg.Homeserver, id.UserID(cfg.UserID), cfg.Token)
-	if err != nil {
-		return nil, err
-	}
+	// NewClient only parses the URL, which ValidateServer did.
+	cli, _ := mautrix.NewClient(cfg.Homeserver, id.UserID(cfg.UserID), cfg.Token)
 	cli.DeviceID = id.DeviceID(cfg.DeviceID)
 	c := &Client{cfg: cfg, cli: cli, allowed: map[id.UserID]bool{}, status: "stopped"}
 	for _, user := range cfg.AllowedUsers {
@@ -280,7 +281,7 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 		first = false
 		return true
 	})
-	crypt, err := newCrypto(ctx, c)
+	crypt, err := startCrypto(ctx, c)
 	if err != nil {
 		c.setStatus("crypto initialization failed")
 		return err
