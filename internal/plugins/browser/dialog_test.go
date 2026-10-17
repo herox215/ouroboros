@@ -148,11 +148,12 @@ func TestConsoleLine(t *testing.T) {
 			`{"type":"boolean","value":true},{"type":"function","description":"function f() {}"},{"type":"symbol"}]}`: `[warning] a undefined null true function f() {} symbol`,
 		`Runtime.consoleAPICalled {"type":"log","args":[{"type":"object","preview":{"properties":[{"name":"a","type":"number","value":"1"},{"name":"b","type":"string","value":"x"}],"overflow":true}},` +
 			`{"type":"object","subtype":"array","preview":{"subtype":"array","properties":[{"name":"0","type":"string","value":"y"},{"name":"1","type":"number","value":"2"}]}}]}`: `[log] {a: 1, b: "x", …} ["y", 2]`,
-		`Runtime.exceptionThrown {"exceptionDetails":{"text":"Uncaught SyntaxError"}}`:                                              "[exception] Uncaught SyntaxError",
-		`Log.entryAdded {"entry":{"level":"verbose","text":"noise"}}`:                                                               "",
-		`Log.entryAdded {"entry":{"level":"warning","text":"deprecated"}}`:                                                          "[warning] deprecated",
-		`Runtime.executionContextCreated {"context":{}}`:                                                                            "",
-		`Runtime.consoleAPICalled {"type":"log","args":[{"type":"string","value":"x` + strings.Repeat("ä", maxConsoleLine) + `"}]}`: "[log] x" + strings.Repeat("ä", (maxConsoleLine-8)/2) + "…",
+		`Runtime.exceptionThrown {"exceptionDetails":{"text":"Uncaught SyntaxError"}}`:                                               "[exception] Uncaught SyntaxError",
+		`Log.entryAdded {"entry":{"level":"verbose","text":"noise"}}`:                                                                "",
+		`Log.entryAdded {"entry":{"level":"warning","text":"deprecated"}}`:                                                           "[warning] deprecated",
+		`Runtime.executionContextCreated {"context":{}}`:                                                                             "",
+		`Runtime.consoleAPICalled {"type":"log","args":[{"type":"string","value":"x` + strings.Repeat("ä", maxConsoleLine) + `"}]}`:  "[log] x" + strings.Repeat("ä", (maxConsoleLine-8)/2) + "…",
+		`Runtime.consoleAPICalled {"type":"log","args":[{"type":"string","value":"` + strings.Repeat("x", maxConsoleLine-6) + `"}]}`: "[log] " + strings.Repeat("x", maxConsoleLine-6),
 	} {
 		method, params, _ := strings.Cut(event, " ")
 		if got := consoleLine(method, json.RawMessage(params)); got != want {

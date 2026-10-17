@@ -142,3 +142,26 @@ func (failing) Close() error              { return nil }
 type blocking struct{}
 
 func (blocking) Read([]byte) (int, error) { select {} }
+
+// A command whose context ends while it is written ends with its context,
+// and nobody waits for its reply.
+func TestConnWriteEndsWithItsContext(t *testing.T) {
+	c, _, _ := pipe(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.write = func(context.Context, []byte) error {
+		cancel()
+		return errors.New("use of closed network connection")
+	}
+	if err := c.call(ctx, "", "Browser.getVersion", nil, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled: %v", err)
+	}
+	c.write = func(context.Context, []byte) error { return errors.New("use of closed network connection") }
+	if err := c.call(context.Background(), "", "Browser.getVersion", nil, nil); !errors.Is(err, errClosed) {
+		t.Fatalf("broken: %v", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.pending) != 0 {
+		t.Fatalf("pending %v", c.pending)
+	}
+}

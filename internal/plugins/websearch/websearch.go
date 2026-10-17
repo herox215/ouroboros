@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"ouroboros/internal/assistant"
@@ -36,7 +35,9 @@ type args struct {
 // Plugin contributes the search tool and its view in the terminal UI.
 func Plugin() plugin.Plugin {
 	return plugin.New("websearch", func(ctx *plugin.Context, _ struct{}) error {
-		s := &search{client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, endpoint: endpoint}
+		// configure gives every configuration a client of its own, with a
+		// timeout and without redirects.
+		s := &search{endpoint: endpoint}
 		plugin.Add(ctx, s.tool())
 		plugin.Add(ctx, plugin.ToolView{Tool: Tool, Show: Show, Detail: assistant.HowItEnded})
 		return nil
@@ -138,15 +139,12 @@ func (s *search) exa(ctx context.Context, a args) (string, error) {
 	if a.MaxBytes != nil {
 		contextLimit = min(contextLimit, *a.MaxBytes)
 	}
-	body, err := json.Marshal(map[string]any{
+	body, _ := json.Marshal(map[string]any{ // texts and numbers: cannot fail
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{"name": "web_search_exa", "arguments": map[string]any{
 			"query": a.Query, "numResults": a.Limit, "type": "auto", "contextMaxCharacters": contextLimit,
 		}},
 	})
-	if err != nil {
-		return "", err
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err

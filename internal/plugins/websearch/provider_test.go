@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -32,9 +33,15 @@ func TestProviderSettings(t *testing.T) {
 	for _, endpoint := range []string{
 		"/search", "ftp://host/search", "https:///search", "https://user:secret@host/search",
 		"https://host/search#fragment", "https://host:99999/search", "https://host:abc/search", ":bad",
+		"https://host:0/search", "https://host:65536/search",
 	} {
 		if _, err := s.configure(settings{Provider: "searxng", Endpoint: endpoint}); err == nil {
 			t.Errorf("accepted endpoint %q", endpoint)
+		}
+	}
+	for _, endpoint := range []string{"https://host:1/search", "https://host:65535/search", "http://host/search"} {
+		if _, err := s.configure(settings{Provider: "searxng", Endpoint: endpoint}); err != nil {
+			t.Errorf("refused endpoint %q: %v", endpoint, err)
 		}
 	}
 	cfg, _ := json.Marshal(settings{Provider: "searxng", Endpoint: "http://localhost:8888/search"})
@@ -154,5 +161,106 @@ func TestPrivateSearchRejectsRedirect(t *testing.T) {
 	}
 	if _, err := s.run(context.Background(), args{Query: "private"}); err == nil || !strings.Contains(err.Error(), "HTTP 302") {
 		t.Fatalf("redirect: %v", err)
+	}
+}
+
+// What breaks before the answer of SearXNG is read is an error, and never a
+// public fallback.
+func TestSearXNGRequestFailures(t *testing.T) {
+	forbidFallback(t)
+	// Settings are checked when they are configured: one that is not reaches
+	// no request.
+	s := &search{client: http.DefaultClient, provider: "searxng", endpoint: "ftp://searx.test/search", private: true}
+	if _, err := s.run(context.Background(), args{Query: "private"}); err == nil || !strings.Contains(err.Error(), "endpoint must be an absolute HTTP(S) URL") {
+		t.Fatalf("an endpoint that is not checked: %v", err)
+	}
+	// The zone of an IPv6 address is taken as it is written, but not once it
+	// is written again with the query.
+	s, err := (&search{client: http.DefaultClient}).configure(settings{Provider: "searxng", Endpoint: "http://[fe80::1%25ä]/search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.run(context.Background(), args{Query: "private"}); err == nil || !strings.Contains(err.Error(), `invalid URL escape "%C3"`) {
+		t.Fatalf("an endpoint that cannot be written again: %v", err)
+	}
+	s, err = (&search{client: breaking()}).configure(settings{Provider: "searxng", Endpoint: "http://searx.test/search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.run(context.Background(), args{Query: "private"}); err == nil || err.Error() != "reading SearXNG search: connection reset" {
+		t.Fatalf("an answer that breaks off: %v", err)
+	}
+}
+
+// Every configuration has a client of its own, which follows no redirect,
+// with the timeout of the client it was made from, or else 30 seconds.
+func TestProviderClient(t *testing.T) {
+	for _, tc := range []struct {
+		from *http.Client
+		want time.Duration
+	}{
+		{nil, 30 * time.Second},
+		{&http.Client{}, 30 * time.Second},
+		{&http.Client{Timeout: 5 * time.Second}, 5 * time.Second},
+	} {
+		configured, err := (&search{client: tc.from}).configure(settings{})
+		if err != nil || configured.client == tc.from || configured.client.Timeout != tc.want || configured.client.CheckRedirect == nil {
+			t.Fatalf("from %+v: %+v, %v", tc.from, configured, err)
+		}
+		if tc.from != nil && (tc.from.CheckRedirect != nil || tc.from.Timeout == 30*time.Second) {
+			t.Fatal("configuration changed the client it was made from")
+		}
+	}
+}
+
+// Of the results of SearXNG only those with an HTTP(S) URL of a host and
+// without credentials are taken.
+func TestSearXNGTakesOnlyWebResults(t *testing.T) {
+	forbidFallback(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"results": []hitJSON{
+			{"Unparsable", "http://[::1", ""},
+			{"FTP", "ftp://example.com/file", ""},
+			{"No host", "https:///path", ""},
+			{"Credentials", "https://user:pw@example.com/", ""},
+			{"Plain", "http://example.com/plain", "plain"},
+			{"Secure", "https://example.com/secure", ""},
+		}})
+	}))
+	defer server.Close()
+	s, err := (&search{client: server.Client()}).configure(settings{Provider: "searxng", Endpoint: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.run(context.Background(), args{Query: "web"})
+	want := hitsText([]hit{{Title: "Plain", URL: "http://example.com/plain", Excerpt: "plain"}, {Title: "Secure", URL: "https://example.com/secure"}})
+	if err != nil || out != want {
+		t.Fatalf("got %q, %v; want %q", out, err, want)
+	}
+}
+
+// An answer of exactly 1 MiB is read, from Exa as from SearXNG.
+func TestSearchReadsAnAnswerOf1MiB(t *testing.T) {
+	forbidFallback(t)
+	for _, provider := range []string{"exa", "searxng"} {
+		t.Run(provider, func(t *testing.T) {
+			head, tail := `{"result":{"content":[{"type":"text","text":"`, `"}]}}`
+			if provider == "searxng" {
+				head, tail = `{"results":[{"title":"Large","url":"https://example.com/large","content":"`, `"}]}`
+			}
+			body := head + strings.Repeat("x", maxResponse-len(head)-len(tail)) + tail
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(body))
+			}))
+			defer server.Close()
+			s, err := (&search{client: server.Client()}).configure(settings{Provider: provider, Endpoint: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := s.run(context.Background(), args{Query: "large"})
+			if err != nil || len(out) != maxOutput || !strings.HasSuffix(out, "for more]") {
+				t.Fatalf("%d bytes, %v", len(out), err)
+			}
+		})
 	}
 }

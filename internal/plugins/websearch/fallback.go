@@ -125,12 +125,10 @@ func page(c *http.Client, req *http.Request) (string, error) {
 // cookie from there with it.
 func duckDuckGo(ctx context.Context, c *http.Client, query string, limit int) ([]hit, error) {
 	if c.Jar == nil {
-		jar, err := cookiejar.New(nil)
-		if err != nil {
-			return nil, err
-		}
-		clone := *c // the client of the node stays as it is, and its limits hold
-		clone.Jar = jar
+		// The client of the node stays as it is, and its limits hold. A jar
+		// without options cannot fail.
+		clone := *c
+		clone.Jar, _ = cookiejar.New(nil)
 		c = &clone
 	}
 	home, err := http.NewRequestWithContext(ctx, http.MethodGet, duckDuckGoHome, nil)

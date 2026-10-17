@@ -14,6 +14,10 @@ import (
 
 func TestBoundedTo(t *testing.T) {
 	const note = "\n[search output truncated; open the source URLs with browser for more]"
+	// Text that is no UTF-8 is cut at its start, never before it.
+	if out := boundedTo(strings.Repeat("\x80", 300), minOutput); out != note {
+		t.Fatalf("no UTF-8: %q", out)
+	}
 	for _, budget := range []int{minOutput, 257, maxOutput} {
 		for _, text := range []string{"short", strings.Repeat("x", budget), strings.Repeat("x", budget+1), strings.Repeat("界🙂ä", budget)} {
 			out := boundedTo(text, budget)

@@ -7,7 +7,7 @@ import (
 )
 
 func TestBrowserTokenEnv(t *testing.T) {
-	for _, env := range []string{"", "A", "_", "aZ_09", "BROWSER_TOKEN"} {
+	for _, env := range []string{"", "A", "_", "aZ_09", "z", "BROWSER_TOKEN"} {
 		if err := validTokenEnv(env); err != nil {
 			t.Errorf("validTokenEnv(%q): %v", env, err)
 		}

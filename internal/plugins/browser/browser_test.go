@@ -591,3 +591,156 @@ func current(b *browser) *tab {
 	c := b.convs["/"]
 	return c.tabs[c.current]
 }
+
+// A call with settings that are not valid, or whose context ended, starts no
+// browser.
+func TestRunRefusesBeforeTheBrowser(t *testing.T) {
+	f := newFake(t)
+	b := newBrowser(f)
+	_, err := backendCall(context.Background(), b, settings{Provider: "chrome"}, `{"action":"read"}`)
+	fails(t, "provider", err, `unknown browser provider "chrome"`)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = backendCall(ctx, b, settings{}, `{"action":"read"}`)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled: %v", err)
+	}
+	if len(f.started) != 0 {
+		t.Fatal("started a browser")
+	}
+}
+
+// A call waits for the call of its conversation that runs, as long as its
+// context lasts.
+func TestConversationWaitsForItsCall(t *testing.T) {
+	b := newBrowser(newFake(t))
+	c, _, err := b.conversation(context.Background(), "/", false, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := b.conversation(ctx, "/", false, false, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled: %v", err)
+	}
+	if c.mu.TryLock() {
+		t.Fatal("the call that gave up released the conversation of another")
+	}
+}
+
+// A tab reads no page with a budget out of range.
+func TestTabReadChecksItsBudget(t *testing.T) {
+	if _, err := (&tab{}).read(context.Background(), 0, 3); err == nil || err.Error() != "max_bytes must be between 4 and 24576" {
+		t.Fatal(err)
+	}
+}
+
+// The times of the tool and of its browsers, which the tests shorten.
+func TestTimesStay(t *testing.T) {
+	if idle != 10*time.Minute || grace != 500*time.Millisecond || loadTimeout != 20*time.Second ||
+		startTimeout != 20*time.Second || closeTimeout != 3*time.Second || requestTimeout != 45*time.Second {
+		t.Fatal(idle, grace, loadTimeout, startTimeout, closeTimeout, requestTimeout)
+	}
+}
+
+// Closing a tab touches only the browser that has it: it brings no tab of a
+// browser without a window to the front and disposes of no context of the
+// owner; a tab of a browser that has ended is not closed in the next one,
+// nor in none.
+func TestCloseTouchesOnlyTheBrowserOfTheTab(t *testing.T) {
+	f := newFake(t)
+	b := newBrowser(f)
+	ctx := context.Background()
+	open := func() {
+		t.Helper()
+		for _, a := range []string{`{"action": "open", "url": "example.com"}`, `{"action": "open", "url": "example.com", "new_tab": true}`} {
+			if _, err := call(ctx, b, settings{}, a); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	open()
+	got, err := call(ctx, b, settings{}, `{"action": "close"}`)
+	is(t, "close", got, err, "closed the tab; tab 1 of 1 is the current one, at https://example.com/")
+	got, err = call(ctx, b, settings{}, `{"action": "close"}`)
+	is(t, "close the last", got, err, "closed the tab")
+	if slices.Contains(f.got(), "Target.activateTarget") || slices.Contains(f.got(), "Target.disposeBrowserContext") {
+		t.Fatalf("sent %v", f.got())
+	}
+
+	open()
+	b.proc.end()
+	got, err = call(ctx, b, settings{}, `{"action": "tabs"}`)
+	is(t, "tabs of a browser that ended", got, err, "[1] https://example.com/\n[2] https://example.com/ (current)")
+	closed := strings.Count(strings.Join(f.got(), " "), "Target.closeTarget")
+	got, err = call(ctx, b, settings{}, `{"action": "close"}`)
+	is(t, "close in the next browser", got, err, "closed the tab; tab 1 of 1 is the current one, at https://example.com/")
+	if strings.Count(strings.Join(f.got(), " "), "Target.closeTarget") != closed {
+		t.Fatal("closed the target of an ended browser in the next one")
+	}
+
+	// The browser ended as it was not used.
+	b.mu.Lock()
+	b.proc.end()
+	b.proc = nil
+	b.mu.Unlock()
+	got, err = call(ctx, b, settings{}, `{"action": "close"}`)
+	is(t, "close without a browser", got, err, "closed the tab")
+}
+
+// Back goes nowhere from a history whose current entry is not in it.
+func TestBackOfABrokenHistory(t *testing.T) {
+	f := newFake(t)
+	b := newBrowser(f)
+	ctx := context.Background()
+	if _, err := call(ctx, b, settings{}, `{"action": "open", "url": "example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.on("Page.getNavigationHistory", func(json.RawMessage) (any, error) {
+		return map[string]any{"currentIndex": 3, "entries": []map[string]int{{"id": 1}, {"id": 2}, {"id": 3}}}, nil
+	})
+	_, err := call(ctx, b, settings{}, `{"action": "back"}`)
+	fails(t, "back", err, "there is no page before this one")
+	if slices.Contains(f.got(), "Page.navigateToHistoryEntry") {
+		t.Fatal("went back")
+	}
+}
+
+// Of the console as many of the last lines are returned as fit in maxPage
+// bytes, each with its line break.
+func TestConsoleFitsTheLastLines(t *testing.T) {
+	c, _, _ := pipe(t)
+	c.listen("S")
+	page := &tab{proc: &process{conn: c}, session: "S"}
+	full := slices.Repeat([]string{strings.Repeat("x", maxPage/24-1)}, 24)
+	for _, tc := range []struct {
+		lines []string
+		left  string
+	}{
+		{full, ""},
+		{append([]string{"a"}, full...), "[1 lines before these were left out]\n"},
+	} {
+		c.mu.Lock()
+		c.sessions["S"].console = tc.lines
+		c.mu.Unlock()
+		if got := page.console(); got != tc.left+strings.Join(full, "\n") {
+			t.Errorf("%d lines: %.80q", len(tc.lines), got)
+		}
+	}
+}
+
+// Of the events of a tab, only its own start of a load makes an action wait
+// for it.
+func TestSettleWaitsOnlyForALoad(t *testing.T) {
+	old := loadTimeout
+	loadTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { loadTimeout = old })
+	events := make(chan event, 4)
+	page := &tab{target: "T", events: events}
+	events <- event{"Page.frameStoppedLoading", json.RawMessage(`{"frameId":"T"}`)}
+	events <- event{"Page.frameNavigated", json.RawMessage(`{"frameId":"T"}`)}
+	if page.settle(context.Background(), 10*time.Millisecond) {
+		t.Fatal("waited for a load that did not start")
+	}
+}
