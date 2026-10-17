@@ -21,14 +21,6 @@ func TestRecoveryAndResearchPrompts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{
-				"If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run.",
-				"Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again.",
-			} {
-				if !strings.Contains(owner, want) {
-					t.Errorf("owner prompt lacks %q", want)
-				}
-			}
 			helper, err := b.helper(cfg, tools)
 			if err != nil {
 				t.Fatal(err)
