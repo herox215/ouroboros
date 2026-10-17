@@ -36,10 +36,19 @@ type mockMatrix struct {
 	// failQuery makes the homeserver fail to tell the devices of users.
 	failQuery bool
 	sync      func(http.ResponseWriter, *http.Request)
+	// The cross-signing keys of each user, how often they and signatures were
+	// uploaded, and the account data of each user.
+	crossSigning map[id.UserID]mautrix.UploadCrossSigningKeysReq[any]
+	uploads      int
+	signatures   int
+	accountData  map[id.UserID]map[string]json.RawMessage
+	// refuse, when set, makes the homeserver fail the requests it reports.
+	refuse func(*http.Request) bool
 }
 
 func newMock(t *testing.T) *mockMatrix {
-	m := &mockMatrix{t: t, keys: map[id.UserID]map[id.DeviceID]mautrix.DeviceKeys{}, otks: map[id.UserID]map[id.DeviceID]map[id.KeyID]mautrix.OneTimeKey{}, inbox: map[id.UserID][]*event.Event{}}
+	m := &mockMatrix{t: t, keys: map[id.UserID]map[id.DeviceID]mautrix.DeviceKeys{}, otks: map[id.UserID]map[id.DeviceID]map[id.KeyID]mautrix.OneTimeKey{}, inbox: map[id.UserID][]*event.Event{},
+		crossSigning: map[id.UserID]mautrix.UploadCrossSigningKeysReq[any]{}, accountData: map[id.UserID]map[string]json.RawMessage{}}
 	m.server = httptest.NewServer(http.HandlerFunc(m.serve))
 	t.Cleanup(m.server.Close)
 	return m
@@ -59,6 +68,9 @@ func (m *mockMatrix) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch {
+	case m.refuse != nil && m.refuse(r):
+		w.WriteHeader(http.StatusInternalServerError)
+		encode(map[string]string{"errcode": "M_UNKNOWN", "error": "refused"})
 	case strings.HasSuffix(r.URL.Path, "/keys/upload"):
 		var req mautrix.ReqUploadKeys
 		json.NewDecoder(r.Body).Decode(&req)
@@ -89,10 +101,56 @@ func (m *mockMatrix) serve(w http.ResponseWriter, r *http.Request) {
 		var req mautrix.ReqQueryKeys
 		json.NewDecoder(r.Body).Decode(&req)
 		out := map[id.UserID]map[id.DeviceID]mautrix.DeviceKeys{}
+		master := map[id.UserID]mautrix.CrossSigningKeys{}
+		self := map[id.UserID]mautrix.CrossSigningKeys{}
 		for u := range req.DeviceKeys {
 			out[u] = m.keys[u]
+			if keys, ok := m.crossSigning[u]; ok {
+				master[u], self[u] = keys.Master, keys.SelfSigning
+			}
 		}
-		encode(map[string]any{"device_keys": out})
+		encode(map[string]any{"device_keys": out, "master_keys": master, "self_signing_keys": self})
+	case strings.HasSuffix(r.URL.Path, "/keys/device_signing/upload"):
+		var req mautrix.UploadCrossSigningKeysReq[any]
+		json.NewDecoder(r.Body).Decode(&req)
+		m.crossSigning[user] = req
+		m.uploads++
+		encode(map[string]any{})
+	case strings.HasSuffix(r.URL.Path, "/keys/signatures/upload"):
+		// A signature is added to the device or the master key it names.
+		var req mautrix.ReqUploadSignatures
+		json.NewDecoder(r.Body).Decode(&req)
+		m.signatures++
+		for u, signed := range req {
+			for name, sig := range signed {
+				if device, ok := m.keys[u][id.DeviceID(name)]; ok {
+					device.Signatures = merged(device.Signatures, sig.Signatures)
+					m.keys[u][id.DeviceID(name)] = device
+				} else if keys := m.crossSigning[u]; keys.Master.FirstKey().String() == name {
+					keys.Master.Signatures = merged(keys.Master.Signatures, sig.Signatures)
+					m.crossSigning[u] = keys
+				} else {
+					m.t.Errorf("signature of unknown key %s of %s", name, u)
+				}
+			}
+		}
+		encode(map[string]any{"failures": map[string]any{}})
+	case strings.Contains(r.URL.Path, "/account_data/"):
+		name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		if r.Method == http.MethodPut {
+			if m.accountData[user] == nil {
+				m.accountData[user] = map[string]json.RawMessage{}
+			}
+			var data json.RawMessage
+			json.NewDecoder(r.Body).Decode(&data)
+			m.accountData[user][name] = data
+			encode(map[string]any{})
+		} else if data, ok := m.accountData[user][name]; ok {
+			w.Write(data)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+			encode(map[string]string{"errcode": "M_NOT_FOUND", "error": "no account data"})
+		}
 	case strings.HasSuffix(r.URL.Path, "/keys/claim"):
 		var req mautrix.ReqClaimKeys
 		json.NewDecoder(r.Body).Decode(&req)
@@ -146,6 +204,23 @@ func (m *mockMatrix) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unexpected", 404)
 	}
 }
+
+// merged is signatures with those of more added.
+func merged(signatures, more map[id.UserID]map[id.KeyID]string) map[id.UserID]map[id.KeyID]string {
+	if signatures == nil {
+		signatures = map[id.UserID]map[id.KeyID]string{}
+	}
+	for u, keys := range more {
+		if signatures[u] == nil {
+			signatures[u] = map[id.KeyID]string{}
+		}
+		for k, v := range keys {
+			signatures[u][k] = v
+		}
+	}
+	return signatures
+}
+
 func (m *mockMatrix) client(t *testing.T, user, device string) *Client {
 	t.Helper()
 	c, err := New(Config{Homeserver: m.server.URL, UserID: user, Token: user, DeviceID: device, StateDir: t.TempDir(), AllowedUsers: []string{"@alice:test", "@bot:test"}})

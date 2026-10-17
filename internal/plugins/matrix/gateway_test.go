@@ -159,6 +159,12 @@ func (m *matrixServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		m.typing = append(m.typing, body.Typing)
 		encode(map[string]any{})
+	case strings.HasSuffix(r.URL.Path, "/keys/device_signing/upload"), strings.Contains(r.URL.Path, "/account_data/"):
+		// The cross-signing keys of a client and its secret storage are taken
+		// and forgotten: each start gives the client new ones.
+		encode(map[string]any{})
+	case strings.HasSuffix(r.URL.Path, "/keys/signatures/upload"):
+		encode(map[string]any{"failures": map[string]any{}})
 	case strings.Contains(r.URL.Path, "/filter"):
 		encode(map[string]string{"filter_id": "fixture-filter"})
 	case strings.HasSuffix(r.URL.Path, "/whoami"):

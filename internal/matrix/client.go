@@ -72,15 +72,14 @@ type cryptography interface {
 var startCrypto = newCrypto
 
 type Client struct {
-	cfg          Config
-	cli          *mautrix.Client
-	allowed      map[id.UserID]bool
-	mu           sync.RWMutex
-	status       string
-	running      bool
-	crypto       cryptography
-	sendMu       sync.Mutex
-	verification *verificationState
+	cfg     Config
+	cli     *mautrix.Client
+	allowed map[id.UserID]bool
+	mu      sync.RWMutex
+	status  string
+	running bool
+	crypto  cryptography
+	sendMu  sync.Mutex
 }
 
 func New(cfg Config) (*Client, error) {
@@ -114,9 +113,6 @@ func (c *Client) Close() error {
 	if c.running {
 		return errors.New("cancel and wait for Matrix Run before Close")
 	}
-	c.mu.Unlock()
-	c.stopVerification()
-	c.mu.Lock()
 	if c.crypto != nil {
 		err := c.crypto.close()
 		c.crypto = nil
@@ -260,7 +256,7 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 	c.running = true
 	c.status = "starting"
 	c.mu.Unlock()
-	defer func() { c.stopVerification(); c.mu.Lock(); c.running = false; c.status = "stopped"; c.mu.Unlock() }()
+	defer func() { c.mu.Lock(); c.running = false; c.status = "stopped"; c.mu.Unlock() }()
 	who, err := c.cli.Whoami(ctx)
 	if err != nil || who.UserID != c.cli.UserID || who.DeviceID != c.cli.DeviceID {
 		return errors.New("the Matrix credentials do not match the configured user and device")
@@ -299,13 +295,17 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 		c.setStatus("crypto initialization failed")
 		return err
 	}
-	if initializer, ok := crypt.(interface {
-		initVerification(context.Context, *Client) error
+	status := "syncing"
+	if signer, ok := crypt.(interface {
+		crossSign(context.Context, *Client) error
 	}); ok {
-		if err := initializer.initVerification(ctx, c); err != nil {
-			crypt.close()
-			return err
+		// A device that is not cross-signed still works: the status tells the
+		// owner why the clients of the allowed users warn about it.
+		signCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		if err := signer.crossSign(signCtx, c); err != nil {
+			status = "syncing; " + err.Error()
 		}
+		cancel()
 	}
 	c.mu.Lock()
 	c.crypto = crypt
@@ -385,7 +385,7 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 		}
 		return true
 	})
-	c.setStatus("syncing")
+	c.setStatus(status)
 	return c.cli.SyncWithContext(ctx)
 }
 func (c *Client) handleInvite(ctx context.Context, room id.RoomID, state []*event.Event) {

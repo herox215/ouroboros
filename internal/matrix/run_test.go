@@ -552,3 +552,43 @@ func TestRunFailsWithoutEncryption(t *testing.T) {
 		t.Fatal("synced without encryption")
 	}
 }
+
+// signingCrypto is a fakeCrypto that cross-signs the device of the client,
+// or fails to with err.
+type signingCrypto struct {
+	fakeCrypto
+	err    error
+	bounds bool // whether the context of crossSign had a deadline
+}
+
+func (s *signingCrypto) crossSign(ctx context.Context, _ *Client) error {
+	_, s.bounds = ctx.Deadline()
+	return s.err
+}
+
+func TestRunTellsWhyTheDeviceIsNotCrossSigned(t *testing.T) {
+	live := time.Now().Add(time.Hour).UnixMilli()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"signed", nil, "syncing"},
+		{"not signed", errors.New("no keys for this device"), "syncing; no keys for this device"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			crypt := &signingCrypto{err: tc.err}
+			useCrypto(t, crypt, nil)
+			h := newHomeserver(t, joined(nil), joined(map[string][]map[string]any{"!dm:test": {encryptedEvent("$message", "@alice:test", live)}}))
+			c := testClient(t, h.server.URL)
+			var status string
+			delivered, err := runUntilIdle(t, h, c, func(context.Context, Message) { status = c.Status() })
+			if !errors.Is(err, context.Canceled) || len(delivered) != 1 {
+				t.Fatalf("Run: %v, delivered %v", err, delivered)
+			}
+			if status != tc.want || !crypt.bounds {
+				t.Fatalf("status %q, cross-signing bounded %v", status, crypt.bounds)
+			}
+		})
+	}
+}

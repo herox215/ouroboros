@@ -1,14 +1,13 @@
 // Profile is captured on open; changing the main profile picker cannot redirect a save.
-export function createSettingsDialog(bridge, modelDialog, doc = document, timers = globalThis) {
+export function createSettingsDialog(bridge, modelDialog, doc = document) {
   const dialog = doc.createElement('dialog');
   dialog.className = 'model-dialog';
   dialog.setAttribute('aria-label', 'Settings');
   doc.body.append(dialog);
   let profile = -1, name = '', version = 0, busy = false;
-  let secrets = [], pollTimer;
-  const stopPolling = () => { timers.clearTimeout(pollTimer); pollTimer = undefined; };
+  let secrets = [];
   const clearPassword = () => { for (const input of secrets) input.value = ''; };
-  dialog.addEventListener('close', () => { stopPolling(); clearPassword(); version++; });
+  dialog.addEventListener('close', () => { clearPassword(); version++; });
   dialog.addEventListener('cancel', event => { clearPassword(); if (busy) event.preventDefault(); });
   const el = (tag, text = '') => { const e = doc.createElement(tag); e.textContent = text; return e; };
   const button = (text, run) => {
@@ -16,7 +15,6 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, timers
     b.addEventListener('click', run); return b;
   };
   const page = title => {
-    stopPolling();
     version++;
     clearPassword(); secrets = [];
     dialog.replaceChildren(el('h2', title));
@@ -108,79 +106,6 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, timers
     };
     form.addEventListener('submit', event => { event.preventDefault(); submit(false); });
     dialog.append(form);
-    if (item.Verification) {
-      const current = version, selectedProfile = profile;
-      const active = () => current === version && dialog.open;
-      const panel = el('section'); panel.setAttribute('aria-label', 'Device verification');
-      const publicStatus = el('p'); publicStatus.setAttribute('role', 'status');
-      const device = el('p'), transaction = el('p'), emojis = el('p');
-      const hint = el('p', 'Compare every emoji with your other Matrix client. Confirm only if all emojis match.');
-      const actionStatus = el('p'); actionStatus.setAttribute('role', 'status');
-      let verification = item.Verification, pending = null, pendingAction = '', actionError = '', sending = false, refreshing = false;
-      const key = v => JSON.stringify([v.Stage, v.TransactionID]);
-      const render = () => {
-        const v = verification;
-        publicStatus.textContent = 'Verification: ' + (v.Stage || 'idle') + (v.Message ? ' · ' + v.Message : '');
-        device.textContent = 'Device: ' + (v.DeviceID || '—');
-        transaction.textContent = 'Transaction: ' + (v.TransactionID || '—');
-        emojis.textContent = (v.Emojis || []).join(' ');
-        const inProgress = ['requested', 'ready', 'comparing', 'confirmed'].includes(v.Stage);
-        start.disabled = busy || sending || !!pending || !['idle', 'done', 'cancelled', 'failed'].includes(v.Stage || 'idle');
-        confirm.hidden = v.Stage !== 'comparing';
-        confirm.disabled = busy || sending || !!pending || v.Stage !== 'comparing' || !v.TransactionID || v.Emojis?.length !== 7;
-        cancelVerification.disabled = busy || sending || (pending && pendingAction === 'cancel') || !inProgress || !v.TransactionID;
-      };
-      const refresh = async () => {
-        if (!active() || refreshing) return;
-        refreshing = true; refreshButton.disabled = true;
-        try {
-          const list = await bridge.Gateways(selectedProfile);
-          if (!active()) return;
-          const latest = list.find(g => g.Name === item.Name);
-          if (!latest?.Verification) throw new Error('Verification unavailable');
-          verification = latest.Verification;
-          status.textContent = (latest.LoggedIn ? 'Logged in' : 'Not logged in') + (latest.Status ? ' · ' + latest.Status : '');
-          if (pending && !sending && key(verification) !== pending) pending = null;
-          actionStatus.textContent = pending ? 'Verification action pending …' : actionError;
-          render();
-        } catch {
-          if (active()) actionStatus.textContent = 'Could not refresh verification status. Retrying …';
-        } finally {
-          refreshing = false; refreshButton.disabled = false;
-          if (active()) { stopPolling(); pollTimer = timers.setTimeout(refresh, 1500); }
-        }
-      };
-      const act = async action => {
-        if (!active() || busy || sending || (pending && (action !== 'cancel' || pendingAction === 'cancel'))) return;
-        const v = verification;
-        if (action === 'confirm' && (v.Stage !== 'comparing' || !v.TransactionID || v.Emojis?.length !== 7)) return;
-        if (action === 'cancel' && (!['requested', 'ready', 'comparing', 'confirmed'].includes(v.Stage) || !v.TransactionID)) return;
-        if (action === 'start' && !['idle', 'done', 'cancelled', 'failed'].includes(v.Stage || 'idle')) return;
-        // Send only an action, never the unsaved form or its credentials. The ID is
-        // from the currently displayed SAS, not a later, separately fetched state.
-        const change = { VerificationAction: action, VerificationTransactionID: action === 'start' ? '' : v.TransactionID || '' };
-        pending = key(v); pendingAction = action; actionError = ''; sending = true; busy = true;
-        save.disabled = logout.disabled = cancel.disabled = true;
-        actionStatus.textContent = 'Verification action pending …'; render();
-        try {
-          await bridge.SaveGateway(selectedProfile, item.Name, change);
-        } catch {
-          if (active()) { pending = null; actionError = 'Verification action failed. Refresh status before trying again.'; actionStatus.textContent = actionError; }
-        } finally {
-          sending = false; busy = false;
-          save.disabled = logout.disabled = cancel.disabled = false;
-          if (active()) { render(); refresh(); }
-        }
-      };
-      const start = button('Start verification', () => act('start'));
-      const confirm = button('Emojis match', () => act('confirm'));
-      const cancelVerification = button('Cancel verification', () => act('cancel'));
-      const refreshButton = button('Refresh verification status', refresh);
-      for (const node of [el('h3', 'Device verification'), publicStatus, device, transaction, emojis, hint,
-        start, confirm, cancelVerification, refreshButton, actionStatus]) panel.append(node);
-      form.append(panel);
-      render(); pollTimer = timers.setTimeout(refresh, 1500);
-    }
   };
   return { open(index, label = '') {
     if (dialog.open) return;

@@ -8,15 +8,15 @@
 // cancel and wait for Run to return, then Close. Callbacks run synchronously in
 // the sync loop and should hand long work to a bounded queue. Send may be called
 // concurrently but sends are serialized. Recreate the client to restart Run.
-// StartVerification initiates a SAS exchange with another device of the same
-// account. Show VerificationStatus's seven ordered emojis only to the local
-// owner, then call ConfirmVerification with that exact transaction ID only
-// after explicit comparison. Verification is not a room message command.
-// Active verification transactions expire and are never resumed after restart.
+// Run cross-signs the device before syncing, so that clients do not warn that
+// it is not verified by its owner; an account without cross-signing keys gets
+// new ones. If that fails, Run syncs anyway and Status tells why.
 //
 // StateDir contains private, identity-specific crypto directories keyed by the
 // homeserver, user and device. Do not copy or share an active device's directory.
 // A nonblocking process lock prevents concurrent use of one crypto identity.
+// Beside them, StateDir keeps the recovery key of the secret storage of each
+// account, which signs later devices of the account.
 //
 // Only direct, authenticated Megolm text and image events from exact allowlisted Matrix
 // IDs in encrypted rooms with exactly two joined members are delivered. Any

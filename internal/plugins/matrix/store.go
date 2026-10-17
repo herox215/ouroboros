@@ -85,9 +85,6 @@ func (s store) snapshot() (plugin.GatewaySettings, error) {
 			state.Status = st.Text
 		}
 	}
-	if verification, ok := s.readVerification(c); ok {
-		state.Verification = &verification.Verification
-	}
 	return state, nil
 }
 

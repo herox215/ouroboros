@@ -645,7 +645,7 @@ internal/credentials/credentials.go:30:22 ARITHMETIC_BASE  # a constant declarat
 internal/home/home.go:145:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestFiles and TestWorkspacesAndSecrets
 internal/home/home.go:150:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestWorkspacesAndSecrets
 internal/node/server.go:86:21 ARITHMETIC_BASE  # a package variable (headerTime): set before any test runs, gremlins never sees it covered; killed by TestRunClosesConnectionsThatSendNothing
-internal/plugins/matrix/controller.go:130:28 ARITHMETIC_BASE  # the expression of a case clause lies outside every coverage block; killed by TestControllerReportsAndRetriesAFailedConnection, which connects again at once instead of after 5 s
+internal/plugins/matrix/controller.go:133:28 ARITHMETIC_BASE  # the expression of a case clause lies outside every coverage block; killed by TestControllerReportsAndRetriesAFailedConnection, which connects again at once instead of after 5 s
 internal/plugins/matrix/conversations.go:103:12 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestConversationAuthorizationPersistenceAndPresentation
 internal/plugins/matrix/store.go:79:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestPluginLogsInOverTheHomeserver and TestSnapshotStatus
 internal/plugins/node/profiles.go:19:17 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestProfileCommand and TestProfileCommandReportsErrors

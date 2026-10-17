@@ -115,21 +115,20 @@ image is **not end-to-end encrypted**. No new login or sync loop is started.
 If owner tools are explicitly allowlisted, include `matrix_set_avatar` there;
 it cannot be granted to peers.
 
-### Verify the Matrix device
+### Cross-signing of the Matrix device
 
-In Settings → Gateways → Matrix, start device verification. Open an already
-trusted Matrix session of the **same bot account** and accept the verification
-request there. Compare all seven emojis on both sides; confirm only if they
-match. Cancel if the device or emojis are unexpected. Verification controls are
-local owner settings, never chat commands. They do not change the room allowlist.
+Matrix clients warn about messages from a device its own account has not
+signed (“not verified by its owner”). Each time the gateway connects, Ouro
+therefore makes the bot account vouch for its device; no verification by hand
+is needed. A bot account without cross-signing keys gets new ones. Their
+private parts go to the account's secret storage on the homeserver, and the
+recovery key that unlocks it stays in the protected gateway state next to the
+crypto directories. A later login of the same account signs its new device
+with them. Homeservers take the first keys of an account without a password.
 
-The bot account must already have a cross-signing identity and a trusted session
-capable of verifying its new device. If it does not, set that up in a full Matrix
-client first. This feature does not reset the account identity or import recovery
-keys. Device keys and signatures survive ordinary Ouro restarts; logging in
-again creates a new device that needs its own verification. A recipient may also
-need to verify the bot account identity in their Matrix client. In the terminal
-UI, use the verification row's Refresh action to update progress.
+If the account already has cross-signing keys whose recovery key Ouro does not
+have, for example set up in another client, Ouro leaves them alone and the
+gateway status says why clients still warn. The gateway works either way.
 
 Logout disables the gateway and forgets its locally stored access token.
 Device/room key state remains protected on disk; remove unwanted sessions also
