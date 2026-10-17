@@ -262,3 +262,81 @@ func TestOneProfileIsNotCounted(t *testing.T) {
 		}
 	}
 }
+
+// Beside a dialog, a line of wide letters stays as it is: the dialog lies
+// over it where it belongs, the chat goes on right of it up to its border,
+// and the window keeps its size.
+func TestDialogOverWideLetters(t *testing.T) {
+	m, _ := newModel(t)
+	for range 30 {
+		m.chat.add(entry{text: strings.Repeat("两个", 40)})
+	}
+	m.renderHistory(true)
+	run(m, "/effort")
+	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	if len(lines) != m.height {
+		t.Fatalf("the window is %d lines high, the view %d", m.height, len(lines))
+	}
+	w, _ := m.dialogSize()
+	x := (m.width - w) / 2
+	framed, beside := 0, 0
+	for i, l := range lines {
+		if ansi.StringWidth(l) > m.width {
+			t.Errorf("line %d is wider than the window: %q", i, l)
+		}
+		if strings.ContainsAny(ansi.Cut(l, 0, x), "两个") && ansi.Cut(l, x, x+1) == "│" && ansi.Cut(l, x+w-1, x+w) == "│" {
+			framed++
+			right := ansi.Cut(l, x+w, m.width)
+			if strings.ContainsAny(right, "两个") {
+				beside++
+			}
+			if !strings.HasSuffix(right, "│") {
+				t.Errorf("line %d lost the border of the chat: %q", i, l)
+			}
+		}
+	}
+	if beside == 0 {
+		t.Errorf("the chat right of the dialog is lost:\n%s", strings.Join(lines, "\n"))
+	}
+	if framed == 0 {
+		t.Fatalf("the dialog should lie over the wide letters:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// What a dialog covers of the chat is blank behind it, and only that: the
+// chat shows neither through it nor not around it.
+func TestDialogCoversTheChat(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 60})
+	m.chat.add(entry{text: strings.Repeat("% ", 2000)})
+	m.renderHistory(true)
+	run(m, "/effort")
+	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	w, _ := m.dialogSize()
+	x := (m.width - w) / 2
+	top, bottom := -1, -1
+	for i, l := range lines {
+		switch ansi.Cut(l, x, x+1) {
+		case "╭":
+			top = i
+		case "╰":
+			bottom = i
+		}
+	}
+	if top < 0 || bottom <= top || bottom+1 >= len(lines) {
+		t.Fatalf("the dialog from %d to %d:\n%s", top, bottom, strings.Join(lines, "\n"))
+	}
+	for i := top; i <= bottom; i++ {
+		if strings.Contains(ansi.Cut(lines[i], x, x+w), "%") {
+			t.Errorf("the chat shows through line %d of the dialog: %q", i, lines[i])
+		}
+		if !strings.Contains(ansi.Cut(lines[i], 0, x), "%") || !strings.Contains(ansi.Cut(lines[i], x+w, m.width), "%") {
+			t.Errorf("the chat is blank beside line %d of the dialog: %q", i, lines[i])
+		}
+	}
+	for _, i := range []int{top - 1, bottom + 1} {
+		if !strings.Contains(ansi.Cut(lines[i], x, x+w), "%") {
+			t.Errorf("the chat is blank at line %d, above or below the dialog: %q", i, lines[i])
+		}
+	}
+}

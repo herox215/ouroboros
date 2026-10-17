@@ -743,10 +743,24 @@ func TestSessionsFilter(t *testing.T) {
 	if lines := sessionLines(m); len(lines) != 3 || !strings.Contains(view(m), "3 sessions") {
 		t.Fatalf("emptied %q", lines)
 	}
-	press(m, "c", "a", "c", "h", "enter")
+	// A key that is no letter changes nothing.
+	press(m, "c", "a")
+	if cmd := press(m, "left"); cmd != nil || m.sessions.filter != "ca" {
+		t.Fatalf("left: %q", m.sessions.filter)
+	}
+	press(m, "c", "h", "enter")
 	if m.screen != screenChat || m.chat.title != "the cache of the prompt" {
 		t.Fatalf("screen %v, shown %q", m.screen, m.chat.title)
 	}
+	// What is pasted filters the list by its first line.
+	m.Update(ctrlS)
+	if _, cmd := m.Update(tea.PasteMsg{Content: "mesh\nand more"}); cmd != nil || m.sessions.filter != "mesh" {
+		t.Fatalf("pasted: %q", m.sessions.filter)
+	}
+	if lines := sessionLines(m); len(lines) != 1 || !strings.HasPrefix(lines[0], "▸ beta and the mesh") {
+		t.Fatalf("filtered by what was pasted %q", lines)
+	}
+	press(m, "esc", "esc")
 	// Nothing matches: the dialog says so and stays open.
 	m.Update(ctrlS)
 	press(m, "z", "z", "z")
@@ -758,6 +772,21 @@ func TestSessionsFilter(t *testing.T) {
 	}
 	if press(m, "esc"); m.screen != screenChat {
 		t.Fatal("and then goes back to the chat")
+	}
+}
+
+// A space is typed into the filter like a letter: the words of a title are
+// found as they stand there.
+func TestSessionsFilterTakesASpace(t *testing.T) {
+	m, _ := newModel(t)
+	for _, title := range []string{"the cache of the prompt", "beta and the mesh"} {
+		c := m.conversation("id-" + title)
+		c.title, c.last = title, time.Now()
+	}
+	m.Update(ctrlS)
+	press(m, "t", "h", "e", " ", "m")
+	if lines := sessionLines(m); m.sessions.filter != "the m" || len(lines) != 1 || !strings.HasPrefix(lines[0], "▸ beta and the mesh") {
+		t.Fatalf("filter %q: %q", m.sessions.filter, lines)
 	}
 }
 
@@ -774,10 +803,23 @@ func TestSessionsFilterSearchesTheContent(t *testing.T) {
 	if lines := sessionLines(m); len(lines) != 0 { // no title holds it, not even that of the chat
 		t.Fatalf("before the node answers: %q", lines)
 	}
+	// What was found for another filter, and a search that failed, are
+	// dropped.
+	m.Update(findMsg{query: "qq", ids: []string{"said"}})
+	m.Update(findMsg{query: "qqq", err: errors.New("the archive cannot be read")})
+	if lines := sessionLines(m); len(lines) != 0 || m.sessions.hits != nil {
+		t.Fatalf("with what was found for something else: %q", lines)
+	}
 	m.Update(cmd()) // what the node found for what is typed
 	if lines := sessionLines(m); len(lines) != 1 || !strings.Contains(lines[0], "the mesh of the peers") {
 		t.Fatalf("with the hits of the node: %q", lines)
 	}
+	// What was looked for already is not asked for again: a space after it
+	// looks for the same.
+	if cmd := press(m, " "); cmd != nil || m.sessions.filter != "qqq " || m.sessions.hitsFor != "qqq" {
+		t.Fatalf("a space after it: %q", m.sessions.filter)
+	}
+	press(m, "backspace")
 	press(m, "esc") // the filter is taken back, and with it what was found for it
 	if m.sessions.hits != nil || m.sessions.hitsFor != "" || len(sessionLines(m)) != 2 {
 		t.Fatalf("emptied: %v, %q", m.sessions.hits, sessionLines(m))
@@ -882,6 +924,10 @@ func TestNewWordIsThreadedIn(t *testing.T) {
 	if w := ansi.StringWidth(threadIn("两个", 0)); w != 4 {
 		t.Fatalf("noise of a wide word takes %d cells, not 4", w)
 	}
+	// After a space no word is on its way: all of it stands.
+	if got := threadIn("one two ", 0); got != "one two " {
+		t.Fatalf("after a space: %q", got)
+	}
 }
 
 // The answer grows in the chat as its pieces come, and a round that ends
@@ -910,5 +956,204 @@ func TestAnswerGrowsAsItIsWritten(t *testing.T) {
 	m.renderHistory(true)
 	if shown := ansi.Strip(m.history.GetContent()); !strings.Contains(shown, "the end") || strings.Contains(shown, "it was a dark") {
 		t.Fatalf("the chat after the answer:\n%s", shown)
+	}
+}
+
+// What the model thought goes with the round of the loop it thought in, which
+// gets an entry for it if it said nothing yet. The chat shows the last lines
+// of it, faint, below a head that says what they are; ctrl+t hides them, and
+// shows them again.
+func TestThoughtsGoWithTheirRound(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "think"}, true)
+	m.apply(c, Event{Kind: plugin.SessionThought, Text: "first "}, true)
+	m.apply(c, Event{Kind: plugin.SessionThought, Text: "idea"}, true)
+	if len(c.entries) != 2 || c.entries[1].thought != "first idea" || c.entries[1].text != "" {
+		t.Fatalf("the first round: %+v", c.entries)
+	}
+	m.apply(c, Event{Kind: plugin.SessionSay, Text: "let me look"}, true)
+	m.apply(c, Event{Kind: plugin.SessionThought, Text: "second thought"}, true)
+	if len(c.entries) != 3 || c.entries[2].thought != "second thought" || c.entries[2].text != "let me look" || c.entries[1].thought != "first idea" {
+		t.Fatalf("the second round: %+v", c.entries)
+	}
+	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "done"}, true)
+	m.renderHistory(true)
+	shown := ansi.Strip(m.history.GetContent())
+	if strings.Count(shown, "· thought") != 2 || !strings.Contains(shown, "first idea") || !strings.Contains(shown, "second thought") ||
+		strings.Index(shown, "second thought") > strings.Index(shown, "let me look") {
+		t.Fatalf("the thoughts:\n%s", shown)
+	}
+	ctrlT := tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
+	m.Update(ctrlT)
+	if shown := ansi.Strip(m.history.GetContent()); !m.thoughtsHidden || strings.Contains(shown, "thought") || !strings.Contains(shown, "let me look") || !strings.Contains(shown, "done") {
+		t.Fatalf("hidden:\n%s", shown)
+	}
+	m.Update(ctrlT)
+	if shown := ansi.Strip(m.history.GetContent()); m.thoughtsHidden || strings.Count(shown, "· thought") != 2 {
+		t.Fatalf("shown again:\n%s", shown)
+	}
+}
+
+// Of a long thought the chat shows its last lines, as one paragraph.
+func TestThoughtBlockShowsTheLastLines(t *testing.T) {
+	block := strings.Split(ansi.Strip(thoughtBlock(strings.Repeat("early words ", 40)+"\n\n  the  late   end", 40)), "\n")
+	if len(block) != maxThought+1 || block[0] != "· thought" || !strings.HasSuffix(block[len(block)-1], "the late end") {
+		t.Fatalf("the block: %q", block)
+	}
+	for _, l := range block[1:] {
+		if !strings.HasPrefix(l, "  ") || ansi.StringWidth(l) > 40-4+2 {
+			t.Errorf("a line of it: %q", l)
+		}
+	}
+	if block := strings.Split(ansi.Strip(thoughtBlock("short", 10)), "\n"); len(block) != 2 || block[1] != "  short" {
+		t.Errorf("a short one in a narrow chat: %q", block)
+	}
+}
+
+// While the answer is written, every frame draws the chat anew and follows
+// its end, unless the owner scrolled away from it; once the answer is over,
+// the frames stop.
+func TestAnswerFramesFollowTheEnd(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 40)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "tell me"}, true)
+	tick := m.apply(c, Event{Kind: plugin.SessionAnswering, Text: "it was"}, true)
+	if tick == nil || !m.streaming {
+		t.Fatal("the first piece of the answer should start the frames")
+	}
+	start := time.Now()
+	if _, ok := tick().(answerMsg); !ok || time.Since(start) < 40*time.Millisecond || time.Since(start) > 5*time.Second {
+		t.Fatalf("a frame of the answer, after %v: it comes 20 times a second", time.Since(start))
+	}
+	if m.apply(c, Event{Kind: plugin.SessionAnswering, Text: " a dark"}, true) != nil {
+		t.Fatal("the frames are started once")
+	}
+	_, next := m.Update(answerMsg{})
+	if batch, ok := next().(tea.BatchMsg); !ok || len(batch) != 2 || m.glide == nil || m.glide.target != topLine(&m.history) {
+		t.Fatalf("following the end: %T, %+v", next(), m.glide)
+	}
+	if !strings.Contains(ansi.Strip(m.history.GetContent()), "it was") {
+		t.Fatalf("the chat with the answer:\n%s", ansi.Strip(m.history.GetContent()))
+	}
+	// Scrolled away from the end, it stays where it is.
+	m.stopGlide(&m.history)
+	m.history.SetYOffset(0)
+	if _, next := m.Update(answerMsg{}); next == nil || m.glide != nil || m.history.YOffset() != 0 || !m.streaming {
+		t.Fatalf("scrolled away: %+v at %d", m.glide, m.history.YOffset())
+	}
+	// A frame stops the clock when the chat is not on it, when the answer
+	// wrote nothing since its last round, and when it is over.
+	for _, tt := range []struct {
+		streaming, pending bool
+		partial            string
+	}{
+		{false, true, "it was"},
+		{true, true, ""},
+		{true, false, "it was"},
+	} {
+		m.streaming, c.pending, c.partial = tt.streaming, tt.pending, tt.partial
+		if _, next := m.Update(answerMsg{}); next != nil || m.streaming {
+			t.Errorf("%+v: the frames go on", tt)
+		}
+	}
+	m.streaming, c.pending, c.partial = true, true, "it was"
+	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "it was a dark night"}, true)
+	if _, next := m.Update(answerMsg{}); next != nil || m.streaming {
+		t.Fatal("the frames go on after the answer")
+	}
+}
+
+// The report of a task that starts an answer, live, starts a new picture of
+// the wait; one in an answer on its way, or replayed, does not.
+func TestTaskReportStartsTheWait(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionTask, Text: "task 1 · read ✓ 1s"}, false)
+	if c.art != 0 {
+		t.Fatalf("a replayed report: picture %d", c.art)
+	}
+	c.pending = false
+	m.apply(c, Event{Kind: plugin.SessionTask, Text: "task 2 · read ✓ 1s"}, true)
+	if c.art != 1 || !c.pending {
+		t.Fatalf("a live report: picture %d, pending %v", c.art, c.pending)
+	}
+	m.apply(c, Event{Kind: plugin.SessionTask, Text: "task 3 · read ✓ 1s"}, true)
+	if c.art != 1 {
+		t.Fatalf("a report in an answer on its way: picture %d", c.art)
+	}
+	if m.renderHistory(true); !strings.Contains(ansi.Strip(m.history.GetContent()), "task 3") {
+		t.Fatalf("the reports:\n%s", ansi.Strip(m.history.GetContent()))
+	}
+}
+
+// The answer of another session, or one replayed, puts the chat on no
+// clock; a piece of the answer of the chat is drawn on its clock alone, and
+// the chat no longer shows it once the session is not watched any more.
+func TestAnswerPiecesAreDrawnOnTheClock(t *testing.T) {
+	m, _ := newModel(t)
+	other := m.conversation("other")
+	m.apply(other, Event{Kind: plugin.SessionMessage, Text: "hi"}, true)
+	if m.apply(other, Event{Kind: plugin.SessionAnswering, Text: "elsewhere"}, true) != nil || m.streaming {
+		t.Fatal("the answer of another session put the chat on its clock")
+	}
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "tell me"}, false)
+	if m.apply(c, Event{Kind: plugin.SessionAnswering, Text: "replayed"}, false) != nil || m.streaming {
+		t.Fatal("a replayed piece put the chat on its clock")
+	}
+	m.renderHistory(true)
+	before := m.history.GetContent()
+	m.event(eventMsg{id: c.contextID, event: Event{Kind: plugin.SessionAnswering, Text: " and more"}})
+	if m.history.GetContent() != before || !m.streaming {
+		t.Fatal("a piece of the answer was drawn at once, not on the clock")
+	}
+	for i := 0; i <= settleFrames; i++ {
+		m.Update(answerMsg{})
+	}
+	if !strings.Contains(ansi.Strip(m.history.GetContent()), "replayed and more") {
+		t.Fatalf("on the clock:\n%s", ansi.Strip(m.history.GetContent()))
+	}
+	m.unwatched(c.contextID)
+	if strings.Contains(ansi.Strip(m.history.GetContent()), "replayed") {
+		t.Fatalf("the watch ended, and the chat still shows the answer on its way:\n%s", ansi.Strip(m.history.GetContent()))
+	}
+}
+
+// The newest word comes in over the frames and then stands; a new word
+// starts the frames anew.
+func TestAdvanceCountsTheFramesOfTheNewestWord(t *testing.T) {
+	c := &conversation{partial: "one"}
+	var frames []int
+	for range settleFrames + 2 {
+		frames = append(frames, c.advance())
+	}
+	c.partial = "one two"
+	frames = append(frames, c.advance())
+	if want := []int{0, 1, 2, 3, 3, 0}; !slices.Equal(frames, want) {
+		t.Fatalf("frames %v, want %v", frames, want)
+	}
+}
+
+// With a filter the list makes room for the line it is typed on: it shows
+// two sessions fewer, cuts a long filter to the dialog, and says that nothing
+// has the filter only where nothing has it.
+func TestSessionsFilterTakesRoom(t *testing.T) {
+	m, _ := newModel(t)
+	at := time.Now()
+	for i := range 12 {
+		c := m.conversation(fmt.Sprintf("id-%d", i))
+		c.title, c.last = fmt.Sprintf("session %d", i), at.Add(-time.Duration(i)*time.Minute)
+	}
+	m.Update(ctrlS)
+	all := len(sessionLines(m))
+	press(m, "s")
+	if got := len(sessionLines(m)); got != all-2 || strings.Contains(view(m), "nothing here") {
+		t.Fatalf("with a filter %d of %d lines:\n%s", got, all, view(m))
+	}
+	m.Update(tea.PasteMsg{Content: strings.Repeat("x", 60) + " the end"})
+	if v := view(m); !strings.Contains(v, "find s"+strings.Repeat("x", 50)+"… ") || strings.Contains(v, "the end") {
+		t.Fatalf("a long filter:\n%s", v)
 	}
 }

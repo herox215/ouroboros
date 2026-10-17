@@ -149,8 +149,10 @@ func TestTUIBackendAsk(t *testing.T) {
 	if len(calling) == 0 || !strings.HasSuffix(calling[0], " bytes") {
 		t.Fatalf("calling %q", calling)
 	}
-	if got := tuiplugin.Size(3277); got != "3.2 KiB" {
-		t.Fatalf("a call of some KiB: %q", got)
+	for n, want := range map[int]string{3277: "3.2 KiB", 1024: "1.0 KiB", 1023: "1023 bytes"} {
+		if got := tuiplugin.Size(n); got != want {
+			t.Fatalf("a call of %d bytes: %q", n, got)
+		}
 	}
 	var kinds []string
 	for _, e := range events {
@@ -383,6 +385,109 @@ func TestTUIBackendModels(t *testing.T) {
 	}
 	if status, _ := u.Status(); status.PeerAccess != models[0].Access.ID || status.PeerModel != "gpt-4o" || status.Model != "gpt-4o-mini" {
 		t.Fatalf("the status after choosing for peers: %+v", status)
+	}
+}
+
+// The UI finds the sessions by what was said in them, lists the services
+// that run past the answers, and stops one: here none runs.
+func TestTUIBackendFindAndServices(t *testing.T) {
+	s := clitest.Settings(t)
+	u := backend(t, s)
+	history.Open(home.Dir(s.Home).History()).Append(history.Who{Session: "c1"}, []openai.Message{{Role: "user", Content: "the dark mode"}}, nil)
+	if found, err := u.Find(context.Background(), "dark"); err != nil || !slices.Equal(found, []string{"c1"}) {
+		t.Fatalf("found %q, %v", found, err)
+	}
+	if found, err := u.Find(context.Background(), "light"); err != nil || len(found) != 0 {
+		t.Fatalf("found %q, %v", found, err)
+	}
+	if list, err := u.Services(context.Background()); err != nil || len(list) != 0 {
+		t.Fatalf("services %+v, %v", list, err)
+	}
+	if err := u.StopService(context.Background(), "s1"); !errors.Is(err, session.ErrNoService) {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+// The gateways are read from what the plugins contributed when the UI asks,
+// each under the name and title it was contributed with: one without
+// settings is left out, and one whose settings cannot be read fails the
+// list. A change goes to the gateway of its name, if that takes changes.
+func TestTUIBackendGateways(t *testing.T) {
+	var ctx *plugin.Context
+	var saved []string
+	broken := errors.New("the store cannot be read")
+	fail := false
+	gateways := plugin.New("gateways", func(c *plugin.Context, _ struct{}) error {
+		ctx = c
+		plugin.Add(c, plugin.Gateway{Name: "echo", Title: "Echo",
+			Settings: func(context.Context) (plugin.GatewaySettings, error) {
+				return plugin.GatewaySettings{Name: "other", Title: "Other", Enabled: true, Status: "Ready"}, nil
+			},
+			Save: func(_ context.Context, change plugin.GatewayChange) error {
+				saved = append(saved, change.UserID)
+				return nil
+			}})
+		plugin.Add(c, plugin.Gateway{Name: "mute", Title: "Mute"})
+		plugin.Add(c, plugin.Gateway{Name: "flaky", Settings: func(context.Context) (plugin.GatewaySettings, error) {
+			if fail {
+				return plugin.GatewaySettings{}, broken
+			}
+			return plugin.GatewaySettings{Status: "Synchronizing"}, nil
+		}})
+		return nil
+	})
+	if _, err := cli.NewWith(gateways); err != nil {
+		t.Fatal(err)
+	}
+	u := tuiplugin.Backend(nil, ctx, nil)
+	list, err := u.Gateways(context.Background())
+	if err != nil || len(list) != 2 {
+		t.Fatalf("gateways %+v, %v", list, err)
+	}
+	if g := list[0]; g.Name != "echo" || g.Title != "Echo" || !g.Enabled || g.Status != "Ready" {
+		t.Errorf("echo: %+v", g)
+	}
+	if g := list[1]; g.Name != "flaky" || g.Title != "" || g.Status != "Synchronizing" {
+		t.Errorf("flaky: %+v", g)
+	}
+	fail = true
+	if list, err := u.Gateways(context.Background()); !errors.Is(err, broken) || list != nil {
+		t.Fatalf("unreadable: %+v, %v", list, err)
+	}
+	if err := u.SaveGateway(context.Background(), "echo", plugin.GatewayChange{UserID: "@luna:example.org"}); err != nil || !slices.Equal(saved, []string{"@luna:example.org"}) {
+		t.Fatalf("saved %q, %v", saved, err)
+	}
+	for _, name := range []string{"mute", "flaky", "none"} {
+		if err := u.SaveGateway(context.Background(), name, plugin.GatewayChange{}); err == nil || err.Error() != `gateway "`+name+`" is not available` || len(saved) != 1 {
+			t.Errorf("%s: %v, saved %q", name, err, saved)
+		}
+	}
+}
+
+// The screen of the remaining usage asks the providers of the accesses of
+// the node, which has none here; a node whose configuration cannot be read
+// says why.
+func TestUsageScreen(t *testing.T) {
+	s := clitest.Settings(t)
+	var ctx *plugin.Context
+	clitest.NewApp(t, s, "", spy(&ctx))
+	var usage *plugin.Screen
+	for _, screen := range plugin.All[plugin.Screen](ctx) {
+		if screen.Command == "usage" {
+			usage = &screen
+		}
+	}
+	if usage == nil || usage.Title != "Remaining usage" {
+		t.Fatalf("the screen: %+v", usage)
+	}
+	if body, err := usage.Body(context.Background()); err != nil || body != "No configured provider exposes remaining quota through its API." {
+		t.Fatalf("body %q, %v", body, err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := usage.Body(context.Background()); err == nil || body != "" {
+		t.Fatalf("an unreadable configuration: %q, %v", body, err)
 	}
 }
 
@@ -740,19 +845,24 @@ func TestStepShowsHowItEndedOnlyOnceItEnded(t *testing.T) {
 	if _, err := cli.NewWith(views); err != nil {
 		t.Fatal(err)
 	}
+	// A call failed once it ended with an error, and only then.
 	for _, tt := range []struct {
-		tool string
-		done bool
-		want string
+		tool   string
+		done   bool
+		err    string
+		want   string
+		failed bool
 	}{
-		{"seen", false, "looking"},
-		{"seen", true, "looking ✓"},
-		{"unseen", false, ""},
-		{"unseen", true, ""},
+		{"seen", false, "", "looking", false},
+		{"seen", true, "", "looking ✓", false},
+		{"seen", false, "broke", "looking", false},
+		{"seen", true, "broke", "looking ✓", true},
+		{"unseen", false, "", "", false},
+		{"unseen", true, "", "", false},
 	} {
-		got := tuiplugin.Shown(ctx, plugin.SessionEvent{Kind: plugin.SessionStep, Tool: tt.tool, Done: tt.done})
-		if got.Text != tt.want || got.Done != tt.done {
-			t.Errorf("%s, done %v: shown as %q", tt.tool, tt.done, got.Text)
+		got := tuiplugin.Shown(ctx, plugin.SessionEvent{Kind: plugin.SessionStep, Tool: tt.tool, Done: tt.done, Err: tt.err})
+		if got.Text != tt.want || got.Done != tt.done || got.Failed != tt.failed {
+			t.Errorf("%s, done %v, error %q: shown as %q, failed %v", tt.tool, tt.done, tt.err, got.Text, got.Failed)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strings"
@@ -57,13 +58,13 @@ func TestDirectoryCommandArguments(t *testing.T) {
 func TestDirectoryCommandShowAndErrors(t *testing.T) {
 	m, original := newModel(t)
 	// A legacy backend can still show the path and use all other commands.
-	for _, path := range []string{"", "/tmp/my project"} {
-		m.chat.directory = path
-		if cmd := run(m, "/cd"); cmd != nil || m.noticeErr || !strings.Contains(m.notice, path) || m.input.Value() != "" {
-			t.Fatalf("show: %q, input %q", m.notice, m.input.Value())
-		}
-		if path == "" && !strings.Contains(m.notice, "workspace") {
-			t.Fatal(m.notice)
+	// With nothing after the command, as with a space, it is shown too.
+	for _, line := range []string{"/cd", "/cd "} {
+		for _, path := range []string{"", "/tmp/my project"} {
+			m.chat.directory = path
+			if cmd := run(m, line); cmd != nil || m.noticeErr || m.notice != "directory: "+cmp.Or(path, "workspace") || m.input.Value() != "" {
+				t.Fatalf("show %q: %q, input %q", line, m.notice, m.input.Value())
+			}
 		}
 	}
 	if cmd := run(m, "/cd /tmp"); cmd != nil || !m.noticeErr {
@@ -71,8 +72,10 @@ func TestDirectoryCommandShowAndErrors(t *testing.T) {
 	}
 	b := &directoryFake{Backend: original}
 	m.backend = b
-	for _, line := range []string{"/cd 'unfinished", "/cd \"unfinished'", "/cd ''", "/cd \"\""} {
-		if cmd := run(m, line); cmd != nil || !m.noticeErr || m.input.Value() != line {
+	unclosed, empty := "/cd: close the quote around the path", "/cd: use --workspace to reset the directory"
+	for line, notice := range map[string]string{"/cd 'unfinished": unclosed, "/cd \"unfinished'": unclosed, "/cd '": unclosed, "/cd \"": unclosed,
+		"/cd ''": empty, "/cd \"\"": empty} {
+		if cmd := run(m, line); cmd != nil || !m.noticeErr || m.notice != notice || m.input.Value() != line {
 			t.Fatalf("invalid %q: notice %q, input %q", line, m.notice, m.input.Value())
 		}
 	}

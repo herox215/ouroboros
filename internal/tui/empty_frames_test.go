@@ -19,9 +19,10 @@ func drawn(frame string) string {
 }
 
 // The name as it is drawn, in both sizes of the font: while the shine
-// crosses it, torn by a glitch, another way with every step of it, and
-// fading out. A number stands for each frame; a look that is changed on
-// purpose changes them, and the test says to what.
+// crosses it, torn by a glitch, another way with every step of it, with the
+// sparks of a neon at windows that cut them off, and fading out. A number
+// stands for each frame; a look that is changed on purpose changes them, and
+// the test says to what.
 func TestNameAnimationIsDrawnAsItWas(t *testing.T) {
 	torn := glitchAt(0)
 	for _, tt := range []struct {
@@ -46,10 +47,114 @@ func TestNameAnimationIsDrawnAsItWas(t *testing.T) {
 		{120, 30, nameGlitch, glitchAt(1) + 0.1, 1, "a286fa3a"},
 		{120, 30, nameGlitch, glitchAt(2) + 0.2, 0.5, "0893f278"},
 		{120, 30, nameGlitch, glitchAt(3) + 0.3, 1, "228c4fe9"},
+		{60, 12, nameNeon, 1.5 * neonStep, 1, "0a2612b7"},
+		{60, 12, nameNeon, 92.5 * neonStep, 1, "25c16278"},
+		{40, 8, nameNeon, 92.5 * neonStep, 1, "eb5cd026"},
+		{39, 7, nameNeon, 35.5 * neonStep, 1, "d899d914"},
 	} {
 		frame := drawNameAnimation("Luna", tt.w, tt.h, seconds(tt.at), false, tt.look, tt.shown, "stay curious")
 		if got := drawn(frame); got != tt.want {
 			t.Errorf("%dx%d, look %d at %.2fs, %v shown: drawn as %s, want %s:\n%s", tt.w, tt.h, tt.look, tt.at, tt.shown, got, tt.want, ansi.Strip(frame))
+		}
+	}
+}
+
+// The other looks as they are drawn, in windows as small as the name and
+// larger ones: the wave, the float, the flare and the beam, a glitch that
+// tears the name over the edges, the neon with other defects and their
+// sparks, the laser while it cuts, at the end of the cut and after it, the
+// rain where it splashes, and the snake as it comes, circles the name and
+// leaves, and where there is no room for it.
+func TestNameLooksAreDrawnAsTheyWere(t *testing.T) {
+	for _, tt := range []struct {
+		w, h  int
+		look  nameLook
+		at    float64
+		light bool
+		tag   string
+		want  string
+	}{
+		{38, 6, nameWave, 0.77, false, "stay curious", "af470863"},
+		{60, 12, nameWave, 2.5, false, "stay curious", "2ad155ad"},
+		{38, 6, nameFloat, 1.3, false, "stay curious", "dd90e46f"},
+		{60, 12, nameFloat, 2.5, false, "stay curious", "12ae2827"},
+		{38, 6, nameFlare, 1.9, false, "stay curious", "d4e7c2ff"},
+		{38, 6, nameFlare, 3.7, false, "stay curious", "bfad51ab"},
+		{38, 6, nameBeam, 6.1, false, "stay curious", "f1ce3d0f"},
+		{60, 12, nameBeam, 1.3, false, "stay curious", "2b278777"},
+		{38, 6, nameGlitch, glitchAt(0) + 0.01, false, "stay curious", "c7af7cef"},
+		{39, 7, nameNeon, 0.5 * neonStep, false, "stay curious", "2a3cec82"},
+		{39, 7, nameNeon, 47.5 * neonStep, false, "stay curious", "169d43b3"},
+		{39, 7, nameNeon, 75.5 * neonStep, false, "stay curious", "a62523dc"},
+		{38, 6, nameNeon, 74.5 * neonStep, false, "stay curious", "78dedd47"},
+		{38, 6, nameNeon, 86.5 * neonStep, false, "dare to begin", "3872337f"},
+		{38, 6, nameNeon, 29.5 * neonStep, false, "", "5de5778f"},
+		{38, 6, nameLaser, 2.095, false, "stay curious", "2eaf6356"},
+		{38, 6, nameLaser, float64(len(laserPath(fitName("Luna", 38, 6)))) * laserStep, false, "stay curious", "f397b629"},
+		{39, 7, nameLaser, 0.835, false, "stay curious", "433dd9fd"},
+		{39, 7, nameLaser, 2.185, false, "stay curious", "83b15b46"},
+		{39, 7, nameLaser, 2.295, false, "stay curious", "73ab1bf5"},
+		{60, 12, nameLaser, 1, true, "stay curious", "b419076a"},
+		{120, 30, nameLaser, 0, false, "stay curious", "f3af072d"},
+		{120, 30, nameLaser, 1.1, false, "stay curious", "d0d69885"},
+		{120, 30, nameLaser, 2.5, false, "stay curious", "a1dc0a64"},
+		{120, 30, nameLaser, 4, false, "stay curious", "a61357d3"},
+		{38, 6, nameRain, 0.4, false, "stay curious", "7cf5a699"},
+		{39, 7, nameRain, 3.03, false, "stay curious", "783c1c74"},
+		{60, 12, nameRain, 2.15, false, "stay curious", "56822826"},
+		{120, 30, nameRain, 0, false, "stay curious", "05757618"},
+		{120, 30, nameRain, 1.5, false, "stay curious", "f5d8cc03"},
+		{60, 12, nameSnake, 2.9, false, "stay curious", "76503943"},
+		{53, 18, nameSnake, 6.15, false, "stay curious", "42fae1eb"},
+		{54, 18, nameSnake, 7.65, false, "stay curious", "487fec28"},
+		{54, 18, nameSnake, 34.15, false, "stay curious", "a0717af2"},
+		{80, 24, nameSnake, 2, false, "stay curious", "d392282d"},
+		{80, 24, nameSnake, 8, false, "stay curious", "878192ff"},
+		{80, 24, nameSnake, 16, false, "stay curious", "1b8d6b6f"},
+		{80, 24, nameSnake, 21.5, false, "stay curious", "a4894e47"},
+		{120, 30, nameSnake, 5, false, "stay curious", "e1a223ff"},
+	} {
+		frame := drawNameAnimation("Luna", tt.w, tt.h, seconds(tt.at), tt.light, tt.look, 1, tt.tag)
+		if got := drawn(frame); got != tt.want {
+			t.Errorf("%dx%d, look %d at %.4fs, light %v, %q: drawn as %s, want %s:\n%s", tt.w, tt.h, tt.look, tt.at, tt.light, tt.tag, got, tt.want, ansi.Strip(frame))
+		}
+	}
+}
+
+// The splash as it is drawn: the big title as it comes in a window just
+// large enough for it, the plain one in a window a row too low for the big
+// one, and in one a few columns too narrow for it, as it fades out.
+func TestSplashIsDrawnAsItWas(t *testing.T) {
+	for _, tt := range []struct {
+		w, h int
+		at   time.Duration
+		want string
+	}{
+		{92, 10, 480 * time.Millisecond, "da7cf987"},
+		{92, 10, 1600 * time.Millisecond, "fb9ccc58"},
+		{92, 9, 0, "a20f5756"},
+		{84, 30, 2400 * time.Millisecond, "502fcf97"},
+	} {
+		frame := drawSplash(tt.w, tt.h, tt.at, false)
+		if got := drawn(frame); got != tt.want {
+			t.Errorf("%dx%d at %v: drawn as %s, want %s:\n%s", tt.w, tt.h, tt.at, got, tt.want, ansi.Strip(frame))
+		}
+	}
+}
+
+// The empty chat as it is drawn where nothing moves: the blocks of the name
+// in their color, and the blanks between them without one.
+func TestEmptyChatIsDrawnAsItWas(t *testing.T) {
+	for _, tt := range []struct {
+		w, h int
+		want string
+	}{
+		{38, 6, "9735661a"},
+		{60, 12, "8bad2908"},
+	} {
+		frame := emptyChat("Luna", tt.w, tt.h, "stay curious")
+		if got := drawn(frame); got != tt.want {
+			t.Errorf("%dx%d: drawn as %s, want %s:\n%s", tt.w, tt.h, got, tt.want, ansi.Strip(frame))
 		}
 	}
 }

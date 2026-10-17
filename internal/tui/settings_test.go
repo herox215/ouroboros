@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
@@ -824,6 +825,14 @@ func TestSettingsModelRows(t *testing.T) {
 	if do(m); !slices.Equal(b.debug, []bool{true}) {
 		t.Errorf("debug: %v", b.debug)
 	}
+	m.status.Debug = true // as the status says once it is read anew
+	pick(t, m, nodeSection, "Debug mode", "turn off")
+	if r := m.config.selectedRow(m); r.value != "on" {
+		t.Errorf("debug on: %q", r.value)
+	}
+	if do(m); !slices.Equal(b.debug, []bool{true, false}) {
+		t.Errorf("debug: %v", b.debug)
+	}
 }
 
 // A tool that is refused and allowed again gets its settings back: it does
@@ -980,5 +989,265 @@ func checkSettingsInfo(t *testing.T, m *Model, b *fakeBackend) {
 		if len(b.changes) != 0 || len(b.debug) != 0 || b.setups != 0 || m.config.editing != nil || m.config.err != nil {
 			t.Errorf("Info changed settings or notice: %+v, %q", b.changes, m.notice)
 		}
+	}
+}
+
+// The settings of a tool for peers, and of a tool in the list of a single
+// peer, open like those of the tools of your agent, and their changes are for
+// peers, or for that peer alone. A peer whose list is no more closes what
+// showed it.
+func TestSettingsOfAToolOfPeers(t *testing.T) {
+	m, b := openSettings(t, withOptions())
+	pick(t, m, peersSection, "read", "settings")
+	do(m)
+	if view := dialogView(m); m.config.tool != "read" || !strings.Contains(view, "Settings › Tools for peers › read") || !strings.Contains(view, `{"allow":["~/share"]}`) {
+		t.Fatalf("the settings of read for peers:\n%s", view)
+	}
+	choose(t, m, "As JSON", "change")
+	press(m, "enter")
+	m.config.input.SetValue("{}")
+	if do(m); len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetToolSettings, For: plugin.ForPeers, Name: "read", Value: "{}"}) {
+		t.Fatalf("for peers: %+v", b.changes)
+	}
+
+	b.changes = nil
+	pick(t, m, singleSection, "luna", "open")
+	do(m)
+	choose(t, m, "read", "settings")
+	do(m)
+	if view := dialogView(m); m.config.peer != "abcdefabcdef" || m.config.tool != "read" || !strings.Contains(view, "Settings › Tools of single peers › luna › read") {
+		t.Fatalf("the settings of read for luna:\n%s", view)
+	}
+	choose(t, m, "As JSON", "change")
+	press(m, "enter")
+	m.config.input.SetValue("{}")
+	if do(m); len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetToolSettings, For: plugin.ForPeers, Peer: "abcdefabcdef", Name: "read", Value: "{}"}) {
+		t.Fatalf("for luna: %+v", b.changes)
+	}
+
+	// The list of luna is removed meanwhile: what is open goes back to the
+	// category.
+	s := withOptions()
+	s.Peers = s.Peers[1:]
+	b.settings = s
+	deliver(m, m.config.reload(m))
+	if view := dialogView(m); m.config.peer != "" || m.config.tool != "" || !m.config.opened || len(m.config.back) != 1 ||
+		!strings.Contains(view, "Settings › Tools of single peers") || strings.Contains(view, "luna") {
+		t.Fatalf("peer %q, tool %q, back %v:\n%s", m.config.peer, m.config.tool, m.config.back, view)
+	}
+}
+
+// What shows a peer or a tool that is not in the configuration shows
+// nothing, rather than another list.
+func TestSettingsPageOfWhatIsNoMore(t *testing.T) {
+	m, _ := openSettings(t, withOptions())
+	pick(t, m, singleSection, "luna", "")
+	c := &m.config
+	for _, tt := range []struct{ peer, tool string }{{"gone", ""}, {"gone", "read"}, {"abcdefabcdef", "gone"}, {"", "gone"}} {
+		c.peer, c.tool = tt.peer, tt.tool
+		if rows := c.page(m); rows != nil {
+			t.Errorf("peer %q, tool %q: %+v", tt.peer, tt.tool, rows)
+		}
+		if c.toolState() != nil {
+			t.Errorf("peer %q, tool %q: a tool", tt.peer, tt.tool)
+		}
+	}
+}
+
+// A category without lines has nothing to select and nothing to do.
+func TestSettingsEmptyCategory(t *testing.T) {
+	s := someSettings()
+	s.Plugins = nil
+	m, b := openSettings(t, s)
+	for i, section := range sections {
+		if section == pluginsSection {
+			m.config.category = i
+		}
+	}
+	press(m, "enter")
+	if !m.config.opened || len(m.config.shown(m)) != 0 || !strings.Contains(dialogView(m), "Settings › Plugins") {
+		t.Fatalf("opened %v:\n%s", m.config.opened, dialogView(m))
+	}
+	press(m, "down", "right")
+	if r := m.config.selectedRow(m); m.config.sel != 0 || m.choice != 0 || r.label != "" || r.actions != nil {
+		t.Errorf("selected %d, choice %d: %+v", m.config.sel, m.choice, r)
+	}
+	if cmd := press(m, "enter"); cmd != nil || len(b.changes) != 0 {
+		t.Errorf("nothing to do did something: %+v", b.changes)
+	}
+}
+
+// A peer of the configuration that is no contact is named by its ID, and a
+// list of one tool says so.
+func TestSettingsPeerWithoutContact(t *testing.T) {
+	s := withOptions()
+	s.Peers = append(s.Peers, plugin.PeerTools{ID: "fedcbafedcba", Own: true, List: plugin.ToolList{Tools: []plugin.ToolState{
+		{Name: "bash", Allowed: true, Listed: true}, {Name: "read"},
+	}}})
+	m, _ := openSettings(t, s)
+	if r := value(t, m, singleSection, "fedcbafedcba"); r.value != "a list of its own: 1 tool" || r.note != "no contact: a list in the configuration" {
+		t.Errorf("the peer: %+v", r)
+	}
+	if got := count(0, "tool"); got != "0 tools" {
+		t.Errorf("none: %q", got)
+	}
+}
+
+// What a setting of a tool is set to is shown as it reads: a list set to
+// nothing is none, a switch yes or no, and what is not set is the default.
+func TestSettingsOptionValue(t *testing.T) {
+	list := plugin.Option{Name: "allow", Kind: plugin.OptionList, Unset: "everything"}
+	on := plugin.Option{Name: "network", Kind: plugin.OptionSwitch}
+	for _, tt := range []struct {
+		o    plugin.ToolOption
+		want string
+	}{
+		{plugin.ToolOption{Option: list}, "everything (default)"},
+		{plugin.ToolOption{Option: list, Set: true}, "none"},
+		{plugin.ToolOption{Option: list, Set: true, List: []string{"~/a", "~/b"}}, "~/a, ~/b"},
+		{plugin.ToolOption{Option: on}, "not set (default)"},
+		{plugin.ToolOption{Option: on, Set: true, Value: "true"}, "yes"},
+		{plugin.ToolOption{Option: on, Set: true, Value: "false"}, "no"},
+		{plugin.ToolOption{Option: plugin.Option{Name: "times", Kind: plugin.OptionNumber}, Set: true, Value: "2"}, "2"},
+	} {
+		if got := optionValue(tt.o); got != tt.want {
+			t.Errorf("%+v: %q, want %q", tt.o, got, tt.want)
+		}
+	}
+}
+
+// A switch that is on turns off.
+func TestSettingsSwitchTurnsOff(t *testing.T) {
+	s := withOptions()
+	read := &s.Tools[plugin.ForOwner].Tools[0]
+	read.Options[2].Set, read.Options[2].Value = true, "true"
+	read.Settings = `{"deny":["~/a","~/b"],"network":true,"times":2}`
+	m, b := openSettings(t, s)
+	pick(t, m, ownerSection, "read", "settings")
+	do(m)
+	if got := shownValue(t, m, "network"); got != "yes" {
+		t.Errorf("network: %q", got)
+	}
+	choose(t, m, "network", "turn off")
+	if do(m); len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"deny":["~/a","~/b"],"network":false,"times":2}`}) {
+		t.Errorf("turned off: %+v", b.changes)
+	}
+}
+
+// No text is no lines; a text is wrapped at the width, each line after the
+// indent.
+func TestSettingsWrapped(t *testing.T) {
+	if got := wrapped("", "  ", 20, mutedStyle); got != nil {
+		t.Errorf("no text: %q", got)
+	}
+	got := wrapped("one two three four", "> ", 10, lipgloss.NewStyle())
+	if strings.Join(got, "|") != "> one two|> three|> four" {
+		t.Errorf("wrapped: %q", got)
+	}
+}
+
+// The list of categories shows each name whole, the one selected marked, and
+// what can be done below that one alone.
+func TestSettingsCategoriesWhole(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	for i, section := range sections {
+		m.config.category = i
+		view := dialogView(m)
+		if !strings.Contains(view, "› "+section) || strings.Count(view, "[open]  Info") != 1 {
+			t.Errorf("%s selected:\n%s", section, view)
+		}
+		for _, other := range sections {
+			if other != section && !strings.Contains(view, "  "+other+" ") {
+				t.Errorf("%s selected, %s is not whole:\n%s", section, other, view)
+			}
+		}
+	}
+}
+
+// The window over the lines says what lies above and below it, and only
+// that: where all of them fit it says nothing, at the first line nothing
+// above, at the last nothing below, and there it is full. The dialog is as
+// high as the body leaves it, also when it is very low.
+func TestSettingsWindowMarks(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if view := dialogView(m); strings.Contains(view, "more") || !strings.Contains(view, protectedSection) || !strings.Contains(view, nodeSection) {
+		t.Fatalf("all categories fit:\n%s", view)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 23})
+	if view := dialogView(m); !strings.Contains(view, "↓ more") || strings.Contains(view, "↑ more") {
+		t.Fatalf("at the first category of too many:\n%s", view)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	m.config.category = len(sections) - 1
+	if view := dialogView(m); strings.Contains(view, "↓ more") || !strings.Contains(view, "↑ more") || !strings.Contains(view, gatewaysSection) {
+		t.Fatalf("at the last category:\n%s", view)
+	}
+	for _, height := range []int{40, 12, 8} {
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+		_, h := m.settingsSize()
+		if h != max(1, m.bodyHeight()-2) {
+			t.Errorf("at a height of %d the dialog may be %d high, in a body of %d", height, h, m.bodyHeight())
+		}
+		for _, info := range []*row{nil, {label: "a", note: strings.Repeat("a long explanation ", 40)}} {
+			m.config.info = info
+			if got := lipgloss.Height(m.config.view(m)); got > h {
+				t.Errorf("at a height of %d the dialog is %d high, not at most %d", height, got, h)
+			}
+		}
+		m.config.info = nil
+	}
+}
+
+// What is typed shows its end, where it is typed, also when it is longer
+// than the line.
+func TestSettingsEditShowsTheEnd(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	pick(t, m, nodeSection, "Description", "change")
+	press(m, "enter")
+	m.config.input.SetValue(strings.Repeat("x", 120) + "THE END")
+	m.config.input.CursorEnd()
+	if view := dialogView(m); !strings.Contains(view, "THE END") {
+		t.Fatalf("the end of what is typed is not shown:\n%s", view)
+	}
+}
+
+// After the configuration is read anew, what is chosen stays on an action
+// the line still has.
+func TestSettingsChoiceStaysOnTheLine(t *testing.T) {
+	m, b := openSettings(t, someSettings())
+	pick(t, m, agentsSection, "Context provider", "Info")
+	if m.choice != 2 {
+		t.Fatalf("Info is the action %d", m.choice)
+	}
+	s := someSettings()
+	s.ContextProviders = nil
+	b.settings = s
+	deliver(m, m.config.reload(m))
+	if m.choice != 1 {
+		t.Fatalf("with one action fewer the choice is %d", m.choice)
+	}
+}
+
+// A tool has settings to open only where it is allowed and has settings;
+// one without single settings shows them as they are kept, and one without
+// any shows none. Without fallbacks the node says so.
+func TestSettingsToolDetailsAndActions(t *testing.T) {
+	m, _ := openSettings(t, someSettings())
+	if r := value(t, m, ownerSection, "get_config"); len(r.actions) != 1 || r.actions[0].name != "refuse" {
+		t.Errorf("get_config for your agent: %+v", r.actions)
+	}
+	if r := value(t, m, peersSection, "list_peers"); len(r.actions) != 1 || r.actions[0].name != "allow" {
+		t.Errorf("list_peers for peers: %+v", r.actions)
+	}
+	if r := value(t, m, peersSection, "read"); len(r.details) != 1 || r.details[0] != (detail{"settings", `{"allow":["~/share"]}`, false}) {
+		t.Errorf("read for peers: %+v", r.details)
+	}
+	if r := value(t, m, ownerSection, "read"); len(r.details) != 0 {
+		t.Errorf("read for your agent: %+v", r.details)
+	}
+	pick(t, m, nodeSection, "Fallbacks", "")
+	if r := m.config.selectedRow(m); r.value != "none" {
+		t.Errorf("no fallbacks: %q", r.value)
 	}
 }

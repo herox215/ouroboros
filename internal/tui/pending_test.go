@@ -58,10 +58,13 @@ func TestAcceptAllPendingInOneConversation(t *testing.T) {
 		t.Fatalf("sent %d messages", len(b.sent))
 	}
 	task := b.sent[0]
-	for _, want := range []string{"Make this change of ouro", "first change", "second change", "42 seconds", "single conversation"} {
+	for _, want := range []string{"Make this change of ouro", "\n1. first change\nWhat was measured: 42 seconds\n", "\n2. second change\n", "single conversation"} {
 		if !strings.Contains(task.text, want) {
 			t.Fatalf("task lacks %q: %s", want, task.text)
 		}
+	}
+	if strings.Count(task.text, "What was measured") != 1 {
+		t.Fatalf("a suggestion without measurements says what was measured: %s", task.text)
 	}
 	if strings.Contains(task.text, "not yet accepted") || task.contextID == first.contextID || task.contextID != m.chat.contextID || m.chats[first.contextID] == nil {
 		t.Fatalf("incorrect target or contents: %+v", task)
@@ -104,5 +107,37 @@ func TestAcceptAllPendingFailuresAndEmpty(t *testing.T) {
 	m.Update(msg)
 	if m.chat == first || !m.noticeErr || !strings.Contains(m.notice, "gone") {
 		t.Fatalf("partial work lost, notice %q", m.notice)
+	}
+}
+
+// Accept all is marked when it is selected, stays selected when more comes to
+// decide, and says that it is on its way once it is chosen. An entry selected
+// that is no more does not become Accept all.
+func TestAcceptAllStaysSelected(t *testing.T) {
+	m, b := newModel(t)
+	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "peer"}}, Suggestions: []plugin.Suggestion{{ID: "s1", Text: "first change"}}}
+	m.Update(m.loadContacts())
+	if m.requests.sel != 0 {
+		t.Fatalf("what came first is selected at %d, not the first", m.requests.sel)
+	}
+	run(m, "/pending")
+	press(m, "down", "down")
+	if m.requests.sel != 2 || !strings.Contains(view(m), "› Accept all") {
+		t.Fatalf("selected %d:\n%s", m.requests.sel, view(m))
+	}
+	b.trust.Suggestions = append(b.trust.Suggestions, plugin.Suggestion{ID: "s2", Text: "second change"})
+	m.Update(m.loadContacts())
+	if m.requests.sel != 3 || !strings.Contains(view(m), "› Accept all") {
+		t.Fatalf("with more to decide, selected %d:\n%s", m.requests.sel, view(m))
+	}
+	if cmd := press(m, "enter"); cmd == nil || !strings.Contains(view(m), "› Accepting all…") {
+		t.Fatalf("on its way:\n%s", view(m))
+	}
+	m.requests.acceptingAll = false
+	press(m, "up")
+	b.trust.Suggestions = b.trust.Suggestions[:1]
+	m.Update(m.loadContacts())
+	if m.requests.sel != 0 {
+		t.Fatalf("the last suggestion gone, selected %d", m.requests.sel)
 	}
 }

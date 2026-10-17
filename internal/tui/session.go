@@ -642,7 +642,11 @@ func (l *sessionsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return l.delete(m, one(), deleting)
 	}
-	if r := []rune(msg.String()); len(r) == 1 && unicode.IsPrint(r[0]) {
+	typed := msg.String()
+	if typed == "space" { // the space bar is told by its name, but it types a space
+		typed = " "
+	}
+	if r := []rune(typed); len(r) == 1 && unicode.IsPrint(r[0]) {
 		l.filter, l.sel = l.filter+string(r), l.pick(m) // what is typed filters, as it is typed
 		return l.find(m)                                // and what was said in a session is looked for with it
 	}

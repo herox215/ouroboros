@@ -82,15 +82,9 @@ func (m *Model) overlay(dialog string) string {
 	dw, dh := lipgloss.Width(dialog), lipgloss.Height(dialog)
 	x := max(0, (w-dw)/2)
 	y := max(0, (h-dh)/2)
-	// What the dialog covers is blank behind it: the canvas lets the blank
-	// cells of a layer through, so the chat would show through the dialog.
-	for i := y; i < min(len(back), y+dh); i++ {
-		line := []rune(ansi.Strip(back[i]))
-		for len(line) < w {
-			line = append(line, ' ')
-		}
-		back[i] = string(line[:x]) + strings.Repeat(" ", dw) + string(line[min(x+dw, len(line)):])
-	}
+	// The layer of the dialog clears all it covers before it is drawn: the
+	// chat does not show through it, and stays whole around it, also where
+	// its letters are wide.
 	style := lipgloss.NewStyle().Foreground(fadeColor(m.light))
 	for i, l := range back {
 		back[i] = style.Render(ansi.Strip(l))

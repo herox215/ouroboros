@@ -957,11 +957,6 @@ func (c *settingsScreen) view(m *Model) string {
 	if c.editing != nil {
 		bottom = []string{"", boldStyle.Render(c.editing.label) + mutedStyle.Render("  enter saves · esc keeps what was"), c.input.View()}
 	}
-	// Where the box is low, the head is its first line alone: what it says
-	// gives way to what is selected.
-	if h-2-len(head)-len(bottom) < 4 {
-		head = []string{head[0], ""}
-	}
 	room := max(1, h-2-len(head)-len(bottom)) // the border
 	// What does not fit says so below it, on a line of its own, and above
 	// it on the empty line below the head.
