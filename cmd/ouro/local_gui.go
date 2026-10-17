@@ -27,7 +27,7 @@ func localGUI(ctx context.Context, args []string) error {
 		!(len(args) == 2 && args[0] == "desktop" && args[1] == "open") {
 		return nil
 	}
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return err
 	}
@@ -38,6 +38,9 @@ func localGUI(ctx context.Context, args []string) error {
 	}
 	return localGUIBuild(ctx, exe, running, os.Stderr)
 }
+
+// executable finds the running binary; tests replace it.
+var executable = os.Executable
 
 func localGUIBuild(ctx context.Context, exe, running string, out io.Writer) error {
 	root := filepath.Dir(exe)

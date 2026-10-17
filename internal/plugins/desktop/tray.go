@@ -45,8 +45,11 @@ func Together(profiles []*Profile) {
 	}
 }
 
+// executable finds the running binary; tests replace it.
+var executable = os.Executable
+
 func launchGUI() error {
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil {
 		return err
 	}
@@ -114,16 +117,14 @@ func (c *controller) open() {
 }
 
 func (p *Profile) start() {
-	if runtime.GOOS != "linux" {
-		return
-	} // native adapters can join here later
 	if p.controller == nil {
 		Together([]*Profile{p})
 	}
 	c := p.controller
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.cancel != nil {
+	// Only Linux has a tray; native adapters can join here later.
+	if c.cancel != nil || runtime.GOOS != "linux" {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/kernel"
@@ -31,6 +32,11 @@ func TestProfiles(t *testing.T) {
 	broken := &Profile{status: func() (plugin.NodeStatus, error) { return plugin.NodeStatus{}, errors.New("bad config") }}
 	if _, err := broken.page(); err == nil {
 		t.Fatal("ignored unreadable profile")
+	}
+	// The error counts the profiles from 1, as the picker shows them.
+	Together([]*Profile{a, broken})
+	if _, err := a.page(); err == nil || err.Error() != "GUI profile 2: bad config" {
+		t.Fatalf("second profile unreadable: %v", err)
 	}
 }
 
@@ -141,5 +147,21 @@ func TestHandOver(t *testing.T) {
 	}
 	if !slices.Contains(r.Env, resumeEnv+`={"profile":"aaa","session":"owner/s1"}`) {
 		t.Fatalf("env: %v", r.Env)
+	}
+}
+
+// The command fails before any window when a profile cannot be read, or when
+// what the process before handed over is no session.
+func TestRunFailsBeforeTheWindow(t *testing.T) {
+	old := show
+	t.Cleanup(func() { show = old })
+	show = func(context.Context, page) error { t.Fatal("window shown"); return nil }
+	broken := &Profile{status: func() (plugin.NodeStatus, error) { return plugin.NodeStatus{}, errors.New("bad config") }}
+	if err := broken.run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "bad config") {
+		t.Fatalf("unreadable profile: %v", err)
+	}
+	t.Setenv(resumeEnv, "not json")
+	if err := fake("Luna", "aaa").run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "the session to go on with") {
+		t.Fatalf("handed over no session: %v", err)
 	}
 }

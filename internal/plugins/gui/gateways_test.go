@@ -55,3 +55,44 @@ func TestWindowGateways(t *testing.T) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }
+
+// A profile without plugins has no gateways, a gateway without settings is
+// left out, and settings that cannot be read are an error.
+func TestWindowGatewaySettings(t *testing.T) {
+	w, _ := modelWindow(t)
+	w.profiles[0].ctx = nil
+	if got, err := w.Gateways(0); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("without plugins: %#v %v", got, err)
+	}
+	sentinel := errors.New("settings unreadable")
+	for _, gateways := range [][]plugin.Gateway{
+		{{Name: "silent", Title: "Silent"}, {Name: "fixture", Title: "Fixture", Settings: func(context.Context) (plugin.GatewaySettings, error) {
+			return plugin.GatewaySettings{Enabled: true}, nil
+		}}},
+		{{Name: "broken", Title: "Broken", Settings: func(context.Context) (plugin.GatewaySettings, error) {
+			return plugin.GatewaySettings{}, sentinel
+		}}},
+	} {
+		k := kernel.New()
+		if err := k.Start(plugin.New("gateway", func(ctx *plugin.Context, _ struct{}) error {
+			for _, g := range gateways {
+				plugin.Add(ctx, g)
+			}
+			return nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k.Stop)
+		w.profiles[1].ctx = k.Context()
+		got, err := w.Gateways(1)
+		if gateways[0].Name == "broken" {
+			if !errors.Is(err, sentinel) || got != nil {
+				t.Fatalf("unreadable settings: %+v %v", got, err)
+			}
+			continue
+		}
+		if err != nil || len(got) != 1 || got[0].Name != "fixture" || got[0].Title != "Fixture" || !got[0].Enabled {
+			t.Fatalf("gateway without settings: %+v %v", got, err)
+		}
+	}
+}
