@@ -299,13 +299,20 @@ func launch(ctx context.Context, cancel context.CancelFunc, dir string, s settin
 	}()
 	go func() {
 		cmd.Wait()
-		p.took, p.stopped = time.Since(p.start), ctx.Err() != nil
-		p.late = errors.Is(ctx.Err(), context.DeadlineExceeded)
-		// What left the group may keep the pipe open: it is not waited for.
+		// Wait's context watcher ends with the shell, not with children that
+		// still hold its output pipe. Enforce the deadline during draining too.
 		select {
 		case <-copied:
+		case <-ctx.Done():
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			select {
+			case <-copied:
+			case <-time.After(grace):
+			}
 		case <-time.After(grace):
 		}
+		p.took, p.stopped = time.Since(p.start), ctx.Err() != nil
+		p.late = errors.Is(ctx.Err(), context.DeadlineExceeded)
 		r.Close()
 		<-copied
 		p.mu.Lock()
@@ -371,7 +378,7 @@ func (p *process) ending() (string, bool) {
 	if p.stopped {
 		note := ""
 		if p.late {
-			note = "\n[its time was up: run it again with a larger \"timeout\", as far as the calling context has time left, or with \"background\": true]"
+			note = "\n[its time was up (timed out): run it again with a larger \"timeout\", as far as the calling context has time left, or with \"background\": true]"
 		}
 		return fmt.Sprintf("stopped after %s; what it printed:\n%s%s", p.took.Round(time.Second), out, note), true
 	}

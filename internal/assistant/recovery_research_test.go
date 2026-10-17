@@ -21,6 +21,14 @@ func TestRecoveryAndResearchPrompts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			for _, want := range []string{
+				"If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run.",
+				"Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again.",
+			} {
+				if !strings.Contains(owner, want) {
+					t.Errorf("owner prompt lacks %q", want)
+				}
+			}
 			helper, err := b.helper(cfg, tools)
 			if err != nil {
 				t.Fatal(err)
@@ -28,6 +36,9 @@ func TestRecoveryAndResearchPrompts(t *testing.T) {
 			helperPrompt, _ := helper.Prompt()
 			for name, prompt := range map[string]string{"owner": owner, "helper": helperPrompt} {
 				for _, want := range []string{
+					"For static documentation, use an available HTTP mechanism first (for example curl through bash when available), with bounded output.",
+					"Use a browser only when JavaScript or interaction is needed, not merely to read static sources.",
+					"Inspect the available HTTP mechanisms before deciding that a new capability is needed; if none is available, report the limitation rather than assuming a tool exists.",
 					"For short comparison questions, stop researching once a few reliable primary sources support the central claims and the requested comparison can be answered.",
 					"Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth.",
 					"For feasibility checks, request a few search results and small, bounded webpage excerpts rather than collecting large raw responses.",
@@ -40,6 +51,8 @@ func TestRecoveryAndResearchPrompts(t *testing.T) {
 					}
 				}
 				for _, want := range []string{
+					"For commit-only requests, default to status, diff and secret checks plus appropriate short tests.",
+					"Do not automatically start a comprehensive review or delegate review tasks; expand the scope only if the user asks or a specific finding requires it.",
 					"When recovering a damaged repository file, first use git log and git show to find and recover the complete known-good version verbatim, rather than piecing it together from fragments.",
 					"If Git has no complete version, check the conversation archive for the original; if neither source has it, state the gap before reconstructing.",
 					"Preserve unrelated local changes, verify the recovered file is complete against the original source, and run the relevant tests; passing tests alone does not prove completeness.",

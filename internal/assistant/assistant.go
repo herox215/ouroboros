@@ -66,6 +66,8 @@ const (
 		`Preserve unrelated local changes, verify the recovered file is complete against the original source, and run the relevant tests; passing tests alone does not prove completeness. ` +
 		`Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, ` +
 		`unless you still need information to make those changes safely. ` +
+		`For commit-only requests, default to status, diff and secret checks plus appropriate short tests. ` +
+		`Do not automatically start a comprehensive review or delegate review tasks; expand the scope only if the user asks or a specific finding requires it. ` +
 		`Write the tests a change needs and no more, and do not run again what passed without a reason. ` +
 		`When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering: ` +
 		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
@@ -103,8 +105,14 @@ const (
 	questionHint = `When you need the user to decide or to tell you something before you can go on, ask with ` + ToolUserQuestion +
 		` instead of ending your answer with the question: they answer with a key, and you go on in the same answer with what they said. ` +
 		`Give the answers you expect as options, and none where only their own words answer. Ask nothing you can find out yourself. `
+	// approvalHint also applies without user_question: tools can ask for permission themselves.
+	approvalHint = `If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run. ` +
+		`Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again. `
 	// researchHint also applies to browser-only research and delegated comparisons.
-	researchHint = `For short comparison questions, stop researching once a few reliable primary sources support the central claims and the requested comparison can be answered. ` +
+	researchHint = `For static documentation, use an available HTTP mechanism first (for example curl through bash when available), with bounded output. ` +
+		`Use a browser only when JavaScript or interaction is needed, not merely to read static sources. ` +
+		`Inspect the available HTTP mechanisms before deciding that a new capability is needed; if none is available, report the limitation rather than assuming a tool exists. ` +
+		`For short comparison questions, stop researching once a few reliable primary sources support the central claims and the requested comparison can be answered. ` +
 		`Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth. ` +
 		`For feasibility checks, request a few search results and small, bounded webpage excerpts rather than collecting large raw responses. ` +
 		`Use the tools' output budget parameters and browser offsets to read more only where needed. ` +
@@ -326,7 +334,7 @@ func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.
-	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + validationHint + researchHint
+	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + validationHint + researchHint + approvalHint
 	if has(toolAskPeer) {
 		prompt += askHint
 	}

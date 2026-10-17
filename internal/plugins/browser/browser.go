@@ -165,7 +165,8 @@ func Show(raw json.RawMessage) string {
 
 func (b *browser) tool() plugin.Tool {
 	description := "Use a web browser, as a person does, for pages that need one: that run scripts, that you sign in to, " +
-		"where you click and fill in forms. Every conversation has tabs of its own; action says what to do in the current one:\n" +
+		"where you click and fill in forms. For static documentation, use an available HTTP mechanism first; use this browser only when JavaScript or interaction is needed. " +
+		"Every conversation has tabs of its own; action says what to do in the current one:\n" +
 		"- open: go to url, or to where link or image [n] leads with element, and return the page as read does; " +
 		"with new_tab in a new tab, which is then the current one.\n" +
 		fmt.Sprintf("- read: the page as text, at most %d KiB per call (continue with offset as the note at the end says); ", maxPage>>10) +

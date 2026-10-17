@@ -50,6 +50,18 @@ func fails(t *testing.T, what string, err error, want string) {
 	}
 }
 
+func TestStaticDocumentationGuidance(t *testing.T) {
+	description := (&browser{}).tool().Description
+	for _, want := range []string{
+		"For static documentation, use an available HTTP mechanism first",
+		"use this browser only when JavaScript or interaction is needed",
+	} {
+		if !strings.Contains(description, want) {
+			t.Errorf("description lacks %q", want)
+		}
+	}
+}
+
 // The tool opens a page in a tab of the conversation, and acts on it.
 func TestBrowse(t *testing.T) {
 	f := newFake(t)

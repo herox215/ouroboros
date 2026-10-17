@@ -27,6 +27,22 @@ func withoutEngines(t *testing.T) {
 	t.Cleanup(func() { engines = old })
 }
 
+func TestStaticDocumentationGuidance(t *testing.T) {
+	description := (&search{}).tool().Description
+	for _, want := range []string{
+		"Verify important claims against source content",
+		"use an available HTTP mechanism first for static documentation",
+		"browser only when JavaScript or interaction is needed",
+	} {
+		if !strings.Contains(description, want) {
+			t.Errorf("description lacks %q", want)
+		}
+	}
+	if strings.Contains(description, "Use browser to open sources") {
+		t.Fatal("description still directs static sources to the browser")
+	}
+}
+
 func TestSearch(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(map[bool]string{false: "json", true: "sse"}[stream], func(t *testing.T) {

@@ -300,7 +300,7 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	old := now
 	now = func() time.Time { return day }
 	t.Cleanup(func() { now = old })
-	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + validationHint + researchHint
+	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + validationHint + researchHint + approvalHint
 	end := ownerStyle + " Today is Saturday, 10 October 2026; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
 	for _, tt := range []struct {
 		tools []config.Entry
