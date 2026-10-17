@@ -191,3 +191,38 @@ func TestLowCacheNeedsCalls(t *testing.T) {
 		t.Fatalf("no tokens told: %v", got)
 	}
 }
+
+// A script failed by itself only when none of the tools it called since it
+// started did; one that ends without having started is counted by itself.
+func TestScriptMeasures(t *testing.T) {
+	var m measures
+	m.step(toolRun, "", time.Second, true)
+	if m.failed != 1 {
+		t.Fatalf("a script that never started: %d failed", m.failed)
+	}
+	m = measures{}
+	m.start(toolRun)
+	m.start("read")
+	m.step("read", "", time.Second, true)
+	m.start("list")
+	m.step("list", "", time.Second, false)
+	m.step(toolRun, "", time.Second, true)
+	if m.failed != 1 {
+		t.Fatalf("a script whose tool failed: %d failed", m.failed)
+	}
+}
+
+// A tool is slow from slowTool on, and an answer has many calls of the LLM
+// from manyCalls on.
+func TestSignalsFromTheirThresholds(t *testing.T) {
+	got := signalled(t, nil, func(r *record) {
+		for range manyCalls {
+			r.call(agent.Call{})
+			r.call(agent.Call{Done: true, ToolCalls: 1})
+		}
+		done(r, "read", `{"path":"a"}`, slowTool, nil)
+	})
+	if want := "read took 30s; 15 calls of the LLM"; got != want {
+		t.Fatalf("signals: %s, want %s", got, want)
+	}
+}

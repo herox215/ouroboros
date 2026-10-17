@@ -179,3 +179,36 @@ func TestPermittedFailing(t *testing.T) {
 		t.Errorf("text of the call: %q", got)
 	}
 }
+
+// The tool that asks the owner is not asked about, and the tools after it
+// are as any other.
+func TestPermittedLeavesTheQuestionAlone(t *testing.T) {
+	runs := 0
+	question := agent.Tool{Name: ToolUserQuestion, Run: func(context.Context, json.RawMessage) (string, error) { return "answered", nil }}
+	bash := agent.Tool{Name: ToolBash, Run: func(context.Context, json.RawMessage) (string, error) { runs++; return "done", nil }}
+	tools := Builder{}.permitted(config.Config{}, []agent.Tool{question, bash})
+	var asked []Question
+	ctx := answering(AllowNot, &asked)
+	rm := json.RawMessage(`{"command": "rm -rf build"}`)
+	if got, err := tools[0].Run(ctx, rm); err != nil || got != "answered" || len(asked) != 0 {
+		t.Fatalf("the question: %q, %v, asked %+v", got, err, asked)
+	}
+	if _, err := tools[1].Run(ctx, rm); err == nil || runs != 0 || len(asked) != 1 {
+		t.Fatalf("bash after the question: %v, %d runs, asked %+v", err, runs, asked)
+	}
+}
+
+// What a rule matches of bash is its command; without one, the arguments
+// as of any other tool.
+func TestCallText(t *testing.T) {
+	for args, want := range map[string]string{
+		`{"command": "rm -rf build"}`: "rm -rf build",
+		`{"cwd": "/tmp"}`:             `{"cwd":"/tmp"}`,
+		`{"command": ""}`:             `{"command":""}`,
+		`not JSON`:                    "not JSON",
+	} {
+		if got := callText(ToolBash, json.RawMessage(args)); got != want {
+			t.Errorf("%s: %q, want %q", args, got, want)
+		}
+	}
+}

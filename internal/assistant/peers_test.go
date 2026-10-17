@@ -244,3 +244,27 @@ func TestPeersTakeNotes(t *testing.T) {
 		t.Fatalf("a node that cannot answer takes no note: %v", err)
 	}
 }
+
+// The agent for the peers without a list of their own checks the lists of
+// the others: when they change, it is built anew.
+func TestPeersFollowTheListsOfSinglePeers(t *testing.T) {
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me", PrivateKey: identity.Generate().Private(),
+		Tools: &config.Tools{A2A: config.Named(toolListPeers)}}
+	built := 0
+	b := Builder{
+		LLM:      func(access string) (agent.LLM, error) { built++; return overHTTP(access) },
+		Accesses: &accesses{rev: "1"},
+		Tools:    func() []agent.Tool { return PeerTools(nil, func() string { return "" }) },
+	}
+	peers := b.Peers(func() (config.Config, error) { return cfg, nil }, discard)
+	ask := func(want int) {
+		t.Helper()
+		if _, err := peers.Respond(from("luna"), "c", "hello"); err != nil || built != want {
+			t.Fatalf("%v, %d agents built, want %d", err, built, want)
+		}
+	}
+	ask(1)
+	cfg.Tools = &config.Tools{A2A: config.Named(toolListPeers), Peers: map[string][]config.Entry{"0123456789ab": config.Named(toolListPeers)}}
+	ask(2)
+	ask(2)
+}

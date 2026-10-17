@@ -300,6 +300,12 @@ func TestOwnerDelegates(t *testing.T) {
 			t.Errorf("%s: %s", name, got)
 		}
 	}
+	// Delegate alone, the first and only tool of the agent, is set up as well.
+	cfg.Tools = &config.Tools{H2A: config.Named(ToolDelegate)}
+	got, err = a.Ask(ctx, "chat", runs(`return delegate({tasks: [{task: "?system"}]})`), nil)
+	if got := result(t, got, err); !strings.Contains(got, `You are a helper of \"me\"`) {
+		t.Errorf("delegate alone: %s", got)
+	}
 }
 
 // The scope rules must reach the owner's prompt when delegation is allowed,
@@ -397,6 +403,7 @@ func TestTaskReport(t *testing.T) {
 	for _, text := range []string{
 		"hello",
 		"[Task two, which you delegated, ended.",
+		strings.Replace(TaskReport(2, "look", "found it", nil), "2", "two", 1),
 		"[Task 2 ended",
 		"[Task 2, which you delegated, failed: no",
 		"[Task 2, which you delegated, failed: no. Its task: open",

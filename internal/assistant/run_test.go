@@ -390,6 +390,7 @@ func TestRunTakesWhatTheLLMCallsDirectly(t *testing.T) {
 		{"delete", `{"path": "a b"}`},
 		{"delete", ``},
 		{"delete", `[1]`},
+		{"delete", `null`},
 		{"nope", `{}`},
 	}}
 	a := agent.New(llm, "m", "sys", withRun([]agent.Tool{echo}, script.NewSessions()))
@@ -406,6 +407,7 @@ func TestRunTakesWhatTheLLMCallsDirectly(t *testing.T) {
 		"deleted a b" + note,
 		"deleted " + note,
 		"error: delete: invalid arguments: they are one object of named values, not an array" + note,
+		"error: delete: invalid arguments: they are a JSON object" + note,
 		"error: unknown tool nope",
 	}
 	if strings.Join(llm.results, "|") != strings.Join(want, "|") {

@@ -5,14 +5,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
 	"ouroboros/internal/history"
+	"ouroboros/internal/home"
+	"ouroboros/internal/kernel"
+	"ouroboros/internal/openai"
 	assistantplugin "ouroboros/internal/plugins/assistant"
 )
 
@@ -157,4 +162,53 @@ func TestScriptsUseTheToolsOfTheNode(t *testing.T) {
 func mustJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// Stopping the node closes the archive the answers went to: no file of it
+// stays open.
+func TestStopClosesTheArchive(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the open files are counted in /proc")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := home.Dir(root)
+	k := kernel.New()
+	if err := k.Start(assistantplugin.Plugin(dir)); err != nil {
+		t.Fatal(err)
+	}
+	defer k.Stop()
+	builder, ok := kernel.Service[assistant.Builder](k)
+	if !ok {
+		t.Fatal("no blueprint")
+	}
+	owner := agent.AnswerOutcome{Processing: agent.Processing{Conversation: agent.Conversation{ID: "mine"}}, Messages: []openai.Message{{Role: "user", Content: "hi"}}}
+	if err := builder.AnswerHooks()[0].After(context.Background(), owner); err != nil {
+		t.Fatal(err)
+	}
+	if openBelow(t, dir.History()) == 0 {
+		t.Fatal("the archive was never opened")
+	}
+	k.Stop()
+	if n := openBelow(t, dir.History()); n != 0 {
+		t.Fatalf("%d files of the archive open after the node stopped", n)
+	}
+}
+
+// openBelow counts the files below dir this process has open.
+func openBelow(t *testing.T, dir string) int {
+	t.Helper()
+	fds, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, fd := range fds {
+		if target, err := os.Readlink(filepath.Join("/proc/self/fd", fd.Name())); err == nil && strings.HasPrefix(target, dir+string(filepath.Separator)) {
+			n++
+		}
+	}
+	return n
 }

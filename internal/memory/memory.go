@@ -128,9 +128,7 @@ func (s *Store) Create(ctx context.Context, project, key, content, source string
 		return Entry{}, err
 	}
 	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return Entry{}, err
-	}
+	rand.Read(id[:]) // never fails
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	e := Entry{ID: hex.EncodeToString(id[:]), Key: key, Content: content, Project: project, Version: 1, Created: now, Updated: now, Source: source}
 	err := s.write(ctx, func(tx *sql.Tx) error {

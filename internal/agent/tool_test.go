@@ -210,12 +210,12 @@ func TestDecodeTakesNumbersAsStrings(t *testing.T) {
 func TestOptionsOf(t *testing.T) {
 	type settings struct {
 		Allow   *[]string `json:"allow" about:"where it goes" unset:"everywhere"`
+		Skip    string    `json:"-"`
 		Network bool      `json:"network,omitempty"`
-		Times   int       `json:"times"`
-		Name    string
-		Skip    string            `json:"-"`
-		Nested  map[string]string `json:"nested"`
 		hidden  string
+		Times   int               `json:"times"`
+		Nested  map[string]string `json:"nested"`
+		Name    string
 	}
 	_ = settings{}.hidden
 	want := []Option{
@@ -263,6 +263,7 @@ func TestDecodeTakesValuesAsStrings(t *testing.T) {
 		`{"options": "[1]"}`:  `t: invalid arguments: "options.0" is a string, not a number`,
 		`{"env": "[]"}`:       `t: invalid arguments: "env" is an object, not a string`,
 		`{"options": "null"}`: `t: invalid arguments: "options" is an array, not a string`,
+		`{"env": "null"}`:     `t: invalid arguments: "env" is an object, not a string`,
 	} {
 		var a args
 		if err := Decode("t", json.RawMessage(raw), &a); err == nil || err.Error() != want {

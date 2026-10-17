@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
@@ -143,4 +144,46 @@ func TestUnknownToolFailsEarly(t *testing.T) {
 	if err := a.Ready(); err == nil || !strings.Contains(err.Error(), "tools.h2a") {
 		t.Fatalf("Ready: %v", err)
 	}
+}
+
+// The owner picks the tools of the lists from what the plugins contributed,
+// the tool that asks the owner and the one that hands tasks to helpers, and
+// the tools of the configuration where the node has one.
+func TestAvailable(t *testing.T) {
+	plain := agent.NewTool("plain", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	b := Builder{Tools: func() []agent.Tool { return []agent.Tool{plain} }}
+	want := "plain," + ToolUserQuestion + "," + ToolDelegate
+	if got := names(b.Available()); got != want {
+		t.Errorf("without a node: %s, want %s", got, want)
+	}
+	b = b.WithConfig(func() (config.Config, error) { return config.Config{}, nil }, nil)
+	want += "," + toolGetConfig + "," + toolProposeConfig + "," + toolWithdrawConfig
+	if got := names(b.Available()); got != want {
+		t.Errorf("with a node: %s, want %s", got, want)
+	}
+}
+
+// A conversation that is forgotten starts anew, and its last answer is no
+// answer a message follows up on.
+func TestForget(t *testing.T) {
+	cfg := config.Config{Access: openaitest.NewServer(t), Model: "gpt-4o", Name: "me"}
+	a := New(func() (config.Config, error) { return cfg, nil }, Builder{LLM: overHTTP, Tools: func() []agent.Tool { return nil }}, discard)
+	ask := func(want string) {
+		t.Helper()
+		if got, err := a.Ask(context.Background(), "chat", "hello", nil); err != nil || got != want {
+			t.Fatalf("got %q, %v; want %q", got, err, want)
+		}
+	}
+	ask("[gpt-4o] turns=1 last=hello")
+	ask("[gpt-4o] turns=3 last=hello")
+	a.keep("chat", answered{at: time.Now()})
+	a.keep("other", answered{at: time.Now()})
+	a.Forget("chat")
+	if _, _, ok := a.followed("chat", "?", time.Now()); ok {
+		t.Error("a forgotten answer is followed up on")
+	}
+	if _, _, ok := a.followed("other", "?", time.Now()); !ok {
+		t.Error("forgetting one conversation forgot another")
+	}
+	ask("[gpt-4o] turns=1 last=hello")
 }

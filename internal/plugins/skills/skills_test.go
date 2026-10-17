@@ -196,12 +196,34 @@ func TestBrokenSkill(t *testing.T) {
 	}
 }
 
-// A file of more than maxFile is not read.
+// A file of more than maxFile is not read; one of maxFile is.
 func TestLargeFile(t *testing.T) {
 	l := fixture(t)
 	write(t, l.dir, "review/big.md", strings.Repeat("a", maxFile+1))
 	if _, err := configured(t, l, `{}`).Run(context.Background(), json.RawMessage(`{"name": "review", "file": "big.md"}`)); err == nil || !strings.Contains(err.Error(), "more than 256 KiB") {
 		t.Errorf("big: %v", err)
+	}
+	write(t, l.dir, "review/full.md", strings.Repeat("a", maxFile))
+	if got, err := configured(t, l, `{}`).Run(context.Background(), json.RawMessage(`{"name": "review", "file": "full.md"}`)); err != nil || len(got) != maxFile {
+		t.Errorf("a file of maxFile: %d bytes, %v", len(got), err)
+	}
+}
+
+// A value of YAML in quotes of either kind is taken without them; anything
+// else is taken as it is.
+func TestUnquote(t *testing.T) {
+	for v, want := range map[string]string{
+		`"Review a change."`: "Review a change.",
+		`'Review'`:           "Review",
+		`""`:                 "",
+		`"`:                  `"`,
+		`"open`:              `"open`,
+		`"mixed'`:            `"mixed'`,
+		`a plain a`:          `a plain a`,
+	} {
+		if got := unquote(v); got != want {
+			t.Errorf("unquote(%s) = %q, want %q", v, got, want)
+		}
 	}
 }
 

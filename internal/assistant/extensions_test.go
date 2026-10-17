@@ -12,6 +12,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
+	"ouroboros/internal/workdir"
 )
 
 func TestExtensionsSharedOwnerPeerFlow(t *testing.T) {
@@ -46,6 +47,11 @@ func TestExtensionsSharedOwnerPeerFlow(t *testing.T) {
 	}
 	contents, err = owner.Contents("id")
 	if err != nil || contents.System != "" || contents.Messages[1].Content != "hook context" {
+		t.Fatal(contents, err)
+	}
+	// The system prompt is the one of the project the conversation is in now.
+	contents, err = owner.ContentsContext(workdir.With(context.Background(), "/project"), "id")
+	if err != nil || contents.Messages[0].Role != "system" || !strings.Contains(contents.Messages[0].Content, `"/project"`) {
 		t.Fatal(contents, err)
 	}
 	if owner.Context("id") == 0 {

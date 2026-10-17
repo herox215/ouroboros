@@ -251,6 +251,11 @@ func TestForwardedFunctionRunsInItsTool(t *testing.T) {
 	if strings.Join(got, " ") != `{"call":"read"} {"call":"fail"}` && strings.Join(got, " ") != `{"call":"fail"} {"call":"read"}` {
 		t.Errorf("run got %q", got)
 	}
+	// A function that is a tool of the agent as well runs as that tool.
+	read := Tool{Name: "read", Run: func(context.Context, json.RawMessage) (string, error) { return "read itself", nil }}
+	if answer, err := New(&fakeLLM{}, "gpt", "sys", run, read).Run(context.Background(), "c1", "call read", Observer{}); err != nil || answer != "echo read itself" {
+		t.Errorf("a tool of its own: %q, %v", answer, err)
+	}
 }
 
 // loopLLM asks for a tool on every turn and records the last message of
@@ -821,6 +826,14 @@ func TestSteering(t *testing.T) {
 	if Steered(context.Background()) != nil {
 		t.Fatal("nobody steers an answer without steering")
 	}
+	// Steering by messages that is nil leaves the steering by texts.
+	ctx = WithMessageSteering(WithSteering(context.Background(), func() []string { return []string{"by text"} }), nil)
+	if said := Steered(ctx); len(said) != 1 || said[0] != "by text" {
+		t.Fatalf("steered %q", said)
+	}
+	if said := SteeredMessages(ctx); len(said) != 1 || said[0].Content != "by text" || said[0].Role != "user" {
+		t.Fatalf("steered %+v", said)
+	}
 }
 
 // A provider that cannot take what the user said on the way ends the answer,
@@ -905,5 +918,89 @@ func TestEmptyAnswerIsAskedAgain(t *testing.T) {
 	llm = &emptyLLM{empty: 2}
 	if got, err := New(llm, "gpt", "alpha").Respond(context.Background(), "c1", "fix it"); err != nil || strings.TrimSpace(got) != "" || len(llm.msgs) != 4 {
 		t.Fatalf("twice: %q, %v, %d messages", got, err, len(llm.msgs))
+	}
+}
+
+// An agent built anew with the memory of another goes on with its
+// conversations.
+func TestWithMemory(t *testing.T) {
+	m := NewMemory()
+	first := &fakeLLM{}
+	if _, err := New(first, "gpt", "alpha").WithMemory(m).Respond(context.Background(), "c1", "one"); err != nil {
+		t.Fatal(err)
+	}
+	second := &fakeLLM{}
+	a := New(second, "gpt", "alpha")
+	if a.WithMemory(m) != a {
+		t.Fatal("WithMemory returns another agent")
+	}
+	if got, err := a.Respond(context.Background(), "c1", "two"); err != nil || got != "echo two" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if len(second.msgs) != 4 || second.msgs[1].Content != "one" || second.msgs[2].Content != "echo one" {
+		t.Fatalf("the conversation of the first agent: %+v", second.msgs)
+	}
+}
+
+// A system prompt for one answer leaves the agent as it is, and the
+// conversation is the same for both.
+func TestWithSystem(t *testing.T) {
+	llm := &fakeLLM{}
+	a := New(llm, "gpt", "alpha")
+	if _, err := a.WithSystem("beta").Respond(context.Background(), "c1", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.msgs[0].Content != "beta" {
+		t.Fatalf("system prompt for one answer: %+v", llm.msgs[0])
+	}
+	if _, err := a.Respond(context.Background(), "c1", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.msgs[0].Content != "alpha" || len(llm.msgs) != 4 || llm.msgs[1].Content != "one" {
+		t.Fatalf("the agent after: %+v", llm.msgs)
+	}
+}
+
+// Prompt is what goes with every call: the system prompt and the tools, a
+// copy of them that the caller may change.
+func TestPrompt(t *testing.T) {
+	a := New(&fakeLLM{}, "gpt", "alpha", Tool{Name: "shout", Description: "says it loud", Schema: `{"type":"object"}`})
+	system, tools := a.Prompt()
+	if system != "alpha" || len(tools) != 1 || tools[0].Function.Name != "shout" || tools[0].Function.Description != "says it loud" {
+		t.Fatalf("prompt: %q, %+v", system, tools)
+	}
+	tools[0].Function.Name = "changed"
+	if _, tools := a.Prompt(); tools[0].Function.Name != "shout" {
+		t.Fatalf("the caller changed the tools of the agent: %+v", tools)
+	}
+}
+
+// Outside of an answer nothing is spent.
+func TestSpentOutsideAnAnswer(t *testing.T) {
+	if got := Spent(context.Background()); got != 0 {
+		t.Fatalf("spent %d", got)
+	}
+}
+
+// Thoughtless leaves out what the LLM thought, in a copy.
+func TestThoughtless(t *testing.T) {
+	msgs := []openai.Message{{Role: "assistant", Content: "hi", Reasoning: "hm", ReasoningField: "reasoning"}}
+	got := Thoughtless(msgs)
+	if len(got) != 1 || got[0].Content != "hi" || got[0].Reasoning != "" || got[0].ReasoningField != "" {
+		t.Fatalf("thoughtless: %+v", got)
+	}
+	if msgs[0].Reasoning != "hm" || msgs[0].ReasoningField != "reasoning" {
+		t.Fatalf("the messages given changed: %+v", msgs)
+	}
+}
+
+// A helper answers what it is asked, not the messages its owner was asked
+// with.
+func TestWithoutInputMessages(t *testing.T) {
+	llm := &fakeLLM{}
+	ctx := WithInputMessages(context.Background(), []openai.Message{{Role: "user", Content: "of the owner"}})
+	got, err := New(llm, "gpt", "sys").Run(WithoutInputMessages(ctx), "c1", "of the helper", Observer{})
+	if err != nil || got != "echo of the helper" || len(llm.msgs) != 2 {
+		t.Fatalf("got %q, %v, sent %+v", got, err, llm.msgs)
 	}
 }

@@ -411,9 +411,7 @@ func answerPeer(network *peers.Network) agent.Tool {
 					"and tell your user that instead of what you took for its question", name, args.Question, toolAskPeer)
 			}
 			contextID := agent.ContextID(ctx) + "/" + node.ID
-			if answer := agent.AnswerOf(ctx); answer != nil {
-				answer.Value(questionKey(args.Question), func() any { return &atomic.Bool{} }).(*atomic.Bool).Store(true)
-			}
+			mark(ctx, questionKey(args.Question)) // answered: it is not given up when the answer ends
 			reply, err := network.Answer(inTask(ctx), node, contextID, args.Question, args.Answer)
 			if said := refused(err, name); said != "" {
 				return said, nil

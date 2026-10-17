@@ -632,3 +632,27 @@ func TestSteeringIsLogged(t *testing.T) {
 		`chat c1: answered after D (llm calls: 2, tool calls: 2, sent N): "said: and this"`,
 	})
 }
+
+// What a review reads of an answer are the lines of its log: of a script
+// that ran, the calls in it stand for it; one that failed has its own line.
+func TestTrail(t *testing.T) {
+	r := newRecord(context.Background(), discard, "c", nil, "hi", func() {})
+	script := json.RawMessage(`{"script":"list()"}`)
+	done(r, "read", `{"path":"a"}`, time.Second, nil)
+	r.step(agent.Step{Tool: toolRun, Args: script})
+	done(r, "list", `{}`, time.Second, nil)
+	r.step(agent.Step{Tool: toolRun, Args: script, Done: true, Took: time.Second})
+	r.step(agent.Step{Tool: toolRun, Args: script})
+	r.step(agent.Step{Tool: toolRun, Args: script, Done: true, Took: time.Second, Err: errors.New("syntax")})
+	_, trail := r.end("ok", nil)
+	var tools []string
+	for _, line := range trail {
+		if fields := strings.Fields(line); fields[0] == "tool" {
+			tools = append(tools, fields[1])
+		}
+	}
+	if strings.Join(tools, " ") != "read list run" || !strings.HasPrefix(trail[0], "message from the owner") ||
+		!strings.HasPrefix(trail[len(trail)-1], "answered after") {
+		t.Fatalf("trail: %q", trail)
+	}
+}

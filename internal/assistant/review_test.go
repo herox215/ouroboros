@@ -26,6 +26,7 @@ type reviewLLM struct {
 	mu       sync.Mutex
 	reviewed []openai.Message
 	effort   string
+	left     time.Duration // of the time the review may take, when it was asked
 }
 
 func (l *reviewLLM) Complete(ctx context.Context, _ string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
@@ -33,6 +34,9 @@ func (l *reviewLLM) Complete(ctx context.Context, _ string, msgs []openai.Messag
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		l.reviewed, l.effort = msgs, openai.EffortOf(ctx)
+		if deadline, ok := ctx.Deadline(); ok {
+			l.left = time.Until(deadline)
+		}
 		return openai.Message{Content: l.reply}, nil
 	}
 	called := 0
@@ -93,6 +97,9 @@ func TestAnswerWithSignalsIsReviewed(t *testing.T) {
 	}
 	if llm.effort != reviewEffort {
 		t.Errorf("effort %q", llm.effort)
+	}
+	if llm.left <= reviewTime/2 || llm.left > reviewTime {
+		t.Errorf("the review had %s left, of %s", llm.left, reviewTime)
 	}
 	if last := lines[len(lines)-1]; last != `chat c: review: "Let read say which files are near."` {
 		t.Errorf("last line of the log: %s", last)
@@ -173,6 +180,9 @@ func TestFirstSentence(t *testing.T) {
 	if got := firstSentence("v1.2 of it"); got != "v1.2 of it" {
 		t.Errorf("got %q", got)
 	}
+	if got := firstSentence(". And then"); got != "." {
+		t.Errorf("got %q", got)
+	}
 }
 
 // Only what starts with CHANGE: is proposed: NONE is nothing, and so is a
@@ -185,6 +195,7 @@ func TestSuggestion(t *testing.T) {
 		"CHANGE: Add\n\n  grep.":           "Add grep.",
 		"**CHANGE:** add grep.":            "add grep.",
 		"CHANGE: " + strings.Repeat("ä", maxSuggested): strings.Repeat("ä", maxSuggested/2) + "…",
+		"CHANGE: " + strings.Repeat("a", maxSuggested): strings.Repeat("a", maxSuggested),
 	} {
 		if got := proposed(reply); got != want {
 			t.Errorf("proposed(%.20q) = %.20q, want %.20q", reply, got, want)

@@ -271,6 +271,25 @@ func TestCompleteStreamsAnswer(t *testing.T) {
 	}
 }
 
+// What the model thinks comes to the sink of ctx in the pieces the stream
+// brings it in; a piece with nothing of it tells the sink nothing.
+func TestCompleteStreamsThought(t *testing.T) {
+	c := newServer(t, sse(
+		`{"choices":[{"delta":{"role":"assistant","reasoning_content":"I will "}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"greet."}}]}`,
+		`{"choices":[{"delta":{"content":"Hello"},"finish_reason":"stop"}]}`,
+	))
+	var pieces []string
+	ctx := WithThought(context.Background(), func(text string) { pieces = append(pieces, text) })
+	got, err := c.Complete(ctx, "gpt", []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil || got.Content != "Hello" || got.Reasoning != "I will greet." {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if len(pieces) != 2 || pieces[0] != "I will " || pieces[1] != "greet." {
+		t.Errorf("the sink was told %q", pieces)
+	}
+}
+
 // What the model thought comes in pieces in one of several fields, and an API
 // that sends it in two of them at once has it counted once.
 func TestCompleteStreamsReasoning(t *testing.T) {
@@ -362,6 +381,7 @@ func TestCompleteStreamsToolCalls(t *testing.T) {
 		"by index": sse(
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read"}}]}}]}`,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\": "}},{"index":1,"id":"b","function":{"name":"list","arguments":"{"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":1,"type":"function"}]}}]}`,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"/x\"}"}},{"index":1,"function":{"arguments":"}"}}]}}]}`,
 			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
 		"without index": sse(
@@ -370,16 +390,23 @@ func TestCompleteStreamsToolCalls(t *testing.T) {
 			`{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"list","arguments":"{}"}}]}}]}`,
 			"[DONE]"),
 	} {
+		c := newServer(t, h)
+		if got, err := c.Complete(context.Background(), "gpt", nil, nil); err != nil || !slices.Equal(got.ToolCalls, want) {
+			t.Errorf("%s without a sink: got %+v, %v", name, got, err)
+		}
 		var written []int
 		ctx := WithCalling(context.Background(), func(bytes int) { written = append(written, bytes) })
-		got, err := newServer(t, h).Complete(ctx, "gpt", nil, nil)
+		got, err := c.Complete(ctx, "gpt", nil, nil)
 		if err != nil || got.Content != "" || !slices.Equal(got.ToolCalls, want) {
 			t.Errorf("%s: got %+v, %v", name, got, err)
 		}
-		// How much of the calls is written grows with every piece, names
-		// and arguments of all of them.
-		if all := len("read") + len(`{"path": "/x"}`) + len("list") + len(`{}`); len(written) < 3 || written[len(written)-1] != all ||
-			!slices.IsSorted(written) {
+		// How much of the calls is written grows with every piece of names
+		// and arguments of all of them, and only with such a piece.
+		grows := len(written) >= 3
+		for i := 1; i < len(written); i++ {
+			grows = grows && written[i] > written[i-1]
+		}
+		if all := len("read") + len(`{"path": "/x"}`) + len("list") + len(`{}`); !grows || written[len(written)-1] != all {
 			t.Errorf("%s: the sink was told %v", name, written)
 		}
 	}
