@@ -76,7 +76,9 @@ func TestSQLBrokenArchiveReads(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "absent"), link); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{file, filepath.Join(file, "archive"), link, filepath.Join(link, "archive")} {
+	// Missing at first, but a file in the way where the path leads after all.
+	through := root + "/missing/../file/archive"
+	for _, path := range []string{file, filepath.Join(file, "archive"), link, filepath.Join(link, "archive"), through} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			a := Open(path)
 			defer a.Close()

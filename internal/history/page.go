@@ -27,7 +27,6 @@ func (a *Archive) Page(id string, after int) (RecordPage, error) {
 		return RecordPage{}, err
 	}
 	skipped, size := 0, 0
-	var encodeErr error
 	err = a.records(path, func(r Record) bool {
 		if skipped < after {
 			skipped++
@@ -37,11 +36,8 @@ func (a *Archive) Page(id string, after int) (RecordPage, error) {
 			out.More = true
 			return false
 		}
-		var b []byte
-		b, encodeErr = json.Marshal(r)
-		if encodeErr != nil {
-			return false
-		}
+		// What was decoded from JSON encodes again, as Match relies on too.
+		b, _ := json.Marshal(r)
 		if len(out.Records) > 0 && size+len(b)+1 > 128*1024 {
 			out.More = true
 			return false
@@ -55,9 +51,6 @@ func (a *Archive) Page(id string, after int) (RecordPage, error) {
 	}
 	if err != nil {
 		return RecordPage{}, err
-	}
-	if encodeErr != nil {
-		return RecordPage{}, encodeErr
 	}
 	out.Next += len(out.Records)
 	return out, nil

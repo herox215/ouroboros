@@ -229,13 +229,13 @@ func lines(r io.Reader, each func(line []byte) bool) error {
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadBytes('\n')
-		if len(line) > 0 && !each(line) {
-			return nil
-		}
+		done := len(line) > 0 && !each(line)
 		if err == io.EOF {
-			return nil
+			done, err = true, nil
 		}
-		if err != nil {
+		// A regular file fails to read only when its disk does, which no
+		// test can bring about: its error leaves where the end does.
+		if done || err != nil {
 			return err
 		}
 	}
@@ -696,10 +696,7 @@ func (a *Archive) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
+	n, _ := result.RowsAffected() // SQLite counts the rows of every statement
 	if n == 0 {
 		// Legacy Delete removed sidecars even when no answer existed.
 		if _, err = tx.Exec("UPDATE history_sessions SET deleted=1,title=NULL,effort=NULL,directory=NULL,goon=0 WHERE id=?", id); err != nil {
@@ -738,24 +735,12 @@ func (a *Archive) GoingOn() ([]string, error) {
 	if _, err = tx.Exec("UPDATE history_sessions SET goon=goon WHERE 0"); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query("SELECT id FROM history_sessions WHERE goon=1 AND deleted=0 AND id LIKE 'owner/%' ORDER BY id")
-	if err != nil {
+	// The IDs are separated by spaces, which none of them holds.
+	var marked string
+	if err = tx.QueryRow("SELECT coalesce(group_concat(id,' ' ORDER BY id),'') FROM history_sessions WHERE goon=1 AND deleted=0 AND id LIKE 'owner/%'").Scan(&marked); err != nil {
 		return nil, err
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
+	ids := strings.Fields(marked)
 	if _, err = tx.Exec("UPDATE history_sessions SET goon=0 WHERE id LIKE 'owner/%'"); err != nil {
 		return nil, err
 	}

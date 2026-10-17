@@ -32,6 +32,11 @@ func TestPeerAnswers(t *testing.T) {
 	if reply, err := s.Peer(ctx, "c", func(ctx context.Context) (string, error) { r, _ := asks(ctx); return r, failed }); reply != "true" || err != failed {
 		t.Fatalf("in a node that starts anew: %q, %v", reply, err)
 	}
+	// The first build asked for is the one.
+	newer := func(ctx context.Context) (string, error) { return fmt.Sprint(AskRestart(ctx, "/newer/ouro")), nil }
+	if reply, err := s.Peer(ctx, "c", newer); reply != "true" || err != nil {
+		t.Fatalf("another build: %q, %v", reply, err)
+	}
 	if len(replaced) != 0 {
 		t.Fatal("the answer on its way keeps the node")
 	}

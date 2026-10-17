@@ -77,6 +77,29 @@ func TestRunningSessionsCanceled(t *testing.T) {
 	}
 }
 
+// endsOnceAsked is a context that ends as soon as it was asked once whether
+// it had: as one does that ends while the sessions are looked at.
+type endsOnceAsked struct {
+	context.Context
+	asked bool
+}
+
+func (c *endsOnceAsked) Err() error {
+	if !c.asked {
+		c.asked = true
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestRunningSessionsCanceledWhileLooking(t *testing.T) {
+	s := &Service{sessions: map[string]*session{"owner": {title: "secret", cancel: func() {}}}}
+	got, err := s.RunningSessions(&endsOnceAsked{Context: t.Context()})
+	if !errors.Is(err, context.Canceled) || len(got) != 0 {
+		t.Fatalf("canceled: %q, %v", got, err)
+	}
+}
+
 func TestRunningSessionsEmpty(t *testing.T) {
 	s := &Service{}
 	got, err := s.RunningSessions(t.Context())

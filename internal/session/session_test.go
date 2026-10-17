@@ -510,6 +510,9 @@ func TestClose(t *testing.T) {
 	if _, _, err := s.Watch(ctx, "s1"); !errors.Is(err, ErrStopped) {
 		t.Fatalf("watch: %v", err)
 	}
+	if _, err := s.New(ctx); !errors.Is(err, ErrStopped) {
+		t.Fatalf("new: %v", err)
+	}
 	s.mu.Lock()
 	last := s.sessions["s1"].events
 	s.mu.Unlock()
@@ -825,6 +828,38 @@ func TestCallingFlushesTheAnswer(t *testing.T) {
 	}
 	want := []string{"answering Ich ergänze den Look. Hell, Dunk", "answering el",
 		"calling 10", fmt.Sprint("calling ", 10+callingStep), fmt.Sprint("calling ", 10+2*callingStep), "calling 5"}
+	if !slices.Equal(told, want) {
+		t.Fatalf("told\n%q\nwant\n%q", told, want)
+	}
+}
+
+// A piece of the answer is sent as soon as it has answerPiece bytes, and how
+// much of a call the model has written once it grew by callingStep: the same
+// count again is not news.
+func TestPiecesAtTheirBounds(t *testing.T) {
+	s := New(&fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		write, calling := openai.AnsweringOf(ctx), openai.CallingOf(ctx)
+		write(strings.Repeat("a", answerPiece))
+		write("b")
+		for _, n := range []int{0, 0, 5, callingStep - 1, callingStep} {
+			calling(n)
+		}
+		return "pong", nil
+	}})
+	defer s.Close()
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "hi")
+	var told []string
+	for _, e := range until(t, live, Answer) {
+		switch e.Kind {
+		case Answering:
+			told = append(told, "answering "+e.Text)
+		case Calling:
+			told = append(told, fmt.Sprint("calling ", e.N))
+		}
+	}
+	want := []string{"answering " + strings.Repeat("a", answerPiece), "answering b", "calling 0", fmt.Sprint("calling ", callingStep)}
 	if !slices.Equal(told, want) {
 		t.Fatalf("told\n%q\nwant\n%q", told, want)
 	}

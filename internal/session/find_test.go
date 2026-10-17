@@ -33,4 +33,13 @@ func TestFind(t *testing.T) {
 	if got, _ := s.Find(context.Background(), "never said"); len(got) != 0 {
 		t.Fatalf("found %q", got)
 	}
+	// A front end finds the same over the socket.
+	client := NewClient(serve(t, Handler(s)).dir)
+	if got, err := client.Find(context.Background(), "mesh"); err != nil || strings.Join(got, " ") != "peer-2c70e12b7a0646f92279f427c7b38e73/c s1" {
+		t.Fatalf("found over the socket %q, %v", got, err)
+	}
+	// Without an archive there is nothing to find.
+	if got, err := service(t, &fakeAgent{}).Find(context.Background(), "mesh"); err != nil || got != nil {
+		t.Fatalf("found without an archive %q, %v", got, err)
+	}
 }

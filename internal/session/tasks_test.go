@@ -267,3 +267,40 @@ func TestReplayedTask(t *testing.T) {
 		t.Fatalf("events %+v, msgs %+v", events, msgs)
 	}
 }
+
+// A task keeps the node from the build its answer asked for until it ended,
+// as an answer on its way does.
+func TestTaskKeepsTheNodeFromItsBuild(t *testing.T) {
+	gate := make(chan struct{})
+	task := waiting("look around", gate, "found it", nil)
+	s := service(t, &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if _, err := assistant.TasksOf(ctx).Start([]assistant.Task{task}); err != nil {
+			return "", err
+		}
+		AskRestart(ctx, "/new/ouro")
+		return "started", nil
+	}})
+	replaced := make(chan string, 2)
+	s.Attach(nil, func(exe string) { replaced <- exe })
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	if err := s.Ask(ctx, "s1", "start"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, live, Restart)
+	s.List(ctx) // the end of the answer is over once its lock is free
+	select {
+	case exe := <-replaced:
+		t.Fatalf("replaced by %s while a task runs", exe)
+	default:
+	}
+	close(gate)
+	select {
+	case exe := <-replaced:
+		if exe != "/new/ouro" {
+			t.Fatalf("replaced by %q", exe)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("not replaced once the task ended")
+	}
+}

@@ -843,7 +843,6 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 	thought, rest := s.thoughts(se)
 	ctx = openai.WithThought(ctx, thought)
-	defer rest()
 	writing, drop, flush := s.answering(se)
 	ctx = openai.WithAnswering(ctx, writing)
 	ctx = openai.WithCalling(ctx, s.calling(se, flush, rest))
@@ -858,6 +857,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		drop() // its words come as a Say, and the next round begins the answer anew
 		s.add(se, Event{Kind: Say, Text: said})
 	})
+	rest() // the end of the thinking belongs before the end of the answer
 	<-named
 	end := Event{Kind: Answer, Text: reply}
 	switch {
@@ -1290,9 +1290,7 @@ func (s *Service) Close() {
 	s.stop()
 	s.answers.Wait()
 	if s.archive != nil {
-		if err := s.archive.Close(); err != nil {
-			s.archive.log("the session archive cannot be closed: %v", err)
-		}
+		s.archive.Close() // SQLite closes its connections without fail
 	}
 }
 

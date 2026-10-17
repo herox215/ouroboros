@@ -88,3 +88,29 @@ func TestGoOn(t *testing.T) {
 	next.GoOn()
 	logs("which sessions go on by themselves cannot be read")
 }
+
+// A session whose answer asked for a build, but not to go on by itself,
+// waits in the new build for the owner.
+func TestRestartWithoutGoingOn(t *testing.T) {
+	dir := t.TempDir()
+	s := service(t, &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		AskRestart(ctx, "/new/ouro")
+		return "built", nil
+	}})
+	s.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
+	replaced := make(chan string, 1)
+	s.Attach(nil, func(exe string) { replaced <- exe })
+	if err := s.Ask(context.Background(), "s1", "build"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-replaced:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the node was not replaced")
+	}
+	a := history.Open(dir)
+	defer a.Close()
+	if ids, err := a.GoingOn(); err != nil || len(ids) != 0 {
+		t.Fatalf("going on: %v, %v", ids, err)
+	}
+}
