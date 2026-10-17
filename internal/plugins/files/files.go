@@ -816,9 +816,9 @@ func search(ctx context.Context, c *guard.Checker, args searchArgs) (string, err
 	if args.Context > 0 {
 		return fit(lines, hits, "\n--\n"), nil
 	}
-	// Every line is a match, up to the notes of the search, which start
-	// with [ where a path cannot.
-	notes := slices.IndexFunc(lines, func(line string) bool { return strings.HasPrefix(line, "[") })
+	// Every line is a match, up to the notes of the search, which have no
+	// :line: of one. A path may start with [ as they do.
+	notes := slices.IndexFunc(lines, func(line string) bool { return !matchAt.MatchString(line) })
 	if notes < 0 {
 		notes = len(lines)
 	}

@@ -566,7 +566,8 @@ func look(ctx context.Context, a args) (string, error) {
 	}
 }
 
-// pipe makes the pipe of what a command prints; tests replace it.
+// pipe makes the pipe of what a command prints, and the one a service
+// watches; tests replace it.
 var pipe = os.Pipe
 
 // workDir is the directory a command runs in: dir, as g allows reading it

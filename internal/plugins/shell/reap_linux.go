@@ -10,8 +10,12 @@ import (
 )
 
 // procs are the processes of this user, as far as their files can be read.
-func procs() []proc {
-	dirs, _ := filepath.Glob("/proc/[0-9]*")
+func procs() []proc { return procsIn("/proc") }
+
+// procsIn are the processes of this user in the table of the processes at
+// root: /proc, or what a test makes up.
+func procsIn(root string) []proc {
+	dirs, _ := filepath.Glob(filepath.Join(root, "[0-9]*"))
 	uid := os.Getuid()
 	var table []proc
 	for _, d := range dirs {

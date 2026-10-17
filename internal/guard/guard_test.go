@@ -2,12 +2,14 @@ package guard
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 var errTest = errors.New("test error")
@@ -655,6 +657,114 @@ func TestCaseOfNames(t *testing.T) {
 	readNames = func(string) ([]string, error) { return []string{"gone"}, nil }
 	clear(names.dirs)
 	w.allowed(owner, Read, "~/share/HELLO.txt", w.home+"/share/HELLO.txt")
+}
+
+// A directory that does not tell names apart by their case lists a file by
+// one name and opens it by others. Here hard links are the other names and
+// the listing leaves them out, so that this runs on any file system.
+func TestNameOnDisk(t *testing.T) {
+	w := newWorld(t)
+	share := w.home + "/share"
+	w.file(share+"/notes.txt", "notes")
+	w.file(share+"/\u00e4", "")
+	w.file(share+"/lonely", "")
+	for _, link := range [][2]string{{"notes.txt", "NOTES.txt"}, {"notes.txt", "a-notes"}, {"\u00e4", "a\u0308"}} {
+		err := os.Link(share+"/"+link[0], share+"/"+link[1])
+		if errors.Is(err, fs.ErrExist) {
+			t.Skip("the file system has these names for one file already, see TestCaseOfNames")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	hidden := map[string]bool{"NOTES.txt": true, "a\u0308": true, "lonely": true}
+	read, reads := readNames, map[string]int{}
+	defer func() { readNames = read; clear(names.dirs) }()
+	readNames = func(dir string) ([]string, error) {
+		reads[dir]++
+		list, err := read(dir)
+		return append(slices.DeleteFunc(list, func(n string) bool { return hidden[n] }), "gone"), err
+	}
+	owner := Access{Tool: "read"}
+	// The name that differs in case alone comes first, though another name
+	// of the same file sorts before it.
+	w.allowed(owner, Read, "~/share/NOTES.txt", share+"/notes.txt")
+	// Then any other name of the same file.
+	w.allowed(owner, Read, "~/share/a\u0308", share+"/\u00e4")
+	// Without one the name stays as it is written.
+	w.allowed(owner, Read, "~/share/lonely", share+"/lonely")
+
+	// A directory is read again only when it changed.
+	clear(reads)
+	w.allowed(owner, Read, "~/share/NOTES.txt", share+"/notes.txt")
+	if len(reads) != 0 {
+		t.Errorf("unchanged directories were read: %v", reads)
+	}
+	when := time.Now().Add(time.Hour)
+	if err := os.Chtimes(share, when, when); err != nil {
+		t.Fatal(err)
+	}
+	w.allowed(owner, Read, "~/share/NOTES.txt", share+"/notes.txt")
+	if reads[share] != 1 {
+		t.Errorf("a directory changed since was read %d times, want once", reads[share])
+	}
+	// Another directory in its place is read as well, though it has the
+	// same time.
+	if err := os.Rename(share, w.home+"/old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(share, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w.file(share+"/NOTES.txt", "")
+	if err := os.Chtimes(share, when, when); err != nil {
+		t.Fatal(err)
+	}
+	w.allowed(owner, Read, "~/share/NOTES.txt", share+"/NOTES.txt")
+	if reads[share] != 2 {
+		t.Errorf("a new directory of the same name was read %d times in all, want twice", reads[share])
+	}
+
+	// Of many directories the first are forgotten: all of them once there
+	// are maxListings, none before.
+	w.file(w.home+"/fresh/x", "")
+	for _, kept := range []int{maxListings - 1, maxListings} {
+		clear(names.dirs)
+		for i := range kept {
+			names.dirs[strconv.Itoa(i)] = listing{}
+		}
+		if found, _ := has(w.home+"/fresh", "x"); !found {
+			t.Error("x is not found in fresh")
+		}
+		want := kept + 1
+		if kept == maxListings {
+			want = 1
+		}
+		if len(names.dirs) != want {
+			t.Errorf("of %d directories and one more, %d are kept, want %d", kept, len(names.dirs), want)
+		}
+	}
+	// A directory that cannot be read leaves the name as it is written.
+	readNames = func(string) ([]string, error) { return nil, errTest }
+	w.allowed(owner, Read, "~/old/NOTES.txt", w.home+"/old/NOTES.txt")
+	if _, err := read(w.root + "/missing"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("listing a directory that is not there: %v", err)
+	}
+}
+
+// A rule holds for a path however its letters are written, also where the
+// file system tells them apart: of what does not exist, it cannot be told
+// how the file system would write it.
+func TestRulesOfEveryCase(t *testing.T) {
+	w := newWorld(t)
+	w.protected = []string{"~/.netrc", "~/tax"}
+	owner := Access{Tool: "read"}
+	w.refused(owner, Write, "~/.NETRC", `~/.netrc is in "protected" of the configuration, which no tool touches`)
+	w.refused(owner, Read, "~/Tax/2026.txt", `~/tax is in "protected" of the configuration, which no tool touches`)
+	w.protected = nil
+	denied := Access{Tool: "read", Deny: []string{"~/Private"}}
+	w.refused(denied, Read, "~/private/x", `~/Private is in "deny" of the tool read`)
+	w.allowed(denied, Read, "~/privately", w.home+"/privately")
 }
 
 // A hard link is the file it links: one to a file that is protected or

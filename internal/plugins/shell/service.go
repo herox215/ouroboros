@@ -205,7 +205,7 @@ func (sv *supervisor) note() {
 // launch starts the service name of peer with command in dir, as start
 // prepared it, and waits for its port.
 func (sv *supervisor) launch(name, peer, command, dir string, port int, d time.Duration, s settings) (*service, error) {
-	r, w, err := os.Pipe()
+	r, w, err := pipe()
 	if err != nil {
 		return nil, err
 	}

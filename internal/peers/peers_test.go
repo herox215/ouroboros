@@ -206,9 +206,14 @@ func TestPeersConnectsOnlyTheHolderOfTheKey(t *testing.T) {
 	}
 
 	// A peer that is trusted and holds its key, but is gone, is unreachable.
+	// A trusted peer that is not online follows, known by its contact.
 	bob.srv.Close()
-	if got, err := alice.network(bob.Node).Peers(context.Background()); err != nil || got[0].State != Unreachable {
+	got, err = alice.network(bob.Node).Peers(context.Background())
+	if err != nil || len(got) != 2 || got[0].PublicKey != bob.PublicKey || got[0].State != Unreachable {
 		t.Fatalf("a node that is gone: %+v, %v", got, err)
+	}
+	if offline := got[1]; offline.PublicKey != dave.PublicKey || offline.Name != "dave" || offline.ID != identity.IDOf(dave.PublicKey) || offline.State != Unreachable {
+		t.Errorf("a trusted peer that is not online: %+v", offline)
 	}
 }
 

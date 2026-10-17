@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -157,6 +159,10 @@ func TestMounts(t *testing.T) {
 	if got, err := mounts(Policy{Writable: []string{"/"}}); err != nil || !slices.Equal(got, []string{"--bind", "/", "/"}) {
 		t.Errorf("the root: %q, %v", got, err)
 	}
+	// The root is above what is right below it.
+	if got, err := mounts(Policy{Writable: []string{"/w", "/"}}); err != nil || !slices.Equal(got, []string{"--bind", "/", "/", "--bind", "/w", "/w"}) {
+		t.Errorf("the root after a directory below it: %q, %v", got, err)
+	}
 	// A directory that cannot be looked into, or not listed, is no answer.
 	locked, blind := at("locked"), at("blind")
 	os.Mkdir(locked, 0)
@@ -228,5 +234,29 @@ func TestWrapFlags(t *testing.T) {
 			!strings.HasSuffix(args, "--ro-bind / / --bind / / --dev /dev --seccomp 3 -- /bin/true x") {
 			t.Errorf("network %v: %s", network, args)
 		}
+	}
+}
+
+// What a command in the sandbox starts in the background ends with it, also
+// what left its group with setsid: Stop finds nothing left.
+func TestStopFindsNothing(t *testing.T) {
+	if Nested() {
+		t.Skip("in a sandbox already, where no other one starts")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd, err := Command(ctx, Policy{}, "sh", "-c", "setsid sleep 60 & sleep 60 & echo started")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = time.Second
+	// The output ends when nothing holds it open any more: the sleeps would
+	// for a minute.
+	if out, err := cmd.Output(); err != nil || string(out) != "started\n" {
+		t.Fatalf("output %q, %v", out, err)
+	}
+	if Stop(cmd.Process.Pid) {
+		t.Error("Stop found something left")
 	}
 }

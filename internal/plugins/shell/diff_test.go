@@ -16,6 +16,7 @@ func TestDiffFiles(t *testing.T) {
 		{"rustfmt", "Diff in /tmp/a file.rs:12:\r\n-x\n+y\nDiff in /tmp/a file.rs:18:\nDiff in src/b.rs:2:", []string{"/tmp/a file.rs", "src/b.rs"}},
 		{"unified", "--- a/src/a.rs\told\n+++ b/src/a.rs\tnew\n--- a/deleted.rs\n+++ /dev/null\n--- /dev/null\n+++ b/new.rs\n", []string{"src/a.rs", "deleted.rs", "new.rs"}},
 		{"ordinary", "Diff in prose\n+++\n--- FAIL: TestThing\n", nil},
+		{"empty names", "--- a/\n+++ \tnew\n", nil},
 		{"long line", strings.Repeat("x", 100000) + "Diff in hidden.rs:1:\nDiff in visible.rs:2:\n", []string{"visible.rs"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -98,6 +99,19 @@ func TestDiffCaptureExcerpt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDiffExcerptBounds(t *testing.T) {
+	// Up to both ends together the output stays as it is.
+	small := strings.Repeat("a", 1024) + strings.Repeat("b", 1024)
+	if got := diffExcerpt(small); got != small {
+		t.Fatalf("small output changed: %d bytes", len(got))
+	}
+	large := strings.Repeat("a", 1024) + "m" + strings.Repeat("b", 1024)
+	want := strings.Repeat("a", 1024) + "\n[… diff excerpt; middle omitted; see full log …]\n" + strings.Repeat("b", 1024)
+	if got := diffExcerpt(large); got != want {
+		t.Fatalf("excerpt: %q", got)
 	}
 }
 

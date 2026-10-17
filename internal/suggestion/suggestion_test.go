@@ -58,6 +58,12 @@ func TestBounds(t *testing.T) {
 	if n, _ := s.Add(strings.Repeat("a", MaxText+1), nil, ""); len(n.Text) != MaxText {
 		t.Fatalf("kept %d bytes", len(n.Text))
 	}
+	// One of MaxText bytes is not cut: it stays as it is, byte for byte,
+	// where a cut would leave out what is no UTF-8.
+	exact := strings.Repeat("b", MaxText-1) + "\xff"
+	if n, _ := s.Add(exact, nil, ""); n.Text != exact {
+		t.Fatalf("a text of MaxText bytes became %d bytes", len(n.Text))
+	}
 }
 
 // A list that cannot be read is no empty one, and is not written over; an

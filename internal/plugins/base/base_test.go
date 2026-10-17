@@ -95,10 +95,15 @@ func TestUsageWithoutFrontEnd(t *testing.T) {
 		plugin.Add(ctx, plugin.Command{Name: "hello", Args: "NAME", Help: "say hello", Run: func(_ context.Context, args []string) error {
 			return errors.New("hello " + strings.Join(args, " "))
 		}})
+		// Synopses one short of the column and as wide as it.
+		plugin.Add(ctx, plugin.Command{Name: "short", Args: "TWELVE-CHARS", Help: "fits"})
+		plugin.Add(ctx, plugin.Command{Name: "exact", Args: "THIRTEEN-CHAR", Help: "goes below"})
 		return nil
 	})
 	app, dir, printed := ouro(t, true, hello)
-	if err := app.Run(context.Background(), nil); err != nil || strings.Contains(printed.String(), "(default)") || !strings.Contains(printed.String(), "  ouro hello NAME         say hello\n") {
+	if err := app.Run(context.Background(), nil); err != nil || strings.Contains(printed.String(), "(default)") || !strings.Contains(printed.String(), "  ouro hello NAME         say hello\n") ||
+		!strings.Contains(printed.String(), "  ouro short TWELVE-CHARS fits\n") ||
+		!strings.Contains(printed.String(), "  ouro exact THIRTEEN-CHAR\n"+strings.Repeat(" ", 26)+"goes below\n") {
 		t.Fatalf("got %q, %v", printed.String(), err)
 	}
 	if _, err := os.Stat(string(dir)); err == nil {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -396,6 +397,32 @@ func TestListen(t *testing.T) {
 		t.Fatalf("taken after the probe: %v", err)
 	} else {
 		ln.Close()
+	}
+
+	// Where IPv6 of a port opens though another program holds it for IPv4,
+	// as on macOS, the port is taken all the same; port 0 needs no probe.
+	var opened []string
+	replace(t, &netListen, func(network, addr string) (net.Listener, error) {
+		opened = append(opened, network+" "+addr)
+		if network == "tcp4" {
+			return nil, errTest
+		}
+		return net.Listen(network, addr)
+	})
+	for _, p := range []int{port(gone), 0} {
+		opened = nil
+		ln, err := listen(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln.Close()
+		want := []string{fmt.Sprintf("tcp4 :%d", p), "tcp :0"}
+		if p == 0 {
+			want = want[1:]
+		}
+		if port(ln) == p || !slices.Equal(opened, want) {
+			t.Errorf("port %d: got %d after %q, want %q", p, port(ln), opened, want)
+		}
 	}
 
 	// Without any port there is no node.
