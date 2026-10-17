@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/cli"
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
@@ -447,6 +448,16 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 	if err := o.AcceptProposal(list[0].ID); err == nil || err.Error() != `there is a profile called "ZWEITE" already` {
 		t.Fatalf("the name of another profile: %v", err)
 	}
+	// Only the name of the proposal that is accepted is checked: another one
+	// is accepted while that name waits.
+	propose(t, alpha, "description", "knows the way", "say what it does")
+	list, _ = o.Proposals()
+	if len(list) != 2 || list[1].Field != "description" {
+		t.Fatalf("waiting: %+v", list)
+	}
+	if err := o.AcceptProposal(list[1].ID); err != nil || clitest.MustLoad(t, alpha).Description != "knows the way" {
+		t.Fatalf("a description while a name waits: %v", err)
+	}
 	os.WriteFile(filepath.Join(alpha.Home, "proposals.json"), []byte("{"), 0o600)
 	if err := o.AcceptProposal(list[0].ID); err == nil {
 		t.Fatal("proposals that cannot be read")
@@ -707,8 +718,14 @@ func TestOwnerDecidesOnSuggestions(t *testing.T) {
 	if list, err := o.Suggestions(); err != nil || len(list) != 2 || list[0].ID != a.ID || list[1].ID != b.ID {
 		t.Fatalf("waiting: %+v, %v", list, err)
 	}
-	if got, err := o.TakeSuggestion(a.ID); err != nil || got.Text != a.Text || got.Signals[0] != "bash took 42s" {
+	got, err := o.TakeSuggestion(a.ID)
+	if err != nil || got.Text != a.Text || got.Signals[0] != "bash took 42s" {
 		t.Fatalf("taken %+v, %v", got, err)
+	}
+	// The agent is asked to make what the owner took, with what was measured.
+	if task := plugin.SuggestedTask(got); task != assistant.SuggestedTask(a.Text, a.Signals) ||
+		!strings.Contains(task, "\n\nlet bash run long commands as jobs\n\nWhat was measured of that answer: bash took 42s.") {
+		t.Fatalf("task %q", task)
 	}
 	if err := o.DropSuggestion(b.ID); err != nil {
 		t.Fatal(err)

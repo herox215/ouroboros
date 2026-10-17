@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -255,7 +256,20 @@ func (c *nodeCommands) serve(ctx context.Context, _ []string) error {
 		defer mu.Unlock()
 		return successor
 	}
+	// What serve started stops with the node, also with one that did not
+	// start: the node stops each profile as it stops, and serve stops those
+	// it did not, each once.
+	stops := []func(){sync.OnceFunc(server.OnStop)}
+	server.OnStop = stops[0]
+	server.Profiles = slices.Clone(server.Profiles)
+	for i, p := range server.Profiles {
+		stops = append(stops, sync.OnceFunc(p.OnStop))
+		server.Profiles[i].OnStop = stops[i+1]
+	}
 	err := server.Run(ctx)
+	for _, stop := range stops {
+		stop()
+	}
 	if s, ok := errors.AsType[*node.Succession](err); ok {
 		return &plugin.Restarting{Exe: s.Exe, Env: append(os.Environ(), s.Env...)}
 	}

@@ -62,6 +62,18 @@ func TestAddProfile(t *testing.T) {
 	if luna.Socket() != root.Socket() || luna.Service().PIDFile != root.Service().PIDFile || luna.Models() != root.Models() {
 		t.Fatal("the process is not shared")
 	}
+	if luna.Catalog() != root.Catalog() || luna.Skills() != root.Skills() {
+		t.Fatal("the catalog and the skills are not shared")
+	}
+	if luna.Services() != filepath.Join(string(luna), "services.json") {
+		t.Fatalf("the services of the profile are in %s", luna.Services())
+	}
+	if _, err := luna.Suggestions().Add("rename it", nil, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := root.Suggestions().List(); err != nil || len(list) != 0 {
+		t.Fatalf("the suggestions are shared: %+v, %v", list, err)
+	}
 	if _, err := luna.Credentials().Get(LegacyAccess); err != nil {
 		t.Fatalf("the accesses are not shared: %v", err)
 	}
@@ -202,6 +214,35 @@ func TestRenameProfile(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(string(sol), 0o700) })
 	if err := sol.RenameProfile("Helios"); err == nil {
 		t.Error("a configuration that cannot be written should fail")
+	}
+}
+
+// A name is free for a profile if no other profile has it, whatever the
+// case of its letters, or has it as its ID: its own name is free for it.
+func TestNameFree(t *testing.T) {
+	root := node(t)
+	luna, _ := root.AddProfile("Luna")
+	lunaID, _ := luna.Identity()
+	terraID, _ := root.Identity()
+	for _, name := range []string{"luna", "Luna", lunaID.ID()} {
+		if err := luna.NameFree(name); err != nil {
+			t.Errorf("%q for Luna: %v", name, err)
+		}
+		if err := root.NameFree(name); err == nil {
+			t.Errorf("%q for Terra should not be free", name)
+		}
+	}
+	for _, name := range []string{"TERRA", terraID.ID()} {
+		if err := luna.NameFree(name); err == nil {
+			t.Errorf("%q for Luna should not be free", name)
+		}
+	}
+	if err := root.NameFree("Sol"); err != nil {
+		t.Errorf("Sol: %v", err)
+	}
+	os.WriteFile(filepath.Join(string(luna), "config.json"), []byte("{"), 0o600)
+	if err := root.NameFree("Sol"); err == nil {
+		t.Error("a profile that cannot be read should fail")
 	}
 }
 

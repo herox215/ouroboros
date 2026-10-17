@@ -18,6 +18,7 @@ import (
 	"ouroboros/internal/cli/clitest"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
+	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 	"ouroboros/internal/openai/openaitest"
 	nodeplugin "ouroboros/internal/plugins/node"
@@ -234,7 +235,7 @@ func TestServe(t *testing.T) {
 
 // A conversation belongs to the peer whose key signed its messages: a peer
 // that uses the context ID of another one starts a conversation of its own,
-// and reads nothing of what the other said.
+// and reads nothing of what the other said, nor of what it told.
 func TestPeersDoNotShareAConversation(t *testing.T) {
 	beta := clitest.Settings(t)
 	cfg := clitest.NodeConfig(beta)
@@ -243,6 +244,7 @@ func TestPeersDoNotShareAConversation(t *testing.T) {
 
 	ctx := context.Background()
 	ask := map[string]func(text string) string{}
+	tell := map[string]func(text string){}
 	for _, name := range []string{"alpha", "gamma"} {
 		s := clitest.Settings(t)
 		cfg := clitest.NodeConfig(s)
@@ -267,6 +269,16 @@ func TestPeersDoNotShareAConversation(t *testing.T) {
 			}
 			return reply
 		}
+		tell[name] = func(text string) {
+			t.Helper()
+			node, err := network.Resolve(ctx, "beta")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := network.Tell(ctx, node, "the same context", text); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
 	if got := ask["alpha"]("a secret"); !strings.Contains(got, "turns=1 last=a secret") {
@@ -277,6 +289,15 @@ func TestPeersDoNotShareAConversation(t *testing.T) {
 	}
 	if got := ask["alpha"]("again"); !strings.Contains(got, "turns=3 last=again") {
 		t.Fatalf("alpha lost its conversation: %q", got)
+	}
+	// A note starts no answer: the agent reads it with the next question of
+	// the peer that told it.
+	tell["gamma"]("a note")
+	if got := ask["gamma"]("and?"); !strings.Contains(got, "turns=4 last=and?") {
+		t.Fatalf("gamma's note was not kept: %q", got)
+	}
+	if got := ask["alpha"]("once more"); !strings.Contains(got, "turns=5 last=once more") {
+		t.Fatalf("alpha read the note of gamma: %q", got)
 	}
 }
 
@@ -347,6 +368,45 @@ func TestServeKeepsTheSessions(t *testing.T) {
 	if reply, err := plugin.Await(context.Background(), sessions, "c1", "still there?"); err != nil || !strings.Contains(reply, "turns=7 last=[A note of ouro, which the owner did not write: ") {
 		t.Fatalf("got %q, %v", reply, err)
 	}
+}
+
+// A session that asked to go on by itself once ouro runs anew is told so by
+// the node that starts next, and answers without the owner.
+func TestServeGoesOnWithTheSessionsThatAsked(t *testing.T) {
+	s := clitest.Settings(t)
+	config.Save(s.Home, clitest.NodeConfig(s))
+	n := clitest.Serve(t, s)
+	app, _ := clitest.NewApp(t, s, "")
+	sessions, _ := cli.Service[plugin.Sessions](app)
+	ctx := context.Background()
+	if _, err := plugin.Await(ctx, sessions, "c1", "build it"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Open(home.Dir(s.Home).History()).GoOn(history.Owner("c1")); err != nil {
+		t.Fatal(err)
+	}
+	clitest.Serve(t, s)
+	watch, cancel := context.WithTimeout(ctx, clitest.Patience)
+	defer cancel()
+	past, events, err := sessions.Watch(watch, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wentOn := func(e plugin.SessionEvent) bool {
+		return e.Kind == plugin.SessionAnswer && strings.HasPrefix(e.Text, "[gpt-4o] turns=3 ") && strings.HasSuffix(e.Text, "[Not from the owner: ouro runs the build you asked for now. Go on with what you were doing.]")
+	}
+	if slices.ContainsFunc(past, wentOn) {
+		return
+	}
+	for e := range events {
+		if wentOn(e) {
+			return
+		}
+	}
+	t.Fatalf("the session did not go on: %+v", past)
 }
 
 // What the plugins do as the node serves runs before it serves, and once

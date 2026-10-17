@@ -161,6 +161,24 @@ func TestFiles(t *testing.T) {
 	if got := d.Models(); got != filepath.Join(string(d), "models.json") {
 		t.Errorf("models %q", got)
 	}
+	if got := d.Catalog(); got != filepath.Join(string(d), "catalog.json") {
+		t.Errorf("catalog %q", got)
+	}
+	if got := d.Services(); got != filepath.Join(string(d), "services.json") {
+		t.Errorf("services %q", got)
+	}
+	if got := d.Skills(); got != filepath.Join(string(d), "skills") {
+		t.Errorf("skills %q", got)
+	}
+	if _, err := d.Suggestions().Add("rename it", nil, "s1"); err != nil {
+		t.Errorf("a suggestion should be kept: %v", err)
+	}
+	if list, _ := d.Suggestions().List(); len(list) != 1 || list[0].Text != "rename it" {
+		t.Errorf("suggestions %+v", list)
+	}
+	if _, err := os.Stat(filepath.Join(string(d), "suggestions.json")); err != nil {
+		t.Errorf("suggestions: %v", err)
+	}
 	if _, err := d.Proposals().Add(config.Config{Name: "alpha"}, "name", []byte(`"beta"`), "why"); err != nil {
 		t.Errorf("a proposal should be kept: %v", err)
 	}

@@ -115,4 +115,44 @@ func TestStartDirectory(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"project"}); err != nil || directory != filepath.Join(cwd, "project") {
 		t.Fatalf("multi-profile project: %q, %v", directory, err)
 	}
+	// No argument is no directory.
+	if app.directoryArgument(nil) {
+		t.Error("no argument taken for a directory")
+	}
+}
+
+// A directory that cannot be told is an error, and no front end opens on
+// another one instead: home without $HOME, and the current directory or
+// one relative to it once it was removed.
+func TestStartDirectoryThatCannotBeTold(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.Mkdir(gone, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(gone)
+	t.Setenv("HOME", "")
+	opened := 0
+	p := plugin.New("test-front", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.FrontEnd{Name: "test-front", Run: func(context.Context) error { opened++; return nil }})
+		return nil
+	})
+	app, err := NewWith(base.Plugin(home.Dir(t.TempDir()), plugin.Terminal{Out: &bytes.Buffer{}, Interactive: true}), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run(context.Background(), []string{"~/project"}); err == nil || !strings.Contains(err.Error(), `project directory "~/project"`) {
+		t.Errorf("home without $HOME: %v", err)
+	}
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "initial project directory") {
+		t.Errorf("a current directory that was removed: %v", err)
+	}
+	if err := app.Run(context.Background(), []string{"./project"}); err == nil || !strings.Contains(err.Error(), `project directory "./project"`) {
+		t.Errorf("relative to a directory that was removed: %v", err)
+	}
+	if opened != 0 {
+		t.Errorf("opened %d times", opened)
+	}
 }

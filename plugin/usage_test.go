@@ -3,6 +3,9 @@ package plugin_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/credentials"
@@ -14,7 +17,10 @@ import (
 func TestOwnerUsage(t *testing.T) {
 	dir := home.Dir(t.TempDir())
 	store := dir.Credentials()
+	// An access of a provider that is gone, or that tells no quota, is
+	// left out, and the others are asked all the same.
 	for _, a := range []credentials.Access{
+		{Provider: "gone"},
 		{Provider: "quota", Name: "good"},
 		{Provider: "quota", Name: "bad"},
 		{Provider: "no-quota"},
@@ -58,5 +64,35 @@ func TestOwnerUsage(t *testing.T) {
 	cancel()
 	if _, err := o.Usage(ctx, []plugin.Provider{p}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled: %v", err)
+	}
+}
+
+// A configuration or accesses that cannot be read fail the report, and no
+// provider is asked.
+func TestOwnerUsageThatCannotBeRead(t *testing.T) {
+	asked := 0
+	p := plugin.Provider{Name: "quota", Usage: func(context.Context, llm.Access) ([]llm.UsageWindow, error) {
+		asked++
+		return nil, nil
+	}}
+	dir := home.Dir(t.TempDir())
+	if _, err := dir.Credentials().Put(credentials.Access{Provider: "quota"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(string(dir), "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if reports, err := plugin.OwnerOf(dir, nil).Usage(context.Background(), []plugin.Provider{p}); err == nil || reports != nil {
+		t.Fatalf("a configuration that cannot be read: %+v, %v", reports, err)
+	}
+	dir = home.Dir(t.TempDir())
+	if err := os.WriteFile(filepath.Join(string(dir), credentials.FileName), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if reports, err := plugin.OwnerOf(dir, nil).Usage(context.Background(), []plugin.Provider{p}); err == nil || !strings.Contains(err.Error(), credentials.FileName) || reports != nil {
+		t.Fatalf("accesses that cannot be read: %+v, %v", reports, err)
+	}
+	if asked != 0 {
+		t.Fatalf("asked %d times", asked)
 	}
 }

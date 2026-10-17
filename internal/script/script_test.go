@@ -102,6 +102,13 @@ func TestResult(t *testing.T) {
 			t.Errorf("%q = %q, %v; want the error %q", source, got, err, want)
 		}
 	}
+	// What a script that failed left is not listed: a Proxy it left runs
+	// nothing more once it ended.
+	for _, end := range []string{`throw new Error("no")`, `return Symbol("x")`} {
+		if _, r, err := run(t, `var p = new Proxy({}, {ownKeys() { echo({late: 1}); return [] }}); `+end); err == nil || len(r.calls) != 0 {
+			t.Errorf("%s: %v, called %v", end, err, r.calls)
+		}
+	}
 }
 
 // A tool is a function of its name that takes one object and returns the
@@ -244,6 +251,10 @@ func TestReservedNames(t *testing.T) {
 	}
 	if reserved("echo") || reserved("list_peers") || !reserved("delete") || !reserved("new") || !reserved("my-tool") {
 		t.Error("the words of the language are not told from names")
+	}
+	// Reserved tells the other packages the same.
+	if Reserved("echo") || !Reserved("delete") || !Reserved("my-tool") {
+		t.Error("Reserved does not tell the words of the language from names")
 	}
 	// A name that is no word of the language is not looked for.
 	r := &recorder{}
@@ -407,6 +418,8 @@ func TestAwaitIsLeftOut(t *testing.T) {
 		"var awaited = 1; await echo({n: awaited})":                                `echo:{"n":1}`,
 		"async function h() { return await echo({a: 2}) }\nconst r = await h(); r": `echo:{"a":2}`,
 		"const f = async (x) => echo(x); await f({b: 3})":                          `echo:{"b":3}`,
+		// A script that is JavaScript as it is keeps its async functions.
+		"async function g() { return await echo({}) }\ntypeof g()": "object",
 	} {
 		if got, _, err := run(t, source); err != nil || strings.SplitN(got, "\n", 2)[0] != want {
 			t.Errorf("%q = %q, %v; want %q", source, got, err, want)
@@ -419,11 +432,55 @@ func TestAwaitIsLeftOut(t *testing.T) {
 	}
 }
 
+// unawaited makes blanks of every await and async that is a word of its
+// own, and leaves strings, comments and longer names alone, whatever comes
+// before or after them.
+func TestUnawaited(t *testing.T) {
+	for source, want := range map[string]string{
+		"await x":                          "      x",
+		"await await":                      "           ",
+		"async function f() { await g() }": "      function f() {       g() }",
+		"xawait awaitx $await _async .await await1 async": "xawait awaitx $await _async .await await1      ",
+		`"await" + 'await' + ` + "`await`":                `"await" + 'await' + ` + "`await`",
+		`"it\"s await" + await x`:                         `"it\"s await" +       x`,
+		`'\\' + await x`:                                  `'\\' +       x`,
+		"// await\nawait x":                               "// await\n      x",
+		"x // await":                                      "x // await",
+		"a/2 + await x":                                   "a/2 +       x",
+		"/*/ await */ await":                              "/*/ await */      ",
+		"x /* await */ await":                             "x /* await */      ",
+		"/**/await":                                       "/**/     ",
+		"/* x *//await":                                   "/* x *//     ",
+		"await/* await":                                   "     /* await",
+		"2 */ await x":                                    "2 */       x",
+		"await /":                                         "      /",
+		"":                                                "",
+	} {
+		if got := unawaited(source); got != want {
+			t.Errorf("unawaited(%q) = %q, want %q", source, got, want)
+		}
+	}
+}
+
+// What is part of a name in JavaScript is told from what is not.
+func TestWord(t *testing.T) {
+	for _, c := range []byte("_$.0569azmAZM") {
+		if !word(c) {
+			t.Errorf("%q is part of a name", c)
+		}
+	}
+	for _, c := range []byte(" /:@[`{-\n\"") {
+		if word(c) {
+			t.Errorf("%q is no part of a name", c)
+		}
+	}
+}
+
 // A call of a tool that is a statement of its own, and not the last one,
 // prints what it returns, as only the value of the last statement comes
 // back; nothing else is printed for the script.
 func TestALostResultIsPrinted(t *testing.T) {
-	got, _, err := run(t, `echo({a: 1}); tools.delete({b: 2}); [1].push(2); Math.max(1, 2); [echo][0]({d: 4}); echo({c: 3})`)
+	got, _, err := run(t, `echo({a: 1}); tools.delete({b: 2}); [1].push(2); Math.max(1, 2); [echo][0]({d: 4}); ({echo: () => "own"}).echo(); echo({c: 3})`)
 	if want := "echo:{\"a\":1}\ndelete:{\"b\":2}\necho:{\"c\":3}"; err != nil || got != want {
 		t.Fatalf("got %q, %v; want %q", got, err, want)
 	}
@@ -455,6 +512,9 @@ func TestPromisesAreSettled(t *testing.T) {
 		`(async () => { throw new Error("async boom") })()`: "the script failed: Error: async boom\n\tat script:1:22",
 		`Promise.reject("no")`:                              "the script failed: no",
 		`new Promise(() => {})`:                             "the script failed: the script gave back a promise that never settled",
+		// What is no error has no stack: it is told as it is.
+		`(async () => { throw {code: 1} })()`:          "the script failed: [object Object]",
+		`(async () => { throw {stack: undefined} })()`: "the script failed: [object Object]",
 	} {
 		if got, _, err := run(t, source); err == nil || got != "" || !strings.HasPrefix(err.Error(), want) {
 			t.Errorf("%q = %q, %v; want %q", source, got, err, want)

@@ -118,7 +118,11 @@ func TestProfiles(t *testing.T) {
 			t.Errorf("%v should fail", args)
 		}
 	}
-	// What is about the node needs no profile.
+	// What is about the node needs no profile, and neither does ouro
+	// without a command.
+	if err := app.Run(ctx, nil); err != nil || !strings.HasPrefix(out.Take(), "ouro – tiny A2A agent node") {
+		t.Fatalf("without a command: %v", err)
+	}
 	if err := app.Run(ctx, []string{"profile"}); err != nil {
 		t.Fatal(err)
 	}
@@ -308,8 +312,35 @@ func TestProfilesWithoutTheGUI(t *testing.T) {
 				if err := app.Run(context.Background(), []string{"gui"}); err == nil || strings.Contains(err.Error(), "the node has several profiles") {
 					t.Fatalf("disabled GUI: %v", err)
 				}
+				return
+			}
+			// The GUI of the first shows the second one only if that has
+			// it on: then a second one that cannot be read fails it. What to
+			// go on with is none, so that no window opens otherwise.
+			if err := os.WriteFile(filepath.Join(string(luna), "config.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OURO_RESUME", "{")
+			err = app.Run(context.Background(), []string{"gui"})
+			if err == nil || strings.Contains(err.Error(), "GUI profile 2") == off[1] || strings.Contains(err.Error(), "the session to go on with") != off[1] {
+				t.Fatalf("the GUI of Terra: %v", err)
 			}
 		})
+	}
+}
+
+// A profile may turn the desktop off: the tray shows the others.
+func TestProfileWithoutTheDesktop(t *testing.T) {
+	s := clitest.Settings(t)
+	_, luna := twoProfiles(t, s)
+	if err := config.Update(string(luna), func(c *config.Config) error {
+		c.Plugins = &config.Plugins{Off: []string{"desktop"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.New(s, cli.Terminal{In: strings.NewReader(""), Out: &syncBuffer{}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -309,6 +309,32 @@ func TestGatewayRestoreValidation(t *testing.T) {
 	}
 }
 
+// namelessBackend makes sessions without an ID.
+type namelessBackend struct{ plugin.Sessions }
+
+func (namelessBackend) New(context.Context) (string, error) { return "", nil }
+
+// A session the backend cannot make, or makes without an ID, is bound to
+// nobody.
+func TestGatewayOpenThatFails(t *testing.T) {
+	failed := errors.New("no session")
+	backend := &gatewayBackend{err: failed}
+	g := plugin.NewGatewayAdapter(backend, gatewayOwner)
+	if id, err := g.Open(t.Context(), gatewayAlice); !errors.Is(err, failed) || id != "" {
+		t.Fatalf("backend error: %q, %v", id, err)
+	}
+	if len(g.Bindings()) != 0 {
+		t.Fatalf("bound %v", g.Bindings())
+	}
+	nameless := plugin.NewGatewayAdapter(namelessBackend{}, gatewayOwner)
+	if id, err := nameless.Open(t.Context(), gatewayAlice); !errors.Is(err, plugin.ErrGatewaySession) || id != "" {
+		t.Fatalf("no ID: %q, %v", id, err)
+	}
+	if len(nameless.Bindings()) != 0 {
+		t.Fatalf("bound %v", nameless.Bindings())
+	}
+}
+
 func TestGatewayConcurrentOpen(t *testing.T) {
 	g := plugin.NewGatewayAdapter(&gatewayBackend{}, gatewayOwner)
 	var wg sync.WaitGroup

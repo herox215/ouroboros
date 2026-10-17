@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
@@ -47,6 +49,30 @@ func TestCommandsReportErrors(t *testing.T) {
 	lost := commands(dir, func() (string, error) { return "", unknown })
 	if err := lost.start(ctx, nil); !errors.Is(err, unknown) {
 		t.Errorf("start without a binary: %v", err)
+	}
+}
+
+// A node that does not start stops what serve started for it, for every
+// profile and once, as a node that ran does: nothing of it goes on after
+// serve returned, like a tray that writes to the log.
+func TestServeThatFailsStopsWhatItStarted(t *testing.T) {
+	dir := home.Dir(t.TempDir()) // not set up
+	c := commands(dir, nil)
+	c.sessions = session.New(nil)
+	var told []string
+	tell := func(what string) func() { return func() { told = append(told, what) } }
+	c.serving = []func() []plugin.Serving{func() []plugin.Serving { return []plugin.Serving{{Start: tell("start")}} }}
+	c.server = node.Server{Home: dir, OnStop: tell("stop first"), Profiles: []node.Server{{Home: dir, OnStop: tell("stop second")}}}
+	if err := c.serve(context.Background(), nil); !errors.Is(err, config.ErrIncomplete) {
+		t.Fatalf("serve: %v", err)
+	}
+	if !slices.Equal(told, []string{"start", "stop first", "stop second"}) {
+		t.Fatalf("told %v", told)
+	}
+	// The next serve stops them again: what the commands keep is not changed.
+	told = nil
+	if err := c.serve(context.Background(), nil); !errors.Is(err, config.ErrIncomplete) || !slices.Equal(told, []string{"start", "stop first", "stop second"}) {
+		t.Fatalf("the second time told %v: %v", told, err)
 	}
 }
 

@@ -100,3 +100,57 @@ func TestOwnerArchiveIOErrors(t *testing.T) {
 		t.Fatal("ignored records error")
 	}
 }
+
+// A page of a session is the page the archive reads, without the node: from
+// the start, after an offset, and an error for an ID that names no session.
+func TestOwnerArchivePage(t *testing.T) {
+	dir := home.Dir(t.TempDir())
+	a := history.Open(dir.History())
+	who := history.Who{Session: "long"}
+	for i := 0; i < 30; i++ {
+		if err := a.Append(who, []openai.Message{{Role: "user", Content: fmt.Sprint("message ", i)}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := history.Owner("long")
+	o := plugin.OwnerOf(dir, nil)
+	for _, after := range []int{0, 40, 59, 60} {
+		want, err := a.Page(id, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := o.ArchivePage(id, after)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("after %d: %+v, %v; want %+v", after, got, err, want)
+		}
+	}
+	if page, _ := o.ArchivePage(id, 0); len(page.Records) != 40 || !page.More || page.Next != 40 || page.Records[0].Content != "message 0" {
+		t.Fatalf("the first page %+v", page)
+	}
+	if _, err := o.ArchivePage("owner/missing", 0); !errors.Is(err, history.ErrNotArchived) {
+		t.Fatalf("missing: %v", err)
+	}
+	if _, err := o.ArchivePage("../outside", 0); err == nil {
+		t.Fatal("accepted an ID of no session")
+	}
+}
+
+// A session that is archived without a record, as an empty file of the
+// archive before it was a database leaves it, has no records, not none.
+func TestOwnerArchiveRecordsOfAnEmptySession(t *testing.T) {
+	dir := home.Dir(t.TempDir())
+	legacy := filepath.Join(dir.History(), "owner")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "empty.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	records, err := plugin.OwnerOf(dir, nil).ArchiveRecords("owner/empty")
+	if err != nil || records == nil || len(records) != 0 {
+		t.Fatalf("records %#v, %v", records, err)
+	}
+	if b, _ := json.Marshal(records); string(b) != "[]" {
+		t.Fatalf("JSON %s", b)
+	}
+}
