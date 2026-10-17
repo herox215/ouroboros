@@ -118,8 +118,8 @@ func TestPeerPromptFollowsTheTools(t *testing.T) {
 		want  string
 	}{
 		{nil, `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.`},
-		{config.Named(toolListPeers), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint + " " + strings.TrimSpace(scriptHint)},
-		{config.Named("read"), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint + peerFilesHint + " " + strings.TrimSpace(scriptHint)},
+		{config.Named(toolListPeers), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint},
+		{config.Named("read"), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint + peerFilesHint},
 	} {
 		cfg.Tools = &config.Tools{A2A: tt.tools}
 		bot, err := b.ForPeers(cfg)

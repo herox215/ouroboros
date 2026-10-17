@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/openai"
-	"ouroboros/internal/script"
 )
 
 // explain runs explain_error with id for the conversation of ctx.
@@ -80,29 +78,16 @@ func TestExplainError(t *testing.T) {
 	}
 }
 
-// promptLLM answers every message with the system prompt and the names of
-// the tools it was offered, run with the functions of its scripts.
 type promptLLM struct{}
 
 func (promptLLM) Complete(_ context.Context, _ string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
 	names := make([]string, len(tools))
 	for i, t := range tools {
 		names[i] = t.Function.Name
-		if t.Function.Name == toolRun {
-			var functions []string
-			for _, m := range regexp.MustCompile(`\n- (?:tools\.)?(\w+)\(`).FindAllStringSubmatch(t.Function.Description, -1) {
-				functions = append(functions, m[1])
-			}
-			names[i] += "(" + strings.Join(functions, ",") + ")"
-		}
 	}
 	return openai.Message{Content: msgs[0].Content + "\ntools: " + strings.Join(names, ",")}, nil
 }
 
-// The agent that answers peers can explain failures whatever tools the owner
-// allows peers, as long as it allows one: it is a function of scripts, which a
-// peer without a tool does not run. It knows when to; without a list of
-// failures it cannot.
 func TestPeerAgentExplainsErrors(t *testing.T) {
 	cfg := config.Config{Access: "http://x", Model: "m", Name: "n"}
 	b := Builder{
@@ -130,11 +115,11 @@ func TestPeerAgentExplainsErrors(t *testing.T) {
 		t.Fatalf("no tools for peers: %q", got)
 	}
 	cfg.Tools = &config.Tools{A2A: config.Named(toolListPeers)}
-	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: run(list_peers,"+toolExplainError+")") {
+	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: list_peers,"+toolExplainError) {
 		t.Fatalf("a tool for peers: %q", got)
 	}
 	cfg.Tools = &config.Tools{A2A: config.Named(config.AllTools)}
-	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: run(list_peers,ask_peer,answer_peer,tell_peer,ask_back,"+toolExplainError+")") {
+	if got := ask(); !strings.Contains(got, "look it up with "+toolExplainError) || !strings.HasSuffix(got, "tools: list_peers,ask_peer,answer_peer,tell_peer,ask_back,"+toolExplainError) {
 		t.Fatalf("all tools for peers: %q", got)
 	}
 
@@ -144,12 +129,12 @@ func TestPeerAgentExplainsErrors(t *testing.T) {
 		t.Fatal("explain_error is not among the tools to pick from")
 	}
 	cfg.Tools = nil
-	owner, err := b.forOwner(cfg, script.NewSessions())
+	owner, err := b.forOwner(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, _ := owner.Respond(context.Background(), "c", "hi")
-	if !strings.HasSuffix(got, "tools: run(list_peers,ask_peer,answer_peer,tell_peer,ask_back,user_question,delegate)") {
+	if !strings.HasSuffix(got, "tools: list_peers,ask_peer,answer_peer,tell_peer,ask_back,user_question,delegate") {
 		t.Fatalf("the owner's agent: %q", got)
 	}
 	// It knows that an error ID can be asked about, and that nothing is known

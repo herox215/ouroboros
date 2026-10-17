@@ -32,8 +32,8 @@ func TestRecoveryAndResearchPrompts(t *testing.T) {
 					"Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth.",
 					"For feasibility checks, request a few search results and small, bounded webpage excerpts rather than collecting large raw responses.",
 					"Use the tools' output budget parameters and browser offsets to read more only where needed.",
-					"Start with about 2 KiB of text per source, leaving room for notes within the script's current output budget, and expand only when necessary.",
-					"Keep the combined output of a script, including notes and other results, safely below its output limit; individual tool limits do not bound a batch.",
+					"Start with about 2 KiB of text per source, leaving room for notes within the output budget, and expand only when necessary.",
+					"Keep the combined output of tool calls, including notes and other results, safely below its output limit; individual tool limits do not bound a batch.",
 				} {
 					if !strings.Contains(prompt, want) {
 						t.Errorf("%s prompt lacks %q", name, want)

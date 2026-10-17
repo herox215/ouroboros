@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"image/color"
 	"slices"
 	"strings"
@@ -24,7 +25,7 @@ func stripped(lines []string) []string {
 // and its size. Its lines hang on a bar, two cells narrower; on a narrow
 // screen the rule goes.
 func TestRenderMessage(t *testing.T) {
-	lines := strings.Split(renderMessage(Message{"user", "hi\nthere"}, 0, &scriptTrace{}, 30, false), "\n")
+	lines := strings.Split(renderMessage(Message{"user", "hi\nthere"}, 0, 30, false), "\n")
 	want := []string{" user  #1 " + strings.Repeat("─", 12) + " 8 bytes", "▎ hi", "▎ there"}
 	if got := stripped(lines); !slices.Equal(got, want) {
 		t.Fatalf("%q, want %q", got, want)
@@ -33,10 +34,10 @@ func TestRenderMessage(t *testing.T) {
 	if !strings.HasPrefix(lines[0], badge) || !strings.HasPrefix(lines[1], lipgloss.NewStyle().Foreground(accent).Render(bar)) {
 		t.Fatalf("the badge and the bar should have the color of the role: %q", lines[:2])
 	}
-	if got := stripped(strings.Split(renderMessage(Message{"tool", "aaa bbb ccc"}, 0, &scriptTrace{}, 9, true), "\n")); !slices.Equal(got[1:], []string{"▎ aaa bbb", "▎ ccc"}) {
+	if got := stripped(strings.Split(renderMessage(Message{"tool", "aaa bbb ccc"}, 0, 9, true), "\n")); !slices.Equal(got[1:], []string{"▎ aaa bbb", "▎ ccc"}) {
 		t.Fatalf("the lines should be wrapped two cells narrower: %q", got)
 	}
-	if got := ansi.Strip(renderMessage(Message{"assistant", "x"}, 9, &scriptTrace{}, 10, false)); got != " assistant  #10  1 byte\n▎ x" {
+	if got := ansi.Strip(renderMessage(Message{"assistant", "x"}, 9, 10, false)); got != " assistant  #10  1 byte\n▎ x" {
 		t.Fatalf("on a narrow screen: %q", got)
 	}
 }
@@ -46,7 +47,7 @@ func TestRenderMessage(t *testing.T) {
 func TestRoleColor(t *testing.T) {
 	for role, want := range map[string]color.Color{
 		"user": accent, "assistant": peer, "system": lipgloss.Color("7"), "tool": good,
-		"tool run": lipgloss.Color("4"), "plugin diagnostic": bad, "developer": muted,
+		"tool read": lipgloss.Color("4"), "plugin diagnostic": bad, "developer": muted,
 	} {
 		if got := roleColor(role); got != want {
 			t.Errorf("%s: %v, want %v", role, got, want)
@@ -70,13 +71,13 @@ func TestMessageLines(t *testing.T) {
 	}{
 		{Message{"tool", "\tx"}, []string{"    x"}},
 		{Message{"assistant", "→ f {}"}, []string{"→ f"}},
-		{Message{"tool run", "- f(): y"}, []string{"- f(): y"}},
+		{Message{"tool read", "- f(): y"}, []string{"- f(): y"}},
 	} {
-		if got := stripped(messageLines(tc.c, 0, &scriptTrace{}, 20)); !slices.Equal(got, tc.want) {
+		if got := stripped(messageLines(tc.c, 20)); !slices.Equal(got, tc.want) {
 			t.Errorf("%v: %q, want %q", tc.c, got, tc.want)
 		}
 	}
-	if got := messageLines(Message{"tool run", "- f(): y"}, 0, &scriptTrace{}, 20); !strings.HasPrefix(got[0], "- "+boldStyle.Render("f")) {
+	if got := messageLines(Message{"tool read", "- f(): y"}, 20); !strings.HasPrefix(got[0], "- "+boldStyle.Render("f")) {
 		t.Fatalf("a tool should have its functions stand out: %q", got)
 	}
 }
@@ -173,11 +174,11 @@ func TestCallLines(t *testing.T) {
 		{"→ bash not json", 40, []string{"→ bash not json"}},
 		{"→ list", 40, []string{"→ list"}},
 	} {
-		if got := stripped(callLines(tc.text, nil, tc.width)); !slices.Equal(got, tc.want) {
+		if got := stripped(callLines(tc.text, tc.width)); !slices.Equal(got, tc.want) {
 			t.Errorf("%q: %q,\nwant %q", tc.text, got, tc.want)
 		}
 	}
-	lines := callLines(`→ read {"path":"/a","limit":20}`, nil, 40)
+	lines := callLines(`→ read {"path":"/a","limit":20}`, 40)
 	if !strings.HasPrefix(lines[0], lipgloss.NewStyle().Foreground(peer).Render("→ ")+boldStyle.Render("read")) ||
 		!strings.HasPrefix(lines[1], "  "+keyStyle.Render("path")) || !strings.HasSuffix(lines[2], literalStyle.Render("20")) {
 		t.Fatalf("the call, its keys and its values should stand out: %q", lines)
@@ -202,81 +203,39 @@ func TestObjectFields(t *testing.T) {
 	}
 }
 
-// A context is a block a message, and a block of the variables its scripts
-// kept, when they kept any; the LLM is not sent that block.
+// Direct calls and archived calls are displayed without interpreter state.
 func TestRenderContext(t *testing.T) {
-	blocks := renderContext(traceContext, 60, false)
-	if len(blocks) != len(traceContext)+1 {
-		t.Fatalf("%d blocks", len(blocks))
+	msgs := []Message{
+		{"tool read", "Read a file.\nparameters: {}"},
+		{"assistant", `→ read {"path":"/a"}`},
+		{"tool", "contents"},
+		{"assistant", `→ run {"script":"const a = 1; print(a)"}`},
+		{"tool", "1\n[kept for the next script: a (number)]"},
+		{"assistant", `→ unknown {"script":"print(a)"}`},
 	}
-	want := []string{
-		" variables  4 " + strings.Repeat("─", 26) + " not sent to the LLM",
-		"▎ a  number             set #3 #8 · used #5 · gone #12",
-		"▎ b  string of 2 bytes  set #3 #5 · used #5 · gone #10",
-		"▎ c  function           set #8 · used #10 · gone #12",
-		"▎ z  number             set #17",
+	blocks := renderContext(msgs, 80, false)
+	if len(blocks) != len(msgs) {
+		t.Fatalf("want one block per message, got %d", len(blocks))
 	}
-	if got := stripped(strings.Split(blocks[len(blocks)-1], "\n")); !slices.Equal(got, want) {
-		t.Fatalf("%q,\nwant %q", got, want)
-	}
-	if !strings.HasPrefix(ansi.Strip(blocks[4]), " assistant  #5 ") || !strings.Contains(ansi.Strip(blocks[8]), "kept for the next script") {
-		t.Fatalf("the messages should come first, with what their scripts did: %q", stripped(blocks[4:9]))
-	}
-	if blocks := renderContext([]Message{{"user", "hi"}}, 40, false); len(blocks) != 1 {
-		t.Fatalf("without variables there is no block of them: %q", blocks)
-	}
-}
-
-// The script of a call of run has the variables it uses marked, and a line
-// below that names them; a script that uses none has no such line.
-func TestCallLinesMarkUses(t *testing.T) {
-	tr := traceScripts(traceContext)
-	lines := callLines(traceContext[4].Text, tr.calls[4], 60)
-	want := []string{"Let me look.", "→ bash", "  command  ls", "→ run", "  script  print(a + b.length); b = 'yy'", "  uses a, b"}
-	if got := stripped(lines); !slices.Equal(got, want) {
-		t.Fatalf("%q,\nwant %q", got, want)
-	}
-	if !strings.Contains(lines[4], "print("+varStyle.Render("a")+" + "+varStyle.Render("b")+".length); b = 'yy'") ||
-		lines[5] != "  "+mutedStyle.Render("uses ")+varStyle.Render("a")+mutedStyle.Render(", ")+varStyle.Render("b") {
-		t.Fatalf("the variables should be marked: %q", lines[4:])
-	}
-	if got := stripped(callLines(traceContext[7].Text, tr.calls[7], 60)); !slices.Equal(got, []string{"→ run", "  script  const a = 2; print(a)"}) {
-		t.Fatalf("a script that uses nothing: %q", got)
-	}
-}
-
-// The result of a script has below it what is kept, as it changed: what
-// the script set with what it is, what is gone, and the names that stayed.
-func TestResultLines(t *testing.T) {
-	tr := traceScripts(traceContext)
-	for i, want := range map[int][]string{
-		8:  {"2", "kept for the next script", "  + c  function", "  ~ a  number, set again", "  · b as they were"},
-		6:  {"2", "kept for the next script", "  ~ b  string of 2 bytes, was string of 1 bytes", "  · a as they were"},
-		12: {"error: the script was stopped: what the scripts before it", "kept is gone", "kept for the next script", "  − a  gone", "  − c  gone"},
-		17: {"kept for the next script", "  + z  number"},
-		19: {"1", "kept for the next script", "  and 41 more"},
-	} {
-		if got := stripped(resultLines(tr.results[i], 60)); !slices.Equal(got, want) {
-			t.Errorf("%d: %q,\nwant %q", i, got, want)
+	for i, msg := range msgs {
+		if want := fmt.Sprintf(" %s  #%d ", msg.Role, i+1); !strings.HasPrefix(ansi.Strip(blocks[i]), want) {
+			t.Errorf("message %d: %q", i, blocks[i])
 		}
 	}
-	r := &resultTrace{text: "\tx", added: []keptVar{{"long", "aaa bbb ccc"}}, changed: []keptChange{{"ch", "a", "b"}}, gone: []string{"s"}}
-	want := []string{"    x", "kept for the next script", "  + long  aaa bbb", "          ccc", "  ~ ch    b, was a", "  − s     gone"}
-	if got := stripped(resultLines(r, 18)); !slices.Equal(got, want) {
-		t.Fatalf("%q,\nwant %q", got, want)
+	for i, want := range map[int]string{
+		1: "▎   path  /a",
+		3: "▎   script  const a = 1; print(a)",
+		4: "▎ [kept for the next script: a (number)]",
+		5: "▎   script  print(a)",
+	} {
+		if !strings.Contains(ansi.Strip(blocks[i]), want) {
+			t.Errorf("message %d lost its text: %q", i, blocks[i])
+		}
 	}
-	if lines := resultLines(r, 18); !strings.HasPrefix(lines[2], "  "+lipgloss.NewStyle().Foreground(good).Render("+")+" "+varStyle.Render("long")) ||
-		!strings.HasPrefix(lines[4], "  "+literalStyle.Render("~")) || lines[5] != "  "+errStyle.Render("−")+" "+varStyle.Render("s")+"     "+errStyle.Render("gone") {
-		t.Fatalf("what was set, set again and is gone should stand out: %q", lines)
-	}
-}
-
-// A variable whose places do not fit on its line goes on below them.
-func TestRenderVariablesWraps(t *testing.T) {
-	vars := []*variable{{name: "long", what: "x", set: []int{1, 2, 3}, used: []int{4}, gone: 5}, {name: "s", what: "number", set: []int{9}}}
-	got := stripped(strings.Split(renderVariables(vars, 44, true), "\n"))[1:]
-	want := []string{"▎ long  x       set #1 #2 #3 · used #4 ·", "▎               gone #5", "▎ s     number  set #9"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("%q,\nwant %q", got, want)
+	// 'script' is an ordinary string argument, regardless of the tool name.
+	run := callLines(`→ run {"script":"print(a)"}`, 80)
+	unknown := callLines(`→ unknown {"script":"print(a)"}`, 80)
+	if !slices.Equal(run[1:], unknown[1:]) || len(run) != 2 {
+		t.Fatalf("archived run has special rendering: %q vs %q", run, unknown)
 	}
 }

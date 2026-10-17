@@ -55,7 +55,7 @@ func TestContextScreenShowsTheContext(t *testing.T) {
 	b.contextSize = 4000
 	b.cache = plugin.SessionCache{Tokens: 1000, Cached: 500, AllTokens: 1000, AllCached: 500}
 	answered(t, m, say(t, m, "ping"))
-	b.contents = []Message{{"system", "You are alpha."}, {"tool run", "Run JavaScript"}, {"user", "ping"}, {"assistant", "→ run {}"},
+	b.contents = []Message{{"system", "You are alpha."}, {"tool read", "Read a file."}, {"user", "ping"}, {"assistant", "→ read {}"},
 		{"tool", strings.Repeat("line\n", 60)}, {"assistant", "pong"}}
 	cmd := run(m, "/context")
 	if m.screen != screenContext || m.input.Value() != "" {
@@ -66,7 +66,7 @@ func TestContextScreenShowsTheContext(t *testing.T) {
 	}
 	m.Update(cmd())
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{" system  #1 ─", "─ 14 bytes", "▎ You are alpha.", " tool run  #2 ─", " user  #3 ─", "─ 4 bytes", " assistant  #4 ─", "─ 10 bytes", "▎ → run ", "0%"} {
+	for _, want := range []string{" system  #1 ─", "─ 14 bytes", "▎ You are alpha.", " tool read  #2 ─", " user  #3 ─", "─ 4 bytes", " assistant  #4 ─", "─ 11 bytes", "▎ → read ", "0%"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the context should show %q:\n%s", want, view)
 		}

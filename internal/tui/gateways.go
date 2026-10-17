@@ -130,12 +130,13 @@ func (c *settingsScreen) gatewayPage(m *Model) []row {
 				out = append(out, editRow(label, value, func(v string) { d.Values[f.Key] = v }))
 			}
 		}
+		out = append(out, c.gatewayVerificationRows(m)...)
 		return append(out,
 			row{label: "Access", value: gatewayAccess},
 			row{label: "Save", actions: []action{{"Save", func(m *Model) tea.Cmd { return c.saveGateway(m, "", false) }}}},
 			row{label: "Logout", actions: []action{{"Logout", func(m *Model) tea.Cmd { return c.saveGateway(m, "", true) }}}})
 	}
-	return []row{
+	out := []row{
 		{label: "Status", value: status},
 		{label: "Enabled", value: enabled, actions: []action{{"Toggle", func(m *Model) tea.Cmd { d.Enabled = !d.Enabled; return nil }}}},
 		editRow("Homeserver", d.Homeserver, func(v string) { d.Homeserver = v }),
@@ -149,6 +150,49 @@ func (c *settingsScreen) gatewayPage(m *Model) []row {
 		{label: "Access", value: gatewayAccess},
 		{label: "Save", actions: []action{{"Save", func(m *Model) tea.Cmd { return c.saveGateway(m, "", false) }}}},
 		{label: "Logout", actions: []action{{"Logout", func(m *Model) tea.Cmd { return c.saveGateway(m, "", true) }}}},
+	}
+	return append(out, c.gatewayVerificationRows(m)...)
+}
+
+// Verification actions never submit the connection form or its write-only secrets.
+func (c *settingsScreen) gatewayVerificationRows(m *Model) []row {
+	for _, g := range c.gateways {
+		if g.Name != c.gateway || g.Verification == nil {
+			continue
+		}
+		v := *g.Verification
+		out := []row{{label: "Device verification", value: v.Stage + " · " + v.Message, actions: []action{{"Refresh", func(m *Model) tea.Cmd { return c.reload(m) }}}}}
+		if v.TransactionID != "" {
+			out = append(out, row{label: "Verification transaction", value: v.TransactionID})
+		}
+		if v.DeviceID != "" {
+			out = append(out, row{label: "Other device", value: v.DeviceID})
+		}
+		if v.Stage == "comparing" && v.TransactionID != "" && len(v.Emojis) == 7 {
+			ordered := make([]detail, len(v.Emojis))
+			for i, emoji := range v.Emojis {
+				ordered[i] = detail{name: strconv.Itoa(i + 1), value: emoji}
+			}
+			out = append(out, row{label: "Compare all emojis", value: strings.Join(v.Emojis, "  "), details: ordered, actions: []action{{"Emojis match", func(m *Model) tea.Cmd { return c.gatewayVerificationAction(m, "confirm", v.TransactionID) }}}})
+		}
+		if v.TransactionID != "" && (v.Stage == "requested" || v.Stage == "ready" || v.Stage == "comparing" || v.Stage == "confirmed") {
+			out = append(out, row{label: "Cancel verification", actions: []action{{"Cancel", func(m *Model) tea.Cmd { return c.gatewayVerificationAction(m, "cancel", v.TransactionID) }}}})
+		} else if g.Enabled && g.LoggedIn {
+			out = append(out, row{label: "Verify with a trusted session of the same Matrix account", actions: []action{{"Start", func(m *Model) tea.Cmd { return c.gatewayVerificationAction(m, "start", "") }}}})
+		}
+		return out
+	}
+	return nil
+}
+
+func (c *settingsScreen) gatewayVerificationAction(m *Model, action, transaction string) tea.Cmd {
+	name, backend, ctx := c.gateway, m.backend, m.ctx
+	return func() tea.Msg {
+		err := backend.SaveGateway(ctx, name, plugin.GatewayChange{VerificationAction: action, VerificationTransactionID: transaction})
+		if err != nil {
+			return changedMsg{done: "Verification action failed", err: gatewaySaveError{}}
+		}
+		return changedMsg{done: "Verification action queued; refresh to see progress"}
 	}
 }
 

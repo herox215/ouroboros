@@ -91,7 +91,7 @@ func TestSourceReplayRoundTrip(t *testing.T) {
 	var records []history.Record
 	if err := json.Unmarshal([]byte(`[
 		{"role":"user","content":"from gui","source":{"interface":"gui"}},
-		{"role":"user","content":"from tui","source":{"interface":"tui"}},
+		{"role":"user","content":"from gateway","source":{"interface":"api","gateway":"matrix"}},
 		{"role":"user","content":"legacy"},
 		{"role":"user","content":"unrecognized","source":{"interface":"future"}},
 		{"role":"user","content":"explicit unknown","source":{"interface":"unknown"}},
@@ -104,7 +104,7 @@ func TestSourceReplayRoundTrip(t *testing.T) {
 	if kinds(events) != "message message message message message answer" {
 		t.Fatalf("replay: %+v", events)
 	}
-	for i, want := range []string{"gui", "tui", "unknown", "unknown", "unknown"} {
+	for i, want := range []string{"gui", "api", "unknown", "unknown", "unknown"} {
 		if events[i].Source.Interface != want || events[i].Text != records[i].Content {
 			t.Errorf("event %d: %+v, want source %s and original text", i, events[i], want)
 		}
@@ -114,6 +114,9 @@ func TestSourceReplayRoundTrip(t *testing.T) {
 	}
 	if events[5].Source != (MessageSource{}) || messages[5].Source != (MessageSource{}) {
 		t.Fatal("assistant answer attributed to an owner interface")
+	}
+	if events[1].Source != records[1].Source {
+		t.Fatalf("gateway lost during replay: %+v", events[1])
 	}
 	dir := t.TempDir()
 	if err := history.Open(dir).Append(history.Who{Session: "s1"}, messages, nil); err != nil {

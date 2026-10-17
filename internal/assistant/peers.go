@@ -11,7 +11,6 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/openai"
-	"ouroboros/internal/script"
 )
 
 // Peers answers the peers of a node, with the agent for the configuration of
@@ -28,9 +27,6 @@ type Peers struct {
 	access string            // the access the agents were built for
 	failed string            // why the configuration could not be used the last time
 	memory *agent.Memory     // of the conversations, for every agent there is
-	// scripts are what the scripts of the conversations kept, for every
-	// agent there is.
-	scripts *script.Sessions
 	// recall returns what the agent said in a conversation it does not
 	// remember, as the archive kept it; nil without an archive.
 	recall func(ctx context.Context, contextID string) []openai.Message
@@ -46,7 +42,7 @@ type built struct {
 // config reads, anew for every message. What goes wrong with a configuration
 // that was changed while the node runs is told to log.
 func (b Builder) Peers(config func() (config.Config, error), log func(format string, args ...any)) *Peers {
-	return &Peers{config: config, builder: b, log: log, agents: map[string]*built{}, memory: agent.NewMemory(), scripts: script.NewSessions()}
+	return &Peers{config: config, builder: b, log: log, agents: map[string]*built{}, memory: agent.NewMemory()}
 }
 
 // Recall makes the agent go on with a conversation it does not remember,
@@ -179,6 +175,6 @@ func (p *Peers) build(cfg config.Config, peer string, had *built) (*agent.Agent,
 	if had != nil && had.of == string(want) {
 		return nil, string(want), cfg.Access, nil
 	}
-	bot, err := p.builder.forPeers(cfg, peer, p.scripts)
+	bot, err := p.builder.forPeers(cfg, peer)
 	return bot, string(want), cfg.Access, err
 }

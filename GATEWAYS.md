@@ -13,6 +13,15 @@ code remains responsible for authentication, room privacy, replay prevention,
 rate limits and safe event presentation. Bindings are persisted in the protected
 profile store, never accepted from incoming messages.
 
+Gateway implementations pass `plugin.WithGatewayName("matrix")` (or their own
+stable transport name, such as `"whatsapp"`) to `NewGatewayAdapter` and
+`NewGatewayAdapterWithBindings`. This generically attributes text, images and
+question replies as `source.interface = api` with `source.gateway = matrix`,
+including in archives and model context. Gateway names are not a fixed list;
+use ASCII letters, digits, dots, underscores or hyphens, up to 64 bytes. The
+name is host configuration, never message content or an account identifier, and
+does not affect authorization. Adapters without a name retain plain API attribution.
+
 ## Matrix
 
 Use make build or make install: these select the pure-Go Matrix crypto backend
@@ -45,13 +54,82 @@ account for each profile.
 
 Each room is associated with its own Ouro session. Replies contain agent output
 and questions, not raw tool arguments, raw tool output or hidden reasoning.
-Ordinary messages start an answer. Use /cancel to stop it; answer a pending agent
-question explicitly with /answer YOUR ANSWER.
+Ordinary messages start an answer, or answer the pending agent question when
+there is one. Just send your answer; for numbered options, sending the number
+selects that option. /answer YOUR ANSWER remains available. Use /cancel to stop
+the current answer. Use /new to start a fresh Ouro
+conversation in the same Matrix room. This stops the previous answer, preserves
+the old chat in Ouro, and keeps the new room binding across restarts.
+
+The Matrix plugin contributes a plain-text output instruction through an answer
+hook when the latest user input is attributed to Matrix. It appears once in each
+model request throughout that answer, is not stored in conversation history, and
+does not apply to other interfaces or peer conversations. Outgoing text is not
+rewritten or stripped of Markdown after generation. Other gateways may contribute
+their own answer hooks without adding transport-specific rules to the core.
+
+Outgoing answers and commentary use opaque presentation IDs, persisted with the
+archive and reused when session events are reconstructed after a restart. The
+Matrix delivery ledger tracks these IDs, not timestamps or usage metadata; two
+identical messages still have different IDs. Legacy delivery hashes cannot be
+converted reliably. On the first upgrade, the existing snapshot is baselined as
+already delivered (including any previously undelivered output); subsequent
+output uses the new ledger. This is not an exactly-once outbox: a send that
+succeeds before the ledger save fails can still be retried. Pending questions
+remain live-only and are not restored from the archive.
+
+Matrix renders a pending restart as “Restarting…” when observed before the
+connection closes. A durable backend marker produces a separate “Restarted.”
+event only in the replacement process, delivered to the triggering conversation
+when Matrix reconnects. Completion events have stable IDs, so reconnects and
+repeated polls do not resend them after successful ledger persistence. The TUI
+keeps its existing restart behavior; it does not display these gateway notices.
 
 The initial transport is limited to encrypted private one-to-one rooms with an
 allowlisted user. It must refuse group/public/unencrypted rooms and recheck
-membership before sending. Attachments, rich streaming edits and interactive
-device-verification/recovery UI are outside this first version.
+membership before sending. Image messages (PNG, JPEG, GIF and WebP, up to
+10 MiB) are downloaded through the authenticated homeserver media endpoint,
+decrypted with integrity verification when encrypted, and passed to the model
+with their caption. Image bytes remain in the live model context, not the
+archived chat history; resend an image if needed after a restart.
+Other attachments and rich streaming edits are not supported. Images cannot
+answer a pending agent question: answer it with text first, then resend the image.
+
+### Set the Matrix profile picture
+
+The owner-only agent tool `matrix_set_avatar({path: "/path/to/avatar.png"})`
+sets the configured bot account's profile picture. To use an image sent in this
+chat instead of a file, call `matrix_set_avatar({attachment: 1})` (or `{}` for
+the first image). The index selects an image in the most recent user message
+containing pictures, even after subsequent text-only turns. Only this live
+conversation is accessible, never other chats or tool-generated pictures.
+Attachments stay in memory and must be resent after a restart or when trimmed
+from the conversation; they are not written to the chat archive.
+Matrix must be enabled and
+logged in. PNG, JPEG and GIF files up to 5 MiB, 4096 pixels per side and
+4 megapixels overall are supported; the normal protected-file rules apply.
+Relative paths use the current project or workspace.
+The tool uploads the file, sets the account avatar and reads it back to verify
+the result. This changes the public account profile, not a room avatar: the
+image is **not end-to-end encrypted**. No new login or sync loop is started.
+If owner tools are explicitly allowlisted, include `matrix_set_avatar` there;
+it cannot be granted to peers.
+
+### Verify the Matrix device
+
+In Settings → Gateways → Matrix, start device verification. Open an already
+trusted Matrix session of the **same bot account** and accept the verification
+request there. Compare all seven emojis on both sides; confirm only if they
+match. Cancel if the device or emojis are unexpected. Verification controls are
+local owner settings, never chat commands. They do not change the room allowlist.
+
+The bot account must already have a cross-signing identity and a trusted session
+capable of verifying its new device. If it does not, set that up in a full Matrix
+client first. This feature does not reset the account identity or import recovery
+keys. Device keys and signatures survive ordinary Ouro restarts; logging in
+again creates a new device that needs its own verification. A recipient may also
+need to verify the bot account identity in their Matrix client. In the terminal
+UI, use the verification row's Refresh action to update progress.
 
 Logout disables the gateway and forgets its locally stored access token.
 Device/room key state remains protected on disk; remove unwanted sessions also

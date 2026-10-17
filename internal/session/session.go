@@ -29,6 +29,7 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/presentation"
 	"ouroboros/internal/workdir"
 )
 
@@ -76,6 +77,10 @@ const (
 	// start anew from the binary in Text: the node takes its own place, and
 	// a front end may do the same.
 	Restart Kind = "restart"
+	// Restarted is durable confirmation that another executable instance has
+	// started after this session requested replacement. PresentationID is stable
+	// across polling, watchers and archive replay; Text is the requested binary.
+	Restarted Kind = "restarted"
 	// Title names the session for its topic, in Text, once the agent can
 	// tell it: on the way to an answer, and anew when the session is loaded.
 	Title Kind = "title"
@@ -113,8 +118,10 @@ const (
 // Event is one thing that happened in a session. It is plain data, written
 // as JSON on the socket.
 type Event struct {
-	Kind Kind      `json:"kind"`
-	At   time.Time `json:"at"`
+	// PresentationID identifies one output occurrence across live delivery and archive replay.
+	PresentationID string    `json:"presentation_id,omitempty"`
+	Kind           Kind      `json:"kind"`
+	At             time.Time `json:"at"`
 	// Text is the message, what the agent said, the answer, why it failed,
 	// or the binary of a Restart.
 	Text string `json:"text,omitempty"`
@@ -174,7 +181,7 @@ type Info struct {
 }
 
 // Line is a message of the context of a session: who it is of, like
-// "system", "user" or "tool run", and its text.
+// "system", "user" or "tool read", and its text.
 type Line struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
@@ -388,6 +395,7 @@ type session struct {
 // tells of it once it is taken.
 type queued struct {
 	text      string
+	images    []openai.Image
 	source    MessageSource
 	generated bool // backend input, not a message from an interface
 	task      *Event
@@ -506,10 +514,14 @@ func (s *Service) Ask(ctx context.Context, id, text string) error {
 }
 
 func (s *Service) askInput(ctx context.Context, id, text string, generated bool) error {
+	return s.askImages(ctx, id, text, nil, generated)
+}
+
+func (s *Service) askImages(ctx context.Context, id, text string, images []openai.Image, generated bool) error {
 	if err := valid(id); err != nil {
 		return err
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return ErrEmpty
 	}
 	if err := s.agent.Ready(); err != nil {
@@ -530,7 +542,7 @@ func (s *Service) askInput(ctx context.Context, id, text string, generated bool)
 	if se.cancel != nil {
 		return ErrBusy
 	}
-	s.begin(se, p, append(se.queue, queued{text: text, source: openai.MessageSourceFrom(ctx), generated: generated})...)
+	s.begin(se, p, append(se.queue, queued{text: text, images: images, source: openai.MessageSourceFrom(ctx), generated: generated})...)
 	se.queue = nil
 	return nil
 }
@@ -643,7 +655,8 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 	}
 	asked := make(chan queued, 1)
 	se.asked = asked
-	s.emit(se, Event{Kind: Asked, Args: question})
+	id := presentation.NewID()
+	s.emit(se, Event{Kind: Asked, PresentationID: id, Args: question})
 	s.mu.Unlock()
 	var answer queued
 	select {
@@ -659,7 +672,7 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 	if answer.text == "" {
 		answer = <-asked // what the owner said just when ctx ended, if anything
 	}
-	s.emit(se, Event{Kind: Asked, Done: true, Text: answer.text, Source: answer.source.Normalized()})
+	s.emit(se, Event{Kind: Asked, PresentationID: id, Done: true, Text: answer.text, Source: answer.source.Normalized()})
 	if answer.text == "" {
 		return agent.OwnerReply{}, ctx.Err()
 	}
@@ -682,7 +695,7 @@ func (s *Service) steered(se *session) []openai.Message {
 func (s *Service) taken(se *session, messages []queued) []openai.Message {
 	texts := make([]openai.Message, len(messages))
 	for i, m := range messages {
-		texts[i] = openai.Message{Role: "user", Content: m.text, Source: m.source}
+		texts[i] = openai.Message{Role: "user", Content: m.text, Images: m.images, Source: m.source}
 		if m.task != nil {
 			s.emit(se, *m.task)
 			continue
@@ -793,6 +806,7 @@ func (s *Service) transient(se *session, e Event) {
 // is closed: the session is named, or not, on the way.
 func (s *Service) answer(ctx context.Context, se *session, text string, restartable bool, named <-chan struct{}) {
 	defer s.answers.Done()
+	ctx = presentation.New(ctx)
 	s.mu.Lock()
 	ctx = workdir.With(ctx, se.directory)
 	s.mu.Unlock()
@@ -835,7 +849,13 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.emit(se, Event{Kind: Suggestion, Text: text})
 	})
-	ctx = agent.WithMessageSteering(ctx, func() []openai.Message { return s.steered(se) })
+	ctx = agent.WithMessageSteering(ctx, func() []openai.Message {
+		s.waitTasks(ctx, se)
+		if ctx.Err() != nil {
+			return nil
+		}
+		return s.steered(se)
+	})
 	ctx = assistant.WithTasks(ctx, delegating{s, se})
 	ctx = agent.WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (agent.OwnerReply, error) {
 		return s.ask(ctx, se, question)
@@ -855,16 +875,24 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		s.add(se, e)
 	}, func(said string) {
 		drop() // its words come as a Say, and the next round begins the answer anew
-		s.add(se, Event{Kind: Say, Text: said})
+		id := presentation.Current(ctx)
+		if id == "" {
+			id = presentation.NewID()
+		}
+		s.add(se, Event{Kind: Say, PresentationID: id, Text: said})
 	})
 	rest() // the end of the thinking belongs before the end of the answer
 	<-named
-	end := Event{Kind: Answer, Text: reply}
+	id := presentation.Current(ctx)
+	if id == "" {
+		id = presentation.Terminal(ctx)
+	}
+	end := Event{Kind: Answer, PresentationID: id, Text: reply}
 	switch {
 	case err != nil && ctx.Err() != nil:
-		end = Event{Kind: Canceled}
+		end = Event{Kind: Canceled, PresentationID: presentation.Terminal(ctx)}
 	case err != nil:
-		end = Event{Kind: Failed, Text: err.Error()}
+		end = Event{Kind: Failed, PresentationID: presentation.Terminal(ctx), Text: err.Error()}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -885,11 +913,23 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		s.emit(se, Event{Kind: Suggestion, Text: suggested})
 	}
 	if se.restart != "" {
-		s.emit(se, Event{Kind: Restart, Text: se.restart})
-		if p.successor == "" { // the first build asked for is the one
-			p.successor = se.restart
+		// Commit the completion intent before the replacement can be scheduled.
+		// If durability fails, keep serving rather than report a restart later
+		// that no gateway can reliably observe.
+		durable := true
+		if s.archive != nil {
+			if err := s.archive.PendingRestart(history.Owner(se.id), processInstance, presentation.NewID(), se.restart); err != nil {
+				s.archive.log("the restart of the session %s cannot be kept: %v", se.id, err)
+				durable = false
+			}
 		}
-		if se.goOn && s.archive != nil {
+		if durable {
+			s.emit(se, Event{Kind: Restart, PresentationID: presentation.NewID(), Text: se.restart})
+			if p.successor == "" { // the first build asked for is the one
+				p.successor = se.restart
+			}
+		}
+		if durable && se.goOn && s.archive != nil {
 			if err := s.archive.GoOn(history.Owner(se.id)); err != nil {
 				s.archive.log("the session %s does not go on by itself in the new build: %v", se.id, err)
 			}

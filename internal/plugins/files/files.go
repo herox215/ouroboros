@@ -42,7 +42,7 @@ const (
 const (
 	maxReadLines  = 2000             // lines one call of read returns
 	maxReadBytes  = 256 << 10        // bytes in one line of read
-	maxReadPage   = 24 << 10         // text bytes per page, below the script output limit
+	maxReadPage   = 24 << 10         // text bytes per page
 	maxWriteBytes = 1 << 20          // bytes of a file that write or edit leave behind
 	editContext   = 3                // lines edit shows before and after what it changed
 	maxEditLines  = 50               // lines edit shows at most
@@ -97,7 +97,6 @@ func tools(g *guard.Guard) []plugin.Tool {
 			fmt.Sprintf("Read a text file: at most %d lines or %d KiB per call. ", maxReadLines, maxReadPage>>10)+
 				"When there is more, a note at the end says which lines of how many it returned and where to continue. "+
 				"A line longer than a page is returned in pieces: continue with the offset and column in the note. "+
-				"Batch relevant bounded sections in one script only when their combined output, including notes and other results, stays safely below the script output limit. "+
 				"The text comes as it is: without line numbers, and with the \\r of lines that end in \\r\\n. "+
 				"Use offset and limit for relevant code sections located by search; leave out limit when the whole file is needed. "+
 				"A picture (PNG, JPEG, GIF or WebP) is shown to you as an image, in its own size: look at it this way. "+
@@ -117,8 +116,6 @@ func tools(g *guard.Guard) []plugin.Tool {
 		tool(g, Edit,
 			`Replace the text "old" in a file by "new". "old" has to match exactly once: take enough of the text around the change; `+
 				`with "all" every time it occurs, like a text that is shown and the tests that expect it. `+
-				"In a script, write old and new as String.raw`…`: a backslash of the file, as in \"\\n\", then stays one; "+
-				"a text with a backtick (Markdown, a struct tag of Go) goes in a string of quotes instead, with \\\\ for each backslash. "+
 				"Or replace the lines from to to by new, with no old to match: of several in one file, do the last first, as the lines after an edit move. "+
 				"Returns the changed lines with a few around them: check them before the next edit. "+
 				fmt.Sprintf("A file of more than %d MiB is not edited: change it with bash, like sed.", maxWriteBytes>>20),
@@ -141,8 +138,6 @@ func tools(g *guard.Guard) []plugin.Tool {
 		tool(g, Search,
 			"Find the lines of text files that match a regular expression (RE2; (?i) at its start ignores case), "+
 				"in one file or every file below a directory, hidden directories left out. "+
-				"In JavaScript scripts, use [(] and [)] for literal parentheses, for example pattern: \"func main[(][)]\", to avoid losing backslashes in JS strings. "+
-				"For other regex escapes, use String.raw`…`, for example pattern: String.raw`\\bmain\\s*\\(`. "+
 				fmt.Sprintf("Returns path:line: text, at most %d lines from at most %d files of at most %d it looks at; files over %d MiB are skipped. ", maxMatches, maxSearched, maxWalked, maxWriteBytes>>20)+
 				"For extensive code analysis, search first for function and declaration overviews, then read relevant sections with offset and limit, not whole files by default; "+
 				fmt.Sprintf("with context it returns them too, as grep -C: the lines around a match as path-line- text, places apart split by --, at most %d places. ", maxPlaces)+
@@ -362,7 +357,7 @@ func read(ctx context.Context, c *guard.Checker, args readArgs) (string, error) 
 		return fmt.Sprintf("%s\n[these were the lines %d to %d of %d: continue with offset %d]",
 			content, first, last, lines+rest, last+1), nil
 	}
-	// The whole file comes as it is: a script of run may take it for data.
+	// The whole file comes as it is: callers may use it as data.
 	if first == 1 && args.Column == 0 {
 		return text.String(), nil
 	}
@@ -404,7 +399,7 @@ var pageNote = regexp.MustCompile(`(?m)^\[these were (?:the lines \d+ to \d+|byt
 
 // paged returns an error if text has the note read puts after a page: a text
 // with it is a page of a file read back, and written it would lose the rest of
-// the file, as a script that wrote back what read gave it did.
+// the file, as a caller that wrote back what read gave it did.
 func paged(text string) error {
 	if note := pageNote.FindString(text); note != "" {
 		return fmt.Errorf("the text has the note %q that %s puts after a page of a file: it holds only a part of the file, "+

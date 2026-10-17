@@ -260,7 +260,7 @@ func flakyLLM(t *testing.T) (baseURL string, down *atomic.Bool) {
 // A peer whose message was not answered asks later what went wrong, with the
 // error ID it was given. The agent of the node looks it up and explains it,
 // to that peer only, in general terms, and only once it can answer again. It
-// is a function of scripts, which a peer runs only with a tool of a2a.
+// is a direct tool, which a peer calls only through a2a.
 func TestPeerAsksWhatWentWrong(t *testing.T) {
 	llm, down := flakyLLM(t)
 	beta := clitest.Settings(t)

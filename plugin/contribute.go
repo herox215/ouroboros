@@ -109,9 +109,16 @@ const (
 // holds while it is not set. See agent.OptionsOf.
 func OptionsOf[S any]() []Option { return agent.OptionsOf[S]() }
 
-// Image is a picture a Tool shows the LLM: its media type, like
+// Image is a picture received from the user or shown by a Tool: its media type, like
 // "image/png", and its bytes.
 type Image = openai.Image
+
+// InputImages returns the pictures from the most recent user message with
+// pictures in the current tool's conversation, looking past text-only turns.
+// Only pictures still retained in memory are available, never tool output or
+// archived pictures. The returned slice and bytes are independent copies.
+// Without a tool conversation context it returns nil.
+func InputImages(ctx context.Context) []Image { return agent.InputImages(ctx) }
 
 // ShowImage makes the LLM see images along with the result of the Tool that
 // ctx is run for, which says in words what they are. It reports false

@@ -82,7 +82,7 @@ func userQuestion() agent.Tool {
 			`Like ` + ToolUserQuestion + `({question: "Which database?", options: ["SQLite", "Postgres"], recommended: "SQLite"}). ` +
 			"When the sending interface is known, the result is JSON with the unchanged answer in answer and its origin in source.interface. " +
 			"Ask nothing you can find out yourself. " +
-			"It waits as long as the script may run: without an answer by then, put the question in your answer instead.",
+			"It waits until the owner answers or the conversation is cancelled.",
 		Schema: `{"type":"object","properties":{` +
 			`"question":{"type":"string","description":"what you ask, in a sentence or two"},` +
 			fmt.Sprintf(`"options":{"type":"array","items":{"type":"string"},"description":"%d to %d answers to choose from, each a few words on one line; leave out for a question only their own words answer"},`, MinOptions, MaxOptions) +

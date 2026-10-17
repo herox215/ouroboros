@@ -281,7 +281,7 @@ func TestChatFormattingAndLazyDetails(t *testing.T) {
 	s := &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
 		return []plugin.SessionEvent{
 			{Kind: plugin.SessionStep, Tool: "read", CallID: "call", Args: json.RawMessage(`{"secret":"arguments"}`), Done: true, Err: "raw error", Remark: "full result", Text: "full result"},
-			{Kind: plugin.SessionStep, Tool: "run", CallID: "run-call", Done: true},
+			{Kind: plugin.SessionStep, Tool: "echo", CallID: "echo-call", Done: true},
 		}, nil, nil
 	}, details: func(_ context.Context, id, call string) (plugin.SessionToolResult, error) {
 		details++
@@ -299,7 +299,7 @@ func TestChatFormattingAndLazyDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Events[0].Text != "reading file ✓" || !snap.Events[0].Failed || snap.Events[1].Text != "run" || snap.Events[1].CallID != "run-call" || snap.Events[1].Failed {
+	if snap.Events[0].Text != "reading file ✓" || !snap.Events[0].Failed || snap.Events[1].Text != "echo" || snap.Events[1].CallID != "echo-call" || snap.Events[1].Failed {
 		t.Fatalf("format: %+v", snap)
 	}
 	b, _ := json.Marshal(snap)

@@ -127,9 +127,6 @@ func pick(all []agent.Tool, allowed []config.Entry, of audience) ([]agent.Tool, 
 	every := false
 	entries := map[string]config.Entry{}
 	for _, e := range allowed {
-		if e.Tool == toolRun {
-			return nil, fmt.Errorf("%s is no tool to list: the agent always has it, and every tool listed here is a function of its scripts", toolRun)
-		}
 		if _, twice := entries[e.Tool]; twice {
 			return nil, fmt.Errorf("the tool %q is listed twice", e.Tool)
 		}

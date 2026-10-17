@@ -17,7 +17,10 @@ type connection interface {
 	TypingTo(context.Context, string, string, bool) error
 	Close() error
 }
-type incoming struct{ RoomID, Sender, Text string }
+type incoming struct {
+	RoomID, Sender, Text string
+	Images               []plugin.Image
+}
 
 type controller struct {
 	store   store
@@ -97,6 +100,12 @@ func (c *controller) run(ctx context.Context) {
 									observed = health.Status
 								}
 								statusMu.Unlock()
+								verificationCtx, stopVerification := context.WithCancel(runCtx)
+								verificationDone := make(chan struct{})
+								go func() {
+									defer close(verificationDone)
+									c.store.verificationLoop(verificationCtx, cfg.Revision, conn)
+								}()
 								guarded := guardedConnection{connection: conn, store: c.store, revision: cfg.Revision}
 								_ = conn.Run(runCtx, func(msgCtx context.Context, msg incoming) error {
 									// A settings change revokes access immediately, even during the
@@ -114,6 +123,8 @@ func (c *controller) run(ctx context.Context) {
 									}
 									return err
 								})
+								stopVerification()
+								<-verificationDone
 								_ = conn.Close()
 							}
 							if runCtx.Err() != nil {

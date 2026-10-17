@@ -16,6 +16,7 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/presentation"
 )
 
 // emptyNote is what a model that answered with nothing at all is told.
@@ -78,7 +79,7 @@ type LLM interface {
 // Step reports a tool call: once when it starts and again, with Done set,
 // when its result is in, together with how long the call took.
 type Step struct {
-	// ID identifies the archived tool call; empty for nested calls of a script.
+	// ID identifies the archived tool call.
 	ID     string
 	Tool   string
 	Args   json.RawMessage
@@ -126,7 +127,7 @@ type Call struct {
 // may be nil.
 type Observer struct {
 	Diagnostic func(Diagnostic)
-	Step       func(Step) // every tool call, also those of a script
+	Step       func(Step) // every tool call
 	Call       func(Call) // every call of the LLM
 }
 
@@ -172,8 +173,7 @@ type shownImages struct {
 
 // Show makes the LLM see images along with the result of the call of a tool
 // that ctx is run for: the result says in words what they are. It reports
-// false outside of a call, where they would go nowhere. A tool that a script
-// runs shows them with the call of the script.
+// false outside of a call, where they would go nowhere.
 func Show(ctx context.Context, images ...openai.Image) bool {
 	s, ok := ctx.Value(imagesKey{}).(*shownImages)
 	if !ok {
@@ -212,7 +212,7 @@ func (a *Answer) Value(key any, make func() any) any {
 }
 
 // Context ends when the answer does: given, failed or stopped. The context
-// of a call of a tool may end before, as that of a script does.
+// of a call of a tool may end before.
 func (a *Answer) Context() context.Context { return a.ctx }
 
 // WithSteering returns a context under which an answer takes what its user
@@ -273,7 +273,7 @@ func Steered(ctx context.Context) []string {
 }
 
 // Spent returns how many bytes the results of tools of the answer that ctx
-// belongs to have so far. A tool that gives back much, like a script, gives
+// belongs to have so far. A tool that gives back much gives
 // back less once it is beyond Budget.
 func Spent(ctx context.Context) int {
 	if spent, ok := ctx.Value(spentKey{}).(*atomic.Int64); ok {
@@ -373,6 +373,7 @@ func (a *Agent) Respond(ctx context.Context, contextID, text string) (string, er
 // Run is like Respond and reports every call of the LLM and every tool call
 // to observe.
 func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observer) (reply string, answerErr error) {
+	ctx = presentation.Ensure(ctx)
 	release, err := a.memory.acquire(ctx, contextID)
 	if err != nil {
 		return "", err
@@ -504,6 +505,9 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		start := time.Now()
 		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
+		if err == nil {
+			msg.PresentationID = presentation.Next(ctx)
+		}
 		if observe.Call != nil {
 			observe.Call(Call{Sent: sent, Tokens: msg.Usage.Prompt, Cached: msg.Usage.Cached, Output: msg.Usage.Output, CostUSD: msg.Usage.CostUSD, InPlan: msg.Usage.InPlan, Thought: len(msg.Reasoning), Via: msg.Via, Instead: msg.Instead, Retried: strings.Join(msg.Retried, "; "), Effort: msg.Effort, Done: true, Took: time.Since(start),
 				ToolCalls: len(msg.ToolCalls), Content: msg.Content, Err: err})
@@ -536,10 +540,11 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			return msg.Content, nil
 		}
 		before := history[asked : len(history)-1]
+		toolCtx := withInputImages(ctx, history)
 		for _, call := range msg.ToolCalls {
 			result := repeated(call, before)
 			if result.Content == "" {
-				result = once(a.call(ctx, call), history)
+				result = once(a.call(toolCtx, call), history)
 			}
 			if err := emit(result); err != nil {
 				return abandon(err)
@@ -743,8 +748,8 @@ func shownWith(image openai.Image, history []openai.Message) string {
 // answer have n bytes, beyond Budget.
 func gathered(n int) string {
 	return fmt.Sprintf("[Not from the user: the results of tools of this answer have %d KiB, "+
-		"and all of it is sent again with every call. Tools give back less from now on: "+
-		"keep data in variables and print only the little you need for the next step.]", n>>10)
+		"and all of it is sent again with every call. Reuse results already returned; "+
+		"request smaller, bounded excerpts and fetch more only where needed.]", n>>10)
 }
 
 // unrepeated is result without the runs of its lines, of minRepeated bytes
@@ -802,59 +807,21 @@ func unrepeated(result string, msgs []openai.Message) string {
 	return out.String()
 }
 
-// unknown is the error for a call of the tool name, which the agent does not
-// have: it names the tool to call it in, if one of the tools calls it inside.
-func (a *Agent) unknown(name string) error {
-	if t, ok := a.inside(name); ok {
-		return fmt.Errorf("unknown tool %s: %s is a function inside the tool %s, not a tool of its own: call %s and call %s in it", name, name, t.Name, t.Name, name)
-	}
-	return errors.New("unknown tool " + name)
-}
-
-// inside returns the tool that calls the tool name inside, if one does.
-func (a *Agent) inside(name string) (Tool, bool) {
-	for _, t := range a.tools {
-		if slices.Contains(t.Functions, name) {
-			return t, true
-		}
-	}
-	return Tool{}, false
-}
-
 // call runs one tool call and returns its result as a message for the LLM.
-// A call of a function inside a tool that forwards it runs in that tool, and
-// the LLM is told to call it there.
 func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
 	name, args := call.Function.Name, json.RawMessage(call.Function.Arguments)
 	tool, ok := a.tools[name]
-	note := ""
-	if t, in := a.inside(name); !ok && in && t.Forward != nil {
-		note = fmt.Sprintf("\n[ran inside the tool %s: %s is a function of %s, call it there]", t.Name, name, t.Name)
-		forward, err := t.Forward(name, args)
-		if err != nil {
-			return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error() + note}
-		}
-		tool, args, ok = t, forward, true
-	}
 	if !ok {
-		err := a.unknown(name)
 		tool = Tool{Name: name, Run: func(context.Context, json.RawMessage) (string, error) {
-			return "", err
+			return "", errors.New("unknown tool " + name)
 		}}
 	}
 	shown := &shownImages{}
 	content, err := invoke(context.WithValue(ctx, imagesKey{}, shown), tool, args, call.ID)
 	if err != nil {
-		return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error() + note}
+		return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error()}
 	}
-	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content + note, Images: shown.images}
-}
-
-// Invoke runs tool with args within the conversation of ctx and reports the
-// call to whoever observes that conversation, like a call the LLM asked for.
-// It is for a tool that runs other tools of its agent, such as a script.
-func Invoke(ctx context.Context, tool Tool, args json.RawMessage) (string, error) {
-	return invoke(ctx, tool, args, "")
+	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content, Images: shown.images}
 }
 
 func invoke(ctx context.Context, tool Tool, args json.RawMessage, id string) (string, error) {

@@ -209,7 +209,7 @@ func TestRead(t *testing.T) {
 	fails(t, got, err, "permission denied")
 }
 
-// Pages stay below the script output limit and say where to go on.
+// Pages have bounded results and say where to go on.
 func TestReadInPieces(t *testing.T) {
 	w := newWorld(t)
 	line := strings.Repeat("x", 1023) + "\n"
@@ -279,7 +279,7 @@ func TestReadLongLinePages(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(got) >= 32<<10 {
-			t.Fatalf("page exceeds script output limit: %d bytes", len(got))
+			t.Fatalf("page exceeds result limit: %d bytes", len(got))
 		}
 		chunk, note, ok := strings.Cut(got, "\n[")
 		if !ok || chunk == "" {
@@ -838,15 +838,13 @@ func TestSchemas(t *testing.T) {
 	}
 }
 
-// Research guidance must agree with the owner prompt: bounded sections may
-// share a script, but separate page limits do not protect its combined output.
+// Research guidance favors focused reads and bounded results.
 func TestResearchGuidance(t *testing.T) {
 	all := tools(&guard.Guard{})
 	for _, tt := range []struct {
 		at   int
 		want string
 	}{
-		{0, "Batch relevant bounded sections in one script only when their combined output, including notes and other results, stays safely below the script output limit."},
 		{0, "Use offset and limit for relevant code sections located by search; leave out limit when the whole file is needed."},
 		{5, "For extensive code analysis, search first for function and declaration overviews, then read relevant sections with offset and limit, not whole files by default;"},
 	} {
@@ -855,25 +853,10 @@ func TestResearchGuidance(t *testing.T) {
 		}
 	}
 	for _, tool := range all {
-		for _, stale := range []string{"Print one page per script", "whole unless it is very long"} {
+		for _, stale := range []string{"script output", "one script", "String.raw", "JavaScript scripts", "whole unless it is very long"} {
 			if strings.Contains(tool.Description, stale) {
 				t.Errorf("%s: conflicting research guidance %q", tool.Name, stale)
 			}
-		}
-	}
-}
-
-// Search examples must survive JavaScript string parsing before RE2 sees them.
-func TestSearchJavaScriptGuidance(t *testing.T) {
-	description := tools(&guard.Guard{})[5].Description
-	for _, want := range []string{
-		"use [(] and [)] for literal parentheses",
-		`pattern: "func main[(][)]"`,
-		"to avoid losing backslashes in JS strings",
-		"pattern: String.raw`\\bmain\\s*\\(`",
-	} {
-		if !strings.Contains(description, want) {
-			t.Errorf("search: missing JavaScript guidance %q", want)
 		}
 	}
 }
@@ -1024,7 +1007,7 @@ func TestSearchIsCut(t *testing.T) {
 	}
 }
 
-// A search ends with its call, which a script that ran too long ends.
+// A search ends when its call is canceled.
 func TestSearchEndsWithItsCall(t *testing.T) {
 	w := newWorld(t)
 	w.file("~/src/a.txt", "x\n")
@@ -1169,7 +1152,7 @@ func TestSearchWithContext(t *testing.T) {
 }
 
 // Beyond maxAround bytes, search says how many more matches are in which
-// file, instead of lines that would not come back from a script.
+// file, instead of an oversized inline result.
 func TestSearchFitsItsBytes(t *testing.T) {
 	w := newWorld(t)
 	w.file("~/fit/a.txt", strings.Repeat("hit "+strings.Repeat("x", 200)+"\n", 100))

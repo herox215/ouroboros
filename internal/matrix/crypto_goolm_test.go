@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -479,6 +480,16 @@ func TestNewCryptoKeepsItsFilesPrivate(t *testing.T) {
 }
 
 func TestNewCryptoNeedsTheKeyOnDisk(t *testing.T) {
+	// RLIMIT_FSIZE is process-wide: isolate it from Go's asynchronous test-cache
+	// log writes, which otherwise permanently fail with EFBIG during this test.
+	if os.Getenv("OURO_MATRIX_KEY_WRITE_FIXTURE") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestNewCryptoNeedsTheKeyOnDisk$")
+		cmd.Env = append(os.Environ(), "OURO_MATRIX_KEY_WRITE_FIXTURE=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("key-write fixture failed: %v\n%s", err, output)
+		}
+		return
+	}
 	m := newMock(t)
 	c := m.client(t, "@bot:test", "BOT")
 	var limit syscall.Rlimit

@@ -160,29 +160,36 @@ func TestTUIBackendAsk(t *testing.T) {
 	}
 	// The round that asks beta is told of although the agent said nothing
 	// along with it: that is how the UI tells the rounds apart.
-	if strings.Join(kinds, " ") != "message say step step step step answer" || events[0].Text != "@beta hello" || events[1].Text != "" {
+	if strings.Join(kinds, " ") != "message say step step answer" || events[0].Text != "@beta hello" || events[1].Text != "" {
 		t.Fatalf("events %+v", events)
 	}
-	// run itself is shown as nothing; the call of beta within it is.
-	if events[2].Text != "" || events[3].Text != "asking beta" || events[3].Done ||
-		!events[4].Done || !strings.HasPrefix(events[4].Text, "asking beta ✓ ") || events[5].Text != "" || !events[5].Done {
-		t.Fatalf("steps %+v", events[2:6])
+	// The direct call of beta is shown while waiting and when it ends.
+	if events[2].Text != "asking beta" || events[2].Done ||
+		!events[3].Done || !strings.HasPrefix(events[3].Text, "asking beta ✓ ") {
+		t.Fatalf("steps %+v", events[2:4])
 	}
-	if reply := events[6]; !strings.Contains(reply.Text, "not connected") || reply.Context == 0 {
+	if reply := events[4]; !strings.Contains(reply.Text, "not connected") || reply.Context == 0 {
 		t.Fatalf("answer %+v", reply)
 	}
-	if pieces.String() != events[6].Text {
-		t.Fatalf("pieces %q of the answer %q", pieces.String(), events[6].Text)
+	if pieces.String() != events[4].Text {
+		t.Fatalf("pieces %q of the answer %q", pieces.String(), events[4].Text)
 	}
 	// The context of the conversation is what the LLM is sent next, message
 	// by message: the call of a tool with its arguments.
 	msgs, err := u.Contents(context.Background(), "ctx")
 	var roles []string
+	var peerTool bool
 	for _, m := range msgs {
+		if strings.HasPrefix(m.Role, "tool ") {
+			if m.Role == "tool ask_peer" && strings.Contains(m.Text, "\nparameters: {") {
+				peerTool = true
+			}
+			continue
+		}
 		roles = append(roles, m.Role)
 	}
-	if err != nil || strings.Join(roles, " ") != "system tool run user assistant tool assistant" ||
-		!strings.Contains(msgs[1].Text, "\nparameters: {") || msgs[2].Text != "@beta hello" || !strings.HasPrefix(msgs[3].Text, "→ run {") {
+	if err != nil || !peerTool || strings.Join(roles, " ") != "system user assistant tool" ||
+		!slices.ContainsFunc(msgs, func(m tui.Message) bool { return m.Role == "assistant" && strings.HasPrefix(m.Text, "→ ask_peer {") }) {
 		t.Fatalf("contents %q, %v", msgs, err)
 	}
 	// The sessions are listed, and one is stopped as asked; there is
@@ -254,7 +261,7 @@ func TestTUIBackendAsk(t *testing.T) {
 func TestTUIBackendLeavesUnshownCallsUnshown(t *testing.T) {
 	alpha, _ := clitest.TwoNodes(t)
 	quiet := plugin.New("quiet", func(ctx *plugin.Context, _ struct{}) error {
-		plugin.Add(ctx, plugin.ToolView{Tool: "run", Show: func(json.RawMessage) string { return "" }, Detail: func(plugin.Step) string { return "ran" }})
+		plugin.Add(ctx, plugin.ToolView{Tool: "ask_peer", Show: func(json.RawMessage) string { return "" }, Detail: func(plugin.Step) string { return "ran" }})
 		return nil
 	})
 	for _, e := range answer(t, backend(t, alpha, quiet), "ctx", "@beta hello") {

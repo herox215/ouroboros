@@ -25,7 +25,7 @@ func model(t *testing.T) (*chatgpttest.Server, agent.LLM) {
 	return srv, Provider(o).Model(llm.Unsaved(&c))
 }
 
-var tools = []openai.Tool{openai.NewTool("run", "Run a script.", `{"type":"object","properties":{"script":{"type":"string"}}}`)}
+var tools = []openai.Tool{openai.NewTool("read", "Read a file.", `{"type":"object","properties":{"path":{"type":"string"}}}`)}
 
 // The agents talk to the Responses API with the token of the access: the
 // request is streamed and not stored, the system prompt goes as the
@@ -44,8 +44,8 @@ func TestComplete(t *testing.T) {
 	seen := srv.Seen()
 	body, _ := json.Marshal(seen.Requests[0])
 	want := `{"input":[{"content":"hi","role":"user"}],"instructions":"You are alpha.","model":"gpt-6.1-sol","prompt_cache_key":"conv-1","store":false,"stream":true,` +
-		`"tools":[{"description":"What the agent of this Ouroboros node can do.","name":"ouro","tools":[{"description":"Run a script.","name":"run",` +
-		`"parameters":{"properties":{"script":{"type":"string"}},"type":"object"},"type":"function"}],"type":"namespace"}]}`
+		`"tools":[{"description":"What the agent of this Ouroboros node can do.","name":"ouro","tools":[{"description":"Read a file.","name":"read",` +
+		`"parameters":{"properties":{"path":{"type":"string"}},"type":"object"},"type":"function"}],"type":"namespace"}]}`
 	if string(body) != want {
 		t.Fatalf("sent\n%s\nwant\n%s", body, want)
 	}
@@ -73,12 +73,12 @@ func TestCompleteWithToolsAndThoughts(t *testing.T) {
 	srv, m := model(t)
 	srv.Set(func(s *chatgpttest.State) { s.Reasoning = "gAAAA-encrypted" })
 	ctx := context.Background()
-	history := []openai.Message{{Role: "system", Content: "You are alpha."}, {Role: "user", Content: `!run {"script":"1+1"}`}}
+	history := []openai.Message{{Role: "system", Content: "You are alpha."}, {Role: "user", Content: `!read {"path":"/a"}`}}
 	call, err := m.Complete(ctx, "m", history, tools)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCall := []openai.ToolCall{{ID: "call-1", Type: "function", Function: openai.FunctionCall{Name: "run", Arguments: `{"script":"1+1"}`}}}
+	wantCall := []openai.ToolCall{{ID: "call-1", Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{"path":"/a"}`}}}
 	if call.Content != "" || !reflect.DeepEqual(call.ToolCalls, wantCall) || call.ReasoningField != openai.ReasoningItems ||
 		call.Reasoning != `[{"encrypted_content":"gAAAA-encrypted","id":"rs_1","summary":[],"type":"reasoning"}]` {
 		t.Fatalf("got %+v", call)
@@ -97,9 +97,9 @@ func TestCompleteWithToolsAndThoughts(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	input, _ := json.Marshal(srv.Seen().Requests[1]["input"])
-	want := `[{"content":"!run {\"script\":\"1+1\"}","role":"user"},` +
+	want := `[{"content":"!read {\"path\":\"/a\"}","role":"user"},` +
 		`{"encrypted_content":"gAAAA-encrypted","id":"rs_1","summary":[],"type":"reasoning"},` +
-		`{"arguments":"{\"script\":\"1+1\"}","call_id":"call-1","name":"run","namespace":"ouro","type":"function_call"},` +
+		`{"arguments":"{\"path\":\"/a\"}","call_id":"call-1","name":"read","namespace":"ouro","type":"function_call"},` +
 		`{"call_id":"call-1","output":"2","type":"function_call_output"},` +
 		`{"content":"A note of a plugin.","role":"developer"},` +
 		`{"content":"It is 2.","role":"assistant"},` +
@@ -456,18 +456,18 @@ func TestCompleteSendsTheEffort(t *testing.T) {
 func TestReadStreamTellsTheCalling(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"Ich ergänze"}`,
-		`data: {"type":"response.function_call_arguments.delta","delta":"{\"script\":"}`,
-		`data: {"type":"response.function_call_arguments.delta","delta":"\"1+1\"}"}`,
-		`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"c","name":"run","arguments":"{\"script\":\"1+1\"}"}}`,
+		`data: {"type":"response.function_call_arguments.delta","delta":"{\"path\":"}`,
+		`data: {"type":"response.function_call_arguments.delta","delta":"\"/a\"}"}`,
+		`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"c","name":"read","arguments":"{\"path\":\"/a\"}"}}`,
 		`data: {"type":"response.completed","response":{"id":"r"}}`,
 	}, "\n\n")
 	var written []int
 	var said []string
 	got, err := readStream(strings.NewReader(body), func() {}, nil, func(text string) { said = append(said, text) }, func(n int) { written = append(written, n) })
-	if err != nil || len(got.ToolCalls) != 1 || got.ToolCalls[0].Function.Arguments != `{"script":"1+1"}` {
+	if err != nil || len(got.ToolCalls) != 1 || got.ToolCalls[0].Function.Arguments != `{"path":"/a"}` {
 		t.Fatalf("got %+v, %v", got, err)
 	}
-	if !slices.Equal(written, []int{len(`{"script":`), len(`{"script":"1+1"}`)}) || !slices.Equal(said, []string{"Ich ergänze"}) {
+	if !slices.Equal(written, []int{len(`{"path":`), len(`{"path":"/a"}`)}) || !slices.Equal(said, []string{"Ich ergänze"}) {
 		t.Fatalf("told %v, said %q", written, said)
 	}
 	// Without a sink it reads the same.

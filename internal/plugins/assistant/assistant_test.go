@@ -87,15 +87,8 @@ func TestOwnerToolsCanBeRestricted(t *testing.T) {
 	}
 }
 
-// run is the message that makes the fake LLM run a script.
-func run(script string) string {
-	args, _ := json.Marshal(map[string]string{"script": script})
-	return "!run " + string(args)
-}
-
-// A script works with the tools of the node: for the owner with all of them,
-// for a peer with those of a2a, each as far as its settings go.
-func TestScriptsUseTheToolsOfTheNode(t *testing.T) {
+// Direct tools use the owner and peer permissions of the node.
+func TestDirectToolsUseTheToolsOfTheNode(t *testing.T) {
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -123,38 +116,63 @@ func TestScriptsUseTheToolsOfTheNode(t *testing.T) {
 	clitest.Trust(t, alpha, beta, "beta")
 	clitest.Trust(t, beta, alpha, "alpha")
 
-	// The owner: every file of a directory in one call of the LLM, and a
-	// tool whose name is a word of the language.
-	everything := `return list({path: "~/share"}).split("\n").map(function(line) { return read({path: "~/share/" + line.split(" ")[0]}).trim() }).join("+")`
-	out, err := clitest.Run(t, alpha, "", "chat", run(everything))
-	if err != nil || out != "[gpt-4o] turns=3 last=alpha+beta\n" {
-		t.Fatalf("the owner: %q, %v", out, err)
-	}
-	out, err = clitest.Run(t, alpha, "", "chat", run(`delete({path: "~/share/a.txt"})`))
-	if err != nil || !strings.Contains(out, "last=error: delete is a word of JavaScript") {
-		t.Fatalf("delete as a function: %q, %v", out, err)
-	}
-	out, err = clitest.Run(t, alpha, "", "chat", run(`return tools.delete({path: "~/share/b.txt"}) + " / " + list({path: "~/share"})`))
-	if err != nil || out != "[gpt-4o] turns=3 last=deleted ~/share/b.txt / a.txt (6 bytes)\n" {
-		t.Fatalf("tools.delete: %q, %v", out, err)
-	}
-	// A script of the owner asks a peer, whose agent runs a script in turn.
-	asks := `return ask_peer({peer: "beta", message: ` + string(mustJSON(run(`return read({path: "~/share/a.txt"})`))) + `})`
-	out, err = clitest.Run(t, alpha, "", "chat", run(asks))
-	if err != nil || out != "[gpt-4o] turns=3 last=[gpt-4o-mini] turns=3 last=alpha\n\n" {
-		t.Fatalf("a script that asks a peer: %q, %v", out, err)
+	for message, want := range map[string]string{
+		`!read {"path":"~/private.txt"}`: "mine\n",
+		`!list {"path":"~/share"}`:       "a.txt (6 bytes)\nb.txt (5 bytes)",
+	} {
+		out, err := clitest.Run(t, alpha, "", "chat", message)
+		if err != nil || out != "[gpt-4o] turns=3 last="+want+"\n" {
+			t.Fatalf("owner %s: %q, %v", message, out, err)
+		}
 	}
 
-	// The peer: what a2a lists, as far as it lets the tool go, and nothing else.
-	for script, want := range map[string]string{
-		`return Object.keys(tools)`:                          `last=["read","list","explain_error"]`,
-		`return read({path: "~/share/a.txt"})`:               "last=alpha\n",
-		`return read({path: "~/private.txt"})`:               `is refused: it is not in "allow" of the tool read`,
-		`return typeof write + typeof ask_peer + typeof run`: "last=undefinedundefinedundefined",
+	// Each request is also nested in an owner ask_peer call: forwarding must
+	// preserve the peer allowlist and file settings, not the owner permissions.
+	for _, tt := range []struct{ message, want string }{
+		{`!read {"path":"~/share/a.txt"}`, "[gpt-4o-mini] turns=3 last=alpha\n"},
+		{`!list {"path":"~/share"}`, "[gpt-4o-mini] turns=3 last=a.txt (6 bytes)\nb.txt (5 bytes)"},
+		{`!read {"path":"~/private.txt"}`, `is refused: it is not in "allow" of the tool read`},
+		{`!list {"path":"~"}`, `is refused: it is not in "allow" of the tool list`},
+		{`!delete {"path":"~/share/b.txt"}`, `[gpt-4o-mini] turns=1 last=!delete {"path":"~/share/b.txt"}`},
+		{`!write {"path":"~/share/a.txt","content":"changed"}`, `[gpt-4o-mini] turns=1 last=!write`},
+		{`!ask_peer {"peer":"alpha","message":"hello"}`, `[gpt-4o-mini] turns=1 last=!ask_peer`},
+		{`!tools.delete {"path":"~/share/b.txt"}`, `[gpt-4o-mini] turns=1 last=!tools.delete`},
 	} {
-		out, err := clitest.Run(t, alpha, "", "ask", "beta", run(script))
-		if err != nil || !strings.Contains(out, want) {
-			t.Errorf("a peer runs %s: %q, %v; want %q", script, out, err, want)
+		for _, nested := range []bool{false, true} {
+			args := []string{"ask", "beta", tt.message}
+			if nested {
+				args = []string{"chat", "!ask_peer " + string(mustJSON(map[string]string{"peer": "beta", "message": tt.message}))}
+			}
+			out, err := clitest.Run(t, alpha, "", args...)
+			if err != nil || !strings.Contains(out, tt.want) {
+				t.Errorf("peer %s (nested=%v): %q, %v; want %q", tt.message, nested, out, err, tt.want)
+			}
+		}
+	}
+	for name, want := range map[string]string{"a.txt": "alpha\n", "b.txt": "beta\n"} {
+		got, err := os.ReadFile(filepath.Join(home, "share", name))
+		if err != nil || string(got) != want {
+			t.Fatalf("peer changed %s: %q, %v", name, got, err)
+		}
+	}
+
+	// Only the direct advertised name deletes; there is no tools namespace.
+	for _, message := range []string{`!tools.delete {"path":"~/share/b.txt"}`, `!delete {"path":"~/share/b.txt"}`} {
+		out, err := clitest.Run(t, alpha, "", "chat", message)
+		want := "[gpt-4o] turns=1 last=" + message + "\n"
+		if strings.HasPrefix(message, "!delete ") {
+			want = "[gpt-4o] turns=3 last=deleted ~/share/b.txt\n"
+		}
+		if err != nil || out != want {
+			t.Fatalf("owner delete %s: %q, %v", message, out, err)
+		}
+		_, statErr := os.Stat(filepath.Join(home, "share/b.txt"))
+		if strings.HasPrefix(message, "!delete ") {
+			if !os.IsNotExist(statErr) {
+				t.Fatalf("direct delete left file: %v", statErr)
+			}
+		} else if statErr != nil {
+			t.Fatalf("unadvertised name changed file: %v", statErr)
 		}
 	}
 }

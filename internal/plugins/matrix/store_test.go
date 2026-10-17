@@ -17,6 +17,10 @@ func TestSettingsValidation(t *testing.T) {
 	for _, c := range []plugin.GatewayChange{
 		{Homeserver: "http://example.org"},
 		{Homeserver: "http://192.0.2.1:8008"},
+		{Homeserver: "http://100.91.15.24:8008"},
+		{Homeserver: "http://100.91.15.23:8009"},
+		{Homeserver: "http://100.91.15.23:8008/path"},
+		{Homeserver: "http://user:pass@100.91.15.23:8008"},
 		{Homeserver: "http://localhost.example.org:8008"},
 		{Homeserver: "http://localhost:8008?token=secret"},
 		{Homeserver: "http://localhost:8008#fragment"},
@@ -38,7 +42,7 @@ func TestSettingsValidation(t *testing.T) {
 		t.Fatalf("normalize: %+v %v", c, err)
 	}
 	for _, server := range []string{
-		"http://localhost:8008",
+		"http://100.91.15.23:8008", "http://localhost:8008",
 		"http://127.0.0.1:8008", "http://[::1]:8008",
 	} {
 		c, err := normalize(plugin.GatewayChange{Homeserver: server})

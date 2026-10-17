@@ -23,6 +23,7 @@ type testSessions struct {
 	events                          []plugin.SessionEvent
 	askErr, watchErr                error
 	asked                           chan string
+	replied                         string
 }
 
 func (s *testSessions) New(context.Context) (string, error) {
@@ -41,10 +42,11 @@ func (s *testSessions) Ask(_ context.Context, _, text string) error {
 	}
 	return err
 }
-func (s *testSessions) Steer(context.Context, string, string) error {
+func (s *testSessions) Steer(_ context.Context, _, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.replies++
+	s.replied = text
 	return nil
 }
 func (s *testSessions) Cancel(context.Context, string) error {
@@ -359,8 +361,8 @@ func TestPresented(t *testing.T) {
 		{plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "done"}, "done"},
 		{plugin.SessionEvent{Kind: plugin.SessionFailed, Text: "secret error details"}, "The agent could not complete this answer. Check the local Ouro session for details."},
 		{plugin.SessionEvent{Kind: plugin.SessionCanceled}, "Answer canceled."},
-		{question(`{"question": "Delete it?", "options": ["yes", "no"]}`, false), "Delete it?\n\nyes\nno\n\nReply with /answer YOUR ANSWER"},
-		{question(`{"question": "Which name?"}`, false), "Which name?\n\nReply with /answer YOUR ANSWER"},
+		{question(`{"question": "Delete it?", "options": ["yes", "no"]}`, false), "Delete it?\n\n1. yes\n2. no\n\nReply with a number or your own answer (no command needed)."},
+		{question(`{"question": "Which name?"}`, false), "Which name?\n\nJust send your answer (no command needed)."},
 		{question(`{"question": "Delete it?", "options": ["yes", "no"]}`, true), ""},
 		{question(`{}`, false), ""},
 		{plugin.SessionEvent{Kind: plugin.SessionThought, Text: "private thought"}, ""},

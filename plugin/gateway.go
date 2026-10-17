@@ -61,6 +61,7 @@ type GatewaySessions interface {
 var (
 	ErrGatewayDenied  = errors.New("gateway access denied")
 	ErrGatewaySession = errors.New("no such gateway session")
+	ErrGatewayImages  = errors.New("gateway backend does not support image input")
 )
 
 // GatewayAdapter adapts authenticated external gateways to existing owner Sessions.
@@ -80,14 +81,33 @@ var (
 type GatewayAdapter struct {
 	sessions  GatewaySessions
 	authorize GatewayAuthorize
+	source    MessageSource
 	mu        sync.Mutex
 	bindings  map[string]GatewayIdentity
 }
 
+// GatewayOption configures host-controlled gateway attribution.
+type GatewayOption func(*GatewayAdapter)
+
+// WithGatewayName identifies the transport in model context and archived message
+// sources. Use a stable public name (for example, matrix or whatsapp), not an
+// account identifier or message text. Names accept ASCII letters, digits, dots,
+// underscores and hyphens, up to 64 bytes. Invalid names are omitted.
+// This is attribution only; it grants no permissions.
+func WithGatewayName(name string) GatewayOption {
+	return func(g *GatewayAdapter) {
+		g.source = (MessageSource{Interface: "api", Gateway: name}).Normalized()
+	}
+}
+
 // NewGatewayAdapter constructs a fail-closed adapter. A nil backend or policy denies
 // all requests. No session or node is opened by construction.
-func NewGatewayAdapter(s GatewaySessions, authorize GatewayAuthorize) *GatewayAdapter {
-	return &GatewayAdapter{sessions: s, authorize: authorize, bindings: make(map[string]GatewayIdentity)}
+func NewGatewayAdapter(s GatewaySessions, authorize GatewayAuthorize, options ...GatewayOption) *GatewayAdapter {
+	g := &GatewayAdapter{sessions: s, authorize: authorize, source: MessageSource{Interface: "api"}, bindings: make(map[string]GatewayIdentity)}
+	for _, option := range options {
+		option(g)
+	}
+	return g
 }
 
 // NewGatewayAdapterWithBindings restores a snapshot from the trusted host's
@@ -97,8 +117,8 @@ func NewGatewayAdapter(s GatewaySessions, authorize GatewayAuthorize) *GatewayAd
 // snapshots isolated by profile and protect their integrity as well as privacy.
 // It validates and copies the entire snapshot without calling the backend or
 // policy. A binding is not a grant: every operation still checks current policy.
-func NewGatewayAdapterWithBindings(s GatewaySessions, authorize GatewayAuthorize, bindings map[string]GatewayIdentity) (*GatewayAdapter, error) {
-	g := NewGatewayAdapter(s, authorize)
+func NewGatewayAdapterWithBindings(s GatewaySessions, authorize GatewayAuthorize, bindings map[string]GatewayIdentity, options ...GatewayOption) (*GatewayAdapter, error) {
+	g := NewGatewayAdapter(s, authorize, options...)
 	for id, who := range bindings {
 		if strings.TrimSpace(id) == "" {
 			return nil, fmt.Errorf("invalid restored binding: %w", ErrGatewaySession)
@@ -183,13 +203,33 @@ func (g *GatewayAdapter) Open(ctx context.Context, who GatewayIdentity) (string,
 
 // Send starts an answer and returns at once. It preserves ErrBusy rather than
 // steering: ordinary send permission must not also answer permission questions.
-// Source remains api: the backend's fixed source vocabulary does not accept
-// gateway. Attribution is not authorization and must not encode identity.
+// Source identifies the API and the host-configured gateway name, never the
+// authenticated account identity. Caller source metadata is not inherited.
 func (g *GatewayAdapter) Send(ctx context.Context, who GatewayIdentity, id, text string) error {
 	if err := g.bound(ctx, who, GatewaySend, id); err != nil {
 		return err
 	}
-	return g.sessions.Ask(WithMessageSource(ctx, MessageSource{Interface: "api"}), id, text)
+	return g.sessions.Ask(WithMessageSource(ctx, g.source), id, text)
+}
+
+// SendImages starts an answer with downloaded pictures, using the same binding
+// and send authorization as Send. It never steers or approves a question. An
+// unsupported backend fails explicitly rather than silently losing pictures.
+// The host must authenticate and download attachments, validate/resize their
+// content and bound resource use before calling. Images are not archived.
+// No images is equivalent to Send, including on text-only backends.
+func (g *GatewayAdapter) SendImages(ctx context.Context, who GatewayIdentity, id, text string, images []Image) error {
+	if len(images) == 0 {
+		return g.Send(ctx, who, id, text)
+	}
+	if err := g.bound(ctx, who, GatewaySend, id); err != nil {
+		return err
+	}
+	backend, ok := g.sessions.(ImageSessions)
+	if !ok {
+		return ErrGatewayImages
+	}
+	return backend.AskImages(WithMessageSource(ctx, g.source), id, text, images)
 }
 
 // Poll returns a complete snapshot, including SessionAsked events. An Asked
@@ -224,7 +264,7 @@ func (g *GatewayAdapter) Reply(ctx context.Context, who GatewayIdentity, id, tex
 	if err := g.bound(ctx, who, GatewayReply, id); err != nil {
 		return err
 	}
-	return g.sessions.Steer(WithMessageSource(ctx, MessageSource{Interface: "api"}), id, text)
+	return g.sessions.Steer(WithMessageSource(ctx, g.source), id, text)
 }
 
 // Cancel stops the answer and its delegated tasks, without deleting the session.

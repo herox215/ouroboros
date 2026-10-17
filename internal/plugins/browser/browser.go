@@ -38,7 +38,7 @@ var pageJS string
 
 // The limits of the tool.
 const (
-	maxPage = 24 << 10 // text bytes read returns per call, below the script output limit
+	maxPage = 24 << 10 // text bytes read returns per call
 	quality = 80       // of the JPEG of a screenshot
 )
 

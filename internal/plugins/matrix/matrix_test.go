@@ -30,7 +30,7 @@ func sessionProvider(s plugin.Sessions) plugin.Plugin {
 func startPlugin(t *testing.T, dir home.Dir, sessions plugin.Sessions) (plugin.Gateway, plugin.Serving) {
 	t.Helper()
 	k := kernel.New()
-	if err := k.Start(sessionProvider(sessions), Plugin(dir)); err != nil {
+	if err := k.Start(sessionProvider(sessions), Plugin(dir, nil)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k.Stop)

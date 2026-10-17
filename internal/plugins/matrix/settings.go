@@ -15,6 +15,21 @@ type loginResult struct{ UserID, Token, DeviceID string }
 type loginFunc func(context.Context, string, string, string) (loginResult, error)
 
 func (s store) change(ctx context.Context, change plugin.GatewayChange, login loginFunc) error {
+	if change.VerificationAction != "" || change.VerificationTransactionID != "" {
+		if err := s.create(); err != nil {
+			return errors.New("Matrix verification store is unavailable")
+		}
+		unlock, err := safefile.Lock(s.path("settings.lock"))
+		if err != nil {
+			return errors.New("Matrix verification store is unavailable")
+		}
+		defer unlock()
+		cfg, err := s.load()
+		if err != nil {
+			return errors.New("Matrix verification settings are unavailable")
+		}
+		return s.queueVerification(cfg, change)
+	}
 	change, err := normalize(change)
 	if err != nil {
 		return err

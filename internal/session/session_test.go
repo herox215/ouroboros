@@ -525,9 +525,9 @@ func TestClose(t *testing.T) {
 // message, with what the plugins reported.
 func TestContents(t *testing.T) {
 	var tool openai.Tool
-	tool.Function.Name, tool.Function.Description, tool.Function.Parameters = "run", "Run JavaScript", json.RawMessage(`{"type":"object"}`)
+	tool.Function.Name, tool.Function.Description, tool.Function.Parameters = "read", "Read a file.", json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`)
 	call := openai.ToolCall{}
-	call.Function.Name, call.Function.Arguments = "run", `{"script":"1"}`
+	call.Function.Name, call.Function.Arguments = "read", `{"path":"/a"}`
 	a := &fakeAgent{contents: assistant.Contents{
 		System: "You are alpha.",
 		Tools:  []openai.Tool{tool},
@@ -536,8 +536,8 @@ func TestContents(t *testing.T) {
 	}, inspect: &agent.Inspection{Diagnostics: []agent.Diagnostic{{Plugin: "post", Phase: "after", Err: errors.New("storage failed")}}}}
 	s := service(t, a)
 	got, err := s.Contents(context.Background(), "s1")
-	want := []Line{{"system", "You are alpha."}, {"tool run", "Run JavaScript\nparameters: {\"type\":\"object\"}"}, {"user", "hi"},
-		{"assistant", "let me see\n→ run {\"script\":\"1\"}"}, {"assistant", "→ run {\"script\":\"1\"}"}, {"plugin diagnostic", "post after failed: storage failed"}}
+	want := []Line{{"system", "You are alpha."}, {"tool read", "Read a file.\nparameters: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}"}, {"user", "hi"},
+		{"assistant", "let me see\n→ read {\"path\":\"/a\"}"}, {"assistant", "→ read {\"path\":\"/a\"}"}, {"plugin diagnostic", "post after failed: storage failed"}}
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("got %q, %v", got, err)
 	}

@@ -36,6 +36,7 @@ var codes = map[string]error{
 	"stopped":    ErrStopped,
 	"no_session": ErrNoSession,
 	"empty":      ErrEmpty,
+	"image":      ErrImage,
 	"no_effort":  ErrNoEffort,
 	"no_job":     ErrNoJob,
 	"no_service": ErrNoService,
@@ -50,9 +51,10 @@ type failure struct {
 
 type (
 	askRequest struct {
-		ID     string        `json:"id"`
-		Text   string        `json:"text"`
-		Source MessageSource `json:"source,omitzero"`
+		ID     string         `json:"id"`
+		Text   string         `json:"text"`
+		Images []openai.Image `json:"images,omitempty"`
+		Source MessageSource  `json:"source,omitzero"`
 	}
 	idRequest struct {
 		ID string `json:"id"`
@@ -110,6 +112,13 @@ func Handler(s *Service) http.Handler {
 		var in askRequest
 		if read(w, r, &in) {
 			reply(w, nil, s.Ask(WithMessageSource(r.Context(), in.Source), in.ID, in.Text))
+		}
+	})
+	// A separate route fails explicitly against older, text-only nodes.
+	mux.HandleFunc("POST /ask-images", func(w http.ResponseWriter, r *http.Request) {
+		var in askRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.AskImages(WithMessageSource(r.Context(), in.Source), in.ID, in.Text, in.Images))
 		}
 	})
 	mux.HandleFunc("POST /steer", func(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +376,11 @@ func (c *Client) New(ctx context.Context) (string, error) {
 // Ask starts the answer to text in the session id.
 func (c *Client) Ask(ctx context.Context, id, text string) error {
 	return c.do(ctx, http.MethodPost, "/ask", askRequest{ID: id, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+}
+
+// AskImages starts an answer with text and pictures; see ImageAPI.
+func (c *Client) AskImages(ctx context.Context, id, text string, images []openai.Image) error {
+	return c.do(ctx, http.MethodPost, "/ask-images", askRequest{ID: id, Text: text, Images: images, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // Steer gives text to the answer on its way in the session id.

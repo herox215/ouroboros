@@ -799,11 +799,11 @@ func TestRejectRequest(t *testing.T) {
 
 // Every round of the loop has its entry, a round the agent said nothing of
 // too, and every call of a round its line, which says once the call ended
-// what became of it. The calls a script runs end before the script does.
+// what became of it. Overlapping calls can finish out of order.
 // Another UI that shows the session sees the same.
 func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	m, b := newModel(t)
-	written, scripted := make(chan struct{}), make(chan struct{})
+	written, read := make(chan struct{}), make(chan struct{})
 	b.ask = func(_ context.Context, step func(Step), say func(string)) (string, error) {
 		say("I read both")
 		step(Step{Text: "reading a.go"})
@@ -811,12 +811,12 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		step(Step{Text: "reading b.go"})
 		step(Step{Text: "reading b.go ✗ no such file", Done: true})
 		say("")
-		step(Step{Text: "running a script"})
+		step(Step{Text: "reading d.go"})
 		step(Step{Text: "writing c.go"})
 		<-written
 		step(Step{Text: "writing c.go ✓ 1ms", Done: true})
-		<-scripted
-		step(Step{Text: "running a script ✓ 9ms", Done: true})
+		<-read
+		step(Step{Text: "reading d.go ✓ 9ms", Done: true})
 		// A call that ended without having started changes nothing.
 		step(Step{Text: "listing ~ ✓ 1ms", Done: true})
 		return "", nil
@@ -827,13 +827,13 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		t.Fatalf("the calls should be one line: %+v\n%s", m.chat, trimmedLines(m))
 	}
 	close(written)
-	drive(t, m, nil, func() bool { return m.chat.doing == "running a script" }) // the script still runs
-	close(scripted)
+	drive(t, m, nil, func() bool { return m.chat.doing == "reading d.go" }) // the read still runs
+	close(read)
 	drive(t, m, nil, func() bool { return !m.chat.pending })
 
 	want := []entry{{mine: true, text: "fix it"},
 		{text: "I read both", calls: []call{{text: "reading a.go ✓ 3ms", done: true}, {text: "reading b.go ✗ no such file", done: true}}},
-		{calls: []call{{text: "running a script ✓ 9ms", done: true}, {text: "writing c.go ✓ 1ms", done: true}}}} // the answer said nothing at the end and leaves no entry of its own
+		{calls: []call{{text: "reading d.go ✓ 9ms", done: true}, {text: "writing c.go ✓ 1ms", done: true}}}} // the answer said nothing at the end and leaves no entry of its own
 	if !sameEntries(m.chat.entries, want) {
 		t.Fatalf("the loop in the history: %+v", m.chat.entries)
 	}

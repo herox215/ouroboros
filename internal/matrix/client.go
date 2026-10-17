@@ -19,7 +19,14 @@ type Config struct {
 	Homeserver, UserID, Token, DeviceID, StateDir string
 	AllowedUsers                                  []string
 }
-type Message struct{ RoomID, Sender, Text string }
+type Image struct {
+	MIMEType string
+	Data     []byte
+}
+type Message struct {
+	RoomID, Sender, Text string
+	Images               []Image
+}
 
 // Login exchanges a password for device credentials. Passwords are never retained.
 func Login(ctx context.Context, homeserver, user, password string) (Credentials, error) {
@@ -39,15 +46,17 @@ func Login(ctx context.Context, homeserver, user, password string) (Credentials,
 }
 
 // ValidateServer checks the homeserver URL for both transport and settings.
-// HTTP is allowed only on loopback; it does not alter TLS verification.
+// HTTP is allowed on loopback and, by explicit owner authorization, only at
+// http://100.91.15.23:8008 on Tailscale. This is not a general exception for
+// Tailscale addresses, other ports or URL paths, and does not alter TLS verification.
 func ValidateServer(server string) error {
 	u, err := url.Parse(server)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("the Matrix homeserver must be a URL without credentials, query or fragment")
 	}
 	loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
-	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
-		return errors.New("the Matrix homeserver must be HTTPS (HTTP is allowed only on loopback)")
+	if u.Scheme != "https" && !(u.Scheme == "http" && (loopback || server == "http://100.91.15.23:8008")) {
+		return errors.New("the Matrix homeserver must be HTTPS (HTTP is allowed only on loopback or the explicitly authorized http://100.91.15.23:8008 Tailscale endpoint)")
 	}
 	return nil
 }
@@ -63,14 +72,15 @@ type cryptography interface {
 var startCrypto = newCrypto
 
 type Client struct {
-	cfg     Config
-	cli     *mautrix.Client
-	allowed map[id.UserID]bool
-	mu      sync.RWMutex
-	status  string
-	running bool
-	crypto  cryptography
-	sendMu  sync.Mutex
+	cfg          Config
+	cli          *mautrix.Client
+	allowed      map[id.UserID]bool
+	mu           sync.RWMutex
+	status       string
+	running      bool
+	crypto       cryptography
+	sendMu       sync.Mutex
+	verification *verificationState
 }
 
 func New(cfg Config) (*Client, error) {
@@ -104,6 +114,9 @@ func (c *Client) Close() error {
 	if c.running {
 		return errors.New("cancel and wait for Matrix Run before Close")
 	}
+	c.mu.Unlock()
+	c.stopVerification()
+	c.mu.Lock()
 	if c.crypto != nil {
 		err := c.crypto.close()
 		c.crypto = nil
@@ -247,7 +260,7 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 	c.running = true
 	c.status = "starting"
 	c.mu.Unlock()
-	defer func() { c.mu.Lock(); c.running = false; c.status = "stopped"; c.mu.Unlock() }()
+	defer func() { c.stopVerification(); c.mu.Lock(); c.running = false; c.status = "stopped"; c.mu.Unlock() }()
 	who, err := c.cli.Whoami(ctx)
 	if err != nil || who.UserID != c.cli.UserID || who.DeviceID != c.cli.DeviceID {
 		return errors.New("the Matrix credentials do not match the configured user and device")
@@ -286,6 +299,14 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 		c.setStatus("crypto initialization failed")
 		return err
 	}
+	if initializer, ok := crypt.(interface {
+		initVerification(context.Context, *Client) error
+	}); ok {
+		if err := initializer.initVerification(ctx, c); err != nil {
+			crypt.close()
+			return err
+		}
+	}
 	c.mu.Lock()
 	c.crypto = crypt
 	c.mu.Unlock()
@@ -301,7 +322,7 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 			return
 		}
 		content := e.Content.AsMessage()
-		if content.MsgType != event.MsgText || content.Body == "" || content.RelatesTo != nil && content.RelatesTo.Type == event.RelReplace {
+		if (content.MsgType != event.MsgText && content.MsgType != event.MsgImage) || (content.MsgType == event.MsgText && content.Body == "") || content.RelatesTo != nil && content.RelatesTo.Type == event.RelReplace {
 			return
 		}
 		peer, err := c.safeRoom(ctx, e.RoomID)
@@ -315,8 +336,23 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 		}
 		seen[e.ID] = true
 		seenMu.Unlock()
+		msg := Message{RoomID: string(e.RoomID), Sender: string(e.Sender), Text: content.Body}
+		if content.MsgType == event.MsgImage {
+			img, err := c.downloadImage(ctx, content)
+			if err != nil {
+				_ = c.SendTo(ctx, msg.RoomID, msg.Sender, "The image could not be read: "+err.Error())
+				return
+			}
+			msg.Text = content.GetCaption()
+			msg.Images = []Image{img}
+			// A download may take time; do not deliver after room membership changed.
+			peer, err := c.safeRoom(ctx, e.RoomID)
+			if err != nil || peer != e.Sender {
+				return
+			}
+		}
 		if onMessage != nil {
-			onMessage(ctx, Message{string(e.RoomID), string(e.Sender), content.Body})
+			onMessage(ctx, msg)
 		}
 	})
 	// Retry a bounded number of undecryptable live events when delayed keys

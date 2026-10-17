@@ -338,7 +338,10 @@ func TestSendChecksTheRoomAroundEncryption(t *testing.T) {
 func TestServerValidation(t *testing.T) {
 	for _, server := range []string{
 		"http://matrix.example", "https://user:pass@example.org", "https://example.org?token=secret",
-		"http://192.0.2.1:8008", "http://localhost.example.org:8008", "ftp://localhost:8008",
+		"http://192.0.2.1:8008", "http://100.91.15.24:8008", "http://100.91.15.23:8009", "http://100.91.15.23",
+		"http://100.91.15.23:80", "http://100.91.15.23:08008", "http://100.91.15.23:8008/path",
+		"http://100.91.15.23:8008?token=secret", "http://100.91.15.23:8008#fragment",
+		"http://user:pass@100.91.15.23:8008", "http://100.91.15.23.example.org:8008", "ftp://100.91.15.23:8008", "http://localhost.example.org:8008", "ftp://localhost:8008",
 		"http://localhost:8008?token=secret", "http://localhost:8008#fragment",
 		"http://user:pass@localhost:8008", "https://example.org#fragment", "https://",
 	} {
@@ -347,7 +350,7 @@ func TestServerValidation(t *testing.T) {
 		}
 	}
 	for _, server := range []string{
-		"https://matrix.example",
+		"https://matrix.example", "http://100.91.15.23:8008",
 		"http://localhost:8008", "http://127.0.0.1:8008", "http://[::1]:8008",
 	} {
 		if err := ValidateServer(server); err != nil {

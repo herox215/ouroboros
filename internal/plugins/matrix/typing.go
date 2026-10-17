@@ -20,7 +20,7 @@ func answering(events []plugin.SessionEvent) bool {
 			active = true
 		case plugin.SessionAsked:
 			active = e.Done
-		case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled, plugin.SessionRestart:
+		case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled, plugin.SessionRestart, plugin.SessionRestarted:
 			active = false
 		}
 	}

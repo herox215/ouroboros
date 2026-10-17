@@ -33,7 +33,7 @@ func (l *llmCalling) Complete(_ context.Context, _ string, msgs []openai.Message
 }
 
 // answer has an agent call bash with settings and each of calls in one
-// answer, each as a script with ten seconds left would, and returns what
+// answer, each with ten seconds left in its calling context, and returns what
 // they returned, an error as "error: " and what it says. What the owner is
 // told of the jobs goes to w.told.
 func (w *world) answer(settings string, calls ...map[string]any) []string {
@@ -45,16 +45,16 @@ func (w *world) answer(settings string, calls ...map[string]any) []string {
 	run := tool.Run
 	tool.Run = func(ctx context.Context, args json.RawMessage) (string, error) {
 		// A call {"owner stops": n} is the owner stopping the job n; one
-		// {"script ended": call} makes the call in a script that ended.
+		// {"call ended": call} makes the call with a canceled context.
 		var owner struct {
 			Stops *int            `json:"owner stops"`
-			Ended json.RawMessage `json:"script ended"`
+			Ended json.RawMessage `json:"call ended"`
 		}
 		if json.Unmarshal(args, &owner); owner.Ended != nil {
 			ctx, cancel := context.WithCancel(ctx)
 			cancel()
 			_, err := run(ctx, owner.Ended)
-			result := fmt.Sprint("the script ended: ", err)
+			result := fmt.Sprint("the call ended: ", err)
 			got = append(got, result)
 			return result, nil
 		}
@@ -195,19 +195,19 @@ func TestJobs(t *testing.T) {
 	}
 }
 
-// Waiting for a job ends with the script that waits, and the job runs on.
+// Waiting for a job ends with the call that waits, and the job runs on.
 func TestWaitEndsWithTheScript(t *testing.T) {
 	w := newWorld(t)
 	got := w.answer("{}",
 		map[string]any{"command": "echo up; sleep 30", "background": true},
-		map[string]any{"script ended": map[string]any{"job": 1}},
-		map[string]any{"script ended": map[string]any{"job": 1, "timeout": 5}},
+		map[string]any{"call ended": map[string]any{"job": 1}},
+		map[string]any{"call ended": map[string]any{"job": 1, "timeout": 5}},
 		map[string]any{"job": 1, "timeout": 1},
 	)
 	want := []string{
 		"job 1 runs in the background",
-		"the script ended: context canceled",
-		"the script ended: context canceled",
+		"the call ended: context canceled",
+		"the call ended: context canceled",
 		"job 1 runs, for ",
 	}
 	if len(got) != len(want) {

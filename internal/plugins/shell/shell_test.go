@@ -257,7 +257,7 @@ func zombie(pid int) bool {
 }
 
 // A command that runs too long is stopped with everything it started, and
-// what it printed comes along; it ends before the script it runs for.
+// what it printed comes along; it ends before its calling context.
 func TestTimeout(t *testing.T) {
 	w := newWorld(t)
 	old := grace
@@ -268,7 +268,7 @@ func TestTimeout(t *testing.T) {
 	// bash may yet tell that what it started was killed, or not.
 	_, err := w.bash(context.Background(), "{}", map[string]any{"command": "echo started; (sleep 30; echo late > " + pid + ".late) & echo $! > " + pid + "; wait", "timeout": 1})
 	if err == nil || !strings.HasPrefix(err.Error(), "the command was stopped after 1s; what it printed:\nstarted\n") || time.Since(start) > 5*time.Second ||
-		!strings.HasSuffix(err.Error(), `[its time was up: run it again with a larger "timeout", as far as the script has time left, or with "background": true]`) {
+		!strings.HasSuffix(err.Error(), `[its time was up: run it again with a larger "timeout", as far as the calling context has time left, or with "background": true]`) {
 		t.Errorf("stopped: %v after %s", err, time.Since(start))
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -285,7 +285,7 @@ func TestTimeout(t *testing.T) {
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := w.bash(ctx, "{}", map[string]any{"command": "true"}); err == nil || err.Error() != "the script has no time left for a command" {
+	if _, err := w.bash(ctx, "{}", map[string]any{"command": "true"}); err == nil || err.Error() != "the call has no time left for a command" {
 		t.Errorf("without time: %v", err)
 	}
 }

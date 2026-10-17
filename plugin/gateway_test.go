@@ -401,7 +401,7 @@ func gatewayUntil(t *testing.T, g *plugin.GatewayAdapter, id string, kind plugin
 func TestGatewayDrivesSessions(t *testing.T) {
 	s := session.New(&gatewayAgent{})
 	t.Cleanup(s.Close)
-	g := plugin.NewGatewayAdapter(s, gatewayOwner)
+	g := plugin.NewGatewayAdapter(s, gatewayOwner, plugin.WithGatewayName("future-gateway"))
 	id, err := g.Open(t.Context(), gatewayAlice)
 	if err != nil {
 		t.Fatal(err)
@@ -415,7 +415,7 @@ func TestGatewayDrivesSessions(t *testing.T) {
 		if e.Kind == plugin.SessionAsked && !e.Done && e.AsQuestion().Question == "Which?" {
 			found = true
 		}
-		if e.Kind == plugin.SessionMessage && e.Source.Interface != "api" {
+		if e.Kind == plugin.SessionMessage && e.Source != (plugin.MessageSource{Interface: "api", Gateway: "future-gateway"}) {
 			t.Fatalf("source: %+v", e)
 		}
 	}

@@ -264,7 +264,7 @@ func TestWhen(t *testing.T) {
 
 // The sessions screen lists those without a message first, then the latest;
 // sessions of the same time in the order of their IDs. A call of a tool
-// nothing is shown of counts, the script that calls the tools does not.
+// nothing is shown of counts, regardless of its name.
 func TestSessionRows(t *testing.T) {
 	m, _ := newModel(t)
 	at := time.Date(2026, 10, 7, 9, 0, 0, 0, time.Local)
@@ -285,14 +285,12 @@ func TestSessionRows(t *testing.T) {
 	}
 
 	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionMessage, Text: "hi"}})
-	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: "run"}})
-	if len(shown.entries) != 1 || shown.round != 0 {
-		t.Fatalf("the script is a tool: %+v", shown.entries)
+	// Archived run events count just like unknown or direct tools.
+	for _, tool := range []string{"run", "unknown", "bash"} {
+		m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: tool}})
+		m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: tool, Done: true, Failed: true}})
 	}
-	// A call nothing is shown of counts all the same.
-	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: "bash"}})
-	m.Update(eventMsg{id: "z", event: Event{Kind: plugin.SessionStep, Tool: "bash", Done: true, Failed: true}})
-	if len(shown.entries) != 2 || shown.summaries()[1] != "Used 1 tool, 1 failed" {
+	if len(shown.entries) != 2 || shown.summaries()[1] != "Used 3 tools, 3 failed" {
 		t.Fatalf("entries %+v", shown.entries)
 	}
 }

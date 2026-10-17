@@ -73,11 +73,12 @@ type Record struct {
 	Time   time.Time `json:"time"`   // when the answer ended
 	// Role is that of the message: user, assistant or tool, and end for the
 	// record that closes an answer with its Outcome.
-	Role       string               `json:"role"`
-	Content    string               `json:"content,omitempty"`
-	Source     openai.MessageSource `json:"source,omitzero"`
-	ToolCalls  []Call               `json:"tool_calls,omitempty"`
-	ToolCallID string               `json:"tool_call_id,omitempty"`
+	Role           string               `json:"role"`
+	Content        string               `json:"content,omitempty"`
+	Source         openai.MessageSource `json:"source,omitzero"`
+	ToolCalls      []Call               `json:"tool_calls,omitempty"`
+	ToolCallID     string               `json:"tool_call_id,omitempty"`
+	PresentationID string               `json:"presentation_id,omitempty"`
 	// Outcome is Answered, Failed or Canceled. Why an answer failed is not
 	// kept: a peer reads its archive, and must not learn the cause from it.
 	Outcome string `json:"outcome,omitempty"`
@@ -88,8 +89,10 @@ type Record struct {
 // Statistics is the context size and provider usage reported when an answer ended.
 // Cache is JSON so the archive need not depend on the assistant.
 type Statistics struct {
-	Context int             `json:"context,omitempty"`
-	Cache   json.RawMessage `json:"cache,omitempty"`
+	// PresentationID belongs to the end record, not its usage statistics.
+	PresentationID string          `json:"-"`
+	Context        int             `json:"context,omitempty"`
+	Cache          json.RawMessage `json:"cache,omitempty"`
 }
 
 // Call is a call of a tool the model asked for.
@@ -158,6 +161,16 @@ func (a *Archive) file(who Who, session string) string {
 
 // Append atomically keeps one complete answer, continuing the SQL sequence.
 func (a *Archive) Append(who Who, msgs []openai.Message, answerErr error, statistics ...Statistics) error {
+	return a.append(who, msgs, answerErr, "", statistics...)
+}
+
+// AppendWithPresentationID keeps an answer with an end presentation ID and no
+// usage statistics. Use Append with Statistics when usage is available.
+func (a *Archive) AppendWithPresentationID(who Who, msgs []openai.Message, answerErr error, presentationID string) error {
+	return a.append(who, msgs, answerErr, presentationID)
+}
+
+func (a *Archive) append(who Who, msgs []openai.Message, answerErr error, presentationID string, statistics ...Statistics) error {
 	db, err := a.database()
 	if err != nil {
 		return err
@@ -191,7 +204,7 @@ func (a *Archive) Append(who Who, msgs []openai.Message, answerErr error, statis
 		return insertRecord(tx, id, ordinal, r, b)
 	}
 	for _, m := range msgs {
-		r := Record{Role: m.Role, Content: m.Content, Source: m.Source, ToolCallID: m.ToolCallID}
+		r := Record{Role: m.Role, Content: m.Content, Source: m.Source, ToolCallID: m.ToolCallID, PresentationID: m.PresentationID}
 		for _, c := range m.ToolCalls {
 			r.ToolCalls = append(r.ToolCalls, Call{c.ID, c.Function.Name, c.Function.Arguments})
 		}
@@ -199,8 +212,9 @@ func (a *Archive) Append(who Who, msgs []openai.Message, answerErr error, statis
 			return err
 		}
 	}
-	end := Record{Role: "end", Outcome: outcome(answerErr)}
+	end := Record{Role: "end", Outcome: outcome(answerErr), PresentationID: presentationID}
 	if len(statistics) > 0 {
+		end.PresentationID = statistics[0].PresentationID
 		end.Statistics = &statistics[0]
 	}
 	if err = add(end); err != nil {
@@ -702,6 +716,9 @@ func (a *Archive) Delete(id string) error {
 		if _, err = tx.Exec("UPDATE history_sessions SET deleted=1,title=NULL,effort=NULL,directory=NULL,goon=0 WHERE id=?", id); err != nil {
 			return err
 		}
+	}
+	if _, err = tx.Exec("DELETE FROM history_restarts WHERE session_id=?", id); err != nil {
+		return err
 	}
 	if _, err = tx.Exec("DELETE FROM history_records WHERE session_id=?", id); err != nil {
 		return err

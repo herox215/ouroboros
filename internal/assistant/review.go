@@ -77,7 +77,6 @@ const reviewPrompt = `You review how ouro, an agent program, gave one answer to 
 	`and the signals that made this answer worth a look. ` +
 	`A follow-up is a short message the owner wrote right after the answer: it may tell what the answer lacked, ` +
 	`as when it only said what it would do, or nothing at all, as a thank you. ` +
-	`The agent calls its tools in scripts of the tool run, which the log leaves out where they ran. ` +
 	`Find the one change of ouro that would have made the answer better, also for the answers to come: ` +
 	`a tool that is missing, slow or misleading, a default, or something in the prompt that led the agent wrong. ` +
 	`A change of how the owner asked is none, and neither is a change of the model or of the provider. ` +

@@ -196,7 +196,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		opencodeplugin.Plugin(opencodeplugin.Options{BaseURL: s.OpenCodeGo}),
 		assistant.Plugin(dir),
 		sessionplugin.Plugin(dir),
-		matrixplugin.Plugin(dir),
+		matrixplugin.Plugin(dir, files),
 		nodeplugin.Plugin(dir, nodeplugin.Options{
 			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,
 			OnStop:  network.Close, // the channels the node opened to peers

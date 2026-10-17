@@ -371,14 +371,16 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read,user_question,delegate,get_config,propose_config,withdraw_proposal" {
 		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
 	}
-	// A script of a peer has neither.
-	bot, err := c.builder.ForPeers(cfg)
+	// Configuration tools are not advertised to peers, even with every tool allowed.
+	b := c.builder
+	b.LLM = func(string) (agent.LLM, error) { return promptLLM{}, nil }
+	bot, err := b.ForPeers(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := bot.Respond(from("luna"), "c", runs(`return typeof get_config + " " + typeof propose_config + " " + typeof withdraw_proposal + " " + typeof read`))
-	if got := result(t, got, err); got != "undefined undefined undefined function" {
-		t.Fatalf("a script of a peer: %q", got)
+	got, err := bot.Respond(from("luna"), "c", "tools")
+	if err != nil || !strings.HasSuffix(got, "tools: list_peers,ask_peer,answer_peer,tell_peer,ask_back,read") {
+		t.Fatalf("peer direct tools: %q, %v", got, err)
 	}
 
 	// The owner's agent is told what a proposal is, and that it may take its

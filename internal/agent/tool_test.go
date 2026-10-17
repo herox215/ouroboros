@@ -237,9 +237,7 @@ func TestOptionsOf(t *testing.T) {
 }
 
 // True or false, an array and an object written as strings are taken as
-// what they hold, as models write them when they call a function of a
-// script as a tool of its own; a string that holds none of them stays an
-// error.
+// what they hold; a string that holds none of them stays an error.
 func TestDecodeTakesValuesAsStrings(t *testing.T) {
 	type args struct {
 		On      bool              `json:"on"`

@@ -21,7 +21,6 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/openai"
-	"ouroboros/internal/script"
 	"ouroboros/internal/suggestion"
 	"ouroboros/internal/workdir"
 )
@@ -53,10 +52,10 @@ const (
 	// bash: how it goes about what the user gives it to do.
 	workHint = `When the user asks for something to be done, do it, and go on until it is done: ` +
 		`do not stop at a plan or at an offer to go on. Treat a hint that something you agreed to or promised before is missing, like a review of your answer naming it, as the order to make up for it: take its reversible local steps, to write, edit, build and test, without a new leave, and ask before only what cannot be undone or gates that the rules for what to ask already name. ` +
-		`For research, batch related read and search calls whose inputs you already know in one run, rather than returning to the model after each small excerpt. ` +
+		`For research, batch related read and search calls whose inputs you already know together, rather than returning to the model after each small excerpt. ` +
 		`For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit. ` +
-		`Read coherent sections large enough to answer the current question, within the script's output limits. ` +
-		`Keep the combined printed output of each batch, including search results and continuation notes, safely below the script output limit; a per-call page limit does not bound the batch. ` +
+		`Read coherent sections large enough to answer the current question, within tool output limits. ` +
+		`Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch. ` +
 		`Reuse findings already returned instead of rereading unchanged sections, unless a specific gap or change requires it. ` +
 		`Split the work when a result is needed to choose the next access or the combined output would be too large. ` +
 		`Change code the way the code around it is written. ` +
@@ -78,7 +77,7 @@ const (
 	improveHint = `You are part of ouro, a program you can change and build anew with ` + ToolRebuild + `. ` +
 		`When a task needs something ouro cannot do, or does badly, building it into ouro is one way to do the task: ` +
 		`weigh it against a workaround, and build it when it is the better way, also for the tasks to come; then tell the user what you changed. ` +
-		`Run rebuild only once the answer it belongs to is done and sent, not while a script of yours is still open or more of the answer still waits on this process: ouro ends with the answer of the old build, and a script loses what it kept when ouro starts anew. When you notice on the way that ouro holds you back otherwise, by a tool that is slow or misleading, ` +
+		`Run rebuild only once the answer it belongs to is done and sent, not while more of the answer still waits on this process: ouro ends with the answer of the old build. When you notice on the way that ouro holds you back otherwise, by a tool that is slow or misleading, ` +
 		`or by something in this prompt that led you wrong, say so at the end of your answer in a sentence or two, with the change you would make. `
 	// proposeHint is added in its place for an owner who wants the changes
 	// proposed (config.SelfImprovePropose): the agent says what it would
@@ -104,17 +103,13 @@ const (
 	questionHint = `When you need the user to decide or to tell you something before you can go on, ask with ` + ToolUserQuestion +
 		` instead of ending your answer with the question: they answer with a key, and you go on in the same answer with what they said. ` +
 		`Give the answers you expect as options, and none where only their own words answer. Ask nothing you can find out yourself. `
-	// scriptHint is added for an agent that has tools: they are functions of
-	// its scripts.
-	scriptHint = `You act through ` + toolRun + ` alone: every tool this prompt names is a function in its scripts, ` +
-		`never a tool to call on its own. `
 	// researchHint also applies to browser-only research and delegated comparisons.
 	researchHint = `For short comparison questions, stop researching once a few reliable primary sources support the central claims and the requested comparison can be answered. ` +
 		`Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth. ` +
 		`For feasibility checks, request a few search results and small, bounded webpage excerpts rather than collecting large raw responses. ` +
 		`Use the tools' output budget parameters and browser offsets to read more only where needed. ` +
-		`Start with about 2 KiB of text per source, leaving room for notes within the script's current output budget, and expand only when necessary. ` +
-		`Keep the combined output of a script, including notes and other results, safely below its output limit; individual tool limits do not bound a batch. `
+		`Start with about 2 KiB of text per source, leaving room for notes within the output budget, and expand only when necessary. ` +
+		`Keep the combined output of tool calls, including notes and other results, safely below its output limit; individual tool limits do not bound a batch. `
 	// validationHint applies even with browser-only tools: opening a page is
 	// not evidence that its interactions work. Helpers need the same rule.
 	validationHint = `When testing whether something works, distinguish reachability from verified functionality. ` +
@@ -145,7 +140,6 @@ const (
 // front end shows of a call is for the plugin of the tool to say. With Done
 // come Took, how long the call took, and Err, why it failed, if it did.
 type Step struct {
-	// ID identifies the archived tool call; empty for nested calls of a script.
 	ID   string
 	Tool string
 	Args json.RawMessage
@@ -179,13 +173,7 @@ type Builder struct {
 	Accesses Accesses
 	// Tools returns everything an agent can do. It is read when an agent is
 	// built; the owner's lists in config.Tools decide which of them it gets.
-	Tools func() []agent.Tool
-	// Failures are the answers to peers that failed. With them the agent
-	// that answers peers gets the tool to explain a failure to the peer it
-	// happened to, whatever else config.Tools allows: it gives a peer nothing
-	// but the reason its own message was not answered. As every tool is a
-	// function of a script, it is there only for a peer the owner allows a
-	// tool. May be nil.
+	Tools    func() []agent.Tool
 	Failures *diagnosis.Store
 	// suggestions keeps what the reviews of answers suggest, for the owner
 	// to take or drop, see WithSuggestions. May be nil.
@@ -236,9 +224,6 @@ type Assistant struct {
 	agent  *agent.Agent
 	built  setup         // what agent was built for
 	memory *agent.Memory // of the conversations, for every agent there is
-	// scripts are what the scripts of the conversations kept, for every
-	// agent there is.
-	scripts *script.Sessions
 
 	sizing sync.Mutex
 	sizes  map[string]int   // what the last call of the LLM sent, by conversation
@@ -259,7 +244,7 @@ type setup struct{ access, revision, model, name, id, tools, provider, fallbacks
 // is read anew for every question. What it does on the way to an answer is
 // told to log, see Ask.
 func New(config func() (config.Config, error), b Builder, log func(format string, args ...any)) *Assistant {
-	return &Assistant{config: config, builder: b, log: log, memory: agent.NewMemory(), scripts: script.NewSessions(), sizes: map[string]int{}, caches: map[string]Cache{}, answers: map[*record]context.CancelFunc{}}
+	return &Assistant{config: config, builder: b, log: log, memory: agent.NewMemory(), sizes: map[string]int{}, caches: map[string]Cache{}, answers: map[*record]context.CancelFunc{}}
 }
 
 // WithDebug makes a tell, while debug says so, much more of every call of
@@ -275,19 +260,16 @@ func (a *Assistant) WithDebug(debug func() bool) *Assistant {
 // model the owner chose for them, see config.Config.PeerLLM. A peer with a
 // list of tools of its own in tools.peers is answered by the agent of ForPeer.
 func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
-	return b.forPeers(cfg, "", script.NewSessions())
+	return b.forPeers(cfg, "")
 }
 
 // ForPeer returns the agent that answers the peer whose node has the ID id:
 // with the tools of its own list in tools.peers, or as ForPeers.
 func (b Builder) ForPeer(cfg config.Config, id string) (*agent.Agent, error) {
-	return b.forPeers(cfg, id, script.NewSessions())
+	return b.forPeers(cfg, id)
 }
 
-// forPeers is ForPeer with the scripts of the conversations in sessions. The
-// agent of every peer without a list of its own, id "", checks the lists of
-// all of them.
-func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Sessions) (*agent.Agent, error) {
+func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	cfg.Access, cfg.Model, _ = cfg.PeerLLM()
 	cfg.Fallbacks = nil // of the owner: no peer makes the node answer through another access
 	if id == "" {
@@ -300,8 +282,6 @@ func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Session
 		return nil, err
 	}
 	prompt := fmt.Sprintf(peerPrompt, cfg.Name)
-	// Its tools are functions of scripts, and a script may keep a node busy:
-	// a peer the owner gave no tool runs none.
 	if len(allowed) == 0 {
 		return b.build(cfg, prompt)
 	}
@@ -323,12 +303,10 @@ func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Session
 		prompt += explainHint
 		allowed = append(allowed, explainError(b.Failures))
 	}
-	return b.build(cfg, prompt+" "+strings.TrimSpace(scriptHint), withRun(allowed, sessions))
+	return b.build(cfg, prompt, allowed...)
 }
 
-// forOwner returns the agent that answers the owner of the node, whose
-// scripts run in sessions.
-func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.Agent, error) {
+func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 	allowed, err := b.ownerTools(cfg)
 	if err != nil {
 		return nil, err
@@ -348,7 +326,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.
-	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint + validationHint + researchHint
+	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + validationHint + researchHint
 	if has(toolAskPeer) {
 		prompt += askHint
 	}
@@ -383,7 +361,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	if has(ToolDelegate) {
 		prompt += delegateHint
 	}
-	return b.build(cfg, prompt+ownerStyle+machineHint(today()), withRun(allowed, sessions))
+	return b.build(cfg, prompt+ownerStyle+machineHint(today()), allowed...)
 }
 
 // now is the time; tests replace it.
@@ -594,9 +572,6 @@ func inDirectory(ctx context.Context, bot *agent.Agent) *agent.Agent {
 	return bot
 }
 
-// toolsOf are the tools of ouro as a review is told them: those the owner of
-// cfg allows the agent, a line each, as the LLM calls them in scripts of run,
-// and the names of those the owner withholds.
 type toolsOf struct{ allowed, withheld []string }
 
 // reviewTools are the tools of ouro for a review of an answer with cfg. The
@@ -832,7 +807,7 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.agent == nil || a.built != want {
-		bot, err := a.builder.forOwner(cfg, a.scripts)
+		bot, err := a.builder.forOwner(cfg)
 		if err != nil {
 			return nil, cfg, err
 		}

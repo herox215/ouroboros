@@ -55,9 +55,9 @@ func TestUserQuestion(t *testing.T) {
 	if !tool.OwnerOnly || tool.Name != ToolUserQuestion {
 		t.Fatalf("the tool: %+v", tool)
 	}
-	// Its schema is one the functions of a script are listed from.
-	if got := signatures([]agent.Tool{tool}); !strings.HasPrefix(got, "- user_question({options?: array, question: string, recommended?: string}): Ask your user") {
-		t.Fatalf("as a function: %s", got)
+	var schema struct{ Required []string }
+	if err := json.Unmarshal([]byte(tool.Schema), &schema); err != nil || len(schema.Required) != 1 || schema.Required[0] != "question" {
+		t.Fatalf("direct tool schema: %s", tool.Schema)
 	}
 	args := json.RawMessage(`{"question":"Which?","options":["a","b"],"recommended":"b"}`)
 	var asked string

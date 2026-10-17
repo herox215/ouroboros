@@ -325,12 +325,8 @@ func (c *conversation) thought(e Event) {
 // step notes what the agent is waiting for while the answer is pending. A
 // call that starts goes into the entry of its round, which a round the agent
 // said nothing of gets now; one that ended takes the place of its start,
-// with what became of it. A call nothing is shown of counts all the same;
-// the script that calls the tools is no tool of its own.
+// with what became of it. A call nothing is shown of counts all the same.
 func (c *conversation) step(e Event) {
-	if e.Tool == toolRun {
-		return
-	}
 	c.partial, c.calling = "", "" // what a round wrote before its tools is not the answer
 	if c.round == 0 {
 		c.add(entry{at: e.At})

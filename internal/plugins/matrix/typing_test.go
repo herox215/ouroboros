@@ -31,7 +31,7 @@ func (c *typingConnection) TypingTo(ctx context.Context, room, peer string, acti
 }
 
 func TestAnswering(t *testing.T) {
-	for _, end := range []plugin.SessionKind{plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled, plugin.SessionRestart} {
+	for _, end := range []plugin.SessionKind{plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled, plugin.SessionRestart, plugin.SessionRestarted} {
 		events := []plugin.SessionEvent{{Kind: plugin.SessionMessage}, {Kind: plugin.SessionStep}, {Kind: end}}
 		if !answering(events[:2]) || answering(events) {
 			t.Fatalf("wrong state for %v", end)

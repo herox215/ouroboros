@@ -117,6 +117,10 @@ CREATE TABLE IF NOT EXISTS history_sessions(
  size INTEGER NOT NULL DEFAULT 0, title TEXT, effort TEXT, directory TEXT,
  goon INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS history_restarts(
+ session_id TEXT PRIMARY KEY REFERENCES history_sessions(id),
+ process_id TEXT NOT NULL, presentation_id TEXT NOT NULL, binary TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS history_records(
  rowid INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES history_sessions(id),
  ordinal INTEGER NOT NULL, seq INTEGER NOT NULL, answer INTEGER NOT NULL,

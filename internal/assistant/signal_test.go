@@ -75,67 +75,11 @@ func TestSignalsAreLogged(t *testing.T) {
 	}
 }
 
-// A tool that waits for someone else is not slow, and what it waits is not
-// counted to the answer; a script is as slow as the tools it calls.
 func TestWaitsAreNoSignals(t *testing.T) {
 	for _, tool := range waiting {
 		if got := signalled(t, nil, func(r *record) { done(r, tool, `{}`, time.Hour, nil) }); got != "" {
 			t.Errorf("%s: %s", tool, got)
 		}
-	}
-	if got := signalled(t, nil, func(r *record) { done(r, toolRun, `{}`, time.Hour, nil) }); got != "" {
-		t.Errorf("%s: %s", toolRun, got)
-	}
-}
-
-// A script is counted by the tools it calls: a tool that failed in it is
-// one failure, and the script failed only by itself when none of them did.
-func TestScriptsAreCountedByTheirTools(t *testing.T) {
-	inScript := func(r *record, tool, args string, err error) {
-		script := `{"script":"` + tool + `()"}`
-		r.step(agent.Step{Tool: toolRun, Args: json.RawMessage(script)})
-		if tool != "" {
-			done(r, tool, args, time.Second, err)
-		}
-		r.step(agent.Step{Tool: toolRun, Args: json.RawMessage(script), Done: true, Took: time.Second, Err: err})
-	}
-	got := signalled(t, nil, func(r *record) {
-		inScript(r, "read", `{"path":"a"}`, errors.New("no"))
-		inScript(r, "read", `{"path":"b"}`, errors.New("no"))
-		inScript(r, "read", `{"path":"a"}`, nil)
-	})
-	if got != "" {
-		t.Fatalf("two tools failed in scripts: %s", got)
-	}
-	got = signalled(t, nil, func(r *record) {
-		inScript(r, "read", `{"path":"a"}`, errors.New("no"))
-		inScript(r, "", "", errors.New("syntax"))
-		inScript(r, "read", `{"path":"a"}`, errors.New("no"))
-	})
-	if got != "3 tool calls failed" {
-		t.Fatalf("a script that failed by itself: %s", got)
-	}
-}
-
-// A script that left out of its result what the agent has to get with
-// another step is a signal, with how much it left out.
-func TestCutIsASignal(t *testing.T) {
-	got := signalled(t, nil, func(r *record) {
-		for _, result := range []string{"x\n(2048 more bytes were printed and left out. All of it is kept", "fine",
-			"y\n(the value has 5120 bytes, of which the first 4096 came back. It is kept"} {
-			r.step(agent.Step{Tool: toolRun, Args: json.RawMessage(`{}`)})
-			r.step(agent.Step{Tool: toolRun, Args: json.RawMessage(`{}`), Done: true, Result: result})
-		}
-	})
-	if got != "2 results of scripts were cut: 3.0 KiB left out" {
-		t.Fatalf("signals: %s", got)
-	}
-	got = signalled(t, nil, func(r *record) {
-		r.step(agent.Step{Tool: toolRun, Args: json.RawMessage(`{}`)})
-		r.step(agent.Step{Tool: toolRun, Args: json.RawMessage(`{}`), Done: true, Result: "(512 more bytes were printed and left out. "})
-	})
-	if got != "1 result of a script was cut: 0.5 KiB left out" {
-		t.Fatalf("signals: %s", got)
 	}
 }
 
@@ -189,26 +133,6 @@ func TestLowCacheNeedsCalls(t *testing.T) {
 	}
 	if got := m.signals(0, cacheCalls, 0, 0, "ok", nil); len(got) != 0 {
 		t.Fatalf("no tokens told: %v", got)
-	}
-}
-
-// A script failed by itself only when none of the tools it called since it
-// started did; one that ends without having started is counted by itself.
-func TestScriptMeasures(t *testing.T) {
-	var m measures
-	m.step(toolRun, "", time.Second, true)
-	if m.failed != 1 {
-		t.Fatalf("a script that never started: %d failed", m.failed)
-	}
-	m = measures{}
-	m.start(toolRun)
-	m.start("read")
-	m.step("read", "", time.Second, true)
-	m.start("list")
-	m.step("list", "", time.Second, false)
-	m.step(toolRun, "", time.Second, true)
-	if m.failed != 1 {
-		t.Fatalf("a script whose tool failed: %d failed", m.failed)
 	}
 }
 

@@ -69,7 +69,12 @@ func TestGoOn(t *testing.T) {
 	s, replaced = inNode(t.TempDir())
 	s.archive.Archive = unavailableArchive(t)
 	s.Ask(context.Background(), "s1", "build")
-	<-replaced
+	s.answers.Wait() // restart is refused when its pending marker cannot be kept
+	select {
+	case exe := <-replaced:
+		t.Fatalf("restart without a durable marker: %s", exe)
+	default:
+	}
 	logs := func(want string) {
 		t.Helper()
 		if !strings.Contains(strings.Join(logged, "\n"), want) {
@@ -77,7 +82,7 @@ func TestGoOn(t *testing.T) {
 		}
 		logged = nil
 	}
-	logs("the session s1 does not go on by itself in the new build")
+	logs("the restart of the session s1 cannot be kept")
 	stopped, _ := inNode(dir)
 	history.Open(dir).GoOn("owner/s2")
 	stopped.Close()

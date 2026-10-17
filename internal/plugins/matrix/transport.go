@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	transport "ouroboros/internal/matrix"
+	"ouroboros/plugin"
 )
 
 func login(ctx context.Context, server, user, password string) (loginResult, error) {
@@ -25,7 +26,11 @@ func (c *sdkConnection) Run(ctx context.Context, receive func(context.Context, i
 	return c.client.Run(ctx, func(msgCtx context.Context, msg transport.Message) {
 		// The SDK has already authenticated the sender and checked the full room
 		// state. Host policy is checked once more at the session boundary.
-		_ = receive(msgCtx, incoming{RoomID: msg.RoomID, Sender: msg.Sender, Text: msg.Text})
+		images := make([]plugin.Image, len(msg.Images))
+		for i, img := range msg.Images {
+			images[i] = plugin.Image{Type: img.MIMEType, Data: img.Data}
+		}
+		_ = receive(msgCtx, incoming{RoomID: msg.RoomID, Sender: msg.Sender, Text: msg.Text, Images: images})
 	})
 }
 func (c *sdkConnection) SendTo(ctx context.Context, room, peer, text string) error {

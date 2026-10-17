@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 
+	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
 	"ouroboros/plugin"
 )
@@ -13,9 +14,11 @@ type needs struct{ Sessions plugin.Sessions }
 // Plugin adds an external messaging gateway, not another default FrontEnd.
 // Only the serving node owns the sync loop; settings in local frontends write
 // the profile-local store, which the node reloads without a process restart.
-func Plugin(dir home.Dir) plugin.Plugin {
+func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 	return plugin.New("matrix", func(ctx *plugin.Context, n needs) error {
 		s := store{filepath.Join(dir.Gateways(), "matrix")}
+		plugin.Add(ctx, avatarTool(s, files))
+		plugin.Add(ctx, outputHook())
 		c := &controller{store: s, receive: receive}
 		c.connect = func(runCtx context.Context, cfg configuration) (connection, error) {
 			conversations, err := openConversations(s, n.Sessions)

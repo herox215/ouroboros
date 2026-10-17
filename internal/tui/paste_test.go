@@ -252,7 +252,7 @@ func TestSummaryShowsThePictures(t *testing.T) {
 	m.chat.add(entry{mine: true, text: "look", at: m.now()})
 	m.chat.add(entry{at: m.now(), calls: []call{
 		{text: cat, done: true},
-		{text: "running a script ✓ 1s", done: true},
+		{text: "reading d.go ✓ 1s", done: true},
 		{text: cat, done: true},
 		{text: `reading /tmp/a\b.png ✓ 9ms · picture "/tmp/a\\b.png" 10×10`, done: true},
 		{text: `reading /tmp/[Image_9].png ✓ 9ms · picture "/tmp/[Image_9].png" 5×5`, done: true},

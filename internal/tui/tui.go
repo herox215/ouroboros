@@ -1181,8 +1181,8 @@ func (m *Model) unsteered(msg unsteeredMsg) {
 }
 
 // started returns the call of e that the call ended, which done tells of,
-// started as: the last that is not done and whose text done begins with. A
-// script runs calls within its own, which end before it does.
+// started as: the last that is not done and whose text done begins with.
+// Overlapping calls may finish in a different order than they started.
 func (e *entry) started(done string) int {
 	for i := len(e.calls) - 1; i >= 0; i-- {
 		c := e.calls[i]

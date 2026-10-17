@@ -48,9 +48,6 @@ func (l *reviewLLM) Complete(ctx context.Context, _ string, msgs []openai.Messag
 	}
 	name, args := "fail", fmt.Sprintf(`{"why":"no %d"}`, called) // the same call again is not run
 
-	if len(tools) == 1 && tools[0].Function.Name == toolRun {
-		name, args = toolRun, scriptOf(name, args)
-	}
 	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Type: "function", Function: openai.FunctionCall{Name: name, Arguments: args}}}}, nil
 }
 
@@ -93,7 +90,7 @@ func TestAnswerWithSignalsIsReviewed(t *testing.T) {
 		}
 	}
 	if strings.Contains(asked, "tool run") {
-		t.Errorf("the review is sent the scripts that ran:\n%s", asked)
+		t.Errorf("the review contains an obsolete run call:\n%s", asked)
 	}
 	if llm.effort != reviewEffort {
 		t.Errorf("effort %q", llm.effort)

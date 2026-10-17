@@ -24,7 +24,7 @@ import (
 // search; esc ends it.
 
 // Message is a message of the context of a conversation: who it is of, like
-// "system", "user" or "tool run", and its text.
+// "system", "user" or "tool read", and its text.
 type Message struct {
 	Role string
 	Text string
