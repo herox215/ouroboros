@@ -122,8 +122,8 @@ func TestConversationAuthorizationPersistenceAndPresentation(t *testing.T) {
 	if err = restored.receive(context.Background(), conn, msg); err != nil {
 		t.Fatal(err)
 	}
-	if sessions.created != 1 || sessions.asks != 2 {
-		t.Fatal("did not resume profile conversation")
+	if sessions.created != 0 || sessions.asks != 2 {
+		t.Fatal("did not talk in the thread")
 	}
 	sessions.mu.Lock()
 	sessions.events = []plugin.SessionEvent{{Kind: plugin.SessionAsked}}
@@ -344,7 +344,7 @@ func TestReceiveForgetsAConversationItCannotSave(t *testing.T) {
 	if err := c.receive(context.Background(), &recordingConnection{}, msg); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.entries) != 1 || sessions.created != 2 || sessions.asks != 1 {
+	if len(c.entries) != 1 || sessions.created != 0 || sessions.asks != 1 {
 		t.Fatalf("%d conversations, %d sessions, %d asks", len(c.entries), sessions.created, sessions.asks)
 	}
 }

@@ -207,6 +207,10 @@ type Event struct {
 	// Once Done, Text is what the owner answered, "" if they did not.
 	Options     []string
 	Recommended string
+	// N is how much works for the thread, of plugin.SessionWorking.
+	N int
+	// Routed says of a message that the thread handed it on.
+	Routed bool
 }
 
 // screen is the top-level view: the chat, the connection requests, the list
@@ -298,6 +302,9 @@ type conversation struct {
 	// peer is the peer a conversation of a peer with the agent is with: it
 	// is only to read. "" for a session of the owner.
 	peer string
+	// routed says that the answer on its way took what the thread handed
+	// on: the thread shows what comes of it, so the footer does not.
+	routed bool
 	// images are the files of the pictures pasted into it, by their labels:
 	// the first is [Image_1].
 	images []string

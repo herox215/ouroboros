@@ -450,3 +450,43 @@ func TestGatewayDrivesSessions(t *testing.T) {
 	}
 	gatewayUntil(t, g, id, plugin.SessionCanceled)
 }
+
+// The thread is open to every identity the host grants owner sessions, with
+// every operation, and to none it does not: it is the one conversation of the
+// owner, not one of the adapter.
+func TestGatewayThread(t *testing.T) {
+	backend := &gatewayBackend{}
+	revoked := false
+	g := plugin.NewGatewayAdapter(backend, func(_ context.Context, _ plugin.GatewayIdentity, _ plugin.GatewayOperation) (plugin.GatewayPermission, error) {
+		return plugin.GatewayPermission{OwnerSession: !revoked}, nil
+	})
+	bob := plugin.GatewayIdentity{Gateway: gatewayAlice.Gateway, Subject: "bob"}
+	for _, who := range []plugin.GatewayIdentity{gatewayAlice, bob} {
+		id, err := g.Thread(t.Context(), who)
+		if err != nil || id != plugin.ThreadID {
+			t.Fatalf("thread of %s: %q, %v", who.Subject, id, err)
+		}
+		if err := g.Send(t.Context(), who, id, "go"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.Poll(t.Context(), who, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.Reply(t.Context(), who, id, "yes"); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.Cancel(t.Context(), who, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if backend.created != 0 || backend.ask != 2 || backend.steer != 2 || backend.canceled != 2 {
+		t.Fatalf("backend calls: %+v", backend)
+	}
+	revoked = true
+	if _, err := g.Thread(t.Context(), gatewayAlice); !errors.Is(err, plugin.ErrGatewayDenied) {
+		t.Fatalf("revoked: %v", err)
+	}
+	if err := g.Send(t.Context(), gatewayAlice, plugin.ThreadID, "go"); !errors.Is(err, plugin.ErrGatewayDenied) {
+		t.Fatalf("revoked send: %v", err)
+	}
+}

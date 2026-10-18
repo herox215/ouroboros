@@ -898,3 +898,13 @@ func TestTaskIsShownAsALine(t *testing.T) {
 		t.Errorf("failed: %+v", got)
 	}
 }
+
+// How much works for the thread comes to the UI as it is.
+func TestWorkingIsShown(t *testing.T) {
+	if got := tuiplugin.Shown(nil, plugin.SessionEvent{Kind: plugin.SessionWorking, N: 2}); got.Kind != plugin.SessionWorking || got.N != 2 {
+		t.Errorf("working: %+v", got)
+	}
+	if got := tuiplugin.Shown(nil, plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "go", Routed: true}); !got.Routed {
+		t.Errorf("a message the thread handed on: %+v", got)
+	}
+}

@@ -230,6 +230,7 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
 		c.title = cmp.Or(c.title, e.Text)
+		c.routed = e.Routed
 	case plugin.SessionTask:
 		// The report of a task starts an answer, or goes into the one on its
 		// way, as a message of the owner does.
@@ -238,6 +239,9 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 			c.art++
 		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
+	case plugin.SessionWorking:
+		// While anything works for the thread, it is thinking.
+		c.pending, c.running = e.N > 0, e.N > 0
 	case plugin.SessionTasks:
 		c.tasks = nil
 		if e.Text != "" {
@@ -255,8 +259,8 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.step(e)
 	case plugin.SessionAsked:
 		c.ask(e)
-		if live && !e.Done && c != m.chat {
-			m.setNotice(m.agentName()+" asks you in “"+short(c.title, 40)+"” · /session", false)
+		if live && !e.Done && c != m.chat && !c.routed {
+			m.setNotice(m.agentName()+" asks you in "+place(c), false)
 		}
 	case plugin.SessionCalling:
 		c.calling = e.Text
@@ -268,12 +272,12 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 	case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled:
 		c.end(e)
-		if live && c != m.chat {
+		if live && c != m.chat && !c.routed {
 			verb := "answered"
 			if e.Kind != plugin.SessionAnswer {
 				verb = "no answer"
 			}
-			m.setNotice(verb+" in “"+short(c.title, 40)+"” · /session", e.Kind != plugin.SessionAnswer)
+			m.setNotice(verb+" in "+place(c), e.Kind != plugin.SessionAnswer)
 		}
 	case plugin.SessionJobs:
 		c.jobs = nil
@@ -344,10 +348,12 @@ func (c *conversation) step(e Event) {
 }
 
 // end shows how the answer ended: the answer, why it failed, or that it was
-// stopped.
+// stopped. A question that waits goes on waiting: the question of an answer
+// ends before it, and in the thread the answer of one session comes while
+// another asks.
 func (c *conversation) end(e Event) {
-	c.pending, c.running, c.doing, c.round = false, false, "", 0                  // the loop of this answer is over
-	c.asking, c.jobs, c.partial, c.thread, c.calling = nil, nil, "", thread{}, "" // its jobs end with it, and with
+	c.pending, c.running, c.doing, c.round = false, false, "", 0   // the loop of this answer is over
+	c.jobs, c.partial, c.thread, c.calling = nil, "", thread{}, "" // its jobs end with it, and with
 	// them the clock the answer was drawn on: its next frame sees pending gone
 	last := entry{text: e.Text, at: e.At}
 	switch e.Kind {
@@ -559,14 +565,18 @@ func (l *sessionsScreen) found(m *Model, msg findMsg) {
 
 // all are the sessions the sessions screen lists: those with a
 // message or with something typed for them, and the one shown, the latest
-// first. One without a message yet is the latest of all. Among the
-// conversations of peers, those the node listed.
+// first, but not the thread, which /thread shows. One without a message yet
+// is the latest of all. Among the conversations of peers, those the node
+// listed.
 func (l *sessionsScreen) all(m *Model) []*conversation {
 	if l.peerTab {
 		return l.peers
 	}
 	var rows []*conversation
 	for _, c := range m.chats {
+		if c.contextID == plugin.ThreadID {
+			continue
+		}
 		if c == m.chat || c.title != "" || c.draft != "" {
 			rows = append(rows, c)
 		}

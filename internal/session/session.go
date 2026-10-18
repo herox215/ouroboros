@@ -113,6 +113,12 @@ const (
 	// one per line in Text as "task N · what it is", "" once none does.
 	// Cancel stops them with the answer.
 	Tasks Kind = "tasks"
+	// Working is how much works for the thread, in N, see ThreadID: its own
+	// answer, and those of the sessions it handed messages to. While any
+	// does, the thread is thinking as far as the owner is shown. It is not
+	// recorded: who watches the thread gets it with what happened in it so
+	// far, last, while N is not 0.
+	Working Kind = "working"
 )
 
 // Event is one thing that happened in a session. It is plain data, written
@@ -127,6 +133,9 @@ type Event struct {
 	Text string `json:"text,omitempty"`
 	// Source identifies the interface that sent a Message or Queued event.
 	Source MessageSource `json:"source,omitzero"`
+	// Routed says of a Message or Queued that the thread handed it on: the
+	// thread shows what comes of the answer that takes it, see ThreadID.
+	Routed bool `json:"routed,omitempty"`
 	// Tool, Args, Done, Took, Err and Remark are of a Step: the call of
 	// Tool with Args, and once Done, how long it took, why it failed, if it
 	// did, and what the tool said of it for the owner. Args and Done are
@@ -139,7 +148,8 @@ type Event struct {
 	Took   time.Duration   `json:"took,omitempty"`
 	Err    string          `json:"err,omitempty"`
 	Remark string          `json:"remark,omitempty"`
-	// N is the number of a Task, and the bytes of Calling.
+	// N is the number of a Task, the bytes of Calling, and how much is
+	// Working.
 	N int `json:"n,omitempty"`
 	// Context is how long the context of the session is when the Event
 	// happens: what the last call of the LLM in it sent, in bytes, 0 if
@@ -319,6 +329,10 @@ type Assistant interface {
 	Forget(contextID string)
 	Title(ctx context.Context, conversation []openai.Message) (string, error)
 	Effort() string
+	// Note makes the agent remember text in the conversation contextID
+	// for its next answer there, as something it was told without being
+	// asked, and keeps it where answers are kept.
+	Note(ctx context.Context, contextID, text string) error
 }
 
 // Service holds the sessions of the owner in the process of the node.
@@ -388,16 +402,32 @@ type session struct {
 	// had the number delegated.
 	tasks     []*task
 	delegated int
+	// routed says that the answer on its way took a message the thread
+	// handed on: the thread shows what comes of it, see relay.
+	routed bool
+	// questions are, of the thread, the questions of sessions it asks the
+	// owner, the first of them now; working is how much works for it, as
+	// Working told it last. said is what the owner said to the answer on its
+	// way, which the thread hands on as it is, see words, with the pictures
+	// of those messages. roster is the list of the sessions it was told last,
+	// told answers ago, see inThread.
+	questions []*relayed
+	working   int
+	said      []string
+	pictures  []openai.Image
+	roster    string
+	told      int
 }
 
 // queued is a message that waits for the answer on its way to take it: one
-// of the owner, or the report of a task that ended, with the Event that
-// tells of it once it is taken.
+// of the owner, or the report of a task that ended or of a session to the
+// thread, with the Event that tells of it once it is taken.
 type queued struct {
 	text      string
 	images    []openai.Image
 	source    MessageSource
 	generated bool // backend input, not a message from an interface
+	routed    bool // handed on by the thread
 	task      *Event
 }
 
@@ -539,10 +569,20 @@ func (s *Service) askImages(ctx context.Context, id, text string, images []opena
 		return ErrRestarting
 	}
 	se := s.get(id)
-	if se.cancel != nil {
+	message := queued{text: text, images: images, source: openai.MessageSourceFrom(ctx), generated: generated}
+	switch {
+	case se.cancel != nil && se.id == ThreadID:
+		// The thread takes what the owner says at any time: the answer on its
+		// way takes it, as it hands on and is quick. It answers no question
+		// of the thread, which only Steer does.
+		message.source = message.source.Normalized()
+		se.queue = append(se.queue, message)
+		s.emit(se, Event{Kind: Queued, Text: text, Source: message.source})
+		return nil
+	case se.cancel != nil:
 		return ErrBusy
 	}
-	s.begin(se, p, append(se.queue, queued{text: text, images: images, source: openai.MessageSourceFrom(ctx), generated: generated})...)
+	s.begin(se, p, append(se.queue, message)...)
 	se.queue = nil
 	return nil
 }
@@ -554,6 +594,7 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 	se.cancel = cancel
 	p.answering++
 	p.release = false // somebody wants the node
+	se.routed, se.said, se.pictures = false, nil, nil
 	inputs := s.taken(se, messages)
 	texts := make([]string, len(inputs))
 	for i, m := range inputs {
@@ -561,7 +602,8 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 	}
 	text := strings.Join(texts, "\n\n")
 	named := make(chan struct{})
-	if se.title == "" && se.tries < titleTries {
+	// The thread is named as such, not for a topic.
+	if se.title == "" && se.tries < titleTries && se.id != ThreadID {
 		se.tries++
 		go s.name(ctx, se, said(se.events), named)
 	} else {
@@ -575,9 +617,10 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 		}
 		se.resumed = time.Time{}
 	}
-	ctx = agent.WithInputMessages(ctx, inputs)
+	ctx = agent.WithInputMessages(ctx, s.inThread(se, inputs))
 	s.answers.Add(1)
 	go s.answer(ctx, se, text, p.replace != nil, named)
+	s.busy()
 }
 
 // Steer queues text for the answer on its way in the session id, and asks
@@ -590,6 +633,11 @@ func (s *Service) Steer(ctx context.Context, id, text string) error {
 		return ErrEmpty
 	}
 	s.mu.Lock()
+	// What the owner says in the thread while it asks them answers it.
+	if id == ThreadID && s.answerRelayed(text, openai.MessageSourceFrom(ctx)) {
+		s.mu.Unlock()
+		return nil
+	}
 	if se, ok := s.sessions[id]; ok && se.cancel != nil {
 		defer s.mu.Unlock()
 		if se.asked != nil {
@@ -657,6 +705,7 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 	se.asked = asked
 	id := presentation.NewID()
 	s.emit(se, Event{Kind: Asked, PresentationID: id, Args: question})
+	s.asking(se, question)
 	s.mu.Unlock()
 	var answer queued
 	select {
@@ -673,6 +722,7 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 		answer = <-asked // what the owner said just when ctx ended, if anything
 	}
 	s.emit(se, Event{Kind: Asked, PresentationID: id, Done: true, Text: answer.text, Source: answer.source.Normalized()})
+	s.answered(se, answer)
 	if answer.text == "" {
 		return agent.OwnerReply{}, ctx.Err()
 	}
@@ -690,12 +740,13 @@ func (s *Service) steered(se *session) []openai.Message {
 }
 
 // taken tells that the answer in se takes messages, each a Message of the
-// owner or the Task whose report it is, and returns their texts. s.mu is
-// held.
+// owner or the Task or Report whose report it is, and returns their texts.
+// s.mu is held.
 func (s *Service) taken(se *session, messages []queued) []openai.Message {
 	texts := make([]openai.Message, len(messages))
 	for i, m := range messages {
 		texts[i] = openai.Message{Role: "user", Content: m.text, Images: m.images, Source: m.source}
+		se.routed = se.routed || m.routed
 		if m.task != nil {
 			s.emit(se, *m.task)
 			continue
@@ -703,7 +754,9 @@ func (s *Service) taken(se *session, messages []queued) []openai.Message {
 		if !m.generated {
 			texts[i].Source = m.source.Normalized()
 		}
-		s.emit(se, Event{Kind: Message, Text: m.text, Source: texts[i].Source})
+		se.said = append(se.said, m.text)
+		se.pictures = append(se.pictures, m.images...)
+		s.emit(se, Event{Kind: Message, Text: m.text, Source: texts[i].Source, Routed: m.routed})
 	}
 	return texts
 }
@@ -857,6 +910,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		return s.steered(se)
 	})
 	ctx = assistant.WithTasks(ctx, delegating{s, se})
+	ctx = s.threadContext(ctx, se)
 	ctx = agent.WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (agent.OwnerReply, error) {
 		return s.ask(ctx, se, question)
 	})
@@ -866,20 +920,22 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	writing, drop, flush := s.answering(se)
 	ctx = openai.WithAnswering(ctx, writing)
 	ctx = openai.WithCalling(ctx, s.calling(se, flush, rest))
+	ctx = s.quietly(ctx, se)
+	ctx = s.shapedFor(ctx, se)
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
 		drop() // what a round wrote before its tools is not the answer
 		e := Event{Kind: Step, CallID: st.ID, Tool: st.Tool, Args: st.Args, Done: st.Done, Took: st.Took, Remark: st.Remark}
 		if st.Err != nil {
 			e.Err = st.Err.Error()
 		}
-		s.add(se, e)
+		s.along(se, e)
 	}, func(said string) {
 		drop() // its words come as a Say, and the next round begins the answer anew
 		id := presentation.Current(ctx)
 		if id == "" {
 			id = presentation.NewID()
 		}
-		s.add(se, Event{Kind: Say, PresentationID: id, Text: said})
+		s.along(se, Event{Kind: Say, PresentationID: id, Text: said})
 	})
 	rest() // the end of the thinking belongs before the end of the answer
 	<-named
@@ -908,7 +964,10 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		s.emit(se, Event{Kind: Jobs})
 	}
 	// The answer is archived already: who learns of its end finds it there.
-	s.emit(se, end)
+	if !handedOn(se, end) {
+		s.emit(se, end)
+	}
+	s.relay(se, end)
 	if suggested != "" {
 		s.emit(se, Event{Kind: Suggestion, Text: suggested})
 	}
@@ -944,6 +1003,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		se.queue = nil
 		s.begin(se, p, messages...)
 	}
+	s.busy()
 	p.settle()
 }
 
@@ -1069,6 +1129,9 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 	if se.efforted {
 		past = append(past, s.effortEvent(se))
 	}
+	if se.working > 0 {
+		past = append(past, Event{Kind: Working, At: s.now().Round(0), N: se.working})
+	}
 	return past, live, nil
 }
 
@@ -1122,14 +1185,16 @@ func (s *Service) effort(se *session) string {
 
 // effortOf gives se the effort it is kept with, if it is. s.mu is held.
 func (s *Service) effortOf(se *session) {
-	if s.archive == nil {
-		return
+	if s.archive != nil {
+		effort, ok, err := s.archive.Effort(history.Owner(se.id))
+		if err != nil {
+			s.archive.log("the effort of the session %s cannot be read: %v", se.id, err)
+		}
+		se.effort, se.efforted = effort, ok
 	}
-	effort, ok, err := s.archive.Effort(history.Owner(se.id))
-	if err != nil {
-		s.archive.log("the effort of the session %s cannot be read: %v", se.id, err)
+	if se.id == ThreadID && !se.efforted {
+		se.effort, se.efforted = threadEffort, true
 	}
-	se.effort, se.efforted = effort, ok
 }
 
 // Cancel stops the answer on its way in the session id, and the tasks the
@@ -1149,6 +1214,9 @@ func (s *Service) Cancel(_ context.Context, id string) error {
 	}
 	for _, t := range se.tasks {
 		t.cancel()
+	}
+	if id == ThreadID {
+		s.stopThread()
 	}
 	return nil
 }
@@ -1192,12 +1260,15 @@ func (s *Service) Delete(_ context.Context, id string) error {
 }
 
 // List describes sessions with messages or explicitly kept metadata, the
-// latest first: those in memory and those kept.
+// latest first: those in memory and those kept. The thread is none of them.
 func (s *Service) List(context.Context) ([]Info, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var list []Info
 	for _, se := range s.sessions {
+		if se.id == ThreadID {
+			continue
+		}
 		if len(se.events) == 0 {
 			if se.efforted || se.directed {
 				list = append(list, Info{ID: se.id, Title: se.title})
@@ -1217,7 +1288,7 @@ func (s *Service) List(context.Context) ([]Info, error) {
 		}
 		for _, e := range entries {
 			id, ok := strings.CutPrefix(e.ID, "owner/")
-			if !ok {
+			if !ok || id == ThreadID {
 				continue
 			}
 			if i := slices.IndexFunc(list, func(info Info) bool { return info.ID == id }); i >= 0 {
@@ -1248,8 +1319,9 @@ func (s *Service) Contents(ctx context.Context, id string) ([]Line, error) {
 	}
 	s.mu.Lock()
 	se := s.get(id) // load both the conversation and its project directory
-	ctx = workdir.With(ctx, se.directory)
+	ctx = s.threadContext(workdir.With(ctx, se.directory), se)
 	s.mu.Unlock()
+
 	var c assistant.Contents
 	var err error
 	if a, ok := s.agent.(interface {
@@ -1258,6 +1330,9 @@ func (s *Service) Contents(ctx context.Context, id string) ([]Line, error) {
 		c, err = a.ContentsContext(ctx, id)
 	} else {
 		c, err = s.agent.Contents(id)
+	}
+	if id == ThreadID {
+		c.Messages = shaped(c.Messages) // what it is sent
 	}
 	var lines []Line
 	if c.System != "" {

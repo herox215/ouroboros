@@ -33,20 +33,30 @@ func (c *typingConnection) TypingTo(ctx context.Context, room, peer string, acti
 func TestAnswering(t *testing.T) {
 	for _, end := range []plugin.SessionKind{plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled, plugin.SessionRestart, plugin.SessionRestarted} {
 		events := []plugin.SessionEvent{{Kind: plugin.SessionMessage}, {Kind: plugin.SessionStep}, {Kind: end}}
-		if !answering(events[:2]) || answering(events) {
+		if !answering("s1", events[:2]) || answering("s1", events) {
 			t.Fatalf("wrong state for %v", end)
 		}
 	}
 	events := []plugin.SessionEvent{{Kind: plugin.SessionMessage}, {Kind: plugin.SessionAsked}}
-	if answering(events) {
+	if answering("s1", events) {
 		t.Fatal("typing while waiting for owner")
 	}
 	events = append(events, plugin.SessionEvent{Kind: plugin.SessionAsked, Done: true})
-	if !answering(events) {
+	if !answering("s1", events) {
 		t.Fatal("did not resume after reply")
 	}
-	if answering(nil) {
+	if answering("s1", nil) {
 		t.Fatal("idle session is typing")
+	}
+	// The thread answers while anything works for it, whatever the
+	// messages and answers before, and not while it asks the owner.
+	working := []plugin.SessionEvent{{Kind: plugin.SessionMessage}, {Kind: plugin.SessionAnswer}, {Kind: plugin.SessionWorking, N: 1}}
+	if !answering(plugin.ThreadID, working) || answering(plugin.ThreadID, working[:2]) || answering(plugin.ThreadID, working[:1]) {
+		t.Fatal("the thread types while nothing works for it, or not while something does")
+	}
+	asking := []plugin.SessionEvent{{Kind: plugin.SessionAsked}, {Kind: plugin.SessionWorking, N: 1}}
+	if answering(plugin.ThreadID, asking) || !answering(plugin.ThreadID, append(asking[:1:1], plugin.SessionEvent{Kind: plugin.SessionAsked, Done: true}, asking[1])) {
+		t.Fatal("the thread types while it asks, or not once it was answered")
 	}
 }
 

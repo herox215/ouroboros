@@ -918,6 +918,83 @@ func TestWithSystem(t *testing.T) {
 	}
 }
 
+// A tool that ends the answer ends it after its round, without a further
+// call of the LLM: the answer is "", and the conversation goes on from the
+// results. What the user said meanwhile is taken all the same.
+func TestEndEndsAfterTheTools(t *testing.T) {
+	llm := &fakeLLM{}
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		End(ctx)
+		return "handed", nil
+	}}
+	a := New(llm, "gpt", "alpha", hand)
+	got, err := a.Respond(context.Background(), "c1", "call hand")
+	if err != nil || got != "" || llm.msgs[len(llm.msgs)-1].Content != "call hand" {
+		t.Fatalf("got %q, %v, the LLM was sent %+v", got, err, llm.msgs)
+	}
+	if got, err := a.Respond(context.Background(), "c1", "hi"); err != nil || got != "echo hi" || len(llm.msgs) != 5 || llm.msgs[3].Content != "handed" {
+		t.Fatalf("after: %q, %v, %+v", got, err, llm.msgs)
+	}
+	said := []openai.Message{{Role: "user", Content: "more"}}
+	ctx := WithMessageSteering(context.Background(), func() []openai.Message {
+		meanwhile := said
+		said = nil
+		return meanwhile
+	})
+	if got, err := a.Respond(ctx, "c2", "call hand"); err != nil || got != "echo more" {
+		t.Fatalf("with what came meanwhile: %q, %v", got, err)
+	}
+	if End(context.Background()) {
+		t.Fatal("End outside of an answer")
+	}
+}
+
+// What WithSent makes of the conversation is what the LLM is sent, after the
+// system prompt; what is kept of the conversation stays as it was.
+func TestWithSent(t *testing.T) {
+	llm := &fakeLLM{}
+	a := New(llm, "gpt", "alpha")
+	if _, err := a.Respond(context.Background(), "c1", "long"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithSent(context.Background(), func(msgs []openai.Message) []openai.Message {
+		msgs[0].Content = "short"
+		return msgs
+	})
+	if _, err := a.Respond(ctx, "c1", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.msgs[0].Content != "alpha" || llm.msgs[1].Content != "short" || llm.msgs[3].Content != "hi" {
+		t.Fatalf("sent %+v", llm.msgs)
+	}
+	if kept := a.memory.Conversation("c1"); kept[0].Content != "long" || len(kept) != 4 {
+		t.Fatalf("kept %+v", kept)
+	}
+}
+
+// WithTools gives one answer other tools, and the conversation goes on as
+// it was: the agent keeps its own tools.
+func TestWithTools(t *testing.T) {
+	llm := &fakeLLM{}
+	a := New(llm, "gpt", "alpha", Tool{Name: "shout", Schema: `{"type":"object"}`})
+	other := a.WithTools(Tool{Name: "whisper", Schema: `{"type":"object"}`})
+	if _, err := other.Respond(context.Background(), "c1", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if system, tools := other.Prompt(); system != "alpha" || len(tools) != 1 || tools[0].Function.Name != "whisper" {
+		t.Fatalf("the copy: %q, %+v", system, tools)
+	}
+	if _, tools := a.Prompt(); len(tools) != 1 || tools[0].Function.Name != "shout" {
+		t.Fatalf("the agent after: %+v", tools)
+	}
+	if _, err := a.Respond(context.Background(), "c1", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if len(llm.msgs) != 4 || llm.msgs[1].Content != "one" {
+		t.Fatalf("the conversation goes on: %+v", llm.msgs)
+	}
+}
+
 // Prompt is what goes with every call: the system prompt and the tools, a
 // copy of them that the caller may change.
 func TestPrompt(t *testing.T) {

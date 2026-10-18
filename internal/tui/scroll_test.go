@@ -306,6 +306,36 @@ func TestHistoryGlidesToWhatComes(t *testing.T) {
 	}
 }
 
+// The box of the input that comes or goes while the history glides to its
+// end moves the end: the history goes on to where the end is then, and what
+// comes after is glided to as well.
+func TestHistoryFollowsItsEndWhileTheInputMoves(t *testing.T) {
+	for _, shown := range []bool{true, false} {
+		m, _ := newModel(t)
+		fill(m, 80)
+		m.inputShown = shown
+		m.layout()
+		say := func(kind plugin.SessionKind, text string) {
+			m.Update(eventMsg{id: m.chat.contextID, event: Event{Kind: kind, Text: text, At: m.now()}})
+		}
+		say(plugin.SessionMessage, "go")
+		say(plugin.SessionAnswer, "started")
+		m.inputShown = !shown
+		for cmd := m.fadeInput(); cmd != nil; {
+			_, cmd = m.Update(inputFadeMsg{})
+		}
+		if !m.followsEnd() {
+			t.Fatalf("shown %v: the history no longer follows its end: at %d of %d, %+v", shown, m.history.YOffset(), topLine(&m.history), m.glide)
+		}
+		say(plugin.SessionAnswer, "one\ntwo\nthree")
+		say(plugin.SessionAnswer, "four")
+		scroll(t, m, scrollTick())
+		if !m.history.AtBottom() {
+			t.Fatalf("shown %v: the history rests at %d of %d", shown, m.history.YOffset(), topLine(&m.history))
+		}
+	}
+}
+
 // fades is how a box shows the lines of a viewport, port: a letter a line,
 // "e" for one faded at an edge, nearly the color of the background, "d" for
 // a dim one and "." for one as it is. shown are the lines of the box from the

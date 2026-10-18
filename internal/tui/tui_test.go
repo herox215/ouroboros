@@ -71,6 +71,7 @@ func (a *fakeAgent) Resume(string, json.RawMessage) error                    { r
 func (a *fakeAgent) Forget(string)                                           {}
 func (a *fakeAgent) Title(context.Context, []openai.Message) (string, error) { return "", nil }
 func (a *fakeAgent) Effort() string                                          { return "" }
+func (a *fakeAgent) Note(context.Context, string, string) error              { return nil }
 
 // fakeBackend is what the UI controls in the tests. Its sessions are those
 // of the node, in this process: their answers come from the fakeAgent.
@@ -207,7 +208,7 @@ func shownEvent(e plugin.SessionEvent) Event {
 	if e.Kind == plugin.SessionStep {
 		text = e.Tool
 	}
-	shown := Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
+	shown := Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache, N: e.N, Routed: e.Routed}
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended

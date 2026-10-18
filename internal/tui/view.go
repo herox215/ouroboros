@@ -145,12 +145,19 @@ func (m *Model) layout() {
 		}
 	}
 	atBottom := m.history.AtBottom()
+	// A history on its way to its end goes on to where its end is now: the
+	// box of the input moves it, as it comes and goes, while an answer and
+	// what follows it come in.
+	toEnd := m.glide != nil && m.glide.view == &m.history && m.glide.target == topLine(&m.history)
 	m.selected, m.pressed = nil, nil // its lines are wrapped anew
 	inner := max(1, m.chatWidth()-4) // border and padding
 	m.input.SetWidth(inner)
 	m.history.SetWidth(inner)
 	m.history.SetHeight(max(1, m.chatHeight()-3)) // border and typing line
-	m.renderHistory(atBottom)
+	m.renderHistory(atBottom && !toEnd)
+	if toEnd {
+		m.glideTo(&m.history, topLine(&m.history)) // on its way already: no frame to ask for
+	}
 	m.context.size(m)
 }
 
@@ -693,6 +700,9 @@ func (m *Model) headerView() string {
 	}
 	if m.requests.unread > 0 {
 		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.requests.unread))
+	}
+	if m.chat.contextID == plugin.ThreadID {
+		title += mutedStyle.Render(" · thread")
 	}
 	if m.chat.directory != "" {
 		title += mutedStyle.Render(" · " + m.chat.directory)

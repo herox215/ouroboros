@@ -12,7 +12,22 @@ import (
 // Renew before the server's 30-second expiry; never persist typing state.
 type typing map[*conversation]time.Time
 
-func answering(events []plugin.SessionEvent) bool {
+// answering reports whether an answer is on its way in the session id, as
+// its events tell, and does not wait for the owner: in the thread, while
+// anything works for it, which only it tells, see plugin.SessionWorking.
+func answering(id string, events []plugin.SessionEvent) bool {
+	if id == plugin.ThreadID {
+		working, asking := false, false
+		for _, e := range events {
+			switch e.Kind {
+			case plugin.SessionWorking:
+				working = e.N > 0
+			case plugin.SessionAsked:
+				asking = !e.Done
+			}
+		}
+		return working && !asking
+	}
 	active := false
 	for _, e := range events {
 		switch e.Kind {

@@ -514,6 +514,9 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		})
 	}
 	suggest := Reviewer(ctx)
+	if ThreadOf(ctx) != nil {
+		suggest = nil // the thread hands on, and answers nothing when it does: there is nothing to review
+	}
 	task := strings.HasPrefix(text, suggestedIntro)
 	if suggest != nil {
 		if before, follow, ok := a.followed(contextID, text, time.Now()); ok {
@@ -531,7 +534,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		}
 		return messages
 	})
-	bot = inDirectory(ctx, bot)
+	bot = inThread(ctx, inDirectory(ctx, bot), cfg)
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {
 			if a.log != nil {
@@ -558,7 +561,11 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			}
 		},
 	})
-	signals, trail := r.end(reply, err)
+	logged := reply
+	if ThreadOf(ctx) != nil && logged == "" {
+		logged = handedOn // no answer that went wrong
+	}
+	signals, trail := r.end(logged, err)
 	if suggest == nil || trail == nil { // not reviewed, or canceled
 		return reply, err
 	}
@@ -709,14 +716,15 @@ func (a *Assistant) Contents(contextID string) (Contents, error) {
 	return a.ContentsContext(context.Background(), contextID)
 }
 
-// ContentsContext includes the project selected for this conversation.
+// ContentsContext includes the project selected for this conversation, and
+// the prompt and tools of the thread under a context of it, see WithThread.
 func (a *Assistant) ContentsContext(ctx context.Context, contextID string) (Contents, error) {
 	c := Contents{Messages: a.memory.Conversation(contextID)}
-	bot, _, err := a.current()
+	bot, cfg, err := a.current()
 	if err != nil {
 		return c, err
 	}
-	c.System, c.Tools = inDirectory(ctx, bot).Prompt()
+	c.System, c.Tools = inThread(ctx, inDirectory(ctx, bot), cfg).Prompt()
 	if bot.HasExtensions() {
 		if snapshot, ok := bot.Inspection(contextID); ok {
 			c.Messages = slices.Clone(snapshot.Messages)
@@ -789,6 +797,17 @@ func (a *Assistant) RestoreStatistics(contextID string, size int, cache Cache) {
 	a.sizing.Lock()
 	defer a.sizing.Unlock()
 	a.sizes[contextID], a.caches[contextID] = size, cache
+}
+
+// Note makes the agent remember text in the conversation contextID as
+// something it was told without being asked, for its next answer there, and
+// keeps it where answers are kept: see agent.Agent.Note.
+func (a *Assistant) Note(ctx context.Context, contextID, text string) error {
+	bot, _, err := a.current()
+	if err != nil {
+		return err
+	}
+	return bot.Note(ctx, contextID, text)
 }
 
 // Forget makes the agent forget the conversation contextID, as if it was

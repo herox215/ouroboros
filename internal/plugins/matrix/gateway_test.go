@@ -264,8 +264,8 @@ func TestGatewayAnswersAnEncryptedMessage(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("the message did not reach the session")
 	}
-	// While the agent answers, Alice sees the bot typing.
-	sessions.set(plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "hello"})
+	// While the thread works, Alice sees the bot typing.
+	sessions.set(plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "hello"}, plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1})
 	eventually(t, "typing", func() bool { return slices.Equal(m.typed(), []bool{true}) })
 	sessions.set(plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "hello"}, plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "pong"})
 	select {

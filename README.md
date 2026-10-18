@@ -218,6 +218,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 |---|---|
 | `/new` | new conversation; the one shown goes on in the background |
 | `/session` | the conversations of the node in a dialog over the chat, the latest first, the one shown marked: type to filter the list, `↑` `↓` select, `enter` shows the one selected, `ctrl+d` twice deletes it, `tab` switches to the conversations of peers, `esc` takes back what is typed and then goes back; see [Sessions](#sessions) |
+| `/thread` | the thread, experimental: one conversation with your agent about everything, while behind it each topic is a conversation of its own and several work at once; see [The thread](#the-thread) |
 | `/cancel` | stop the answer that is on its way in the conversation shown, and the tasks its agent delegated |
 | `/jobs` | the commands the agent runs in the background for the answers on their way, in your conversations and in those of peers, each with where it runs and for how long, the list kept up to date: `↑` `↓` select, `enter` stops the one selected, `esc` back; see [Commands](#commands) |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
@@ -367,6 +368,58 @@ one where you left it.
   name of the peer (as your contacts name it) and its first message. `enter` shows one, only to read: you
   cannot write there. `ctrl+d` pressed twice deletes it, and your agent forgets it. They start anew for the peer
   after a restart; only yours go on.
+
+#### The thread
+
+The thread is experimental. It is one conversation with your agent about everything, and you open it with
+`/thread`. It reads like any chat: you write, your agent thinks, and it answers. Behind it, each topic is a
+conversation of its own, and several of them work at once. While one works on the login, you can talk about the
+photos, and the answer about the login comes in when it is done. You are not shown that this happens: the thread
+says nothing of the conversations it uses, and while any of them works for it, the line below the chat says that
+your agent is thinking.
+
+- **Handing on.** The agent of the thread does none of the work itself. For each of your messages it decides which
+  topic it continues, or whether it is a new one. It hands the message to the conversation of that topic with
+  `session_send`, or starts one for it with `session_new`. Then its answer ends without a word, as that
+  conversation answers. A message about several topics hands each its part. When it cannot tell which topic you
+  mean, it asks you, about the topic. It answers itself only what the thread answers already, like what was said
+  before. Its words along the way and the calls with which it hands on are not shown; `/context` shows them.
+- **Which conversations.** The agent of the thread is told which conversations there are to hand your messages
+  to: those in which something happened in the last 24 hours, at most 30, the latest first, each with a handle of
+  8 characters of its ID, its title, its project where it is not that of the thread, and whether it is working or
+  asks you something. Older ones are left out, and the thread refuses to hand anything to them.
+- **Little to read, and cached.** The agent of the thread only hands on, so it is sent little, and thinks little
+  (`low`) unless you set its `/effort`. What it was sent stays as it was, and every call begins with all the call
+  before sent, as the caches of providers want it: the list of the conversations comes before your message only
+  when it changed, or after 6 answers, and stays; of what a conversation answered the thread gets the first and the
+  last 300 bytes, as that conversation remembers all of it; your messages come without where you wrote them. What
+  is kept, in the archive and in the chat, stays whole: only what is sent is shorter. With DeepSeek V4.1 Flash at
+  OpenCode Go, 18 messages about three topics sent 4 to 10k tokens a call, of which 86 to 98% were cached, but
+  for the first after a start and the one after a cut of the conversation; `/context` shows what is sent.
+- **What a conversation gets.** A message the thread hands on is a message of yours there: an answer to it starts,
+  the answer on its way takes it as it would take what you queued, or it answers the question the conversation
+  waits for. It is attributed to where you wrote it in the thread. It is your words as you wrote them: without
+  words of its own, `session_send` and `session_new` hand on what you said since the last answer of the thread.
+  The agent of the thread writes only the part of a message that belongs to the topic, or what your words mean
+  where only the thread explains them, like your answer to a question it asked, in your voice. It never writes
+  about you, the thread or other topics, nor sums up what the conversation said itself, which remembers it.
+- **What comes back.** The answer of a conversation that took a message the thread handed on is shown in the
+  thread as the answer of your agent, and an answer that failed as one that failed. What such an answer asks you
+  on its way is asked in the thread, one question at a time, and what you say there next answers it; answered in
+  that conversation itself, it is over in the thread too. The agent of the thread is told all of it for its next
+  answer. What you write in a conversation yourself does not come back to the thread, and neither does an answer
+  that was stopped. While another conversation is shown, the footer says that the thread answered
+  (`answered in the thread · /thread`).
+- **Stopping.** `esc` and `/cancel` in the thread stop its answer and what the conversations work on for it.
+- **Where new ones work.** A conversation the thread starts works in the directory the agent names, or else in the
+  project of the thread. The first time a UI shows the thread, the thread takes the directory the UI started in as
+  its project; `/cd` there changes it, and the header shows it after `· thread`.
+- **Gateways.** A gateway talks in the thread too: every Matrix room does, so there is no `/new` there, see
+  [GATEWAYS.md](GATEWAYS.md). What is written in a room and in the terminal UI is one conversation, and the
+  answers of the thread go to every room that talks in it.
+- **It is a session of the node.** The thread has the ID `thread`, is kept in the archive and goes on after a
+  restart like any conversation, shown as it was. `/session` does not list it, it is not named for a topic, and its
+  agent has the two tools of the thread alone. The conversations it starts are listed there as any other.
 
 ### Profiles
 
@@ -1656,6 +1709,7 @@ internal/tui         terminal UI (Bubble Tea), with the splash and the setup
   question.go        the input (inputView), and a question of the agent in it
   commands.go        the slash commands of the UI and /help
   session.go         the conversations and the screen of /session
+  thread.go          the thread: /thread
   context.go, contents.go  the screen of /context
   settings.go, model.go, effort.go  the screens of /settings, /model, /effort
   onboard.go         the setup

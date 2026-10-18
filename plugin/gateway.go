@@ -74,7 +74,8 @@ var (
 // restricted non-owner execution mode needs a different backend contract.
 //
 // Only sessions opened through this adapter (or restored by the trusted host)
-// can be used, by the exact identity that opened them. Bindings are in memory
+// can be used, by the exact identity that opened them, and the thread, see
+// Thread. Bindings are in memory
 // unless the host explicitly saves Bindings and restores them with
 // NewGatewayAdapterWithBindings. The host owns transport authentication, rate
 // limits, protected persistence and node lifecycle.
@@ -168,6 +169,9 @@ func (g *GatewayAdapter) bound(ctx context.Context, who GatewayIdentity, op Gate
 	if err := g.permit(ctx, who, op); err != nil {
 		return err
 	}
+	if id == ThreadID {
+		return nil // every identity with the grant, see Thread
+	}
 	g.mu.Lock()
 	owner, ok := g.bindings[id]
 	g.mu.Unlock()
@@ -175,6 +179,23 @@ func (g *GatewayAdapter) bound(ctx context.Context, who GatewayIdentity, op Gate
 		return ErrGatewaySession
 	}
 	return nil
+}
+
+// Thread returns the ID of the thread, the one conversation of the owner, for
+// who to talk in: the other operations take it as they take a session of
+// Open. Unlike one of those it is no session of this adapter, nor of who
+// alone: every identity granted OwnerSession uses the same thread, as the
+// owner does in every other front end, and its snapshots hold all of it, also
+// what was said in it elsewhere and what the sessions it hands messages to
+// answered. That is no more than the grant gives already, as the agent of the
+// owner reads its history. Send queues in the thread while its agent hands
+// on, rather than failing with ErrBusy, and answers no question the thread
+// asks: Reply does.
+func (g *GatewayAdapter) Thread(ctx context.Context, who GatewayIdentity) (string, error) {
+	if err := g.permit(ctx, who, GatewayOpen); err != nil {
+		return "", err
+	}
+	return ThreadID, nil
 }
 
 // Open creates a fresh session and binds it to who. It cannot resume or attach

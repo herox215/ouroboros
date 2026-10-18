@@ -31,6 +31,8 @@ type fakeAgent struct {
 	forgot   []string
 	title    func(ctx context.Context, conversation []openai.Message) (string, error)
 	effort   string // of the node
+	notes    []string
+	note     error // what Note fails with
 }
 
 func (a *fakeAgent) Ready() error { return a.ready }
@@ -73,6 +75,20 @@ func (a *fakeAgent) Effort() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.effort
+}
+
+func (a *fakeAgent) Note(_ context.Context, id, text string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.notes = append(a.notes, id+": "+text)
+	return a.note
+}
+
+// noted is what the agent was told without being asked, as "ID: TEXT".
+func (a *fakeAgent) noted() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.notes)
 }
 
 func (a *fakeAgent) Forget(id string) {

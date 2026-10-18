@@ -56,20 +56,21 @@ func TestPollTypingLifecycle(t *testing.T) {
 			t.Fatalf("missing typing = %v", want)
 		}
 	}
-	msg := plugin.SessionEvent{Kind: plugin.SessionMessage}
-	set(msg)
+	// The room talks in the thread, which types while anything works for it.
+	msg, work := plugin.SessionEvent{Kind: plugin.SessionMessage}, plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1}
+	set(msg, work)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); c.poll(ctx, conn) }()
 	defer func() { cancel(); <-done }()
 	expect(true)
-	set(msg, plugin.SessionEvent{Kind: plugin.SessionAsked})
+	set(msg, plugin.SessionEvent{Kind: plugin.SessionAsked}, work)
 	expect(false)
-	set(msg, plugin.SessionEvent{Kind: plugin.SessionAsked, Done: true})
+	set(msg, plugin.SessionEvent{Kind: plugin.SessionAsked, Done: true}, work)
 	expect(true)
 	set(msg, plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "done"})
 	expect(false)
-	set(msg, plugin.SessionEvent{Kind: plugin.SessionAnswer}, msg)
+	set(msg, plugin.SessionEvent{Kind: plugin.SessionAnswer}, msg, work)
 	expect(true)
 	cancel()
 	expect(false)
@@ -141,7 +142,7 @@ func TestPollStopsTypingWhenTheSessionIsGone(t *testing.T) {
 	if err = c.receive(context.Background(), conn, incoming{RoomID: "!room:example.org", Sender: "@owner:example.org", Text: "hello"}); err != nil {
 		t.Fatal(err)
 	}
-	sessions.set(plugin.SessionEvent{Kind: plugin.SessionMessage})
+	sessions.set(plugin.SessionEvent{Kind: plugin.SessionMessage}, plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); c.poll(ctx, conn) }()
@@ -184,7 +185,7 @@ func TestPollLooksAtEveryConversation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sessions.set(plugin.SessionEvent{Kind: plugin.SessionMessage})
+	sessions.set(plugin.SessionEvent{Kind: plugin.SessionMessage}, plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); c.poll(ctx, conn) }()

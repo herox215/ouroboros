@@ -138,6 +138,9 @@ func (s *Service) load(id string) *session {
 	if title != "" {
 		events = append(events, Event{Kind: Title, At: last.Local(), Text: title, Context: usage.Context, Cache: usage.Cache})
 	}
+	if id == ThreadID {
+		events = quiet(events)
+	}
 	se := &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
 	s.effortOf(se)
 	s.directoryOf(se)
@@ -176,6 +179,17 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source})
 			if ended, ok := assistant.AsTaskReport(unnoted(r.Content)); ok {
 				events = append(events, Event{Kind: Task, At: at, N: ended.N, Remark: ended.Title, Text: ended.Answer, Err: ended.Err})
+				continue
+			}
+			// What the thread is told of the sessions is not said by the owner.
+			if isRoster(unnoted(r.Content)) {
+				continue
+			}
+			if relayed, ok := asRelay(unnoted(r.Content)); ok {
+				for _, e := range relayed {
+					e.At, e.PresentationID = at, id
+					events = append(events, e)
+				}
 				continue
 			}
 			events = append(events, Event{Kind: Message, At: at, Text: unnoted(r.Content), Source: r.Source.Normalized()})
@@ -322,6 +336,7 @@ func (s *Service) Find(_ context.Context, query string) ([]string, error) {
 	for i, id := range hits { // a session of the owner is named as List names it, without its party
 		hits[i] = strings.TrimPrefix(id, "owner/")
 	}
+	hits = slices.DeleteFunc(hits, func(id string) bool { return id == ThreadID }) // which List leaves out too
 	slices.Sort(hits)
 	return hits, err
 }

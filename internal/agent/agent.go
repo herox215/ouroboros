@@ -192,6 +192,20 @@ type Answer struct {
 	reports reports
 	values  sync.Map
 	ctx     context.Context
+	ended   atomic.Bool // by End
+}
+
+// End makes the answer of ctx end once the tools of its round ran, without a
+// further call of the LLM: what they did is all of it, and it answers "".
+// What the user said meanwhile is still taken, by a further call. It reports
+// whether ctx is of an answer.
+func End(ctx context.Context) bool {
+	a := AnswerOf(ctx)
+	if a == nil {
+		return false
+	}
+	a.ended.Store(true)
+	return true
 }
 
 // AnswerOf returns the answer a tool is run for under ctx, nil outside of
@@ -359,6 +373,14 @@ func (a *Agent) WithSystem(system string) *Agent {
 	return &copy
 }
 
+// WithTools returns a copy that may use tools alone, for one answer. Memory
+// and the system prompt are shared; concurrent conversations are unaffected.
+func (a *Agent) WithTools(tools ...Tool) *Agent {
+	copy := *New(a.llm, a.model, a.system.Content, tools...)
+	copy.memory, copy.extensions = a.memory, a.extensions
+	return &copy
+}
+
 // Prompt returns what the agent sends with every call of the LLM before the
 // conversation: its system prompt and its tools.
 func (a *Agent) Prompt() (system string, tools []openai.Tool) {
@@ -474,7 +496,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		if err := ctx.Err(); err != nil {
 			return abandon(err)
 		}
-		msgs := append([]openai.Message{a.system}, history...)
+		msgs := sent(ctx, append([]openai.Message{a.system}, history...))
 		if note := notes(round, int(spent.Load())); note != "" && msgs[len(msgs)-1].Role == "tool" {
 			msgs = append(msgs, openai.Message{Role: "user", Content: note})
 		}
@@ -553,15 +575,23 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			spent.Add(int64(len(result.Content)))
 			history = append(history, result)
 		}
-		if _, err := report(); err != nil {
+		delivered, err := report()
+		if err != nil {
 			return abandon(err)
 		}
 		// What the user said meanwhile follows the results.
-		for _, said := range steeredMessages(ctx) {
+		steered := steeredMessages(ctx)
+		for _, said := range steered {
 			if err := emit(said); err != nil {
 				return abandon(err)
 			}
 			history = append(history, said)
+		}
+		// A tool that ended the answer ends it here, unless something came
+		// meanwhile for the LLM to take.
+		if AnswerOf(ctx).ended.Swap(false) && !delivered && len(steered) == 0 {
+			a.memory.remember(contextID, history)
+			return "", nil
 		}
 	}
 	return abandon(ErrTooManyToolCalls)

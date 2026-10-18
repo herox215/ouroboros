@@ -33,7 +33,7 @@ func TestConversationForwardsImagesAndCaption(t *testing.T) {
 	if err := c.receive(context.Background(), conn, msg); err != nil {
 		t.Fatal(err)
 	}
-	if sessions.text != "/new" || len(sessions.images) != 1 || sessions.images[0].Type != img.Type || !bytes.Equal(sessions.images[0].Data, img.Data) || sessions.created != 1 {
+	if sessions.text != "/new" || len(sessions.images) != 1 || sessions.images[0].Type != img.Type || !bytes.Equal(sessions.images[0].Data, img.Data) || sessions.created != 0 {
 		t.Fatalf("image lost or caption treated as command: %+v", sessions)
 	}
 	sessions.text, sessions.images = "", nil

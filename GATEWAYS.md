@@ -13,6 +13,16 @@ code remains responsible for authentication, room privacy, replay prevention,
 rate limits and safe event presentation. Bindings are persisted in the protected
 profile store, never accepted from incoming messages.
 
+The one exception is the thread (experimental), the one conversation of the
+owner, see "The thread" in the README: `GatewayAdapter.Thread` returns its ID to
+every identity the host grants `OwnerSession`, and the other operations take it
+without a binding. Every such identity talks in the same thread, as the owner
+does in the terminal UI, and its snapshots hold all of it: also what was said in
+it elsewhere, and what the sessions it hands messages to answered. That is no
+more than the grant gives already, as the agent of the owner reads its history.
+`Send` queues there while the agent of the thread hands on, and answers no
+question the thread asks: only `Reply` does, which keeps its own authorization.
+
 Gateway implementations pass `plugin.WithGatewayName("matrix")` (or their own
 stable transport name, such as `"whatsapp"`) to `NewGatewayAdapter` and
 `NewGatewayAdapterWithBindings`. This generically attributes text, images and
@@ -52,14 +62,22 @@ create another Matrix device or sync loop. Changes are picked up by the running
 node; the gateway is unavailable while the node is stopped. Use a separate bot
 account for each profile.
 
-Each room is associated with its own Ouro session. Replies contain agent output
-and questions, not raw tool arguments, raw tool output or hidden reasoning.
-Ordinary messages start an answer, or answer the pending agent question when
-there is one. Just send your answer; for numbered options, sending the number
-selects that option. /answer YOUR ANSWER remains available. Use /cancel to stop
-the current answer. Use /new to start a fresh Ouro
-conversation in the same Matrix room. This stops the previous answer, preserves
-the old chat in Ouro, and keeps the new room binding across restarts.
+Every room talks in the thread: one conversation about everything, whose agent
+hands each message to the Ouro session of its topic, or starts one, and whose
+replies are the answers and questions of those sessions, see "The thread" in the
+README. So there is no /new: a new topic is a new session by itself. A room is
+not sent what the thread said before it talked there; after that it is sent all
+the thread answers and asks, also to what was written in the terminal UI. A room
+that had a session of its own before talks in the thread from the next start of
+the gateway on, without being sent the thread so far; its session stays in Ouro,
+and the thread hands messages on to it while it is of the last 24 hours. Replies
+contain agent output and questions, not raw tool arguments, raw tool output or
+hidden reasoning. Ordinary messages go to the thread, or answer the pending
+question when there is one. Just send your answer; for numbered options, sending
+the number selects that option. /answer YOUR ANSWER remains available. Use
+/cancel to stop what the thread and its sessions work on. Pictures go to the
+session the thread hands the message to. The bot types while anything works for
+the thread, and not while it waits for an answer.
 
 The Matrix plugin contributes a plain-text output instruction through an answer
 hook when the latest user input is attributed to Matrix. It appears once in each

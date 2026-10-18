@@ -48,9 +48,9 @@ func openConversations(s store, sessions plugin.GatewaySessions) (*conversations
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	bindings := map[string]plugin.GatewayIdentity{}
 	for _, entry := range c.entries {
-		if entry == nil || entry.Session == "" || entry.Room == "" {
+		if entry == nil || entry.Session == "" || entry.Room == "" ||
+			strings.TrimSpace(entry.Identity.Gateway) == "" || strings.TrimSpace(entry.Identity.Subject) == "" {
 			return nil, errors.New("invalid gateway conversation state")
 		}
 		if entry.SentVersion < 0 || entry.SentVersion > 1 {
@@ -59,9 +59,16 @@ func openConversations(s store, sessions plugin.GatewaySessions) (*conversations
 		if len(entry.Sent) == 0 {
 			entry.SentVersion = 1
 		}
-		bindings[entry.Session] = entry.Identity
+		// A room talks in the thread. One of a session of its own talks
+		// there from now on, without what the thread said before, see
+		// publish; the session is kept in Ouro, and the thread hands on to it.
+		if entry.Session != plugin.ThreadID {
+			entry.Session, entry.Sent, entry.SentVersion = plugin.ThreadID, nil, 0
+		}
 	}
-	adapter, err := plugin.NewGatewayAdapterWithBindings(sessions, func(ctx context.Context, who plugin.GatewayIdentity, op plugin.GatewayOperation) (plugin.GatewayPermission, error) {
+	// Every room talks in the thread, which binds nobody: no session of the
+	// gateway alone is to be restored.
+	c.adapter = plugin.NewGatewayAdapter(sessions, func(ctx context.Context, who plugin.GatewayIdentity, op plugin.GatewayOperation) (plugin.GatewayPermission, error) {
 		cfg, err := s.load()
 		if err != nil || !cfg.Enabled || cfg.Token == "" || who.Gateway != account(cfg) {
 			return plugin.GatewayPermission{}, plugin.ErrGatewayDenied
@@ -78,11 +85,7 @@ func openConversations(s store, sessions plugin.GatewaySessions) (*conversations
 			}
 		}
 		return plugin.GatewayPermission{}, plugin.ErrGatewayDenied
-	}, bindings, plugin.WithGatewayName("matrix"))
-	if err != nil {
-		return nil, err
-	}
-	c.adapter = adapter
+	}, plugin.WithGatewayName("matrix"))
 	return c, nil
 }
 func (c *conversations) receive(ctx context.Context, conn connection, msg incoming) error {
@@ -96,47 +99,27 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 	defer c.mu.Unlock()
 	entry := c.entries[key]
 	text := strings.TrimSpace(msg.Text)
-	if len(msg.Images) == 0 && text == "/new" {
-		// Cancel before switching so an old answer cannot continue unnoticed.
-		// Keep the old session and its history; only replace the room binding.
-		if entry != nil {
-			if err := c.adapter.Cancel(ctx, who, entry.Session); err != nil {
-				return err
-			}
-		}
-		id, err := c.adapter.Open(ctx, who)
-		if err != nil {
-			return err
-		}
-		next := conversation{Session: id, Identity: who, Room: msg.RoomID, SentVersion: 1}
-		if entry == nil {
-			c.entries[key] = &next
-			if err := c.save(); err != nil {
-				delete(c.entries, key)
-				return err
-			}
-		} else {
-			// Retain the pointer used by the ephemeral typing tracker.
-			previous := *entry
-			*entry = next
-			if err := c.save(); err != nil {
-				*entry = previous
-				return err
-			}
-		}
-		return conn.SendTo(ctx, msg.RoomID, msg.Sender, "New chat started. Your next message starts a fresh conversation; the previous chat is kept in Ouro.")
-	}
 	if entry == nil {
-		id, err := c.adapter.Open(ctx, who)
+		// The room talks in the thread, where what was said before it did
+		// is not its to be told.
+		id, err := c.adapter.Thread(ctx, who)
 		if err != nil {
 			return err
 		}
-		entry = &conversation{Session: id, Identity: who, Room: msg.RoomID, SentVersion: 1}
+		events, err := c.adapter.Poll(ctx, who, id)
+		if err != nil {
+			return err
+		}
+		entry = &conversation{Session: id, Identity: who, Room: msg.RoomID}
+		sentAll(entry, deliveryKeys(events))
 		c.entries[key] = entry
 		if err = c.save(); err != nil {
 			delete(c.entries, key)
 			return err
 		}
+	}
+	if len(msg.Images) == 0 && text == "/new" {
+		return conn.SendTo(ctx, msg.RoomID, msg.Sender, "There is one conversation here, about everything: just write, and Ouro keeps the topics apart.")
 	}
 	if len(msg.Images) == 0 && text == "/cancel" {
 		return c.adapter.Cancel(ctx, who, entry.Session)
@@ -234,7 +217,7 @@ func (c *conversations) poll(ctx context.Context, conn connection) {
 				typing.update(ctx, conn, entry, false, time.Now())
 				continue
 			}
-			typing.update(ctx, conn, entry, answering(events), time.Now())
+			typing.update(ctx, conn, entry, answering(entry.Session, events), time.Now())
 			// A failure waits for the next round; later output must not overtake it.
 			_ = c.publish(ctx, conn, entry, events)
 		}
@@ -280,6 +263,16 @@ func deliveryKeys(events []plugin.SessionEvent) []string {
 	return keys
 }
 
+// sentAll takes what keys name as delivered to entry, without delivering it.
+func sentAll(entry *conversation, keys []string) {
+	entry.Sent, entry.SentVersion = map[string]bool{}, 1
+	for _, key := range keys {
+		if key != "" {
+			entry.Sent[key] = true
+		}
+	}
+}
+
 // publish is called with c.mu held and only after the adapter authorized Poll.
 func (c *conversations) publish(ctx context.Context, conn connection, entry *conversation, events []plugin.SessionEvent) error {
 	keys := deliveryKeys(events)
@@ -288,13 +281,7 @@ func (c *conversations) publish(ctx context.Context, conn connection, entry *con
 		// The owner chose to baseline existing history rather than replay it during
 		// this one-time migration. Persist the baseline before delivering new output.
 		previous := entry.Sent
-		entry.Sent = map[string]bool{}
-		for _, key := range keys {
-			if key != "" {
-				entry.Sent[key] = true
-			}
-		}
-		entry.SentVersion = 1
+		sentAll(entry, keys)
 		if err := c.save(); err != nil {
 			entry.Sent, entry.SentVersion = previous, 0
 			return err
