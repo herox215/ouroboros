@@ -6,7 +6,7 @@
 # The tests run on a copy of the pushed commit, not on the working tree.
 #
 #	OURO_HOOK_MUTATION=off       leave the mutation tests out of this push
-#	OURO_HOOK_MUTATION_TIME=N    stop them after N seconds (default 300)
+#	OURO_HOOK_MUTATION_TIME=N    stop them after N seconds (no limit by default)
 #	git push --no-verify         skip the hook altogether
 set -eu
 
@@ -41,12 +41,18 @@ else
 	changed=$(git log --format= --name-only "$pushed" --not --remotes="$remote")
 fi
 
+# Packages the coverage gate leaves out are test code of their own, which the
+# mutation tests leave out too.
+excluded=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$top/coverage-exclusions.txt")
+
 packages=
 for dir in $(printf '%s\n' "$changed" | sed -n 's|/[^/]*\.go$||p' | sort -u); do
 	# A package that the pushed commit deletes has nothing left to mutate.
-	if git cat-file -e "$pushed:$dir" 2>/dev/null; then
-		packages="$packages $dir"
-	fi
+	git cat-file -e "$pushed:$dir" 2>/dev/null || continue
+	for left in $excluded; do
+		case "$dir" in "$left"|"$left"/*) continue 2 ;; esac
+	done
+	packages="$packages $dir"
 done
 if [ -z "$packages" ]; then
 	echo "pre-push: no Go package changed on main, mutation tests skipped."
@@ -76,7 +82,7 @@ cd "$snapshot/tree"
 start=$(date +%s)
 echo "pre-push: mutation tests of the packages changed on main:$packages ..."
 # shellcheck disable=SC2086
-if ! OURO_MUTATION_TIME=${OURO_HOOK_MUTATION_TIME:-300} scripts/mutation.sh $packages; then
+if ! OURO_MUTATION_TIME=${OURO_HOOK_MUTATION_TIME:-0} scripts/mutation.sh $packages; then
 	echo "pre-push: the mutation tests could not run (see above); the push was rejected." >&2
 	echo "          Push without them: OURO_HOOK_MUTATION=off git push" >&2
 	exit 1

@@ -377,3 +377,17 @@ func TestAvatarDataReportsAReadFailure(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 }
+
+func TestAvatarFileInfoFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "avatar.png"), []byte("png"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := statAvatar
+	statAvatar = func(*os.File) (os.FileInfo, error) { return nil, errors.New("cannot inspect") }
+	defer func() { statAvatar = old }()
+	files := &guard.Guard{Home: filepath.Join(root, "node"), Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
+	if _, err := avatarData(context.Background(), avatarArgs{Path: "avatar.png"}, files); err == nil || err.Error() != "cannot inspect" {
+		t.Fatalf("got %v", err)
+	}
+}

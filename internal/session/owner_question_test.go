@@ -51,3 +51,11 @@ func TestBackendOwnerQuestion(t *testing.T) {
 		t.Fatal(text)
 	}
 }
+
+func TestBackendOwnerQuestionOfAStoppedService(t *testing.T) {
+	s := New(&fakeAgent{})
+	s.Close()
+	if _, err := s.OwnerQuestion(context.Background(), json.RawMessage(`{"question":"Connect?"}`)); !errors.Is(err, ErrStopped) {
+		t.Fatalf("got %v", err)
+	}
+}

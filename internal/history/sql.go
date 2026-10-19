@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"ouroboros/internal/storage"
 )
 
 // database opens lazily because Open historically cannot return an error. A
@@ -56,7 +54,7 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 			return nil, fmt.Errorf("archive path is not a directory: %s", a.dir)
 		}
 	}
-	db, err := storage.Open(a.dir)
+	db, err := a.open(a.dir)
 	if err != nil {
 		return nil, err
 	}

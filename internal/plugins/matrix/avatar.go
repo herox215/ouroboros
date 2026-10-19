@@ -17,6 +17,10 @@ import (
 const setAvatar = "matrix_set_avatar"
 const maxAvatarBytes = 5 << 20
 
+// statAvatar reads the mode and size of the opened avatar. Tests replace it
+// to see the failure of a file that cannot be inspected.
+var statAvatar = (*os.File).Stat
+
 type avatarArgs struct {
 	Path       string `json:"path"`
 	Attachment int    `json:"attachment"`
@@ -105,7 +109,7 @@ func avatarData(ctx context.Context, args avatarArgs, files *guard.Guard) ([]byt
 		return nil, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
+	info, err := statAvatar(f)
 	if err != nil {
 		return nil, err
 	}

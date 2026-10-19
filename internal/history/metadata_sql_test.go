@@ -101,6 +101,7 @@ func TestNoteModelFailsAtEveryWrite(t *testing.T) {
 		clock time.Time
 	}{
 		"session":  {sql: "CREATE TRIGGER broken BEFORE UPDATE ON history_sessions WHEN new.model=old.model BEGIN SELECT RAISE(ABORT,'broken'); END"},
+		"model":    {sql: "CREATE TRIGGER broken BEFORE UPDATE OF model ON history_sessions BEGIN SELECT RAISE(ABORT,'broken'); END"},
 		"sequence": {sql: "ALTER TABLE history_records DROP COLUMN answer"},
 		// A clock no JSON time can hold.
 		"time":    {clock: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)},

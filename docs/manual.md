@@ -2308,14 +2308,14 @@ you are on.
   with the findings and the command to run that check alone. The mutation tests it leaves out.
 - A commit that stages no Go code and nothing of the checks themselves (only `README.md`, say) is not checked.
 - **pre-push runs the mutation tests when main is pushed**, on a copy of the pushed commit, **for the packages
-  whose Go files the push changes on main**, for at most 5 minutes. It prints the survivors and does not reject
-  the push; only when the mutation tests cannot run at all is the push rejected. A push to any other branch
-  runs nothing.
+  whose Go files the push changes on main**, leaving out the packages of `coverage-exclusions.txt`. It runs to
+  the end, however many packages a push changes, prints the survivors and does not reject the push; only when
+  the mutation tests cannot run at all is the push rejected. A push to any other branch runs nothing.
 
 | Variable | Effect |
 |---|---|
 | `OURO_HOOK_MUTATION=off` | leave the mutation tests out of this push to main |
-| `OURO_HOOK_MUTATION_TIME=600` | stop them after that many seconds instead of 300; the packages left over are named |
+| `OURO_HOOK_MUTATION_TIME=600` | stop them after that many seconds, about a push of many packages; the packages left over are named |
 | `OURO_GO_DIR=/opt/go` | where Go is, if not in `PATH` or `~/.local/go` |
 
 ### How long it takes

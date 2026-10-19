@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"ouroboros/internal/openai"
+	"ouroboros/internal/storage"
 )
 
 // The bounds of what the tools give back.
@@ -116,6 +117,9 @@ type Archive struct {
 	now func() time.Time
 	mu  sync.Mutex
 	db  *sql.DB
+	// open opens the database file. Tests replace it with a file that fails
+	// where they need it to; Open sets it to storage.Open.
+	open func(string) (*sql.DB, error)
 }
 
 // Open returns a lazy archive handle. Its first write (or read of an existing
@@ -123,7 +127,7 @@ type Archive struct {
 // missing directory do not create it. Operation errors include
 // initialization failures; Open retains its historical no-error signature.
 func Open(dir string) *Archive {
-	return &Archive{dir: dir, now: time.Now}
+	return &Archive{dir: dir, now: time.Now, open: storage.Open}
 }
 
 // named is what a session name may be: a context ID as ouro makes them, of
@@ -855,11 +859,16 @@ const ModelChanged = "model"
 // what was said before is not resumed, so that no model is sent a
 // conversation it has none of cached.
 func (a *Archive) NoteModel(id, model string) error {
-	if err := a.SetModel(id, model); err != nil {
+	if _, err := a.path(id); err != nil {
 		return err
 	}
+	// Open before the model is kept: a failed open then leaves neither the
+	// model nor the record that says where the conversation goes on.
 	db, err := a.database()
 	if err != nil {
+		return err
+	}
+	if err := a.SetModel(id, model); err != nil {
 		return err
 	}
 	tx, err := db.Begin()
