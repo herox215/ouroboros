@@ -44,7 +44,7 @@ cover:
 	go tool covdata percent -i=.cover
 
 # Every check, on the working tree: what the pre-commit hook runs, and the
-# mutation tests. See "Checks" in the README.
+# mutation tests. See "Checks" in docs/manual.md.
 check: fmt-check lint test cover-check mutation
 
 # Is every Go file formatted? Changes no file.

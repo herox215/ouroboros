@@ -14,7 +14,7 @@ rate limits and safe event presentation. Bindings are persisted in the protected
 profile store, never accepted from incoming messages.
 
 The one exception is the thread, the one conversation of the owner, see "The
-thread" in the README: `GatewayAdapter.Thread` returns its ID to
+thread" in the [manual](docs/manual.md#channels): `GatewayAdapter.Thread` returns its ID to
 every identity the host grants `OwnerSession`, and the other operations take it
 without a binding. Every such identity talks in the same thread, as the owner
 does in the terminal UI, and its snapshots hold all of it: also what was said in
@@ -65,7 +65,7 @@ account for each profile.
 Every room talks in the thread: one conversation about everything, whose agent
 hands each message to the Ouro session of its topic, or starts one, and whose
 replies are the answers and questions of those sessions, see "The thread" in the
-README. So there is no /new: a new topic is a new session by itself. A room is
+the [manual](docs/manual.md). So there is no /new: a new topic is a new session by itself. A room is
 not sent what the thread said before it talked there; after that it is sent all
 the thread answers and asks, also to what was written in the terminal UI, and
 what the owner wrote in the thread elsewhere, messages and answers to its

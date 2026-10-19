@@ -38,7 +38,7 @@ requires the GUI plugin and native build dependencies.
 
 ## Optional Omarchy / Waybar custom module
 
-1. Build and install a native GUI-capable Ouroboros (see the main README).
+1. Build and install a native GUI-capable Ouroboros (see docs/manual.md).
    Ensure `ouro` is on the PATH inherited by Waybar; otherwise replace it below
    and in the module with its absolute installed path.
 2. Copy `waybar/ouroboros.jsonc` and `waybar/ouroboros.css` to

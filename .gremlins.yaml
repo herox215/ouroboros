@@ -12,7 +12,7 @@ unleash:
     efficacy: 0
     mutant-coverage: 0
 
-# The supported mutations. See "Mutation tests" in the README for what each does.
+# The supported mutations. See "Mutation tests" in docs/manual.md for what each does.
 mutants:
   arithmetic-base:
     enabled: true
