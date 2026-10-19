@@ -104,7 +104,10 @@ func (h *archive) tools() []plugin.Tool {
 			Name: Search,
 			Description: about + fmt.Sprintf("Search the archive for a text, ignoring case. Returns per hit the session, the time, "+
 				"the record number and an excerpt; read the records around a hit with %s. At most %d hits. ", Read, history.MaxHits) +
-				"The owner may search all of their conversations; a peer only the one it is in. " + hint,
+				"The owner may search all of their conversations; a peer only the one it is in. " +
+				"When the user refers back to an earlier agreement (including UI or dialog design), search the conversation history before confirming specific details as agreed. " +
+				"Use scope all for the owner's earlier conversations, and read the surrounding records with history_read to distinguish a proposal from an agreement. " +
+				"If the reference remains ambiguous or the history is unavailable or inconclusive, state what is unverified; ask a focused question only if needed, rather than inventing details or giving blanket agreement. " + hint,
 			Schema: `{"type":"object","properties":{` +
 				`"query":{"type":"string","description":"the text to find"},` +
 				`"scope":{"type":"string","enum":["current","all"],"description":"current (the default): this conversation; all: every conversation of the owner"},` +

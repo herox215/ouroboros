@@ -264,7 +264,7 @@ func TestQuestionWithSuggestions(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 19})
 	press(m, "/", "s")
 	view := ansi.Strip(m.chatView())
-	if !fits(m) || len(suggested(m)) != 5+2 || !strings.Contains(view, "› Chat about it") || strings.Contains(view, "SQLite") || strings.Contains(view, "Postgres") {
+	if !fits(m) || len(suggested(m)) != 4+2 || !strings.Contains(view, "› Chat about it") || strings.Contains(view, "SQLite") || strings.Contains(view, "Postgres") {
 		t.Fatalf("%d rows of the panel above the input:\n%s", len(suggested(m)), view)
 	}
 }

@@ -3,16 +3,21 @@
 package peers
 
 import (
+	"context"
+	"sync"
+
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/discovery"
 	"ouroboros/internal/home"
 	"ouroboros/internal/peers"
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
 // needs are the services the plugin uses.
 type needs struct {
-	Scanner *discovery.Scanner
+	Scanner  *discovery.Scanner
+	Sessions *session.Service
 }
 
 // services are what the plugin provides.
@@ -30,6 +35,17 @@ type services struct {
 func Plugin(dir home.Dir, network *peers.Network) plugin.Plugin {
 	return plugin.NewService("peers", func(ctx *plugin.Context, n needs) (services, error) {
 		network.Finder = n.Scanner
+		approvalCtx, cancel := context.WithCancel(context.Background())
+		var start sync.Once
+		var running sync.WaitGroup
+		stop := func() { cancel(); running.Wait() }
+		ctx.OnStop(stop)
+		plugin.Add(ctx, plugin.Serving{Start: func() {
+			start.Do(func() {
+				running.Add(1)
+				go func() { defer running.Done(); network.Approvals(approvalCtx, n.Sessions.OwnerQuestion, dir.Log) }()
+			})
+		}, Stop: stop})
 
 		selfID := func() string {
 			cfg, _ := dir.Config() // without a configuration no node is this one

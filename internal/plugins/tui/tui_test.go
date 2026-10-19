@@ -584,7 +584,7 @@ func command(m *tui.Model, line string) tea.Cmd {
 // claims a command of the UI.
 func TestUIShowsWhatPluginsContribute(t *testing.T) {
 	greedy := plugin.New("greedy", func(ctx *plugin.Context, _ struct{}) error {
-		plugin.Add(ctx, plugin.Slash{Name: "stop", Help: "stats", Run: func(context.Context) (string, error) { return "", nil }})
+		plugin.Add(ctx, plugin.Slash{Name: "help", Help: "stats", Run: func(context.Context) (string, error) { return "", nil }})
 		return nil
 	})
 	s := clitest.Settings(t)
@@ -596,7 +596,7 @@ func TestUIShowsWhatPluginsContribute(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 		m.Update(key(' ')) // skips the splash
 		view := ansi.Strip(m.View().Content)
-		if want := `/stop is taken by the terminal UI: "stats" is left out`; !strings.Contains(view, want) {
+		if want := `/help is taken by the terminal UI: "stats" is left out`; !strings.Contains(view, want) {
 			t.Errorf("view lacks %q:\n%s", want, view)
 		}
 		load := command(m, "/greetings")

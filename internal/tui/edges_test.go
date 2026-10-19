@@ -63,11 +63,11 @@ func TestInitAndTicks(t *testing.T) {
 		t.Fatalf("got %T", msg)
 	}
 	b.status.Name = "renamed"
-	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1"}}}
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1"}}}
 	_, cmd := m.Update(msg)
 	settle(m, cmd)
-	if m.status.Name != "renamed" || len(m.requests.trust.Incoming) != 1 {
-		t.Fatalf("status %+v, requests %+v", m.status, m.requests.trust)
+	if m.status.Name != "renamed" || len(m.suggestionRequests.trust.Suggestions) != 1 {
+		t.Fatalf("status %+v, requests %+v", m.status, m.suggestionRequests.trust)
 	}
 }
 
@@ -102,10 +102,10 @@ func TestBackendErrors(t *testing.T) {
 
 	// A decision that fails for another reason than the contacts says why.
 	m, b := newModel(t)
-	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1"}}}
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1"}}}
 	b.acceptErr = boom
 	m.Update(m.loadContacts())
-	run(m, "/pending")
+	run(m, "/suggestions")
 	m.Update(press(m, "enter")())
 	notice(t, m, "boom")
 }
@@ -163,49 +163,6 @@ func TestChatKeys(t *testing.T) {
 	}
 	if press(m, "pgup", "pgdown", "esc") != nil || m.input.Value() != "   " {
 		t.Fatal("scrolling and esc run nothing")
-	}
-}
-
-func TestRequestsScreen(t *testing.T) {
-	m, b := newModel(t)
-	run(m, "/pending")
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "No pending requests.") {
-		t.Fatalf("view:\n%s", view)
-	}
-	if press(m, "down"); m.requests.sel != 0 || press(m, "enter") != nil || press(m, "right", "enter") != nil {
-		t.Fatal("without a request there is nothing to select or decide")
-	}
-
-	b.trust = Contacts{
-		Incoming: []plugin.Request{{PublicKey: "0123456789abcdef"}, {PublicKey: "pk-short", Name: "gamma"}},
-		Outgoing: []plugin.Request{{PublicKey: "pk-out", Name: "delta"}},
-	}
-	m.Update(m.loadContacts())
-	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"0123456789…", "gamma", "Waiting for the other side:", "delta (pk-out)"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("view lacks %q:\n%s", want, view)
-		}
-	}
-	for _, step := range []struct {
-		key  string
-		want int
-	}{{"down", 1}, {"j", 2}, {"up", 1}, {"k", 0}, {"j", 1}} {
-		if press(m, step.key); m.requests.sel != step.want {
-			t.Fatalf("after %s: selected %d, want %d", step.key, m.requests.sel, step.want)
-		}
-	}
-	for _, step := range []struct {
-		key  string
-		want int
-	}{{"right", reject}, {"l", reject}, {"left", accept}, {"h", accept}} {
-		if press(m, step.key); m.choice != step.want {
-			t.Fatalf("after %s: chose %d, want %d", step.key, m.choice, step.want)
-		}
-	}
-	press(m, "enter")()
-	if len(b.accepted) != 1 || b.accepted[0] != "pk-short" {
-		t.Fatalf("accepted %v", b.accepted)
 	}
 }
 

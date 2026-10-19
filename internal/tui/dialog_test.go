@@ -13,7 +13,7 @@ import (
 // /effort and /model open a dialog in the middle of the chat: the chat stays
 // behind it, faded, and the window keeps its size.
 func TestDialogLiesOverTheChat(t *testing.T) {
-	for _, open := range []string{"/effort", "/model"} {
+	for _, open := range []string{"/effort", "/model", "/suggestions"} {
 		m, b := newModel(t)
 		b.offers = []Models{local("gpt-4o", "gpt-4o-mini")}
 		answered(t, m, say(t, m, "ping"))

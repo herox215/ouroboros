@@ -28,21 +28,40 @@ func TestAnswerIsWrappedToTheHistory(t *testing.T) {
 	}
 }
 
-// Without requests of this node, none is said to wait. The choices go below
-// the proposal selected.
-func TestPendingScreenWithProposalsOnly(t *testing.T) {
+// Legacy contacts do not create a banner, header badge or approval list.
+func TestLegacyContactsDoNotCreatePendingUI(t *testing.T) {
 	m, b := newModel(t)
-	b.trust = Contacts{Proposals: []plugin.Proposal{
-		{ID: "p1", Field: "tools.a2a", Now: `[]`, Then: `["list_peers"]`, Reason: "peers"},
-		{ID: "p2", Field: "name", Now: `"alpha"`, Then: `"omega"`, Reason: "a better name"},
-	}}
+	before, height := view(m), m.history.Height()
+	b.trust = Contacts{
+		Incoming:  []plugin.Request{{PublicKey: "peer", Name: "legacy peer", Proposed: true}},
+		Outgoing:  []plugin.Request{{PublicKey: "out", Name: "legacy outgoing"}},
+		Proposals: []plugin.Proposal{{ID: "p1", Field: "legacy field"}},
+	}
 	m.Update(m.loadContacts())
-	run(m, "/pending")
-	press(m, "j")
+	if m.pendingRows() != 0 || m.suggestionRequests.unread != 0 || m.history.Height() != height || view(m) != before {
+		t.Fatalf("legacy contacts changed the chat UI:\n%s", view(m))
+	}
+	run(m, "/suggestions")
 	v := view(m)
-	if strings.Contains(v, "Waiting for the other side") || strings.Count(v, "[accept]") != 1 ||
-		strings.Index(v, "[accept]") < strings.Index(v, "a better name") {
-		t.Fatalf("the view:\n%s", v)
+	if !strings.Contains(v, "No suggestions.") || strings.Contains(v, "legacy") || strings.Contains(v, "[accept]") || press(m, "enter") != nil || press(m, "a") != nil {
+		t.Fatalf("legacy contacts entered suggestions:\n%s", v)
+	}
+}
+
+func TestPendingCommandIsAbsent(t *testing.T) {
+	m, _ := newModel(t)
+	for _, name := range []string{"pending", "approvals"} {
+		if len(m.matching("/"+name)) != 0 {
+			t.Fatalf("/%s is offered", name)
+		}
+		run(m, "/"+name)
+		if m.screen != screenChat || m.notice != "unknown command /"+name+": /help lists them" {
+			t.Fatalf("/%s is still bound: %q", name, m.notice)
+		}
+	}
+	run(m, "/help")
+	if v := view(m); strings.Contains(v, "/pending") || strings.Contains(v, "/approvals") || !strings.Contains(v, "/suggestions") {
+		t.Fatalf("obsolete help:\n%s", v)
 	}
 }
 
@@ -210,7 +229,7 @@ func TestThreadInSettlesLetterByLetter(t *testing.T) {
 // its text wrapped below it and what was measured, if anything was.
 func TestPendingScreenSuggestions(t *testing.T) {
 	m, b := newModel(t)
-	run(m, "/pending")
+	run(m, "/suggestions")
 	if v := view(m); strings.Contains(v, "Accept all") || strings.Contains(v, "Changes of ouro") {
 		t.Fatalf("nothing waits:\n%s", v)
 	}
@@ -221,7 +240,7 @@ func TestPendingScreenSuggestions(t *testing.T) {
 		Suggestions: []plugin.Suggestion{{ID: "s1", Text: long}, {ID: "s2", Text: "the second", Signals: []string{"42 seconds"}}},
 	}
 	m.Update(m.loadContacts())
-	press(m, "down", "down", "down")
+	press(m, "down")
 	v := view(m)
 	if strings.Count(v, "measured:") != 1 || !strings.Contains(v, "measured: 42 seconds") || !strings.Contains(v, "Changes of ouro the reviews of answers suggest") {
 		t.Fatalf("the suggestions:\n%s", v)

@@ -12,7 +12,7 @@ import (
 func TestRelativeProjectFromWorkspace(t *testing.T) {
 	s := New(&fakeAgent{})
 	defer s.Close()
-	s.Workspace = t.TempDir()
+	s.Workspace = canonicalTempDir(t)
 	project := filepath.Join(s.Workspace, "project")
 	if err := os.Mkdir(project, 0700); err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestRelativeProjectFromWorkspace(t *testing.T) {
 }
 
 func TestDirectorySaveFailureDoesNotChangeSession(t *testing.T) {
-	root, one, two := t.TempDir(), t.TempDir(), t.TempDir()
+	root, one, two := t.TempDir(), canonicalTempDir(t), canonicalTempDir(t)
 	s, _, _ := archived(t, &fakeAgent{}, root, time.Now())
 	defer s.Close()
 	ctx := context.Background()
@@ -83,7 +83,7 @@ func TestInitialDirectoryWithoutWorkingDirectory(t *testing.T) {
 // A session gets the initial directory also when the archive cannot keep
 // it, which is logged.
 func TestInitialDirectoryThatCannotBeKept(t *testing.T) {
-	initial := t.TempDir()
+	initial := canonicalTempDir(t)
 	broken := filepath.Join(t.TempDir(), "history")
 	if err := os.WriteFile(broken, nil, 0o600); err != nil {
 		t.Fatal(err)

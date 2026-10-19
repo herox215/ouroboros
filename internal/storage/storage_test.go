@@ -290,6 +290,9 @@ func TestOpenWithoutWorkingDirectory(t *testing.T) {
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Getwd(); err == nil {
+		t.Skip("the system still reports the removed working directory")
+	}
 	if db, err := Open("relative"); err == nil || db != nil || !strings.HasPrefix(err.Error(), "storage directory: ") {
 		t.Fatalf("Open(relative) = %v, %v", db, err)
 	}

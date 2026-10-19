@@ -9,7 +9,7 @@
 // keys and the messages on to that screen. Each screen is a type of its own
 // with its state, its keys and its view: modelScreen (/model),
 // settingsScreen (/settings), sessionsScreen (/session), contextScreen
-// (/context), requestsScreen (/pending), pluginScreen (what plugins added),
+// (/context), requestsScreen (/suggestions), pluginScreen (what plugins added),
 // splashScreen, and onboarding for the setup. A method of a screen takes the
 // Model for what it shares.
 package tui
@@ -17,7 +17,6 @@ package tui
 import (
 	"cmp"
 	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -31,7 +30,7 @@ import (
 	"ouroboros/plugin"
 )
 
-// refreshInterval is how often node status, connection requests and the
+// refreshInterval is how often node status, suggestions and the
 // screen of a plugin that is open are checked. Tests shorten it.
 var refreshInterval = 10 * time.Second
 
@@ -46,20 +45,17 @@ type Fallback = plugin.Fallback
 // lists them for the model screen (/model).
 type Models = plugin.AccessModels
 
-// Contacts is what waits for the owner of the local node: the connection
-// requests, and the changes of the configuration its agent proposed.
+// Contacts is the backend contacts snapshot. Legacy approval data is ignored
+// by the TUI; only Suggestions are displayed and decided here.
 type Contacts struct {
-	Incoming []plugin.Request
-	Outgoing []plugin.Request
-	// Proposals are listed after Incoming, and selected like them.
-	Proposals []plugin.Proposal
-	// Suggestions are the changes of ouro the reviews of answers suggested,
-	// listed after Proposals and selected like them.
+	Incoming    []plugin.Request
+	Outgoing    []plugin.Request
+	Proposals   []plugin.Proposal
 	Suggestions []plugin.Suggestion
 }
 
 // waiting is how many entries wait for a decision.
-func (c Contacts) waiting() int { return len(c.Incoming) + len(c.Proposals) + len(c.Suggestions) }
+func (c Contacts) waiting() int { return len(c.Suggestions) }
 
 // Backend is what the UI controls.
 type Backend interface {
@@ -115,15 +111,6 @@ type Backend interface {
 	// StopService stops the service id.
 	StopService(ctx context.Context, id string) error
 	Contacts() (Contacts, error)
-	// Accept and Reject decide on a connection request. They fail with
-	// plugin.ErrNotSaved if the decision could not be stored.
-	Accept(ctx context.Context, publicKey string) error
-	Reject(ctx context.Context, publicKey string) error
-	// AcceptProposal and RefuseProposal decide on a change of the
-	// configuration the agent proposed. Accepting fails with plugin.ErrStale
-	// if the configuration changed since it was proposed.
-	AcceptProposal(id string) error
-	RefuseProposal(id string) error
 	// TakeSuggestion and DropSuggestion decide on a change of ouro the
 	// review of an answer suggested: either drops it from those that wait,
 	// and TakeSuggestion returns it, for the agent to make.
@@ -213,13 +200,13 @@ type Event struct {
 	Routed bool
 }
 
-// screen is the top-level view: the chat, the connection requests, the list
+// screen is the top-level view: the chat, the suggestions dialog, the list
 // of the commands or a screen a plugin contributed.
 type screen int
 
 const (
 	screenChat screen = iota
-	screenRequests
+	screenSuggestions
 	screenHelp
 	screenPlugin // the one of Model.screens that is open
 	screenModel  // the models of the provider, for /model
@@ -343,20 +330,20 @@ type Model struct {
 	// being written: the pieces of it come per token and are drawn together.
 	streaming bool
 
-	requests requestsScreen // what waits for a decision, for /pending
-	screen   screen
-	commands []command    // of the UI, then of the plugins
-	suggest  int          // the command selected of those suggested while one is typed
-	entered  []string     // what the owner entered, the latest last, for up and down
-	recall   recall       // where up and down are in it
-	plugins  pluginScreen // the screens the plugins contributed, and the one that is open
-	choice   int          // the action selected: accept or reject, or one of a screen
+	suggestionRequests requestsScreen // reviews awaiting a decision
+	screen             screen
+	commands           []command    // of the UI, then of the plugins
+	suggest            int          // the command selected of those suggested while one is typed
+	entered            []string     // what the owner entered, the latest last, for up and down
+	recall             recall       // where up and down are in it
+	plugins            pluginScreen // the screens the plugins contributed, and the one that is open
+	choice             int          // the action selected: accept or reject, or one of a screen
 
 	picker modelScreen  // the models of the accesses, for /model
 	effort effortScreen // the slider of the effort, for /effort
 	jobs   jobsScreen   // the commands that run in the background, for /jobs
 	// thoughtsHidden is whether what the model thought is hidden in the
-	// chat, which ctrl+t turns off and on; by default it is shown.
+	// chat, which ctrl+r turns off and on; by default it is shown.
 	thoughtsHidden bool
 	// jobsShown is whether the jobs of the session shown are listed on the
 	// right of the chat, for ctrl+j, instead of in the line of the wait.
@@ -593,7 +580,7 @@ func (m *Model) loadContacts() tea.Msg {
 	return contactsMsg{trust, err}
 }
 
-// refresh reloads the node status, the connection requests, the sessions
+// refresh reloads the node status, the suggestions, the sessions
 // and the screen of a plugin that is open.
 func (m *Model) refresh() tea.Cmd {
 	if m.screen == screenPlugin {
@@ -659,7 +646,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.setNotice("contacts: "+msg.err.Error(), true)
 		} else {
-			m.requests.apply(m, msg.trust)
+			m.suggestionRequests.apply(m, Contacts{Suggestions: msg.trust.Suggestions})
 		}
 	case modelsMsg:
 		m.picker.loaded(m, msg)
@@ -822,8 +809,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.leave()
 	}
 	switch m.screen {
-	case screenRequests:
-		return m.requests.handleKey(m, msg)
+	case screenSuggestions:
+		return m.suggestionRequests.handleKey(m, msg)
 	case screenPlugin:
 		return m.plugins.handleKey(m, msg)
 	case screenModel:
@@ -854,6 +841,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	switch msg.String() {
+	case "ctrl+t":
+		return m.openThread()
 	case "ctrl+s":
 		return m.openSessions() // what is typed stays with the session shown
 	case "ctrl+k":
@@ -894,8 +883,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// requestsScreen is the state of the screen of what waits for a decision:
-// the connection requests and the proposals.
+// requestsScreen holds the suggestions awaiting a decision.
 type requestsScreen struct {
 	acceptingAll bool     // a bulk decision is on its way
 	trust        Contacts // what waits
@@ -904,7 +892,7 @@ type requestsScreen struct {
 	seen         int      // how much waited when it was last looked at
 }
 
-// handleRequestKey handles keys on the connection requests screen: up and
+// handleKey handles keys in the suggestions dialog: up and
 // down select an entry, left and right whether to accept or reject it, and
 // enter decides.
 func (r *requestsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
@@ -927,26 +915,23 @@ func (r *requestsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// The choices for an entry on the connection requests screen.
+// The choices for a suggestion.
 const (
 	accept = iota
 	reject
 )
 
-// leave quits the UI and stops what it still asks of the backend, such as a
-// decision on a connection request. The answers on their way are the
-// node's: they go on.
+// leave quits the UI and stops its backend calls. Answers on their way
+// belong to the node: they go on.
 func (m *Model) leave() tea.Cmd {
 	m.quit()
 	return tea.Quit
 }
 
-func (m *Model) openRequests() tea.Cmd {
-	m.screen = screenRequests
-	m.requests.sel, m.choice = 0, accept
-	m.requests.unread = 0
-	m.requests.seen = m.requests.trust.waiting()
-	// What came since the last refresh is shown now, not in a while.
+func (m *Model) openSuggestions() tea.Cmd {
+	m.screen = screenSuggestions
+	m.suggestionRequests.sel, m.choice = 0, accept
+	m.suggestionRequests.unread = 0
 	return m.loadContacts
 }
 
@@ -971,54 +956,7 @@ func (r *requestsScreen) decide(m *Model, accept bool) tea.Cmd {
 	if r.sel >= r.trust.waiting() {
 		return nil
 	}
-	if proposals := len(r.trust.Incoming) + len(r.trust.Proposals); r.sel >= proposals {
-		return r.decideSuggestion(m, r.trust.Suggestions[r.sel-proposals], accept)
-	}
-	if r.sel >= len(r.trust.Incoming) {
-		return r.decideProposal(m, r.trust.Proposals[r.sel-len(r.trust.Incoming)], accept)
-	}
-	pub := r.trust.Incoming[r.sel].PublicKey
-	verb, failed := "declined", "rejecting failed"
-	if accept {
-		verb, failed = "accepted", "accepting failed"
-		if r.trust.Incoming[r.sel].Proposed {
-			verb = "sent" // to the peer, where a human decides
-		}
-	}
-	return func() tea.Msg {
-		var err error
-		if accept {
-			err = m.backend.Accept(m.ctx, pub)
-		} else {
-			err = m.backend.Reject(m.ctx, pub)
-		}
-		if errors.Is(err, plugin.ErrNotSaved) {
-			// Nothing was decided. The request stays in the list, to be tried
-			// again; why it failed is in the log.
-			return actionMsg{err: errors.New(failed + " – the contact could not be saved")}
-		}
-		if err != nil {
-			return actionMsg{err: err}
-		}
-		return actionMsg{done: "request " + verb}
-	}
-}
-
-// decideProposal accepts or refuses a change of the configuration the agent
-// proposed.
-func (r *requestsScreen) decideProposal(m *Model, p plugin.Proposal, accept bool) tea.Cmd {
-	return func() tea.Msg {
-		if !accept {
-			if err := m.backend.RefuseProposal(p.ID); err != nil {
-				return actionMsg{err: err}
-			}
-			return actionMsg{done: "proposal refused, " + p.Field + " stays as it is"}
-		}
-		if err := m.backend.AcceptProposal(p.ID); err != nil {
-			return actionMsg{err: err}
-		}
-		return actionMsg{done: p.Field + " changed"}
-	}
+	return r.decideSuggestion(m, r.trust.Suggestions[r.sel], accept)
 }
 
 // decideSuggestion takes or drops a change of ouro a review suggested. One
@@ -1049,15 +987,19 @@ func (m *Model) taken(msg takenMsg) tea.Cmd {
 		m.setNotice(msg.err.Error(), true)
 		return m.refresh()
 	}
-	m.screen = screenChat
-	watch := m.newConversation()
-	m.input.SetValue(plugin.SuggestedTask(msg.suggestion))
-	send := m.send()
-	m.setNotice(m.agentName()+" makes the suggestion", false)
-	return tea.Batch(watch, send, m.refresh())
+	m.removeSuggestion(msg.suggestion.ID)
+	c := m.newChat()
+	c.pending, c.art = true, 1
+	text := plugin.SuggestedTask(msg.suggestion)
+	ask := func() tea.Msg {
+		return askedMsg{c.contextID, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), c.contextID, text)}
+	}
+	m.setNotice(m.agentName()+" makes the suggestion in the background", false)
+	return tea.Batch(m.watch(c), ask, m.refresh())
 }
 
 func (r *requestsScreen) apply(m *Model, trust Contacts) {
+	trust = Contacts{Suggestions: trust.Suggestions}
 	// A removed item must not turn an individual decision into Accept all.
 	all := r.trust.waiting() > 0 && r.sel == r.trust.waiting()
 	if all {
@@ -1069,7 +1011,7 @@ func (r *requestsScreen) apply(m *Model, trust Contacts) {
 	if trust.waiting() > r.seen {
 		r.unread += trust.waiting() - r.seen
 	}
-	if m.screen == screenRequests {
+	if m.screen == screenSuggestions {
 		r.unread = 0
 	}
 	r.seen = trust.waiting()

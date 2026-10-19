@@ -320,7 +320,12 @@ func TestRunCheckCancelEndsGroup(t *testing.T) {
 	if !<-done {
 		t.Fatal("a cancelled check passed")
 	}
-	runnerContains(t, report.String(), "FAILED: signal: killed")
+	// The shell may itself be killed, or reap its killed child and exit
+	// successfully before the signal reaches it. CommandContext reports the
+	// context error in the latter case; both outcomes are cancellation.
+	if !strings.Contains(report.String(), "FAILED: signal: killed\n") && !strings.Contains(report.String(), "FAILED: context canceled\n") {
+		t.Fatalf("unexpected cancellation report:\n%s", report.String())
+	}
 	// The background process is in the group and ends with it, long before
 	// its minute is up.
 	select {

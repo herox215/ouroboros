@@ -14,6 +14,17 @@ import (
 	"ouroboros/internal/workdir"
 )
 
+// canonicalTempDir matches the canonical paths returned by directory resolution,
+// including when the system temporary directory is reached through a symlink.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	path, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func directoryAt(t *testing.T, api API, id string) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -32,7 +43,7 @@ func directoryAt(t *testing.T, api API, id string) string {
 }
 
 func TestDirectoryIsolationAndValidation(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	sub := filepath.Join(root, "sub")
 	if err := os.Mkdir(sub, 0o700); err != nil {
 		t.Fatal(err)
@@ -119,6 +130,10 @@ func TestDirectoryAbsoluteFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cwd, err = filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := service(t, &fakeAgent{})
 	if err := s.SetDirectory(context.Background(), "s1", "."); err != nil {
 		t.Fatal(err)
@@ -129,7 +144,7 @@ func TestDirectoryAbsoluteFallback(t *testing.T) {
 }
 
 func TestDirectoryPersistence(t *testing.T) {
-	dir, project, initial := t.TempDir(), t.TempDir(), t.TempDir()
+	dir, project, initial := t.TempDir(), canonicalTempDir(t), canonicalTempDir(t)
 	ctx := context.Background()
 	s, arch, _ := archived(t, &fakeAgent{}, dir, time.Now())
 	for id, path := range map[string]string{"saved": project, "empty": "", "quiet": project} {
@@ -158,7 +173,7 @@ func TestDirectoryPersistence(t *testing.T) {
 }
 
 func TestDirectoryBusyAndTaskContext(t *testing.T) {
-	project := t.TempDir()
+	project := canonicalTempDir(t)
 	entered := make(chan string, 1)
 	gate := make(chan struct{})
 	taskDirectory := make(chan string, 1)
@@ -216,7 +231,7 @@ func (a directoryContentsAgent) ContentsContext(ctx context.Context, _ string) (
 func TestDirectoryContentsContext(t *testing.T) {
 	s := New(directoryContentsAgent{&fakeAgent{}})
 	t.Cleanup(s.Close)
-	project := t.TempDir()
+	project := canonicalTempDir(t)
 	ctx := context.Background()
 	if err := s.SetDirectory(ctx, "s1", project); err != nil {
 		t.Fatal(err)
@@ -231,7 +246,7 @@ func TestClientDirectory(t *testing.T) {
 	s := service(t, &fakeAgent{})
 	c := NewClient(serve(t, Handler(s)).dir)
 	ctx := context.Background()
-	project := t.TempDir()
+	project := canonicalTempDir(t)
 	_, live, err := c.Watch(ctx, "s1")
 	if err != nil {
 		t.Fatal(err)

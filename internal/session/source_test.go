@@ -137,6 +137,12 @@ func TestSourceReplayRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(a.resumed["s1"], &resumed); err != nil {
 		t.Fatal(err)
 	}
+	for i := range resumed { // as the archive keeps when its answer ended
+		if resumed[i].At.IsZero() {
+			t.Fatalf("resumed without a time: %+v", resumed[i])
+		}
+		resumed[i].At = time.Time{}
+	}
 	if !reflect.DeepEqual(resumed, messages) {
 		t.Fatalf("resumed memory: %+v, want %+v", resumed, messages)
 	}

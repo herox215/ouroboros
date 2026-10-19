@@ -35,7 +35,7 @@ func TestDownloadImage(t *testing.T) {
 			content := &event.MessageEventContent{MsgType: event.MsgImage, URL: "mxc://test/image"}
 			if mode == "encrypted" || mode == "tampered" || mode == "bad metadata" {
 				file := attachment.NewEncryptedFile()
-				payload = file.Encrypt(payload)
+				file.EncryptInPlace(payload)
 				raw, _ := json.Marshal(file)
 				file = &attachment.EncryptedFile{}
 				if err := json.Unmarshal(raw, file); err != nil {
@@ -86,7 +86,8 @@ func TestDownloadImage(t *testing.T) {
 func TestRunDeliversImageAfterAuthorization(t *testing.T) {
 	plain := imageFixture(t)
 	file := attachment.NewEncryptedFile()
-	encrypted := file.Encrypt(plain)
+	encrypted := bytes.Clone(plain)
+	file.EncryptInPlace(encrypted)
 	raw, _ := json.Marshal(file)
 	file = &attachment.EncryptedFile{}
 	if err := json.Unmarshal(raw, file); err != nil {

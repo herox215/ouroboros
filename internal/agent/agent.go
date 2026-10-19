@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -634,6 +635,7 @@ func (m *Memory) note(contextID string, msg openai.Message) {
 		m.conversations[contextID] = c
 	}
 	c.lastUsed = m.clock
+	msg.At = cmp.Or(msg.At, time.Now())
 	c.notes = append(c.notes, msg)
 	c.notes = c.notes[max(0, len(c.notes)-maxNotes):]
 	if len(m.conversations) > maxContexts {
@@ -917,7 +919,11 @@ func (m *Memory) remember(contextID string, msgs []openai.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clock++
-	msgs = trim(msgs)
+	msgs = slices.Clone(trim(msgs))
+	now := time.Now() // the end of the answer of the messages that have no time yet
+	for i := range msgs {
+		msgs[i].At = cmp.Or(msgs[i].At, now)
+	}
 	c := m.conversations[contextID]
 	if c == nil {
 		c = &conversation{}

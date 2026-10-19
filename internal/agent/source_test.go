@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/openai"
 )
@@ -75,6 +76,10 @@ func TestInputAndSteeringMessageSourcesPersist(t *testing.T) {
 	users = nil
 	for _, m := range memory.Conversation("id") {
 		if m.Role == "user" {
+			if m.At.IsZero() {
+				t.Fatalf("remembered without a time: %+v", m)
+			}
+			m.At = time.Time{}
 			users = append(users, m)
 		}
 	}

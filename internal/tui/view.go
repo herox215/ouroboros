@@ -74,7 +74,7 @@ func (m *Model) bodyHeight() int { return max(0, m.height-2-m.pendingRows()) }
 // pendingRows is how many rows the line below the footer takes: one while
 // something waits for a decision, except on the screen that lists it.
 func (m *Model) pendingRows() int {
-	if m.requests.trust.waiting() == 0 || m.screen == screenRequests {
+	if m.suggestionRequests.trust.waiting() == 0 || m.screen == screenSuggestions {
 		return 0
 	}
 	return 1
@@ -84,29 +84,14 @@ func (m *Model) pendingRows() int {
 // where to decide, and what it is. The command comes before what waits, so
 // that a narrow window cuts off the latter.
 func (r *requestsScreen) pendingView(m *Model) string {
-	var what []string
-	for _, r := range r.trust.Incoming {
-		name := r.Name
-		if name == "" {
-			name = shortKey(r.PublicKey)
-		}
-		if r.Proposed {
-			what = append(what, "your agent wants to connect to "+name)
-		} else {
-			what = append(what, name+" wants to chat")
-		}
+	n := len(r.trust.Suggestions)
+	what := "a review suggests a change of ouro"
+	if n > 1 {
+		what = fmt.Sprintf("reviews suggest %d changes of ouro", n)
 	}
-	for _, p := range r.trust.Proposals {
-		what = append(what, "your agent proposes to change "+p.Field)
-	}
-	if n := len(r.trust.Suggestions); n == 1 {
-		what = append(what, "a review suggests a change of ouro")
-	} else if n > 1 {
-		what = append(what, fmt.Sprintf("reviews suggest %d changes of ouro", n))
-	}
-	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d pending", r.trust.waiting())) +
-		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/pending") +
-		mutedStyle.Render(" to decide · "+strings.Join(what, ", "))
+	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d suggestions", n)) +
+		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/suggestions") +
+		mutedStyle.Render(" to decide · "+what)
 	return ansi.Truncate(" "+line, m.width, "…")
 }
 
@@ -205,10 +190,10 @@ func (m *Model) renderHistory(toBottom bool) {
 		}
 		// What the review of an answer proposes is a faint line below it:
 		// a thought of the agent, not part of the conversation, which waits
-		// in /pending to be taken or dropped.
+		// in /suggestions to be taken or dropped.
 		if e.suggestion {
 			lines := strings.Split(lipgloss.Wrap(e.text, max(20, width-4), ""), "\n")
-			return append(blocks, mutedStyle.Render("  ✦ "+strings.Join(lines, "\n    ")+" · /pending")), false
+			return append(blocks, mutedStyle.Render("  ✦ "+strings.Join(lines, "\n    ")+" · /suggestions")), false
 		}
 		if !m.thoughtsHidden && e.thought != "" {
 			blocks, words = append(blocks, wrap(thoughtBlock(e.thought, width))), false
@@ -368,7 +353,7 @@ func wideRune(r rune) bool {
 
 // thoughtKey is the key that shows what the model thought, and hides it
 // again.
-const thoughtKey = "ctrl+t"
+const thoughtKey = "ctrl+r"
 
 // maxThought is how many of its lines the chat shows of the thinking of a
 // round of the loop: the whole of it would push the words away, and the
@@ -477,8 +462,8 @@ func (m *Model) View() tea.View {
 	}
 	var body string
 	switch m.screen {
-	case screenRequests:
-		body = m.requests.view(m)
+	case screenSuggestions:
+		body = m.overlay(m.suggestionRequests.view(m))
 	case screenHelp:
 		body = m.overlay(m.helpView())
 	case screenKeys:
@@ -502,7 +487,7 @@ func (m *Model) View() tea.View {
 	}
 	parts := []string{m.headerView(), body, m.footerView()}
 	if m.pendingRows() > 0 {
-		parts = append(parts, m.requests.pendingView(m))
+		parts = append(parts, m.suggestionRequests.pendingView(m))
 	}
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	return v
@@ -520,12 +505,11 @@ func (m *Model) windowTitle() string {
 	return fmt.Sprintf("ouro · %d/%d", m.profileAt, m.profileOf)
 }
 
-// requestsView lists what is waiting for a decision: the connection requests,
-// the changes of the configuration the agent proposed, and the changes of
-// ouro the reviews of answers suggested.
+// view lists the changes of ouro the reviews of answers suggested.
 func (r *requestsScreen) view(m *Model) string {
-	w, h := m.width, m.bodyHeight()
-	lines := []string{boldStyle.Render("Connection requests"), ""}
+	w, h := m.dialogSize()
+	title, bulk := "Suggestions", "a: accept all · suggestions go into one new chat"
+	lines := []string{boldStyle.Render(title), ""}
 	if r.trust.waiting() > 0 {
 		marker := "  "
 		if r.sel == r.trust.waiting() {
@@ -536,11 +520,12 @@ func (r *requestsScreen) view(m *Model) string {
 			label = "Accepting all…"
 		}
 		lines = append(lines, marker+boldStyle.Render(label),
-			mutedStyle.Render("a: accept all · confirms connections and configuration; suggestions go into one new chat"), "")
+			mutedStyle.Render(bulk), "")
 	}
-	if len(r.trust.Incoming) == 0 {
-		lines = append(lines, mutedStyle.Render("No pending requests."))
+	if r.trust.waiting() == 0 {
+		lines = append(lines, mutedStyle.Render("No suggestions."))
 	}
+	selectedEnd := 2
 	selected := func(i int) string {
 		if i == r.sel {
 			return lipgloss.NewStyle().Foreground(accent).Render("› ")
@@ -552,55 +537,18 @@ func (r *requestsScreen) view(m *Model) string {
 		if i != r.sel {
 			return nil
 		}
+		selectedEnd = len(lines) + 1
 		return []string{"    " + choices([]string{"accept", "reject"}, m.choice)}
-	}
-	for i, r := range r.trust.Incoming {
-		name := r.Name
-		if name == "" {
-			name = shortKey(r.PublicKey)
-		}
-		marker := selected(i)
-		what := "wants to chat"
-		if r.Proposed {
-			// Nobody asked yet: accepting sends the request, with this key.
-			what = "· your agent wants to connect (" + shortKey(r.PublicKey) + ")"
-		}
-		lines = append(lines,
-			marker+boldStyle.Render(name)+"  "+mutedStyle.Render(what),
-			"    "+mutedStyle.Render(r.Addr+" · "+r.At.Format("15:04")))
-		lines = append(lines, decide(i)...)
-	}
-	if len(r.trust.Outgoing) > 0 {
-		lines = append(lines, "", mutedStyle.Render("Waiting for the other side:"))
-		for _, r := range r.trust.Outgoing {
-			lines = append(lines, "  "+mutedStyle.Render(r.Name+" ("+shortKey(r.PublicKey)+")"))
-		}
-	}
-	if len(r.trust.Proposals) > 0 {
-		lines = append(lines, "", boldStyle.Render("Changes of the configuration your agent proposes"), "")
-	}
-	for i, p := range r.trust.Proposals {
-		// Now and then are what the node says. The reason is what the agent
-		// says, and it is shown as that.
-		lines = append(lines,
-			selected(len(r.trust.Incoming)+i)+boldStyle.Render(p.Field)+"  "+mutedStyle.Render("· "+p.At.Format("15:04")),
-			"    "+mutedStyle.Render("now:  ")+p.Now,
-			"    "+mutedStyle.Render("then: ")+p.Then,
-			"    "+mutedStyle.Render("your agent says: "+p.Reason))
-		if p.Stale {
-			lines = append(lines, "    "+errStyle.Render("the configuration was changed since: accepting drops this without applying it"))
-		}
-		lines = append(lines, decide(len(r.trust.Incoming)+i)...)
 	}
 	if len(r.trust.Suggestions) > 0 {
 		lines = append(lines, "", boldStyle.Render("Changes of ouro the reviews of answers suggest"),
 			mutedStyle.Render("accept: your agent makes it in a new conversation · reject: it is dropped"), "")
 	}
 	for i, s := range r.trust.Suggestions {
-		at := len(r.trust.Incoming) + len(r.trust.Proposals) + i
+		at := i
 		// The text is what an LLM says; what was measured is what the node says.
 		lines = append(lines, selected(at)+boldStyle.Render("suggestion")+"  "+mutedStyle.Render("· "+s.At.Format("15:04")))
-		for _, l := range strings.Split(lipgloss.Wrap(s.Text, max(20, w-8), ""), "\n") {
+		for _, l := range strings.Split(lipgloss.Wrap(s.Text, max(1, w-8), ""), "\n") {
 			lines = append(lines, "    "+l)
 		}
 		if len(s.Signals) > 0 {
@@ -608,7 +556,13 @@ func (r *requestsScreen) view(m *Model) string {
 		}
 		lines = append(lines, decide(at)...)
 	}
-	return box(true, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
+	// Keep the selected decision in view, also with many or long suggestions.
+	rows := max(1, h-4)
+	if selectedEnd > rows+2 {
+		top := max(2, selectedEnd-rows)
+		lines = append([]string{boldStyle.Render(title), ""}, lines[top:]...)
+	}
+	return m.dialog(lines)
 }
 
 // shortKey abbreviates a base64 public key for display.
@@ -698,11 +652,11 @@ func (m *Model) headerView() string {
 	default:
 		state = mutedStyle.Render(id + "type /start")
 	}
-	if m.requests.unread > 0 {
-		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✉ %d", m.requests.unread))
+	if m.suggestionRequests.unread > 0 {
+		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✦ %d suggestions", m.suggestionRequests.unread))
 	}
 	if m.chat.contextID == plugin.ThreadID {
-		title += mutedStyle.Render(" · thread")
+		title += mutedStyle.Render(" ·") + boldStyle.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7")).Render(" thread ")
 	}
 	if m.chat.directory != "" {
 		title += mutedStyle.Render(" · " + m.chat.directory)
@@ -935,7 +889,7 @@ func (m *Model) footerHint() string {
 		help = "type to write"
 	}
 	switch m.screen {
-	case screenRequests:
+	case screenSuggestions:
 		help = "↑↓ select · ←→ accept or reject · enter decide · esc back"
 	case screenHelp, screenKeys:
 		help = "esc back"

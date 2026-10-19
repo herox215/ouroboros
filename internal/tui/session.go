@@ -249,8 +249,10 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
 	case plugin.SessionWorking:
-		// While anything works for the thread, it is thinking.
-		c.pending, c.running = e.N > 0, e.N > 0
+		// Background topics do not occupy the conversation input.
+		if e.N == 0 {
+			c.pending, c.running = false, false
+		}
 	case plugin.SessionTasks:
 		c.tasks = nil
 		if e.Text != "" {

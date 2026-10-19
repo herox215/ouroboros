@@ -6,12 +6,14 @@ package proposal
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -108,12 +110,9 @@ func (s *Store) List() ([]Proposal, error) {
 	return list, err
 }
 
-// Add records that path is proposed to become value, for reason, on the
-// configuration cfg: the value is set on a copy of it, so one the field does
-// not take is an error and no proposal. What is the value already is none
-// either. The same change is not recorded twice; with Max proposals waiting
-// a new one fails with ErrFull.
-func (s *Store) Add(cfg config.Config, path string, value json.RawMessage, reason string) (Proposal, error) {
+// Prepare validates and normalizes a change without recording it. An unchanged
+// value is an error. The result can be shown to the owner for authorization.
+func Prepare(cfg config.Config, path string, value json.RawMessage, reason string) (Proposal, error) {
 	before, err := cfg.Field(path)
 	if err != nil {
 		return Proposal{}, err
@@ -128,9 +127,17 @@ func (s *Store) Add(cfg config.Config, path string, value json.RawMessage, reaso
 	if len(reason) > MaxReason {
 		reason = reason[:MaxReason]
 	}
-	p := Proposal{ID: newID(), Path: path, Value: after, Before: before, Reason: reason, At: time.Now()}
+	return Proposal{ID: newID(), Path: path, Value: after, Before: before, Reason: reason, At: time.Now()}, nil
+}
+
+// Add records a validated proposal for a later decision by the owner.
+func (s *Store) Add(cfg config.Config, path string, value json.RawMessage, reason string) (Proposal, error) {
+	p, err := Prepare(cfg, path, value, reason)
+	if err != nil {
+		return Proposal{}, err
+	}
 	err = s.update(func(list *[]Proposal) error {
-		same := func(q Proposal) bool { return q.Path == path && bytes.Equal(q.Value, after) }
+		same := func(q Proposal) bool { return q.Path == path && bytes.Equal(q.Value, p.Value) }
 		if i := slices.IndexFunc(*list, same); i >= 0 {
 			p = (*list)[i]
 			return errUnchanged
@@ -145,6 +152,32 @@ func (s *Store) Add(cfg config.Config, path string, value json.RawMessage, reaso
 		return Proposal{}, err
 	}
 	return p, nil
+}
+
+// Apply commits an already authorized, unrecorded proposal. The store must be
+// beside the node configuration. The field is compared and the whole resulting
+// configuration checked under the configuration lock; unrelated edits survive.
+// Callers must obtain the owner's affirmative answer before calling Apply.
+func (s *Store) Apply(ctx context.Context, p Proposal, check func(config.Config) error) error {
+	return config.Update(filepath.Dir(s.path), func(c *config.Config) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		now, err := c.Field(p.Path)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(now, p.Before) {
+			return ErrStale
+		}
+		if err := c.SetField(p.Path, p.Value); err != nil {
+			return err
+		}
+		if err := check(*c); err != nil {
+			return err
+		}
+		return ctx.Err()
+	})
 }
 
 // Accept applies the proposal id to the configuration in dir and drops it.

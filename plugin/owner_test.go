@@ -344,22 +344,22 @@ func TestOwnerDecisionThatIsNotSaved(t *testing.T) {
 	}
 }
 
-// propose makes the agent of the owner of s propose a change, and returns
-// what the chat printed.
-func propose(t *testing.T, s cli.Settings, path string, value any, reason string) string {
+// seedProposal records a legacy pending proposal, as persisted by older builds.
+// New propose_config calls ask directly and no longer populate this store.
+func seedProposal(t *testing.T, s cli.Settings, path string, value any, reason string) {
 	t.Helper()
-	args, _ := json.Marshal(map[string]any{"path": path, "value": value, "reason": reason})
-	out, err := clitest.Run(t, s, "", "chat", "!propose_config "+string(args))
+	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return out
+	if _, err := home.Dir(s.Home).Proposals().Add(clitest.MustLoad(t, s), path, raw, reason); err != nil {
+		t.Fatal(err)
+	}
 }
 
-// What the agent proposes for the configuration changes nothing until the
-// owner accepts it, and holds at once then: the node that runs answers peers
-// with the new configuration, without a restart.
-func TestOwnerDecidesOnProposals(t *testing.T) {
+// Legacy pending proposals still require an explicit owner decision. Accepting
+// one updates the running node without a restart.
+func TestOwnerDecidesOnLegacyProposals(t *testing.T) {
 	userHome, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -390,10 +390,7 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 	if list, err := o.Proposals(); err != nil || len(list) != 0 {
 		t.Fatalf("nothing proposed: %+v, %v", list, err)
 	}
-	out := propose(t, alpha, "tools.a2a", []any{map[string]any{"tool": "read", "allow": []string{"~/share"}}}, "beta wants to read the share")
-	if !strings.Contains(out, "last=Proposed, and nothing is changed yet: tools.a2a is to become") || !strings.Contains(out, "/pending") {
-		t.Fatalf("the agent was told: %q", out)
-	}
+	seedProposal(t, alpha, "tools.a2a", []any{map[string]any{"tool": "read", "allow": []string{"~/share"}}}, "beta wants to read the share")
 	list, err := o.Proposals()
 	if err != nil || len(list) != 1 || list[0].Field != "tools.a2a" || list[0].Now != `[]` || list[0].Then != `[{"allow":["~/share"],"tool":"read"}]` ||
 		list[0].Reason != "beta wants to read the share" || list[0].Stale || list[0].ID == "" || list[0].At.IsZero() {
@@ -428,7 +425,7 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 	}
 
 	// A new name holds at once as well: beta finds the node under it.
-	propose(t, alpha, "name", "omega", "a better name")
+	seedProposal(t, alpha, "name", "omega", "a better name")
 	list, _ = o.Proposals()
 	if len(list) != 1 || list[0].Now != `"alpha"` || list[0].Then != `"omega"` {
 		t.Fatalf("waiting: %+v", list)
@@ -443,14 +440,14 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 	if _, err := home.Dir(alpha.Home).AddProfile("zweite"); err != nil {
 		t.Fatal(err)
 	}
-	propose(t, alpha, "name", "ZWEITE", "another name")
+	seedProposal(t, alpha, "name", "ZWEITE", "another name")
 	list, _ = o.Proposals()
 	if err := o.AcceptProposal(list[0].ID); err == nil || err.Error() != `there is a profile called "ZWEITE" already` {
 		t.Fatalf("the name of another profile: %v", err)
 	}
 	// Only the name of the proposal that is accepted is checked: another one
 	// is accepted while that name waits.
-	propose(t, alpha, "description", "knows the way", "say what it does")
+	seedProposal(t, alpha, "description", "knows the way", "say what it does")
 	list, _ = o.Proposals()
 	if len(list) != 2 || list[1].Field != "description" {
 		t.Fatalf("waiting: %+v", list)
@@ -465,7 +462,7 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 	os.Remove(filepath.Join(alpha.Home, "proposals.json"))
 
 	// A refused proposal is gone and changed nothing.
-	propose(t, alpha, "tools.a2a", []string{"*"}, "everything for everybody")
+	seedProposal(t, alpha, "tools.a2a", []string{"*"}, "everything for everybody")
 	list, _ = o.Proposals()
 	if err := o.RefuseProposal(list[0].ID); err != nil {
 		t.Fatal(err)
@@ -479,7 +476,7 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 
 	// The configuration changed since: the owner sees that, and accepting
 	// applies nothing.
-	propose(t, alpha, "model", "gpt-4o-mini", "cheaper")
+	seedProposal(t, alpha, "model", "gpt-4o-mini", "cheaper")
 	if err := config.Update(alpha.Home, func(c *config.Config) error {
 		c.Model = "o3-mini"
 		return nil
@@ -501,7 +498,7 @@ func TestOwnerDecidesOnProposals(t *testing.T) {
 	}
 
 	// What cannot be read is an error, not an empty list.
-	propose(t, alpha, "model", "gpt-4o-mini", "cheaper")
+	seedProposal(t, alpha, "model", "gpt-4o-mini", "cheaper")
 	saved, _ := os.ReadFile(filepath.Join(alpha.Home, "config.json"))
 	os.WriteFile(filepath.Join(alpha.Home, "config.json"), []byte("{"), 0o600)
 	if list, err := o.Proposals(); err == nil || list != nil {

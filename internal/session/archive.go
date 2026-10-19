@@ -176,7 +176,10 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 		case history.Restarted:
 			events = append(events, Event{Kind: Restarted, PresentationID: id, At: at, Text: r.Content, Context: size, Cache: cache})
 		case "user":
-			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source})
+			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source, At: r.Time})
+			if strings.HasPrefix(unnoted(r.Content), backgroundHead) {
+				continue // internal background result, not a message of the owner
+			}
 			if ended, ok := assistant.AsTaskReport(unnoted(r.Content)); ok {
 				events = append(events, Event{Kind: Task, At: at, N: ended.N, Remark: ended.Title, Text: ended.Answer, Err: ended.Err})
 				continue
@@ -194,7 +197,7 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			}
 			events = append(events, Event{Kind: Message, At: at, Text: unnoted(r.Content), Source: r.Source.Normalized()})
 		case "assistant":
-			m := openai.Message{Role: "assistant", Content: r.Content}
+			m := openai.Message{Role: "assistant", Content: r.Content, At: r.Time}
 			if len(r.ToolCalls) == 0 {
 				msgs = append(msgs, m)
 				events = append(events, Event{Kind: Answer, PresentationID: id, At: at, Text: r.Content})
@@ -209,7 +212,7 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			}
 			msgs = append(msgs, m)
 		case "tool":
-			msgs = append(msgs, openai.Message{Role: "tool", ToolCallID: r.ToolCallID, Content: r.Content})
+			msgs = append(msgs, openai.Message{Role: "tool", ToolCallID: r.ToolCallID, Content: r.Content, At: r.Time})
 			if step, ok := steps[r.ToolCallID]; ok {
 				step.At, step.Done = at, true
 				if failed, ok := strings.CutPrefix(r.Content, "error: "); ok {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -94,7 +93,6 @@ type fakeBackend struct {
 	rejected  []string
 	acceptErr error
 	rejectErr error
-	decided   context.Context // what a decision on a request ran with
 
 	// offers are what the accesses answer with, for /model; modelsErr is
 	// why not. set are the models the owner saved, each as "access model",
@@ -142,10 +140,16 @@ func (f *fakeBackend) ChangeSetting(s Setting) (string, error) {
 	return f.done, f.fail["change"]
 }
 
-func (f *fakeBackend) Status() (Status, error)     { return f.status, f.fail["status"] }
-func (f *fakeBackend) Start() error                { f.started++; return f.fail["start"] }
-func (f *fakeBackend) Stop() error                 { f.stopped++; return f.fail["stop"] }
-func (f *fakeBackend) Contacts() (Contacts, error) { return f.trust, f.fail["contacts"] }
+func (f *fakeBackend) Status() (Status, error) { return f.status, f.fail["status"] }
+func (f *fakeBackend) Start() error            { f.started++; return f.fail["start"] }
+func (f *fakeBackend) Stop() error             { f.stopped++; return f.fail["stop"] }
+func (f *fakeBackend) Contacts() (Contacts, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	trust := f.trust
+	trust.Suggestions = slices.Clone(trust.Suggestions)
+	return trust, f.fail["contacts"]
+}
 func (f *fakeBackend) Setup() (Setup, error) {
 	f.setups++
 	if err := f.fail["setup"]; err != nil {
@@ -299,28 +303,15 @@ func (f *fakeBackend) Read(ctx context.Context, id string) ([]Event, error) {
 func (f *fakeBackend) Contents(context.Context, string) ([]Message, error) {
 	return f.contents, f.fail["contents"]
 }
-func (f *fakeBackend) Accept(ctx context.Context, publicKey string) error {
-	f.decided = ctx
-	f.accepted = append(f.accepted, publicKey)
-	return f.acceptErr
-}
-func (f *fakeBackend) Reject(ctx context.Context, publicKey string) error {
-	f.decided = ctx
-	f.rejected = append(f.rejected, publicKey)
-	return f.rejectErr
-}
-func (f *fakeBackend) AcceptProposal(id string) error {
-	f.accepted = append(f.accepted, "proposal "+id)
-	return f.acceptErr
-}
-func (f *fakeBackend) RefuseProposal(id string) error {
-	f.rejected = append(f.rejected, "proposal "+id)
-	return f.rejectErr
-}
 func (f *fakeBackend) TakeSuggestion(id string) (plugin.Suggestion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.accepted = append(f.accepted, "suggestion "+id)
-	for _, s := range f.trust.Suggestions {
+	for i, s := range f.trust.Suggestions {
 		if s.ID == id {
+			if f.acceptErr == nil {
+				f.trust.Suggestions = slices.Delete(slices.Clone(f.trust.Suggestions), i, i+1)
+			}
 			return s, f.acceptErr
 		}
 	}
@@ -752,60 +743,6 @@ func TestSendError(t *testing.T) {
 	}
 }
 
-func TestConnectionRequests(t *testing.T) {
-	m, b := newModel(t)
-	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma", Addr: "1.2.3.4:9"}}}
-	m.Update(m.loadContacts())
-	if view := m.View().Content; !strings.Contains(view, "✉ 1") {
-		t.Fatalf("header should show the pending count:\n%s", view)
-	}
-
-	run(m, "/pending")
-	if m.screen != screenRequests || m.input.Value() != "" {
-		t.Fatal("/pending should open the requests screen")
-	}
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "gamma") || !strings.Contains(view, "wants to chat") || !strings.Contains(view, "[accept]  reject") {
-		t.Fatalf("requests view:\n%s", view)
-	}
-
-	cmd := press(m, "enter")
-	if cmd == nil {
-		t.Fatal("accept should return a command")
-	}
-	m.Update(cmd())
-	if len(b.accepted) != 1 || b.accepted[0] != "pk1" {
-		t.Fatalf("accepted %v", b.accepted)
-	}
-
-	press(m, "esc")
-	if m.screen != screenChat {
-		t.Fatal("esc should go back to the chat")
-	}
-}
-
-func TestRejectRequest(t *testing.T) {
-	m, b := newModel(t)
-	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
-	m.Update(m.loadContacts())
-	run(m, "/pending")
-	press(m, "right")
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, " accept  [reject]") {
-		t.Fatalf("reject should be selected:\n%s", view)
-	}
-	cmd := press(m, "enter")
-	if cmd == nil {
-		t.Fatal("reject should return a command")
-	}
-	m.Update(cmd())
-	if len(b.rejected) != 1 || b.rejected[0] != "pk1" {
-		t.Fatalf("rejected %v", b.rejected)
-	}
-}
-
-// Every round of the loop has its entry, a round the agent said nothing of
-// too, and every call of a round its line, which says once the call ended
-// what became of it. Overlapping calls can finish out of order.
-// Another UI that shows the session sees the same.
 func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	m, b := newModel(t)
 	written, read := make(chan struct{}), make(chan struct{})
@@ -1031,11 +968,11 @@ func TestCancelStopsTheAnswer(t *testing.T) {
 func TestQuitLeavesTheAnswerGoingOn(t *testing.T) {
 	ctrlC := tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl})
 	for name, quit := range map[string]func(*Model) tea.Cmd{
-		"/quit":                func(m *Model) tea.Cmd { return run(m, "/quit") },
-		"ctrl+c":               func(m *Model) tea.Cmd { _, cmd := m.Update(ctrlC); return cmd },
-		"ctrl+c on requests":   func(m *Model) tea.Cmd { run(m, "/pending"); _, cmd := m.Update(ctrlC); return cmd },
-		"ctrl+c on the help":   func(m *Model) tea.Cmd { run(m, "/help"); _, cmd := m.Update(ctrlC); return cmd },
-		"ctrl+c on the splash": func(m *Model) tea.Cmd { m.splash.show = true; _, cmd := m.Update(ctrlC); return cmd },
+		"/quit":                 func(m *Model) tea.Cmd { return run(m, "/quit") },
+		"ctrl+c":                func(m *Model) tea.Cmd { _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on suggestions": func(m *Model) tea.Cmd { run(m, "/suggestions"); _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on the help":    func(m *Model) tea.Cmd { run(m, "/help"); _, cmd := m.Update(ctrlC); return cmd },
+		"ctrl+c on the splash":  func(m *Model) tea.Cmd { m.splash.show = true; _, cmd := m.Update(ctrlC); return cmd },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, b := newModel(t)
@@ -1066,43 +1003,18 @@ func TestQuitLeavesTheAnswerGoingOn(t *testing.T) {
 	}
 }
 
-func TestQuitCancelsRequestDecisions(t *testing.T) {
-	for _, key := range []string{"left", "right"} {
-		m, b := newModel(t)
-		b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
-		m.Update(m.loadContacts())
-		run(m, "/pending")
-		press(m, key, "enter")()
-		if b.decided == nil || b.decided.Err() != nil {
-			t.Fatalf("%s: a decision should run with a live context", key)
-		}
-		m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
-		if b.decided.Err() == nil {
-			t.Fatalf("%s: quitting should cancel a running decision", key)
-		}
-	}
-}
-
-func TestStartAndStop(t *testing.T) {
+func TestNodeLifecycleCommandsAreCLIOnly(t *testing.T) {
 	m, b := newModel(t)
-	if run(m, "/start"); b.started != 0 || m.notice != "the node is running" {
-		t.Fatalf("a running node is not started again: %q", m.notice)
+	for _, name := range []string{"start", "stop"} {
+		if cmd := run(m, "/"+name); cmd != nil || m.notice != "unknown command /"+name+": /help lists them" {
+			t.Fatalf("/%s should not be a UI command: %q", name, m.notice)
+		}
+		if len(m.matching("/"+name)) != 0 || strings.Contains(m.helpView(), "/"+name) {
+			t.Fatalf("/%s should not be suggested or listed in help", name)
+		}
 	}
-	m.Update(run(m, "/stop")())
-	if b.stopped != 1 || m.notice != "node stopped" {
-		t.Fatal("/stop should stop a running node")
-	}
-	m.status.Running = false
-	if run(m, "/stop"); b.stopped != 1 || m.notice != "the node is not running" {
-		t.Fatalf("a stopped node is not stopped again: %q", m.notice)
-	}
-	m.Update(run(m, "/start")())
-	if b.started != 1 || m.notice != "node started" {
-		t.Fatal("/start should start a stopped node")
-	}
-	m.status.Configured = false
-	if run(m, "/start"); b.setups != 1 || m.onboard == nil || !m.onboard.first {
-		t.Fatal("/start should open the setup for an unconfigured node")
+	if b.started != 0 || b.stopped != 0 || b.setups != 0 {
+		t.Fatal("CLI-only commands should not change the node")
 	}
 }
 
@@ -1144,186 +1056,6 @@ func TestOpeningTheUIStartsTheNode(t *testing.T) {
 	}
 }
 
-// A decision that could not be stored is shown as failed, not as done, and
-// the request stays where it is, to be decided again.
-func TestDecisionThatIsNotSaved(t *testing.T) {
-	for key, want := range map[string]string{
-		"left":  "accepting failed – the contact could not be saved",
-		"right": "rejecting failed – the contact could not be saved",
-	} {
-		m, b := newModel(t)
-		b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}}}
-		b.acceptErr = fmt.Errorf("%w: open contacts.json.lock: permission denied", plugin.ErrNotSaved)
-		b.rejectErr = b.acceptErr
-		m.Update(m.loadContacts())
-		run(m, "/pending")
-
-		_, refresh := m.Update(press(m, key, "enter")())
-		if m.notice != want || !m.noticeErr {
-			t.Fatalf("%s: notice %q (error %v)", key, m.notice, m.noticeErr)
-		}
-		view := ansi.Strip(m.View().Content)
-		if !strings.Contains(view, want) || strings.Contains(view, "request accepted") || strings.Contains(view, "request declined") || strings.Contains(view, "permission denied") {
-			t.Fatalf("%s: view:\n%s", key, view)
-		}
-		// The list is read anew and still holds the request.
-		if refresh == nil {
-			t.Fatalf("%s: a failed decision should reload the requests", key)
-		}
-		m.Update(m.loadContacts())
-		if m.screen != screenRequests || len(m.requests.trust.Incoming) != 1 || !strings.Contains(ansi.Strip(m.View().Content), "gamma") {
-			t.Fatalf("%s: the request is gone:\n%s", key, ansi.Strip(m.View().Content))
-		}
-
-		// The second try goes through.
-		b.acceptErr, b.rejectErr = nil, nil
-		m.Update(press(m, "enter")())
-		if len(b.accepted)+len(b.rejected) != 2 || m.noticeErr || !strings.HasPrefix(m.notice, "request ") {
-			t.Fatalf("%s: retry: accepted %v, rejected %v, notice %q", key, b.accepted, b.rejected, m.notice)
-		}
-	}
-}
-
-// What the agent proposes is shown as that, with the key that would be
-// asked, and accepting it sends the request: it accepts nobody.
-func TestProposedConnection(t *testing.T) {
-	m, b := newModel(t)
-	b.trust = Contacts{Incoming: []plugin.Request{
-		{PublicKey: "0123456789abcdef", Name: "luna", Addr: "1.2.3.4:9", Proposed: true},
-		{PublicKey: "pk2", Name: "gamma"},
-	}}
-	m.Update(m.loadContacts())
-	run(m, "/pending")
-	view := m.View().Content
-	if !strings.Contains(view, "your agent wants to connect (0123456789…)") || strings.Count(view, "wants to chat") != 1 {
-		t.Fatalf("requests view:\n%s", view)
-	}
-	m.Update(press(m, "enter")())
-	if len(b.accepted) != 1 || b.accepted[0] != "0123456789abcdef" {
-		t.Fatalf("accepted %v", b.accepted)
-	}
-	if view := m.View().Content; !strings.Contains(view, "request sent") || strings.Contains(view, "request accepted") {
-		t.Fatalf("after agreeing to a proposal:\n%s", view)
-	}
-	// Declined, it is a request that was declined like any other.
-	m.Update(press(m, "right", "enter")())
-	if view := m.View().Content; !strings.Contains(view, "request declined") {
-		t.Fatalf("after declining a proposal:\n%s", view)
-	}
-	// The request of a peer is accepted, not sent.
-	press(m, "down")
-	if m.choice != accept {
-		t.Fatal("another entry is accepted unless reject is selected for it")
-	}
-	m.Update(press(m, "enter")())
-	if view := m.View().Content; !strings.Contains(view, "request accepted") {
-		t.Fatalf("after accepting a request:\n%s", view)
-	}
-}
-
-// What the agent proposes for the configuration waits with the connection
-// requests, and is decided like them: the owner sees what the field is and
-// what it would be, as the node says, and what the agent says about it.
-func TestProposals(t *testing.T) {
-	m, b := newModel(t)
-	at := time.Date(2026, 10, 4, 15, 4, 0, 0, time.Local)
-	b.trust = Contacts{
-		Incoming: []plugin.Request{{PublicKey: "pk1", Name: "gamma"}},
-		Proposals: []plugin.Proposal{
-			{ID: "p1", Field: "tools.a2a", Now: `[]`, Then: `["list_peers"]`, Reason: "peers should see who is online", At: at},
-			{ID: "p2", Field: "name", Now: `"alpha"`, Then: `"omega"`, Reason: "a better name", At: at, Stale: true},
-		},
-	}
-	m.Update(m.loadContacts())
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✉ 3") {
-		t.Fatalf("the header should count requests and proposals:\n%s", view)
-	}
-	run(m, "/pending")
-	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{
-		"› gamma", "Changes of the configuration your agent proposes",
-		"  tools.a2a  · 15:04", "now:  []", `then: ["list_peers"]`, "your agent says: peers should see who is online",
-		`now:  "alpha"`, `then: "omega"`, "the configuration was changed since: accepting drops this without applying it",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("the view lacks %q:\n%s", want, view)
-		}
-	}
-	if strings.Contains(view, "✉") || strings.Count(view, "the configuration was changed since") != 1 || strings.Contains(view, "No pending requests") {
-		t.Fatalf("the view:\n%s", view)
-	}
-
-	// Down to the first proposal, and accept it.
-	press(m, "j")
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› tools.a2a") || strings.Contains(view, "› gamma") {
-		t.Fatalf("the first proposal should be selected:\n%s", view)
-	}
-	m.Update(press(m, "enter")())
-	if len(b.accepted) != 1 || b.accepted[0] != "proposal p1" || m.notice != "tools.a2a changed" || m.noticeErr {
-		t.Fatalf("accepted %v, notice %q", b.accepted, m.notice)
-	}
-	// Further down to the second proposal, and refuse it.
-	press(m, "j")
-	if m.requests.sel != 2 {
-		t.Fatalf("selected %d", m.requests.sel)
-	}
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "› name") || strings.Contains(view, "› tools.a2a") {
-		t.Fatalf("the second proposal should be selected:\n%s", view)
-	}
-	m.Update(press(m, "right", "enter")())
-	if len(b.rejected) != 1 || b.rejected[0] != "proposal p2" || m.notice != "proposal refused, name stays as it is" || m.noticeErr {
-		t.Fatalf("refused %v, notice %q", b.rejected, m.notice)
-	}
-	// The request above them is still a request.
-	press(m, "k", "k", "k")
-	m.Update(press(m, "enter")())
-	if len(b.accepted) != 2 || b.accepted[1] != "pk1" {
-		t.Fatalf("accepted %v", b.accepted)
-	}
-
-	// A decision that fails says why, and changes nothing here.
-	press(m, "j")
-	b.acceptErr = plugin.ErrStale
-	m.Update(press(m, "enter")())
-	if m.notice != plugin.ErrStale.Error() || !m.noticeErr {
-		t.Fatalf("a stale proposal: %q", m.notice)
-	}
-	b.rejectErr = errors.New("disk full")
-	m.Update(press(m, "right", "enter")())
-	if m.notice != "disk full" || !m.noticeErr {
-		t.Fatalf("a refusal that fails: %q", m.notice)
-	}
-
-	// Proposals alone: nothing but them to select, and a new one is counted.
-	b.trust = Contacts{Proposals: b.trust.Proposals[:1]}
-	m.Update(m.loadContacts())
-	if m.requests.sel != 0 {
-		t.Fatalf("selected %d of one entry", m.requests.sel)
-	}
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "No pending requests.") || !strings.Contains(view, "› tools.a2a") {
-		t.Fatalf("proposals alone:\n%s", view)
-	}
-	press(m, "esc")
-	b.trust = Contacts{Proposals: []plugin.Proposal{{ID: "p1"}, {ID: "p3"}, {ID: "p4"}}}
-	m.Update(m.loadContacts())
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "✉ 2") {
-		t.Fatalf("new proposals should be counted:\n%s", view)
-	}
-	// With nothing waiting there is nothing to decide.
-	b.trust = Contacts{}
-	m.Update(m.loadContacts())
-	run(m, "/pending")
-	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Changes of the configuration") || strings.Contains(view, "[accept]") {
-		t.Fatalf("nothing is proposed:\n%s", view)
-	}
-	if cmd := press(m, "enter"); cmd != nil {
-		t.Fatal("accepting nothing should do nothing")
-	}
-}
-
-// A tool that asked for ouro to start anew makes the UI quit once the answer
-// is in; the session it showed goes on in another UI, without the splash,
-// which does not quit for what happened before it.
 func TestRestartGoesOnInAnotherUI(t *testing.T) {
 	m, b := newModel(t)
 	answered(t, m, say(t, m, "ping"))
@@ -1355,66 +1087,7 @@ func TestRestartGoesOnInAnotherUI(t *testing.T) {
 	}
 }
 
-// What is pending is said in a line below the footer, with the command that
-// decides on it, until it is decided: on every screen but the one that lists
-// it, and within the height of the window.
-func TestPendingLine(t *testing.T) {
-	m, b := newModel(t)
-	last := func() string {
-		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-		if len(lines) != 30 {
-			t.Fatalf("%d lines in a window of 30", len(lines))
-		}
-		return strings.TrimRight(lines[len(lines)-1], " ")
-	}
-	if line := last(); strings.Contains(line, "pending") {
-		t.Fatalf("nothing is pending: %q", line)
-	}
-	height := m.history.Height()
-
-	// A peer that did not say its name is called by its key.
-	b.trust = Contacts{Incoming: []plugin.Request{{PublicKey: "0123456789abcdef"}}}
-	m.Update(m.loadContacts())
-	if line := last(); !strings.Contains(line, "0123456789… wants to chat") {
-		t.Fatalf("pending line %q", line)
-	}
-	b.trust = Contacts{
-		Incoming:  []plugin.Request{{PublicKey: "pk1", Name: "gamma"}, {PublicKey: "pk2", Name: "bob", Proposed: true}},
-		Proposals: []plugin.Proposal{{ID: "1", Field: "tools.a2a"}},
-	}
-	m.Update(m.loadContacts())
-	// The window is too narrow for all of it: the end is cut off, not the command.
-	want := " ● 3 pending · type /pending to decide · gamma wants to chat, your agent wants to connect to bob, "
-	if line := last(); !strings.HasPrefix(line, want) || !strings.HasSuffix(line, "…") {
-		t.Fatalf("pending line %q", line)
-	}
-	m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
-	if line := last(); line != want+"your agent proposes to change tools.a2a" {
-		t.Fatalf("pending line %q", line)
-	}
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if m.history.Height() != height-1 {
-		t.Fatalf("the history is %d high, was %d", m.history.Height(), height)
-	}
-
-	// Seen is not decided: the line is back after the screen.
-	run(m, "/pending")
-	if line := last(); strings.Contains(line, "pending") {
-		t.Fatalf("the screen lists what is pending itself: %q", line)
-	}
-	press(m, "esc")
-	if line := last(); !strings.Contains(line, "3 pending") {
-		t.Fatalf("pending line %q", line)
-	}
-
-	b.trust = Contacts{}
-	m.Update(m.loadContacts())
-	if line := last(); strings.Contains(line, "pending") || m.history.Height() != height {
-		t.Fatalf("nothing is pending: %q, history %d high", line, m.history.Height())
-	}
-}
-
-// The empty chat names the agent as the status of the node calls it now.
+// The empty chat follows the current node name.
 func TestEmptyChatFollowsTheName(t *testing.T) {
 	m, b := newModel(t)
 	b.status.Name = "beta"

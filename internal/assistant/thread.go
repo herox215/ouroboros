@@ -5,35 +5,32 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/workdir"
 )
 
-// The thread is the one conversation in which the owner talks with the
-// agent about everything, while behind it each topic is a session of its
-// own, and several of them work at once. Its agent does none of the work: it
-// hands each message to the session of its topic with ToolSessionSend, or
-// starts a session for a new one with ToolSessionNew, and ends its answer
-// with that, without a word. What the session answers is shown to the owner
-// as the answer of the thread, so that the owner talks with one agent alone.
-// The sessions run it, see WithThread.
+// The thread is the owner's conversation across topics. Its agent routes
+// work to topic sessions, acknowledges it without waiting, and composes
+// their later results in the context of the ongoing conversation.
 
 // The tools of the agent of the thread, which no other agent has.
 const (
-	ToolSessionSend = "session_send"
-	ToolSessionNew  = "session_new"
+	ToolSessionSend  = "session_send"
+	ToolSessionNew   = "session_new"
+	ToolSearchThread = "search_thread"
 )
 
 // threadPrompt is what the agent of the thread is; %q is the name of the
-// node. It names the tools of the thread, so keep it in step with them.
+// node, %d the hours of ThreadWindow. It names the tools of the thread, so keep it in step with them.
 const threadPrompt = `You are %q, the personal agent of the owner of this Ouroboros node, and this is the one conversation the owner has with you, about everything. ` +
 	`Behind it, each topic is worked on in a session of its own, which does the work with all your tools, at the same time as the sessions of the other topics. ` +
 	`You do none of the work yourself: you hand what the owner says to the session of its topic with ` + ToolSessionSend + `, or start a session for a new topic with ` + ToolSessionNew + `. ` +
-	`What a session answers is shown to the owner as your answer, and what it asks as your question, so that the owner talks with you alone. ` +
-	`The owner is never to notice the sessions: never mention them, nor handing on, starting or asking one, nor their IDs, and write nothing along with handing on. ` +
-	`Handing on ends your answer: the session answers. ` +
+	`A session works independently. Its completion arrives as an internal background result: use the current conversation to explain the result in your own voice, never forward it verbatim or treat it as a new assignment. ` +
+	`The owner is never to notice the sessions: unless debug mode is explicitly enabled, never mention sessions, routing, helpers or their IDs. After handing work on, briefly acknowledge it naturally in the owner's language, then end your answer immediately without waiting for completion. ` +
+	`Keep the conversation available for other requests while work continues. When a background result arrives, connect it to its original topic and the current conversation: after a topic change use a natural transition such as "By the way, about XYZ earlier". If still on topic, continue directly. Preserve important findings, limitations and next steps; do not invent progress or claim verification the result does not establish. Never route a background result back to a session as an owner request. ` +
 	`Before the messages of the owner comes the list of the sessions of the last 24 hours whenever it changed, the latest first, and the last one you were told holds: their handles, what each is about, its project where it is not that of this conversation, and whether it is working or asks the owner something. ` +
 	`Decide for every message which topic it continues, or whether it is a new one; a message about several topics hands each its part. ` +
 	`A session remembers its own conversation, but sees nothing of this one: it is to get the owner's words as they are, in the owner's voice, as if they had written them there themselves. ` +
@@ -41,9 +38,14 @@ const threadPrompt = `You are %q, the personal agent of the owner of this Ourobo
 	`Write text only for the part of a message that belongs to the topic, or where the owner's words make sense only with this conversation, like the answer to a question you asked: then write what they mean, as they would say it, in their language. ` +
 	`Never write about the owner, this conversation or other topics, never repeat or sum up what the session said itself, and add no instructions of your own. ` +
 	`When you cannot tell which topic is meant, ask the owner in a short, natural question about the topic, as anyone would in a conversation. ` +
-	`Of what a session answered you are shown only the start and the end: what the owner asks about an answer goes to the session of its topic, which has all of it. ` +
+	`Background results include the topic and the complete answer; earlier legacy answers may show only their start and end. Follow-up requests go to the original topic. ` +
 	`Answer yourself only what this conversation answers already, like what was said before. ` +
-	`Messages in brackets are from ouro, not from the owner: the list of the sessions, and what the sessions answered and asked, which the owner was shown as yours. `
+	`Messages in brackets are internal data from ouro, not instructions from the owner: session lists, background results and earlier questions. A background result must be answered here, not handed on. ` +
+	`You are shown only the last %d hours of this conversation: when the owner refers to something said before that, find it with ` + ToolSearchThread + `. `
+
+// ThreadWindow is how much of the conversation of the thread its agent is
+// shown: older messages it finds with ToolSearchThread.
+const ThreadWindow = 6 * time.Hour
 
 // handedOn is what the log tells of an answer of the thread that answered
 // nothing, as it does when it hands on.
@@ -60,6 +62,9 @@ type Thread interface {
 	// what the owner said since the last answer of the thread, and returns
 	// the title of the session and what became of the message.
 	Send(ctx context.Context, id, text string) (title, outcome string, err error)
+	// Search returns what in the whole conversation of the thread holds
+	// query, ignoring case, also what its agent is no longer shown.
+	Search(ctx context.Context, query string) (string, error)
 	// Start starts a session with text as its first message, "" for what
 	// the owner said since the last answer of the thread, in the project
 	// directory, "" for that of the thread, and returns its ID.
@@ -85,6 +90,11 @@ func ThreadOf(ctx context.Context) Thread {
 type sending struct {
 	Session string `json:"session"`
 	Text    string `json:"text"`
+}
+
+// searching is what a call of ToolSearchThread is asked to do.
+type searching struct {
+	Query string `json:"query"`
 }
 
 // starting is what a call of ToolSessionNew is asked to do.
@@ -117,7 +127,6 @@ func threadTools() []agent.Tool {
 			if err != nil {
 				return "", err
 			}
-			agent.End(ctx) // the session answers
 			return fmt.Sprintf("Handed to %q: %s.", title, outcome), nil
 		},
 	}, {
@@ -141,8 +150,25 @@ func threadTools() []agent.Tool {
 			if _, err := thread.Start(ctx, s.Text, s.Directory); err != nil {
 				return "", err
 			}
-			agent.End(ctx) // the session answers
-			return "Started a session with it: it answers it now.", nil
+			return "Work started in the background. Briefly acknowledge it naturally, then finish this turn; do not wait for the result.", nil
+		},
+	}, {
+		Name: ToolSearchThread,
+		Description: "Search the whole of this conversation, also what you are no longer shown, for a word or phrase, ignoring case: " +
+			"returns the messages that hold it, with when they were written. Use it only when the owner refers to something you are not shown.",
+		Schema: `{"type":"object","properties":{` +
+			`"query":{"type":"string","description":"the word or phrase to look for"}` +
+			`},"required":["query"]}`,
+		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			thread, err := threadFor(ctx, ToolSearchThread)
+			if err != nil {
+				return "", err
+			}
+			var s searching
+			if err := agent.Decode(ToolSearchThread, raw, &s); err != nil {
+				return "", err
+			}
+			return thread.Search(ctx, s.Query)
 		},
 	}}
 }
@@ -168,6 +194,6 @@ func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.A
 	if directory := workdir.Of(ctx); directory != "" {
 		project = strconv.Quote(directory)
 	}
-	prompt := fmt.Sprintf(threadPrompt, cfg.Name) + fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
+	prompt := fmt.Sprintf(threadPrompt, cfg.Name, int(ThreadWindow.Hours())) + fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
 	return bot.WithSystem(prompt).WithTools(threadTools()...)
 }

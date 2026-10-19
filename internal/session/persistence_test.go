@@ -28,7 +28,7 @@ func unavailableArchive(t *testing.T) *history.Archive {
 
 func TestPersistenceEmptySessions(t *testing.T) {
 	ctx := context.Background()
-	root, project := t.TempDir(), t.TempDir()
+	root, project := t.TempDir(), canonicalTempDir(t)
 	s, _, _ := archived(t, &fakeAgent{}, root, time.Now())
 	fresh, err := s.New(ctx)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestPersistenceEmptySessions(t *testing.T) {
 
 func TestPersistenceProjectConversationAndPeerIsolation(t *testing.T) {
 	ctx := context.Background()
-	root, project := t.TempDir(), t.TempDir()
+	root, project := t.TempDir(), canonicalTempDir(t)
 	s, arch, _ := archived(t, &fakeAgent{}, root, time.Now())
 	if err := s.SetDirectory(ctx, "same", project); err != nil {
 		t.Fatal(err)

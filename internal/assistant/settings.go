@@ -30,11 +30,10 @@ type node struct {
 	proposals *proposal.Store
 }
 
-// WithConfig returns the blueprint with the tools get_config,
-// propose_config and withdraw_proposal for the agent of the owner: config
-// reads the configuration of the node, and what the agent proposes waits in
-// proposals for the owner to decide. The agent changes nothing by itself,
-// and a proposal it takes back changes nothing either.
+// WithConfig returns the blueprint with the owner-only configuration tools.
+// Changes are validated, asked about in the conversation and applied only after
+// an affirmative answer. The store remains available for older pending proposals.
+// The proposals file must be in the node's configuration directory.
 //
 // Neither is to be had from the blueprint again: a plugin that gets the
 // blueprint gets no way to the key of the node or to the proposals.
@@ -92,7 +91,8 @@ type proposeArgs struct {
 func (b Builder) proposeConfig() agent.Tool {
 	return agent.Tool{
 		Name: toolProposeConfig,
-		Description: "Propose one change of the configuration to your owner, who accepts or refuses it in the terminal UI. " +
+		Description: "Propose one change of the configuration to your owner and wait for their answer in this conversation. " +
+			"Only the exact answer Apply change authorizes it; any other answer leaves it unchanged. " +
 			"Look at it with " + toolGetConfig + " first, and propose the whole new value of one field.",
 		Schema: `{"type":"object","properties":{` +
 			`"path":{"type":"string","description":"the field: name, description, model, tools.h2a, tools.a2a or tools.protected"},` +
@@ -111,17 +111,28 @@ func (b Builder) proposeConfig() agent.Tool {
 				return "", errors.New(toolProposeConfig + ` needs "path", "value" and "reason"`)
 			}
 			p, err := b.propose(args)
-			if errors.Is(err, proposal.ErrFull) {
-				return "", fmt.Errorf("%d proposals are waiting for your owner already, and no more are kept: "+
-					"they decide on them among the requests in the terminal UI (/pending)", proposal.Max)
-			}
 			if err != nil {
 				return "", fmt.Errorf("nothing was proposed: %w", err)
 			}
-			return fmt.Sprintf("Proposed, and nothing is changed yet: %s is to become %s instead of %s. "+
-				"The proposal waits for your owner among the requests in the terminal UI (the command /pending), where they accept or refuse it. "+
-				"Tell them that, and do not say that the change is made. "+
-				"Its id is %s.", p.Path, p.Value, p.Before, p.ID), nil
+			question, _ := json.Marshal(Question{
+				Question:    fmt.Sprintf("Change %s from %s to %s?\nReason: %s", p.Path, p.Before, p.Value, p.Reason),
+				Options:     []string{"Apply change", "Reject change"},
+				Recommended: "Reject change",
+			})
+			answer, err := agent.AskOwner(ctx, question)
+			if err != nil {
+				return "", fmt.Errorf("configuration not changed: %w", err)
+			}
+			if err := ctx.Err(); err != nil {
+				return "", fmt.Errorf("configuration not changed: %w", err)
+			}
+			if answer != "Apply change" {
+				return "Configuration not changed: the owner did not approve the change.", nil
+			}
+			if err := b.node.proposals.Apply(ctx, p, b.Check); err != nil {
+				return "", fmt.Errorf("configuration not changed: %w", err)
+			}
+			return fmt.Sprintf("Configuration changed with the owner's approval: %s is now %s instead of %s.", p.Path, p.Value, p.Before), nil
 		},
 	}
 }
@@ -136,9 +147,9 @@ type withdrawArgs struct {
 func (b Builder) withdrawProposal() agent.Tool {
 	return agent.Tool{
 		Name: toolWithdrawConfig,
-		Description: "Take back one change of the configuration that you proposed and that still waits for your owner: " +
-			"it is dropped, and nothing is changed. Give the id that " + toolProposeConfig + " answered with. " +
-			"Without an id this lists the proposals of yours that wait, with their ids. " +
+		Description: "Take back an older pending configuration proposal: it is dropped, and nothing is changed. " +
+			"Without an id this lists those older proposals with their ids; give one of those ids to withdraw it. " +
+			"New calls to " + toolProposeConfig + " ask directly and leave no pending proposal. " +
 			"What your owner already decided on is out of reach: it is applied, or it is gone.",
 		Schema: `{"type":"object","properties":{` +
 			`"id":{"type":"string","description":"the id of the proposal to take back; leave it out to see what waits"}}}`,
@@ -189,9 +200,9 @@ func (b Builder) waitingProposals() (string, error) {
 		len(waiting), strings.Join(lines, "\n"), toolWithdrawConfig), nil
 }
 
-// propose records the change args asks for, if the node could run with it:
+// propose prepares an unrecorded change if the node could run with it:
 // the value is checked the way the node checks its configuration when it
-// starts.
+// starts. The caller must ask for authorization before applying it.
 func (b Builder) propose(args proposeArgs) (proposal.Proposal, error) {
 	cfg, err := b.node.config()
 	if err != nil {
@@ -209,7 +220,7 @@ func (b Builder) propose(args proposeArgs) (proposal.Proposal, error) {
 	if err := b.Check(changed); err != nil {
 		return proposal.Proposal{}, err
 	}
-	return b.node.proposals.Add(cfg, args.Path, value, args.Reason)
+	return proposal.Prepare(cfg, args.Path, value, args.Reason)
 }
 
 // Check reports whether the agents of a node can be built from cfg: an

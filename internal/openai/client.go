@@ -127,6 +127,10 @@ type Message struct {
 	Content        string `json:"content"`
 	// Source is owner-origin metadata, kept locally but never sent as an API field.
 	Source MessageSource `json:"source,omitzero"`
+	// At is when the answer the message belongs to ended, as it is
+	// remembered; zero for one of the answer on its way. It is kept locally
+	// but never sent as an API field.
+	At time.Time `json:"at,omitzero"`
 	// Reasoning is what the model thought before it wrote an assistant
 	// message, and ReasoningField the field of the API it came in. Sent back
 	// in that field ("reasoning" if none), the model goes on from what it

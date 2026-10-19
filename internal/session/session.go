@@ -677,7 +677,7 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 	}
 	// What a task reports is not the owner's to take back.
 	last := len(se.queue) - 1
-	for last >= 0 && se.queue[last].task != nil {
+	for last >= 0 && (se.queue[last].task != nil || se.queue[last].generated && strings.HasPrefix(se.queue[last].text, backgroundHead)) {
 		last--
 	}
 	if last < 0 {
@@ -747,6 +747,9 @@ func (s *Service) taken(se *session, messages []queued) []openai.Message {
 	for i, m := range messages {
 		texts[i] = openai.Message{Role: "user", Content: m.text, Images: m.images, Source: m.source}
 		se.routed = se.routed || m.routed
+		if m.generated && strings.HasPrefix(m.text, backgroundHead) {
+			continue // internal result, never a visible message of the owner
+		}
 		if m.task != nil {
 			s.emit(se, *m.task)
 			continue

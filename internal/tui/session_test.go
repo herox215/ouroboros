@@ -961,7 +961,7 @@ func TestAnswerGrowsAsItIsWritten(t *testing.T) {
 
 // What the model thought goes with the round of the loop it thought in, which
 // gets an entry for it if it said nothing yet. The chat shows the last lines
-// of it, faint, below a head that says what they are; ctrl+t hides them, and
+// of it, faint, below a head that says what they are; ctrl+r hides them, and
 // shows them again.
 func TestThoughtsGoWithTheirRound(t *testing.T) {
 	m, _ := newModel(t)
@@ -984,12 +984,12 @@ func TestThoughtsGoWithTheirRound(t *testing.T) {
 		strings.Index(shown, "second thought") > strings.Index(shown, "let me look") {
 		t.Fatalf("the thoughts:\n%s", shown)
 	}
-	ctrlT := tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}
-	m.Update(ctrlT)
+	ctrlR := tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl}
+	m.Update(ctrlR)
 	if shown := ansi.Strip(m.history.GetContent()); !m.thoughtsHidden || strings.Contains(shown, "thought") || !strings.Contains(shown, "let me look") || !strings.Contains(shown, "done") {
 		t.Fatalf("hidden:\n%s", shown)
 	}
-	m.Update(ctrlT)
+	m.Update(ctrlR)
 	if shown := ansi.Strip(m.history.GetContent()); m.thoughtsHidden || strings.Count(shown, "· thought") != 2 {
 		t.Fatalf("shown again:\n%s", shown)
 	}

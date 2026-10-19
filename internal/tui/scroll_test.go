@@ -384,8 +384,8 @@ func TestHistoryFadesAtItsEdges(t *testing.T) {
 	press(m, "/", "s")
 	edge := lipgloss.NewStyle().Foreground(fadeColor(m.light))
 	top := m.panelTop(m.panel())
-	if top != n-3 {
-		t.Fatalf("the panel of five commands begins at row %d of a history of %d", top, n)
+	if top != n-2 {
+		t.Fatalf("the panel of four commands begins at row %d of a history of %d", top, n)
 	}
 	for i, line := range strings.Split(m.chatView(), "\n")[:top] {
 		if line != edge.Render(ansi.Strip(line)) {

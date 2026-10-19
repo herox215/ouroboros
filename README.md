@@ -77,14 +77,14 @@ and reads do, leaves the agent thinking, so the line does not flicker. What each
 arguments and its result, is on the context screen (`/context`).
 An answer that ouro could have done better, by the [signals](#the-log) of the log, is looked back on once it is
 given, and what the review would change of ouro follows it as a faint line, like `✦ bash waited 42s for the
-build: let it run as a job · /pending`. It changes nothing by itself: it waits in `/pending`, where accepting it
+build: let it run as a job · /suggestions`. It changes nothing by itself: it waits in `/suggestions`, where accepting it
 opens a new conversation that asks your agent to make it, after checking it against the source, as the review read
 only the log; the conversation shown goes on. The answer to it is not reviewed again, so that reviews do not
 suggest what to make of their own suggestions. Rejecting it drops it. Front ends get it as the session event
-`suggestion`; the chat does not keep it with the session, `/pending` does, in `suggestions.json` of the node, at
+`suggestion`; the chat does not keep it with the session, `/suggestions` does, in `suggestions.json` of the node, at
 most 16, the same text once.
 What the model thinks before it writes comes in as the stream brings it, and the chat shows the last
-lines of it, faint, above the words of its round, under `· thought`; `ctrl+t` hides it again. A
+lines of it, faint, above the words of its round, under `· thought`; `ctrl+r` hides it again. A
 provider that keeps its thinking to itself, as the responses API of OpenAI does, sends none of it,
 and then there is nothing to show. Front ends get it as the session event `thought`, a piece each.
 The answer itself grows in the chat as the stream brings it, with a mark at its end, and the answer of
@@ -202,7 +202,7 @@ Other plugins add to the UI, see [Extending](#extending):
 
 A command has one meaning. The UI keeps its own commands (the table below), and of two plugins that claim the
 same name the one that was started first gets it, a screen before a plain command. What loses its name is left out, and the UI says so in red in its
-footer when it opens, until the first key is pressed: `/stop is taken by the terminal UI: the screen "Stats"
+footer when it opens, until the first key is pressed: `/help is taken by the terminal UI: the screen "Stats"
 is left out`. The UI opens all the same, and so does everything else of that plugin.
 
 While the UI is open your node is online: opening it starts the node, and closing it stops the node
@@ -222,12 +222,11 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/thread` | back to the thread, which the UI opens with: one conversation with your agent about everything, while behind it each topic is a conversation of its own and several work at once; see [The thread](#the-thread) |
 | `/cancel` | stop the answer that is on its way in the conversation shown, and the tasks its agent delegated |
 | `/jobs` | the commands the agent runs in the background for the answers on their way, in your conversations and in those of peers, each with where it runs and for how long, the list kept up to date: `↑` `↓` select, `enter` stops the one selected, `esc` back; see [Commands](#commands) |
-| `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
 | `/setup` | run the setup; for a node that is set up it starts with its accesses: `enter` uses the one selected, `l` signs in to it again, `r` renames it, `d` removes it, the last row adds another one, see [Providers and accesses](#providers-and-accesses) |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back. `/` searches it: every match is marked as you type, without regard to case and across the ends of lines; `↑` `↓` go from match to match, `enter` keeps the search, `esc` ends it |
 | `/settings` | the configuration in one place, in a dialog over the chat, by categories: the node, the agents, the plugins, the tools of your agent, of peers and of single peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
 | `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `f` a [fallback](#fallbacks), `esc` back |
-| `/pending` | what waits for your decision: connection requests of peers, connections your agent proposes, [changes of the configuration](#configuration) it proposes, and changes of ouro the [reviews](#the-log) of answers suggest. `↑` `↓` select an entry, `←` `→` accept or reject, `enter` decides, `esc` back. Accepting a suggestion has your agent make it in a new conversation |
+| `/suggestions` | changes of ouro the reviews suggest, in the existing dialog over the chat. `↑` `↓` select, `←` `→` accept or reject, `enter` decides, `a` accepts all in one new conversation, `esc` closes without deciding. Accepting starts an agent task; it does not apply a change immediately |
 | `/effort` | how much the model thinks before it answers in the conversation shown, see [Sessions](#sessions) |
 | `/debug` | turn the debug mode on or off: the log of the node then tells much more |
 | `/help` | list the commands, those of the plugins too |
@@ -247,7 +246,8 @@ Keys only move around:
 | `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `ctrl+k` | the keys of the chat in a dialog, like `/keys`, but what is typed stays in the input |
-| `ctrl+t` | what the model thought above the words of its round, shown or hidden again |
+| `ctrl+t` | back to the thread, like `/thread`; what is typed stays with its conversation |
+| `ctrl+r` | what the model thought above the words of its round, shown or hidden again |
 | `ctrl+j` | the jobs of the conversation shown, and the services below them, in a list on the right, and the chat and the input narrower for it; a job too long for a line goes on in the next, and while the list is shown the footer says `ctrl+j hide`. Again: the list is hidden, and the jobs are named in the line of the wait below the chat again |
 | `pgup` `pgdn` | scroll the chat |
 | `esc` | on a screen: back to the chat. In the chat: close the list of commands with the command typed; without one, stop the answer on its way in the conversation shown and the tasks its agent delegated, like `/cancel` |
@@ -374,7 +374,7 @@ one where you left it.
 #### The thread
 
 The thread is one conversation with your agent about everything. The terminal UI opens with it, every Matrix
-room talks in it, and `/thread` goes back to it from a conversation of its own. It reads like any chat: you
+room talks in it, and `/thread` or `ctrl+t` goes back to it from a conversation of its own. The header marks the active thread with a light background. It reads like any chat: you
 write, your agent thinks, and it answers. Behind it, each topic is a
 conversation of its own, and several of them work at once. While one works on the login, you can talk about the
 photos, and the answer about the login comes in when it is done. You are not shown that this happens: the thread
@@ -399,6 +399,10 @@ your agent is thinking.
   is kept, in the archive and in the chat, stays whole: only what is sent is shorter. With DeepSeek V4.1 Flash at
   OpenCode Go, 18 messages about three topics sent 4 to 10k tokens a call, of which 86 to 98% were cached, but
   for the first after a start and the one after a cut of the conversation; `/context` shows what is sent.
+- **The last 6 hours.** The agent of the thread is sent only what happened in it in the last 6 hours, from the
+  first message of yours or of ouro that is not older, and the last list of the conversations before that. What is
+  older it finds with `search_thread`, which searches the whole thread in the archive, when you refer to it. Each
+  time the 6 hours move past an answer, the next call finds nothing in the cache, as it begins anew.
 - **What a conversation gets.** A message the thread hands on is a message of yours there: an answer to it starts,
   the answer on its way takes it as it would take what you queued, or it answers the question the conversation
   waits for. It is attributed to where you wrote it in the thread. It is your words as you wrote them: without
@@ -447,7 +451,7 @@ and a model of its own.
 - **The UI shows them all.** `shift+tab` shows the next profile, with all it showed: its conversation, what
   you typed there, its screen. The name in the header morphs into the new profile's name in a short wave of
   dots; another switch continues from what is on screen. The footer says which profile is shown. `/settings`,
-  `/model`, `/pending` and the rest are of the profile shown. `ouro` opens on the first profile,
+  `/model`, `/suggestions` and the rest are of the profile shown. `ouro` opens on the first profile,
   `ouro --profile Luna` on Luna.
 - **The command line names one.** `ouro --profile PROFILE COMMAND` runs a command for the profile that
   `PROFILE` names: its ID, the start of its ID that no other one has, or its name, whatever the case of its
@@ -972,6 +976,12 @@ anything out. It is where your [sessions](#sessions) are kept. The plugin `histo
 is: the archive changes no context, and is only read when the agent calls one of its tools. Turned off, the
 plugin takes the tools away, and the node archives all the same.
 
+When you refer back to an earlier agreement, including UI or dialog design, the search tool instructs
+the agent to search the history and read the surrounding records before confirming specific details
+as agreed. For your earlier conversations it searches across sessions. A proposal is not an agreement;
+if the evidence is ambiguous, unavailable or inconclusive, the agent should say what remains unverified
+and ask a focused question only when needed, rather than giving blanket agreement.
+
 | Tool | Does | Limits |
 |---|---|---|
 | `history_search(query, scope?, limit?)` | the records that contain a text, ignoring case: per hit the session, the time, the number of the record, its role and the text around the hit. `scope` is `current` (the default) or `all` | 20 hits, at most 50 with `limit`, and 16 KiB |
@@ -1080,8 +1090,7 @@ list: `enter` saves it, `esc` keeps what was.
   build does not have, a plugin turned off that another one needs, a description of more than one line or
   300 characters. What fails changes nothing, and the footer says why.
 - **The footer says from when a change holds.** The name, the tools, the paths and the context provider hold
-  from the next message, for you and for peers. The description holds for the next one who reads the card. A plugin turned on or off holds once ouro starts anew: quit and start `ouro`, and `/stop` and
-  `/start` the node. Until then its line says that it runs, or that it does not.
+  from the next message, for you and for peers. The description holds for the next one who reads the card. A plugin turned on or off holds once ouro starts anew: quit and start `ouro` again. Node lifecycle commands remain available only in the CLI as `ouro start` and `ouro stop`. Until then its line says that it runs, or that it does not.
 - **All tools.** Turning a tool off while all tools are allowed lists every other tool by its name instead
   of `*`, so that nothing else changes; from then on a tool of a plugin turned on later is not allowed by
   itself. Turning all tools on again drops the names, but keeps the settings of the tools that have some.
@@ -1129,8 +1138,8 @@ it is a model of another provider, see [Providers and accesses](#providers-and-a
 | Tool | Does |
 |---|---|
 | `get_config()` | returns the configuration as JSON: ID, name, description, model, `provider` (what the access in use is called) and `tools`. The key of the node and what the accesses sign in with are not in it, and neither is the ID of the access. What is not set shows with the default that holds (`description`, `h2a`, `a2a`, `protected`), and so does the switch of `bash` |
-| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The proposal waits for you, and the agent is told its id |
-| `withdraw_proposal(id?)` | takes back one of the agent's own proposals before you decided on it: with `id` the one it names, without an id it lists what waits, with their ids. Nothing is changed by it, and what you decided on is out of reach |
+| `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The tool asks directly through the user-question interface, shows old and new values, and waits; only “Apply change” applies it |
+| `withdraw_proposal(id?)` | lists or removes legacy stored proposals only; new changes ask directly and are not queued |
 | `user_question(question, options?, recommended?)` | asks you `question` and waits for your answer, which it returns: with 2 to 6 `options` to choose from, one of them `recommended` if the agent has a preference, or without any, for you to write it |
 | `delegate(tasks)` | starts 1 to 4 tasks in the background, each done by a helper, and returns at once with their numbers; the report of each comes as a message once it ended. A task is `{task, tools?}`: `tools` narrows what the helper may use |
 
@@ -1162,31 +1171,19 @@ tasks of the conversation along with its answer, and a stopped task is not repor
 task runs is not deleted. Where nothing runs past the answer, `delegate` waits for its tasks and returns what
 each ended with. Take `delegate` out of `tools.h2a` if your agent is not to use helpers.
 
-**Trust comes only from your decision.** What an agent may do and what a peer may reach is trust, so a
-proposal changes nothing: it waits among the requests in the terminal UI (`/pending`), where you see the field, what
-it is **now** and what it would be **then**, and accept or reject it. Now and then come from the
-node: now is read from `config.json` when the list is shown, then is the value the node checked and would
-write. Only the line "your agent says" is the text of the agent.
+**Trust comes only from your decision.** Configuration changes proposed by your agent ask directly in
+its conversation through the same question interface as `user_question`. The question shows the field,
+its current and proposed values, and the reason. Only **Apply change** authorizes the write; rejection,
+a different answer, cancellation, or a missing question interface changes nothing. There is no separate
+pending/approval screen and no new persisted configuration proposal.
 
-- The value is checked the way the node checks its configuration when it starts: an unknown tool, a tool that
-  is listed twice, a setting a tool does not have, a value of the wrong type, a protected path that is none
-  or a description of more than one line or 300 characters is an error the agent gets at once, and no
-  proposal.
-- The key of the node and the access to the LLM cannot be proposed: not which access the node answers
-  through, and nothing of what an access holds, which is not in the configuration at all. A proposal that a
-  peer talked your agent into must not send your conversations to another server. You change them alone, in
-  the setup. The model can be proposed: it is one of the access in use.
-- A proposal is made for the configuration as it was. If the field was changed since (by hand, or by another
-  proposal you accepted), the list says so, and accepting applies nothing and drops the proposal.
-- At most 16 proposals wait; a further one is not recorded, and the agent is told. The same change is
-  recorded once.
-- Proposals are decided in the terminal UI only. `ouro chat "…"` opens none: the agent says that the proposal
-  waits there. `ouro ask` writes to another node without your agent, so no proposal comes from it.
-- An accepted change is in `config.json` and holds at once, see above; `ouro.log` records it.
-- **Both tools are for you alone.** For a conversation of a peer they refuse, `"*"` in `a2a` does not include
-  them, and their names in `a2a` are an error: the node does not start and says that these tools are not for
-  peers. A peer that makes your agent propose something for it (it can, with a persuasive answer to
-  `ask_peer`) gets a line in your list, which says what would change, and nothing more.
+- Values are validated before the question and again before writing. Unknown tools, duplicate tools,
+  wrong types and invalid protected paths are rejected.
+- The node key, provider endpoints and credentials cannot be proposed; those remain in setup.
+- If the target field changed while the question was open, approval does not overwrite it. Changes to
+  unrelated fields are preserved under the configuration lock.
+- These configuration tools are owner-only, never available to peers.
+- `withdraw_proposal` remains for listing or removing legacy proposals; it does not approve them.
 
 The file tools cannot do any of this: `config.json` is locked for them, see [Files](#files).
 
@@ -1579,7 +1576,7 @@ file. After a conversation that went wrong, the log says what the agent did and 
   change of ouro that would have made it better: a tool that is missing, slow or misleading, a default, or the
   prompt. What comes from the task or the provider is no change. The line `review: "…"` has what it proposes,
   `review: nothing to change` that it found nothing, `review failed: …` why it could not. What it proposes
-  is shown in the chat and waits in `/pending`, see [Terminal UI](#terminal-ui); it changes nothing by itself.
+  is shown in the chat and waits in `/suggestions`, see [Terminal UI](#terminal-ui); it changes nothing by itself.
   Whether the owner took or dropped it is logged too: `the owner took a suggestion: "…"`. A node that stops right
   after the answer, as `ouro chat` stops one it started, stops the review with it.
 - **Canceled**: when you type `/cancel` in the UI, interrupt `ouro chat` with Ctrl-C or stop the node, the call
@@ -1631,10 +1628,11 @@ trusted peers:
 
 1. Alice's agent wants to write to Bob (she asks it to, or uses `ouro ask`). Bob is not connected, so
    **nothing is sent**, not even a request: Bob is proposed to Alice, with his ID and key.
-2. In Alice's terminal UI `/pending` shows `bob · your agent wants to connect`. With accept she agrees, and only
+2. Alice receives a question in her thread with Bob's identity and public key. Only **Approve connection** agrees, and only
    then Bob gets a **connection request** (`contact/request`). It carries no message; Bob records it and
    answers `pending`, no LLM call happens. With reject the proposal is dropped and Bob never hears of it.
-3. In Bob's terminal UI `/pending` shows the request; he selects accept (or reject) and presses `enter`.
+3. Bob receives the incoming request as a question in his thread, using the same question interface.
+   Only **Approve connection** grants trust; **Reject connection** refuses it. Cancellation or arbitrary text never approves.
 4. Bob notifies Alice, both sides store each other as trusted and can chat. Until then Alice's agent is
    told that Bob has not decided, and what she wanted to say stays with her.
 
@@ -2335,3 +2333,11 @@ Ouroboros is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`); th
 [NOTICE](NOTICE). The binary links third-party modules under their respective licenses, listed with
 their license texts in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Pass all three files on with the binary
 and satisfy the listed dependencies' redistribution requirements, including any source-code availability requirements.
+
+### Conversational background results
+
+The thread acknowledges work briefly and remains available while topic sessions run.
+Completions return to the thread agent with their full result and topic, rather than being
+shown verbatim. It connects them to the current conversation, naturally returning to the
+earlier topic when necessary. Internal result messages are not owner messages. Background
+work alone no longer keeps the terminal input in its thinking state.

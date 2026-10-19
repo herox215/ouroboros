@@ -46,7 +46,7 @@ var (
 	// ErrUnconfirmed means the node is one the owner of this node has not
 	// decided to connect to: nothing was sent to it. It waits among the
 	// connection requests for the owner to confirm.
-	ErrUnconfirmed = errors.New("is not connected: the owner has to confirm the connection first, among the connection requests")
+	ErrUnconfirmed = errors.New("is not connected: the owner has to explicitly approve the connection in the question interface first")
 	// ErrNoRequest means there is no such connection request to decide on.
 	ErrNoRequest = errors.New("request is gone")
 	// ErrNotSaved means a decision on a connection request could not be

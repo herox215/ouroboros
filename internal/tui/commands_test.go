@@ -70,7 +70,7 @@ func TestCommandSuggestions(t *testing.T) {
 		t.Fatalf("footer %q, suggested %q", help, suggested(m))
 	}
 	press(m, "/", "s")
-	want := []string{"› /session list the conversations and switch to one", "/start start the node", "/stop stop the node", "/setup set up the node", "/settings the configuration"}
+	want := []string{"› /session list the conversations and switch to one", "/setup set up the node", "/settings the configuration", "/suggestions review suggested changes of ouro"}
 	if got := suggested(m); !slices.Equal(got, want) {
 		t.Fatalf("suggested %q", got)
 	}
@@ -83,10 +83,10 @@ func TestCommandSuggestions(t *testing.T) {
 	}
 
 	// Down and up select, around the ends of the list.
-	if press(m, "down"); suggested(m)[1] != "› /start start the node" {
+	if press(m, "down"); suggested(m)[1] != "› /setup set up the node" {
 		t.Fatalf("suggested %q", suggested(m))
 	}
-	if press(m, "up", "up"); suggested(m)[4] != "› /settings the configuration" {
+	if press(m, "up", "up"); suggested(m)[3] != "› /suggestions review suggested changes of ouro" {
 		t.Fatalf("suggested %q", suggested(m))
 	}
 	if press(m, "down"); suggested(m)[0] != want[0] {

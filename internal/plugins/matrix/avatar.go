@@ -30,7 +30,7 @@ func avatarTool(s store, files *guard.Guard) plugin.Tool {
 		[]plugin.Param{{Name: "path", Description: "The local image file; relative paths use the current project or workspace. Omit to use a chat attachment.", Optional: true}},
 		func(ctx context.Context, args avatarArgs) (string, error) {
 			if _, peer := plugin.OriginFrom(ctx); peer {
-				return "", errors.New("Matrix profile changes are owner-only")
+				return "", errors.New("the Matrix profile changes are owner-only")
 			}
 			if args.Path != "" && args.Attachment != 0 {
 				return "", errors.New("choose a path or an attachment, not both")
@@ -52,7 +52,7 @@ func avatarTool(s store, files *guard.Guard) plugin.Tool {
 			}
 			latest, err := s.load()
 			if err != nil || latest.Revision != cfg.Revision || latest.Token != cfg.Token || latest.UserID != cfg.UserID || latest.Homeserver != cfg.Homeserver || !latest.Enabled {
-				return "", errors.New("Matrix settings changed; retry with the current account")
+				return "", errors.New("the Matrix settings changed; retry with the current account")
 			}
 			client, err := transport.New(transport.Config{Homeserver: cfg.Homeserver, UserID: cfg.UserID, Token: cfg.Token, DeviceID: cfg.DeviceID, StateDir: s.path("devices")})
 			if err != nil {
@@ -90,7 +90,7 @@ func avatarData(ctx context.Context, args avatarArgs, files *guard.Guard) ([]byt
 		return images[index-1].Data, nil
 	}
 	if files == nil {
-		return nil, errors.New("Matrix avatar file access is unavailable")
+		return nil, errors.New("the Matrix avatar file access is unavailable")
 	}
 	checker, err := files.Checker(guard.Access{Tool: setAvatar, Directory: workdir.Of(ctx)})
 	if err != nil {

@@ -1,6 +1,9 @@
 package openai
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // MessageSource identifies the owner's interface, not the content of a message.
 // The zero value means no owner source was recorded (including old messages).
@@ -74,6 +77,7 @@ func MessagesForModel(messages []Message) []Message {
 				". Interpret 'here' relative to this source interface unless the conversation indicates otherwise. This describes the message origin, not a screenshot.]\n\n" + m.Content
 		}
 		m.Source = MessageSource{}
+		m.At = time.Time{}
 	}
 	return out
 }

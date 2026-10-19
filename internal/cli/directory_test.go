@@ -146,7 +146,9 @@ func TestStartDirectoryThatCannotBeTold(t *testing.T) {
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "initial project directory") {
+	// Some systems still report the removed cwd; then validation fails at
+	// Stat rather than Getwd. Either path must reject it without opening a UI.
+	if err := app.Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "project directory") {
 		t.Errorf("a current directory that was removed: %v", err)
 	}
 	if err := app.Run(context.Background(), []string{"./project"}); err == nil || !strings.Contains(err.Error(), `project directory "./project"`) {

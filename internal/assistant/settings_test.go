@@ -119,49 +119,83 @@ func TestGetConfig(t *testing.T) {
 	}
 }
 
-// A proposal changes nothing: it waits for the owner, and the agent is told
-// so.
+// Configuration changes ask the owner directly and persist only an explicit approval.
 func TestProposeConfig(t *testing.T) {
+	for _, reply := range []string{"Apply change", "Reject change", "yes", "", "Apply change please"} {
+		t.Run(reply, func(t *testing.T) {
+			c := newConfigured(t)
+			asked := false
+			ctx := agent.WithOwner(context.Background(), func(_ context.Context, raw json.RawMessage) (string, error) {
+				q, err := ParseQuestion(raw)
+				if err != nil || !strings.Contains(q.Question, `name from "me" to "you"`) || !strings.Contains(q.Question, "a better name") || q.Recommended != "Reject change" {
+					t.Fatalf("question: %+v, %v", q, err)
+				}
+				asked = true
+				if c.config().Name != "me" || len(c.waiting()) != 0 {
+					t.Fatal("changed or queued before approval")
+				}
+				return reply, nil
+			})
+			got, err := c.builder.proposeConfig().Run(ctx, json.RawMessage(`{"path":"name","value":"you","reason":"a better name"}`))
+			want := "me"
+			if reply == "Apply change" {
+				want = "you"
+			}
+			if err != nil || !asked || c.config().Name != want || len(c.waiting()) != 0 {
+				t.Fatalf("result %q, %v; name %q", got, err, c.config().Name)
+			}
+		})
+	}
+	// Lists encoded as strings are normalized before asking and saving.
 	c := newConfigured(t)
-	got := c.tool(toolProposeConfig, propose{"tools.a2a", []any{"list_peers", map[string]any{"tool": "read", "allow": []string{"~/share"}}}, "so that peers can read the share"})
-	want := `Proposed, and nothing is changed yet: tools.a2a is to become ["list_peers",{"allow":["~/share"],"tool":"read"}] instead of []. ` +
-		"The proposal waits for your owner among the requests in the terminal UI (the command /pending), where they accept or refuse it. " +
-		"Tell them that, and do not say that the change is made. Its id is "
-	if !strings.HasPrefix(got, want) {
-		t.Fatalf("got %q\nwant %q…", got, want)
+	ctx := agent.WithOwner(context.Background(), func(context.Context, json.RawMessage) (string, error) { return "Apply change", nil })
+	got, err := c.builder.proposeConfig().Run(ctx, json.RawMessage(`{"path":"tools.protected","value":"[\"~/.ssh\",\"~/secret\"]","reason":"more"}`))
+	if err != nil || !strings.Contains(got, `["~/.ssh","~/secret"]`) || len(c.config().Protected()) != 2 || len(c.waiting()) != 0 {
+		t.Fatalf("list: %q, %v", got, err)
 	}
-	if c.config().Tools != nil {
-		t.Fatal("the proposal changed the configuration")
-	}
-	list := c.waiting()
-	if len(list) != 1 || list[0].Path != "tools.a2a" || string(list[0].Value) != `["list_peers",{"allow":["~/share"],"tool":"read"}]` ||
-		string(list[0].Before) != `[]` || list[0].Reason != "so that peers can read the share" {
-		t.Fatalf("waiting: %+v", list)
-	}
-	// The agent is told the id, so that it can take the proposal back; how,
-	// the prompt tells where it may.
-	if end := strings.TrimPrefix(got, want); end != list[0].ID+"." {
-		t.Fatalf("the id in the answer: %q", end)
-	}
+}
 
-	// A list that is handed over as a text is the list.
-	got = c.tool(toolProposeConfig, propose{"tools.protected", `["~/.ssh", "~/secret"]`, "more"})
-	if !strings.HasPrefix(got, `Proposed, and nothing is changed yet: tools.protected is to become ["~/.ssh","~/secret"] instead of ["~/.ssh",`) {
-		t.Fatalf("a list as text: %q", got)
-	}
-	got = c.tool(toolProposeConfig, propose{"name", "you", "a better name"})
-	if !strings.HasPrefix(got, `Proposed, and nothing is changed yet: name is to become "you" instead of "me".`) {
-		t.Fatalf("a name: %q", got)
-	}
-	got = c.tool(toolProposeConfig, propose{"description", "knows the way", "say what I do"})
-	if !strings.HasPrefix(got, `Proposed, and nothing is changed yet: description is to become "knows the way" instead of "Ouroboros instance named me".`) {
-		t.Fatalf("a description: %q", got)
-	}
-	if got := c.tool(toolProposeConfig, propose{"description", "two\nlines", "r"}); !strings.HasPrefix(got, "error: nothing was proposed: description is one line") {
-		t.Fatalf("a description of two lines: %q", got)
-	}
-	if len(c.waiting()) != 4 || c.config().Name != "me" || c.config().Description != "" {
-		t.Fatalf("waiting: %+v", c.waiting())
+func TestProposeConfigDoesNotApplyWithoutAuthorization(t *testing.T) {
+	for _, mode := range []string{"no owner", "timeout", "cancelled reply", "stale", "unrelated edit", "invalid latest config"} {
+		t.Run(mode, func(t *testing.T) {
+			c := newConfigured(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if mode != "no owner" {
+				ctx = agent.WithOwner(ctx, func(context.Context, json.RawMessage) (string, error) {
+					switch mode {
+					case "timeout":
+						return "Apply change", context.DeadlineExceeded
+					case "cancelled reply":
+						cancel()
+					case "stale", "unrelated edit", "invalid latest config":
+						cfg := c.config()
+						if mode == "stale" {
+							cfg.Name = "someone else"
+						} else if mode == "invalid latest config" {
+							cfg.Tools = &config.Tools{A2A: config.Named("unknown")}
+						} else {
+							cfg.Model = "new-model"
+						}
+						c.save(cfg)
+					}
+					return "Apply change", nil
+				})
+			}
+			_, err := c.builder.proposeConfig().Run(ctx, json.RawMessage(`{"path":"name","value":"you","reason":"r"}`))
+			want := "me"
+			if mode == "stale" {
+				want = "someone else"
+			} else if mode == "unrelated edit" {
+				want = "you"
+				if c.config().Model != "new-model" {
+					t.Fatal("unrelated edit lost")
+				}
+			}
+			if (err == nil) != (mode == "unrelated edit") || c.config().Name != want || len(c.waiting()) != 0 {
+				t.Fatalf("err %v, name %q, waiting %+v", err, c.config().Name, c.waiting())
+			}
+		})
 	}
 }
 
@@ -200,8 +234,12 @@ func TestWithdrawProposal(t *testing.T) {
 	}
 
 	// What waits is listed with the id it is taken back with.
-	c.tool(toolProposeConfig, propose{"name", "you", "a better name"})
-	c.tool(toolProposeConfig, propose{"tools.a2a", []string{"read"}, "peers may read"})
+	if _, err := c.proposals.Add(c.config(), "name", json.RawMessage(`"you"`), "a better name"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.proposals.Add(c.config(), "tools.a2a", json.RawMessage(`["read"]`), "peers may read"); err != nil {
+		t.Fatal(err)
+	}
 	list := c.waiting()
 	if len(list) != 2 {
 		t.Fatalf("waiting: %+v", list)
@@ -296,30 +334,24 @@ func TestProposeConfigChecksTheValue(t *testing.T) {
 		t.Fatalf("waiting: %+v", list)
 	}
 
-	// What is allowed for the owner is a proposal: every tool, and "*" for peers.
+	// Valid changes ask directly, and never occupy the pending store.
+	ctx := agent.WithOwner(context.Background(), func(context.Context, json.RawMessage) (string, error) {
+		return "Apply change", nil
+	})
 	for _, args := range []propose{
 		{"tools.h2a", []string{"read", toolGetConfig, toolProposeConfig}, "r"},
 		{"tools.a2a", []string{"*"}, "r"},
 		{"tools.protected", []string{}, "r"},
 		{"model", "gpt-4o-mini", "r"},
 	} {
-		if got := c.tool(toolProposeConfig, args); !strings.HasPrefix(got, "Proposed, and nothing is changed yet: ") {
-			t.Errorf("%+v: %q", args, got)
+		raw, _ := json.Marshal(args)
+		if got, err := c.builder.proposeConfig().Run(ctx, raw); err != nil || !strings.HasPrefix(got, "Configuration changed") {
+			t.Errorf("%+v: %q, %v", args, got, err)
 		}
 	}
-
-	// No more wait than fit, and the agent is told to whom to turn.
-	for i := len(c.waiting()); i < proposal.Max; i++ {
-		c.tool(toolProposeConfig, propose{"name", strings.Repeat("n", i+3), "r"})
+	if len(c.waiting()) != 0 {
+		t.Fatal("direct changes left pending proposals")
 	}
-	if got := c.tool(toolProposeConfig, propose{"name", "one more", "r"}); got != "error: 16 proposals are waiting for your owner already, and no more are kept: "+
-		"they decide on them among the requests in the terminal UI (/pending)" {
-		t.Errorf("a full list: %q", got)
-	}
-	if len(c.waiting()) != proposal.Max {
-		t.Fatalf("%d waiting", len(c.waiting()))
-	}
-
 	c.failing = errTest
 	if _, err := c.builder.proposeConfig().Run(context.Background(), json.RawMessage(`{"path": "name", "value": "x", "reason": "r"}`)); err == nil || err.Error() != "nothing was proposed: test error" {
 		t.Fatalf("a configuration that cannot be read: %v", err)

@@ -26,15 +26,13 @@ var own = []command{
 	{"thread", "back to the thread, the one conversation about everything", (*Model).openThread},
 	{"cancel", "stop the answer and the tasks on their way here", (*Model).cancel},
 	{"jobs", "list the commands that run in the background, also for peers, and stop one", (*Model).openJobs},
-	{"start", "start the node", (*Model).start},
-	{"stop", "stop the node", (*Model).stop},
 	{"setup", "set up the node", (*Model).setup},
 	{"model", "choose the model of the provider", (*Model).openModel},
 	{"effort", "choose how much the model thinks before it answers", (*Model).openEffort},
 	{"settings", "the configuration", (*Model).openSettings},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
-	{"pending", "decide on what is pending: connection requests and proposals", (*Model).openRequests},
+	{"suggestions", "review suggested changes of ouro", (*Model).openSuggestions},
 	{"keys", "list the keys (ctrl+k does too)", (*Model).openKeys},
 	{"help", "list the commands", func(m *Model) tea.Cmd { m.screen = screenHelp; return nil }},
 	{"quit", "quit (ctrl+c does too)", (*Model).leave},
@@ -167,27 +165,6 @@ func (m *Model) suggestionLines(rows int) []string {
 		lines[i] = ansi.Truncate("  "+mark+name.Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help), m.width, "…")
 	}
 	return lines
-}
-
-func (m *Model) start() tea.Cmd {
-	switch {
-	case !m.status.Configured:
-		return m.setup()
-	case m.status.Running:
-		m.setNotice("the node is running", false)
-		return nil
-	}
-	m.setNotice("starting node…", false)
-	return func() tea.Msg { return actionMsg{"node started", m.backend.Start()} }
-}
-
-func (m *Model) stop() tea.Cmd {
-	if !m.status.Running {
-		m.setNotice("the node is not running", false)
-		return nil
-	}
-	m.setNotice("stopping node…", false)
-	return func() tea.Msg { return actionMsg{"node stopped", m.backend.Stop()} }
 }
 
 // toggleDebug turns the debug mode of the node on or off. The header shows

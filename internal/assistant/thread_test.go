@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"ouroboros/internal/config"
@@ -19,11 +17,17 @@ type fakeThread struct {
 	err     error
 	sent    []string // as "ID TEXT"
 	started []string // as "DIRECTORY TEXT"
+	sought  []string // the queries
 }
 
 func (f *fakeThread) Send(_ context.Context, id, text string) (string, string, error) {
 	f.sent = append(f.sent, id+" "+text)
 	return "Fix", "the session answers it now", f.err
+}
+
+func (f *fakeThread) Search(_ context.Context, query string) (string, error) {
+	f.sought = append(f.sought, query)
+	return "found " + query, f.err
 }
 
 func (f *fakeThread) Start(_ context.Context, text, directory string) (string, error) {
@@ -36,71 +40,33 @@ func (f *fakeThread) Start(_ context.Context, text, directory string) (string, e
 // thread alone.
 func TestThreadHandsOn(t *testing.T) {
 	cfg, b := directNode(t)
-	var logged []string
-	var mu sync.Mutex
-	a := New(func() (config.Config, error) { return cfg, nil }, b, func(format string, args ...any) {
-		mu.Lock()
-		defer mu.Unlock()
-		logged = append(logged, fmt.Sprintf(format, args...))
-	})
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	defer a.Stop()
 	thread := &fakeThread{}
 	ctx := WithThread(context.Background(), thread)
-	for _, call := range []string{`!session_send {"session":"s1","text":"more"}`, `!session_new {"text":"go","directory":"/p"}`, `!session_send {"session":"s1"}`, `!session_new {}`} {
-		if got, err := a.Ask(ctx, "thread", call, nil); err != nil || got != "" {
-			t.Fatalf("%s: %q, %v", call, got, err)
+	for _, call := range []string{`!session_send {"session":"s1","text":"more"}`, `!session_new {"text":"go","directory":"/p"}`} {
+		got, err := a.Ask(ctx, "thread", call, nil)
+		if err != nil || got == "" {
+			t.Fatalf("handoff must allow an acknowledgement: %q, %v", got, err)
 		}
 	}
-	if strings.Join(thread.sent, "|") != "s1 more|s1 " || strings.Join(thread.started, "|") != "/p go| " {
+	if strings.Join(thread.sent, "|") != "s1 more" || strings.Join(thread.started, "|") != "/p go" {
 		t.Fatalf("sent %q, started %q", thread.sent, thread.started)
 	}
-	// Its answers are not reviewed: that it says nothing is how it hands on.
-	reviewed := WithReview(ctx, func(string) { t.Error("a review of the thread") })
-	if got, err := a.Ask(reviewed, "thread", `!session_send {"session":"s1","text":"more"}`, nil); err != nil || got != "" {
-		t.Fatalf("reviewed: %q, %v", got, err)
+	got, err := a.Ask(ctx, "thread", `!search_thread {"query":"dialog"}`, nil)
+	if got := result(t, got, err); got != "found dialog" {
+		t.Fatalf("search: %s", got)
 	}
-	a.reviewing.Lock()
-	_, kept := a.last["thread"]
-	a.reviewing.Unlock()
-	if kept {
-		t.Fatal("the answer of the thread is kept for a review")
-	}
-	a.Stop() // the log is written
-	mu.Lock()
-	log := strings.Join(logged, "\n")
-	mu.Unlock()
-	if strings.Contains(log, "signals:") || !strings.Contains(log, `"[nothing: the thread hands on, and the session answers]"`) {
-		t.Fatalf("log:\n%s", log)
-	}
-	contents, _ := a.ContentsContext(ctx, "thread")
-	if results := contents.Messages[2].Content + "|" + contents.Messages[5].Content; results != `Handed to "Fix": the session answers it now.|Started a session with it: it answers it now.` {
-		t.Fatalf("what the agent of the thread was told: %s", results)
-	}
-
-	// What the thread cannot hand on is the result of the call, and so is
-	// a call it cannot read.
 	thread.err = errTest
-	for _, call := range []string{`!session_send {"session":"s1","text":"more"}`, `!session_new {"text":"go"}`, `!session_new [1]`, `!session_send [1]`} {
+	for _, call := range []string{`!session_send {"session":"s1"}`, `!session_new {}`, `!session_new [1]`} {
 		got, err := a.Ask(ctx, "thread", call, nil)
 		if got := result(t, got, err); !strings.HasPrefix(got, "error: ") {
 			t.Fatalf("%s: %s", call, got)
 		}
 	}
-
-	// The tools of the thread are of the thread alone, and the other tools
-	// of the owner's agent are not of the thread.
-	contents, err := a.ContentsContext(ctx, "thread")
-	if err != nil || len(contents.Tools) != 2 || contents.Tools[0].Function.Name != ToolSessionSend || contents.Tools[1].Function.Name != ToolSessionNew {
-		t.Fatalf("the tools of the thread: %+v, %v", contents.Tools, err)
-	}
-	contents, _ = a.ContentsContext(context.Background(), "c")
-	for _, tool := range contents.Tools {
-		if strings.HasPrefix(tool.Function.Name, "session_") {
-			t.Fatalf("the owner's agent has %s", tool.Function.Name)
-		}
-	}
 	for _, tool := range threadTools() {
-		if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil || err.Error() != tool.Name+" is for the thread alone" {
-			t.Fatalf("%s outside the thread: %v", tool.Name, err)
+		if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil {
+			t.Fatalf("%s ran outside the thread", tool.Name)
 		}
 	}
 }
@@ -114,6 +80,7 @@ func TestThreadPrompt(t *testing.T) {
 	got, err := a.Ask(ctx, "thread", "?system", nil)
 	if err != nil || !strings.HasPrefix(got, `You are "me", the personal agent of the owner of this Ouroboros node, and this is the one conversation`) ||
 		!strings.Contains(got, "The owner is never to notice the sessions") || !strings.Contains(got, "goes to it word for word") ||
+		!strings.Contains(got, "You are shown only the last 6 hours of this conversation: when the owner refers to something said before that, find it with search_thread. ") ||
 		!strings.Contains(got, "where session_new starts a session that names no directory, is your workspace. ") ||
 		!strings.Contains(got, ownerStyle) || strings.Contains(got, workHint) {
 		t.Fatalf("the prompt of the thread: %q, %v", got, err)

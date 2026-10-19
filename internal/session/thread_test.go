@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,6 +49,10 @@ func dispatcher(told chan<- string, answer func(ctx context.Context, text string
 				return answer(ctx, text)
 			}
 			return "pong:" + text, nil
+		}
+		if strings.HasPrefix(text, backgroundHead) {
+			_, result, _ := strings.Cut(text, "\n\n")
+			return result, nil // fixture represents the thread composing its reply
 		}
 		told <- text
 		// What it does on its way is not shown.
@@ -182,12 +187,8 @@ func TestThreadStartsASession(t *testing.T) {
 	if got := through(t, past, live, Answer); got[0].Kind != Message || got[0].Text != "fix the login" || got[0].Source != (MessageSource{Interface: "tui"}) || !got[0].Routed {
 		t.Fatalf("the session: %v", kinds(got))
 	}
-	want := fmt.Sprintf("thread: [Session %s \"Login\" answered, and the owner was shown it as your answer:]\n\npong:fix the login", handle(id))
-	if notes := a.noted(); !slices.Equal(notes, []string{want}) {
-		t.Fatalf("the thread was told %q", notes)
-	}
-	if presented := a.presentedAs(); !slices.Equal(presented, []string{answer.PresentationID}) {
-		t.Fatalf("the answer was shown as %q, and kept as %q", answer.PresentationID, presented)
+	if notes := a.noted(); len(notes) != 0 {
+		t.Fatalf("completion must be processed, not merely noted: %q", notes)
 	}
 	past, _, _ = s.Watch(ctx, ThreadID)
 	if slices.ContainsFunc(past, func(e Event) bool { return e.Kind == Title }) {
@@ -430,21 +431,18 @@ func TestThreadShowsTheEnd(t *testing.T) {
 		return "pong:" + text, nil
 	})
 	a.note = errTest
-	s, _, l := archived(t, a, t.TempDir(), time.Now())
+	s, _, _ := archived(t, a, t.TempDir(), time.Now())
 	ctx := context.Background()
 	asked(t, s, "s1", "hello")
 	_, thread, _ := s.Watch(ctx, ThreadID)
 	_, s1, _ := s.Watch(ctx, "s1")
 	ask(t, s, "send s1 fail")
 	<-told
-	if lines := shown(working(t, thread)); !slices.Equal(lines, []string{"message send s1 fail", "failed " + errTest.Error()}) {
+	if lines := shown(working(t, thread)); !slices.Equal(lines, []string{"message send s1 fail", "answer " + errTest.Error()}) {
 		t.Fatalf("the thread showed %q", lines)
 	}
-	if notes := a.noted(); len(notes) != 1 || notes[0] != `thread: [Session s1 "hello" failed, and the owner was shown that it did: test error]` {
-		t.Fatalf("the thread was told %q", notes)
-	}
-	if !l.has("the thread cannot keep what it showed: test error") {
-		t.Fatalf("log %q", l.lines)
+	if notes := a.noted(); len(notes) != 0 {
+		t.Fatalf("failure bypassed conversational processing: %q", notes)
 	}
 
 	ask(t, s, "send s1 stop")
@@ -465,7 +463,7 @@ func TestThreadShowsTheEnd(t *testing.T) {
 // directory it names; one it cannot start is not kept. The sessions here
 // answer until the node stops.
 func TestThreadStartsInItsProject(t *testing.T) {
-	project, other := t.TempDir(), t.TempDir()
+	project, other := canonicalTempDir(t), canonicalTempDir(t)
 	a := &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
@@ -693,6 +691,46 @@ func TestShaped(t *testing.T) {
 	}
 }
 
+// The agent of the thread is sent what happened in it within the last
+// assistant.ThreadWindow, cut before a message of the owner or of ouro, and the
+// last list of the sessions it was told before, unless it is told one anew.
+func TestRecentOf(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	old, recent := now.Add(-assistant.ThreadWindow-time.Minute), now.Add(-assistant.ThreadWindow+time.Minute)
+	sessions := roster(nil, "")
+	msgs := []openai.Message{
+		{Role: "user", Content: sessions, At: old},
+		{Role: "user", Content: "fix it", At: old},
+		{Role: "assistant", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionSend, `{}`)}, At: old},
+		{Role: "tool", ToolCallID: "c1", Content: "Handed on.", At: recent}, // its answer ended late
+		{Role: "user", Content: "and this", At: recent},
+		{Role: "user", Content: "now"}, // of the answer on its way
+	}
+	contents := func(msgs []openai.Message) []string {
+		var out []string
+		for _, m := range msgs {
+			out = append(out, cmp.Or(m.Content, m.Role))
+		}
+		return out
+	}
+	if got := contents(recentOf(msgs, now)); !slices.Equal(got, []string{sessions, "and this", "now"}) {
+		t.Fatalf("recent %q", got)
+	}
+	if got := contents(recentOf(msgs, recent)); !slices.Equal(got, contents(msgs)) {
+		t.Fatalf("all recent %q", got)
+	}
+	if got := contents(recentOf(msgs[:4], now)); !slices.Equal(got, []string{sessions}) {
+		t.Fatalf("nothing recent %q", got)
+	}
+	if got := contents(recentOf(msgs[1:], now)); !slices.Equal(got, []string{"and this", "now"}) {
+		t.Fatalf("without a list %q", got)
+	}
+	told := append(slices.Clone(msgs), openai.Message{Role: "user", Content: roster([]routed{{id: "s1", title: "Fix"}}, "")})
+	if got := recentOf(told, now); len(got) != 3 || got[0].Content != "and this" {
+		t.Fatalf("told anew %q", contents(got))
+	}
+}
+
 // What the thread is told of a session reads back as what it showed of it.
 func TestRelayText(t *testing.T) {
 	se := &session{id: "s1", title: `Fix "it"`}
@@ -748,8 +786,12 @@ func TestThreadArchived(t *testing.T) {
 	}
 	var memory []openai.Message
 	json.Unmarshal(a.resumed[ThreadID], &memory)
-	if len(memory) != 6 || !isRoster(unnoted(memory[0].Content)) {
+	if len(memory) != 6 || !isRoster(unnoted(memory[0].Content)) || slices.ContainsFunc(memory, func(m openai.Message) bool { return m.At.IsZero() }) {
 		t.Fatalf("the agent remembers %+v", memory)
+	}
+	// It searches all of it, also what its agent is no longer sent.
+	if found, err := (threading{s}).Search(ctx, "FIX IT"); err != nil || !strings.Contains(found, "user: fix it") || !strings.Contains(found, "[1 hit in this conversation]") {
+		t.Fatalf("searched %q, %v", found, err)
 	}
 	list, _ := s.List(ctx)
 	found, _ := s.Find(ctx, "fix")

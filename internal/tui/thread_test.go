@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
@@ -90,7 +91,7 @@ func TestThreadKeepsItsProject(t *testing.T) {
 // While anything works for the thread, it is thinking, also between the
 // answers that come: they are shown as its answers. What the thread answers
 // while another session is shown is told in the footer.
-func TestThreadThinksWhileItWorks(t *testing.T) {
+func TestThreadStaysAvailableWhileTopicsWork(t *testing.T) {
 	m, _ := newModel(t)
 	thread := m.conversation(plugin.ThreadID)
 	m.apply(thread, Event{Kind: plugin.SessionMessage, Text: "fix the login, and sort the photos"}, true)
@@ -102,7 +103,7 @@ func TestThreadThinksWhileItWorks(t *testing.T) {
 	m.apply(thread, Event{Kind: plugin.SessionWorking, N: 1}, true)
 	m.chat = thread
 	m.renderHistory(true)
-	if !thread.pending || m.waiting() != "alpha is thinking" {
+	if thread.pending || m.waiting() != "" {
 		t.Fatalf("pending %v, waiting %q", thread.pending, m.waiting())
 	}
 	m.apply(thread, Event{Kind: plugin.SessionAnswer, Text: "the photos are sorted"}, true)
@@ -161,5 +162,30 @@ func TestThreadQuestionOutlivesAnAnswer(t *testing.T) {
 	cmd()
 	if len(b.sent) != 0 || !thread.asking.sent {
 		t.Fatalf("sent %+v", b.sent)
+	}
+}
+
+// The thread shortcut preserves both drafts and marks the thread in the header.
+func TestThreadShortcutAndHighlight(t *testing.T) {
+	m, _ := threadModel(t, "", nil)
+	thread := m.chat
+	m.input.SetValue("thread draft")
+	settle(m, m.newConversation())
+	topic := m.chat
+	m.input.SetValue("topic draft")
+	badge := boldStyle.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7")).Render(" thread ")
+	if strings.Contains(m.headerView(), badge) {
+		t.Fatal("a topic is marked as the thread")
+	}
+	settle(m, m.handleKey(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}))
+	if m.chat != thread || m.input.Value() != "thread draft" || m.thoughtsHidden {
+		t.Fatalf("thread shortcut: chat %q, draft %q, thoughts hidden %v", m.chat.contextID, m.input.Value(), m.thoughtsHidden)
+	}
+	if !strings.Contains(m.headerView(), badge) {
+		t.Fatalf("thread lacks highlight: %q", m.headerView())
+	}
+	settle(m, m.switchTo(topic))
+	if m.input.Value() != "topic draft" {
+		t.Fatalf("topic draft lost: %q", m.input.Value())
 	}
 }

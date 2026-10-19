@@ -25,7 +25,7 @@ const (
 // stays as it is, also when the wheel turns.
 func (m *Model) inDialog() bool {
 	switch m.screen {
-	case screenEffort, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions:
+	case screenSuggestions, screenEffort, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions:
 		return true
 	}
 	return false
