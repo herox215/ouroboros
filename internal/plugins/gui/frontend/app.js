@@ -195,28 +195,44 @@ export function browse(bridge, doc = document, resume = '') {
   const create = doc.getElementById('new-session');
   const drafts = new Map();
   const localEntries = new Map();
-  // The composer is sticky: it is pinned to the viewport bottom, so asking the
-  // browser to bring it into view moves nothing — it is already in view. The
-  // page scrolls, not the transcript, so the page itself is moved to its end.
+  // The history scrolls on its own, between the header and the composer, so it
+  // is moved to its end, not the page.
+  const scroller = doc.getElementById('transcript');
   const end = () => {
-    const page = doc.scrollingElement;
-    page.scrollTop = page.scrollHeight;
+    scroller.scrollTop = scroller.scrollHeight;
   };
-  const atEnd = () => {
-    const page = doc.scrollingElement;
-    return page.scrollHeight - page.clientHeight - page.scrollTop <= 48;
-  };
-  // Whether new output is followed: so at the end of the page, not once the
-  // owner scrolls up to read. It is kept from the scroll events rather than
-  // measured when output comes, so that a window made smaller at the end does
-  // not count as scrolling up. Whoever sends is taken to the end, see submit.
+  // Whether new output is followed: so at the end of the history, not once the
+  // owner scrolls up to read. Whoever sends is taken to the end, see submit.
+  // It is told by a mark at the end of the history coming into view or going
+  // out of it, not by reading the scroll position in each scroll event: such a
+  // read, while the history bounces past its end, made WebKit draw a frame
+  // without the bounce, so that a slow pull jerked back and forth.
   let following = true;
   const stick = () => {
     following = true;
     end();
   };
-  doc.addEventListener('scroll', () => { following = atEnd(); }, { passive: true });
-  doc.defaultView?.addEventListener('resize', () => { if (following) end(); });
+  const keep = () => { if (following) end(); };
+  const Intersection = doc.defaultView?.IntersectionObserver;
+  if (Intersection) {
+    // Within 48 px of the end still counts as at the end.
+    new Intersection(([mark]) => { following = mark.isIntersecting; },
+      { root: scroller, rootMargin: '0px 0px 48px 0px' }).observe(doc.getElementById('transcript-end'));
+  }
+  doc.defaultView?.addEventListener('resize', keep);
+  // The history also changes its height by itself: as the sidebar slides and
+  // its lines wrap anew, or as an answer grows while it streams in.
+  const Resize = doc.defaultView?.ResizeObserver;
+  if (Resize) {
+    const sizes = new Resize(keep);
+    sizes.observe(scroller);
+    sizes.observe(doc.getElementById('content'));
+  }
+  // Expanding a text or a tool call is reading it: the history stays where it
+  // is, not pulled to the end it grew, until the owner scrolls there again.
+  doc.getElementById('content').addEventListener('click', event => {
+    if (event.target?.closest?.('button, summary')) following = false;
+  });
   let context = null;
   let ready = false;
   const questionPanel = doc.getElementById('question-panel');
@@ -394,8 +410,13 @@ export function browse(bridge, doc = document, resume = '') {
             const events = await bridge.PollSession(snapshot.token);
             if (!active()) return;
             if (events === null) throw new Error('Session-Verbindung beendet');
-            await render(events || []);
-            if (active() && following) end();
+            // A poll comes back every 150 ms, mostly empty. Moving the history to
+            // its end each time, at its end already, took back the bounce of a
+            // pull past it: it is moved only when the history grew.
+            if (!events?.length) continue;
+            const height = scroller.scrollHeight;
+            await render(events);
+            if (active() && following && scroller.scrollHeight !== height) end();
           }
         } catch (cause) {
           if (active()) {
@@ -486,11 +507,16 @@ export function browse(bridge, doc = document, resume = '') {
 export async function start(bridge, doc = document) {
   const sidebar = doc.getElementById('sidebar');
   const toggle = doc.getElementById('sidebar-toggle');
+  // The sidebar is not hidden but slides out, see the stylesheet; inert keeps
+  // what is out of view out of reach of the keyboard and screen readers.
   toggle.addEventListener('click', () => {
-    sidebar.hidden = !sidebar.hidden;
-    doc.body.setAttribute('data-sidebar-collapsed', String(sidebar.hidden));
-    toggle.setAttribute('aria-expanded', String(!sidebar.hidden));
-    toggle.textContent = sidebar.hidden ? '▶ Sitzungen einblenden' : '◀ Sitzungen ausblenden';
+    const collapsed = !sidebar.inert;
+    sidebar.inert = collapsed;
+    doc.body.setAttribute('data-sidebar-collapsed', String(collapsed));
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    const label = collapsed ? 'Seitenleiste einblenden' : 'Seitenleiste ausblenden';
+    toggle.setAttribute('aria-label', label);
+    toggle.title = label;
   });
   try {
     const state = await bridge.InitialState();

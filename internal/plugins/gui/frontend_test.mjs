@@ -35,9 +35,9 @@ class Element extends EventTarget {
 
   focus() { this.focused = true; }
 
-  // No scrollIntoView stub: the sticky composer is never scrolled into view,
-  // the page itself is moved, see the test on end scrolling.
-  scrollIntoView() { assert.fail('the frontend must move the page, not scroll an element into view'); }
+  // No scrollIntoView stub: the history is moved to its end itself, see the
+  // test on end scrolling.
+  scrollIntoView() { assert.fail('the frontend must move the history, not scroll an element into view'); }
 
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
@@ -64,17 +64,20 @@ class Element extends EventTarget {
   }
 }
 
-// A page that clamps scrollTop at both ends, as a browser does.
-function scroller() {
-  let top = 0;
-  return {
-    scrollHeight: 0,
-    clientHeight: 0,
-    get scrollTop() { return top; },
-    set scrollTop(value) {
-      top = Math.max(0, Math.min(value, Math.max(0, this.scrollHeight - this.clientHeight)));
-    },
-  };
+// A scroller that clamps scrollTop at both ends, as a browser does.
+class Scroller extends Element {
+  constructor(tagName) {
+    super(tagName);
+    this.scrollHeight = 0;
+    this.clientHeight = 0;
+    this.top = 0;
+  }
+
+  get scrollTop() { return this.top; }
+
+  set scrollTop(value) {
+    this.top = Math.max(0, Math.min(value, Math.max(0, this.scrollHeight - this.clientHeight)));
+  }
 }
 
 function documentFixture() {
@@ -92,6 +95,8 @@ function documentFixture() {
     'session-meta': new Element('p'),
     content: new Element('div'),
     'session-status': new Element('p'),
+    transcript: new Scroller('div'),
+    'transcript-end': new Element('div'),
     refresh: new Element('button'),
     'new-session': new Element('button'),
     'question-panel': new Element('section'),
@@ -108,11 +113,17 @@ function documentFixture() {
   elements.error.hidden = true;
   // The document gets the scroll events of the page, its window the resizes.
   const events = new EventTarget();
+  // Its window tells whether the mark at the end of the history is in view, see scrollPage.
+  const view = new EventTarget(), marks = [];
+  view.IntersectionObserver = class {
+    constructor(run, options) { this.run = run; this.options = options; marks.push(this); }
+    observe(target) { this.target = target; }
+  };
   return {
     ...elements,
     body: new Element('body'),
-    scrollingElement: scroller(),
-    defaultView: new EventTarget(),
+    defaultView: view,
+    marks,
     addEventListener: events.addEventListener.bind(events),
     dispatchEvent: events.dispatchEvent.bind(events),
     getElementById(id) {
@@ -144,17 +155,19 @@ test('HTML supplies the module and accessible profile/error elements', async () 
   assert.match(html, /<[^>]+(?=[^>]*id="session-status")(?=[^>]*role="status")[^>]*>/);
 });
 
-// The owner scrolls the page, as the browser reports it.
+// The owner scrolls the history, as the browser reports it.
 function scrollPage(doc, top) {
-  doc.scrollingElement.scrollTop = top;
-  doc.dispatchEvent(new Event('scroll'));
+  const page = doc.transcript;
+  page.scrollTop = top;
+  const near = page.scrollHeight - page.clientHeight - page.scrollTop <= 48;
+  for (const mark of doc.marks) mark.run([{ isIntersecting: near, target: mark.target }]);
 }
 
 // An open owner session on a page of 3200 px in a window of 900 px, where
 // every rendered message makes the transcript 400 px taller.
 async function liveSession(events = []) {
   const doc = archiveFixture();
-  const page = doc.scrollingElement;
+  const page = doc.transcript;
   page.scrollHeight = 3200;
   page.clientHeight = 900;
   const append = doc.content.append.bind(doc.content);
@@ -171,6 +184,9 @@ async function liveSession(events = []) {
 
 test('live messages keep the page at its end unless the user has scrolled up', async () => {
   const { doc, page, pending } = await liveSession();
+  assert.equal(doc.marks.length, 1);
+  assert.equal(doc.marks[0].target, doc['transcript-end']);
+  assert.deepEqual(doc.marks[0].options, { root: doc.transcript, rootMargin: '0px 0px 48px 0px' });
   assert.equal(page.scrollTop, 2300, 'the empty transcript still sits at its end');
   pending[0].resolve([{ kind: 'answer', text: 'new' }]);
   await settle();
@@ -240,12 +256,24 @@ test('transcript layout uses real message heights for reliable end scrolling', a
   assert.doesNotMatch(css, /content-visibility\s*:\s*auto|contain-intrinsic-size/);
 });
 
-// A sticky composer is pinned to the viewport bottom, so scrollIntoView() on it
-// is a no-op and the newest message would stay below the fold.
-test('end scrolling moves the page itself, which the sticky composer requires', async () => {
+// The history is its own scroller, the composer below it and the sidebar beside
+// it: only the history bounces at its ends, and nothing in it is sticky, so the
+// bounce moves it as one rather than jerking a pinned composer along.
+test('only the history scrolls and bounces; composer and sidebar stay out of it', async () => {
+  const html = await readFile(new URL('./frontend/index.html', import.meta.url), 'utf8');
+  const scroller = html.slice(html.indexOf('id="transcript"'), html.indexOf('class="composer-dock"'));
+  assert.match(scroller, /id="content"/);
+  assert.doesNotMatch(scroller, /id="composer"/);
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.composer\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
-  assert.doesNotMatch(source, /scrollIntoView/);
+  assert.match(css, /\.transcript-scroller \{[^}]*overflow-y: auto; overscroll-behavior-y: contain;/);
+  assert.match(css, /html, body \{ overscroll-behavior: none; \}/);
+  assert.match(css, /\.sidebar \{[^}]*overscroll-behavior: none/);
+  assert.doesNotMatch(css, /position: sticky; bottom/);
+  // At the end or not is told by the mark coming into view, not by reading the
+  // scroll position in scroll events, which jerked the bounce.
+  assert.doesNotMatch(source, /addEventListener\('scroll'/);
+  assert.match(html, /id="content"[^>]*><\/div>\s*<div id="transcript-end" aria-hidden="true">/);
+  assert.doesNotMatch(source, /scrollIntoView|scrollingElement/);
 });
 
 test('sidebar toggle hides and restores navigation without changing the session', async () => {
@@ -258,15 +286,18 @@ test('sidebar toggle hides and restores navigation without changing the session'
   const title = doc['session-title'].textContent;
   for (let i = 0; i < 2; i++) {
     button.dispatchEvent(new Event('click'));
-    assert.equal(doc.sidebar.hidden, true);
+    // Collapsed, the sidebar slides out and is out of reach, not removed.
+    assert.equal(doc.sidebar.hidden, false);
+    assert.equal(doc.sidebar.inert, true);
     assert.equal(doc.body.getAttribute('data-sidebar-collapsed'), 'true');
     assert.equal(button.getAttribute('aria-expanded'), 'false');
-    assert.equal(button.textContent, '▶ Sitzungen einblenden');
+    assert.equal(button.getAttribute('aria-label'), 'Seitenleiste einblenden');
+    assert.equal(button.title, 'Seitenleiste einblenden');
     button.dispatchEvent(new Event('click'));
-    assert.equal(doc.sidebar.hidden, false);
+    assert.equal(doc.sidebar.inert, false);
     assert.equal(doc.body.getAttribute('data-sidebar-collapsed'), 'false');
     assert.equal(button.getAttribute('aria-expanded'), 'true');
-    assert.equal(button.textContent, '◀ Sitzungen ausblenden');
+    assert.equal(button.getAttribute('aria-label'), 'Seitenleiste ausblenden');
     assert.equal(doc['session-title'].textContent, title);
   }
 });
@@ -457,7 +488,7 @@ test('sessions are sorted newest first and grouped without mutating bridge data'
 
 test('opening and switching sessions scrolls to the end only after the full replay', async () => {
   const doc = archiveFixture();
-  const page = doc.scrollingElement;
+  const page = doc.transcript;
   page.scrollHeight = 5000;
   page.clientHeight = 800;
   const scrolls = [];
@@ -1622,4 +1653,71 @@ test('model dialog asks to save or discard a change left by the X, back or Escap
   el.model.value = 'm';
   el.close.dispatchEvent(new Event('click'));
   assert.equal(el.dialog.open, false);
+});
+
+test('the sidebar toggle is an icon, the sidebar slides, and the page does not bounce', async () => {
+  const html = await readFile(new URL('./frontend/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<button id="sidebar-toggle"[^>]*aria-label="Seitenleiste ausblenden"[^>]*>\s*<svg\b[^>]*aria-hidden="true"/);
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.match(css, /html, body \{ overscroll-behavior: none; \}/);
+  assert.match(css, /body \{[^}]*transition: grid-template-columns/);
+  assert.match(css, /body\[data-sidebar-collapsed="true"\] \.sidebar \{[^}]*transform: translateX\(-100%\)/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+});
+
+test('a history that grows or wraps anew stays at its end; expanding something is reading', async () => {
+  const doc = archiveFixture();
+  const observed = [];
+  doc.defaultView.ResizeObserver = class { constructor(run) { this.run = run; } observe(target) { observed.push([target, this.run]); } };
+  const page = doc.transcript;
+  page.scrollHeight = 3200;
+  page.clientHeight = 900;
+  await browse({
+    async Sessions() { return [{ id: 'owner/live' }]; },
+    async OpenSession() { return { token: 0, events: [] }; },
+  }, doc);
+  assert.deepEqual(observed.map(([target]) => target), [doc.transcript, doc.content]);
+  const resized = () => { for (const [, run] of observed) run([]); };
+  assert.equal(page.scrollTop, 2300);
+  // The sidebar slides in: the lines wrap anew and the history gets taller.
+  page.scrollHeight = 3600;
+  resized();
+  assert.equal(page.scrollTop, 2700, 'the end stays in view');
+  // Expanding a text or a tool call is reading: the history stays where it is.
+  const expand = new Element('button');
+  expand.closest = () => expand;
+  const click = new Event('click');
+  Object.defineProperty(click, 'target', { value: expand });
+  doc.content.dispatchEvent(click);
+  page.scrollHeight = 4400;
+  resized();
+  assert.equal(page.scrollTop, 2700);
+});
+
+test('the sidebar toggle rides along the right edge of the sidebar, beside the brand', async () => {
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.match(css, /#sidebar-toggle \{[^}]*position: fixed;[^}]*transform: translateX\(calc\(var\(--sidebar-width\) - 68px\)\); transition: transform/);
+  assert.match(css, /body\[data-sidebar-collapsed="true"\] #sidebar-toggle \{ transform: none; \}/);
+  assert.match(css, /\.brand \{[^}]*padding: 0 44px 0 4px;/, 'the brand leaves room for it at its right');
+});
+
+test('empty polls and output that does not grow the history leave it alone, so a bounce is not taken back', async () => {
+  const { doc, page, pending } = await liveSession();
+  const writes = [];
+  let top = page.scrollTop;
+  Object.defineProperty(page, 'scrollTop', { get: () => top, set(value) { writes.push(value); top = value; } });
+  pending[0].resolve([]);
+  await settle();
+  pending[1].resolve([]);
+  await settle();
+  assert.deepEqual(writes, [], 'an empty poll moves nothing');
+  const append = doc.content.append;
+  doc.content.append = child => { doc.content.children.push(child); };
+  pending[2].resolve([{ kind: 'answer', text: 'same height' }]);
+  await settle();
+  assert.deepEqual(writes, [], 'output that does not grow the history moves nothing');
+  doc.content.append = append;
+  pending[3].resolve([{ kind: 'answer', text: 'grows' }]);
+  await settle();
+  assert.equal(writes.length, 1, 'output that grows it is followed');
 });
