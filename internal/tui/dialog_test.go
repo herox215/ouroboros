@@ -199,6 +199,33 @@ func TestKeysOpenInDialog(t *testing.T) {
 	}
 }
 
+func TestSessionsActiveCountInChatCorner(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m.chat = m.thread()
+	m.conversation("working").running = true
+	m.conversation("idle").title = "idle"
+	for _, active := range []bool{true, false} {
+		m.chats["working"].running = active
+		want := "0 active sessions"
+		if active {
+			want = "1 active session"
+		}
+		view := ansi.Strip(m.chatView())
+		lines := strings.Split(view, "\n")
+		line := lines[m.chatHeight()-2]
+		at := m.chatWidth() - 2 - len(want)
+		index := strings.Index(line, want)
+		if index < 0 || lipgloss.Width(line[:index]) != at || strings.Count(view, want) != 1 {
+			t.Fatalf("active count should be at the bottom right of the chat, in the thread: %q", line)
+		}
+	}
+	m.chat = m.conversation("idle")
+	if strings.Contains(ansi.Strip(m.chatView()), "active sessions") {
+		t.Fatal("the count belongs to the thread only")
+	}
+}
+
 // ctrl+s and /session list the conversations in a dialog over the chat, like
 // the model and the settings: what is typed stays, and the chat stays behind.
 func TestSessionsOpenInDialog(t *testing.T) {

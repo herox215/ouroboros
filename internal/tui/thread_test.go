@@ -118,8 +118,8 @@ func TestThreadStaysAvailableWhileTopicsWork(t *testing.T) {
 			t.Fatalf("the chat lacks %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "session") {
-		t.Fatalf("the chat tells of sessions:\n%s", view)
+	if strings.Contains(strings.ReplaceAll(view, "0 active sessions", ""), "session") {
+		t.Fatalf("the chat tells of sessions beyond the active count:\n%s", view)
 	}
 }
 

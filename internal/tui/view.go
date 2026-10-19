@@ -757,6 +757,26 @@ func (m *Model) chatColumn() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, strings.Join(history, "\n"), m.waitView(inner))
 	}
 	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
+	if c.contextID == plugin.ThreadID && m.screen == screenChat {
+		active := 0
+		for _, c := range m.chats {
+			if c.contextID != plugin.ThreadID && c.running {
+				active++
+			}
+		}
+		label := fmt.Sprintf("%d active sessions", active)
+		if active == 1 {
+			label = "1 active session"
+		}
+		label = ansi.Truncate(label, max(1, m.chatWidth()-4), "…")
+		canvas := lipgloss.NewCanvas(w, h)
+		canvas.Compose(lipgloss.NewCompositor(
+			lipgloss.NewLayer(chat),
+			lipgloss.NewLayer(mutedStyle.Render(label)).
+				X(max(0, w-2-lipgloss.Width(label))).Y(h-2).Z(1),
+		))
+		chat = lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(canvas.Render())
+	}
 	// Suggestions and answers lie over the bottom of the chat, in a panel.
 	// Its size and the positions of its history stay unchanged behind them.
 	panel := m.panel()
