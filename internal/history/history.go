@@ -55,6 +55,7 @@ const (
 	suffix          = ".jsonl"
 	titleSuffix     = ".title"
 	effortSuffix    = ".effort"
+	modelSuffix     = ".model"
 	directorySuffix = ".directory"
 	goOnSuffix      = ".goon"
 )
@@ -828,6 +829,63 @@ func (a *Archive) SetEffort(id, effort string) error {
 // with SetEffort, and whether it was given one.
 func (a *Archive) Effort(id string) (string, bool, error) {
 	return a.beside(id, effortSuffix)
+}
+
+// SetModel gives the conversation id, as List names it, the model that
+// answered in it last. The conversation needs not be archived yet.
+func (a *Archive) SetModel(id, model string) error {
+	path, err := a.path(id)
+	if err != nil {
+		return err
+	}
+	return a.setBeside(a.id(path), modelSuffix, model)
+}
+
+// Model returns the model the conversation id, as List names it, was given
+// with SetModel, and whether it was given one.
+func (a *Archive) Model(id string) (string, bool, error) {
+	return a.beside(id, modelSuffix)
+}
+
+// ModelChanged is the role of the record that tells that the conversation
+// goes on under another model than before: replay drops what came before it.
+const ModelChanged = "model"
+
+// NoteModel keeps that the conversation id goes on under model from now on:
+// what was said before is not resumed, so that no model is sent a
+// conversation it has none of cached.
+func (a *Archive) NoteModel(id, model string) error {
+	if err := a.SetModel(id, model); err != nil {
+		return err
+	}
+	db, err := a.database()
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("INSERT INTO history_sessions(id) VALUES(?) ON CONFLICT(id) DO UPDATE SET deleted=0", id); err != nil {
+		return err
+	}
+	var seq, answer, ordinal int
+	if err = tx.QueryRow("SELECT coalesce(max(seq),0),coalesce(max(answer),0),coalesce(max(ordinal),0) FROM history_records WHERE session_id=?", id).Scan(&seq, &answer, &ordinal); err != nil {
+		return err
+	}
+	r := Record{Seq: seq + 1, Answer: answer, Time: a.now().UTC(), Role: ModelChanged, Content: model}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	if err = insertRecord(tx, id, ordinal+1, r, b); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("UPDATE history_sessions SET archived=1,modified=?,size=size+? WHERE id=?", r.Time.UnixNano(), len(b)+1, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Records returns every record of the conversation id, as List names it, in

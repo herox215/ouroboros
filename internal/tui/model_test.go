@@ -52,20 +52,19 @@ func TestModelScreenChoosesAModel(t *testing.T) {
 	}
 	press(m, "down", "down")
 	m.Update(press(m, "enter")())
-	if len(b.set) != 1 || b.set[0] != "a1 gpt-4o-mini" || m.notice != "model changed to gpt-4o-mini" || m.noticeErr {
+	if len(b.set) != 1 || b.set[0] != "a1 gpt-4o-mini" || m.notice != "model changed to gpt-4o-mini · new conversation" || m.noticeErr {
 		t.Fatalf("set %v, notice %q", b.set, m.notice)
 	}
-	if m.screen != screenModel {
-		t.Fatal("the screen should stay open")
+	if m.screen != screenChat {
+		t.Fatal("the conversation starts anew, so the model screen should close")
 	}
 	// The status is read anew, and marks the new model as the one in use.
 	b.status.Model = "gpt-4o-mini"
 	m.Update(m.refreshStatus())
-	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "▸ gpt-4o-mini  in use") || strings.Contains(view, "gpt-4o  in use") {
+	deliver(m, run(m, "/model"))
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "▸ gpt-4o-mini  in use") {
 		t.Fatalf("the new model should be marked:\n%s", view)
 	}
-
 	press(m, "esc")
 	if m.screen != screenChat {
 		t.Fatal("esc should go back to the chat")

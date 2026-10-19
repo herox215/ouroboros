@@ -28,6 +28,10 @@ type modelsMsg struct {
 	err       error
 }
 
+// modelChangedMsg is what the model screen says once the node answers with
+// another model: the conversation that was shown is not continued there.
+type modelChangedMsg struct{ done string }
+
 // fallbacksMsg are the fallbacks of the node after f changed them, with
 // what the owner is told of it.
 type fallbacksMsg struct {
@@ -120,13 +124,22 @@ func (s *modelScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		if msg.String() == "f" {
 			return s.toggleFallback(m, access, picked.model)
 		}
+		changed := picked.model != m.status.Model
 		return func() tea.Msg {
 			switched, err := m.backend.SetModel(access.ID, picked.model)
 			done := "model changed to " + picked.model
 			if switched {
 				done += " of " + access.Label + " · " + switchedNote
 			}
-			return actionMsg{done, err}
+			if err != nil {
+				return actionMsg{done, err}
+			}
+			if changed {
+				// The model that answered before has none of the
+				// conversation cached: it goes on in a new one.
+				return modelChangedMsg{done + " · new conversation"}
+			}
+			return actionMsg{done, nil}
 		}
 	}
 	return nil

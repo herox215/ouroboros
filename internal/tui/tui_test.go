@@ -70,6 +70,7 @@ func (a *fakeAgent) Resume(string, json.RawMessage) error                    { r
 func (a *fakeAgent) Forget(string)                                           {}
 func (a *fakeAgent) Title(context.Context, []openai.Message) (string, error) { return "", nil }
 func (a *fakeAgent) Effort() string                                          { return "" }
+func (a *fakeAgent) Model() string                                           { return "" }
 func (a *fakeAgent) Note(context.Context, string, string) error              { return nil }
 
 // fakeBackend is what the UI controls in the tests. Its sessions are those

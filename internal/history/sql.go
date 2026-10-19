@@ -75,6 +75,34 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A database from before the model of a session was kept gets its
+	// column here: the schema above creates a new one with it.
+	var modelColumn bool
+	columns, err := tx.Query("PRAGMA table_info(history_sessions)")
+	if err != nil {
+		return nil, err
+	}
+	for columns.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var dflt any
+		if err = columns.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+			columns.Close()
+			return nil, err
+		}
+		if name == "model" {
+			modelColumn = true
+		}
+	}
+	columns.Close()
+	if err = columns.Err(); err != nil {
+		return nil, err
+	}
+	if !modelColumn {
+		if _, err = tx.Exec("ALTER TABLE history_sessions ADD COLUMN model TEXT"); err != nil {
+			return nil, err
+		}
+	}
 	var done int
 	err = tx.QueryRow("SELECT count(*) FROM history_migrations WHERE name='legacy-v1'").Scan(&done)
 	if err != nil {
@@ -114,7 +142,7 @@ CREATE TABLE IF NOT EXISTS history_migrations(name TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS history_sessions(
  id TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0,
  deleted INTEGER NOT NULL DEFAULT 0, modified INTEGER NOT NULL DEFAULT 0,
- size INTEGER NOT NULL DEFAULT 0, title TEXT, effort TEXT, directory TEXT,
+ size INTEGER NOT NULL DEFAULT 0, title TEXT, effort TEXT, model TEXT, directory TEXT,
  goon INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS history_restarts(
@@ -164,7 +192,7 @@ func (a *Archive) importLegacy(tx *sql.Tx) error {
 		for _, e := range entries {
 			ext := filepath.Ext(e.Name())
 			name := strings.TrimSuffix(e.Name(), ext)
-			if !named.MatchString(name) || (ext != suffix && ext != titleSuffix && ext != effortSuffix && ext != directorySuffix && ext != goOnSuffix) {
+			if !named.MatchString(name) || (ext != suffix && ext != titleSuffix && ext != effortSuffix && ext != modelSuffix && ext != directorySuffix && ext != goOnSuffix) {
 				continue
 			}
 			path := filepath.Join(a.dir, p.Name(), e.Name())
@@ -231,6 +259,8 @@ func metadataColumn(kind string) string {
 		return "title"
 	case effortSuffix:
 		return "effort"
+	case modelSuffix:
+		return "model"
 	case directorySuffix:
 		return "directory"
 	case goOnSuffix:

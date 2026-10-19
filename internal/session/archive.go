@@ -107,6 +107,7 @@ func (s *Service) load(id string) *session {
 		}
 		se := &session{id: id, title: title, watchers: map[chan Event]struct{}{}}
 		s.effortOf(se)
+		s.modelOf(se)
 		s.directoryOf(se)
 		if title != "" {
 			se.events = append(se.events, Event{Kind: Title, Text: title})
@@ -118,8 +119,17 @@ func (s *Service) load(id string) *session {
 	}
 	events, msgs := replay(records)
 	memory, _ := json.Marshal(msgs) // messages are always written
-	if err := s.agent.Resume(id, memory); err != nil {
-		s.archive.log("what the agent remembers of the session %s is lost: %v", id, err)
+	model, _, err := s.archive.Model(history.Owner(id))
+	if err != nil {
+		s.archive.log("the model of the session %s cannot be read: %v", id, err)
+	}
+	// A conversation whose model changed is not resumed: the model of the
+	// node has none of it cached, so it would be sent in full. What follows
+	// starts anew, see modelFor.
+	if now := s.model(); model == "" || now == "" || model == now {
+		if err := s.agent.Resume(id, memory); err != nil {
+			s.archive.log("what the agent remembers of the session %s is lost: %v", id, err)
+		}
 	}
 	var usage Event
 	if len(events) > 0 {
@@ -143,6 +153,7 @@ func (s *Service) load(id string) *session {
 	}
 	se := &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
 	s.effortOf(se)
+	s.modelOf(se)
 	s.directoryOf(se)
 	return se
 }
@@ -175,6 +186,10 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 		switch r.Role {
 		case history.Restarted:
 			events = append(events, Event{Kind: Restarted, PresentationID: id, At: at, Text: r.Content, Context: size, Cache: cache})
+		case history.ModelChanged:
+			// Another model answers from here on: what came before is not
+			// resumed, and it is not shown again.
+			msgs = nil
 		case "user":
 			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source, At: r.Time})
 			if strings.HasPrefix(unnoted(r.Content), backgroundHead) {

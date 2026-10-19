@@ -394,8 +394,11 @@ type session struct {
 	tries int
 	// effort is how much the model thinks in the session, once efforted
 	// says that the owner set it: else the agent says.
-	effort    string
-	efforted  bool
+	effort   string
+	efforted bool
+	// model is the model that answered in the session last, empty if none
+	// did; another one does not continue it, see modelFor.
+	model     string
 	directory string
 	directed  bool // distinguishes an explicit reset from no saved directory
 	// tasks are the tasks the agent delegated that run, the last of which
@@ -601,6 +604,14 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 		texts[i] = m.Content
 	}
 	text := strings.Join(texts, "\n\n")
+	if note := s.modelFor(se); note != "" {
+		// The model has none of what was said before: it is told that the
+		// context starts anew here.
+		text = note + text
+		if len(inputs) > 0 {
+			inputs[0].Content = note + inputs[0].Content
+		}
+	}
 	named := make(chan struct{})
 	// The thread is named as such, not for a topic.
 	if se.title == "" && se.tries < titleTries && se.id != ThreadID {
@@ -1184,6 +1195,68 @@ func (s *Service) effort(se *session) string {
 		return effort
 	}
 	return s.agent.Effort()
+}
+
+// modeler is an agent that says which model it answers with: an Assistant
+// that cannot tell is one whose sessions are continued as they are.
+type modeler interface {
+	Model() string
+}
+
+// model is the model the agent answers with now, "" if it cannot tell.
+func (s *Service) model() string {
+	if m, ok := s.agent.(modeler); ok {
+		return m.Model()
+	}
+	return ""
+}
+
+// modelOf gives se the model it is kept with, if it is. s.mu is held.
+func (s *Service) modelOf(se *session) {
+	if s.archive == nil {
+		return
+	}
+	model, _, err := s.archive.Model(history.Owner(se.id))
+	if err != nil {
+		s.archive.log("the model of the session %s cannot be read: %v", se.id, err)
+	}
+	se.model = model
+}
+
+// modelNote is what a session is told when another model answers in it.
+func modelNote(model string) string {
+	return "[Not from the owner: the model changed to " + model + "; what was said before is not in your context.]\n\n"
+}
+
+// modelFor makes se answer under the model of the node, and returns a note
+// for the agent when another model answered in it before. That model has
+// none of the conversation cached, so it is not continued: the agent forgets
+// it, and the archive notes where the new context starts. s.mu is held.
+func (s *Service) modelFor(se *session) string {
+	model := s.model()
+	if model == "" {
+		return ""
+	}
+	changed := se.model != "" && se.model != model
+	if changed {
+		s.agent.Forget(se.id)
+	}
+	if s.archive != nil {
+		var err error
+		if changed {
+			err = s.archive.NoteModel(history.Owner(se.id), model)
+		} else if se.model != model {
+			err = s.archive.SetModel(history.Owner(se.id), model)
+		}
+		if err != nil {
+			s.archive.log("the model of the session %s cannot be kept: %v", se.id, err)
+		}
+	}
+	se.model = model
+	if changed {
+		return modelNote(model)
+	}
+	return ""
 }
 
 // effortOf gives se the effort it is kept with, if it is. s.mu is held.

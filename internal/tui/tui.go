@@ -705,6 +705,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setNotice(msg.done, false)
 		}
 		return m, m.refresh()
+	case modelChangedMsg:
+		m.screen = screenChat
+		cmd := m.newConversation()
+		m.setNotice(msg.done, false)
+		return m, cmd
 	case spinner.TickMsg:
 		var hide tea.Cmd
 		if msg.ID == m.spinner.ID() {

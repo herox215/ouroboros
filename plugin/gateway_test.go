@@ -363,6 +363,7 @@ func (*gatewayAgent) Ready() error                 { return nil }
 func (*gatewayAgent) Context(string) int           { return 0 }
 func (*gatewayAgent) Cache(string) assistant.Cache { return assistant.Cache{} }
 func (*gatewayAgent) Effort() string               { return "" }
+func (*gatewayAgent) Model() string                { return "" }
 func (*gatewayAgent) Title(context.Context, []openai.Message) (string, error) {
 	return "gateway test", nil
 }

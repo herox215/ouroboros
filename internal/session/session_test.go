@@ -21,6 +21,7 @@ import (
 type fakeAgent struct {
 	mu        sync.Mutex
 	ready     error
+	model     string // the model of the node
 	run       func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
 	size      int
 	cache     assistant.Cache
@@ -77,6 +78,12 @@ func (a *fakeAgent) Effort() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.effort
+}
+
+func (a *fakeAgent) Model() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.model
 }
 
 func (a *fakeAgent) Note(ctx context.Context, id, text string) error {

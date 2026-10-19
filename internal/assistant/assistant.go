@@ -650,6 +650,16 @@ func (a *Assistant) Effort() string {
 	return cfg.Effort
 }
 
+// Model is the model the agents answer with now: the model of the
+// configuration, "" if it cannot be read.
+func (a *Assistant) Model() string {
+	cfg, err := a.config()
+	if err != nil {
+		return ""
+	}
+	return cfg.Model
+}
+
 // Context returns how long the context of the conversation contextID is: the
 // bytes the last call of the LLM in it sent, the prompt, the tools and the
 // conversation so far as JSON. 0 if this process made no call in it yet.
