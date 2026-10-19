@@ -195,6 +195,28 @@ export function browse(bridge, doc = document, resume = '') {
   const create = doc.getElementById('new-session');
   const drafts = new Map();
   const localEntries = new Map();
+  // The composer is sticky: it is pinned to the viewport bottom, so asking the
+  // browser to bring it into view moves nothing — it is already in view. The
+  // page scrolls, not the transcript, so the page itself is moved to its end.
+  const end = () => {
+    const page = doc.scrollingElement;
+    page.scrollTop = page.scrollHeight;
+  };
+  const atEnd = () => {
+    const page = doc.scrollingElement;
+    return page.scrollHeight - page.clientHeight - page.scrollTop <= 48;
+  };
+  // Whether new output is followed: so at the end of the page, not once the
+  // owner scrolls up to read. It is kept from the scroll events rather than
+  // measured when output comes, so that a window made smaller at the end does
+  // not count as scrolling up. Whoever sends is taken to the end, see submit.
+  let following = true;
+  const stick = () => {
+    following = true;
+    end();
+  };
+  doc.addEventListener('scroll', () => { following = atEnd(); }, { passive: true });
+  doc.defaultView?.addEventListener('resize', () => { if (following) end(); });
   let context = null;
   let ready = false;
   const questionPanel = doc.getElementById('question-panel');
@@ -247,6 +269,9 @@ export function browse(bridge, doc = document, resume = '') {
   };
   const submit = async (text = draft.value, fromOption = false) => {
     if (!writable() || !text.trim()) return;
+    // Who sends, also by an option of a question or while an answer runs, is
+    // at the end, scrolled up or not: their message and the answer follow.
+    stick();
     const target = context;
     const question = asking;
     const state = target.state;
@@ -360,8 +385,8 @@ export function browse(bridge, doc = document, resume = '') {
       ready = true;
       updateComposer();
       status.textContent = entry.id.startsWith('owner/') ? 'Session · Bereit' : 'Peer-Session · Nur lesen';
-      // The page scrolls, not the transcript. Start at its end after the full replay.
-      composer.scrollIntoView({ block: 'end', behavior: 'instant' });
+      // Start at the end of the transcript after the full replay, following it.
+      stick();
       // One outstanding poll per selected chat; the bridge batches the live stream.
       const follow = async () => {
         try {
@@ -369,10 +394,8 @@ export function browse(bridge, doc = document, resume = '') {
             const events = await bridge.PollSession(snapshot.token);
             if (!active()) return;
             if (events === null) throw new Error('Session-Verbindung beendet');
-            const page = doc.scrollingElement;
-            const atEnd = page.scrollHeight - page.clientHeight - page.scrollTop <= 48;
             await render(events || []);
-            if (active() && atEnd) composer.scrollIntoView({ block: 'end', behavior: 'instant' });
+            if (active() && following) end();
           }
         } catch (cause) {
           if (active()) {
