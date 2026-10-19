@@ -59,7 +59,7 @@ func (a *Archive) CompleteRestarts(processID string) (map[string]Record, error) 
 	if _, err = tx.Exec("UPDATE history_restarts SET process_id=process_id WHERE 0"); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query("SELECT r.session_id,r.presentation_id,r.binary FROM history_restarts r JOIN history_sessions s ON s.id=r.session_id WHERE r.process_id<>? AND s.deleted=0 AND r.session_id LIKE 'owner/%' ORDER BY r.session_id", processID)
+	rows, err := tx.Query("SELECT r.session_id,r.presentation_id,r.binary FROM history_restarts r JOIN history_sessions s ON s.id=r.session_id WHERE r.process_id<>? AND s.deleted=0 AND r.session_id LIKE 'owner/%'", processID)
 	if err != nil {
 		return nil, err
 	}

@@ -55,3 +55,26 @@ func TestModelChangeStartsAnew(t *testing.T) {
 		t.Fatalf("resumed %s, records %v, log %q", memory, roles, l.lines)
 	}
 }
+
+// notAModeler is an agent that cannot say which model it answers with, as
+// only a modeler can: its sessions are continued as they are.
+type notAModeler struct{ Assistant }
+
+// An agent that cannot tell its model answers under none, and a session of a
+// service without an archive is kept with none either.
+func TestModelWithoutAModelerOrAnArchive(t *testing.T) {
+	an := notAModeler{&fakeAgent{model: "m1"}}
+	if _, ok := any(an).(modeler); ok {
+		t.Fatal("the agent tells its model")
+	}
+	s := New(an)
+	t.Cleanup(s.Close)
+	if got := s.model(); got != "" {
+		t.Fatalf("model %q", got)
+	}
+	se := &session{id: "s1"}
+	s.modelOf(se) // without an archive there is nothing to read it from
+	if se.model != "" {
+		t.Fatalf("kept %q", se.model)
+	}
+}

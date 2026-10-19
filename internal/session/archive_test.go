@@ -17,6 +17,7 @@ import (
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/storage"
 )
 
 // logs is what a Service logged.
@@ -246,6 +247,66 @@ func TestResumeWithoutEvents(t *testing.T) {
 	s, _, _ := archived(t, &fakeAgent{}, dir, time.Now())
 	if past, _, err := s.Watch(context.Background(), "s1"); err != nil || len(past) != 0 {
 		t.Fatalf("past %+v, %v", past, err)
+	}
+}
+
+// A restart that another build completed is told to the session it belongs
+// to when the service is given the archive again, once it holds it: the
+// session is loaded already, and finds its completion as it happened.
+func TestRestartCompletedWhileLoaded(t *testing.T) {
+	dir := t.TempDir()
+	if err := history.Open(dir).Append(history.Who{Session: "s1"}, []openai.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	s, arch, l := archived(t, &fakeAgent{}, dir, time.Now())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, live, err := s.Watch(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := arch.PendingRestart("owner/s1", "previous-image", "restart-id", "/new/ouro"); err != nil {
+		t.Fatal(err)
+	}
+	s.Archive(arch, l.log, func(string) string { return "" })
+	got := until(t, live, Restarted)
+	if last := got[len(got)-1]; last.Text != "/new/ouro" || last.PresentationID != "restart-id" || last.At.IsZero() {
+		t.Fatalf("restarted %+v", last)
+	}
+	if len(l.lines) != 0 {
+		t.Fatalf("log %v", l.lines)
+	}
+}
+
+// A model that cannot be read once the records were is logged, and the
+// session goes on without it.
+func TestArchiveFailsToReadTheModel(t *testing.T) {
+	dir := t.TempDir()
+	arch := history.Open(dir)
+	if err := arch.Append(history.Who{Session: "s1"}, []openai.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The archive keeps its database open, so the column it reads the model
+	// from can be taken from under it: the records are still there.
+	db, err := storage.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("ALTER TABLE history_sessions RENAME COLUMN model TO gone"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := service(t, &fakeAgent{})
+	l := &logs{}
+	s.Archive(arch, l.log, func(string) string { return "" })
+	if past, _, err := s.Watch(context.Background(), "s1"); err != nil || kinds(past) != "message" {
+		t.Fatalf("past %q, %v", kinds(past), err)
+	}
+	if !l.has("the model of the session s1 cannot be read") {
+		t.Errorf("log %q", l.lines)
 	}
 }
 

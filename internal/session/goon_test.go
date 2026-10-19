@@ -9,6 +9,8 @@ import (
 
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
+	"ouroboros/internal/openai"
+	"ouroboros/internal/storage"
 )
 
 // A session whose answer asked to go on by itself in the build it asked for
@@ -92,6 +94,58 @@ func TestGoOn(t *testing.T) {
 	next.archive.Archive = unavailableArchive(t)
 	next.GoOn()
 	logs("which sessions go on by themselves cannot be read")
+}
+
+// A session whose answer asked to go on by itself keeps the restart, but
+// what cannot mark it to go on is logged: only that part is lost.
+func TestGoOnMarkCannotBeKept(t *testing.T) {
+	dir := t.TempDir()
+	arch := history.Open(dir)
+	// Prepare the database the archive keeps open: the mark of another
+	// session opens it, so the column of the going-on mark can be taken from
+	// under it without being given back.
+	if err := arch.Append(history.Who{Session: "s0"}, []openai.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	db, err := storage.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("ALTER TABLE history_sessions RENAME COLUMN goon TO gone"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a := &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		AskRestart(ctx, "/new/ouro")
+		AskGoOn(ctx)
+		return "built", nil
+	}}
+	s := service(t, a)
+	l := &logs{}
+	s.Archive(arch, l.log, func(string) string { return "" })
+	replaced := make(chan string, 1)
+	s.Attach(nil, func(exe string) { replaced <- exe })
+	if err := s.Ask(context.Background(), "s1", "build"); err != nil {
+		t.Fatal(err)
+	}
+	s.answers.Wait()
+	select {
+	case exe := <-replaced:
+		if exe != "/new/ouro" {
+			t.Fatalf("replaced by %q", exe)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restart was not kept")
+	}
+	if !l.has("the session s1 does not go on by itself in the new build") {
+		t.Errorf("log %q", l.lines)
+	}
+	if l.has("the restart of the session s1 cannot be kept") {
+		t.Errorf("log %q", l.lines)
+	}
 }
 
 // A session whose answer asked for a build, but not to go on by itself,

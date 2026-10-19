@@ -106,3 +106,112 @@ func TestConnectionQuestionCannotApproveChangedRequest(t *testing.T) {
 		t.Fatalf("%+v", data)
 	}
 }
+
+// A rejection of a request that changed since it was shown is refused like an
+// approval of one.
+func TestConnectionQuestionCannotRejectChangedRequest(t *testing.T) {
+	alice, bob := serve(t, "alice"), serve(t, "bob")
+	alice.contacts.AddIncoming(bob.PublicKey, "bob", "", "")
+	data, _ := alice.contacts.Snapshot()
+	err := alice.network().approval(t.Context(), data.Incoming[0], func(context.Context, json.RawMessage) (string, error) {
+		alice.contacts.AddIncoming(bob.PublicKey, "changed", "", "")
+		return "Reject connection", nil
+	})
+	if err != ErrNoRequest {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A decision that cannot be stored is reported, for either answer, and the
+// request stays.
+func TestConnectionQuestionReportsUnstoredDecisions(t *testing.T) {
+	for _, answer := range []string{"Approve connection", "Reject connection"} {
+		t.Run(answer, func(t *testing.T) {
+			alice, bob := serve(t, "alice"), serve(t, "bob")
+			alice.contacts.AddIncoming(bob.PublicKey, "bob", "", "")
+			data, _ := alice.contacts.Snapshot()
+			repair := breakContacts(t, alice)
+			defer repair()
+			err := alice.network().approval(t.Context(), data.Incoming[0], func(context.Context, json.RawMessage) (string, error) {
+				return answer, nil
+			})
+			if err == nil {
+				t.Fatal("unstored decision reported as made")
+			}
+		})
+	}
+}
+
+// A decision that waits when the owner cancels ends with the conversation.
+func TestApprovalsStopWhenTheOwnerCancels(t *testing.T) {
+	alice, bob, carol := serve(t, "alice"), serve(t, "bob"), serve(t, "carol")
+	alice.contacts.AddIncoming(bob.PublicKey, "bob", "", "")
+	alice.contacts.AddIncoming(carol.PublicKey, "carol", "", "")
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		alice.network().Approvals(ctx, func(context.Context, json.RawMessage) (string, error) {
+			cancel()
+			return "", context.Canceled
+		}, nil)
+		close(done)
+	}()
+	<-done
+	if data, _ := alice.contacts.Snapshot(); len(data.Incoming) != 2 {
+		t.Fatalf("a canceled approval changed the requests: %+v", data.Incoming)
+	}
+}
+
+// A contact list that cannot be read is reported, and the wait goes on until
+// the context ends.
+func TestApprovalsReportUnreadableContacts(t *testing.T) {
+	alice, bob := serve(t, "alice"), serve(t, "bob")
+	alice.contacts.AddIncoming(bob.PublicKey, "bob", "", "")
+	repair := breakContacts(t, alice)
+	defer repair()
+	ctx, cancel := context.WithCancel(t.Context())
+	logged := make(chan string, 1)
+	done := make(chan struct{})
+	go func() {
+		alice.network().Approvals(ctx, nil, func(format string, args ...any) {
+			select {
+			case logged <- format:
+			default:
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-logged:
+	case <-done:
+		t.Fatal("approvals ended without a report")
+	}
+	cancel()
+	<-done
+}
+
+// An approval that fails while the owner is there is reported, and the wait
+// goes on.
+func TestApprovalsReportAFailedApproval(t *testing.T) {
+	alice, bob := serve(t, "alice"), serve(t, "bob")
+	alice.contacts.AddIncoming(bob.PublicKey, "bob", "", "")
+	ctx, cancel := context.WithCancel(t.Context())
+	logged := make(chan string, 1)
+	done := make(chan struct{})
+	go func() {
+		alice.network().Approvals(ctx, func(context.Context, json.RawMessage) (string, error) {
+			return "yes", nil
+		}, func(format string, args ...any) {
+			select {
+			case logged <- format:
+				cancel()
+			default:
+			}
+		})
+		close(done)
+	}()
+	<-done
+	if format := <-logged; format != "peer connection approval: %v" {
+		t.Fatalf("reported %q", format)
+	}
+}

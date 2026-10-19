@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ouroboros/internal/openai"
+	"ouroboros/internal/storage"
 )
 
 func legacy(t *testing.T, dir, relative, text string) string {
@@ -229,5 +230,47 @@ func TestSQLSubstringCandidates(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("%s: %d != %d (%v)", fmt.Sprintf("%q", q), got, want, err)
 		}
+	}
+}
+
+// A database that predates the model column gets it on the next open.
+func TestSQLAddsTheModelColumn(t *testing.T) {
+	a := Open(prepared(t, "ALTER TABLE history_sessions DROP COLUMN model"))
+	defer a.Close()
+	if err := a.SetModel("owner/draft", "gpt-4o"); err != nil {
+		t.Fatal(err)
+	}
+	if model, ok, err := a.Model("owner/draft"); err != nil || !ok || model != "gpt-4o" {
+		t.Fatalf("model: %q, %v, %v", model, ok, err)
+	}
+}
+
+// A model column that cannot be added fails the open, rather than leaving an
+// archive without it.
+func TestSQLCannotAddTheModelColumn(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "history")
+	db, err := storage.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	columns := []string{"id TEXT PRIMARY KEY", "archived INTEGER NOT NULL DEFAULT 0", "deleted INTEGER NOT NULL DEFAULT 0", "modified INTEGER NOT NULL DEFAULT 0"}
+	for i := 0; i < 1996; i++ {
+		columns = append(columns, fmt.Sprintf("c%d TEXT", i))
+	}
+	if _, err := db.Exec("CREATE TABLE history_sessions(" + strings.Join(columns, ",") + ")"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE INDEX history_recent ON history_sessions(archived,deleted,modified DESC)"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a := Open(dir)
+	defer a.Close()
+	if _, err := a.List(); err == nil || !strings.Contains(err.Error(), "too many columns") {
+		t.Fatalf("opened: %v", err)
 	}
 }

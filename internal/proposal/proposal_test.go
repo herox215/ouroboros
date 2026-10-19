@@ -1,6 +1,7 @@
 package proposal
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -291,5 +292,85 @@ func TestErrors(t *testing.T) {
 	os.Mkdir(filepath.Join(dir, "other.json.lock"), 0o700)
 	if _, err := Open(filepath.Join(dir, "other.json")).List(); err == nil {
 		t.Error("List without a lock")
+	}
+}
+
+// What Apply cannot do is reported, and the configuration it would have
+// changed stays as it was.
+func TestApplyErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		apply func(n *node) error
+		want  string
+	}{
+		{
+			// The owner's answer does not count for a proposal whose call was
+			// given up already.
+			name: "a canceled context",
+			apply: func(n *node) error {
+				p := n.propose("name", `"beta"`, "")
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return n.store.Apply(ctx, p, func(config.Config) error {
+					n.t.Error("a canceled call checked the configuration")
+					return nil
+				})
+			},
+			want: context.Canceled.Error(),
+		},
+		{
+			// A field that is no field cannot be read, and is not applied.
+			name: "an unknown field",
+			apply: func(n *node) error {
+				p := Proposal{ID: "x", Path: "nope", Before: json.RawMessage(`null`), Value: json.RawMessage(`1`)}
+				return n.store.Apply(context.Background(), p, func(config.Config) error {
+					n.t.Error("an unknown field checked the configuration")
+					return nil
+				})
+			},
+			want: `the configuration has no field "nope" that can be proposed`,
+		},
+		{
+			// A value of the wrong type is refused by the field, not written.
+			name: "a value of the wrong type",
+			apply: func(n *node) error {
+				before, err := n.config().Field("name")
+				if err != nil {
+					n.t.Fatal(err)
+				}
+				p := Proposal{ID: "x", Path: "name", Before: before, Value: json.RawMessage(`3`)}
+				return n.store.Apply(context.Background(), p, func(config.Config) error {
+					n.t.Error("a bad value checked the configuration")
+					return nil
+				})
+			},
+			want: "name: json: cannot unmarshal number into Go value of type string",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			n := newNode(t)
+			path := filepath.Join(n.dir, "config.json")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = tt.apply(n)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("apply: %v, want %q", err, tt.want)
+			}
+			if tt.name == "a canceled context" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("the error is not the one of the context: %v", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("the configuration changed:\n%s\nbefore:\n%s", after, before)
+			}
+			if cfg := n.config(); cfg.Name != "alpha" || cfg.Model != "gpt" {
+				t.Fatalf("the configuration changed: %+v", cfg)
+			}
+		})
 	}
 }

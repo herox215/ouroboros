@@ -760,6 +760,26 @@ func TestRelayText(t *testing.T) {
 	}
 }
 
+// Without an archive the thread keeps nothing to search, and says so.
+func TestThreadSearchWithoutArchive(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	if found, err := (threading{s}).Search(context.Background(), "anything"); err != nil || found != "nothing of this conversation is kept to search" {
+		t.Fatalf("searched %q, %v", found, err)
+	}
+}
+
+// What the thread cannot keep with its agent is logged, and the answer goes
+// on.
+func TestThreadNoteCannotBeKept(t *testing.T) {
+	s, _, l := archived(t, &fakeAgent{note: errors.New("no memory")}, t.TempDir(), time.Now())
+	s.mu.Lock()
+	s.note("s1", "shown")
+	s.mu.Unlock()
+	if !l.has("the thread cannot keep what it showed: no memory") {
+		t.Fatalf("log %q", l.lines)
+	}
+}
+
 // The thread goes on from the archive as it was shown: what it was told of
 // the sessions is no message of the owner, what it did on its way is not
 // shown, and what the sessions answered and asked shows as before. The

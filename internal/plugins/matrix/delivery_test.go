@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,5 +257,20 @@ func TestRoomsOfVersion1AreBaselined(t *testing.T) {
 	room := "!room:example.org @owner:example.org "
 	if got := conn.messages(); !slices.Equal(got, []string{room + "You, in the terminal:\nafter", room + "new answer"}) || entry.SentVersion != sentVersion {
 		t.Fatalf("sent %q, version %d", got, entry.SentVersion)
+	}
+}
+
+func TestDeliveryKeysKeepQuestionsAtDifferentTimesApart(t *testing.T) {
+	question := func(at time.Time) plugin.SessionEvent {
+		return plugin.SessionEvent{Kind: plugin.SessionAsked, Args: []byte(`{"question":"Which?"}`), At: at}
+	}
+	keys := deliveryKeys([]plugin.SessionEvent{question(time.Unix(1, 0)), question(time.Unix(2, 0)), question(time.Unix(1, 0))})
+	if len(keys) != 3 || keys[0] == keys[1] || keys[0] == keys[2] || keys[1] == keys[2] {
+		t.Fatalf("keys %q", keys)
+	}
+	for _, key := range keys {
+		if !strings.HasPrefix(key, "text:") {
+			t.Fatalf("key %q", key)
+		}
 	}
 }

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +125,129 @@ func TestRunDeliversImageAfterAuthorization(t *testing.T) {
 type mediaTransport struct {
 	base  http.RoundTripper
 	media string
+}
+
+// failingBody fails every read, as a download cut off mid-body would.
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+func (failingBody) Close() error             { return nil }
+
+// statusTransport answers with a status but no transport error.
+type statusTransport struct{ status int }
+
+func (s statusTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: s.status, Status: http.StatusText(s.status), Body: http.NoBody, Header: make(http.Header), Request: r}, nil
+}
+
+func TestDownloadImageFails(t *testing.T) {
+	content := func() *event.MessageEventContent {
+		return &event.MessageEventContent{MsgType: event.MsgImage, URL: "mxc://test/image"}
+	}
+	t.Run("declared size", func(t *testing.T) {
+		c := testClient(t, "https://matrix.test")
+		msg := content()
+		msg.Info = &event.FileInfo{Size: maxImageBytes + 1}
+		if _, err := c.downloadImage(context.Background(), msg); err == nil || !strings.Contains(err.Error(), "10 MiB") {
+			t.Fatalf("download: %v", err)
+		}
+	})
+	t.Run("request failure", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		c := testClient(t, server.URL)
+		c.cli.DefaultHTTPRetries = 0
+		server.Close()
+		if _, err := c.downloadImage(context.Background(), content()); err == nil || !strings.Contains(err.Error(), "download failed") {
+			t.Fatalf("download: %v", err)
+		}
+	})
+	t.Run("unexpected status", func(t *testing.T) {
+		c := testClient(t, "https://matrix.test")
+		c.cli.Client = &http.Client{Transport: statusTransport{status: http.StatusNoContent}}
+		if _, err := c.downloadImage(context.Background(), content()); err == nil || !strings.Contains(err.Error(), "download failed") {
+			t.Fatalf("download: %v", err)
+		}
+	})
+	t.Run("body read failure", func(t *testing.T) {
+		c := testClient(t, "https://matrix.test")
+		c.cli.Client = &http.Client{Transport: bodyTransport{http.StatusOK}}
+		if _, err := c.downloadImage(context.Background(), content()); err == nil || !strings.Contains(err.Error(), "download failed") {
+			t.Fatalf("download: %v", err)
+		}
+	})
+}
+
+// bodyTransport answers every request with a body that cannot be read.
+type bodyTransport struct{ status int }
+
+func (b bodyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: b.status, Status: http.StatusText(b.status), Body: failingBody{}, Header: make(http.Header), Request: r}, nil
+}
+
+func TestRunReportsImagesItCannotRead(t *testing.T) {
+	live := time.Now().Add(time.Hour).UnixMilli()
+	change := func(e *event.Event) {
+		e.Content.Parsed = &event.MessageEventContent{MsgType: event.MsgImage, Body: "What is this?", URL: "mxc://test/image"}
+	}
+	for _, tc := range []struct {
+		name    string
+		handler http.Handler
+		want    []string
+	}{
+		{"download fails", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "gone", http.StatusInternalServerError) }),
+			[]string{"The image could not be read: media download failed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			crypt := &fakeCrypto{change: map[id.EventID]func(*event.Event){"$image": change}}
+			useCrypto(t, crypt, nil)
+			media := httptest.NewServer(tc.handler)
+			defer media.Close()
+			h := newHomeserver(t, joined(nil), joined(map[string][]map[string]any{"!dm:test": {encryptedEvent("$image", "@alice:test", live)}}))
+			c := testClient(t, h.server.URL)
+			c.cli.Client = &http.Client{Transport: mediaTransport{base: http.DefaultTransport, media: media.URL}}
+			delivered, err := runUntilIdle(t, h, c, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(delivered) != 0 || !slices.Equal(crypt.sent(), tc.want) {
+				t.Fatalf("delivered %+v, sent %q", delivered, crypt.sent())
+			}
+			if sent, _, _ := h.requests(); !slices.Equal(sent, []string{"!dm:test"}) {
+				t.Fatalf("sent to %v", sent)
+			}
+		})
+	}
+}
+
+func TestRunDropsAnImageWhoseRoomChangedWhileDownloading(t *testing.T) {
+	live := time.Now().Add(time.Hour).UnixMilli()
+	plain := imageFixture(t)
+	change := func(e *event.Event) {
+		e.Content.Parsed = &event.MessageEventContent{MsgType: event.MsgImage, Body: "What is this?", URL: "mxc://test/image"}
+	}
+	crypt := &fakeCrypto{change: map[id.EventID]func(*event.Event){"$image": change}}
+	useCrypto(t, crypt, nil)
+	h := newHomeserver(t, joined(nil), joined(map[string][]map[string]any{"!dm:test": {encryptedEvent("$image", "@alice:test", live)}}))
+	requests := 0
+	media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		// The room stops being safe while the image is on its way.
+		h.breakRoom("!dm:test", true)
+		w.Write(plain)
+	}))
+	defer media.Close()
+	c := testClient(t, h.server.URL)
+	c.cli.Client = &http.Client{Transport: mediaTransport{base: http.DefaultTransport, media: media.URL}}
+	delivered, err := runUntilIdle(t, h, c, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: %v", err)
+	}
+	if requests != 1 || len(delivered) != 0 || len(crypt.sent()) != 0 {
+		t.Fatalf("requests=%d delivered=%+v sent=%q", requests, delivered, crypt.sent())
+	}
+	if sent, _, _ := h.requests(); len(sent) != 0 {
+		t.Fatalf("sent to %v", sent)
+	}
 }
 
 func (m mediaTransport) RoundTrip(r *http.Request) (*http.Response, error) {

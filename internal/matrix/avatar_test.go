@@ -187,3 +187,22 @@ func TestSetAvatarErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSetAvatarRejectsAnUnsupportedFormat(t *testing.T) {
+	// A format this package can read its header from but does not upload.
+	image.RegisterFormat("testonly", "OURO", func(io.Reader) (image.Image, error) {
+		return image.NewGray(image.Rect(0, 0, 1, 1)), nil
+	}, func(io.Reader) (image.Config, error) {
+		return image.Config{Width: 1, Height: 1}, nil
+	})
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		t.Error("unsupported image reached server")
+	}))
+	defer server.Close()
+	got, err := avatarClient(t, server.URL).SetAvatar(context.Background(), []byte("OURO"))
+	if got != "" || err == nil || err.Error() != "supported avatars are PNG, JPEG and GIF" || requests != 0 {
+		t.Fatalf("SetAvatar = %q, %v; requests=%d", got, err, requests)
+	}
+}

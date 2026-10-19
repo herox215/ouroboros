@@ -445,3 +445,50 @@ func TestReadCutsBeforeACharacter(t *testing.T) {
 		t.Fatalf("page of %d bytes, note %q", len(text), note)
 	}
 }
+
+// A deletion that cannot remove the pending restart deletes nothing.
+func TestDeleteFailsAtRestartRemoval(t *testing.T) {
+	a := at(t)
+	if err := a.Append(owner, question, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.PendingRestart(Owner(owner.Session), "old", "presentation", "binary"); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, a, broken("BEFORE DELETE ON history_restarts"))
+	if err := a.Delete(Owner(owner.Session)); err == nil || errors.Is(err, ErrNotArchived) {
+		t.Fatalf("deleted: %v", err)
+	}
+	if records, err := a.Records(Owner(owner.Session)); err != nil || len(records) != 2 {
+		t.Fatalf("records %+v, %v", records, err)
+	}
+}
+
+// A note of the model that cannot begin a transaction of its own is not kept.
+func TestNoteModelCannotBegin(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "history")
+	a := Open(dir)
+	if err := a.SetModel("owner/noted", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(root, inTransaction)
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	a = Open(moved)
+	defer a.Close()
+	// The hook of the directory begins a transaction on every connection, so
+	// the model is still kept, but noting it cannot begin one.
+	db, err := storage.Open(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.db = db
+	if err := a.NoteModel("owner/noted", "m2"); err == nil {
+		t.Fatal("the model was noted")
+	}
+}

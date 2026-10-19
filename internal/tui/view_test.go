@@ -291,3 +291,25 @@ func TestFooterHintsWithoutTheInput(t *testing.T) {
 		t.Errorf("with the jobs alone: %q", got)
 	}
 }
+
+// With more suggestions than a low dialog shows, the list scrolls to the
+// selected one, and keeps the title in view.
+func TestPendingScreenScrollsToSelection(t *testing.T) {
+	m, b := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{
+		{ID: "s1", Text: "first suggestion"},
+		{ID: "s2", Text: "second suggestion"},
+		{ID: "s3", Text: "third suggestion"},
+		{ID: "s4", Text: "fourth suggestion"},
+	}}
+	m.Update(m.loadContacts())
+	run(m, "/suggestions")
+	for range 3 {
+		press(m, "down")
+	}
+	v := view(m)
+	if !strings.Contains(v, "Suggestions") || !strings.Contains(v, "fourth suggestion") || strings.Contains(v, "first suggestion") {
+		t.Fatalf("the selected suggestion is not in view:\n%s", v)
+	}
+}

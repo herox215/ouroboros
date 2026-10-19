@@ -167,6 +167,7 @@ type fakeCrypto struct {
 	failures  map[id.EventID]int
 	change    map[id.EventID]func(*event.Event)
 	encrypted int
+	plaintext []string     // what was handed to encrypt
 	sealing   func() error // runs while a message is encrypted
 	closed    bool
 }
@@ -189,9 +190,10 @@ func (f *fakeCrypto) decrypt(_ context.Context, e *event.Event) (*event.Event, e
 	return plain, nil
 }
 
-func (f *fakeCrypto) encrypt(context.Context, id.RoomID, id.UserID, string) (*event.EncryptedEventContent, error) {
+func (f *fakeCrypto) encrypt(_ context.Context, _ id.RoomID, _ id.UserID, text string) (*event.EncryptedEventContent, error) {
 	f.mu.Lock()
 	f.encrypted++
+	f.plaintext = append(f.plaintext, text)
 	hook := f.sealing
 	f.mu.Unlock()
 	if hook != nil {
@@ -213,6 +215,12 @@ func (f *fakeCrypto) tried() []id.EventID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.decrypted)
+}
+
+func (f *fakeCrypto) sent() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.plaintext)
 }
 
 // useCrypto makes Run start with crypt, or fail with err, instead of setting

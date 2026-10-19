@@ -665,3 +665,31 @@ func TestSDKRefusesToForwardRoomKeys(t *testing.T) {
 		t.Fatal("the fixture cannot forward keys")
 	}
 }
+
+func TestNewCryptoRemovesAKeyItCouldNotWrite(t *testing.T) {
+	m := newMock(t)
+	c := m.client(t, "@bot:test", "BOT")
+	var limit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	// One byte short of the key: no file of the process can hold it, as on a
+	// full disk. The limit is small enough not to get in the way of anything
+	// else this process writes.
+	narrow := limit
+	narrow.Cur = 31
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &narrow); err != nil {
+		t.Fatal(err)
+	}
+	crypt, err := newCrypto(context.Background(), c)
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(err, syscall.EFBIG) || crypt != nil {
+		t.Fatalf("started with a key that is not on disk: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(cryptoStateDir(c.cfg), "pickle.key")); !os.IsNotExist(err) {
+		t.Fatalf("left the key behind: %v", err)
+	}
+	setupCrypto(t, c)
+}

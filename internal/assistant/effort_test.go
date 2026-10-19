@@ -61,3 +61,21 @@ func TestEffortOfASession(t *testing.T) {
 		t.Fatalf("an unreadable configuration: %q", broken.Effort())
 	}
 }
+
+// Model is the model of the configuration as it is now, and "" if the
+// configuration cannot be read.
+func TestModel(t *testing.T) {
+	cfg := config.Config{Access: "a", Model: "m", Name: "me", PrivateKey: identity.Generate().Private()}
+	a := New(func() (config.Config, error) { return cfg, nil }, Builder{}, discard)
+	if got := a.Model(); got != "m" {
+		t.Fatalf("model %q", got)
+	}
+	cfg.Model = "other"
+	if got := a.Model(); got != "other" {
+		t.Fatalf("the model as configured anew %q", got)
+	}
+	broken := New(func() (config.Config, error) { return config.Config{Model: "max"}, errors.New("unreadable") }, Builder{}, discard)
+	if got := broken.Model(); got != "" {
+		t.Fatalf("an unreadable configuration: %q", got)
+	}
+}

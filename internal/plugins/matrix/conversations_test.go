@@ -203,11 +203,12 @@ func conversationStore(t *testing.T) (store, configuration) {
 
 func TestOpenConversationsRefusesDamagedState(t *testing.T) {
 	for name, data := range map[string]string{
-		"no JSON":     "{",
-		"no entry":    `{"key": null}`,
-		"no session":  `{"key": {"Session": "", "Room": "!room:example.org", "Identity": {"Gateway": "matrix:x", "Subject": "@owner:example.org\n!room:example.org"}}}`,
-		"no room":     `{"key": {"Session": "s", "Room": "", "Identity": {"Gateway": "matrix:x", "Subject": "@owner:example.org\n!room:example.org"}}}`,
-		"no identity": `{"key": {"Session": "s", "Room": "!room:example.org", "Identity": {"Gateway": "", "Subject": "@owner:example.org\n!room:example.org"}}}`,
+		"no JSON":                    "{",
+		"no entry":                   `{"key": null}`,
+		"no session":                 `{"key": {"Session": "", "Room": "!room:example.org", "Identity": {"Gateway": "matrix:x", "Subject": "@owner:example.org\n!room:example.org"}}}`,
+		"no room":                    `{"key": {"Session": "s", "Room": "", "Identity": {"Gateway": "matrix:x", "Subject": "@owner:example.org\n!room:example.org"}}}`,
+		"no identity":                `{"key": {"Session": "s", "Room": "!room:example.org", "Identity": {"Gateway": "", "Subject": "@owner:example.org\n!room:example.org"}}}`,
+		"unsupported delivery state": `{"key": {"Session": "s", "Room": "!room:example.org", "Identity": {"Gateway": "matrix:x", "Subject": "@owner:example.org\n!room:example.org"}, "SentVersion": 3}}`,
 	} {
 		s, _ := conversationStore(t)
 		if err := os.WriteFile(s.path("conversations.json"), []byte(data), 0600); err != nil {
@@ -371,5 +372,26 @@ func TestPresented(t *testing.T) {
 		if got := presented(tc.event); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.event.Kind, got, tc.want)
 		}
+	}
+}
+
+func TestReceiveExplainsAnUnsupportedImageBackend(t *testing.T) {
+	s, _ := conversationStore(t)
+	c, err := openConversations(s, &testSessions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &recordingConnection{}
+	msg := incoming{RoomID: "!room:example.org", Sender: "@owner:example.org", Text: "hello"}
+	if err := c.receive(context.Background(), conn, msg); err != nil {
+		t.Fatal(err)
+	}
+	msg.Text, msg.Images = "look", []plugin.Image{{Type: "image/png", Data: []byte("image")}}
+	if err := c.receive(context.Background(), conn, msg); err != nil {
+		t.Fatal(err)
+	}
+	sent := conn.messages()
+	if len(sent) != 1 || !strings.HasSuffix(sent[0], "This session backend does not support images.") {
+		t.Fatalf("sent %q", sent)
 	}
 }

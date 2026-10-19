@@ -21,6 +21,7 @@ func TestOutputHookScope(t *testing.T) {
 	}{
 		{"matrix", []openai.Message{matrix}, false, 1},
 		{"gui after matrix", []openai.Message{matrix, {Role: "user", Source: openai.MessageSource{Interface: "gui"}}}, false, 0},
+		{"skips what the assistant said", []openai.Message{matrix, {Role: "assistant", Content: "thinking"}}, false, 1},
 		{"other gateway", []openai.Message{{Role: "user", Source: openai.MessageSource{Interface: "api", Gateway: "other"}}}, false, 0},
 		{"unattributed", []openai.Message{matrix, {Role: "user"}}, false, 0},
 		{"peer", []openai.Message{matrix}, true, 0},

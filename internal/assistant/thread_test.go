@@ -6,8 +6,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/config"
+	"ouroboros/internal/openai"
 	"ouroboros/internal/workdir"
 )
 
@@ -108,5 +110,71 @@ func TestNote(t *testing.T) {
 	unset := New(func() (config.Config, error) { return config.Config{}, nil }, b, discard)
 	if err := unset.Note(context.Background(), "thread", "x"); !errors.Is(err, config.ErrIncomplete) {
 		t.Fatalf("not set up: %v", err)
+	}
+}
+
+// A tool of the thread that is given arguments it cannot read fails, and
+// hands nothing on: the session is asked nothing, the conversation searched
+// for nothing.
+func TestThreadToolsRefuseMalformedArguments(t *testing.T) {
+	thread := &fakeThread{}
+	ctx := WithThread(context.Background(), thread)
+	for tool, args := range map[string]string{
+		ToolSessionSend:  `{"session":1}`,
+		ToolSearchThread: `{"query":1}`,
+	} {
+		found := false
+		for _, candidate := range threadTools() {
+			if candidate.Name != tool {
+				continue
+			}
+			found = true
+			if got, err := candidate.Run(ctx, json.RawMessage(args)); err == nil || got != "" {
+				t.Errorf("%s with %s: %q, %v", tool, args, got, err)
+			}
+		}
+		if !found {
+			t.Fatalf("%s is no tool of the thread", tool)
+		}
+	}
+	if len(thread.sent)+len(thread.started)+len(thread.sought) != 0 {
+		t.Fatalf("handed on: sent %q, started %q, sought %q", thread.sent, thread.started, thread.sought)
+	}
+}
+
+// silentLLM answers nothing at all, however often it is asked: what a thread
+// gets for a session that answered nothing and said it went well.
+type silentLLM struct{}
+
+func (silentLLM) Complete(context.Context, string, []openai.Message, []openai.Tool) (openai.Message, error) {
+	return openai.Message{}, nil
+}
+
+// An answer of the thread that answers nothing is logged as one that handed
+// on, also when nothing went wrong: what the log tells is what a review of
+// the conversation reads. No answer of the thread is one a message follows up
+// on, so nothing is kept for the next message.
+func TestThreadLogsAnAnswerThatAnsweredNothing(t *testing.T) {
+	a, log := recorded(t, ownerConfig(), silentLLM{})
+	log.take()
+	ctx := WithThread(context.Background(), &fakeThread{})
+	reply, err := a.Run(ctx, "chat", "hi", nil, nil)
+	if err != nil || reply != "" {
+		t.Fatalf("got %q, %v", reply, err)
+	}
+	lines := log.take()
+	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "chat chat: answered after ") || !strings.Contains(last, handedOn) {
+		t.Fatalf("the log of an answer that answered nothing: %q", lines)
+	}
+	if _, _, ok := a.followed("chat", "and?", time.Now()); ok {
+		t.Fatal("an answer of the thread is followed up on")
+	}
+	// Outside the thread an answer that says nothing is an answer that says
+	// nothing: nothing was handed on.
+	if reply, err := a.Run(context.Background(), "other", "hi", nil, nil); err != nil || reply != "" {
+		t.Fatalf("outside the thread: %q, %v", reply, err)
+	}
+	if lines := log.take(); !strings.HasSuffix(lines[len(lines)-1], `: ""`) {
+		t.Fatalf("the log outside the thread: %q", lines)
 	}
 }
