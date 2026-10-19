@@ -35,10 +35,9 @@ class Element extends EventTarget {
 
   focus() { this.focused = true; }
 
-  scrollIntoView(options) {
-    this.scrolls ??= [];
-    this.scrolls.push(options);
-  }
+  // No scrollIntoView stub: the sticky composer is never scrolled into view,
+  // the page itself is moved, see the test on end scrolling.
+  scrollIntoView() { assert.fail('the frontend must move the page, not scroll an element into view'); }
 
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
@@ -63,6 +62,19 @@ class Element extends EventTarget {
       this.selectedIndex = 0;
     }
   }
+}
+
+// A page that clamps scrollTop at both ends, as a browser does.
+function scroller() {
+  let top = 0;
+  return {
+    scrollHeight: 0,
+    clientHeight: 0,
+    get scrollTop() { return top; },
+    set scrollTop(value) {
+      top = Math.max(0, Math.min(value, Math.max(0, this.scrollHeight - this.clientHeight)));
+    },
+  };
 }
 
 function documentFixture() {
@@ -94,10 +106,15 @@ function documentFixture() {
   };
   elements.profile.disabled = true;
   elements.error.hidden = true;
+  // The document gets the scroll events of the page, its window the resizes.
+  const events = new EventTarget();
   return {
     ...elements,
     body: new Element('body'),
-    scrollingElement: { scrollHeight: 0, clientHeight: 0, scrollTop: 0 },
+    scrollingElement: scroller(),
+    defaultView: new EventTarget(),
+    addEventListener: events.addEventListener.bind(events),
+    dispatchEvent: events.dispatchEvent.bind(events),
     getElementById(id) {
       assert.ok(Object.hasOwn(elements, id), 'Unexpected element: ' + id);
       return elements[id];
@@ -127,28 +144,108 @@ test('HTML supplies the module and accessible profile/error elements', async () 
   assert.match(html, /<[^>]+(?=[^>]*id="session-status")(?=[^>]*role="status")[^>]*>/);
 });
 
-test('live messages keep the composer visible unless the user has scrolled up', async () => {
+// The owner scrolls the page, as the browser reports it.
+function scrollPage(doc, top) {
+  doc.scrollingElement.scrollTop = top;
+  doc.dispatchEvent(new Event('scroll'));
+}
+
+// An open owner session on a page of 3200 px in a window of 900 px, where
+// every rendered message makes the transcript 400 px taller.
+async function liveSession(events = []) {
   const doc = archiveFixture();
-  const pending = [];
+  const page = doc.scrollingElement;
+  page.scrollHeight = 3200;
+  page.clientHeight = 900;
+  const append = doc.content.append.bind(doc.content);
+  doc.content.append = child => { append(child); page.scrollHeight += 400; };
+  const pending = [], sent = [];
   await browse({
     async Sessions() { return [{ id: 'owner/live' }]; },
-    async OpenSession() { return { token: 1, events: [] }; },
+    async OpenSession() { return { token: 1, events }; },
     PollSession() { const next = deferred(); pending.push(next); return next.promise; },
+    async SendMessage(...args) { sent.push(args); },
   }, doc);
-  assert.equal(doc.composer.scrolls.length, 1);
+  return { doc, page, pending, sent };
+}
+
+test('live messages keep the page at its end unless the user has scrolled up', async () => {
+  const { doc, page, pending } = await liveSession();
+  assert.equal(page.scrollTop, 2300, 'the empty transcript still sits at its end');
   pending[0].resolve([{ kind: 'answer', text: 'new' }]);
   await settle();
-  assert.equal(doc.composer.scrolls.length, 2);
-  doc.scrollingElement.scrollHeight = 2000;
-  doc.scrollingElement.clientHeight = 900;
+  assert.equal(doc.content.children.length, 1);
+  assert.equal(page.scrollTop, 2700, 'the answer is followed to the new end');
+  // The owner scrolls up to read earlier messages: new output must not pull the page down.
+  scrollPage(doc, 100);
   pending[1].resolve([{ kind: 'answer', text: 'more' }]);
   await settle();
-  assert.equal(doc.composer.scrolls.length, 2);
+  assert.equal(doc.content.children.length, 2);
+  assert.equal(page.scrollTop, 100, 'reading earlier messages is not interrupted');
+  // Scrolled back down, close enough to the end, output is followed again.
+  scrollPage(doc, 4000 - 900 - 40);
+  pending[2].resolve([{ kind: 'answer', text: 'again' }]);
+  await settle();
+  assert.equal(page.scrollTop, 4400 - 900);
+});
+
+test('who sends is taken to the end and follows the answer, also when scrolled up', async () => {
+  const { doc, page, pending, sent } = await liveSession();
+  scrollPage(doc, 100);
+  typeDraft(doc, 'hello');
+  submit(doc);
+  assert.deepEqual(sent, [[0, 'owner/live', 'hello']]);
+  assert.equal(page.scrollTop, 2300, 'sending takes the owner to the end at once');
+  await settle();
+  pending[0].resolve([{ kind: 'message', text: 'hello' }, { kind: 'answer', text: 'reply' }]);
+  await settle();
+  assert.equal(page.scrollTop, 4000 - 900, 'the message and its answer are followed');
+  // An option of a question sends as well, while the agent waits for it.
+  pending[1].resolve([{ kind: 'asked', question: { text: 'Which?', options: ['a', 'b'] } }]);
+  await settle();
+  scrollPage(doc, 100);
+  doc['question-options'].children[0].dispatchEvent(new Event('click'));
+  assert.deepEqual(sent[1], [0, 'owner/live', 'a']);
+  assert.equal(page.scrollTop, page.scrollHeight - 900, 'answering a question takes the owner to the end');
+});
+
+test('a blank or refused send does not move the page', async () => {
+  const { doc, page, sent } = await liveSession();
+  scrollPage(doc, 100);
+  typeDraft(doc, '   ');
+  submit(doc);
+  assert.deepEqual(sent, []);
+  assert.equal(page.scrollTop, 100);
+});
+
+test('a window made smaller at the end stays at the end, scrolled up it stays where it is', async () => {
+  const { doc, page, pending } = await liveSession();
+  page.clientHeight = 600;
+  doc.defaultView.dispatchEvent(new Event('resize'));
+  assert.equal(page.scrollTop, 3200 - 600, 'the end stays in view');
+  pending[0].resolve([{ kind: 'answer', text: 'new' }]);
+  await settle();
+  assert.equal(page.scrollTop, 3600 - 600, 'and output is still followed');
+  scrollPage(doc, 100);
+  page.clientHeight = 500;
+  doc.defaultView.dispatchEvent(new Event('resize'));
+  assert.equal(page.scrollTop, 100);
+  pending[1].resolve([{ kind: 'answer', text: 'more' }]);
+  await settle();
+  assert.equal(page.scrollTop, 100);
 });
 
 test('transcript layout uses real message heights for reliable end scrolling', async () => {
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
   assert.doesNotMatch(css, /content-visibility\s*:\s*auto|contain-intrinsic-size/);
+});
+
+// A sticky composer is pinned to the viewport bottom, so scrollIntoView() on it
+// is a no-op and the newest message would stay below the fold.
+test('end scrolling moves the page itself, which the sticky composer requires', async () => {
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.composer\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
+  assert.doesNotMatch(source, /scrollIntoView/);
 });
 
 test('sidebar toggle hides and restores navigation without changing the session', async () => {
@@ -360,12 +457,17 @@ test('sessions are sorted newest first and grouped without mutating bridge data'
 
 test('opening and switching sessions scrolls to the end only after the full replay', async () => {
   const doc = archiveFixture();
+  const page = doc.scrollingElement;
+  page.scrollHeight = 5000;
+  page.clientHeight = 800;
+  const scrolls = [];
+  let top = 0;
+  Object.defineProperty(page, 'scrollTop', {
+    get: () => top,
+    set(value) { top = value; scrolls.push({ top: value, messages: doc.content.children.length }); },
+  });
   const old = deferred();
   const events = Array.from({ length: 85 }, (_, i) => ({ kind: 'message', text: String(i) }));
-  const scrolls = [];
-  doc.composer.scrollIntoView = options => {
-    scrolls.push({ options, messages: doc.content.children.length });
-  };
   await browse({
     async Sessions() { return [{ id: 'owner/first' }, { id: 'peer/second' }, { id: 'owner/stale' }]; },
     async OpenSession(_, id) {
@@ -373,7 +475,7 @@ test('opening and switching sessions scrolls to the end only after the full repl
       return { token: 0, events };
     },
   }, doc);
-  assert.deepEqual(scrolls, [{ options: { block: 'end', behavior: 'instant' }, messages: 85 }]);
+  assert.deepEqual(scrolls, [{ top: 5000, messages: 85 }]);
   choose(doc, 'owner/stale');
   await settle();
   assert.equal(scrolls.length, 1);
