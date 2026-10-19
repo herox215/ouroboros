@@ -181,7 +181,8 @@ const (
 	SessionTask      = session.Task      // the report of a task the agent delegated, taken like a message: N, Remark, Text, Err
 	SessionTasks     = session.Tasks     // the tasks the agent delegated that run, a line each in Text
 	// SessionWorking is how much works for the thread, in N: while any
-	// does, it is thinking as far as the owner is shown.
+	// does, it is thinking as far as the owner is shown. Own tells that the
+	// thread itself answers, not only the sessions it handed messages to.
 	SessionWorking = session.Working
 	// SessionSuggestion is what the review of an answer proposes to change
 	// of ouro, in Text, after the answer ended. It changes nothing.

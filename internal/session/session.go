@@ -151,6 +151,9 @@ type Event struct {
 	// N is the number of a Task, the bytes of Calling, and how much is
 	// Working.
 	N int `json:"n,omitempty"`
+	// Own says of Working that the thread itself answers, not only the
+	// sessions it handed messages to.
+	Own bool `json:"own,omitempty"`
 	// Context is how long the context of the session is when the Event
 	// happens: what the last call of the LLM in it sent, in bytes, 0 if
 	// none was made yet.
@@ -409,13 +412,14 @@ type session struct {
 	// handed on: the thread shows what comes of it, see relay.
 	routed bool
 	// questions are, of the thread, the questions of sessions it asks the
-	// owner, the first of them now; working is how much works for it, as
-	// Working told it last. said is what the owner said to the answer on its
-	// way, which the thread hands on as it is, see words, with the pictures
-	// of those messages. roster is the list of the sessions it was told last,
-	// told answers ago, see inThread.
+	// owner, the first of them now; working is how much works for it, and
+	// own whether it answers itself, as Working told it last. said is what
+	// the owner said to the answer on its way, which the thread hands on as
+	// it is, see words, with the pictures of those messages. roster is the
+	// list of the sessions it was told last, told answers ago, see inThread.
 	questions []*relayed
 	working   int
+	own       bool
 	said      []string
 	pictures  []openai.Image
 	roster    string
@@ -1144,7 +1148,7 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 		past = append(past, s.effortEvent(se))
 	}
 	if se.working > 0 {
-		past = append(past, Event{Kind: Working, At: s.now().Round(0), N: se.working})
+		past = append(past, Event{Kind: Working, At: s.now().Round(0), N: se.working, Own: se.cancel != nil})
 	}
 	return past, live, nil
 }

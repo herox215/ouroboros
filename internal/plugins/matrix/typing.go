@@ -13,20 +13,27 @@ import (
 type typing map[*conversation]time.Time
 
 // answering reports whether an answer is on its way in the session id, as
-// its events tell, and does not wait for the owner: in the thread, while
-// anything works for it, which only it tells, see plugin.SessionWorking.
+// its events tell, and does not wait for the owner: in the thread, while it
+// writes the answer to what the owner said, or while work it handed on for a
+// message it has not answered yet goes on, which only it tells, see
+// plugin.SessionWorking. Work that goes on after its answer is background:
+// the room sees it when it is done, and is not told of it by typing.
 func answering(id string, events []plugin.SessionEvent) bool {
 	if id == plugin.ThreadID {
-		working, asking := false, false
+		working, asking, owed, own := false, false, false, false
 		for _, e := range events {
 			switch e.Kind {
 			case plugin.SessionWorking:
-				working = e.N > 0
+				working, own = e.N > 0, e.Own
 			case plugin.SessionAsked:
 				asking = !e.Done
+			case plugin.SessionMessage:
+				owed = true
+			case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled:
+				owed = false
 			}
 		}
-		return working && !asking
+		return working && !asking && (own || owed)
 	}
 	active := false
 	for _, e := range events {

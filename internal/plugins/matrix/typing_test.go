@@ -48,14 +48,23 @@ func TestAnswering(t *testing.T) {
 	if answering("s1", nil) {
 		t.Fatal("idle session is typing")
 	}
-	// The thread answers while anything works for it, whatever the
-	// messages and answers before, and not while it asks the owner.
-	working := []plugin.SessionEvent{{Kind: plugin.SessionMessage}, {Kind: plugin.SessionAnswer}, {Kind: plugin.SessionWorking, N: 1}}
-	if !answering(plugin.ThreadID, working) || answering(plugin.ThreadID, working[:2]) || answering(plugin.ThreadID, working[:1]) {
-		t.Fatal("the thread types while nothing works for it, or not while something does")
+	// The thread types while it answers what the owner said and has not
+	// answered yet, also when it handed the message on, and not after its
+	// answer: work that goes on then is background, and not typing.
+	msg := plugin.SessionEvent{Kind: plugin.SessionMessage}
+	work := plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1}
+	own := plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1, Own: true}
+	if !answering(plugin.ThreadID, []plugin.SessionEvent{msg, work}) || !answering(plugin.ThreadID, []plugin.SessionEvent{msg, own}) {
+		t.Fatal("the thread does not type while it answers")
 	}
-	asking := []plugin.SessionEvent{{Kind: plugin.SessionAsked}, {Kind: plugin.SessionWorking, N: 1}}
-	if answering(plugin.ThreadID, asking) || !answering(plugin.ThreadID, append(asking[:1:1], plugin.SessionEvent{Kind: plugin.SessionAsked, Done: true}, asking[1])) {
+	if answering(plugin.ThreadID, []plugin.SessionEvent{work}) || answering(plugin.ThreadID, []plugin.SessionEvent{msg, plugin.SessionEvent{Kind: plugin.SessionAnswer}, work}) {
+		t.Fatal("the thread types while nothing works for it, or after its answer")
+	}
+	if !answering(plugin.ThreadID, []plugin.SessionEvent{msg, plugin.SessionEvent{Kind: plugin.SessionAnswer}, own}) {
+		t.Fatal("the thread does not type while it answers the handed-on work")
+	}
+	asking := []plugin.SessionEvent{msg, plugin.SessionEvent{Kind: plugin.SessionAsked}, work}
+	if answering(plugin.ThreadID, asking) || !answering(plugin.ThreadID, []plugin.SessionEvent{msg, plugin.SessionEvent{Kind: plugin.SessionAsked}, plugin.SessionEvent{Kind: plugin.SessionAsked, Done: true}, work}) {
 		t.Fatal("the thread types while it asks, or not once it was answered")
 	}
 }

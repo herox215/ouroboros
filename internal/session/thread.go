@@ -577,14 +577,15 @@ func (s *Service) busy() {
 		return
 	}
 	n := 0
+	own := thread.cancel != nil
 	for _, se := range s.sessions {
 		if se.cancel != nil && (se == thread || se.routed) || slices.ContainsFunc(se.queue, func(m queued) bool { return m.routed }) {
 			n++
 		}
 	}
-	if n != thread.working {
-		thread.working = n
-		s.transient(thread, Event{Kind: Working, N: n})
+	if n != thread.working || own != thread.own {
+		thread.working, thread.own = n, own
+		s.transient(thread, Event{Kind: Working, N: n, Own: own})
 	}
 }
 

@@ -72,6 +72,12 @@ func TestPollTypingLifecycle(t *testing.T) {
 	expect(false)
 	set(msg, plugin.SessionEvent{Kind: plugin.SessionAnswer}, msg, work)
 	expect(true)
+	// Once the thread answered, work it handed on is background and does
+	// not keep the room typing; its own next answer does.
+	set(msg, plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "handed on"}, work)
+	expect(false)
+	set(msg, plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "handed on"}, plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1, Own: true})
+	expect(true)
 	cancel()
 	expect(false)
 }
