@@ -1,6 +1,7 @@
 package history
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -279,5 +280,34 @@ func TestCompleteRestartsReportsAReadThatFailsPartway(t *testing.T) {
 		CREATE TEMP TRIGGER no_update INSTEAD OF UPDATE ON history_restarts BEGIN SELECT 1; END`)
 	if completed, err := a.CompleteRestarts("new"); err == nil || completed != nil {
 		t.Fatalf("completion: %+v, %v", completed, err)
+	}
+}
+
+// A completed restart is counted in the size of the conversation it closes.
+func TestCompletedRestartGrowsTheSize(t *testing.T) {
+	a := at(t)
+	if err := a.PendingRestart("owner/trigger", "old", "presentation", "/new/ouro"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.CompleteRestarts("new")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("completion: %v, %v", got, err)
+	}
+	b, err := json.Marshal(got["owner/trigger"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := a.List(); err != nil || len(entries) != 1 || entries[0].Size != int64(len(b)+1) {
+		t.Fatalf("entries %+v, %v; want a size of %d", entries, err, len(b)+1)
+	}
+}
+
+// Nothing is pending in an archive that does not exist, which needs no
+// database to say so.
+func TestCompleteRestartsWithoutAnArchive(t *testing.T) {
+	a := Open(filepath.Join(t.TempDir(), "missing"))
+	defer a.Close()
+	if got, err := a.CompleteRestarts("new"); err != nil || got != nil {
+		t.Fatalf("completion: %v, %v", got, err)
 	}
 }

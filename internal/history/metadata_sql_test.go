@@ -1,6 +1,7 @@
 package history
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -125,5 +126,37 @@ func TestNoteModelFailsAtEveryWrite(t *testing.T) {
 				t.Fatal("the model was noted")
 			}
 		})
+	}
+}
+
+// NoteModel continues the numbering of the conversation and counts the record
+// it adds in the size of the conversation.
+func TestNoteModelContinuesTheNumbering(t *testing.T) {
+	a := at(t)
+	if err := a.Append(owner, question, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := all(t, a, owner)
+	if len(before) == 0 {
+		t.Fatal("no records before")
+	}
+	last := before[len(before)-1]
+	if err := a.NoteModel(Owner(owner.Session), "gpt-4o"); err != nil {
+		t.Fatal(err)
+	}
+	after := all(t, a, owner)
+	if len(after) != len(before)+1 || after[len(after)-1].Role != ModelChanged || after[len(after)-1].Seq != last.Seq+1 {
+		t.Fatalf("records after: %+v", after)
+	}
+	var want int64
+	for _, r := range after {
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want += int64(len(b) + 1)
+	}
+	if entries, err := a.List(); err != nil || len(entries) != 1 || entries[0].Size != want {
+		t.Fatalf("entries %+v, %v; want a size of %d", entries, err, want)
 	}
 }

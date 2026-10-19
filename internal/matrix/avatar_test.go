@@ -111,6 +111,12 @@ func TestSetAvatarRejectsInvalidImages(t *testing.T) {
 		"valid header with truncated pixels": valid[:len(valid)-20],
 		"dimension":                          avatarFixture(t, "png", maxAvatarDimension+1, 1),
 		"pixels":                             avatarFixture(t, "png", 2049, 2048),
+		// A valid image is refused for its length alone.
+		"valid beyond the byte limit": append(avatarFixture(t, "png", 2, 2), make([]byte, maxAvatarBytes)...),
+		// A JPEG or GIF header may name no width or no height, and its image
+		// decodes to an empty one: the dimensions have to be checked.
+		"zero width":  avatarFixture(t, "jpeg", 0, 5),
+		"zero height": avatarFixture(t, "jpeg", 5, 0),
 		// WebP is deliberately unsupported: this package has no WebP decoder.
 		"webp header": []byte("RIFFxxxxWEBPVP8 "),
 	}
@@ -204,5 +210,56 @@ func TestSetAvatarRejectsAnUnsupportedFormat(t *testing.T) {
 	got, err := avatarClient(t, server.URL).SetAvatar(context.Background(), []byte("OURO"))
 	if got != "" || err == nil || err.Error() != "supported avatars are PNG, JPEG and GIF" || requests != 0 {
 		t.Fatalf("SetAvatar = %q, %v; requests=%d", got, err, requests)
+	}
+}
+
+// avatarUploadClient answers the three calls SetAvatar makes for an image it
+// accepts.
+func avatarUploadClient(t *testing.T) *Client {
+	t.Helper()
+	profile := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch step := r.Method + " " + r.URL.Path; step {
+		case "POST /_matrix/media/v3/upload":
+			io.WriteString(w, `{"content_uri":"mxc://test/avatar"}`)
+		case "PUT /_matrix/client/v3/profile/@avatar-bot:test/avatar_url":
+			var body struct {
+				AvatarURL string `json:"avatar_url"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			profile = body.AvatarURL
+			io.WriteString(w, "{}")
+		case "GET /_matrix/client/v3/profile/@avatar-bot:test/avatar_url":
+			json.NewEncoder(w).Encode(map[string]string{"avatar_url": profile})
+		default:
+			t.Errorf("unexpected request %s", step)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return avatarClient(t, server.URL)
+}
+
+// An image at a limit is accepted: 4096 pixels on a side, 4 megapixels and
+// 5 MiB of file are the largest that fit, not the first that do not.
+func TestSetAvatarAcceptsTheLimits(t *testing.T) {
+	pad := func(data []byte, size int) []byte {
+		return append(data, make([]byte, size-len(data))...)
+	}
+	for name, data := range map[string][]byte{
+		"widest":  avatarFixture(t, "png", maxAvatarDimension, 1),
+		"tallest": avatarFixture(t, "png", 1, maxAvatarDimension),
+		"pixels":  avatarFixture(t, "png", 2048, 2048),
+		"bytes":   pad(avatarFixture(t, "png", 2, 2), maxAvatarBytes),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := avatarUploadClient(t).SetAvatar(context.Background(), data)
+			if err != nil || got != "mxc://test/avatar" {
+				t.Fatalf("SetAvatar = %q, %v", got, err)
+			}
+		})
 	}
 }

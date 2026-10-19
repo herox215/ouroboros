@@ -970,6 +970,11 @@ func TestWithSent(t *testing.T) {
 	if kept := a.memory.Conversation("c1"); kept[0].Content != "long" || len(kept) != 4 {
 		t.Fatalf("kept %+v", kept)
 	}
+	// Without a shape, what is kept is what is sent.
+	kept := []openai.Message{{Role: "user", Content: "keep"}}
+	if got := sent(WithSent(context.Background(), nil), kept); len(got) != 1 || got[0].Content != "keep" {
+		t.Fatalf("no shape: %+v", got)
+	}
 }
 
 // WithTools gives one answer other tools, and the conversation goes on as

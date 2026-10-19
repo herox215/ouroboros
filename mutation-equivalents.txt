@@ -55,8 +55,8 @@ internal/plugins/computer/computer.go:543:24 CONDITIONALS_BOUNDARY  # an element
 internal/plugins/computer/mcp.go:230:33 CONDITIONALS_BOUNDARY  # an empty line is no JSON, which handle passes over as well
 internal/plugins/computer/mcp.go:300:16 CONDITIONALS_BOUNDARY  # 2048 bytes cut to their last 2048 bytes are the same
 internal/guard/guard.go:513:16 INVERT_LOGICAL  # where the directory cannot be looked at (err) or was not listed before (!ok), one of the infos is nil and !os.SameFile is true anyway
-internal/history/history.go:341:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
-internal/history/history.go:232:21 CONDITIONALS_BOUNDARY  # the read at the end of a file that ends with a line break is empty, and an empty line is no record, which records skips like any other
+internal/history/history.go:360:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
+internal/history/history.go:251:21 CONDITIONALS_BOUNDARY  # the read at the end of a file that ends with a line break is empty, and an empty line is no record, which records skips like any other
 internal/history/sql.go:44:6 INVERT_LOOPCTRL  # the parents of a directory that exists exist too: going on up finds every one and ends with the same empty archive
 internal/history/sql.go:286:4 INVERT_LOOPCTRL  # nothing sets ascii back once it is false: going on only looks at more characters
 internal/plugins/files/files.go:784:87 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
@@ -96,7 +96,7 @@ internal/session/session.go:918:16 CONDITIONALS_BOUNDARY  # a title of exactly h
 internal/session/running_sessions.go:31:18 CONDITIONALS_BOUNDARY  # a title of exactly maxTitle bytes cut to maxTitle bytes stays as it is
 internal/session/session.go:561:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
 internal/storage/storage.go:95:17 ARITHMETIC_BASE  # 10/time.Millisecond is 0: the retries spin instead of sleeping, and the open still waits until the lock is free or the deadline passed
-internal/history/history.go:765:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
+internal/history/history.go:787:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
 internal/tui/tui.go:1061:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
 internal/tui/tui.go:960:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way

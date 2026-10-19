@@ -225,28 +225,41 @@ func TestRunDropsAnImageWhoseRoomChangedWhileDownloading(t *testing.T) {
 	change := func(e *event.Event) {
 		e.Content.Parsed = &event.MessageEventContent{MsgType: event.MsgImage, Body: "What is this?", URL: "mxc://test/image"}
 	}
-	crypt := &fakeCrypto{change: map[id.EventID]func(*event.Event){"$image": change}}
-	useCrypto(t, crypt, nil)
-	h := newHomeserver(t, joined(nil), joined(map[string][]map[string]any{"!dm:test": {encryptedEvent("$image", "@alice:test", live)}}))
-	requests := 0
-	media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		// The room stops being safe while the image is on its way.
-		h.breakRoom("!dm:test", true)
-		w.Write(plain)
-	}))
-	defer media.Close()
-	c := testClient(t, h.server.URL)
-	c.cli.Client = &http.Client{Transport: mediaTransport{base: http.DefaultTransport, media: media.URL}}
-	delivered, err := runUntilIdle(t, h, c, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run: %v", err)
-	}
-	if requests != 1 || len(delivered) != 0 || len(crypt.sent()) != 0 {
-		t.Fatalf("requests=%d delivered=%+v sent=%q", requests, delivered, crypt.sent())
-	}
-	if sent, _, _ := h.requests(); len(sent) != 0 {
-		t.Fatalf("sent to %v", sent)
+	for name, during := range map[string]func(t *testing.T, h *homeserver){
+		// The state of the room cannot be read any more.
+		"unreadable": func(t *testing.T, h *homeserver) { h.breakRoom("!dm:test", true) },
+		// Alice leaves and Bob becomes the peer: the sender is no longer the
+		// one it is safe to answer.
+		"changed hands": func(t *testing.T, h *homeserver) {
+			h.changeRoomAfterRead("!dm:test", map[string]event.Membership{"@bob:test": event.MembershipJoin})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			crypt := &fakeCrypto{change: map[id.EventID]func(*event.Event){"$image": change}}
+			useCrypto(t, crypt, nil)
+			h := newHomeserver(t, joined(nil), joined(map[string][]map[string]any{"!dm:test": {encryptedEvent("$image", "@alice:test", live)}}))
+			requests := 0
+			media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				// The room changes while the image is on its way.
+				during(t, h)
+				w.Write(plain)
+			}))
+			defer media.Close()
+			c := testClient(t, h.server.URL)
+			c.allowed["@bob:test"] = true
+			c.cli.Client = &http.Client{Transport: mediaTransport{base: http.DefaultTransport, media: media.URL}}
+			delivered, err := runUntilIdle(t, h, c, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run: %v", err)
+			}
+			if requests != 1 || len(delivered) != 0 || len(crypt.sent()) != 0 {
+				t.Fatalf("requests=%d delivered=%+v sent=%q", requests, delivered, crypt.sent())
+			}
+			if sent, _, _ := h.requests(); len(sent) != 0 {
+				t.Fatalf("sent to %v", sent)
+			}
+		})
 	}
 }
 

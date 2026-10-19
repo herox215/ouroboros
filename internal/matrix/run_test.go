@@ -31,6 +31,7 @@ type homeserver struct {
 	waiting chan struct{}
 	held    sync.Once
 	state   map[string][]*event.Event
+	changed map[string][]*event.Event // the state a room has from its next read on
 	broken  map[string]bool
 	reads   map[string]int // state requests per room
 	joins   []string
@@ -40,7 +41,7 @@ type homeserver struct {
 
 func newHomeserver(t *testing.T, syncs ...map[string]any) *homeserver {
 	h := &homeserver{t: t, user: "@bot:test", device: "BOT", syncs: syncs, waiting: make(chan struct{}),
-		state: map[string][]*event.Event{}, broken: map[string]bool{}, reads: map[string]int{}}
+		state: map[string][]*event.Event{}, changed: map[string][]*event.Event{}, broken: map[string]bool{}, reads: map[string]int{}}
 	h.server = httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.server.Close)
 	return h
@@ -87,6 +88,10 @@ func (h *homeserver) serve(w http.ResponseWriter, r *http.Request) {
 			encode(map[string]string{"errcode": "M_UNKNOWN", "error": "state unavailable"})
 			return
 		}
+		if next, ok := h.changed[path[1]]; ok {
+			h.state[path[1]] = next
+			delete(h.changed, path[1])
+		}
 		state, ok := h.state[path[1]]
 		if !ok {
 			state = safeEvents()
@@ -123,6 +128,17 @@ func (h *homeserver) room(room string, members map[string]event.Membership) {
 		state = append(state, stateEvent(event.StateMember, user, &event.MemberEventContent{Membership: membership}))
 	}
 	h.state[room] = state
+}
+
+// changeRoomAfterRead sets the state the room has from its next read on.
+func (h *homeserver) changeRoomAfterRead(room string, members map[string]event.Membership) {
+	state := safeEvents()[:2]
+	for user, membership := range members {
+		state = append(state, stateEvent(event.StateMember, user, &event.MemberEventContent{Membership: membership}))
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.changed[room] = state
 }
 
 func (h *homeserver) breakRoom(room string, broken bool) {
