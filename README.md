@@ -28,8 +28,9 @@ StatusNotifier tray icon (including on Omarchy/Quickshell); click for a small me
 with running session titles and an explicit action to open the GUI.
 Optional Waybar custom-module configuration and
 installation instructions are in [integrations](integrations/README.md). Native
-macOS/Windows tray adapters are not yet included; they can use the same status
-and open commands. Desktop configuration and auto-start are never changed
+macOS builds with cgo also show a native menu-bar icon with status, running
+session titles and “Open Ouroboros”. Windows has no native tray adapter yet;
+it can use the same status and open commands. Desktop configuration and auto-start are never changed
 automatically.
 
 ## Terminal UI

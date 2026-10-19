@@ -34,8 +34,8 @@ func TestTrayAggregate(t *testing.T) {
 }
 
 func TestTrayLifetime(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux node adapter")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Linux or macOS node adapter")
 	}
 	p := &Profile{log: func(err error) { t.Errorf("tray error: %v", err) }}
 	q := &Profile{}

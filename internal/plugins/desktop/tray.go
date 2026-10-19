@@ -114,9 +114,9 @@ func (c *controller) open() {
 }
 
 func (p *Profile) start() {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return
-	} // native adapters can join here later
+	}
 	if p.controller == nil {
 		Together([]*Profile{p})
 	}

@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && (!darwin || !cgo)
 
 // Package tray exposes Ouroboros as a StatusNotifierItem on Linux.
 package tray
@@ -11,5 +11,5 @@ import (
 
 // Run is unsupported outside Linux; it never calls either callback.
 func Run(ctx context.Context, sample func(context.Context) desktop.Status, open func()) error {
-	return errors.New("tray: StatusNotifierItem is supported only on Linux; use the platform desktop launcher instead")
+	return errors.New("tray: requires Linux or a macOS build with cgo; use the platform desktop launcher instead")
 }
