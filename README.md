@@ -399,7 +399,9 @@ your agent is thinking.
   is kept, in the archive and in the chat, stays whole: only what is sent is shorter. With DeepSeek V4.1 Flash at
   OpenCode Go, 18 messages about three topics sent 4 to 10k tokens a call, of which 86 to 98% were cached, but
   for the first after a start and the one after a cut of the conversation; `/context` shows what is sent.
-- **The last 6 hours.** The agent of the thread is sent only what happened in it in the last 6 hours, from the
+- **The last 6 hours.** The terminal thread view also shows only this rolling window; older
+  messages stay in the archive, and a thread with no recent messages opens empty.
+  The agent of the thread is sent only what happened in it in the last 6 hours, from the
   first message of yours or of ouro that is not older, and the last list of the conversations before that. What is
   older it finds with `search_thread`, which searches the whole thread in the archive, when you refer to it. Each
   time the 6 hours move past an answer, the next call finds nothing in the cache, as it begins anew.
@@ -410,6 +412,10 @@ your agent is thinking.
   The agent of the thread writes only the part of a message that belongs to the topic, or what your words mean
   where only the thread explains them, like your answer to a question it asked, in your voice. It never writes
   about you, the thread or other topics, nor sums up what the conversation said itself, which remembers it.
+In the terminal UI, new complete answers arriving in the visible thread unfold quickly in small
+word-like chunks, rather than appearing all at once. Reopened history is not animated, and answers
+already streamed by the model keep their normal streaming effect.
+
 - **What comes back.** The answer of a conversation that took a message the thread handed on is shown in the
   thread as the answer of your agent, and an answer that failed as one that failed. What such an answer asks you
   on its way is asked in the thread, one question at a time, and what you say there next answers it; answered in

@@ -222,7 +222,8 @@ const (
 // one round of the loop to its answer: what the agent said, if anything, and
 // the tool calls it asked for.
 type entry struct {
-	mine bool
+	reveal *textReveal // local display animation; text stays complete
+	mine   bool
 	// task is the report of a task the agent delegated, which its answer
 	// takes like a message of the owner: text is its line.
 	task bool
@@ -618,6 +619,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.onboard.input.SetStyles(textinput.DefaultStyles(msg.IsDark()))
 		}
 	case tickMsg:
+		if m.threadStart(m.chat) != m.chat.shown.first {
+			m.renderHistory(m.followsEnd())
+		}
 		return m, tea.Batch(m.refresh(), tick())
 	case splashMsg:
 		if m.onboard != nil {
@@ -719,6 +723,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, hide)
 	case inputFadeMsg:
 		return m, m.inputFaded()
+	case revealMsg:
+		return m, m.revealFrame(msg)
 	case answerMsg:
 		if !m.streaming || !m.chat.pending || m.chat.partial == "" {
 			m.streaming = false // the answer is over, or wrote nothing since

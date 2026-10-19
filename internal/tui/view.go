@@ -150,7 +150,9 @@ func (m *Model) layout() {
 // every answer included.
 func (m *Model) renderHistory(toBottom bool) {
 	c := m.chat
-	if len(c.entries) == 0 {
+	first := m.threadStart(c)
+	if first == len(c.entries) && !c.pending && len(c.queued) == 0 {
+		c.shown = rendered{first: first}
 		if m.resuming == c {
 			m.history.SetContent("")
 			return
@@ -178,7 +180,13 @@ func (m *Model) renderHistory(toBottom bool) {
 	// the last block there is the words of a round of an answer that is in,
 	// below which the line of its calls goes.
 	one := func(i int, blocks []string, words bool) ([]string, bool) {
+		if i < first {
+			return blocks, words
+		}
 		e := c.entries[i]
+		if e.reveal != nil {
+			e.text = string(e.reveal.runes[:e.reveal.shown])
+		}
 		// The report of a task is a line of its own: what the agent makes
 		// of it is its answer.
 		if e.task {
@@ -240,14 +248,14 @@ func (m *Model) renderHistory(toBottom bool) {
 	// costs only its own words, however long the conversation is.
 	settled, kept := c.settled(), c.shown.n
 	blocks := c.shown.blocks
-	if c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || kept > settled {
+	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || kept > settled {
 		kept, blocks = 0, nil
 	}
 	words := false // the last block is the words of a round of an answer that is in
 	for i := kept; i < settled; i++ {
 		blocks, words = one(i, blocks, words)
 	}
-	c.shown = rendered{n: settled, width: width, thoughts: !m.thoughtsHidden, blocks: blocks}
+	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, blocks: blocks}
 	for i := settled; i < len(c.entries); i++ {
 		blocks, words = one(i, blocks, words)
 	}
@@ -275,6 +283,7 @@ func (m *Model) renderHistory(toBottom bool) {
 // rendered are the entries of a conversation as the chat shows them, the
 // first n of them, wrapped for the width they were drawn at.
 type rendered struct {
+	first    int      // first entry inside the visible thread window
 	n        int      // of the entries, how many are in blocks
 	width    int      // the width of the chat they are wrapped for
 	thoughts bool     // whether what the model thought was shown then
@@ -285,6 +294,11 @@ type rendered struct {
 // them but those of the answer that is on its way, whose words, calls and line
 // of calls still change.
 func (c *conversation) settled() int {
+	for i, e := range c.entries {
+		if e.reveal != nil {
+			return i
+		}
+	}
 	if !c.pending {
 		return len(c.entries)
 	}

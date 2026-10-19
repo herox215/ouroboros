@@ -212,7 +212,11 @@ func (m *Model) replay(c *conversation, past []Event) {
 func (m *Model) event(msg eventMsg) tea.Cmd {
 	c := m.conversation(msg.id)
 	following := c == m.chat && m.followsEnd()
+	animate := c == m.chat && c.contextID == plugin.ThreadID && c.partial == "" && msg.event.Kind == plugin.SessionAnswer
 	cmd := m.apply(c, msg.event, true)
+	if animate && strings.TrimSpace(msg.event.Text) != "" {
+		cmd = tea.Batch(cmd, m.revealAnswer(c))
+	}
 	var glide tea.Cmd
 	// The pieces of the answer on its way are not drawn per piece but on the
 	// clock of the chat, see answerMsg.
