@@ -1197,7 +1197,7 @@ The file tools cannot do any of this: `config.json` is locked for them, see [Fil
 
 ### Providers and accesses
 
-A **provider** is a kind of LLM a node can talk to. This ouro has three, which the setup offers by these
+A **provider** is a kind of LLM a node can talk to. This ouro has four, which the setup offers by these
 names:
 
 | Provider | Signs in with | Answers through |
@@ -1205,6 +1205,7 @@ names:
 | **Custom Provider** (`openai`) | an endpoint and an API key, which may be none (a local Ollama): any OpenAI-compatible API | `POST /chat/completions` at the endpoint |
 | **ChatGPT** (`chatgpt`) | your ChatGPT account, in the browser ("Sign in with ChatGPT") | `POST /v1/responses` at `api.openai.com`, within the limits of your plan |
 | **OpenCode Go** (`opencode-go`) | the API key of your OpenCode Go subscription, from the OpenCode console, and nothing else | `POST /chat/completions` at `https://opencode.ai/zen/go/v1` |
+| **Claude Code** (`claude-code`, experimental) | the login of the official Claude Code CLI (`claude auth login`), with your Claude Pro, Max or Team plan | the CLI, which sends one `POST /v1/messages` to `api.anthropic.com` per call |
 
 **OpenCode Go** needs no endpoint from you: where it is reached is part of ouro. The key is kept with the
 other credentials and sent as `Authorization: Bearer …`, with the ID of the conversation in
@@ -1218,6 +1219,32 @@ for again, and an OpenCode Go that does not answer is told as that.
 
 An access you set up before as a custom provider stays what it is, also when its endpoint is the one of
 OpenCode Go: its ID, its key and the model in use are not touched, and nothing turns it into another kind.
+
+**Claude Code** lets the agents answer within your Claude plan instead of with an API key. It needs the
+official CLI, installed (`npm install -g @anthropic-ai/claude-code`) and signed in with `claude auth login`
+as the user ouro runs as. ouro looks for `claude` on `PATH` and where it is usually installed
+(`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, …), and the setup waits until the CLI says it is
+signed in. ouro keeps no token: the access holds where the CLI is, the e-mail address and the plan, and the
+directory of the login if `CLAUDE_CONFIG_DIR` named one when you signed in. What a call costs counts
+against the usage your plan has for the Agent SDK and `claude -p`, as for every app built on them. That is
+less per window than the interactive Claude Code gets. `/usage` shows the limits of the plan as the CLI
+fetches them.
+
+Every call starts the CLI once, with none of its own tools, settings, slash commands or MCP servers. ouro
+hands it the conversation as stream-json on stdin. The CLI takes the earlier messages without answering
+them and answers the last one. Its requests go to a relay of ouro on the loopback interface. The relay
+sends the first request to the API with the tools of the agent in place of those of the CLI, and refuses
+every request after it. It reads the answer as it passes: the text, the calls of tools, what the model
+thought (signed, to go back with the next call) and the usage. The agent runs the tools as with every other
+provider. The relay also puts every request of a conversation in the same form: the messages of the user
+as ouro sent them, without the reminders the CLI adds, and the date at the end. So the API finds what it
+cached of the conversation from the second call on. Variables that would send the CLI to another API or
+with another key (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, …) are not passed
+on. The CLI does not update itself while ouro runs it.
+
+The models are those the CLI offers for your plan. A plain model ID runs within the 200K window the CLI
+gives a gateway. This provider is experimental: it depends on how the CLI speaks stream-json, which is not a
+public interface of Anthropic and may change with an update of the CLI.
 
 An **access** is one way the node signs in: an endpoint with its key, or a ChatGPT account. A node can have
 several, also several of the same provider – a key of your own and one of work, or two Ollama servers. Each
@@ -1279,7 +1306,7 @@ a model in `/model` makes it the last of the fallbacks, marked `fallback 1`, `fa
 and `f` on a fallback takes it out again. Without fallbacks nothing changes: the answer stops with why.
 
 - **What hands on to a fallback**: a limit or a quota that is reached (HTTP 429 or 402, the limit of a ChatGPT
-  plan), a service that fails (HTTP 5xx, a plan that cannot be used right now), and an access that is not
+  or Claude plan), a service that fails (HTTP 5xx, a plan that cannot be used right now), and an access that is not
   reached at all, like a local server that is down. **What does not**: an error of what was asked, like a
   context that is too long or a model the access does not have, a key or a login that is refused, and an
   answer you stopped. Those are told as they are.
@@ -1699,8 +1726,9 @@ internal/cli         the list of plugins that make up ouro, and the frame they d
 internal/plugins     the standard plugins, one package each: commands, setup dialog, wiring
   assistant          builds the agents of the node
   base               the console and the dispatcher of the commands of all plugins
-  chatgpt, openai,   the providers of LLMs: ChatGPT, OpenAI-compatible APIs, OpenCode Go
-    opencode
+  chatgpt, openai,   the providers of LLMs: ChatGPT, OpenAI-compatible APIs, OpenCode Go,
+    opencode,        Claude Code
+    claudecode
   discovery,         finds the nodes online, on the network and on the tailnet
     tailscale
   files              the tools for files: read, write, edit, list, delete, search
@@ -1731,6 +1759,7 @@ internal/setup       the setup of the node: its accesses, model, name; the termi
 internal/llm         what a provider of an LLM is: how it signs in, lists its models and answers, and the one access it reaches
 internal/credentials the accesses of the node, in credentials.json: what it signs in to its LLMs with
 internal/chatgpt     the provider that signs in with ChatGPT: the login, its tokens, the Responses API (+ chatgpttest fake)
+internal/claudecode  the provider that answers through the Claude Code CLI: the CLI, the relay of its one request, the stream of the answer
 internal/node        the local node: Server runs it, Local controls the background one
 internal/session     the sessions of the owner: the Service the node runs them in, and the client of its socket
 internal/assistant   blueprint of the agents (owner and peers), their permitted tools and structured tool calls; owner activity goes to the log
