@@ -1,8 +1,12 @@
 // Profile is captured on open; changing the main profile picker cannot redirect a save.
 export function createSettingsDialog(bridge, modelDialog, doc = document) {
   const dialog = doc.createElement('dialog');
-  dialog.className = 'model-dialog';
+  dialog.className = 'model-dialog settings-dialog';
   dialog.setAttribute('aria-label', 'Settings');
+  // Opening a page focuses the dialog itself, not its first button, which
+  // would otherwise wear the focus ring before anything was chosen, and the
+  // focus is not lost with the button of the page before; Tab reaches them.
+  dialog.setAttribute('tabindex', '-1');
   doc.body.append(dialog);
   let profile = -1, name = '', version = 0, busy = false;
   let secrets = [];
@@ -14,35 +18,48 @@ export function createSettingsDialog(bridge, modelDialog, doc = document) {
     const b = el('button', text); b.type = 'button';
     b.addEventListener('click', run); return b;
   };
-  const page = title => {
+  // A button that shows only a symbol; its name is for screen readers and the tooltip.
+  const icon = (symbol, label, run) => {
+    const b = button(symbol, () => { if (!busy) run(); });
+    b.className = 'dialog-icon';
+    b.setAttribute('aria-label', label); b.title = label;
+    return b;
+  };
+  // Every page has a header: back to the page before where there is one,
+  // its title, and the close button in the corner.
+  const page = (title, back) => {
     version++;
     clearPassword(); secrets = [];
-    dialog.replaceChildren(el('h2', title));
+    const header = el('div'); header.className = 'dialog-header';
+    if (back) header.append(icon('‹', 'Back', back));
+    header.append(el('h2', title));
+    header.append(icon('×', 'Close', () => dialog.close()));
+    dialog.replaceChildren(header);
+    if (dialog.open) dialog.focus();
   };
   const home = () => {
     page('Settings · ' + name);
-    dialog.append(button('Model', () => { dialog.close(); modelDialog.open(profile, name); }));
+    dialog.append(button('Model', () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
     dialog.append(button('Gateways', gateways));
-    dialog.append(button('Close', () => dialog.close()));
   };
   const failure = () => {
     // Never reflect backend error strings: they may contain credentials.
     dialog.append(el('p', 'Gateway operation failed. Check the settings and try again.'));
   };
   const gateways = async () => {
-    page('Settings › Gateways');
-    dialog.append(button('Back', home));
+    page('Settings › Gateways', home);
     const current = ++version;
     const status = el('p', 'Loading …'); dialog.append(status);
     try {
       const list = await bridge.Gateways(profile);
       if (current !== version || !dialog.open) return;
       status.textContent = list.length ? '' : 'No gateway plugins available for this profile.';
+      status.hidden = !status.textContent;
       for (const item of list) dialog.append(button(item.Title || item.Name, () => gateway(item)));
-    } catch { if (current === version) { status.textContent = ''; failure(); } }
+    } catch { if (current === version) { status.textContent = ''; status.hidden = true; failure(); } }
   };
   const gateway = item => {
-    page('Settings › Gateways › ' + (item.Title || item.Name));
+    page('Settings › Gateways › ' + (item.Title || item.Name), () => { clearPassword(); gateways(); });
     const form = el('form');
     const field = (label, value, type = 'text') => {
       const l = el('label', label), input = el('input');
@@ -107,8 +124,9 @@ export function createSettingsDialog(bridge, modelDialog, doc = document) {
     form.addEventListener('submit', event => { event.preventDefault(); submit(false); });
     dialog.append(form);
   };
-  return { open(index, label = '') {
+  const show = (index, label = '') => {
     if (dialog.open) return;
-    profile = index; name = label; version++; home(); dialog.showModal();
-  } };
+    profile = index; name = label; version++; home(); dialog.showModal(); dialog.focus();
+  };
+  return { open: show };
 }

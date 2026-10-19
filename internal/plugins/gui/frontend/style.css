@@ -60,6 +60,25 @@ a { color: var(--accent); }
 .model-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
 .model-dialog-actions button { padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .model-dialog-actions .model-dialog-save { background: #eef0e7; border-color: #c2c3b6; }
+.model-dialog:focus-visible { outline: none; }
+/* The header of a dialog: back where there is a page to go back to, the title,
+   and the X in the corner. */
+.dialog-header { display: flex; align-items: center; gap: 6px; margin: -8px -10px 10px 0; }
+.dialog-header h2 { flex: 1; min-width: 0; }
+.model-dialog .dialog-icon { display: grid; place-items: center; flex: none; width: 36px; min-height: 36px; height: 36px; padding: 0 0 3px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; }
+.model-dialog .dialog-icon:hover:not(:disabled) { background: #eef0e7; border-color: var(--line); color: var(--accent); }
+.model-dialog .dialog-icon[hidden], .model-dialog-actions[hidden] { display: none; }
+.dialog-header .dialog-icon:first-child:not([hidden]) { margin-left: -10px; }
+.model-dialog-confirm { margin-top: 20px; padding: 14px 16px; border: 1px solid #e4dcc0; border-radius: 10px; background: #fbf7ea; font-size: 13px; }
+.model-dialog-confirm .model-dialog-actions { margin-top: 12px; }
+/* The settings pages put their buttons straight into the dialog and its form:
+   styled like the actions above, with room around them, and rounded, so that
+   the focus ring follows their corners. */
+.settings-dialog > button, .settings-dialog form > button { margin: 12px 10px 0 0; padding: 8px 18px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.settings-dialog > button:hover:not(:disabled), .settings-dialog form > button:hover:not(:disabled) { background: #eef0e7; }
+.settings-dialog form > button[type="submit"] { background: #eef0e7; border-color: #c2c3b6; }
+.settings-dialog > p, .settings-dialog form > p { margin-top: 16px; font-size: 13px; color: var(--muted); }
+.settings-dialog :focus-visible { outline-offset: 2px; }
 main { min-width: 0; }
 .session-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 25px 36px; border-bottom: 1px solid var(--line); }
 .session-heading { min-width: 0; flex: 1; }

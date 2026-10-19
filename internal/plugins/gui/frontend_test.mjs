@@ -1267,10 +1267,14 @@ test('reopening while a choice is sending keeps it locked; disconnect clears the
 });
 
 function dialogElements(doc) {
-  const dialog = doc.body.children.find(e => e.children[0]?.textContent === 'Modell einstellen');
-  const form = dialog.children[2];
-  return { dialog, form, access: form.children[0].children[0], model: form.children[1].children[0],
-    status: form.children[2], error: form.children[3], cancel: form.children[4].children[0], save: form.children[4].children[1] };
+  const dialog = doc.body.children.find(e => e.className === 'model-dialog');
+  const [header, , form] = dialog.children;
+  const [back, title, close] = header.children;
+  const confirm = form.children[4];
+  const [keep, discard, saveAndLeave] = confirm.children[1].children;
+  return { dialog, form, title, back, close, access: form.children[0].children[0], model: form.children[1].children[0],
+    status: form.children[2], error: form.children[3], confirm, keep, discard, saveAndLeave,
+    actions: form.children[5], save: form.children[5].children[0] };
 }
 
 test('reusable model dialog loads and saves for its explicit profile, and opens again', async () => {
@@ -1298,7 +1302,7 @@ test('reusable model dialog loads and saves for its explicit profile, and opens 
   await picker.open(0, 'Privat');
   assert.deepEqual(loaded, [1, 0]);
   assert.equal(doc.body.children.length, 1);
-  assert.equal(el.cancel.disabled, false);
+  assert.equal(el.close.disabled, false);
 });
 
 test('model dialog ignores a response after close and reports load/save errors', async () => {
@@ -1311,7 +1315,7 @@ test('model dialog ignores a response after close and reports load/save errors',
   }, doc);
   const pending = picker.open(0);
   const el = dialogElements(doc);
-  el.cancel.dispatchEvent(new Event('click'));
+  el.close.dispatchEvent(new Event('click'));
   resolve({ access: 'a', model: 'stale', accesses: [{ id: 'a', models: ['stale'] }] });
   await pending;
   assert.equal(el.access.children.length, 0);
@@ -1323,7 +1327,7 @@ test('model dialog ignores a response after close and reports load/save errors',
   request = Promise.resolve({ access: 'a', model: 'm', accesses: [{ id: 'a', label: 'A', models: ['m'] }] });
   await picker.open(1);
   el.form.dispatchEvent(new Event('submit', { cancelable: true }));
-  assert.equal(el.cancel.disabled, true);
+  assert.equal(el.close.disabled, true);
   await settle();
   assert.equal(el.dialog.open, true);
   assert.match(el.error.textContent, /Speichern fehlgeschlagen/);
@@ -1367,7 +1371,7 @@ test('a running save refuses a second submit and Escape, and locks the dialog', 
   const el = dialogElements(doc);
   el.model.value = 'n';
   el.form.dispatchEvent(new Event('submit', { cancelable: true }));
-  assert.equal(el.cancel.disabled, true);
+  assert.equal(el.close.disabled, true);
   assert.equal(el.status.textContent, 'Modell wird gespeichert …');
   el.form.dispatchEvent(new Event('submit', { cancelable: true }));
   const escape = new Event('cancel', { cancelable: true });
@@ -1379,7 +1383,18 @@ test('a running save refuses a second submit and Escape, and locks the dialog', 
   assert.equal(el.dialog.open, false);
   await picker.open(1, 'Arbeit');
   assert.equal(el.dialog.open, true);
-  assert.equal(el.cancel.disabled, false);
+  assert.equal(el.close.disabled, false);
+});
+
+test('settings opens on the dialog, not with the focus ring on its first button', async () => {
+  const doc = documentFixture();
+  createSettingsDialog({}, {}, doc).open(0, 'node');
+  const dialog = doc.body.children.at(-1);
+  assert.equal(dialog.getAttribute('tabindex'), '-1');
+  assert.equal(dialog.focused, true);
+  assert.match(dialog.className, /\bsettings-dialog\b/);
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.settings-dialog > button[^{]*\{[^}]*border-radius/);
 });
 
 test('settings icon navigates to the model dialog for the selected profile', async () => {
@@ -1398,6 +1413,12 @@ test('settings icon navigates to the model dialog for the selected profile', asy
   assert.deepEqual(loaded, [1]);
   assert.equal(dialogElements(doc).dialog.open, true);
   assert.match(dialogElements(doc).status.textContent, /Keine Zugänge/);
+  // The arrow leads back to the settings it was opened from.
+  const el = dialogElements(doc);
+  assert.equal(el.back.hidden, false);
+  el.back.dispatchEvent(new Event('click'));
+  assert.equal(el.dialog.open, false);
+  assert.equal(settings.open, true);
 });
 
 test('gateway navigation saves to captured profile, masks and clears credentials, and logs out', async () => {
@@ -1507,4 +1528,98 @@ test('gateway schema renders arbitrary fields without Matrix and clears all secr
   click('custom'); form = dialog.children.at(-1); inputs = fields();
   inputs[1].value = inputs[5].value = 'close'; dialog.close();
   assert.equal(inputs[1].value, ''); assert.equal(inputs[5].value, '');
+});
+
+test('settings pages close with the X in the corner and go back with the arrow', async () => {
+  const doc = documentFixture();
+  createSettingsDialog({ Gateways: async () => [{ Name: 'matrix', Title: 'Matrix' }] }, {}, doc).open(0, 'node');
+  const dialog = doc.body.children.at(-1);
+  const header = () => dialog.children[0];
+  const named = label => header().children.find(e => e.getAttribute('aria-label') === label);
+  const title = () => header().children.find(e => e.tagName === 'h2').textContent;
+  assert.equal(title(), 'Settings · node');
+  assert.equal(named('Back'), undefined, 'the first page has nowhere to go back to');
+  assert.equal(named('Close').textContent, '×');
+  assert.ok(!dialog.children.some(e => e.textContent === 'Close'), 'no Close button besides the X');
+  dialog.children.find(e => e.textContent === 'Gateways').dispatchEvent(new Event('click')); await settle();
+  assert.equal(title(), 'Settings › Gateways');
+  assert.equal(named('Back').textContent, '‹');
+  assert.ok(!dialog.children.some(e => e.tagName === 'p' && !e.hidden), 'no empty status line before the list');
+  dialog.children.find(e => e.textContent === 'Matrix').dispatchEvent(new Event('click'));
+  assert.equal(title(), 'Settings › Gateways › Matrix');
+  named('Back').dispatchEvent(new Event('click')); await settle();
+  assert.equal(title(), 'Settings › Gateways');
+  named('Back').dispatchEvent(new Event('click'));
+  assert.equal(title(), 'Settings · node');
+  named('Close').dispatchEvent(new Event('click'));
+  assert.equal(dialog.open, false);
+});
+
+test('model dialog has an X and, opened from a page, a back arrow instead of a cancel button', async () => {
+  const doc = documentFixture();
+  const picker = createModelDialog({ Models: async () => ({ access: 'a', model: 'm', accesses: [{ id: 'a', label: 'A', models: ['m'] }] }) }, doc);
+  await picker.open(0, 'Privat');
+  const el = dialogElements(doc);
+  assert.equal(el.title.textContent, 'Modell einstellen');
+  assert.equal(el.close.getAttribute('aria-label'), 'Schließen');
+  assert.equal(el.back.hidden, true, 'nowhere to go back to');
+  assert.deepEqual(el.actions.children.map(b => b.textContent), ['Speichern']);
+  assert.equal(el.dialog.focused, true);
+  el.close.dispatchEvent(new Event('click'));
+  assert.equal(el.dialog.open, false, 'nothing changed, so it closes at once');
+});
+
+test('model dialog asks to save or discard a change left by the X, back or Escape', async () => {
+  const doc = documentFixture();
+  const saved = [], backs = [];
+  let refuse = false;
+  const picker = createModelDialog({
+    Models: async () => ({ access: 'a', model: 'm', accesses: [{ id: 'a', label: 'A', models: ['m', 'n'] }] }),
+    SetModel: async (...args) => { if (refuse) throw new Error('Offline'); saved.push(args); },
+  }, doc);
+  const el = dialogElements(doc);
+  const asking = () => !el.confirm.hidden && el.actions.hidden;
+  const escape = () => { const e = new Event('cancel', { cancelable: true }); el.dialog.dispatchEvent(e); return e.defaultPrevented; };
+  await picker.open(0, 'Privat', () => backs.push('settings'));
+  el.model.value = 'n';
+  el.close.dispatchEvent(new Event('click'));
+  assert.equal(el.dialog.open, true);
+  assert.ok(asking());
+  el.keep.dispatchEvent(new Event('click'));
+  assert.ok(!asking());
+  assert.equal(el.model.value, 'n', 'editing goes on with the change');
+  assert.equal(escape(), true, 'Escape asks as well');
+  assert.ok(asking());
+  assert.equal(escape(), true, 'and a second Escape takes the question back');
+  assert.ok(!asking());
+  el.back.dispatchEvent(new Event('click'));
+  assert.ok(asking());
+  el.discard.dispatchEvent(new Event('click'));
+  assert.equal(el.dialog.open, false);
+  assert.deepEqual(backs, ['settings'], 'discarding goes where the owner was going');
+  assert.deepEqual(saved, []);
+  // Saving from the question saves and goes on.
+  await picker.open(0, 'Privat', () => backs.push('settings'));
+  assert.ok(!asking(), 'a new open starts without the question');
+  el.model.value = 'n';
+  el.back.dispatchEvent(new Event('click'));
+  el.saveAndLeave.dispatchEvent(new Event('click'));
+  await settle();
+  assert.deepEqual(saved, [[0, 'a', 'n']]);
+  assert.equal(el.dialog.open, false);
+  assert.deepEqual(backs, ['settings', 'settings']);
+  // A save that fails keeps the dialog open with the error.
+  refuse = true;
+  await picker.open(0, 'Privat');
+  el.model.value = 'n';
+  el.close.dispatchEvent(new Event('click'));
+  el.saveAndLeave.dispatchEvent(new Event('click'));
+  await settle();
+  assert.equal(el.dialog.open, true);
+  assert.ok(!asking());
+  assert.match(el.error.textContent, /Offline/);
+  // Changed back to what was shown, there is nothing to ask about.
+  el.model.value = 'm';
+  el.close.dispatchEvent(new Event('click'));
+  assert.equal(el.dialog.open, false);
 });
