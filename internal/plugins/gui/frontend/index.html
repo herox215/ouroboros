@@ -34,7 +34,9 @@
   </aside>
   <main id="main" tabindex="-1" aria-labelledby="session-title">
     <header class="session-header">
-      <button id="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true">◀ Sitzungen ausblenden</button>
+      <button id="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Seitenleiste ausblenden" title="Seitenleiste ausblenden">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.5"/><path d="M7.75 3.75v12.5"/></svg>
+      </button>
       <div class="session-heading">
         <p class="eyebrow">Sessions</p>
         <h1 id="session-title">Sitzung auswählen</h1>
@@ -42,11 +44,18 @@
       </div>
       <span class="readonly-badge">Sessions</span>
     </header>
-    <div class="transcript-wrap">
-      <p id="error" role="alert" hidden></p>
-      <p id="session-status" role="status">Wähle eine Sitzung, um den Chat zu öffnen.</p>
-      <noscript><p>Bitte aktiviere JavaScript, um die Sessions zu öffnen.</p></noscript>
-      <div id="content" aria-label="Sitzungsverlauf"></div>
+    <!-- The chat history scrolls on its own, and only it bounces at its ends:
+         header, composer and sidebar stay where they are. -->
+    <div id="transcript" class="transcript-scroller">
+      <div class="transcript-wrap">
+        <p id="error" role="alert" hidden></p>
+        <p id="session-status" role="status">Wähle eine Sitzung, um den Chat zu öffnen.</p>
+        <noscript><p>Bitte aktiviere JavaScript, um die Sessions zu öffnen.</p></noscript>
+        <div id="content" aria-label="Sitzungsverlauf"></div>
+        <div id="transcript-end" aria-hidden="true"></div>
+      </div>
+    </div>
+    <div class="composer-dock">
       <form id="composer" class="composer" aria-label="Nachricht verfassen">
         <section id="question-panel" class="question-panel" aria-labelledby="question-heading" aria-live="polite" hidden>
           <h2 id="question-heading">Deine Entscheidung</h2>
@@ -55,12 +64,12 @@
           <p id="question-hint"></p>
         </section>
         <label for="draft">Nachricht / eigene Antwort</label>
-        <textarea id="draft" rows="4" placeholder="Nachricht schreiben …" aria-describedby="composer-hint" disabled></textarea>
+        <textarea id="draft" rows="2" placeholder="Nachricht schreiben …" aria-describedby="composer-hint" disabled></textarea>
         <div class="composer-actions">
           <p id="composer-hint">Enter sendet · Shift+Enter für eine neue Zeile</p>
+          <p id="send-status" role="status"></p>
           <button id="send" type="submit" disabled>Senden</button>
         </div>
-        <p id="send-status" role="status"></p>
         <p id="send-error" role="alert" hidden></p>
       </form>
     </div>
