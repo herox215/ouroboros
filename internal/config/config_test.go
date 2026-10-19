@@ -251,6 +251,24 @@ func TestToolLists(t *testing.T) {
 	}
 }
 
+// A peer with a list of its own gets that list, even an empty one; any
+// other peer gets the list for peers.
+func TestToolsOf(t *testing.T) {
+	if got, own := (Config{}).ToolsOf("abc"); got != nil || own {
+		t.Errorf("without tools: %v, %v", got, own)
+	}
+	c := Config{Tools: &Tools{A2A: Named("list_peers"), Peers: map[string][]Entry{"abc": Named("build"), "def": {}}}}
+	if got, own := c.ToolsOf("abc"); !reflect.DeepEqual(got, Named("build")) || !own {
+		t.Errorf("a list of its own: %v, %v", got, own)
+	}
+	if got, own := c.ToolsOf("def"); got == nil || len(got) != 0 || !own {
+		t.Errorf("an empty list of its own: %v, %v", got, own)
+	}
+	if got, own := c.ToolsOf("ghi"); !reflect.DeepEqual(got, Named("list_peers")) || own {
+		t.Errorf("the list for peers: %v, %v", got, own)
+	}
+}
+
 // An owner who took all tools away keeps that choice when the file is rewritten.
 func TestToolListsSurviveSaving(t *testing.T) {
 	dir := t.TempDir()
@@ -473,6 +491,10 @@ func TestFields(t *testing.T) {
 	}
 	if err := plain.SetField("name", json.RawMessage(`"x"`)); err != nil || plain.Tools != nil {
 		t.Errorf("got %+v, %v", plain.Tools, err)
+	}
+	// A name of as many characters as allowed is not too long.
+	if err := plain.SetField("name", json.RawMessage(`"`+strings.Repeat("ä", MaxName)+`"`)); err != nil || plain.Name != strings.Repeat("ä", MaxName) {
+		t.Errorf("the longest name: %q, %v", plain.Name, err)
 	}
 
 	for _, tt := range []struct{ path, value, want string }{

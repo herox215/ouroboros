@@ -17,6 +17,7 @@ type testSessions struct {
 	plugin.Sessions
 	list       func(context.Context) ([]plugin.SessionInfo, error)
 	peers      []plugin.SessionInfo
+	peersErr   error
 	watch      func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error)
 	read       func(context.Context, string) ([]plugin.SessionEvent, error)
 	details    func(context.Context, string, string) (plugin.SessionToolResult, error)
@@ -51,7 +52,9 @@ func (s *testSessions) List(ctx context.Context) ([]plugin.SessionInfo, error) {
 	}
 	return nil, nil
 }
-func (s *testSessions) Peers(context.Context) ([]plugin.SessionInfo, error) { return s.peers, nil }
+func (s *testSessions) Peers(context.Context) ([]plugin.SessionInfo, error) {
+	return s.peers, s.peersErr
+}
 func (s *testSessions) Watch(ctx context.Context, id string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
 	return s.watch(ctx, id)
 }
@@ -278,7 +281,7 @@ func TestChatFormattingAndLazyDetails(t *testing.T) {
 	s := &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
 		return []plugin.SessionEvent{
 			{Kind: plugin.SessionStep, Tool: "read", CallID: "call", Args: json.RawMessage(`{"secret":"arguments"}`), Done: true, Err: "raw error", Remark: "full result", Text: "full result"},
-			{Kind: plugin.SessionStep, Tool: "run", CallID: "run-call", Done: true},
+			{Kind: plugin.SessionStep, Tool: "echo", CallID: "echo-call", Done: true},
 		}, nil, nil
 	}, details: func(_ context.Context, id, call string) (plugin.SessionToolResult, error) {
 		details++
@@ -296,7 +299,7 @@ func TestChatFormattingAndLazyDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Events[0].Text != "reading file ✓" || !snap.Events[0].Failed || snap.Events[1].Text != "run" || snap.Events[1].CallID != "run-call" {
+	if snap.Events[0].Text != "reading file ✓" || !snap.Events[0].Failed || snap.Events[1].Text != "echo" || snap.Events[1].CallID != "echo-call" || snap.Events[1].Failed {
 		t.Fatalf("format: %+v", snap)
 	}
 	b, _ := json.Marshal(snap)
@@ -354,5 +357,121 @@ func TestSessionBridgeErrors(t *testing.T) {
 	}})
 	if _, err := w.OpenSession(0, "owner/a"); !errors.Is(err, sentinel) {
 		t.Fatal(err)
+	}
+	if _, err := sessionWindow(t, &testSessions{peersErr: sentinel}).Sessions(0); !errors.Is(err, sentinel) {
+		t.Fatalf("peers: %v", err)
+	}
+	// Neither an empty call ID nor a service without tool details reaches a
+	// service: the one here has no details to give.
+	if _, err := sessionWindow(t, &testSessions{}).ToolResult(0, "owner/a", ""); err == nil || err.Error() != "empty tool call ID" {
+		t.Fatalf("empty call ID: %v", err)
+	}
+	if _, err := sessionWindow(t, struct{ plugin.Sessions }{&testSessions{}}).ToolResult(0, "owner/a", "call"); err == nil || err.Error() != "sessions service has no tool details" {
+		t.Fatalf("no tool details: %v", err)
+	}
+}
+
+// Without the views of plugins a step shows as the name of its tool.
+func TestStepWithoutPlugins(t *testing.T) {
+	w := sessionWindow(t, &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		return []plugin.SessionEvent{{Kind: plugin.SessionStep, Tool: "read", CallID: "call", Done: true, Err: "raw error", Text: "full result"}}, nil, nil
+	}})
+	snap, err := w.OpenSession(0, "owner/a")
+	if err != nil || len(snap.Events) != 1 || snap.Events[0].Text != "read" || !snap.Events[0].Failed {
+		t.Fatalf("step: %+v %v", snap, err)
+	}
+}
+
+// A window that closes or shuts down while a poll reads the live stream gets
+// nothing of it: whether that happens while the poll waits for more, or as
+// the batch fills. Here a restart does it, as the driver does.
+func TestPollClosedWhileReading(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		before   int  // events in the stream before the restart
+		shutdown bool // the restart cancels the context of the window rather than closing it
+	}{{"closed while waiting", 0, false}, {"shut down as the batch fills", 99, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			live := make(chan plugin.SessionEvent, 100)
+			for i := range tc.before {
+				live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: fmt.Sprint(i)}
+			}
+			live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/new/ouro"}
+			parent, shutdown := context.WithCancel(context.Background())
+			defer shutdown()
+			w := newWindowContext(parent, page{choices: []choice{{name: "a"}}, profiles: []*Profile{{sessions: &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+				return nil, live, nil
+			}}}}})
+			t.Cleanup(w.Close)
+			if tc.shutdown {
+				w.OnRestart(shutdown)
+			} else {
+				w.OnRestart(w.Close)
+			}
+			snapshot, err := w.OpenSession(0, "owner/s1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if events := w.PollSession(snapshot.Token); events == nil || len(events) != 0 {
+				t.Fatalf("events of a closed window: %+v", events)
+			}
+			if exe, _, ok := w.Restart(); !ok || exe != "/new/ouro" {
+				t.Fatalf("restart: %q %v", exe, ok)
+			}
+		})
+	}
+}
+
+// Peers alone are listed too, the latest first.
+func TestPeersAlone(t *testing.T) {
+	w := sessionWindow(t, &testSessions{peers: []plugin.SessionInfo{
+		{ID: "peer-a/old", Title: "old", Last: time.Unix(1, 0)},
+		{ID: "peer-b/new", Title: "new", Last: time.Unix(2, 0)},
+	}})
+	sessions, err := w.Sessions(0)
+	if err != nil || len(sessions) != 2 || sessions[0].ID != "peer-b/new" || sessions[1].ID != "peer-a/old" {
+		t.Fatalf("peers: %+v %v", sessions, err)
+	}
+}
+
+// A window that shuts down while a session opens gets nothing of it.
+func TestOpenWhileShuttingDown(t *testing.T) {
+	parent, shutdown := context.WithCancel(context.Background())
+	defer shutdown()
+	w := newWindowContext(parent, page{choices: []choice{{name: "a"}}, profiles: []*Profile{{sessions: &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		shutdown()
+		return []plugin.SessionEvent{{Kind: plugin.SessionAnswer, Text: "late"}}, nil, nil
+	}}}}})
+	t.Cleanup(w.Close)
+	if snapshot, err := w.OpenSession(0, "owner/s1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("opened while shutting down: %+v %v", snapshot, err)
+	}
+}
+
+// A window that never opened a session, or that shut down, has nothing to
+// poll: an empty batch, never the end of a stream it does not read.
+func TestPollWithoutAStream(t *testing.T) {
+	if events := sessionWindow(t, &testSessions{}).PollSession(0); events == nil || len(events) != 0 {
+		t.Fatalf("no session: %#v", events)
+	}
+	live := make(chan plugin.SessionEvent)
+	close(live)
+	parent, shutdown := context.WithCancel(context.Background())
+	defer shutdown()
+	w := newWindowContext(parent, page{choices: []choice{{name: "a"}}, profiles: []*Profile{{sessions: &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		return nil, live, nil
+	}}}}})
+	t.Cleanup(w.Close)
+	snapshot, err := w.OpenSession(0, "owner/s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown()
+	// The stream ended as well: whichever of the two a poll could see first,
+	// it sees the shutdown.
+	for range 32 {
+		if events := w.PollSession(snapshot.Token); events == nil || len(events) != 0 {
+			t.Fatalf("shut down: %#v", events)
+		}
 	}
 }

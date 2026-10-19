@@ -86,6 +86,20 @@ func TestToolDetailsDoesNotCreateArchive(t *testing.T) {
 	}
 }
 
+// A request that ended is not answered, and a Service without an archive
+// has no results of tools.
+func TestToolDetailsWithoutArchive(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.ToolResult(ended, "s", "call"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ended: %v", err)
+	}
+	if _, err := s.ToolResult(context.Background(), "s", "call"); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("without an archive: %v", err)
+	}
+}
+
 func TestLiveToolCallID(t *testing.T) {
 	a := &fakeAgent{run: func(_ context.Context, _ string, observe func(assistant.Step), _ func(string)) (string, error) {
 		observe(assistant.Step{ID: "live-call", Tool: "read"})

@@ -138,7 +138,7 @@ func (d Dir) SaveConfig(c config.Config) error {
 func (d Dir) Secrets() []string {
 	root := d.Root()
 	files := append(config.Files(string(root)), credentials.Files(string(root))...)
-	files = append(files, d.Browser())
+	files = append(files, d.Browser(), d.Gateways())
 	profiles, _ := d.Profiles()
 	for _, p := range profiles {
 		switch {
@@ -148,7 +148,7 @@ func (d Dir) Secrets() []string {
 			}
 			continue
 		case p == root:
-			files = append(files, p.path("contacts.json"), p.path("proposals.json"), p.path("failures.json"), p.History(), p.UpdateDir(), p.Browser())
+			files = append(files, p.path("contacts.json"), p.path("proposals.json"), p.path("failures.json"), p.History(), p.UpdateDir(), p.Browser(), p.Gateways())
 		default:
 			files = append(files, string(p))
 		}
@@ -177,6 +177,10 @@ func (d Dir) History() string { return d.path("history") }
 // Browser is the directory of the profile of the browser the agents of the
 // profile use: what they signed in to, their cookies.
 func (d Dir) Browser() string { return d.path("browser") }
+
+// Gateways holds the profile-local credentials, device keys and conversation
+// mappings of external messaging gateways. No agent tool may access it.
+func (d Dir) Gateways() string { return d.path("gateways") }
 
 // Services is the file of the services of the profile that run, by which
 // what a node that ended without stopping them left of them is stopped.

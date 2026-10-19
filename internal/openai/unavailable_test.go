@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"syscall"
 	"testing"
 )
 
@@ -49,6 +52,40 @@ func TestIsUnavailable(t *testing.T) {
 	} {
 		if got := IsUnavailable(tc.err); got != tc.want {
 			t.Errorf("%s: %v is unavailable: %v", name, tc.err, got)
+		}
+	}
+}
+
+// A call broke off on its way when its connection ended before the answer
+// was in, or a gateway or the service was overloaded for a moment: not when
+// it was stopped, waited too long or was refused for what it asked.
+func TestIsTransient(t *testing.T) {
+	post := func(err error) error { return &url.Error{Op: "Post", URL: "http://llm/v1/chat/completions", Err: err} }
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"closed":                  {post(io.EOF), true},
+		"closed in the middle":    {fmt.Errorf("stream: %w", io.ErrUnexpectedEOF), true},
+		"reset":                   {post(syscall.ECONNRESET), true},
+		"aborted":                 {post(syscall.ECONNABORTED), true},
+		"broken pipe":             {post(syscall.EPIPE), true},
+		"bad gateway":             {&APIError{Status: 502}, true},
+		"unavailable":             {fmt.Errorf("call: %w", &APIError{Status: 503}), true},
+		"gateway timeout":         {&APIError{Status: 504}, true},
+		"overloaded":              {&APIError{Status: 529}, true},
+		"the service fails":       {&APIError{Status: 500}, false},
+		"too many requests":       {&APIError{Status: 429}, false},
+		"a request that is wrong": {&APIError{Status: 400}, false},
+		"stopped":                 {post(context.Canceled), false},
+		"waited too long":         {post(context.DeadlineExceeded), false},
+		"stopped as it closed":    {errors.Join(context.Canceled, io.EOF), false},
+		"waited, then closed":     {errors.Join(context.DeadlineExceeded, io.ErrUnexpectedEOF), false},
+		"anything else":           {errors.New("openai: response has no choices"), false},
+		"nothing":                 {nil, false},
+	} {
+		if got := IsTransient(tc.err); got != tc.want {
+			t.Errorf("%s: %v is transient: %v", name, tc.err, got)
 		}
 	}
 }

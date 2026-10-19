@@ -31,7 +31,7 @@ import (
 // The limits of a command.
 const (
 	// DefaultTimeout is how long a command runs when the call does not say;
-	// a call may say longer, up to what is left of its script.
+	// a call may say longer, up to the deadline of its context.
 	DefaultTimeout = time.Minute
 	// MaxOutput is how much of what a command printed comes back: the start
 	// and the end of it, half each.
@@ -143,7 +143,7 @@ func Tool(g *guard.Guard) plugin.Tool {
 		Schema: `{"type":"object","properties":{` +
 			`"command":{"type":"string","description":"the command, as bash -c takes it; needed but with \"job\""},` +
 			`"dir":{"type":"string","description":"the directory it runs in: absolute, starting with \"~\", the home directory, or relative to the directory commands start in, where it runs if missing"},` +
-			fmt.Sprintf(`"timeout":{"type":"integer","description":"how many seconds it may run, %d if missing, at most what is left of the script; in the background as long as the answer if missing; with \"job\" limit the wait for completion (without a timeout it waits until done)"},`, int(DefaultTimeout/time.Second)) +
+			fmt.Sprintf(`"timeout":{"type":"integer","description":"how many seconds it may run, %d if missing, at most what is left of the call context; in the background as long as the answer if missing; with \"job\" limit the wait for completion (without a timeout it waits until done)"},`, int(DefaultTimeout/time.Second)) +
 			`"background":{"type":"boolean","description":"run the command as a job that keeps running, and return at once"},` +
 			`"job":{"type":"integer","description":"the number of a job: shows how it does, without \"command\""},` +
 			`"stop":{"type":"boolean","description":"with \"job\": stop the job"}` +
@@ -204,13 +204,12 @@ func run(ctx context.Context, g *guard.Guard, s settings, a args) (string, error
 		if a.Timeout > 0 {
 			timeout = time.Duration(a.Timeout) * time.Second
 		}
-		// The command ends before its script, so that the script gets its
-		// result.
+		// Leave time to return the result before the calling context ends.
 		if deadline, ok := ctx.Deadline(); ok {
 			timeout = min(timeout, time.Until(deadline)-grace)
 		}
 		if timeout <= 0 {
-			return "", errors.New("the script has no time left for a command")
+			return "", errors.New("the call has no time left for a command")
 		}
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 	}
@@ -300,13 +299,20 @@ func launch(ctx context.Context, cancel context.CancelFunc, dir string, s settin
 	}()
 	go func() {
 		cmd.Wait()
-		p.took, p.stopped = time.Since(p.start), ctx.Err() != nil
-		p.late = errors.Is(ctx.Err(), context.DeadlineExceeded)
-		// What left the group may keep the pipe open: it is not waited for.
+		// Wait's context watcher ends with the shell, not with children that
+		// still hold its output pipe. Enforce the deadline during draining too.
 		select {
 		case <-copied:
+		case <-ctx.Done():
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			select {
+			case <-copied:
+			case <-time.After(grace):
+			}
 		case <-time.After(grace):
 		}
+		p.took, p.stopped = time.Since(p.start), ctx.Err() != nil
+		p.late = errors.Is(ctx.Err(), context.DeadlineExceeded)
 		r.Close()
 		<-copied
 		p.mu.Lock()
@@ -372,7 +378,7 @@ func (p *process) ending() (string, bool) {
 	if p.stopped {
 		note := ""
 		if p.late {
-			note = "\n[its time was up: run it again with a larger \"timeout\", as far as the script has time left, or with \"background\": true]"
+			note = "\n[its time was up (timed out): run it again with a larger \"timeout\", as far as the calling context has time left, or with \"background\": true]"
 		}
 		return fmt.Sprintf("stopped after %s; what it printed:\n%s%s", p.took.Round(time.Second), out, note), true
 	}
@@ -520,7 +526,7 @@ func (j *jobs) ending(n int, automatic bool) string {
 
 // look tells how the job of a does, with what it printed since it was last
 // asked: once it ended, or once an explicit "timeout" passed; a stopped
-// job is canceled first. Waiting also ends with the calling script.
+// job is canceled first. Waiting also ends when the calling context is canceled.
 func look(ctx context.Context, a args) (string, error) {
 	if a.Command != "" {
 		return "", errors.New(`"job" goes without "command": a job runs one command`)
@@ -566,7 +572,8 @@ func look(ctx context.Context, a args) (string, error) {
 	}
 }
 
-// pipe makes the pipe of what a command prints; tests replace it.
+// pipe makes the pipe of what a command prints, and the one a service
+// watches; tests replace it.
 var pipe = os.Pipe
 
 // workDir is the directory a command runs in: dir, as g allows reading it

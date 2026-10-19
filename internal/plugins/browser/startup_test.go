@@ -19,6 +19,7 @@ func TestLaunchStartupTarget(t *testing.T) {
 		{"default context ID", `[{"targetId":"startup","type":"page","url":"about:blank","browserContextId":"default"}]`, "startup"},
 		{"other targets", `[{"targetId":"worker","type":"service_worker","url":"about:blank"},{"targetId":"peer","type":"page","url":"about:blank","browserContextId":"peer"},{"targetId":"popup","type":"page","url":"about:blank","openerId":"other"},{"targetId":"page","type":"page","url":"https://example.com"},{"targetId":"startup","type":"page","url":"about:blank"}]`, "startup"},
 		{"ambiguous", `[{"targetId":"one","type":"page","url":"about:blank"},{"targetId":"two","type":"page","url":"about:blank"}]`, ""},
+		{"ambiguous of three", `[{"targetId":"one","type":"page","url":"about:blank"},{"targetId":"two","type":"page","url":"about:blank"},{"targetId":"three","type":"page","url":"about:blank"}]`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			script := strings.Replace(answering, "    *) printf", `    *Target.getBrowserContexts*) printf '{"id":%s,"result":{"browserContextIds":["peer"]}}\0' "$id" >&4;;

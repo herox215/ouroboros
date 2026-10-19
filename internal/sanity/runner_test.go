@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestSummaryWriterJSON(t *testing.T) {
@@ -83,6 +86,20 @@ func TestRunCheckShell(t *testing.T) {
 				runnerContains(t, report.String(), "PASS\n")
 			}
 		})
+	}
+}
+
+func TestRunCheckOmittedEntries(t *testing.T) {
+	dir := t.TempDir()
+	exe := runnerShell(t, dir, "i=0\nwhile [ $i -lt 62 ]; do printf '{\"Action\":\"skip\",\"Package\":\"p\",\"Test\":\"T%d\"}\\n' $i; i=$((i+1)); done\n")
+	log := filepath.Join(dir, "output.json")
+	var report strings.Builder
+	if runCheck(context.Background(), dir, exe, nil, log, true, &report) {
+		t.Fatal(report.String())
+	}
+	runnerContains(t, report.String(), "SKIP: p T59\n", "2 additional failure/skip entries in "+log+"\n", "PASS\n")
+	if strings.Contains(report.String(), "T60") {
+		t.Fatal(report.String())
 	}
 }
 
@@ -194,6 +211,128 @@ func TestRunCancelledContext(t *testing.T) {
 	}
 }
 
+func TestRunWithGUI(t *testing.T) {
+	yes := true
+	for _, tc := range []struct {
+		name             string
+		gui              *bool
+		failGo, failNode bool
+		result           string
+	}{
+		{"by default", nil, false, false, "RESULT: selected test commands passed"},
+		{"asked for", &yes, false, false, "RESULT: selected test commands passed"},
+		{"after failed tests", nil, true, false, "RESULT: problems found"},
+		{"frontend fails", nil, false, true, "RESULT: problems found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := runnerSource(t)
+			t.Setenv("TMPDIR", t.TempDir())
+			// Go is called by its absolute path and leads PATH for the tests
+			// that call Go themselves; node is looked up in PATH.
+			toolchain, tools := t.TempDir(), t.TempDir()
+			t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+			goBody := "printf '%s\\n' \"$*\" >> calls\nprintf '%s\\n' \"$PATH\" > path\n" +
+				"for a in \"$@\"; do case $a in -coverprofile=*) printf 'mode: set\\nexample/p.go:1.1,2.2 1 1\\n' > \"${a#-coverprofile=}\";; esac; done\n"
+			if tc.failGo {
+				goBody += "case \"$*\" in *./...) exit 1;; esac\n"
+			}
+			nodeBody := "printf 'node %s\\n' \"$*\" >> calls\n"
+			if tc.failNode {
+				nodeBody += "exit 3\n"
+			}
+			goTool := runnerScript(t, filepath.Join(toolchain, "go"), goBody)
+			runnerScript(t, filepath.Join(tools, "node"), nodeBody)
+			report, err := Run(context.Background(), source, goTool, Options{GUI: tc.gui})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gui := goTool + " test -json -count=1 -race -timeout=5m -tags=production,webkit2_41 ./internal/plugins/gui"
+			frontend := "node --test internal/plugins/gui/frontend_test.mjs"
+			runnerContains(t, report, "$ "+gui+"\n", "$ "+frontend+"\n", "Statement coverage: 100.0%", tc.result)
+			calls := strings.Split(runnerRead(t, filepath.Join(source, "calls")), "\n")
+			if len(calls) != 4 || !strings.HasSuffix(calls[0], " ./...") || calls[1] != strings.TrimPrefix(gui, goTool+" ") || calls[2] != frontend {
+				t.Fatalf("calls=%q", calls)
+			}
+			if path := runnerRead(t, filepath.Join(source, "path")); !strings.HasPrefix(path, toolchain+string(os.PathListSeparator)+tools+string(os.PathListSeparator)) {
+				t.Fatalf("PATH of go: %s", path)
+			}
+			if strings.Contains(report, "explicitly skipped") {
+				t.Fatal(report)
+			}
+		})
+	}
+}
+
+func TestRunWithoutCoverage(t *testing.T) {
+	source := runnerSource(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	exe := runnerShell(t, source, "exit 0\n")
+	gui := false
+	report, err := Run(context.Background(), source, exe, Options{GUI: &gui})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runnerContains(t, report, "PASS\n", "Coverage unavailable: read coverage profile:", "Coverage is partial", "RESULT: problems found")
+}
+
+func TestRunWithoutTemporaryDirectory(t *testing.T) {
+	source := runnerSource(t)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	if report, err := Run(context.Background(), source, "/must/not/run", Options{}); err == nil || report != "" {
+		t.Fatalf("Run=%q,%v", report, err)
+	}
+}
+
+func TestRunCheckCancelEndsGroup(t *testing.T) {
+	dir := t.TempDir()
+	// What the command starts in the background holds a FIFO open while it
+	// runs: reading the FIFO ends once nothing of the group is left.
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() {
+		f, err := os.Open(fifo)
+		if err == nil {
+			_, err = io.ReadAll(f)
+			f.Close()
+		}
+		closed <- err
+	}()
+	exe := runnerShell(t, dir, "sh -c 'echo > started.new; mv started.new started; exec sleep 60' 3>fifo &\nwait\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var report strings.Builder
+	done := make(chan bool)
+	go func() { done <- runCheck(ctx, dir, exe, nil, filepath.Join(dir, "log"), false, &report) }()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "started")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the command did not start its background process")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if !<-done {
+		t.Fatal("a cancelled check passed")
+	}
+	runnerContains(t, report.String(), "FAILED: signal: killed")
+	// The background process is in the group and ends with it, long before
+	// its minute is up.
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the background process still runs")
+	}
+}
+
 func runnerSource(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -204,7 +343,10 @@ func runnerSource(t *testing.T) string {
 }
 func runnerShell(t *testing.T, dir, body string) string {
 	t.Helper()
-	path := filepath.Join(dir, "fake-command")
+	return runnerScript(t, filepath.Join(dir, "fake-command"), body)
+}
+func runnerScript(t *testing.T, path, body string) string {
+	t.Helper()
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nset -eu\n"+body), 0700); err != nil {
 		t.Fatal(err)
 	}

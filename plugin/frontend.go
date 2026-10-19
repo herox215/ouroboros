@@ -105,6 +105,19 @@ func (r *Restarting) Error() string { return "ouro is to be started anew from " 
 // on when the front end is closed. Await asks and waits for one answer.
 type Sessions = session.API
 
+// ThreadID is the ID of the session that is the thread: the one
+// conversation in which the owner says what is to be done, and its agent
+// hands it to the session it belongs to, or starts one for it. Sessions.List
+// leaves it out.
+const ThreadID = session.ThreadID
+
+// ImageSessions optionally extends Sessions with picture input. Both the local
+// service and socket client implement it; pictures are not archived.
+type ImageSessions = session.ImageAPI
+
+// ErrImage means an input picture is empty or has an unsupported media type.
+var ErrImage = session.ErrImage
+
 // MessageSource identifies the interface sending one owner message.
 type MessageSource = openai.MessageSource
 
@@ -161,11 +174,15 @@ const (
 	SessionFailed    = session.Failed    // an answer that failed
 	SessionCanceled  = session.Canceled  // an answer that was stopped
 	SessionRestart   = session.Restart   // ouro starts anew from a new build, the binary in Text
+	SessionRestarted = session.Restarted // durable completion in the triggering session; deduplicate by PresentationID
 	SessionTitle     = session.Title     // the session is named for its topic, in Text
 	SessionEffort    = session.Effort    // how much the model thinks in the session, in Text
 	SessionJobs      = session.Jobs      // the commands that run in the background for the answer, a line each in Text
 	SessionTask      = session.Task      // the report of a task the agent delegated, taken like a message: N, Remark, Text, Err
 	SessionTasks     = session.Tasks     // the tasks the agent delegated that run, a line each in Text
+	// SessionWorking is how much works for the thread, in N: while any
+	// does, it is thinking as far as the owner is shown.
+	SessionWorking = session.Working
 	// SessionSuggestion is what the review of an answer proposes to change
 	// of ouro, in Text, after the answer ended. It changes nothing.
 	SessionSuggestion = session.Suggestion

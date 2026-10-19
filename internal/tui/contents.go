@@ -31,7 +31,6 @@ var (
 	stringStyle  = lipgloss.NewStyle().Foreground(good)   // a text in JSON
 	literalStyle = lipgloss.NewStyle().Foreground(warn)   // a number, true, false or null in JSON
 	noteStyle    = mutedStyle.Italic(true)                // a note in brackets
-	varStyle     = lipgloss.NewStyle().Foreground(warn)   // a variable the scripts keep
 )
 
 // roleColors are the colors of the roles of messages: the user and the agent
@@ -57,24 +56,19 @@ func roleColor(role string) color.Color {
 }
 
 // renderContext lays out the messages of a context width cells wide, a
-// block each, and after them the variables its scripts kept, when they kept
-// any.
+// block each.
 func renderContext(msgs []Message, width int, light bool) []string {
-	t := traceScripts(msgs)
 	var blocks []string
 	for i, c := range msgs {
-		blocks = append(blocks, renderMessage(c, i, &t, width, light))
-	}
-	if len(t.variables) > 0 {
-		blocks = append(blocks, renderVariables(t.variables, width, light))
+		blocks = append(blocks, renderMessage(c, i, width, light))
 	}
 	return blocks
 }
 
 // renderMessage lays out the message i of a context width cells wide: its
 // head, with its number and its size, and its lines on the bar.
-func renderMessage(c Message, i int, t *scriptTrace, width int, light bool) string {
-	return block(c.Role, roleColor(c.Role), fmt.Sprintf("#%d", i+1), byteSize(len(c.Text)), messageLines(c, i, t, width-2), width, light)
+func renderMessage(c Message, i int, width int, light bool) string {
+	return block(c.Role, roleColor(c.Role), fmt.Sprintf("#%d", i+1), byteSize(len(c.Text)), messageLines(c, width-2), width, light)
 }
 
 // block lays out a block of the context screen width cells wide: a head of a
@@ -104,19 +98,15 @@ func byteSize(n int) string {
 	return fmt.Sprintf("%.1f KiB", float64(n)/1024)
 }
 
-// messageLines lays out the text of the message i width cells wide, as its
-// role has it: the calls of the agent with what their scripts use, and the
-// result of a script with how what is kept changed.
-func messageLines(c Message, i int, t *scriptTrace, width int) []string {
+// messageLines lays out text width cells wide, with tool definitions and
+// the assistant's calls formatted for readability.
+func messageLines(c Message, width int) []string {
 	text := strings.ReplaceAll(c.Text, "\t", "    ")
 	if c.Role == "assistant" {
-		return callLines(text, t.calls[i], width)
+		return callLines(text, width)
 	}
 	if strings.HasPrefix(c.Role, "tool ") {
 		return toolLines(text, width)
-	}
-	if r := t.results[i]; r != nil {
-		return resultLines(r, width)
 	}
 	return textLines(text, width)
 }
@@ -215,29 +205,23 @@ func colorJSON(s string) string {
 }
 
 // callLines lays out what the agent says and the calls of tools it makes,
-// each a line "→ name arguments"; runs are what their scripts use, by call.
-func callLines(text string, runs []*runTrace, width int) []string {
+// each a line "→ name arguments".
+func callLines(text string, width int) []string {
 	parts := strings.Split("\n"+text, "\n→ ")
 	var lines []string
 	if words := strings.TrimPrefix(parts[0], "\n"); words != "" {
 		lines = textLines(words, width)
 	}
-	for i, call := range parts[1:] {
-		var r *runTrace
-		if i < len(runs) {
-			r = runs[i]
-		}
-		lines = append(lines, callLine(call, r, width)...)
+	for _, call := range parts[1:] {
+		lines = append(lines, callLine(call, width)...)
 	}
 	return lines
 }
 
 // callLine lays out a call of a tool: "→ name", and its arguments below it,
 // one a line and their values in a column. A text is shown as the lines it
-// has; other values, and arguments that are no object of JSON, as JSON. The
-// script of a call of run r has the variables it uses marked, and a line
-// below that names them.
-func callLine(call string, r *runTrace, width int) []string {
+// has; other values, and arguments that are no object of JSON, as JSON.
+func callLine(call string, width int) []string {
 	name, args, _ := strings.Cut(call, " ")
 	head := lipgloss.NewStyle().Foreground(peer).Render("→ ") + boldStyle.Render(name)
 	fields, ok := objectFields(args)
@@ -254,9 +238,6 @@ func callLine(call string, r *runTrace, width int) []string {
 		rest := strings.Repeat(" ", column+4)
 		var s string
 		if json.Unmarshal(f.value, &s) == nil && s != "" {
-			if r != nil && f.key == "script" {
-				s = markUses(s, r.at)
-			}
 			lines = append(lines, hang(first, rest, strings.ReplaceAll(s, "\t", "    "), width)...)
 			continue
 		}
@@ -264,108 +245,7 @@ func callLine(call string, r *runTrace, width int) []string {
 		_ = json.Compact(&b, f.value) // it was decoded: it is JSON
 		lines = append(lines, hang(first, rest, colorJSON(b.String()), width)...)
 	}
-	if r != nil && len(r.uses) > 0 {
-		lines = append(lines, hang("  ", "  ", mutedStyle.Render("uses ")+varNames(r.uses), width)...)
-	}
 	return lines
-}
-
-// markUses marks the variables a script uses where they are in it.
-func markUses(script string, uses []nameAt) string {
-	for i := len(uses) - 1; i >= 0; i-- {
-		u := uses[i]
-		script = script[:u.at] + varStyle.Render(u.name) + script[u.at+len(u.name):]
-	}
-	return script
-}
-
-// varNames is names of variables, one after the other.
-func varNames(names []string) string {
-	marked := make([]string, len(names))
-	for i, name := range names {
-		marked[i] = varStyle.Render(name)
-	}
-	return strings.Join(marked, mutedStyle.Render(", "))
-}
-
-// resultLines lays out the result of a script: its text, and below it what
-// the interpreter keeps for the next script, as it changed with the script.
-// What it set comes first with what it is, then what is gone; the names that
-// stayed as they were are only named.
-func resultLines(r *resultTrace, width int) []string {
-	var lines []string
-	if r.text != "" {
-		lines = textLines(strings.ReplaceAll(r.text, "\t", "    "), width)
-	}
-	lines = append(lines, mutedStyle.Render("kept for the next script"))
-	column := 0
-	for _, k := range r.added {
-		column = max(column, ansi.StringWidth(k.name))
-	}
-	for _, c := range r.changed {
-		column = max(column, ansi.StringWidth(c.name))
-	}
-	for _, name := range r.gone {
-		column = max(column, ansi.StringWidth(name))
-	}
-	row := func(mark, name, what string) []string {
-		first := "  " + mark + " " + varStyle.Render(name) + strings.Repeat(" ", column-ansi.StringWidth(name)+2)
-		return hang(first, strings.Repeat(" ", column+6), what, width)
-	}
-	for _, k := range r.added {
-		lines = append(lines, row(lipgloss.NewStyle().Foreground(good).Render("+"), k.name, mutedStyle.Render(k.what))...)
-	}
-	for _, c := range r.changed {
-		what := c.now + ", set again"
-		if c.was != c.now {
-			what = c.now + ", was " + c.was
-		}
-		lines = append(lines, row(literalStyle.Render("~"), c.name, mutedStyle.Render(what))...)
-	}
-	for _, name := range r.gone {
-		lines = append(lines, row(errStyle.Render("−"), name, errStyle.Render("gone"))...)
-	}
-	if len(r.same) > 0 {
-		lines = append(lines, hang("  · ", "    ", mutedStyle.Render(strings.Join(r.same, ", ")+" as they were"), width)...)
-	}
-	if r.more != "" {
-		lines = append(lines, "  "+mutedStyle.Render(r.more))
-	}
-	return lines
-}
-
-// renderVariables lays out the variables the scripts of a context kept, a
-// line each: what it was when it was last kept, and the numbers of the
-// messages whose scripts set it, used it, and after which it was gone. The
-// interpreter keeps them beside the context: the LLM is not sent this.
-func renderVariables(vars []*variable, width int, light bool) string {
-	names, whats := 0, 0
-	for _, v := range vars {
-		names, whats = max(names, ansi.StringWidth(v.name)), max(whats, ansi.StringWidth(v.what))
-	}
-	var lines []string
-	for _, v := range vars {
-		first := varStyle.Render(v.name) + strings.Repeat(" ", names-ansi.StringWidth(v.name)+2) +
-			mutedStyle.Render(v.what) + strings.Repeat(" ", whats-ansi.StringWidth(v.what)+2)
-		where := mutedStyle.Render("set ") + messageNumbers(v.set)
-		if len(v.used) > 0 {
-			where += mutedStyle.Render(" · used ") + messageNumbers(v.used)
-		}
-		if v.gone > 0 {
-			where += mutedStyle.Render(" · ") + errStyle.Render(fmt.Sprintf("gone #%d", v.gone))
-		}
-		lines = append(lines, hang(first, strings.Repeat(" ", names+whats+4), where, width-2)...)
-	}
-	return block("variables", warn, fmt.Sprint(len(vars)), "not sent to the LLM", lines, width, light)
-}
-
-// messageNumbers are the numbers of messages, as their heads show them.
-func messageNumbers(numbers []int) string {
-	s := make([]string, len(numbers))
-	for i, n := range numbers {
-		s[i] = fmt.Sprintf("#%d", n)
-	}
-	return strings.Join(s, " ")
 }
 
 // field is a field of an object of JSON.

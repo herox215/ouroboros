@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +16,13 @@ import (
 	"ouroboros/plugin"
 )
 
+// No test talks to the session bus of the user, not even with a mutant that
+// starts the tray of the system: a test without a bus of its own finds none.
+func TestMain(m *testing.M) {
+	os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/ouroboros-test-bus")
+	os.Exit(m.Run())
+}
+
 type testSessions struct {
 	plugin.Sessions
 	activity plugin.Activity
@@ -20,15 +30,18 @@ type testSessions struct {
 	calls    int
 }
 
-func (s *testSessions) Activity(context.Context) (plugin.Activity, error) {
+// Activity fails, like a node that is asked, when ctx has no time left.
+func (s *testSessions) Activity(ctx context.Context) (plugin.Activity, error) {
 	s.calls++
+	if err := ctx.Err(); err != nil {
+		return plugin.Activity{}, err
+	}
 	return s.activity, s.err
 }
 
-func desktopCommand(t *testing.T, sessions plugin.Sessions, extra ...plugin.Plugin) (plugin.Command, *bytes.Buffer) {
-	t.Helper()
-	out := new(bytes.Buffer)
-	services := plugin.NewService("services", func(*plugin.Context, struct{}) (struct {
+// services provides what the plugin needs of the node.
+func services(sessions plugin.Sessions, out io.Writer) plugin.Plugin {
+	return plugin.NewService("services", func(*plugin.Context, struct{}) (struct {
 		Console  *plugin.Console
 		Sessions plugin.Sessions
 	}, error) {
@@ -37,13 +50,18 @@ func desktopCommand(t *testing.T, sessions plugin.Sessions, extra ...plugin.Plug
 			Sessions plugin.Sessions
 		}{&plugin.Console{Out: out}, sessions}, nil
 	})
+}
+
+func desktopCommand(t *testing.T, sessions plugin.Sessions, extra ...plugin.Plugin) (plugin.Command, *bytes.Buffer) {
+	t.Helper()
+	out := new(bytes.Buffer)
 	var ctx *plugin.Context
 	spy := plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
 		ctx = c
 		return nil
 	})
 	k := kernel.New()
-	plugins := append([]plugin.Plugin{services, Plugin(), spy}, extra...)
+	plugins := append([]plugin.Plugin{services(sessions, out), Plugin(), spy}, extra...)
 	if err := k.Start(plugins...); err != nil {
 		t.Fatal(err)
 	}
@@ -181,5 +199,38 @@ func TestBadArgs(t *testing.T) {
 	}
 	if sessions.calls != 0 || guiCalls != 0 || out.Len() != 0 {
 		t.Fatalf("activity calls = %d, gui calls = %d, output = %q", sessions.calls, guiCalls, out.String())
+	}
+}
+
+// The options hand the profile of the tray to the frame. Its errors go to the
+// log of the node, or to the standard log without one.
+func TestPluginOptions(t *testing.T) {
+	profile := func(o Options) *Profile {
+		t.Helper()
+		var p *Profile
+		o.Profile = func(got *Profile) { p = got }
+		k := kernel.New()
+		if err := k.Start(services(&testSessions{}, io.Discard), Plugin(o)); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k.Stop)
+		if p == nil {
+			t.Fatal("no profile handed over")
+		}
+		return p
+	}
+	var logged []error
+	failure := errors.New("tray failure")
+	profile(Options{Log: func(err error) { logged = append(logged, err) }}).log(failure)
+	if len(logged) != 1 || logged[0] != failure {
+		t.Fatalf("node log: %v", logged)
+	}
+	var standard bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&standard)
+	t.Cleanup(func() { log.SetOutput(old) })
+	profile(Options{}).log(failure)
+	if !strings.Contains(standard.String(), "desktop tray: tray failure") {
+		t.Fatalf("standard log: %q", standard.String())
 	}
 }

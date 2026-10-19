@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
@@ -48,6 +49,13 @@ func archived(t *testing.T, a *fakeAgent, dir string, now time.Time) (*Service, 
 	return s, arch, l
 }
 
+// echo is an LLM that answers with the last message it was sent.
+type echo struct{}
+
+func (echo) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	return openai.Message{Role: "assistant", Content: msgs[len(msgs)-1].Content}, nil
+}
+
 // call is a call of a tool with id.
 func call(id, name, args string) openai.ToolCall {
 	return openai.ToolCall{ID: id, Type: "function", Function: openai.FunctionCall{Name: name, Arguments: args}}
@@ -74,12 +82,15 @@ func TestArchivedSession(t *testing.T) {
 	arch.Append(history.Who{Session: "p1", Peer: "key"}, []openai.Message{{Role: "user", Content: "from a peer"}}, nil)
 
 	var mu sync.Mutex
-	var told []string
-	b := &fakeAgent{run: func(_ context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+	var told, sent []string
+	b := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		// What the model is sent of the message, from what the session
+		// hands the agent besides the text.
+		got, err := agent.New(echo{}, "m", "").Respond(ctx, "s1", text)
 		mu.Lock()
 		defer mu.Unlock()
-		told = append(told, text)
-		return "pong", nil
+		told, sent = append(told, text), append(sent, got)
+		return "pong", err
 	}}
 	later := time.Now().Add(3 * time.Hour)
 	s, _, l := archived(t, b, dir, later)
@@ -118,6 +129,9 @@ func TestArchivedSession(t *testing.T) {
 	if len(told) != 2 || !strings.HasPrefix(told[0], "[A note of ouro, which the owner did not write: ouro started anew since the last answer of this conversation, 3 hours ago.") ||
 		!strings.HasSuffix(told[0], "]\n\nand now?") || told[1] != "and then?" {
 		t.Fatalf("the agent was told %q", told)
+	}
+	if len(sent) != 2 || !strings.HasSuffix(sent[0], told[0]) || strings.Contains(sent[1], "A note of ouro") {
+		t.Fatalf("the model was sent %q", sent)
 	}
 	past, _, _ = s.Watch(ctx, "s1")
 	if past[len(past)-4].Text != "and now?" {
@@ -181,6 +195,45 @@ func TestArchiveFails(t *testing.T) {
 		t.Fatalf("past %+v", past)
 	}
 	if !l.has("what the agent remembers of the session s2 is lost: no memory") {
+		t.Errorf("log %q", l.lines)
+	}
+}
+
+// breaksOnResume is an agent whose resumption of a session breaks the
+// archive.
+type breaksOnResume struct {
+	*fakeAgent
+	breaks func()
+}
+
+func (a breaksOnResume) Resume(id string, memory json.RawMessage) error {
+	a.breaks()
+	return a.fakeAgent.Resume(id, memory)
+}
+
+// A title that cannot be read once the records were is logged, and the
+// session goes on without it.
+func TestArchiveFailsAfterTheRecords(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "history")
+	arch := history.Open(dir)
+	if err := arch.Append(history.Who{Session: "s1"}, []openai.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := arch.SetTitle("owner/s1", "Greeting"); err != nil {
+		t.Fatal(err)
+	}
+	s := New(breaksOnResume{&fakeAgent{}, func() {
+		arch.Close()
+		os.Rename(dir, dir+".moved")
+		os.WriteFile(dir, nil, 0o600)
+	}})
+	t.Cleanup(s.Close)
+	l := &logs{}
+	s.Archive(arch, l.log, func(string) string { return "" })
+	if past, _, err := s.Watch(context.Background(), "s1"); err != nil || kinds(past) != "message" {
+		t.Fatalf("past %+v, %v", past, err)
+	}
+	if !l.has("the title of the session s1 cannot be read") {
 		t.Errorf("log %q", l.lines)
 	}
 }

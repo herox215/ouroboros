@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -262,6 +263,17 @@ func TestWindows(t *testing.T) {
 
 	got, err = call(context.Background(), c, settings{BlockedApps: []string{"*"}}, `{"action": "windows"}`)
 	is(t, "none allowed", got, err, "no window of an app you may use\nwindows of apps you may not use: Alacritty, firefox, Slack")
+
+	// Without windows of other apps none are named; a window that does not
+	// say how far to the front it is comes after one at the back.
+	f.windows(
+		map[string]any{"window_id": 8, "pid": 80, "app_name": "gimp", "title": "Unknown", "is_on_screen": true, "z_index": nil, "bounds": map[string]any{"width": 10, "height": 10}},
+		map[string]any{"window_id": 9, "pid": 80, "app_name": "gimp", "title": "Back", "is_on_screen": true, "z_index": 0, "bounds": map[string]any{"width": 10, "height": 10}},
+		map[string]any{"window_id": 10, "pid": 80, "app_name": "gimp", "title": "Also back", "is_on_screen": true, "z_index": 0, "bounds": map[string]any{"width": 10, "height": 10}},
+	)
+	// Those as far to the front keep their order.
+	got, err = call(context.Background(), c, settings{}, `{"action": "windows"}`)
+	is(t, "only allowed ones", got, err, "window 9: gimp \"Back\" 10×10\nwindow 10: gimp \"Also back\" 10×10\nwindow 8: gimp \"Unknown\" 10×10")
 	if f.started[0] != "cua-driver" || len(f.started) != 1 {
 		t.Fatalf("started %v", f.started)
 	}
@@ -353,6 +365,7 @@ func TestActions(t *testing.T) {
 	}{
 		{`{"action": "click", "window": 7, "element": 3}`, "click", `{"delivery_mode":"foreground","element_token":"t3","pid":70,` + s + `,"window_id":7}`},
 		{`{"action": "click", "window": 7, "x": 10, "y": 20, "count": 2, "button": "right"}`, "click", `{"button":"right","count":2,"delivery_mode":"foreground","pid":70,` + s + `,"window_id":7,"x":10,"y":20}`},
+		{`{"action": "click", "window": 7, "x": 10, "y": 20, "count": 1}`, "click", `{"delivery_mode":"foreground","pid":70,` + s + `,"window_id":7,"x":10,"y":20}`},
 		{`{"action": "type", "window": 7, "element": 3, "text": "python"}`, "type_text", `{"delivery_mode":"foreground","element_token":"t3","pid":70,` + s + `,"text":"python","window_id":7}`},
 		{`{"action": "key", "window": 7, "key": "Escape"}`, "press_key", `{"delivery_mode":"foreground","key":"Escape","pid":70,` + s + `,"window_id":7}`},
 		{`{"action": "key", "window": 7, "key": "ctrl + s"}`, "hotkey", `{"delivery_mode":"foreground","keys":["ctrl","s"],"pid":70,` + s + `,"window_id":7}`},
@@ -391,6 +404,8 @@ func TestActions(t *testing.T) {
 	// What an action lacks.
 	_, err = call(ctx, c, firefox, `{"action": "click", "window": 7}`)
 	fails(t, "click without a target", err, "click needs element, or x and y")
+	_, err = call(ctx, c, firefox, `{"action": "click", "window": 7, "x": 10}`)
+	fails(t, "click with x alone", err, "click needs element, or x and y")
 	_, err = call(ctx, c, firefox, `{"action": "type", "window": 7}`)
 	fails(t, "type without text", err, "type needs text")
 	_, err = call(ctx, c, firefox, `{"action": "key", "window": 7, "key": "ctrl+"}`)
@@ -580,6 +595,7 @@ func TestShow(t *testing.T) {
 		`{"action": "click", "window": 7, "element": 3}`:    "clicking [3] in window 7",
 		`{"action": "click", "window": 7, "x": 1, "y": 2}`:  "clicking at 1,2 in window 7",
 		`{"action": "click", "window": 7}`:                  "clicking in window 7",
+		`{"action": "click", "window": 7, "x": 1}`:          "clicking in window 7",
 		`{"action": "type", "window": 7, "text": "secret"}`: "typing into window 7",
 		`{"action": "key", "window": 7, "key": "ctrl+s"}`:   "pressing ctrl+s in window 7",
 		`{"action": "scroll", "window": 7}`:                 "scrolling window 7",
@@ -655,10 +671,17 @@ func TestFailures(t *testing.T) {
 	_, err = call(ctx, c, firefox, `{"action": "look", "window": 7}`)
 	fails(t, "a state it cannot read", err, "cua-driver says nothing of window 7: odd")
 
-	// A cut list of elements says of how many, and a screenshot without its
-	// size is shown all the same.
+	// The size of a screenshot there is not says nothing.
 	f.on("get_window_state", func(map[string]any) any {
-		return answer("state", map[string]any{"total_element_count": 9, "elements": []any{
+		return answer("state", map[string]any{"elements": []any{}, "screenshot_width": 1280, "screenshot_height": 900})
+	})
+	got, err := call(ctx, c, firefox, `{"action": "look", "window": 7}`)
+	is(t, "a size without a screenshot", got, err, "window 7: firefox \"Snakes\", 0 elements\nwithout a screenshot")
+
+	// A cut list of elements says of how many, and a screenshot without its
+	// size, or with half of it, is shown all the same.
+	f.on("get_window_state", func(map[string]any) any {
+		return answer("state", map[string]any{"total_element_count": 9, "screenshot_width": 1280, "elements": []any{
 			map[string]any{"element_index": 4, "element_token": "t4", "role": "label", "depth": 1},
 		}}, image("PNG"))
 	})
@@ -707,5 +730,62 @@ func TestLookTree(t *testing.T) {
 	}
 	if p := f.last("click"); !strings.Contains(p, `"element_token":"s00000002:0"`) {
 		t.Fatalf("clicked with %s", p)
+	}
+
+	// Where it lists elements as well, those are what look shows.
+	f.on("get_window_state", func(map[string]any) any {
+		return answer("state", map[string]any{"snapshot_id": "s00000003", "tree_markdown": "- [0] window \"Tree\"\n", "elements": []any{
+			map[string]any{"element_index": 4, "element_token": "t4", "role": "label", "depth": 1},
+		}})
+	})
+	got, err = call(context.Background(), c, firefox, `{"action": "look", "window": 7}`)
+	is(t, "elements and a tree", got, err, "window 7: firefox \"Snakes\", 1 elements\n[4] label\nwithout a screenshot")
+}
+
+// The elements of a window fill what look returns up to maxText bytes,
+// and one more that does not fit is cut.
+func TestLookFits(t *testing.T) {
+	f := newFake(t)
+	c := newComputer(f)
+	const n = 25
+	header := fmt.Sprintf("window 7: firefox \"Snakes\", %d elements\n", n)
+	var elements []any
+	var lines []string
+	size := len(header)
+	for i := 1; i <= n; i++ {
+		label := strings.Repeat("x", 900)
+		if i == n {
+			label = strings.Repeat("x", maxText-size-len(fmt.Sprintf("[%d] r \"\"\n", i)))
+		}
+		line := fmt.Sprintf("[%d] r %q", i, label)
+		size += len(line) + 1
+		lines = append(lines, line)
+		elements = append(elements, map[string]any{"element_index": i, "element_token": "t", "role": "r", "label": label, "depth": 0})
+	}
+	if size != maxText {
+		t.Fatalf("%d bytes, not maxText", size)
+	}
+	f.on("get_window_state", func(map[string]any) any { return answer("state", map[string]any{"elements": elements}) })
+	got, err := call(context.Background(), c, firefox, `{"action": "look", "window": 7}`)
+	is(t, "as much as fits", got, err, header+strings.Join(lines, "\n")+"\nwithout a screenshot")
+
+	// One byte more of the last element does not fit either.
+	last := elements[n-1].(map[string]any)
+	last["label"] = last["label"].(string) + "x"
+	got, err = call(context.Background(), c, firefox, `{"action": "look", "window": 7}`)
+	is(t, "one byte more", got, err, header+strings.Join(lines[:n-1], "\n")+"\n… and more: look with query for what you need\nwithout a screenshot")
+	last["label"] = last["label"].(string)[1:]
+
+	elements = append(elements, map[string]any{"element_index": n + 1, "element_token": "t", "role": "r", "depth": 0})
+	got, err = call(context.Background(), c, firefox, `{"action": "look", "window": 7}`)
+	is(t, "one more", got, err, strings.Replace(header, "25 elements", "26 elements", 1)+strings.Join(lines, "\n")+
+		"\n… and more: look with query for what you need\nwithout a screenshot")
+}
+
+// cua-driver runs ten minutes unused before it is ended, and has three
+// seconds to end once its input is closed.
+func TestTimes(t *testing.T) {
+	if idle != 10*time.Minute || closeTimeout != 3*time.Second {
+		t.Errorf("idle %v, closeTimeout %v", idle, closeTimeout)
 	}
 }

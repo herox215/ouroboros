@@ -131,3 +131,12 @@ func TestWindowArchiveErrors(t *testing.T) {
 		t.Fatal("missing records callback")
 	}
 }
+
+// An archive without records lists none: an empty list, not JSON null.
+func TestWindowArchiveWithoutRecords(t *testing.T) {
+	w := newWindow(page{choices: []choice{{"empty", ""}}, archives: []archiveAccess{{records: func(string) ([]plugin.ArchivedRecord, error) { return nil, nil }}}})
+	records, err := w.SessionRecords(0, "owner/session")
+	if err != nil || records == nil || len(records) != 0 {
+		t.Fatalf("records: %#v, %v", records, err)
+	}
+}

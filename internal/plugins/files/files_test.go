@@ -209,7 +209,7 @@ func TestRead(t *testing.T) {
 	fails(t, got, err, "permission denied")
 }
 
-// Pages stay below the script output limit and say where to go on.
+// Pages have bounded results and say where to go on.
 func TestReadInPieces(t *testing.T) {
 	w := newWorld(t)
 	line := strings.Repeat("x", 1023) + "\n"
@@ -279,7 +279,7 @@ func TestReadLongLinePages(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(got) >= 32<<10 {
-			t.Fatalf("page exceeds script output limit: %d bytes", len(got))
+			t.Fatalf("page exceeds result limit: %d bytes", len(got))
 		}
 		chunk, note, ok := strings.Cut(got, "\n[")
 		if !ok || chunk == "" {
@@ -838,15 +838,13 @@ func TestSchemas(t *testing.T) {
 	}
 }
 
-// Research guidance must agree with the owner prompt: bounded sections may
-// share a script, but separate page limits do not protect its combined output.
+// Research guidance favors focused reads and bounded results.
 func TestResearchGuidance(t *testing.T) {
 	all := tools(&guard.Guard{})
 	for _, tt := range []struct {
 		at   int
 		want string
 	}{
-		{0, "Batch relevant bounded sections in one script only when their combined output, including notes and other results, stays safely below the script output limit."},
 		{0, "Use offset and limit for relevant code sections located by search; leave out limit when the whole file is needed."},
 		{5, "For extensive code analysis, search first for function and declaration overviews, then read relevant sections with offset and limit, not whole files by default;"},
 	} {
@@ -855,25 +853,10 @@ func TestResearchGuidance(t *testing.T) {
 		}
 	}
 	for _, tool := range all {
-		for _, stale := range []string{"Print one page per script", "whole unless it is very long"} {
+		for _, stale := range []string{"script output", "one script", "String.raw", "JavaScript scripts", "whole unless it is very long"} {
 			if strings.Contains(tool.Description, stale) {
 				t.Errorf("%s: conflicting research guidance %q", tool.Name, stale)
 			}
-		}
-	}
-}
-
-// Search examples must survive JavaScript string parsing before RE2 sees them.
-func TestSearchJavaScriptGuidance(t *testing.T) {
-	description := tools(&guard.Guard{})[5].Description
-	for _, want := range []string{
-		"use [(] and [)] for literal parentheses",
-		`pattern: "func main[(][)]"`,
-		"to avoid losing backslashes in JS strings",
-		"pattern: String.raw`\\bmain\\s*\\(`",
-	} {
-		if !strings.Contains(description, want) {
-			t.Errorf("search: missing JavaScript guidance %q", want)
 		}
 	}
 }
@@ -1024,7 +1007,7 @@ func TestSearchIsCut(t *testing.T) {
 	}
 }
 
-// A search ends with its call, which a script that ran too long ends.
+// A search ends when its call is canceled.
 func TestSearchEndsWithItsCall(t *testing.T) {
 	w := newWorld(t)
 	w.file("~/src/a.txt", "x\n")
@@ -1169,7 +1152,7 @@ func TestSearchWithContext(t *testing.T) {
 }
 
 // Beyond maxAround bytes, search says how many more matches are in which
-// file, instead of lines that would not come back from a script.
+// file, instead of an oversized inline result.
 func TestSearchFitsItsBytes(t *testing.T) {
 	w := newWorld(t)
 	w.file("~/fit/a.txt", strings.Repeat("hit "+strings.Repeat("x", 200)+"\n", 100))
@@ -1258,4 +1241,107 @@ func TestUnknownArguments(t *testing.T) {
 	w := newWorld(t)
 	got, err := w.run(owner, Read, `{"file": "~/x"}`)
 	fails(t, got, err, `read: invalid arguments: it has no "file"; it takes path, offset, column, limit, size, region`)
+}
+
+// A page of a long line ends before maxReadPage bytes, at the start of a
+// character, and says which bytes of which line of how many it held; a
+// line of exactly maxReadPage bytes is no page; a column cuts the first
+// line alone.
+func TestReadPageBounds(t *testing.T) {
+	w := newWorld(t)
+	one := strings.Repeat("x", maxReadPage-1) + "\n"
+	w.file("~/one", one)
+	if got, err := w.run(owner, Read, readArgs{Path: "~/one"}); err != nil || got != one {
+		t.Errorf("a line of exactly a page: %d bytes, %v", len(got), err)
+	}
+	source := "x" + strings.Repeat("€", 20000)
+	w.file("~/long", source+"\nshort\nshort\n")
+	for _, column := range []int{0, 24574} {
+		got, err := w.run(owner, Read, readArgs{Path: "~/long", Column: column})
+		chunk, note, _ := strings.Cut(got, "\n[")
+		end := column + len(chunk)
+		want := fmt.Sprintf("these were bytes %d to %d of line 1 of 3: continue with offset 1 and column %d]", column+1, end, end)
+		if err != nil || len(chunk) > maxReadPage || chunk != source[column:end] || note != want {
+			t.Errorf("column %d: %d bytes, %q, %v", column, len(chunk), note, err)
+		}
+	}
+	w.file("~/columns", "abcdef\nxyz123\n")
+	if got, err := w.run(owner, Read, readArgs{Path: "~/columns", Column: 2}); err != nil || got != "cdef\nxyz123\n[these were the lines 1 to 2 of 2, the end of the file]" {
+		t.Errorf("a column: %q, %v", got, err)
+	}
+}
+
+// What edit says and does at the edges: a file with both ends of lines,
+// "old" that goes past the end of the file or parts from it on its first
+// line, and lines that "all" adds before the next place.
+func TestEditEdges(t *testing.T) {
+	w := newWorld(t)
+	w.file("~/mixed.txt", "x\ny\r\nx\r\ny\r\n")
+	if _, err := w.run(owner, Edit, editArgs{Path: "~/mixed.txt", Old: "x\ny", New: "z"}); err != nil || w.content("~/mixed.txt") != "z\r\nx\r\ny\r\n" {
+		t.Errorf("old as it is written: %v, %q", err, w.content("~/mixed.txt"))
+	}
+	w.file("~/crlf.txt", "a\r\nb\r\n")
+	w.file("~/end.txt", "a\nb\n")
+	for path, old := range map[string]string{
+		"~/crlf.txt": "a\nq\nc",
+		"~/end.txt":  "b\n\nx",
+	} {
+		want := map[string]string{
+			"~/crlf.txt": `; 1 of its lines match from line 1 of the file on, then line 2 of the file is "b\r", where "old" has "q"`,
+			"~/end.txt":  `; 2 of its lines match from line 2 of the file on, then line 4 of the file is (the end of the file), where "old" has "x"`,
+		}[path]
+		got, err := w.run(owner, Edit, editArgs{Path: path, Old: old, New: "z"})
+		if err == nil || got != "" || !strings.HasSuffix(err.Error(), want) {
+			t.Errorf("%s: %v\nwant %q", path, err, want)
+		}
+	}
+	w.file("~/all.txt", "a\nb\na\nb\n")
+	got, err := w.run(owner, Edit, map[string]any{"path": "~/all.txt", "old": "a\n", "new": "x\ny\n", "all": true})
+	if err != nil || got != "edited ~/all.txt: replaced 2 times, in the lines 1, 4" || w.content("~/all.txt") != "x\ny\nb\nx\ny\nb\n" {
+		t.Errorf("all: %q, %v, %q", got, err, w.content("~/all.txt"))
+	}
+}
+
+// What search shows at its bounds: as much as fills maxAround bytes, the
+// first place even when it alone is more, and context up to maxContext; a
+// path that starts with [ is cut as well.
+func TestSearchBounds(t *testing.T) {
+	w := newWorld(t)
+	var b strings.Builder
+	var shown []string
+	size := 0
+	for k := 1; ; k++ {
+		prefix := fmt.Sprintf("~/fit.txt:%d: ", k)
+		if rest := maxAround - size - len(prefix); rest <= maxMatchBytes {
+			text := "m" + strings.Repeat("x", rest-1)
+			b.WriteString(text + "\nm\n")
+			shown = append(shown, prefix+text)
+			break
+		}
+		text := "m" + strings.Repeat("x", 199)
+		b.WriteString(text + "\n")
+		shown = append(shown, prefix+text)
+		size += len(prefix) + len(text)
+	}
+	w.file("~/fit.txt", b.String())
+	got, err := w.run(owner, "search", map[string]any{"path": "~/fit.txt", "pattern": "^m"})
+	want := strings.Join(shown, "\n") + "\n[1 more matching lines, beyond what one search shows, in ~/fit.txt (1): search there with a narrower pattern]"
+	if err != nil || got != want {
+		t.Errorf("exactly maxAround: %v, the end: %q", err, got[max(0, len(got)-200):])
+	}
+
+	// A place holds a match with maxContext lines on either side.
+	w.file("~/wide.txt", strings.Repeat("m"+strings.Repeat("x", 290)+"\n", maxPlaceLines))
+	got, err = w.run(owner, "search", map[string]any{"path": "~/wide.txt", "pattern": "^m", "context": maxContext})
+	if first := strings.Split(got, "\n--\n")[0]; err != nil || !strings.HasPrefix(first, "~/wide.txt:1: m") || strings.Count(first, "\n") != 2*maxContext || len(first) <= maxAround {
+		t.Errorf("a first place of more than maxAround: %d bytes, %v", len(got), err)
+	}
+
+	w.guard.Workspace = w.home
+	w.file("~/[x]/a.txt", strings.Repeat("hit "+strings.Repeat("x", 200)+"\n", 100))
+	got, err = w.run(owner, "search", map[string]any{"path": "[x]", "pattern": "hit"})
+	if lines := strings.Split(got, "\n"); err != nil || len(got) > maxAround+300 || !strings.HasPrefix(lines[0], "[x]/a.txt:1: hit") ||
+		!strings.HasPrefix(lines[len(lines)-1], "[") || !strings.Contains(lines[len(lines)-1], "more matching lines, beyond what one search shows, in [x]/a.txt") {
+		t.Errorf("a path that starts with [: %d bytes, %v", len(got), err)
+	}
 }

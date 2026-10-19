@@ -55,26 +55,23 @@ func menuRows(s desktop.Status) []menuProperties {
 	return rows
 }
 
-func exportMenu(conn *dbus.Conn, s desktop.Status, open func()) (*menuMethods, error) {
+// exportMenu exports the menu on a connection that exported already: at the
+// constant path it cannot fail, see run.
+func exportMenu(conn *dbus.Conn, s desktop.Status, open func()) *menuMethods {
 	m := &menuMethods{revision: 1, rows: menuRows(s), open: open, conn: conn}
-	if err := conn.Export(m, menuPath, menuInterface); err != nil {
-		return nil, err
-	}
-	props, err := prop.Export(conn, menuPath, prop.Map{menuInterface: {
+	conn.Export(m, menuPath, menuInterface)
+	props, _ := prop.Export(conn, menuPath, prop.Map{menuInterface: {
 		"Version":       {Value: uint32(3), Emit: prop.EmitConst},
 		"TextDirection": {Value: "ltr", Emit: prop.EmitConst},
 		"Status":        {Value: "normal", Emit: prop.EmitConst},
 		"IconThemePath": {Value: []string{}, Emit: prop.EmitConst},
 	}})
-	if err != nil {
-		return nil, err
-	}
 	iface := introspect.Interface{Name: menuInterface, Methods: introspect.Methods(m), Properties: props.Introspection(menuInterface), Signals: []introspect.Signal{
 		{Name: "LayoutUpdated", Args: []introspect.Arg{{Name: "revision", Type: "u"}, {Name: "parent", Type: "i"}}},
 		{Name: "ItemsPropertiesUpdated", Args: []introspect.Arg{{Name: "updatedProps", Type: "a(ia{sv})"}, {Name: "removedProps", Type: "a(ias)"}}},
 	}}
-	err = conn.Export(introspect.NewIntrospectable(&introspect.Node{Name: string(menuPath), Interfaces: []introspect.Interface{iface, prop.IntrospectData}}), menuPath, "org.freedesktop.DBus.Introspectable")
-	return m, err
+	conn.Export(introspect.NewIntrospectable(&introspect.Node{Name: string(menuPath), Interfaces: []introspect.Interface{iface, prop.IntrospectData}}), menuPath, "org.freedesktop.DBus.Introspectable")
+	return m
 }
 
 func (m *menuMethods) update(s desktop.Status) error {

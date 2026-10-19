@@ -67,3 +67,21 @@ func TestNobodyClosesTheWindow(t *testing.T) {
 		t.Fatal("restarted without a window to close")
 	}
 }
+
+// Restart names the profile the window shows, and none when it shows none.
+func TestRestartNamesTheProfile(t *testing.T) {
+	two := []choice{{"Luna", "aaa"}, {"Other", "bbb"}}
+	for _, tc := range []struct {
+		choices  []choice
+		selected int
+		want     string
+	}{{two, 0, "aaa"}, {two, 1, "bbb"}, {two, 2, ""}, {two, -1, ""}, {nil, 0, ""}} {
+		w := newWindow(page{choices: tc.choices, selected: tc.selected})
+		w.OnRestart(func() {})
+		w.restart("/new/ouro")
+		if exe, going, ok := w.Restart(); !ok || exe != "/new/ouro" || going.Profile != tc.want {
+			t.Errorf("%d of %d: %q %+v %v", tc.selected, len(tc.choices), exe, going, ok)
+		}
+		w.Close()
+	}
+}

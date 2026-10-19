@@ -121,8 +121,10 @@ func SessionOf(ctx context.Context) string {
 
 // Message is a single chat message.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	// PresentationID identifies this message locally and is never sent to a provider.
+	PresentationID string `json:"-"`
+	Role           string `json:"role"`
+	Content        string `json:"content"`
 	// Source is owner-origin metadata, kept locally but never sent as an API field.
 	Source MessageSource `json:"source,omitzero"`
 	// Reasoning is what the model thought before it wrote an assistant

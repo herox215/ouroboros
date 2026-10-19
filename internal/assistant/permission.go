@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
@@ -21,11 +20,6 @@ const (
 	AllowAlways = "Always allow it"
 	AllowNot    = "Don't run it"
 )
-
-// permissionTimeout bounds only the wait for permission, not the tool it
-// guards or an ordinary user_question. Rebuild waits for the owner until the
-// enclosing context ends instead. No answer means no permission.
-const permissionTimeout = 30 * time.Second
 
 // WithAllowing returns the blueprint whose agent of the owner keeps a call
 // the owner allowed for good with allow, see config.Tools.Allowed.
@@ -82,22 +76,15 @@ func (b Builder) permit(ctx context.Context, current func() (config.Config, erro
 		Options:  []string{AllowOnce, AllowAlways, AllowNot},
 	}
 	asked, _ := json.Marshal(q) // strings only: cannot fail
-	asking := ctx
-	if tool != ToolRebuild {
-		var cancel context.CancelFunc
-		asking, cancel = context.WithTimeout(ctx, permissionTimeout)
-		defer cancel()
-	}
-	answer, err := agent.AskOwner(asking, asked)
-	// Even an answer arriving just after the deadline grants no permission.
-	if asking.Err() != nil {
-		err = asking.Err()
+	// Permission stays open until the owner decides or the caller cancels.
+	answer, err := agent.AskOwner(ctx, asked)
+	// Cancellation wins even if the callback returns a late approval.
+	if ctx.Err() != nil {
+		err = ctx.Err()
 	}
 	switch {
 	case errors.Is(err, agent.ErrNoOwner):
 		return fmt.Errorf("%s did not run: it needs the leave of the owner, who cannot be asked here (it matches the rule %q of tools.ask)", tool, rule.Match)
-	case tool != ToolRebuild && errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf("%s did not run: not allowed because the owner did not answer the permission question in time (at most %s): %w", tool, permissionTimeout, err)
 	case err != nil:
 		return fmt.Errorf("%s did not run: the owner was asked whether it may, and did not answer: %w", tool, err)
 	}

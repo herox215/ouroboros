@@ -1,4 +1,5 @@
 import { createModelDialog } from './model-dialog.js';
+import { createSettingsDialog } from './settings-dialog.js';
 
 // Session text is rendered literally, including questions and tool output.
 export function mount(state, doc = document) {
@@ -472,9 +473,10 @@ export async function start(bridge, doc = document) {
     const state = await bridge.InitialState();
     mount(state, doc);
     const modelDialog = createModelDialog(bridge, doc);
+    const settingsDialog = createSettingsDialog(bridge, modelDialog, doc);
     doc.getElementById('settings').addEventListener('click', () => {
       const index = doc.getElementById('profile').selectedIndex;
-      modelDialog.open(index, state.profiles[index]?.name);
+      settingsDialog.open(index, state.profiles[index]?.name);
     });
     await browse(bridge, doc, state.resume);
   } catch (error) {

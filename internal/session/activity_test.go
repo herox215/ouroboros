@@ -15,16 +15,18 @@ func TestActivity(t *testing.T) {
 	cancel := func() {}
 	s.sessions = map[string]*session{
 		"private idle title": {title: "secret", events: []Event{{Text: "secret message"}}},
+		"idle":               {},
 		"working":            {cancel: cancel},
+		"also working":       {cancel: cancel},
 		"question":           {cancel: cancel, asked: make(chan queued, 1)},
 		"task only":          {tasks: []*task{{}}},
 	}
 	got, err := s.Activity(ctx)
-	if err != nil || got != (Activity{Running: 3, Waiting: 1}) {
+	if err != nil || got != (Activity{Running: 4, Waiting: 1}) {
 		t.Fatalf("activity: %+v, %v", got, err)
 	}
 	wire, _ := json.Marshal(got)
-	if strings.Contains(string(wire), "secret") || string(wire) != `{"running":3,"waiting":1}` {
+	if strings.Contains(string(wire), "secret") || string(wire) != `{"running":4,"waiting":1}` {
 		t.Fatalf("private data: %s", wire)
 	}
 	// Accepted replies and canceled questions must disappear on the next sample.

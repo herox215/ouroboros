@@ -42,6 +42,21 @@ func TestSettingsInfoScroll(t *testing.T) {
 	if !strings.Contains(dialogView(m), "THE END") {
 		t.Fatal("cannot reach the end of Info")
 	}
+	if got := footer(m); got != "↑↓ scroll · enter / esc back" {
+		t.Errorf("the footer with Info: %q", got)
+	}
+	// Up goes back to the beginning, and stops there.
+	for range 200 {
+		press(m, "up")
+		dialogView(m)
+	}
+	if view := dialogView(m); strings.Contains(view, "THE END") || m.config.infoTop != 0 {
+		t.Fatalf("up did not go back to the beginning: %d\n%s", m.config.infoTop, view)
+	}
+	press(m, "j", "j", "k")
+	if m.config.infoTop != 1 {
+		t.Errorf("j j k: %d", m.config.infoTop)
+	}
 	press(m, "esc")
 	if m.config.top != top || m.config.selectedRow(m).label != "read" {
 		t.Fatal("Info moved the underlying list")

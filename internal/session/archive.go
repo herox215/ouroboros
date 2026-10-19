@@ -41,6 +41,16 @@ func (s *Service) Archive(a *history.Archive, log func(format string, args ...an
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.archive = &archive{Archive: a, log: log, peer: peer}
+	completed, err := a.CompleteRestarts(processInstance)
+	if err != nil {
+		log("completed restarts cannot be kept: %v", err)
+		return
+	}
+	for id, r := range completed {
+		if se := s.sessions[strings.TrimPrefix(id, "owner/")]; se != nil {
+			s.emit(se, Event{Kind: Restarted, At: r.Time.Local(), PresentationID: r.PresentationID, Text: r.Content})
+		}
+	}
 }
 
 // ForgetPeers tells s how the agent that answers the peers forgets one of
@@ -128,6 +138,9 @@ func (s *Service) load(id string) *session {
 	if title != "" {
 		events = append(events, Event{Kind: Title, At: last.Local(), Text: title, Context: usage.Context, Cache: usage.Cache})
 	}
+	if id == ThreadID {
+		events = quiet(events)
+	}
 	se := &session{id: id, events: events, watchers: map[chan Event]struct{}{}, resumed: last, title: title}
 	s.effortOf(se)
 	s.directoryOf(se)
@@ -148,13 +161,35 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 	start := 0
 	var size int
 	var cache assistant.Cache
-	for _, r := range records {
+	for i, r := range records {
 		at := r.Time.Local()
+		id := r.PresentationID
+		if id == "" {
+			// Legacy records have no live identity; their archive sequence is stable.
+			seq := r.Seq
+			if seq == 0 {
+				seq = i + 1
+			}
+			id = fmt.Sprintf("archive:%d", seq)
+		}
 		switch r.Role {
+		case history.Restarted:
+			events = append(events, Event{Kind: Restarted, PresentationID: id, At: at, Text: r.Content, Context: size, Cache: cache})
 		case "user":
 			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source})
 			if ended, ok := assistant.AsTaskReport(unnoted(r.Content)); ok {
 				events = append(events, Event{Kind: Task, At: at, N: ended.N, Remark: ended.Title, Text: ended.Answer, Err: ended.Err})
+				continue
+			}
+			// What the thread is told of the sessions is not said by the owner.
+			if isRoster(unnoted(r.Content)) {
+				continue
+			}
+			if relayed, ok := asRelay(unnoted(r.Content)); ok {
+				for _, e := range relayed {
+					e.At, e.PresentationID = at, id
+					events = append(events, e)
+				}
 				continue
 			}
 			events = append(events, Event{Kind: Message, At: at, Text: unnoted(r.Content), Source: r.Source.Normalized()})
@@ -162,10 +197,10 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			m := openai.Message{Role: "assistant", Content: r.Content}
 			if len(r.ToolCalls) == 0 {
 				msgs = append(msgs, m)
-				events = append(events, Event{Kind: Answer, At: at, Text: r.Content})
+				events = append(events, Event{Kind: Answer, PresentationID: id, At: at, Text: r.Content})
 				continue
 			}
-			events = append(events, Event{Kind: Say, At: at, Text: r.Content})
+			events = append(events, Event{Kind: Say, PresentationID: id, At: at, Text: r.Content})
 			for _, c := range r.ToolCalls {
 				m.ToolCalls = append(m.ToolCalls, openai.ToolCall{ID: c.ID, Type: "function", Function: openai.FunctionCall{Name: c.Name, Arguments: c.Arguments}})
 				step := Event{Kind: Step, At: at, CallID: c.ID, Tool: c.Name, Args: args(c.Arguments)}
@@ -193,10 +228,10 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			switch r.Outcome {
 			case history.Failed:
 				msgs = agent.Abandon(msgs)
-				events = append(events, Event{Kind: Failed, At: at, Text: "the answer failed"})
+				events = append(events, Event{Kind: Failed, PresentationID: id, At: at, Text: "the answer failed"})
 			case history.Canceled:
 				msgs = agent.Abandon(msgs)
-				events = append(events, Event{Kind: Canceled, At: at})
+				events = append(events, Event{Kind: Canceled, PresentationID: id, At: at})
 			}
 			for i := start; i < len(events); i++ {
 				events[i].Context, events[i].Cache = size, cache
@@ -301,6 +336,7 @@ func (s *Service) Find(_ context.Context, query string) ([]string, error) {
 	for i, id := range hits { // a session of the owner is named as List names it, without its party
 		hits[i] = strings.TrimPrefix(id, "owner/")
 	}
+	hits = slices.DeleteFunc(hits, func(id string) bool { return id == ThreadID }) // which List leaves out too
 	slices.Sort(hits)
 	return hits, err
 }

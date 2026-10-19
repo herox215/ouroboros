@@ -53,7 +53,7 @@ type record struct {
 	sent    int       // bytes to the LLM, see agent.Call
 	tokens  int       // tokens sent to the LLM, as far as the API said
 	cached  int       // of those, the tokens the provider had cached
-	tooled  int       // tool calls that ended, those of scripts included
+	tooled  int       // tool calls that ended
 	calling time.Time // when the call of the LLM that is under way started; zero if none is
 	tools   []flight  // under way, in the order they started
 	closed  bool      // the last line is written
@@ -266,11 +266,8 @@ func (r *record) step(s agent.Step) {
 	}
 	if !s.Done {
 		r.tools = append(r.tools, flight{s.Tool, s.Args, time.Now()})
-		r.measured.start(s.Tool)
 		return
 	}
-	// The call that ends is the last of its kind that started: a tool a
-	// script calls ends before the script does.
 	for i := len(r.tools) - 1; i >= 0; i-- {
 		if r.tools[i].tool == s.Tool && bytes.Equal(r.tools[i].args, s.Args) {
 			r.tools = slices.Delete(r.tools, i, i+1)
@@ -279,19 +276,11 @@ func (r *record) step(s agent.Step) {
 	}
 	r.tooled++
 	r.measured.step(s.Tool, string(s.Args), s.Took, s.Err != nil)
-	if s.Tool == toolRun {
-		r.measured.result(s.Result)
-	}
 	outcome := fmt.Sprintf("ok (%d bytes)", len(s.Result))
 	if s.Err != nil {
 		outcome = "error " + r.text(s.Err.Error())
 	}
 	r.line("tool %s %s took %s: %s", r.plain(s.Tool), r.args(s.Tool, s.Args), took(s.Took), outcome)
-	// A script that ran is the calls in the lines before it: to a review
-	// its line reads as one more.
-	if s.Tool == toolRun && s.Err == nil {
-		r.trail = r.trail[:len(r.trail)-1]
-	}
 }
 
 // text is s as the log takes a text: without secrets, shortened and quoted.

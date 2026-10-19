@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -123,6 +125,10 @@ func TestService(t *testing.T) {
 	if list := sv.list(); len(list) != 1 || list[0].Name != "web" || list[0].Port != port || list[0].PeerKey != "" {
 		t.Errorf("the list for the owner: %+v", list)
 	}
+	if got, _ := w.service(context.Background(), sv, "{}", map[string]any{"action": "status", "name": "web"}); !strings.HasPrefix(got, "service web runs, for ") ||
+		!strings.Contains(got, fmt.Sprintf(", on localhost:%d; its last lines:\nserving", port)) {
+		t.Errorf("status while it runs: %q", got)
+	}
 	// One name runs once, one port is listened on once.
 	if _, err := w.service(context.Background(), sv, "{}", map[string]any{"action": "start", "name": "web", "command": "sleep 9"}); err == nil ||
 		err.Error() != "the service web runs already: stop it, or choose another name" {
@@ -155,9 +161,16 @@ func TestService(t *testing.T) {
 		t.Errorf("processes with its tag are left: %v", left)
 	}
 
-	// The owner stops one in the front end.
-	if !sv.stopID(sv.list()[0].ID) || answers(port) {
+	// The owner stops one in the front end, and none that does not run.
+	if sv.stopID("none") {
+		t.Error("the owner stopped a service that is not there")
+	}
+	id := sv.list()[0].ID
+	if !sv.stopID(id) || answers(port) {
 		t.Error("the owner did not stop the service")
+	}
+	if sv.stopID(id) {
+		t.Error("the owner stopped a service that ended")
 	}
 	if got, _ := w.service(context.Background(), sv, "{}", map[string]any{"action": "status", "name": "web"}); !strings.Contains(got, "was stopped after") ||
 		!strings.Contains(got, "the owner stopped it") || !strings.Contains(got, "serving") {
@@ -165,6 +178,11 @@ func TestService(t *testing.T) {
 	}
 	if _, err := os.Stat(sv.file); !os.IsNotExist(err) {
 		t.Errorf("the file of the services is left: %v", err)
+	}
+	// What ended is still listed for a while.
+	if got, _ := w.service(context.Background(), sv, "{}", map[string]any{"action": "list"}); !strings.HasPrefix(got, "web · ended at ") ||
+		!strings.Contains(got, fmt.Sprintf(" · localhost:%d · echo serving;", port)) || !strings.Contains(got, "\nleaves · ended at ") {
+		t.Errorf("list once they ended: %q", got)
 	}
 }
 
@@ -189,6 +207,15 @@ func TestServiceEnds(t *testing.T) {
 	// Its name is free again.
 	if _, err := w.service(ctx, sv, "{}", map[string]any{"action": "start", "name": "short", "command": "sleep 30"}); err != nil {
 		t.Errorf("the name of one that ended: %v", err)
+	}
+	// One that ends before its port answers is not waited for.
+	start := time.Now()
+	got, err = w.service(ctx, sv, "{}", map[string]any{"action": "start", "name": "crash", "port": freePort(t), "command": "echo no; exit 2"})
+	if err != nil || !strings.HasPrefix(got, "service crash ended by itself after") || !strings.Contains(got, "exit 2") || !strings.Contains(got, "no") {
+		t.Errorf("one that ends before its port answers: %q, %v", got, err)
+	}
+	if took := time.Since(start); took >= readyTime {
+		t.Errorf("the start waited %s for the port of one that ended", took)
 	}
 	dir, err := prepare(ctx, ToolService, w.guard, "")
 	if err != nil {
@@ -329,11 +356,241 @@ func TestServiceArguments(t *testing.T) {
 		`{"action": "start", "name": "web", "command": "x", "port": 70000}`: "70000 is no port",
 		`{"action": "restart", "name": "web"}`:                              `service does "start", "status", "logs", "stop" or "list", not "restart"`,
 		`{"action": "status", "name": "none"}`:                              "there is no service none: no service runs",
+		`{"action": "start", "name": "web", "command": "x", "hours": -1}`:   `"hours" is how many hours it may run`,
 	} {
 		var a map[string]any
 		json.Unmarshal([]byte(args), &a)
 		if _, err := w.service(ctx, sv, "{}", a); err == nil || err.Error() != want {
 			t.Errorf("%s: %v, want %q", args, err, want)
 		}
+	}
+	tool, err := ServiceTool(sv, w.guard).Configure(json.RawMessage("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Run(ctx, json.RawMessage(`{"action": "list", "lines": "many"}`)); err == nil || !strings.Contains(err.Error(), ToolService) {
+		t.Errorf("arguments that cannot be read: %v", err)
+	}
+	// Settings it cannot run with keep it from being built.
+	for settings, want := range map[string]string{
+		`{"env": [""]}`:    `"" in env is no name of a variable`,
+		`{"env": ["A=B"]}`: `"A=B" in env is no name of a variable`,
+		`{"env": ["A B"]}`: `"A B" in env is no name of a variable`,
+	} {
+		if _, err := ServiceTool(sv, w.guard).Configure(json.RawMessage(settings)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", settings, err, want)
+		}
+	}
+}
+
+// A service that cannot start says why, and is neither listed nor noted.
+func TestServiceStartFails(t *testing.T) {
+	w := newWorld(t)
+	sv := w.supervisor()
+	ctx := context.Background()
+	start := map[string]any{"action": "start", "name": "web", "command": "sleep 30"}
+
+	// Something that is no service listens on the port.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	port := l.Addr().(*net.TCPAddr).Port
+	if _, err := w.service(ctx, sv, "{}", map[string]any{"action": "start", "name": "web", "command": "sleep 30", "port": port}); err == nil ||
+		err.Error() != fmt.Sprintf("something listens on port %d already: choose another port, or ask the user about what listens there", port) {
+		t.Errorf("a port that is taken: %v", err)
+	}
+
+	old := shell
+	t.Cleanup(func() { shell = old })
+	shell = filepath.Join(t.TempDir(), "bash")
+	if _, err := w.service(ctx, sv, "{}", start); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("without bash: %v", err)
+	}
+	shell = old
+
+	t.Cleanup(func() { pipe = os.Pipe })
+	pipe = func() (*os.File, *os.File, error) { return nil, nil, errTest }
+	if _, err := w.service(ctx, sv, "{}", start); !errors.Is(err, errTest) {
+		t.Errorf("without a pipe: %v", err)
+	}
+	pipe = os.Pipe
+
+	if got, _ := w.service(ctx, sv, "{}", map[string]any{"action": "list"}); got != "no service runs" {
+		t.Errorf("list: %q", got)
+	}
+	if _, err := os.Stat(sv.file); !os.IsNotExist(err) {
+		t.Errorf("the file of the services: %v", err)
+	}
+}
+
+// No more services start than the limit of whom they run for: those of
+// others and those that ended do not count, and the name of one that ended
+// is free.
+func TestServiceAdmit(t *testing.T) {
+	ended := make(chan struct{})
+	close(ended)
+	svc := func(peer, name string, port int, running bool) *service {
+		done := ended
+		if running {
+			done = make(chan struct{})
+		}
+		return &service{peer: peer, name: name, port: port, p: &process{done: done}}
+	}
+	sv := &supervisor{all: []*service{
+		svc("", "a", 0, true), svc("", "b", 0, true), svc("", "c", 8080, true), svc("", "old", 0, false), svc("", "older", 0, false),
+		svc("peer", "a", 0, true), svc("peer", "b", 0, true),
+	}}
+	for _, tt := range []struct {
+		peer, name string
+		port       int
+		want       string
+	}{
+		{"", "d", 0, ""},
+		{"", "old", 0, ""},
+		{"", "a", 0, "the service a runs already: stop it, or choose another name"},
+		{"", "d", 8080, "the service c listens on port 8080 already"},
+		{"other", "d", 9090, ""},
+		{"other", "a", 0, ""},
+		{"peer", "c", 0, "2 services run already: stop one first"},
+		{"peer", "d", 8080, "the service c listens on port 8080 already"},
+	} {
+		limit := MaxServices
+		if tt.peer != "" {
+			limit = MaxPeerServices
+		}
+		err := sv.admit(tt.peer, tt.name, tt.port, limit)
+		if tt.want == "" && err != nil || tt.want != "" && (err == nil || err.Error() != tt.want) {
+			t.Errorf("%q of %q on %d: %v, want %q", tt.name, tt.peer, tt.port, err, tt.want)
+		}
+	}
+	sv.all = append(sv.all, svc("", "d", 0, true))
+	if err := sv.admit("", "e", 0, MaxServices); err == nil || err.Error() != "4 services run already: stop one first" {
+		t.Errorf("one more than the limit: %v", err)
+	}
+	sv.closed = true
+	if err := sv.admit("other", "e", 0, MaxPeerServices); err == nil || err.Error() != "the node stops: no service starts any more" {
+		t.Errorf("once the node stops: %v", err)
+	}
+}
+
+// A service that does not end when asked is killed once its time to end is
+// over.
+func TestServiceKilledAfterGrace(t *testing.T) {
+	w := newWorld(t)
+	sv := w.supervisor()
+	ctx := context.Background()
+	if _, err := w.service(ctx, sv, "{}", map[string]any{"action": "start", "name": "stubborn",
+		"command": `trap '' TERM; echo up; while true; do sleep 0.1; done`}); err != nil {
+		t.Fatal(err)
+	}
+	w.waitFor(sv, "stubborn", "up")
+	start := time.Now()
+	got, err := w.service(ctx, sv, "{}", map[string]any{"action": "stop", "name": "stubborn"})
+	if err != nil || !strings.HasPrefix(got, "service stubborn was stopped after") || !strings.Contains(got, ": you stopped it") {
+		t.Errorf("stop: %q, %v", got, err)
+	}
+	if took := time.Since(start); took < serviceGrace {
+		t.Errorf("killed after %s, before its time to end was over", took)
+	}
+}
+
+// A service whose port does not answer runs all the same, and the agent is
+// told so.
+func TestServiceDoesNotAnswer(t *testing.T) {
+	w := newWorld(t)
+	sv := w.supervisor()
+	ctx := context.Background()
+	port := freePort(t)
+	got, err := w.service(ctx, sv, "{}", map[string]any{"action": "start", "name": "mute", "port": port, "command": "echo up; exec sleep 60"})
+	if err != nil || !strings.HasPrefix(got, "service mute runs since") ||
+		!strings.Contains(got, fmt.Sprintf(`, but does not answer on localhost:%d after 15s: look at it with "status".`, port)) || !strings.HasSuffix(got, "\nup") {
+		t.Errorf("start: %q, %v", got, err)
+	}
+	if got, _ := w.service(ctx, sv, "{}", map[string]any{"action": "status", "name": "mute"}); !strings.Contains(got, fmt.Sprintf(", on localhost:%d, which does not answer; its last lines:\nup", port)) {
+		t.Errorf("status: %q", got)
+	}
+}
+
+// A file of the services that cannot be written is logged, and the service
+// runs all the same.
+func TestServiceNotNoted(t *testing.T) {
+	w := newWorld(t)
+	var mu sync.Mutex
+	var logged []string
+	sv := &supervisor{file: filepath.Join(w.node, "missing", "services.json"), logf: func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}}
+	t.Cleanup(sv.stopAll)
+	dir, err := prepare(context.Background(), ToolService, w.guard, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := sv.launch("quiet", "", "sleep 30", dir, 0, time.Hour, settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	first := fmt.Sprint(logged)
+	mu.Unlock()
+	if !s.running() || !strings.HasPrefix(first, "[the services that run cannot be noted: ") {
+		t.Errorf("logged %s", first)
+	}
+}
+
+// The tool tells a time under an hour in minutes.
+func TestHours(t *testing.T) {
+	for d, want := range map[time.Duration]string{30 * time.Minute: "30 minutes", 59 * time.Minute: "59 minutes", time.Hour: "1 hour", 2 * time.Hour: "2 hours", 24 * time.Hour: "24 hours"} {
+		if got := hours(d); got != want {
+			t.Errorf("%s: %q, want %q", d, got, want)
+		}
+	}
+}
+
+// The owner is shown what a call of the tool for services does.
+func TestShowService(t *testing.T) {
+	for args, want := range map[string]string{
+		`{"action": "start", "name": "web"}`:  "starting the service web",
+		`{"action": "stop", "name": "web"}`:   "stopping the service web",
+		`{"action": "status", "name": "web"}`: "looking at the service web",
+		`{"action": "logs", "name": "web"}`:   "looking at the service web",
+		`{"action": "list"}`:                  "listing the services",
+		`{"action": "restart", "name": "x"}`:  "",
+		`{"action": 1}`:                       "",
+	} {
+		if got := ShowService(json.RawMessage(args)); got != want {
+			t.Errorf("%s: %q, want %q", args, got, want)
+		}
+	}
+}
+
+// The log of a service keeps the last serviceLog bytes it printed, from the
+// start of a line on.
+func TestServiceLog(t *testing.T) {
+	var r ring
+	if got := r.last(5); got != "(nothing)" {
+		t.Errorf("an empty log: %q", got)
+	}
+	// Lines of 100 bytes each, numbered.
+	for i := range 700 {
+		fmt.Fprintf(&r, "%03d%s\n", i, strings.Repeat("x", 96))
+	}
+	if len(r.buf) != serviceLog/100*100 {
+		t.Errorf("%d bytes kept", len(r.buf))
+	}
+	lines := strings.Split(r.last(1000), "\n")
+	if len(lines) != serviceLog/100 || !strings.HasPrefix(lines[0], fmt.Sprintf("%03d", 700-serviceLog/100)) || !strings.HasPrefix(lines[len(lines)-1], "699") {
+		t.Errorf("%d lines kept, from %.3s to %.3s", len(lines), lines[0], lines[len(lines)-1])
+	}
+	if got := r.last(2); got != "698"+strings.Repeat("x", 96)+"\n699"+strings.Repeat("x", 96) {
+		t.Errorf("the last two lines: %q", got)
+	}
+	// What has no end of a line is kept as far as it goes.
+	var long ring
+	if n, err := long.Write([]byte(strings.Repeat("y", serviceLog+10))); n != serviceLog+10 || err != nil || len(long.buf) != serviceLog {
+		t.Errorf("one long line: %d, %v, %d bytes kept", n, err, len(long.buf))
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"ouroboros/internal/history"
 )
 
 // The services the tools keep running are listed the oldest first, those of
@@ -38,5 +40,18 @@ func TestServices(t *testing.T) {
 	}
 	if len(stopped) != 4 {
 		t.Errorf("stopped %v", stopped)
+	}
+}
+
+// With an archive, a service of a peer is named as the archive names the
+// peer.
+func TestServicesOfNamedPeers(t *testing.T) {
+	s, _, _ := archived(t, &fakeAgent{}, t.TempDir(), time.Now())
+	s.ServicesFrom(func() []Services {
+		return []Services{{List: func() []ServiceInfo { return []ServiceInfo{{ID: "a", PeerKey: "peer-key"}} }}}
+	})
+	list, err := s.Services(context.Background())
+	if err != nil || len(list) != 1 || list[0].Peer != "beta of "+history.Party("peer-key")[:9] {
+		t.Fatalf("services %+v, %v", list, err)
 	}
 }

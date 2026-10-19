@@ -84,3 +84,14 @@ func TestRainKeepsNameTaglineAndViewport(t *testing.T) {
 		}
 	}
 }
+
+// A canvas without room gets no rain, and is left as it was.
+func TestRainWithoutRoom(t *testing.T) {
+	for _, size := range [][2]int{{0, 4}, {4, 0}} {
+		c := &canvas{w: size[0], h: size[1], back: darkPalette.back}
+		drawNameRain(c, 1, 1)
+		if len(c.cells) != 0 || c.alpha != 0 {
+			t.Fatalf("%v: %d cells, alpha %v", size, len(c.cells), c.alpha)
+		}
+	}
+}

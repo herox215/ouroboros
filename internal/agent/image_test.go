@@ -147,27 +147,78 @@ func TestPicturesAreShownOnce(t *testing.T) {
 	}
 }
 
-// A tool gives the owner a remark on its call, the last it gave, with the
-// step that ends it; a tool it runs gives its own. Outside of a call a
-// remark goes nowhere.
+// A direct tool gives the owner its last remark with the completed step.
 func TestRemark(t *testing.T) {
-	inner := Tool{Name: "inner", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
-		Remark(ctx, "of inner")
-		return "", nil
-	}}
-	outer := Tool{Name: "outer", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+	tool := Tool{Name: "remark", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
 		Remark(ctx, "first")
-		Invoke(ctx, inner, nil)
-		Remark(ctx, "of outer")
-		return "", nil
+		Remark(ctx, "last")
+		return "result", nil
 	}}
 	var steps []Step
-	ctx := context.WithValue(context.Background(), observerKey{}, Observer{Step: func(s Step) { steps = append(steps, s) }})
-	Invoke(ctx, outer, nil)
-	if len(steps) != 4 || steps[2].Tool != "inner" || steps[2].Remark != "of inner" || steps[3].Remark != "of outer" || steps[0].Remark != "" {
+	_, err := New(&fakeLLM{}, "m", "s", tool).Run(t.Context(), "id", "call remark", Observer{Step: func(s Step) { steps = append(steps, s) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 2 || steps[0].Remark != "" || steps[1].Remark != "last" || steps[1].ID != "c1" {
 		t.Fatalf("steps %+v", steps)
 	}
 	if Remark(context.Background(), "nowhere") {
 		t.Fatal("a remark outside of a call should go nowhere")
+	}
+}
+
+// Images remain attached to their own direct calls for providers and hooks,
+// including deduplication between calls in the same model round.
+func TestDirectToolImagesObserved(t *testing.T) {
+	rounds := 0
+	llm := llmFunc(func(msgs []openai.Message) openai.Message {
+		rounds++
+		if rounds == 1 {
+			return openai.Message{ToolCalls: []openai.ToolCall{
+				{ID: "one", Type: "function", Function: openai.FunctionCall{Name: "look", Arguments: "{}"}},
+				{ID: "two", Type: "function", Function: openai.FunctionCall{Name: "look", Arguments: "{}"}},
+			}}
+		}
+		return openai.Message{Content: "done"}
+	})
+	tool := Tool{Name: "look", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		if !Show(ctx, image(1)) {
+			t.Error("Show rejected direct call")
+		}
+		return "picture", nil
+	}}
+	check := func(messages []openai.Message) {
+		t.Helper()
+		var results []openai.Message
+		for _, m := range messages {
+			if m.Role == "tool" {
+				results = append(results, m)
+			}
+		}
+		if len(results) != 2 || results[0].ToolCallID != "one" || !slices.EqualFunc(results[0].Images, []openai.Image{image(1)}, sameImage) || results[1].ToolCallID != "two" || len(results[1].Images) != 0 || results[1].Content != "picture\n[The picture is the same as the one shown above with the result of the call one: it is not sent again.]" {
+			t.Fatalf("observed results %+v", results)
+		}
+	}
+	var observed []openai.Message
+	hookCalled := false
+	provider := ContextProvider{Name: "images", Prepare: func(_ context.Context, p Preparation) ([]openai.Message, error) { return p.Messages, nil }, Observe: func(_ context.Context, _ Processing, m openai.Message) error {
+		observed = append(observed, m)
+		return nil
+	}}
+	a, err := New(llm, "m", "s", tool).WithExtensions("images", []ContextProvider{provider}, []AnswerHook{{Name: "images", After: func(_ context.Context, o AnswerOutcome) error {
+		hookCalled = true
+		check(o.Messages)
+		return nil
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Respond(t.Context(), "id", "look twice"); err != nil {
+		t.Fatal(err)
+	}
+	check(observed)
+	check(a.memory.Conversation("id"))
+	if !hookCalled {
+		t.Fatal("after hook not called")
 	}
 }

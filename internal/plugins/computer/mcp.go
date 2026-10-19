@@ -26,7 +26,8 @@ var closeTimeout = 3 * time.Second
 type driver struct {
 	path string // the program, to tell whether the settings name another
 	out  io.WriteCloser
-	stop func() // ends the program and waits for it
+	stop func()        // ends the program and waits for it
+	gone chan struct{} // closed once read has ended
 
 	write sync.Mutex // guards out
 
@@ -95,6 +96,15 @@ func launch(ctx context.Context, path string) (*driver, error) {
 	}
 	done := make(chan struct{})
 	go func() { cmd.Wait(); close(done) }()
+	// Why it ended is the last of what it wrote, which is all there once it
+	// was waited for: its output closes before.
+	why := func() string {
+		select {
+		case <-done:
+		case <-time.After(closeTimeout):
+		}
+		return stderr.String()
+	}
 	d := connect(path, out, in, func() {
 		in.Close()
 		select {
@@ -103,7 +113,8 @@ func launch(ctx context.Context, path string) (*driver, error) {
 			cmd.Process.Kill()
 			<-done
 		}
-	}, stderr.String)
+		out.Close() // also where what it started holds its output open
+	}, why)
 	if err := d.greet(ctx); err != nil {
 		d.end()
 		return nil, err
@@ -127,7 +138,7 @@ func arguments(goos string) []string {
 // connect returns the driver that answers on in and is asked on out, which
 // stop ends. what tells why it ended, once it did.
 func connect(path string, in io.Reader, out io.WriteCloser, stop func(), what func() string) *driver {
-	d := &driver{path: path, out: out, stop: stop, waiting: map[int64]chan reply{}}
+	d := &driver{path: path, out: out, stop: stop, gone: make(chan struct{}), waiting: map[int64]chan reply{}}
 	go d.read(in, what)
 	return d
 }
@@ -212,6 +223,7 @@ func (d *driver) send(message any) error {
 // read hands the answers of the driver to the requests that wait for them,
 // until it ends.
 func (d *driver) read(in io.Reader, what func() string) {
+	defer close(d.gone)
 	r := bufio.NewReader(in)
 	for {
 		line, err := r.ReadBytes('\n')
@@ -269,8 +281,11 @@ func (d *driver) closed() bool {
 	return d.err != nil
 }
 
-// end ends the driver.
-func (d *driver) end() { d.stop() }
+// end ends the driver, and returns once it is closed.
+func (d *driver) end() {
+	d.stop()
+	<-d.gone
+}
 
 // tail keeps the last lines a program wrote, to say why it ended.
 type tail struct {

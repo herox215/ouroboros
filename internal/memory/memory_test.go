@@ -153,3 +153,19 @@ func TestSafeSearchAndBounds(t *testing.T) {
 		t.Fatal("invalid scope")
 	}
 }
+
+// A key of 128 bytes, a content of 8192 bytes and a source of 256 bytes are
+// taken; one byte more is not.
+func TestLimitsOfTheText(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	key, content, source := strings.Repeat("k", MaxKey), strings.Repeat("c", MaxContent), strings.Repeat("s", 256)
+	if _, err := s.Create(ctx, "", key, content, source); err != nil {
+		t.Fatalf("at the limits: %v", err)
+	}
+	for _, a := range [][3]string{{key + "k", "c", "s"}, {"k", content + "c", "s"}, {"k", "c", source + "s"}} {
+		if _, err := s.Create(ctx, "", a[0], a[1], a[2]); err == nil {
+			t.Errorf("a key of %d bytes, a content of %d and a source of %d was taken", len(a[0]), len(a[1]), len(a[2]))
+		}
+	}
+}

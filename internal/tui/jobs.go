@@ -170,19 +170,18 @@ const jobsKey = "ctrl+j"
 const jobsListWidth = 30
 
 // jobsWidth is how wide the list of the jobs on the right is: a third of the
-// window at most, 0 while it is hidden. While it fades out it keeps its room.
+// window at most, 0 while it is hidden. On its way it slows down as it
+// arrives, just like the box of the input.
 func (m *Model) jobsWidth() int {
-	if !m.jobsShown && m.jobsLevel == 0 {
-		return 0
-	}
-	return min(jobsListWidth, m.width/3)
+	t := float64(m.jobsLevel) / jobsFrames
+	return int(math.Round((1 - math.Pow(1-t, 3)) * float64(min(jobsListWidth, m.width/3))))
 }
 
 // jobsList lists the jobs of the session shown on the right of the chat,
 // and the services below them, as high as the chat and the input. A job too long for a line goes on in the
 // next ones, indented.
 func (m *Model) jobsList() string {
-	w, h := m.jobsWidth(), m.bodyHeight()
+	w, h := min(jobsListWidth, m.width/3), m.bodyHeight()
 	inner := max(1, w-4) // border and padding
 	lines := []string{boldStyle.Render("Jobs")}
 	if len(m.chat.jobs) == 0 {
@@ -225,84 +224,35 @@ func (m *Model) jobsList() string {
 	if m.jobsLevel >= jobsFrames {
 		return list
 	}
-	return m.dissolve(list, m.jobsLevel)
-}
-
-// noiseGlyphs are what the noise the list of the jobs comes in as is drawn
-// with: light dots, so that it stays in the background; noiseDense is how
-// many of its cells have one, the others are blank.
-var noiseGlyphs = []rune("·∙:")
-
-const noiseDense = 0.35
-
-// dissolve is view at the level of jobsFrames it came in to: it slides in
-// from the right, slowing down as it arrives, as noise that flickers from
-// frame to frame, and every cell of it settles into itself at a time of its
-// own, the last once it arrived. Going out it does the same backwards.
-func (m *Model) dissolve(view string, level int) string {
-	t := float64(level) / jobsFrames
-	arrived := 1 - math.Pow(1-min(1, t/0.7), 3) // how far it slid in, from 0 to 1
-	lines := strings.Split(view, "\n")
-	for y, line := range lines {
-		w := ansi.StringWidth(line)
-		shown := int(math.Round(arrived * float64(w))) // its columns on the left that are in
-		var b strings.Builder
-		b.WriteString(strings.Repeat(" ", w-shown))
-		from := -1 // the first column of a run of cells that are themselves
-		for x := 0; x <= shown; x++ {
-			cell := float64(y*w + x) // the noise goes along with the cell
-			if x < shown && t >= 0.4+0.6*noise(cell) {
-				if from < 0 {
-					from = x
-				}
-				continue
-			}
-			if from >= 0 {
-				b.WriteString(ansi.Cut(line, from, x))
-				from = -1
-			}
-			if x < shown {
-				b.WriteString(m.noiseCell(cell, level))
-			}
+	lines = strings.Split(list, "\n")
+	for i, line := range lines {
+		line = ansi.Cut(line, 0, m.jobsWidth())
+		if m.jobsLevel*2 < jobsFrames {
+			lines[i] = lipgloss.NewStyle().Foreground(fadeColor(m.light)).Render(ansi.Strip(line))
+		} else {
+			lines[i] = faint(line)
 		}
-		lines[y] = b.String()
 	}
 	return strings.Join(lines, "\n")
 }
 
-// noiseCell is a cell of the noise at the frame level: blank or a dot, in
-// the gray of a faded edge, and from frame to frame another.
-func (m *Model) noiseCell(cell float64, level int) string {
-	at := noise(cell + float64(level)*7.31)
-	if at >= noiseDense {
-		return " "
-	}
-	glyph := noiseGlyphs[int(at/noiseDense*float64(len(noiseGlyphs)))]
-	return lipgloss.NewStyle().Foreground(fadeColor(m.light)).Render(string(glyph))
-}
-
-// The list of the jobs slides in as noise, and out again, over jobsFrames
-// frames, one every jobsFrame.
+// The list slides in from the right with the same timing as the input.
 const (
-	jobsFrames = 14
-	jobsFrame  = 25 * time.Millisecond
+	jobsFrames = inputFrames
+	jobsFrame  = inputFrame
 )
 
 // jobsFadeMsg is a frame of the list of the jobs on its way in or out.
 type jobsFadeMsg struct{}
 
-// toggleJobs shows the list of the jobs, or hides it again: it fades in or
-// out. The chat and the input make room for it at once, and take it back
-// once it faded out.
+// toggleJobs slides the list of the jobs in or out. The chat and the input
+// give it room or take it back with every frame.
 func (m *Model) toggleJobs() tea.Cmd {
 	m.jobsShown = !m.jobsShown
 	var load tea.Cmd
 	if m.jobsShown {
 		m.servicesAsked++
 		load = m.loadServices()
-		if m.jobsLevel == 0 {
-			m.layout()
-		}
 	}
 	if m.jobsFading {
 		return load // the frames on their way turn around
@@ -349,9 +299,7 @@ func (m *Model) jobsFaded() tea.Cmd {
 	} else {
 		m.jobsLevel = max(0, m.jobsLevel-1)
 	}
-	if m.jobsLevel == 0 && !m.jobsShown {
-		m.layout() // the chat and the input take the room back
-	}
+	m.layout() // the chat and the input follow the list on its way
 	if m.jobsLevel == 0 || m.jobsLevel == jobsFrames {
 		m.jobsFading = false
 		return nil

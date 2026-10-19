@@ -46,6 +46,18 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+// A response of as many bytes as are read is read whole.
+func TestUsageOfTheLongestResponse(t *testing.T) {
+	body := usageBody()
+	body = strings.Repeat(" ", (64<<10)-len(body)) + body
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+	defer srv.Close()
+	got, err := opencode.Provider(opencode.Options{}).Usage(t.Context(), access{c: client.Credentials(srv.URL, key)})
+	if err != nil || len(got) != 3 || got[2].UsedPercent != 125 {
+		t.Fatalf("windows %+v, %v", got, err)
+	}
+}
+
 func TestUsageRejectsMalformedData(t *testing.T) {
 	bodies := []string{"", "null", "{}", `{"usage":null}`, `{"usage":{}}`, usageBody() + " {}", strings.Repeat("x", (64<<10)+1)}
 	for _, name := range []string{"rolling", "weekly", "monthly"} {
@@ -149,5 +161,54 @@ func TestUsageCancellation(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancellation did not end the request")
+	}
+}
+
+// transport answers a request itself, for what no server does.
+type transport func(*http.Request) (*http.Response, error)
+
+func (f transport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// use makes f the transport of every client that uses the default one,
+// until the test ends.
+func use(t *testing.T, f transport) {
+	old := http.DefaultTransport
+	http.DefaultTransport = f
+	t.Cleanup(func() { http.DefaultTransport = old })
+}
+
+// brokenBody is a response body that breaks off: each read runs read and
+// fails with the key in the error.
+type brokenBody struct{ read func() }
+
+func (b brokenBody) Read([]byte) (int, error) {
+	b.read()
+	return 0, errors.New("connection reset by " + key)
+}
+func (brokenBody) Close() error { return nil }
+
+// A transport that fails and a body that breaks off are not shown as they
+// are, as either may hold the key; a body that breaks off as the call is
+// canceled ends with the cancellation.
+func TestUsageThatBreaksOff(t *testing.T) {
+	p := opencode.Provider(opencode.Options{})
+	a := access{c: client.Credentials("http://zen.invalid/zen/go/v1", key)}
+	use(t, func(*http.Request) (*http.Response, error) { return nil, errors.New("dial " + key) })
+	if got, err := p.Usage(t.Context(), a); err == nil || got != nil || err.Error() != "cannot fetch OpenCode Go usage" {
+		t.Fatalf("transport error: %+v, %v", got, err)
+	}
+	use(t, func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: brokenBody{func() {}}}, nil
+	})
+	if got, err := p.Usage(t.Context(), a); err == nil || got != nil || err.Error() != "cannot read OpenCode Go usage" {
+		t.Fatalf("body error: %+v, %v", got, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	use(t, func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: brokenBody{cancel}}, nil
+	})
+	if got, err := p.Usage(ctx, a); !errors.Is(err, context.Canceled) || got != nil {
+		t.Fatalf("canceled while reading: %+v, %v", got, err)
 	}
 }

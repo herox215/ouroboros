@@ -231,7 +231,7 @@ func TestDelegateShown(t *testing.T) {
 // a prompt of its own and nothing of the owner's conversation. Nothing of
 // it is archived, and the owner is shown how the tasks ended.
 func TestOwnerDelegates(t *testing.T) {
-	cfg, b := scripted(t)
+	cfg, b := directNode(t)
 	tools := b.Tools
 	rebuild := agent.NewTool(ToolRebuild, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
 	b.Tools = func() []agent.Tool {
@@ -249,11 +249,17 @@ func TestOwnerDelegates(t *testing.T) {
 	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
 	ctx := context.WithValue(context.Background(), asker{}, "the owner")
 
-	keys := `!run {"script":"return Object.keys(tools)"}`
-	note := `!run {"script":"return [note({text: \"a\"}), who()]"}`
-	source := fmt.Sprintf(`return delegate({tasks: [{task: %q}, {task: %q, tools: ["note"]}, {task: %q}, {task: "?system"}]})`, keys, keys, note)
+	type task struct {
+		Task  string   `json:"task"`
+		Tools []string `json:"tools,omitempty"`
+	}
+	request := func(tasks ...task) string {
+		raw, _ := json.Marshal(map[string]any{"tasks": tasks})
+		return "!delegate " + string(raw)
+	}
+	source := request(task{Task: "!who {}"}, task{Task: "!note {\"text\":\"a\"}", Tools: []string{"note"}}, task{Task: "!note {\"text\":\"b\"}"}, task{Task: "?system"})
 	var remark string
-	got, err := a.Ask(ctx, "chat", runs(source), func(s Step) {
+	got, err := a.Ask(ctx, "chat", source, func(s Step) {
 		if s.Tool == ToolDelegate && s.Done {
 			remark = s.Remark
 		}
@@ -263,16 +269,16 @@ func TestOwnerDelegates(t *testing.T) {
 		t.Fatalf("got %s, %v", got, err)
 	}
 	for i, want := range []string{
-		`[gpt-4o] turns=3 last=["who","note"]`,
-		`[gpt-4o] turns=3 last=["note"]`,
-		`[gpt-4o] turns=3 last=["set a","the owner in chat/delegate/`,
+		"[gpt-4o] turns=3 last=the owner in chat/delegate/",
+		"[gpt-4o] turns=3 last=set a",
+		"[gpt-4o] turns=3 last=set b",
 	} {
 		if !strings.HasPrefix(answers[i].Answer, want) || answers[i].Error != "" {
 			t.Errorf("task %d: got %+v, want %s", i+1, answers[i], want)
 		}
 	}
 	prompt := answers[3].Answer
-	if !strings.HasPrefix(prompt, `You are a helper of "me", the personal agent of the owner`) || !strings.Contains(prompt, scriptHint) ||
+	if !strings.HasPrefix(prompt, `You are a helper of "me", the personal agent of the owner`) ||
 		!strings.HasSuffix(prompt, b.workspaceHint()) || strings.Contains(prompt, delegateHint) || strings.Contains(prompt, questionHint) {
 		t.Errorf("the prompt of a helper: %q", prompt)
 	}
@@ -294,18 +300,24 @@ func TestOwnerDelegates(t *testing.T) {
 	// A task for the tools that are not for a helper is refused.
 	cfg.Tools = nil
 	for _, name := range []string{toolAskPeer, ToolRebuild, ToolUserQuestion, ToolDelegate} {
-		source := fmt.Sprintf(`return delegate({tasks: [{task: "a", tools: [%q]}]})`, name)
-		got, err := a.Ask(ctx, "chat", runs(source), nil)
+		source := request(task{Task: "a", Tools: []string{name}})
+		got, err := a.Ask(ctx, "chat", source, nil)
 		if got := result(t, got, err); !strings.Contains(got, fmt.Sprintf(`delegate: task 1: a helper has no tool %q (there are: who, note)`, name)) {
 			t.Errorf("%s: %s", name, got)
 		}
+	}
+	// Delegate alone, the first and only tool of the agent, is set up as well.
+	cfg.Tools = &config.Tools{H2A: config.Named(ToolDelegate)}
+	got, err = a.Ask(ctx, "chat", request(task{Task: "?system"}), nil)
+	if got := result(t, got, err); !strings.Contains(got, `You are a helper of \"me\"`) {
+		t.Errorf("delegate alone: %s", got)
 	}
 }
 
 // The scope rules must reach the owner's prompt when delegation is allowed,
 // independently of the shared hint used by the prompt assembly tests.
 func TestDelegationScopeGuidance(t *testing.T) {
-	cfg, b := scripted(t)
+	cfg, b := directNode(t)
 	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
 	for _, tool := range []string{ToolDelegate, "*", "who"} {
 		t.Run(tool, func(t *testing.T) {
@@ -317,6 +329,9 @@ func TestDelegationScopeGuidance(t *testing.T) {
 			want := tool != "who"
 			for _, rule := range []string{
 				"For delegated code analysis, give each helper a clear scope with minimal overlap, and say what findings it should report.",
+				"Before delegating, briefly tell the owner how you are splitting the work.",
+				"The conversation waits for all helpers before your next model step and delivers their reports together.",
+				"Combine all results into one final answer; do not present a partial result as the conclusion or send separate final answers for individual helpers.",
 				"First investigate the remaining areas outside the delegated scopes; do not repeat a helper's search or reading while it works.",
 				"Then use the helper reports to bring the analysis together, and check delegated code yourself only where a report leaves a specific uncertainty or finding to verify; do not broadly reread delegated paths or repeat the analysis.",
 			} {
@@ -356,8 +371,8 @@ func TestDelegateStartsTheTasks(t *testing.T) {
 	background := &started{first: 2}
 	ctx := WithTasks(context.Background(), background)
 	got, err := delegating(llm).Run(ctx, tasks("first\nmore", "b"))
-	if err != nil || got != "Started tasks 2 and 3. The report of each comes as a message of its own once it ended, "+
-		"on your way to an answer or after it: do not wait for it, and go on with what else there is, or end your answer." {
+	if err != nil || got != "Started tasks 2 and 3. The report of each comes with the other task reports before your next model step. "+
+		"The conversation waits for all helpers; combine their results into one final answer." {
 		t.Fatalf("got %q, %v", got, err)
 	}
 	if len(background.tasks) != 2 || background.tasks[0].Title != "first" || background.tasks[1].Title != "b" || len(llm.asked) != 0 {
@@ -367,7 +382,7 @@ func TestDelegateStartsTheTasks(t *testing.T) {
 		t.Fatalf("the task: %q, %v", answer, err)
 	}
 	// One task is one.
-	if got, _ := delegating(llm).Run(ctx, tasks("c")); !strings.HasPrefix(got, "Started task 2. Its report comes as a message") {
+	if got, _ := delegating(llm).Run(ctx, tasks("c")); !strings.HasPrefix(got, "Started task 2. Its report comes with the other task reports") {
 		t.Fatalf("one task: %q", got)
 	}
 	// Why none started is the error of the call.
@@ -397,6 +412,7 @@ func TestTaskReport(t *testing.T) {
 	for _, text := range []string{
 		"hello",
 		"[Task two, which you delegated, ended.",
+		strings.Replace(TaskReport(2, "look", "found it", nil), "2", "two", 1),
 		"[Task 2 ended",
 		"[Task 2, which you delegated, failed: no",
 		"[Task 2, which you delegated, failed: no. Its task: open",

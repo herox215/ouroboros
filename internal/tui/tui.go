@@ -169,6 +169,10 @@ type Backend interface {
 	// Settings returns the configuration of the node for the settings
 	// screen (/settings), without its keys.
 	Settings() (Settings, error)
+	// Gateways reads public settings dynamically from this profile's plugins.
+	Gateways(ctx context.Context) ([]plugin.GatewaySettings, error)
+	// SaveGateway passes a transient credential change to one contribution.
+	SaveGateway(context.Context, string, plugin.GatewayChange) error
 	// ChangeSetting makes one change of the configuration, once the node
 	// checked it, and says from when it holds.
 	ChangeSetting(s Setting) (string, error)
@@ -203,6 +207,10 @@ type Event struct {
 	// Once Done, Text is what the owner answered, "" if they did not.
 	Options     []string
 	Recommended string
+	// N is how much works for the thread, of plugin.SessionWorking.
+	N int
+	// Routed says of a message that the thread handed it on.
+	Routed bool
 }
 
 // screen is the top-level view: the chat, the connection requests, the list
@@ -294,6 +302,9 @@ type conversation struct {
 	// peer is the peer a conversation of a peer with the agent is with: it
 	// is only to read. "" for a session of the owner.
 	peer string
+	// routed says that the answer on its way took what the thread handed
+	// on: the thread shows what comes of it, so the footer does not.
+	routed bool
 	// images are the files of the pictures pasted into it, by their labels:
 	// the first is [Image_1].
 	images []string
@@ -420,7 +431,8 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 	m.input.Focus() // the input is where everything is typed, commands too
-	m.chat = m.newChat()
+	// The owner talks in the thread, unless they want a conversation of its own.
+	m.chat = m.thread()
 	var problems []string
 	m.plugins.screens, slashes, problems = bind(ownNames(), screens, slashes)
 	m.commands = append(m.commands, own...)
@@ -802,6 +814,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.notice = ""
 	m.selected, m.pressed = nil, nil
 	if msg.String() == "ctrl+c" {
+		if m.screen == screenSettings {
+			m.config.input.SetValue("")
+			m.config.editing = nil
+			m.config.clearGatewaySecrets()
+		}
 		return m.leave()
 	}
 	switch m.screen {
@@ -1172,8 +1189,8 @@ func (m *Model) unsteered(msg unsteeredMsg) {
 }
 
 // started returns the call of e that the call ended, which done tells of,
-// started as: the last that is not done and whose text done begins with. A
-// script runs calls within its own, which end before it does.
+// started as: the last that is not done and whose text done begins with.
+// Overlapping calls may finish in a different order than they started.
 func (e *entry) started(done string) int {
 	for i := len(e.calls) - 1; i >= 0; i-- {
 		c := e.calls[i]

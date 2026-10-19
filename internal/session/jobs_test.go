@@ -147,4 +147,14 @@ func TestJobsInOrder(t *testing.T) {
 	if want := "a4 b1 b2 a3"; strings.Join(got, " ") != want {
 		t.Fatalf("order %s, want %s", got, want)
 	}
+	// The jobs of a session where nothing was said yet have no title.
+	s.mu.Lock()
+	s.get("a")
+	s.mu.Unlock()
+	list, _ = s.Jobs(context.Background())
+	for _, j := range list {
+		if j.Title != "" {
+			t.Fatalf("job %+v", j)
+		}
+	}
 }

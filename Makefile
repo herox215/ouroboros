@@ -22,24 +22,24 @@ endif
 	check fmt-check vet lint cover-check mutation tools hooks unhooks
 
 build:
-	go build -tags "production,webkit2_41" -trimpath -ldflags="$(LDFLAGS)" -o "$(BIN)" ./cmd/ouro
+	go build -tags "production,webkit2_41,goolm" -trimpath -ldflags="$(LDFLAGS)" -o "$(BIN)" ./cmd/ouro
 
 vet:
-	go vet ./...
+	go vet -tags goolm ./...
 
 test: vet
-	go test -race ./...
+	go test -race -tags goolm ./...
 
 # Optional native GUI checks need the desktop libraries and Node for the frontend tests.
 test-gui:
-	go test -race -tags "production,webkit2_41" ./internal/plugins/gui
+	go test -race -tags "production,webkit2_41,goolm" ./internal/plugins/gui
 	node --test internal/plugins/gui/frontend_test.mjs
 
 # Coverage including the end-to-end test, which runs the real binary. The unit
 # tests and that binary write into one directory; cover.out is both merged.
 cover:
 	rm -rf .cover cover.out && mkdir .cover
-	OURO_E2E_COVERDIR=$(CURDIR)/.cover go test -count=1 -cover -coverpkg=ouroboros/... ./... -args -test.gocoverdir=$(CURDIR)/.cover >.cover/test.log 2>&1 || { cat .cover/test.log; exit 1; }
+	OURO_E2E_COVERDIR=$(CURDIR)/.cover go test -tags goolm -count=1 -cover -coverpkg=ouroboros/... ./... -args -test.gocoverdir=$(CURDIR)/.cover >.cover/test.log 2>&1 || { cat .cover/test.log; exit 1; }
 	go tool covdata textfmt -i=.cover -o=cover.out
 	go tool covdata percent -i=.cover
 
@@ -53,7 +53,7 @@ fmt-check:
 
 # staticcheck, pinned in scripts/tool-versions, configured in staticcheck.conf.
 lint:
-	@staticcheck=$$(scripts/tool.sh staticcheck) && "$$staticcheck" ./... && echo "lint: ok"
+	@staticcheck=$$(scripts/tool.sh staticcheck) && "$$staticcheck" -tags goolm ./... && echo "lint: ok"
 
 # 100% statement coverage of the production code; exclusions are in coverage-exclusions.txt.
 cover-check: cover

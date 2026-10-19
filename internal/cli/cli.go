@@ -71,6 +71,7 @@ import (
 	filesplugin "ouroboros/internal/plugins/files"
 	"ouroboros/internal/plugins/gui"
 	historyplugin "ouroboros/internal/plugins/history"
+	matrixplugin "ouroboros/internal/plugins/matrix"
 	memoryplugin "ouroboros/internal/plugins/memory"
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
@@ -195,6 +196,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		opencodeplugin.Plugin(opencodeplugin.Options{BaseURL: s.OpenCodeGo}),
 		assistant.Plugin(dir),
 		sessionplugin.Plugin(dir),
+		matrixplugin.Plugin(dir, files),
 		nodeplugin.Plugin(dir, nodeplugin.Options{
 			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,
 			OnStop:  network.Close, // the channels the node opened to peers

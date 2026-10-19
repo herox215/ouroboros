@@ -53,7 +53,7 @@ a { color: var(--accent); }
 .model-dialog h2 { font-size: 20px; letter-spacing: -.02em; }
 .model-dialog-description { margin: 8px 0 22px; color: var(--muted); font-size: 13px; }
 .model-dialog label { display: block; margin-top: 16px; font-weight: 600; font-size: 13px; }
-.model-dialog select { display: block; width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-weight: 400; }
+.model-dialog input:not([type="checkbox"]), .model-dialog select { display: block; width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-weight: 400; }
 .model-dialog-status, .model-dialog-error { margin-top: 16px; font-size: 13px; }
 .model-dialog-status { color: var(--muted); }
 .model-dialog-error { color: #873a29; }

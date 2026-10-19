@@ -29,7 +29,8 @@ func TestEndToEnd(t *testing.T) {
 	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "ouro")
-	build := []string{"build", "-o", bin}
+	// With the Matrix crypto of goolm, as "make build" builds it.
+	build := []string{"build", "-tags", "goolm", "-o", bin}
 	coverDir := os.Getenv("OURO_E2E_COVERDIR") // set by: make cover
 	if coverDir != "" {
 		build = append(build, "-cover", "-coverpkg=ouroboros/...")
@@ -156,6 +157,30 @@ func TestEndToEnd(t *testing.T) {
 		}
 		expect(string(out), want)
 	}
+
+	// An explicit GUI launch from a checkout builds it first. A build that
+	// fails says so and exits with 1, rather than start the GUI of before:
+	// here there is no make.
+	checkout := filepath.Join(dir, "checkout")
+	for name, text := range map[string]string{"go.mod": "module ouroboros\n", "Makefile": "", "cmd/ouro/main.go": "package main"} {
+		path := filepath.Join(checkout, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Link(bin, filepath.Join(checkout, "ouro")); err != nil {
+		t.Fatal(err)
+	}
+	gui := exec.Command(filepath.Join(checkout, "ouro"), "gui")
+	gui.Env = append(slices.Clone(env), "PATH="+filepath.Join(dir, "no make"))
+	out, err := gui.CombinedOutput()
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		t.Fatalf("ouro gui with a failing build should exit with 1, got %v\n%s", err, out)
+	}
+	expect(string(out), "Checking the local GUI build", "✗ local GUI build failed; not starting the old GUI")
 
 	// At a terminal the API key is asked for without showing it.
 	tty := newTerminal(t)

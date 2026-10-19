@@ -1,11 +1,13 @@
 package sanity
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func writeCoverageFixture(t *testing.T, text string) string {
@@ -136,5 +138,37 @@ func TestCoverageReportErrors(t *testing.T) {
 		if report, err := coverageReport(writeCoverageFixture(t, profile)); err == nil || report != "" {
 			t.Fatalf("expected error without partial report, got %q, %v", report, err)
 		}
+	}
+}
+
+func TestCoverageReportTieBreaks(t *testing.T) {
+	// Blocks of equal size in one file and line go by start column, then end
+	// line, then end column.
+	profile := "mode: set\n" +
+		"f.go:5.3,6.1 1 0\n" +
+		"f.go:5.2,7.1 1 0\n" +
+		"f.go:5.2,6.4 1 0\n" +
+		"f.go:5.2,6.2 1 0\n"
+	report, err := coverageReport(writeCoverageFixture(t, profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "  f.go:5-6 (columns 2-2): 1 uncovered statements\n" +
+		"  f.go:5-6 (columns 2-4): 1 uncovered statements\n" +
+		"  f.go:5-7 (columns 2-1): 1 uncovered statements\n" +
+		"  f.go:5-6 (columns 3-1): 1 uncovered statements\n"
+	if !strings.Contains(report, want) {
+		t.Fatalf("blocks not sorted, want\n%s\nin:\n%s", want, report)
+	}
+}
+
+func TestParseCoverageProfileReadErrors(t *testing.T) {
+	errRead := errors.New("disk gone")
+	if _, err := parseCoverageProfile(iotest.ErrReader(errRead)); !errors.Is(err, errRead) || !strings.Contains(err.Error(), "read header") {
+		t.Fatalf("header: %v", err)
+	}
+	giant := "mode: set\nf.go:1.1,1.2 1 0\n" + strings.Repeat("x", 1<<20+1) + "\n"
+	if _, err := parseCoverageProfile(strings.NewReader(giant)); err == nil || !strings.Contains(err.Error(), "read coverage blocks") {
+		t.Fatalf("blocks: %v", err)
 	}
 }

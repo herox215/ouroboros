@@ -127,9 +127,6 @@ func pick(all []agent.Tool, allowed []config.Entry, of audience) ([]agent.Tool, 
 	every := false
 	entries := map[string]config.Entry{}
 	for _, e := range allowed {
-		if e.Tool == toolRun {
-			return nil, fmt.Errorf("%s is no tool to list: the agent always has it, and every tool listed here is a function of its scripts", toolRun)
-		}
 		if _, twice := entries[e.Tool]; twice {
 			return nil, fmt.Errorf("the tool %q is listed twice", e.Tool)
 		}
@@ -411,9 +408,7 @@ func answerPeer(network *peers.Network) agent.Tool {
 					"and tell your user that instead of what you took for its question", name, args.Question, toolAskPeer)
 			}
 			contextID := agent.ContextID(ctx) + "/" + node.ID
-			if answer := agent.AnswerOf(ctx); answer != nil {
-				answer.Value(questionKey(args.Question), func() any { return &atomic.Bool{} }).(*atomic.Bool).Store(true)
-			}
+			mark(ctx, questionKey(args.Question)) // answered: it is not given up when the answer ends
 			reply, err := network.Answer(inTask(ctx), node, contextID, args.Question, args.Answer)
 			if said := refused(err, name); said != "" {
 				return said, nil

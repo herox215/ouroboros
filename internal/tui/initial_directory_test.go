@@ -67,6 +67,11 @@ func TestInitialDirectoryDoesNotOverwriteExisting(t *testing.T) {
 	if m.chat.fresh || m.chat.directory != "" {
 		t.Fatal("Resume retained new-conversation state")
 	}
+	// A start path set later is not the path of the session resumed either.
+	m.SetInitialDirectory("/tmp/later")
+	if m.chat.directory != "" {
+		t.Fatalf("the resumed session took the start path: %q", m.chat.directory)
+	}
 	msg := m.watch(m.chat)().(watchedMsg)
 	m.watched(msg)
 	if !slices.Equal(b.calls, []string{"watch:resumed"}) || m.chat.directory != "/tmp/existing" {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/openai"
@@ -397,5 +398,60 @@ func TestInspectionOwnsActualToolSpecifications(t *testing.T) {
 	next, _ := a.Inspection("id")
 	if next.Tools[0].Function.Parameters[0] == 'x' {
 		t.Fatal("tool schema alias")
+	}
+}
+
+// A provider that cannot take a result ends the answer: the result of a
+// tool, or one a tool reports later, with the results of the round it is
+// ready by or once the LLM answered.
+func TestObserveFailsOnResults(t *testing.T) {
+	boom := errors.New("boom")
+	failOn := func(content string) []ContextProvider {
+		return []ContextProvider{{Name: "p", Prepare: func(_ context.Context, p Preparation) ([]openai.Message, error) { return p.Messages, nil },
+			Observe: func(_ context.Context, _ Processing, m openai.Message) error {
+				if m.Content == content {
+					return boom
+				}
+				return nil
+			}}}
+	}
+	shout := Tool{Name: "shout", Run: func(context.Context, json.RawMessage) (string, error) { return "LOUD", nil }}
+	a, err := New(&fakeLLM{}, "gpt", "sys", shout).WithExtensions("p", failOn("LOUD"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Respond(context.Background(), "c1", "call shout"); !errors.Is(err, boom) {
+		t.Fatalf("result of a tool: %v", err)
+	}
+
+	for _, readyAtOnce := range []bool{true, false} {
+		done := make(chan struct{})
+		work := Tool{Name: "work", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			AnswerOf(ctx).Watch(done, func() string { return "late result" })
+			if readyAtOnce {
+				close(done)
+			}
+			return "started", nil
+		}}
+		calls := 0
+		llm := llmFunc(func([]openai.Message) openai.Message {
+			calls++
+			if calls == 1 {
+				return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "work", Arguments: "{}"}}}}
+			}
+			close(done)
+			return openai.Message{Content: "done"}
+		})
+		a, err := New(llm, "gpt", "sys", work).WithExtensions("p", failOn("late result"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 2 // the LLM answered before the result was ready
+		if readyAtOnce {
+			want = 1
+		}
+		if _, err := a.Respond(context.Background(), "c1", "go"); !errors.Is(err, boom) || calls != want {
+			t.Fatalf("reported result, ready at once %v: %v after %d calls", readyAtOnce, err, calls)
+		}
 	}
 }

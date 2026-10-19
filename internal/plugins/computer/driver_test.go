@@ -3,6 +3,7 @@ package computer
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -98,6 +99,7 @@ func TestProtocolEdges(t *testing.T) {
 	fromDriver, toServer := io.Pipe()
 	d := connect("x", toDriver, toServer, func() { toServer.Close(); fromServer.Close() }, func() string { return "" })
 	defer d.end()
+	second := make(chan string, 1)
 	go func() {
 		r := bufio.NewReader(fromDriver)
 		r.ReadBytes('\n')
@@ -106,7 +108,8 @@ func TestProtocolEdges(t *testing.T) {
 			`{"jsonrpc":"2.0","id":"x","result":{}}`+"\n"+
 			`{"jsonrpc":"2.0","id":99,"result":{}}`+"\n"+
 			`{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad params"}}`+"\n")
-		r.ReadBytes('\n')
+		line, _ := r.ReadBytes('\n')
+		second <- string(line)
 		fromServer.Close() // ends while the second request waits
 		io.Copy(io.Discard, r)
 	}()
@@ -116,6 +119,10 @@ func TestProtocolEdges(t *testing.T) {
 	}
 	if err := d.request(ctx, "b", nil, nil); err == nil || err.Error() != "cua-driver ended" {
 		t.Fatalf("ended while waiting: %v", err)
+	}
+	// What is passed over gets no answer: next comes the second request.
+	if line := <-second; !strings.Contains(line, `"method":"b"`) {
+		t.Fatalf("after the first request came %s", line)
 	}
 
 	// A driver that takes no more input fails the request.
@@ -139,5 +146,16 @@ func TestArguments(t *testing.T) {
 		if got := arguments(goos); !slices.Equal(got, want) {
 			t.Errorf("arguments(%q) = %q, want %q", goos, got, want)
 		}
+	}
+}
+
+// The text of a result is that of its parts of text that say something.
+func TestResultText(t *testing.T) {
+	var r result
+	if err := json.Unmarshal([]byte(`{"content":[{"type":"text","text":"  "},{"type":"image","text":"alt"},{"type":"text","text":" a "},{"type":"text","text":"b"}]}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.text(); got != "a\nb" {
+		t.Errorf("text %q", got)
 	}
 }

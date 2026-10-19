@@ -71,6 +71,7 @@ func (a *fakeAgent) Resume(string, json.RawMessage) error                    { r
 func (a *fakeAgent) Forget(string)                                           {}
 func (a *fakeAgent) Title(context.Context, []openai.Message) (string, error) { return "", nil }
 func (a *fakeAgent) Effort() string                                          { return "" }
+func (a *fakeAgent) Note(context.Context, string, string) error              { return nil }
 
 // fakeBackend is what the UI controls in the tests. Its sessions are those
 // of the node, in this process: their answers come from the fakeAgent.
@@ -129,6 +130,11 @@ type fakeBackend struct {
 	hits  []string             // the sessions whose content a filter was found in
 	read  map[string][]Event   // what happened in them
 }
+
+func (f *fakeBackend) Gateways(ctx context.Context) ([]plugin.GatewaySettings, error) {
+	return nil, nil
+}
+func (f *fakeBackend) SaveGateway(context.Context, string, plugin.GatewayChange) error { return nil }
 
 func (f *fakeBackend) Settings() (Settings, error) { return f.settings, f.fail["settings"] }
 func (f *fakeBackend) ChangeSetting(s Setting) (string, error) {
@@ -202,7 +208,7 @@ func shownEvent(e plugin.SessionEvent) Event {
 	if e.Kind == plugin.SessionStep {
 		text = e.Tool
 	}
-	shown := Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache}
+	shown := Event{Kind: e.Kind, Text: text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache, N: e.N, Routed: e.Routed}
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended
@@ -388,10 +394,14 @@ func newModel(t *testing.T) (*Model, *fakeBackend) {
 	return newModelOn(t, b), b
 }
 
-// newModelOn is the UI of b in a window of 100×30, without the splash.
+// newModelOn is the UI of b in a window of 100×30, without the splash, in a
+// conversation of its own, as /new starts it: the thread, which a UI shows
+// first, hides what an answer does on its way, see thread_test.go.
 func newModelOn(t *testing.T, b *fakeBackend) *Model {
 	t.Helper()
 	m := New(b, nil, nil)
+	delete(m.chats, plugin.ThreadID)
+	m.chat = m.newChat()
 	t.Cleanup(m.quit)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.splash.show = false // dismiss the start screen; its own test is below
@@ -794,11 +804,11 @@ func TestRejectRequest(t *testing.T) {
 
 // Every round of the loop has its entry, a round the agent said nothing of
 // too, and every call of a round its line, which says once the call ended
-// what became of it. The calls a script runs end before the script does.
+// what became of it. Overlapping calls can finish out of order.
 // Another UI that shows the session sees the same.
 func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	m, b := newModel(t)
-	written, scripted := make(chan struct{}), make(chan struct{})
+	written, read := make(chan struct{}), make(chan struct{})
 	b.ask = func(_ context.Context, step func(Step), say func(string)) (string, error) {
 		say("I read both")
 		step(Step{Text: "reading a.go"})
@@ -806,12 +816,12 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		step(Step{Text: "reading b.go"})
 		step(Step{Text: "reading b.go ✗ no such file", Done: true})
 		say("")
-		step(Step{Text: "running a script"})
+		step(Step{Text: "reading d.go"})
 		step(Step{Text: "writing c.go"})
 		<-written
 		step(Step{Text: "writing c.go ✓ 1ms", Done: true})
-		<-scripted
-		step(Step{Text: "running a script ✓ 9ms", Done: true})
+		<-read
+		step(Step{Text: "reading d.go ✓ 9ms", Done: true})
 		// A call that ended without having started changes nothing.
 		step(Step{Text: "listing ~ ✓ 1ms", Done: true})
 		return "", nil
@@ -822,13 +832,13 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 		t.Fatalf("the calls should be one line: %+v\n%s", m.chat, trimmedLines(m))
 	}
 	close(written)
-	drive(t, m, nil, func() bool { return m.chat.doing == "running a script" }) // the script still runs
-	close(scripted)
+	drive(t, m, nil, func() bool { return m.chat.doing == "reading d.go" }) // the read still runs
+	close(read)
 	drive(t, m, nil, func() bool { return !m.chat.pending })
 
 	want := []entry{{mine: true, text: "fix it"},
 		{text: "I read both", calls: []call{{text: "reading a.go ✓ 3ms", done: true}, {text: "reading b.go ✗ no such file", done: true}}},
-		{calls: []call{{text: "running a script ✓ 9ms", done: true}, {text: "writing c.go ✓ 1ms", done: true}}}} // the answer said nothing at the end and leaves no entry of its own
+		{calls: []call{{text: "reading d.go ✓ 9ms", done: true}, {text: "writing c.go ✓ 1ms", done: true}}}} // the answer said nothing at the end and leaves no entry of its own
 	if !sameEntries(m.chat.entries, want) {
 		t.Fatalf("the loop in the history: %+v", m.chat.entries)
 	}

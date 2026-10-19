@@ -149,8 +149,10 @@ func TestTUIBackendAsk(t *testing.T) {
 	if len(calling) == 0 || !strings.HasSuffix(calling[0], " bytes") {
 		t.Fatalf("calling %q", calling)
 	}
-	if got := tuiplugin.Size(3277); got != "3.2 KiB" {
-		t.Fatalf("a call of some KiB: %q", got)
+	for n, want := range map[int]string{3277: "3.2 KiB", 1024: "1.0 KiB", 1023: "1023 bytes"} {
+		if got := tuiplugin.Size(n); got != want {
+			t.Fatalf("a call of %d bytes: %q", n, got)
+		}
 	}
 	var kinds []string
 	for _, e := range events {
@@ -158,29 +160,36 @@ func TestTUIBackendAsk(t *testing.T) {
 	}
 	// The round that asks beta is told of although the agent said nothing
 	// along with it: that is how the UI tells the rounds apart.
-	if strings.Join(kinds, " ") != "message say step step step step answer" || events[0].Text != "@beta hello" || events[1].Text != "" {
+	if strings.Join(kinds, " ") != "message say step step answer" || events[0].Text != "@beta hello" || events[1].Text != "" {
 		t.Fatalf("events %+v", events)
 	}
-	// run itself is shown as nothing; the call of beta within it is.
-	if events[2].Text != "" || events[3].Text != "asking beta" || events[3].Done ||
-		!events[4].Done || !strings.HasPrefix(events[4].Text, "asking beta ✓ ") || events[5].Text != "" || !events[5].Done {
-		t.Fatalf("steps %+v", events[2:6])
+	// The direct call of beta is shown while waiting and when it ends.
+	if events[2].Text != "asking beta" || events[2].Done ||
+		!events[3].Done || !strings.HasPrefix(events[3].Text, "asking beta ✓ ") {
+		t.Fatalf("steps %+v", events[2:4])
 	}
-	if reply := events[6]; !strings.Contains(reply.Text, "not connected") || reply.Context == 0 {
+	if reply := events[4]; !strings.Contains(reply.Text, "not connected") || reply.Context == 0 {
 		t.Fatalf("answer %+v", reply)
 	}
-	if pieces.String() != events[6].Text {
-		t.Fatalf("pieces %q of the answer %q", pieces.String(), events[6].Text)
+	if pieces.String() != events[4].Text {
+		t.Fatalf("pieces %q of the answer %q", pieces.String(), events[4].Text)
 	}
 	// The context of the conversation is what the LLM is sent next, message
 	// by message: the call of a tool with its arguments.
 	msgs, err := u.Contents(context.Background(), "ctx")
 	var roles []string
+	var peerTool bool
 	for _, m := range msgs {
+		if strings.HasPrefix(m.Role, "tool ") {
+			if m.Role == "tool ask_peer" && strings.Contains(m.Text, "\nparameters: {") {
+				peerTool = true
+			}
+			continue
+		}
 		roles = append(roles, m.Role)
 	}
-	if err != nil || strings.Join(roles, " ") != "system tool run user assistant tool assistant" ||
-		!strings.Contains(msgs[1].Text, "\nparameters: {") || msgs[2].Text != "@beta hello" || !strings.HasPrefix(msgs[3].Text, "→ run {") {
+	if err != nil || !peerTool || strings.Join(roles, " ") != "system user assistant tool" ||
+		!slices.ContainsFunc(msgs, func(m tui.Message) bool { return m.Role == "assistant" && strings.HasPrefix(m.Text, "→ ask_peer {") }) {
 		t.Fatalf("contents %q, %v", msgs, err)
 	}
 	// The sessions are listed, and one is stopped as asked; there is
@@ -252,7 +261,7 @@ func TestTUIBackendAsk(t *testing.T) {
 func TestTUIBackendLeavesUnshownCallsUnshown(t *testing.T) {
 	alpha, _ := clitest.TwoNodes(t)
 	quiet := plugin.New("quiet", func(ctx *plugin.Context, _ struct{}) error {
-		plugin.Add(ctx, plugin.ToolView{Tool: "run", Show: func(json.RawMessage) string { return "" }, Detail: func(plugin.Step) string { return "ran" }})
+		plugin.Add(ctx, plugin.ToolView{Tool: "ask_peer", Show: func(json.RawMessage) string { return "" }, Detail: func(plugin.Step) string { return "ran" }})
 		return nil
 	})
 	for _, e := range answer(t, backend(t, alpha, quiet), "ctx", "@beta hello") {
@@ -383,6 +392,109 @@ func TestTUIBackendModels(t *testing.T) {
 	}
 	if status, _ := u.Status(); status.PeerAccess != models[0].Access.ID || status.PeerModel != "gpt-4o" || status.Model != "gpt-4o-mini" {
 		t.Fatalf("the status after choosing for peers: %+v", status)
+	}
+}
+
+// The UI finds the sessions by what was said in them, lists the services
+// that run past the answers, and stops one: here none runs.
+func TestTUIBackendFindAndServices(t *testing.T) {
+	s := clitest.Settings(t)
+	u := backend(t, s)
+	history.Open(home.Dir(s.Home).History()).Append(history.Who{Session: "c1"}, []openai.Message{{Role: "user", Content: "the dark mode"}}, nil)
+	if found, err := u.Find(context.Background(), "dark"); err != nil || !slices.Equal(found, []string{"c1"}) {
+		t.Fatalf("found %q, %v", found, err)
+	}
+	if found, err := u.Find(context.Background(), "light"); err != nil || len(found) != 0 {
+		t.Fatalf("found %q, %v", found, err)
+	}
+	if list, err := u.Services(context.Background()); err != nil || len(list) != 0 {
+		t.Fatalf("services %+v, %v", list, err)
+	}
+	if err := u.StopService(context.Background(), "s1"); !errors.Is(err, session.ErrNoService) {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+// The gateways are read from what the plugins contributed when the UI asks,
+// each under the name and title it was contributed with: one without
+// settings is left out, and one whose settings cannot be read fails the
+// list. A change goes to the gateway of its name, if that takes changes.
+func TestTUIBackendGateways(t *testing.T) {
+	var ctx *plugin.Context
+	var saved []string
+	broken := errors.New("the store cannot be read")
+	fail := false
+	gateways := plugin.New("gateways", func(c *plugin.Context, _ struct{}) error {
+		ctx = c
+		plugin.Add(c, plugin.Gateway{Name: "echo", Title: "Echo",
+			Settings: func(context.Context) (plugin.GatewaySettings, error) {
+				return plugin.GatewaySettings{Name: "other", Title: "Other", Enabled: true, Status: "Ready"}, nil
+			},
+			Save: func(_ context.Context, change plugin.GatewayChange) error {
+				saved = append(saved, change.UserID)
+				return nil
+			}})
+		plugin.Add(c, plugin.Gateway{Name: "mute", Title: "Mute"})
+		plugin.Add(c, plugin.Gateway{Name: "flaky", Settings: func(context.Context) (plugin.GatewaySettings, error) {
+			if fail {
+				return plugin.GatewaySettings{}, broken
+			}
+			return plugin.GatewaySettings{Status: "Synchronizing"}, nil
+		}})
+		return nil
+	})
+	if _, err := cli.NewWith(gateways); err != nil {
+		t.Fatal(err)
+	}
+	u := tuiplugin.Backend(nil, ctx, nil)
+	list, err := u.Gateways(context.Background())
+	if err != nil || len(list) != 2 {
+		t.Fatalf("gateways %+v, %v", list, err)
+	}
+	if g := list[0]; g.Name != "echo" || g.Title != "Echo" || !g.Enabled || g.Status != "Ready" {
+		t.Errorf("echo: %+v", g)
+	}
+	if g := list[1]; g.Name != "flaky" || g.Title != "" || g.Status != "Synchronizing" {
+		t.Errorf("flaky: %+v", g)
+	}
+	fail = true
+	if list, err := u.Gateways(context.Background()); !errors.Is(err, broken) || list != nil {
+		t.Fatalf("unreadable: %+v, %v", list, err)
+	}
+	if err := u.SaveGateway(context.Background(), "echo", plugin.GatewayChange{UserID: "@luna:example.org"}); err != nil || !slices.Equal(saved, []string{"@luna:example.org"}) {
+		t.Fatalf("saved %q, %v", saved, err)
+	}
+	for _, name := range []string{"mute", "flaky", "none"} {
+		if err := u.SaveGateway(context.Background(), name, plugin.GatewayChange{}); err == nil || err.Error() != `gateway "`+name+`" is not available` || len(saved) != 1 {
+			t.Errorf("%s: %v, saved %q", name, err, saved)
+		}
+	}
+}
+
+// The screen of the remaining usage asks the providers of the accesses of
+// the node, which has none here; a node whose configuration cannot be read
+// says why.
+func TestUsageScreen(t *testing.T) {
+	s := clitest.Settings(t)
+	var ctx *plugin.Context
+	clitest.NewApp(t, s, "", spy(&ctx))
+	var usage *plugin.Screen
+	for _, screen := range plugin.All[plugin.Screen](ctx) {
+		if screen.Command == "usage" {
+			usage = &screen
+		}
+	}
+	if usage == nil || usage.Title != "Remaining usage" {
+		t.Fatalf("the screen: %+v", usage)
+	}
+	if body, err := usage.Body(context.Background()); err != nil || body != "No configured provider exposes remaining quota through its API." {
+		t.Fatalf("body %q, %v", body, err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := usage.Body(context.Background()); err == nil || body != "" {
+		t.Fatalf("an unreadable configuration: %q, %v", body, err)
 	}
 }
 
@@ -645,6 +757,7 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 		m.Update(key(' ')) // skips the splash
 		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "gpt-") })
+		drive(t, m, typed(m, "/new"), func() bool { return m.Current() != plugin.ThreadID }) // the thread hands on, and starts nothing anew
 		drive(t, m, typed(m, "!again"), func() bool { _, ok := m.Restarts(); return ok })
 		shown = m.Current()
 		return nil
@@ -740,19 +853,24 @@ func TestStepShowsHowItEndedOnlyOnceItEnded(t *testing.T) {
 	if _, err := cli.NewWith(views); err != nil {
 		t.Fatal(err)
 	}
+	// A call failed once it ended with an error, and only then.
 	for _, tt := range []struct {
-		tool string
-		done bool
-		want string
+		tool   string
+		done   bool
+		err    string
+		want   string
+		failed bool
 	}{
-		{"seen", false, "looking"},
-		{"seen", true, "looking ✓"},
-		{"unseen", false, ""},
-		{"unseen", true, ""},
+		{"seen", false, "", "looking", false},
+		{"seen", true, "", "looking ✓", false},
+		{"seen", false, "broke", "looking", false},
+		{"seen", true, "broke", "looking ✓", true},
+		{"unseen", false, "", "", false},
+		{"unseen", true, "", "", false},
 	} {
-		got := tuiplugin.Shown(ctx, plugin.SessionEvent{Kind: plugin.SessionStep, Tool: tt.tool, Done: tt.done})
-		if got.Text != tt.want || got.Done != tt.done {
-			t.Errorf("%s, done %v: shown as %q", tt.tool, tt.done, got.Text)
+		got := tuiplugin.Shown(ctx, plugin.SessionEvent{Kind: plugin.SessionStep, Tool: tt.tool, Done: tt.done, Err: tt.err})
+		if got.Text != tt.want || got.Done != tt.done || got.Failed != tt.failed {
+			t.Errorf("%s, done %v, error %q: shown as %q, failed %v", tt.tool, tt.done, tt.err, got.Text, got.Failed)
 		}
 	}
 }
@@ -779,5 +897,15 @@ func TestTaskIsShownAsALine(t *testing.T) {
 	failed := plugin.SessionEvent{Kind: plugin.SessionTask, N: 3, Remark: "read", Err: "it broke\n  badly"}
 	if got := tuiplugin.Shown(nil, failed); got.Text != "task 3 · read ✗ it broke badly" || !got.Failed {
 		t.Errorf("failed: %+v", got)
+	}
+}
+
+// How much works for the thread comes to the UI as it is.
+func TestWorkingIsShown(t *testing.T) {
+	if got := tuiplugin.Shown(nil, plugin.SessionEvent{Kind: plugin.SessionWorking, N: 2}); got.Kind != plugin.SessionWorking || got.N != 2 {
+		t.Errorf("working: %+v", got)
+	}
+	if got := tuiplugin.Shown(nil, plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "go", Routed: true}); !got.Routed {
+		t.Errorf("a message the thread handed on: %+v", got)
 	}
 }

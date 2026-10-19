@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/internal/session"
@@ -107,9 +108,8 @@ func TestJobsList(t *testing.T) {
 	wide := m.input.Width()
 
 	_, fade := m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	// It forms from noise: its room is taken at once, and empty before the
-	// first frame.
-	if m.jobsLevel != 0 || m.input.Width() != wide-30 || strings.Contains(ansi.Strip(m.View().Content), "Jobs") {
+	// Like the input, it gives up no room before the first frame.
+	if m.jobsLevel != 0 || m.input.Width() != wide || strings.Contains(ansi.Strip(m.View().Content), "Jobs") {
 		t.Fatalf("the list before it faded in: level %d\n%s", m.jobsLevel, m.View().Content)
 	}
 	fadeAll(m, fade)
@@ -139,7 +139,7 @@ func TestJobsList(t *testing.T) {
 	}
 
 	_, fade = m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	// It fades out: it keeps its room until it is gone.
+	// It slides out, giving the room back with every frame.
 	if m.jobsShown || m.input.Width() != wide-30 {
 		t.Fatalf("the list fading out: %v, input %d", m.jobsShown, m.input.Width())
 	}
@@ -175,36 +175,43 @@ func fadeAll(m *Model, cmd tea.Cmd) {
 
 func isFade(msg tea.Msg) bool { _, ok := msg.(jobsFadeMsg); return ok }
 
-// The list of the jobs slides in from the right as noise: at first there is
-// nothing of it, then its left part on the right, as noise, and at last the
-// list itself.
-func TestJobsListSlidesInAsNoise(t *testing.T) {
+// The list slides in and out like the input, giving up room with every
+// frame. Turning around while it moves starts no second sequence of frames.
+func TestJobsListSlidesLikeInput(t *testing.T) {
 	m, _ := newModel(t)
 	m.apply(m.chat, Event{Kind: plugin.SessionMessage, Text: "serve it"}, true)
 	m.apply(m.chat, Event{Kind: plugin.SessionJobs, Text: "job 1 · npm run dev"}, true)
-	m.jobsShown, m.jobsLevel = true, jobsFrames
-	list := m.jobsList() // whole
-	w := m.jobsWidth()
-	if whole := ansi.Strip(m.dissolve(list, jobsFrames)); whole != ansi.Strip(list) {
-		t.Fatalf("arrived:\n%s", whole)
-	}
-	if none := ansi.Strip(m.dissolve(list, 0)); strings.TrimSpace(none) != "" {
-		t.Fatalf("before it comes in:\n%s", none)
-	}
-	early := strings.Split(ansi.Strip(m.dissolve(list, 2)), "\n")
-	if !strings.HasPrefix(early[0], strings.Repeat(" ", w/4)) || strings.TrimSpace(early[0]) == "" {
-		t.Fatalf("on its way in, the left part of it on the right:\n%s", strings.Join(early, "\n"))
-	}
-	half := ansi.Strip(m.dissolve(list, jobsFrames/2))
-	if !strings.ContainsAny(half, string(noiseGlyphs)) || strings.Contains(half, "npm run dev") {
-		t.Fatalf("halfway:\n%s", half)
-	}
-	for level := range jobsFrames + 1 {
-		for _, l := range strings.Split(m.dissolve(list, level), "\n") {
-			if ansi.StringWidth(l) != w {
-				t.Fatalf("at %d a line is %d wide, not %d: %q", level, ansi.StringWidth(l), w, ansi.Strip(l))
+	wide := m.input.Width()
+	m.toggleJobs()
+	for level := 1; level <= jobsFrames; level++ {
+		m.Update(jobsFadeMsg{})
+		w := m.jobsWidth()
+		if m.input.Width() != wide-w || m.history.Width() != wide-w {
+			t.Fatalf("frame %d: chat and input should give up %d columns", level, w)
+		}
+		for _, line := range strings.Split(m.jobsList(), "\n") {
+			if ansi.StringWidth(line) != w {
+				t.Fatalf("frame %d: list width %d, want %d", level, ansi.StringWidth(line), w)
 			}
 		}
+		for _, line := range strings.Split(m.View().Content, "\n") {
+			if ansi.StringWidth(line) != m.width {
+				t.Fatalf("frame %d: view width %d, want %d", level, ansi.StringWidth(line), m.width)
+			}
+		}
+	}
+	m.toggleJobs()
+	m.Update(jobsFadeMsg{})
+	m.Update(jobsFadeMsg{})
+	w := m.jobsWidth()
+	if cmd := m.toggleJobs(); cmd == nil || !m.jobsFading || m.jobsLevel != jobsFrames-2 || m.jobsWidth() != w {
+		t.Fatal("turning around should keep the current frame and ask for services")
+	}
+	for m.jobsFading {
+		m.Update(jobsFadeMsg{})
+	}
+	if m.jobsWidth() != jobsListWidth {
+		t.Fatal("the list should be fully back in")
 	}
 }
 
@@ -246,5 +253,127 @@ func TestServicesListed(t *testing.T) {
 	m.Update(press(m, "enter")())
 	if !slices.Equal(stopped, []string{"t2"}) {
 		t.Fatalf("stopped %v", stopped)
+	}
+}
+
+// While the list of ctrl+j is shown, the services are asked for anew every
+// while; what was asked for before the list was hidden, or shown anew since,
+// is dropped and asks for no more.
+func TestServicesAskedForAnewWhileShown(t *testing.T) {
+	m, b := newModel(t)
+	running := []plugin.ServiceInfo{{ID: "t1", Name: "web", Command: "npm run dev"}}
+	b.sessions.ServicesFrom(func() []session.Services {
+		return []session.Services{{List: func() []plugin.ServiceInfo { return running }, Stop: func(string) bool { return false }}}
+	})
+	m.toggleJobs()
+	asked := m.servicesAsked
+	tick := m.servicesLoaded(servicesMsg{running, asked})
+	if tick == nil || len(m.services) != 1 {
+		t.Fatalf("the services shown: %+v", m.services)
+	}
+	if msg, ok := tick().(servicesTick); !ok || msg.asked != asked {
+		t.Fatalf("a while later: %+v", msg)
+	}
+	_, load := m.Update(servicesTick{asked})
+	if load == nil {
+		t.Fatal("the services are not asked for anew")
+	}
+	if msg, ok := load().(servicesMsg); !ok || msg.asked != asked || len(msg.list) != 1 || msg.list[0].ID != "t1" {
+		t.Fatalf("asked anew: %+v", msg)
+	}
+	if _, cmd := m.Update(servicesTick{asked - 1}); cmd != nil {
+		t.Error("a tick of before asks anew")
+	}
+	if m.servicesLoaded(servicesMsg{nil, asked - 1}) != nil || len(m.services) != 1 {
+		t.Errorf("a list of before: %+v", m.services)
+	}
+	m.toggleJobs() // hidden
+	if _, cmd := m.Update(servicesTick{asked}); cmd != nil {
+		t.Error("a hidden list asks anew")
+	}
+	if m.servicesLoaded(servicesMsg{nil, asked}) != nil || len(m.services) != 1 {
+		t.Errorf("a hidden list: %+v", m.services)
+	}
+}
+
+// /jobs lists the services below the jobs, the one selected marked, each
+// with its port if it has one, and stops the one selected; up and down move
+// the selection, which stays on an entry when the list gets shorter.
+func TestJobsScreenWithJobsAndServices(t *testing.T) {
+	m, b := newModel(t)
+	at := time.Unix(1000, 0)
+	m.now = func() time.Time { return at }
+	running := []plugin.ServiceInfo{
+		{ID: "t1", Name: "web", Command: "npm run dev", Since: at, Until: at.Add(time.Hour)},
+		{ID: "t2", Name: "api", Command: "go run .", Port: 8080, Since: at, Until: at.Add(time.Hour)},
+	}
+	var stopped []string
+	b.sessions.ServicesFrom(func() []session.Services {
+		return []session.Services{{List: func() []plugin.ServiceInfo { return running }, Stop: func(id string) bool { stopped = append(stopped, id); return true }}}
+	})
+	m.Update(run(m, "/jobs")())
+	if v := view(m); strings.Contains(v, "localhost:0") || !strings.Contains(v, "localhost:8080") || !strings.Contains(v, "› service web") {
+		t.Fatalf("/jobs:\n%s", v)
+	}
+	// With no job before them, the first service is the first entry.
+	m.Update(press(m, "enter")())
+	if !slices.Equal(stopped, []string{"t1"}) {
+		t.Fatalf("stopped %v", stopped)
+	}
+	// With a job before them, the services follow it.
+	m.jobs.list = []plugin.Job{{N: 1, Command: "sleep 9", Since: at}}
+	press(m, "down")
+	if v := view(m); !strings.Contains(v, "› service web") || strings.Contains(v, "› job") {
+		t.Fatalf("the first service selected:\n%s", v)
+	}
+	press(m, "down")
+	if v := view(m); !strings.Contains(v, "› service api") {
+		t.Fatalf("the second service selected:\n%s", v)
+	}
+	m.Update(press(m, "enter")())
+	press(m, "up")
+	if m.jobs.sel != 1 || !slices.Equal(stopped, []string{"t1", "t2"}) {
+		t.Fatalf("selected %d, stopped %v", m.jobs.sel, stopped)
+	}
+	m.jobs.sel = 2
+	m.jobsLoaded(jobsMsg{list: m.jobs.list, services: running[:1], opened: m.jobs.opened})
+	if m.jobs.sel != 1 {
+		t.Fatalf("with one service fewer the selection is %d", m.jobs.sel)
+	}
+	// Without services there is no head for them.
+	m.jobs.services = nil
+	if v := view(m); strings.Contains(v, "Services") {
+		t.Fatalf("no services:\n%s", v)
+	}
+}
+
+// The list of ctrl+j is a third of a narrow window wide, names the tasks
+// and the services only when there are some, a port only where there is
+// one, and is faint while it slides, but not once it is in.
+func TestJobsListParts(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	m.jobsShown, m.jobsLevel = true, jobsFrames
+	if w := m.jobsWidth(); w != 20 {
+		t.Fatalf("the list is %d wide in 60", w)
+	}
+	list := ansi.Strip(m.jobsList())
+	if lipgloss.Width(m.jobsList()) != 20 || strings.Contains(list, "Tasks") || strings.Contains(list, "Services") {
+		t.Fatalf("the list:\n%s", list)
+	}
+	if strings.Contains(m.jobsList(), "\x1b[2m") {
+		t.Fatal("the list is faint once it is in")
+	}
+	m.chat.tasks = []string{"task 1 · read"}
+	m.services = []plugin.ServiceInfo{{Name: "web", Command: "npm run dev"}, {Name: "api", Command: "go run .", Port: 8080}}
+	list = ansi.Strip(m.jobsList())
+	if !strings.Contains(list, "Tasks") || !strings.Contains(list, "Services") || strings.Contains(list, ":0") || !strings.Contains(list, "api · :8080") {
+		t.Fatalf("the list:\n%s", list)
+	}
+	for level := 1; level < jobsFrames; level++ {
+		m.jobsLevel = level
+		if faint := strings.Contains(m.jobsList(), "\x1b[2m"); faint != (level*2 >= jobsFrames) {
+			t.Errorf("frame %d: faint %v", level, faint)
+		}
 	}
 }

@@ -98,7 +98,7 @@ func TestInputHidden(t *testing.T) {
 	}
 
 	press(m, "backspace")
-	at = at.Add(inputIdleTime - time.Millisecond)
+	at = at.Add(3*time.Second - time.Millisecond) // the box stays three seconds
 	if tick(); !m.inputVisible() {
 		t.Fatal("the empty input should stay until it is idle")
 	}
@@ -157,4 +157,19 @@ func brings(cmd tea.Cmd) bool {
 		}
 	}
 	return false
+}
+
+// A frame of the box of the input on its way comes 25 milliseconds after the
+// one before, and the clock it slides on is started once.
+func TestInputFramesTakeTheirTime(t *testing.T) {
+	m, _ := newModel(t)
+	m.inputShown = false
+	start := time.Now()
+	frame := m.fadeInput()
+	if frame == nil || m.fadeInput() != nil {
+		t.Fatal("the box should start its frames once")
+	}
+	if _, ok := frame().(inputFadeMsg); !ok || time.Since(start) < 20*time.Millisecond {
+		t.Fatalf("a frame of the box came after %v", time.Since(start))
+	}
 }

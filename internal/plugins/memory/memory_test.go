@@ -99,3 +99,43 @@ func TestPeerAndMissingConversationRejected(t *testing.T) {
 		}
 	}
 }
+
+// A memory is only in a scope the conversation can name: global, or the
+// trusted current project, which is an absolute path. What a tool cannot do
+// is an error the model is told, and nothing is changed.
+func TestToolsRefuseWhatTheyCannotDo(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	project := workdir.With(ctx, "/project/a")
+	var e store.Entry
+	if err := json.Unmarshal([]byte(call(t, s, ctx, "owner", Create, `{"key":"drink","content":"oolong"}`)), &e); err != nil {
+		t.Fatal(err)
+	}
+	id := `"id":"` + e.ID + `"`
+	for _, tt := range []struct {
+		ctx        context.Context
+		name, args string
+		want       string
+	}{
+		{workdir.With(ctx, "relative/project"), Search, `{}`, "current project must be an absolute trusted path"},
+		{ctx, Create, `{"key":"k","content":"c","scope":"project"}`, "no current project selected"},
+		{project, Create, `{"key":"k","content":"c","scope":"everywhere"}`, "scope must be global or project"},
+		{ctx, Create, `{"id":"x","key":"k","content":"c"}`, "create takes no ID or version"},
+		{ctx, Create, `{"version":1,"key":"k","content":"c"}`, "create takes no ID or version"},
+		{ctx, Update, `{` + id + `,"version":1,"key":"drink","content":"tea","scope":"project"}`, "no current project selected"},
+		{ctx, Forget, `{` + id + `,"version":1,"scope":"project"}`, "no current project selected"},
+		{ctx, Forget, `{"id":"missing","version":1}`, "memory not found"},
+		{ctx, Read, `{` + id + `,"scope":"project"}`, "no current project selected"},
+	} {
+		if got := call(t, s, tt.ctx, "owner", tt.name, tt.args); !strings.HasPrefix(got, "error:") || !strings.Contains(got, tt.want) {
+			t.Errorf("%s %s: %q, want an error with %q", tt.name, tt.args, got, tt.want)
+		}
+	}
+	if got, err := s.Read(ctx, "", e.ID); err != nil || got != e {
+		t.Fatalf("refused calls changed the memory: %+v, %v", got, err)
+	}
+}

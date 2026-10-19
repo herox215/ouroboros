@@ -32,6 +32,16 @@ func TestCheckSanityTool(t *testing.T) {
 		if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "source checkout") {
 			t.Fatalf("unknown source: %v", err)
 		}
+		// Without Go nothing is checked.
+		empty := t.TempDir()
+		t.Setenv("OURO_GO_DIR", empty)
+		t.Setenv("PATH", empty)
+		if _, err := update.GoTool(); err == nil {
+			t.Skip("Go is installed for all users, where the test cannot hide it")
+		}
+		if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "rebuild needs Go") {
+			t.Fatalf("without Go: %v", err)
+		}
 		return
 	}
 	t.Fatal("check_sanity was not registered")

@@ -14,6 +14,8 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/credentials"
 	"ouroboros/internal/home"
+	"ouroboros/internal/identity"
+	"ouroboros/internal/peers"
 	"ouroboros/plugin"
 )
 
@@ -302,9 +304,17 @@ func TestChange(t *testing.T) {
 		t.Errorf("all again, settings kept: %s", got)
 	}
 	change(plugin.Setting{Kind: plugin.SetAllTools, On: true}) // on already
+	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: `{"allow":["~/y"]}`})
+	if got := entries(plugin.ForOwner); got != `["*",{"allow":["~/y"],"tool":"read"}]` {
+		t.Errorf("other settings under *: %s", got)
+	}
 	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: ""})
 	if got := entries(plugin.ForOwner); got != `["*"]` {
 		t.Errorf("without settings under *: %s", got)
+	}
+	change(plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Value: ""}) // none already
+	if got := entries(plugin.ForOwner); got != `["*"]` {
+		t.Errorf("without settings again: %s", got)
 	}
 	// Also where the entry comes before "*" in a file written by hand.
 	config.Update(dir, func(c *config.Config) error {
@@ -401,7 +411,7 @@ func TestSettingsOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := s.Tools[plugin.ForPeers].Tools[0].Options; len(got) != 1 || got[0].Name != "allow" || got[0].Kind != plugin.OptionList ||
-		!got[0].Set || !slices.Equal(got[0].List, []string{"~/share", "~/x"}) {
+		!got[0].Set || !slices.Equal(got[0].List, []string{"~/share", "~/x"}) || got[0].Value != "" {
 		t.Errorf("read for peers: %+v", got)
 	}
 	if got := s.Tools[plugin.ForOwner].Tools[0].Options; len(got) != 1 || got[0].Set || got[0].List != nil {
@@ -473,5 +483,133 @@ func TestPeerLists(t *testing.T) {
 	}
 	if s, _ = o.Settings(tools(), nil); len(s.Peers) != 0 {
 		t.Errorf("peers %+v", s.Peers)
+	}
+}
+
+// The trusted peers are listed with the tools they get, from the list for
+// peers or from one of their own, once each and by their name; a peer with a
+// list of its own that is not trusted is listed too, and contacts that
+// cannot be read are none.
+func TestTrustedPeerLists(t *testing.T) {
+	dir := home.Dir(t.TempDir())
+	luna, sol := identity.Generate(), identity.Generate()
+	cfg := off()
+	cfg.Tools = &config.Tools{A2A: config.Named("list_peers"), Peers: map[string][]config.Entry{luna.ID(): config.Named("build"), "abcdefabcdef": config.Named("read")}}
+	if err := config.Save(string(dir), cfg); err != nil {
+		t.Fatal(err)
+	}
+	trusted := dir.Contacts()
+	if err := trusted.AddTrusted(sol.Public(), "Sol", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := trusted.AddTrusted(luna.Public(), "Luna", ""); err != nil {
+		t.Fatal(err)
+	}
+	o := plugin.OwnerOf(dir, &peers.Network{Contacts: trusted})
+	s, err := o.Settings(tools(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type peer struct {
+		ID, Name string
+		Own      bool
+		Allowed  []string
+	}
+	of := func(list []plugin.PeerTools) []peer {
+		var out []peer
+		for _, p := range list {
+			got := peer{ID: p.ID, Name: p.Name, Own: p.Own}
+			for _, tool := range p.List.Tools {
+				if tool.Allowed {
+					got.Allowed = append(got.Allowed, tool.Name)
+				}
+			}
+			out = append(out, got)
+		}
+		return out
+	}
+	want := []peer{
+		{sol.ID(), "Sol", false, []string{"list_peers"}},
+		{luna.ID(), "Luna", true, []string{"build"}},
+		{"abcdefabcdef", "", true, []string{"read"}},
+	}
+	if got := of(s.Peers); !reflect.DeepEqual(got, want) {
+		t.Fatalf("peers %+v, want %+v", got, want)
+	}
+
+	if err := os.WriteFile(filepath.Join(string(dir), "contacts.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = o.Settings(tools(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := of(s.Peers); len(got) != 2 || got[0].Name != "" || got[1].Name != "" || !got[0].Own || !got[1].Own {
+		t.Fatalf("without contacts %+v", got)
+	}
+}
+
+// An option is shown as it is set: a text as it is, a number or a switch as
+// it is written, a list as its items; one set to null is not set.
+func TestSettingsOptionValues(t *testing.T) {
+	type settings struct {
+		Mode  string   `json:"mode"`
+		Depth int      `json:"depth"`
+		Quiet bool     `json:"quiet"`
+		Allow []string `json:"allow"`
+	}
+	tune := plugin.Configurable(plugin.NewTool("tune", "Tune it.", nil, func(context.Context, struct{}) (string, error) { return "", nil }),
+		func(settings) (plugin.RunFunc, error) {
+			return func(context.Context, json.RawMessage) (string, error) { return "", nil }, nil
+		})
+	// For peers, the settings are of the wrong kinds: they are shown as
+	// they are written, a list as its items only where one is taken.
+	cfg := clitest.NodeConfig(clitest.Settings(t))
+	cfg.Tools = &config.Tools{H2A: []config.Entry{{Tool: "tune", Settings: json.RawMessage(`{"mode":"fast","depth":3,"quiet":true,"allow":null}`)}},
+		A2A: []config.Entry{{Tool: "tune", Settings: json.RawMessage(`{"mode":["a","b"],"allow":"~/x"}`)}}}
+	o, _, _ := built(t, cfg)
+	s, err := o.Settings([]plugin.Tool{tune}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type option struct {
+		Name, Value string
+		Set         bool
+		List        []string
+	}
+	for who, want := range map[plugin.Audience][]option{
+		plugin.ForOwner: {{"mode", "fast", true, nil}, {"depth", "3", true, nil}, {"quiet", "true", true, nil}, {"allow", "", false, nil}},
+		plugin.ForPeers: {{"mode", `["a","b"]`, true, []string{"a", "b"}}, {"depth", "", false, nil}, {"quiet", "", false, nil}, {"allow", "~/x", true, nil}},
+	} {
+		var got []option
+		for _, o := range s.Tools[who].Tools[0].Options {
+			got = append(got, option{o.Name, o.Value, o.Set, o.List})
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("options for %v: %+v", who, got)
+		}
+	}
+}
+
+// A change is logged by what it changes; one of a list of tools says whose
+// list it is.
+func TestSettingString(t *testing.T) {
+	for _, tt := range []struct {
+		s    plugin.Setting
+		want string
+	}{
+		{plugin.Setting{Kind: plugin.SetName}, "the name"},
+		{plugin.Setting{Kind: plugin.SetPlugin, Name: "free", Peer: "abc"}, "the plugin free"},
+		{plugin.Setting{Kind: plugin.SetAllTools}, "all tools of the owner"},
+		{plugin.Setting{Kind: plugin.SetAllTools, For: plugin.ForPeers}, "all tools for peers"},
+		{plugin.Setting{Kind: plugin.SetAllTools, Peer: "abc"}, "all tools for the peer abc"},
+		{plugin.Setting{Kind: plugin.SetTool, Name: "read"}, "the tool read of the owner"},
+		{plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", For: plugin.ForPeers}, "the settings of the tool read for peers"},
+		{plugin.Setting{Kind: plugin.SetToolSettings, Name: "read", Peer: "abc"}, "the settings of the tool read for the peer abc"},
+		{plugin.Setting{Kind: plugin.SetProtected, Peer: "abc"}, "the protected paths"},
+		{plugin.Setting{Kind: plugin.SetPeerList, Peer: "abc"}, "the own list of tools of the peer abc"},
+	} {
+		if got := tt.s.String(); got != tt.want {
+			t.Errorf("%+v is %q, want %q", tt.s, got, tt.want)
+		}
 	}
 }

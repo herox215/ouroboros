@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"maps"
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -57,6 +58,19 @@ func foreground(params string) string {
 
 // told is c as the terminal is told it.
 func told(c color.RGBA) string { return fmt.Sprintf("38;2;%d;%d;%d", c.R, c.G, c.B) }
+
+// alike says whether two colors as the terminal is told them are the same,
+// but for a step of rounding in a channel.
+func alike(a, b string) bool {
+	var ar, ag, ab, br, bg, bb int
+	if n, _ := fmt.Sscanf(a, "38;2;%d;%d;%d", &ar, &ag, &ab); n != 3 {
+		return false
+	}
+	if n, _ := fmt.Sscanf(b, "38;2;%d;%d;%d", &br, &bg, &bb); n != 3 {
+		return false
+	}
+	return max(ar-br, br-ar, ag-bg, bg-ag, ab-bb, bb-ab) <= 1
+}
 
 // seconds is the time s seconds after the animation began.
 func seconds(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
@@ -198,6 +212,58 @@ func TestNameAnimationBeamWandersOverTheName(t *testing.T) {
 	if on, _ := brightest(2.3); on <= peak {
 		t.Fatalf("the beam went from the column %d to %d", peak, on)
 	}
+	// Over a name of 34 columns and 6 rows the spot sets out 10 columns
+	// before it, crosses it at 18 columns a second, out to 10 columns behind
+	// it, and rests 2.2 seconds: it comes round again after 5.2 seconds.
+	spot := func(at float64) int {
+		best, top := 0, -1.0
+		for x := range 34 {
+			if lit := nameBeam.lit(x, 2, 34, 6, at); lit > top {
+				best, top = x, lit
+			}
+		}
+		return best
+	}
+	for _, tt := range []struct {
+		at   float64
+		want int
+	}{{1, 8}, {1.5, 17}, {6.2, 8}, {6.7, 17}} {
+		if got := spot(tt.at); got != tt.want {
+			t.Errorf("after %v seconds the spot is at the column %d, want %d", tt.at, got, tt.want)
+		}
+	}
+}
+
+// The spot of the beam is round, in cells that are twice as high as wide:
+// two columns from its middle are as dark as one row. On a name of 9 rows it
+// is 4.8 columns wide, sets out 15 columns before the name in its middle
+// row, and sways 2.4 rows down and up again every 4.2 seconds.
+func TestNameAnimationBeamSpot(t *testing.T) {
+	lit := func(x, y int, at float64) float64 { return nameBeam.lit(x, y, 40, 9, at) }
+	if got := lit(-15, 4, 0); got != 1 {
+		t.Fatalf("the middle of the spot is %f bright", got)
+	}
+	for _, c := range [][2]int{{-13, 4}, {-17, 4}, {-15, 5}, {-15, 3}} {
+		if got, want := lit(c[0], c[1], 0), math.Exp(-(2/4.8)*(2/4.8)); math.Abs(got-want) > 1e-12 {
+			t.Errorf("at %v the spot is %f bright, want %f", c, got, want)
+		}
+	}
+	if got, want := lit(-12, 4, 0), math.Exp(-(3/4.8)*(3/4.8)); math.Abs(got-want) > 1e-12 {
+		t.Errorf("three columns from its middle the spot is %f bright, want %f", got, want)
+	}
+	// row is the brightest row of the column x at the time at.
+	row := func(x int, at float64) int {
+		best, top := 0, -1.0
+		for y := range 9 {
+			if l := lit(x, y, at); l > top {
+				best, top = y, l
+			}
+		}
+		return best
+	}
+	if down, up := row(13, 1.05), row(70, 3.15); down != 6 || up != 2 {
+		t.Errorf("swayed down to the row %d, up to %d; want 6 and 2", down, up)
+	}
 }
 
 // The wave rolls bands of light through the name, leaning to the right:
@@ -228,6 +294,20 @@ func TestNameAnimationWaveRollsThroughTheName(t *testing.T) {
 	}
 	if later <= first || top <= bottom {
 		t.Fatalf("the wave: a crest at the column %d, later at %d; the top row at %d, below at %d", first, later, top, bottom)
+	}
+	// A name of 14 columns holds 1.4 crests: one every 10 columns. Of six
+	// rows, the top one is 5 × 1.2 columns ahead of the bottom one, where
+	// the wave starts at half its height at first.
+	for x := range 4 {
+		if a, b := nameWave.lit(x, 5, 14, 6, 0.3), nameWave.lit(x+10, 5, 14, 6, 0.3); math.Abs(a-b) > 1e-9 {
+			t.Fatalf("the columns %d and %d are %f and %f bright, a crest apart", x, x+10, a, b)
+		}
+		if a, b := nameWave.lit(x, 5, 14, 6, 0.3), nameWave.lit(x+6, 0, 14, 6, 0.3); math.Abs(a-b) > 1e-9 {
+			t.Fatalf("the column %d of the bottom row is %f bright, %d of the top row %f", x, a, x+6, b)
+		}
+	}
+	if lit := nameWave.lit(0, 5, 14, 6, 0); math.Abs(lit-waveHeight/2) > 1e-9 {
+		t.Fatalf("the wave starts %f bright", lit)
 	}
 }
 
@@ -276,6 +356,28 @@ func TestNameAnimationFloatBobsTheLetters(t *testing.T) {
 			t.Fatalf("after %v seconds the float tears a letter: %v, want %v", at, got, atRest)
 		}
 	}
+	// Every column of a letter, its last one too, bobs as far as the letter.
+	first := func(lines []string, x int) int {
+		for y, line := range lines {
+			if r := []rune(line); x < len(r) && r[x] != ' ' {
+				return y
+			}
+		}
+		return -1
+	}
+	rest := frame(0)
+	for _, at := range []float64{0.4, 0.7, 1.4, 2.1} {
+		lines := frame(at)
+		for i, span := range spans {
+			left := (46 - len([]rune(art[0]))) / 2
+			bob := first(lines, left+span[0]) - first(rest, left+span[0])
+			for x := span[0]; x <= span[1]; x++ {
+				if got := first(lines, left+x) - first(rest, left+x); got != bob {
+					t.Fatalf("after %v seconds the column %d of the letter %d bobs %d rows, the letter %d", at, x, i, got, bob)
+				}
+			}
+		}
+	}
 	if down(0) != 3 || down(floatPeriod/4) != 0 || down(floatPeriod/2) != 1 {
 		t.Fatalf("the wave of the bob: at 0 below %d, at a quarter %d, at half %d", down(0), down(floatPeriod/4), down(floatPeriod/2))
 	}
@@ -306,6 +408,35 @@ func TestNameAnimationFlareLightsTheLetters(t *testing.T) {
 	for _, at := range []float64{0, 0.5, 2.3, 4.4} {
 		if got := ansi.Strip(drawNameAnimation("Luna", 46, 10, seconds(at), false, nameFlare, 1)); got != still {
 			t.Fatalf("after %v seconds the flare moved the name:\n%s", at, got)
+		}
+	}
+	// Every cell shows as lit as the flare says: the letter of its time
+	// with the sine of its time, and the columns around it with 0.7 of
+	// that, falling off over 3 columns of the font at its size, 6 here.
+	w, p := len([]rune(art[0])), colors(false)
+	left := (46 - w) / 2
+	for _, at := range []float64{0.95, 2.2, 5, 6.1} {
+		now := seconds(at).Seconds()
+		into := math.Mod(now, flareEvery*float64(len(spans)))
+		n := int(into/flareEvery) % len(spans)
+		share := math.Sin(math.Pi * (into/flareEvery - float64(n)))
+		cells := colorsOf(drawNameAnimation("Luna", 46, 10, seconds(at), false, nameFlare, 1))
+		for y, row := range art {
+			for x, r := range []rune(row) {
+				if r == ' ' {
+					continue
+				}
+				lit := share
+				if x < spans[n][0] {
+					lit = 0.7 * share * bell(float64(spans[n][0]-x), 6)
+				} else if x > spans[n][1] {
+					lit = 0.7 * share * bell(float64(x-spans[n][1]), 6)
+				}
+				fg := mix(p.gradient(float64(x)/float64(w)*0.8-now*0.36), p.glow, shineGlow*lit)
+				if got, want := cells[[2]int{left + x, top + y}], told(mix(p.back, fg, nameMatte+(1-nameMatte)*lit)); !alike(got, want) {
+					t.Fatalf("after %v seconds the cell %d, %d is %s, want %s: lit %f by the letter %d", at, x, y, got, want, lit, n)
+				}
+			}
 		}
 	}
 	peak, dim := flareEvery/2, flareEvery*1.5
@@ -431,6 +562,75 @@ func TestNameAnimationNeonFlickers(t *testing.T) {
 	if len(flickered) == n {
 		t.Fatalf("every visit flickers on the same letter of %d, want it taken at random", len(spans))
 	}
+}
+
+// The defect flickers in steps: all of a step it burns or is out, and it
+// burns about four steps for one it is out. Cells outside of its letter,
+// and a name without a defect, burn steadily.
+func TestNeonFlickerInSteps(t *testing.T) {
+	spans := [][2]int{{0, 3}, {5, 8}}
+	out := 0
+	for step := range 400 {
+		early := neonFlicker(6, 0, 1, spans, (float64(step)+0.1)*neonStep)
+		if late := neonFlicker(6, 0, 1, spans, (float64(step)+0.9)*neonStep); late != early {
+			t.Fatalf("the step %d flickers within itself: %f, then %f", step, early, late)
+		}
+		switch early {
+		case neonOut:
+			out++
+		case 1:
+		default:
+			t.Fatalf("the step %d is %f bright", step, early)
+		}
+	}
+	if out < 40 || out > 160 {
+		t.Fatalf("the defect is out %d steps of 400, want about 80", out)
+	}
+	for at := 0.0; at < 28; at += neonStep {
+		if neonFlicker(4, 0, 1, spans, at) != 1 || neonFlicker(9, 0, 1, spans, at) != 1 || neonFlicker(6, 0, -1, spans, at) != 1 {
+			t.Fatalf("after %v seconds a cell flickers outside of the defect", at)
+		}
+	}
+}
+
+// The letter the defect is on is taken by the whole tagline of the visit, not
+// by its length alone; a visit without a tagline has one all the same.
+func TestNeonDefectByTheTagline(t *testing.T) {
+	art := nameArt("Luna", nameScale)
+	spans, w, h := letterSpans(art), len([]rune(art[0])), len(art)
+	left, top := (46-w)/2, (10-h)/2
+	// inked is a cell of the frame in every letter: the top one of its first
+	// column.
+	var inked [][2]int
+	for _, span := range spans {
+		y := 0
+		for []rune(art[y])[span[0]] == ' ' {
+			y++
+		}
+		inked = append(inked, [2]int{left + span[0], top + y})
+	}
+	// defect is the letter that goes out in the visit of tagline.
+	defect := func(tagline string) int {
+		for step := range 200 {
+			cells := colorsOf(drawNameAnimation("Luna", 46, 10, seconds((float64(step)+0.5)*neonStep), false, nameNeon, 1, tagline))
+			for i, cell := range inked {
+				var r, g, b int
+				if n, _ := fmt.Sscanf(cells[cell], "38;2;%d;%d;%d", &r, &g, &b); n == 3 && r+g+b < 300 {
+					return i
+				}
+			}
+		}
+		t.Fatalf("no letter goes out with the tagline %q", tagline)
+		return -1
+	}
+	seen := map[int]bool{}
+	for _, first := range "abcdefgh" {
+		seen[defect(string(first)+"tagline")] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("taglines of one length flicker on the letters %v alone", seen)
+	}
+	defect("")
 }
 
 // A glitch tears the name for a third of a second, another way with every

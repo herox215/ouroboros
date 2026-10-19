@@ -18,6 +18,27 @@ func WithMessageSteering(ctx context.Context, steer func() []openai.Message) con
 	return context.WithValue(ctx, messageSteeringKey{}, steer)
 }
 
+type sentKey struct{}
+
+// WithSent returns ctx under which every call of the LLM of an answer is
+// sent what shape makes of the conversation, as it is, without the system
+// prompt: what is kept of the conversation stays as it is. shape is to keep
+// every call of a tool next to its results, and to make the same of the same
+// messages, so that what the provider cached of them holds.
+func WithSent(ctx context.Context, shape func([]openai.Message) []openai.Message) context.Context {
+	return context.WithValue(ctx, sentKey{}, shape)
+}
+
+// sent is what the call of the LLM of the answer of ctx is sent of msgs, the
+// system prompt first, see WithSent.
+func sent(ctx context.Context, msgs []openai.Message) []openai.Message {
+	shape, ok := ctx.Value(sentKey{}).(func([]openai.Message) []openai.Message)
+	if !ok || shape == nil {
+		return msgs
+	}
+	return append(msgs[:1:1], shape(copyMessages(msgs[1:]))...)
+}
+
 func steeredMessages(ctx context.Context) []openai.Message {
 	return SteeredMessages(ctx)
 }

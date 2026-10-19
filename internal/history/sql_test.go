@@ -40,6 +40,9 @@ func TestSQLMigrationRestartDeletion(t *testing.T) {
 	legacy(t, dir, "owner/unanswered.directory", "")
 	legacy(t, dir, "owner/unanswered.goon", "")
 	legacy(t, dir, "owner/empty.jsonl", "")
+	// What the archive did not write itself is left alone.
+	legacy(t, dir, "owner/notes.txt", "")
+	legacy(t, dir, "owner/not named.jsonl", string(b)+"\n")
 	peer := Party("peer")
 	legacy(t, dir, peer+"/old.jsonl", string(b)+"\n")
 	legacy(t, dir, peer+"/old.goon", "")

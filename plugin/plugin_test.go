@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,21 @@ func (callOnce) Complete(_ context.Context, _ string, msgs []openai.Message, _ [
 		return openai.Message{Content: last.Content}, nil
 	}
 	return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "conversation", Arguments: "{}"}}}}, nil
+}
+
+// seeing asks for the tool "conversation" and answers with its result and
+// the pictures that came with it.
+type seeing struct{}
+
+func (seeing) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+	if last := msgs[len(msgs)-1]; last.Role == "tool" {
+		types := make([]string, len(last.Images))
+		for i, image := range last.Images {
+			types[i] = image.Type
+		}
+		return openai.Message{Content: fmt.Sprintf("%s, %d picture %s", last.Content, len(last.Images), strings.Join(types, " "))}, nil
+	}
+	return callOnce{}.Complete(ctx, model, msgs, tools)
 }
 
 // A plugin declares what it needs in the struct its start function takes and
@@ -142,6 +158,19 @@ func TestContributions(t *testing.T) {
 	})
 	if got, _ := agent.New(callOnce{}, "m", "s", conversation).Respond(ctx, "c-1", "hi"); got != "c-1" {
 		t.Fatalf("the conversation of a tool: %q", got)
+	}
+	// A tool shows the LLM pictures and the owner a remark on its call, which
+	// go nowhere outside of one.
+	if plugin.ShowImage(ctx, plugin.Image{Type: "image/png", Data: []byte("png")}) || plugin.Remark(ctx, "shown") {
+		t.Fatal("shown outside of a call of a tool")
+	}
+	showing := plugin.NewTool("conversation", "", nil, func(ctx context.Context, _ struct{}) (string, error) {
+		return fmt.Sprint(plugin.ShowImage(ctx, plugin.Image{Type: "image/png", Data: []byte("png")}), plugin.Remark(ctx, "640×480")), nil
+	})
+	var remark string
+	got, _ := agent.New(seeing{}, "m", "s", showing).Run(ctx, "c-2", "hi", agent.Observer{Step: func(s agent.Step) { remark = s.Remark }})
+	if got != "true true, 1 picture image/png" || remark != "640×480" {
+		t.Fatalf("shown %q, remark %q", got, remark)
 	}
 	if _, ok := plugin.OriginFrom(ctx); ok {
 		t.Fatal("the owner's context has no origin")

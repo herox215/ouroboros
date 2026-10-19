@@ -213,3 +213,43 @@ func TestTail(t *testing.T) {
 		t.Fatalf("kept %d bytes ending %q", len(got), got[len(got)-20:])
 	}
 }
+
+// A browser that does not say what its contexts and pages are is ended, and
+// does not start.
+func TestLaunchFailsWithoutItsPages(t *testing.T) {
+	for _, method := range []string{"Target.getBrowserContexts", "Target.getTargets"} {
+		t.Run(method, func(t *testing.T) {
+			script := strings.Replace(answering, "    *) printf", `    *`+method+`*) printf '{"id":%s,"error":{"code":-32000,"message":"not now"}}\0' "$id" >&4;;
+    *) printf`, 1)
+			path := program(t, script)
+			p, _, err := run(context.Background(), path, t.TempDir(), false, "")
+			if err == nil || err.Error() != method+": not now" || p != nil {
+				t.Fatalf("%v, %v", p, err)
+			}
+		})
+	}
+}
+
+// A browser that was updated is another one: what it says it is, is asked
+// again.
+func TestLaunchLearnsAnUpdatedBrowser(t *testing.T) {
+	path := program(t, answering)
+	ctx := context.Background()
+	for _, version := range []string{"150", "151"} {
+		t.Setenv("FAKE_UA", "Mozilla/5.0 HeadlessChrome/"+version)
+		p, err := launch(ctx, t.TempDir(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.end()
+		later := time.Now().Add(time.Hour)
+		if err := os.Chtimes(path, later, later); err != nil {
+			t.Fatal(err)
+		}
+	}
+	starts, _ := os.ReadFile(filepath.Join(filepath.Dir(path), "starts"))
+	got := strings.Split(strings.TrimSpace(string(starts)), "\n")
+	if len(got) != 4 || strings.Contains(got[2], "--user-agent") || !strings.Contains(got[3], "--user-agent=Mozilla/5.0 Chrome/151") {
+		t.Fatalf("started %q", got)
+	}
+}

@@ -69,7 +69,12 @@ func TestGoOn(t *testing.T) {
 	s, replaced = inNode(t.TempDir())
 	s.archive.Archive = unavailableArchive(t)
 	s.Ask(context.Background(), "s1", "build")
-	<-replaced
+	s.answers.Wait() // restart is refused when its pending marker cannot be kept
+	select {
+	case exe := <-replaced:
+		t.Fatalf("restart without a durable marker: %s", exe)
+	default:
+	}
 	logs := func(want string) {
 		t.Helper()
 		if !strings.Contains(strings.Join(logged, "\n"), want) {
@@ -77,7 +82,7 @@ func TestGoOn(t *testing.T) {
 		}
 		logged = nil
 	}
-	logs("the session s1 does not go on by itself in the new build")
+	logs("the restart of the session s1 cannot be kept")
 	stopped, _ := inNode(dir)
 	history.Open(dir).GoOn("owner/s2")
 	stopped.Close()
@@ -87,4 +92,30 @@ func TestGoOn(t *testing.T) {
 	next.archive.Archive = unavailableArchive(t)
 	next.GoOn()
 	logs("which sessions go on by themselves cannot be read")
+}
+
+// A session whose answer asked for a build, but not to go on by itself,
+// waits in the new build for the owner.
+func TestRestartWithoutGoingOn(t *testing.T) {
+	dir := t.TempDir()
+	s := service(t, &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		AskRestart(ctx, "/new/ouro")
+		return "built", nil
+	}})
+	s.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
+	replaced := make(chan string, 1)
+	s.Attach(nil, func(exe string) { replaced <- exe })
+	if err := s.Ask(context.Background(), "s1", "build"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-replaced:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the node was not replaced")
+	}
+	a := history.Open(dir)
+	defer a.Close()
+	if ids, err := a.GoingOn(); err != nil || len(ids) != 0 {
+		t.Fatalf("going on: %v, %v", ids, err)
+	}
 }

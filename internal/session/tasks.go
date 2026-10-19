@@ -12,12 +12,13 @@ import (
 	"ouroboros/internal/workdir"
 )
 
-// task is a task the agent delegated that runs in the background of its
-// session, past the answer that started it.
+// task is a task the agent delegated that runs concurrently with the
+// originating answer. The next model round waits for its report.
 type task struct {
 	n      int
 	title  string
 	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // delegating runs the tasks the agent delegates in the session se, see
@@ -50,7 +51,7 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 		ctx = workdir.With(ctx, se.directory)
 		ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 		se.delegated++
-		running := &task{n: se.delegated, title: t.Title, cancel: cancel}
+		running := &task{n: se.delegated, title: t.Title, cancel: cancel, done: make(chan struct{})}
 		se.tasks = append(se.tasks, running)
 		started[i] = running.n
 		p.answering++
@@ -81,7 +82,28 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	if !stopped {
 		s.deliver(se, p, t, answer, err, s.now().Sub(start))
 	}
+	close(t.done) // the report is queued before the answer can resume
 	p.settle()
+}
+
+// waitTasks joins the helpers before the next model round, so even streamed
+// final text cannot precede their reports. Waiting holds no session/process
+// lock and ends immediately when the answer is canceled.
+func (s *Service) waitTasks(ctx context.Context, se *session) {
+	for {
+		s.mu.Lock()
+		if len(se.tasks) == 0 {
+			s.mu.Unlock()
+			return
+		}
+		done := se.tasks[0].done
+		s.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // deliver hands the agent of se the report of the task t that ended with

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"ouroboros/internal/agent"
-	"ouroboros/internal/script"
 )
 
 // Signal is a sign, measured on the way to an answer, that ouro could have
@@ -35,7 +34,6 @@ const (
 	SignalLowCache    SignalKind = "low cache"
 	SignalGaveUp      SignalKind = "gave up"
 	SignalEmpty       SignalKind = "empty answer"
-	SignalCut         SignalKind = "cut"
 	// SignalFollowUp is of the message after the answer, see followed.
 	SignalFollowUp SignalKind = "follow-up"
 )
@@ -61,44 +59,13 @@ type measures struct {
 	slowest  map[string]time.Duration // of each tool slower than slowTool
 	waited   time.Duration            // in the tools of waiting
 	failed   int                      // tool calls
-	scripts  []int                    // failed when each script under way started
-	cut      int                      // results of scripts that left something out
-	leftOut  int                      // bytes they left out
 	same     map[string]int           // calls by tool and arguments
 	retried  int                      // calls of the LLM asked again
 	fallback int                      // calls of the LLM a fallback answered
 }
 
-// result notes what a script gave back: what it left out of it, see
-// script.LeftOut, which the agent has to go and get with another step.
-func (m *measures) result(text string) {
-	if n := script.LeftOut(text); n > 0 {
-		m.cut++
-		m.leftOut += n
-	}
-}
-
-// start notes a tool call that starts.
-func (m *measures) start(tool string) {
-	if tool == toolRun {
-		m.scripts = append(m.scripts, m.failed)
-	}
-}
-
-// step notes a tool call that ended. A script is noted by the tools it
-// calls: it is slow, failed or repeated as they are, and failed by itself
-// only when none of them did, as when it could not be run.
+// step records each completed direct call exactly once.
 func (m *measures) step(tool, args string, took time.Duration, failed bool) {
-	if tool == toolRun {
-		before := m.failed
-		if n := len(m.scripts); n > 0 {
-			before, m.scripts = m.scripts[n-1], m.scripts[:n-1]
-		}
-		if failed && m.failed == before {
-			m.failed++
-		}
-		return
-	}
 	if slices.Contains(waiting, tool) {
 		m.waited += took
 	} else if took >= slowTool {
@@ -140,13 +107,6 @@ func (m *measures) signals(took time.Duration, llm, tokens, cached int, reply st
 			tool, args, _ := strings.Cut(call, " ")
 			add(SignalRepeated, "%s ran %d times with %s", tool, n, args)
 		}
-	}
-	if m.cut > 0 {
-		results := "1 result of a script was"
-		if m.cut > 1 {
-			results = fmt.Sprintf("%d results of scripts were", m.cut)
-		}
-		add(SignalCut, "%s cut: %.1f KiB left out", results, float64(m.leftOut)/1024)
 	}
 	if llm >= manyCalls {
 		add(SignalManyCalls, "%d calls of the LLM", llm)

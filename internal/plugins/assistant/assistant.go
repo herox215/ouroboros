@@ -11,6 +11,7 @@ import (
 	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 	"ouroboros/internal/llm"
+	"ouroboros/internal/presentation"
 	"ouroboros/internal/update"
 	"ouroboros/plugin"
 )
@@ -65,7 +66,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 // of the plugins. A failure is its diagnostic, and leaves the answer as it
 // is.
 func Archived(archive *history.Archive, statistics ...func(string) history.Statistics) agent.AnswerHook {
-	return agent.AnswerHook{Name: "archive", After: func(_ context.Context, o agent.AnswerOutcome) error {
+	return agent.AnswerHook{Name: "archive", After: func(ctx context.Context, o agent.AnswerOutcome) error {
 		who := history.Who{Session: o.Conversation.ID}
 		if o.Conversation.Peer {
 			if o.Conversation.Origin.PublicKey == "" {
@@ -73,9 +74,12 @@ func Archived(archive *history.Archive, statistics ...func(string) history.Stati
 			}
 			who.Peer = o.Conversation.Origin.PublicKey
 		}
+		terminalID := presentation.Terminal(ctx)
 		if !o.Conversation.Peer && len(statistics) > 0 {
-			return archive.Append(who, o.Messages, o.Err, statistics[0](who.Session))
+			stats := statistics[0](who.Session)
+			stats.PresentationID = terminalID
+			return archive.Append(who, o.Messages, o.Err, stats)
 		}
-		return archive.Append(who, o.Messages, o.Err)
+		return archive.AppendWithPresentationID(who, o.Messages, o.Err, terminalID)
 	}}
 }

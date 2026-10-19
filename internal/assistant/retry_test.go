@@ -33,7 +33,7 @@ func noWait(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 // A call that broke off on its way is asked again, twice at most; the
 // answer says why. Any other error is not.
 func TestRetrying(t *testing.T) {
-	eof := &url.Error{Op: "Post", URL: "http://100.91.15.23:4000/v1/chat/completions", Err: io.EOF}
+	eof := &url.Error{Op: "Post", URL: "http://llm/v1/chat/completions", Err: io.EOF}
 	ctx := context.Background()
 
 	llm := &answers{errs: []error{eof}}
@@ -70,5 +70,44 @@ func TestRetrying(t *testing.T) {
 	llm = &answers{errs: []error{eof}}
 	if _, err := (retrying{llm, noWait}).Complete(stopped, "m", nil, nil); err != eof || llm.calls != 1 {
 		t.Errorf("stopped: %v, %d calls", err, llm.calls)
+	}
+}
+
+// wait waits as long as it is told, unless ctx ends first.
+func TestWait(t *testing.T) {
+	if err := wait(context.Background(), time.Millisecond); err != nil {
+		t.Fatalf("waited: %v", err)
+	}
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := wait(stopped, time.Hour); !errors.Is(err, context.Canceled) || time.Since(start) > time.Minute {
+		t.Fatalf("stopped: %v after %s", err, time.Since(start))
+	}
+}
+
+// A call that broke off is asked again after each of retryAfter in turn;
+// once a wait ends early, it is asked no more, and waits no more.
+func TestRetryingWaits(t *testing.T) {
+	eof := &url.Error{Op: "Post", URL: "x", Err: io.EOF}
+	var waited []time.Duration
+	waits := func(fail bool) func(context.Context, time.Duration) error {
+		waited = nil
+		return func(_ context.Context, d time.Duration) error {
+			waited = append(waited, d)
+			if fail {
+				return context.Canceled
+			}
+			return nil
+		}
+	}
+	llm := &answers{errs: []error{eof, eof}}
+	if _, err := (retrying{llm, waits(false)}).Complete(context.Background(), "m", nil, nil); err != nil || llm.calls != 3 ||
+		len(waited) != 2 || waited[0] != time.Second || waited[1] != 4*time.Second {
+		t.Fatalf("waited %v, %v, %d calls", waited, err, llm.calls)
+	}
+	llm = &answers{errs: []error{eof}}
+	if _, err := (retrying{llm, waits(true)}).Complete(context.Background(), "m", nil, nil); err != eof || llm.calls != 1 || len(waited) != 1 {
+		t.Fatalf("a wait that ended early: waited %v, %v, %d calls", waited, err, llm.calls)
 	}
 }

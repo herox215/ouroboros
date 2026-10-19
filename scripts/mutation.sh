@@ -22,6 +22,8 @@ uncoverable=mutation-uncoverable.txt
 out=${OURO_MUTATION_DIR:-$ROOT/.mutation}
 limit=${OURO_MUTATION_TIME:-0}
 mutant_time=90
+# The build tags of the Makefile: goolm selects the pure Go crypto of Matrix.
+tags=goolm
 # Calls that send a signal to a process ID, in production code or in tests.
 signals='syscall\.Kill|unix\.Kill|os\.FindProcess'
 
@@ -36,7 +38,7 @@ else
 	# Production code only: what coverage leaves out as test code is not mutated either.
 	module=$(go list -m)
 	sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's|/$||' -e '/^$/d' coverage-exclusions.txt >"${TMPDIR:-/tmp}/ouro-mutation-excluded.$$"
-	packages=$(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./... | sed -e "s|^$module/||" | grep -vxF -f "${TMPDIR:-/tmp}/ouro-mutation-excluded.$$" || true)
+	packages=$(go list -tags "$tags" -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./... | sed -e "s|^$module/||" | grep -vxF -f "${TMPDIR:-/tmp}/ouro-mutation-excluded.$$" || true)
 	rm -f "${TMPDIR:-/tmp}/ouro-mutation-excluded.$$"
 fi
 
@@ -90,7 +92,7 @@ for dir in $packages; do
 	# three times the unchanged run: enough to compile and run a mutant while
 	# all cores are busy, short enough for a mutant that hangs.
 	before=$(date +%s)
-	if ! go test "./$dir" >"$log" 2>&1; then
+	if ! go test -tags "$tags" "./$dir" >"$log" 2>&1; then
 		echo "mutation: the tests of $dir fail unchanged; they have to pass before they can be mutated:" >&2
 		sed 's/^/  /' "$log" >&2
 		exit 1
@@ -108,9 +110,9 @@ for dir in $packages; do
 	if [ "$limit" -gt 0 ]; then
 		left=$((limit - ($(date +%s) - start)))
 		[ "$left" -ge 1 ] || left=1
-		timeout "$left" "$gremlins" unleash --config "$ROOT/.gremlins.yaml" --timeout-coefficient "$coefficient" --exclude-files / "./$dir" >"$log" 2>&1 || status=$?
+		timeout "$left" "$gremlins" unleash --config "$ROOT/.gremlins.yaml" --tags "$tags" --timeout-coefficient "$coefficient" --exclude-files / "./$dir" >"$log" 2>&1 || status=$?
 	else
-		"$gremlins" unleash --config "$ROOT/.gremlins.yaml" --timeout-coefficient "$coefficient" --exclude-files / "./$dir" >"$log" 2>&1 || status=$?
+		"$gremlins" unleash --config "$ROOT/.gremlins.yaml" --tags "$tags" --timeout-coefficient "$coefficient" --exclude-files / "./$dir" >"$log" 2>&1 || status=$?
 	fi
 	# Lines of gremlins: "  STATUS MUTATOR at file.go:line:column", the file relative to the package.
 	# When it is stopped it reports the mutants it was still testing as LIVED;

@@ -25,6 +25,9 @@ func (s *Service) RunningSessions(ctx context.Context) ([]string, error) {
 				continue
 			}
 			title := se.title
+			if se.id == ThreadID { // named as such, not for a topic
+				title = "Thread"
+			}
 			if title == "" && len(se.events) > 0 {
 				title = se.events[0].Text
 			}

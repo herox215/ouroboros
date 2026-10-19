@@ -88,11 +88,11 @@ func (l library) write(a writeArgs) error {
 		return err
 	}
 	info, err := os.Lstat(l.dir)
+	if err == nil && !info.IsDir() {
+		err = errors.New("skills directory must not be a symbolic link")
+	}
 	if err != nil {
 		return err
-	}
-	if !info.IsDir() {
-		return errors.New("skills directory must not be a symbolic link")
 	}
 	root, err := os.OpenRoot(l.dir)
 	if err != nil {
@@ -103,11 +103,11 @@ func (l library) write(a writeArgs) error {
 		return err
 	}
 	info, err = root.Lstat(a.Name)
+	if err == nil && !info.IsDir() {
+		err = errors.New("skill directory must not be a symbolic link")
+	}
 	if err != nil {
 		return err
-	}
-	if !info.IsDir() {
-		return errors.New("skill directory must not be a symbolic link")
 	}
 	skill, err := root.OpenRoot(a.Name)
 	if err != nil {
@@ -134,11 +134,11 @@ func (l library) write(a writeArgs) error {
 				return err
 			}
 			info, err := skill.Lstat(current)
+			if err == nil && !info.IsDir() {
+				err = errors.New("skill file directories must not be symbolic links")
+			}
 			if err != nil {
 				return err
-			}
-			if !info.IsDir() {
-				return errors.New("skill file directories must not be symbolic links")
 			}
 		}
 	}
@@ -162,12 +162,11 @@ func (l library) write(a writeArgs) error {
 	if err == nil {
 		err = f.Sync()
 	}
-	closeErr := f.Close()
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return err
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 	if !a.Overwrite {
 		return skill.Link(tmp, a.File)

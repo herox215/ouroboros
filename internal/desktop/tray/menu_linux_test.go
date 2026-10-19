@@ -5,11 +5,14 @@ package tray
 import (
 	"context"
 	"encoding/xml"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/introspect"
+	"ouroboros/internal/desktop"
 )
 
 // Exercise the exported wire protocol, not just local method calls.
@@ -127,5 +130,48 @@ func testMenuProtocol(t *testing.T, client *dbus.Conn, service string, opened <-
 	case <-opened:
 	case <-ctx.Done():
 		t.Fatal("group action did not open GUI")
+	}
+}
+
+// The menu answers from its rows: an unknown item is an error, no IDs ask for
+// all items, a property a row leaves out has the default of DBusMenu, and an
+// unchanged status publishes nothing.
+func TestMenuMethods(t *testing.T) {
+	status := desktop.Status{State: "working", Running: 2, Sessions: []string{"Research", "Review"}}
+	m := &menuMethods{revision: 1, rows: menuRows(status)} // without a connection: publishing would panic
+	if err := m.update(status); err != nil || m.revision != 1 {
+		t.Fatalf("unchanged status: %v, revision %d", err, m.revision)
+	}
+	if _, _, err := m.GetLayout(999, -1, nil); err == nil || err.Name != menuInterface+".Error.InvalidMenuItem" {
+		t.Fatalf("layout of an unknown item: %v", err)
+	}
+	// Only the root has children.
+	if _, layout, err := m.GetLayout(openID, -1, nil); err != nil || layout.ID != openID || len(layout.Children) != 0 || layout.Properties["label"].Value() != "Open Ouroboros" {
+		t.Fatalf("layout of an item: %+v %v", layout, err)
+	}
+	rows, err := m.GetGroupProperties(nil, []string{"label"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int32
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	if !slices.Equal(ids, []int32{0, 1, 2, 100, 101, 3, openID}) || rows[4].Properties["label"].Value() != "Review" || len(rows[0].Properties) != 0 {
+		t.Fatalf("all items: %+v", rows)
+	}
+	for _, tc := range []struct {
+		id   int32
+		name string
+		want any
+	}{
+		{3, "type", "separator"}, {3, "label", ""}, {3, "enabled", true}, {3, "visible", true},
+		{openID, "type", "standard"}, {openID, "toggle-state", int32(-1)}, {openID, "disposition", "normal"},
+		{0, "children-display", "submenu"}, {1, "children-display", ""},
+	} {
+		got, err := m.GetProperty(tc.id, tc.name)
+		if err != nil || !reflect.DeepEqual(got.Value(), tc.want) {
+			t.Errorf("%d %s: %v %v, want %v", tc.id, tc.name, got, err, tc.want)
+		}
 	}
 }

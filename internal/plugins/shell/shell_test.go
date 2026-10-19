@@ -257,7 +257,7 @@ func zombie(pid int) bool {
 }
 
 // A command that runs too long is stopped with everything it started, and
-// what it printed comes along; it ends before the script it runs for.
+// what it printed comes along; it ends before its calling context.
 func TestTimeout(t *testing.T) {
 	w := newWorld(t)
 	old := grace
@@ -268,7 +268,7 @@ func TestTimeout(t *testing.T) {
 	// bash may yet tell that what it started was killed, or not.
 	_, err := w.bash(context.Background(), "{}", map[string]any{"command": "echo started; (sleep 30; echo late > " + pid + ".late) & echo $! > " + pid + "; wait", "timeout": 1})
 	if err == nil || !strings.HasPrefix(err.Error(), "the command was stopped after 1s; what it printed:\nstarted\n") || time.Since(start) > 5*time.Second ||
-		!strings.HasSuffix(err.Error(), `[its time was up: run it again with a larger "timeout", as far as the script has time left, or with "background": true]`) {
+		!strings.HasSuffix(err.Error(), `[its time was up (timed out): run it again with a larger "timeout", as far as the calling context has time left, or with "background": true]`) {
 		t.Errorf("stopped: %v after %s", err, time.Since(start))
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -285,8 +285,66 @@ func TestTimeout(t *testing.T) {
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, err := w.bash(ctx, "{}", map[string]any{"command": "true"}); err == nil || err.Error() != "the script has no time left for a command" {
+	if _, err := w.bash(ctx, "{}", map[string]any{"command": "true"}); err == nil || err.Error() != "the call has no time left for a command" {
 		t.Errorf("without time: %v", err)
+	}
+}
+
+// A shell that exits before its children must not turn a timeout during
+// output draining into a successful exit, or leave those children running.
+func TestTimeoutAfterShellExit(t *testing.T) {
+	for _, callerDeadline := range []bool{false, true} {
+		name := "tool timeout"
+		if callerDeadline {
+			name = "calling context"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t)
+			old := grace
+			grace = 2 * time.Second
+			t.Cleanup(func() { grace = old })
+			ctx := context.Background()
+			timeout := 1
+			if callerDeadline {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+				defer cancel()
+				timeout = 60
+			}
+			// Both a child and a grandchild hold the pipe after bash exits.
+			// Keep their IDs on disk so even a failed regression is cleaned up.
+			pids := filepath.Join(t.TempDir(), "pids")
+			t.Cleanup(func() {
+				b, _ := os.ReadFile(pids)
+				for _, id := range strings.Fields(string(b)) {
+					pid, _ := strconv.Atoi(id)
+					if pid > 1 {
+						syscall.Kill(pid, syscall.SIGKILL)
+					}
+				}
+			})
+			start := time.Now()
+			got, err := w.bash(ctx, "{}", map[string]any{
+				"command": "(sleep 30 & echo $! >> " + pids + "; wait) & echo $! >> " + pids + "; echo started",
+				"timeout": timeout,
+			})
+			if got != "" || err == nil || !strings.Contains(err.Error(), "timed out") || !strings.Contains(err.Error(), "started\n") {
+				t.Errorf("timeout after shell exit: %q, %v", got, err)
+			}
+			if took := time.Since(start); took > 2500*time.Millisecond {
+				t.Errorf("timeout took %s", took)
+			}
+			b, err := os.ReadFile(pids)
+			if err != nil || len(strings.Fields(string(b))) != 2 {
+				t.Fatalf("child IDs: %q, %v", b, err)
+			}
+			for _, id := range strings.Fields(string(b)) {
+				pid, _ := strconv.Atoi(id)
+				if running(pid) {
+					t.Errorf("child %d still runs after timeout", pid)
+				}
+			}
+		})
 	}
 }
 

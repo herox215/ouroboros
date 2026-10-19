@@ -11,7 +11,7 @@ import (
 )
 
 func TestMessageSteeringIsLoggedWithSources(t *testing.T) {
-	a, log := recorded(t, ownerConfig(), &scriptLLM{})
+	a, log := recorded(t, ownerConfig(), &toolLLM{})
 	queue := []openai.Message{
 		{Role: "user", Content: "first here", Source: openai.MessageSource{Interface: "gui"}},
 		{Role: "user", Content: "second here", Source: openai.MessageSource{Interface: "tui"}},

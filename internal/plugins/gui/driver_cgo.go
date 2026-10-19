@@ -4,6 +4,7 @@ package gui
 
 import (
 	"context"
+	"embed"
 	"io/fs"
 
 	"github.com/wailsapp/wails/v2"
@@ -11,6 +12,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+//go:embed frontend/*
+var assets embed.FS
 
 // Tests replace the native boundary without opening a desktop window.
 var runWindow = wails.Run

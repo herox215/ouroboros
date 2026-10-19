@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -115,5 +116,52 @@ func TestLazyStoreClosesAndConcurrentStop(t *testing.T) {
 	}
 	if s.store != nil {
 		t.Fatal("store retained after shutdown")
+	}
+}
+
+// lazyTools are the tools of the plugin on s.
+func lazyTools(s *lazyStore) []plugin.Tool {
+	ts := tools(nil)
+	for i := range ts {
+		ts[i].Run = func(ctx context.Context, raw json.RawMessage) (string, error) {
+			return s.run(ctx, raw, i)
+		}
+	}
+	return ts
+}
+
+// A call that is stopped before it starts opens no archive.
+func TestStoppedCallOpensNothing(t *testing.T) {
+	s := &lazyStore{dir: filepath.Join(t.TempDir(), "history")}
+	probe := agent.NewTool("probe", "", nil, func(ctx context.Context, _ struct{}) (string, error) {
+		stopped, cancel := context.WithCancel(ctx)
+		cancel()
+		_, err := s.run(stopped, json.RawMessage("{}"), 0)
+		return fmt.Sprint(err), nil
+	})
+	if out := callTools(t, []plugin.Tool{probe}, context.Background(), "owner", "probe", "{}"); out != context.Canceled.Error() {
+		t.Fatalf("stopped call: %s", out)
+	}
+	if _, err := os.Stat(s.dir); !os.IsNotExist(err) || s.store != nil {
+		t.Fatalf("a stopped call opened the archive: %v", err)
+	}
+}
+
+// A call whose archive cannot be opened fails, and the next call tries
+// again.
+func TestArchiveThatCannotBeOpened(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "history")
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &lazyStore{dir: dir}
+	defer s.stop(true)
+	ts := lazyTools(s)
+	if out := callTools(t, ts, context.Background(), "owner", Search, "{}"); !strings.HasPrefix(out, "error:") || s.store != nil {
+		t.Fatalf("searched in an archive that cannot be: %s", out)
+	}
+	os.Remove(dir)
+	if out := callTools(t, ts, context.Background(), "owner", Search, "{}"); out != "[]" || s.store == nil {
+		t.Fatalf("search once the archive can be: %s", out)
 	}
 }

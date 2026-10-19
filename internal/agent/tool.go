@@ -38,15 +38,6 @@ type Tool struct {
 	// the list of the tools of that very peer names it, never with every
 	// tool and never in the list of all peers.
 	Trusted bool
-	// Functions are the names of the tools the tool calls inside, as run
-	// calls them in a script: the LLM that calls one of them as a tool of
-	// its own is told to call it there.
-	Functions []string
-	// Forward returns the arguments of the tool for a call of the function
-	// name with args, which the LLM made as if it was a tool of its own: the
-	// call then runs inside the tool, and the LLM is told to call it there.
-	// Nil for a tool that only says where the function is.
-	Forward func(name string, args json.RawMessage) (json.RawMessage, error)
 }
 
 // RunFunc is what runs a tool.
@@ -251,8 +242,8 @@ func unknownOf(name string, raw json.RawMessage, names []string, t reflect.Type)
 // value the LLM wrote as a string is taken as the value it holds: a number,
 // like "offset": "295"; true or false, like "background": "True"; and an
 // array or an object in JSON, like "options": "[\"a\", \"b\"]". Models do
-// so, mostly when they call a tool they were not offered, or one of a script
-// as a tool of its own. What cannot be decoded is an InvalidArguments error.
+// so even for direct tool calls. What cannot be decoded is an
+// InvalidArguments error.
 func Decode(name string, raw json.RawMessage, v any) error {
 	for range maxQuoted {
 		err := json.Unmarshal(raw, v)

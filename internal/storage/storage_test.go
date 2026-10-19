@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -250,5 +251,114 @@ func TestOpenFailure(t *testing.T) {
 	}
 	if db, err := Open(dir); err == nil || db != nil {
 		t.Fatalf("Open(corrupt) = %v, %v", db, err)
+	}
+}
+
+// Each step of Open that fails says which one it was, and nothing is opened.
+func TestOpenFailureSteps(t *testing.T) {
+	if _, err := os.Stat("/proc/self/comm"); err != nil {
+		t.Skip("the kernel has no /proc:", err)
+	}
+	// Linux lets nobody, not even root, change the mode of what /proc has
+	// of a process: its directory and its files.
+	directory := "/proc/self"
+	database := t.TempDir()
+	if err := os.Symlink("/proc/self/comm", filepath.Join(database, FileName)); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the file of the database would be.
+	occupied := t.TempDir()
+	if err := os.Mkdir(filepath.Join(occupied, FileName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ dir, want string }{
+		{directory, "secure storage directory: "},
+		{database, "secure storage database: "},
+		{occupied, "create storage database: "},
+	} {
+		if db, err := Open(c.dir); err == nil || db != nil || !strings.HasPrefix(err.Error(), c.want) {
+			t.Errorf("Open(%s) = %v, %v; want %q", c.dir, db, err, c.want)
+		}
+	}
+}
+
+// A relative directory is taken from the working directory, and fails once
+// that is gone.
+func TestOpenWithoutWorkingDirectory(t *testing.T) {
+	gone := t.TempDir()
+	t.Chdir(gone)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	if db, err := Open("relative"); err == nil || db != nil || !strings.HasPrefix(err.Error(), "storage directory: ") {
+		t.Fatalf("Open(relative) = %v, %v", db, err)
+	}
+}
+
+// A database that stays in another journal mode is refused: the stores rely
+// on WAL to read while another pool writes.
+func TestOpenRefusesAnotherJournal(t *testing.T) {
+	defer func(pragma string) { walPragma = pragma }(walPragma)
+	walPragma = "PRAGMA journal_mode=DELETE"
+	if db, err := Open(t.TempDir()); err == nil || db != nil || err.Error() != `enable storage WAL: got journal mode "delete"` {
+		t.Fatalf("Open = %v, %v", db, err)
+	}
+}
+
+// A switch of the journal that worked is not tried again: only a busy
+// database is.
+func TestEnableWALTriesOnce(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	execTest(t, db, "CREATE TABLE calls(x)")
+	defer func(pragma string) { walPragma = pragma }(walPragma)
+	walPragma = "INSERT INTO calls VALUES (1) RETURNING 'wal'"
+	var journal string
+	if err := enableWAL(db, &journal); err != nil || journal != "wal" {
+		t.Fatalf("enableWAL = %q, %v", journal, err)
+	}
+	var calls int
+	if err := db.QueryRow("SELECT count(*) FROM calls").Scan(&calls); err != nil || calls != 1 {
+		t.Fatalf("switched %d times, %v", calls, err)
+	}
+}
+
+// The first open of a database waits for a connection that writes in the
+// rollback journal, although SQLite itself does not wait when the reader
+// that switches the journal turns into a writer.
+func TestOpenWaitsToSwitchTheJournal(t *testing.T) {
+	dir := t.TempDir()
+	other, err := sql.Open("sqlite", "file:"+filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	other.SetMaxOpenConns(1)
+	execTest(t, other, "CREATE TABLE t(x)")
+	tx, err := other.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("INSERT INTO t VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+	releasing := make(chan struct{})
+	time.AfterFunc(200*time.Millisecond, func() {
+		close(releasing)
+		tx.Rollback()
+	})
+	db := openTest(t, dir)
+	select {
+	case <-releasing:
+	default:
+		t.Fatal("the journal was switched while another connection wrote")
+	}
+	var journal string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil || journal != "wal" {
+		t.Fatalf("journal mode %q, %v", journal, err)
 	}
 }

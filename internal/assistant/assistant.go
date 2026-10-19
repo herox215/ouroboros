@@ -21,7 +21,6 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/openai"
-	"ouroboros/internal/script"
 	"ouroboros/internal/suggestion"
 	"ouroboros/internal/workdir"
 )
@@ -53,17 +52,22 @@ const (
 	// bash: how it goes about what the user gives it to do.
 	workHint = `When the user asks for something to be done, do it, and go on until it is done: ` +
 		`do not stop at a plan or at an offer to go on. Treat a hint that something you agreed to or promised before is missing, like a review of your answer naming it, as the order to make up for it: take its reversible local steps, to write, edit, build and test, without a new leave, and ask before only what cannot be undone or gates that the rules for what to ask already name. ` +
-		`For research, batch related read and search calls whose inputs you already know in one run, rather than returning to the model after each small excerpt. ` +
+		`For research, batch related read and search calls whose inputs you already know together, rather than returning to the model after each small excerpt. ` +
 		`For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit. ` +
-		`Read coherent sections large enough to answer the current question, within the script's output limits. ` +
-		`Keep the combined printed output of each batch, including search results and continuation notes, safely below the script output limit; a per-call page limit does not bound the batch. ` +
+		`Read coherent sections large enough to answer the current question, within tool output limits. ` +
+		`Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch. ` +
 		`Reuse findings already returned instead of rereading unchanged sections, unless a specific gap or change requires it. ` +
 		`Split the work when a result is needed to choose the next access or the combined output would be too large. ` +
 		`Change code the way the code around it is written. ` +
 		`When writing or proposing tool descriptions, including parameter descriptions, write them in English regardless of the conversation language. ` +
 		`What you find changed and did not change yourself is the work of the user: look at it before you overwrite or delete it. ` +
+		`When recovering a damaged repository file, first use git log and git show to find and recover the complete known-good version verbatim, rather than piecing it together from fragments. ` +
+		`If Git has no complete version, check the conversation archive for the original; if neither source has it, state the gap before reconstructing. ` +
+		`Preserve unrelated local changes, verify the recovered file is complete against the original source, and run the relevant tests; passing tests alone does not prove completeness. ` +
 		`Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, ` +
 		`unless you still need information to make those changes safely. ` +
+		`For commit-only requests, default to status, diff and secret checks plus appropriate short tests. ` +
+		`Do not automatically start a comprehensive review or delegate review tasks; expand the scope only if the user asks or a specific finding requires it. ` +
 		`Write the tests a change needs and no more, and do not run again what passed without a reason. ` +
 		`When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering: ` +
 		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
@@ -75,7 +79,7 @@ const (
 	improveHint = `You are part of ouro, a program you can change and build anew with ` + ToolRebuild + `. ` +
 		`When a task needs something ouro cannot do, or does badly, building it into ouro is one way to do the task: ` +
 		`weigh it against a workaround, and build it when it is the better way, also for the tasks to come; then tell the user what you changed. ` +
-		`Run rebuild only once the answer it belongs to is done and sent, not while a script of yours is still open or more of the answer still waits on this process: ouro ends with the answer of the old build, and a script loses what it kept when ouro starts anew. When you notice on the way that ouro holds you back otherwise, by a tool that is slow or misleading, ` +
+		`Run rebuild only once the answer it belongs to is done and sent, not while more of the answer still waits on this process: ouro ends with the answer of the old build. When you notice on the way that ouro holds you back otherwise, by a tool that is slow or misleading, ` +
 		`or by something in this prompt that led you wrong, say so at the end of your answer in a sentence or two, with the change you would make. `
 	// proposeHint is added in its place for an owner who wants the changes
 	// proposed (config.SelfImprovePropose): the agent says what it would
@@ -101,10 +105,19 @@ const (
 	questionHint = `When you need the user to decide or to tell you something before you can go on, ask with ` + ToolUserQuestion +
 		` instead of ending your answer with the question: they answer with a key, and you go on in the same answer with what they said. ` +
 		`Give the answers you expect as options, and none where only their own words answer. Ask nothing you can find out yourself. `
-	// scriptHint is added for an agent that has tools: they are functions of
-	// its scripts.
-	scriptHint = `You act through ` + toolRun + ` alone: every tool this prompt names is a function in its scripts, ` +
-		`never a tool to call on its own. `
+	// approvalHint also applies without user_question: tools can ask for permission themselves.
+	approvalHint = `If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run. ` +
+		`Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again. `
+	// researchHint also applies to browser-only research and delegated comparisons.
+	researchHint = `For static documentation, use an available HTTP mechanism first (for example curl through bash when available), with bounded output. ` +
+		`Use a browser only when JavaScript or interaction is needed, not merely to read static sources. ` +
+		`Inspect the available HTTP mechanisms before deciding that a new capability is needed; if none is available, report the limitation rather than assuming a tool exists. ` +
+		`For short comparison questions, stop researching once a few reliable primary sources support the central claims and the requested comparison can be answered. ` +
+		`Do not pursue further repository or implementation details unless they resolve a specific remaining uncertainty or the user asks for that depth. ` +
+		`For feasibility checks, request a few search results and small, bounded webpage excerpts rather than collecting large raw responses. ` +
+		`Use the tools' output budget parameters and browser offsets to read more only where needed. ` +
+		`Start with about 2 KiB of text per source, leaving room for notes within the output budget, and expand only when necessary. ` +
+		`Keep the combined output of tool calls, including notes and other results, safely below its output limit; individual tool limits do not bound a batch. `
 	// validationHint applies even with browser-only tools: opening a page is
 	// not evidence that its interactions work. Helpers need the same rule.
 	validationHint = `When testing whether something works, distinguish reachability from verified functionality. ` +
@@ -135,7 +148,6 @@ const (
 // front end shows of a call is for the plugin of the tool to say. With Done
 // come Took, how long the call took, and Err, why it failed, if it did.
 type Step struct {
-	// ID identifies the archived tool call; empty for nested calls of a script.
 	ID   string
 	Tool string
 	Args json.RawMessage
@@ -169,13 +181,7 @@ type Builder struct {
 	Accesses Accesses
 	// Tools returns everything an agent can do. It is read when an agent is
 	// built; the owner's lists in config.Tools decide which of them it gets.
-	Tools func() []agent.Tool
-	// Failures are the answers to peers that failed. With them the agent
-	// that answers peers gets the tool to explain a failure to the peer it
-	// happened to, whatever else config.Tools allows: it gives a peer nothing
-	// but the reason its own message was not answered. As every tool is a
-	// function of a script, it is there only for a peer the owner allows a
-	// tool. May be nil.
+	Tools    func() []agent.Tool
 	Failures *diagnosis.Store
 	// suggestions keeps what the reviews of answers suggest, for the owner
 	// to take or drop, see WithSuggestions. May be nil.
@@ -226,9 +232,6 @@ type Assistant struct {
 	agent  *agent.Agent
 	built  setup         // what agent was built for
 	memory *agent.Memory // of the conversations, for every agent there is
-	// scripts are what the scripts of the conversations kept, for every
-	// agent there is.
-	scripts *script.Sessions
 
 	sizing sync.Mutex
 	sizes  map[string]int   // what the last call of the LLM sent, by conversation
@@ -249,7 +252,7 @@ type setup struct{ access, revision, model, name, id, tools, provider, fallbacks
 // is read anew for every question. What it does on the way to an answer is
 // told to log, see Ask.
 func New(config func() (config.Config, error), b Builder, log func(format string, args ...any)) *Assistant {
-	return &Assistant{config: config, builder: b, log: log, memory: agent.NewMemory(), scripts: script.NewSessions(), sizes: map[string]int{}, caches: map[string]Cache{}, answers: map[*record]context.CancelFunc{}}
+	return &Assistant{config: config, builder: b, log: log, memory: agent.NewMemory(), sizes: map[string]int{}, caches: map[string]Cache{}, answers: map[*record]context.CancelFunc{}}
 }
 
 // WithDebug makes a tell, while debug says so, much more of every call of
@@ -265,19 +268,16 @@ func (a *Assistant) WithDebug(debug func() bool) *Assistant {
 // model the owner chose for them, see config.Config.PeerLLM. A peer with a
 // list of tools of its own in tools.peers is answered by the agent of ForPeer.
 func (b Builder) ForPeers(cfg config.Config) (*agent.Agent, error) {
-	return b.forPeers(cfg, "", script.NewSessions())
+	return b.forPeers(cfg, "")
 }
 
 // ForPeer returns the agent that answers the peer whose node has the ID id:
 // with the tools of its own list in tools.peers, or as ForPeers.
 func (b Builder) ForPeer(cfg config.Config, id string) (*agent.Agent, error) {
-	return b.forPeers(cfg, id, script.NewSessions())
+	return b.forPeers(cfg, id)
 }
 
-// forPeers is ForPeer with the scripts of the conversations in sessions. The
-// agent of every peer without a list of its own, id "", checks the lists of
-// all of them.
-func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Sessions) (*agent.Agent, error) {
+func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	cfg.Access, cfg.Model, _ = cfg.PeerLLM()
 	cfg.Fallbacks = nil // of the owner: no peer makes the node answer through another access
 	if id == "" {
@@ -290,8 +290,6 @@ func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Session
 		return nil, err
 	}
 	prompt := fmt.Sprintf(peerPrompt, cfg.Name)
-	// Its tools are functions of scripts, and a script may keep a node busy:
-	// a peer the owner gave no tool runs none.
 	if len(allowed) == 0 {
 		return b.build(cfg, prompt)
 	}
@@ -313,12 +311,10 @@ func (b Builder) forPeers(cfg config.Config, id string, sessions *script.Session
 		prompt += explainHint
 		allowed = append(allowed, explainError(b.Failures))
 	}
-	return b.build(cfg, prompt+" "+strings.TrimSpace(scriptHint), withRun(allowed, sessions))
+	return b.build(cfg, prompt, allowed...)
 }
 
-// forOwner returns the agent that answers the owner of the node, whose
-// scripts run in sessions.
-func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.Agent, error) {
+func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 	allowed, err := b.ownerTools(cfg)
 	if err != nil {
 		return nil, err
@@ -338,7 +334,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.
-	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + scriptHint + validationHint
+	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + validationHint + researchHint + approvalHint
 	if has(toolAskPeer) {
 		prompt += askHint
 	}
@@ -373,7 +369,7 @@ func (b Builder) forOwner(cfg config.Config, sessions *script.Sessions) (*agent.
 	if has(ToolDelegate) {
 		prompt += delegateHint
 	}
-	return b.build(cfg, prompt+ownerStyle+machineHint(today()), withRun(allowed, sessions))
+	return b.build(cfg, prompt+ownerStyle+machineHint(today()), allowed...)
 }
 
 // now is the time; tests replace it.
@@ -518,6 +514,9 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		})
 	}
 	suggest := Reviewer(ctx)
+	if ThreadOf(ctx) != nil {
+		suggest = nil // the thread hands on, and answers nothing when it does: there is nothing to review
+	}
 	task := strings.HasPrefix(text, suggestedIntro)
 	if suggest != nil {
 		if before, follow, ok := a.followed(contextID, text, time.Now()); ok {
@@ -535,7 +534,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		}
 		return messages
 	})
-	bot = inDirectory(ctx, bot)
+	bot = inThread(ctx, inDirectory(ctx, bot), cfg)
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {
 			if a.log != nil {
@@ -562,7 +561,11 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			}
 		},
 	})
-	signals, trail := r.end(reply, err)
+	logged := reply
+	if ThreadOf(ctx) != nil && logged == "" {
+		logged = handedOn // no answer that went wrong
+	}
+	signals, trail := r.end(logged, err)
 	if suggest == nil || trail == nil { // not reviewed, or canceled
 		return reply, err
 	}
@@ -584,9 +587,6 @@ func inDirectory(ctx context.Context, bot *agent.Agent) *agent.Agent {
 	return bot
 }
 
-// toolsOf are the tools of ouro as a review is told them: those the owner of
-// cfg allows the agent, a line each, as the LLM calls them in scripts of run,
-// and the names of those the owner withholds.
 type toolsOf struct{ allowed, withheld []string }
 
 // reviewTools are the tools of ouro for a review of an answer with cfg. The
@@ -716,14 +716,15 @@ func (a *Assistant) Contents(contextID string) (Contents, error) {
 	return a.ContentsContext(context.Background(), contextID)
 }
 
-// ContentsContext includes the project selected for this conversation.
+// ContentsContext includes the project selected for this conversation, and
+// the prompt and tools of the thread under a context of it, see WithThread.
 func (a *Assistant) ContentsContext(ctx context.Context, contextID string) (Contents, error) {
 	c := Contents{Messages: a.memory.Conversation(contextID)}
-	bot, _, err := a.current()
+	bot, cfg, err := a.current()
 	if err != nil {
 		return c, err
 	}
-	c.System, c.Tools = inDirectory(ctx, bot).Prompt()
+	c.System, c.Tools = inThread(ctx, inDirectory(ctx, bot), cfg).Prompt()
 	if bot.HasExtensions() {
 		if snapshot, ok := bot.Inspection(contextID); ok {
 			c.Messages = slices.Clone(snapshot.Messages)
@@ -798,6 +799,17 @@ func (a *Assistant) RestoreStatistics(contextID string, size int, cache Cache) {
 	a.sizes[contextID], a.caches[contextID] = size, cache
 }
 
+// Note makes the agent remember text in the conversation contextID as
+// something it was told without being asked, for its next answer there, and
+// keeps it where answers are kept: see agent.Agent.Note.
+func (a *Assistant) Note(ctx context.Context, contextID, text string) error {
+	bot, _, err := a.current()
+	if err != nil {
+		return err
+	}
+	return bot.Note(ctx, contextID, text)
+}
+
 // Forget makes the agent forget the conversation contextID, as if it was
 // never had.
 func (a *Assistant) Forget(contextID string) {
@@ -822,7 +834,7 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.agent == nil || a.built != want {
-		bot, err := a.builder.forOwner(cfg, a.scripts)
+		bot, err := a.builder.forOwner(cfg)
 		if err != nil {
 			return nil, cfg, err
 		}

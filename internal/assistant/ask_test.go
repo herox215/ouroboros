@@ -75,14 +75,9 @@ func TestAsk(t *testing.T) {
 	if err != nil || got != "[gpt-4o] turns=5 last=luna: how are you?" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	// The script the call is made in is reported around it.
-	if len(steps) != 4 || steps[0].Tool != toolRun || steps[3].Tool != toolRun {
-		t.Fatalf("steps %+v", steps)
+	if len(steps) != 2 || steps[0].ID == "" || steps[1].ID != steps[0].ID {
+		t.Fatalf("direct call IDs: %+v", steps)
 	}
-	if steps[0].ID == "" || steps[3].ID != steps[0].ID || steps[1].ID != "" || steps[2].ID != "" {
-		t.Fatalf("archived and nested call IDs: %+v", steps)
-	}
-	steps = steps[1:3]
 	// The call is reported when it starts and when its result is in, with
 	// its arguments and without the answer of the peer.
 	asking := `{"message":"how are you?","peer":"luna"}`
@@ -104,7 +99,7 @@ func TestAsk(t *testing.T) {
 	if err != nil || got != "[gpt-4o] turns=3 last=luna (id "+luna.ID+", model gpt-luna, connected): knows the way" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if len(steps) != 4 || steps[1].Tool != toolListPeers || steps[1].Done || steps[2].Tool != toolListPeers || !steps[2].Done || len(shown(steps)) != 0 {
+	if len(steps) != 2 || steps[0].Tool != toolListPeers || steps[0].Done || steps[1].Tool != toolListPeers || !steps[1].Done || len(shown(steps)) != 0 {
 		t.Fatalf("steps %+v, shown %q", steps, shown(steps))
 	}
 
@@ -305,7 +300,7 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	old := now
 	now = func() time.Time { return day }
 	t.Cleanup(func() { now = old })
-	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + scriptHint + validationHint
+	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + validationHint + researchHint + approvalHint
 	end := ownerStyle + " Today is Saturday, 10 October 2026; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
 	for _, tt := range []struct {
 		tools []config.Entry
@@ -339,10 +334,10 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 			t.Errorf("with %s: workflow rule present = %v, want %v", tt.tools, strings.Contains(got, workflow), wantWorkflow)
 		}
 		for _, research := range []string{
-			"For research, batch related read and search calls whose inputs you already know in one run, rather than returning to the model after each small excerpt.",
+			"For research, batch related read and search calls whose inputs you already know together, rather than returning to the model after each small excerpt.",
 			"For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit.",
-			"Read coherent sections large enough to answer the current question, within the script's output limits.",
-			"Keep the combined printed output of each batch, including search results and continuation notes, safely below the script output limit; a per-call page limit does not bound the batch.",
+			"Read coherent sections large enough to answer the current question, within tool output limits.",
+			"Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch.",
 			"Reuse findings already returned instead of rereading unchanged sections, unless a specific gap or change requires it.",
 			"Split the work when a result is needed to choose the next access or the combined output would be too large.",
 		} {

@@ -47,10 +47,12 @@ func Run(ctx context.Context, sample func(context.Context) desktop.Status, open 
 		return fmt.Errorf("tray: connect session bus: %w", err)
 	}
 	defer conn.Close()
-	return run(ctx, conn, sample, open)
+	return run(ctx, conn, 2*time.Second, sample, open)
 }
 
-func run(ctx context.Context, conn *dbus.Conn, sample func(context.Context) desktop.Status, open func()) error {
+// run serves the tray on conn, which closes when ctx is done, and samples
+// every interval.
+func run(ctx context.Context, conn *dbus.Conn, every time.Duration, sample func(context.Context) desktop.Status, open func()) error {
 	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
 	if err != nil {
 		return fmt.Errorf("tray: acquire name: %w", err)
@@ -63,15 +65,12 @@ func run(ctx context.Context, conn *dbus.Conn, sample func(context.Context) desk
 		return fmt.Errorf("tray: export item: %w", err)
 	}
 	initial := sample(ctx)
-	menu, err := exportMenu(conn, initial, open)
-	if err != nil {
-		return fmt.Errorf("tray: export menu: %w", err)
-	}
+	// Exporting fails only on a connection with a handler of its own or at an
+	// invalid path. This one just exported, and the paths are constants: the
+	// exports below cannot fail.
+	menu := exportMenu(conn, initial, open)
 	previous := model(initial)
-	props, err := prop.Export(conn, itemPath, properties(previous))
-	if err != nil {
-		return fmt.Errorf("tray: export properties: %w", err)
-	}
+	props, _ := prop.Export(conn, itemPath, properties(previous))
 	iface := introspect.Interface{
 		Name: itemInterface, Methods: introspect.Methods(item), Properties: props.Introspection(itemInterface),
 		Signals: []introspect.Signal{
@@ -79,11 +78,9 @@ func run(ctx context.Context, conn *dbus.Conn, sample func(context.Context) desk
 			{Name: "NewStatus", Args: []introspect.Arg{{Name: "status", Type: "s"}}},
 		},
 	}
-	if err := conn.Export(introspect.NewIntrospectable(&introspect.Node{
+	conn.Export(introspect.NewIntrospectable(&introspect.Node{
 		Name: string(itemPath), Interfaces: []introspect.Interface{iface, prop.IntrospectData},
-	}), itemPath, "org.freedesktop.DBus.Introspectable"); err != nil {
-		return err
-	}
+	}), itemPath, "org.freedesktop.DBus.Introspectable")
 	signals := make(chan *dbus.Signal, 16)
 	conn.Signal(signals)
 	defer conn.RemoveSignal(signals)
@@ -93,23 +90,18 @@ func run(ctx context.Context, conn *dbus.Conn, sample func(context.Context) desk
 		return err
 	}
 	registered := register(ctx, conn)
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ctx.Done():
-			return nil
-		case <-conn.Context().Done():
-			if ctx.Err() != nil {
-				return nil
-			}
-			return errors.New("tray: session bus disconnected")
 		case sig, ok := <-signals:
+			// Closing the connection closes the signals, whatever closed it:
+			// ctx, the bus, or a failed read.
 			if !ok {
 				if ctx.Err() != nil {
 					return nil
 				}
-				return errors.New("tray: session bus signal stream closed")
+				return errors.New("tray: session bus disconnected")
 			}
 			if sig != nil && sig.Name == "org.freedesktop.DBus.NameOwnerChanged" && len(sig.Body) == 3 && sig.Body[0] == watcherName {
 				registered = false

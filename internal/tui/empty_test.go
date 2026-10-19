@@ -169,3 +169,13 @@ func TestEmptyTaglineNeedsItsWidth(t *testing.T) {
 		t.Error("narrower than the tagline, it should not be shown")
 	}
 }
+
+// The blocks of the artwork are filled in its color, and only they: the
+// blanks between them stay as the chat is.
+func TestArtTextColorsTheBlocks(t *testing.T) {
+	got := artText([]string{"██  █", " █"})
+	want := blockStyle.Render("██") + "  " + blockStyle.Render("█") + "\n " + blockStyle.Render("█")
+	if got != want || !strings.Contains(got, "\x1b[") {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

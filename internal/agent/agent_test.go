@@ -210,46 +210,14 @@ func TestToolErrorsAreToldToTheLLM(t *testing.T) {
 	}
 }
 
-// A tool that is a function inside another is not called on its own: the
-// LLM is told the tool to call it in.
-func TestUnknownToolNamesTheToolItIsIn(t *testing.T) {
-	run := Tool{Name: "run", Functions: []string{"read", "nope"}, Run: func(context.Context, json.RawMessage) (string, error) {
-		return "", nil
-	}}
-	got, err := New(&fakeLLM{}, "gpt", "sys", run).Run(context.Background(), "c1", "call nope", Observer{})
-	want := "echo error: unknown tool nope: nope is a function inside the tool run, not a tool of its own: call run and call nope in it"
-	if err != nil || got != want {
-		t.Errorf("got %q, %v; want %q", got, err, want)
+func TestUnknownRunIsRejected(t *testing.T) {
+	var steps []Step
+	got, err := New(&fakeLLM{}, "gpt", "sys").Run(t.Context(), "c1", "call run", Observer{Step: func(s Step) { steps = append(steps, s) }})
+	if err != nil || got != "echo error: unknown tool run" {
+		t.Fatalf("got %q, %v", got, err)
 	}
-}
-
-// A tool that forwards the functions inside it runs a call of one of them
-// that the LLM made as a tool of its own, and the LLM is told where to call
-// it; so is an error of the tool.
-func TestForwardedFunctionRunsInItsTool(t *testing.T) {
-	var got []string
-	run := Tool{Name: "run", Functions: []string{"read", "fail", "bad"},
-		Forward: func(name string, args json.RawMessage) (json.RawMessage, error) {
-			if name == "bad" {
-				return nil, errors.New("bad: invalid arguments")
-			}
-			return json.RawMessage(`{"call":"` + name + `"}`), nil
-		},
-		Run: func(_ context.Context, args json.RawMessage) (string, error) {
-			got = append(got, string(args))
-			if strings.Contains(string(args), "fail") {
-				return "", errors.New("boom")
-			}
-			return "ran", nil
-		}}
-	note := "\n[ran inside the tool run: %s is a function of run, call it there]"
-	for name, want := range map[string]string{"read": "echo ran" + fmt.Sprintf(note, "read"), "fail": "echo error: boom" + fmt.Sprintf(note, "fail"), "bad": "echo error: bad: invalid arguments" + fmt.Sprintf(note, "bad")} {
-		if answer, err := New(&fakeLLM{}, "gpt", "sys", run).Run(context.Background(), "c1", "call "+name, Observer{}); err != nil || answer != want {
-			t.Errorf("%s: %q, %v; want %q", name, answer, err, want)
-		}
-	}
-	if strings.Join(got, " ") != `{"call":"read"} {"call":"fail"}` && strings.Join(got, " ") != `{"call":"fail"} {"call":"read"}` {
-		t.Errorf("run got %q", got)
+	if len(steps) != 2 || steps[0].ID != "c1" || steps[0].Tool != "run" || steps[0].Done || !steps[1].Done || steps[1].Err == nil || steps[1].Err.Error() != "unknown tool run" {
+		t.Fatalf("steps %+v", steps)
 	}
 }
 
@@ -384,48 +352,39 @@ func TestHistoryWithoutUserMessageIsEmpty(t *testing.T) {
 	}
 }
 
-// A tool that runs other tools of its agent reports their calls like the LLM's
-// own, to whoever observes the conversation.
-func TestInvoke(t *testing.T) {
+// Each direct call in a model round keeps its arguments, result, and observer ID.
+func TestMultipleDirectToolCalls(t *testing.T) {
+	rounds := 0
+	llm := llmFunc(func(msgs []openai.Message) openai.Message {
+		rounds++
+		if rounds == 1 {
+			return openai.Message{ToolCalls: []openai.ToolCall{
+				{ID: "one", Type: "function", Function: openai.FunctionCall{Name: "shout", Arguments: `{"n":1}`}},
+				{ID: "two", Type: "function", Function: openai.FunctionCall{Name: "fail", Arguments: `{"x":1}`}},
+			}}
+		}
+		results := msgs[len(msgs)-2:]
+		if results[0].ToolCallID != "one" || results[0].Content != `LOUD c1 {"n":1}` || results[1].ToolCallID != "two" || results[1].Content != "error: test error" {
+			t.Fatalf("results %+v", results)
+		}
+		return openai.Message{Content: "done"}
+	})
 	shout := Tool{Name: "shout", Run: func(ctx context.Context, args json.RawMessage) (string, error) {
 		return "LOUD " + ContextID(ctx) + " " + string(args), nil
 	}}
 	fail := Tool{Name: "fail", Run: func(context.Context, json.RawMessage) (string, error) { return "", errTest }}
-	both := Tool{Name: "both", Schema: `{"type":"object"}`, Run: func(ctx context.Context, args json.RawMessage) (string, error) {
-		first, err := Invoke(ctx, shout, json.RawMessage(`{"n":1}`))
-		if err != nil {
-			return "", err
-		}
-		_, err = Invoke(ctx, fail, args)
-		return first, err
-	}}
-
-	var steps []string
-	observe := func(s Step) {
-		steps = append(steps, fmt.Sprint(s.Tool, " ", string(s.Args), " ", s.Done, " ", s.Result, " ", s.Err))
+	var steps []Step
+	a := New(llm, "gpt", "sys", shout, fail)
+	got, err := a.Run(t.Context(), "c1", "call both", Observer{Step: func(s Step) { steps = append(steps, s) }})
+	if err != nil || got != "done" || rounds != 2 {
+		t.Fatalf("got %q, %v, rounds %d", got, err, rounds)
 	}
-	got, err := New(&fakeLLM{}, "gpt", "sys", both).Run(context.Background(), "c1", "call both", Observer{Step: observe})
-	if err != nil || got != "echo error: test error" {
-		t.Fatalf("got %q, %v", got, err)
+	if len(steps) != 4 || steps[0].ID != "one" || steps[1].ID != "one" || steps[2].ID != "two" || steps[3].ID != "two" || steps[0].Done || !steps[1].Done || steps[2].Done || !steps[3].Done || steps[1].Result != `LOUD c1 {"n":1}` || steps[1].Err != nil || steps[3].Err != errTest {
+		t.Fatalf("steps %+v", steps)
 	}
-	want := []string{
-		`both {"x":1} false  <nil>`,
-		`shout {"n":1} false  <nil>`,
-		`shout {"n":1} true LOUD c1 {"n":1} <nil>`,
-		`fail {"x":1} false  <nil>`,
-		`fail {"x":1} true  test error`,
-		`both {"x":1} true LOUD c1 {"n":1} test error`,
-	}
-	if strings.Join(steps, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("steps:\n%s\nwant:\n%s", strings.Join(steps, "\n"), strings.Join(want, "\n"))
-	}
-
-	// Nobody has to observe: not the conversation, and not a call outside of one.
-	if got, err := New(&fakeLLM{}, "gpt", "sys", both).Respond(context.Background(), "c1", "call both"); err != nil || got != "echo error: test error" {
-		t.Fatalf("not observed: %q, %v", got, err)
-	}
-	if got, err := Invoke(context.Background(), shout, json.RawMessage(`{}`)); err != nil || got != "LOUD  {}" {
-		t.Fatalf("outside of a conversation: %q, %v", got, err)
+	rounds = 0
+	if got, err := New(llm, "gpt", "sys", shout, fail).Respond(t.Context(), "c1", "again"); err != nil || got != "done" {
+		t.Fatalf("unobserved: %q, %v", got, err)
 	}
 }
 
@@ -619,6 +578,9 @@ func TestBudgetOfAnAnswer(t *testing.T) {
 		told := last.Role == "user" && strings.HasPrefix(last.Content, "[Not from the user: the results of tools of this answer have")
 		if told != (i >= 2) {
 			t.Errorf("call %d: told %v", i+1, told)
+		}
+		if told && (!strings.Contains(last.Content, "bounded excerpts") || strings.Contains(last.Content, "variables") || strings.Contains(last.Content, "print") || strings.Contains(last.Content, "Tools give back less")) {
+			t.Errorf("call %d: stale or missing direct-tool budget guidance: %s", i+1, last.Content)
 		}
 		if told && (msgs[len(msgs)-2].Role != "tool" || strings.Contains(msgs[len(msgs)-2].Content, "Not from")) {
 			t.Errorf("call %d: the result before the note %+v", i+1, msgs[len(msgs)-2])
@@ -821,6 +783,14 @@ func TestSteering(t *testing.T) {
 	if Steered(context.Background()) != nil {
 		t.Fatal("nobody steers an answer without steering")
 	}
+	// Steering by messages that is nil leaves the steering by texts.
+	ctx = WithMessageSteering(WithSteering(context.Background(), func() []string { return []string{"by text"} }), nil)
+	if said := Steered(ctx); len(said) != 1 || said[0] != "by text" {
+		t.Fatalf("steered %q", said)
+	}
+	if said := SteeredMessages(ctx); len(said) != 1 || said[0].Content != "by text" || said[0].Role != "user" {
+		t.Fatalf("steered %+v", said)
+	}
 }
 
 // A provider that cannot take what the user said on the way ends the answer,
@@ -905,5 +875,166 @@ func TestEmptyAnswerIsAskedAgain(t *testing.T) {
 	llm = &emptyLLM{empty: 2}
 	if got, err := New(llm, "gpt", "alpha").Respond(context.Background(), "c1", "fix it"); err != nil || strings.TrimSpace(got) != "" || len(llm.msgs) != 4 {
 		t.Fatalf("twice: %q, %v, %d messages", got, err, len(llm.msgs))
+	}
+}
+
+// An agent built anew with the memory of another goes on with its
+// conversations.
+func TestWithMemory(t *testing.T) {
+	m := NewMemory()
+	first := &fakeLLM{}
+	if _, err := New(first, "gpt", "alpha").WithMemory(m).Respond(context.Background(), "c1", "one"); err != nil {
+		t.Fatal(err)
+	}
+	second := &fakeLLM{}
+	a := New(second, "gpt", "alpha")
+	if a.WithMemory(m) != a {
+		t.Fatal("WithMemory returns another agent")
+	}
+	if got, err := a.Respond(context.Background(), "c1", "two"); err != nil || got != "echo two" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if len(second.msgs) != 4 || second.msgs[1].Content != "one" || second.msgs[2].Content != "echo one" {
+		t.Fatalf("the conversation of the first agent: %+v", second.msgs)
+	}
+}
+
+// A system prompt for one answer leaves the agent as it is, and the
+// conversation is the same for both.
+func TestWithSystem(t *testing.T) {
+	llm := &fakeLLM{}
+	a := New(llm, "gpt", "alpha")
+	if _, err := a.WithSystem("beta").Respond(context.Background(), "c1", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.msgs[0].Content != "beta" {
+		t.Fatalf("system prompt for one answer: %+v", llm.msgs[0])
+	}
+	if _, err := a.Respond(context.Background(), "c1", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.msgs[0].Content != "alpha" || len(llm.msgs) != 4 || llm.msgs[1].Content != "one" {
+		t.Fatalf("the agent after: %+v", llm.msgs)
+	}
+}
+
+// A tool that ends the answer ends it after its round, without a further
+// call of the LLM: the answer is "", and the conversation goes on from the
+// results. What the user said meanwhile is taken all the same.
+func TestEndEndsAfterTheTools(t *testing.T) {
+	llm := &fakeLLM{}
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		End(ctx)
+		return "handed", nil
+	}}
+	a := New(llm, "gpt", "alpha", hand)
+	got, err := a.Respond(context.Background(), "c1", "call hand")
+	if err != nil || got != "" || llm.msgs[len(llm.msgs)-1].Content != "call hand" {
+		t.Fatalf("got %q, %v, the LLM was sent %+v", got, err, llm.msgs)
+	}
+	if got, err := a.Respond(context.Background(), "c1", "hi"); err != nil || got != "echo hi" || len(llm.msgs) != 5 || llm.msgs[3].Content != "handed" {
+		t.Fatalf("after: %q, %v, %+v", got, err, llm.msgs)
+	}
+	said := []openai.Message{{Role: "user", Content: "more"}}
+	ctx := WithMessageSteering(context.Background(), func() []openai.Message {
+		meanwhile := said
+		said = nil
+		return meanwhile
+	})
+	if got, err := a.Respond(ctx, "c2", "call hand"); err != nil || got != "echo more" {
+		t.Fatalf("with what came meanwhile: %q, %v", got, err)
+	}
+	if End(context.Background()) {
+		t.Fatal("End outside of an answer")
+	}
+}
+
+// What WithSent makes of the conversation is what the LLM is sent, after the
+// system prompt; what is kept of the conversation stays as it was.
+func TestWithSent(t *testing.T) {
+	llm := &fakeLLM{}
+	a := New(llm, "gpt", "alpha")
+	if _, err := a.Respond(context.Background(), "c1", "long"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithSent(context.Background(), func(msgs []openai.Message) []openai.Message {
+		msgs[0].Content = "short"
+		return msgs
+	})
+	if _, err := a.Respond(ctx, "c1", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if llm.msgs[0].Content != "alpha" || llm.msgs[1].Content != "short" || llm.msgs[3].Content != "hi" {
+		t.Fatalf("sent %+v", llm.msgs)
+	}
+	if kept := a.memory.Conversation("c1"); kept[0].Content != "long" || len(kept) != 4 {
+		t.Fatalf("kept %+v", kept)
+	}
+}
+
+// WithTools gives one answer other tools, and the conversation goes on as
+// it was: the agent keeps its own tools.
+func TestWithTools(t *testing.T) {
+	llm := &fakeLLM{}
+	a := New(llm, "gpt", "alpha", Tool{Name: "shout", Schema: `{"type":"object"}`})
+	other := a.WithTools(Tool{Name: "whisper", Schema: `{"type":"object"}`})
+	if _, err := other.Respond(context.Background(), "c1", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if system, tools := other.Prompt(); system != "alpha" || len(tools) != 1 || tools[0].Function.Name != "whisper" {
+		t.Fatalf("the copy: %q, %+v", system, tools)
+	}
+	if _, tools := a.Prompt(); len(tools) != 1 || tools[0].Function.Name != "shout" {
+		t.Fatalf("the agent after: %+v", tools)
+	}
+	if _, err := a.Respond(context.Background(), "c1", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if len(llm.msgs) != 4 || llm.msgs[1].Content != "one" {
+		t.Fatalf("the conversation goes on: %+v", llm.msgs)
+	}
+}
+
+// Prompt is what goes with every call: the system prompt and the tools, a
+// copy of them that the caller may change.
+func TestPrompt(t *testing.T) {
+	a := New(&fakeLLM{}, "gpt", "alpha", Tool{Name: "shout", Description: "says it loud", Schema: `{"type":"object"}`})
+	system, tools := a.Prompt()
+	if system != "alpha" || len(tools) != 1 || tools[0].Function.Name != "shout" || tools[0].Function.Description != "says it loud" {
+		t.Fatalf("prompt: %q, %+v", system, tools)
+	}
+	tools[0].Function.Name = "changed"
+	if _, tools := a.Prompt(); tools[0].Function.Name != "shout" {
+		t.Fatalf("the caller changed the tools of the agent: %+v", tools)
+	}
+}
+
+// Outside of an answer nothing is spent.
+func TestSpentOutsideAnAnswer(t *testing.T) {
+	if got := Spent(context.Background()); got != 0 {
+		t.Fatalf("spent %d", got)
+	}
+}
+
+// Thoughtless leaves out what the LLM thought, in a copy.
+func TestThoughtless(t *testing.T) {
+	msgs := []openai.Message{{Role: "assistant", Content: "hi", Reasoning: "hm", ReasoningField: "reasoning"}}
+	got := Thoughtless(msgs)
+	if len(got) != 1 || got[0].Content != "hi" || got[0].Reasoning != "" || got[0].ReasoningField != "" {
+		t.Fatalf("thoughtless: %+v", got)
+	}
+	if msgs[0].Reasoning != "hm" || msgs[0].ReasoningField != "reasoning" {
+		t.Fatalf("the messages given changed: %+v", msgs)
+	}
+}
+
+// A helper answers what it is asked, not the messages its owner was asked
+// with.
+func TestWithoutInputMessages(t *testing.T) {
+	llm := &fakeLLM{}
+	ctx := WithInputMessages(context.Background(), []openai.Message{{Role: "user", Content: "of the owner"}})
+	got, err := New(llm, "gpt", "sys").Run(WithoutInputMessages(ctx), "c1", "of the helper", Observer{})
+	if err != nil || got != "echo of the helper" || len(llm.msgs) != 2 {
+		t.Fatalf("got %q, %v, sent %+v", got, err, llm.msgs)
 	}
 }

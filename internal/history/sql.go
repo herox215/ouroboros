@@ -34,7 +34,8 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			// ENOENT can also mean a dangling symlink in the path. Only
 			// genuine absence is an empty archive, not a broken directory.
-			for path := filepath.Clean(a.dir); ; path = filepath.Dir(path) {
+			// The walk ends at the root or at ".", which always exist.
+			for path, below := filepath.Clean(a.dir), ""; path != below; path, below = filepath.Dir(path), path {
 				_, linkErr := os.Lstat(path)
 				if linkErr == nil {
 					if _, statErr := os.Stat(path); statErr != nil {
@@ -44,9 +45,6 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 				}
 				if !errors.Is(linkErr, fs.ErrNotExist) {
 					return nil, linkErr
-				}
-				if filepath.Dir(path) == path {
-					return nil, err
 				}
 			}
 			return nil, nil
@@ -118,6 +116,10 @@ CREATE TABLE IF NOT EXISTS history_sessions(
  deleted INTEGER NOT NULL DEFAULT 0, modified INTEGER NOT NULL DEFAULT 0,
  size INTEGER NOT NULL DEFAULT 0, title TEXT, effort TEXT, directory TEXT,
  goon INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS history_restarts(
+ session_id TEXT PRIMARY KEY REFERENCES history_sessions(id),
+ process_id TEXT NOT NULL, presentation_id TEXT NOT NULL, binary TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS history_records(
  rowid INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES history_sessions(id),

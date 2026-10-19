@@ -178,3 +178,97 @@ func TestFooterFitsTheWindow(t *testing.T) {
 		t.Errorf("a notice alone: %q", got)
 	}
 }
+
+// A rune is wide where the terminal gives it two cells: in the blocks of
+// Chinese, Japanese and Korean, and only there, up to the edges of each.
+func TestWideRune(t *testing.T) {
+	for _, r := range []rune{'a', 0x10ff, 0x1160, 0x2e7f, 0xa4d0, 0xabff, 0xd7a4, 0xf8ff, 0xfb00, 0xfe2f, 0xfe70, 0xfeff, 0xff61, 0xffdf, 0xffe7, 0x1ffff} {
+		if wideRune(r) {
+			t.Errorf("%U is wide", r)
+		}
+	}
+	for _, r := range []rune{0x1100, 0x115f, 0x2e80, 0xa4cf, 0xac00, 0xd7a3, 0xf900, 0xfaff, 0xfe30, 0xfe6f, 0xff00, 0xff60, 0xffe0, 0xffe6, 0x20000, '两'} {
+		if !wideRune(r) {
+			t.Errorf("%U is not wide", r)
+		}
+	}
+}
+
+// The newest word comes in as noise and settles letter by letter, each
+// letter with glyphs of its own from frame to frame; what is no letter or
+// digit stands from the first.
+func TestThreadInSettlesLetterByLetter(t *testing.T) {
+	for frame, want := range []string{"at ╲:┼╪▖▗", "at 3:2▌▐░", "at 3:2│┼m", "at 3:23pm"} {
+		if got := threadIn("at 3:23pm", frame); got != want {
+			t.Errorf("frame %d: %q, want %q", frame, got, want)
+		}
+	}
+}
+
+// The requests list what waits: Accept all and the head of the suggested
+// changes only when there is something for them, and each suggestion with
+// its text wrapped below it and what was measured, if anything was.
+func TestPendingScreenSuggestions(t *testing.T) {
+	m, b := newModel(t)
+	run(m, "/pending")
+	if v := view(m); strings.Contains(v, "Accept all") || strings.Contains(v, "Changes of ouro") {
+		t.Fatalf("nothing waits:\n%s", v)
+	}
+	long := strings.Repeat("make the chat faster ", 12)
+	b.trust = Contacts{
+		Incoming:    []plugin.Request{{PublicKey: "peer", Name: "luna"}},
+		Proposals:   []plugin.Proposal{{ID: "p1", Field: "name"}},
+		Suggestions: []plugin.Suggestion{{ID: "s1", Text: long}, {ID: "s2", Text: "the second", Signals: []string{"42 seconds"}}},
+	}
+	m.Update(m.loadContacts())
+	press(m, "down", "down", "down")
+	v := view(m)
+	if strings.Count(v, "measured:") != 1 || !strings.Contains(v, "measured: 42 seconds") || !strings.Contains(v, "Changes of ouro the reviews of answers suggest") {
+		t.Fatalf("the suggestions:\n%s", v)
+	}
+	lines := strings.Split(v, "\n")
+	marked := lineWith(lines, "› suggestion")
+	if marked < 0 || !strings.Contains(lines[marked+1], "the second") {
+		t.Fatalf("the second suggestion is not the one selected:\n%s", v)
+	}
+	for _, l := range lines {
+		if inner := strings.TrimPrefix(strings.TrimSpace(l), "│ "); strings.Contains(inner, "faster") && !strings.HasPrefix(inner, "    ") {
+			t.Errorf("a line of the suggestion is not indented: %q", l)
+		}
+	}
+}
+
+// What a review suggests is wrapped to the width of the chat.
+func TestSuggestionEntryFitsTheChat(t *testing.T) {
+	m, _ := newModel(t)
+	m.chat.add(entry{suggestion: true, text: strings.Repeat("make the chat faster ", 20)})
+	m.renderHistory(true)
+	for _, l := range strings.Split(ansi.Strip(m.history.GetContent()), "\n") {
+		if w := ansi.StringWidth(l); w > m.history.Width() {
+			t.Errorf("a line of %d cells in a chat of %d: %q", w, m.history.Width(), l)
+		}
+	}
+}
+
+// Without the box of the input the footer says how to stop an answer on its
+// way, not how to write; with the list of the jobs it says how to hide it,
+// after what else it says.
+func TestFooterHintsWithoutTheInput(t *testing.T) {
+	m, _ := newModel(t)
+	m.inputShown = false
+	if got := ansi.Strip(m.footerHint()); got != "type to write" {
+		t.Errorf("idle: %q", got)
+	}
+	m.chat.pending = true
+	if got := ansi.Strip(m.footerHint()); got != "esc stop" {
+		t.Errorf("an answer on its way: %q", got)
+	}
+	m.jobsShown = true
+	if got := ansi.Strip(m.footerHint()); got != "esc stop · "+jobsKey+" hide" {
+		t.Errorf("with the jobs: %q", got)
+	}
+	m.chat.pending, m.inputShown = false, true
+	if got := ansi.Strip(m.footerHint()); got != jobsKey+" hide" {
+		t.Errorf("with the jobs alone: %q", got)
+	}
+}

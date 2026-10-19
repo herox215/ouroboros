@@ -3,7 +3,7 @@ package assistant
 import "testing"
 
 func TestRestoreStatistics(t *testing.T) {
-	a, _ := recorded(t, ownerConfig(), &scriptLLM{})
+	a, _ := recorded(t, ownerConfig(), &toolLLM{})
 	want := Cache{Tokens: 1000, Cached: 900, AllTokens: 3000, AllCached: 2500, Metrics: CallMetrics{Calls: 3, Output: 120}}
 	a.RestoreStatistics("continued", 4321, want)
 	if a.Cache("continued") != want || a.Context("continued") != 4321 {

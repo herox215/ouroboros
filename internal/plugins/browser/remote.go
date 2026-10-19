@@ -141,7 +141,7 @@ func connectCDP(ctx context.Context, s settings) (*process, error) {
 	}
 	if strings.Contains(strings.ToLower(version.Product), "firefox") {
 		p.end()
-		return nil, errors.New("Firefox is not a supported CDP backend; use native Camofox REST")
+		return nil, errors.New("the Firefox browser is not a supported CDP backend; use the native Camofox REST API")
 	}
 	return p, nil
 }

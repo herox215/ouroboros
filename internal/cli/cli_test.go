@@ -3,10 +3,12 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -186,6 +188,46 @@ func TestPluginExtendsOuro(t *testing.T) {
 	bot, _ = cli.Service[*assistant.Assistant](plain)
 	if err := bot.Ready(); err == nil || !strings.Contains(err.Error(), `unknown tool "shout"`) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// The tools for files keep out of what the configuration protects as it is
+// at the call, and touch nothing while it cannot be read.
+func TestFilesFollowTheConfiguration(t *testing.T) {
+	user := t.TempDir()
+	t.Setenv("HOME", user)
+	if err := os.WriteFile(filepath.Join(user, "notes.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := clitest.Settings(t)
+	var ctx *plugin.Context
+	if _, err := cli.NewWith(clitest.Plugins(s, cli.Terminal{In: strings.NewReader(""), Out: &bytes.Buffer{}},
+		plugin.New("tools", func(c *plugin.Context, _ struct{}) error { ctx = c; return nil }))...); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(plugin.All[plugin.Tool](ctx), func(tool plugin.Tool) bool { return tool.Name == "read" })
+	if i < 0 {
+		t.Fatal("no tool read")
+	}
+	read := func() (string, error) {
+		return plugin.All[plugin.Tool](ctx)[i].Run(context.Background(), json.RawMessage(`{"path":"~/notes.md"}`))
+	}
+	if got, err := read(); err != nil || got != "hello\n" {
+		t.Fatalf("without a configuration: %q, %v", got, err)
+	}
+	cfg := clitest.NodeConfig(s)
+	cfg.Tools = &config.Tools{Protected: &[]string{"~/notes.md"}}
+	if err := config.Save(s.Home, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read(); err == nil || !strings.Contains(err.Error(), `~/notes.md is in "protected" of the configuration`) {
+		t.Fatalf("protected: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read(); err == nil || !strings.Contains(err.Error(), "the configuration cannot be read, so no file is touched") {
+		t.Fatalf("a configuration that cannot be read: %v", err)
 	}
 }
 

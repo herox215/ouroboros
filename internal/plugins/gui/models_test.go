@@ -1,8 +1,12 @@
 package gui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/config"
@@ -10,6 +14,7 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/kernel"
+	"ouroboros/internal/llm"
 	"ouroboros/internal/llm/llmtest"
 	"ouroboros/plugin"
 )
@@ -104,5 +109,35 @@ func TestWindowModels(t *testing.T) {
 	}
 	if _, err := w.Models(0); !errors.Is(err, plugin.ErrNotSetUp) {
 		t.Fatalf("not set up: %v", err)
+	}
+}
+
+// Models need the owner of the profile, and the selected model of a
+// configuration that can be read.
+func TestWindowModelsFailures(t *testing.T) {
+	if _, err := sessionWindow(t, &testSessions{}).Models(0); err == nil || !strings.Contains(err.Error(), "has no owner access") {
+		t.Fatalf("no owner: %v", err)
+	}
+	w, dirs := modelWindow(t)
+	provider := llmtest.Provider("two")
+	list := provider.Models
+	provider.Models = func(ctx context.Context, a llm.Access) (llm.Models, error) {
+		// The configuration breaks while the models are listed.
+		if err := os.WriteFile(filepath.Join(string(dirs[1]), "config.json"), []byte("{"), 0o600); err != nil {
+			return llm.Models{}, err
+		}
+		return list(ctx, a)
+	}
+	k := kernel.New()
+	if err := k.Start(plugin.New("models", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, provider)
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k.Stop)
+	w.profiles[1].ctx = k.Context()
+	if _, err := w.Models(1); err == nil || !strings.HasPrefix(err.Error(), "read selected model: ") {
+		t.Fatalf("unreadable selection: %v", err)
 	}
 }

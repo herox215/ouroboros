@@ -14,23 +14,27 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/presentation"
 )
 
 // fakeAgent answers as its run says, "pong" without one.
 type fakeAgent struct {
-	mu       sync.Mutex
-	ready    error
-	run      func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
-	size     int
-	cache    assistant.Cache
-	contents assistant.Contents
-	failed   error // of Contents
-	inspect  *agent.Inspection
-	resumed  map[string]json.RawMessage
-	resume   error
-	forgot   []string
-	title    func(ctx context.Context, conversation []openai.Message) (string, error)
-	effort   string // of the node
+	mu        sync.Mutex
+	ready     error
+	run       func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
+	size      int
+	cache     assistant.Cache
+	contents  assistant.Contents
+	failed    error // of Contents
+	inspect   *agent.Inspection
+	resumed   map[string]json.RawMessage
+	resume    error
+	forgot    []string
+	title     func(ctx context.Context, conversation []openai.Message) (string, error)
+	effort    string // of the node
+	notes     []string
+	presented []string // what each of the notes was presented as
+	note      error    // what Note fails with
 }
 
 func (a *fakeAgent) Ready() error { return a.ready }
@@ -73,6 +77,28 @@ func (a *fakeAgent) Effort() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.effort
+}
+
+func (a *fakeAgent) Note(ctx context.Context, id, text string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.notes = append(a.notes, id+": "+text)
+	a.presented = append(a.presented, presentation.Current(ctx))
+	return a.note
+}
+
+// noted is what the agent was told without being asked, as "ID: TEXT".
+func (a *fakeAgent) noted() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.notes)
+}
+
+// presentedAs is what each of the notes was presented as, see noted.
+func (a *fakeAgent) presentedAs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.presented)
 }
 
 func (a *fakeAgent) Forget(id string) {
@@ -510,6 +536,9 @@ func TestClose(t *testing.T) {
 	if _, _, err := s.Watch(ctx, "s1"); !errors.Is(err, ErrStopped) {
 		t.Fatalf("watch: %v", err)
 	}
+	if _, err := s.New(ctx); !errors.Is(err, ErrStopped) {
+		t.Fatalf("new: %v", err)
+	}
 	s.mu.Lock()
 	last := s.sessions["s1"].events
 	s.mu.Unlock()
@@ -522,9 +551,9 @@ func TestClose(t *testing.T) {
 // message, with what the plugins reported.
 func TestContents(t *testing.T) {
 	var tool openai.Tool
-	tool.Function.Name, tool.Function.Description, tool.Function.Parameters = "run", "Run JavaScript", json.RawMessage(`{"type":"object"}`)
+	tool.Function.Name, tool.Function.Description, tool.Function.Parameters = "read", "Read a file.", json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`)
 	call := openai.ToolCall{}
-	call.Function.Name, call.Function.Arguments = "run", `{"script":"1"}`
+	call.Function.Name, call.Function.Arguments = "read", `{"path":"/a"}`
 	a := &fakeAgent{contents: assistant.Contents{
 		System: "You are alpha.",
 		Tools:  []openai.Tool{tool},
@@ -533,8 +562,8 @@ func TestContents(t *testing.T) {
 	}, inspect: &agent.Inspection{Diagnostics: []agent.Diagnostic{{Plugin: "post", Phase: "after", Err: errors.New("storage failed")}}}}
 	s := service(t, a)
 	got, err := s.Contents(context.Background(), "s1")
-	want := []Line{{"system", "You are alpha."}, {"tool run", "Run JavaScript\nparameters: {\"type\":\"object\"}"}, {"user", "hi"},
-		{"assistant", "let me see\n→ run {\"script\":\"1\"}"}, {"assistant", "→ run {\"script\":\"1\"}"}, {"plugin diagnostic", "post after failed: storage failed"}}
+	want := []Line{{"system", "You are alpha."}, {"tool read", "Read a file.\nparameters: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}"}, {"user", "hi"},
+		{"assistant", "let me see\n→ read {\"path\":\"/a\"}"}, {"assistant", "→ read {\"path\":\"/a\"}"}, {"plugin diagnostic", "post after failed: storage failed"}}
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("got %q, %v", got, err)
 	}
@@ -825,6 +854,38 @@ func TestCallingFlushesTheAnswer(t *testing.T) {
 	}
 	want := []string{"answering Ich ergänze den Look. Hell, Dunk", "answering el",
 		"calling 10", fmt.Sprint("calling ", 10+callingStep), fmt.Sprint("calling ", 10+2*callingStep), "calling 5"}
+	if !slices.Equal(told, want) {
+		t.Fatalf("told\n%q\nwant\n%q", told, want)
+	}
+}
+
+// A piece of the answer is sent as soon as it has answerPiece bytes, and how
+// much of a call the model has written once it grew by callingStep: the same
+// count again is not news.
+func TestPiecesAtTheirBounds(t *testing.T) {
+	s := New(&fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		write, calling := openai.AnsweringOf(ctx), openai.CallingOf(ctx)
+		write(strings.Repeat("a", answerPiece))
+		write("b")
+		for _, n := range []int{0, 0, 5, callingStep - 1, callingStep} {
+			calling(n)
+		}
+		return "pong", nil
+	}})
+	defer s.Close()
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "hi")
+	var told []string
+	for _, e := range until(t, live, Answer) {
+		switch e.Kind {
+		case Answering:
+			told = append(told, "answering "+e.Text)
+		case Calling:
+			told = append(told, fmt.Sprint("calling ", e.N))
+		}
+	}
+	want := []string{"answering " + strings.Repeat("a", answerPiece), "answering b", "calling 0", fmt.Sprint("calling ", callingStep)}
 	if !slices.Equal(told, want) {
 		t.Fatalf("told\n%q\nwant\n%q", told, want)
 	}

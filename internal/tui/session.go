@@ -44,7 +44,8 @@ type (
 		past         []Event
 		live         <-chan Event
 		err          error
-		directorySet bool // the initial directory was stored, even if Watch failed
+		directorySet bool  // the initial directory was stored, even if Watch failed
+		kept         error // why the thread keeps its project, see thread
 	}
 	// eventMsg is what happened in a session just now.
 	eventMsg struct {
@@ -118,11 +119,16 @@ func (m *Model) watch(c *conversation) tea.Cmd {
 	return func() tea.Msg {
 		msg := watchedMsg{id: id}
 		if backend, ok := m.backend.(directoryBackend); ok && fresh && path != "" {
-			if err := backend.SetSessionDirectory(m.ctx, id, path); err != nil {
+			err := backend.SetSessionDirectory(m.ctx, id, path)
+			switch {
+			case err != nil && id == plugin.ThreadID:
+				msg.kept = err // it is shown all the same
+			case err != nil:
 				msg.err = err
 				return msg
+			default:
+				msg.directorySet = true
 			}
-			msg.directorySet = true
 		}
 		msg.past, msg.live, msg.err = m.backend.Watch(m.ctx, id)
 		return msg
@@ -144,6 +150,9 @@ func (m *Model) watched(msg watchedMsg) tea.Cmd {
 		m.resuming = nil
 	}
 	m.replay(c, msg.past)
+	if msg.kept != nil {
+		m.setNotice("the thread keeps its project: "+msg.kept.Error(), true)
+	}
 	return next(msg.id, msg.live)
 }
 
@@ -230,6 +239,7 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
 		c.title = cmp.Or(c.title, e.Text)
+		c.routed = e.Routed
 	case plugin.SessionTask:
 		// The report of a task starts an answer, or goes into the one on its
 		// way, as a message of the owner does.
@@ -238,6 +248,9 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 			c.art++
 		}
 		c.pending, c.running, c.round, c.doing = true, true, 0, ""
+	case plugin.SessionWorking:
+		// While anything works for the thread, it is thinking.
+		c.pending, c.running = e.N > 0, e.N > 0
 	case plugin.SessionTasks:
 		c.tasks = nil
 		if e.Text != "" {
@@ -255,8 +268,8 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.step(e)
 	case plugin.SessionAsked:
 		c.ask(e)
-		if live && !e.Done && c != m.chat {
-			m.setNotice(m.agentName()+" asks you in “"+short(c.title, 40)+"” · /session", false)
+		if live && !e.Done && c != m.chat && !c.routed {
+			m.setNotice(m.agentName()+" asks you in "+place(c), false)
 		}
 	case plugin.SessionCalling:
 		c.calling = e.Text
@@ -268,12 +281,12 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 	case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled:
 		c.end(e)
-		if live && c != m.chat {
+		if live && c != m.chat && !c.routed {
 			verb := "answered"
 			if e.Kind != plugin.SessionAnswer {
 				verb = "no answer"
 			}
-			m.setNotice(verb+" in “"+short(c.title, 40)+"” · /session", e.Kind != plugin.SessionAnswer)
+			m.setNotice(verb+" in "+place(c), e.Kind != plugin.SessionAnswer)
 		}
 	case plugin.SessionJobs:
 		c.jobs = nil
@@ -325,12 +338,8 @@ func (c *conversation) thought(e Event) {
 // step notes what the agent is waiting for while the answer is pending. A
 // call that starts goes into the entry of its round, which a round the agent
 // said nothing of gets now; one that ended takes the place of its start,
-// with what became of it. A call nothing is shown of counts all the same;
-// the script that calls the tools is no tool of its own.
+// with what became of it. A call nothing is shown of counts all the same.
 func (c *conversation) step(e Event) {
-	if e.Tool == toolRun {
-		return
-	}
 	c.partial, c.calling = "", "" // what a round wrote before its tools is not the answer
 	if c.round == 0 {
 		c.add(entry{at: e.At})
@@ -348,10 +357,12 @@ func (c *conversation) step(e Event) {
 }
 
 // end shows how the answer ended: the answer, why it failed, or that it was
-// stopped.
+// stopped. A question that waits goes on waiting: the question of an answer
+// ends before it, and in the thread the answer of one session comes while
+// another asks.
 func (c *conversation) end(e Event) {
-	c.pending, c.running, c.doing, c.round = false, false, "", 0                  // the loop of this answer is over
-	c.asking, c.jobs, c.partial, c.thread, c.calling = nil, nil, "", thread{}, "" // its jobs end with it, and with
+	c.pending, c.running, c.doing, c.round = false, false, "", 0   // the loop of this answer is over
+	c.jobs, c.partial, c.thread, c.calling = nil, "", thread{}, "" // its jobs end with it, and with
 	// them the clock the answer was drawn on: its next frame sees pending gone
 	last := entry{text: e.Text, at: e.At}
 	switch e.Kind {
@@ -563,14 +574,18 @@ func (l *sessionsScreen) found(m *Model, msg findMsg) {
 
 // all are the sessions the sessions screen lists: those with a
 // message or with something typed for them, and the one shown, the latest
-// first. One without a message yet is the latest of all. Among the
-// conversations of peers, those the node listed.
+// first, but not the thread, which /thread shows. One without a message yet
+// is the latest of all. Among the conversations of peers, those the node
+// listed.
 func (l *sessionsScreen) all(m *Model) []*conversation {
 	if l.peerTab {
 		return l.peers
 	}
 	var rows []*conversation
 	for _, c := range m.chats {
+		if c.contextID == plugin.ThreadID {
+			continue
+		}
 		if c == m.chat || c.title != "" || c.draft != "" {
 			rows = append(rows, c)
 		}
@@ -642,7 +657,11 @@ func (l *sessionsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return l.delete(m, one(), deleting)
 	}
-	if r := []rune(msg.String()); len(r) == 1 && unicode.IsPrint(r[0]) {
+	typed := msg.String()
+	if typed == "space" { // the space bar is told by its name, but it types a space
+		typed = " "
+	}
+	if r := []rune(typed); len(r) == 1 && unicode.IsPrint(r[0]) {
 		l.filter, l.sel = l.filter+string(r), l.pick(m) // what is typed filters, as it is typed
 		return l.find(m)                                // and what was said in a session is looked for with it
 	}
@@ -716,7 +735,7 @@ func (m *Model) deleted(msg deletedMsg) tea.Cmd {
 	m.setNotice("deleted “"+short(c.title, 40)+"”", false)
 	var cmd tea.Cmd
 	if c == m.chat { // what is typed stays
-		m.chat = m.newChat()
+		m.chat = m.thread()
 		m.renderHistory(true)
 		cmd = m.watch(m.chat)
 	}

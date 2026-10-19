@@ -1,6 +1,14 @@
 package session
 
-import "context"
+import (
+	"context"
+
+	"ouroboros/internal/presentation"
+)
+
+// processInstance is initialized once per executable image, including exec of
+// the same binary with the same PID. All Services/profiles in this image share it.
+var processInstance = presentation.NewID()
 
 type restartKey struct{}
 

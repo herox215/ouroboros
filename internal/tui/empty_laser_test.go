@@ -68,7 +68,7 @@ func TestLaserRevealsNameAndRestsWithoutBeamOrParticles(t *testing.T) {
 		if !strings.Contains(middle, "▀") || !strings.ContainsAny(middle, "✦•·") {
 			t.Fatal("cut has no beam or sparks")
 		}
-		if frame(0.5) != frame(0.5) {
+		if again := frame(0.5); frame(0.5) != again {
 			t.Fatal("rendering depends on frame history")
 		}
 		for _, later := range []float64{doneAt + 3, doneAt + 30, doneAt + 3600} {
@@ -169,6 +169,20 @@ func TestLaserRayHasHardEdges(t *testing.T) {
 		}
 		if painted == 0 {
 			t.Fatal("beam is missing")
+		}
+	}
+}
+
+// Art without ink has nothing to cut, and a ray from the cutting head to
+// itself has no length: neither draws anything.
+func TestLaserWithoutInkOrLength(t *testing.T) {
+	p := colors(false)
+	c := &canvas{w: 8, h: 4, cells: make([]cell, 32), back: p.back}
+	drawNameLaser(c, p, []string{"    ", "    "}, 2, 1, 1, 1)
+	drawLaserRay(c, p, 3.5, 1.5, 3.5, 1.5, 1)
+	for i, cl := range c.cells {
+		if cl != (cell{}) {
+			t.Fatalf("cell %d is drawn: %+v", i, cl)
 		}
 	}
 }
