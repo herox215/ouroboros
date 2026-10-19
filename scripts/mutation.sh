@@ -56,7 +56,11 @@ export GOFLAGS
 # again. In the cache of the user that grew by about 20 GB a day; Go removes
 # entries only after five days unused. The mutants get a cache of their own,
 # which goes when the run ends.
-GOCACHE=$(mktemp -d "${TMPDIR:-/tmp}/ouro-mutation-cache.XXXXXX")
+# It goes next to the cache of the user, not into TMPDIR: a run of the whole
+# repository needs some 12 GB (a few MB per mutant), and TMPDIR is a tmpfs in
+# memory on many systems. A full one there makes gremlins die with
+# "panic: error, this is temporary" while it copies a working directory.
+GOCACHE=$(mktemp -d "$(dirname "$(go env GOCACHE)")/ouro-mutation-cache.XXXXXX")
 export GOCACHE
 trap 'rm -rf "$GOCACHE"' EXIT
 trap 'exit 130' INT TERM
