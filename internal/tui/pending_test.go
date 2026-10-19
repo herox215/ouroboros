@@ -146,3 +146,17 @@ func TestAcceptAllStaysSelected(t *testing.T) {
 		t.Fatalf("the last suggestion gone, selected %d", m.suggestionRequests.sel)
 	}
 }
+
+// Accepting all of nothing sends nothing: no task goes out and no chat is
+// made for a list of suggestions that is empty.
+func TestAcceptedAllWithoutSuggestionsSendsNothing(t *testing.T) {
+	m, b := newModel(t)
+	first, chats := m.chat, len(m.chats)
+	_, cmd := m.Update(acceptedAllMsg{screen: &m.suggestionRequests})
+	if m.chat != first || len(m.chats) != chats || m.notice != "all suggestions processed" || cmd == nil {
+		t.Fatalf("chat %q, %d chats, notice %q, cmd %v", m.chat.contextID, len(m.chats), m.notice, cmd)
+	}
+	if b.accepted != nil || m.chat.pending {
+		t.Fatalf("accepted %v, pending %v", b.accepted, m.chat.pending)
+	}
+}

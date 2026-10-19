@@ -152,6 +152,19 @@ func TestDownloadImageFails(t *testing.T) {
 			t.Fatalf("download: %v", err)
 		}
 	})
+	t.Run("empty URI", func(t *testing.T) {
+		requests := 0
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+		defer server.Close()
+		c := testClient(t, server.URL)
+		msg := &event.MessageEventContent{MsgType: event.MsgImage}
+		if _, err := c.downloadImage(context.Background(), msg); err == nil || !strings.Contains(err.Error(), "invalid Matrix media URI") {
+			t.Fatalf("download: %v", err)
+		}
+		if requests != 0 {
+			t.Fatalf("downloaded invalid media %d times", requests)
+		}
+	})
 	t.Run("request failure", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 		c := testClient(t, server.URL)
@@ -175,6 +188,39 @@ func TestDownloadImageFails(t *testing.T) {
 			t.Fatalf("download: %v", err)
 		}
 	})
+}
+
+// An image of exactly the 10 MiB limit is downloaded, whole; one byte more is
+// refused: the limit keeps what fits.
+func TestDownloadImageAtTheSizeLimit(t *testing.T) {
+	plain := imageFixture(t)
+	pad := func(size int) []byte { return append(bytes.Clone(plain), make([]byte, size-len(plain))...) }
+	for _, tc := range []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"at the limit", maxImageBytes, false},
+		{"beyond the limit", maxImageBytes + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := pad(tc.size)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(payload) }))
+			defer server.Close()
+			c := testClient(t, server.URL)
+			content := &event.MessageEventContent{MsgType: event.MsgImage, URL: "mxc://test/image", Info: &event.FileInfo{Size: tc.size}}
+			got, err := c.downloadImage(context.Background(), content)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "10 MiB") {
+					t.Fatalf("download: %v", err)
+				}
+				return
+			}
+			if err != nil || got.MIMEType != "image/png" || !bytes.Equal(got.Data, payload) {
+				t.Fatalf("got %d bytes of %q, %v", len(got.Data), got.MIMEType, err)
+			}
+		})
+	}
 }
 
 // bodyTransport answers every request with a body that cannot be read.

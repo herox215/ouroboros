@@ -931,3 +931,173 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("handle %q", got)
 	}
 }
+
+// A session in which something happened exactly recent ago is still one the
+// thread may hand messages to, and a healthy archive logs nothing.
+func TestRoutableKeepsASessionExactlyRecentAgo(t *testing.T) {
+	dir := t.TempDir()
+	arch := history.Open(dir)
+	arch.Append(history.Who{Session: "kept"}, []openai.Message{{Role: "user", Content: "from before"}}, nil)
+	arch.SetTitle(history.Owner("kept"), "Kept")
+	entries, err := arch.List()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries %+v, %v", entries, err)
+	}
+	arch.Close()
+	at := entries[0].Modified.Add(recent)
+	s, _, l := archived(t, &fakeAgent{}, dir, at)
+	s.now = func() time.Time { return at }
+	s.mu.Lock()
+	got := s.routable()
+	s.mu.Unlock()
+	if len(got) != 1 || got[0].id != "kept" || got[0].title != "Kept" {
+		t.Fatalf("routable %+v", got)
+	}
+	if len(l.lines) != 0 {
+		t.Fatalf("log %q", l.lines)
+	}
+}
+
+// The agent of the thread is sent of long answers of sessions only what lies
+// above the two parts it keeps: an answer of exactly the length that fits in
+// them is left as it is.
+func TestShapedCutsOnlyWhatIsLongerThanThePartsItKeeps(t *testing.T) {
+	se := &session{id: "s1", title: "Fix"}
+	at := len(relayText(se, relayAnswered, "")) - len(relayAnswered)
+	shapes := func(n int) bool {
+		msg := relayText(se, relayAnswered, strings.Repeat("x", n))
+		return shaped([]openai.Message{{Role: "user", Content: msg}})[0].Content != msg
+	}
+	limit := 2*relayKept + len(relayGap)
+	for n, want := range map[int]bool{
+		limit: false, limit - at: false, limit - len(relayAnswered): false, limit - len(relayGap): false,
+		2 * relayKept: false, 2*relayKept - 1: false, limit + 1: true,
+	} {
+		if got := shapes(n); got != want {
+			t.Errorf("an answer of %d bytes: cut %v, want %v", n, got, want)
+		}
+	}
+}
+
+// A note without the head of what the thread wrote is no note, though what
+// comes after the head is in it.
+func TestAsRelayNeedsTheHead(t *testing.T) {
+	for _, text := range []string{
+		`"x" ` + relayAnswered + "hi",
+		`"x" "y"` + relayAnswered + "hi",
+	} {
+		if events, ok := asRelay(text); ok || events != nil {
+			t.Fatalf("%q: asRelay %+v, %v", text, events, ok)
+		}
+	}
+}
+
+// What the thread is sent of what happened in it is what happened exactly a
+// thread window ago.
+func TestRecentOfKeepsAMessageExactlyAThreadWindowOld(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	edge := now.Add(-assistant.ThreadWindow)
+	msgs := []openai.Message{
+		{Role: "assistant", Content: "before", At: edge.Add(-time.Second)},
+		{Role: "user", Content: "exactly", At: edge},
+	}
+	if got := recentOf(msgs, now); len(got) != 1 || got[0].Content != "exactly" {
+		t.Fatalf("recent %+v", got)
+	}
+}
+
+// The thread is told the sessions with the first answer and with every
+// rosterEvery-th after it.
+func TestInThreadTellsTheSessionsAgainEverySoManyAnswers(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	thread := s.get(ThreadID)
+	messages := []openai.Message{{Role: "user", Content: "hi"}}
+	told := 0
+	for range rosterEvery + 1 {
+		if got := s.inThread(thread, messages); len(got) == 2 && isRoster(got[0].Content) && got[1].Content == "hi" {
+			told++
+		}
+	}
+	if told != 2 {
+		t.Fatalf("the sessions were told %d times in %d answers", told, rosterEvery+1)
+	}
+}
+
+// A session is started of pictures alone: the thread hands them on though it
+// has no words for them.
+func TestThreadStartsOfPicturesAlone(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	ctx := context.Background()
+	if err := s.askImages(ctx, ThreadID, "", []openai.Image{{Type: "image/png", Data: []byte("picture")}}, false); err != nil {
+		t.Fatal(err)
+	}
+	id, err := threading{s}.Start(ctx, "", "")
+	if err != nil || id == "" {
+		t.Fatalf("started %q, %v", id, err)
+	}
+}
+
+// Where the owner wrote what the thread hands on is where they wrote their
+// last message, not where what was queued there since came from.
+func TestThreadSourceIsTheLastMessageOfTheOwner(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[ThreadID] = &session{id: ThreadID, events: []Event{
+		{Kind: Message, Text: "hi", Source: MessageSource{Interface: "gui"}},
+		{Kind: Queued, Text: "later", Source: MessageSource{Interface: "tui"}},
+	}}
+	if got := s.threadSource(); got.Interface != "gui" {
+		t.Fatalf("source %+v", got)
+	}
+}
+
+// What the thread is told of a routed answer says whether it completed or
+// failed.
+func TestRelaySaysWhetherTheAnswerCompleted(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	s.mu.Lock()
+	s.sessions[ThreadID] = &session{id: ThreadID, cancel: func() {}}
+	se := &session{id: "s1", title: "Fix", routed: true}
+	s.sessions["s1"] = se
+	s.node.mu.Lock()
+	s.relay(se, Event{Kind: Answer, Text: "done"})
+	s.node.mu.Unlock()
+	thread := s.sessions[ThreadID]
+	s.mu.Unlock()
+	if len(thread.queue) != 1 || !strings.Contains(thread.queue[0].text, "(s1) completed.") {
+		t.Fatalf("relayed %+v", thread.queue)
+	}
+}
+
+// What the thread keeps of what it showed is no reason to log anything.
+func TestNothingIsLoggedWhenTheThreadKeepsWhatItShowed(t *testing.T) {
+	a := &fakeAgent{}
+	s, _, l := archived(t, a, t.TempDir(), time.Now())
+	s.mu.Lock()
+	s.note("s1", "shown")
+	s.mu.Unlock()
+	if got := a.noted(); !slices.Equal(got, []string{ThreadID + ": shown"}) {
+		t.Fatalf("the agent was told %q", got)
+	}
+	if len(l.lines) != 0 {
+		t.Fatalf("log %q", l.lines)
+	}
+}
+
+// The thread stops the answers of the sessions it handed messages to, and no
+// other.
+func TestStopThreadStopsOnlyWhatItHandedMessagesTo(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	var stopped []string
+	s.mu.Lock()
+	s.sessions["plain"] = &session{id: "plain", cancel: func() { stopped = append(stopped, "plain") }}
+	s.sessions["routed"] = &session{id: "routed", cancel: func() { stopped = append(stopped, "routed") }, routed: true}
+	s.stopThread()
+	s.mu.Unlock()
+	if !slices.Equal(stopped, []string{"routed"}) {
+		t.Fatalf("stopped %v", stopped)
+	}
+}

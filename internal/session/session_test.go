@@ -897,3 +897,88 @@ func TestPiecesAtTheirBounds(t *testing.T) {
 		t.Fatalf("told\n%q\nwant\n%q", told, want)
 	}
 }
+
+// What the owner writes that begins as an internal result is their message,
+// and Unsteer takes it back like any other.
+func TestUnsteerTakesBackAMessageThatBeginsAsABackgroundResult(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	text := backgroundHead + "a session] hi"
+	s.mu.Lock()
+	s.sessions["owner"] = &session{id: "owner", queue: []queued{{text: text}}}
+	s.mu.Unlock()
+	got, err := s.Unsteer(context.Background(), "owner")
+	if err != nil || got != text {
+		t.Fatalf("taken back %q, %v", got, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.sessions["owner"].queue) != 0 {
+		t.Fatalf("still queued %+v", s.sessions["owner"].queue)
+	}
+}
+
+// A message of the owner that begins as an internal result is shown as what
+// they wrote.
+func TestOwnerMessageThatBeginsAsABackgroundResultIsShown(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	ctx := context.Background()
+	text := backgroundHead + "a session] hi"
+	_, live, err := s.Watch(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ask(ctx, "s1", text); err != nil {
+		t.Fatal(err)
+	}
+	until(t, live, Answer)
+	past, _, _ := s.Watch(ctx, "s1")
+	if kinds(past) != "message answer" || past[0].Text != text {
+		t.Fatalf("past %+v", past)
+	}
+}
+
+// An internal result is taken without being shown, and what follows it in the
+// same answer is taken as it is, shown and said.
+func TestTakenTakesWhatFollowsAnInternalResult(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	se := &session{id: "s1", watchers: map[chan Event]struct{}{}}
+	inputs := s.taken(se, []queued{
+		{text: backgroundHead + "a session] done", generated: true},
+		{text: "then this"},
+	})
+	if len(inputs) != 2 || inputs[1].Content != "then this" || !slices.Equal(se.said, []string{"then this"}) ||
+		kinds(se.events) != "message" || se.events[0].Text != "then this" {
+		t.Fatalf("inputs %+v, said %q, events %+v", inputs, se.said, se.events)
+	}
+}
+
+// What watches a session finds how much works for it, and that a thread with
+// work of its own is not the one that answers.
+func TestWatchTellsTheWorkWithWhetherItAnswersItself(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	s.mu.Lock()
+	s.sessions[ThreadID] = &session{id: ThreadID, working: 2, watchers: map[chan Event]struct{}{}}
+	s.mu.Unlock()
+	past, _, err := s.Watch(context.Background(), ThreadID)
+	if err != nil || kinds(past) != "working" || past[0].N != 2 || past[0].Own {
+		t.Fatalf("past %+v, %v", past, err)
+	}
+}
+
+// What the thread is sent is shaped; what another session is sent is not.
+func TestContentsShapesOnlyTheThread(t *testing.T) {
+	se := &session{id: "s1", title: "Fix"}
+	long := relayText(se, relayAnswered, strings.Repeat("x", 2*relayKept+len(relayGap)+1))
+	s := service(t, &fakeAgent{contents: assistant.Contents{Messages: []openai.Message{{Role: "user", Content: long}}}})
+	ctx := context.Background()
+	lines, err := s.Contents(ctx, "s1")
+	if err != nil || len(lines) != 1 || lines[0].Text != long {
+		t.Fatalf("of a session %+v, %v", lines, err)
+	}
+	lines, err = s.Contents(ctx, ThreadID)
+	if err != nil || len(lines) != 1 || lines[0].Text == long || !strings.Contains(lines[0].Text, relayGap) {
+		t.Fatalf("of the thread %+v, %v", lines, err)
+	}
+}

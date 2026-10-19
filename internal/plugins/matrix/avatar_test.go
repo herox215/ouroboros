@@ -251,6 +251,40 @@ func TestAvatarToolRefusesAnOversizedAttachment(t *testing.T) {
 	}
 }
 
+// A file of exactly the 5 MiB limit is a whole avatar: it is read as it is,
+// not as one byte too many.
+func TestAvatarDataReadsAFileOfExactlyTheLimit(t *testing.T) {
+	root := t.TempDir()
+	f, err := os.Create(filepath.Join(root, "avatar.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxAvatarBytes); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	files := &guard.Guard{Home: filepath.Join(root, "node"), Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
+	data, err := avatarData(context.Background(), avatarArgs{Path: "avatar.png"}, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != maxAvatarBytes {
+		t.Fatalf("read %d bytes, want %d", len(data), maxAvatarBytes)
+	}
+}
+
+// An attachment of exactly the 5 MiB limit is taken on, and what stops it is
+// the login, not its size.
+func TestAvatarToolTakesAnAttachmentOfExactlyTheLimit(t *testing.T) {
+	cfg := validAvatarConfig("https://example.org")
+	cfg.DeviceID = ""
+	tool, _, _ := avatarFixtureTool(t, cfg, nil)
+	result := runAvatarTool(t, tool, []openai.Image{{Type: "image/png", Data: make([]byte, maxAvatarBytes)}})
+	if !strings.Contains(result, "incomplete or invalid") {
+		t.Fatalf("tool said %q", result)
+	}
+}
+
 func TestAvatarToolNeedsFileAccessForAPath(t *testing.T) {
 	tool, _, _ := avatarFixtureTool(t, validAvatarConfig("https://example.org"), nil)
 	if _, err := tool.Run(context.Background(), json.RawMessage(`{"path":"avatar.png"}`)); err == nil || !strings.Contains(err.Error(), "file access is unavailable") {

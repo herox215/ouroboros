@@ -209,6 +209,31 @@ func TestWriteFails(t *testing.T) {
 	}
 }
 
+// A search whose hits fill the budget of its bytes stops there: what another
+// conversation holds is not taken in their place, though it would still fit.
+func TestSearchStopsAtTheByteBudget(t *testing.T) {
+	a := at(t)
+	query := strings.Repeat("q", 340)
+	long := strings.Repeat("x", 100) + query + strings.Repeat("y", 100)
+	// 28 of the hits fill the bytes of the search, and the next does not fit.
+	for range 40 {
+		if err := a.Append(Who{Session: "chat-1"}, []openai.Message{{Role: "user", Content: long}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The next conversation holds a short hit that would still fit.
+	if err := a.Append(Who{Session: "chat-2"}, []openai.Message{{Role: "user", Content: query}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	out, hits, err := a.Search(Who{Session: "chat-1"}, query, true, MaxHits)
+	if err != nil || hits != 28 || strings.Contains(out, "chat-2 ·") {
+		t.Fatalf("search: %d hits, %v, another conversation in it: %v", hits, err, strings.Contains(out, "chat-2 ·"))
+	}
+	if !strings.HasSuffix(out, "[more hits are not shown; searched 2 conversations: search for something more precise]") {
+		t.Fatalf("search of %d bytes: %q", len(out), out[len(out)-100:])
+	}
+}
+
 // The owner searches its current conversation or all of its own, a peer
 // only the one it is in: no peer reaches what the owner or another peer
 // said.

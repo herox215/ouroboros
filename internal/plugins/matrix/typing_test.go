@@ -121,3 +121,13 @@ func TestTypingNeedsThePeerOfTheConversation(t *testing.T) {
 		t.Fatalf("typing without a peer: %v", conn.states)
 	}
 }
+
+// A thread whose work has stopped after the message it was handed does not
+// type: it owes no answer once work it handed on is done.
+func TestThreadStopsTypingWhenItsWorkStops(t *testing.T) {
+	msg := plugin.SessionEvent{Kind: plugin.SessionMessage}
+	stopped := plugin.SessionEvent{Kind: plugin.SessionWorking, N: 0, Own: true}
+	if answering(plugin.ThreadID, []plugin.SessionEvent{msg, stopped}) || answering(plugin.ThreadID, []plugin.SessionEvent{stopped}) {
+		t.Fatal("the thread types while nothing works")
+	}
+}

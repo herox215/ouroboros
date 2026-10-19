@@ -189,3 +189,23 @@ func TestThreadShortcutAndHighlight(t *testing.T) {
 		t.Fatalf("topic draft lost: %q", m.input.Value())
 	}
 }
+
+// Work for the thread that goes on elsewhere keeps it pending: only its end
+// frees what is typed in the thread.
+func TestWorkingElsewhereKeepsTheThreadPending(t *testing.T) {
+	m, _ := newModel(t)
+	thread := m.conversation(plugin.ThreadID)
+	m.chat = thread
+	m.apply(thread, Event{Kind: plugin.SessionMessage, Text: "fix the login"}, true)
+	if !thread.pending {
+		t.Fatal("the thread is not pending with a message on its way")
+	}
+	m.apply(thread, Event{Kind: plugin.SessionWorking, N: 2}, true)
+	if !thread.pending || !thread.running {
+		t.Fatal("work elsewhere freed the thread")
+	}
+	m.apply(thread, Event{Kind: plugin.SessionWorking}, true)
+	if thread.pending || thread.running {
+		t.Fatal("the end of the work left the thread pending")
+	}
+}

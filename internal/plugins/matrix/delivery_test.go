@@ -274,3 +274,29 @@ func TestDeliveryKeysKeepQuestionsAtDifferentTimesApart(t *testing.T) {
 		}
 	}
 }
+
+// The kind of an event is in its key: a say and an answer of the same text
+// count as the same assistant output, while what the answer says it could not
+// do with that text is another thing.
+func TestDeliveryKeysKeepKindsApart(t *testing.T) {
+	events := []plugin.SessionEvent{
+		{Kind: plugin.SessionAnswer, Text: "Answer canceled."},
+		{Kind: plugin.SessionCanceled},
+		{Kind: plugin.SessionSay, Text: "Answer canceled."},
+	}
+	keys := deliveryKeys(events)
+	fingerprint := func(key string) string { return key[:strings.LastIndex(key, ":")] }
+	if fingerprint(keys[0]) != fingerprint(keys[2]) || keys[0] == keys[2] || fingerprint(keys[0]) == fingerprint(keys[1]) {
+		t.Fatalf("keys %q", keys)
+	}
+}
+
+// The count of a text is its place among the same text: the first is the
+// first, the next the second.
+func TestDeliveryKeysCountRepeatedText(t *testing.T) {
+	events := []plugin.SessionEvent{{Kind: plugin.SessionAnswer, Text: "Same."}, {Kind: plugin.SessionAnswer, Text: "Same."}}
+	keys := deliveryKeys(events)
+	if keys[0] == keys[1] || !strings.HasSuffix(keys[0], ":1") || !strings.HasSuffix(keys[1], ":2") {
+		t.Fatalf("keys %q", keys)
+	}
+}

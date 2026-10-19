@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestConnectionQuestionFailsClosed(t *testing.T) {
@@ -213,5 +214,43 @@ func TestApprovalsReportAFailedApproval(t *testing.T) {
 	<-done
 	if format := <-logged; format != "peer connection approval: %v" {
 		t.Fatalf("reported %q", format)
+	}
+}
+
+// An approval the owner grants is no failure: nothing is reported about it.
+func TestApprovalsDoNotReportAGrantedApproval(t *testing.T) {
+	alice, bob := serve(t, "alice"), serve(t, "bob")
+	alice.contacts.AddIncoming(bob.PublicKey, "bob", "", "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	logged := make(chan string, 4)
+	done := make(chan struct{})
+	go func() {
+		alice.network().Approvals(ctx, func(context.Context, json.RawMessage) (string, error) {
+			return "Approve connection", nil
+		}, func(format string, args ...any) {
+			select {
+			case logged <- format:
+			default:
+			}
+		})
+		close(done)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if trusted, _, _ := alice.contacts.State(bob.PublicKey); trusted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("approval not stored")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	select {
+	case format := <-logged:
+		t.Fatalf("reported %q about a granted approval", format)
+	default:
 	}
 }

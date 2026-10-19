@@ -313,3 +313,53 @@ func TestPendingScreenScrollsToSelection(t *testing.T) {
 		t.Fatalf("the selected suggestion is not in view:\n%s", v)
 	}
 }
+
+// The line below the footer takes its row from the body: header and footer
+// leave the rest of the window to the chat, one row less while something
+// waits for a decision.
+func TestPendingLineTakesARowOfTheBody(t *testing.T) {
+	m, b := newModel(t)
+	if got := m.bodyHeight(); got != m.height-2 {
+		t.Fatalf("the body of %d rows of %d", got, m.height)
+	}
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1", Text: "a change"}}}
+	m.Update(m.loadContacts())
+	if m.pendingRows() != 1 || m.bodyHeight() != m.height-3 {
+		t.Fatalf("%d rows wait, the body is %d of %d", m.pendingRows(), m.bodyHeight(), m.height)
+	}
+}
+
+// A window that changes size keeps a history scrolled up where it was: only
+// a history that follows its end comes to it anew.
+func TestResizingKeepsAScrolledHistoryInPlace(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 80)
+	scroll(t, m, press(m, "pgup"))
+	at := m.history.YOffset()
+	if m.history.AtBottom() {
+		t.Fatal("the history should be scrolled up")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if got := m.history.YOffset(); got != at || m.history.AtBottom() {
+		t.Fatalf("the history went from %d to %d", at, got)
+	}
+}
+
+// What a suggestion says is wrapped to the chat, not to the dialog: the
+// dialog cuts nothing of it off.
+func TestSuggestionTextIsNotCutByTheDialog(t *testing.T) {
+	m, b := newModel(t)
+	text := strings.Repeat("make the chat faster ", 20)
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1", Text: text}}}
+	m.Update(m.loadContacts())
+	run(m, "/suggestions")
+	v := view(m)
+	if got, want := strings.Count(v, "faster"), strings.Count(text, "faster"); got != want {
+		t.Fatalf("%d of the %d words are shown:\n%s", got, want, v)
+	}
+	for _, l := range strings.Split(v, "\n") {
+		if strings.Contains(l, "faster") && strings.HasSuffix(strings.TrimSpace(l), "…") {
+			t.Fatalf("a line of the suggestion is cut: %q", l)
+		}
+	}
+}

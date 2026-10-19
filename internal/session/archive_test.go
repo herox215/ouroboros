@@ -474,3 +474,43 @@ func TestAgo(t *testing.T) {
 		t.Errorf("unnoted %q", got)
 	}
 }
+
+// A conversation goes on under the model it was kept under: one kept without
+// a model under the one of the node, and one kept under a model though the
+// agent of the node cannot tell its own.
+func TestArchivedSessionIsResumedWhateverTheModel(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	history.Open(dir).Append(history.Who{Session: "s1"}, []openai.Message{{Role: "user", Content: "hi"}}, nil)
+	b := &fakeAgent{model: "m"}
+	s, _, _ := archived(t, b, dir, time.Now())
+	s.Watch(ctx, "s1")
+	if _, ok := b.resumed["s1"]; !ok {
+		t.Fatal("a session kept without a model is resumed under the one of the node")
+	}
+
+	dir = t.TempDir()
+	arch := history.Open(dir)
+	arch.Append(history.Who{Session: "s2"}, []openai.Message{{Role: "user", Content: "hi"}}, nil)
+	if err := arch.SetModel(history.Owner("s2"), "m"); err != nil {
+		t.Fatal(err)
+	}
+	b = &fakeAgent{}
+	s, _, _ = archived(t, b, dir, time.Now())
+	s.Watch(ctx, "s2")
+	if _, ok := b.resumed["s2"]; !ok {
+		t.Fatal("a session kept under a model is resumed though the agent cannot tell its own")
+	}
+}
+
+// Legacy records have no identity of their own: they are numbered by their
+// place in the archive, from 1.
+func TestReplayNumbersLegacyRecords(t *testing.T) {
+	events, _ := replay([]history.Record{
+		{Role: "assistant", Content: "one"},
+		{Role: "assistant", Content: "two"},
+	})
+	if len(events) != 2 || events[0].PresentationID != "archive:1" || events[1].PresentationID != "archive:2" {
+		t.Fatalf("events %+v", events)
+	}
+}

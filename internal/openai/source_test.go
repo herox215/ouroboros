@@ -72,6 +72,17 @@ func TestMessageSourceGatewayNormalization(t *testing.T) {
 	}
 }
 
+// A gateway named with the last letter or digit of a range is kept: z, Z and
+// 9 are allowed, not only what comes before them.
+func TestGatewayNormalizationKeepsTheEndsOfTheRanges(t *testing.T) {
+	for _, name := range []string{"z", "Z", "9", "az", "aZ", "a9", "zZ9.-_"} {
+		source := MessageSource{Interface: "api", Gateway: name}
+		if got := source.Normalized(); got != source {
+			t.Errorf("%q normalized to %+v", name, got)
+		}
+	}
+}
+
 func TestMessageSourceJSONAndModelCopy(t *testing.T) {
 	messages := []Message{
 		{Role: "user", Content: "what is here?", Source: MessageSource{Interface: "gui"}},

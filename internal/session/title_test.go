@@ -237,3 +237,23 @@ func TestTitleFails(t *testing.T) {
 		t.Errorf("log %q", l.lines)
 	}
 }
+
+// A title of exactly the length that is kept is kept as it is: the message
+// that carries it is no valid UTF-8, and nothing cuts it.
+func TestTitleOfExactlyTheLimitIsKept(t *testing.T) {
+	title := strings.Repeat("x", history.MaxTitle-1) + "\xff"
+	a := &fakeAgent{title: func(context.Context, []openai.Message) (string, error) { return title, nil }}
+	s := service(t, a)
+	ctx := context.Background()
+	_, live, err := s.Watch(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ask(ctx, "s1", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	got := until(t, live, Title)
+	if got[len(got)-1].Text != title {
+		t.Fatalf("the title is %q", got[len(got)-1].Text)
+	}
+}

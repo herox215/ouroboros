@@ -107,3 +107,15 @@ func TestRunningSessionsEmpty(t *testing.T) {
 		t.Fatalf("empty: %q, %v", got, err)
 	}
 }
+
+// A title that fits is not cut, and so not sanitized either: the in-process
+// API accepts a message that is no valid UTF-8.
+func TestRunningSessionsPreservesTitlesThatFit(t *testing.T) {
+	for _, text := range []string{strings.Repeat("ä", maxTitle/2), strings.Repeat("x", maxTitle-1) + "\xff"} {
+		s := &Service{sessions: map[string]*session{"owner": {title: text, cancel: func() {}}}}
+		got, err := s.RunningSessions(t.Context())
+		if err != nil || len(got) != 1 || got[0] != text {
+			t.Fatalf("%q: titles %q, %v", text, got, err)
+		}
+	}
+}

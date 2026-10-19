@@ -1125,3 +1125,49 @@ func TestTheCallAnEndStartedAs(t *testing.T) {
 		}
 	}
 }
+
+// The line below the footer comes at once: the chat takes one row less for
+// it the moment a suggestion waits.
+func TestPendingLineResizesTheChatAtOnce(t *testing.T) {
+	m, b := newModel(t)
+	before := m.history.Height()
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1", Text: "a change"}}}
+	m.Update(m.loadContacts())
+	if m.pendingRows() != 1 || m.history.Height() != before-1 {
+		t.Fatalf("%d rows wait, the history has %d of %d", m.pendingRows(), m.history.Height(), before)
+	}
+}
+
+// What is decided of an entry stays decided when the same entry is selected
+// again, as it is when what waits comes anew.
+func TestChoiceStaysWhenTheSameEntryIsSelected(t *testing.T) {
+	m, b := newModel(t)
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1", Text: "first change"}}}
+	m.Update(m.loadContacts())
+	run(m, "/suggestions")
+	press(m, "right")
+	if m.choice != reject {
+		t.Fatalf("the first change is chosen %v", m.choice)
+	}
+	b.trust.Suggestions = append(b.trust.Suggestions, plugin.Suggestion{ID: "s2", Text: "second change"})
+	m.Update(m.loadContacts())
+	if m.suggestionRequests.sel != 0 || m.choice != reject {
+		t.Fatalf("selected %d, chosen %v", m.suggestionRequests.sel, m.choice)
+	}
+}
+
+// What came since the list was last open is unread, and only that: a list
+// looked at before adds nothing again.
+func TestUnreadCountsOnlyWhatCameSinceTheListWasSeen(t *testing.T) {
+	m, b := newModel(t)
+	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1", Text: "first"}}}
+	m.Update(m.loadContacts())
+	if m.suggestionRequests.unread != 1 {
+		t.Fatalf("%d unread of one", m.suggestionRequests.unread)
+	}
+	b.trust.Suggestions = append(b.trust.Suggestions, plugin.Suggestion{ID: "s2", Text: "second"}, plugin.Suggestion{ID: "s3", Text: "third"})
+	m.Update(m.loadContacts())
+	if got := m.suggestionRequests.unread; got != 3 {
+		t.Fatalf("%d unread of one seen and three waiting", got)
+	}
+}

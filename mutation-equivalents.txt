@@ -13,37 +13,32 @@
 # behaviour does not belong here: it needs a test.
 
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
-internal/agent/agent.go:1039:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
+internal/agent/agent.go:1043:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
 internal/kernel/kernel.go:429:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
 internal/update/update.go:109:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
-internal/plugins/files/files.go:268:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
-internal/plugins/files/files.go:301:5 INVERT_LOOPCTRL  # at the end of the file reading on finds the end again, and the loop stops there
-internal/plugins/files/files.go:314:38 CONDITIONALS_BOUNDARY  # a column of 0 cuts nothing off the first line, which is UTF-8 and starts with a character
-internal/plugins/files/files.go:822:11 CONDITIONALS_BOUNDARY  # notes first means nothing matched: the notes alone, at most two short ones, fit either way
-internal/plugins/files/files.go:942:10 CONDITIONALS_BOUNDARY  # end is never 0 at a later match: the first place reaches context lines, at least one, past its match, or the file has no line after it
-internal/plugins/files/files.go:944:5 INVERT_LOOPCTRL  # a place beyond the limit leaves end where it was, so every later match starts a place beyond the limit too and adds nothing
-internal/script/script.go:674:26 CONDITIONALS_BOUNDARY  # a heap that did not grow is far from the limit either way: now == start is refused by both forms
-internal/script/script.go:674:47 CONDITIONALS_BOUNDARY  # the heap is sampled every few milliseconds and never stands at exactly the limit
-internal/proposal/proposal.go:128:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
+internal/plugins/files/files.go:263:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
+internal/plugins/files/files.go:296:5 INVERT_LOOPCTRL  # at the end of the file reading on finds the end again, and the loop stops there
+internal/plugins/files/files.go:309:38 CONDITIONALS_BOUNDARY  # a column of 0 cuts nothing off the first line, which is UTF-8 and starts with a character
+internal/plugins/files/files.go:817:11 CONDITIONALS_BOUNDARY  # notes first means nothing matched: the notes alone, at most two short ones, fit either way
+internal/plugins/files/files.go:937:10 CONDITIONALS_BOUNDARY  # end is never 0 at a later match: the first place reaches context lines, at least one, past its match, or the file has no line after it
+internal/plugins/files/files.go:939:5 INVERT_LOOPCTRL  # a place beyond the limit leaves end where it was, so every later match starts a place beyond the limit too and adds nothing
+internal/proposal/proposal.go:127:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
 internal/memory/memory.go:247:11 CONDITIONALS_BOUNDARY  # a limit of exactly MaxHits set to MaxHits is the same limit
-internal/agent/agent.go:696:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
-internal/agent/agent.go:956:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:961:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:1029:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
-internal/script/script.go:560:44 CONDITIONALS_BOUNDARY  # with no room left, the head of 0 bytes of a line adds nothing
-internal/script/script.go:623:8 CONDITIONALS_BOUNDARY  # what the interpreter prints is valid UTF-8, whose first byte begins a character
-internal/script/script.go:837:14 CONDITIONALS_BOUNDARY  # used comes from a clock that only counts up: two sessions never have the same
-internal/agent/agent.go:491:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
+internal/agent/agent.go:734:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
+internal/agent/agent.go:960:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:965:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:1033:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
+internal/agent/agent.go:515:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
 internal/cli/profiles.go:79:15 CONDITIONALS_BOUNDARY  # gui.Together of no profiles joins nothing: calling it with none changes no profile
-internal/openai/client.go:527:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
+internal/openai/client.go:533:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
 internal/tui/wait.go:43:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
 internal/discovery/discovery.go:254:11 INVERT_LOGICAL  # the system gives every address of an interface as an *net.IPNet, so ok is always true and the mask decides alone
 internal/discovery/discovery.go:254:36 INVERT_LOGICAL  # the system gives an IPv4 address a mask of 4 bytes and an IPv6 address one of 16: both tests always agree
 internal/printable/printable.go:35:31 CONDITIONALS_BOUNDARY  # a line of exactly max characters cut to max characters is the same line
-internal/plugins/browser/browser.go:376:30 CONDITIONALS_BOUNDARY  # a new tab of a conversation without tabs is the empty first tab that ready gives it anyway
-internal/plugins/browser/browser.go:673:11 INVERT_LOGICAL  # not live, the context of a peer is of p only when p has gone, and a call of a browser that has gone fails at once and sends nothing
-internal/plugins/browser/browser.go:812:5 INVERT_LOOPCTRL  # break leaves the select, which ends the body of the loop: the next event is read either way
-internal/plugins/browser/browser.go:913:10 CONDITIONALS_BOUNDARY  # text[offset] begins a character, as checked above: the loop stops there either way
+internal/plugins/browser/browser.go:377:30 CONDITIONALS_BOUNDARY  # a new tab of a conversation without tabs is the empty first tab that ready gives it anyway
+internal/plugins/browser/browser.go:674:11 INVERT_LOGICAL  # not live, the context of a peer is of p only when p has gone, and a call of a browser that has gone fails at once and sends nothing
+internal/plugins/browser/browser.go:813:5 INVERT_LOOPCTRL  # break leaves the select, which ends the body of the loop: the next event is read either way
+internal/plugins/browser/browser.go:914:10 CONDITIONALS_BOUNDARY  # text[offset] begins a character, as checked above: the loop stops there either way
 internal/plugins/browser/camofox.go:128:19 CONDITIONALS_BOUNDARY  # a message of exactly 1000 bytes cut to 1000 bytes is the same message
 internal/plugins/browser/camofox.go:362:41 CONDITIONALS_BOUNDARY  # a current tab found at index 0 leaves c.current at 0, which it was just set to
 internal/plugins/browser/camofox.go:401:18 CONDITIONALS_BOUNDARY  # end is at most total; a last window that ends at total has none of the tail left to add, tail[5000:] is empty
@@ -57,14 +52,14 @@ internal/plugins/computer/mcp.go:300:16 CONDITIONALS_BOUNDARY  # 2048 bytes cut 
 internal/guard/guard.go:513:16 INVERT_LOGICAL  # where the directory cannot be looked at (err) or was not listed before (!ok), one of the infos is nil and !os.SameFile is true anyway
 internal/history/history.go:360:4 INVERT_LOOPCTRL  # once more is set, each further session stops at its first hit and adds nothing: going on only reads more
 internal/history/history.go:251:21 CONDITIONALS_BOUNDARY  # the read at the end of a file that ends with a line break is empty, and an empty line is no record, which records skips like any other
-internal/history/sql.go:44:6 INVERT_LOOPCTRL  # the parents of a directory that exists exist too: going on up finds every one and ends with the same empty archive
-internal/history/sql.go:286:4 INVERT_LOOPCTRL  # nothing sets ascii back once it is false: going on only looks at more characters
-internal/plugins/files/files.go:784:87 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
-internal/plugins/files/files.go:784:87 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
-internal/plugins/files/files.go:935:5 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
-internal/session/archive.go:158:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/session/archive.go:166:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/tui/commands.go:151:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
+internal/history/sql.go:42:6 INVERT_LOOPCTRL  # the parents of a directory that exists exist too: going on up finds every one and ends with the same empty archive
+internal/history/sql.go:318:4 INVERT_LOOPCTRL  # nothing sets ascii back once it is false: going on only looks at more characters
+internal/plugins/files/files.go:779:87 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
+internal/plugins/files/files.go:779:87 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
+internal/plugins/files/files.go:930:5 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
+internal/session/archive.go:196:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:204:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/tui/commands.go:150:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
 internal/tui/logo.go:133:19 CONDITIONALS_BOUNDARY  # a pixel exactly reach from the ring line is outside the body (at most 4) and the head (at most 7.4) either way
 internal/tui/logo.go:136:14 CONDITIONALS_BOUNDARY  # with nothing grown, the pixels at u == 0 get a thickness of NaN and stay not solid, as they were
 internal/tui/logo.go:136:23 CONDITIONALS_BOUNDARY  # u comes from atan2 at pixel centers and is never exactly the length of the body
@@ -88,24 +83,23 @@ internal/tui/settings.go:926:44 ARITHMETIC_BASE  # the width of an entry of a li
 internal/tui/settings.go:926:44 INVERT_NEGATIVES  # the width of an entry of a list is not used: its label is drawn anew below, cut to the inside of the dialog
 internal/tui/settings.go:935:58 ARITHMETIC_BASE  # the whole line is cut to the inside of the dialog after: the label of an entry cut there ends where the cut of the line ends, with the same ellipsis
 internal/tui/settings.go:935:58 INVERT_NEGATIVES  # the whole line is cut to the inside of the dialog after: the label of an entry cut there ends where the cut of the line ends, with the same ellipsis
-internal/tui/view.go:706:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
-internal/tui/view.go:104:14 CONDITIONALS_BOUNDARY  # one suggestion is told by the branch before: the else is reached only for none or more than one, never for exactly one
-internal/tui/view.go:299:33 CONDITIONALS_BOUNDARY  # where the first entry asks, the loop returns 0 for it; where it does not, the loop ends and returns 0: the same either way
-internal/tui/view.go:320:11 CONDITIONALS_BOUNDARY  # at the last frame every letter is settled anyway: a seed modulo settleFrames is never below settleFrames less settleFrames, so the word stands as it is
-internal/session/session.go:918:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
-internal/session/running_sessions.go:31:18 CONDITIONALS_BOUNDARY  # a title of exactly maxTitle bytes cut to maxTitle bytes stays as it is
-internal/session/session.go:561:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
+internal/tui/view.go:684:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
+internal/tui/view.go:305:33 CONDITIONALS_BOUNDARY  # where the first entry asks, the loop returns 0 for it; where it does not, the loop ends and returns 0: the same either way
+internal/tui/view.go:326:11 CONDITIONALS_BOUNDARY  # at the last frame every letter is settled anyway: a seed modulo settleFrames is never below settleFrames less settleFrames, so the word stands as it is
+internal/session/session.go:1036:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
+internal/session/running_sessions.go:34:18 CONDITIONALS_BOUNDARY  # a title of exactly maxTitle bytes cut to maxTitle bytes stays as it is
+internal/session/session.go:615:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
 internal/storage/storage.go:95:17 ARITHMETIC_BASE  # 10/time.Millisecond is 0: the retries spin instead of sleeping, and the open still waits until the lock is free or the deadline passed
 internal/history/history.go:787:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
-internal/tui/tui.go:1061:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
-internal/tui/tui.go:960:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way
-internal/tui/session.go:622:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
-internal/tui/session.go:627:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
+internal/tui/tui.go:1022:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/tui/tui.go:964:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way
+internal/tui/session.go:643:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
+internal/tui/session.go:648:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
 internal/tui/nav.go:11:7 CONDITIONALS_BOUNDARY  # with one entry, (at + by%1 + 1) % 1 is 0 as well
 internal/tui/nav.go:14:8 CONDITIONALS_BOUNDARY  # at 0 set to 0 stays where it was
 internal/assistant/metrics.go:40:17 CONDITIONALS_BOUNDARY  # no tokens written in a time above zero are 0 tokens a second, which the TPS is set to before
-internal/openai/client.go:547:4 INVERT_LOOPCTRL  # an answer that is no bad request stays none for every effort that is left: going on asks nothing more and ends with the loop
+internal/openai/client.go:553:4 INVERT_LOOPCTRL  # an answer that is no bad request stays none for every effort that is left: going on asks nothing more and ends with the loop
 internal/discovery/discovery.go:255:5 INVERT_LOOPCTRL  # Linux lists the IPv4 addresses of an interface before those of IPv6, so nothing follows the address it stops at; on macOS, where IPv6 comes first, the tests notice
 internal/tui/logo.go:158:40 CONDITIONALS_BOUNDARY  # the center of a pixel is never exactly on the ellipse of the eye
 internal/tui/logo.go:159:30 CONDITIONALS_BOUNDARY  # the center of a pixel is never exactly 0.45 beside the middle of the eye
@@ -137,8 +131,8 @@ internal/plugins/files/picture.go:172:47 ARITHMETIC_BASE  # a picture is never m
 internal/plugins/files/picture.go:172:56 ARITHMETIC_BASE  # a picture is never made larger, so the next column begins at least one further: the lower bound of one column never decides, and less of it neither
 internal/tui/dialog.go:57:45 ARITHMETIC_BASE  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
 internal/tui/dialog.go:57:45 INVERT_NEGATIVES  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
-internal/tui/tui.go:875:50 CONDITIONALS_BOUNDARY  # up in an empty input with nothing queued brings back what was entered and never comes here
-internal/tui/view.go:999:56 CONDITIONALS_BOUNDARY  # with no room the conversation is cut to nothing: the footer is the hint alone either way
+internal/tui/tui.go:883:50 CONDITIONALS_BOUNDARY  # up in an empty input with nothing queued brings back what was entered and never comes here
+internal/tui/view.go:977:56 CONDITIONALS_BOUNDARY  # with no room the conversation is cut to nothing: the footer is the hint alone either way
 internal/tui/mesh.go:122:12 CONDITIONALS_BOUNDARY  # of two free cells as far from the nerve cells before, either is as good: which of them is taken is left to chance either way
 internal/tui/mesh.go:186:11 CONDITIONALS_BOUNDARY  # a connection that did not begin to grow has its tip on the nerve cell it grows from, which is drawn over it
 internal/tui/mesh.go:187:4 INVERT_LOOPCTRL  # the nerve cells after one that did not begin to grow did not either: going on finds each of them so and draws nothing
@@ -183,3 +177,10 @@ internal/matrix/client.go:316:121 CONDITIONALS_BOUNDARY  # started is read from 
 internal/matrix/client.go:373:116 CONDITIONALS_BOUNDARY  # started is read from the wall clock in Run, which tests cannot set: no event can be made to carry exactly that millisecond, the only one the two forms treat differently
 internal/matrix/client.go:382:42 CONDITIONALS_BOUNDARY  # only events not older than the start of Run wait for a retry: one is exactly 30000 ms old no sooner than 30 s into Run, and then for one millisecond of the wall clock, which tests cannot set
 internal/plugins/matrix/store.go:84:152 CONDITIONALS_BOUNDARY  # time.Since counts nanoseconds of a clock tests cannot set: no status can be read at exactly 15 s of age, the only age the two forms treat differently
+internal/session/session.go:630:18 CONDITIONALS_BOUNDARY  # the inputs always hold the message that began the answer, so the guard holds either way
+internal/session/thread.go:200:99 CONDITIONALS_BOUNDARY  # the content begins with the footer, which begins with a space: the head cannot match either way
+internal/session/thread.go:295:17 INVERT_LOGICAL  # a text with no space after the head cannot hold a footer, which begins with a space: the longer path ends in nil, false too
+internal/tui/view.go:136:74 CONDITIONALS_NEGATION  # a glide aimed at the last line sits on the line the layout aims it at again, and a history at the bottom is where rendering it to the bottom puts it
+internal/tui/view.go:575:17 CONDITIONALS_BOUNDARY  # at exactly rows+2 the scroll puts back the title and the blank line it cut, so the lines are those they were
+internal/tui/view.go:575:23 ARITHMETIC_BASE  # where the smaller limit decides first, top is 2, the title and the blank line again, so the lines stay as they were until rows+2, where both forms cut alike
+internal/plugins/desktop/tray.go:127:65 CONDITIONALS_NEGATION  # on linux the first test of the system is false, so both forms start the tray; on macOS the mutant keeps it from starting, which TestTrayLifetime notices
