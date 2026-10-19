@@ -20,10 +20,10 @@ type command struct {
 
 // own are the commands of the UI. Plugins add theirs, see bind.
 var own = []command{
-	{"new", "start a new conversation; the one shown goes on", (*Model).newConversation},
+	{"new", "start a conversation of its own, outside the thread; the one shown goes on", (*Model).newConversation},
 	{"cd", "show or change the project directory; --workspace resets it", (*Model).showDirectory},
 	{"session", "list the conversations and switch to one", (*Model).openSessions},
-	{"thread", "the thread: say what is to be done, ouro hands it on (experimental)", (*Model).openThread},
+	{"thread", "back to the thread, the one conversation about everything", (*Model).openThread},
 	{"cancel", "stop the answer and the tasks on their way here", (*Model).cancel},
 	{"jobs", "list the commands that run in the background, also for peers, and stop one", (*Model).openJobs},
 	{"start", "start the node", (*Model).start},

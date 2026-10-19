@@ -444,13 +444,15 @@ func (s *Service) relay(se *session, end Event) {
 	if end.Kind == Failed {
 		what, text = relayFailed, oneLine(end.Text)+"]"
 	}
-	s.note(relayText(se, what, text))
+	s.note(end.PresentationID, relayText(se, what, text))
 }
 
 // note tells the agent of the thread text for its next answer, and keeps
-// it with the thread: what it was not asked for, but showed. s.mu is held.
-func (s *Service) note(text string) {
-	if err := s.agent.Note(context.Background(), ThreadID, text); err != nil && s.archive != nil {
+// it with the thread: what it was not asked for, but showed, as the
+// occurrence id, so that it is the same when the thread goes on from the
+// archive. s.mu is held.
+func (s *Service) note(id, text string) {
+	if err := s.agent.Note(presentation.As(context.Background(), id), ThreadID, text); err != nil && s.archive != nil {
 		s.archive.log("the thread cannot keep what it showed: %v", err)
 	}
 }
@@ -497,7 +499,7 @@ func (s *Service) answered(se *session, answer queued) {
 	}
 	s.emit(thread, Event{Kind: Asked, PresentationID: q.id, Done: true, Text: answer.text, Source: answer.source.Normalized()})
 	if answer.text != "" {
-		s.note(relayText(se, relayAsked, string(q.question)+"\n\n"+answer.text))
+		s.note(q.id, relayText(se, relayAsked, string(q.question)+"\n\n"+answer.text))
 	}
 	if len(thread.questions) > 0 {
 		s.ask1(thread)

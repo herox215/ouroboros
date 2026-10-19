@@ -10,6 +10,7 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/presentation"
 )
 
 // An answer keeps what its tools put there, from one call to the next, and
@@ -63,8 +64,8 @@ func TestAnswer(t *testing.T) {
 }
 
 // A note is remembered without an answer, and the next answer of its
-// conversation starts with it. The hooks are told, and only the last few
-// notes are kept.
+// conversation starts with it. The hooks are told, with what it was presented
+// as, and only the last few notes are kept.
 func TestNote(t *testing.T) {
 	llm := &fakeLLM{}
 	var told []string
@@ -72,7 +73,7 @@ func TestNote(t *testing.T) {
 	hooks := []AnswerHook{
 		{Name: "before", Before: func(context.Context, Preparation) ([]openai.Message, error) { return nil, nil }},
 		{Name: "archive", After: func(_ context.Context, o AnswerOutcome) error {
-			told = append(told, fmt.Sprint(o.Conversation.ID, o.Conversation.Peer, o.Conversation.Origin.PublicKey, len(o.Messages), o.Messages[0].Content, o.Reply, o.Err))
+			told = append(told, fmt.Sprint(o.Conversation.ID, o.Conversation.Peer, o.Conversation.Origin.PublicKey, len(o.Messages), o.Messages[0].Content, o.Messages[0].PresentationID, o.Reply, o.Err))
 			if o.Messages[0].Content == "bad" {
 				return boom
 			}
@@ -84,13 +85,13 @@ func TestNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "luna"})
-	if err := a.Note(ctx, "c1", "thanks"); err != nil {
+	if err := a.Note(presentation.As(ctx, "shown"), "c1", "thanks"); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Note(ctx, "c1", "bad"); !errors.Is(err, boom) || err.Error() != "answer hook archive after: boom" {
 		t.Fatalf("a hook that fails: %v", err)
 	}
-	if len(told) != 2 || told[0] != "c1trueluna1thanks<nil>" {
+	if len(told) != 2 || told[0] != "c1trueluna1thanksshown<nil>" || told[1] != "c1trueluna1bad<nil>" {
 		t.Fatalf("told %q", told)
 	}
 	if a.memory.history("c1") != nil || llm.msgs != nil {

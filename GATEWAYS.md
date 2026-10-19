@@ -13,8 +13,8 @@ code remains responsible for authentication, room privacy, replay prevention,
 rate limits and safe event presentation. Bindings are persisted in the protected
 profile store, never accepted from incoming messages.
 
-The one exception is the thread (experimental), the one conversation of the
-owner, see "The thread" in the README: `GatewayAdapter.Thread` returns its ID to
+The one exception is the thread, the one conversation of the owner, see "The
+thread" in the README: `GatewayAdapter.Thread` returns its ID to
 every identity the host grants `OwnerSession`, and the other operations take it
 without a binding. Every such identity talks in the same thread, as the owner
 does in the terminal UI, and its snapshots hold all of it: also what was said in
@@ -67,7 +67,12 @@ hands each message to the Ouro session of its topic, or starts one, and whose
 replies are the answers and questions of those sessions, see "The thread" in the
 README. So there is no /new: a new topic is a new session by itself. A room is
 not sent what the thread said before it talked there; after that it is sent all
-the thread answers and asks, also to what was written in the terminal UI. A room
+the thread answers and asks, also to what was written in the terminal UI, and
+what the owner wrote in the thread elsewhere, messages and answers to its
+questions, as "You, in the terminal:" (or "in the app", "via GATEWAY") and the
+words, since the bot cannot write as the owner; what any room wrote is not sent
+to the rooms. A room kept with an earlier delivery state takes all of the thread
+so far as sent, once, and is sent what comes from then on. A room
 that had a session of its own before talks in the thread from the next start of
 the gateway on, without being sent the thread so far; its session stays in Ouro,
 and the thread hands messages on to it while it is of the last 24 hours. Replies

@@ -14,25 +14,27 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/openai"
+	"ouroboros/internal/presentation"
 )
 
 // fakeAgent answers as its run says, "pong" without one.
 type fakeAgent struct {
-	mu       sync.Mutex
-	ready    error
-	run      func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
-	size     int
-	cache    assistant.Cache
-	contents assistant.Contents
-	failed   error // of Contents
-	inspect  *agent.Inspection
-	resumed  map[string]json.RawMessage
-	resume   error
-	forgot   []string
-	title    func(ctx context.Context, conversation []openai.Message) (string, error)
-	effort   string // of the node
-	notes    []string
-	note     error // what Note fails with
+	mu        sync.Mutex
+	ready     error
+	run       func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
+	size      int
+	cache     assistant.Cache
+	contents  assistant.Contents
+	failed    error // of Contents
+	inspect   *agent.Inspection
+	resumed   map[string]json.RawMessage
+	resume    error
+	forgot    []string
+	title     func(ctx context.Context, conversation []openai.Message) (string, error)
+	effort    string // of the node
+	notes     []string
+	presented []string // what each of the notes was presented as
+	note      error    // what Note fails with
 }
 
 func (a *fakeAgent) Ready() error { return a.ready }
@@ -77,10 +79,11 @@ func (a *fakeAgent) Effort() string {
 	return a.effort
 }
 
-func (a *fakeAgent) Note(_ context.Context, id, text string) error {
+func (a *fakeAgent) Note(ctx context.Context, id, text string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.notes = append(a.notes, id+": "+text)
+	a.presented = append(a.presented, presentation.Current(ctx))
 	return a.note
 }
 
@@ -89,6 +92,13 @@ func (a *fakeAgent) noted() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return slices.Clone(a.notes)
+}
+
+// presentedAs is what each of the notes was presented as, see noted.
+func (a *fakeAgent) presentedAs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.presented)
 }
 
 func (a *fakeAgent) Forget(id string) {

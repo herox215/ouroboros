@@ -757,6 +757,7 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 		m.Update(key(' ')) // skips the splash
 		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "gpt-") })
+		drive(t, m, typed(m, "/new"), func() bool { return m.Current() != plugin.ThreadID }) // the thread hands on, and starts nothing anew
 		drive(t, m, typed(m, "!again"), func() bool { _, ok := m.Restarts(); return ok })
 		shown = m.Current()
 		return nil

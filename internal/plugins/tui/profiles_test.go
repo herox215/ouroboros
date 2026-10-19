@@ -24,7 +24,7 @@ var shiftTab = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 
 // The UI of a node with several profiles shows them all: it opens on the one
 // named, or on the first, and shift+tab shows the next. Each answers in its
-// own sessions, and a new build goes on with the profile shown.
+// own thread, and a new build goes on with the profile shown.
 func TestProfilesInOneUI(t *testing.T) {
 	s := clitest.Settings(t)
 	terra := home.Dir(s.Home)
@@ -75,12 +75,30 @@ func TestProfilesInOneUI(t *testing.T) {
 	if err := ui.Run(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if list, err := session.NewClient(luna).List(context.Background()); err != nil || len(list) != 1 {
-		t.Fatalf("Luna has %+v, %v", list, err)
+	said := func(p home.Dir) []string {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		past, _, err := session.NewClient(p).Watch(ctx, session.ThreadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var messages []string
+		for _, e := range past {
+			if e.Kind == session.Message {
+				messages = append(messages, e.Text)
+			}
+		}
+		return messages
 	}
-	// Opening Terra deliberately creates a persistent empty session, even
-	// though the message was sent only in Luna.
-	if list, err := session.NewClient(terra).List(context.Background()); err != nil || len(list) != 1 || list[0].Title != "" {
+	if messages := said(luna); len(messages) != 1 || messages[0] != "hello Luna" {
+		t.Fatalf("the thread of Luna has %q", messages)
+	}
+	// Opening Terra leaves no session behind: the UI shows the thread.
+	if messages := said(terra); len(messages) != 0 {
+		t.Fatalf("the thread of Terra has %q", messages)
+	}
+	if list, err := session.NewClient(terra).List(context.Background()); err != nil || len(list) != 0 {
 		t.Fatalf("Terra has %+v, %v", list, err)
 	}
 

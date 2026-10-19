@@ -394,10 +394,14 @@ func newModel(t *testing.T) (*Model, *fakeBackend) {
 	return newModelOn(t, b), b
 }
 
-// newModelOn is the UI of b in a window of 100×30, without the splash.
+// newModelOn is the UI of b in a window of 100×30, without the splash, in a
+// conversation of its own, as /new starts it: the thread, which a UI shows
+// first, hides what an answer does on its way, see thread_test.go.
 func newModelOn(t *testing.T, b *fakeBackend) *Model {
 	t.Helper()
 	m := New(b, nil, nil)
+	delete(m.chats, plugin.ThreadID)
+	m.chat = m.newChat()
 	t.Cleanup(m.quit)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.splash.show = false // dismiss the start screen; its own test is below

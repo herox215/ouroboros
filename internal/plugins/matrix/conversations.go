@@ -1,6 +1,7 @@
 package matrix
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -21,15 +22,25 @@ type conversation struct {
 	Identity plugin.GatewayIdentity
 	Room     string
 	Sent     map[string]bool
-	// SentVersion separates stable output IDs from the legacy whole-event hashes.
+	// SentVersion separates stable output IDs from the legacy whole-event
+	// hashes (0), and from those that sent nothing the owner said elsewhere
+	// (1), see sentVersion.
 	SentVersion int
 }
+
+// sentVersion is the SentVersion of what a room is sent now: its output by
+// stable IDs, and what the owner said in the conversation elsewhere.
+const sentVersion = 2
+
 type conversations struct {
 	store   store
 	adapter *plugin.GatewayAdapter
 	mu      sync.Mutex
 	entries map[string]*conversation
 }
+
+// gatewayName is how what a room says is attributed, see plugin.MessageSource.
+const gatewayName = "matrix"
 
 func account(c configuration) string {
 	hash := sha256.Sum256([]byte(c.Homeserver + "\n" + c.UserID))
@@ -53,11 +64,11 @@ func openConversations(s store, sessions plugin.GatewaySessions) (*conversations
 			strings.TrimSpace(entry.Identity.Gateway) == "" || strings.TrimSpace(entry.Identity.Subject) == "" {
 			return nil, errors.New("invalid gateway conversation state")
 		}
-		if entry.SentVersion < 0 || entry.SentVersion > 1 {
+		if entry.SentVersion < 0 || entry.SentVersion > sentVersion {
 			return nil, errors.New("unsupported gateway delivery state")
 		}
 		if len(entry.Sent) == 0 {
-			entry.SentVersion = 1
+			entry.SentVersion = sentVersion
 		}
 		// A room talks in the thread. One of a session of its own talks
 		// there from now on, without what the thread said before, see
@@ -85,7 +96,7 @@ func openConversations(s store, sessions plugin.GatewaySessions) (*conversations
 			}
 		}
 		return plugin.GatewayPermission{}, plugin.ErrGatewayDenied
-	}, plugin.WithGatewayName("matrix"))
+	}, plugin.WithGatewayName(gatewayName))
 	return c, nil
 }
 func (c *conversations) receive(ctx context.Context, conn connection, msg incoming) error {
@@ -170,6 +181,8 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 
 func presented(e plugin.SessionEvent) string {
 	switch e.Kind {
+	case plugin.SessionMessage:
+		return saidElsewhere(e)
 	case plugin.SessionSay, plugin.SessionAnswer:
 		return e.Text
 	case plugin.SessionFailed:
@@ -182,7 +195,7 @@ func presented(e plugin.SessionEvent) string {
 		return "Restarted."
 	case plugin.SessionAsked:
 		if e.Done {
-			return ""
+			return saidElsewhere(e)
 		}
 		q := e.AsQuestion()
 		if q.Question == "" {
@@ -199,6 +212,21 @@ func presented(e plugin.SessionEvent) string {
 		return text + "\n\nJust send your answer (no command needed)."
 	}
 	return ""
+}
+
+// saidElsewhere is what the owner said in the conversation, a message or the
+// answer to a question, from where a room does not see it, as the room is
+// shown it: the thread is one conversation, wherever it is had. What a room
+// said, or what has no known interface, is "".
+func saidElsewhere(e plugin.SessionEvent) string {
+	where := map[string]string{"tui": "in the terminal", "gui": "in the app", "cli": "on the command line"}[e.Source.Interface]
+	if e.Source.Interface == "api" && e.Source.Gateway != gatewayName {
+		where = "via " + cmp.Or(e.Source.Gateway, "the API")
+	}
+	if where == "" || strings.TrimSpace(e.Text) == "" {
+		return ""
+	}
+	return "You, " + where + ":\n" + e.Text
 }
 
 // poll publishes only presentation events, never thoughts, tool arguments,
@@ -243,6 +271,9 @@ func deliveryKeys(events []plugin.SessionEvent) []string {
 		}
 		if event.PresentationID != "" {
 			keys[i] = "id:" + event.PresentationID
+			if event.Kind == plugin.SessionAsked && event.Done { // the question has the ID too
+				keys[i] = "answered:" + event.PresentationID
+			}
 			continue
 		}
 		kind := string(event.Kind)
@@ -265,7 +296,7 @@ func deliveryKeys(events []plugin.SessionEvent) []string {
 
 // sentAll takes what keys name as delivered to entry, without delivering it.
 func sentAll(entry *conversation, keys []string) {
-	entry.Sent, entry.SentVersion = map[string]bool{}, 1
+	entry.Sent, entry.SentVersion = map[string]bool{}, sentVersion
 	for _, key := range keys {
 		if key != "" {
 			entry.Sent[key] = true
@@ -276,14 +307,16 @@ func sentAll(entry *conversation, keys []string) {
 // publish is called with c.mu held and only after the adapter authorized Poll.
 func (c *conversations) publish(ctx context.Context, conn connection, entry *conversation, events []plugin.SessionEvent) error {
 	keys := deliveryKeys(events)
-	if entry.SentVersion == 0 {
-		// Legacy hashes cannot be inverted after replay changes the event metadata.
-		// The owner chose to baseline existing history rather than replay it during
-		// this one-time migration. Persist the baseline before delivering new output.
-		previous := entry.Sent
+	if entry.SentVersion < sentVersion {
+		// Legacy hashes cannot be inverted after replay changes the event metadata,
+		// and version 1 sent nothing the owner said elsewhere, while what the thread
+		// relayed came back from the archive under other IDs. The owner chose to
+		// baseline existing history rather than replay it during this one-time
+		// migration. Persist the baseline before delivering new output.
+		previous, version := entry.Sent, entry.SentVersion
 		sentAll(entry, keys)
 		if err := c.save(); err != nil {
-			entry.Sent, entry.SentVersion = previous, 0
+			entry.Sent, entry.SentVersion = previous, version
 			return err
 		}
 		return nil

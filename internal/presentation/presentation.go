@@ -28,6 +28,13 @@ func Ensure(ctx context.Context) context.Context {
 	return New(ctx)
 }
 
+// As starts a fresh trace whose current identity is id, even if ctx already
+// has one: what is kept under it is presented as id, which was presented
+// already.
+func As(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, traceKey{}, &trace{current: id, terminal: NewID()})
+}
+
 // NewID returns a unique opaque identity, independent of message text.
 func NewID() string { return rand.Text() }
 

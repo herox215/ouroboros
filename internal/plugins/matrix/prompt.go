@@ -23,7 +23,7 @@ func outputHook() plugin.AnswerHook {
 				continue
 			}
 			source := m.Source.Normalized()
-			if source.Interface == "api" && source.Gateway == "matrix" {
+			if source.Interface == "api" && source.Gateway == gatewayName {
 				return []openai.Message{{Role: "system", Content: outputInstructions}}, nil
 			}
 			break

@@ -216,9 +216,9 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 
 | Command | What it does |
 |---|---|
-| `/new` | new conversation; the one shown goes on in the background |
+| `/new` | a conversation of its own, outside [the thread](#the-thread); the one shown goes on in the background |
 | `/session` | the conversations of the node in a dialog over the chat, the latest first, the one shown marked: type to filter the list, `↑` `↓` select, `enter` shows the one selected, `ctrl+d` twice deletes it, `tab` switches to the conversations of peers, `esc` takes back what is typed and then goes back; see [Sessions](#sessions) |
-| `/thread` | the thread, experimental: one conversation with your agent about everything, while behind it each topic is a conversation of its own and several work at once; see [The thread](#the-thread) |
+| `/thread` | back to the thread, which the UI opens with: one conversation with your agent about everything, while behind it each topic is a conversation of its own and several work at once; see [The thread](#the-thread) |
 | `/cancel` | stop the answer that is on its way in the conversation shown, and the tasks its agent delegated |
 | `/jobs` | the commands the agent runs in the background for the answers on their way, in your conversations and in those of peers, each with where it runs and for how long, the list kept up to date: `↑` `↓` select, `enter` stops the one selected, `esc` back; see [Commands](#commands) |
 | `/start` / `/stop` | start or stop the node (`/start` runs the setup of a node that has none) |
@@ -301,7 +301,8 @@ So an answer does not depend on the UI:
 - **Closing the UI** while your agent works does not stop it. The answer is given in the node, and it is in the
   log and in the history. Open the UI again and the conversation is there, the answer too. A node the UI
   started stops once no answer is on its way.
-- **Several conversations at once.** `/new` starts a new conversation and leaves the one before going on.
+- **Several conversations at once.** The UI opens with [the thread](#the-thread), which keeps your topics apart
+  by itself. `/new` starts a conversation of its own, outside the thread, and leaves the one before going on.
   `/session` (or `ctrl+s`) lists the conversations of the node in a dialog over the chat: each with its
   title and when something last happened in it, and behind those whose answer is on its way a small
   animation. The one shown is marked. What you type filters the list as you type it, by title and by the
@@ -371,8 +372,9 @@ one where you left it.
 
 #### The thread
 
-The thread is experimental. It is one conversation with your agent about everything, and you open it with
-`/thread`. It reads like any chat: you write, your agent thinks, and it answers. Behind it, each topic is a
+The thread is one conversation with your agent about everything. The terminal UI opens with it, every Matrix
+room talks in it, and `/thread` goes back to it from a conversation of its own. It reads like any chat: you
+write, your agent thinks, and it answers. Behind it, each topic is a
 conversation of its own, and several of them work at once. While one works on the login, you can talk about the
 photos, and the answer about the login comes in when it is done. You are not shown that this happens: the thread
 says nothing of the conversations it uses, and while any of them works for it, the line below the chat says that
@@ -407,16 +409,18 @@ your agent is thinking.
   thread as the answer of your agent, and an answer that failed as one that failed. What such an answer asks you
   on its way is asked in the thread, one question at a time, and what you say there next answers it; answered in
   that conversation itself, it is over in the thread too. The agent of the thread is told all of it for its next
-  answer. What you write in a conversation yourself does not come back to the thread, and neither does an answer
-  that was stopped. While another conversation is shown, the footer says that the thread answered
+  answer, and keeps it as what was shown, so that a restart does not show it anew. What you write in a
+  conversation yourself does not come back to the thread, and neither does an answer that was stopped. While another conversation is shown, the footer says that the thread answered
   (`answered in the thread · /thread`).
 - **Stopping.** `esc` and `/cancel` in the thread stop its answer and what the conversations work on for it.
 - **Where new ones work.** A conversation the thread starts works in the directory the agent names, or else in the
   project of the thread. The first time a UI shows the thread, the thread takes the directory the UI started in as
-  its project; `/cd` there changes it, and the header shows it after `· thread`.
+  its project, unless it answers just then and keeps the one it has, which the footer says; `/cd` there changes
+  it, and the header shows it after `· thread`.
 - **Gateways.** A gateway talks in the thread too: every Matrix room does, so there is no `/new` there, see
-  [GATEWAYS.md](GATEWAYS.md). What is written in a room and in the terminal UI is one conversation, and the
-  answers of the thread go to every room that talks in it.
+  [GATEWAYS.md](GATEWAYS.md). What is written in a room and in the terminal UI is one conversation. The terminal
+  UI shows what you wrote in a room as your messages; a room is sent the answers and questions of the thread, and
+  what you wrote elsewhere, as `You, in the terminal:` and your words, since the bot cannot write as you.
 - **It is a session of the node.** The thread has the ID `thread`, is kept in the archive and goes on after a
   restart like any conversation, shown as it was. `/session` does not list it, it is not named for a topic, and its
   agent has the two tools of the thread alone. The conversations it starts are listed there as any other.

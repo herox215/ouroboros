@@ -5,29 +5,38 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
 )
 
-// /thread shows the thread, which takes the start directory of the UI as
-// its project the first time the UI shows it. It is no session of the list.
-func TestThreadCommand(t *testing.T) {
-	m, original := newModel(t)
-	b := &directoryFake{Backend: original}
-	m.backend = b
-	m.SetInitialDirectory("/start")
-	shown := m.chat
-	m.input.SetValue("draft")
-	cmd := run(m, "/thread")
-	if m.input.Value() != "" {
-		m.input.SetValue("") // the command line, not what was typed before it
+// threadModel is the UI of a fakeBackend as it opens, in the thread, without
+// the splash, with the start directory, if there is one, and the backend for
+// directories b.
+func threadModel(t *testing.T, directory string, err error) (*Model, *directoryFake) {
+	t.Helper()
+	b := &directoryFake{Backend: newBackend(t), err: err}
+	m := New(b, nil, nil)
+	t.Cleanup(m.quit)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.splash.show = false
+	m.Update(m.refreshStatus())
+	m.SetInitialDirectory(directory)
+	return m, b
+}
+
+// A UI shows the thread first, which takes the start directory of the UI as
+// its project. /new starts a conversation of its own, and /thread goes back
+// to the thread, which keeps the project it has. It is no session of the
+// list.
+func TestTheThreadIsShownFirst(t *testing.T) {
+	m, b := threadModel(t, "/start", nil)
+	if m.chat.contextID != plugin.ThreadID || m.chat.directory != "/start" {
+		t.Fatalf("shown %q in %q", m.chat.contextID, m.chat.directory)
 	}
-	if m.chat.contextID != plugin.ThreadID || m.screen != screenChat || m.notice != "the thread: say what is to be done, ouro hands it to its session" {
-		t.Fatalf("shown %q, notice %q", m.chat.contextID, m.notice)
-	}
-	settle(m, cmd)
-	if b.calls != 1 || b.id != plugin.ThreadID || b.path != "/start" || m.notice != "the thread: what is new starts in /start" {
+	settle(m, m.watch(m.chat))
+	if b.calls != 1 || b.id != plugin.ThreadID || b.path != "/start" || m.notice != "" {
 		t.Fatalf("directory %+v, notice %q", b, m.notice)
 	}
 	if header := ansi.Strip(m.headerView()); !strings.Contains(header, "· thread") || !strings.HasSuffix(strings.TrimSpace(header), "· effort low") {
@@ -36,13 +45,15 @@ func TestThreadCommand(t *testing.T) {
 	if cmd := run(m, "/thread"); cmd != nil || m.notice != "this is the thread: say what is to be done" {
 		t.Fatalf("again: %q", m.notice)
 	}
-
-	// Shown again, it keeps the project it has: the directory set last is
-	// that of the conversation shown before, which is new.
-	settle(m, m.switchTo(shown))
+	thread := m.chat
+	m.input.SetValue("draft")
+	settle(m, m.newConversation())
+	if m.chat == thread || b.calls != 2 || b.id != m.chat.contextID {
+		t.Fatalf("shown %q, directory set %d times, last of %q", m.chat.contextID, b.calls, b.id)
+	}
 	settle(m, run(m, "/thread"))
-	if b.calls != 2 || b.id != shown.contextID || m.chat.contextID != plugin.ThreadID {
-		t.Fatalf("directory set %d times, last of %q, shown %q", b.calls, b.id, m.chat.contextID)
+	if m.chat != thread || b.calls != 2 || m.notice != "back in the thread" || m.input.Value() != "draft" {
+		t.Fatalf("shown %q, directory set %d times, notice %q, input %q", m.chat.contextID, b.calls, m.notice, m.input.Value())
 	}
 	m.chat.title = "fix the login" // as a message would name it
 	m.openSessions()
@@ -53,28 +64,26 @@ func TestThreadCommand(t *testing.T) {
 	}
 }
 
-// A thread that cannot take the start directory keeps its project, and
-// says so; without a start directory, or a backend for directories, none is
-// set.
+// A thread that cannot take the start directory, as it answers, is shown
+// with the project it has, and says so; without a start directory none is
+// set. Shown again after a session the UI started in, it takes it then.
 func TestThreadKeepsItsProject(t *testing.T) {
-	m, original := newModel(t)
-	b := &directoryFake{Backend: original, err: errors.New("wait for the answer first")}
-	m.backend = b
-	m.SetInitialDirectory("/start")
-	settle(m, run(m, "/thread"))
-	if m.notice != "the thread keeps its project: wait for the answer first" || !m.noticeErr {
-		t.Fatalf("notice %q", m.notice)
+	m, _ := threadModel(t, "/start", errors.New("wait for the answer first"))
+	settle(m, m.watch(m.chat))
+	if !m.chat.watching || m.notice != "the thread keeps its project: wait for the answer first" || !m.noticeErr {
+		t.Fatalf("watching %v, notice %q", m.chat.watching, m.notice)
 	}
-
-	m, original = newModel(t)
-	b = &directoryFake{Backend: original}
-	m.backend = b
-	settle(m, run(m, "/thread"))
-	m, _ = newModel(t)
-	m.SetInitialDirectory("/start")
-	settle(m, run(m, "/thread"))
-	if b.calls != 0 || m.chat.contextID != plugin.ThreadID {
+	m, b := threadModel(t, "", nil)
+	settle(m, m.watch(m.chat))
+	if b.calls != 0 || !m.chat.watching {
 		t.Fatalf("directory set %d times", b.calls)
+	}
+	m, b = threadModel(t, "/start", nil)
+	m.Resume("s1")
+	settle(m, m.watch(m.chat))
+	settle(m, run(m, "/thread"))
+	if m.chat.contextID != plugin.ThreadID || b.calls != 1 || b.id != plugin.ThreadID {
+		t.Fatalf("shown %q, directory set %d times, last of %q", m.chat.contextID, b.calls, b.id)
 	}
 }
 

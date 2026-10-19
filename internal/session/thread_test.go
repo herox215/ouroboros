@@ -142,8 +142,8 @@ func shown(events []Event) []string {
 // The thread starts a session for what is new, and says nothing of it: the
 // session answers on its own, with what the owner wrote it from, and its
 // answer is shown as the answer of the thread, which is told it for its next
-// answer. Meanwhile the thread works. It is no session to list, and is not
-// named for a topic.
+// answer, kept as the occurrence it was shown as. Meanwhile the thread works.
+// It is no session to list, and is not named for a topic.
 func TestThreadStartsASession(t *testing.T) {
 	told := make(chan string, 4)
 	gate := make(chan struct{})
@@ -185,6 +185,9 @@ func TestThreadStartsASession(t *testing.T) {
 	want := fmt.Sprintf("thread: [Session %s \"Login\" answered, and the owner was shown it as your answer:]\n\npong:fix the login", handle(id))
 	if notes := a.noted(); !slices.Equal(notes, []string{want}) {
 		t.Fatalf("the thread was told %q", notes)
+	}
+	if presented := a.presentedAs(); !slices.Equal(presented, []string{answer.PresentationID}) {
+		t.Fatalf("the answer was shown as %q, and kept as %q", answer.PresentationID, presented)
 	}
 	past, _, _ = s.Watch(ctx, ThreadID)
 	if slices.ContainsFunc(past, func(e Event) bool { return e.Kind == Title }) {
@@ -359,11 +362,16 @@ func TestThreadAsks(t *testing.T) {
 		t.Fatalf("the thread asked %d times: %q", n, lines)
 	}
 	notes := a.noted()
-	if !slices.ContainsFunc(notes, func(n string) bool {
+	i := slices.IndexFunc(notes, func(n string) bool {
 		return strings.HasPrefix(n, `thread: [Session s1 "first" asked the owner, as you, and they answered. The question, then the answer:]`) &&
 			strings.HasSuffix(n, string(asks)+"\n\nb")
-	}) {
+	})
+	if i < 0 {
 		t.Fatalf("the thread was told %q", notes)
+	}
+	asked := got[slices.IndexFunc(got, func(e Event) bool { return e.Kind == Asked })]
+	if presented := a.presentedAs(); presented[i] != asked.PresentationID || asked.PresentationID == "" {
+		t.Fatalf("the question was shown as %q, and kept as %q", asked.PresentationID, presented[i])
 	}
 
 	// A question not asked in the thread yet ends there without a word.

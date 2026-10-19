@@ -605,9 +605,10 @@ const maxNotes = 32
 // conversation contextID said without asking for an answer. No LLM is called
 // for it: the next answer in the conversation starts with it. The hooks are
 // told of it as of an answer that is nothing but that message, so that it is
-// kept where answers are.
+// kept where answers are, as presented with the current identity of ctx, if
+// it has one: see presentation.As.
 func (a *Agent) Note(ctx context.Context, contextID, text string) error {
-	note := openai.Message{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx)}
+	note := openai.Message{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx), PresentationID: presentation.Current(ctx)}
 	a.memory.note(contextID, note)
 	origin, peer := a2a.OriginFrom(ctx)
 	told := AnswerOutcome{Processing{a.llm, a.model, Conversation{contextID, peer, origin}}, []openai.Message{note}, "", nil}

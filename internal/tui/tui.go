@@ -431,7 +431,8 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 	m.input.Focus() // the input is where everything is typed, commands too
-	m.chat = m.newChat()
+	// The owner talks in the thread, unless they want a conversation of its own.
+	m.chat = m.thread()
 	var problems []string
 	m.plugins.screens, slashes, problems = bind(ownNames(), screens, slashes)
 	m.commands = append(m.commands, own...)

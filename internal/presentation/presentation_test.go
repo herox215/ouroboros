@@ -32,6 +32,10 @@ func TestTrace(t *testing.T) {
 	if Terminal(ctx) != terminal {
 		t.Fatal("terminal identity changed")
 	}
+	as := As(ctx, "shown")
+	if Current(as) != "shown" || Terminal(as) == "" || Terminal(as) == terminal || Current(ctx) != second {
+		t.Fatal("As did not present the identity in a trace of its own")
+	}
 }
 
 func TestConcurrentTrace(t *testing.T) {

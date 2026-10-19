@@ -44,7 +44,8 @@ type (
 		past         []Event
 		live         <-chan Event
 		err          error
-		directorySet bool // the initial directory was stored, even if Watch failed
+		directorySet bool  // the initial directory was stored, even if Watch failed
+		kept         error // why the thread keeps its project, see thread
 	}
 	// eventMsg is what happened in a session just now.
 	eventMsg struct {
@@ -118,11 +119,16 @@ func (m *Model) watch(c *conversation) tea.Cmd {
 	return func() tea.Msg {
 		msg := watchedMsg{id: id}
 		if backend, ok := m.backend.(directoryBackend); ok && fresh && path != "" {
-			if err := backend.SetSessionDirectory(m.ctx, id, path); err != nil {
+			err := backend.SetSessionDirectory(m.ctx, id, path)
+			switch {
+			case err != nil && id == plugin.ThreadID:
+				msg.kept = err // it is shown all the same
+			case err != nil:
 				msg.err = err
 				return msg
+			default:
+				msg.directorySet = true
 			}
-			msg.directorySet = true
 		}
 		msg.past, msg.live, msg.err = m.backend.Watch(m.ctx, id)
 		return msg
@@ -144,6 +150,9 @@ func (m *Model) watched(msg watchedMsg) tea.Cmd {
 		m.resuming = nil
 	}
 	m.replay(c, msg.past)
+	if msg.kept != nil {
+		m.setNotice("the thread keeps its project: "+msg.kept.Error(), true)
+	}
 	return next(msg.id, msg.live)
 }
 
@@ -726,7 +735,7 @@ func (m *Model) deleted(msg deletedMsg) tea.Cmd {
 	m.setNotice("deleted “"+short(c.title, 40)+"”", false)
 	var cmd tea.Cmd
 	if c == m.chat { // what is typed stays
-		m.chat = m.newChat()
+		m.chat = m.thread()
 		m.renderHistory(true)
 		cmd = m.watch(m.chat)
 	}

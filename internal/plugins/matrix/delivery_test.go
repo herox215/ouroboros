@@ -135,7 +135,7 @@ func TestLegacyDeliveryBaselinePersistsAndRetries(t *testing.T) {
 	for _, e := range c.entries {
 		entry = e
 	}
-	if entry.SentVersion != 1 || !entry.Sent["id:old"] {
+	if entry.SentVersion != sentVersion || !entry.Sent["id:old"] {
 		t.Fatal("baseline not persisted")
 	}
 	events = append(events, plugin.SessionEvent{Kind: plugin.SessionAnswer, PresentationID: "new", Text: "new answer"})
@@ -163,5 +163,98 @@ func TestDeliveryRetriesFailedSend(t *testing.T) {
 	}
 	if len(conn.messages()) != 1 {
 		t.Fatal("retry missing")
+	}
+}
+
+// The thread is one conversation: a room is sent what the owner said in it
+// elsewhere, and their answers to its questions, not what a room said or
+// what has no known interface. An answer is sent apart from its question.
+func TestRoomsAreSentWhatIsSaidElsewhere(t *testing.T) {
+	said := func(source plugin.MessageSource) plugin.SessionEvent {
+		return plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "hello", Source: source}
+	}
+	for source, want := range map[plugin.MessageSource]string{
+		{Interface: "tui"}:                    "You, in the terminal:\nhello",
+		{Interface: "gui"}:                    "You, in the app:\nhello",
+		{Interface: "cli"}:                    "You, on the command line:\nhello",
+		{Interface: "api", Gateway: "signal"}: "You, via signal:\nhello",
+		{Interface: "api"}:                    "You, via the API:\nhello",
+		{Interface: "api", Gateway: "matrix"}: "",
+		{Interface: "unknown"}:                "",
+		{}:                                    "",
+	} {
+		if got := presented(said(source)); got != want {
+			t.Errorf("from %+v: %q", source, got)
+		}
+	}
+	if got := presented(plugin.SessionEvent{Kind: plugin.SessionMessage, Text: " ", Source: plugin.MessageSource{Interface: "tui"}}); got != "" {
+		t.Errorf("nothing said: %q", got)
+	}
+	c, entry, _ := deliveryConversation(t)
+	conn := &recordingConnection{}
+	events := []plugin.SessionEvent{
+		said(plugin.MessageSource{Interface: "tui"}),
+		said(plugin.MessageSource{Interface: "api", Gateway: "matrix"}),
+		{Kind: plugin.SessionAsked, PresentationID: "q", Args: []byte(`{"question":"Which?"}`)},
+		{Kind: plugin.SessionAsked, PresentationID: "q", Done: true, Text: "a", Source: plugin.MessageSource{Interface: "tui"}},
+		{Kind: plugin.SessionAnswer, PresentationID: "answer", Text: "done"},
+	}
+	if err := c.publish(t.Context(), conn, entry, events); err != nil {
+		t.Fatal(err)
+	}
+	room := "!room:example.org @owner:example.org "
+	if got := conn.messages(); !slices.Equal(got, []string{room + "You, in the terminal:\nhello", room + "Which?\n\nJust send your answer (no command needed).", room + "You, in the terminal:\na", room + "done"}) {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+// A room that was sent its output alone takes all of it so far as sent once,
+// also what the owner said elsewhere and what the thread relayed under the
+// IDs of the archive, and is sent what comes from then on. A room that cannot
+// keep that takes nothing as sent.
+func TestRoomsOfVersion1AreBaselined(t *testing.T) {
+	c, entry, sessions := deliveryConversation(t)
+	entry.Sent, entry.SentVersion = map[string]bool{"id:old": true}, 1
+	if err := c.save(); err != nil {
+		t.Fatal(err)
+	}
+	c, err := openConversations(c.store, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range c.entries {
+		entry = e
+	}
+	terminal := plugin.MessageSource{Interface: "tui"}
+	events := []plugin.SessionEvent{
+		{Kind: plugin.SessionAnswer, PresentationID: "old", Text: "old answer"},
+		{Kind: plugin.SessionAnswer, PresentationID: "archive:6", Text: "relayed before"},
+		{Kind: plugin.SessionMessage, Text: "before", Source: terminal},
+		{Kind: plugin.SessionAsked, PresentationID: "q", Done: true, Text: "a", Source: terminal},
+	}
+	conn := &recordingConnection{}
+	if err := os.Remove(c.store.path("conversations.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(c.store.path("conversations.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.publish(t.Context(), conn, entry, events); err == nil || entry.SentVersion != 1 || len(entry.Sent) != 1 || len(conn.messages()) != 0 {
+		t.Fatalf("a room that cannot keep it: %v, %+v, sent %q", err, entry, conn.messages())
+	}
+	if err := os.Remove(c.store.path("conversations.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.publish(t.Context(), conn, entry, events); err != nil {
+		t.Fatal(err)
+	}
+	events = append(events, plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "after", Source: terminal},
+		plugin.SessionEvent{Kind: plugin.SessionAnswer, PresentationID: "new", Text: "new answer"})
+	if err := c.publish(t.Context(), conn, entry, events); err != nil {
+		t.Fatal(err)
+	}
+	room := "!room:example.org @owner:example.org "
+	if got := conn.messages(); !slices.Equal(got, []string{room + "You, in the terminal:\nafter", room + "new answer"}) || entry.SentVersion != sentVersion {
+		t.Fatalf("sent %q, version %d", got, entry.SentVersion)
 	}
 }

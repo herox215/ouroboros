@@ -388,7 +388,7 @@ func TestSessionTitle(t *testing.T) {
 
 // d pressed twice on the sessions screen deletes the session selected; a key
 // in between starts over. One whose answer is on its way is not deleted, nor
-// is one without a message. The session shown gives way to a new one, and
+// is one without a message. The session shown gives way to the thread, and
 // what is typed stays.
 func TestDeleteSession(t *testing.T) {
 	m, b := newModel(t)
@@ -442,12 +442,14 @@ func TestDeleteSession(t *testing.T) {
 	press(m, "ctrl+d")
 	_, watch := m.Update(press(m, "ctrl+d")())
 	drive(t, m, watch, func() bool { return true })
-	if m.chat == second || m.chat.contextID == second.contextID || m.input.Value() != "typed" || len(m.chat.entries) != 0 {
+	if m.chat.contextID != plugin.ThreadID || m.input.Value() != "typed" || len(m.chat.entries) != 0 {
 		t.Fatalf("shown %+v, input %q", m.chat, m.input.Value())
 	}
 
 	// What the node says against it is told.
 	press(m, "esc")
+	m.input.Reset()
+	drive(t, m, run(m, "/new"), func() bool { return m.chat.contextID != plugin.ThreadID })
 	drive(t, m, say(t, m, "third"), func() bool { return !m.chat.pending && m.chat.title != "" })
 	b.fail = map[string]error{"delete": errors.New("the node is not running")}
 	m.Update(ctrlS)

@@ -122,7 +122,7 @@ func TestCommandSuggestions(t *testing.T) {
 
 	// More commands than the list has rows: it scrolls to the one selected.
 	m.input.SetValue("/")
-	if got := suggested(m); len(got) != maxSuggestions || got[0] != "› /new start a new conversation; the one shown goes on" {
+	if got := suggested(m); len(got) != maxSuggestions || got[0] != "› /new start a conversation of its own, outside the thread; the one shown goes on" {
 		t.Fatalf("suggested %q", got)
 	}
 	press(m, "up")

@@ -32,6 +32,18 @@ func (m *Model) newChat() *conversation {
 	return c
 }
 
+// thread is the conversation of the thread, which takes the start path as
+// its project the first time this UI shows it, as a new conversation does:
+// where what is new in it starts, see openThread.
+func (m *Model) thread() *conversation {
+	if c, ok := m.chats[plugin.ThreadID]; ok {
+		return c
+	}
+	c := m.conversation(plugin.ThreadID)
+	c.directory, c.fresh = m.initialDirectory, true
+	return c
+}
+
 // directoryBackend is optional so backends without project directories keep
 // working. The backend resolves paths and rejects changes while busy; the
 // directory event, not the command, supplies the canonical absolute path.
