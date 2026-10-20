@@ -383,6 +383,7 @@ type session struct {
 	events   []Event
 	watchers map[chan Event]struct{}
 	cancel   context.CancelFunc // of the answer on its way; nil without one
+	since    time.Time          // when that answer began
 	queue    []queued           // the messages that wait for that answer to take them
 	asked    chan queued        // takes what the owner answers the question that answer waits for; nil without one
 	restart  string             // the binary a tool of that answer asked to start anew from
@@ -598,7 +599,7 @@ func (s *Service) askImages(ctx context.Context, id, text string, images []opena
 // ended, in se. s.mu and the mu of p, the process of s, are held.
 func (s *Service) begin(se *session, p *process, messages ...queued) {
 	ctx, cancel := context.WithCancel(s.ctx)
-	se.cancel = cancel
+	se.cancel, se.since = cancel, s.now()
 	p.answering++
 	p.release = false // somebody wants the node
 	se.routed, se.said, se.pictures = false, nil, nil

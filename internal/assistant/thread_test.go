@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,16 @@ type fakeThread struct {
 	sent    []string // as "ID TEXT"
 	started []string // as "DIRECTORY TEXT"
 	sought  []string // the queries
+	stopped []string // as "ID JOB"
+}
+
+func (f *fakeThread) State(_ context.Context, id string) (string, error) {
+	return "state " + id, f.err
+}
+
+func (f *fakeThread) Stop(_ context.Context, id string, job int) (string, error) {
+	f.stopped = append(f.stopped, fmt.Sprint(id, " ", job))
+	return "stopped", f.err
 }
 
 func (f *fakeThread) Send(_ context.Context, id, text string) (string, string, error) {
@@ -59,8 +70,14 @@ func TestThreadHandsOn(t *testing.T) {
 	if got := result(t, got, err); got != "found dialog" {
 		t.Fatalf("search: %s", got)
 	}
+	if got, err := a.Ask(ctx, "thread", `!session_status {"session":"s1"}`, nil); result(t, got, err) != "state s1" {
+		t.Fatalf("status: %s", got)
+	}
+	if got, err := a.Ask(ctx, "thread", `!session_stop {"session":"s1","job":2}`, nil); result(t, got, err) != "stopped" || strings.Join(thread.stopped, "|") != "s1 2" {
+		t.Fatalf("stop: %s, %q", got, thread.stopped)
+	}
 	thread.err = errTest
-	for _, call := range []string{`!session_send {"session":"s1"}`, `!session_new {}`, `!session_new [1]`} {
+	for _, call := range []string{`!session_send {"session":"s1"}`, `!session_new {}`, `!session_new [1]`, `!session_status {"session":"s1"}`, `!session_stop {"session":"s1"}`, `!session_stop [1]`, `!session_status [1]`} {
 		got, err := a.Ask(ctx, "thread", call, nil)
 		if got := result(t, got, err); !strings.HasPrefix(got, "error: ") {
 			t.Fatalf("%s: %s", call, got)
