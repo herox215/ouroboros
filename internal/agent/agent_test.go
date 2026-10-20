@@ -768,7 +768,8 @@ func TestSteering(t *testing.T) {
 		return said
 	})
 	got, err := a.Run(ctx, "c1", "call shout", Observer{})
-	if err != nil || got != "echo do this instead" || asked != 1 {
+	// Asked after the tool, and before the answer ends.
+	if err != nil || got != "echo do this instead" || asked != 2 {
 		t.Fatalf("got %q, %v, asked %d times", got, err, asked)
 	}
 	var roles []string
@@ -1043,5 +1044,38 @@ func TestWithoutInputMessages(t *testing.T) {
 	got, err := New(llm, "gpt", "sys").Run(WithoutInputMessages(ctx), "c1", "of the helper", Observer{})
 	if err != nil || got != "echo of the helper" || len(llm.msgs) != 2 {
 		t.Fatalf("got %q, %v, sent %+v", got, err, llm.msgs)
+	}
+}
+
+// What the user says while the model writes its answer does not come after
+// that answer as a second one: the model is told its answer as a draft,
+// with what the user said after it, and answers once.
+func TestSteeringWhileAnswering(t *testing.T) {
+	var sent [][]openai.Message
+	llm := llmFunc(func(msgs []openai.Message) openai.Message {
+		sent = append(sent, msgs)
+		return openai.Message{Content: fmt.Sprint("answer ", len(sent))}
+	})
+	a := New(llm, "gpt", "sys")
+	queue := []string{"one more thing"}
+	ctx := WithSteering(context.Background(), func() []string {
+		said := queue
+		queue = nil
+		return said
+	})
+	var drafts []string
+	got, err := a.Run(ctx, "c1", "hi", Observer{Draft: func(text string) { drafts = append(drafts, text) }})
+	if err != nil || got != "answer 2" || len(sent) != 2 {
+		t.Fatalf("got %q, %v, asked %d times", got, err, len(sent))
+	}
+	if !slices.Equal(drafts, []string{"answer 1"}) {
+		t.Fatalf("drafts %q", drafts)
+	}
+	var said []string
+	for _, m := range a.memory.history("c1") {
+		said = append(said, m.Role+": "+m.Content)
+	}
+	if want := []string{"user: hi", "user: " + DraftHead + "answer 1", "user: one more thing", "assistant: answer 2"}; !slices.Equal(said, want) {
+		t.Fatalf("remembered %q", said)
 	}
 }

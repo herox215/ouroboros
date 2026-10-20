@@ -47,6 +47,18 @@ func raw(v any) json.RawMessage {
 // text is a block of text.
 func text(s string) json.RawMessage { return raw(map[string]string{"type": "text", "text": s}) }
 
+// textOf is the text of a block of text, "" for another block.
+func textOf(block json.RawMessage) string {
+	var t struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(block, &t) != nil || t.Type != "text" {
+		return ""
+	}
+	return t.Text
+}
+
 // image is a block with a picture.
 func image(i openai.Image) json.RawMessage {
 	return raw(map[string]any{"type": "image", "source": map[string]string{
@@ -61,11 +73,27 @@ func image(i openai.Image) json.RawMessage {
 func translate(msgs []openai.Message) (system string, frames []frame, err error) {
 	var prompt []string
 	add := func(role string, blocks ...json.RawMessage) {
+		// Old conversations and captured answers can contain empty text
+		// blocks. The API rejects them, even beside valid content. Work on
+		// a copy so the kept blocks of an answer are not changed.
+		blocks = slices.DeleteFunc(slices.Clone(blocks), func(block json.RawMessage) bool {
+			var t struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			return json.Unmarshal(block, &t) == nil && t.Type == "text" && t.Text == ""
+		})
 		if len(blocks) == 0 {
 			return
 		}
 		if n := len(frames); n > 0 && frames[n-1].Type == role {
-			frames[n-1].Message.Content = append(frames[n-1].Message.Content, blocks...)
+			// The model reads blocks of text one after the other as one
+			// text: two messages would run into each other without a break.
+			content := frames[n-1].Message.Content
+			if before, next := textOf(content[len(content)-1]), textOf(blocks[0]); before != "" && next != "" {
+				blocks = append([]json.RawMessage{text("\n\n" + next)}, blocks[1:]...)
+			}
+			frames[n-1].Message.Content = append(content, blocks...)
 			return
 		}
 		f := frame{Type: role}
@@ -100,7 +128,10 @@ func translate(msgs []openai.Message) (system string, frames []frame, err error)
 		case "tool":
 			result := map[string]any{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": m.Content}
 			if len(m.Images) > 0 {
-				parts := []json.RawMessage{text(m.Content)}
+				var parts []json.RawMessage
+				if m.Content != "" {
+					parts = append(parts, text(m.Content))
+				}
 				for _, i := range m.Images {
 					parts = append(parts, image(i))
 				}

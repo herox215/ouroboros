@@ -23,6 +23,11 @@ import (
 // emptyNote is what a model that answered with nothing at all is told.
 const emptyNote = "[Your last message was empty, which is no answer: go on with the task, or answer with what is done and what is not.]"
 
+// DraftHead begins what the agent remembers of an answer the model wrote
+// while more came for it, which did not reach the user: the draft follows
+// it, and what came follows the draft.
+const DraftHead = "[Not from the owner: you wrote the answer below, but more came meanwhile, which follows it, and it did not reach the owner. Answer once, taking in both: only that answer reaches them.]\n\n"
+
 const (
 	maxContexts = 256               // conversations kept in memory
 	maxRounds   = 100               // LLM calls per answer; stops an agent that keeps calling tools
@@ -130,6 +135,9 @@ type Observer struct {
 	Diagnostic func(Diagnostic)
 	Step       func(Step) // every tool call
 	Call       func(Call) // every call of the LLM
+	// Draft is told of an answer the model wrote that is not the answer, as
+	// more came for it meanwhile: the model writes the answer anew.
+	Draft func(text string)
 }
 
 type (
@@ -562,6 +570,23 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		msg.Role = "assistant"
 		msg.Source = openai.MessageSource{}
+		// What the user said while the model wrote its answer would come
+		// as a second answer after it: the model writes one instead, which
+		// takes in both, and what it wrote is told to it as a draft.
+		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) != "" {
+			if steered := steeredMessages(ctx); len(steered) > 0 {
+				if observe.Draft != nil {
+					observe.Draft(msg.Content)
+				}
+				for _, m := range append([]openai.Message{{Role: "user", Content: DraftHead + msg.Content}}, steered...) {
+					if err := emit(m); err != nil {
+						return abandon(err)
+					}
+					history = append(history, m)
+				}
+				continue
+			}
+		}
 		history = append(history, msg)
 		if err := emit(msg); err != nil {
 			return abandon(err)

@@ -563,6 +563,11 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 				say(c.Content)
 			}
 		},
+		Draft: func(string) {
+			if say != nil {
+				say("") // what streamed of it is not the answer, and nothing is said
+			}
+		},
 		Step: func(s agent.Step) {
 			r.step(s)
 			if observe != nil {

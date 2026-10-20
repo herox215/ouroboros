@@ -201,7 +201,7 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 				events = append(events, Event{Kind: Say, PresentationID: id, At: at, Text: said})
 				continue
 			}
-			if strings.HasPrefix(r.Content, assistant.ExchangeHead) {
+			if strings.HasPrefix(r.Content, assistant.ExchangeHead) || strings.HasPrefix(r.Content, agent.DraftHead) {
 				continue
 			}
 			if ended, ok := assistant.AsTaskReport(unnoted(r.Content)); ok {

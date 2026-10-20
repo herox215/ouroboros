@@ -96,7 +96,7 @@ func TestTranslate(t *testing.T) {
 	if err != nil || system != "one" || len(frames) != 3 {
 		t.Fatalf("%q, %+v, %v", system, frames, err)
 	}
-	if got := string(raw(frames[0].Message.Content)); got != `[{"source":{"data":"cG5n","media_type":"image/png","type":"base64"},"type":"image"},{"text":"later","type":"text"},{"text":"","type":"text"}]` {
+	if got := string(raw(frames[0].Message.Content)); got != `[{"source":{"data":"cG5n","media_type":"image/png","type":"base64"},"type":"image"},{"text":"later","type":"text"}]` {
 		t.Errorf("user %s", got)
 	}
 	if got := string(raw(frames[1].Message.Content)); !strings.Contains(got, `"id":"a","input":{}`) || !strings.Contains(got, `"id":"b","input":{}`) || !strings.Contains(got, `"input":{"k":1}`) {
@@ -105,8 +105,50 @@ func TestTranslate(t *testing.T) {
 	if got := string(raw(frames[2].Message.Content)); got != `[{"content":[{"text":"seen","type":"text"},{"source":{"data":"cG5n","media_type":"image/png","type":"base64"},"type":"image"}],"tool_use_id":"a","type":"tool_result"}]` {
 		t.Errorf("tool %s", got)
 	}
+	_, frames, err = translate([]openai.Message{
+		{Role: "user", Content: "first"},
+		{Role: "user", Content: "second"},
+	})
+	if got := string(raw(frames[0].Message.Content)); err != nil || got != `[{"text":"first","type":"text"},{"text":"\n\nsecond","type":"text"}]` {
+		t.Errorf("two messages %s, %v", got, err)
+	}
 	if _, _, err := translate(nil); err == nil {
 		t.Error("an empty conversation")
+	}
+}
+
+func TestTranslateEmptyText(t *testing.T) {
+	png := openai.Image{Type: "image/png", Data: []byte("png")}
+	kept := keepThoughts([]json.RawMessage{
+		json.RawMessage(`{"type":"thinking","thinking":"thought","signature":"s"}`),
+		json.RawMessage(`{"type":"text","text":""}`),
+		json.RawMessage(`{"type":"text","text":"answer"}`),
+	})
+	_, frames, err := translate([]openai.Message{
+		{Role: "user", Content: "first"},
+		{Role: "system"},
+		{Role: "user"},
+		{Role: "user", Content: "second"},
+		{Role: "assistant", Content: "answer", Reasoning: kept, ReasoningField: openai.ReasoningItems},
+		{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "a", Function: openai.FunctionCall{Name: "x", Arguments: "{}"}}}},
+		{Role: "tool", ToolCallID: "a", Images: []openai.Image{png}},
+	})
+	if err != nil || len(frames) != 3 {
+		t.Fatalf("frames %+v, %v", frames, err)
+	}
+	for i, want := range []string{
+		`[{"text":"first","type":"text"},{"text":"\n\nsecond","type":"text"}]`,
+		`[{"type":"thinking","thinking":"thought","signature":"s"},{"type":"text","text":"answer"},{"id":"a","input":{},"name":"x","type":"tool_use"}]`,
+		`[{"content":[{"source":{"data":"cG5n","media_type":"image/png","type":"base64"},"type":"image"}],"tool_use_id":"a","type":"tool_result"}]`,
+	} {
+		if got := string(raw(frames[i].Message.Content)); got != want {
+			t.Errorf("frame %d: %s, want %s", i, got, want)
+		}
+	}
+	// An empty tool result is valid as a string, unlike an empty text block.
+	_, frames, err = translate([]openai.Message{{Role: "tool", ToolCallID: "a"}})
+	if err != nil || string(raw(frames[0].Message.Content)) != `[{"content":"","tool_use_id":"a","type":"tool_result"}]` {
+		t.Fatalf("empty tool result %+v, %v", frames, err)
 	}
 }
 

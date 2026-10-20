@@ -38,7 +38,11 @@ func TestInputAndSteeringMessageSourcesPersist(t *testing.T) {
 	ctx := WithInputMessages(t.Context(), input)
 	input[0].Content = "changed after context copy"
 	ctx = WithSteering(ctx, func() []string { t.Error("old callback used despite message callback"); return nil })
-	ctx = WithMessageSteering(ctx, func() []openai.Message { return steering })
+	ctx = WithMessageSteering(ctx, func() []openai.Message { // taken once, as a queue is
+		said := steering
+		steering = nil
+		return said
+	})
 	if _, err := a.Run(ctx, "id", "ignored", Observer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +96,12 @@ func TestMessageSourceLegacyInputAndSteering(t *testing.T) {
 	a := New(&fakeLLM{}, "m", "s", NewTool("test", "", nil, func(context.Context, struct{}) (string, error) { return "result", nil }))
 	ctx := openai.WithMessageSource(t.Context(), openai.MessageSource{Interface: "cli"})
 	// Legacy steering still receives the context's owner source.
-	ctx = WithSteering(ctx, func() []string { return []string{"later"} })
+	later := []string{"later"}
+	ctx = WithSteering(ctx, func() []string { // taken once, as a queue is
+		said := later
+		later = nil
+		return said
+	})
 	// Initial input is deliberately unattributed so the fake calls the tool.
 	ctx = WithInputMessages(ctx, []openai.Message{{Role: "user", Content: "call test"}})
 	if _, err := a.Respond(ctx, "id", "ignored"); err != nil {
