@@ -8,8 +8,9 @@
 #	OURO_MUTATION_TIME=N   stop after N seconds and report what is done by then
 #	OURO_MUTATION_DIR=DIR  where the report goes (default: .mutation)
 #
-# Survivors are reported for review and do not fail the run: no threshold is
-# agreed on. It fails only when the mutation tests cannot run at all.
+# A survivor that mutation-equivalents.txt does not accept fails the run: it is
+# a missing assertion or an entry still to be added. So does a failure to run
+# the mutation tests at all. There is no score to reach.
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -149,7 +150,7 @@ else
 fi
 
 report=$out/report.txt
-awk -v accepted="$accepted" -v outside="$outside" -v own="_$(go env GOOS).go" '
+awk -v accepted="$accepted" -v outside="$outside" -v own="_$(go env GOOS).go" -v gate="$out/gate.survivors" '
 BEGIN {
 	while ((getline line < accepted) > 0) { split(line, f, " "); equivalent[f[1] " " f[2]] = 1 }
 	while ((getline line < outside) > 0) { split(line, f, " "); unreached[f[1] " " f[2]] = 1 }
@@ -199,6 +200,9 @@ END {
 		split(key, f, " "); file = f[1]; sub(/:[0-9]+:[0-9]+$/, "", file)
 		if ((file in files) && !(key in reached)) printf "mutation-uncoverable.txt: no uncovered %s at %s any more; remove or update the line.\n", f[2], f[1]
 	}
+	# What the run fails on: the survivors that no entry of
+	# mutation-equivalents.txt accepted.
+	print count["LIVED"] + 0 > gate
 }' "$results" >"$report"
 if [ -n "$skipped" ]; then
 	echo "Not mutated, because the package sends signals to process IDs and a mutant could signal the wrong ones:$skipped" >>"$report"
@@ -211,3 +215,14 @@ if [ -n "$unfinished" ]; then
 	echo "          Run them to the end with: make mutation PKGS=\"${unfinished# }\"" >&2
 fi
 echo "mutation: full report in $report, output of gremlins per package next to it ($(($(date +%s) - start))s)."
+
+if [ ! -f "$out/gate.survivors" ]; then
+	echo "mutation: the report is incomplete; nothing is known about the survivors." >&2
+	exit 1
+fi
+survivors=$(cat "$out/gate.survivors")
+if [ "$survivors" -gt 0 ]; then
+	echo "mutation: $survivors survived that no test noticed and no entry accepts." >&2
+	echo "          Add the missing assertion, or list an equivalent mutant in $equivalents with its reason." >&2
+	exit 1
+fi

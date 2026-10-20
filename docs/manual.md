@@ -2258,7 +2258,9 @@ Scope and limits:
 - The mutants of other packages reach that code unchanged, through `daemon.Stop`. Whatever they hand it, one
   function sends the signal, and it refuses a PID of 1 or less (`terminate` in `internal/daemon`, with a test).
 
-**Survivors do not fail the run**; no threshold is agreed on. They are for review, and each is one of two things:
+**A survivor that no entry accepts fails the run**: `make mutation` exits non-zero, and with it the pre-push
+hook. There is no threshold and no score to reach; the list of equivalents is the gate. Each survivor is one of
+two things:
 
 - a **gap in the assertions**: the change alters what the code does and no test notices. Add the assertion.
 - an **equivalent mutant**: the change cannot alter what the code does (for example `<` ↔ `<=` where both
@@ -2308,9 +2310,10 @@ you are on.
   with the findings and the command to run that check alone. The mutation tests it leaves out.
 - A commit that stages no Go code and nothing of the checks themselves (only `README.md`, say) is not checked.
 - **pre-push runs the mutation tests when main is pushed**, on a copy of the pushed commit, **for the packages
-  whose Go files the push changes on main**, leaving out the packages of `coverage-exclusions.txt`. It runs to
-  the end, however many packages a push changes, prints the survivors and does not reject the push; only when
-  the mutation tests cannot run at all is the push rejected. A push to any other branch runs nothing.
+  whose production Go files the push changes on main**, leaving out the packages of `coverage-exclusions.txt`
+  and the packages of which the push changes only tests. It runs to the end, however many packages a push
+  changes, and rejects the push when a survivor is left that `mutation-equivalents.txt` does not accept, or when
+  the mutation tests cannot run. A push to any other branch runs nothing.
 
 | Variable | Effect |
 |---|---|

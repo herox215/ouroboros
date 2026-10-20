@@ -7,7 +7,8 @@ unleash:
   integration: false
   # timeout-coefficient is not set here: scripts/mutation.sh works it out for
   # each package from how long its tests take.
-  # No thresholds: survivors are reported for review, they fail nothing.
+  # No thresholds: scripts/mutation.sh fails on a survivor that no entry of
+  # mutation-equivalents.txt accepts, not on a score.
   threshold:
     efficacy: 0
     mutant-coverage: 0

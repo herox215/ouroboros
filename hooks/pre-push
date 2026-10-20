@@ -1,6 +1,7 @@
 #!/bin/sh
 # Runs the mutation tests when commits are pushed to main, for the packages
-# those commits change. Installed per clone with "make hooks". Other branches
+# those commits change outside their tests: a push of tests or of no Go code has
+# nothing new to mutate. Installed per clone with "make hooks". Other branches
 # are pushed without them.
 #
 # The tests run on a copy of the pushed commit, not on the working tree.
@@ -45,8 +46,13 @@ fi
 # mutation tests leave out too.
 excluded=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$top/coverage-exclusions.txt")
 
+# Only a change to production code can make a new mutant: a package whose only
+# changed files are its tests or none of its Go files is left out, which is most
+# of the packages of a push that tests the work of another.
+production=$(printf '%s\n' "$changed" | grep -E '\.go$' | grep -v '_test\.go$' || true)
+
 packages=
-for dir in $(printf '%s\n' "$changed" | sed -n 's|/[^/]*\.go$||p' | sort -u); do
+for dir in $(printf '%s\n' "$production" | sed -n 's|/[^/]*\.go$||p' | sort -u); do
 	# A package that the pushed commit deletes has nothing left to mutate.
 	git cat-file -e "$pushed:$dir" 2>/dev/null || continue
 	for left in $excluded; do
@@ -55,7 +61,7 @@ for dir in $(printf '%s\n' "$changed" | sed -n 's|/[^/]*\.go$||p' | sort -u); do
 	packages="$packages $dir"
 done
 if [ -z "$packages" ]; then
-	echo "pre-push: no Go package changed on main, mutation tests skipped."
+	echo "pre-push: no production Go file changed on main, mutation tests skipped."
 	exit 0
 fi
 
@@ -78,13 +84,14 @@ export OURO_TOOLS_DIR OURO_MUTATION_DIR
 
 cd "$snapshot/tree"
 
-# They report, they do not reject: no threshold is agreed on.
+# They reject a push that leaves a survivor no entry of mutation-equivalents.txt
+# accepts, and one whose mutation tests cannot run. There is no score to reach.
 start=$(date +%s)
 echo "pre-push: mutation tests of the packages changed on main:$packages ..."
 # shellcheck disable=SC2086
 if ! OURO_MUTATION_TIME=${OURO_HOOK_MUTATION_TIME:-0} scripts/mutation.sh $packages; then
-	echo "pre-push: the mutation tests could not run (see above); the push was rejected." >&2
-	echo "          Push without them: OURO_HOOK_MUTATION=off git push" >&2
+	echo "pre-push: the mutation tests did not pass (see above); the push was rejected." >&2
+	echo "          Add the missing test or the entry, or push without them: OURO_HOOK_MUTATION=off git push" >&2
 	exit 1
 fi
 echo "pre-push: ok, $(($(date +%s) - start))s."
