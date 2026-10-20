@@ -140,7 +140,7 @@ func newCrypto(ctx context.Context, c *Client) (cryptography, error) {
 func (s *sdkCrypto) decrypt(ctx context.Context, e *event.Event) (*event.Event, error) {
 	return s.helper.Decrypt(ctx, e)
 }
-func (s *sdkCrypto) encrypt(ctx context.Context, room id.RoomID, peer id.UserID, text string) (*event.EncryptedEventContent, error) {
+func (s *sdkCrypto) encrypt(ctx context.Context, room id.RoomID, peer id.UserID, content *event.MessageEventContent) (*event.EncryptedEventContent, error) {
 	mach := s.helper.Machine()
 	// Start a fresh session for each reply, so former room members can never
 	// decrypt new replies using a previously shared outbound session.
@@ -150,7 +150,7 @@ func (s *sdkCrypto) encrypt(ctx context.Context, room id.RoomID, peer id.UserID,
 	if err := mach.ShareGroupSession(ctx, room, []id.UserID{mach.Client.UserID, peer}); err != nil {
 		return nil, err
 	}
-	return mach.EncryptMegolmEvent(ctx, room, event.EventMessage, &event.MessageEventContent{MsgType: event.MsgText, Body: text})
+	return mach.EncryptMegolmEvent(ctx, room, event.EventMessage, content)
 }
 func (s *sdkCrypto) close() error {
 	s.helper.Machine().Destroy()

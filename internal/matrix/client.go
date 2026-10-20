@@ -63,7 +63,7 @@ func ValidateServer(server string) error {
 
 type cryptography interface {
 	decrypt(context.Context, *event.Event) (*event.Event, error)
-	encrypt(context.Context, id.RoomID, id.UserID, string) (*event.EncryptedEventContent, error)
+	encrypt(context.Context, id.RoomID, id.UserID, *event.MessageEventContent) (*event.EncryptedEventContent, error)
 	close() error
 }
 
@@ -215,6 +215,11 @@ func (c *Client) TypingTo(ctx context.Context, room, expectedPeer string, typing
 func (c *Client) send(ctx context.Context, room string, expectedPeer id.UserID, text string) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.sendContent(ctx, room, expectedPeer, &event.MessageEventContent{MsgType: event.MsgText, Body: text})
+}
+
+// sendContent is send for any message content; c.sendMu is held.
+func (c *Client) sendContent(ctx context.Context, room string, expectedPeer id.UserID, content *event.MessageEventContent) error {
 	c.mu.RLock()
 	crypt := c.crypto
 	ready := c.running && crypt != nil
@@ -231,7 +236,7 @@ func (c *Client) send(ctx context.Context, room string, expectedPeer id.UserID, 
 	if expectedPeer != "" && peer != expectedPeer {
 		return errors.New("the peer of the Matrix room changed")
 	}
-	encrypted, err := crypt.encrypt(ctx, id.RoomID(room), peer, text)
+	encrypted, err := crypt.encrypt(ctx, id.RoomID(room), peer, content)
 	if err != nil {
 		return errors.New("the Matrix encryption failed")
 	}

@@ -371,14 +371,14 @@ func TestRunSyncDropsHistoryAndPlaintext(t *testing.T) {
 			<-r.Context().Done()
 			return
 		}
-		encrypted, err := aliceCrypto.encrypt(ctx, "!dm:test", "@bot:test", "live secret")
+		encrypted, err := aliceCrypto.encrypt(ctx, "!dm:test", "@bot:test", &event.MessageEventContent{MsgType: event.MsgText, Body: "live secret"})
 		if err != nil {
 			t.Error(err)
 			cancel()
 			return
 		}
 		// A room that was left is no room to answer in, whatever its state.
-		left, err := aliceCrypto.encrypt(ctx, "!left:test", "@bot:test", "left secret")
+		left, err := aliceCrypto.encrypt(ctx, "!left:test", "@bot:test", &event.MessageEventContent{MsgType: event.MsgText, Body: "left secret"})
 		if err != nil {
 			t.Error(err)
 			cancel()
@@ -609,7 +609,7 @@ func TestSDKEncryptionFailuresSendNothing(t *testing.T) {
 	m.mu.Unlock()
 	// Without its store, the encryption cannot start a new session.
 	botCrypto.helper.Close()
-	if _, err := botCrypto.encrypt(context.Background(), "!dm:test", "@alice:test", "must not leave"); err == nil {
+	if _, err := botCrypto.encrypt(context.Background(), "!dm:test", "@alice:test", &event.MessageEventContent{MsgType: event.MsgText, Body: "must not leave"}); err == nil {
 		t.Fatal("encrypted without a session store")
 	}
 	m.mu.Lock()

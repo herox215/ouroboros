@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -37,6 +38,7 @@ type homeserver struct {
 	joins   []string
 	sent    []string // rooms an encrypted message was sent to
 	typing  []bool
+	uploads [][]byte // what was uploaded as media
 }
 
 func newHomeserver(t *testing.T, syncs ...map[string]any) *homeserver {
@@ -54,6 +56,14 @@ func (h *homeserver) serve(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(v); err != nil {
 			h.t.Error(err)
 		}
+	}
+	if r.URL.Path == "/_matrix/media/v3/upload" {
+		data, _ := io.ReadAll(r.Body)
+		h.mu.Lock()
+		h.uploads = append(h.uploads, data)
+		h.mu.Unlock()
+		encode(map[string]string{"content_uri": "mxc://test/upload"})
+		return
 	}
 	if path[0] == "sync" {
 		h.mu.Lock()
@@ -183,7 +193,8 @@ type fakeCrypto struct {
 	failures  map[id.EventID]int
 	change    map[id.EventID]func(*event.Event)
 	encrypted int
-	plaintext []string     // what was handed to encrypt
+	plaintext []string // what was handed to encrypt
+	contents  []*event.MessageEventContent
 	sealing   func() error // runs while a message is encrypted
 	closed    bool
 }
@@ -206,10 +217,11 @@ func (f *fakeCrypto) decrypt(_ context.Context, e *event.Event) (*event.Event, e
 	return plain, nil
 }
 
-func (f *fakeCrypto) encrypt(_ context.Context, _ id.RoomID, _ id.UserID, text string) (*event.EncryptedEventContent, error) {
+func (f *fakeCrypto) encrypt(_ context.Context, _ id.RoomID, _ id.UserID, content *event.MessageEventContent) (*event.EncryptedEventContent, error) {
 	f.mu.Lock()
 	f.encrypted++
-	f.plaintext = append(f.plaintext, text)
+	f.plaintext = append(f.plaintext, content.Body)
+	f.contents = append(f.contents, content)
 	hook := f.sealing
 	f.mu.Unlock()
 	if hook != nil {

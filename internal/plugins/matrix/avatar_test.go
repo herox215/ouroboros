@@ -161,7 +161,7 @@ func TestAvatarToolRefusesUnauthorizedAndProtectedFiles(t *testing.T) {
 	}
 }
 
-func TestPluginContributesAvatarTool(t *testing.T) {
+func TestPluginContributesItsTools(t *testing.T) {
 	k := kernel.New()
 	dir := home.Dir(t.TempDir())
 	if err := k.Start(sessionProvider(&testSessions{}), Plugin(dir, &guard.Guard{Home: string(dir)})); err != nil {
@@ -169,7 +169,7 @@ func TestPluginContributesAvatarTool(t *testing.T) {
 	}
 	defer k.Stop()
 	tools := plugin.All[plugin.Tool](k.Context())
-	if len(tools) != 1 || tools[0].Name != setAvatar || !tools[0].OwnerOnly {
+	if len(tools) != 2 || tools[0].Name != setAvatar || tools[1].Name != sendImage || !tools[0].OwnerOnly || !tools[1].OwnerOnly {
 		t.Fatalf("tools: %+v", tools)
 	}
 }

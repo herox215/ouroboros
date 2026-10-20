@@ -42,6 +42,9 @@ func imagesOf(msg transport.Message) []plugin.Image {
 func (c *sdkConnection) SendTo(ctx context.Context, room, peer, text string) error {
 	return c.client.SendTo(ctx, room, peer, text)
 }
+func (c *sdkConnection) SendImageTo(ctx context.Context, room, peer, name string, data []byte) error {
+	return c.client.SendImageTo(ctx, room, peer, name, data)
+}
 func (c *sdkConnection) TypingTo(ctx context.Context, room, peer string, typing bool) error {
 	return c.client.TypingTo(ctx, room, peer, typing)
 }

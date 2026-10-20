@@ -18,6 +18,8 @@ func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 	return plugin.New("matrix", func(ctx *plugin.Context, n needs) error {
 		s := store{filepath.Join(dir.Gateways(), "matrix")}
 		plugin.Add(ctx, avatarTool(s, files))
+		running := &live{}
+		plugin.Add(ctx, imageTool(running, files))
 		plugin.Add(ctx, outputHook())
 		c := &controller{store: s, receive: receive}
 		c.connect = func(runCtx context.Context, cfg configuration) (connection, error) {
@@ -29,7 +31,7 @@ func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 			if err != nil {
 				return nil, err
 			}
-			return &sessionConnection{connection: transport, conversations: conversations, store: s, revision: cfg.Revision}, nil
+			return &sessionConnection{connection: transport, conversations: conversations, store: s, revision: cfg.Revision, live: running}, nil
 		}
 		plugin.Add(ctx, plugin.Gateway{Name: "matrix", Title: "Matrix",
 			Settings: func(context.Context) (plugin.GatewaySettings, error) { return s.snapshot() },
@@ -76,6 +78,7 @@ type sessionConnection struct {
 	conversations *conversations
 	store         store
 	revision      string
+	live          *live
 }
 
 func (s *sessionConnection) Run(ctx context.Context, receive func(context.Context, incoming) error) error {
@@ -83,6 +86,10 @@ func (s *sessionConnection) Run(ctx context.Context, receive func(context.Contex
 	defer cancel()
 	done := make(chan struct{})
 	guarded := guardedConnection{connection: s.connection, store: s.store, revision: s.revision}
+	if s.live != nil {
+		s.live.set(guarded, s.conversations)
+		defer s.live.clear(s.conversations)
+	}
 	go func() { defer close(done); s.conversations.poll(runCtx, guarded) }()
 	err := s.connection.Run(runCtx, receive)
 	cancel()

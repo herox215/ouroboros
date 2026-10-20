@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -93,14 +94,20 @@ func avatarData(ctx context.Context, args avatarArgs, files *guard.Guard) ([]byt
 		}
 		return images[index-1].Data, nil
 	}
+	return localImage(ctx, files, setAvatar, args.Path, maxAvatarBytes, "Matrix avatar", "5 MiB")
+}
+
+// localImage reads the image file path for tool as far as the rules of files
+// let it, a regular file of at most limit bytes; what names it in errors.
+func localImage(ctx context.Context, files *guard.Guard, tool, path string, limit int64, what, size string) ([]byte, error) {
 	if files == nil {
-		return nil, errors.New("the Matrix avatar file access is unavailable")
+		return nil, fmt.Errorf("the %s file access is unavailable", what)
 	}
-	checker, err := files.Checker(guard.Access{Tool: setAvatar, Directory: workdir.Of(ctx)})
+	checker, err := files.Checker(guard.Access{Tool: tool, Directory: workdir.Of(ctx)})
 	if err != nil {
 		return nil, err
 	}
-	path, err := checker.Check(guard.Read, args.Path)
+	path, err = checker.Check(guard.Read, path)
 	if err != nil {
 		return nil, err
 	}
@@ -114,15 +121,10 @@ func avatarData(ctx context.Context, args avatarArgs, files *guard.Guard) ([]byt
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, errors.New("the avatar must be a regular image file")
+		return nil, fmt.Errorf("the %s must be a regular image file", what)
 	}
-	if info.Size() > maxAvatarBytes {
-		return nil, errors.New("the Matrix avatar exceeds 5 MiB")
+	if info.Size() > limit {
+		return nil, fmt.Errorf("the %s exceeds %s", what, size)
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxAvatarBytes+1))
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
+	return io.ReadAll(io.LimitReader(f, limit+1))
 }
