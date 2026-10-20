@@ -250,7 +250,9 @@ func TestEndlessToolCallsAreStopped(t *testing.T) {
 	for i, last := range llm.lasts {
 		told := strings.Contains(last, fmt.Sprintf("this is call %d of at most %d", i+1, maxRounds))
 		asked := strings.Contains(last, fmt.Sprintf("this is call %d of the LLM for this answer. If you are still looking", i+1))
-		if told != (i >= warnRounds) || asked != (i == askRounds) || strings.Contains(last, "Not from the user") != (told || asked) {
+		// 80 is warnRounds, written out: a test that takes its expectation
+		// from the constant would not notice a change of it.
+		if told != (i >= 80) || asked != (i == askRounds) || strings.Contains(last, "Not from the user") != (told || asked) {
 			t.Fatalf("call %d: %q", i+1, last)
 		}
 	}

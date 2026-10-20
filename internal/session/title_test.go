@@ -79,6 +79,9 @@ func roles(msgs []openai.Message) string {
 // the answer ends once it named it, or not. The title is told to who watches
 // the session, listed and kept along with it.
 func TestTitleOnceThereIsATopic(t *testing.T) {
+	if titleTime != 20*time.Second {
+		t.Fatalf("titleTime is %v; the deadline below is written for 20 seconds", titleTime)
+	}
 	dir := t.TempDir()
 	n := newNamer()
 	s, arch, l := archived(t, &fakeAgent{title: n.title}, dir, time.Now())
@@ -90,7 +93,11 @@ func TestTitleOnceThereIsATopic(t *testing.T) {
 	if roles(c.conversation) != "user:hi" {
 		t.Fatalf("asked with %q", roles(c.conversation))
 	}
-	if deadline, ok := c.ctx.Deadline(); !ok || time.Until(deadline) > titleTime {
+	// Between 15 and 25 seconds is the 20 seconds of titleTime, written out:
+	// a test that takes its expectation from the constant would not notice a
+	// change of it.
+	deadline, ok := c.ctx.Deadline()
+	if d := time.Until(deadline); !ok || d > 25*time.Second || d < 15*time.Second {
 		t.Fatalf("no time to name it: %v", deadline)
 	}
 	c.reply <- titled{} // no topic yet
