@@ -194,6 +194,9 @@ type Answer struct {
 	values  sync.Map
 	ctx     context.Context
 	ended   atomic.Bool // by End
+	// kept is what the tools of the round keep, see Keep.
+	keptMu sync.Mutex
+	kept   []openai.Message
 }
 
 // End makes the answer of ctx end once the tools of its round ran, without a
@@ -261,6 +264,24 @@ func WithOwner(ctx context.Context, ask func(ctx context.Context, question json.
 func AskOwner(ctx context.Context, question json.RawMessage) (string, error) {
 	reply, err := AskOwnerReply(ctx, question)
 	return reply.Text, err
+}
+
+// CanAskOwner reports whether a question to the owner under ctx reaches
+// someone, see WithOwner: false where AskOwner fails with ErrNoOwner.
+func CanAskOwner(ctx context.Context) bool {
+	ask, ok := ctx.Value(ownerKey{}).(func(context.Context, json.RawMessage) (OwnerReply, error))
+	return ok && ask != nil
+}
+
+// talkKey keeps the conversation an answer started with, see Talk.
+type talkKey struct{}
+
+// Talk is the conversation the answer of ctx started with, up to the message
+// it answers, nil outside of an answer: a tool can tell from it in what
+// language the owner speaks.
+func Talk(ctx context.Context) []openai.Message {
+	talk, _ := ctx.Value(talkKey{}).([]openai.Message)
+	return talk
 }
 
 // WithoutOwner returns a context under which nobody is asked: AskOwner fails
@@ -417,6 +438,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		input = []openai.Message{{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx)}}
 	}
 	history = append(history, copyMessages(input)...)
+	ctx = context.WithValue(ctx, talkKey{}, copyMessages(history))
 	origin, peer := a2a.OriginFrom(ctx)
 	processing := Processing{a.llm, a.model, Conversation{contextID, peer, origin}}
 	var contributions, events []openai.Message
@@ -575,6 +597,14 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			result.Content = unrepeated(result.Content, history[asked:])
 			spent.Add(int64(len(result.Content)))
 			history = append(history, result)
+		}
+		// What the tools kept follows all results: none may stand between
+		// a call and its result.
+		for _, m := range AnswerOf(ctx).takeKept() {
+			if err := emit(m); err != nil {
+				return abandon(err)
+			}
+			history = append(history, m)
 		}
 		delivered, err := report()
 		if err != nil {

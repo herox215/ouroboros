@@ -195,6 +195,15 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			if strings.HasPrefix(unnoted(r.Content), backgroundHead) {
 				continue // internal background result, not a message of the owner
 			}
+			// What a tool said to the owner shows as it did, the same
+			// occurrence; what the agent kept of what was asked shows not.
+			if said, ok := strings.CutPrefix(r.Content, agent.SaidHead); ok {
+				events = append(events, Event{Kind: Say, PresentationID: id, At: at, Text: said})
+				continue
+			}
+			if strings.HasPrefix(r.Content, assistant.ExchangeHead) {
+				continue
+			}
 			if ended, ok := assistant.AsTaskReport(unnoted(r.Content)); ok {
 				events = append(events, Event{Kind: Task, At: at, N: ended.N, Remark: ended.Title, Text: ended.Answer, Err: ended.Err})
 				continue

@@ -17,12 +17,10 @@ func TestQuickAnswers(t *testing.T) {
 		reply            bool
 	}{
 		{"plain answer", "Postgres", "Postgres", []plugin.SessionEvent{question}, true},
-		{"number", " 2 ", "Postgres", []plugin.SessionEvent{question}, true},
-		{"first option", "1", "SQLite", []plugin.SessionEvent{question}, true},
+		{"option in other case", " postgres ", "Postgres", []plugin.SessionEvent{question}, true},
+		{"number stays text", "2", "2", []plugin.SessionEvent{question}, true},
 		{"free text", "Something else", "Something else", []plugin.SessionEvent{question}, true},
-		{"out of range stays text", "3", "3", []plugin.SessionEvent{question}, true},
-		{"zero stays text", "0", "0", []plugin.SessionEvent{question}, true},
-		{"explicit number", "/answer 2", "Postgres", []plugin.SessionEvent{question}, true},
+		{"explicit answer", "/answer sqlite", "SQLite", []plugin.SessionEvent{question}, true},
 		{"ordinary message", "2", "", nil, false},
 		{"answered question", "2", "", []plugin.SessionEvent{question, {Kind: plugin.SessionAsked, Done: true}}, false},
 		{"canceled question", "2", "", []plugin.SessionEvent{question, {Kind: plugin.SessionCanceled}}, false},

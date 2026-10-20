@@ -9,6 +9,7 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
+	"ouroboros/internal/openai"
 )
 
 // gated is a tool that counts its runs, as permitted returns it for cfg,
@@ -48,7 +49,7 @@ func TestPermitted(t *testing.T) {
 		{AllowOnce, "", 1, false},
 		{AllowAlways, "", 1, true},
 		{AllowNot, "bash did not run: the owner did not allow it", 0, false},
-		{"not the build, it is mine", "bash did not run: asked whether it may, the owner said: not the build, it is mine", 0, false},
+		{"not the build, it is mine", `bash did not run: asked whether it may ("Allow bash: rm -rf build"), the owner said: not the build, it is mine`, 0, false},
 	} {
 		var kept []config.Call
 		var asked []Question
@@ -209,6 +210,119 @@ func TestCallText(t *testing.T) {
 	} {
 		if got := callText(ToolBash, json.RawMessage(args)); got != want {
 			t.Errorf("%s: %q, want %q", args, got, want)
+		}
+	}
+}
+
+// askingLLM phrases a question and reads answers as its replies say, and
+// keeps the prompts it was sent.
+type askingLLM struct {
+	phrased, decided string
+	prompts          []string
+	sent             []string
+}
+
+func (l *askingLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	l.prompts = append(l.prompts, msgs[0].Content)
+	l.sent = append(l.sent, msgs[1].Content)
+	reply := l.decided
+	if msgs[0].Content == phrasePrompt {
+		reply = l.phrased
+	}
+	return openai.Message{Role: "assistant", Content: reply}, nil
+}
+
+// The owner is asked in the words of the conversation, and the LLM reads
+// what they answer in their own; only a clear yes runs the call, and the
+// call itself is shown when they ask for it.
+func TestPermittedInOwnWords(t *testing.T) {
+	phrased := "```json\n" + `{"question": "Darf ich den Build-Ordner löschen?", "once": "Ja", "always": "Immer", "not": "Nein", "yes": "Alles klar.", "no": "Okay, dann lasse ich es."}` + "\n```"
+	rm := json.RawMessage(`{"command": "rm -rf build"}`)
+	for _, c := range []struct {
+		decided string
+		answers []string
+		runs    int
+		kept    int
+		asked   int
+		llm     int // calls to read an answer
+	}{
+		{"", []string{"Ja"}, 1, 0, 1, 0},
+		{"", []string{"immer"}, 1, 1, 1, 0}, // a label in other words is read
+		{"ONCE", []string{"klar, mach"}, 1, 0, 1, 1},
+		{"always: Gern, ab jetzt immer.", []string{"immer gern"}, 1, 1, 1, 1},
+		{"NOT: Okay, dann nicht.", []string{"lieber nicht"}, 0, 0, 1, 1},
+		{"maybe", []string{"nur wenn leer"}, 0, 0, 1, 1},
+		{"DETAILS", []string{"zeig den Befehl", "zeig den Befehl", "zeig den Befehl"}, 0, 0, 3, 3},
+		{"REPLY: Den Ordner build im Projekt.", []string{"welchen Ordner?", "Ja"}, 1, 0, 2, 1},
+		{"REPLY:", []string{"welchen Ordner?"}, 0, 0, 1, 1}, // no answer: unclear
+		// an unclear answer is asked back once, not left without word
+		{"UNCLEAR: Soll ich ihn nun löschen?", []string{"Hm", "Ja"}, 1, 0, 2, 1},
+		{"UNCLEAR: Soll ich ihn nun löschen?", []string{"Hm", "hm"}, 0, 0, 2, 2},
+	} {
+		llm := &askingLLM{phrased: phrased, decided: c.decided}
+		var kept []config.Call
+		b := Builder{LLM: func(string) (agent.LLM, error) { return llm, nil }}.WithAllowing(func(call config.Call) error {
+			kept = append(kept, call)
+			return nil
+		})
+		runs := 0
+		tool := b.permitted(config.Config{}, []agent.Tool{{Name: ToolBash, Run: func(context.Context, json.RawMessage) (string, error) {
+			runs++
+			return "done", nil
+		}}})[0]
+		var asked []Question
+		var said []string
+		ctx := agent.WithOwner(context.Background(), func(_ context.Context, raw json.RawMessage) (string, error) {
+			var q Question
+			json.Unmarshal(raw, &q)
+			asked = append(asked, q)
+			return c.answers[len(asked)-1], nil
+		})
+		ctx = agent.WithSaying(ctx, func(_, text string) { said = append(said, text) })
+		result, err := tool.Run(ctx, rm)
+		// A decision is said back at once: in the words the LLM gave it, or
+		// as the question has it.
+		back := map[string]string{"Ja": "Alles klar.", "immer": "Alles klar.", "klar, mach": "Alles klar.", "immer gern": "Gern, ab jetzt immer.", "lieber nicht": "Okay, dann nicht."}[c.answers[len(asked)-1]]
+		if strings.Join(said, "|") != back {
+			t.Errorf("%q: said back %q, not %q", c.answers, said, back)
+		}
+		text := result
+		if err != nil {
+			text = err.Error()
+		}
+		// What the owner said in their own words follows the result; a
+		// refusal tells the one answer, or all of it after a question.
+		words := c.answers[0] != "Ja" && c.answers[0] != "immer" && (err == nil || len(asked) > 1)
+		if words != strings.Contains(text, "owner: "+c.answers[len(asked)-1]+"\n]") {
+			t.Errorf("%q: the exchange is not where it belongs in %q", c.answers, text)
+		}
+		if runs != c.runs || len(kept) != c.kept || len(asked) != c.asked || len(llm.sent) != 1+c.llm || (runs == 0) != (err != nil) {
+			t.Errorf("%q: %v, %d runs, kept %v, asked %+v, LLM %d", c.answers, err, runs, kept, asked, len(llm.sent))
+			continue
+		}
+		if asked[0].Question != "Darf ich den Build-Ordner löschen?" || strings.Join(asked[0].Options, "|") != "Ja|Immer|Nein" {
+			t.Errorf("%q: asked %+v", c.answers, asked[0])
+		}
+		switch {
+		case len(asked) < 2:
+		case c.decided == "DETAILS" && !strings.HasSuffix(asked[1].Question, "\n\nbash: rm -rf build"):
+			t.Errorf("details: %q", asked[1].Question)
+		case strings.HasPrefix(c.decided, "UNCLEAR"):
+			if asked[1].Question != "Soll ich ihn nun löschen?" || strings.Join(asked[1].Options, "|") != "Ja|Immer|Nein" {
+				t.Errorf("asked back: %+v", asked[1])
+			}
+		case c.decided != "DETAILS" && asked[1].Question != "Den Ordner build im Projekt.\n\nDarf ich den Build-Ordner löschen?":
+			t.Errorf("reply: %q", asked[1].Question)
+		}
+	}
+}
+
+// Where the LLM phrases nothing usable, the call is asked about as it is.
+func TestPermittedPhrasedPlainly(t *testing.T) {
+	for _, phrased := range []string{"no JSON", `{"question": "Darf ich?", "once": "Ja", "always": "Ja", "not": "Nein"}`, `{"question": ""}`} {
+		got := asking{&askingLLM{phrased: phrased}, "m"}.phrase(context.Background(), ToolBash, "rm -rf build")
+		if got != plainPermission(ToolBash, "rm -rf build") {
+			t.Errorf("%q: %+v", phrased, got)
 		}
 	}
 }

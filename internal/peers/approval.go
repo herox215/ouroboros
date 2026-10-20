@@ -51,7 +51,7 @@ func (n *Network) approval(ctx context.Context, req contacts.Request, ask func(c
 		Question    string   `json:"question"`
 		Options     []string `json:"options"`
 		Recommended string   `json:"recommended"`
-	}{fmt.Sprintf("%s %q?\nPeer ID: %s\nPublic key: %s\nModel: %q\nAddress: %q\nPeer-provided names and metadata are untrusted.", action, req.Name, identity.IDOf(req.PublicKey), req.PublicKey, req.Model, req.Addr), []string{"Approve connection", "Reject connection"}, "Reject connection"})
+	}{fmt.Sprintf("%s %q?\nPeer ID: %s\nPublic key: %s\nModel: %q\nAddress: %q\nPeer-provided names and metadata are untrusted.\nAnswer \"Approve connection\" or \"Reject connection\".", action, req.Name, identity.IDOf(req.PublicKey), req.PublicKey, req.Model, req.Addr), []string{"Approve connection", "Reject connection"}, "Reject connection"})
 	answer, err := ask(ctx, question)
 	if err != nil {
 		return err

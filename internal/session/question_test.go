@@ -137,3 +137,23 @@ func TestAwaitAnswersAQuestion(t *testing.T) {
 		t.Fatalf("got %q, %v", got, err)
 	}
 }
+
+// What a tool says to the owner on its way, like that it goes on with
+// their answer, is told at once as a Say.
+func TestToolSays(t *testing.T) {
+	a := &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if !agent.Say(ctx, "Alles klar, ich lösche sie.") {
+			return "", errors.New("nobody hears it")
+		}
+		return "done", nil
+	}}
+	s := service(t, a)
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	if err := s.Ask(ctx, "s1", "go"); err != nil {
+		t.Fatal(err)
+	}
+	if got := told(until(t, live, Answer)); !same(got, "message go", "say Alles klar, ich lösche sie.", "answer done") {
+		t.Fatalf("got %q", got)
+	}
+}

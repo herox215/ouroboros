@@ -85,3 +85,45 @@ func TestReportFollowsToolResults(t *testing.T) {
 		t.Fatalf("%d LLM calls", calls)
 	}
 }
+
+// What a tool says to the owner, and what it keeps, follows the results of
+// its round as messages of their own, which the LLM reads and the next
+// answer remembers; outside of an answer nothing is kept.
+func TestKept(t *testing.T) {
+	if Keep(context.Background(), "x") {
+		t.Fatal("kept outside of an answer")
+	}
+	var shown []string
+	tool := Tool{Name: "work", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Keep(ctx, "asked and answered")
+		Say(ctx, "Alles klar.")
+		return "done", nil
+	}}
+	var sent []openai.Message
+	llm := llmFunc(func(msgs []openai.Message) openai.Message {
+		sent = msgs
+		if len(msgs) == 2 {
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "work", Arguments: "{}"}}, {ID: "2", Function: openai.FunctionCall{Name: "work", Arguments: "{}"}}}}
+		}
+		return openai.Message{Content: "fine"}
+	})
+	bot := New(llm, "m", "sys", tool)
+	ctx := WithSaying(context.Background(), func(id, text string) { shown = append(shown, id+" "+text) })
+	if got, err := bot.Respond(ctx, "c", "go"); err != nil || got != "fine" {
+		t.Fatalf("%q, %v", got, err)
+	}
+	var roles []string
+	for _, m := range sent[2:] {
+		roles = append(roles, m.Role+" "+m.Content)
+	}
+	said := "user " + SaidHead + "Alles klar."
+	if want := []string{"assistant ", "tool done", "tool done", "user asked and answered", said, "user asked and answered", said}; fmt.Sprint(roles) != fmt.Sprint(want) {
+		t.Fatalf("sent %q", roles)
+	}
+	if len(shown) != 2 || shown[0] == shown[1] || len(shown[0]) < len(" Alles klar.") {
+		t.Fatalf("shown %q", shown)
+	}
+	if remembered := bot.memory.history("c"); len(remembered) != 9 { // go, the calls, two results, four kept, the answer
+		t.Fatalf("remembered %d messages", len(remembered))
+	}
+}

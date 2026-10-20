@@ -160,9 +160,12 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 		if len(msg.Images) != 0 {
 			return conn.SendTo(ctx, msg.RoomID, msg.Sender, "Please answer the pending question with text first, then resend the image.")
 		}
-		options := pending.AsQuestion().Options
-		if n, err := strconv.Atoi(text); err == nil && n > 0 && n <= len(options) {
-			text = options[n-1]
+		// The question shows no options here: an answer that says one of
+		// them is that option, any other the agent reads in its own words.
+		for _, option := range pending.AsQuestion().Options {
+			if strings.EqualFold(strings.Join(strings.Fields(text), " "), option) {
+				text = option
+			}
 		}
 		return c.adapter.Reply(ctx, who, entry.Session, text)
 	}
@@ -201,15 +204,9 @@ func presented(e plugin.SessionEvent) string {
 		if q.Question == "" {
 			return ""
 		}
-		text := q.Question
-		if len(q.Options) > 0 {
-			text += "\n"
-			for i, option := range q.Options {
-				text += "\n" + strconv.Itoa(i+1) + ". " + option
-			}
-			return text + "\n\nReply with a number or your own answer (no command needed)."
-		}
-		return text + "\n\nJust send your answer (no command needed)."
+		// A question reads here as a message of the conversation: it is
+		// answered in own words, which the agent reads.
+		return q.Question
 	}
 	return ""
 }

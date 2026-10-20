@@ -91,3 +91,30 @@ func TestUserQuestion(t *testing.T) {
 		t.Fatalf("for a peer: %v, asked %q", err, asked)
 	}
 }
+
+// The owner hears at once that their answer arrived, in the words the LLM
+// finds for it; without an LLM, or where nobody answered, nothing is said.
+func TestUserQuestionAcknowledged(t *testing.T) {
+	llm := &askingLLM{decided: "\"Alles klar, dann SQLite.\""}
+	for _, c := range []struct {
+		ask    asking
+		answer string
+		err    error
+		said   string
+	}{
+		{asking{llm, "m"}, "SQLite", nil, "Alles klar, dann SQLite."},
+		{asking{}, "SQLite", nil, ""},
+		{asking{llm, "m"}, "", errors.New("gone"), ""},
+	} {
+		var said []string
+		ctx := agent.WithOwner(context.Background(), func(context.Context, json.RawMessage) (string, error) { return c.answer, c.err })
+		ctx = agent.WithSaying(ctx, func(_, text string) { said = append(said, text) })
+		got, err := userQuestion(c.ask.acknowledge).Run(ctx, json.RawMessage(`{"question":"Welche Datenbank?","options":["SQLite","Postgres"]}`))
+		if got != c.answer || (err != nil) != (c.err != nil) || strings.Join(said, "|") != c.said {
+			t.Errorf("%+v: %q, %v, said %q", c, got, err, said)
+		}
+	}
+	if sent := llm.sent[0]; !strings.Contains(sent, "Welche Datenbank?\n(SQLite / Postgres)") || !strings.Contains(sent, "<answer>\nSQLite\n</answer>") || llm.prompts[0] != ackPrompt {
+		t.Errorf("sent %q", sent)
+	}
+}

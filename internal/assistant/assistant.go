@@ -104,7 +104,10 @@ const (
 	// to its answer.
 	questionHint = `When you need the user to decide or to tell you something before you can go on, ask with ` + ToolUserQuestion +
 		` instead of ending your answer with the question: they answer with a key, and you go on in the same answer with what they said. ` +
-		`Give the answers you expect as options, and none where only their own words answer. Ask nothing you can find out yourself. `
+		`Give the answers you expect as options, and none where only their own words answer. Ask nothing you can find out yourself. ` +
+		`Ask as a person does in a chat: one short, plain sentence in the language of the conversation, about what it is about, without code or commands; ` +
+		`the options, if any, a few words each. Some front ends show only the question, so it has to make sense without them: ` +
+		`the user may answer in their own words, and you read what they meant. `
 	// approvalHint also applies without user_question: tools can ask for permission themselves.
 	approvalHint = `If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run. ` +
 		`Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again. `
@@ -321,6 +324,12 @@ func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 	}
 	if err := config.ValidSelfImprove(cfg.SelfImprove); err != nil {
 		return nil, err
+	}
+	// The owner hears at once that their answer to a question arrived.
+	if at := slices.IndexFunc(allowed, func(t agent.Tool) bool { return t.Name == ToolUserQuestion }); at >= 0 {
+		allowed[at] = userQuestion(func(ctx context.Context, q Question, answer string) {
+			b.askingOf(cfg).acknowledge(ctx, q, answer) // the LLM only once it is needed
+		})
 	}
 	// What the owner wants to be asked about first runs once they allowed
 	// it, for helpers too, which get these tools.

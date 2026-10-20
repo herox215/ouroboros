@@ -71,8 +71,9 @@ func flat(text string) string { return strings.Join(strings.Fields(text), " ") }
 
 // userQuestion is the tool with which the agent asks its owner. Whoever
 // holds the conversation shows the question and hands back the answer, see
-// agent.WithOwner: the sessions of the node do.
-func userQuestion() agent.Tool {
+// agent.WithOwner: the sessions of the node do. heard, if not nil, hears
+// the answer before the tool returns it: it says back that it arrived.
+func userQuestion(heard ...func(context.Context, Question, string)) agent.Tool {
 	return agent.Tool{
 		Name: ToolUserQuestion,
 		Description: "Ask your user a question and wait for the answer, which it returns: " +
@@ -84,7 +85,7 @@ func userQuestion() agent.Tool {
 			"Ask nothing you can find out yourself. " +
 			"It waits until the owner answers or the conversation is cancelled.",
 		Schema: `{"type":"object","properties":{` +
-			`"question":{"type":"string","description":"what you ask, in a sentence or two"},` +
+			`"question":{"type":"string","description":"what you ask: one short, plain sentence in the language of the conversation, without code; it has to make sense without the options"},` +
 			fmt.Sprintf(`"options":{"type":"array","items":{"type":"string"},"description":"%d to %d answers to choose from, each a few words on one line; leave out for a question only their own words answer"},`, MinOptions, MaxOptions) +
 			`"recommended":{"type":"string","description":"the option you would choose, exactly as in options; leave out without a preference"}` +
 			`},"required":["question"]}`,
@@ -101,6 +102,11 @@ func userQuestion() agent.Tool {
 			answer, err := agent.AskOwnerReply(ctx, asked)
 			if errors.Is(err, agent.ErrNoOwner) {
 				return "", errors.New("nobody can be asked here: put the question in your answer instead")
+			}
+			if err == nil {
+				for _, h := range heard {
+					h(ctx, q, answer.Text)
+				}
 			}
 			if err != nil || answer.Source.Interface == "" {
 				return answer.Text, err

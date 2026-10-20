@@ -204,7 +204,7 @@ func TestRoomsAreSentWhatIsSaidElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	room := "!room:example.org @owner:example.org "
-	if got := conn.messages(); !slices.Equal(got, []string{room + "You, in the terminal:\nhello", room + "Which?\n\nJust send your answer (no command needed).", room + "You, in the terminal:\na", room + "done"}) {
+	if got := conn.messages(); !slices.Equal(got, []string{room + "You, in the terminal:\nhello", room + "Which?", room + "You, in the terminal:\na", room + "done"}) {
 		t.Fatalf("sent %q", got)
 	}
 }

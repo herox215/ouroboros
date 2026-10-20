@@ -745,6 +745,20 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 	return agent.OwnerReply{Text: answer.text, Source: answer.source.Normalized()}, nil
 }
 
+// saying tells what a tool says to the owner on the way to the answer in se
+// as a Say, the occurrence id, also in the thread where it relays the
+// questions of se, see asking: there the owner hears it too. The archive
+// keeps it with the answer, see agent.Say.
+func (s *Service) saying(se *session, id, text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := Event{Kind: Say, PresentationID: id, Text: text}
+	s.emit(se, e)
+	if se.routed && se.id != ThreadID {
+		s.emit(s.get(ThreadID), e)
+	}
+}
+
 // steered hands the answer on its way in se the messages that are queued
 // for it: see taken.
 func (s *Service) steered(se *session) []openai.Message {
@@ -933,6 +947,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	ctx = agent.WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (agent.OwnerReply, error) {
 		return s.ask(ctx, se, question)
 	})
+	ctx = agent.WithSaying(ctx, func(id, text string) { s.saying(se, id, text) })
 	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 	thought, rest := s.thoughts(se)
 	ctx = openai.WithThought(ctx, thought)

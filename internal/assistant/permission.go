@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,18 +47,60 @@ func (b Builder) permitted(cfg config.Config, tools []agent.Tool) []agent.Tool {
 		}
 		run := t.Run
 		guarded[i].Run = func(ctx context.Context, args json.RawMessage) (string, error) {
-			if err := b.permit(ctx, current, t.Name, args); err != nil {
-				return "", err
+			talk, err := b.permit(ctx, current, t.Name, args)
+			if err != nil {
+				return "", err // says what the owner answered last
 			}
-			return run(ctx, args)
+			// What the owner was asked and said stays in the conversation
+			// as a message of its own: the agent knows it later on too.
+			// Outside of an answer it follows the result.
+			if talk == "" || agent.Keep(ctx, talk) {
+				return run(ctx, args)
+			}
+			result, err := run(ctx, args)
+			if err != nil {
+				return result, fmt.Errorf("%w\n\n%s", err, talk)
+			}
+			return result + "\n\n" + talk, nil
 		}
 	}
 	return guarded
 }
 
 // permit returns nil if the call of tool with args may run, and why not
-// otherwise: it asks the owner if a rule wants it.
-func (b Builder) permit(ctx context.Context, current func() (config.Config, error), tool string, args json.RawMessage) error {
+// otherwise: it asks the owner if a rule wants it. With it comes what was
+// said then, see exchange: "" where nobody was asked; a refusal says what
+// the owner answered last, and with a question of theirs before, all of it.
+func (b Builder) permit(ctx context.Context, current func() (config.Config, error), tool string, args json.RawMessage) (string, error) {
+	talk := exchange{tool: tool}
+	err := b.permitting(ctx, current, tool, args, &talk)
+	return talk.String(), err
+}
+
+// exchange is what was said between the agent and the owner on whether a
+// call may run: questions and answers, in turn, and whether the owner
+// answered in words of their own rather than with an option.
+type exchange struct {
+	tool     string
+	said     []string
+	ownWords bool
+}
+
+// ExchangeHead begins what the agent keeps of what the owner was asked and
+// said before a call ran, see exchange.
+const ExchangeHead = "[Not from the owner: before the call of "
+
+// String is the exchange as the agent keeps it: "" where the owner only
+// chose an option, which the result tells well enough.
+func (e exchange) String() string {
+	if !e.ownWords {
+		return ""
+	}
+	return ExchangeHead + e.tool + " ran, the owner was asked whether it may:\n" + strings.Join(e.said, "\n") + "\n]"
+}
+
+// permitting is permit, keeping what is said in talk.
+func (b Builder) permitting(ctx context.Context, current func() (config.Config, error), tool string, args json.RawMessage, talk *exchange) error {
 	cfg, err := current()
 	if err != nil {
 		return fmt.Errorf("%s did not run: the rules for what to ask the owner cannot be read: %w", tool, err)
@@ -70,40 +113,84 @@ func (b Builder) permit(ctx context.Context, current func() (config.Config, erro
 	if rule == nil || slices.Contains(cfg.AllowedCalls(), call) {
 		return nil
 	}
-	q := Question{
-		// one line, as the question shows: the call first, where it is cut
-		Question: fmt.Sprintf("Allow %s: %s", tool, flat(call.Call)),
-		Options:  []string{AllowOnce, AllowAlways, AllowNot},
-	}
-	asked, _ := json.Marshal(q) // strings only: cannot fail
-	// Permission stays open until the owner decides or the caller cancels.
-	answer, err := agent.AskOwner(ctx, asked)
-	// Cancellation wins even if the callback returns a late approval.
-	if ctx.Err() != nil {
-		err = ctx.Err()
-	}
-	switch {
-	case errors.Is(err, agent.ErrNoOwner):
+	if !agent.CanAskOwner(ctx) {
 		return fmt.Errorf("%s did not run: it needs the leave of the owner, who cannot be asked here (it matches the rule %q of tools.ask)", tool, rule.Match)
-	case err != nil:
-		return fmt.Errorf("%s did not run: the owner was asked whether it may, and did not answer: %w", tool, err)
 	}
-	switch answer {
-	case AllowOnce:
-		return nil
-	case AllowAlways:
-		if b.allow == nil {
-			return nil // nowhere to keep it: allowed this time
+	// The owner is asked in a sentence of the conversation, not with the
+	// call: they see the call itself when they ask for it.
+	ask := b.askingOf(cfg)
+	p := ask.phrase(ctx, tool, call.Call)
+	question := p.Question
+	askedBack := false // after an unclear answer, once
+	for range maxDetails + 1 {
+		asked, _ := json.Marshal(Question{Question: question, Options: []string{p.Once, p.Always, p.Not}}) // strings only: cannot fail
+		// Permission stays open until the owner decides or the caller cancels.
+		answer, err := agent.AskOwner(ctx, asked)
+		// Cancellation wins even if the callback returns a late approval.
+		if ctx.Err() != nil {
+			err = ctx.Err()
 		}
-		if err := b.allow(call); err != nil {
-			agent.Remark(ctx, "allowed this time; keeping it for good failed: "+err.Error())
+		if !errors.Is(err, agent.ErrNoOwner) {
+			talk.said = append(talk.said, "asked: "+flat(question)+" ("+strings.Join([]string{p.Once, p.Always, p.Not}, " / ")+")")
 		}
-		return nil
-	case AllowNot:
-		return fmt.Errorf("%s did not run: the owner did not allow it", tool)
+		if err == nil {
+			talk.said = append(talk.said, "owner: "+answer)
+			options := []string{p.Once, p.Always, p.Not, AllowOnce, AllowAlways, AllowNot}
+			talk.ownWords = talk.ownWords || !slices.ContainsFunc(options, func(o string) bool { return strings.EqualFold(flat(answer), o) })
+		}
+		switch {
+		case errors.Is(err, agent.ErrNoOwner):
+			return fmt.Errorf("%s did not run: it needs the leave of the owner, who cannot be asked here (it matches the rule %q of tools.ask)", tool, rule.Match)
+		case err != nil:
+			return fmt.Errorf("%s did not run: the owner was asked whether it may, and did not answer: %w", tool, err)
+		}
+		decided, reply := ask.decide(ctx, p, tool, call.Call, answer)
+		// The owner hears at once that their answer arrived, in words of
+		// the conversation, before the call runs or is left.
+		switch decided {
+		case decidedOnce, decidedAlways:
+			agent.Say(ctx, cmp.Or(reply, p.Yes))
+		case decidedNot:
+			agent.Say(ctx, cmp.Or(reply, p.No))
+		}
+		switch decided {
+		case decidedOnce:
+			return nil
+		case decidedAlways:
+			if b.allow == nil {
+				return nil // nowhere to keep it: allowed this time
+			}
+			if err := b.allow(call); err != nil {
+				agent.Remark(ctx, "allowed this time; keeping it for good failed: "+err.Error())
+			}
+			return nil
+		case decidedNot:
+			return fmt.Errorf("%s did not run: the owner did not allow it", tool)
+		case decidedDetails:
+			question = p.Question + "\n\n" + tool + ": " + call.Call
+			continue
+		case decidedReply:
+			question = reply + "\n\n" + p.Question
+			continue
+		case decidedUnclear:
+			// The owner is asked back once rather than left without word.
+			if reply != "" && !askedBack {
+				askedBack = true
+				question = reply
+				continue
+			}
+		}
+		if len(talk.said) > 2 {
+			return fmt.Errorf("%s did not run: the owner did not decide on it:\n\n%s", tool, talk)
+		}
+		return fmt.Errorf("%s did not run: asked whether it may (%q), the owner said: %s", tool, p.Question, answer)
 	}
-	return fmt.Errorf("%s did not run: asked whether it may, the owner said: %s", tool, answer)
+	return fmt.Errorf("%s did not run: the owner asked about the call and did not decide:\n\n%s", tool, talk)
 }
+
+// maxDetails is how often the owner is answered a question about the call,
+// or shown it in full on their asking, before the call is left undecided.
+const maxDetails = 2
 
 // callText is the text of a call of tool with args that a rule matches: the
 // command of bash, the arguments of any other tool as JSON on one line.

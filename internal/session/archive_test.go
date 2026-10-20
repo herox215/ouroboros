@@ -514,3 +514,25 @@ func TestReplayNumbersLegacyRecords(t *testing.T) {
 		t.Fatalf("events %+v", events)
 	}
 }
+
+// What a tool said to the owner comes back from the archive as the Say it
+// was, the same occurrence; what the agent kept of what was asked is not
+// shown, but remembered.
+func TestReplaySaid(t *testing.T) {
+	events, msgs := replay([]history.Record{
+		{Seq: 1, Role: "user", Content: "go"},
+		{Seq: 2, Role: "user", Content: assistant.ExchangeHead + "bash ran, the owner was asked whether it may:\nowner: Oke\n]"},
+		{Seq: 3, Role: "user", Content: agent.SaidHead + "Alles klar.", PresentationID: "p1"},
+		{Seq: 4, Role: "end", Outcome: history.Answered},
+	})
+	var shown []string
+	for _, e := range events {
+		shown = append(shown, string(e.Kind)+" "+e.PresentationID+" "+e.Text)
+	}
+	if want := []string{"message  go", "say p1 Alles klar."}; strings.Join(shown, "|") != strings.Join(want, "|") {
+		t.Fatalf("events %q", shown)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("remembered %+v", msgs)
+	}
+}
