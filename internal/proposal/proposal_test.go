@@ -374,3 +374,27 @@ func TestApplyErrors(t *testing.T) {
 		})
 	}
 }
+
+// A change the check refuses is not written, though the check sees the field
+// already set, and the proposal still waits for another answer.
+func TestApplyDoesNotWriteAChangeTheCheckRefuses(t *testing.T) {
+	n := newNode(t)
+	p := n.propose("name", `"beta"`, "")
+	var seen string
+	err := n.store.Apply(context.Background(), p, func(c config.Config) error {
+		seen = c.Name
+		return errors.New("name is taken")
+	})
+	if err == nil || err.Error() != "name is taken" {
+		t.Fatalf("apply: %v", err)
+	}
+	if seen != "beta" {
+		t.Fatalf("the check saw the name %q rather than the change", seen)
+	}
+	if cfg := n.config(); cfg.Name != "alpha" {
+		t.Fatalf("the configuration changed: %+v", cfg)
+	}
+	if ids := n.waiting(); len(ids) != 1 || ids[0] != p.ID {
+		t.Fatalf("proposals: %v", ids)
+	}
+}

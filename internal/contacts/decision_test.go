@@ -71,3 +71,34 @@ func TestQuestionDecisionRejectsStaleRequest(t *testing.T) {
 		t.Fatalf("%+v", data)
 	}
 }
+
+// A refused request of a peer blocks it; a refused proposal only drops it,
+// since the peer did nothing to be blocked for.
+func TestQuestionDecisionBlocksOnlyARefusedRequest(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "contacts.json"))
+	if err := s.AddIncoming("peer", "peer", "model", "addr"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Propose("asked", "asked", "model", "addr"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := s.Snapshot()
+	if err != nil || len(data.Incoming) != 2 {
+		t.Fatalf("requests: %+v, %v", data, err)
+	}
+	for _, req := range data.Incoming {
+		if _, ok, err := s.DecideRequest(req, false); err != nil || !ok {
+			t.Fatalf("refusal of %s: %v, %v", req.PublicKey, ok, err)
+		}
+	}
+	data, err = s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Blocked) != 1 || data.Blocked[0] != "peer" {
+		t.Fatalf("blocked: %+v", data)
+	}
+	if len(data.Incoming) != 0 || len(data.Trusted) != 0 || len(data.Outgoing) != 0 {
+		t.Fatalf("decided: %+v", data)
+	}
+}
