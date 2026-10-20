@@ -201,19 +201,20 @@ func TestLoginByPastingTheAddress(t *testing.T) {
 func TestLoginCallback(t *testing.T) {
 	srv, o := fake(t)
 	d := &llmtest.Dialog{}
+	// The page is opened and answered before Login waits for the callback, in
+	// the caller's goroutine: the server closes once Login returns, and a
+	// request of a goroutine left behind then fails or reports after the test.
 	d.OnOpen = func(page string) {
-		go func() {
-			back := srv.Elsewhere(page)
-			u, _ := url.Parse(back)
-			if resp, err := http.Get(u.Scheme + "://" + u.Host + "/other"); err != nil || resp.StatusCode != http.StatusNotFound {
-				t.Errorf("another path: %v, %v", resp, err)
+		back := srv.Elsewhere(page)
+		u, _ := url.Parse(back)
+		if resp, err := http.Get(u.Scheme + "://" + u.Host + "/other"); err != nil || resp.StatusCode != http.StatusNotFound {
+			t.Errorf("another path: %v, %v", resp, err)
+		}
+		for range 2 {
+			if resp, err := http.Get(back); err != nil || resp.StatusCode != http.StatusOK {
+				t.Errorf("the callback: %v, %v", resp, err)
 			}
-			for range 2 {
-				if resp, err := http.Get(back); err != nil || resp.StatusCode != http.StatusOK {
-					t.Errorf("the callback: %v, %v", resp, err)
-				}
-			}
-		}()
+		}
 	}
 	if _, err := Provider(o).Login(context.Background(), d, nil); err != nil {
 		t.Fatal(err)
