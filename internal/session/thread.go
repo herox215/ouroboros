@@ -369,6 +369,7 @@ func (t threading) Send(ctx context.Context, id, text string) (string, string, e
 		if err != nil {
 			return title, outcome, err
 		}
+		t.s.handedTo(id)
 		// The tool result is archived with the routing call, making the fresh
 		// decision inspectable without adding it to target context.
 		return title, outcome + "; CheckTopic: continue (" + decision.Reason + ")", nil
@@ -414,7 +415,40 @@ func (t threading) Start(ctx context.Context, text, directory string) (string, e
 		s.Delete(ctx, id)
 		return "", err
 	}
+	s.handedTo(id)
 	return id, nil
+}
+
+// handedTo tells the thread that its agent started the session id or handed
+// it a message, see Handed.
+func (s *Service) handedTo(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emit(s.get(ThreadID), Event{Kind: Handed, Text: id})
+}
+
+// handedBy is the session a finished call of the thread's agent started or
+// handed a message to, as its arguments or its result in the archive tell,
+// "" for none: so the thread tells Handed again when it is read back.
+func handedBy(step Event, result string) string {
+	if step.Err != "" {
+		return ""
+	}
+	switch step.Tool {
+	case assistant.ToolSessionSend:
+		var to struct {
+			Session string `json:"session"`
+		}
+		_ = json.Unmarshal(step.Args, &to) // what cannot be read names no session
+		return to.Session
+	case assistant.ToolSessionNew:
+		_, rest, ok := strings.Cut(result, " in session ")
+		started, _, _ := strings.Cut(rest, ".")
+		if ok {
+			return started
+		}
+	}
+	return ""
 }
 
 // words is text, which the agent of the thread hands on, or where it gives

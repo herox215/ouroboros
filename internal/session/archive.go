@@ -243,6 +243,9 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 					step.Err = failed
 				}
 				events = append(events, step)
+				if to := handedBy(step, r.Content); to != "" {
+					events = append(events, Event{Kind: Handed, At: at, Text: to})
+				}
 			}
 		case "end":
 			if r.Statistics != nil {

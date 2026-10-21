@@ -71,26 +71,17 @@ function appendText(parent, value, doc) {
 
 // Session events are the same projection the terminal UI watches: never raw records.
 // What a transcript tells browse of its parts, where nothing listens.
-const quietSections = { observe() {}, resolve: async () => '', changed() {} };
+const quietSections = { observe() {}, changed() {} };
 
 // Messages are headed as in the terminal UI: "you", or the name of the agent.
 function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros', sections = quietSections) {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
   let partial = null;
-  // Each owner message opens a part of the thread; the sessions its steps
-  // start or address belong to that part, see browse.
+  // Each owner message opens a part of the thread; the sessions the thread
+  // started or handed a message to on it belong to that part, as its Handed
+  // events tell, see browse.
   let exchange = { at: null, sessions: new Set() };
-  const sessionTools = /^session_(new|send|status|stop)$/;
-  const track = event => {
-    if (!event.done || !event.call_id || !sessionTools.test(event.tool || '')) return;
-    const part = exchange;
-    void sections.resolve(event.call_id).then(handle => {
-      if (!handle || part.sessions.has(handle)) return;
-      part.sessions.add(handle);
-      sections.changed(part);
-    });
-  };
   const message = (kind, label, text, at) => {
     const item = doc.createElement('section');
     item.className = 'message message-' + kind;
@@ -131,8 +122,13 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
         }
         partial.text.textContent += event.text || '';
         break;
+      case 'handed':
+        if (event.text && !exchange.sessions.has(event.text)) {
+          exchange.sessions.add(event.text);
+          sections.changed(exchange);
+        }
+        break;
       case 'step': {
-        track(event);
         clearPartial();
         const key = event.call_id || event.tool;
         let call = calls.get(key);
@@ -281,18 +277,12 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   // Beside the thread, the sessions of the part of it in view show on the
   // left and their artefacts on the right, as in the demo: the part whose
   // messages cross the middle of the history, or the last one at its end.
-  // Which sessions a part has, its calls of the session tools tell, see
+  // Which sessions a part has, the Handed events of the thread tell, see
   // transcript; no scroll position is read for it, see following.
   let section = null, latest = null, seen = 0, soon = false;
   const visible = new Set();
+  // A part names a session by its ID or by the handle the thread knows it by.
   const inSection = entry => !!section && [...section.sessions].some(handle => entry.id.slice(entry.id.indexOf('/') + 1).startsWith(handle));
-  const handleOf = result => {
-    try {
-      const named = JSON.parse(result.arguments || '{}').session;
-      if (named) return String(named);
-    } catch { /* no arguments to read */ }
-    return /in session ([^\s.]+)/.exec(result.content || '')?.[1] || '';
-  };
   const show = part => {
     if (!part || part === section) return;
     section = part;
@@ -320,18 +310,6 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       if (soon) return;
       soon = true;
       queueMicrotask(() => { soon = false; if (following) show(latest); });
-    },
-    async resolve(callID) {
-      const profile = context?.profile;
-      for (let tries = 0; tries < 6; tries++) {
-        try {
-          const result = await bridge.ToolResult(profile, threadID, callID);
-          if (result?.found) return handleOf(result);
-        } catch { return ''; }
-        // The call is archived once the answer of the thread ends.
-        await new Promise(done => setTimeout(done, 2000));
-      }
-      return '';
     },
     changed(part) {
       if (part !== section) return;

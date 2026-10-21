@@ -119,6 +119,11 @@ const (
 	// recorded: who watches the thread gets it with what happened in it so
 	// far, last, while N is not 0.
 	Working Kind = "working"
+	// Handed tells of the thread which session a call of its agent started
+	// or handed a message to: its ID, or the handle the thread knows it by,
+	// in Text. A front end can show beside the thread which sessions a part
+	// of it concerns; it says nothing to the owner by itself.
+	Handed Kind = "handed"
 )
 
 // Event is one thing that happened in a session. It is plain data, written

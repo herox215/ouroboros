@@ -1959,20 +1959,17 @@ test('the fade at the top is off while the start of the thread is in view, so a 
 test('beside the thread show the sessions of the part in view, else "Noch keine"; a search finds the others', async () => {
   const doc = archiveFixture();
   const now = new Date().toISOString();
-  const results = {
-    'call-new': { found: true, arguments: '{"text":"recherchier"}', content: 'Work started in the background in session aaaa1111. Briefly acknowledge …' },
-    'call-send': { found: true, arguments: '{"session":"bbbb2222","text":"weiter"}', content: 'Handed to "B".' },
-  };
   const stepsOf = { 'owner/aaaa1111-x': [{ kind: 'step', done: true, tool: 'browser_use', text: 'browser_use · navigate spec.matrix.org' }] };
   await browse({
     async Sessions() { return [{ id: 'owner/aaaa1111-x', title: 'Recherche', running: true }, { id: 'owner/bbbb2222-y', title: 'B' }, { id: 'owner/cccc3333-z', title: 'C' }]; },
     async OpenSession() { return { token: 0, events: [
       { kind: 'message', text: 'recherchier mal', at: now },
-      { kind: 'step', tool: 'session_new', call_id: 'call-new', done: true, at: now },
+      { kind: 'handed', text: 'aaaa1111-x', at: now },
+      { kind: 'answer', text: 'läuft', at: now },
       { kind: 'message', text: 'und B?', at: now },
-      { kind: 'step', tool: 'session_send', call_id: 'call-send', done: true, at: now },
+      { kind: 'handed', text: 'bbbb2222', at: now },
+      { kind: 'handed', text: 'bbbb2222', at: now },
     ] }; },
-    async ToolResult(profile, id, callID) { assert.equal(id, 'owner/thread'); return results[callID]; },
     async SessionSteps(profile, id) { return stepsOf[id] || []; },
   }, doc, '', 'owner/thread');
   await settle();
@@ -1989,6 +1986,7 @@ test('beside the thread show the sessions of the part in view, else "Noch keine"
   assert.match(doc['context-details'].children[0].children[1].textContent, /browser_use · navigate spec\.matrix\.org/);
   // Scrolled on to the second part, the session it addressed shows instead.
   band.run([{ isIntersecting: false, target: items[0] }, { isIntersecting: false, target: items[1] }, { isIntersecting: true, target: items[2] }]);
+  assert.equal(items[2].exchange.sessions.size, 1, 'a session handed twice in a part counts once');
   await settle();
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/bbbb2222-y']);
   // Back at the end, the newest part is in view, though it never reached the middle.
