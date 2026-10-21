@@ -11,33 +11,19 @@
 <body>
   <a class="skip-link" href="#main">Zum Sitzungsinhalt</a>
   <aside id="sidebar" class="sidebar" aria-label="Sessionnavigation">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">O</span> Ouroboros <span class="brand-caption">Chat</span></div>
-    <section class="profile-card" aria-labelledby="profile-label">
-      <label id="profile-label" for="profile">Profil</label>
-      <select id="profile" disabled></select>
-      <p id="active" aria-live="polite"></p>
-      <p id="identity"></p>
-    </section>
-    <button id="thread" type="button" aria-current="false" hidden><span>Thread</span><small>Aufgaben besprechen · Ergebnisse sammeln</small></button>
+    <!-- Beside the thread only the sessions of the part of it in view, as in the
+         demo. The profile is chosen at start (ouro --profile NAME gui). -->
+    <select id="profile" aria-label="Profil" hidden disabled></select>
     <div class="sessions-heading">
       <h2 id="sessions-heading">[Sessions]</h2>
-      <button id="refresh" type="button">Aktualisieren</button>
     </div>
     <div id="sessions" aria-labelledby="sessions-heading"></div>
-    <button id="new-session" type="button" disabled>+ Neue Session</button>
-    <div class="search-field">
-      <label class="sr-only" for="session-search">Sitzungen durchsuchen</label>
-      <input id="session-search" type="search" placeholder="Sitzungen durchsuchen …" autocomplete="off" aria-controls="sessions">
-    </div>
     <div class="sidebar-footer">
       <button id="settings" class="settings-button" type="button" aria-label="Einstellungen öffnen" title="Einstellungen" aria-haspopup="dialog"><span aria-hidden="true">⚙</span></button>
     </div>
   </aside>
   <main id="main" tabindex="-1" aria-labelledby="session-title">
     <header class="session-header">
-      <button id="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Seitenleiste ausblenden" title="Seitenleiste ausblenden">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.5"/><path d="M7.75 3.75v12.5"/></svg>
-      </button>
       <div class="session-heading">
         <p class="eyebrow">Ouroboros</p>
         <h1 id="session-title">Sitzung auswählen</h1>

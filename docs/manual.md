@@ -151,11 +151,12 @@ ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that o
 which keep working.
 
 The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
-It opens a Wails v2 window with a profile picker and the profile's thread, the same
+It opens a Wails v2 window with the profile's thread, the same
 conversation the TUI shows first. Say what is to be done there; the node routes topics,
 relays questions and gathers results through its existing thread implementation.
-The GUI adds no routing of its own. **Thread** in the sidebar returns to this conversation
-from an individual session; it stays available while filtering the session list.
+The GUI adds no routing of its own. Beside the thread there is no navigation of its own,
+as in the demo: no profile picker, search, new session or toggle; the profile is chosen at
+start (`ouro --profile NAME gui`). **Zum Thread** returns from an individual session.
 The status shows work in progress, questions and the number of active sessions the thread
 handed work to. **Stoppen** calls the same session cancellation as the TUI, including
 stopping the thread's delegated answers. Messages can still be sent while work runs.
@@ -168,9 +169,9 @@ to (`session_send`), looked at (`session_status`) or stopped (`session_stop`) on
 whose result it reports there, belong to it, as the `handed` events of the thread tell: the thread
 hides the calls of its agent, so it tells those as events of their own, also when it is read
 back from the archive. Front ends that do not know the kind leave it out. The
-sidebar shows the time of the part and its sessions with their state, or **Noch keine**; a
-search lists all sessions of the profile, refreshed every three seconds without reopening
-the conversation. The context rail shows the artefacts of those sessions: their last calls
+sidebar shows the time of the part and its sessions with their state, or **Noch keine**,
+refreshed every three seconds without reopening the conversation; a session opened from it
+keeps the part beside it. The context rail shows the artefacts of those sessions: their last calls
 of tools, as `SessionSteps` reads them. Older messages fade out at the top while older ones
 are above. Opening a tool result also shows it in that rail, using the same lazy request and cache.
 It may stay beside the thread when returning from its session, labelled with its source;
@@ -185,8 +186,7 @@ is saved locally for the GUI across profiles and restarts.
 The frontend is plain HTML/CSS/JavaScript embedded in the executable: no Node, npm,
 Wails CLI, separate web server, or frontend build is needed. The Go binding supplies
 the profiles and session list (owner and peer conversations, newest first).
-The sidebar groups sessions by date and filters titles and IDs locally; it does not search
-message contents. The GUI opens chats through the same session service as the TUI: owner sessions use
+The sidebar groups sessions by date. The GUI opens chats through the same session service as the TUI: owner sessions use
 `Watch`, peer conversations use `Read`, and live events update the selected chat. Tool results
 and arguments are not included in the GUI transcript payload; opening a tool call requests
 its saved result separately. Long texts show an 8,000-character preview until expanded.

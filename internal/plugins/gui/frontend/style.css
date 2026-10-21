@@ -84,22 +84,13 @@ a { color: var(--accent); }
 .skip-link { position: fixed; top: 12px; left: 12px; z-index: 10; padding: 10px 16px; background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; transform: translateY(-160%); }
 .skip-link:focus { transform: translateY(0); }
 .sidebar { position: sticky; top: 0; height: 100vh; height: 100dvh; width: var(--sidebar-width); transition: transform var(--sidebar-motion), visibility 0s; will-change: transform; overscroll-behavior: none; display: flex; flex-direction: column; gap: 12px; padding: 24px 28px 18px; background: transparent; border-right: 0; min-width: 0; overflow-y: auto; }
-.brand { display: flex; align-items: center; gap: 9px; padding: 0 44px 0 4px; font-weight: 650; letter-spacing: -.02em; }
-.brand-mark { display: none; }
-.brand-caption { display: none; }
-.profile-card { padding: 0; border: 0; background: transparent; }
-.profile-card label, .eyebrow { display: block; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .09em; }
+.eyebrow { display: block; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .09em; }
 #profile { width: 100%; min-height: 32px; margin-top: 2px; padding: 3px 0; background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; font-size: 11px; }
 #active { display: none; }
 #identity { margin-top: 3px; max-width: 100%; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--muted); user-select: text; }
 #active:empty, #identity:empty, #session-meta:empty, #session-status:empty { display: none; }
 .sessions-heading { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sessions-heading h2 { font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
-#refresh { padding: 6px 10px; background: transparent; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
-#refresh:hover:not(:disabled) { background: var(--surface); border-color: var(--line-strong); }
-.search-field { margin-top: -8px; }
-#session-search { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 13px; }
-#session-search::placeholder { color: var(--muted); opacity: 1; }
 #sessions { flex: 0 1 auto; min-height: 40px; max-height: 48vh; overflow-y: auto; overscroll-behavior: none; scrollbar-width: thin; }
 #sessions > * + * { margin-top: 18px; }
 #sessions h2, #sessions h3, #sessions .session-group-label { padding: 0 10px 7px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
@@ -144,28 +135,11 @@ a { color: var(--accent); }
 .settings-dialog :focus-visible { outline-offset: 2px; }
 main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 24px 0 10px; border-bottom: 0; transition: padding-left var(--sidebar-motion); }
-/* With the sidebar out, the header makes room for the toggle in the corner. */
-body[data-sidebar-collapsed="true"] .session-header { padding-left: 76px; }
 .session-heading { min-width: 0; flex: 1; }
-/* The toggle sits at the right edge of the sidebar, beside the brand, and rides
-   along with that edge as the sidebar slides: in the top left corner when it is
-   in. A transform, so that it moves as smoothly as the sidebar. */
-#sidebar-toggle { position: fixed; top: 20px; left: 16px; z-index: 5; transform: translateX(calc(var(--sidebar-width) - 68px)); transition: transform var(--sidebar-motion); display: grid; place-items: center; width: 36px; min-height: 36px; height: 36px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); }
-#sidebar-toggle:hover { background: var(--hover); border-color: var(--line); color: var(--accent); }
-#sidebar-toggle svg { width: 20px; height: 20px; }
-body[data-sidebar-collapsed="true"] { grid-template-columns: 0px minmax(0, 1fr) var(--context-width); }
-body[data-sidebar-collapsed="true"] #sidebar-toggle { transform: none; }
-/* Hidden at the end of the slide, so that it is out of reach while collapsed. */
-body[data-sidebar-collapsed="true"] .sidebar { transform: translateX(-100%); visibility: hidden; transition: transform var(--sidebar-motion), visibility 0s linear .24s; }
-@media (prefers-reduced-motion: reduce) { body, .sidebar, body[data-sidebar-collapsed="true"] .sidebar, .session-header, #sidebar-toggle { transition: none; } }
+@media (prefers-reduced-motion: reduce) { body, .sidebar, .session-header { transition: none; } }
 h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; text-transform: uppercase; font-weight: 500; }
 #session-meta { margin-top: 4px; color: var(--muted); font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .readonly-badge { flex-shrink: 0; padding: 4px 10px; color: var(--accent); border: 1px solid var(--line); background: var(--hover); border-radius: 20px; font-size: 11px; }
-#thread { text-align: left; padding: 8px 0; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent; }
-#thread span, #thread small { display: block; }
-#thread span { font-weight: 650; }
-#thread small { margin-top: 3px; font-size: 11px; color: var(--muted); }
-#thread[aria-current="true"] { border-color: var(--accent); color: var(--accent); }
 #back-to-thread, #stop { padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
 .composer #stop { min-height: 34px; }
 #stop:not(:disabled) { color: var(--error); border-color: var(--error-line); }
@@ -206,7 +180,7 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #composer-hint { flex: 1; min-width: 0; }
 #composer-hint, #send-status { color: var(--muted); font-size: 12px; }
 #send-error { color: var(--error); margin-top: 6px; font-size: 13px; }
-#send, #new-session, .question-option { border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; background: var(--hover); }
+#send, .question-option { border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; background: var(--hover); }
 .composer #send { min-height: 34px; padding: 5px 16px; }
 .question-panel { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); max-height: 40vh; overflow-y: auto; }
 .question-panel h2 { font-size: 13px; color: var(--accent); margin-bottom: 8px; }
@@ -232,11 +206,8 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
   main { flex: 1; }
   .sidebar { position: static; height: auto; width: auto; transform: none; flex: none; max-height: 45vh; gap: 14px; padding: 18px 16px; border-right: 0; border-bottom: 1px solid var(--line); }
   #sessions { flex: none; min-height: 0; max-height: 240px; }
-  body[data-sidebar-collapsed="true"] .sidebar { display: none; }
   .sidebar-footer { padding-top: 10px; }
   .session-header { padding: 22px 18px 14px; }
-  #sidebar-toggle, body[data-sidebar-collapsed="true"] #sidebar-toggle { transform: none; }
-  .brand { padding: 0 4px 0 42px; }
   .transcript-wrap { padding: 22px 18px 22px; }
   .composer-dock { padding: 0 18px 10px; }
 }
@@ -252,10 +223,6 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #context-details { max-height: 58vh; overflow-y: auto; border-top: 1px solid var(--line); }
 #context-details:empty { display: none; }
 #context-details pre { margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-#new-session, #refresh, #session-search { min-height: 30px; border-radius: 0; background: transparent; font-size: 10px; }
-#new-session { padding: 5px 0; border: 0; text-align: left; }
-#refresh { padding: 4px; border: 0; }
-#session-search { padding: 6px 0; border: 0; border-bottom: 1px solid var(--line); }
 #sessions h2 { padding-left: 0; }
 #sessions .session-title { font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
 #sessions .session-meta { font-size: 9px; }

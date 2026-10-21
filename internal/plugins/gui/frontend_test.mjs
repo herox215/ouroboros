@@ -87,13 +87,9 @@ function documentFixture() {
   const elements = {
     settings: new Element('button'),
     sidebar: new Element('aside'),
-    'sidebar-toggle': new Element('button'),
     profile: new Element('select'),
-    active: new Element('p'),
-    identity: new Element('p'),
     error: new Element('p'),
     sessions: new Element('div'),
-    'session-search': new Element('input'),
     'session-title': new Element('h2'),
     'session-meta': new Element('p'),
     content: new Element('div'),
@@ -101,9 +97,6 @@ function documentFixture() {
     transcript: new Scroller('div'),
     'transcript-end': new Element('div'),
     'transcript-start': new Element('div'),
-    refresh: new Element('button'),
-    'new-session': new Element('button'),
-    thread: new Element('button'),
     'back-to-thread': new Element('button'),
     stop: new Element('button'),
     'context-title': new Element('h2'),
@@ -157,12 +150,16 @@ function select(doc, index) {
 test('HTML supplies the module and accessible profile/error elements', async () => {
   const html = await readFile(new URL('./frontend/index.html', import.meta.url), 'utf8');
   assert.match(html, /<script\b[^>]*type="module"[^>]*src="\/app\.js"[^>]*><\/script>/);
-  for (const id of ['profile', 'active', 'identity', 'error', 'sessions', 'content', 'session-status', 'session-search', 'session-title', 'session-meta', 'refresh', 'new-session', 'thread', 'back-to-thread', 'stop', 'composer', 'draft', 'send', 'send-error', 'send-status', 'question-panel', 'question-text', 'question-options', 'question-hint']) {
+  for (const id of ['profile', 'error', 'sessions', 'content', 'session-status', 'session-title', 'session-meta', 'back-to-thread', 'stop', 'composer', 'draft', 'send', 'send-error', 'send-status', 'question-panel', 'question-text', 'question-options', 'question-hint']) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
-  assert.match(html, /<label\b[^>]*for="profile"/);
-  assert.match(html, /<select\b(?=[^>]*id="profile")(?=[^>]*disabled)[^>]*>/);
-  assert.match(html, /<[^>]+(?=[^>]*id="active")(?=[^>]*aria-live="polite")[^>]*>/);
+  // Beside the thread only its sessions: no navigation above them, and the
+  // profile, chosen at start, is not shown.
+  for (const id of ['active', 'identity', 'session-search', 'refresh', 'new-session', 'thread', 'sidebar-toggle']) {
+    assert.doesNotMatch(html, new RegExp('id="' + id + '"'));
+  }
+  assert.doesNotMatch(html, /class="brand"/);
+  assert.match(html, /<select\b(?=[^>]*id="profile")(?=[^>]*aria-label="Profil")(?=[^>]*hidden)(?=[^>]*disabled)[^>]*>/);
   assert.match(html, /<[^>]+(?=[^>]*id="error")(?=[^>]*role="alert")(?=[^>]*hidden)[^>]*>/);
   assert.match(html, /<[^>]+(?=[^>]*id="session-status")(?=[^>]*role="status")[^>]*>/);
 });
@@ -289,32 +286,6 @@ test('only the history scrolls and bounces; composer and sidebar stay out of it'
   assert.doesNotMatch(source, /scrollIntoView|scrollingElement/);
 });
 
-test('sidebar toggle hides and restores navigation without changing the session', async () => {
-  const doc = documentFixture();
-  await start({
-    async InitialState() { return { profiles: [{ name: 'Luna' }], selected: 0 }; },
-    async Sessions() { return []; },
-  }, doc);
-  const button = doc['sidebar-toggle'];
-  const title = doc['session-title'].textContent;
-  for (let i = 0; i < 2; i++) {
-    button.dispatchEvent(new Event('click'));
-    // Collapsed, the sidebar slides out and is out of reach, not removed.
-    assert.equal(doc.sidebar.hidden, false);
-    assert.equal(doc.sidebar.inert, true);
-    assert.equal(doc.body.getAttribute('data-sidebar-collapsed'), 'true');
-    assert.equal(button.getAttribute('aria-expanded'), 'false');
-    assert.equal(button.getAttribute('aria-label'), 'Seitenleiste einblenden');
-    assert.equal(button.title, 'Seitenleiste einblenden');
-    button.dispatchEvent(new Event('click'));
-    assert.equal(doc.sidebar.inert, false);
-    assert.equal(doc.body.getAttribute('data-sidebar-collapsed'), 'false');
-    assert.equal(button.getAttribute('aria-expanded'), 'true');
-    assert.equal(button.getAttribute('aria-label'), 'Seitenleiste ausblenden');
-    assert.equal(doc['session-title'].textContent, title);
-  }
-});
-
 test('initial selection uses the bridge snapshot, including a non-first profile', async () => {
   const doc = documentFixture();
   let calls = 0;
@@ -333,9 +304,6 @@ test('initial selection uses the bridge snapshot, including a non-first profile'
     ['0', '1 · Luna'], ['1', '2 · Other'],
   ]);
   assert.equal(doc.profile.selectedIndex, 1);
-  assert.equal(doc.profile.disabled, false);
-  assert.equal(doc.active.textContent, 'Profil: Other');
-  assert.equal(doc.identity.textContent, 'bbb');
   assert.equal(doc.error.hidden, true);
 });
 
@@ -363,25 +331,9 @@ test('switching profiles reads archives without snapshot writes', async () => {
   });
   await start(bridge, doc);
   select(doc, 1);
-  assert.equal(doc.active.textContent, 'Profil: Other');
-  assert.equal(doc.identity.textContent, 'bbb');
   select(doc, 0);
-  assert.equal(doc.active.textContent, 'Profil: Luna');
-  assert.equal(doc.identity.textContent, 'aaa');
   assert.equal(state.selected, 0);
   assert.equal(calls, 1);
-});
-
-test('one unnamed profile disables the picker and shows the setup fallback', () => {
-  const doc = documentFixture();
-  // The Go bridge supplies "Not set up" for an unnamed profile.
-  mount({ profiles: [{ name: 'Not set up', id: '' }], selected: 0 }, doc);
-  assert.equal(doc.profile.disabled, true);
-  assert.equal(doc.profile.selectedIndex, 0);
-  assert.equal(doc.profile.children.length, 1);
-  assert.equal(doc.profile.children[0].textContent, '1 · Not set up');
-  assert.equal(doc.active.textContent, 'Profil: Not set up');
-  assert.equal(doc.identity.textContent, 'Profil noch nicht eingerichtet');
 });
 
 test('a profile list without an entry mounts without touching the view', () => {
@@ -389,8 +341,6 @@ test('a profile list without an entry mounts without touching the view', () => {
   mount({ profiles: [], selected: 0 }, doc);
   assert.equal(doc.profile.selectedIndex, 0);
   assert.deepEqual(doc.profile.children, []);
-  assert.equal(doc.active.textContent, '');
-  assert.equal(doc.identity.textContent, '');
 });
 
 test('duplicate names remain distinct options selected by index', () => {
@@ -403,10 +353,7 @@ test('duplicate names remain distinct options selected by index', () => {
     ['0', '1 · Same'], ['1', '2 · Same'],
   ]);
   select(doc, 1);
-  assert.equal(doc.active.textContent, 'Profil: Same');
-  assert.equal(doc.identity.textContent, 'second');
   select(doc, 0);
-  assert.equal(doc.identity.textContent, 'first');
 });
 
 test('HTML in profile names is displayed literally through textContent', () => {
@@ -414,9 +361,7 @@ test('HTML in profile names is displayed literally through textContent', () => {
   const name = '<img src=x onerror="alert(1)"> & <script>bad()</script>';
   mount({ profiles: [{ name, id: 'safe-id' }], selected: 0 }, doc);
   assert.equal(doc.profile.children[0].textContent, '1 · ' + name);
-  assert.equal(doc.active.textContent, 'Profil: ' + name);
   assert.deepEqual(doc.profile.children[0].children, []);
-  assert.deepEqual(doc.active.children, []);
 });
 
 test('an asynchronous bridge rejection reveals the error instead of rejecting start', async () => {
@@ -429,10 +374,7 @@ test('an asynchronous bridge rejection reveals the error instead of rejecting st
   }, doc));
   assert.equal(doc.error.hidden, false);
   assert.equal(doc.error.textContent, 'Profile konnten nicht geladen werden: Error: bridge unavailable');
-  assert.equal(doc.profile.disabled, true);
   assert.deepEqual(doc.profile.children, []);
-  assert.equal(doc.active.textContent, '');
-  assert.equal(doc.identity.textContent, '');
 });
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -451,24 +393,9 @@ function buttons(doc) {
   return doc.sessions.children.flatMap(group => group.children.filter(child => child.tagName === 'button'));
 }
 function choose(doc, id) {
-  let button = buttons(doc).find(button => button.title === id);
-  // Beside the thread only working sessions show: the others are found by search.
-  const searched = !button && !doc['session-search'].value;
-  if (searched) {
-    doc['session-search'].value = id;
-    doc['session-search'].dispatchEvent(new Event('input'));
-    button = buttons(doc).find(button => button.title === id);
-  }
+  const button = buttons(doc).find(button => button.title === id);
   assert.ok(button, 'Missing session: ' + id);
   button.dispatchEvent(new Event('click'));
-  if (searched) {
-    doc['session-search'].value = '';
-    doc['session-search'].dispatchEvent(new Event('input'));
-  }
-}
-function search(doc, query) {
-  doc['session-search'].value = query;
-  doc['session-search'].dispatchEvent(new Event('input'));
 }
 function current(doc) {
   return buttons(doc).filter(button => button.getAttribute('aria-current') === 'true').map(button => button.title);
@@ -543,87 +470,6 @@ test('opening and switching sessions scrolls to the end only after the full repl
   assert.equal(scrolls.length, 2);
 });
 
-test('search matches title and ID case insensitively without any backend calls', async () => {
-  const doc = archiveFixture();
-  const calls = [];
-  await browse({
-    async Sessions() { calls.push('list'); return [
-      { id: 'owner/Alpha-ID', title: 'Äpfel Meeting' }, { id: 'peer/Beta', title: 'Other' },
-    ]; },
-    async OpenSession(_, id) { calls.push(id); return { token: 0, events: [{ kind: 'message', text: 'unchanged' }] }; },
-  }, doc);
-  for (const query of [' äPFEL ', 'MEETING', 'ALPHA-id']) {
-    search(doc, query);
-    assert.deepEqual(buttons(doc).map(button => button.title), ['owner/Alpha-ID']);
-  }
-  search(doc, 'PEER/bETA');
-  assert.deepEqual(buttons(doc).map(button => button.title), ['peer/Beta']);
-  search(doc, 'missing');
-  assert.deepEqual(buttons(doc), []);
-  assert.equal(doc.sessions.children[0].className, 'list-empty');
-  assert.equal(doc.content.children[0].children[1].textContent, 'unchanged');
-  search(doc, '');
-  assert.equal(buttons(doc).length, 2);
-  assert.deepEqual(current(doc), ['owner/Alpha-ID']);
-  assert.deepEqual(calls, ['list', 'owner/Alpha-ID']);
-});
-
-test('refresh preserves selected session despite reordered entries and falls back if removed', async () => {
-  const doc = archiveFixture();
-  let entries = [{ id: 'owner/a' }, { id: 'owner/b' }];
-  const reads = [];
-  await browse({
-    async Sessions() { return entries; },
-    async OpenSession(_, id) { reads.push(id); return { token: 0, events: [] }; },
-  }, doc);
-  choose(doc, 'owner/b');
-  await settle();
-  entries = [{ id: 'owner/new' }, { id: 'owner/b' }, { id: 'owner/a' }];
-  search(doc, 'b');
-  doc.refresh.dispatchEvent(new Event('click'));
-  await settle();
-  assert.deepEqual(current(doc), ['owner/b']);
-  assert.equal(doc['session-search'].value, 'b');
-  assert.equal(doc['session-title'].textContent, 'owner/b');
-  entries = [{ id: 'owner/new' }];
-  search(doc, '');
-  doc.refresh.dispatchEvent(new Event('click'));
-  await settle();
-  assert.deepEqual(current(doc), ['owner/new']);
-  assert.deepEqual(reads, ['owner/a', 'owner/b', 'owner/b', 'owner/new']);
-});
-
-test('empty archives and list/open errors recover via refresh', async () => {
-  const doc = archiveFixture();
-  let mode = 'empty';
-  await browse({
-    async Sessions() {
-      if (mode === 'list-error') throw new Error('list failed');
-      return mode === 'empty' ? null : [{ id: 'owner/a' }];
-    },
-    async OpenSession() {
-      if (mode === 'read-error') throw new Error('read failed');
-      return { token: 0, events: mode === 'null-events' ? null : [{ kind: 'message', text: 'recovered' }] };
-    },
-  }, doc);
-  assert.deepEqual(buttons(doc), []);
-  assert.equal(doc.sessions.children[0].className, 'list-empty');
-  assert.match(doc['session-status'].textContent, /Noch keine Sessions/);
-  for (const next of ['list-error', 'read-error', 'success', 'null-events', 'empty']) {
-    mode = next;
-    doc.refresh.dispatchEvent(new Event('click'));
-    await settle();
-    assert.equal(doc.refresh.disabled, false);
-    if (mode.endsWith('error')) {
-      assert.equal(doc.error.hidden, false);
-      assert.match(doc.error.textContent, mode === 'list-error' ? /list failed/ : /read failed/);
-    } else {
-      assert.equal(doc.error.hidden, true);
-      assert.equal(doc.content.children.length, mode === 'success' ? 1 : 0);
-    }
-  }
-});
-
 test('late list responses or errors cannot leak into the newly selected profile', async () => {
   for (const reject of [false, true]) {
     const doc = archiveFixture();
@@ -633,10 +479,8 @@ test('late list responses or errors cannot leak into the newly selected profile'
       Sessions(profile) { return profile === 0 ? old.promise : Promise.resolve([{ id: 'owner/new' }]); },
       async OpenSession(profile, id) { reads.push([profile, id]); return { token: 0, events: [{ kind: 'message', text: 'new profile' }] }; },
     }, doc);
-    search(doc, 'old');
     select(doc, 1);
     await settle();
-    assert.equal(doc['session-search'].value, '');
     if (reject) old.reject(new Error('stale list failure'));
     else old.resolve([{ id: 'owner/old' }]);
     await loading;
@@ -644,7 +488,6 @@ test('late list responses or errors cannot leak into the newly selected profile'
     assert.equal(doc.content.children[0].children[1].textContent, 'new profile');
     assert.deepEqual(reads, [[1, 'owner/new']]);
     assert.equal(doc.error.hidden, true);
-    assert.equal(doc.refresh.disabled, false);
   }
 });
 
@@ -1099,79 +942,6 @@ test('send outcomes and drafts stay with their session/profile, including return
   assert.equal(doc.send.disabled, false);
   assert.equal(doc.draft.value, 'hello');
   assert.match(doc['send-error'].textContent, /retry me/);
-});
-
-test('new sessions open even when empty archives omit them, and survive refresh', async () => {
-  const doc = archiveFixture();
-  const opened = [];
-  let creates = 0;
-  await browse({
-    async Sessions() { return []; },
-    async NewSession(profile) { assert.equal(profile, 0); creates++; return 'owner/new'; },
-    async OpenSession(...args) { opened.push(args); return { events: [] }; },
-  }, doc);
-  doc['new-session'].dispatchEvent(new Event('click'));
-  doc['new-session'].dispatchEvent(new Event('click'));
-  await settle();
-  assert.equal(creates, 1);
-  assert.deepEqual(current(doc), ['owner/new']);
-  assert.equal(doc.draft.disabled, false);
-  typeDraft(doc, 'unsent');
-  doc.refresh.dispatchEvent(new Event('click'));
-  assert.equal(doc.draft.disabled, true);
-  await settle();
-  assert.deepEqual(current(doc), ['owner/new']);
-  assert.equal(doc.draft.value, 'unsent');
-  assert.deepEqual(opened, [[0, 'owner/new'], [0, 'owner/new']]);
-});
-
-test('late creation success/failure cannot steal a newer session or profile', async () => {
-  for (const switchProfile of [false, true]) for (const reject of [false, true]) {
-    const doc = archiveFixture();
-    const pending = deferred();
-    await browse({
-      async Sessions() { return [{ id: 'owner/a' }, { id: 'owner/b' }]; },
-      NewSession() { return pending.promise; },
-      async OpenSession() { return { events: [] }; },
-    }, doc);
-    doc['new-session'].dispatchEvent(new Event('click'));
-    if (switchProfile) select(doc, 1);
-    else choose(doc, 'owner/b');
-    await settle();
-    typeDraft(doc, 'keep');
-    if (reject) pending.reject(new Error('stale create'));
-    else pending.resolve('owner/new');
-    await settle();
-    assert.deepEqual(current(doc), [switchProfile ? 'owner/a' : 'owner/b']);
-    assert.equal(doc.draft.value, 'keep');
-    assert.equal(doc.error.hidden, true);
-    assert.equal(doc['new-session'].disabled, false);
-  }
-});
-
-test('new session errors recover; loading transcripts cannot send', async () => {
-  const doc = archiveFixture();
-  const pending = deferred();
-  let creates = 0;
-  const loading = browse({
-    async Sessions() { return [{ id: 'owner/a' }]; },
-    OpenSession() { return pending.promise; },
-    async NewSession() { creates++; throw new Error('create failed'); },
-    SendMessage() { assert.fail('Loading sessions must not send'); },
-  }, doc);
-  await settle();
-  typeDraft(doc, 'wait');
-  submit(doc);
-  assert.equal(doc.draft.disabled, true);
-  pending.resolve({ events: [] });
-  await loading;
-  for (let i = 0; i < 2; i++) {
-    doc['new-session'].dispatchEvent(new Event('click'));
-    await settle();
-    assert.match(doc.error.textContent, /create failed/);
-    assert.equal(doc['new-session'].disabled, false);
-  }
-  assert.equal(creates, 2);
 });
 
 test('questions render literally with recommendations, free replies, queued and resolved states', async () => {
@@ -1735,16 +1505,6 @@ test('model dialog asks to save or discard a change left by the X, back or Escap
   assert.equal(el.dialog.open, false);
 });
 
-test('the sidebar toggle is an icon, the sidebar slides, and the page does not bounce', async () => {
-  const html = await readFile(new URL('./frontend/index.html', import.meta.url), 'utf8');
-  assert.match(html, /<button id="sidebar-toggle"[^>]*aria-label="Seitenleiste ausblenden"[^>]*>\s*<svg\b[^>]*aria-hidden="true"/);
-  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
-  assert.match(css, /html, body \{ overscroll-behavior: none; \}/);
-  assert.match(css, /body \{[^}]*transition: grid-template-columns/);
-  assert.match(css, /body\[data-sidebar-collapsed="true"\] \.sidebar \{[^}]*transform: translateX\(-100%\)/);
-  assert.match(css, /prefers-reduced-motion: reduce/);
-});
-
 test('a history that grows or wraps anew stays at its end; expanding something is reading', async () => {
   const doc = archiveFixture();
   const observed = [];
@@ -1772,13 +1532,6 @@ test('a history that grows or wraps anew stays at its end; expanding something i
   page.scrollHeight = 4400;
   resized();
   assert.equal(page.scrollTop, 2700);
-});
-
-test('the sidebar toggle rides along the right edge of the sidebar, beside the brand', async () => {
-  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
-  assert.match(css, /#sidebar-toggle \{[^}]*position: fixed;[^}]*transform: translateX\(calc\(var\(--sidebar-width\) - 68px\)\); transition: transform/);
-  assert.match(css, /body\[data-sidebar-collapsed="true"\] #sidebar-toggle \{ transform: none; \}/);
-  assert.match(css, /\.brand \{[^}]*padding: 0 44px 0 4px;/, 'the brand leaves room for it at its right');
 });
 
 test('empty polls and output that does not grow the history leave it alone, so a bounce is not taken back', async () => {
@@ -1812,36 +1565,12 @@ test('the thread opens by default, including an empty profile, through the ordin
       SendMessage: async (...args) => { sent.push(args); },
     }, doc);
     assert.deepEqual(opened, [[0, 'owner/thread']]);
-    assert.equal(doc.thread.hidden, false);
-    assert.equal(doc.thread.getAttribute('aria-current'), 'true');
     assert.equal(doc['back-to-thread'].hidden, true);
     assert.equal(doc['session-title'].textContent, 'Thread');
     assert.equal(doc.draft.disabled, false);
     typeDraft(doc, 'two different topics'); submit(doc); await settle();
     assert.deepEqual(sent, [[0, 'owner/thread', 'two different topics']]);
   }
-});
-
-test('the thread stays outside search, restores its draft, and is selected on profile change', async () => {
-  const doc = archiveFixture(), opened = [];
-  await browse({
-    Sessions: async () => [{ id: 'owner/topic' }],
-    OpenSession: async (...args) => { opened.push(args); return { token: 0, events: [] }; },
-  }, doc, '', 'owner/thread');
-  typeDraft(doc, 'thread draft');
-  choose(doc, 'owner/topic'); await settle();
-  assert.equal(doc['back-to-thread'].hidden, false);
-  search(doc, 'no match');
-  assert.equal(doc.thread.hidden, false);
-  doc['back-to-thread'].dispatchEvent(new Event('click')); await settle();
-  assert.equal(doc.draft.value, 'thread draft');
-  doc.refresh.dispatchEvent(new Event('click')); await settle();
-  assert.equal(doc['session-title'].textContent, 'Thread');
-  select(doc, 1); await settle();
-  assert.deepEqual(opened.at(-1), [1, 'owner/thread']);
-  assert.equal(doc.draft.value, '');
-  select(doc, 0); await settle();
-  assert.equal(doc.draft.value, 'thread draft');
 });
 
 test('restart resumes a thread or explicit session; missing resumed sessions return to the thread', async () => {
@@ -1904,7 +1633,7 @@ test('late stop failures stay with the original session and peers cannot be stop
   const doc = archiveFixture(), stopping = deferred(), stopped = [];
   await browse({
     Sessions: async () => [{ id: 'peer-key/topic' }],
-    OpenSession: async (_, id) => ({ token: 0, events: id === 'owner/thread' ? [{ kind: 'working', n: 1 }] : [] }),
+    OpenSession: async (_, id) => ({ token: 0, events: id === 'owner/thread' ? [{ kind: 'message', text: 'go' }, { kind: 'handed', text: 'topic' }, { kind: 'working', n: 1 }] : [] }),
     StopSession: (...args) => { stopped.push(args); return stopping.promise; },
   }, doc, '', 'owner/thread');
   doc.stop.dispatchEvent(new Event('click'));
@@ -1914,7 +1643,7 @@ test('late stop failures stay with the original session and peers cannot be stop
   assert.equal(doc.stop.disabled, true);
   stopping.reject(Error('cannot stop')); await settle();
   assert.equal(doc['send-error'].hidden, true);
-  doc.thread.dispatchEvent(new Event('click')); await settle();
+  doc['back-to-thread'].dispatchEvent(new Event('click')); await settle();
   assert.match(doc['send-error'].textContent, /cannot stop/);
   assert.equal(doc.stop.disabled, false);
 });
@@ -1923,7 +1652,8 @@ test('the context rail reuses explicitly loaded tool results and clears them whe
   const doc = archiveFixture(); let requests = 0;
   await browse({
     Sessions: async () => [{ id: 'owner/a' }, { id: 'owner/b' }],
-    OpenSession: async (_, id) => ({token: 0, events: id === 'owner/a' ? [{kind: 'step', tool: 'read', call_id: 'call', done: true, text: 'read file'}] : []}),
+    OpenSession: async (_, id) => ({token: 0, events: id === 'owner/a' ? [{kind: 'step', tool: 'read', call_id: 'call', done: true, text: 'read file'}]
+      : id === 'owner/thread' ? [{kind: 'message', text: 'go'}, {kind: 'handed', text: 'a'}, {kind: 'handed', text: 'b'}] : []}),
     ToolResult: async () => { requests++; return {found: true, arguments: '<input>', content: '<output>'}; },
   }, doc, 'owner/a', 'owner/thread');
   assert.equal(requests, 0);
@@ -1936,7 +1666,7 @@ test('the context rail reuses explicitly loaded tool results and clears them whe
   detail.open = false; detail.dispatchEvent(new Event('toggle'));
   detail.open = true; detail.dispatchEvent(new Event('toggle')); await settle();
   assert.equal(requests, 1, 'the inspector reuses the same request and cache');
-  doc.thread.dispatchEvent(new Event('click')); await settle();
+  doc['back-to-thread'].dispatchEvent(new Event('click')); await settle();
   assert.deepEqual(visibleTexts(doc['context-details']), ['<input>', '<output>'], 'the result remains beside the central thread');
   assert.match(doc['context-note'].textContent, /owner\/a/);
   choose(doc, 'owner/b'); await settle();
@@ -1952,12 +1682,10 @@ test('live session overview adds delegated topics without reopening the thread a
       if (late && profile === 0) return late.promise;
       return profile === 1 ? [{id: 'owner/other', running: true}] : refresh ? [{id: 'owner/idle'}, {id: 'owner/new', running: true}] : [];
     },
-    OpenSession: async (...args) => { opened.push(args); return {token: 0, events: []}; },
+    OpenSession: async (...args) => { opened.push(args); return {token: 0, events: [{kind: 'message', text: 'go'}, {kind: 'handed', text: 'new'}, {kind: 'handed', text: 'idle'}, {kind: 'handed', text: 'other'}]}; },
   }, doc, '', 'owner/thread');
   refresh = true; await tick();
-  // Beside the thread only the sessions of the part in view show; a search lists the others.
-  assert.deepEqual(buttons(doc), []);
-  search(doc, 'owner');
+  // Beside the thread the sessions of the part in view show.
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/new', 'owner/idle']);
   assert.equal(buttons(doc)[0].getAttribute('data-running'), 'true');
   assert.deepEqual(opened, [[0, 'owner/thread']], 'refresh changes the list, not the watched conversation');
@@ -1966,7 +1694,6 @@ test('live session overview adds delegated topics without reopening the thread a
   select(doc, 1); await settle();
   assert.deepEqual(opened.at(-1), [1, 'owner/thread']);
   late.resolve([{id: 'owner/stale', running: true}]); await pending;
-  search(doc, 'owner');
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/other']);
 });
 
@@ -2020,7 +1747,7 @@ test('the fade at the top is off while the start of the thread is in view, so a 
   assert.match(css, /\.transcript-scroller\.at-start \+ \.transcript-fade \{ opacity: 0; \}/);
 });
 
-test('beside the thread show the sessions of the part in view, else "Noch keine"; a search finds the others', async () => {
+test('beside the thread show the sessions of the part in view, else "Noch keine"', async () => {
   const doc = archiveFixture();
   const now = new Date().toISOString();
   const stepsOf = { 'owner/aaaa1111-x': [{ kind: 'step', done: true, tool: 'browser_use', text: 'browser_use · navigate spec.matrix.org' }] };
@@ -2057,9 +1784,6 @@ test('beside the thread show the sessions of the part in view, else "Noch keine"
   doc.marks.find(mark => mark.target === doc['transcript-end']).run([{ isIntersecting: true }]);
   await settle();
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/bbbb2222-y']);
-  // A search lists all of them.
-  search(doc, 'owner');
-  assert.equal(buttons(doc).length, 3);
 });
 
 // Review of #54: an opened session keeps the part of the thread and its

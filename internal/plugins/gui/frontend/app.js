@@ -13,16 +13,7 @@ export function mount(state, doc = document) {
     option.setAttribute('data-name', profile.name);
     picker.append(option);
   });
-  const render = () => {
-    const profile = state.profiles[picker.selectedIndex];
-    if (!profile) return;
-    doc.getElementById('active').textContent = 'Profil: ' + profile.name;
-    doc.getElementById('identity').textContent = profile.id || 'Profil noch nicht eingerichtet';
-  };
   picker.selectedIndex = state.selected;
-  picker.disabled = state.profiles.length < 2;
-  picker.addEventListener('change', render);
-  render();
 }
 
 export function dateGroup(value, now = new Date()) {
@@ -215,20 +206,16 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   // The name of the agent of the selected profile, as the terminal UI heads its messages.
   const agentName = () => profiles.children?.[profiles.selectedIndex]?.getAttribute?.('data-name') || 'ouroboros';
   const sessions = doc.getElementById('sessions');
-  const search = doc.getElementById('session-search');
   const content = doc.getElementById('content');
   const status = doc.getElementById('session-status');
   const title = doc.getElementById('session-title');
   const meta = doc.getElementById('session-meta');
   const error = doc.getElementById('error');
-  const refresh = doc.getElementById('refresh');
   const composer = doc.getElementById('composer');
   const draft = doc.getElementById('draft');
   const send = doc.getElementById('send');
   const sendError = doc.getElementById('send-error');
   const sendStatus = doc.getElementById('send-status');
-  const create = doc.getElementById('new-session');
-  const thread = doc.getElementById('thread');
   const back = doc.getElementById('back-to-thread');
   const stop = doc.getElementById('stop');
   const threadEntry = { id: threadID, title: 'Thread' };
@@ -244,7 +231,6 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     if (result.arguments) appendText(contextDetails, result.arguments, doc);
     appendText(contextDetails, result.content || '(Leeres Ergebnis)', doc);
   };
-  thread.hidden = !threadID;
   const drafts = new Map();
   const localEntries = new Map();
   // The history scrolls on its own, between the header and the composer, so it
@@ -287,6 +273,9 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   const inSection = entry => !!section && [...section.sessions].some(handle => entry.id.slice(entry.id.indexOf('/') + 1).startsWith(handle));
   const show = part => {
     if (!part || part === section) return;
+    // A result opened deliberately stays beside the thread until the owner
+    // scrolls to another part of it; then the artefacts of that part show.
+    if (section) inspecting = null;
     section = part;
     renderList();
     void artefacts();
@@ -327,7 +316,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   let drawing = 0;
   const artefacts = async () => {
     const draw = ++drawing;
-    if (!section || !threadID || context?.id !== threadID) return;
+    if (!section || !threadID || context?.id !== threadID || inspecting) return;
     const profile = context.profile;
     // A render on its way is stale once another one began or the selection
     // changed, see read.
@@ -411,7 +400,6 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     }
     updateComposer();
   };
-  let creating = false;
   const sessionState = (profile, id) => {
     const key = profile + ':' + id;
     if (!drafts.has(key)) drafts.set(key, { text: '', error: '', pending: false, notice: '' });
@@ -508,11 +496,9 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     error.hidden = false;
   };
   const renderList = () => {
-    thread.setAttribute('aria-current', selected === threadID ? 'true' : 'false');
     back.hidden = !threadID || selected === threadID;
     sessions.replaceChildren();
-    const query = search.value.trim().toLocaleLowerCase('de-DE');
-    if (threadID && !query && section?.at) {
+    if (threadID && section?.at) {
       const when = doc.createElement('p');
       when.className = 'section-time';
       when.textContent = 'T – ' + clock(section.at);
@@ -520,10 +506,9 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     }
     const groups = new Map();
     for (const entry of [...entries].sort((a, b) => Number(!!b.running) - Number(!!a.running))) {
-      if (!((entry.title || '') + ' ' + entry.id).toLocaleLowerCase('de-DE').includes(query)) continue;
       // Beside the thread, as in the demo, only the sessions of the part of it
-      // in view show; a search finds the others.
-      if (threadID && !query && !inSection(entry)) continue;
+      // in view show.
+      if (threadID && !inSection(entry)) continue;
       const label = entry.running ? 'Aktiv' : dateGroup(entry.modified);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(entry);
@@ -565,7 +550,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     if (!groups.size) {
       const empty = doc.createElement('p');
       empty.className = 'list-empty';
-      empty.textContent = query ? 'Keine passende Session gefunden.' : threadID ? 'Noch keine' : 'Noch keine Sessions.';
+      empty.textContent = threadID ? 'Noch keine' : 'Noch keine Sessions.';
       sessions.append(empty);
     }
   };
@@ -684,8 +669,6 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     setQuestion(null);
     draft.value = '';
     updateComposer();
-    creating = false;
-    create.disabled = true;
     const previous = reset ? null : (selected || resume);
     selected = null;
     entries = [];
@@ -695,14 +678,12 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       contextNote.textContent = '';
       contextDetails.replaceChildren();
     }
-    if (reset) search.value = '';
     sessions.replaceChildren();
     content.replaceChildren();
     error.hidden = true;
     title.textContent = 'Sessions';
     meta.textContent = 'Unterhaltungen des Nodes';
     status.textContent = 'Sessions werden geladen …';
-    refresh.disabled = true;
     try {
       let result = [], listError;
       try { result = await bridge.Sessions(profiles.selectedIndex) || []; }
@@ -722,41 +703,10 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       if (version !== generation) return;
       status.textContent = '';
       fail('Sessions konnten nicht geladen werden', cause);
-    } finally {
-      if (version === generation) { refresh.disabled = false; create.disabled = false; }
     }
   };
-  create.addEventListener('click', async () => {
-    if (create.disabled || creating) return;
-    const profile = profiles.selectedIndex;
-    const version = generation;
-    const current = selection;
-    creating = true;
-    create.disabled = true;
-    error.hidden = true;
-    try {
-      const id = await bridge.NewSession(profile);
-      const entry = { id, title: 'Neue Session', modified: new Date().toISOString() };
-      if (!localEntries.has(profile)) localEntries.set(profile, new Map());
-      localEntries.get(profile).set(id, entry);
-      if (version !== generation) return;
-      entries = [entry, ...entries.filter(item => item.id !== id)];
-      renderList();
-      if (current === selection) {
-        search.value = '';
-        await read(entry);
-      }
-    } catch (cause) {
-      if (version === generation && current === selection) fail('Session konnte nicht erstellt werden', cause);
-    } finally {
-      if (version === generation) { creating = false; create.disabled = false; }
-    }
-  });
   profiles.addEventListener('change', () => { load(true); });
-  thread.addEventListener('click', () => { if (threadID) void read(threadEntry); });
   back.addEventListener('click', () => { if (threadID) void read(threadEntry); });
-  search.addEventListener('input', renderList);
-  refresh.addEventListener('click', () => { load(); });
   // Refresh only the existing session list, never the thread history/watch.
   // A late result belongs to its captured profile; it cannot change selection.
   let listing = false;
@@ -783,19 +733,6 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
 
 export async function start(bridge, doc = document) {
   const theme = createThemePreference(doc);
-  const sidebar = doc.getElementById('sidebar');
-  const toggle = doc.getElementById('sidebar-toggle');
-  // The sidebar is not hidden but slides out, see the stylesheet; inert keeps
-  // what is out of view out of reach of the keyboard and screen readers.
-  toggle.addEventListener('click', () => {
-    const collapsed = !sidebar.inert;
-    sidebar.inert = collapsed;
-    doc.body.setAttribute('data-sidebar-collapsed', String(collapsed));
-    toggle.setAttribute('aria-expanded', String(!collapsed));
-    const label = collapsed ? 'Seitenleiste einblenden' : 'Seitenleiste ausblenden';
-    toggle.setAttribute('aria-label', label);
-    toggle.title = label;
-  });
   try {
     const state = await bridge.InitialState();
     mount(state, doc);
