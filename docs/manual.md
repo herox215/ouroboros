@@ -163,9 +163,10 @@ stopping the thread's delegated answers. Messages can still be sent while work r
 the current directory by default. A busy thread keeps its project and shows a notice.
 Beside the thread, the sidebar follows the part of it in view, as in the demo: the part
 whose messages cross the middle of the history, or the newest one at its end. Each message
-of the owner opens a part; the sessions its thread started or addressed with `session_new`,
-`session_send`, `session_status` or `session_stop` belong to it, read from those calls
-(`session_new` returns the ID of the session it started, as the thread is told it). The
+of the owner opens a part; the sessions the thread started (`session_new`) or handed a message
+to (`session_send`) on it belong to it, as the `handed` events of the thread tell: the thread
+hides the calls of its agent, so it tells those as events of their own, also when it is read
+back from the archive. Front ends that do not know the kind leave it out. The
 sidebar shows the time of the part and its sessions with their state, or **Noch keine**; a
 search lists all sessions of the profile, refreshed every three seconds without reopening
 the conversation. The context rail shows the artefacts of those sessions: their last calls
