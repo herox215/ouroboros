@@ -209,12 +209,15 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 .composer-row { display: flex; align-items: flex-end; gap: 10px; }
 .composer-prompt { flex: none; padding: 7px 0; color: var(--muted); }
 .composer-row #draft { flex: 1; min-height: 0; max-height: 30vh; resize: none; overflow-y: auto; }
+/* The line is the field: focus shows on the line below it, not as a box. */
+.composer-row #draft:focus-visible { outline: none; }
+.composer:focus-within { border-top-color: var(--accent); }
 .composer #send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 50%; font-size: 15px; line-height: 1; }
 .composer #send:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
 .composer #stop:disabled { display: none; }
 .composer-actions { margin-top: 2px; }
 /* Older messages fade out towards the top, as in the demo. */
-.transcript-scroller { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 120px); mask-image: linear-gradient(to bottom, transparent 0, #000 120px); }
+.transcript-scroller { -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .3) 14%, #000 40%); mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .3) 14%, #000 40%); }
 /* What the agent handed to a session reads as a line of its own, as in the demo. */
 #content .message-task { padding: 2px 0 8px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 #content .message-task h3 { display: inline; margin: 0 6px 0 0; }

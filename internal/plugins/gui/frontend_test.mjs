@@ -1923,5 +1923,5 @@ test('the composer is one line behind a prompt with a round send button, as in t
   assert.match(html, /<div class="composer-row">\s*<span class="composer-prompt" aria-hidden="true">›<\/span>\s*<textarea id="draft" rows="1"/);
   assert.match(html, /<button id="send" type="submit" aria-label="Senden"[^>]*><span aria-hidden="true">↑<\/span><\/button>/);
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.transcript-scroller \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0/);
+  assert.match(css, /\.transcript-scroller \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0, rgba\(0, 0, 0, \.3\) 14%, #000 40%\)/);
 });
