@@ -97,6 +97,7 @@ function documentFixture() {
     'session-status': new Element('p'),
     transcript: new Scroller('div'),
     'transcript-end': new Element('div'),
+    'transcript-start': new Element('div'),
     refresh: new Element('button'),
     'new-session': new Element('button'),
     thread: new Element('button'),
@@ -166,7 +167,7 @@ function scrollPage(doc, top) {
   const page = doc.transcript;
   page.scrollTop = top;
   const near = page.scrollHeight - page.clientHeight - page.scrollTop <= 48;
-  for (const mark of doc.marks) mark.run([{ isIntersecting: near, target: mark.target }]);
+  for (const mark of doc.marks) if (mark.target === doc['transcript-end']) mark.run([{ isIntersecting: near, target: mark.target }]);
 }
 
 // An open owner session on a page of 3200 px in a window of 900 px, where
@@ -190,7 +191,7 @@ async function liveSession(events = []) {
 
 test('live messages keep the page at its end unless the user has scrolled up', async () => {
   const { doc, page, pending } = await liveSession();
-  assert.equal(doc.marks.length, 1);
+  assert.equal(doc.marks.length, 2, 'one mark at the end, one at the start');
   assert.equal(doc.marks[0].target, doc['transcript-end']);
   assert.deepEqual(doc.marks[0].options, { root: doc.transcript, rootMargin: '0px 0px 48px 0px' });
   assert.equal(page.scrollTop, 2300, 'the empty transcript still sits at its end');
@@ -1924,4 +1925,17 @@ test('the composer is one line behind a prompt with a round send button, as in t
   assert.match(html, /<button id="send" type="submit" aria-label="Senden"[^>]*><span aria-hidden="true">↑<\/span><\/button>/);
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.transcript-scroller \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0, rgba\(0, 0, 0, \.3\) 14%, #000 40%\)/);
+});
+
+test('the fade at the top is off while the start of the thread is in view, so a short thread reads in full', async () => {
+  const { doc } = await liveSession();
+  const toggles = [];
+  doc.transcript.classList = { toggle: (name, on) => toggles.push([name, on]) };
+  const start = doc.marks.find(mark => mark.target === doc['transcript-start']);
+  assert.deepEqual(start.options, { root: doc.transcript });
+  start.run([{ isIntersecting: true }]);
+  start.run([{ isIntersecting: false }]);
+  assert.deepEqual(toggles, [['at-start', true], ['at-start', false]]);
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.transcript-scroller\.at-start \{ -webkit-mask-image: none; mask-image: none; \}/);
 });

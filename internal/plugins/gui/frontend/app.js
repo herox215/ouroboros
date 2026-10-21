@@ -253,6 +253,10 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     // Within 48 px of the end still counts as at the end.
     new Intersection(([mark]) => { following = mark.isIntersecting; },
       { root: scroller, rootMargin: '0px 0px 48px 0px' }).observe(doc.getElementById('transcript-end'));
+    // Older messages fade out at the top only while there are older ones above:
+    // at the start of a short thread the first lines stay readable.
+    new Intersection(([mark]) => { scroller.classList?.toggle('at-start', mark.isIntersecting); },
+      { root: scroller }).observe(doc.getElementById('transcript-start'));
   }
   doc.defaultView?.addEventListener('resize', keep);
   // The history also changes its height by itself: as the sidebar slides and

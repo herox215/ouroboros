@@ -218,6 +218,8 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 .composer-actions { margin-top: 2px; }
 /* Older messages fade out towards the top, as in the demo. */
 .transcript-scroller { -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .3) 14%, #000 40%); mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, .3) 14%, #000 40%); }
+.transcript-scroller.at-start { -webkit-mask-image: none; mask-image: none; }
+#transcript-start { height: 1px; }
 /* What the agent handed to a session reads as a line of its own, as in the demo. */
 #content .message-task { padding: 2px 0 8px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 #content .message-task h3 { display: inline; margin: 0 6px 0 0; }
