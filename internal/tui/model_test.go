@@ -50,13 +50,19 @@ func TestModelScreenChoosesAModel(t *testing.T) {
 	if m.picker.sel != len(m.picker.choices)-1 {
 		t.Fatalf("up should go around to the last model: %d", m.picker.sel)
 	}
+	shown := m.chat
 	press(m, "down", "down")
 	m.Update(press(m, "enter")())
-	if len(b.set) != 1 || b.set[0] != "a1 gpt-4o-mini" || m.notice != "model changed to gpt-4o-mini · new conversation" || m.noticeErr {
+	if len(b.set) != 1 || b.set[0] != "a1 gpt-4o-mini" || m.notice != "model changed to gpt-4o-mini · "+changedNote || m.noticeErr {
 		t.Fatalf("set %v, notice %q", b.set, m.notice)
 	}
 	if m.screen != screenChat {
-		t.Fatal("the conversation starts anew, so the model screen should close")
+		t.Fatal("the model screen should close once the model is picked")
+	}
+	// The conversation that was shown goes on: another model answers in it
+	// from the next message, its context starting anew there.
+	if m.chat != shown || m.chat.contextID != shown.contextID {
+		t.Fatalf("the switch left the conversation: %q, was %q", m.chat.contextID, shown.contextID)
 	}
 	// The status is read anew, and marks the new model as the one in use.
 	b.status.Model = "gpt-4o-mini"
