@@ -5,7 +5,7 @@ description: Use Git safely and efficiently through bash: inspect repositories, 
 
 # Git workflow
 
-Use this skill for tasks involving Git repositories, changes, history, branches, commits, or remotes. All examples use the `bash` function inside `run`; Git is not a separate tool.
+Use this skill for tasks involving Git repositories, changes, history, branches, commits, or remotes. Call the `bash` tool directly with JSON arguments; there is no `run` wrapper or `print` call. Git is not a separate tool.
 
 ## Working environment
 
@@ -19,11 +19,13 @@ Use this skill for tasks involving Git repositories, changes, history, branches,
 
 Start with a small, bounded inspection, batching independent commands when useful:
 
-```javascript
-print(bash({
-  dir: "/absolute/path/to/repo",
-  command: "git rev-parse --show-toplevel && git status --short --branch && git --no-pager diff --no-ext-diff --stat && git --no-pager diff --no-ext-diff --cached --stat"
-}));
+Example arguments for a direct `bash` tool call:
+
+```json
+{
+  "dir": "/absolute/path/to/repo",
+  "command": "git rev-parse --show-toplevel && git status --short --branch && git --no-pager diff --no-ext-diff --stat && git --no-pager diff --no-ext-diff --cached --stat"
+}
 ```
 
 Then inspect relevant file diffs and enough surrounding source to understand the task. Check both staged and unstaged changes before touching a file; untracked files also belong to the user unless you created them. Preserve unrelated work. Never interpret a dirty tree as permission to reset or clean it.
