@@ -175,10 +175,14 @@ func threadTools() []agent.Tool {
 			if err := agent.Decode(ToolSessionNew, raw, &s); err != nil {
 				return "", err
 			}
-			if _, err := thread.Start(ctx, s.Text, s.Directory); err != nil {
+			id, err := thread.Start(ctx, s.Text, s.Directory)
+			if err != nil {
 				return "", err
 			}
-			return "Work started in the background. Briefly acknowledge ordinary work, then finish this turn without waiting. Omit the acknowledgement for quick visible actions when the owner wants no extra text.", nil
+			// The ID, as its description promises: as the thread is told it
+			// (session.handle), so that its agent and the front ends can tell
+			// which session a part of the thread started.
+			return "Work started in the background in session " + id[:min(len(id), 8)] + ". Briefly acknowledge ordinary work, then finish this turn without waiting. Omit the acknowledgement for quick visible actions when the owner wants no extra text.", nil
 		},
 	}, {
 		Name: ToolSearchThread,

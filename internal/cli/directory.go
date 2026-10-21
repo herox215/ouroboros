@@ -37,9 +37,9 @@ func (a *App) startDirectory(ctx context.Context, args []string) (context.Contex
 	var path string
 	switch {
 	case len(args) == 0:
-	case args[0] == "tui":
+	case args[0] == "tui" || args[0] == "gui":
 		if len(args) > 2 {
-			return ctx, args, fmt.Errorf("usage: ouro tui [DIRECTORY]")
+			return ctx, args, fmt.Errorf("usage: ouro %s [DIRECTORY]", args[0])
 		}
 		if len(args) == 2 {
 			path = args[1]

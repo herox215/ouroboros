@@ -37,10 +37,12 @@ func TestStartDirectory(t *testing.T) {
 	}
 	p := plugin.New("test-front", func(ctx *plugin.Context, _ struct{}) error {
 		plugin.Add(ctx, plugin.FrontEnd{Name: "test-front", Run: capture})
-		plugin.Add(ctx, plugin.Command{Name: "tui", Run: func(ctx context.Context, args []string) error {
-			commandArgs = args
-			return capture(ctx)
-		}})
+		for _, name := range []string{"tui", "gui"} {
+			plugin.Add(ctx, plugin.Command{Name: name, Run: func(ctx context.Context, args []string) error {
+				commandArgs = args
+				return capture(ctx)
+			}})
+		}
 		plugin.Add(ctx, plugin.Command{Name: "status", Run: func(ctx context.Context, args []string) error {
 			directory, command, commandArgs = workdir.Of(ctx), "status", args
 			return nil
@@ -66,6 +68,8 @@ func TestStartDirectory(t *testing.T) {
 		{"home project", []string{"~/project with spaces"}, filepath.Join(cwd, "project with spaces")},
 		{"tui cwd", []string{"tui"}, cwd},
 		{"tui project", []string{"tui", "project with spaces"}, filepath.Join(cwd, "project with spaces")},
+		{"gui cwd", []string{"gui"}, cwd},
+		{"gui project", []string{"gui", "project with spaces"}, filepath.Join(cwd, "project with spaces")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			directory, commandArgs = "", nil
@@ -84,6 +88,7 @@ func TestStartDirectory(t *testing.T) {
 	for _, args := range [][]string{
 		{filepath.Join(cwd, "missing")}, {"./missing"}, {"~/missing"}, {"./file"},
 		{"project", "extra"}, {"tui", "missing"}, {"tui", ""}, {"tui", "project", "extra"},
+		{"gui", "missing"}, {"gui", ""}, {"gui", "project", "extra"},
 	} {
 		before := frontRuns
 		if err := app.Run(context.Background(), args); err == nil || (!strings.Contains(err.Error(), "directory") && !strings.Contains(err.Error(), "DIRECTORY")) {

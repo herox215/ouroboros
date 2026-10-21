@@ -200,3 +200,17 @@ func TestThreadLogsAnAnswerThatAnsweredNothing(t *testing.T) {
 		t.Fatalf("the log outside the thread: %q", lines)
 	}
 }
+
+// session_new returns the ID of the session it started, as its description
+// promises, as the thread is told it: so the agent of the thread and the
+// front ends can tell which session a part of the thread started.
+func TestSessionNewNamesItsSession(t *testing.T) {
+	cfg, b := directNode(t)
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	defer a.Stop()
+	ctx := WithThread(context.Background(), &fakeThread{})
+	got, err := a.Ask(ctx, "thread", `!session_new {"text":"go"}`, nil)
+	if got := result(t, got, err); !strings.HasPrefix(got, "Work started in the background in session s2. ") {
+		t.Fatalf("session_new: %s", got)
+	}
+}

@@ -1,5 +1,7 @@
+import { createThemePreference } from './theme.js';
+
 // Profile is captured on open; changing the main profile picker cannot redirect a save.
-export function createSettingsDialog(bridge, modelDialog, doc = document) {
+export function createSettingsDialog(bridge, modelDialog, doc = document, theme = createThemePreference(doc)) {
   const dialog = doc.createElement('dialog');
   dialog.className = 'model-dialog settings-dialog';
   dialog.setAttribute('aria-label', 'Settings');
@@ -41,6 +43,14 @@ export function createSettingsDialog(bridge, modelDialog, doc = document) {
     page('Settings · ' + name);
     dialog.append(button('Model', () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
     dialog.append(button('Gateways', gateways));
+    const label = el('label', 'Darstellung');
+    const select = el('select');
+    for (const [value, text] of [['system', 'System'], ['light', 'Hell'], ['dark', 'Dunkel']]) {
+      const option = el('option', text); option.value = value; select.append(option);
+    }
+    select.value = theme.value;
+    select.addEventListener('change', () => theme.set(select.value));
+    label.append(select); dialog.append(label);
   };
   const failure = () => {
     // Never reflect backend error strings: they may contain credentials.

@@ -1,5 +1,6 @@
 import { createModelDialog } from './model-dialog.js';
 import { createSettingsDialog } from './settings-dialog.js';
+import { createThemePreference } from './theme.js';
 
 // Session text is rendered literally, including questions and tool output.
 export function mount(state, doc = document) {
@@ -9,18 +10,10 @@ export function mount(state, doc = document) {
     const option = doc.createElement('option');
     option.value = String(index);
     option.textContent = (index + 1) + ' · ' + profile.name;
+    option.setAttribute('data-name', profile.name);
     picker.append(option);
   });
-  const render = () => {
-    const profile = state.profiles[picker.selectedIndex];
-    if (!profile) return;
-    doc.getElementById('active').textContent = 'Profil: ' + profile.name;
-    doc.getElementById('identity').textContent = profile.id || 'Profil noch nicht eingerichtet';
-  };
   picker.selectedIndex = state.selected;
-  picker.disabled = state.profiles.length < 2;
-  picker.addEventListener('change', render);
-  render();
 }
 
 export function dateGroup(value, now = new Date()) {
@@ -35,6 +28,15 @@ export function dateGroup(value, now = new Date()) {
 }
 
 const dateFormat = new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
+const clockFormat = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
+
+// The time above a message, as the terminal UI writes it: the clock today, the
+// date with it before.
+function clock(value, now = new Date()) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toDateString() === now.toDateString() ? clockFormat.format(date) : dateFormat.format(date);
+}
 function formatDate(value) {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? dateFormat.format(date) : '';
@@ -60,19 +62,41 @@ function appendText(parent, value, doc) {
 }
 
 // Session events are the same projection the terminal UI watches: never raw records.
-function transcript(bridge, profile, id, content, doc, active, setQuestion) {
+// What a transcript tells browse of its parts, where nothing listens.
+const quietSections = { observe() {}, changed() {} };
+
+// How much of the thread shows, as in the terminal UI (tui.threadStart) and as
+// its agent is told it (assistant.ThreadWindow): the archive keeps the rest.
+const threadWindow = 6 * 60 * 60 * 1000;
+
+// Messages are headed as in the terminal UI, in the language of the GUI:
+// "Du", or the name of the agent.
+function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros', sections = quietSections) {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
   let partial = null;
+  // Of the thread only its last hours show: the expired prefix is left out,
+  // and from the first message within them on everything shows, also one
+  // without a time, as the terminal UI does.
+  const cutoff = Date.now() - threadWindow;
+  let shown = sections === quietSections;
+  // Each owner message opens a part of the thread; the sessions the thread
+  // started or handed a message to on it belong to that part, as its Handed
+  // events tell, see browse.
+  let exchange = { at: null, sessions: new Set() };
   const message = (kind, label, text, at) => {
+    if (!shown && !(Date.parse(at) < cutoff)) shown = true;
     const item = doc.createElement('section');
     item.className = 'message message-' + kind;
     const heading = doc.createElement('h3');
-    const time = formatDate(at);
+    const time = clock(at);
     heading.textContent = label + (time ? ' · ' + time : '');
     item.append(heading);
     if (text) appendText(item, text, doc);
+    if (!shown) return item;
     content.append(item);
+    item.exchange = exchange;
+    sections.observe(item);
     return item;
   };
   const clearPartial = () => {
@@ -80,26 +104,33 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion) {
     partial = null;
   };
   const apply = (event) => {
+    onEvent(event);
     switch (event.kind) {
-      case 'message': closeQuestion(); message('user', 'Du', event.text, event.at); break;
+      case 'message': closeQuestion(); exchange = { at: event.at, sessions: new Set() }; message('user', 'Du', event.text, event.at); break;
       case 'say':
         clearPartial();
-        if (event.text?.trim()) message('assistant', 'Assistent', event.text, event.at);
+        if (event.text?.trim()) message('assistant', agent, event.text, event.at);
         break;
       case 'answer':
         closeQuestion();
       case 'suggestion':
         clearPartial();
-        if (event.text?.trim()) message('assistant', 'Assistent', event.text, event.at);
+        if (event.text?.trim()) message('assistant', agent, event.text, event.at);
         break;
       case 'answering':
         if (!partial) {
-          const item = message('assistant', 'Assistent · schreibt …', '', event.at);
+          const item = message('assistant', agent + ' · schreibt …', '', event.at);
           const text = doc.createElement('pre');
           item.append(text);
           partial = { item, text };
         }
         partial.text.textContent += event.text || '';
+        break;
+      case 'handed':
+        if (event.text && !exchange.sessions.has(event.text)) {
+          exchange.sessions.add(event.text);
+          sections.changed(exchange);
+        }
         break;
       case 'step': {
         clearPartial();
@@ -116,7 +147,9 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion) {
           calls.set(key, call);
           const ref = event.call_id;
           if (ref) details.addEventListener('toggle', async () => {
-            if (!details.open || call.loaded || call.loading || !active()) return;
+            if (!details.open || !active()) return;
+            if (call.loaded) { inspect(event.tool, call.result); return; }
+            if (call.loading) return;
             call.loading = true;
             if (!call.note) {
               call.note = doc.createElement('p');
@@ -130,6 +163,8 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion) {
                 if (result.arguments) appendText(details, result.arguments, doc);
                 appendText(details, result.content || '(Leeres Ergebnis)', doc);
                 call.loaded = true;
+                call.result = result;
+                inspect(event.tool, result);
               }
               call.note.textContent = result.found ? '' : 'Noch kein gespeichertes Ergebnis. Zum erneuten Laden auf- und zuklappen.';
             } catch (cause) {
@@ -162,7 +197,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion) {
         clearPartial();
         message('end', 'Status', event.kind === 'canceled' ? 'Antwort gestoppt' : (event.text || 'Antwort fehlgeschlagen'), event.at);
         break;
-      case 'task': message('other', 'Aufgabe', event.text, event.at); break;
+      case 'task': message('task', '↳ Aufgabe', event.text, event.at); break;
       case 'thought': break;
     }
   };
@@ -177,22 +212,36 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion) {
   return render;
 }
 
-export function browse(bridge, doc = document, resume = '') {
+export function browse(bridge, doc = document, resume = '', threadID = '') {
   const profiles = doc.getElementById('profile');
+  // The name of the agent of the selected profile, as the terminal UI heads its messages.
+  const agentName = () => profiles.children?.[profiles.selectedIndex]?.getAttribute?.('data-name') || 'ouroboros';
   const sessions = doc.getElementById('sessions');
-  const search = doc.getElementById('session-search');
   const content = doc.getElementById('content');
   const status = doc.getElementById('session-status');
   const title = doc.getElementById('session-title');
   const meta = doc.getElementById('session-meta');
   const error = doc.getElementById('error');
-  const refresh = doc.getElementById('refresh');
   const composer = doc.getElementById('composer');
   const draft = doc.getElementById('draft');
   const send = doc.getElementById('send');
   const sendError = doc.getElementById('send-error');
   const sendStatus = doc.getElementById('send-status');
-  const create = doc.getElementById('new-session');
+  const back = doc.getElementById('back-to-thread');
+  const stop = doc.getElementById('stop');
+  const threadEntry = { id: threadID, title: 'Thread' };
+  const contextTitle = doc.getElementById('context-title');
+  const contextNote = doc.getElementById('context-note');
+  const contextDetails = doc.getElementById('context-details');
+  let inspecting = null;
+  const inspect = (tool, result) => {
+    inspecting = { profile: context.profile, id: context.id };
+    contextTitle.textContent = '[' + (tool || 'Werkzeug') + ']';
+    contextNote.textContent = 'Werkzeug-Ergebnis · ' + context.id;
+    contextDetails.replaceChildren();
+    if (result.arguments) appendText(contextDetails, result.arguments, doc);
+    appendText(contextDetails, result.content || '(Leeres Ergebnis)', doc);
+  };
   const drafts = new Map();
   const localEntries = new Map();
   // The history scrolls on its own, between the header and the composer, so it
@@ -216,10 +265,99 @@ export function browse(bridge, doc = document, resume = '') {
   const Intersection = doc.defaultView?.IntersectionObserver;
   if (Intersection) {
     // Within 48 px of the end still counts as at the end.
-    new Intersection(([mark]) => { following = mark.isIntersecting; },
+    new Intersection(([mark]) => { following = mark.isIntersecting; pick(); },
       { root: scroller, rootMargin: '0px 0px 48px 0px' }).observe(doc.getElementById('transcript-end'));
+    // Older messages fade out at the top only while there are older ones above:
+    // at the start of a short thread the first lines stay readable.
+    new Intersection(([mark]) => { scroller.classList?.toggle('at-start', mark.isIntersecting); },
+      { root: scroller }).observe(doc.getElementById('transcript-start'));
   }
   doc.defaultView?.addEventListener('resize', keep);
+  // Beside the thread, the sessions of the part of it in view show on the
+  // left and their artefacts on the right, as in the demo: the part whose
+  // messages cross the middle of the history, or the last one at its end.
+  // Which sessions a part has, the Handed events of the thread tell, see
+  // transcript; no scroll position is read for it, see following.
+  let section = null, latest = null, seen = 0, soon = false;
+  const visible = new Set();
+  // A part names a session by its ID or by the handle the thread knows it by.
+  const inSection = entry => !!section && [...section.sessions].some(handle => entry.id.slice(entry.id.indexOf('/') + 1).startsWith(handle));
+  const show = part => {
+    if (!part || part === section) return;
+    // A result opened deliberately stays beside the thread until the owner
+    // scrolls to another part of it; then the artefacts of that part show.
+    if (section) inspecting = null;
+    section = part;
+    renderList();
+    void artefacts();
+  };
+  // Both marks decide anew whichever tells first: at the end of the history
+  // the newest part is in view, though it may never reach the middle.
+  const pick = () => {
+    // Only the thread has parts; an individual session keeps the one it was opened from.
+    if (context?.id !== threadID) return;
+    if (following) return show(latest);
+    let first = null;
+    for (const item of visible) if (!first || item.seq < first.seq) first = item;
+    if (first) show(first.exchange);
+  };
+  const band = Intersection && new Intersection(items => {
+    for (const item of items) item.isIntersecting ? visible.add(item.target) : visible.delete(item.target);
+    pick();
+  }, { root: scroller, rootMargin: '-45% 0px -45% 0px' });
+  const sections = {
+    observe(item) {
+      item.seq = ++seen;
+      latest = item.exchange;
+      band?.observe(item);
+      // At the end, the newest part is the one in view.
+      if (soon) return;
+      soon = true;
+      queueMicrotask(() => { soon = false; if (following) show(latest); });
+    },
+    changed(part) {
+      if (part !== section) return;
+      renderList();
+      void artefacts();
+    },
+  };
+  // The artefacts of the sessions of the part in view: the last calls of
+  // their tools, as the plugins of the tools tell them.
+  const steps = new Map();
+  let drawing = 0;
+  const artefacts = async () => {
+    const draw = ++drawing;
+    if (!section || !threadID || context?.id !== threadID || inspecting) return;
+    const profile = context.profile;
+    // A render on its way is stale once another one began or the selection
+    // changed, see read.
+    const stale = () => draw !== drawing || context?.id !== threadID || context?.profile !== profile;
+    const shown = entries.filter(inSection);
+    contextTitle.textContent = '[Artefakte]';
+    contextNote.textContent = shown.length ? 'T – ' + clock(section.at) : 'Noch keine';
+    const blocks = [];
+    for (const entry of shown) {
+      // What was read while the session worked is read once more after it ended.
+      const kept = steps.get(entry.id);
+      let list = kept?.list;
+      if (!kept || entry.running || kept.running) {
+        try { list = await bridge.SessionSteps(profile, entry.id) || []; } catch { list = list || []; }
+        if (stale()) return;
+        steps.set(entry.id, { list, running: !!entry.running });
+      }
+      const block = doc.createElement('section');
+      block.className = 'artefact';
+      const title = doc.createElement('h3');
+      title.textContent = (entry.title || entry.id) + ' · ' + (entry.running ? 'arbeitet' : 'fertig');
+      block.append(title);
+      const lines = doc.createElement('pre');
+      lines.textContent = list.slice(-8).map(step => step.text || step.tool).join('\n') || 'Noch keine Werkzeuge';
+      block.append(lines);
+      blocks.push(block);
+    }
+    if (stale()) return;
+    contextDetails.replaceChildren(...blocks);
+  };
   // The history also changes its height by itself: as the sidebar slides and
   // its lines wrap anew, or as an answer grows while it streams in.
   const Resize = doc.defaultView?.ResizeObserver;
@@ -235,6 +373,16 @@ export function browse(bridge, doc = document, resume = '') {
   });
   let context = null;
   let ready = false;
+  let activity = { busy: false, n: 0, own: false, stopping: false };
+  const updateStatus = () => {
+    if (!ready) return;
+    const central = context?.id === threadID;
+    const active = Math.max(0, activity.n - (activity.own ? 1 : 0));
+    status.textContent = !context?.id.startsWith('owner/') ? 'Peer-Session · Nur lesen' :
+      (central ? 'Thread' : 'Session') + ' · ' +
+      (asking ? 'Braucht deine Antwort' : activity.busy ? 'Arbeitet …' : 'Bereit') +
+      (central ? ' · ' + active + (active === 1 ? ' aktive Session' : ' aktive Sessions') : '');
+  };
   const questionPanel = doc.getElementById('question-panel');
   const questionText = doc.getElementById('question-text');
   const questionOptions = doc.getElementById('question-options');
@@ -263,14 +411,24 @@ export function browse(bridge, doc = document, resume = '') {
     }
     updateComposer();
   };
-  let creating = false;
   const sessionState = (profile, id) => {
     const key = profile + ':' + id;
     if (!drafts.has(key)) drafts.set(key, { text: '', error: '', pending: false, notice: '' });
     return drafts.get(key);
   };
   const writable = () => ready && context?.id.startsWith('owner/') && !context.state.pending;
+  // The one line of the composer grows with what is written, up to a limit in
+  // the stylesheet, and shrinks again once it is sent.
+  const grow = () => {
+    if (!draft.style) return;
+    // Empty, or not laid out yet (no width), it is the one line of rows="1";
+    // measured without a width it would come out many lines tall.
+    draft.style.height = '';
+    if (!draft.value || !draft.offsetWidth) return;
+    draft.style.height = draft.scrollHeight + 'px';
+  };
   const updateComposer = () => {
+    grow();
     if (asking) {
       const sent = context?.state.sentQuestion === asking.key;
       asking.buttons.forEach(button => { button.disabled = !writable() || sent; });
@@ -279,10 +437,28 @@ export function browse(bridge, doc = document, resume = '') {
     }
     draft.disabled = !ready || !context?.id.startsWith('owner/');
     send.disabled = !writable() || !draft.value.trim();
+    stop.disabled = !ready || !context?.id.startsWith('owner/') || !activity.busy || activity.stopping;
     sendError.textContent = context?.state.error || '';
     sendError.hidden = !sendError.textContent;
     sendStatus.textContent = context?.state.pending ? 'Wird gesendet …' : (context?.state.notice || '');
+    updateStatus();
   };
+  stop.addEventListener('click', async () => {
+    if (stop.disabled) return;
+    const target = context;
+    const current = activity;
+    current.stopping = true;
+    target.state.error = '';
+    updateComposer();
+    try {
+      await bridge.StopSession(target.profile, target.id);
+    } catch (cause) {
+      target.state.error = 'Antwort konnte nicht gestoppt werden: ' + String(cause);
+    } finally {
+      current.stopping = false;
+      if (context === target) updateComposer();
+    }
+  });
   const submit = async (text = draft.value, fromOption = false) => {
     if (!writable() || !text.trim()) return;
     // Who sends, also by an option of a question or while an answer runs, is
@@ -331,12 +507,20 @@ export function browse(bridge, doc = document, resume = '') {
     error.hidden = false;
   };
   const renderList = () => {
+    back.hidden = !threadID || selected === threadID;
     sessions.replaceChildren();
-    const query = search.value.trim().toLocaleLowerCase('de-DE');
+    if (threadID && section?.at) {
+      const when = doc.createElement('p');
+      when.className = 'section-time';
+      when.textContent = 'T – ' + clock(section.at);
+      sessions.append(when);
+    }
     const groups = new Map();
-    for (const entry of entries) {
-      if (!((entry.title || '') + ' ' + entry.id).toLocaleLowerCase('de-DE').includes(query)) continue;
-      const label = dateGroup(entry.modified);
+    for (const entry of [...entries].sort((a, b) => Number(!!b.running) - Number(!!a.running))) {
+      // Beside the thread, as in the demo, only the sessions of the part of it
+      // in view show.
+      if (threadID && !inSection(entry)) continue;
+      const label = entry.running ? 'Aktiv' : dateGroup(entry.modified);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(entry);
     }
@@ -350,17 +534,25 @@ export function browse(bridge, doc = document, resume = '') {
         const button = doc.createElement('button');
         button.type = 'button';
         button.className = 'session-item';
+        button.setAttribute('data-running', String(!!entry.running));
         button.setAttribute('aria-current', entry.id === selected ? 'true' : 'false');
         const name = doc.createElement('span');
         name.className = 'session-title';
         name.textContent = entry.title || entry.id;
         const subtitle = doc.createElement('span');
         subtitle.className = 'session-meta';
-        subtitle.textContent = (entry.id.startsWith('owner/') ? 'Eigene Session' : 'Peer-Session') +
+        // As the sessions in the demo: what it works on, its state, and a bar that
+        // runs while it works. No progress is made up: the bar only says running or not.
+        subtitle.textContent = 'Zustand: ' + (entry.running ? 'arbeitet' : 'bereit') + ' · ' +
+          (entry.id.startsWith('owner/') ? 'eigene' : 'peer') +
           (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
+        const bar = doc.createElement('span');
+        bar.className = 'session-bar';
+        bar.setAttribute('aria-hidden', 'true');
         button.title = entry.id;
         button.append(name);
         button.append(subtitle);
+        button.append(bar);
         button.addEventListener('click', () => { read(entry); });
         group.append(button);
       }
@@ -369,7 +561,7 @@ export function browse(bridge, doc = document, resume = '') {
     if (!groups.size) {
       const empty = doc.createElement('p');
       empty.className = 'list-empty';
-      empty.textContent = query ? 'Keine passende Session gefunden.' : 'Noch keine Sessions.';
+      empty.textContent = threadID ? 'Noch keine' : 'Noch keine Sessions.';
       sessions.append(empty);
     }
   };
@@ -382,11 +574,26 @@ export function browse(bridge, doc = document, resume = '') {
       renderList();
     }
     ready = false;
+    activity = { busy: false, n: 0, own: false, stopping: false };
     setQuestion(null);
     context = { profile, id: entry.id, state: sessionState(profile, entry.id) };
     draft.value = context.state.text;
     updateComposer();
     content.replaceChildren();
+    drawing++; // artefacts on their way belong to what was shown before
+    visible.clear();
+    band?.disconnect();
+    // The thread starts its parts anew; an individual session opened from it
+    // keeps the part it was opened from, and its siblings beside it.
+    if (entry.id === threadID) section = latest = null;
+    // A deliberately opened result may stay beside the thread. It belongs to
+    // its profile and is cleared when another individual session is selected.
+    if (entry.id !== threadID || inspecting?.profile !== profile) {
+      inspecting = null;
+      contextTitle.textContent = '[' + (entry.id === threadID ? 'Thread' : 'Session') + ']';
+      contextNote.textContent = 'Öffne ein Werkzeug-Ergebnis im Verlauf, um es hier zu lesen.';
+      contextDetails.replaceChildren();
+    }
     error.hidden = true;
     title.textContent = entry.title || entry.id;
     meta.textContent = entry.id + (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
@@ -395,12 +602,43 @@ export function browse(bridge, doc = document, resume = '') {
       const snapshot = await bridge.OpenSession(profile, entry.id);
       const active = () => version === generation && current === selection;
       if (!active()) return;
-      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion);
+      context.state.notice = snapshot.notice || '';
+      const onEvent = event => {
+        switch (event.kind) {
+          case 'working':
+            activity.n = event.n || 0;
+            activity.own = !!event.own;
+            activity.busy = activity.n > 0;
+            break;
+          case 'message': case 'task': case 'answering': case 'thought': case 'calling':
+            activity.busy = true;
+            break;
+          case 'asked': if (!event.done) activity.busy = true; break;
+          case 'answer': case 'failed': case 'canceled':
+            activity.busy = entry.id === threadID && activity.n > (activity.own ? 1 : 0);
+            break;
+          case 'directory': meta.textContent = event.text || 'Profil-Workspace'; break;
+          case 'step':
+            if (!contextDetails.children.length) {
+              contextTitle.textContent = '[' + (event.tool || 'Werkzeug') + ']';
+              contextNote.textContent = event.text || event.tool || '';
+            }
+            break;
+          case 'title':
+            if (entry.id !== threadID && event.text) {
+              entry.title = event.text;
+              title.textContent = event.text;
+              renderList();
+            }
+            break;
+        }
+        updateComposer();
+      };
+      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect, agentName(), entry.id === threadID ? sections : undefined);
       await render(snapshot.events || []);
       if (!active()) return;
       ready = true;
       updateComposer();
-      status.textContent = entry.id.startsWith('owner/') ? 'Session · Bereit' : 'Peer-Session · Nur lesen';
       // Start at the end of the transcript after the full replay, following it.
       stick();
       // One outstanding poll per selected chat; the bridge batches the live stream.
@@ -422,6 +660,7 @@ export function browse(bridge, doc = document, resume = '') {
           if (active()) {
             ready = false;
             setQuestion(null);
+            status.textContent = 'Verbindung unterbrochen';
             fail('Verbindung zur Session unterbrochen. Bitte aktualisieren', cause);
           }
         }
@@ -441,93 +680,80 @@ export function browse(bridge, doc = document, resume = '') {
     setQuestion(null);
     draft.value = '';
     updateComposer();
-    creating = false;
-    create.disabled = true;
     const previous = reset ? null : (selected || resume);
     selected = null;
     entries = [];
-    if (reset) search.value = '';
+    if (reset || !inspecting) {
+      inspecting = null;
+      contextTitle.textContent = '[Kontext]';
+      contextNote.textContent = '';
+      contextDetails.replaceChildren();
+    }
     sessions.replaceChildren();
     content.replaceChildren();
     error.hidden = true;
     title.textContent = 'Sessions';
     meta.textContent = 'Unterhaltungen des Nodes';
     status.textContent = 'Sessions werden geladen …';
-    refresh.disabled = true;
     try {
-      const result = await bridge.Sessions(profiles.selectedIndex) || [];
+      let result = [], listError;
+      try { result = await bridge.Sessions(profiles.selectedIndex) || []; }
+      catch (cause) { if (!threadID) throw cause; listError = cause; }
       if (version !== generation) return;
       // Work on a copy; never mutate data owned by the bridge.
       const locals = localEntries.get(profiles.selectedIndex) || new Map();
       for (const entry of result) locals.delete(entry.id);
-      entries = [...result, ...locals.values()].sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
+      entries = [...result, ...locals.values()].filter(entry => entry.id !== threadID)
+        .sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
       renderList();
       status.textContent = entries.length ? 'Wähle eine Session.' : 'Noch keine Sessions.';
-      if (entries.length) await read(entries.find(entry => entry.id === previous) || entries[0]);
+      const target = threadID && previous === threadID ? threadEntry : entries.find(entry => entry.id === previous);
+      if (threadID || entries.length) await read(target || (threadID ? threadEntry : entries[0]));
+      if (listError && version === generation) fail('Sessions konnten nicht geladen werden', listError);
     } catch (cause) {
       if (version !== generation) return;
       status.textContent = '';
       fail('Sessions konnten nicht geladen werden', cause);
-    } finally {
-      if (version === generation) { refresh.disabled = false; create.disabled = false; }
     }
   };
-  create.addEventListener('click', async () => {
-    if (create.disabled || creating) return;
-    const profile = profiles.selectedIndex;
-    const version = generation;
-    const current = selection;
-    creating = true;
-    create.disabled = true;
-    error.hidden = true;
-    try {
-      const id = await bridge.NewSession(profile);
-      const entry = { id, title: 'Neue Session', modified: new Date().toISOString() };
-      if (!localEntries.has(profile)) localEntries.set(profile, new Map());
-      localEntries.get(profile).set(id, entry);
-      if (version !== generation) return;
-      entries = [entry, ...entries.filter(item => item.id !== id)];
-      renderList();
-      if (current === selection) {
-        search.value = '';
-        await read(entry);
-      }
-    } catch (cause) {
-      if (version === generation && current === selection) fail('Session konnte nicht erstellt werden', cause);
-    } finally {
-      if (version === generation) { creating = false; create.disabled = false; }
-    }
-  });
   profiles.addEventListener('change', () => { load(true); });
-  search.addEventListener('input', renderList);
-  refresh.addEventListener('click', () => { load(); });
+  back.addEventListener('click', () => { if (threadID) void read(threadEntry); });
+  // Refresh only the existing session list, never the thread history/watch.
+  // A late result belongs to its captured profile; it cannot change selection.
+  let listing = false;
+  doc.defaultView?.setInterval?.(async () => {
+    if (listing || !ready || doc.hidden) return;
+    const version = generation, profile = profiles.selectedIndex;
+    listing = true;
+    try {
+      const result = await bridge.Sessions(profile) || [];
+      if (version !== generation || profile !== profiles.selectedIndex) return;
+      const locals = localEntries.get(profile) || new Map();
+      for (const entry of result) locals.delete(entry.id);
+      const nextEntries = [...result, ...locals.values()].filter(entry => entry.id !== threadID)
+        .sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
+      if (JSON.stringify(nextEntries) === JSON.stringify(entries)) return;
+      entries = nextEntries;
+      renderList();
+      if (entries.some(inSection)) void artefacts();
+    } catch { /* Keep the last list; explicit refresh reports errors. */ }
+    finally { listing = false; }
+  }, 3000);
   return load();
 }
 
 export async function start(bridge, doc = document) {
-  const sidebar = doc.getElementById('sidebar');
-  const toggle = doc.getElementById('sidebar-toggle');
-  // The sidebar is not hidden but slides out, see the stylesheet; inert keeps
-  // what is out of view out of reach of the keyboard and screen readers.
-  toggle.addEventListener('click', () => {
-    const collapsed = !sidebar.inert;
-    sidebar.inert = collapsed;
-    doc.body.setAttribute('data-sidebar-collapsed', String(collapsed));
-    toggle.setAttribute('aria-expanded', String(!collapsed));
-    const label = collapsed ? 'Seitenleiste einblenden' : 'Seitenleiste ausblenden';
-    toggle.setAttribute('aria-label', label);
-    toggle.title = label;
-  });
+  const theme = createThemePreference(doc);
   try {
     const state = await bridge.InitialState();
     mount(state, doc);
     const modelDialog = createModelDialog(bridge, doc);
-    const settingsDialog = createSettingsDialog(bridge, modelDialog, doc);
+    const settingsDialog = createSettingsDialog(bridge, modelDialog, doc, theme);
     doc.getElementById('settings').addEventListener('click', () => {
       const index = doc.getElementById('profile').selectedIndex;
       settingsDialog.open(index, state.profiles[index]?.name);
     });
-    await browse(bridge, doc, state.resume);
+    await browse(bridge, doc, state.resume, state.thread);
   } catch (error) {
     const message = doc.getElementById('error');
     message.textContent = 'Profile konnten nicht geladen werden: ' + String(error);

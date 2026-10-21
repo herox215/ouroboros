@@ -26,6 +26,21 @@ type testSessions struct {
 	steer      func(context.Context, string, string) error
 	open       func(context.Context) (bool, error)
 	release    func(context.Context) error
+	directory  func(context.Context, string, string) error
+	cancel     func(context.Context, string) error
+}
+
+func (s *testSessions) SetDirectory(ctx context.Context, id, path string) error {
+	if s.directory != nil {
+		return s.directory(ctx, id, path)
+	}
+	return nil
+}
+func (s *testSessions) Cancel(ctx context.Context, id string) error {
+	if s.cancel != nil {
+		return s.cancel(ctx, id)
+	}
+	return nil
 }
 
 func (s *testSessions) Open(ctx context.Context) (bool, error) {
@@ -93,7 +108,7 @@ func TestSessionServiceSelection(t *testing.T) {
 	var watched context.Context
 	a := &testSessions{
 		list: func(context.Context) ([]plugin.SessionInfo, error) {
-			return []plugin.SessionInfo{{ID: "shared", Title: "A", Last: time.Unix(1, 0)}}, nil
+			return []plugin.SessionInfo{{ID: "shared", Title: "A", Running: true, Last: time.Unix(1, 0)}}, nil
 		},
 		peers: []plugin.SessionInfo{{ID: "peer-key/conv", Title: "peer", Last: time.Unix(2, 0)}},
 		watch: func(ctx context.Context, id string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
@@ -115,7 +130,7 @@ func TestSessionServiceSelection(t *testing.T) {
 	}}
 	w := sessionWindow(t, a, b)
 	sessions, err := w.Sessions(0)
-	if err != nil || len(sessions) != 2 || sessions[0].ID != "peer-key/conv" || sessions[1].ID != "owner/shared" || sessions[1].Title != "A" {
+	if err != nil || len(sessions) != 2 || sessions[0].ID != "peer-key/conv" || sessions[1].ID != "owner/shared" || sessions[1].Title != "A" || !sessions[1].Running || sessions[0].Running {
 		t.Fatalf("sessions: %+v %v", sessions, err)
 	}
 	owner, err := w.OpenSession(0, "owner/shared")
@@ -473,5 +488,43 @@ func TestPollWithoutAStream(t *testing.T) {
 		if events := w.PollSession(snapshot.Token); events == nil || len(events) != 0 {
 			t.Fatalf("shut down: %#v", events)
 		}
+	}
+}
+
+// SessionSteps reads the finished calls of tools of an owner session for the
+// artefacts beside the thread, and nothing of a peer's.
+func TestSessionSteps(t *testing.T) {
+	var watched []string
+	fail := false
+	s := &testSessions{watch: func(_ context.Context, id string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		watched = append(watched, id)
+		if fail {
+			return nil, nil, errors.New("gone")
+		}
+		return []plugin.SessionEvent{
+			{Kind: plugin.SessionMessage, Text: "go"},
+			{Kind: plugin.SessionStep, Tool: "echo", CallID: "running"},
+			{Kind: plugin.SessionStep, Tool: "echo", CallID: "done", Done: true},
+		}, nil, nil
+	}}
+	w := sessionWindow(t, s)
+	steps, err := w.SessionSteps(0, "owner/a")
+	if err != nil || len(steps) != 1 || steps[0].CallID != "done" || steps[0].Text != "echo" {
+		t.Fatalf("steps %+v %v", steps, err)
+	}
+	if strings.Join(watched, "|") != "a" {
+		t.Fatal(watched)
+	}
+	for _, id := range []string{"peer-key/conv", "owner/../a"} {
+		if _, err := w.SessionSteps(0, id); err == nil {
+			t.Fatalf("accepted %q", id)
+		}
+	}
+	if _, err := w.SessionSteps(9, "owner/a"); err == nil {
+		t.Fatal("accepted a missing profile")
+	}
+	fail = true
+	if _, err := w.SessionSteps(0, "owner/a"); err == nil {
+		t.Fatal("a failed watch was not reported")
 	}
 }

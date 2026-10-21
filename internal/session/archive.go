@@ -193,7 +193,12 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 		case "user":
 			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source, At: r.Time})
 			if strings.HasPrefix(unnoted(r.Content), backgroundHead) {
-				continue // internal background result, not a message of the owner
+				// An internal background result, not a message of the owner: it
+				// tells which session the part of the thread it begins concerns.
+				if of := reported(unnoted(r.Content)); of != "" {
+					events = append(events, Event{Kind: Handed, At: at, Text: of})
+				}
+				continue
 			}
 			// What a tool said to the owner shows as it did, the same
 			// occurrence; what the agent kept of what was asked shows not.
@@ -243,6 +248,9 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 					step.Err = failed
 				}
 				events = append(events, step)
+				if to := handedBy(step, r.Content); to != "" {
+					events = append(events, Event{Kind: Handed, At: at, Text: to})
+				}
 			}
 		case "end":
 			if r.Statistics != nil {

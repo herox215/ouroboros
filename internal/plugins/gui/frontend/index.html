@@ -4,58 +4,49 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'">
-  <title>Ouroboros · Sessions</title>
+  <title>Ouroboros · Thread</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Zum Sitzungsinhalt</a>
   <aside id="sidebar" class="sidebar" aria-label="Sessionnavigation">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">O</span> Ouroboros <span class="brand-caption">Chat</span></div>
-    <section class="profile-card" aria-labelledby="profile-label">
-      <label id="profile-label" for="profile">Profil</label>
-      <select id="profile" disabled></select>
-      <p id="active" aria-live="polite"></p>
-      <p id="identity"></p>
-    </section>
+    <!-- Beside the thread only the sessions of the part of it in view, as in the
+         demo. The profile is chosen at start (ouro --profile NAME gui). -->
+    <select id="profile" aria-label="Profil" hidden disabled></select>
     <div class="sessions-heading">
-      <h2 id="sessions-heading">Sitzungen</h2>
-      <button id="refresh" type="button">Aktualisieren</button>
-    </div>
-    <button id="new-session" type="button" disabled>Neue Session</button>
-    <div class="search-field">
-      <label class="sr-only" for="session-search">Sitzungen durchsuchen</label>
-      <input id="session-search" type="search" placeholder="Sitzungen durchsuchen …" autocomplete="off" aria-controls="sessions">
+      <h2 id="sessions-heading">[Sessions]</h2>
     </div>
     <div id="sessions" aria-labelledby="sessions-heading"></div>
     <div class="sidebar-footer">
-      <button id="settings" class="settings-button" type="button" aria-label="Modelleinstellungen öffnen" title="Modelleinstellungen" aria-haspopup="dialog"><span aria-hidden="true">⚙</span></button>
+      <button id="settings" class="settings-button" type="button" aria-label="Einstellungen öffnen" title="Einstellungen" aria-haspopup="dialog"><span aria-hidden="true">⚙</span></button>
     </div>
   </aside>
   <main id="main" tabindex="-1" aria-labelledby="session-title">
     <header class="session-header">
-      <button id="sidebar-toggle" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Seitenleiste ausblenden" title="Seitenleiste ausblenden">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.5"/><path d="M7.75 3.75v12.5"/></svg>
-      </button>
       <div class="session-heading">
-        <p class="eyebrow">Sessions</p>
+        <p class="eyebrow">Ouroboros</p>
         <h1 id="session-title">Sitzung auswählen</h1>
         <p id="session-meta"></p>
       </div>
-      <span class="readonly-badge">Sessions</span>
+      <button id="back-to-thread" type="button" hidden>Zum Thread</button>
     </header>
     <!-- The chat history scrolls on its own, and only it bounces at its ends:
          header, composer and sidebar stay where they are. -->
+    <div class="transcript-frame">
     <div id="transcript" class="transcript-scroller">
       <div class="transcript-wrap">
+        <div id="transcript-start" aria-hidden="true"></div>
         <p id="error" role="alert" hidden></p>
-        <p id="session-status" role="status">Wähle eine Sitzung, um den Chat zu öffnen.</p>
         <noscript><p>Bitte aktiviere JavaScript, um die Sessions zu öffnen.</p></noscript>
         <div id="content" aria-label="Sitzungsverlauf"></div>
         <div id="transcript-end" aria-hidden="true"></div>
       </div>
     </div>
+    <div class="transcript-fade" aria-hidden="true"></div>
+    </div>
     <div class="composer-dock">
+      <p id="session-status" role="status">Thread wird geladen …</p>
       <form id="composer" class="composer" aria-label="Nachricht verfassen">
         <section id="question-panel" class="question-panel" aria-labelledby="question-heading" aria-live="polite" hidden>
           <h2 id="question-heading">Deine Entscheidung</h2>
@@ -63,16 +54,27 @@
           <div id="question-options" role="group" aria-label="Antwortmöglichkeiten"></div>
           <p id="question-hint"></p>
         </section>
-        <label for="draft">Nachricht / eigene Antwort</label>
-        <textarea id="draft" rows="2" placeholder="Nachricht schreiben …" aria-describedby="composer-hint" disabled></textarea>
+        <!-- One line, as in the demo: it grows with what is written. -->
+        <label class="sr-only" for="draft">Nachricht / eigene Antwort</label>
+        <div class="composer-row">
+          <span class="composer-prompt" aria-hidden="true">›</span>
+          <textarea id="draft" rows="1" placeholder="Nachricht schreiben" aria-describedby="composer-hint" disabled></textarea>
+          <button id="stop" type="button" disabled>Stoppen</button>
+          <button id="send" type="submit" aria-label="Senden" title="Senden" disabled><span aria-hidden="true">↑</span></button>
+        </div>
         <div class="composer-actions">
-          <p id="composer-hint">Enter sendet · Shift+Enter für eine neue Zeile</p>
+          <p id="composer-hint" class="sr-only">Enter sendet · Shift+Enter für eine neue Zeile</p>
           <p id="send-status" role="status"></p>
-          <button id="send" type="submit" disabled>Senden</button>
         </div>
         <p id="send-error" role="alert" hidden></p>
       </form>
     </div>
   </main>
+  <aside id="context-rail" class="context-rail" aria-label="Werkzeugkontext">
+    <p class="eyebrow">Kontext</p>
+    <h2 id="context-title">[Thread]</h2>
+    <p id="context-note">Öffne ein Werkzeug-Ergebnis im Verlauf, um es hier zu lesen.</p>
+    <div id="context-details"></div>
+  </aside>
 </body>
 </html>

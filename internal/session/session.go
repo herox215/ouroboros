@@ -119,6 +119,12 @@ const (
 	// recorded: who watches the thread gets it with what happened in it so
 	// far, last, while N is not 0.
 	Working Kind = "working"
+	// Handed tells of the thread which session a part of it concerns: one
+	// its agent started, handed a message to, looked at or stopped, or whose
+	// result the thread reports. Its ID, or the handle the thread knows it
+	// by, is in Text. A front end can show beside the thread which sessions a
+	// part of it concerns; it says nothing to the owner by itself.
+	Handed Kind = "handed"
 )
 
 // Event is one thing that happened in a session. It is plain data, written
@@ -803,7 +809,13 @@ func (s *Service) taken(se *session, messages []queued) []openai.Message {
 		texts[i] = openai.Message{Role: "user", Content: m.text, Images: m.images, Source: m.source}
 		se.routed = se.routed || m.routed
 		if m.generated && strings.HasPrefix(m.text, backgroundHead) {
-			continue // internal result, never a visible message of the owner
+			// An internal result, never a visible message of the owner: the
+			// part of the thread that takes it concerns its session, told
+			// here as it is taken, as the archive keeps it, see replay.
+			if of := reported(m.text); of != "" {
+				s.emit(se, Event{Kind: Handed, Text: of})
+			}
+			continue
 		}
 		if m.task != nil {
 			s.emit(se, *m.task)
