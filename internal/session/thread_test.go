@@ -531,6 +531,17 @@ func TestHandRefuses(t *testing.T) {
 		t.Fatalf("not ready: %v", err)
 	}
 	a.ready = nil
+	// The answer is shown before its goroutine settles: a successor set before
+	// then would be handed to a replace this service never got.
+	for {
+		s.node.mu.Lock()
+		answering := s.node.answering
+		s.node.mu.Unlock()
+		if answering == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	s.node.mu.Lock()
 	s.node.successor = "/new/ouro"
 	s.node.mu.Unlock()

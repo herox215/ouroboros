@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -419,8 +420,21 @@ func TestAvatarDataReportsAReadFailure(t *testing.T) {
 	if err := s.save(validAvatarConfig("https://example.org")); err != nil {
 		t.Fatal(err)
 	}
+	// A directory opens on every system but fails to read; it passes as a
+	// regular file here so that the read itself is what fails.
+	file := filepath.Join(root, "regular")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	regular, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := statAvatar
+	statAvatar = func(*os.File) (os.FileInfo, error) { return regular, nil }
+	defer func() { statAvatar = old }()
 	g := &guard.Guard{Home: filepath.Join(root, "node"), Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
-	if _, err := avatarTool(s, g).Run(context.Background(), json.RawMessage(`{"path":"/proc/self/mem"}`)); err == nil || !strings.Contains(err.Error(), "input/output error") {
+	if _, err := avatarTool(s, g).Run(context.Background(), json.RawMessage(`{"path":`+strconv.Quote(root)+`}`)); err == nil || !strings.Contains(err.Error(), "is a directory") {
 		t.Fatalf("run: %v", err)
 	}
 }

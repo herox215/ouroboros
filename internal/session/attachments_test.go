@@ -105,8 +105,15 @@ func TestAttachmentInputAndReply(t *testing.T) {
 
 func TestAttachmentLimitsAndFailedDelivery(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
 	s := service(t, &fakeAgent{ready: errors.New("not ready")})
+	// Socket errors preserve their sentinel identity. The socket lives below
+	// the usual temporary directory: below tmp its path would exceed the length
+	// a Unix socket may have on macOS.
+	c := NewClient(serve(t, Handler(s)).dir)
+	if err := c.SteerAttachments(t.Context(), "s1", "", make([]Attachment, MaxAttachments+1)); !errors.Is(err, ErrAttachment) {
+		t.Fatalf("socket error: %v", err)
+	}
+	t.Setenv("TMPDIR", tmp)
 	for _, files := range [][]Attachment{
 		make([]Attachment, MaxAttachments+1),
 		{{Data: make([]byte, MaxAttachmentBytes)}, {Data: []byte{1}}},
@@ -129,11 +136,6 @@ func TestAttachmentLimitsAndFailedDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.RemoveAll(dir)
-	// Socket errors preserve their sentinel identity.
-	c := NewClient(serve(t, Handler(s)).dir)
-	if err := c.SteerAttachments(t.Context(), "s1", "", make([]Attachment, MaxAttachments+1)); !errors.Is(err, ErrAttachment) {
-		t.Fatalf("socket error: %v", err)
-	}
 }
 
 func TestQueuedAndRelayedAttachmentMarker(t *testing.T) {
