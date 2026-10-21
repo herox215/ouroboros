@@ -65,17 +65,27 @@ function appendText(parent, value, doc) {
 // What a transcript tells browse of its parts, where nothing listens.
 const quietSections = { observe() {}, changed() {} };
 
+// How much of the thread shows, as in the terminal UI (tui.threadStart) and as
+// its agent is told it (assistant.ThreadWindow): the archive keeps the rest.
+const threadWindow = 6 * 60 * 60 * 1000;
+
 // Messages are headed as in the terminal UI, in the language of the GUI:
 // "Du", or the name of the agent.
 function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros', sections = quietSections) {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
   let partial = null;
+  // Of the thread only its last hours show: the expired prefix is left out,
+  // and from the first message within them on everything shows, also one
+  // without a time, as the terminal UI does.
+  const cutoff = Date.now() - threadWindow;
+  let shown = sections === quietSections;
   // Each owner message opens a part of the thread; the sessions the thread
   // started or handed a message to on it belong to that part, as its Handed
   // events tell, see browse.
   let exchange = { at: null, sessions: new Set() };
   const message = (kind, label, text, at) => {
+    if (!shown && !(Date.parse(at) < cutoff)) shown = true;
     const item = doc.createElement('section');
     item.className = 'message message-' + kind;
     const heading = doc.createElement('h3');
@@ -83,6 +93,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
     heading.textContent = label + (time ? ' · ' + time : '');
     item.append(heading);
     if (text) appendText(item, text, doc);
+    if (!shown) return item;
     content.append(item);
     item.exchange = exchange;
     sections.observe(item);

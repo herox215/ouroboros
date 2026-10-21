@@ -1831,3 +1831,29 @@ test('beside an opened session its siblings stay, ended sessions are read anew, 
   assert.equal(doc['context-details'].children.length, before);
   assert.doesNotMatch(rail(), /OLD THREAD RESULT/);
 });
+
+test('of the thread only its last six hours show, as in the terminal UI; individual sessions show in full', async () => {
+  const doc = archiveFixture();
+  const ago = hours => new Date(Date.now() - hours * 3600000).toISOString();
+  const events = [
+    { kind: 'message', text: 'yesterday', at: ago(30) },
+    { kind: 'answer', text: 'old answer', at: ago(30) },
+    { kind: 'message', text: 'today', at: ago(2) },
+    { kind: 'answer', text: 'new answer', at: ago(2) },
+    { kind: 'answer', text: 'late old stamp', at: ago(9) },
+  ];
+  await browse({
+    async Sessions() { return [{ id: 'owner/a', title: 'A' }]; },
+    async OpenSession() { return { token: 0, events }; },
+  }, doc, '', 'owner/thread');
+  await settle();
+  // The expired prefix is left out; from the first message within the window on all shows.
+  assert.deepEqual(visibleTexts(doc.content), ['today', 'new answer', 'late old stamp']);
+  const plain = archiveFixture();
+  await browse({
+    async Sessions() { return [{ id: 'owner/a', title: 'A' }]; },
+    async OpenSession() { return { token: 0, events }; },
+  }, plain);
+  await settle();
+  assert.equal(visibleTexts(plain.content).length, 5, 'an individual session shows all of it');
+});

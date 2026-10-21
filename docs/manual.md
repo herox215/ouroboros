@@ -154,7 +154,8 @@ The optional `gui` plugin contributes only the explicit `ouro gui` command, not 
 It opens a Wails v2 window with the profile's thread, the same
 conversation the TUI shows first. Say what is to be done there; the node routes topics,
 relays questions and gathers results through its existing thread implementation.
-The GUI adds no routing of its own. Beside the thread there is no navigation of its own,
+Of the thread the GUI shows the last six hours, as the TUI does and as its agent
+is told it; the archive keeps the rest. The GUI adds no routing of its own. Beside the thread there is no navigation of its own,
 as in the demo: no profile picker, search, new session or toggle; the profile is chosen at
 start (`ouro --profile NAME gui`). **Zum Thread** returns from an individual session.
 The status shows work in progress, questions and the number of active sessions the thread
