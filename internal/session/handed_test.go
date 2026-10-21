@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/assistant"
@@ -28,6 +29,21 @@ func TestThreadTellsWhichSessionItStarted(t *testing.T) {
 	if last.Kind != Handed || last.Text != id {
 		t.Fatalf("the thread tells %+v, not the session %s it started", last, id)
 	}
+	// Looking at a session or stopping it concerns the part on the way too.
+	for _, look := range []func() error{
+		func() error { _, err := threading{s}.State(context.Background(), id); return err },
+		func() error { _, err := threading{s}.Stop(context.Background(), id, 0); return err },
+	} {
+		if err := look(); err != nil {
+			t.Fatal(err)
+		}
+		s.mu.Lock()
+		events := s.get(ThreadID).events
+		s.mu.Unlock()
+		if last := events[len(events)-1]; last.Kind != Handed || last.Text != id {
+			t.Fatalf("the thread tells %+v, not the session %s it looked at", last, id)
+		}
+	}
 }
 
 // Read back from the archive, the thread tells again which sessions its
@@ -48,6 +64,8 @@ func TestThreadTellsHandedAgainFromTheArchive(t *testing.T) {
 		{Seq: 5, Answer: 1, Role: "tool", ToolCallID: "c", Content: "error: no session"},
 		{Seq: 6, Answer: 1, Role: "tool", ToolCallID: "d", Content: "running"},
 		{Seq: 7, Answer: 1, Role: "end", Outcome: "answered"},
+		{Seq: 8, Answer: 2, Role: "user", Content: backgroundHead + `"Lorem (Test)" (77aa88bb) completed. This is internal result data.]\n\nfine`},
+		{Seq: 9, Answer: 2, Role: "user", Content: backgroundHead + `"Odd" without a handle]`},
 	})
 	var handed []string
 	for _, e := range events {
@@ -55,7 +73,7 @@ func TestThreadTellsHandedAgainFromTheArchive(t *testing.T) {
 			handed = append(handed, e.Text)
 		}
 	}
-	if len(handed) != 2 || handed[0] != "abcd1234" || handed[1] != "ef567890" {
+	if strings.Join(handed, " ") != "abcd1234 ef567890 abcd1234 77aa88bb" {
 		t.Fatalf("handed %q", handed)
 	}
 }
@@ -70,6 +88,8 @@ func TestHandedBy(t *testing.T) {
 		want   string
 	}{
 		{step(assistant.ToolSessionSend, `{"session":"s1"}`, ""), "", "s1"},
+		{step(assistant.ToolSessionState, `{"session":"s4"}`, ""), "", "s4"},
+		{step(assistant.ToolSessionStop, `{"session":"s5","job":1}`, ""), "", "s5"},
 		{step(assistant.ToolSessionSend, `[1]`, ""), "", ""},
 		{step(assistant.ToolSessionSend, `{"session":"s1"}`, "failed"), "", ""},
 		{step(assistant.ToolSessionNew, `{}`, ""), "Work started in the background in session s2. Briefly", "s2"},

@@ -424,7 +424,25 @@ func (t threading) Start(ctx context.Context, text, directory string) (string, e
 func (s *Service) handedTo(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.handed(id)
+}
+
+// handed tells the thread that the session id concerns the part of it on
+// its way, see Handed. s.mu is held.
+func (s *Service) handed(id string) {
 	s.emit(s.get(ThreadID), Event{Kind: Handed, Text: id})
+}
+
+// reported is the session whose result the background report text tells
+// the agent of the thread, see relay, "" for none: so the thread tells
+// Handed again when it is read back.
+func reported(text string) string {
+	for _, status := range []string{") completed. ", ") failed. "} {
+		if head, _, ok := strings.Cut(text, status); ok {
+			return head[strings.LastIndex(head, "(")+1:]
+		}
+	}
+	return ""
 }
 
 // handedBy is the session a finished call of the thread's agent started or
@@ -435,7 +453,7 @@ func handedBy(step Event, result string) string {
 		return ""
 	}
 	switch step.Tool {
-	case assistant.ToolSessionSend:
+	case assistant.ToolSessionSend, assistant.ToolSessionState, assistant.ToolSessionStop:
 		var to struct {
 			Session string `json:"session"`
 		}
@@ -556,6 +574,7 @@ func (s *Service) relay(se *session, end Event) {
 		return
 	}
 	thread := s.get(ThreadID)
+	s.handed(se.id) // the thread reports its result
 	status := "completed"
 	if end.Kind == Failed {
 		status = "failed"

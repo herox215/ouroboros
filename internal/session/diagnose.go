@@ -24,6 +24,7 @@ func (t threading) State(_ context.Context, id string) (string, error) {
 	if id == ThreadID || !s.routableID(id) {
 		return "", fmt.Errorf("no session %q among those of the last 24 hours", id)
 	}
+	s.handed(id)
 	return s.state(s.get(id)), nil
 }
 
@@ -38,6 +39,7 @@ func (t threading) Stop(ctx context.Context, id string, job int) (string, error)
 	if ok {
 		se := s.get(id)
 		running = se.cancel != nil || len(se.tasks) > 0
+		s.handed(id)
 	}
 	s.mu.Unlock()
 	switch {
