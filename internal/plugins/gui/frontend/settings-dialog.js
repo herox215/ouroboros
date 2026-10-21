@@ -1,4 +1,5 @@
 import { createThemePreference } from './theme.js';
+import { mountSpeechSettings } from './speech-dialog.js';
 
 // Profile is captured on open; changing the main profile picker cannot redirect a save.
 export function createSettingsDialog(bridge, modelDialog, doc = document, theme = createThemePreference(doc)) {
@@ -11,9 +12,9 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
   dialog.setAttribute('tabindex', '-1');
   doc.body.append(dialog);
   let profile = -1, name = '', version = 0, busy = false;
-  let secrets = [];
+  let secrets = [], disposePage = () => {};
   const clearPassword = () => { for (const input of secrets) input.value = ''; };
-  dialog.addEventListener('close', () => { clearPassword(); version++; });
+  dialog.addEventListener('close', () => { disposePage(); clearPassword(); version++; });
   dialog.addEventListener('cancel', event => { clearPassword(); if (busy) event.preventDefault(); });
   const el = (tag, text = '') => { const e = doc.createElement(tag); e.textContent = text; return e; };
   const button = (text, run) => {
@@ -30,6 +31,7 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
   // Every page has a header: back to the page before where there is one,
   // its title, and the close button in the corner.
   const page = (title, back) => {
+    disposePage(); disposePage = () => {};
     version++;
     clearPassword(); secrets = [];
     const header = el('div'); header.className = 'dialog-header';
@@ -43,6 +45,10 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     page('Settings · ' + name);
     dialog.append(button('Model', () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
     dialog.append(button('Gateways', gateways));
+    dialog.append(button('Speech recognition', () => {
+      page('Settings › Speech recognition', home);
+      disposePage = mountSpeechSettings(bridge, profile, dialog, doc, doc.defaultView?.setTimeout ? doc.defaultView : globalThis);
+    }));
     const label = el('label', 'Darstellung');
     const select = el('select');
     for (const [value, text] of [['system', 'System'], ['light', 'Hell'], ['dark', 'Dunkel']]) {

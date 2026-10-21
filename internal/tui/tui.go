@@ -658,6 +658,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.picker.loaded(m, msg)
 	case fallbacksMsg:
 		m.picker.fallbacksSet(m, msg)
+	case speechMsg:
+		return m, m.config.speechLoaded(m, msg)
+	case speechTick:
+		if msg.owner == m && msg.generation == m.config.speech.generation && m.config.speechOpen(m) {
+			return m, m.config.readSpeech(m)
+		}
 	case settingsMsg:
 		m.config.loaded(m, msg)
 	case changedMsg:

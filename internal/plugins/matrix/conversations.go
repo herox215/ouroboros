@@ -33,10 +33,11 @@ type conversation struct {
 const sentVersion = 2
 
 type conversations struct {
-	store   store
-	adapter *plugin.GatewayAdapter
-	mu      sync.Mutex
-	entries map[string]*conversation
+	store      store
+	adapter    *plugin.GatewayAdapter
+	mu         sync.Mutex
+	entries    map[string]*conversation
+	transcribe transcribeFunc
 }
 
 // gatewayName is how what a room says is attributed, see plugin.MessageSource.
@@ -109,6 +110,13 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 	if err != nil {
 		return err
 	}
+	msg, transcribed, err := c.prepareAudio(ctx, conn, msg, cfg.Revision)
+	if errors.Is(err, errAudioReported) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	who := plugin.GatewayIdentity{Gateway: account(cfg), Subject: msg.Sender + "\n" + msg.RoomID}
 	key := who.Gateway + "\n" + who.Subject
 	c.mu.Lock()
@@ -134,10 +142,10 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 			return err
 		}
 	}
-	if len(msg.Images) == 0 && len(msg.Attachments) == 0 && text == "/new" {
+	if !transcribed && len(msg.Images) == 0 && len(msg.Attachments) == 0 && text == "/new" {
 		return conn.SendTo(ctx, msg.RoomID, msg.Sender, "There is one conversation here, about everything: just write, and Ouro keeps the topics apart.")
 	}
-	if len(msg.Images) == 0 && len(msg.Attachments) == 0 && text == "/cancel" {
+	if !transcribed && len(msg.Images) == 0 && len(msg.Attachments) == 0 && text == "/cancel" {
 		return c.adapter.Cancel(ctx, who, entry.Session)
 	}
 	events, err := c.adapter.Poll(ctx, who, entry.Session)
@@ -157,11 +165,14 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 			pending = nil
 		}
 	}
-	explicit := len(msg.Images) == 0 && len(msg.Attachments) == 0 && strings.HasPrefix(text, "/answer ")
+	// Transcribed speech always uses Send, never Reply: even if a question
+	// appears after Poll, thread input cannot grant permission. It also never
+	// enters the transport's slash-command path.
+	explicit := !transcribed && len(msg.Images) == 0 && len(msg.Attachments) == 0 && strings.HasPrefix(text, "/answer ")
 	if explicit {
 		text = strings.TrimSpace(strings.TrimPrefix(text, "/answer "))
 	}
-	if pending != nil {
+	if pending != nil && !transcribed {
 		if !explicit {
 			text = msg.Text
 		}

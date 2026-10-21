@@ -133,6 +133,8 @@ a { color: var(--accent); }
 .settings-dialog form > button[type="submit"] { background: var(--hover); border-color: var(--line-strong); }
 .settings-dialog > p, .settings-dialog form > p { margin-top: 16px; font-size: 13px; color: var(--muted); }
 .settings-dialog :focus-visible { outline-offset: 2px; }
+.speech-settings progress { display: block; width: 100%; height: 18px; margin-top: 16px; accent-color: var(--text); }
+.speech-settings label[hidden], .speech-settings p[hidden], .speech-settings button[hidden] { display: none; }
 main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 24px 0 10px; border-bottom: 0; transition: padding-left var(--sidebar-motion); }
 .session-heading { min-width: 0; flex: 1; }

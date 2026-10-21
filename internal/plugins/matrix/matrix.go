@@ -7,6 +7,7 @@ import (
 
 	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
+	"ouroboros/internal/speech"
 	"ouroboros/plugin"
 )
 
@@ -31,7 +32,9 @@ func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 			if err != nil {
 				return nil, err
 			}
-			return &sessionConnection{connection: transport, conversations: conversations, store: s, revision: cfg.Revision, live: running}, nil
+			speechManager := speech.New(filepath.Join(string(dir), "speech"))
+			conversations.transcribe = speechManager.Transcribe
+			return &sessionConnection{connection: transport, speech: speechManager, conversations: conversations, store: s, revision: cfg.Revision, live: running}, nil
 		}
 		plugin.Add(ctx, plugin.Gateway{Name: "matrix", Title: "Matrix",
 			Settings: func(context.Context) (plugin.GatewaySettings, error) { return s.snapshot() },
@@ -102,6 +105,7 @@ func (s *sessionConnection) Status() string {
 
 type sessionConnection struct {
 	connection
+	speech        *speech.Manager
 	conversations *conversations
 	store         store
 	revision      string
@@ -111,6 +115,10 @@ type sessionConnection struct {
 func (s *sessionConnection) Run(ctx context.Context, receive func(context.Context, incoming) error) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if s.speech != nil {
+		stop := context.AfterFunc(runCtx, func() { _ = s.speech.Close() })
+		defer func() { stop(); _ = s.speech.Close() }()
+	}
 	done := make(chan struct{})
 	guarded := guardedConnection{connection: s.connection, store: s.store, revision: s.revision}
 	if s.live != nil {

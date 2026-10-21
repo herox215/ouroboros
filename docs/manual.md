@@ -1137,6 +1137,31 @@ list: `enter` saves it, `esc` keeps what was.
 - **A provider stays on while it is used.** A provider is the plugin of its name (`openai`, `chatgpt`): it
   cannot be turned off while an access of the node signs in with it. Remove the access in `/setup` first.
 
+#### Speech recognition
+
+Both the window's Settings and terminal `/settings` offer **Speech recognition**.
+It starts disabled. Select `local`, choose a model, save, then explicitly select
+**Download / setup**. Opening settings or saving never downloads anything. The
+same page shows download bytes, percentage, preparation phase and cancellation.
+The default model is `large-v3-turbo-q5_0` (about 547 MiB). Setup builds a pinned
+CPU whisper.cpp runtime if `whisper-cli` or `whisper-server` is absent. The local
+server keeps the model loaded between messages and stops with the Matrix gateway.
+Setup needs FFmpeg and, for the runtime build, CMake plus C/C++ compilers. Keep the
+process that started setup open until
+it finishes; another process can read progress or request cancellation.
+
+Alternatively, select `remote`, enter an OpenAI-compatible transcription base URL,
+model and optional API key, then save. Remote mode sends audio to that endpoint;
+configured does not mean tested. Use HTTPS for network endpoints. Blank API keys
+keep the saved secret. Settings and downloads are private to the profile, under
+its `speech` directory, and take effect without restarting the Matrix gateway.
+
+Matrix audio messages are transcribed automatically once configured. Ouro sends
+the transcript back visibly before passing it to the agent as ordinary input.
+Speech cannot answer permission questions or invoke Matrix slash commands. Failed
+or empty transcriptions stop the message and report the failure. Inputs are limited
+to 25 MiB; local recordings over ten minutes are rejected rather than truncated.
+
 #### Plugins on and off
 
 The plugins are compiled into ouro, and `Plugins` in `internal/cli/cli.go` lists them: turning one on or off

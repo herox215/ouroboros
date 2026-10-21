@@ -95,6 +95,7 @@ type edit struct {
 
 // settingsScreen is the state of the settings screen.
 type settingsScreen struct {
+	speech       speechScreen
 	gateways     []plugin.GatewaySettings
 	gateway      string
 	gatewayDraft plugin.GatewayChange
@@ -128,6 +129,7 @@ func (c *settingsScreen) reload(m *Model) tea.Cmd {
 func (m *Model) openSettings() tea.Cmd {
 	m.screen = screenSettings
 	c := &m.config
+	c.closeSpeech()
 	c.category, c.opened, c.peer, c.tool, c.back = 0, false, "", "", nil
 	c.sel, m.choice, c.top = 0, 0, 0
 	c.editing, c.info = nil, nil
@@ -188,6 +190,9 @@ func (c *settingsScreen) shown(m *Model) []row {
 }
 
 func (c *settingsScreen) page(m *Model) []row {
+	if c.section() == speechSection {
+		return c.speechRows(m)
+	}
 	switch {
 	case c.gateway != "":
 		return c.gatewayPage(m)
@@ -273,6 +278,9 @@ func (c *settingsScreen) enter(m *Model, peer, tool string) tea.Cmd {
 
 // leave goes a level up, to the row that was selected there.
 func (c *settingsScreen) leave(m *Model) {
+	if c.section() == speechSection {
+		c.closeSpeech()
+	}
 	switch {
 	case c.gateway != "":
 		c.gateway = ""
@@ -338,7 +346,7 @@ func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		switch msg.String() {
 		case "esc":
 			c.clearGatewaySecrets()
-			if c.gateway != "" {
+			if c.gateway != "" || c.section() == speechSection {
 				c.input.SetValue("")
 			}
 			c.editing = nil
@@ -381,6 +389,10 @@ func (c *settingsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 			}
 			if len(c.rows) > 0 {
 				c.opened, c.sel, m.choice, c.top, c.back = true, 0, 0, 0, nil
+				if c.section() == speechSection {
+					c.closeSpeech()
+					return c.readSpeech(m)
+				}
 			}
 		}
 		return nil
@@ -414,13 +426,15 @@ const (
 	singleSection    = "Tools of single peers"
 	protectedSection = "Protected paths"
 	gatewaysSection  = "Gateways"
+	speechSection    = "Speech recognition"
 )
 
 // sections are the categories in the order the settings screen lists them.
-var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
+var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection, peersSection, singleSection, gatewaysSection, speechSection, protectedSection}
 
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
+	speechSection:    "speech provider, models, credentials and local setup",
 	gatewaysSection:  "external messaging access for this profile",
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
 	agentsSection:    "the context provider, the debug mode",
@@ -433,6 +447,7 @@ var contents = map[string]string{
 
 // about is what an open category says of its lines.
 var about = map[string]string{
+	speechSection:    "Edit settings, then Save. Only Download/setup downloads the saved local model and runtime; Cancel stops setup. Blank API key preserves the stored key.",
 	gatewaysSection:  "Allowlisted users are delegated this profile’s agent tools, INCLUDING permission answers, not just chat. Empty denies all.",
 	nodeSection:      "The access and the models are changed with the setup and /model, the effort with /effort.",
 	agentsSection:    "A change holds from the next message, for you and for peers.",

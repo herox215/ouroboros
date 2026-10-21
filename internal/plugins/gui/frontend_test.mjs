@@ -10,8 +10,10 @@ const { createModelDialog } = await import(dialogURL);
 const themeSource = await readFile(new URL('./frontend/theme.js', import.meta.url), 'utf8');
 const themeURL = 'data:text/javascript;base64,' + Buffer.from(themeSource).toString('base64');
 const { createThemePreference } = await import(themeURL);
+const speechSource = await readFile(new URL('./frontend/speech-dialog.js', import.meta.url), 'utf8');
+const speechURL = 'data:text/javascript;base64,' + Buffer.from(speechSource).toString('base64');
 const settingsSource = await readFile(new URL('./frontend/settings-dialog.js', import.meta.url), 'utf8');
-const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource.replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64');
+const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource.replace("'./theme.js'", JSON.stringify(themeURL)).replace("'./speech-dialog.js'", JSON.stringify(speechURL))).toString('base64');
 const { createSettingsDialog } = await import(settingsURL);
 const { mount, start, browse, dateGroup } = await import(
   'data:text/javascript;base64,' + Buffer.from(source.replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL)).replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64')
@@ -136,7 +138,7 @@ function documentFixture() {
       return elements[id];
     },
     createElement(tagName) {
-      assert.ok(['option', 'section', 'h2', 'h3', 'pre', 'p', 'button', 'span', 'details', 'summary', 'dialog', 'form', 'label', 'select', 'div', 'input'].includes(tagName));
+      assert.ok(['option', 'section', 'h2', 'h3', 'pre', 'p', 'button', 'span', 'details', 'summary', 'dialog', 'form', 'label', 'select', 'div', 'input', 'progress'].includes(tagName));
       return new Element(tagName);
     },
   };
@@ -1856,4 +1858,88 @@ test('of the thread only its last six hours show, as in the terminal UI; individ
   }, plain);
   await settle();
   assert.equal(visibleTexts(plain.content).length, 5, 'an individual session shows all of it');
+});
+
+function speechFixture(bridge = {}) {
+  const doc = documentFixture(), timers = new Map(); let next = 0;
+  doc.defaultView.setTimeout = fn => { const id = ++next; timers.set(id, fn); return id; };
+  doc.defaultView.clearTimeout = id => timers.delete(id);
+  const snapshot = { config: { provider: 'local', model: 'large-v3-turbo-q5_0', endpoint: '', language: '' },
+    models: [{ id: 'large-v3-turbo-q5_0', label: 'Turbo', bytes: 200 }, { id: 'small', label: 'Small', bytes: 100 }],
+    has_key: false, runtime_ready: false, model_ready: false, download: {} };
+  const calls = [];
+  const picker = createSettingsDialog({
+    SpeechSettings: async profile => { calls.push(['read', profile]); return snapshot; },
+    SaveSpeech: async (profile, change) => { calls.push(['save', profile, { ...change }]); snapshot.config = { ...change, api_key: '' }; },
+    DownloadSpeech: async profile => { calls.push(['download', profile]); snapshot.download = { active: true, phase: 'downloading', received: 50, total: 200 }; },
+    CancelSpeechDownload: async profile => { calls.push(['cancel', profile]); snapshot.download = { active: false, phase: 'cancelled' }; },
+    ...bridge,
+  }, {}, doc);
+  picker.open(1, 'Work'); const dialog = doc.body.children.at(-1);
+  const open = () => dialog.children.find(e => e.textContent === 'Speech recognition').dispatchEvent(new Event('click'));
+  open();
+  const form = () => dialog.children.at(-1);
+  const field = text => form().children.find(e => e.tagName === 'label' && e.textContent === text).children[0];
+  const button = text => form().children.find(e => e.tagName === 'button' && e.textContent === text);
+  const click = text => button(text).dispatchEvent(new Event('click'));
+  const tick = async () => { const [id, run] = timers.entries().next().value; timers.delete(id); await run(); };
+  return { doc, picker, dialog, snapshot, calls, timers, form, field, button, click, tick, open };
+}
+
+test('speech settings explicitly saves before setup, displays progress here, cancels, and never auto downloads', async () => {
+  const f = speechFixture(); await settle();
+  assert.deepEqual(f.calls, [['read', 1]]);
+  assert.equal(f.field('Local model').value, 'large-v3-turbo-q5_0');
+  f.field('Local model').value = 'small'; f.field('Local model').dispatchEvent(new Event('change'));
+  assert.equal(f.button('Download / setup').disabled, true);
+  f.click('Download / setup'); await settle();
+  assert.equal(f.calls.filter(c => c[0] === 'download').length, 0);
+  f.click('Save'); await settle();
+  assert.equal(f.calls.find(c => c[0] === 'save')[2].model, 'small');
+  assert.equal(f.calls.filter(c => c[0] === 'download').length, 0);
+  f.click('Download / setup'); await settle();
+  const progress = f.form().children.find(e => e.tagName === 'progress');
+  assert.equal(progress.value, 50); assert.equal(progress.max, 200);
+  assert.ok(f.form().children.some(e => /Downloading · 50 bytes \/ 200 bytes \(25%\)/.test(e.textContent)));
+  assert.ok(f.form().children.some(e => /Runtime: not ready · Model: not ready/.test(e.textContent)));
+  f.snapshot.download.received = 100; await f.tick();
+  assert.equal(progress.value, 100);
+  f.click('Cancel download'); await settle();
+  assert.ok(f.calls.some(c => c[0] === 'cancel' && c[1] === 1));
+  assert.ok(f.calls.every(c => c[1] === 1));
+  f.dialog.close(); assert.equal(f.timers.size, 0);
+});
+
+test('speech remote disclosure, secret handling, sanitized failures, and navigation cleanup', async () => {
+  let payload;
+  const f = speechFixture({ SaveSpeech: async (profile, change) => { payload = change; throw Error('TOP-SECRET https://secret.invalid'); } });
+  await settle();
+  f.field('Provider').value = 'remote'; f.field('Provider').dispatchEvent(new Event('change'));
+  assert.equal(f.button('Download / setup').hidden, true);
+  assert.ok(f.form().children.some(e => /sends your audio off this computer/.test(e.textContent) && !e.hidden));
+  f.field('Remote endpoint').value = 'https://example.invalid/v1';
+  f.field('Remote model').value = 'whisper-1';
+  const key = f.field('API key (blank keeps saved key)'); key.value = 'TOP-SECRET';
+  assert.equal(key.type, 'password'); f.click('Save'); assert.equal(key.value, ''); await settle();
+  assert.equal(payload.api_key, '');
+  assert.ok(f.form().children.some(e => /Speech operation failed/.test(e.textContent)));
+  assert.ok(!f.form().children.some(e => /TOP-SECRET|secret.invalid/.test(e.textContent)));
+  f.snapshot.download = { active: false, error: 'TOP-SECRET', phase: 'https://secret.invalid' }; await f.tick();
+  assert.ok(!f.form().children.some(e => /TOP-SECRET|secret.invalid/.test(e.textContent)));
+  key.value = 'discard';
+  f.dialog.children[0].children.find(e => e.getAttribute('aria-label') === 'Back').dispatchEvent(new Event('click'));
+  assert.equal(key.value, ''); assert.equal(f.timers.size, 0);
+  f.open(); await settle(); f.dialog.close(); assert.equal(f.timers.size, 0);
+});
+
+test('speech ignores in-flight responses after close and reopening another profile', async () => {
+  let resolve;
+  const f = speechFixture({ SpeechSettings: () => new Promise(done => { resolve = done; }) });
+  const oldForm = f.form(); f.dialog.close();
+  f.picker.open(0, 'Other');
+  resolve(f.snapshot); await settle();
+  assert.equal(f.timers.size, 0);
+  assert.notEqual(f.form(), oldForm);
+  assert.ok(f.dialog.children.some(e => e.textContent === 'Speech recognition'));
+  f.dialog.close();
 });
