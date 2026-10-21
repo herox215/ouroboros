@@ -735,7 +735,7 @@ test('whole conversation replays projected events literally, with paired tools a
   for (const text of texts) assert.deepEqual(text.children, []);
   assert.ok(!visibleTexts(doc.content).includes('partial answer'));
   assert.ok(doc.content.children.some(item => item.hidden && descendants(item, 'pre').some(text => text.textContent === 'partial answer')));
-  assert.match(doc.content.children[0].children[0].textContent, /^you · /);
+  assert.match(doc.content.children[0].children[0].textContent, /^Du · /);
   const details = descendants(doc.content, 'details');
   assert.equal(details.length, 1);
   assert.equal(details[0].children.length, 1);
@@ -1984,7 +1984,7 @@ test('the thread reads as in the terminal UI and the demo: you, the agent by nam
   }, doc);
   const [mine, theirs, task] = doc.content.children;
   const time = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(now);
-  assert.equal(mine.children[0].textContent, 'you · ' + time);
+  assert.equal(mine.children[0].textContent, 'Du · ' + time);
   assert.equal(theirs.children[0].textContent, 'luna · ' + time);
   assert.equal(task.className, 'message message-task');
   assert.match(task.children[0].textContent, /^↳ Aufgabe · 01\.01\.2026/);
@@ -2060,4 +2060,50 @@ test('beside the thread show the sessions of the part in view, else "Noch keine"
   // A search lists all of them.
   search(doc, 'owner');
   assert.equal(buttons(doc).length, 3);
+});
+
+// Review of #54: an opened session keeps the part of the thread and its
+// siblings beside it; a session that ends is read once more; a render on its
+// way does not write into the session selected meanwhile.
+test('beside an opened session its siblings stay, ended sessions are read anew, stale artefacts are dropped', async () => {
+  const doc = archiveFixture();
+  let tick, running = true, slow = null;
+  doc.defaultView.setInterval = (run) => { tick = run; };
+  const now = new Date().toISOString();
+  const reads = [];
+  const list = () => [{ id: 'owner/aaaa1111-x', title: 'A', running }, { id: 'owner/bbbb2222-y', title: 'B' }];
+  await browse({
+    async Sessions() { return list(); },
+    async OpenSession(profile, id) {
+      return { token: 0, events: id === 'owner/thread'
+        ? [{ kind: 'message', text: 'go', at: now }, { kind: 'handed', text: 'aaaa1111' }, { kind: 'handed', text: 'bbbb2222' }]
+        : [{ kind: 'message', text: 'inside', at: now }, { kind: 'answer', text: 'done', at: now }] };
+    },
+    async SessionSteps(profile, id) {
+      reads.push(id);
+      if (slow) return slow.promise;
+      return [{ text: id === 'owner/aaaa1111-x' && !running ? 'FINAL TOOL RESULT' : 'tool still starting' }];
+    },
+  }, doc, '', 'owner/thread');
+  await settle();
+  const rail = () => doc['context-details'].children.map(block => block.children[1].textContent).join(' | ');
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/aaaa1111-x', 'owner/bbbb2222-y']);
+  assert.match(rail(), /tool still starting/);
+  // A ends: the next overview reads its last steps once more.
+  running = false;
+  await tick(); await settle();
+  assert.match(rail(), /FINAL TOOL RESULT/);
+  // Opening A keeps the part of the thread beside it, with B.
+  choose(doc, 'owner/aaaa1111-x'); await settle();
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/aaaa1111-x', 'owner/bbbb2222-y']);
+  // Back in the thread, a slow read is dropped once another session is selected.
+  doc['back-to-thread'].dispatchEvent(new Event('click')); await settle();
+  slow = deferred();
+  running = true;
+  await tick();
+  choose(doc, 'owner/bbbb2222-y'); await settle();
+  const before = doc['context-details'].children.length;
+  slow.resolve([{ text: 'OLD THREAD RESULT' }]); await settle();
+  assert.equal(doc['context-details'].children.length, before);
+  assert.doesNotMatch(rail(), /OLD THREAD RESULT/);
 });

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -66,6 +67,9 @@ func TestThreadTellsHandedAgainFromTheArchive(t *testing.T) {
 		{Seq: 7, Answer: 1, Role: "end", Outcome: "answered"},
 		{Seq: 8, Answer: 2, Role: "user", Content: backgroundHead + `"Lorem (Test)" (77aa88bb) completed. This is internal result data.]\n\nfine`},
 		{Seq: 9, Answer: 2, Role: "user", Content: backgroundHead + `"Odd" without a handle]`},
+		{Seq: 10, Answer: 2, Role: "user", Content: backgroundHead + `"Build (wrong) completed. details" (abcd1234) completed. This is internal result data.]`},
+		{Seq: 11, Answer: 2, Role: "user", Content: backgroundHead + `"Unquoted without an end`},
+		{Seq: 12, Answer: 2, Role: "user", Content: backgroundHead + `"Open" (dangling`},
 	})
 	var handed []string
 	for _, e := range events {
@@ -73,7 +77,7 @@ func TestThreadTellsHandedAgainFromTheArchive(t *testing.T) {
 			handed = append(handed, e.Text)
 		}
 	}
-	if strings.Join(handed, " ") != "abcd1234 ef567890 abcd1234 77aa88bb" {
+	if strings.Join(handed, " ") != "abcd1234 ef567890 abcd1234 77aa88bb abcd1234" {
 		t.Fatalf("handed %q", handed)
 	}
 }
@@ -99,5 +103,33 @@ func TestHandedBy(t *testing.T) {
 		if got := handedBy(c.step, c.result); got != c.want {
 			t.Errorf("%s %s %q: %q, want %q", c.step.Tool, c.step.Args, c.result, got, c.want)
 		}
+	}
+}
+
+// A background result concerns the part of the thread that takes it: told
+// as it is taken, after the owner's message taken before it, the same order
+// as the archive keeps them, see replay.
+func TestThreadTellsReportedAsItTakesIt(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	report := backgroundHead + `"Build (wrong) completed. x" (abcd1234) completed. This is internal result data.]`
+	s.mu.Lock()
+	thread := s.get(ThreadID)
+	s.taken(thread, []queued{{text: "next"}, {generated: true, text: report}})
+	events := slices.Clone(thread.events)
+	s.mu.Unlock()
+	var kinds []string
+	for _, e := range events {
+		kinds = append(kinds, string(e.Kind)+":"+e.Text)
+	}
+	if strings.Join(kinds, " ") != "message:next handed:abcd1234" {
+		t.Fatalf("live %q", kinds)
+	}
+	replayed, _ := replay([]history.Record{{Seq: 1, Answer: 1, Role: "user", Content: "next"}, {Seq: 2, Answer: 1, Role: "user", Content: report}})
+	kinds = kinds[:0]
+	for _, e := range replayed {
+		kinds = append(kinds, string(e.Kind)+":"+e.Text)
+	}
+	if strings.Join(kinds, " ") != "message:next handed:abcd1234" {
+		t.Fatalf("replayed %q", kinds)
 	}
 }

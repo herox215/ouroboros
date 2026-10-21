@@ -437,12 +437,25 @@ func (s *Service) handed(id string) {
 // the agent of the thread, see relay, "" for none: so the thread tells
 // Handed again when it is read back.
 func reported(text string) string {
-	for _, status := range []string{") completed. ", ") failed. "} {
-		if head, _, ok := strings.Cut(text, status); ok {
-			return head[strings.LastIndex(head, "(")+1:]
-		}
+	rest, ok := strings.CutPrefix(text, backgroundHead)
+	if !ok {
+		return ""
 	}
-	return ""
+	// The title is quoted, see relay: skip it as a whole, as it may hold
+	// anything, also what looks like a handle and a status.
+	title, err := strconv.QuotedPrefix(rest)
+	if err != nil {
+		return ""
+	}
+	rest, ok = strings.CutPrefix(rest[len(title):], " (")
+	if !ok {
+		return ""
+	}
+	handle, _, ok := strings.Cut(rest, ") ")
+	if !ok {
+		return ""
+	}
+	return handle
 }
 
 // handedBy is the session a finished call of the thread's agent started or
@@ -574,7 +587,6 @@ func (s *Service) relay(se *session, end Event) {
 		return
 	}
 	thread := s.get(ThreadID)
-	s.handed(se.id) // the thread reports its result
 	status := "completed"
 	if end.Kind == Failed {
 		status = "failed"

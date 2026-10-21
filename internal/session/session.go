@@ -809,7 +809,13 @@ func (s *Service) taken(se *session, messages []queued) []openai.Message {
 		texts[i] = openai.Message{Role: "user", Content: m.text, Images: m.images, Source: m.source}
 		se.routed = se.routed || m.routed
 		if m.generated && strings.HasPrefix(m.text, backgroundHead) {
-			continue // internal result, never a visible message of the owner
+			// An internal result, never a visible message of the owner: the
+			// part of the thread that takes it concerns its session, told
+			// here as it is taken, as the archive keeps it, see replay.
+			if of := reported(m.text); of != "" {
+				s.emit(se, Event{Kind: Handed, Text: of})
+			}
+			continue
 		}
 		if m.task != nil {
 			s.emit(se, *m.task)

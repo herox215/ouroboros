@@ -74,7 +74,8 @@ function appendText(parent, value, doc) {
 // What a transcript tells browse of its parts, where nothing listens.
 const quietSections = { observe() {}, changed() {} };
 
-// Messages are headed as in the terminal UI: "you", or the name of the agent.
+// Messages are headed as in the terminal UI, in the language of the GUI:
+// "Du", or the name of the agent.
 function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros', sections = quietSections) {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
@@ -103,7 +104,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
   const apply = (event) => {
     onEvent(event);
     switch (event.kind) {
-      case 'message': closeQuestion(); exchange = { at: event.at, sessions: new Set() }; message('user', 'you', event.text, event.at); break;
+      case 'message': closeQuestion(); exchange = { at: event.at, sessions: new Set() }; message('user', 'Du', event.text, event.at); break;
       case 'say':
         clearPartial();
         if (event.text?.trim()) message('assistant', agent, event.text, event.at);
@@ -293,6 +294,8 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   // Both marks decide anew whichever tells first: at the end of the history
   // the newest part is in view, though it may never reach the middle.
   const pick = () => {
+    // Only the thread has parts; an individual session keeps the one it was opened from.
+    if (context?.id !== threadID) return;
     if (following) return show(latest);
     let first = null;
     for (const item of visible) if (!first || item.seq < first.seq) first = item;
@@ -325,16 +328,22 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   const artefacts = async () => {
     const draw = ++drawing;
     if (!section || !threadID || context?.id !== threadID) return;
+    const profile = context.profile;
+    // A render on its way is stale once another one began or the selection
+    // changed, see read.
+    const stale = () => draw !== drawing || context?.id !== threadID || context?.profile !== profile;
     const shown = entries.filter(inSection);
     contextTitle.textContent = '[Artefakte]';
     contextNote.textContent = shown.length ? 'T – ' + clock(section.at) : 'Noch keine';
     const blocks = [];
     for (const entry of shown) {
-      let list = steps.get(entry.id);
-      if (!list || entry.running) {
-        try { list = await bridge.SessionSteps(context.profile, entry.id) || []; } catch { list = list || []; }
-        if (draw !== drawing) return;
-        steps.set(entry.id, list);
+      // What was read while the session worked is read once more after it ended.
+      const kept = steps.get(entry.id);
+      let list = kept?.list;
+      if (!kept || entry.running || kept.running) {
+        try { list = await bridge.SessionSteps(profile, entry.id) || []; } catch { list = list || []; }
+        if (stale()) return;
+        steps.set(entry.id, { list, running: !!entry.running });
       }
       const block = doc.createElement('section');
       block.className = 'artefact';
@@ -346,7 +355,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       block.append(lines);
       blocks.push(block);
     }
-    if (draw !== drawing) return;
+    if (stale()) return;
     contextDetails.replaceChildren(...blocks);
   };
   // The history also changes its height by itself: as the sidebar slides and
@@ -575,9 +584,12 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     draft.value = context.state.text;
     updateComposer();
     content.replaceChildren();
+    drawing++; // artefacts on their way belong to what was shown before
     visible.clear();
     band?.disconnect();
-    section = latest = null;
+    // The thread starts its parts anew; an individual session opened from it
+    // keeps the part it was opened from, and its siblings beside it.
+    if (entry.id === threadID) section = latest = null;
     // A deliberately opened result may stay beside the thread. It belongs to
     // its profile and is cleared when another individual session is selected.
     if (entry.id !== threadID || inspecting?.profile !== profile) {
@@ -626,7 +638,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         }
         updateComposer();
       };
-      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect, agentName(), sections);
+      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect, agentName(), entry.id === threadID ? sections : undefined);
       await render(snapshot.events || []);
       if (!active()) return;
       ready = true;
