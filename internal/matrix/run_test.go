@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -115,7 +116,7 @@ func (h *homeserver) serve(w http.ResponseWriter, r *http.Request) {
 			h.t.Errorf("plaintext send attempted: %s", r.URL.Path)
 		}
 		h.sent = append(h.sent, path[1])
-		encode(map[string]string{"event_id": "$sent"})
+		encode(map[string]string{"event_id": fmt.Sprintf("$sent%d", len(h.sent))})
 	case path[0] == "rooms" && path[2] == "typing":
 		var body struct{ Typing bool }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -217,11 +218,13 @@ func (f *fakeCrypto) decrypt(_ context.Context, e *event.Event) (*event.Event, e
 	return plain, nil
 }
 
-func (f *fakeCrypto) encrypt(_ context.Context, _ id.RoomID, _ id.UserID, content *event.MessageEventContent) (*event.EncryptedEventContent, error) {
+func (f *fakeCrypto) encrypt(_ context.Context, _ id.RoomID, _ id.UserID, kind event.Type, content any) (*event.EncryptedEventContent, error) {
 	f.mu.Lock()
 	f.encrypted++
-	f.plaintext = append(f.plaintext, content.Body)
-	f.contents = append(f.contents, content)
+	if message, ok := content.(*event.MessageEventContent); ok {
+		f.plaintext = append(f.plaintext, message.Body)
+		f.contents = append(f.contents, message)
+	}
 	hook := f.sealing
 	f.mu.Unlock()
 	if hook != nil {

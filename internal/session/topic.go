@@ -207,10 +207,21 @@ func concernRevision(events []Event) int {
 	return revision
 }
 
+// changed reports which evidence invalidated a decision, with target changes
+// taking precedence. s.mu is held immediately before delivery.
+func (c checkedConcern) changed(s *Service, id string) string {
+	if s.sessions[id] != c.target || concernRevision(c.target.events) != c.events ||
+		len(c.target.queue) != c.queued || c.target.asked != c.asked {
+		return "target"
+	}
+	thread := s.sessions[ThreadID]
+	if thread != c.thread || (thread != nil && concernRevision(thread.events) != c.threadRevision) {
+		return "thread context"
+	}
+	return ""
+}
+
 // unchanged is called with s.mu held immediately before delivery.
 func (c checkedConcern) unchanged(s *Service, id string) bool {
-	thread := s.sessions[ThreadID]
-	threadUnchanged := thread == c.thread && (thread == nil || concernRevision(thread.events) == c.threadRevision)
-	return threadUnchanged && s.sessions[id] == c.target && concernRevision(c.target.events) == c.events &&
-		len(c.target.queue) == c.queued && c.target.asked == c.asked
+	return c.changed(s, id) == ""
 }

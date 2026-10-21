@@ -172,7 +172,7 @@ func TestPluginContributesGatewayOutput(t *testing.T) {
 		t.Fatalf("Matrix must not register model tools: %+v", tools)
 	}
 	outputs := plugin.All[plugin.GatewayOutput](k.Context())
-	if len(outputs) != 1 || outputs[0].Name != "matrix" || outputs[0].SendImage == nil || outputs[0].SetAvatar == nil {
+	if len(outputs) != 1 || outputs[0].Name != "matrix" || outputs[0].SendImage == nil || outputs[0].SetAvatar == nil || outputs[0].VotePoll == nil {
 		t.Fatalf("gateway outputs: %+v", outputs)
 	}
 	for _, text := range []string{"10 MiB", "PNG", "JPEG", "GIF", "WebP", "end-to-end encrypted", "Destination", "multiple rooms"} {

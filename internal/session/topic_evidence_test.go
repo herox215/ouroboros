@@ -13,7 +13,9 @@ import (
 
 func TestTopicSendRejectsConcurrentThreadChange(t *testing.T) {
 	s, a, se, question := topicFixture(t)
+	checks := 0
 	a.checkTopic = func(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
+		checks++
 		s.mu.Lock()
 		s.emit(s.get(ThreadID), Event{Kind: Message, Text: "No, I meant the other issue"})
 		s.mu.Unlock()
@@ -22,6 +24,9 @@ func TestTopicSendRejectsConcurrentThreadChange(t *testing.T) {
 	before := topicSnapshot(s, se)
 	if _, _, err := (threading{s}).Send(context.Background(), se.id, "do it"); err == nil {
 		t.Fatal("accepted stale thread evidence")
+	}
+	if checks != 3 {
+		t.Fatalf("unbounded or missing fresh verification: %d checks", checks)
 	}
 	topicUnchanged(t, s, se, question, before)
 }

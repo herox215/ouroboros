@@ -190,7 +190,7 @@ func (m *mockMatrix) serve(w http.ResponseWriter, r *http.Request) {
 		var content event.EncryptedEventContent
 		json.NewDecoder(r.Body).Decode(&content)
 		m.sent = append(m.sent, &event.Event{ID: id.EventID(fmt.Sprintf("$sent%d", len(m.sent))), Timestamp: time.Now().UnixMilli(), RoomID: "!dm:test", Sender: user, Type: event.EventEncrypted, Content: event.Content{Parsed: &content}})
-		encode(map[string]string{"event_id": "$sent"})
+		encode(map[string]string{"event_id": string(m.sent[len(m.sent)-1].ID)})
 	case strings.Contains(r.URL.Path, "/filter"):
 		encode(map[string]string{"filter_id": "fixture-filter"})
 	case strings.HasSuffix(r.URL.Path, "/whoami"):
@@ -371,14 +371,14 @@ func TestRunSyncDropsHistoryAndPlaintext(t *testing.T) {
 			<-r.Context().Done()
 			return
 		}
-		encrypted, err := aliceCrypto.encrypt(ctx, "!dm:test", "@bot:test", &event.MessageEventContent{MsgType: event.MsgText, Body: "live secret"})
+		encrypted, err := aliceCrypto.encrypt(ctx, "!dm:test", "@bot:test", event.EventMessage, &event.MessageEventContent{MsgType: event.MsgText, Body: "live secret"})
 		if err != nil {
 			t.Error(err)
 			cancel()
 			return
 		}
 		// A room that was left is no room to answer in, whatever its state.
-		left, err := aliceCrypto.encrypt(ctx, "!left:test", "@bot:test", &event.MessageEventContent{MsgType: event.MsgText, Body: "left secret"})
+		left, err := aliceCrypto.encrypt(ctx, "!left:test", "@bot:test", event.EventMessage, &event.MessageEventContent{MsgType: event.MsgText, Body: "left secret"})
 		if err != nil {
 			t.Error(err)
 			cancel()
@@ -609,7 +609,7 @@ func TestSDKEncryptionFailuresSendNothing(t *testing.T) {
 	m.mu.Unlock()
 	// Without its store, the encryption cannot start a new session.
 	botCrypto.helper.Close()
-	if _, err := botCrypto.encrypt(context.Background(), "!dm:test", "@alice:test", &event.MessageEventContent{MsgType: event.MsgText, Body: "must not leave"}); err == nil {
+	if _, err := botCrypto.encrypt(context.Background(), "!dm:test", "@alice:test", event.EventMessage, &event.MessageEventContent{MsgType: event.MsgText, Body: "must not leave"}); err == nil {
 		t.Fatal("encrypted without a session store")
 	}
 	m.mu.Lock()

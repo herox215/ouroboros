@@ -32,7 +32,7 @@ func fixture(t *testing.T, providers ...plugin.GatewayOutput) (map[string]plugin
 	for _, tool := range plugin.All[plugin.Tool](pctx) {
 		tools[tool.Name] = tool
 	}
-	if len(tools) != 3 {
+	if len(tools) != 4 {
 		t.Fatalf("got %d tools", len(tools))
 	}
 	for _, tool := range tools {
@@ -167,7 +167,7 @@ func TestListingAndLateDiscovery(t *testing.T) {
 	}
 	plugin.Add(ctx, plugin.GatewayOutput{Name: "late", ImageDescription: "Image restrictions", AvatarDescription: "Public avatar restrictions", SendImage: imageOK})
 	got, err := tools["gateway_list"].Run(t.Context(), []byte(`{}`))
-	want := `[{"name":"late","send_image":true,"set_avatar":false,"image_description":"Image restrictions","avatar_description":"Public avatar restrictions"}]`
+	want := `[{"name":"late","send_image":true,"set_avatar":false,"image_description":"Image restrictions","avatar_description":"Public avatar restrictions","vote_poll":false,"poll_description":""}]`
 	if err != nil || got != want {
 		t.Fatalf("list: %s %v", got, err)
 	}
@@ -176,7 +176,11 @@ func TestListingAndLateDiscovery(t *testing.T) {
 	}
 	plugin.Add(ctx, plugin.GatewayOutput{Name: "late", SetAvatar: avatarOK})
 	for name, tool := range tools {
-		if _, err := tool.Run(t.Context(), []byte(`{"attachment":1}`)); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		raw := `{"attachment":1}`
+		if name == plugin.GatewayVotePollTool {
+			raw = `{"poll_id":"poll","option_ids":[]}`
+		}
+		if _, err := tool.Run(t.Context(), []byte(raw)); err == nil || !strings.Contains(err.Error(), "duplicate") {
 			t.Errorf("%s failed to reject duplicate: %v", name, err)
 		}
 	}
@@ -188,6 +192,10 @@ func TestPeerDenied(t *testing.T) {
 			t.Fatal("peer reached backend")
 			return "", nil
 		},
+		VotePoll: func(context.Context, plugin.GatewayPollVoteRequest) (string, error) {
+			t.Fatal("peer reached vote backend")
+			return "", nil
+		},
 		SetAvatar: func(context.Context, plugin.GatewayAvatarRequest) (string, error) {
 			t.Fatal("peer reached backend")
 			return "", nil
@@ -196,7 +204,11 @@ func TestPeerDenied(t *testing.T) {
 	for _, origin := range []a2a.Origin{{PublicKey: "peer"}, {}} {
 		ctx := a2a.WithOrigin(t.Context(), origin)
 		for name, tool := range tools {
-			if _, err := tool.Run(ctx, []byte(`{"attachment":1}`)); err == nil || !strings.Contains(err.Error(), "owner-only") {
+			raw := `{"attachment":1}`
+			if name == plugin.GatewayVotePollTool {
+				raw = `{"poll_id":"poll","option_ids":[]}`
+			}
+			if _, err := tool.Run(ctx, []byte(raw)); err == nil || !strings.Contains(err.Error(), "owner-only") {
 				t.Errorf("%s allowed peer: %v", name, err)
 			}
 		}

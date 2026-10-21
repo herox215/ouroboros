@@ -101,6 +101,11 @@ func TestThreadPrompt(t *testing.T) {
 		!strings.Contains(got, "The owner is never to notice the sessions") || !strings.Contains(got, "goes to it word for word") ||
 		!strings.Contains(got, "You are shown only the last 6 hours of this conversation: when the owner refers to something said before that, find it with search_thread. ") ||
 		!strings.Contains(got, "where session_new starts a session that names no directory, is your workspace. ") ||
+		!strings.Contains(got, "briefly acknowledge ordinary work") || !strings.Contains(got, "only if you do not also hand that request on") ||
+		!strings.Contains(got, "omit this acknowledgement") || !strings.Contains(got, "A failed handoff leaves the original request unresolved") ||
+		!strings.Contains(got, "finish silently instead of announcing or confirming it in text") ||
+		!strings.Contains(got, "Still report failures, necessary questions or material uncertainty") ||
+		!strings.Contains(got, "it need not produce a text reply when the visible action already suffices") ||
 		!strings.Contains(got, ownerStyle) || strings.Contains(got, workHint) {
 		t.Fatalf("the prompt of the thread: %q, %v", got, err)
 	}

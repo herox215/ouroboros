@@ -15,8 +15,8 @@ import (
 
 // The agent of the owner answers the thread as its agent: with the sessions
 // of the last day before the message of the owner, and the tools of the
-// thread, with which it starts a session and ends its answer without a word.
-// The answer of the session is the answer the thread shows, and the agent of
+// thread, with which it starts a session and may briefly acknowledge it.
+// The answer of the session is interpreted by the thread, and the agent of
 // the thread knows it with its next answer.
 func TestThreadWithTheAssistant(t *testing.T) {
 	cfg := config.Config{Access: openaitest.NewServer(t), Model: "gpt-4o", Name: "me"}

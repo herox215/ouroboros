@@ -6,6 +6,7 @@ import "context"
 const (
 	GatewaySendImageTool = "gateway_send_image"
 	GatewaySetAvatarTool = "gateway_set_avatar"
+	GatewayVotePollTool  = "gateway_vote_poll"
 )
 
 // GatewayImageRequest selects exactly one local path or 1-based image attachment.
@@ -22,6 +23,14 @@ type GatewayAvatarRequest struct {
 	Attachment int    `json:"attachment"`
 }
 
+// GatewayPollVoteRequest selects poll options by their opaque provider IDs.
+// An empty OptionIDs slice withdraws the vote. Destination is provider-specific.
+type GatewayPollVoteRequest struct {
+	PollID      string   `json:"poll_id"`
+	OptionIDs   []string `json:"option_ids"`
+	Destination string   `json:"destination"`
+}
+
 // GatewayOutput contributes neutral output capabilities with Add. Consumers
 // discover these with All at invocation time. Name must be nonempty and unique.
 // Nil callbacks denote unsupported capabilities. Descriptions must be safe to
@@ -32,6 +41,8 @@ type GatewayOutput struct {
 	Name              string
 	ImageDescription  string
 	AvatarDescription string
+	PollDescription   string
 	SendImage         func(context.Context, GatewayImageRequest) (string, error)
 	SetAvatar         func(context.Context, GatewayAvatarRequest) (string, error)
+	VotePoll          func(context.Context, GatewayPollVoteRequest) (string, error)
 }

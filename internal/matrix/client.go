@@ -3,6 +3,7 @@ package matrix
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -72,7 +73,7 @@ func ValidateServer(server string) error {
 
 type cryptography interface {
 	decrypt(context.Context, *event.Event) (*event.Event, error)
-	encrypt(context.Context, id.RoomID, id.UserID, *event.MessageEventContent) (*event.EncryptedEventContent, error)
+	encrypt(context.Context, id.RoomID, id.UserID, event.Type, any) (*event.EncryptedEventContent, error)
 	close() error
 }
 
@@ -89,6 +90,7 @@ type Client struct {
 	running bool
 	crypto  cryptography
 	sendMu  sync.Mutex
+	polls   pollTracker
 }
 
 func New(cfg Config) (*Client, error) {
@@ -229,36 +231,52 @@ func (c *Client) send(ctx context.Context, room string, expectedPeer id.UserID, 
 
 // sendContent is send for any message content; c.sendMu is held.
 func (c *Client) sendContent(ctx context.Context, room string, expectedPeer id.UserID, content *event.MessageEventContent) error {
+	_, err := c.sendEvent(ctx, room, expectedPeer, event.EventMessage, content, nil)
+	return err
+}
+
+// sendEvent preserves the same key-sharing and membership checks for every
+// encrypted event type. c.sendMu is held; check may reject a poll closed during
+// key exchange, immediately before ciphertext publication.
+func (c *Client) sendEvent(ctx context.Context, room string, expectedPeer id.UserID, kind event.Type, content any, check func() error) (*mautrix.RespSendEvent, error) {
 	c.mu.RLock()
 	crypt := c.crypto
 	ready := c.running && crypt != nil
 	c.mu.RUnlock()
 	if !ready {
-		return errors.New("the Matrix transport is not running")
+		return nil, errors.New("the Matrix transport is not running")
 	}
 	peer, err := c.safeRoom(ctx, id.RoomID(room))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// Bind queued replies to the original sender before any encryption or key
-	// sharing, not merely to whichever allowlisted peer is currently present.
+	// Bind queued replies before any encryption or key sharing.
 	if expectedPeer != "" && peer != expectedPeer {
-		return errors.New("the peer of the Matrix room changed")
+		return nil, errors.New("the peer of the Matrix room changed")
 	}
-	encrypted, err := crypt.encrypt(ctx, id.RoomID(room), peer, content)
+	if check != nil {
+		if err := check(); err != nil {
+			return nil, err
+		}
+	}
+	encrypted, err := crypt.encrypt(ctx, id.RoomID(room), peer, kind, content)
 	if err != nil {
-		return errors.New("the Matrix encryption failed")
+		return nil, errors.New("the Matrix encryption failed")
 	}
 	// Recheck after key exchange, before publishing ciphertext.
 	current, err := c.safeRoom(ctx, id.RoomID(room))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if current != peer {
-		return errors.New("the peer of the Matrix room changed")
+		return nil, errors.New("the peer of the Matrix room changed")
 	}
-	_, err = c.cli.SendMessageEvent(ctx, id.RoomID(room), event.EventEncrypted, encrypted)
-	return err
+	if check != nil {
+		if err := check(); err != nil {
+			return nil, err
+		}
+	}
+	return c.cli.SendMessageEvent(ctx, id.RoomID(room), event.EventEncrypted, encrypted)
 }
 
 func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Message)) error {
@@ -327,9 +345,11 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 	seen := map[id.EventID]bool{}
 	var seenMu sync.Mutex
 	locations := &locationTracker{}
+	polls := &c.polls
 	syncer.OnEvent(func(ctx context.Context, e *event.Event) {
 		isLocation := locationEvent(e)
-		if e.Type != event.EventMessage && !isLocation {
+		isPoll := pollEvent(e)
+		if e.Type != event.EventMessage && !isLocation && !isPoll {
 			return
 		}
 		// Beacon announcements are room state (and thus normally plaintext).
@@ -351,7 +371,7 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 			}
 		}
 		content := e.Content.AsMessage()
-		if !isLocation && ((content.MsgType != event.MsgText && content.MsgType != event.MsgImage && content.MsgType != event.MsgFile && content.MsgType != event.MsgAudio && content.MsgType != event.MsgVideo) || (content.MsgType == event.MsgText && content.Body == "") || content.RelatesTo != nil && content.RelatesTo.Type == event.RelReplace) {
+		if !isLocation && !isPoll && ((content.MsgType != event.MsgText && content.MsgType != event.MsgImage && content.MsgType != event.MsgFile && content.MsgType != event.MsgAudio && content.MsgType != event.MsgVideo) || (content.MsgType == event.MsgText && content.Body == "") || content.RelatesTo != nil && content.RelatesTo.Type == event.RelReplace) {
 			return
 		}
 		peer, err := c.safeRoom(ctx, e.RoomID)
@@ -370,7 +390,13 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 			return // Location-only events never invoke the assistant or send replies.
 		}
 		msg := Message{RoomID: string(e.RoomID), Sender: string(e.Sender), Text: content.Body}
-		if content.MsgType != event.MsgText {
+		if isPoll {
+			msg.Text = polls.update(e)
+			if msg.Text == "" {
+				return // Votes and closures update context without invoking the assistant.
+			}
+		}
+		if !isPoll && content.MsgType != event.MsgText {
 			if content.MsgType == event.MsgImage {
 				img, err := c.downloadImage(ctx, content)
 				if err != nil {
@@ -394,6 +420,15 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 			}
 		}
 		msg.Metadata = locations.snapshot(e.RoomID, e.Sender, time.Now())
+		for snapshot := polls.snapshot(e.RoomID, e.Sender); len(snapshot) > 0; snapshot = snapshot[1:] {
+			msg.Metadata["polls"] = snapshot
+			raw, err := json.Marshal(msg.Metadata)
+			if err == nil && len(raw) <= 16*1024 {
+				break
+			}
+			// Preserve existing context if escaped text exceeds the shared budget.
+			delete(msg.Metadata, "polls")
+		}
 		if onMessage != nil {
 			onMessage(ctx, msg)
 		}

@@ -59,6 +59,8 @@ func gatewayOutput(s store, running *live, files *guard.Guard) plugin.GatewayOut
 		Name:              "matrix",
 		ImageDescription:  image.Description + " Destination is a Matrix room ID; omit it only when exactly one allowed room talks to Ouro. With multiple rooms, choose a destination explicitly; the gateway never guesses.",
 		AvatarDescription: avatar.Description,
+		PollDescription:   pollDescription,
+		VotePoll:          votePoll(running),
 		SendImage: func(ctx context.Context, request plugin.GatewayImageRequest) (string, error) {
 			args, err := json.Marshal(imageArgs{Path: request.Path, Attachment: request.Attachment, Room: request.Destination})
 			if err != nil {

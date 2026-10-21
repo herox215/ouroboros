@@ -339,28 +339,40 @@ func (t threading) Send(ctx context.Context, id, text string) (string, string, e
 	id = t.s.resolve(id)
 	t.s.mu.Unlock()
 	words, pictures := t.s.words(text)
-	checked, decision, err := t.checkConcern(ctx, id, words, pictures, false)
-	if err != nil {
-		return "", "", err
+	// Keep this request's words and pictures while newer thread input arrives.
+	// Only thread-context races are retried, at most twice, and every attempt
+	// obtains an independent decision from fresh evidence. Semantic refusals,
+	// verifier failures and target changes are never retried here.
+	const attempts = 3
+	for attempt := 0; ; attempt++ {
+		checked, decision, err := t.checkConcern(ctx, id, words, pictures, false)
+		if err != nil {
+			return "", "", err
+		}
+		threadChanged := false
+		title, outcome, err := t.s.hand(ctx, id, words, pictures, func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if changed := checked.changed(t.s, id); changed != "" {
+				threadChanged = changed == "thread context"
+				return fmt.Errorf("CheckTopic: %s changed during verification; no message sent. Recheck its current concern before retrying", changed)
+			}
+			if !slices.ContainsFunc(t.s.routable(), func(r routed) bool { return r.id == id }) {
+				return fmt.Errorf("no session %q among those of the last 24 hours: hand the message to one of the list, or start a new one with %s", id, assistant.ToolSessionNew)
+			}
+			return nil
+		})
+		if threadChanged && attempt+1 < attempts {
+			continue
+		}
+		if err != nil {
+			return title, outcome, err
+		}
+		// The tool result is archived with the routing call, making the fresh
+		// decision inspectable without adding it to target context.
+		return title, outcome + "; CheckTopic: continue (" + decision.Reason + ")", nil
 	}
-	title, outcome, err := t.s.hand(ctx, id, words, pictures, func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if !checked.unchanged(t.s, id) {
-			return fmt.Errorf("CheckTopic: target changed during verification; no message sent. Recheck its current concern before retrying")
-		}
-		if !slices.ContainsFunc(t.s.routable(), func(r routed) bool { return r.id == id }) {
-			return fmt.Errorf("no session %q among those of the last 24 hours: hand the message to one of the list, or start a new one with %s", id, assistant.ToolSessionNew)
-		}
-		return nil
-	})
-	if err != nil {
-		return title, outcome, err
-	}
-	// The tool result is archived with the routing call, making the independent
-	// decision and its reason inspectable without adding them to target context.
-	return title, outcome + "; CheckTopic: continue (" + decision.Reason + ")", nil
 }
 
 // Search returns the messages of the whole thread that hold query, see
