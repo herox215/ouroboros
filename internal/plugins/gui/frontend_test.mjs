@@ -124,7 +124,8 @@ function documentFixture() {
   const view = new EventTarget(), marks = [];
   view.IntersectionObserver = class {
     constructor(run, options) { this.run = run; this.options = options; marks.push(this); }
-    observe(target) { this.target = target; }
+    observe(target) { this.target ??= target; (this.targets ??= []).push(target); }
+    disconnect() { this.targets = []; }
   };
   return {
     ...elements,
@@ -191,7 +192,7 @@ async function liveSession(events = []) {
 
 test('live messages keep the page at its end unless the user has scrolled up', async () => {
   const { doc, page, pending } = await liveSession();
-  assert.equal(doc.marks.length, 2, 'one mark at the end, one at the start');
+  assert.equal(doc.marks.length, 3, 'a mark at the end, one at the start, and the band in the middle');
   assert.equal(doc.marks[0].target, doc['transcript-end']);
   assert.deepEqual(doc.marks[0].options, { root: doc.transcript, rootMargin: '0px 0px 48px 0px' });
   assert.equal(page.scrollTop, 2300, 'the empty transcript still sits at its end');
@@ -1894,7 +1895,10 @@ test('live session overview adds delegated topics without reopening the thread a
     OpenSession: async (...args) => { opened.push(args); return {token: 0, events: []}; },
   }, doc, '', 'owner/thread');
   refresh = true; await tick();
-  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/new'], 'beside the thread only the working session shows');
+  // Beside the thread only the sessions of the part in view show; a search lists the others.
+  assert.deepEqual(buttons(doc), []);
+  search(doc, 'owner');
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/new', 'owner/idle']);
   assert.equal(buttons(doc)[0].getAttribute('data-running'), 'true');
   assert.deepEqual(opened, [[0, 'owner/thread']], 'refresh changes the list, not the watched conversation');
   late = deferred();
@@ -1902,6 +1906,7 @@ test('live session overview adds delegated topics without reopening the thread a
   select(doc, 1); await settle();
   assert.deepEqual(opened.at(-1), [1, 'owner/thread']);
   late.resolve([{id: 'owner/stale', running: true}]); await pending;
+  search(doc, 'owner');
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/other']);
 });
 
@@ -1951,20 +1956,46 @@ test('the fade at the top is off while the start of the thread is in view, so a 
   assert.match(css, /\.transcript-scroller\.at-start \{ -webkit-mask-image: none; mask-image: none; \}/);
 });
 
-test('beside the thread only working sessions show, else "Noch keine"; a search finds the others', async () => {
+test('beside the thread show the sessions of the part in view, else "Noch keine"; a search finds the others', async () => {
   const doc = archiveFixture();
-  let list = [{ id: 'owner/old', title: 'Alt' }];
+  const now = new Date().toISOString();
+  const results = {
+    'call-new': { found: true, arguments: '{"text":"recherchier"}', content: 'Work started in the background in session aaaa1111. Briefly acknowledge …' },
+    'call-send': { found: true, arguments: '{"session":"bbbb2222","text":"weiter"}', content: 'Handed to "B".' },
+  };
+  const stepsOf = { 'owner/aaaa1111-x': [{ kind: 'step', done: true, tool: 'browser_use', text: 'browser_use · navigate spec.matrix.org' }] };
   await browse({
-    async Sessions() { return list; },
-    async OpenSession() { return { token: 0, events: [] }; },
+    async Sessions() { return [{ id: 'owner/aaaa1111-x', title: 'Recherche', running: true }, { id: 'owner/bbbb2222-y', title: 'B' }, { id: 'owner/cccc3333-z', title: 'C' }]; },
+    async OpenSession() { return { token: 0, events: [
+      { kind: 'message', text: 'recherchier mal', at: now },
+      { kind: 'step', tool: 'session_new', call_id: 'call-new', done: true, at: now },
+      { kind: 'message', text: 'und B?', at: now },
+      { kind: 'step', tool: 'session_send', call_id: 'call-send', done: true, at: now },
+    ] }; },
+    async ToolResult(profile, id, callID) { assert.equal(id, 'owner/thread'); return results[callID]; },
+    async SessionSteps(profile, id) { return stepsOf[id] || []; },
   }, doc, '', 'owner/thread');
-  assert.deepEqual(buttons(doc), []);
-  assert.equal(doc.sessions.children[0].textContent, 'Noch keine');
-  search(doc, 'alt');
-  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/old']);
-  search(doc, '');
-  list = [{ id: 'owner/old', title: 'Alt' }, { id: 'owner/run', title: 'Läuft', running: true }];
-  doc.refresh.dispatchEvent(new Event('click'));
   await settle();
-  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/run']);
+  const [band] = doc.marks.filter(mark => mark.options.rootMargin === '-45% 0px -45% 0px');
+  const items = doc.content.children;
+  // Scrolled up from the end: the part in the middle of the history counts.
+  doc.marks.find(mark => mark.target === doc['transcript-end']).run([{ isIntersecting: false }]);
+  // The first part is in the middle of the history: its new session shows, and its tool calls on the right.
+  band.run([{ isIntersecting: true, target: items[0] }]);
+  await settle();
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/aaaa1111-x']);
+  assert.match(doc.sessions.children[0].textContent, /^T – /);
+  assert.equal(doc['context-title'].textContent, '[Artefakte]');
+  assert.match(doc['context-details'].children[0].children[1].textContent, /browser_use · navigate spec\.matrix\.org/);
+  // Scrolled on to the second part, the session it addressed shows instead.
+  band.run([{ isIntersecting: false, target: items[0] }, { isIntersecting: false, target: items[1] }, { isIntersecting: true, target: items[2] }]);
+  await settle();
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/bbbb2222-y']);
+  // Back at the end, the newest part is in view, though it never reached the middle.
+  doc.marks.find(mark => mark.target === doc['transcript-end']).run([{ isIntersecting: true }]);
+  await settle();
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/bbbb2222-y']);
+  // A search lists all of them.
+  search(doc, 'owner');
+  assert.equal(buttons(doc).length, 3);
 });

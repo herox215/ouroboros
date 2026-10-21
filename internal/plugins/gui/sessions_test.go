@@ -490,3 +490,41 @@ func TestPollWithoutAStream(t *testing.T) {
 		}
 	}
 }
+
+// SessionSteps reads the finished calls of tools of an owner session for the
+// artefacts beside the thread, and nothing of a peer's.
+func TestSessionSteps(t *testing.T) {
+	var watched []string
+	fail := false
+	s := &testSessions{watch: func(_ context.Context, id string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		watched = append(watched, id)
+		if fail {
+			return nil, nil, errors.New("gone")
+		}
+		return []plugin.SessionEvent{
+			{Kind: plugin.SessionMessage, Text: "go"},
+			{Kind: plugin.SessionStep, Tool: "echo", CallID: "running"},
+			{Kind: plugin.SessionStep, Tool: "echo", CallID: "done", Done: true},
+		}, nil, nil
+	}}
+	w := sessionWindow(t, s)
+	steps, err := w.SessionSteps(0, "owner/a")
+	if err != nil || len(steps) != 1 || steps[0].CallID != "done" || steps[0].Text != "echo" {
+		t.Fatalf("steps %+v %v", steps, err)
+	}
+	if strings.Join(watched, "|") != "a" {
+		t.Fatal(watched)
+	}
+	for _, id := range []string{"peer-key/conv", "owner/../a"} {
+		if _, err := w.SessionSteps(0, id); err == nil {
+			t.Fatalf("accepted %q", id)
+		}
+	}
+	if _, err := w.SessionSteps(9, "owner/a"); err == nil {
+		t.Fatal("accepted a missing profile")
+	}
+	fail = true
+	if _, err := w.SessionSteps(0, "owner/a"); err == nil {
+		t.Fatal("a failed watch was not reported")
+	}
+}

@@ -161,11 +161,16 @@ handed work to. **Stoppen** calls the same session cancellation as the TUI, incl
 stopping the thread's delegated answers. Messages can still be sent while work runs.
 `ouro gui [DIRECTORY]` uses the same initial-project handling as `ouro tui [DIRECTORY]`:
 the current directory by default. A busy thread keeps its project and shows a notice.
-The sidebar also lists the archived sessions of that profile;
-active sessions are marked and listed first, with the overview refreshed every three seconds
-without reopening the conversation. The light monospace workspace follows the demo layout:
-sessions on the left, conversation in the centre and a context rail on wide windows.
-Opening a tool result also shows it in that rail, using the same lazy request and cache.
+Beside the thread, the sidebar follows the part of it in view, as in the demo: the part
+whose messages cross the middle of the history, or the newest one at its end. Each message
+of the owner opens a part; the sessions its thread started or addressed with `session_new`,
+`session_send`, `session_status` or `session_stop` belong to it, read from those calls
+(`session_new` returns the ID of the session it started, as the thread is told it). The
+sidebar shows the time of the part and its sessions with their state, or **Noch keine**; a
+search lists all sessions of the profile, refreshed every three seconds without reopening
+the conversation. The context rail shows the artefacts of those sessions: their last calls
+of tools, as `SessionSteps` reads them. Older messages fade out at the top while older ones
+are above. Opening a tool result also shows it in that rail, using the same lazy request and cache.
 It may stay beside the thread when returning from its session, labelled with its source;
 switching profiles clears it. The rail is a saved result, not a live browser view.
 `ouro --profile NAME gui` selects the initial profile. Switching is local to the window and does not

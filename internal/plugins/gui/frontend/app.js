@@ -70,11 +70,27 @@ function appendText(parent, value, doc) {
 }
 
 // Session events are the same projection the terminal UI watches: never raw records.
+// What a transcript tells browse of its parts, where nothing listens.
+const quietSections = { observe() {}, resolve: async () => '', changed() {} };
+
 // Messages are headed as in the terminal UI: "you", or the name of the agent.
-function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros') {
+function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros', sections = quietSections) {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
   let partial = null;
+  // Each owner message opens a part of the thread; the sessions its steps
+  // start or address belong to that part, see browse.
+  let exchange = { at: null, sessions: new Set() };
+  const sessionTools = /^session_(new|send|status|stop)$/;
+  const track = event => {
+    if (!event.done || !event.call_id || !sessionTools.test(event.tool || '')) return;
+    const part = exchange;
+    void sections.resolve(event.call_id).then(handle => {
+      if (!handle || part.sessions.has(handle)) return;
+      part.sessions.add(handle);
+      sections.changed(part);
+    });
+  };
   const message = (kind, label, text, at) => {
     const item = doc.createElement('section');
     item.className = 'message message-' + kind;
@@ -84,6 +100,8 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
     item.append(heading);
     if (text) appendText(item, text, doc);
     content.append(item);
+    item.exchange = exchange;
+    sections.observe(item);
     return item;
   };
   const clearPartial = () => {
@@ -93,7 +111,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
   const apply = (event) => {
     onEvent(event);
     switch (event.kind) {
-      case 'message': closeQuestion(); message('user', 'you', event.text, event.at); break;
+      case 'message': closeQuestion(); exchange = { at: event.at, sessions: new Set() }; message('user', 'you', event.text, event.at); break;
       case 'say':
         clearPartial();
         if (event.text?.trim()) message('assistant', agent, event.text, event.at);
@@ -114,6 +132,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
         partial.text.textContent += event.text || '';
         break;
       case 'step': {
+        track(event);
         clearPartial();
         const key = event.call_id || event.tool;
         let call = calls.get(key);
@@ -251,7 +270,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   const Intersection = doc.defaultView?.IntersectionObserver;
   if (Intersection) {
     // Within 48 px of the end still counts as at the end.
-    new Intersection(([mark]) => { following = mark.isIntersecting; },
+    new Intersection(([mark]) => { following = mark.isIntersecting; pick(); },
       { root: scroller, rootMargin: '0px 0px 48px 0px' }).observe(doc.getElementById('transcript-end'));
     // Older messages fade out at the top only while there are older ones above:
     // at the start of a short thread the first lines stay readable.
@@ -259,6 +278,98 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       { root: scroller }).observe(doc.getElementById('transcript-start'));
   }
   doc.defaultView?.addEventListener('resize', keep);
+  // Beside the thread, the sessions of the part of it in view show on the
+  // left and their artefacts on the right, as in the demo: the part whose
+  // messages cross the middle of the history, or the last one at its end.
+  // Which sessions a part has, its calls of the session tools tell, see
+  // transcript; no scroll position is read for it, see following.
+  let section = null, latest = null, seen = 0, soon = false;
+  const visible = new Set();
+  const inSection = entry => !!section && [...section.sessions].some(handle => entry.id.slice(entry.id.indexOf('/') + 1).startsWith(handle));
+  const handleOf = result => {
+    try {
+      const named = JSON.parse(result.arguments || '{}').session;
+      if (named) return String(named);
+    } catch { /* no arguments to read */ }
+    return /in session ([^\s.]+)/.exec(result.content || '')?.[1] || '';
+  };
+  const show = part => {
+    if (!part || part === section) return;
+    section = part;
+    renderList();
+    void artefacts();
+  };
+  // Both marks decide anew whichever tells first: at the end of the history
+  // the newest part is in view, though it may never reach the middle.
+  const pick = () => {
+    if (following) return show(latest);
+    let first = null;
+    for (const item of visible) if (!first || item.seq < first.seq) first = item;
+    if (first) show(first.exchange);
+  };
+  const band = Intersection && new Intersection(items => {
+    for (const item of items) item.isIntersecting ? visible.add(item.target) : visible.delete(item.target);
+    pick();
+  }, { root: scroller, rootMargin: '-45% 0px -45% 0px' });
+  const sections = {
+    observe(item) {
+      item.seq = ++seen;
+      latest = item.exchange;
+      band?.observe(item);
+      // At the end, the newest part is the one in view.
+      if (soon) return;
+      soon = true;
+      queueMicrotask(() => { soon = false; if (following) show(latest); });
+    },
+    async resolve(callID) {
+      const profile = context?.profile;
+      for (let tries = 0; tries < 6; tries++) {
+        try {
+          const result = await bridge.ToolResult(profile, threadID, callID);
+          if (result?.found) return handleOf(result);
+        } catch { return ''; }
+        // The call is archived once the answer of the thread ends.
+        await new Promise(done => setTimeout(done, 2000));
+      }
+      return '';
+    },
+    changed(part) {
+      if (part !== section) return;
+      renderList();
+      void artefacts();
+    },
+  };
+  // The artefacts of the sessions of the part in view: the last calls of
+  // their tools, as the plugins of the tools tell them.
+  const steps = new Map();
+  let drawing = 0;
+  const artefacts = async () => {
+    const draw = ++drawing;
+    if (!section || !threadID || context?.id !== threadID) return;
+    const shown = entries.filter(inSection);
+    contextTitle.textContent = '[Artefakte]';
+    contextNote.textContent = shown.length ? 'T – ' + clock(section.at) : 'Noch keine';
+    const blocks = [];
+    for (const entry of shown) {
+      let list = steps.get(entry.id);
+      if (!list || entry.running) {
+        try { list = await bridge.SessionSteps(context.profile, entry.id) || []; } catch { list = list || []; }
+        if (draw !== drawing) return;
+        steps.set(entry.id, list);
+      }
+      const block = doc.createElement('section');
+      block.className = 'artefact';
+      const title = doc.createElement('h3');
+      title.textContent = (entry.title || entry.id) + ' · ' + (entry.running ? 'arbeitet' : 'fertig');
+      block.append(title);
+      const lines = doc.createElement('pre');
+      lines.textContent = list.slice(-8).map(step => step.text || step.tool).join('\n') || 'Noch keine Werkzeuge';
+      block.append(lines);
+      blocks.push(block);
+    }
+    if (draw !== drawing) return;
+    contextDetails.replaceChildren(...blocks);
+  };
   // The history also changes its height by itself: as the sidebar slides and
   // its lines wrap anew, or as an answer grows while it streams in.
   const Resize = doc.defaultView?.ResizeObserver;
@@ -413,12 +524,18 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     back.hidden = !threadID || selected === threadID;
     sessions.replaceChildren();
     const query = search.value.trim().toLocaleLowerCase('de-DE');
+    if (threadID && !query && section?.at) {
+      const when = doc.createElement('p');
+      when.className = 'section-time';
+      when.textContent = 'T – ' + clock(section.at);
+      sessions.append(when);
+    }
     const groups = new Map();
     for (const entry of [...entries].sort((a, b) => Number(!!b.running) - Number(!!a.running))) {
       if (!((entry.title || '') + ' ' + entry.id).toLocaleLowerCase('de-DE').includes(query)) continue;
-      // Beside the thread, as in the demo, only the sessions that work now show;
-      // a search finds the others.
-      if (threadID && !query && !entry.running) continue;
+      // Beside the thread, as in the demo, only the sessions of the part of it
+      // in view show; a search finds the others.
+      if (threadID && !query && !inSection(entry)) continue;
       const label = entry.running ? 'Aktiv' : dateGroup(entry.modified);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(entry);
@@ -479,6 +596,9 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     draft.value = context.state.text;
     updateComposer();
     content.replaceChildren();
+    visible.clear();
+    band?.disconnect();
+    section = latest = null;
     // A deliberately opened result may stay beside the thread. It belongs to
     // its profile and is cleared when another individual session is selected.
     if (entry.id !== threadID || inspecting?.profile !== profile) {
@@ -527,7 +647,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         }
         updateComposer();
       };
-      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect, agentName());
+      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect, agentName(), sections);
       await render(snapshot.events || []);
       if (!active()) return;
       ready = true;
@@ -663,6 +783,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       if (JSON.stringify(nextEntries) === JSON.stringify(entries)) return;
       entries = nextEntries;
       renderList();
+      if (entries.some(inSection)) void artefacts();
     } catch { /* Keep the last list; explicit refresh reports errors. */ }
     finally { listing = false; }
   }, 3000);

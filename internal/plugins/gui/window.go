@@ -557,3 +557,34 @@ func (w *Window) SessionRecords(profile int, id string) ([]plugin.ArchivedRecord
 	}
 	return out, nil
 }
+
+// SessionSteps returns the calls of tools an owner session made, as the
+// thread shows its artefacts beside the part of it that started or addressed
+// that session. It watches the session only for its past and lets it go: the
+// watch of the selected conversation stays as it is.
+func (w *Window) SessionSteps(profile int, id string) ([]ChatEvent, error) {
+	p, err := w.profile(profile)
+	if err != nil {
+		return nil, err
+	}
+	serviceID, owner, err := sessionID(id)
+	if err != nil {
+		return nil, err
+	}
+	if !owner {
+		return nil, fmt.Errorf("session %q is not the owner's", id)
+	}
+	ctx, cancel := context.WithCancel(w.ctx)
+	defer cancel()
+	past, _, err := p.sessions.Watch(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	steps := []ChatEvent{}
+	for _, e := range p.events(past) {
+		if e.Kind == plugin.SessionStep && e.Done {
+			steps = append(steps, e)
+		}
+	}
+	return steps, nil
+}
