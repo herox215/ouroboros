@@ -60,7 +60,7 @@ function appendText(parent, value, doc) {
 }
 
 // Session events are the same projection the terminal UI watches: never raw records.
-function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent) {
+function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect) {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
   let partial = null;
@@ -117,7 +117,9 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
           calls.set(key, call);
           const ref = event.call_id;
           if (ref) details.addEventListener('toggle', async () => {
-            if (!details.open || call.loaded || call.loading || !active()) return;
+            if (!details.open || !active()) return;
+            if (call.loaded) { inspect(event.tool, call.result); return; }
+            if (call.loading) return;
             call.loading = true;
             if (!call.note) {
               call.note = doc.createElement('p');
@@ -131,6 +133,8 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
                 if (result.arguments) appendText(details, result.arguments, doc);
                 appendText(details, result.content || '(Leeres Ergebnis)', doc);
                 call.loaded = true;
+                call.result = result;
+                inspect(event.tool, result);
               }
               call.note.textContent = result.found ? '' : 'Noch kein gespeichertes Ergebnis. Zum erneuten Laden auf- und zuklappen.';
             } catch (cause) {
@@ -198,6 +202,18 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   const back = doc.getElementById('back-to-thread');
   const stop = doc.getElementById('stop');
   const threadEntry = { id: threadID, title: 'Thread' };
+  const contextTitle = doc.getElementById('context-title');
+  const contextNote = doc.getElementById('context-note');
+  const contextDetails = doc.getElementById('context-details');
+  let inspecting = null;
+  const inspect = (tool, result) => {
+    inspecting = { profile: context.profile, id: context.id };
+    contextTitle.textContent = '[' + (tool || 'Werkzeug') + ']';
+    contextNote.textContent = 'Werkzeug-Ergebnis · ' + context.id;
+    contextDetails.replaceChildren();
+    if (result.arguments) appendText(contextDetails, result.arguments, doc);
+    appendText(contextDetails, result.content || '(Leeres Ergebnis)', doc);
+  };
   thread.hidden = !threadID;
   const drafts = new Map();
   const localEntries = new Map();
@@ -370,9 +386,9 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     sessions.replaceChildren();
     const query = search.value.trim().toLocaleLowerCase('de-DE');
     const groups = new Map();
-    for (const entry of entries) {
+    for (const entry of [...entries].sort((a, b) => Number(!!b.running) - Number(!!a.running))) {
       if (!((entry.title || '') + ' ' + entry.id).toLocaleLowerCase('de-DE').includes(query)) continue;
-      const label = dateGroup(entry.modified);
+      const label = entry.running ? 'Aktiv' : dateGroup(entry.modified);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(entry);
     }
@@ -386,13 +402,15 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         const button = doc.createElement('button');
         button.type = 'button';
         button.className = 'session-item';
+        button.setAttribute('data-running', String(!!entry.running));
         button.setAttribute('aria-current', entry.id === selected ? 'true' : 'false');
         const name = doc.createElement('span');
         name.className = 'session-title';
         name.textContent = entry.title || entry.id;
         const subtitle = doc.createElement('span');
         subtitle.className = 'session-meta';
-        subtitle.textContent = (entry.id.startsWith('owner/') ? 'Eigene Session' : 'Peer-Session') +
+        subtitle.textContent = (entry.running ? '● Arbeitet' : '○ Bereit') + ' · ' +
+          (entry.id.startsWith('owner/') ? 'Eigene Session' : 'Peer-Session') +
           (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
         button.title = entry.id;
         button.append(name);
@@ -424,6 +442,14 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     draft.value = context.state.text;
     updateComposer();
     content.replaceChildren();
+    // A deliberately opened result may stay beside the thread. It belongs to
+    // its profile and is cleared when another individual session is selected.
+    if (entry.id !== threadID || inspecting?.profile !== profile) {
+      inspecting = null;
+      contextTitle.textContent = '[' + (entry.id === threadID ? 'Thread' : 'Session') + ']';
+      contextNote.textContent = 'Öffne ein Werkzeug-Ergebnis im Verlauf, um es hier zu lesen.';
+      contextDetails.replaceChildren();
+    }
     error.hidden = true;
     title.textContent = entry.title || entry.id;
     meta.textContent = entry.id + (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
@@ -448,6 +474,12 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
             activity.busy = entry.id === threadID && activity.n > (activity.own ? 1 : 0);
             break;
           case 'directory': meta.textContent = event.text || 'Profil-Workspace'; break;
+          case 'step':
+            if (!contextDetails.children.length) {
+              contextTitle.textContent = '[' + (event.tool || 'Werkzeug') + ']';
+              contextNote.textContent = event.text || event.tool || '';
+            }
+            break;
           case 'title':
             if (entry.id !== threadID && event.text) {
               entry.title = event.text;
@@ -458,7 +490,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         }
         updateComposer();
       };
-      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent);
+      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect);
       await render(snapshot.events || []);
       if (!active()) return;
       ready = true;
@@ -509,6 +541,12 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     const previous = reset ? null : (selected || resume);
     selected = null;
     entries = [];
+    if (reset || !inspecting) {
+      inspecting = null;
+      contextTitle.textContent = '[Kontext]';
+      contextNote.textContent = '';
+      contextDetails.replaceChildren();
+    }
     if (reset) search.value = '';
     sessions.replaceChildren();
     content.replaceChildren();
@@ -571,6 +609,26 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   back.addEventListener('click', () => { if (threadID) void read(threadEntry); });
   search.addEventListener('input', renderList);
   refresh.addEventListener('click', () => { load(); });
+  // Refresh only the existing session list, never the thread history/watch.
+  // A late result belongs to its captured profile; it cannot change selection.
+  let listing = false;
+  doc.defaultView?.setInterval?.(async () => {
+    if (listing || !ready || doc.hidden) return;
+    const version = generation, profile = profiles.selectedIndex;
+    listing = true;
+    try {
+      const result = await bridge.Sessions(profile) || [];
+      if (version !== generation || profile !== profiles.selectedIndex) return;
+      const locals = localEntries.get(profile) || new Map();
+      for (const entry of result) locals.delete(entry.id);
+      const nextEntries = [...result, ...locals.values()].filter(entry => entry.id !== threadID)
+        .sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
+      if (JSON.stringify(nextEntries) === JSON.stringify(entries)) return;
+      entries = nextEntries;
+      renderList();
+    } catch { /* Keep the last list; explicit refresh reports errors. */ }
+    finally { listing = false; }
+  }, 3000);
   return load();
 }
 

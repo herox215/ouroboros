@@ -313,8 +313,16 @@ func (w *Window) SendMessage(profile int, id, text string) error {
 	return err
 }
 
+// SessionEntry is the existing session list with its live running state.
+type SessionEntry struct {
+	ID       string    `json:"id"`
+	Title    string    `json:"title"`
+	Modified time.Time `json:"modified"`
+	Running  bool      `json:"running"`
+}
+
 // Sessions lists owner IDs qualified with owner/ and unchanged peer IDs.
-func (w *Window) Sessions(profile int) ([]plugin.ArchivedSession, error) {
+func (w *Window) Sessions(profile int) ([]SessionEntry, error) {
 	p, err := w.ready(profile)
 	if err != nil {
 		return nil, err
@@ -333,12 +341,12 @@ func (w *Window) Sessions(profile int) ([]plugin.ArchivedSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]plugin.ArchivedSession, 0, len(owners)+len(peers))
+	out := make([]SessionEntry, 0, len(owners)+len(peers))
 	for _, s := range owners {
-		out = append(out, plugin.ArchivedSession{ID: "owner/" + s.ID, Title: s.Title, Modified: s.Last})
+		out = append(out, SessionEntry{ID: "owner/" + s.ID, Title: s.Title, Modified: s.Last, Running: s.Running})
 	}
 	for _, s := range peers {
-		out = append(out, plugin.ArchivedSession{ID: s.ID, Title: s.Title, Modified: s.Last})
+		out = append(out, SessionEntry{ID: s.ID, Title: s.Title, Modified: s.Last, Running: s.Running})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
 	return out, nil

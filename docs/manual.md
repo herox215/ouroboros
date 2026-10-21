@@ -162,6 +162,12 @@ stopping the thread's delegated answers. Messages can still be sent while work r
 `ouro gui [DIRECTORY]` uses the same initial-project handling as `ouro tui [DIRECTORY]`:
 the current directory by default. A busy thread keeps its project and shows a notice.
 The sidebar also lists the archived sessions of that profile;
+active sessions are marked and listed first, with the overview refreshed every three seconds
+without reopening the conversation. The light monospace workspace follows the demo layout:
+sessions on the left, conversation in the centre and a context rail on wide windows.
+Opening a tool result also shows it in that rail, using the same lazy request and cache.
+It may stay beside the thread when returning from its session, labelled with its source;
+switching profiles clears it. The rail is a saved result, not a live browser view.
 `ouro --profile NAME gui` selects the initial profile. Switching is local to the window and does not
 change configuration. Profiles with the GUI plugin disabled are omitted. The window starts the
 node through the same sessions API as the TUI when needed, and releases nodes it started on close;

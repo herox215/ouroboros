@@ -108,7 +108,7 @@ func TestSessionServiceSelection(t *testing.T) {
 	var watched context.Context
 	a := &testSessions{
 		list: func(context.Context) ([]plugin.SessionInfo, error) {
-			return []plugin.SessionInfo{{ID: "shared", Title: "A", Last: time.Unix(1, 0)}}, nil
+			return []plugin.SessionInfo{{ID: "shared", Title: "A", Running: true, Last: time.Unix(1, 0)}}, nil
 		},
 		peers: []plugin.SessionInfo{{ID: "peer-key/conv", Title: "peer", Last: time.Unix(2, 0)}},
 		watch: func(ctx context.Context, id string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
@@ -130,7 +130,7 @@ func TestSessionServiceSelection(t *testing.T) {
 	}}
 	w := sessionWindow(t, a, b)
 	sessions, err := w.Sessions(0)
-	if err != nil || len(sessions) != 2 || sessions[0].ID != "peer-key/conv" || sessions[1].ID != "owner/shared" || sessions[1].Title != "A" {
+	if err != nil || len(sessions) != 2 || sessions[0].ID != "peer-key/conv" || sessions[1].ID != "owner/shared" || sessions[1].Title != "A" || !sessions[1].Running || sessions[0].Running {
 		t.Fatalf("sessions: %+v %v", sessions, err)
 	}
 	owner, err := w.OpenSession(0, "owner/shared")

@@ -102,6 +102,9 @@ function documentFixture() {
     thread: new Element('button'),
     'back-to-thread': new Element('button'),
     stop: new Element('button'),
+    'context-title': new Element('h2'),
+    'context-note': new Element('p'),
+    'context-details': new Element('div'),
     'question-panel': new Element('section'),
     'question-text': new Element('p'),
     'question-options': new Element('div'),
@@ -1841,4 +1844,51 @@ test('late stop failures stay with the original session and peers cannot be stop
   doc.thread.dispatchEvent(new Event('click')); await settle();
   assert.match(doc['send-error'].textContent, /cannot stop/);
   assert.equal(doc.stop.disabled, false);
+});
+
+test('the context rail reuses explicitly loaded tool results and clears them when switching', async () => {
+  const doc = archiveFixture(); let requests = 0;
+  await browse({
+    Sessions: async () => [{ id: 'owner/a' }, { id: 'owner/b' }],
+    OpenSession: async (_, id) => ({token: 0, events: id === 'owner/a' ? [{kind: 'step', tool: 'read', call_id: 'call', done: true, text: 'read file'}] : []}),
+    ToolResult: async () => { requests++; return {found: true, arguments: '<input>', content: '<output>'}; },
+  }, doc, 'owner/a', 'owner/thread');
+  assert.equal(requests, 0);
+  assert.equal(doc['context-details'].children.length, 0);
+  const detail = descendants(doc.content, 'details')[0];
+  detail.open = true; detail.dispatchEvent(new Event('toggle')); await settle();
+  assert.equal(requests, 1);
+  assert.equal(doc['context-title'].textContent, '[read]');
+  assert.deepEqual(visibleTexts(doc['context-details']), ['<input>', '<output>']);
+  detail.open = false; detail.dispatchEvent(new Event('toggle'));
+  detail.open = true; detail.dispatchEvent(new Event('toggle')); await settle();
+  assert.equal(requests, 1, 'the inspector reuses the same request and cache');
+  doc.thread.dispatchEvent(new Event('click')); await settle();
+  assert.deepEqual(visibleTexts(doc['context-details']), ['<input>', '<output>'], 'the result remains beside the central thread');
+  assert.match(doc['context-note'].textContent, /owner\/a/);
+  choose(doc, 'owner/b'); await settle();
+  assert.equal(doc['context-details'].children.length, 0);
+});
+
+test('live session overview adds delegated topics without reopening the thread and ignores stale profiles', async () => {
+  const doc = archiveFixture(), opened = [];
+  let tick, refresh = false, late;
+  doc.defaultView.setInterval = (run, ms) => { assert.equal(ms, 3000); tick = run; };
+  await browse({
+    Sessions: async profile => {
+      if (late && profile === 0) return late.promise;
+      return profile === 1 ? [{id: 'owner/other'}] : refresh ? [{id: 'owner/idle'}, {id: 'owner/new', running: true}] : [];
+    },
+    OpenSession: async (...args) => { opened.push(args); return {token: 0, events: []}; },
+  }, doc, '', 'owner/thread');
+  refresh = true; await tick();
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/new', 'owner/idle']);
+  assert.equal(buttons(doc)[0].getAttribute('data-running'), 'true');
+  assert.deepEqual(opened, [[0, 'owner/thread']], 'refresh changes the list, not the watched conversation');
+  late = deferred();
+  const pending = tick();
+  select(doc, 1); await settle();
+  assert.deepEqual(opened.at(-1), [1, 'owner/thread']);
+  late.resolve([{id: 'owner/stale', running: true}]); await pending;
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/other']);
 });
