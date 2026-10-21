@@ -16,7 +16,8 @@ import (
 type State struct {
 	Profiles []ProfileOption `json:"profiles"`
 	Selected int             `json:"selected"`
-	// Resume is the session the window before showed, "" to show the newest:
+	Thread   string          `json:"thread"`
+	// Resume is the session the window before showed, "" to show the thread:
 	// the process that started this one handed it over, see handOver.
 	Resume string `json:"resume,omitempty"`
 }
@@ -34,6 +35,8 @@ type ChatEvent struct {
 	Failed   bool               `json:"failed"`
 	At       time.Time          `json:"at"`
 	CallID   string             `json:"call_id"`
+	N        int                `json:"n"`
+	Own      bool               `json:"own"`
 	Question *ChatQuestion      `json:"question,omitempty"`
 }
 
@@ -47,6 +50,7 @@ type ChatQuestion struct {
 type ChatSnapshot struct {
 	Token  int         `json:"token"`
 	Events []ChatEvent `json:"events"`
+	Notice string      `json:"notice,omitempty"`
 }
 
 type sessionWatch struct {
@@ -74,11 +78,14 @@ type Window struct {
 	session   string       // the session the window shows, as the front end named it
 	restarts  string       // the build a tool asked ouro to start anew from, see PollSession
 	leave     func()       // closes the window for it, see OnRestart
+	directory string
+	threadMu  sync.Mutex
+	threads   map[int]bool // profiles whose thread took this UI's start directory
 }
 
 func newWindow(p page) *Window { return newWindowContext(context.Background(), p) }
 func newWindowContext(ctx context.Context, p page) *Window {
-	state := State{Profiles: make([]ProfileOption, len(p.choices)), Selected: p.selected, Resume: p.session}
+	state := State{Profiles: make([]ProfileOption, len(p.choices)), Selected: p.selected, Resume: p.session, Thread: "owner/" + plugin.ThreadID}
 	for i, choice := range p.choices {
 		state.Profiles[i] = ProfileOption{Name: choice.name, ID: choice.id}
 	}
@@ -89,7 +96,7 @@ func newWindowContext(ctx context.Context, p page) *Window {
 	archives := make([]archiveAccess, len(p.choices))
 	copy(archives, p.archives)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Window{state: state, profiles: profiles, archives: archives, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool)}
+	return &Window{state: state, profiles: profiles, archives: archives, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool), directory: p.directory, threads: make(map[int]bool)}
 }
 func (w *Window) InitialState() State {
 	state := w.state
@@ -374,7 +381,11 @@ func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
 	w.mu.Unlock()
 	var past []plugin.SessionEvent
 	var live <-chan plugin.SessionEvent
+	var notice string
 	if owner {
+		if serviceID == plugin.ThreadID {
+			notice = w.placeThread(ctx, p, profile)
+		}
 		past, live, err = p.sessions.Watch(ctx, serviceID)
 	} else {
 		past, err = p.sessions.Read(ctx, serviceID)
@@ -393,7 +404,7 @@ func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
 	if !owner {
 		token = 0 // peer snapshots have no live stream
 	}
-	return ChatSnapshot{Token: token, Events: p.events(past)}, nil
+	return ChatSnapshot{Token: token, Events: p.events(past), Notice: notice}, nil
 }
 
 // PollSession waits at most 150ms, returning no more than 100 events. It reads
@@ -461,7 +472,7 @@ func (p *Profile) events(events []plugin.SessionEvent) []ChatEvent {
 	return out
 }
 func (p *Profile) event(e plugin.SessionEvent) ChatEvent {
-	out := ChatEvent{Kind: e.Kind, Text: e.Text, Tool: e.Tool, Done: e.Done, At: e.At, CallID: e.CallID}
+	out := ChatEvent{Kind: e.Kind, Text: e.Text, Tool: e.Tool, Done: e.Done, At: e.At, CallID: e.CallID, N: e.N, Own: e.Own}
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		out.Question = &ChatQuestion{Text: q.Question, Options: q.Options, Recommended: q.Recommended}

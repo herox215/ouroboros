@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'">
-  <title>Ouroboros · Sessions</title>
+  <title>Ouroboros · Thread</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -18,6 +18,7 @@
       <p id="active" aria-live="polite"></p>
       <p id="identity"></p>
     </section>
+    <button id="thread" type="button" aria-current="false" hidden><span>Thread</span><small>Aufgaben besprechen · Ergebnisse sammeln</small></button>
     <div class="sessions-heading">
       <h2 id="sessions-heading">Sitzungen</h2>
       <button id="refresh" type="button">Aktualisieren</button>
@@ -38,18 +39,18 @@
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.5"/><path d="M7.75 3.75v12.5"/></svg>
       </button>
       <div class="session-heading">
-        <p class="eyebrow">Sessions</p>
+        <p class="eyebrow">Ouroboros</p>
         <h1 id="session-title">Sitzung auswählen</h1>
         <p id="session-meta"></p>
+        <p id="session-status" role="status">Thread wird geladen …</p>
       </div>
-      <span class="readonly-badge">Sessions</span>
+      <button id="back-to-thread" type="button" hidden>Zum Thread</button>
     </header>
     <!-- The chat history scrolls on its own, and only it bounces at its ends:
          header, composer and sidebar stay where they are. -->
     <div id="transcript" class="transcript-scroller">
       <div class="transcript-wrap">
         <p id="error" role="alert" hidden></p>
-        <p id="session-status" role="status">Wähle eine Sitzung, um den Chat zu öffnen.</p>
         <noscript><p>Bitte aktiviere JavaScript, um die Sessions zu öffnen.</p></noscript>
         <div id="content" aria-label="Sitzungsverlauf"></div>
         <div id="transcript-end" aria-hidden="true"></div>
@@ -68,6 +69,7 @@
         <div class="composer-actions">
           <p id="composer-hint">Enter sendet · Shift+Enter für eine neue Zeile</p>
           <p id="send-status" role="status"></p>
+          <button id="stop" type="button" disabled>Stoppen</button>
           <button id="send" type="submit" disabled>Senden</button>
         </div>
         <p id="send-error" role="alert" hidden></p>

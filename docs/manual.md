@@ -151,7 +151,17 @@ ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that o
 which keep working.
 
 The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
-It opens a Wails v2 window with a profile picker and all archived sessions of that profile;
+It opens a Wails v2 window with a profile picker and the profile's thread, the same
+conversation the TUI shows first. Say what is to be done there; the node routes topics,
+relays questions and gathers results through its existing thread implementation.
+The GUI adds no routing of its own. **Thread** in the sidebar returns to this conversation
+from an individual session; it stays available while filtering the session list.
+The status shows work in progress, questions and the number of active sessions the thread
+handed work to. **Stoppen** calls the same session cancellation as the TUI, including
+stopping the thread's delegated answers. Messages can still be sent while work runs.
+`ouro gui [DIRECTORY]` uses the same initial-project handling as `ouro tui [DIRECTORY]`:
+the current directory by default. A busy thread keeps its project and shows a notice.
+The sidebar also lists the archived sessions of that profile;
 `ouro --profile NAME gui` selects the initial profile. Switching is local to the window and does not
 change configuration. Profiles with the GUI plugin disabled are omitted. The window starts the
 node through the same sessions API as the TUI when needed, and releases nodes it started on close;

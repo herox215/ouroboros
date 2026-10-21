@@ -26,6 +26,21 @@ type testSessions struct {
 	steer      func(context.Context, string, string) error
 	open       func(context.Context) (bool, error)
 	release    func(context.Context) error
+	directory  func(context.Context, string, string) error
+	cancel     func(context.Context, string) error
+}
+
+func (s *testSessions) SetDirectory(ctx context.Context, id, path string) error {
+	if s.directory != nil {
+		return s.directory(ctx, id, path)
+	}
+	return nil
+}
+func (s *testSessions) Cancel(ctx context.Context, id string) error {
+	if s.cancel != nil {
+		return s.cancel(ctx, id)
+	}
+	return nil
 }
 
 func (s *testSessions) Open(ctx context.Context) (bool, error) {

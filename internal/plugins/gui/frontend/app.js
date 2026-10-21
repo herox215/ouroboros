@@ -60,7 +60,7 @@ function appendText(parent, value, doc) {
 }
 
 // Session events are the same projection the terminal UI watches: never raw records.
-function transcript(bridge, profile, id, content, doc, active, setQuestion) {
+function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent) {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
   let partial = null;
@@ -80,6 +80,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion) {
     partial = null;
   };
   const apply = (event) => {
+    onEvent(event);
     switch (event.kind) {
       case 'message': closeQuestion(); message('user', 'Du', event.text, event.at); break;
       case 'say':
@@ -177,7 +178,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion) {
   return render;
 }
 
-export function browse(bridge, doc = document, resume = '') {
+export function browse(bridge, doc = document, resume = '', threadID = '') {
   const profiles = doc.getElementById('profile');
   const sessions = doc.getElementById('sessions');
   const search = doc.getElementById('session-search');
@@ -193,6 +194,11 @@ export function browse(bridge, doc = document, resume = '') {
   const sendError = doc.getElementById('send-error');
   const sendStatus = doc.getElementById('send-status');
   const create = doc.getElementById('new-session');
+  const thread = doc.getElementById('thread');
+  const back = doc.getElementById('back-to-thread');
+  const stop = doc.getElementById('stop');
+  const threadEntry = { id: threadID, title: 'Thread' };
+  thread.hidden = !threadID;
   const drafts = new Map();
   const localEntries = new Map();
   // The history scrolls on its own, between the header and the composer, so it
@@ -235,6 +241,16 @@ export function browse(bridge, doc = document, resume = '') {
   });
   let context = null;
   let ready = false;
+  let activity = { busy: false, n: 0, own: false, stopping: false };
+  const updateStatus = () => {
+    if (!ready) return;
+    const central = context?.id === threadID;
+    const active = Math.max(0, activity.n - (activity.own ? 1 : 0));
+    status.textContent = !context?.id.startsWith('owner/') ? 'Peer-Session · Nur lesen' :
+      (central ? 'Thread' : 'Session') + ' · ' +
+      (asking ? 'Braucht deine Antwort' : activity.busy ? 'Arbeitet …' : 'Bereit') +
+      (central ? ' · ' + active + (active === 1 ? ' aktive Session' : ' aktive Sessions') : '');
+  };
   const questionPanel = doc.getElementById('question-panel');
   const questionText = doc.getElementById('question-text');
   const questionOptions = doc.getElementById('question-options');
@@ -279,10 +295,28 @@ export function browse(bridge, doc = document, resume = '') {
     }
     draft.disabled = !ready || !context?.id.startsWith('owner/');
     send.disabled = !writable() || !draft.value.trim();
+    stop.disabled = !ready || !context?.id.startsWith('owner/') || !activity.busy || activity.stopping;
     sendError.textContent = context?.state.error || '';
     sendError.hidden = !sendError.textContent;
     sendStatus.textContent = context?.state.pending ? 'Wird gesendet …' : (context?.state.notice || '');
+    updateStatus();
   };
+  stop.addEventListener('click', async () => {
+    if (stop.disabled) return;
+    const target = context;
+    const current = activity;
+    current.stopping = true;
+    target.state.error = '';
+    updateComposer();
+    try {
+      await bridge.StopSession(target.profile, target.id);
+    } catch (cause) {
+      target.state.error = 'Antwort konnte nicht gestoppt werden: ' + String(cause);
+    } finally {
+      current.stopping = false;
+      if (context === target) updateComposer();
+    }
+  });
   const submit = async (text = draft.value, fromOption = false) => {
     if (!writable() || !text.trim()) return;
     // Who sends, also by an option of a question or while an answer runs, is
@@ -331,6 +365,8 @@ export function browse(bridge, doc = document, resume = '') {
     error.hidden = false;
   };
   const renderList = () => {
+    thread.setAttribute('aria-current', selected === threadID ? 'true' : 'false');
+    back.hidden = !threadID || selected === threadID;
     sessions.replaceChildren();
     const query = search.value.trim().toLocaleLowerCase('de-DE');
     const groups = new Map();
@@ -382,6 +418,7 @@ export function browse(bridge, doc = document, resume = '') {
       renderList();
     }
     ready = false;
+    activity = { busy: false, n: 0, own: false, stopping: false };
     setQuestion(null);
     context = { profile, id: entry.id, state: sessionState(profile, entry.id) };
     draft.value = context.state.text;
@@ -395,12 +432,37 @@ export function browse(bridge, doc = document, resume = '') {
       const snapshot = await bridge.OpenSession(profile, entry.id);
       const active = () => version === generation && current === selection;
       if (!active()) return;
-      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion);
+      context.state.notice = snapshot.notice || '';
+      const onEvent = event => {
+        switch (event.kind) {
+          case 'working':
+            activity.n = event.n || 0;
+            activity.own = !!event.own;
+            activity.busy = activity.n > 0;
+            break;
+          case 'message': case 'task': case 'answering': case 'thought': case 'calling':
+            activity.busy = true;
+            break;
+          case 'asked': if (!event.done) activity.busy = true; break;
+          case 'answer': case 'failed': case 'canceled':
+            activity.busy = entry.id === threadID && activity.n > (activity.own ? 1 : 0);
+            break;
+          case 'directory': meta.textContent = event.text || 'Profil-Workspace'; break;
+          case 'title':
+            if (entry.id !== threadID && event.text) {
+              entry.title = event.text;
+              title.textContent = event.text;
+              renderList();
+            }
+            break;
+        }
+        updateComposer();
+      };
+      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent);
       await render(snapshot.events || []);
       if (!active()) return;
       ready = true;
       updateComposer();
-      status.textContent = entry.id.startsWith('owner/') ? 'Session · Bereit' : 'Peer-Session · Nur lesen';
       // Start at the end of the transcript after the full replay, following it.
       stick();
       // One outstanding poll per selected chat; the bridge batches the live stream.
@@ -422,6 +484,7 @@ export function browse(bridge, doc = document, resume = '') {
           if (active()) {
             ready = false;
             setQuestion(null);
+            status.textContent = 'Verbindung unterbrochen';
             fail('Verbindung zur Session unterbrochen. Bitte aktualisieren', cause);
           }
         }
@@ -455,15 +518,20 @@ export function browse(bridge, doc = document, resume = '') {
     status.textContent = 'Sessions werden geladen …';
     refresh.disabled = true;
     try {
-      const result = await bridge.Sessions(profiles.selectedIndex) || [];
+      let result = [], listError;
+      try { result = await bridge.Sessions(profiles.selectedIndex) || []; }
+      catch (cause) { if (!threadID) throw cause; listError = cause; }
       if (version !== generation) return;
       // Work on a copy; never mutate data owned by the bridge.
       const locals = localEntries.get(profiles.selectedIndex) || new Map();
       for (const entry of result) locals.delete(entry.id);
-      entries = [...result, ...locals.values()].sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
+      entries = [...result, ...locals.values()].filter(entry => entry.id !== threadID)
+        .sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
       renderList();
       status.textContent = entries.length ? 'Wähle eine Session.' : 'Noch keine Sessions.';
-      if (entries.length) await read(entries.find(entry => entry.id === previous) || entries[0]);
+      const target = threadID && previous === threadID ? threadEntry : entries.find(entry => entry.id === previous);
+      if (threadID || entries.length) await read(target || (threadID ? threadEntry : entries[0]));
+      if (listError && version === generation) fail('Sessions konnten nicht geladen werden', listError);
     } catch (cause) {
       if (version !== generation) return;
       status.textContent = '';
@@ -499,6 +567,8 @@ export function browse(bridge, doc = document, resume = '') {
     }
   });
   profiles.addEventListener('change', () => { load(true); });
+  thread.addEventListener('click', () => { if (threadID) void read(threadEntry); });
+  back.addEventListener('click', () => { if (threadID) void read(threadEntry); });
   search.addEventListener('input', renderList);
   refresh.addEventListener('click', () => { load(); });
   return load();
@@ -527,7 +597,7 @@ export async function start(bridge, doc = document) {
       const index = doc.getElementById('profile').selectedIndex;
       settingsDialog.open(index, state.profiles[index]?.name);
     });
-    await browse(bridge, doc, state.resume);
+    await browse(bridge, doc, state.resume, state.thread);
   } catch (error) {
     const message = doc.getElementById('error');
     message.textContent = 'Profile konnten nicht geladen werden: ' + String(error);

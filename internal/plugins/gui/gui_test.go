@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"ouroboros/internal/kernel"
+	"ouroboros/internal/workdir"
 	"ouroboros/plugin"
 )
 
@@ -64,9 +65,12 @@ func TestCommand(t *testing.T) {
 		if p.choices[0].id != "aaa" {
 			t.Fatalf("page: %+v", p)
 		}
+		if p.directory != "/project" {
+			t.Fatalf("start directory: %q", p.directory)
+		}
 		return sentinel
 	}
-	if err := commands[0].Run(context.Background(), nil); !errors.Is(err, sentinel) || !called {
+	if err := commands[0].Run(workdir.With(context.Background(), "/project"), nil); !errors.Is(err, sentinel) || !called {
 		t.Fatalf("run: %v, called: %v", err, called)
 	}
 	called = false

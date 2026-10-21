@@ -103,6 +103,14 @@ body[data-sidebar-collapsed="true"] .sidebar { transform: translateX(-100%); vis
 h1 { margin-top: 5px; font-size: clamp(19px, 2vw, 25px); line-height: 1.35; letter-spacing: -.025em; font-weight: 600; }
 #session-meta { margin-top: 8px; color: var(--muted); font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .readonly-badge { flex-shrink: 0; padding: 4px 10px; color: #59634e; border: 1px solid #dce0d2; background: #eef0e7; border-radius: 20px; font-size: 11px; }
+#thread { text-align: left; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: transparent; }
+#thread span, #thread small { display: block; }
+#thread span { font-weight: 650; }
+#thread small { margin-top: 3px; font-size: 11px; color: var(--muted); }
+#thread[aria-current="true"] { background: #fffefa; border-color: #b5bda8; color: #34442c; }
+#back-to-thread, #stop { padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fdfcf9; }
+.composer #stop { min-height: 34px; }
+#stop:not(:disabled) { color: #873a29; border-color: #ddbbb0; }
 /* The scroller spans the column, so that its scroll bar is at the window edge;
    its content keeps its width. It bounces at its ends, the rest of the window
    does not, and nothing in it is sticky, so that the bounce moves it as one. */
@@ -110,7 +118,7 @@ h1 { margin-top: 5px; font-size: clamp(19px, 2vw, 25px); line-height: 1.35; lett
    overscroll does not chain to the page, which does not bounce. */
 .transcript-scroller { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .transcript-wrap { max-width: 960px; margin: 0 auto; padding: 28px 36px 28px; }
-#session-status { margin-bottom: 28px; color: var(--muted); font-size: 13px; }
+#session-status { margin-top: 6px; color: var(--muted); font-size: 13px; }
 #error { margin-bottom: 22px; padding: 12px 16px; border: 1px solid #ddbbb0; border-radius: 9px; background: #fbefe9; color: #873a29; }
 #content { min-width: 0; }
 /* The mark that tells whether the history is at its end, see app.js. */

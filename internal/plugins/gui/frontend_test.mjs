@@ -99,6 +99,9 @@ function documentFixture() {
     'transcript-end': new Element('div'),
     refresh: new Element('button'),
     'new-session': new Element('button'),
+    thread: new Element('button'),
+    'back-to-thread': new Element('button'),
+    stop: new Element('button'),
     'question-panel': new Element('section'),
     'question-text': new Element('p'),
     'question-options': new Element('div'),
@@ -145,7 +148,7 @@ function select(doc, index) {
 test('HTML supplies the module and accessible profile/error elements', async () => {
   const html = await readFile(new URL('./frontend/index.html', import.meta.url), 'utf8');
   assert.match(html, /<script\b[^>]*type="module"[^>]*src="\/app\.js"[^>]*><\/script>/);
-  for (const id of ['profile', 'active', 'identity', 'error', 'sessions', 'content', 'session-status', 'session-search', 'session-title', 'session-meta', 'refresh', 'new-session', 'composer', 'draft', 'send', 'send-error', 'send-status', 'question-panel', 'question-text', 'question-options', 'question-hint']) {
+  for (const id of ['profile', 'active', 'identity', 'error', 'sessions', 'content', 'session-status', 'session-search', 'session-title', 'session-meta', 'refresh', 'new-session', 'thread', 'back-to-thread', 'stop', 'composer', 'draft', 'send', 'send-error', 'send-status', 'question-panel', 'question-text', 'question-options', 'question-hint']) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(html, /<label\b[^>]*for="profile"/);
@@ -264,6 +267,7 @@ test('only the history scrolls and bounces; composer and sidebar stay out of it'
   const scroller = html.slice(html.indexOf('id="transcript"'), html.indexOf('class="composer-dock"'));
   assert.match(scroller, /id="content"/);
   assert.doesNotMatch(scroller, /id="composer"/);
+  assert.doesNotMatch(scroller, /id="session-status"/, 'thread activity stays visible above the scrolling history');
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.transcript-scroller \{[^}]*overflow-y: auto; overscroll-behavior-y: contain;/);
   assert.match(css, /html, body \{ overscroll-behavior: none; \}/);
@@ -1720,4 +1724,121 @@ test('empty polls and output that does not grow the history leave it alone, so a
   pending[3].resolve([{ kind: 'answer', text: 'grows' }]);
   await settle();
   assert.equal(writes.length, 1, 'output that grows it is followed');
+});
+
+test('the thread opens by default, including an empty profile, through the ordinary session bridge', async () => {
+  for (const entries of [[], [{ id: 'owner/topic', title: 'Topic' }]]) {
+    const doc = archiveFixture(), opened = [], sent = [];
+    await start({
+      InitialState: async () => ({ profiles: [{ name: 'Luna' }], selected: 0, thread: 'owner/thread' }),
+      Sessions: async () => entries,
+      OpenSession: async (...args) => { opened.push(args); return { token: 0, events: [] }; },
+      SendMessage: async (...args) => { sent.push(args); },
+    }, doc);
+    assert.deepEqual(opened, [[0, 'owner/thread']]);
+    assert.equal(doc.thread.hidden, false);
+    assert.equal(doc.thread.getAttribute('aria-current'), 'true');
+    assert.equal(doc['back-to-thread'].hidden, true);
+    assert.equal(doc['session-title'].textContent, 'Thread');
+    assert.equal(doc.draft.disabled, false);
+    typeDraft(doc, 'two different topics'); submit(doc); await settle();
+    assert.deepEqual(sent, [[0, 'owner/thread', 'two different topics']]);
+  }
+});
+
+test('the thread stays outside search, restores its draft, and is selected on profile change', async () => {
+  const doc = archiveFixture(), opened = [];
+  await browse({
+    Sessions: async () => [{ id: 'owner/topic' }],
+    OpenSession: async (...args) => { opened.push(args); return { token: 0, events: [] }; },
+  }, doc, '', 'owner/thread');
+  typeDraft(doc, 'thread draft');
+  choose(doc, 'owner/topic'); await settle();
+  assert.equal(doc['back-to-thread'].hidden, false);
+  search(doc, 'no match');
+  assert.equal(doc.thread.hidden, false);
+  doc['back-to-thread'].dispatchEvent(new Event('click')); await settle();
+  assert.equal(doc.draft.value, 'thread draft');
+  doc.refresh.dispatchEvent(new Event('click')); await settle();
+  assert.equal(doc['session-title'].textContent, 'Thread');
+  select(doc, 1); await settle();
+  assert.deepEqual(opened.at(-1), [1, 'owner/thread']);
+  assert.equal(doc.draft.value, '');
+  select(doc, 0); await settle();
+  assert.equal(doc.draft.value, 'thread draft');
+});
+
+test('restart resumes a thread or explicit session; missing resumed sessions return to the thread', async () => {
+  for (const [resume, expected] of [['owner/thread', 'owner/thread'], ['owner/topic', 'owner/topic'], ['owner/gone', 'owner/thread']]) {
+    const doc = archiveFixture(), opened = [];
+    await browse({
+      Sessions: async () => [{ id: 'owner/topic' }],
+      OpenSession: async (...args) => { opened.push(args); return { token: 0, events: [] }; },
+    }, doc, resume, 'owner/thread');
+    assert.deepEqual(opened, [[0, expected]]);
+  }
+});
+
+test('a failed session list does not prevent opening the thread', async () => {
+  const doc = archiveFixture();
+  await browse({
+    Sessions: async () => { throw Error('list unavailable'); },
+    OpenSession: async (_, id) => { assert.equal(id, 'owner/thread'); return { token: 0, events: [] }; },
+  }, doc, '', 'owner/thread');
+  assert.equal(doc.draft.disabled, false);
+  assert.equal(doc['session-title'].textContent, 'Thread');
+  assert.match(doc.error.textContent, /list unavailable/);
+});
+
+test('thread work, relayed questions, replies and stopping use the shared session events', async () => {
+  const doc = archiveFixture(), pending = [], sent = [], stopped = [];
+  await browse({
+    Sessions: async () => [],
+    OpenSession: async () => ({ token: 1, notice: 'keeps project', events: [
+      { kind: 'message', text: 'two topics' },
+      { kind: 'answer', text: 'first result' },
+      { kind: 'directory', text: '/project' },
+      { kind: 'working', n: 3, own: true },
+    ] }),
+    PollSession: () => { const d = deferred(); pending.push(d); return d.promise; },
+    SendMessage: async (...args) => { sent.push(args); },
+    StopSession: async (...args) => { stopped.push(args); },
+  }, doc, '', 'owner/thread');
+  assert.match(doc['session-status'].textContent, /Arbeitet.*2 aktive Sessions/);
+  assert.equal(doc['session-meta'].textContent, '/project');
+  assert.equal(doc['send-status'].textContent, 'keeps project');
+  assert.equal(doc.stop.disabled, false);
+  pending[0].resolve([{ kind: 'working', n: 2, own: false }, { kind: 'asked', question: { text: 'Which topic?', options: ['first', 'second'] } }]);
+  await settle();
+  assert.match(doc['session-status'].textContent, /Braucht deine Antwort.*2 aktive Sessions/);
+  doc['question-options'].children[0].dispatchEvent(new Event('click')); await settle();
+  assert.deepEqual(sent, [[0, 'owner/thread', 'first']]);
+  pending[1].resolve([{ kind: 'asked', done: true, text: 'first' }, { kind: 'answer', text: 'done' }]);
+  await settle();
+  assert.equal(doc['question-panel'].hidden, true);
+  assert.match(doc['session-status'].textContent, /Arbeitet/);
+  doc.stop.dispatchEvent(new Event('click')); await settle();
+  assert.deepEqual(stopped, [[0, 'owner/thread']]);
+  pending[2].resolve([{ kind: 'working', n: 0, own: false }]); await settle();
+  assert.match(doc['session-status'].textContent, /Bereit.*0 aktive Sessions/);
+  assert.equal(doc.stop.disabled, true);
+});
+
+test('late stop failures stay with the original session and peers cannot be stopped', async () => {
+  const doc = archiveFixture(), stopping = deferred(), stopped = [];
+  await browse({
+    Sessions: async () => [{ id: 'peer-key/topic' }],
+    OpenSession: async (_, id) => ({ token: 0, events: id === 'owner/thread' ? [{ kind: 'working', n: 1 }] : [] }),
+    StopSession: (...args) => { stopped.push(args); return stopping.promise; },
+  }, doc, '', 'owner/thread');
+  doc.stop.dispatchEvent(new Event('click'));
+  doc.stop.dispatchEvent(new Event('click'));
+  assert.deepEqual(stopped, [[0, 'owner/thread']]);
+  choose(doc, 'peer-key/topic'); await settle();
+  assert.equal(doc.stop.disabled, true);
+  stopping.reject(Error('cannot stop')); await settle();
+  assert.equal(doc['send-error'].hidden, true);
+  doc.thread.dispatchEvent(new Event('click')); await settle();
+  assert.match(doc['send-error'].textContent, /cannot stop/);
+  assert.equal(doc.stop.disabled, false);
 });

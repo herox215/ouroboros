@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"ouroboros/internal/workdir"
 	"ouroboros/plugin"
 )
 
@@ -56,11 +57,12 @@ type archiveAccess struct {
 
 type choice struct{ name, id string }
 type page struct {
-	choices  []choice
-	archives []archiveAccess // legacy archive tests only
-	profiles []*Profile
-	selected int
-	session  string // the session the window goes on with, "" to show the newest
+	choices   []choice
+	archives  []archiveAccess // legacy archive tests only
+	profiles  []*Profile
+	selected  int
+	session   string // the session the window goes on with, "" to show the thread
+	directory string // the start directory, as in the terminal UI
 }
 
 func (p *Profile) page() (page, error) {
@@ -99,6 +101,7 @@ func (p *Profile) run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	page.directory = workdir.Of(ctx)
 	going, err := resumed()
 	if err != nil {
 		return err
