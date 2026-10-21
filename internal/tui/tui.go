@@ -1062,6 +1062,13 @@ func (m *Model) send() tea.Cmd {
 		m.setNotice("this is how "+c.peer+" and "+m.agentName()+" talked: it is only to read · /new", true)
 		return nil
 	}
+	// What is written while the agent asks and the row for own words is
+	// selected is its answer: the question is over with it, as with one of
+	// the answers to choose from.
+	if a := c.asking; a != nil && !a.sent && a.own() {
+		m.input.Reset()
+		return m.choose(text)
+	}
 	id := c.contextID
 	if c.pending {
 		// The answer on its way takes it as soon as it can: until then it is

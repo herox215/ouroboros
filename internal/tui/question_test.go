@@ -153,9 +153,13 @@ func TestQuestionInOwnWords(t *testing.T) {
 	if _, ok := m.handleQuestionKey(tea.KeyPressMsg{Code: tea.KeyUp}); ok || !c.asking.own() {
 		t.Fatal("up left what was written")
 	}
-	drive(t, m, press(m, "enter"), func() bool { return !c.pending })
-	if got := texts(m); got != ">go|Which database?|>no|using no" {
-		t.Fatalf("answered: %s", got)
+	cmd := press(m, "enter")
+	if !c.asking.sent || strings.Contains(ansi.Strip(m.chatView()), "? Which") {
+		t.Fatal("the answer is on its way: nothing is left to answer")
+	}
+	drive(t, m, cmd, func() bool { return !c.pending })
+	if got := texts(m); got != ">go|Which database?|>no|using no" || c.asking != nil {
+		t.Fatalf("answered: %s, asking %+v", got, c.asking)
 	}
 }
 

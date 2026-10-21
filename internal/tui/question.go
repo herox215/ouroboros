@@ -101,8 +101,9 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, true
 }
 
-// choose answers the question of the conversation shown with option: what
-// the owner says while the agent waits for an answer is that answer.
+// choose answers the question of the conversation shown with option, one of
+// the answers or what the owner wrote: what they say while the agent waits
+// for an answer is that answer.
 func (m *Model) choose(option string) tea.Cmd {
 	c := m.chat
 	c.asking.sent = true
