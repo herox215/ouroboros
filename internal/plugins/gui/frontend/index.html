@@ -64,13 +64,17 @@
           <div id="question-options" role="group" aria-label="Antwortmöglichkeiten"></div>
           <p id="question-hint"></p>
         </section>
-        <label for="draft">Nachricht / eigene Antwort</label>
-        <textarea id="draft" rows="2" placeholder="Nachricht schreiben …" aria-describedby="composer-hint" disabled></textarea>
-        <div class="composer-actions">
-          <p id="composer-hint">Enter sendet · Shift+Enter für eine neue Zeile</p>
-          <p id="send-status" role="status"></p>
+        <!-- One line, as in the demo: it grows with what is written. -->
+        <label class="sr-only" for="draft">Nachricht / eigene Antwort</label>
+        <div class="composer-row">
+          <span class="composer-prompt" aria-hidden="true">›</span>
+          <textarea id="draft" rows="1" placeholder="Nachricht schreiben" aria-describedby="composer-hint" disabled></textarea>
           <button id="stop" type="button" disabled>Stoppen</button>
-          <button id="send" type="submit" disabled>Senden</button>
+          <button id="send" type="submit" aria-label="Senden" title="Senden" disabled><span aria-hidden="true">↑</span></button>
+        </div>
+        <div class="composer-actions">
+          <p id="composer-hint" class="sr-only">Enter sendet · Shift+Enter für eine neue Zeile</p>
+          <p id="send-status" role="status"></p>
         </div>
         <p id="send-error" role="alert" hidden></p>
       </form>

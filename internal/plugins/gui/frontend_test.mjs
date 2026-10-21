@@ -718,7 +718,7 @@ test('whole conversation replays projected events literally, with paired tools a
   for (const text of texts) assert.deepEqual(text.children, []);
   assert.ok(!visibleTexts(doc.content).includes('partial answer'));
   assert.ok(doc.content.children.some(item => item.hidden && descendants(item, 'pre').some(text => text.textContent === 'partial answer')));
-  assert.match(doc.content.children[0].children[0].textContent, /^Du · /);
+  assert.match(doc.content.children[0].children[0].textContent, /^you · /);
   const details = descendants(doc.content, 'details');
   assert.equal(details.length, 1);
   assert.equal(details[0].children.length, 1);
@@ -1891,4 +1891,37 @@ test('live session overview adds delegated topics without reopening the thread a
   assert.deepEqual(opened.at(-1), [1, 'owner/thread']);
   late.resolve([{id: 'owner/stale', running: true}]); await pending;
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/other']);
+});
+
+test('the thread reads as in the terminal UI and the demo: you, the agent by name, the clock today', async () => {
+  const doc = documentFixture();
+  mount({ profiles: [{ name: 'luna' }], selected: 0 }, doc);
+  const now = new Date();
+  await browse({
+    async Sessions() { return [{ id: 'owner/a', running: true, title: 'Matrix-Eingang' }]; },
+    async OpenSession() { return { token: 0, events: [
+      { kind: 'message', text: 'hi', at: now.toISOString() },
+      { kind: 'answer', text: 'hallo', at: now.toISOString() },
+      { kind: 'task', text: 'S/02 · Matrix-Eingang', at: '2026-01-01T12:00:00Z' },
+    ] }; },
+  }, doc);
+  const [mine, theirs, task] = doc.content.children;
+  const time = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(now);
+  assert.equal(mine.children[0].textContent, 'you · ' + time);
+  assert.equal(theirs.children[0].textContent, 'luna · ' + time);
+  assert.equal(task.className, 'message message-task');
+  assert.match(task.children[0].textContent, /^↳ Aufgabe · 01\.01\.2026/);
+  // A session tells its state and runs its bar while it works, without a made-up progress.
+  const session = doc.sessions.children[0].children.find(e => e.tagName === 'button');
+  assert.equal(session.getAttribute('data-running'), 'true');
+  assert.match(session.children[1].textContent, /^Zustand: arbeitet · eigene/);
+  assert.equal(session.children[2].className, 'session-bar');
+});
+
+test('the composer is one line behind a prompt with a round send button, as in the demo', async () => {
+  const html = await readFile(new URL('./frontend/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<div class="composer-row">\s*<span class="composer-prompt" aria-hidden="true">›<\/span>\s*<textarea id="draft" rows="1"/);
+  assert.match(html, /<button id="send" type="submit" aria-label="Senden"[^>]*><span aria-hidden="true">↑<\/span><\/button>/);
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.transcript-scroller \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0/);
 });

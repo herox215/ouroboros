@@ -204,3 +204,25 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #sessions button[data-running="true"] .session-title { font-weight: 650; }
 #back-to-thread, #stop, .composer #send { border-radius: 0; background: transparent; font-size: 10px; }
 #composer-hint, #send-status { font-size: 9px; }
+/* As in the demo: the composer is one line that grows with what is written,
+   behind a prompt, with a round send button; Stop shows only while it works. */
+.composer-row { display: flex; align-items: flex-end; gap: 10px; }
+.composer-prompt { flex: none; padding: 7px 0; color: var(--muted); }
+.composer-row #draft { flex: 1; min-height: 0; max-height: 30vh; resize: none; overflow-y: auto; }
+.composer #send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 50%; font-size: 15px; line-height: 1; }
+.composer #send:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+.composer #stop:disabled { display: none; }
+.composer-actions { margin-top: 2px; }
+/* Older messages fade out towards the top, as in the demo. */
+.transcript-scroller { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 120px); mask-image: linear-gradient(to bottom, transparent 0, #000 120px); }
+/* What the agent handed to a session reads as a line of its own, as in the demo. */
+#content .message-task { padding: 2px 0 8px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+#content .message-task h3 { display: inline; margin: 0 6px 0 0; }
+#content .message-task pre { display: inline; }
+/* A session's bar runs while it works and stands full when it is done; it
+   tells no progress, which the backend does not know. */
+#sessions .session-bar { display: block; height: 4px; margin-top: 6px; background: repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 5px); color: var(--muted); opacity: .45; }
+#sessions button[data-running="true"] .session-bar { color: var(--accent); opacity: 1; background-size: 10px 4px; animation: session-run 1s linear infinite; }
+@keyframes session-run { to { background-position: 10px 0; } }
+@media (prefers-reduced-motion: reduce) { #sessions button[data-running="true"] .session-bar { animation: none; } }
+.sessions-heading h2 { white-space: nowrap; }

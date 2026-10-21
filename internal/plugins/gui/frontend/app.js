@@ -9,6 +9,7 @@ export function mount(state, doc = document) {
     const option = doc.createElement('option');
     option.value = String(index);
     option.textContent = (index + 1) + ' · ' + profile.name;
+    option.setAttribute('data-name', profile.name);
     picker.append(option);
   });
   const render = () => {
@@ -35,6 +36,15 @@ export function dateGroup(value, now = new Date()) {
 }
 
 const dateFormat = new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
+const clockFormat = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
+
+// The time above a message, as the terminal UI writes it: the clock today, the
+// date with it before.
+function clock(value, now = new Date()) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toDateString() === now.toDateString() ? clockFormat.format(date) : dateFormat.format(date);
+}
 function formatDate(value) {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? dateFormat.format(date) : '';
@@ -60,7 +70,8 @@ function appendText(parent, value, doc) {
 }
 
 // Session events are the same projection the terminal UI watches: never raw records.
-function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect) {
+// Messages are headed as in the terminal UI: "you", or the name of the agent.
+function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros') {
   const closeQuestion = () => setQuestion(null);
   const calls = new Map();
   let partial = null;
@@ -68,7 +79,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
     const item = doc.createElement('section');
     item.className = 'message message-' + kind;
     const heading = doc.createElement('h3');
-    const time = formatDate(at);
+    const time = clock(at);
     heading.textContent = label + (time ? ' · ' + time : '');
     item.append(heading);
     if (text) appendText(item, text, doc);
@@ -82,20 +93,20 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
   const apply = (event) => {
     onEvent(event);
     switch (event.kind) {
-      case 'message': closeQuestion(); message('user', 'Du', event.text, event.at); break;
+      case 'message': closeQuestion(); message('user', 'you', event.text, event.at); break;
       case 'say':
         clearPartial();
-        if (event.text?.trim()) message('assistant', 'Assistent', event.text, event.at);
+        if (event.text?.trim()) message('assistant', agent, event.text, event.at);
         break;
       case 'answer':
         closeQuestion();
       case 'suggestion':
         clearPartial();
-        if (event.text?.trim()) message('assistant', 'Assistent', event.text, event.at);
+        if (event.text?.trim()) message('assistant', agent, event.text, event.at);
         break;
       case 'answering':
         if (!partial) {
-          const item = message('assistant', 'Assistent · schreibt …', '', event.at);
+          const item = message('assistant', agent + ' · schreibt …', '', event.at);
           const text = doc.createElement('pre');
           item.append(text);
           partial = { item, text };
@@ -167,7 +178,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
         clearPartial();
         message('end', 'Status', event.kind === 'canceled' ? 'Antwort gestoppt' : (event.text || 'Antwort fehlgeschlagen'), event.at);
         break;
-      case 'task': message('other', 'Aufgabe', event.text, event.at); break;
+      case 'task': message('task', '↳ Aufgabe', event.text, event.at); break;
       case 'thought': break;
     }
   };
@@ -184,6 +195,8 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
 
 export function browse(bridge, doc = document, resume = '', threadID = '') {
   const profiles = doc.getElementById('profile');
+  // The name of the agent of the selected profile, as the terminal UI heads its messages.
+  const agentName = () => profiles.children?.[profiles.selectedIndex]?.getAttribute?.('data-name') || 'ouroboros';
   const sessions = doc.getElementById('sessions');
   const search = doc.getElementById('session-search');
   const content = doc.getElementById('content');
@@ -302,7 +315,18 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     return drafts.get(key);
   };
   const writable = () => ready && context?.id.startsWith('owner/') && !context.state.pending;
+  // The one line of the composer grows with what is written, up to a limit in
+  // the stylesheet, and shrinks again once it is sent.
+  const grow = () => {
+    if (!draft.style) return;
+    // Empty, or not laid out yet (no width), it is the one line of rows="1";
+    // measured without a width it would come out many lines tall.
+    draft.style.height = '';
+    if (!draft.value || !draft.offsetWidth) return;
+    draft.style.height = draft.scrollHeight + 'px';
+  };
   const updateComposer = () => {
+    grow();
     if (asking) {
       const sent = context?.state.sentQuestion === asking.key;
       asking.buttons.forEach(button => { button.disabled = !writable() || sent; });
@@ -409,12 +433,18 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         name.textContent = entry.title || entry.id;
         const subtitle = doc.createElement('span');
         subtitle.className = 'session-meta';
-        subtitle.textContent = (entry.running ? '● Arbeitet' : '○ Bereit') + ' · ' +
-          (entry.id.startsWith('owner/') ? 'Eigene Session' : 'Peer-Session') +
+        // As the sessions in the demo: what it works on, its state, and a bar that
+        // runs while it works. No progress is made up: the bar only says running or not.
+        subtitle.textContent = 'Zustand: ' + (entry.running ? 'arbeitet' : 'bereit') + ' · ' +
+          (entry.id.startsWith('owner/') ? 'eigene' : 'peer') +
           (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
+        const bar = doc.createElement('span');
+        bar.className = 'session-bar';
+        bar.setAttribute('aria-hidden', 'true');
         button.title = entry.id;
         button.append(name);
         button.append(subtitle);
+        button.append(bar);
         button.addEventListener('click', () => { read(entry); });
         group.append(button);
       }
@@ -490,7 +520,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         }
         updateComposer();
       };
-      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect);
+      const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect, agentName());
       await render(snapshot.events || []);
       if (!active()) return;
       ready = true;
