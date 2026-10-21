@@ -2000,7 +2000,11 @@ test('the composer is one line behind a prompt with a round send button, as in t
   assert.match(html, /<div class="composer-row">\s*<span class="composer-prompt" aria-hidden="true">›<\/span>\s*<textarea id="draft" rows="1"/);
   assert.match(html, /<button id="send" type="submit" aria-label="Senden"[^>]*><span aria-hidden="true">↑<\/span><\/button>/);
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.transcript-scroller \{[^}]*mask-image: linear-gradient\(to bottom, transparent 0, rgba\(0, 0, 0, \.3\) 14%, #000 40%\)/);
+  // The fade is a still layer over the top of the history, not a mask on the
+  // scrolling history, which WebKit composited anew each frame of a scroll.
+  assert.match(html, /<\/div>\s*<div class="transcript-fade" aria-hidden="true"><\/div>\s*<\/div>\s*<div class="composer-dock">/);
+  assert.match(css, /\.transcript-fade \{[^}]*position: absolute;[^}]*pointer-events: none;[^}]*background: linear-gradient\(to bottom, var\(--background\) 0, color-mix\(in srgb, var\(--background\) 70%, transparent\) 14%, transparent 100%\)/);
+  assert.doesNotMatch(css, /mask-image/);
 });
 
 test('the fade at the top is off while the start of the thread is in view, so a short thread reads in full', async () => {
@@ -2013,7 +2017,7 @@ test('the fade at the top is off while the start of the thread is in view, so a 
   start.run([{ isIntersecting: false }]);
   assert.deepEqual(toggles, [['at-start', true], ['at-start', false]]);
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
-  assert.match(css, /\.transcript-scroller\.at-start \{ -webkit-mask-image: none; mask-image: none; \}/);
+  assert.match(css, /\.transcript-scroller\.at-start \+ \.transcript-fade \{ opacity: 0; \}/);
 });
 
 test('beside the thread show the sessions of the part in view, else "Noch keine"; a search finds the others', async () => {
