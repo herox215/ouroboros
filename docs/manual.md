@@ -179,6 +179,9 @@ switching profiles clears it. The rail is a saved result, not a live browser vie
 change configuration. Profiles with the GUI plugin disabled are omitted. The window starts the
 node through the same sessions API as the TUI when needed, and releases nodes it started on close;
 running answers continue in the node.
+The gear button opens the settings, including **Darstellung**: **System** (the default),
+**Hell** or **Dunkel**. System follows changes to the OS appearance immediately. The choice
+is saved locally for the GUI across profiles and restarts.
 The frontend is plain HTML/CSS/JavaScript embedded in the executable: no Node, npm,
 Wails CLI, separate web server, or frontend build is needed. The Go binding supplies
 the profiles and session list (owner and peer conversations, newest first).

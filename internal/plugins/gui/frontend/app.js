@@ -1,5 +1,6 @@
 import { createModelDialog } from './model-dialog.js';
 import { createSettingsDialog } from './settings-dialog.js';
+import { createThemePreference } from './theme.js';
 
 // Session text is rendered literally, including questions and tool output.
 export function mount(state, doc = document) {
@@ -769,6 +770,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
 }
 
 export async function start(bridge, doc = document) {
+  const theme = createThemePreference(doc);
   const sidebar = doc.getElementById('sidebar');
   const toggle = doc.getElementById('sidebar-toggle');
   // The sidebar is not hidden but slides out, see the stylesheet; inert keeps
@@ -786,7 +788,7 @@ export async function start(bridge, doc = document) {
     const state = await bridge.InitialState();
     mount(state, doc);
     const modelDialog = createModelDialog(bridge, doc);
-    const settingsDialog = createSettingsDialog(bridge, modelDialog, doc);
+    const settingsDialog = createSettingsDialog(bridge, modelDialog, doc, theme);
     doc.getElementById('settings').addEventListener('click', () => {
       const index = doc.getElementById('profile').selectedIndex;
       settingsDialog.open(index, state.profiles[index]?.name);

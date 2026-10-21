@@ -7,11 +7,14 @@ const source = await readFile(new URL('./frontend/app.js', import.meta.url), 'ut
 const dialogSource = await readFile(new URL('./frontend/model-dialog.js', import.meta.url), 'utf8');
 const dialogURL = 'data:text/javascript;base64,' + Buffer.from(dialogSource).toString('base64');
 const { createModelDialog } = await import(dialogURL);
+const themeSource = await readFile(new URL('./frontend/theme.js', import.meta.url), 'utf8');
+const themeURL = 'data:text/javascript;base64,' + Buffer.from(themeSource).toString('base64');
+const { createThemePreference } = await import(themeURL);
 const settingsSource = await readFile(new URL('./frontend/settings-dialog.js', import.meta.url), 'utf8');
-const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource).toString('base64');
+const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource.replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64');
 const { createSettingsDialog } = await import(settingsURL);
 const { mount, start, browse, dateGroup } = await import(
-  'data:text/javascript;base64,' + Buffer.from(source.replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL))).toString('base64')
+  'data:text/javascript;base64,' + Buffer.from(source.replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL)).replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64')
 );
 
 class Element extends EventTarget {
@@ -130,6 +133,7 @@ function documentFixture() {
   return {
     ...elements,
     body: new Element('body'),
+    documentElement: new Element('html'),
     defaultView: view,
     marks,
     addEventListener: events.addEventListener.bind(events),
@@ -1435,6 +1439,62 @@ test('a running save refuses a second submit and Escape, and locks the dialog', 
   await picker.open(1, 'Arbeit');
   assert.equal(el.dialog.open, true);
   assert.equal(el.close.disabled, false);
+});
+
+test('appearance defaults to system and restores only valid saved preferences', () => {
+  const doc = documentFixture(), stored = new Map();
+  doc.defaultView.localStorage = { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) };
+  const theme = createThemePreference(doc);
+  assert.equal(theme.value, 'system');
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'system');
+  theme.set('dark');
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'dark');
+  assert.equal(createThemePreference(doc).value, 'dark', 'reopening restores the preference');
+  theme.set('light');
+  assert.equal(createThemePreference(doc).value, 'light');
+  theme.set('system');
+  assert.equal(createThemePreference(doc).value, 'system');
+  theme.set('invalid');
+  assert.equal(theme.value, 'system');
+  doc.defaultView.localStorage.getItem = () => 'invalid';
+  assert.equal(createThemePreference(doc).value, 'system', 'unknown saved values follow the OS');
+});
+
+test('appearance still switches if local storage is unavailable', () => {
+  const doc = documentFixture();
+  Object.defineProperty(doc.defaultView, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+  const theme = createThemePreference(doc);
+  assert.equal(theme.value, 'system');
+  theme.set('dark');
+  assert.equal(theme.value, 'dark');
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'dark');
+});
+
+test('the gear changes appearance immediately and keeps it across settings and profile changes', async () => {
+  const doc = documentFixture();
+  await start({
+    InitialState: async () => ({ profiles: [{ name: 'Privat' }, { name: 'Arbeit' }], selected: 0 }),
+    Sessions: async () => [],
+  }, doc);
+  doc.settings.dispatchEvent(new Event('click'));
+  const dialog = doc.body.children.at(-1);
+  const appearance = () => dialog.children.find(e => e.tagName === 'label').children[0];
+  assert.equal(appearance().value, 'system');
+  assert.deepEqual(appearance().children.map(e => [e.value, e.textContent]), [['system', 'System'], ['light', 'Hell'], ['dark', 'Dunkel']]);
+  appearance().value = 'dark';
+  appearance().dispatchEvent(new Event('change'));
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'dark');
+  dialog.close();
+  select(doc, 1);
+  await settle();
+  doc.settings.dispatchEvent(new Event('click'));
+  assert.equal(appearance().value, 'dark');
+  appearance().value = 'light';
+  appearance().dispatchEvent(new Event('change'));
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'light');
+  appearance().value = 'system';
+  appearance().dispatchEvent(new Event('change'));
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'system');
 });
 
 test('settings opens on the dialog, not with the focus ring on its first button', async () => {

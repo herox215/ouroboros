@@ -1,11 +1,69 @@
 :root {
   color-scheme: light;
   font: 12px/1.7 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  background: #eae7e1;
-  color: #4d503b;
+  background: var(--background);
+  color: var(--text);
+  --background: #eae7e1;
+  --text: #4d503b;
+  --surface: #fff;
+  --field: #fdfcf9;
+  --hover: #eef0e7;
+  --line-strong: #c2c3b6;
+  --session-hover: #dedfd340;
+  --selected: #dedfd370;
+  --error: #873a29;
+  --error-line: #ddbbb0;
+  --error-background: #fbefe9;
+  --warning-line: #e4dcc0;
+  --warning-background: #fbf7ea;
+  --tool-background: #f0efe9;
   --muted: #828371;
   --line: #cccec0;
   --accent: #53583b;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #20221d;
+  --text: #e1e4d4;
+  --surface: #2b2e26;
+  --field: #272a23;
+  --hover: #34392c;
+  --line-strong: #777f65;
+  --session-hover: #c1cc9910;
+  --selected: #c1cc9924;
+  --error: #f0ad96;
+  --error-line: #855447;
+  --error-background: #3d2b25;
+  --warning-line: #6e6440;
+  --warning-background: #332f22;
+  --tool-background: #282b24;
+  --muted: #a5a897;
+  --line: #505645;
+  --accent: #c1cc99;
+}
+/* Without an explicit light/dark choice, CSS follows the OS live, including
+   before the application module has loaded. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    color-scheme: dark;
+    --background: #20221d;
+    --text: #e1e4d4;
+    --surface: #2b2e26;
+    --field: #272a23;
+    --hover: #34392c;
+    --line-strong: #777f65;
+    --session-hover: #c1cc9910;
+    --selected: #c1cc9924;
+    --error: #f0ad96;
+    --error-line: #855447;
+    --error-background: #3d2b25;
+    --warning-line: #6e6440;
+    --warning-background: #332f22;
+    --tool-background: #282b24;
+    --muted: #a5a897;
+    --line: #505645;
+    --accent: #c1cc99;
+  }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -23,7 +81,7 @@ button:disabled, select:disabled { cursor: default; color: var(--muted); }
 a { color: var(--accent); }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.skip-link { position: fixed; top: 12px; left: 12px; z-index: 10; padding: 10px 16px; background: #fff; border: 1px solid var(--accent); border-radius: 8px; transform: translateY(-160%); }
+.skip-link { position: fixed; top: 12px; left: 12px; z-index: 10; padding: 10px 16px; background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; transform: translateY(-160%); }
 .skip-link:focus { transform: translateY(0); }
 .sidebar { position: sticky; top: 0; height: 100vh; height: 100dvh; width: var(--sidebar-width); transition: transform var(--sidebar-motion), visibility 0s; will-change: transform; overscroll-behavior: none; display: flex; flex-direction: column; gap: 12px; padding: 24px 28px 18px; background: transparent; border-right: 0; min-width: 0; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 44px 0 4px; font-weight: 650; letter-spacing: -.02em; }
@@ -38,50 +96,50 @@ a { color: var(--accent); }
 .sessions-heading { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sessions-heading h2 { font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
 #refresh { padding: 6px 10px; background: transparent; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
-#refresh:hover:not(:disabled) { background: #fff; border-color: #c2c3b6; }
+#refresh:hover:not(:disabled) { background: var(--surface); border-color: var(--line-strong); }
 .search-field { margin-top: -8px; }
-#session-search { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fdfcf9; font-size: 13px; }
+#session-search { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 13px; }
 #session-search::placeholder { color: var(--muted); opacity: 1; }
 #sessions { flex: 0 1 auto; min-height: 40px; max-height: 48vh; overflow-y: auto; overscroll-behavior: none; scrollbar-width: thin; }
 #sessions > * + * { margin-top: 18px; }
 #sessions h2, #sessions h3, #sessions .session-group-label { padding: 0 10px 7px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
 #sessions button { display: block; width: 100%; margin: 3px 0; padding: 10px 0 12px; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; overflow-wrap: anywhere; font-size: 13px; }
-#sessions button:hover { background: #dedfd340; }
-#sessions button[aria-current="true"], #sessions button[aria-current="page"], #sessions button.is-active, #sessions button.selected { background: #dedfd370; border-color: var(--accent); box-shadow: none; color: var(--accent); }
+#sessions button:hover { background: var(--session-hover); }
+#sessions button[aria-current="true"], #sessions button[aria-current="page"], #sessions button.is-active, #sessions button.selected { background: var(--selected); border-color: var(--accent); box-shadow: none; color: var(--accent); }
 #sessions .session-title { display: block; font-weight: 600; }
 #sessions .session-meta, #sessions small { display: block; margin-top: 3px; color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .sidebar-footer { margin-top: auto; padding-top: 10px; border-top: 0; }
 .settings-button { display: grid; place-items: center; width: 44px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 23px; }
-.settings-button:hover { background: #fffefa; border-color: var(--line); color: var(--accent); }
-.model-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 26px; border: 1px solid var(--line); border-radius: 16px; background: #eae7e1; color: inherit; box-shadow: 0 20px 80px #29292330; }
+.settings-button:hover { background: var(--field); border-color: var(--line); color: var(--accent); }
+.model-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--background); color: inherit; box-shadow: 0 20px 80px #29292330; }
 .model-dialog::backdrop { background: #29292360; }
 .model-dialog h2 { font-size: 20px; letter-spacing: -.02em; }
 .model-dialog-description { margin: 8px 0 22px; color: var(--muted); font-size: 13px; }
 .model-dialog label { display: block; margin-top: 16px; font-weight: 600; font-size: 13px; }
-.model-dialog input:not([type="checkbox"]), .model-dialog select { display: block; width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-weight: 400; }
+.model-dialog input:not([type="checkbox"]), .model-dialog select { display: block; width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-weight: 400; }
 .model-dialog-status, .model-dialog-error { margin-top: 16px; font-size: 13px; }
 .model-dialog-status { color: var(--muted); }
-.model-dialog-error { color: #873a29; }
+.model-dialog-error { color: var(--error); }
 .model-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
-.model-dialog-actions button { padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
-.model-dialog-actions .model-dialog-save { background: #eef0e7; border-color: #c2c3b6; }
+.model-dialog-actions button { padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.model-dialog-actions .model-dialog-save { background: var(--hover); border-color: var(--line-strong); }
 .model-dialog:focus-visible { outline: none; }
 /* The header of a dialog: back where there is a page to go back to, the title,
    and the X in the corner. */
 .dialog-header { display: flex; align-items: center; gap: 6px; margin: -8px -10px 10px 0; }
 .dialog-header h2 { flex: 1; min-width: 0; }
 .model-dialog .dialog-icon { display: grid; place-items: center; flex: none; width: 36px; min-height: 36px; height: 36px; padding: 0 0 3px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; }
-.model-dialog .dialog-icon:hover:not(:disabled) { background: #eef0e7; border-color: var(--line); color: var(--accent); }
+.model-dialog .dialog-icon:hover:not(:disabled) { background: var(--hover); border-color: var(--line); color: var(--accent); }
 .model-dialog .dialog-icon[hidden], .model-dialog-actions[hidden] { display: none; }
 .dialog-header .dialog-icon:first-child:not([hidden]) { margin-left: -10px; }
-.model-dialog-confirm { margin-top: 20px; padding: 14px 16px; border: 1px solid #e4dcc0; border-radius: 10px; background: #fbf7ea; font-size: 13px; }
+.model-dialog-confirm { margin-top: 20px; padding: 14px 16px; border: 1px solid var(--warning-line); border-radius: 10px; background: var(--warning-background); font-size: 13px; }
 .model-dialog-confirm .model-dialog-actions { margin-top: 12px; }
 /* The settings pages put their buttons straight into the dialog and its form:
    styled like the actions above, with room around them, and rounded, so that
    the focus ring follows their corners. */
-.settings-dialog > button, .settings-dialog form > button { margin: 12px 10px 0 0; padding: 8px 18px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
-.settings-dialog > button:hover:not(:disabled), .settings-dialog form > button:hover:not(:disabled) { background: #eef0e7; }
-.settings-dialog form > button[type="submit"] { background: #eef0e7; border-color: #c2c3b6; }
+.settings-dialog > button, .settings-dialog form > button { margin: 12px 10px 0 0; padding: 8px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.settings-dialog > button:hover:not(:disabled), .settings-dialog form > button:hover:not(:disabled) { background: var(--hover); }
+.settings-dialog form > button[type="submit"] { background: var(--hover); border-color: var(--line-strong); }
 .settings-dialog > p, .settings-dialog form > p { margin-top: 16px; font-size: 13px; color: var(--muted); }
 .settings-dialog :focus-visible { outline-offset: 2px; }
 main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -92,8 +150,8 @@ body[data-sidebar-collapsed="true"] .session-header { padding-left: 76px; }
 /* The toggle sits at the right edge of the sidebar, beside the brand, and rides
    along with that edge as the sidebar slides: in the top left corner when it is
    in. A transform, so that it moves as smoothly as the sidebar. */
-#sidebar-toggle { position: fixed; top: 20px; left: 16px; z-index: 5; transform: translateX(calc(var(--sidebar-width) - 68px)); transition: transform var(--sidebar-motion); display: grid; place-items: center; width: 36px; min-height: 36px; height: 36px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #4b4a43; }
-#sidebar-toggle:hover { background: #f1f0eb; border-color: var(--line); color: var(--accent); }
+#sidebar-toggle { position: fixed; top: 20px; left: 16px; z-index: 5; transform: translateX(calc(var(--sidebar-width) - 68px)); transition: transform var(--sidebar-motion); display: grid; place-items: center; width: 36px; min-height: 36px; height: 36px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); }
+#sidebar-toggle:hover { background: var(--hover); border-color: var(--line); color: var(--accent); }
 #sidebar-toggle svg { width: 20px; height: 20px; }
 body[data-sidebar-collapsed="true"] { grid-template-columns: 0px minmax(0, 1fr) var(--context-width); }
 body[data-sidebar-collapsed="true"] #sidebar-toggle { transform: none; }
@@ -102,15 +160,15 @@ body[data-sidebar-collapsed="true"] .sidebar { transform: translateX(-100%); vis
 @media (prefers-reduced-motion: reduce) { body, .sidebar, body[data-sidebar-collapsed="true"] .sidebar, .session-header, #sidebar-toggle { transition: none; } }
 h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; text-transform: uppercase; font-weight: 500; }
 #session-meta { margin-top: 4px; color: var(--muted); font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.readonly-badge { flex-shrink: 0; padding: 4px 10px; color: #59634e; border: 1px solid #dce0d2; background: #eef0e7; border-radius: 20px; font-size: 11px; }
+.readonly-badge { flex-shrink: 0; padding: 4px 10px; color: var(--accent); border: 1px solid var(--line); background: var(--hover); border-radius: 20px; font-size: 11px; }
 #thread { text-align: left; padding: 8px 0; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: transparent; }
 #thread span, #thread small { display: block; }
 #thread span { font-weight: 650; }
 #thread small { margin-top: 3px; font-size: 11px; color: var(--muted); }
 #thread[aria-current="true"] { border-color: var(--accent); color: var(--accent); }
-#back-to-thread, #stop { padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fdfcf9; }
+#back-to-thread, #stop { padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
 .composer #stop { min-height: 34px; }
-#stop:not(:disabled) { color: #873a29; border-color: #ddbbb0; }
+#stop:not(:disabled) { color: var(--error); border-color: var(--error-line); }
 /* The scroller spans the column, so that its scroll bar is at the window edge;
    its content keeps its width. It bounces at its ends, the rest of the window
    does not, and nothing in it is sticky, so that the bounce moves it as one. */
@@ -119,7 +177,7 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 .transcript-scroller { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
 .transcript-wrap { max-width: 760px; margin: 0 auto; padding: 36px 0 22px; }
 #session-status { margin: 0 0 6px; text-align: right; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-#error { margin-bottom: 22px; padding: 12px 16px; border: 1px solid #ddbbb0; border-radius: 9px; background: #fbefe9; color: #873a29; }
+#error { margin-bottom: 22px; padding: 12px 16px; border: 1px solid var(--error-line); border-radius: 9px; background: var(--error-background); color: var(--error); }
 #content { min-width: 0; }
 /* The mark that tells whether the history is at its end, see app.js. */
 #transcript-end { height: 1px; }
@@ -130,12 +188,12 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #content p + p { margin-top: 14px; }
 #content code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .9em; }
 #content .message-user { padding: 12px 0 16px; margin: 0; background: transparent; border: 0; border-radius: 0; }
-#content .message-tool pre { padding: 16px; background: #f0efe9; border: 1px solid var(--line); border-radius: 8px; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
+#content .message-tool pre { padding: 16px; background: var(--tool-background); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .tool-call { margin-top: 6px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; overflow: hidden; }
 .tool-call summary { padding: 10px 14px; cursor: pointer; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
 #content .tool-call pre { padding: 14px; border-top: 1px solid var(--line); font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
 #content .message-end { color: var(--muted); font-size: 12px; border-bottom: 0; }
-.expand-text { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fdfcf9; font: inherit; cursor: pointer; }
+.expand-text { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font: inherit; cursor: pointer; }
 .expand-text { margin-top: 8px; font-size: 12px; }
 /* The composer sits below the history, not in it, and is compact, so that the
    history keeps the room: one row for the hint, the status and Send. */
@@ -147,8 +205,8 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 .composer-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 #composer-hint { flex: 1; min-width: 0; }
 #composer-hint, #send-status { color: var(--muted); font-size: 12px; }
-#send-error { color: #873a29; margin-top: 6px; font-size: 13px; }
-#send, #new-session, .question-option { border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; background: #eef0e7; }
+#send-error { color: var(--error); margin-top: 6px; font-size: 13px; }
+#send, #new-session, .question-option { border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; background: var(--hover); }
 .composer #send { min-height: 34px; padding: 5px 16px; }
 .question-panel { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); max-height: 40vh; overflow-y: auto; }
 .question-panel h2 { font-size: 13px; color: var(--accent); margin-bottom: 8px; }
