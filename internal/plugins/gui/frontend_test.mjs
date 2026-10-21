@@ -446,9 +446,20 @@ function buttons(doc) {
   return doc.sessions.children.flatMap(group => group.children.filter(child => child.tagName === 'button'));
 }
 function choose(doc, id) {
-  const button = buttons(doc).find(button => button.title === id);
+  let button = buttons(doc).find(button => button.title === id);
+  // Beside the thread only working sessions show: the others are found by search.
+  const searched = !button && !doc['session-search'].value;
+  if (searched) {
+    doc['session-search'].value = id;
+    doc['session-search'].dispatchEvent(new Event('input'));
+    button = buttons(doc).find(button => button.title === id);
+  }
   assert.ok(button, 'Missing session: ' + id);
   button.dispatchEvent(new Event('click'));
+  if (searched) {
+    doc['session-search'].value = '';
+    doc['session-search'].dispatchEvent(new Event('input'));
+  }
 }
 function search(doc, query) {
   doc['session-search'].value = query;
@@ -1878,12 +1889,12 @@ test('live session overview adds delegated topics without reopening the thread a
   await browse({
     Sessions: async profile => {
       if (late && profile === 0) return late.promise;
-      return profile === 1 ? [{id: 'owner/other'}] : refresh ? [{id: 'owner/idle'}, {id: 'owner/new', running: true}] : [];
+      return profile === 1 ? [{id: 'owner/other', running: true}] : refresh ? [{id: 'owner/idle'}, {id: 'owner/new', running: true}] : [];
     },
     OpenSession: async (...args) => { opened.push(args); return {token: 0, events: []}; },
   }, doc, '', 'owner/thread');
   refresh = true; await tick();
-  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/new', 'owner/idle']);
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/new'], 'beside the thread only the working session shows');
   assert.equal(buttons(doc)[0].getAttribute('data-running'), 'true');
   assert.deepEqual(opened, [[0, 'owner/thread']], 'refresh changes the list, not the watched conversation');
   late = deferred();
@@ -1938,4 +1949,22 @@ test('the fade at the top is off while the start of the thread is in view, so a 
   assert.deepEqual(toggles, [['at-start', true], ['at-start', false]]);
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.transcript-scroller\.at-start \{ -webkit-mask-image: none; mask-image: none; \}/);
+});
+
+test('beside the thread only working sessions show, else "Noch keine"; a search finds the others', async () => {
+  const doc = archiveFixture();
+  let list = [{ id: 'owner/old', title: 'Alt' }];
+  await browse({
+    async Sessions() { return list; },
+    async OpenSession() { return { token: 0, events: [] }; },
+  }, doc, '', 'owner/thread');
+  assert.deepEqual(buttons(doc), []);
+  assert.equal(doc.sessions.children[0].textContent, 'Noch keine');
+  search(doc, 'alt');
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/old']);
+  search(doc, '');
+  list = [{ id: 'owner/old', title: 'Alt' }, { id: 'owner/run', title: 'Läuft', running: true }];
+  doc.refresh.dispatchEvent(new Event('click'));
+  await settle();
+  assert.deepEqual(buttons(doc).map(b => b.title), ['owner/run']);
 });

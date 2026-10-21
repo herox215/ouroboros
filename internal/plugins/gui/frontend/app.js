@@ -416,6 +416,9 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     const groups = new Map();
     for (const entry of [...entries].sort((a, b) => Number(!!b.running) - Number(!!a.running))) {
       if (!((entry.title || '') + ' ' + entry.id).toLocaleLowerCase('de-DE').includes(query)) continue;
+      // Beside the thread, as in the demo, only the sessions that work now show;
+      // a search finds the others.
+      if (threadID && !query && !entry.running) continue;
       const label = entry.running ? 'Aktiv' : dateGroup(entry.modified);
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(entry);
@@ -457,7 +460,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     if (!groups.size) {
       const empty = doc.createElement('p');
       empty.className = 'list-empty';
-      empty.textContent = query ? 'Keine passende Session gefunden.' : 'Noch keine Sessions.';
+      empty.textContent = query ? 'Keine passende Session gefunden.' : threadID ? 'Noch keine' : 'Noch keine Sessions.';
       sessions.append(empty);
     }
   };
