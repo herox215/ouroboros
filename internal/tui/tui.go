@@ -708,10 +708,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refresh()
 	case modelChangedMsg:
+		// The conversation goes on under the new model: the session keeps
+		// its id and what it shows, and the node starts the context anew
+		// with the next message.
 		m.screen = screenChat
-		cmd := m.newConversation()
 		m.setNotice(msg.done, false)
-		return m, cmd
+		return m, m.refresh()
 	case spinner.TickMsg:
 		var hide tea.Cmd
 		if msg.ID == m.spinner.ID() {

@@ -29,7 +29,8 @@ type modelsMsg struct {
 }
 
 // modelChangedMsg is what the model screen says once the node answers with
-// another model: the conversation that was shown is not continued there.
+// another model: the conversation that was shown goes on, which the owner is
+// told of, since that model has none of it in its context.
 type modelChangedMsg struct{ done string }
 
 // fallbacksMsg are the fallbacks of the node after f changed them, with
@@ -59,6 +60,10 @@ type choice struct {
 // switchedNote is what the owner is told once when the agents answer through
 // another access than before.
 const switchedNote = "the prompt cache starts anew there: the first requests may cost more or take longer"
+
+// changedNote is what the owner is told once another model answers in the
+// conversation that was shown: it goes on, but the model starts anew in it.
+const changedNote = "the conversation goes on, the model starts without what was said before"
 
 // openModel opens the model screen and lists the models of the accesses. A
 // node that is not set up has no access to ask.
@@ -135,9 +140,10 @@ func (s *modelScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 				return actionMsg{done, err}
 			}
 			if changed {
-				// The model that answered before has none of the
-				// conversation cached: it goes on in a new one.
-				return modelChangedMsg{done + " · new conversation"}
+				// The conversation goes on, but in the context of
+				// another model: the node tells it so with the next
+				// message, see the session's modelFor.
+				return modelChangedMsg{done + " · " + changedNote}
 			}
 			return actionMsg{done, nil}
 		}
