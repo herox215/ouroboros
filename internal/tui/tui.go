@@ -296,6 +296,8 @@ type conversation struct {
 	// images are the files of the pictures pasted into it, by their labels:
 	// the first is [Image_1].
 	images []string
+	// files are other pasted attachments, indexed by [File_1], [File_2], ….
+	files []string
 }
 
 // Model is the UI state.

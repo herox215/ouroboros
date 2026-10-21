@@ -367,6 +367,10 @@ func (*gatewayAgent) Model() string                { return "" }
 func (*gatewayAgent) Title(context.Context, []openai.Message) (string, error) {
 	return "gateway test", nil
 }
+func (*gatewayAgent) CheckTopic(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
+	return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "test continuation"}, nil
+}
+
 func (*gatewayAgent) Run(ctx context.Context, _, text string, _ func(assistant.Step), _ func(string)) (string, error) {
 	if text == "wait" {
 		<-ctx.Done()

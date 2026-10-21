@@ -195,7 +195,7 @@ func (m *Model) rewatch(id string) tea.Cmd {
 
 // replay builds the session c anew from what happened in it.
 func (m *Model) replay(c *conversation, past []Event) {
-	*c = conversation{contextID: c.contextID, draft: c.draft, images: c.images, art: c.art, watching: true, pending: c.pending && len(past) == 0}
+	*c = conversation{contextID: c.contextID, draft: c.draft, images: c.images, files: c.files, art: c.art, watching: true, pending: c.pending && len(past) == 0}
 	for _, e := range past {
 		m.apply(c, e, false)
 	}

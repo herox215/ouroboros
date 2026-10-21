@@ -79,7 +79,10 @@ func withImages(m openai.Message) any {
 	if len(m.Images) == 0 {
 		return m.Content
 	}
-	parts := []part{{Type: "input_text", Text: m.Content}}
+	parts := make([]part, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, part{Type: "input_text", Text: m.Content})
+	}
 	for _, image := range m.Images {
 		parts = append(parts, part{Type: "input_image", ImageURL: image.URL()})
 	}

@@ -32,6 +32,42 @@ use ASCII letters, digits, dots, underscores or hyphens, up to 64 bytes. The
 name is host configuration, never message content or an account identifier, and
 does not affect authorization. Adapters without a name retain plain API attribution.
 
+### Per-message context
+
+Gateways can keep descriptive state per authenticated room and sender and attach
+an immutable JSON snapshot to each input. Construct it with
+`plugin.NewGatewayMetadata(map[string]any{...})`, then pass
+`plugin.WithGatewayMetadata(ctx, snapshot)` to the adapter's Send or Reply
+(including image and attachment variants). The adapter supplies its own source
+interface and gateway name; caller-provided MessageSource attribution is not
+inherited. Invalid JSON values or snapshots larger than 16 KiB are rejected.
+Never include tokens, device keys or other credentials.
+
+Snapshots are stored as `source.metadata` JSON objects with the message, survive
+socket transport and archives, and are appended to model input as descriptive
+gateway data, not instructions. Later state changes do not alter older messages.
+Metadata grants no authority and is not a way to change permission policy.
+The gateway owns state collection, isolation and freshness; the core does not
+interpret transport-specific fields. A new call without context inherits none.
+
+Matrix collects static `m.location` messages and MSC3672 live beacons without
+starting an assistant answer. The next text/media message carries `location`
+with `uri`, `timestamp` (Unix milliseconds), `live`, `active`, optional
+`description`, and `expires_at` for live sharing. `active` describes live sharing
+at receipt, not coordinate freshness; always consider the point's timestamp.
+Stopped/expired live locations are retained only as last-known points with
+`active: false`. State is in memory per connection and room/sender. On reconnect,
+current beacon announcements can be restored from joined-room state, but a new
+coordinate update is required; static locations must be shared again.
+
+Coordinates require the same trusted-device decryption and private-room checks
+as incoming messages. Beacon start/stop announcements normally are plaintext
+Matrix room state; these are accepted only from joined-room sync with the
+allowlisted sender's state key and rechecked encrypted one-to-one membership.
+These announcements are homeserver-authenticated, not device-authenticated, and
+cannot supply coordinates. The tracker currently keeps the latest sharing
+session per room and sender, not multiple concurrent independent trackers.
+
 ## Matrix
 
 Use make build or make install: these select the pure-Go Matrix crypto backend
@@ -118,12 +154,34 @@ archived chat history; resend an image if needed after a restart.
 Other attachments and rich streaming edits are not supported. Images cannot
 answer a pending agent question: answer it with text first, then resend the image.
 
-### Set the Matrix profile picture
+### Gateway output tools
 
-The owner-only agent tool `matrix_set_avatar({path: "/path/to/avatar.png"})`
+Gateway plugins contribute output capabilities; the agent uses the neutral
+`gateway_list`, `gateway_send_image`, and `gateway_set_avatar` tools rather than
+protocol-specific tools. `gateway_list` describes registered capabilities and
+backend restrictions, not connection health. A capability can be registered while
+its account is disabled or disconnected; the backend then rejects the action.
+Specify `gateway` when more than one provider supports the operation. Message
+source metadata does not select an account or recipient.
+
+For example, `gateway_send_image({gateway: "matrix", path: "/path/to/image.png"})`
+sends through the running Matrix connection. Alternatively use `attachment: 1`
+for a live chat image. If multiple known rooms exist, specify `destination` as
+the Matrix room ID. The backend binds that room to its allowed recipient and
+retains its encryption and membership checks. Unknown rooms are not accepted.
+
+The former `matrix_send_image` and `matrix_set_avatar` tools are no longer
+registered. Explicit owner-tool allowlists and tool-specific permission rules
+must be updated to the corresponding neutral names; include `gateway_list` for
+capability discovery. This is not done automatically: granting a neutral tool
+can also grant access to other installed providers of that capability.
+
+### Set a gateway profile picture
+
+The owner-only agent tool `gateway_set_avatar({gateway: "matrix", path: "/path/to/avatar.png"})`
 sets the configured bot account's profile picture. To use an image sent in this
-chat instead of a file, call `matrix_set_avatar({attachment: 1})` (or `{}` for
-the first image). The index selects an image in the most recent user message
+chat instead of a file, call `gateway_set_avatar({gateway: "matrix", attachment: 1})` (or omit
+both path and attachment for the first image). The index selects an image in the most recent user message
 containing pictures, even after subsequent text-only turns. Only this live
 conversation is accessible, never other chats or tool-generated pictures.
 Attachments stay in memory and must be resent after a restart or when trimmed
@@ -135,7 +193,7 @@ Relative paths use the current project or workspace.
 The tool uploads the file, sets the account avatar and reads it back to verify
 the result. This changes the public account profile, not a room avatar: the
 image is **not end-to-end encrypted**. No new login or sync loop is started.
-If owner tools are explicitly allowlisted, include `matrix_set_avatar` there;
+If owner tools are explicitly allowlisted, include `gateway_set_avatar` there;
 it cannot be granted to peers.
 
 ### Cross-signing of the Matrix device

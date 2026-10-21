@@ -15,7 +15,7 @@ import (
 	"ouroboros/plugin"
 )
 
-const setAvatar = "matrix_set_avatar"
+const setAvatar = plugin.GatewaySetAvatarTool
 const maxAvatarBytes = 5 << 20
 
 // statAvatar reads the mode and size of the opened avatar. Tests replace it

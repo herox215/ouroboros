@@ -82,6 +82,7 @@ func userQuestion(heard ...func(context.Context, Question, string)) agent.Tool {
 			"they can always answer in their own words instead, so add no option for that. Without options they write the answer. " +
 			`Like ` + ToolUserQuestion + `({question: "Which database?", options: ["SQLite", "Postgres"], recommended: "SQLite"}). ` +
 			"When the sending interface is known, the result is JSON with the unchanged answer in answer and its origin in source.interface. " +
+			"The reply may include pictures, arrive without text, or change the topic; treat it as the owner's next message rather than forcing an offered option. " +
 			"Ask nothing you can find out yourself. " +
 			"It waits until the owner answers or the conversation is cancelled.",
 		Schema: `{"type":"object","properties":{` +

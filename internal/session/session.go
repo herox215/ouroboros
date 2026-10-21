@@ -331,6 +331,8 @@ type Assistant interface {
 	Resume(contextID string, conversation json.RawMessage) error
 	Forget(contextID string)
 	Title(ctx context.Context, conversation []openai.Message) (string, error)
+	// CheckTopic independently verifies a proposed continuation before delivery.
+	CheckTopic(ctx context.Context, check assistant.TopicCheck) (assistant.TopicDecision, error)
 	Effort() string
 	// Note makes the agent remember text in the conversation contextID
 	// for its next answer there, as something it was told without being
@@ -350,8 +352,11 @@ type Service struct {
 	stop    context.CancelFunc
 	answers sync.WaitGroup // on their way
 
-	mu               sync.Mutex
-	sessions         map[string]*session
+	mu       sync.Mutex
+	sessions map[string]*session
+	// Archived concern anchors are read once; live sessions use their original
+	// Message event, which survives context compaction and model changes.
+	concernAnchors   map[string]string
 	initialDirectory string             // for new sessions and resolving relative project paths
 	jobs             map[string]running // of the answers on their way, by session or conversation of a peer, see Jobs
 	services         func() []Services  // that run past the answers, see ServicesFrom
@@ -379,15 +384,19 @@ type process struct {
 
 // session is one conversation of the owner with the agent.
 type session struct {
-	id       string
-	events   []Event
-	watchers map[chan Event]struct{}
-	cancel   context.CancelFunc // of the answer on its way; nil without one
-	since    time.Time          // when that answer began
-	queue    []queued           // the messages that wait for that answer to take them
-	asked    chan queued        // takes what the owner answers the question that answer waits for; nil without one
-	restart  string             // the binary a tool of that answer asked to start anew from
-	goOn     bool               // the session goes on by itself in that build, see GoOn
+	// concernPictures keeps original request images for routing evidence while
+	// live. Images, like other image input, are intentionally not archived.
+	concernPictures []openai.Image
+	backendQuestion bool // backend approval, not an agent's topical conversation
+	id              string
+	events          []Event
+	watchers        map[chan Event]struct{}
+	cancel          context.CancelFunc // of the answer on its way; nil without one
+	since           time.Time          // when that answer began
+	queue           []queued           // the messages that wait for that answer to take them
+	asked           chan queued        // takes what the owner answers the question that answer waits for; nil without one
+	restart         string             // the binary a tool of that answer asked to start anew from
+	goOn            bool               // the session goes on by itself in that build, see GoOn
 	// resumed is when the last answer ended of a session that was loaded
 	// from where it is kept, until the agent is told so with the next
 	// message; zero otherwise.
@@ -431,12 +440,13 @@ type session struct {
 // of the owner, or the report of a task that ended or of a session to the
 // thread, with the Event that tells of it once it is taken.
 type queued struct {
-	text      string
-	images    []openai.Image
-	source    MessageSource
-	generated bool // backend input, not a message from an interface
-	routed    bool // handed on by the thread
-	task      *Event
+	text           string
+	images         []openai.Image
+	hasAttachments bool
+	source         MessageSource
+	generated      bool // backend input, not a message from an interface
+	routed         bool // handed on by the thread
+	task           *Event
 }
 
 // New returns the Service of the sessions with agent.
@@ -556,6 +566,10 @@ func (s *Service) askInput(ctx context.Context, id, text string, generated bool)
 }
 
 func (s *Service) askImages(ctx context.Context, id, text string, images []openai.Image, generated bool) error {
+	return s.askMedia(ctx, id, text, images, generated, false)
+}
+
+func (s *Service) askMedia(ctx context.Context, id, text string, images []openai.Image, generated, hasAttachments bool) error {
 	if err := valid(id); err != nil {
 		return err
 	}
@@ -577,7 +591,7 @@ func (s *Service) askImages(ctx context.Context, id, text string, images []opena
 		return ErrRestarting
 	}
 	se := s.get(id)
-	message := queued{text: text, images: images, source: openai.MessageSourceFrom(ctx), generated: generated}
+	message := queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx), generated: generated}
 	switch {
 	case se.cancel != nil && se.id == ThreadID:
 		// The thread takes what the owner says at any time: the answer on its
@@ -642,23 +656,34 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 // Steer queues text for the answer on its way in the session id, and asks
 // for an answer to it if none is.
 func (s *Service) Steer(ctx context.Context, id, text string) error {
+	return s.steerImages(ctx, id, text, nil)
+}
+
+func (s *Service) steerImages(ctx context.Context, id, text string, images []openai.Image) error {
+	return s.steerMedia(ctx, id, text, images, false)
+}
+
+func (s *Service) steerMedia(ctx context.Context, id, text string, images []openai.Image, hasAttachments bool) error {
 	if err := valid(id); err != nil {
 		return err
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return ErrEmpty
 	}
-	s.mu.Lock()
-	// What the owner says in the thread while it asks them answers it.
-	if id == ThreadID && s.answerRelayed(text, openai.MessageSourceFrom(ctx)) {
-		s.mu.Unlock()
-		return nil
+	// A reply in the shared conversation is not necessarily an answer to its
+	// outstanding question. Verify the concern before consuming that wait.
+	if id == ThreadID {
+		answered, err := s.replyToConcern(ctx, queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx)})
+		if err != nil || answered {
+			return err
+		}
 	}
+	s.mu.Lock()
 	if se, ok := s.sessions[id]; ok && se.cancel != nil {
 		defer s.mu.Unlock()
 		if se.asked != nil {
 			// What the owner says now answers the question: ask tells it.
-			se.asked <- queued{text: text, source: openai.MessageSourceFrom(ctx)}
+			se.asked <- queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx)}
 			se.asked = nil
 			return nil
 		}
@@ -672,12 +697,12 @@ func (s *Service) Steer(ctx context.Context, id, text string) error {
 		if handing {
 			return ErrRestarting
 		}
-		se.queue = append(se.queue, queued{text: text, source: openai.MessageSourceFrom(ctx).Normalized()})
+		se.queue = append(se.queue, queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx).Normalized()})
 		s.emit(se, Event{Kind: Queued, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()})
 		return nil
 	}
 	s.mu.Unlock()
-	return s.Ask(ctx, id, text)
+	return s.askMedia(ctx, id, text, images, false, hasAttachments)
 }
 
 // Unsteer takes back the last message that is queued in the session id.
@@ -734,15 +759,15 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 		se.asked = nil // nobody answers it any more
 	}
 	close(asked)
-	if answer.text == "" {
+	if answer.text == "" && len(answer.images) == 0 {
 		answer = <-asked // what the owner said just when ctx ended, if anything
 	}
 	s.emit(se, Event{Kind: Asked, PresentationID: id, Done: true, Text: answer.text, Source: answer.source.Normalized()})
 	s.answered(se, answer)
-	if answer.text == "" {
+	if answer.text == "" && len(answer.images) == 0 {
 		return agent.OwnerReply{}, ctx.Err()
 	}
-	return agent.OwnerReply{Text: answer.text, Source: answer.source.Normalized()}, nil
+	return agent.OwnerReply{Text: answer.text, Images: answer.images, HasAttachments: answer.hasAttachments, Source: answer.source.Normalized()}, nil
 }
 
 // saying tells what a tool says to the owner on the way to the answer in se
@@ -786,6 +811,9 @@ func (s *Service) taken(se *session, messages []queued) []openai.Message {
 		}
 		if !m.generated {
 			texts[i].Source = m.source.Normalized()
+		}
+		if !slices.ContainsFunc(se.events, func(e Event) bool { return e.Kind == Message }) {
+			se.concernPictures = slices.Clone(m.images)
 		}
 		se.said = append(se.said, m.text)
 		se.pictures = append(se.pictures, m.images...)

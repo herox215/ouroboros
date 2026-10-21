@@ -13,7 +13,7 @@ import (
 	"ouroboros/plugin"
 )
 
-const sendImage = "matrix_send_image"
+const sendImage = plugin.GatewaySendImageTool
 const maxSentImageBytes = 10 << 20
 
 // imageSender is a connection that sends images too, as the SDK's does.

@@ -59,9 +59,10 @@ type GatewaySessions interface {
 }
 
 var (
-	ErrGatewayDenied  = errors.New("gateway access denied")
-	ErrGatewaySession = errors.New("no such gateway session")
-	ErrGatewayImages  = errors.New("gateway backend does not support image input")
+	ErrGatewayDenied      = errors.New("gateway access denied")
+	ErrGatewaySession     = errors.New("no such gateway session")
+	ErrGatewayAttachments = errors.New("gateway backend does not support attachments")
+	ErrGatewayImages      = errors.New("gateway backend does not support image input")
 )
 
 // GatewayAdapter adapts authenticated external gateways to existing owner Sessions.
@@ -230,7 +231,7 @@ func (g *GatewayAdapter) Send(ctx context.Context, who GatewayIdentity, id, text
 	if err := g.bound(ctx, who, GatewaySend, id); err != nil {
 		return err
 	}
-	return g.sessions.Ask(WithMessageSource(ctx, g.source), id, text)
+	return g.sessions.Ask(g.messageContext(ctx), id, text)
 }
 
 // SendImages starts an answer with downloaded pictures, using the same binding
@@ -250,7 +251,7 @@ func (g *GatewayAdapter) SendImages(ctx context.Context, who GatewayIdentity, id
 	if !ok {
 		return ErrGatewayImages
 	}
-	return backend.AskImages(WithMessageSource(ctx, g.source), id, text, images)
+	return backend.AskImages(g.messageContext(ctx), id, text, images)
 }
 
 // Poll returns a complete snapshot, including SessionAsked events. An Asked
@@ -285,7 +286,26 @@ func (g *GatewayAdapter) Reply(ctx context.Context, who GatewayIdentity, id, tex
 	if err := g.bound(ctx, who, GatewayReply, id); err != nil {
 		return err
 	}
-	return g.sessions.Steer(WithMessageSource(ctx, g.source), id, text)
+	return g.sessions.Steer(g.messageContext(ctx), id, text)
+}
+
+// ReplyImages delivers a conversational reply, including picture-only input.
+// It uses GatewayReply authorization, not GatewaySend: the text-only fallback
+// may approve a pending call. Image-bearing replies never grant permission.
+// Like Reply, it has no atomic question-ID targeting. The host must prepare
+// and bound attachments as for SendImages; unsupported backends fail explicitly.
+func (g *GatewayAdapter) ReplyImages(ctx context.Context, who GatewayIdentity, id, text string, images []Image) error {
+	if len(images) == 0 {
+		return g.Reply(ctx, who, id, text)
+	}
+	if err := g.bound(ctx, who, GatewayReply, id); err != nil {
+		return err
+	}
+	backend, ok := g.sessions.(ReplyImageSessions)
+	if !ok {
+		return ErrGatewayImages
+	}
+	return backend.SteerImages(g.messageContext(ctx), id, text, images)
 }
 
 // Cancel stops the answer and its delegated tasks, without deleting the session.
@@ -294,4 +314,36 @@ func (g *GatewayAdapter) Cancel(ctx context.Context, who GatewayIdentity, id str
 		return err
 	}
 	return g.sessions.Cancel(ctx, id)
+}
+
+// SendAttachments delivers files under the same authorization and binding as
+// Send. No files falls back to text; unsupported backends fail explicitly.
+func (g *GatewayAdapter) SendAttachments(ctx context.Context, who GatewayIdentity, id, text string, files []Attachment) error {
+	if len(files) == 0 {
+		return g.Send(ctx, who, id, text)
+	}
+	if err := g.bound(ctx, who, GatewaySend, id); err != nil {
+		return err
+	}
+	backend, ok := g.sessions.(AttachmentSessions)
+	if !ok {
+		return ErrGatewayAttachments
+	}
+	return backend.AskAttachments(g.messageContext(ctx), id, text, files)
+}
+
+// ReplyAttachments delivers conversational files with GatewayReply authority.
+// File-bearing replies must never approve a pending permission question.
+func (g *GatewayAdapter) ReplyAttachments(ctx context.Context, who GatewayIdentity, id, text string, files []Attachment) error {
+	if len(files) == 0 {
+		return g.Reply(ctx, who, id, text)
+	}
+	if err := g.bound(ctx, who, GatewayReply, id); err != nil {
+		return err
+	}
+	backend, ok := g.sessions.(ReplyAttachmentSessions)
+	if !ok {
+		return ErrGatewayAttachments
+	}
+	return backend.SteerAttachments(g.messageContext(ctx), id, text, files)
 }

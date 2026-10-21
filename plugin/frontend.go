@@ -115,6 +115,9 @@ const ThreadID = session.ThreadID
 // service and socket client implement it; pictures are not archived.
 type ImageSessions = session.ImageAPI
 
+// ReplyImageSessions optionally supports conversational replies with pictures.
+type ReplyImageSessions = session.ReplyImageAPI
+
 // ErrImage means an input picture is empty or has an unsupported media type.
 var ErrImage = session.ErrImage
 
@@ -238,3 +241,14 @@ func IsPicture(path string) bool { return pasteboard.IsPicture(path) }
 // LocalPath is the path of the file a URI of the scheme file names; what is
 // no such URI is returned as it is.
 func LocalPath(name string) string { return pasteboard.Local(name) }
+
+// Attachment is a downloaded generic file, including an empty file.
+type Attachment = session.Attachment
+
+// AttachmentSessions optionally accepts bounded files at private local paths.
+type AttachmentSessions = session.AttachmentAPI
+
+// ReplyAttachmentSessions supports file-bearing conversational replies.
+type ReplyAttachmentSessions = session.ReplyAttachmentAPI
+
+var ErrAttachment = session.ErrAttachment

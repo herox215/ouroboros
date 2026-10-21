@@ -69,9 +69,13 @@ func (a *fakeAgent) Conversation(string) json.RawMessage                     { r
 func (a *fakeAgent) Resume(string, json.RawMessage) error                    { return nil }
 func (a *fakeAgent) Forget(string)                                           {}
 func (a *fakeAgent) Title(context.Context, []openai.Message) (string, error) { return "", nil }
-func (a *fakeAgent) Effort() string                                          { return "" }
-func (a *fakeAgent) Model() string                                           { return "" }
-func (a *fakeAgent) Note(context.Context, string, string) error              { return nil }
+func (a *fakeAgent) CheckTopic(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
+	return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "test continuation"}, nil
+}
+
+func (a *fakeAgent) Effort() string                             { return "" }
+func (a *fakeAgent) Model() string                              { return "" }
+func (a *fakeAgent) Note(context.Context, string, string) error { return nil }
 
 // fakeBackend is what the UI controls in the tests. Its sessions are those
 // of the node, in this process: their answers come from the fakeAgent.

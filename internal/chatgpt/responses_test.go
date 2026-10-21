@@ -378,10 +378,14 @@ func TestTranslateImages(t *testing.T) {
 	_, input := translate([]openai.Message{
 		{Role: "user", Content: "look", Images: []openai.Image{png}},
 		{Role: "tool", ToolCallID: "c", Content: "a picture", Images: []openai.Image{png}},
+		{Role: "user", Images: []openai.Image{png}},
+		{Role: "tool", ToolCallID: "empty", Images: []openai.Image{png}},
 	})
 	want := []string{
 		`{"role":"user","content":[{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,cA=="}]}`,
 		`{"type":"function_call_output","call_id":"c","output":[{"type":"input_text","text":"a picture"},{"type":"input_image","image_url":"data:image/png;base64,cA=="}]}`,
+		`{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,cA=="}]}`,
+		`{"type":"function_call_output","call_id":"empty","output":[{"type":"input_image","image_url":"data:image/png;base64,cA=="}]}`,
 	}
 	for i := range want {
 		if string(input[i]) != want[i] {

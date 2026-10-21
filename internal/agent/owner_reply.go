@@ -10,9 +10,13 @@ import (
 
 // OwnerReply keeps the owner's exact answer separate from its origin.
 // Source is absent for callers that use the legacy WithOwner callback.
+// Images are transient and excluded from JSON; AskOwnerReply shows them to
+// the model with the calling tool result, including when Text is empty.
 type OwnerReply struct {
-	Text   string               `json:"answer"`
-	Source openai.MessageSource `json:"source,omitzero"`
+	HasAttachments bool                 `json:"-"` // Generic files are never approval evidence.
+	Images         []openai.Image       `json:"-"` // Live model input only; never approval evidence.
+	Text           string               `json:"answer"`
+	Source         openai.MessageSource `json:"source,omitzero"`
 }
 
 // WithOwnerReply is WithOwner with per-reply source metadata.
@@ -84,5 +88,9 @@ func AskOwnerReply(ctx context.Context, question json.RawMessage) (OwnerReply, e
 	if !ok || ask == nil {
 		return OwnerReply{}, ErrNoOwner
 	}
-	return ask(ctx, question)
+	reply, err := ask(ctx, question)
+	if err == nil {
+		Show(ctx, reply.Images...)
+	}
+	return reply, err
 }

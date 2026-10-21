@@ -26,7 +26,7 @@ func (c *sdkConnection) Run(ctx context.Context, receive func(context.Context, i
 	return c.client.Run(ctx, func(msgCtx context.Context, msg transport.Message) {
 		// The SDK has already authenticated the sender and checked the full room
 		// state. Host policy is checked once more at the session boundary.
-		_ = receive(msgCtx, incoming{RoomID: msg.RoomID, Sender: msg.Sender, Text: msg.Text, Images: imagesOf(msg)})
+		_ = receive(msgCtx, incoming{RoomID: msg.RoomID, Sender: msg.Sender, Text: msg.Text, Images: imagesOf(msg), Attachments: attachmentsOf(msg), Metadata: msg.Metadata})
 	})
 }
 
@@ -37,6 +37,14 @@ func imagesOf(msg transport.Message) []plugin.Image {
 		images[i] = plugin.Image{Type: img.MIMEType, Data: img.Data}
 	}
 	return images
+}
+
+func attachmentsOf(msg transport.Message) []plugin.Attachment {
+	files := make([]plugin.Attachment, len(msg.Attachments))
+	for i, file := range msg.Attachments {
+		files[i] = plugin.Attachment{Name: file.Name, Type: file.MIMEType, Data: file.Data}
+	}
+	return files
 }
 
 func (c *sdkConnection) SendTo(ctx context.Context, room, peer, text string) error {

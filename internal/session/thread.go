@@ -59,6 +59,7 @@ func handle(id string) string { return id[:min(len(id), handleSize)] }
 // routed is a session the thread may hand messages to.
 type routed struct {
 	id, title, directory string
+	anchor               string // immutable original owner request, independent of title
 	last                 time.Time
 	running              bool
 	question             string // what it asks the owner and waits for, "" for nothing
@@ -101,7 +102,11 @@ func (s *Service) routable() []routed {
 		}
 		return strings.Compare(a.id, b.id)
 	})
-	return list[:min(len(list), maxRouted)]
+	list = list[:min(len(list), maxRouted)]
+	for i := range list {
+		list[i].anchor = s.concern(list[i].id)
+	}
+	return list
 }
 
 // awaited is what a session waits for the owner to answer, as its events
@@ -135,6 +140,9 @@ func roster(sessions []routed, here string) string {
 	b.WriteString(rosterHead + ", the latest first, as ouro tells them whenever they change; the owner did not write it:")
 	for _, r := range sessions {
 		fmt.Fprintf(&b, "\n- %s: %s", handle(r.id), strconv.Quote(oneLine(r.title)))
+		if r.anchor != "" {
+			b.WriteString(" · concern: " + strconv.Quote(concernBound(oneLine(r.anchor), 500)))
+		}
 		switch {
 		case r.directory == here: // that of the thread goes without saying
 		case r.directory == "":
@@ -331,12 +339,28 @@ func (t threading) Send(ctx context.Context, id, text string) (string, string, e
 	id = t.s.resolve(id)
 	t.s.mu.Unlock()
 	words, pictures := t.s.words(text)
-	return t.s.hand(ctx, id, words, pictures, func() error {
+	checked, decision, err := t.checkConcern(ctx, id, words, pictures, false)
+	if err != nil {
+		return "", "", err
+	}
+	title, outcome, err := t.s.hand(ctx, id, words, pictures, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !checked.unchanged(t.s, id) {
+			return fmt.Errorf("CheckTopic: target changed during verification; no message sent. Recheck its current concern before retrying")
+		}
 		if !slices.ContainsFunc(t.s.routable(), func(r routed) bool { return r.id == id }) {
 			return fmt.Errorf("no session %q among those of the last 24 hours: hand the message to one of the list, or start a new one with %s", id, assistant.ToolSessionNew)
 		}
 		return nil
 	})
+	if err != nil {
+		return title, outcome, err
+	}
+	// The tool result is archived with the routing call, making the independent
+	// decision and its reason inspectable without adding them to target context.
+	return title, outcome + "; CheckTopic: continue (" + decision.Reason + ")", nil
 }
 
 // Search returns the messages of the whole thread that hold query, see
@@ -403,7 +427,10 @@ func (s *Service) words(text string) (string, []openai.Image) {
 // answers the question the session waits for, the answer on its way takes
 // it, or one starts for it. The thread shows what comes of that answer, see
 // relay.
-func (s *Service) hand(_ context.Context, id, text string, pictures []openai.Image, may func() error) (string, string, error) {
+func (s *Service) hand(ctx context.Context, id, text string, pictures []openai.Image, may func() error) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	if strings.TrimSpace(text) == "" && len(pictures) == 0 {
 		return "", "", ErrEmpty
 	}
@@ -558,12 +585,16 @@ func (s *Service) answered(se *session, answer queued) {
 // question the thread asks them, and reports whether there is one. s.mu is
 // held.
 func (s *Service) answerRelayed(text string, source MessageSource) bool {
+	return s.answerRelayedImages(queued{text: text, source: source})
+}
+
+func (s *Service) answerRelayedImages(message queued) bool {
 	thread := s.sessions[ThreadID]
 	if thread == nil || len(thread.questions) == 0 || thread.questions[0].se.asked == nil {
 		return false
 	}
 	se := thread.questions[0].se
-	se.asked <- queued{text: text, source: source}
+	se.asked <- message
 	se.asked = nil
 	return true
 }

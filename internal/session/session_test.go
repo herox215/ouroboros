@@ -19,23 +19,24 @@ import (
 
 // fakeAgent answers as its run says, "pong" without one.
 type fakeAgent struct {
-	mu        sync.Mutex
-	ready     error
-	model     string // the model of the node
-	run       func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
-	size      int
-	cache     assistant.Cache
-	contents  assistant.Contents
-	failed    error // of Contents
-	inspect   *agent.Inspection
-	resumed   map[string]json.RawMessage
-	resume    error
-	forgot    []string
-	title     func(ctx context.Context, conversation []openai.Message) (string, error)
-	effort    string // of the node
-	notes     []string
-	presented []string // what each of the notes was presented as
-	note      error    // what Note fails with
+	mu         sync.Mutex
+	ready      error
+	model      string // the model of the node
+	run        func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
+	size       int
+	cache      assistant.Cache
+	contents   assistant.Contents
+	failed     error // of Contents
+	inspect    *agent.Inspection
+	resumed    map[string]json.RawMessage
+	resume     error
+	forgot     []string
+	checkTopic func(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error)
+	title      func(ctx context.Context, conversation []openai.Message) (string, error)
+	effort     string // of the node
+	notes      []string
+	presented  []string // what each of the notes was presented as
+	note       error    // what Note fails with
 }
 
 func (a *fakeAgent) Ready() error { return a.ready }
@@ -72,6 +73,13 @@ func (a *fakeAgent) Title(ctx context.Context, conversation []openai.Message) (s
 		return a.title(ctx, conversation)
 	}
 	return "", nil
+}
+
+func (a *fakeAgent) CheckTopic(ctx context.Context, check assistant.TopicCheck) (assistant.TopicDecision, error) {
+	if a.checkTopic != nil {
+		return a.checkTopic(ctx, check)
+	}
+	return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "test continuation"}, nil
 }
 
 func (a *fakeAgent) Effort() string {

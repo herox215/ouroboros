@@ -20,6 +20,7 @@ func (s *Service) OwnerQuestion(ctx context.Context, question json.RawMessage) (
 	stop := context.AfterFunc(s.ctx, cancel)
 	defer stop()
 	se := s.get("approval-" + a2a.NewID())
+	se.backendQuestion = true
 	se.routed = true
 	se.cancel = cancel
 	s.answers.Add(1)

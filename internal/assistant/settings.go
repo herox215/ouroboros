@@ -119,15 +119,15 @@ func (b Builder) proposeConfig() agent.Tool {
 				Options:     []string{"Apply change", "Reject change"},
 				Recommended: "Reject change",
 			})
-			answer, err := agent.AskOwner(ctx, question)
+			answer, err := agent.AskOwnerReply(ctx, question)
 			if err != nil {
 				return "", fmt.Errorf("configuration not changed: %w", err)
 			}
 			if err := ctx.Err(); err != nil {
 				return "", fmt.Errorf("configuration not changed: %w", err)
 			}
-			if answer != "Apply change" {
-				return "Configuration not changed: the owner did not approve the change.", nil
+			if len(answer.Images) != 0 || answer.Text != "Apply change" {
+				return "Configuration not changed: the owner did not approve the change. Owner said: " + answer.Text, nil
 			}
 			if err := b.node.proposals.Apply(ctx, p, b.Check); err != nil {
 				return "", fmt.Errorf("configuration not changed: %w", err)

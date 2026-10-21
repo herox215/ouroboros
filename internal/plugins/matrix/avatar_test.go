@@ -161,16 +161,29 @@ func TestAvatarToolRefusesUnauthorizedAndProtectedFiles(t *testing.T) {
 	}
 }
 
-func TestPluginContributesItsTools(t *testing.T) {
+func TestPluginContributesGatewayOutput(t *testing.T) {
 	k := kernel.New()
 	dir := home.Dir(t.TempDir())
 	if err := k.Start(sessionProvider(&testSessions{}), Plugin(dir, &guard.Guard{Home: string(dir)})); err != nil {
 		t.Fatal(err)
 	}
 	defer k.Stop()
-	tools := plugin.All[plugin.Tool](k.Context())
-	if len(tools) != 2 || tools[0].Name != setAvatar || tools[1].Name != sendImage || !tools[0].OwnerOnly || !tools[1].OwnerOnly {
-		t.Fatalf("tools: %+v", tools)
+	if tools := plugin.All[plugin.Tool](k.Context()); len(tools) != 0 {
+		t.Fatalf("Matrix must not register model tools: %+v", tools)
+	}
+	outputs := plugin.All[plugin.GatewayOutput](k.Context())
+	if len(outputs) != 1 || outputs[0].Name != "matrix" || outputs[0].SendImage == nil || outputs[0].SetAvatar == nil {
+		t.Fatalf("gateway outputs: %+v", outputs)
+	}
+	for _, text := range []string{"10 MiB", "PNG", "JPEG", "GIF", "WebP", "end-to-end encrypted", "Destination", "multiple rooms"} {
+		if !strings.Contains(outputs[0].ImageDescription, text) {
+			t.Errorf("image description missing %q", text)
+		}
+	}
+	for _, text := range []string{"5 MiB", "4096", "4 megapixels", "public", "not end-to-end encrypted", "reads it back"} {
+		if !strings.Contains(outputs[0].AvatarDescription, text) {
+			t.Errorf("avatar description missing %q", text)
+		}
 	}
 }
 

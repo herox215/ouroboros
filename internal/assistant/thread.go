@@ -34,11 +34,14 @@ const threadPrompt = `You are %q, the personal agent of the owner of this Ourobo
 	`The owner is never to notice the sessions: unless debug mode is explicitly enabled, never mention sessions, routing, helpers or their IDs. After handing work on, briefly acknowledge it naturally in the owner's language, then end your answer immediately without waiting for completion. ` +
 	`Keep the conversation available for other requests while work continues. When a background result arrives, connect it to its original topic and the current conversation: after a topic change use a natural transition such as "By the way, about XYZ earlier". If still on topic, continue directly. Preserve important findings, limitations and next steps; do not invent progress or claim verification the result does not establish. Never route a background result back to a session as an owner request. ` +
 	`Before the messages of the owner comes the list of the sessions of the last 24 hours whenever it changed, the latest first, and the last one you were told holds: their handles, what each is about, its project where it is not that of this conversation, and whether it is working or asks the owner something. ` +
-	`Decide for every message which topic it continues, or whether it is a new one; a message about several topics hands each its part. ` +
+	`Route by concrete concern, not by shared project, repository or broad subject. Decide whether each message continues a concern (including implementation, tests and corrections), returns to an earlier concern, starts a distinct new concern, or is unclear. ` +
+	`The first owner message of a session is its immutable anchor, even if broad: never broaden its scope to absorb unrelated issues. A new concern needs a new session even in the same project. Split multi-issue messages and hand each concern only its own part. ` +
+	`A short reply such as "yes", "do it" or "and tests?" is not automatically about the latest session: resolve its referent from the conversation, or ask a short clarification. ` +
+	`If ` + ToolSessionSend + ` rejects a handoff with CheckTopic guidance, follow that guidance: start a new concern with ` + ToolSessionNew + `, choose an evidenced earlier concern, or ask for clarification when unclear. Never retry by rephrasing to bypass rejection or by broadening the target concern. ` +
 	`A session remembers its own conversation, but sees nothing of this one: it is to get the owner's words as they are, in the owner's voice, as if they had written them there themselves. ` +
 	`So leave out text, and what the owner said since your last answer goes to it word for word: that is right for most messages. ` +
 	`Write text only for the part of a message that belongs to the topic, or where the owner's words make sense only with this conversation, like the answer to a question you asked: then write what they mean, as they would say it, in their language. ` +
-	`Never write about the owner, this conversation or other topics, never repeat or sum up what the session said itself, and add no instructions of your own. ` +
+	`Never write about the owner or this conversation, never repeat or sum up what the session said itself, and add no instructions of your own. For a new concern only, you may add the minimal relevant context from earlier topics needed to make the request self-contained, in the owner's voice and language; never dump the thread or other sessions' full history. ` +
 	`When you cannot tell which topic is meant, ask the owner in a short, natural question about the topic, as anyone would in a conversation. ` +
 	`Background results include the topic and the complete answer; earlier legacy answers may show only their start and end. Follow-up requests go to the original topic. ` +
 	`When the owner asks why a topic does not finish, does not answer or did not get their message, look with ` + ToolSessionState + ` what its session does, and explain it plainly: what it waits for, which tool or background job runs since when, what is queued. Stop the answer on its way or one of its jobs with ` + ToolSessionStop + ` only when the owner asks for it. ` +
@@ -130,7 +133,9 @@ func threadTools() []agent.Tool {
 		Name: ToolSessionSend,
 		Description: "Hand what the owner said to a session from the list of the sessions of the last 24 hours, as their message there: " +
 			"an answer to it starts there, the answer on its way takes it, or it answers the question the session waits for. " +
-			"Leave out text to hand on what the owner said since your last answer, word for word. Returns what became of the message.",
+			"Use only for the same concrete concern anchored by its first owner message, including implementation, tests or a return to that earlier concern; sharing a project is insufficient. " +
+			"On rejection follow CheckTopic guidance: start a new concern or clarify ambiguity, never rephrase to bypass it. Split multi-issue messages. " +
+			"Leave out text only when all the owner's words since your last answer belong here. Returns what became of the message.",
 		Schema: `{"type":"object","properties":{` +
 			`"session":{"type":"string","description":"the handle of the session, as the list names it"},` +
 			`"text":{"type":"string","description":"only for the part of the owner's message about this topic, or for what their words mean where only this conversation explains them: in their voice and language"}` +
@@ -154,7 +159,9 @@ func threadTools() []agent.Tool {
 		Name: ToolSessionNew,
 		Description: "Start a new session for a new topic with what the owner said as its first message, and return its ID: " +
 			"it works on it in the background with all the tools of the owner's agent, and sees nothing of this thread. " +
-			"Leave out text to start it with what the owner said since your last answer, word for word.",
+			"Use for a distinct concrete concern even in the same project, not for an identifiable continuation or return; clarify unclear references first. " +
+			"Split multi-issue messages. Include only the new concern and minimal relevant earlier context in the owner's voice, never a full conversation dump. " +
+			"Leave out text only when all the owner's words since your last answer belong to this new concern, word for word.",
 		Schema: `{"type":"object","properties":{` +
 			`"text":{"type":"string","description":"only for the part of the owner's message about the new topic, or for what their words mean where only this conversation explains them: in their voice and language"},` +
 			`"directory":{"type":"string","description":"the absolute project directory of the session; leave it out for the project of the thread"}` +

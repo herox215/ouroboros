@@ -218,8 +218,10 @@ func TestCallText(t *testing.T) {
 // keeps the prompts it was sent.
 type askingLLM struct {
 	phrased, decided string
-	prompts          []string
-	sent             []string
+	// then are the decisions after the first, in turn: the last stays.
+	then    []string
+	prompts []string
+	sent    []string
 }
 
 func (l *askingLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
@@ -228,38 +230,41 @@ func (l *askingLLM) Complete(_ context.Context, _ string, msgs []openai.Message,
 	reply := l.decided
 	if msgs[0].Content == phrasePrompt {
 		reply = l.phrased
+	} else if msgs[0].Content == decidePrompt && len(l.then) > 0 {
+		l.decided, l.then = l.then[0], l.then[1:]
 	}
 	return openai.Message{Role: "assistant", Content: reply}, nil
 }
 
 // The owner is asked in the words of the conversation, and the LLM reads
-// what they answer in their own; only a clear yes runs the call, and the
+// what they answer, a chosen option too; what it reads decides, and the
 // call itself is shown when they ask for it.
 func TestPermittedInOwnWords(t *testing.T) {
 	phrased := "```json\n" + `{"question": "Darf ich den Build-Ordner löschen?", "once": "Ja", "always": "Immer", "not": "Nein", "yes": "Alles klar.", "no": "Okay, dann lasse ich es."}` + "\n```"
 	rm := json.RawMessage(`{"command": "rm -rf build"}`)
 	for _, c := range []struct {
-		decided string
+		decided []string // what the LLM reads in each answer
 		answers []string
 		runs    int
 		kept    int
 		asked   int
 		llm     int // calls to read an answer
 	}{
-		{"", []string{"Ja"}, 1, 0, 1, 0},
-		{"", []string{"immer"}, 1, 1, 1, 0}, // a label in other words is read
-		{"ONCE", []string{"klar, mach"}, 1, 0, 1, 1},
-		{"always: Gern, ab jetzt immer.", []string{"immer gern"}, 1, 1, 1, 1},
-		{"NOT: Okay, dann nicht.", []string{"lieber nicht"}, 0, 0, 1, 1},
-		{"maybe", []string{"nur wenn leer"}, 0, 0, 1, 1},
-		{"DETAILS", []string{"zeig den Befehl", "zeig den Befehl", "zeig den Befehl"}, 0, 0, 3, 3},
-		{"REPLY: Den Ordner build im Projekt.", []string{"welchen Ordner?", "Ja"}, 1, 0, 2, 1},
-		{"REPLY:", []string{"welchen Ordner?"}, 0, 0, 1, 1}, // no answer: unclear
+		{[]string{"ONCE"}, []string{"Ja"}, 1, 0, 1, 1},
+		{[]string{"ALWAYS"}, []string{"immer"}, 1, 1, 1, 1},
+		{[]string{"UNCLEAR"}, []string{"Ja"}, 0, 0, 1, 1}, // even an option is what the LLM reads
+		{[]string{"ONCE"}, []string{"klar, mach"}, 1, 0, 1, 1},
+		{[]string{"always: Gern, ab jetzt immer."}, []string{"immer gern"}, 1, 1, 1, 1},
+		{[]string{"NOT: Okay, dann nicht."}, []string{"lieber nicht"}, 0, 0, 1, 1},
+		{[]string{"maybe"}, []string{"nur wenn leer"}, 0, 0, 1, 1},
+		{[]string{"DETAILS"}, []string{"zeig den Befehl", "zeig den Befehl", "zeig den Befehl"}, 0, 0, 3, 3},
+		{[]string{"REPLY: Den Ordner build im Projekt.", "ONCE"}, []string{"welchen Ordner?", "Ja"}, 1, 0, 2, 2},
+		{[]string{"REPLY:"}, []string{"welchen Ordner?"}, 0, 0, 1, 1}, // no answer: unclear
 		// an unclear answer is asked back once, not left without word
-		{"UNCLEAR: Soll ich ihn nun löschen?", []string{"Hm", "Ja"}, 1, 0, 2, 1},
-		{"UNCLEAR: Soll ich ihn nun löschen?", []string{"Hm", "hm"}, 0, 0, 2, 2},
+		{[]string{"UNCLEAR: Soll ich ihn nun löschen?", "ONCE"}, []string{"Hm", "Ja"}, 1, 0, 2, 2},
+		{[]string{"UNCLEAR: Soll ich ihn nun löschen?"}, []string{"Hm", "hm"}, 0, 0, 2, 2},
 	} {
-		llm := &askingLLM{phrased: phrased, decided: c.decided}
+		llm := &askingLLM{phrased: phrased, decided: c.decided[0], then: c.decided[1:]}
 		var kept []config.Call
 		b := Builder{LLM: func(string) (agent.LLM, error) { return llm, nil }}.WithAllowing(func(call config.Call) error {
 			kept = append(kept, call)
@@ -282,7 +287,7 @@ func TestPermittedInOwnWords(t *testing.T) {
 		result, err := tool.Run(ctx, rm)
 		// A decision is said back at once: in the words the LLM gave it, or
 		// as the question has it.
-		back := map[string]string{"Ja": "Alles klar.", "immer": "Alles klar.", "klar, mach": "Alles klar.", "immer gern": "Gern, ab jetzt immer.", "lieber nicht": "Okay, dann nicht."}[c.answers[len(asked)-1]]
+		back := map[string]string{"ONCE": "Alles klar.", "ALWAYS": "Alles klar.", "always: Gern, ab jetzt immer.": "Gern, ab jetzt immer.", "NOT: Okay, dann nicht.": "Okay, dann nicht."}[c.decided[len(c.decided)-1]]
 		if strings.Join(said, "|") != back {
 			t.Errorf("%q: said back %q, not %q", c.answers, said, back)
 		}
@@ -305,13 +310,13 @@ func TestPermittedInOwnWords(t *testing.T) {
 		}
 		switch {
 		case len(asked) < 2:
-		case c.decided == "DETAILS" && !strings.HasSuffix(asked[1].Question, "\n\nbash: rm -rf build"):
+		case c.decided[0] == "DETAILS" && !strings.HasSuffix(asked[1].Question, "\n\nbash: rm -rf build"):
 			t.Errorf("details: %q", asked[1].Question)
-		case strings.HasPrefix(c.decided, "UNCLEAR"):
+		case strings.HasPrefix(c.decided[0], "UNCLEAR"):
 			if asked[1].Question != "Soll ich ihn nun löschen?" || strings.Join(asked[1].Options, "|") != "Ja|Immer|Nein" {
 				t.Errorf("asked back: %+v", asked[1])
 			}
-		case c.decided != "DETAILS" && asked[1].Question != "Den Ordner build im Projekt.\n\nDarf ich den Build-Ordner löschen?":
+		case c.decided[0] != "DETAILS" && asked[1].Question != "Den Ordner build im Projekt.\n\nDarf ich den Build-Ordner löschen?":
 			t.Errorf("reply: %q", asked[1].Question)
 		}
 	}

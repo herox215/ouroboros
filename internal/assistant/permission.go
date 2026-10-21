@@ -125,7 +125,8 @@ func (b Builder) permitting(ctx context.Context, current func() (config.Config, 
 	for range maxDetails + 1 {
 		asked, _ := json.Marshal(Question{Question: question, Options: []string{p.Once, p.Always, p.Not}}) // strings only: cannot fail
 		// Permission stays open until the owner decides or the caller cancels.
-		answer, err := agent.AskOwner(ctx, asked)
+		ownerReply, err := agent.AskOwnerReply(ctx, asked)
+		answer := ownerReply.Text
 		// Cancellation wins even if the callback returns a late approval.
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -143,6 +144,14 @@ func (b Builder) permitting(ctx context.Context, current func() (config.Config, 
 			return fmt.Errorf("%s did not run: it needs the leave of the owner, who cannot be asked here (it matches the rule %q of tools.ask)", tool, rule.Match)
 		case err != nil:
 			return fmt.Errorf("%s did not run: the owner was asked whether it may, and did not answer: %w", tool, err)
+		}
+		// Pictures are conversational input, never permission evidence, even
+		// with an approval-looking caption. Return control to the agent.
+		if ownerReply.HasAttachments {
+			return fmt.Errorf("%s did not run: the owner sent attachments instead of explicit permission; owner said: %s", tool, answer)
+		}
+		if len(ownerReply.Images) != 0 {
+			return fmt.Errorf("%s did not run: the owner sent images instead of explicit permission; owner said: %s", tool, answer)
 		}
 		decided, reply := ask.decide(ctx, p, tool, call.Call, answer)
 		// The owner hears at once that their answer arrived, in words of
@@ -172,6 +181,8 @@ func (b Builder) permitting(ctx context.Context, current func() (config.Config, 
 		case decidedReply:
 			question = reply + "\n\n" + p.Question
 			continue
+		case decidedMessage:
+			return fmt.Errorf("%s did not run: permission remains undecided; continue with the owner's new message: %s", tool, answer)
 		case decidedUnclear:
 			// The owner is asked back once rather than left without word.
 			if reply != "" && !askedBack {

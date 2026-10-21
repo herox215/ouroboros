@@ -20,51 +20,78 @@ const maxImageBytes = 10 * 1024 * 1024
 // downloadImage uses the authenticated homeserver media endpoint, never an
 // arbitrary sender-provided HTTP URL. Authorization is checked by Run first.
 func (c *Client) downloadImage(ctx context.Context, content *event.MessageEventContent) (Image, error) {
+	file, err := c.downloadMedia(ctx, content, "image")
+	if err != nil {
+		return Image{}, err
+	}
+	mime := http.DetectContentType(file.Data)
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+	default:
+		return Image{}, errors.New("supported images are PNG, JPEG, GIF and WebP")
+	}
+	return Image{MIMEType: mime, Data: file.Data}, nil
+}
+
+// downloadAttachment accepts arbitrary file content, without interpreting it as
+// an image. MIME metadata is advisory; absent metadata is sniffed from the bytes.
+func (c *Client) downloadAttachment(ctx context.Context, content *event.MessageEventContent) (Attachment, error) {
+	return c.downloadMedia(ctx, content, "attachment")
+}
+
+// downloadMedia shares the authenticated endpoint, timeout, byte bound and
+// encrypted-file integrity verification for every incoming media kind.
+func (c *Client) downloadMedia(ctx context.Context, content *event.MessageEventContent, kind string) (Attachment, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	uri := content.URL
 	if content.File != nil {
 		uri = content.File.URL
 		if err := content.File.PrepareForDecryption(); err != nil {
-			return Image{}, errors.New("invalid encrypted image metadata")
+			return Attachment{}, errors.New("invalid encrypted " + kind + " metadata")
 		}
 	}
 	mxc, err := uri.Parse()
 	if err != nil || mxc.IsEmpty() {
-		return Image{}, errors.New("invalid Matrix media URI")
+		return Attachment{}, errors.New("invalid Matrix media URI")
 	}
 	if content.Info != nil && content.Info.Size > maxImageBytes {
-		return Image{}, errors.New("image exceeds 10 MiB")
+		return Attachment{}, errors.New(kind + " exceeds 10 MiB")
 	}
 	resp, err := c.cli.Download(ctx, mxc)
 	if resp != nil {
 		defer resp.Body.Close()
 	}
 	if err != nil {
-		return Image{}, errors.New("media download failed")
+		return Attachment{}, errors.New("media download failed")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Image{}, errors.New("media download failed")
+		return Attachment{}, errors.New("media download failed")
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 	if err != nil {
-		return Image{}, errors.New("media download failed")
+		return Attachment{}, errors.New("media download failed")
 	}
 	if len(data) > maxImageBytes {
-		return Image{}, errors.New("image exceeds 10 MiB")
+		return Attachment{}, errors.New(kind + " exceeds 10 MiB")
 	}
 	if content.File != nil {
 		if err := content.File.DecryptInPlace(data); err != nil {
-			return Image{}, errors.New("image decryption or integrity check failed")
+			return Attachment{}, errors.New(kind + " decryption or integrity check failed")
 		}
 	}
-	mime := http.DetectContentType(data)
-	switch mime {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
-	default:
-		return Image{}, errors.New("supported images are PNG, JPEG, GIF and WebP")
+	mime := ""
+	if content.Info != nil {
+		mime = content.Info.MimeType
 	}
-	return Image{MIMEType: mime, Data: data}, nil
+	if mime == "" {
+		mime = http.DetectContentType(data)
+	}
+	name := content.FileName
+	if name == "" {
+		name = content.Body
+	}
+	return Attachment{Name: name, MIMEType: mime, Data: data}, nil
 }
 
 // SendImageTo uploads a PNG, JPEG, GIF or WebP of at most 10 MiB encrypted

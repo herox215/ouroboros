@@ -37,6 +37,7 @@ var codes = map[string]error{
 	"no_session": ErrNoSession,
 	"empty":      ErrEmpty,
 	"image":      ErrImage,
+	"attachment": ErrAttachment,
 	"no_effort":  ErrNoEffort,
 	"no_job":     ErrNoJob,
 	"no_service": ErrNoService,
@@ -51,10 +52,11 @@ type failure struct {
 
 type (
 	askRequest struct {
-		ID     string         `json:"id"`
-		Text   string         `json:"text"`
-		Images []openai.Image `json:"images,omitempty"`
-		Source MessageSource  `json:"source,omitzero"`
+		ID          string         `json:"id"`
+		Text        string         `json:"text"`
+		Images      []openai.Image `json:"images,omitempty"`
+		Attachments []Attachment   `json:"attachments,omitempty"`
+		Source      MessageSource  `json:"source,omitzero"`
 	}
 	idRequest struct {
 		ID string `json:"id"`
@@ -119,6 +121,24 @@ func Handler(s *Service) http.Handler {
 		var in askRequest
 		if read(w, r, &in) {
 			reply(w, nil, s.AskImages(WithMessageSource(r.Context(), in.Source), in.ID, in.Text, in.Images))
+		}
+	})
+	mux.HandleFunc("POST /ask-attachments", func(w http.ResponseWriter, r *http.Request) {
+		var in askRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.AskAttachments(WithMessageSource(r.Context(), in.Source), in.ID, in.Text, in.Attachments))
+		}
+	})
+	mux.HandleFunc("POST /steer-attachments", func(w http.ResponseWriter, r *http.Request) {
+		var in askRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.SteerAttachments(WithMessageSource(r.Context(), in.Source), in.ID, in.Text, in.Attachments))
+		}
+	})
+	mux.HandleFunc("POST /steer-images", func(w http.ResponseWriter, r *http.Request) {
+		var in askRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.SteerImages(WithMessageSource(r.Context(), in.Source), in.ID, in.Text, in.Images))
 		}
 	})
 	mux.HandleFunc("POST /steer", func(w http.ResponseWriter, r *http.Request) {
@@ -567,4 +587,19 @@ func (c *Client) Release(ctx context.Context) error {
 		}
 	}
 	return errors.New("the node did not stop in time")
+}
+
+// SteerImages delivers conversational text and pictures; see ReplyImageAPI.
+func (c *Client) SteerImages(ctx context.Context, id, text string, images []openai.Image) error {
+	return c.do(ctx, http.MethodPost, "/steer-images", askRequest{ID: id, Text: text, Images: images, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+}
+
+// AskAttachments starts an answer with bounded files; see AttachmentAPI.
+func (c *Client) AskAttachments(ctx context.Context, id, text string, files []Attachment) error {
+	return c.do(ctx, http.MethodPost, "/ask-attachments", askRequest{ID: id, Text: text, Attachments: files, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+}
+
+// SteerAttachments delivers file-bearing replies; see ReplyAttachmentAPI.
+func (c *Client) SteerAttachments(ctx context.Context, id, text string, files []Attachment) error {
+	return c.do(ctx, http.MethodPost, "/steer-attachments", askRequest{ID: id, Text: text, Attachments: files, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
 }

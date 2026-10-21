@@ -69,3 +69,49 @@ func TestGatewayImageInput(t *testing.T) {
 		t.Fatalf("text fallback: %v", err)
 	}
 }
+
+func (s *gatewayImageBackend) SteerImages(ctx context.Context, id, text string, images []plugin.Image) error {
+	s.images = images
+	return s.Steer(ctx, id, text)
+}
+
+func TestGatewayImageReplies(t *testing.T) {
+	backend := &gatewayImageBackend{}
+	denied := false
+	var op plugin.GatewayOperation
+	g := plugin.NewGatewayAdapter(backend, func(_ context.Context, _ plugin.GatewayIdentity, operation plugin.GatewayOperation) (plugin.GatewayPermission, error) {
+		op = operation
+		return plugin.GatewayPermission{OwnerSession: !denied}, nil
+	})
+	id, err := g.Open(t.Context(), gatewayAlice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := []plugin.Image{{Type: "image/png", Data: []byte("picture")}}
+	other := plugin.GatewayIdentity{Gateway: gatewayAlice.Gateway, Subject: "other"}
+	if err := g.ReplyImages(t.Context(), other, id, "", images); !errors.Is(err, plugin.ErrGatewaySession) {
+		t.Fatalf("identity: %v", err)
+	}
+	denied = true
+	if err := g.ReplyImages(t.Context(), gatewayAlice, id, "", images); !errors.Is(err, plugin.ErrGatewayDenied) {
+		t.Fatalf("authorization: %v", err)
+	}
+	denied = false
+	if err := g.ReplyImages(t.Context(), gatewayAlice, id, "new topic", images); err != nil {
+		t.Fatal(err)
+	}
+	if op != plugin.GatewayReply || backend.steer != 1 || backend.ask != 0 || backend.text != "new topic" || backend.source.Interface != "api" || len(backend.images) != 1 {
+		t.Fatalf("forwarding: %+v op=%s", backend, op)
+	}
+	legacy := plugin.NewGatewayAdapter(&gatewayBackend{}, gatewayOwner)
+	id, err = legacy.Open(t.Context(), gatewayAlice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.ReplyImages(t.Context(), gatewayAlice, id, "", images); !errors.Is(err, plugin.ErrGatewayImages) {
+		t.Fatalf("unsupported: %v", err)
+	}
+	if err := legacy.ReplyImages(t.Context(), gatewayAlice, id, "text", nil); err != nil {
+		t.Fatalf("fallback: %v", err)
+	}
+}

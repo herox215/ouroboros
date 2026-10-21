@@ -58,8 +58,8 @@ func TestPastedPicturesAreTypedAsLabels(t *testing.T) {
 		"'" + in(`back\slash.webp`) + "'":                                      one(`back\slash.webp`),
 
 		"look at " + in("cat.png"):            as("look at " + in("cat.png")),
-		in("cat.png") + " " + in("notes.txt"): as(in("cat.png") + " " + in("notes.txt")),
-		in("notes.txt"):                       as(in("notes.txt")),
+		in("cat.png") + " " + in("notes.txt"): {"[Image_1] [File_1] ", []string{in("cat.png")}},
+		in("notes.txt"):                       {"[File_1] ", nil},
 		in("gone.png"):                        as(in("gone.png")),
 		in("dir.png"):                         as(in("dir.png")),
 		"cat.png":                             as("cat.png"),

@@ -23,9 +23,18 @@ type Image struct {
 	MIMEType string
 	Data     []byte
 }
+
+// Attachment is a downloaded, integrity-checked Matrix file.
+type Attachment struct {
+	Name, MIMEType string
+	Data           []byte
+}
 type Message struct {
 	RoomID, Sender, Text string
 	Images               []Image
+	Attachments          []Attachment
+	// Metadata is an independent snapshot; location timestamps are Unix milliseconds.
+	Metadata map[string]any
 }
 
 // Login exchanges a password for device credentials. Passwords are never retained.
@@ -317,17 +326,32 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 	c.mu.Unlock()
 	seen := map[id.EventID]bool{}
 	var seenMu sync.Mutex
-	syncer.OnEventType(event.EventMessage, func(ctx context.Context, e *event.Event) {
-		if e.Mautrix.EventSource&event.SourceDecrypted == 0 || e.Mautrix.EventSource&event.SourceTimeline == 0 || e.Timestamp < started || e.Sender == c.cli.UserID || !c.allowed[e.Sender] || e.ID == "" {
+	locations := &locationTracker{}
+	syncer.OnEvent(func(ctx context.Context, e *event.Event) {
+		isLocation := locationEvent(e)
+		if e.Type != event.EventMessage && !isLocation {
 			return
 		}
-		// Bind the claimed sender to the authenticated direct-session device.
-		// Unknown, forwarded, imported, blacklisted or mismatching keys fail closed.
-		if e.Mautrix.TrustSource == nil || e.Mautrix.TrustSource.UserID != e.Sender || e.Mautrix.ForwardedKeys || e.Mautrix.TrustState < id.TrustStateUnset || e.Mautrix.TrustState == id.TrustStateUnknownDevice || e.Mautrix.TrustState == id.TrustStateForwarded || e.Mautrix.TrustState == id.TrustStateBackup {
+		// Beacon announcements are room state (and thus normally plaintext).
+		// They may start/stop sharing but never supply coordinates. Accept only
+		// sender-keyed state from joined-room sync; safeRoom below rechecks the
+		// encrypted private room. Coordinates still require trusted decryption.
+		announcement := beaconInfoType(e.Type.Type) && e.StateKey != nil && *e.StateKey == string(e.Sender) && e.Mautrix.EventSource&event.SourceJoin != 0 && e.Mautrix.EventSource&(event.SourceState|event.SourceTimeline) != 0
+		if e.Sender == c.cli.UserID || !c.allowed[e.Sender] || e.ID == "" {
 			return
+		}
+		if !announcement {
+			if e.Mautrix.EventSource&event.SourceDecrypted == 0 || e.Mautrix.EventSource&event.SourceTimeline == 0 || e.Timestamp < started {
+				return
+			}
+			// Bind the claimed sender to the authenticated direct-session device.
+			// Unknown, forwarded, imported or mismatching keys fail closed.
+			if e.Mautrix.TrustSource == nil || e.Mautrix.TrustSource.UserID != e.Sender || e.Mautrix.ForwardedKeys || e.Mautrix.TrustState < id.TrustStateUnset || e.Mautrix.TrustState == id.TrustStateUnknownDevice || e.Mautrix.TrustState == id.TrustStateForwarded || e.Mautrix.TrustState == id.TrustStateBackup {
+				return
+			}
 		}
 		content := e.Content.AsMessage()
-		if (content.MsgType != event.MsgText && content.MsgType != event.MsgImage) || (content.MsgType == event.MsgText && content.Body == "") || content.RelatesTo != nil && content.RelatesTo.Type == event.RelReplace {
+		if !isLocation && ((content.MsgType != event.MsgText && content.MsgType != event.MsgImage && content.MsgType != event.MsgFile && content.MsgType != event.MsgAudio && content.MsgType != event.MsgVideo) || (content.MsgType == event.MsgText && content.Body == "") || content.RelatesTo != nil && content.RelatesTo.Type == event.RelReplace) {
 			return
 		}
 		peer, err := c.safeRoom(ctx, e.RoomID)
@@ -341,21 +365,35 @@ func (c *Client) Run(ctx context.Context, onMessage func(context.Context, Messag
 		}
 		seen[e.ID] = true
 		seenMu.Unlock()
+		if isLocation {
+			locations.update(e, time.Now())
+			return // Location-only events never invoke the assistant or send replies.
+		}
 		msg := Message{RoomID: string(e.RoomID), Sender: string(e.Sender), Text: content.Body}
-		if content.MsgType == event.MsgImage {
-			img, err := c.downloadImage(ctx, content)
-			if err != nil {
-				_ = c.SendTo(ctx, msg.RoomID, msg.Sender, "The image could not be read: "+err.Error())
-				return
+		if content.MsgType != event.MsgText {
+			if content.MsgType == event.MsgImage {
+				img, err := c.downloadImage(ctx, content)
+				if err != nil {
+					_ = c.SendTo(ctx, msg.RoomID, msg.Sender, "The image could not be read: "+err.Error())
+					return
+				}
+				msg.Images = []Image{img}
+			} else {
+				file, err := c.downloadAttachment(ctx, content)
+				if err != nil {
+					_ = c.SendTo(ctx, msg.RoomID, msg.Sender, "The attachment could not be read: "+err.Error())
+					return
+				}
+				msg.Attachments = []Attachment{file}
 			}
 			msg.Text = content.GetCaption()
-			msg.Images = []Image{img}
 			// A download may take time; do not deliver after room membership changed.
 			peer, err := c.safeRoom(ctx, e.RoomID)
 			if err != nil || peer != e.Sender {
 				return
 			}
 		}
+		msg.Metadata = locations.snapshot(e.RoomID, e.Sender, time.Now())
 		if onMessage != nil {
 			onMessage(ctx, msg)
 		}

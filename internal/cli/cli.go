@@ -71,6 +71,7 @@ import (
 	desktopplugin "ouroboros/internal/plugins/desktop"
 	"ouroboros/internal/plugins/discovery"
 	filesplugin "ouroboros/internal/plugins/files"
+	"ouroboros/internal/plugins/gateways"
 	"ouroboros/internal/plugins/gui"
 	historyplugin "ouroboros/internal/plugins/history"
 	matrixplugin "ouroboros/internal/plugins/matrix"
@@ -199,6 +200,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		claudecodeplugin.Plugin(claudecode.Options{Dir: filepath.Join(string(dir), "claude-code")}),
 		assistant.Plugin(dir),
 		sessionplugin.Plugin(dir),
+		gateways.Plugin(),
 		matrixplugin.Plugin(dir, files),
 		nodeplugin.Plugin(dir, nodeplugin.Options{
 			HTTPPort: s.HTTPPort, DiscoPort: s.DiscoPort, Version: Version, Log: t.Out,

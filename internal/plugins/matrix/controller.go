@@ -20,6 +20,8 @@ type connection interface {
 type incoming struct {
 	RoomID, Sender, Text string
 	Images               []plugin.Image
+	Attachments          []plugin.Attachment
+	Metadata             map[string]any
 }
 
 type controller struct {

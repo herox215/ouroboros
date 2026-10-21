@@ -22,6 +22,7 @@ const (
 	decidedDetails = "DETAILS"
 	decidedReply   = "REPLY"
 	decidedUnclear = "UNCLEAR"
+	decidedMessage = "MESSAGE" // conversational input, not a permission decision
 )
 
 // The bounds of what the LLM is sent to ask the owner: the end of the
@@ -51,6 +52,7 @@ const decidePrompt = `An assistant asked its owner whether it may run a tool cal
 	decidedOnce + ` if it may run this time, ` + decidedAlways + ` if it may always run this call, ` +
 	decidedNot + ` if it must not run, ` + decidedDetails + ` if the owner asks to see the command or the call itself, ` +
 	`or ` + decidedUnclear + ` for anything else, like a condition or a change of the call. ` +
+	`A topic change or a new unrelated request is ` + decidedMessage + ` with no follow-up question: return control to the main agent. ` +
 	`When in doubt, answer ` + decidedUnclear + `: only a clear yes lets the call run. ` +
 	`After ` + decidedUnclear + ` add a colon and one short question back to them in their language, as a person asks in a chat, ` +
 	`that they can answer with yes or no, like "` + decidedUnclear + `: Soll ich sie nun löschen oder nicht?" ` +
@@ -124,24 +126,24 @@ func (a asking) phrase(ctx context.Context, tool, call string) permission {
 }
 
 // decide is what the owner's answer to p means, one of the decided
-// constants: a label of p is what it says, any other answer the LLM reads.
-// To a question of the owner, decidedReply, it gives the answer too, to an
-// unclear answer the question back to them, and to a decision what is said
-// back, "" for what p says.
+// constants: the LLM reads every answer, a chosen option too; without it
+// only a label of p is understood. To a question of the owner,
+// decidedReply, it gives the answer too, to an unclear answer the question
+// back to them, and to a decision what is said back, "" for what p says.
 func (a asking) decide(ctx context.Context, p permission, tool, call, answer string) (string, string) {
-	said := flat(answer)
-	is := func(labels ...string) bool {
-		return slices.ContainsFunc(labels, func(l string) bool { return strings.EqualFold(said, l) })
-	}
-	switch {
-	case is(p.Once, AllowOnce):
-		return decidedOnce, ""
-	case is(p.Always, AllowAlways):
-		return decidedAlways, ""
-	case is(p.Not, AllowNot):
-		return decidedNot, ""
-	}
 	if a.llm == nil {
+		said := flat(answer)
+		is := func(labels ...string) bool {
+			return slices.ContainsFunc(labels, func(l string) bool { return strings.EqualFold(said, l) })
+		}
+		switch {
+		case is(p.Once, AllowOnce):
+			return decidedOnce, ""
+		case is(p.Always, AllowAlways):
+			return decidedAlways, ""
+		case is(p.Not, AllowNot):
+			return decidedNot, ""
+		}
 		return decidedUnclear, ""
 	}
 	reply, err := a.complete(ctx, decidePrompt, talkOf(ctx)+"<call tool=\""+tool+"\">\n"+clip(call, askingCall)+"\n</call>\n"+
@@ -161,7 +163,7 @@ func (a asking) decide(ctx context.Context, p permission, tool, call, answer str
 	switch word {
 	case decidedOnce, decidedAlways, decidedNot:
 		return word, flat(back)
-	case decidedDetails:
+	case decidedDetails, decidedMessage:
 		return word, ""
 	case decidedUnclear:
 		return word, flat(back)

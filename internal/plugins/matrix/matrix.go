@@ -2,6 +2,7 @@ package matrix
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 
 	"ouroboros/internal/guard"
@@ -17,9 +18,8 @@ type needs struct{ Sessions plugin.Sessions }
 func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 	return plugin.New("matrix", func(ctx *plugin.Context, n needs) error {
 		s := store{filepath.Join(dir.Gateways(), "matrix")}
-		plugin.Add(ctx, avatarTool(s, files))
 		running := &live{}
-		plugin.Add(ctx, imageTool(running, files))
+		plugin.Add(ctx, gatewayOutput(s, running, files))
 		plugin.Add(ctx, outputHook())
 		c := &controller{store: s, receive: receive}
 		c.connect = func(runCtx context.Context, cfg configuration) (connection, error) {
@@ -49,6 +49,31 @@ func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 		ctx.OnStop(c.stop)
 		return nil
 	})
+}
+
+// gatewayOutput keeps the backend tools private; the shared gateway tools own
+// the model-facing schema and dispatch to these callbacks with the same context.
+func gatewayOutput(s store, running *live, files *guard.Guard) plugin.GatewayOutput {
+	image, avatar := imageTool(running, files), avatarTool(s, files)
+	return plugin.GatewayOutput{
+		Name:              "matrix",
+		ImageDescription:  image.Description + " Destination is a Matrix room ID; omit it only when exactly one allowed room talks to Ouro. With multiple rooms, choose a destination explicitly; the gateway never guesses.",
+		AvatarDescription: avatar.Description,
+		SendImage: func(ctx context.Context, request plugin.GatewayImageRequest) (string, error) {
+			args, err := json.Marshal(imageArgs{Path: request.Path, Attachment: request.Attachment, Room: request.Destination})
+			if err != nil {
+				return "", err
+			}
+			return image.Run(ctx, args)
+		},
+		SetAvatar: func(ctx context.Context, request plugin.GatewayAvatarRequest) (string, error) {
+			args, err := json.Marshal(avatarArgs{Path: request.Path, Attachment: request.Attachment})
+			if err != nil {
+				return "", err
+			}
+			return avatar.Run(ctx, args)
+		},
+	}
 }
 
 // receive hands a message to the conversations of the connection it came
