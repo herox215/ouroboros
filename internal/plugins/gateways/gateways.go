@@ -78,7 +78,7 @@ func Plugin() plugin.Plugin {
 				}
 				return p.SendImage(ctx, plugin.GatewayImageRequest{Path: args.Path, Attachment: args.Attachment, Destination: args.Destination})
 			})
-		image.Schema = `{"type":"object","properties":{"gateway":{"type":"string","description":"Exact provider name; omit only when exactly one provider supports sending images."},"path":{"type":"string","minLength":1,"description":"Local image path; exclusive with attachment. Backend file permissions apply."},"attachment":{"type":"integer","minimum":1,"description":"1-based image index in the most recent user message with images; live conversation only, not after restart; exclusive with path."},"destination":{"type":"string","description":"Optional destination interpreted by the backend; omit only when its target is unambiguous."}},"additionalProperties":false,"oneOf":[{"required":["path"],"not":{"required":["attachment"]}},{"required":["attachment"],"not":{"required":["path"]}}]}`
+		image.Schema = `{"type":"object","properties":{"gateway":{"type":"string","description":"Exact provider name; omit only when exactly one provider supports sending images."},"path":{"type":"string","minLength":1,"description":"Local image path; exclusive with attachment. Backend file permissions apply."},"attachment":{"type":"integer","minimum":1,"description":"1-based image index in the most recent user message with images; live conversation only, not after restart; exclusive with path."},"destination":{"type":"string","description":"Optional destination interpreted by the backend; omit only when its target is unambiguous."}},"additionalProperties":false}`
 		image.OwnerOnly = true
 		plugin.Add(pctx, image)
 

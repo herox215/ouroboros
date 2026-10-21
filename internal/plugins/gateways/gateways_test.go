@@ -160,6 +160,23 @@ func TestInputValidation(t *testing.T) {
 	}
 }
 
+// The Claude API rejects a tool schema that holds oneOf, allOf or anyOf at its top
+// level; validateInput alone enforces which arguments go together.
+func TestSchemaHasNoTopLevelCombinator(t *testing.T) {
+	tools, _ := fixture(t)
+	for _, name := range []string{plugin.GatewaySendImageTool, plugin.GatewaySetAvatarTool, plugin.GatewayVotePollTool} {
+		var schema map[string]any
+		if err := json.Unmarshal([]byte(tools[name].Schema), &schema); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, key := range []string{"oneOf", "allOf", "anyOf"} {
+			if _, ok := schema[key]; ok {
+				t.Errorf("%s schema has top-level %s", name, key)
+			}
+		}
+	}
+}
+
 func TestListingAndLateDiscovery(t *testing.T) {
 	tools, ctx := fixture(t)
 	if got, err := tools["gateway_list"].Run(t.Context(), []byte(`{}`)); err != nil || got != "[]" {
