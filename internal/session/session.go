@@ -437,9 +437,13 @@ type session struct {
 	working   int
 	own       bool
 	said      []string
-	pictures  []openai.Image
-	roster    string
-	told      int
+	// writing is when the answer on its way told the last piece of what it
+	// writes, as long as nothing came after it; zero otherwise. Who starts to
+	// watch then is told that it writes, see Watch.
+	writing  time.Time
+	pictures []openai.Image
+	roster   string
+	told     int
 }
 
 // queued is a message that waits for the answer on its way to take it: one
@@ -924,6 +928,12 @@ func (s *Service) transient(se *session, e Event) {
 	e.At = s.now().Round(0)
 	e.Context = s.agent.Context(se.id)
 	e.Cache = s.agent.Cache(se.id)
+	switch e.Kind {
+	case Answering:
+		se.writing = e.At
+	case Calling: // it goes on with a call of a tool, not with the answer
+		se.writing = time.Time{}
+	}
 	s.tell(se, e)
 }
 
@@ -1139,6 +1149,7 @@ func (s *Service) emit(se *session, e Event) {
 	e.Context = s.agent.Context(se.id)
 	e.Cache = s.agent.Cache(se.id)
 	se.events = append(se.events, e)
+	se.writing = time.Time{}
 	s.tell(se, e)
 }
 
@@ -1205,6 +1216,11 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 	}
 	if se.working > 0 {
 		past = append(past, Event{Kind: Working, At: s.now().Round(0), N: se.working, Own: se.cancel != nil})
+	}
+	// The pieces of the answer on its way are not kept; that it is written
+	// is, without what it says so far.
+	if !se.writing.IsZero() {
+		past = append(past, Event{Kind: Answering, At: se.writing})
 	}
 	return past, live, nil
 }

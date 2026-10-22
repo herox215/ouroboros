@@ -355,7 +355,8 @@ function toolChart(doc, calls, pending, running) {
     });
   };
   calls.forEach((step, index) => tick(step, index, ''));
-  if (pending) tick(pending, all.length - 1, 'chart-live');
+  // A call that was on its way when the session stopped does not pulse.
+  if (pending) tick(pending, all.length - 1, running ? 'chart-live' : '');
   if (running) {
     mark('line', { class: 'chart-now', x1: labels + plot - 1.2, x2: labels + plot - 1.2, y1: pad, y2: height - pad });
   }
@@ -543,9 +544,13 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   // A session opened on its own, not the thread: where it stands, as its
   // events tell it. Without any, the rail keeps its hint.
   const own = [];
+  let heard = false; // an event of it came live, after its replay
   const ownArtefacts = () => {
     if (!context || context.id === threadID || inspecting || !own.length) return;
-    const entry = entries.find(item => item.id === context.id) || { id: context.id };
+    // It works as the list says, or as its own events tell since it was
+    // opened: the list learns of new work only with its next refresh.
+    const listed = entries.find(item => item.id === context.id) || { id: context.id };
+    const entry = { ...listed, running: !!listed.running || (heard && activity.busy) };
     contextTitle.textContent = t('context.stand');
     contextNote.textContent = 'T – ' + clock(own[own.length - 1].at);
     contextDetails.replaceChildren(artefactBlock(doc, entry, own));
@@ -800,6 +805,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     setQuestion(null);
     context = { profile, id: entry.id, state: sessionState(profile, entry.id) };
     own.length = 0;
+    heard = false;
     draft.value = context.state.text;
     updateComposer();
     content.replaceChildren();
@@ -834,6 +840,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         ownArtefacts();
       };
       const onEvent = event => {
+        if (ready) heard = true;
         switch (event.kind) {
           case 'working':
             activity.n = event.n || 0;
@@ -971,6 +978,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       if (JSON.stringify(nextEntries) === JSON.stringify(entries)) return;
       entries = nextEntries;
       renderList();
+      ownArtefacts();
       if (entries.some(inSection)) void artefacts();
     } catch { /* Keep the last list; explicit refresh reports errors. */ }
     finally { listing = false; }

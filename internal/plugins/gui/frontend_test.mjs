@@ -1908,6 +1908,9 @@ test('the artefacts tell where a session stands: its phase, its call, its last a
   const stale = await standOf([{ kind: 'message', text: 'go' }, { kind: 'step', tool: 'bash', text: 'bash · sleep', done: false }], false);
   assert.equal(said(stale), 'ready');
   assert.deepEqual([stale.facts.next], ['nothing']);
+  // Nor does its chart pulse the call it stood at. Review of #61.
+  assert.equal(stale.svg.children.some(child => /chart-live/.test(child.getAttribute('class') || '')), false);
+  assert.equal(stale.svg.children.some(child => child.getAttribute('class') === 'chart-now'), false);
   // A failed answer and a stopped one have their own word.
   assert.equal(said(await standOf([{ kind: 'message', text: 'go' }, { kind: 'failed', text: 'kaputt' }], false)), 'failed');
   assert.equal(said(await standOf([{ kind: 'message', text: 'go' }, { kind: 'canceled', text: '' }], false)), 'canceled');
@@ -1968,6 +1971,39 @@ test('beside an opened session its siblings stay, ended sessions are read anew, 
   slow.resolve([{ kind: 'step', tool: 'read', text: 'OLD THREAD RESULT', done: true }]); await settle();
   assert.equal(doc['context-details'].children.length, before);
   assert.doesNotMatch(rail(), /OLD THREAD RESULT/);
+});
+
+// Review of #61: a session opened while it does not work stands as working
+// once new work comes in live, before the list knows it, and the next list
+// that says it ended is drawn too.
+test('an opened session stands as working once its own events say so, and as the list says after', async () => {
+  const doc = archiveFixture();
+  let tick, running = false;
+  doc.defaultView.setInterval = (run) => { tick = run; };
+  const now = new Date().toISOString();
+  const pending = [];
+  await browse({
+    async Sessions() { return [{ id: 'owner/a', title: 'A', running }]; },
+    async OpenSession() { return { token: 1, events: [{ kind: 'message', text: 'go', at: now }, { kind: 'answer', text: 'done', at: now }] }; },
+    PollSession() { const next = deferred(); pending.push(next); return next.promise; },
+  }, doc, 'owner/a');
+  await settle();
+  const stand = () => blockParts(doc['context-details'].children[0]);
+  assert.equal(stand().word, 'done');
+  pending[0].resolve([{ kind: 'message', text: 'more', at: now }, { kind: 'step', tool: 'bash', text: 'bash · make', done: false, at: now }]);
+  await settle();
+  assert.equal(said(stand()), 'calls make');
+  assert.equal(stand().facts.next, 'the result of bash');
+  assert.match(stand().svg.children.find(child => child.tagName === 'rect').getAttribute('class'), /chart-live$/);
+  // The list learns that it works, and then that it ended: the rail follows it.
+  running = true;
+  await tick(); await settle();
+  assert.equal(said(stand()), 'calls make');
+  pending[1].resolve([{ kind: 'canceled', text: '', at: now }]);
+  running = false;
+  await settle(); await tick(); await settle();
+  assert.equal(stand().word, 'canceled');
+  assert.equal(stand().facts.next, 'nothing');
 });
 
 test('of the thread only its last six hours show, as in the terminal UI; individual sessions show in full', async () => {

@@ -543,10 +543,11 @@ func TestSessionTrace(t *testing.T) {
 // with the trace, without what it says, and not at all when something else
 // came after it.
 func TestSessionTraceEndsWriting(t *testing.T) {
+	// As the service tells it to who starts to watch: the pieces are not
+	// kept, one Answering without text says that the answer is written.
 	events := []plugin.SessionEvent{
 		{Kind: plugin.SessionMessage, Text: "go"},
-		{Kind: plugin.SessionAnswering, Text: "a "},
-		{Kind: plugin.SessionAnswering, Text: "piece"},
+		{Kind: plugin.SessionAnswering},
 	}
 	s := &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
 		return events, nil, nil

@@ -874,6 +874,47 @@ func TestCallingFlushesTheAnswer(t *testing.T) {
 	}
 }
 
+// The pieces of an answer are not kept, but who starts to watch while it is
+// written is told that it is, without what it says; a call of a tool or the
+// answer ends that. Review of #61.
+func TestWatchTellsThatTheAnswerIsWritten(t *testing.T) {
+	wrote, called, end := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	goOn := make(chan struct{})
+	s := service(t, &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		write, calling := openai.AnsweringOf(ctx), openai.CallingOf(ctx)
+		write(strings.Repeat("a", answerPiece))
+		close(wrote)
+		<-goOn
+		calling(1)
+		close(called)
+		<-end
+		return "pong", nil
+	}})
+	// A test that fails lets the answer end, so that Close does not wait for it.
+	var goneOn, ended sync.Once
+	t.Cleanup(func() { goneOn.Do(func() { close(goOn) }); ended.Do(func() { close(end) }) })
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "hi")
+	<-wrote
+	until(t, live, Answering)
+	past, _, err := s.Watch(ctx, "s1")
+	if err != nil || len(past) == 0 || past[len(past)-1].Kind != Answering || past[len(past)-1].Text != "" || past[len(past)-1].At.IsZero() {
+		t.Fatalf("while written %+v, %v", past, err)
+	}
+	goneOn.Do(func() { close(goOn) })
+	<-called
+	until(t, live, Calling)
+	if past, _, _ := s.Watch(ctx, "s1"); strings.Contains(kinds(past), "answering") {
+		t.Fatalf("after a call %s", kinds(past))
+	}
+	ended.Do(func() { close(end) })
+	until(t, live, Answer)
+	if past, _, _ := s.Watch(ctx, "s1"); strings.Contains(kinds(past), "answering") {
+		t.Fatalf("after the answer %s", kinds(past))
+	}
+}
+
 // A piece of the answer is sent as soon as it has answerPiece bytes, and how
 // much of a call the model has written once it grew by callingStep: the same
 // count again is not news.
