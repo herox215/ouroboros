@@ -164,6 +164,30 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #content h2, #content h3, #content .message-header { margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 600; line-height: 1.7; }
 #content pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; font: inherit; line-height: 1.7; }
 #content p + p { margin-top: 14px; }
+/* Formatted agent text, see markdown.js. Line breaks in a paragraph stay as written. */
+#content .markdown { line-height: 1.7; overflow-wrap: anywhere; }
+#content .markdown > * + * { margin-top: 12px; }
+#content .markdown p, #content .markdown .md-tight { white-space: pre-wrap; }
+#content .markdown .md-tight { display: block; }
+#content .markdown .md-heading { margin-bottom: 0; color: inherit; font-size: 1em; font-weight: 700; line-height: 1.7; }
+#content .markdown .md-h1, #content .markdown .md-h2 { color: var(--accent); }
+#content .markdown ul, #content .markdown ol { padding-left: 1.6em; }
+#content .markdown ul { list-style: disc; }
+#content .markdown ul ul { list-style: circle; }
+#content .markdown li > * + * { margin-top: 4px; }
+#content .markdown li.md-task { list-style: none; margin-left: -1.2em; }
+#content .markdown blockquote { padding-left: 14px; border-left: 2px solid var(--line); color: var(--muted); }
+#content .markdown code { padding: 1px 5px; border-radius: 5px; background: var(--hover); color: var(--accent); }
+#content .markdown pre.md-code { padding: 14px; overflow-x: auto; white-space: pre; background: var(--tool-background); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
+#content .markdown pre.md-code code { padding: 0; background: transparent; color: inherit; font-size: inherit; }
+#content .markdown hr { border: 0; border-top: 1px solid var(--line); }
+#content .markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+#content .markdown th, #content .markdown td { padding: 6px 12px; border: 1px solid var(--line); text-align: left; }
+#content .markdown th { font-weight: 700; background: var(--hover); }
+#content .markdown .align-center { text-align: center; }
+#content .markdown .align-right { text-align: right; }
+#content .markdown .md-link { color: var(--accent); text-decoration: underline; }
+#content .markdown .md-muted { color: var(--muted); }
 #content code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .9em; }
 #content .message-user { padding: 12px 0 16px; margin: 0; background: transparent; border: 0; border-radius: 0; }
 #content .message-tool pre { padding: 16px; background: var(--tool-background); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
