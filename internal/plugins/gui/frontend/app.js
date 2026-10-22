@@ -70,6 +70,11 @@ const quietSections = { observe() {}, changed() {} };
 // its agent is told it (assistant.ThreadWindow): the archive keeps the rest.
 const threadWindow = 6 * 60 * 60 * 1000;
 
+// How long a window waits before each time it opens a session again whose
+// live stream ended, in ms: about half a minute in all, long enough for a
+// node to start anew from a new build, see browse.
+const reconnectDelays = [250, 500, 1000, 2000, 4000, 8000, 8000];
+
 // Messages are headed as in the terminal UI, in the language of the GUI:
 // "Du", or the name of the agent.
 function transcript(bridge, profile, id, content, doc, active, setQuestion, onEvent, inspect, agent = 'ouroboros', sections = quietSections) {
@@ -432,7 +437,7 @@ function artefactBlock(doc, entry, trace) {
   return block;
 }
 
-export function browse(bridge, doc = document, resume = '', threadID = '') {
+export function browse(bridge, doc = document, resume = '', threadID = '', retry = reconnectDelays) {
   const profiles = doc.getElementById('profile');
   // The name of the agent of the selected profile, as the terminal UI heads its messages.
   const agentName = () => profiles.children?.[profiles.selectedIndex]?.getAttribute?.('data-name') || 'ouroboros';
@@ -599,6 +604,10 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   });
   let context = null;
   let ready = false;
+  // Why the live stream of the shown session is lost for good, see read: said
+  // beside the composer as well, where it is in view, since the error at the
+  // start of the history scrolled away. A session that shows again clears it.
+  let gone = '';
   let activity = { busy: false, n: 0, own: false, stopping: false };
   const updateStatus = () => {
     if (!ready) return;
@@ -663,7 +672,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     draft.disabled = !ready || !context?.id.startsWith('owner/');
     send.disabled = !writable() || !draft.value.trim();
     stop.disabled = !ready || !context?.id.startsWith('owner/') || !activity.busy || activity.stopping;
-    sendError.textContent = context?.state.error || '';
+    sendError.textContent = context?.state.error || gone;
     sendError.hidden = !sendError.textContent;
     sendStatus.textContent = context?.state.pending ? t('composer.sending') : (context?.state.notice || '');
     updateStatus();
@@ -808,13 +817,6 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     heard = false;
     draft.value = context.state.text;
     updateComposer();
-    content.replaceChildren();
-    drawing++; // artefacts on their way belong to what was shown before
-    visible.clear();
-    band?.disconnect();
-    // The thread starts its parts anew; an individual session opened from it
-    // keeps the part it was opened from, and its siblings beside it.
-    if (entry.id === threadID) section = latest = null;
     // A deliberately opened result may stay beside the thread. It belongs to
     // its profile and is cleared when another individual session is selected.
     if (entry.id !== threadID || inspecting?.profile !== profile) {
@@ -827,90 +829,145 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     title.textContent = entry.title || entry.id;
     meta.textContent = entry.id + (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
     status.textContent = t('session.loading');
-    try {
-      const snapshot = await bridge.OpenSession(profile, entry.id);
-      const active = () => version === generation && current === selection;
-      if (!active()) return;
+    const active = () => version === generation && current === selection;
+    // What shows is cleared once the snapshot that replaces it is there: a
+    // session opened again after its stream ended keeps its transcript until
+    // then, see reconnect.
+    const clear = () => {
+      own.length = 0;
+      heard = false;
+      content.replaceChildren();
+      drawing++; // artefacts on their way belong to what was shown before
+      visible.clear();
+      band?.disconnect();
+      // The thread starts its parts anew; an individual session opened from it
+      // keeps the part it was opened from, and its siblings beside it.
+      if (entry.id === threadID) section = latest = null;
+    };
+    clear();
+    // The stand of a session opened on its own follows its events; beside
+    // the thread, the rail reads each session for itself.
+    const stand = event => {
+      if (entry.id === threadID) return;
+      own.push(event);
+      ownArtefacts();
+    };
+    const onEvent = event => {
+      if (ready) heard = true;
+      switch (event.kind) {
+        case 'working':
+          activity.n = event.n || 0;
+          activity.own = !!event.own;
+          activity.busy = activity.n > 0;
+          break;
+        case 'message': case 'task':
+          activity.busy = true;
+          stand(event);
+          break;
+        case 'answering':
+          activity.busy = true;
+          // One piece of the answer being written is enough to tell it.
+          if (own[own.length - 1]?.kind !== 'answering') stand(event);
+          break;
+        case 'thought': case 'calling':
+          activity.busy = true;
+          break;
+        case 'asked': if (!event.done) activity.busy = true; stand(event); break;
+        case 'answer': case 'failed': case 'canceled':
+          activity.busy = entry.id === threadID && activity.n > (activity.own ? 1 : 0);
+          stand(event);
+          break;
+        case 'directory': meta.textContent = event.text || t('session.workspace'); break;
+        case 'step': stand(event); break;
+        case 'jobs': case 'say': stand(event); break;
+        case 'title':
+          if (entry.id !== threadID && event.text) {
+            entry.title = event.text;
+            title.textContent = event.text;
+            renderList();
+          }
+          break;
+      }
+      updateComposer();
+    };
+    // follow replays a snapshot of the session in full, then follows its live
+    // stream, see poll.
+    const follow = async (snapshot) => {
       context.state.notice = snapshot.notice || '';
-      // The stand of a session opened on its own follows its events; beside
-      // the thread, the rail reads each session for itself.
-      const stand = event => {
-        if (entry.id === threadID) return;
-        own.push(event);
-        ownArtefacts();
-      };
-      const onEvent = event => {
-        if (ready) heard = true;
-        switch (event.kind) {
-          case 'working':
-            activity.n = event.n || 0;
-            activity.own = !!event.own;
-            activity.busy = activity.n > 0;
-            break;
-          case 'message': case 'task':
-            activity.busy = true;
-            stand(event);
-            break;
-          case 'answering':
-            activity.busy = true;
-            // One piece of the answer being written is enough to tell it.
-            if (own[own.length - 1]?.kind !== 'answering') stand(event);
-            break;
-          case 'thought': case 'calling':
-            activity.busy = true;
-            break;
-          case 'asked': if (!event.done) activity.busy = true; stand(event); break;
-          case 'answer': case 'failed': case 'canceled':
-            activity.busy = entry.id === threadID && activity.n > (activity.own ? 1 : 0);
-            stand(event);
-            break;
-          case 'directory': meta.textContent = event.text || t('session.workspace'); break;
-          case 'step': stand(event); break;
-          case 'jobs': case 'say': stand(event); break;
-          case 'title':
-            if (entry.id !== threadID && event.text) {
-              entry.title = event.text;
-              title.textContent = event.text;
-              renderList();
-            }
-            break;
-        }
-        updateComposer();
-      };
       const render = transcript(bridge, profile, entry.id, content, doc, active, setQuestion, onEvent, inspect, agentName(), entry.id === threadID ? sections : undefined);
       await render(snapshot.events || []);
       if (!active()) return;
       ready = true;
+      gone = '';
       updateComposer();
       // Start at the end of the transcript after the full replay, following it.
       stick();
-      // One outstanding poll per selected chat; the bridge batches the live stream.
-      const follow = async () => {
-        try {
-          while (active() && snapshot.token && entry.id.startsWith('owner/')) {
-            const events = await bridge.PollSession(snapshot.token);
-            if (!active()) return;
-            if (events === null) throw new Error(t('session.ended'));
-            // A poll comes back every 150 ms, mostly empty. Moving the history to
-            // its end each time, at its end already, took back the bounce of a
-            // pull past it: it is moved only when the history grew.
-            if (!events?.length) continue;
-            const height = scroller.scrollHeight;
-            await render(events);
-            if (active() && following && scroller.scrollHeight !== height) end();
-          }
-        } catch (cause) {
-          if (active()) {
-            ready = false;
-            setQuestion(null);
-            status.textContent = t('session.disconnected');
-            fail(t('session.disconnectedHint'), cause);
-          }
+      void poll(snapshot.token, render);
+    };
+    // One outstanding poll per selected chat; the bridge batches the live stream.
+    const poll = async (token, render) => {
+      try {
+        while (active() && token && entry.id.startsWith('owner/')) {
+          const events = await bridge.PollSession(token);
+          if (!active()) return;
+          // The stream ended, as when the node starts anew: the session is
+          // opened again.
+          if (events === null) return reconnect();
+          // A stream that answers earns its retries back; one that ends
+          // right after each opening uses them up instead of spinning.
+          attempts = 0;
+          // A poll comes back every 150 ms, mostly empty. Moving the history to
+          // its end each time, at its end already, took back the bounce of a
+          // pull past it: it is moved only when the history grew.
+          if (!events?.length) continue;
+          const height = scroller.scrollHeight;
+          await render(events);
+          if (active() && following && scroller.scrollHeight !== height) end();
         }
-      };
-      void follow();
+      } catch (cause) {
+        if (active()) lost(cause);
+      }
+    };
+    const lost = (cause, message = t('session.disconnectedHint')) => {
+      ready = false;
+      gone = message + ': ' + String(cause);
+      setQuestion(null);
+      updateComposer();
+      status.textContent = t('session.disconnected');
+      fail(message, cause);
+    };
+    // reconnect opens the session again a bounded number of times, ever
+    // later, while the node starts anew: the window of a new build replaces
+    // this one, see Window.OpenSession, or the node gives the whole session
+    // anew, which replaces the transcript without doubling it. A node that
+    // does not come back is said once, and the transcript stays.
+    let attempts = 0;
+    const reconnect = async () => {
+      ready = false;
+      setQuestion(null);
+      activity = { busy: false, n: 0, own: false, stopping: false };
+      updateComposer();
+      status.textContent = t('session.reconnecting');
+      let cause = new Error(t('session.ended'));
+      while (attempts < retry.length) {
+        await new Promise(resolve => setTimeout(resolve, retry[attempts++]));
+        if (!active()) return;
+        let snapshot;
+        try { snapshot = await bridge.OpenSession(profile, entry.id); }
+        catch (failed) { cause = failed; continue; }
+        if (!active()) return;
+        error.hidden = true;
+        clear();
+        return follow(snapshot);
+      }
+      if (active()) lost(cause, t('session.gone'));
+    };
+    try {
+      const snapshot = await bridge.OpenSession(profile, entry.id);
+      if (!active()) return;
+      await follow(snapshot);
     } catch (cause) {
-      if (version !== generation || current !== selection) return;
+      if (!active()) return;
       status.textContent = '';
       fail(t('session.loadFailed'), cause);
     }

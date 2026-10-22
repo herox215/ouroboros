@@ -74,10 +74,11 @@ type Window struct {
 	selected  int
 	active    *sessionWatch
 	lifecycle sync.Mutex
-	opened    map[int]bool // profiles opened here; value says whether we started the node
-	session   string       // the session the window shows, as the front end named it
-	restarts  string       // the build a tool asked ouro to start anew from, see PollSession
-	leave     func()       // closes the window for it, see OnRestart
+	opened    map[int]bool   // profiles opened here; value says whether we started the node
+	session   string         // the session the window shows, as the front end named it
+	restarts  string         // the build a tool asked ouro to start anew from, see PollSession
+	leave     func()         // closes the window for it, see OnRestart
+	instances map[int]string // the image of the node of each profile, as the window last saw it, see noticeRestart
 	directory string
 	threadMu  sync.Mutex
 	threads   map[int]bool // profiles whose thread took this UI's start directory
@@ -96,7 +97,7 @@ func newWindowContext(ctx context.Context, p page) *Window {
 	archives := make([]archiveAccess, len(p.choices))
 	copy(archives, p.archives)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Window{state: state, profiles: profiles, archives: archives, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool), directory: p.directory, threads: make(map[int]bool)}
+	return &Window{state: state, profiles: profiles, archives: archives, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool), instances: make(map[int]string), directory: p.directory, threads: make(map[int]bool)}
 }
 func (w *Window) InitialState() State {
 	state := w.state
@@ -131,7 +132,8 @@ func (w *Window) OnRestart(leave func()) {
 }
 
 // restart takes the build a tool of the watched session asked ouro to start
-// anew from, see PollSession, and leaves the window for it.
+// anew from, see PollSession, or the one a node that started anew runs, see
+// noticeRestart, and leaves the window for it.
 func (w *Window) restart(exe string) {
 	w.mu.Lock()
 	take := w.restarts == "" && w.leave != nil
@@ -142,6 +144,36 @@ func (w *Window) restart(exe string) {
 	w.mu.Unlock()
 	if take {
 		leave()
+	}
+}
+
+// instances is what a sessions service tells of the image of ouro its node
+// runs, see session.Instance.
+type instances interface {
+	Instance(context.Context) (plugin.NodeInstance, error)
+}
+
+// noticeRestart compares the image the node of profile runs with the one the
+// window saw before, and leaves the window for the build that runs once it
+// changed: the node started anew, as a rebuild in another session, ouro update
+// or a peer make it do, and no restart event of the watched session told the
+// window. A service that cannot tell, or a node that does not answer, changes
+// nothing.
+func (w *Window) noticeRestart(ctx context.Context, p Profile, profile int) {
+	tells, ok := p.sessions.(instances)
+	if !ok {
+		return
+	}
+	now, err := tells.Instance(ctx)
+	if err != nil || now.ID == "" {
+		return
+	}
+	w.mu.Lock()
+	before := w.instances[profile]
+	w.instances[profile] = now.ID
+	w.mu.Unlock()
+	if before != "" && before != now.ID && now.Executable != "" {
+		w.restart(now.Executable)
 	}
 }
 
@@ -368,7 +400,11 @@ func sessionID(id string) (string, bool, error) {
 	return "", false, fmt.Errorf("invalid session ID %q", id)
 }
 
-// OpenSession replaces the active watch. Peers are read-only snapshots.
+// OpenSession replaces the active watch. Peers are read-only snapshots. The
+// front end opens a session again once its live stream ended, see
+// PollSession: a node that started anew from another build then leaves the
+// window for it, see noticeRestart, and one that did not gives the whole
+// session anew.
 func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
 	p, err := w.ready(profile)
 	if err != nil {
@@ -390,6 +426,7 @@ func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
 	var past []plugin.SessionEvent
 	var live <-chan plugin.SessionEvent
 	var notice string
+	w.noticeRestart(ctx, p, profile)
 	if owner {
 		if serviceID == plugin.ThreadID {
 			notice = w.placeThread(ctx, p, profile)
@@ -459,7 +496,7 @@ func (w *Window) PollSession(token int) []ChatEvent {
 		case e, ok := <-live:
 			if !ok {
 				if len(out) == 0 {
-					return nil // JSON null tells the frontend the stream ended
+					return nil // JSON null tells the frontend the stream ended: it opens the session again
 				}
 				return finish()
 			}
