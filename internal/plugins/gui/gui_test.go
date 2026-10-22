@@ -49,7 +49,7 @@ func TestCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := plugin.All[plugin.Command](ctx)
-	if len(commands) != 1 || commands[0].Name != "gui" || p == nil {
+	if len(commands) != 2 || commands[0].Name != "gui" || commands[1].Name != "fyne" || p == nil {
 		t.Fatalf("command: %+v, profile: %v", commands, p)
 	}
 	if len(plugin.All[plugin.FrontEnd](ctx)) != 0 {

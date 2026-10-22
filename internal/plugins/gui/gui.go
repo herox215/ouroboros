@@ -29,6 +29,7 @@ func Plugin(owner *plugin.Owner, profile func(*Profile)) plugin.Plugin {
 	return plugin.New("gui", func(ctx *plugin.Context, n struct{ Sessions plugin.Sessions }) error {
 		p := &Profile{owner: owner, status: owner.Status, sessions: n.Sessions, ctx: ctx}
 		plugin.Add(ctx, plugin.Command{Name: "gui", Help: "chat in a window with a profile picker", Run: p.run})
+		plugin.Add(ctx, plugin.Command{Name: "fyne", Help: "chat in the same window, drawn with Fyne", Run: p.runFyne})
 		if profile != nil {
 			profile(p)
 		}
@@ -61,8 +62,9 @@ type page struct {
 	archives  []archiveAccess // legacy archive tests only
 	profiles  []*Profile
 	selected  int
-	session   string // the session the window goes on with, "" to show the thread
-	directory string // the start directory, as in the terminal UI
+	session   string            // the session the window goes on with, "" to show the thread
+	directory string            // the start directory, as in the terminal UI
+	drafts    map[string]string // unsent Fyne composer text handed over by a previous build
 }
 
 func (p *Profile) page() (page, error) {
@@ -97,24 +99,35 @@ func (p *Profile) run(ctx context.Context, args []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	page, err := p.page()
+	page, err := p.windowPage(ctx)
 	if err != nil {
 		return err
 	}
-	page.directory = workdir.Of(ctx)
+	return show(ctx, page)
+}
+
+// windowPage is the page a window opens on: the profiles, the one named, the
+// start directory and the session and drafts a process before handed over.
+func (p *Profile) windowPage(ctx context.Context) (page, error) {
+	window, err := p.page()
+	if err != nil {
+		return page{}, err
+	}
+	window.directory = workdir.Of(ctx)
 	going, err := resumed()
 	if err != nil {
-		return err
+		return page{}, err
 	}
 	if going != nil {
-		page.session = going.Session
-		for i, c := range page.choices {
+		window.session = going.Session
+		window.drafts = going.Drafts
+		for i, c := range window.choices {
 			if c.id == going.Profile {
-				page.selected = i
+				window.selected = i
 			}
 		}
 	}
-	return show(ctx, page)
+	return window, nil
 }
 
 // show is replaced by tests so command tests never open a desktop window.
@@ -127,8 +140,9 @@ const resumeEnv = "OURO_RESUME"
 // resume is what the window of a new process goes on with: the profile it
 // showed, and the session, see handOver.
 type resume struct {
-	Profile string `json:"profile,omitempty"`
-	Session string `json:"session,omitempty"`
+	Profile string            `json:"profile,omitempty"`
+	Session string            `json:"session,omitempty"`
+	Drafts  map[string]string `json:"drafts,omitempty"`
 }
 
 // handOver returns the plugin.Restarting that starts exe: ouro starts anew

@@ -16,6 +16,7 @@ ouro chat "ask beta …"    # one answer from your agent, for scripts; without a
 ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
 ouro gui                  # native Wails GUI: chat, create sessions, switch profiles
+ouro fyne                 # the same window, drawn with Fyne instead of a web view
 ouro stop
 ouro update               # build and install the newest main
 ouro rollback             # the build before the last update or rebuild again
@@ -150,7 +151,34 @@ without a command, and `ouro chat` talks line by line. If the list of plugins ho
 ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that open them (`ouro tui`, …),
 which keep working.
 
-The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
+The optional `gui` plugin contributes only the explicit `ouro gui` and `ouro fyne` commands, not a default front end.
+`ouro fyne` opens the same window drawn with Fyne instead of a web view: the same profile,
+the same thread, sessions, composer and context rail, from the same session service. It is
+built with cgo; a build without cgo refuses the command. Both windows keep their appearance
+preference separately (`System`, `Light`, `Dark` in the settings); `System`, the default,
+follows the light or dark appearance of the desktop while the window is open.
+The Fyne window behaves like a native one: buttons, session cards and links answer the
+pointer and show the keyboard focus, Enter and Space press what has the focus, and text
+in the transcript can be selected and copied. Enter sends, Shift+Enter starts a new line,
+and the composer grows with what is written up to eight lines. Escape leaves a dialog or
+closes the sessions drawer from wherever the focus is; Ctrl+, opens the settings, Ctrl+L
+puts the keyboard into the composer, Ctrl+Q and Ctrl+W close the window. Below 1100
+pixels the context rail goes; below 640 the sessions move into a drawer behind the menu
+button in the header. While the end of the history is in view, the window keeps it there
+as answers stream in; scrolled up to older messages, it stays where it is.
+The tests of the Fyne window click through it with the hit testing of the desktop driver
+in every size from 360×420 to 1400×900. Two optional checks open the real desktop driver
+and need an X server, never the owner's desktop:
+`OURO_TEST_FYNE_NATIVE=1 OURO_FYNE_SNAPSHOTS=DIR xvfb-run go test ./internal/plugins/gui -run Native`
+restarts a window into a new build and keeps pictures of it in DIR; without the variables
+`OURO_FYNE_SNAPSHOTS=DIR go test ./internal/plugins/gui -run Snapshots` draws the same
+pictures with the software renderer.
+Fyne checks the installed executable independently of the selected session. When a
+new build replaces it, the window automatically restarts into that build, keeping
+the selected profile, session and unsent composer drafts. A build with identical
+contents does not restart the window; failed builds leave it running unchanged.
+This detects installation, not completion of the node's deferred restart: running
+answers continue in the node. Source edits alone do not update an installed GUI.
 It opens a Wails v2 window with the profile's thread, the same
 conversation the TUI shows first. Say what is to be done there; the node routes topics,
 relays questions and gathers results through its existing thread implementation.

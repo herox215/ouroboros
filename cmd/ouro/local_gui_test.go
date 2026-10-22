@@ -127,7 +127,7 @@ func TestLocalGUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	executable = func() (string, error) { return exe, nil }
-	for _, args := range [][]string{{"gui"}, {"--profile", "P", "desktop", "open"}} {
+	for _, args := range [][]string{{"gui"}, {"fyne"}, {"--profile", "P", "fyne"}, {"--profile", "P", "desktop", "open"}} {
 		err := localGUI(context.Background(), args)
 		r, restarting := errors.AsType[*plugin.Restarting](err)
 		if restarting != (runtime.GOOS == "linux") || (restarting && r.Exe != exe) || (!restarting && err != nil) {

@@ -62,6 +62,7 @@ ouro start               # node in the background
 ouro list                # who is on the network
 ouro ask <ID|name> "hi"  # write to another node
 ouro gui                 # native window
+ouro fyne                # the same window, drawn with Fyne
 ouro update              # build and install the newest main
 ```
 

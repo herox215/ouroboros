@@ -23,7 +23,7 @@ func localGUI(ctx context.Context, args []string) error {
 	} else if len(args) > 1 && args[0] == "--profile" {
 		args = args[2:]
 	}
-	if !(len(args) == 1 && args[0] == "gui") &&
+	if !(len(args) == 1 && (args[0] == "gui" || args[0] == "fyne")) &&
 		!(len(args) == 2 && args[0] == "desktop" && args[1] == "open") {
 		return nil
 	}
