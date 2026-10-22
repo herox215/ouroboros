@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
@@ -474,4 +475,58 @@ func TestFyneHover(t *testing.T) {
 
 func sizeName(size fyne.Size) string {
 	return itoa(int(size.Width)) + "x" + itoa(int(size.Height))
+}
+
+// A right click on what was said offers to copy it, as native text does.
+func TestFyneRightClickCopies(t *testing.T) {
+	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
+	var body *widget.Label
+	fyne.DoAndWait(func() {
+		for _, o := range labelsIn(ui.content) {
+			if l, ok := o.(*widget.Label); ok && l.Selectable && strings.Contains(l.Text, "Polish the window") {
+				body = l
+			}
+		}
+	})
+	if body == nil {
+		t.Fatal("no selectable message")
+	}
+	settle(ui.win)
+	var pos fyne.Position
+	fyne.DoAndWait(func() {
+		p, ok := absolute(ui, body)
+		if !ok {
+			t.Fatal("the message does not show")
+		}
+		pos = p.Add(fyne.NewPos(10, body.Size().Height/2))
+		hit, at := hitAt(ui.win.Canvas(), pos)
+		secondary, ok := hit.(fyne.SecondaryTappable)
+		if !ok || !holds(body, hit) {
+			t.Fatalf("a right click on the message reached %T", hit)
+		}
+		secondary.TappedSecondary(&fyne.PointEvent{Position: at, AbsolutePosition: pos})
+	})
+	waitFor(t, func() bool {
+		top := ui.win.Canvas().Overlays().Top()
+		found := false
+		if top != nil {
+			var walk func(o fyne.CanvasObject)
+			walk = func(o fyne.CanvasObject) {
+				switch o := o.(type) {
+				case *canvas.Text:
+					found = found || o.Text == "Copy"
+				case *fyne.Container:
+					for _, c := range o.Objects {
+						walk(c)
+					}
+				case fyne.Widget:
+					for _, c := range test.WidgetRenderer(o).Objects() {
+						walk(c)
+					}
+				}
+			}
+			walk(top)
+		}
+		return found
+	})
 }

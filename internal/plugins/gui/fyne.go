@@ -59,7 +59,7 @@ func showFyneWindow(ctx context.Context, window page) error {
 	native.SetPadded(false)
 	application.SetIcon(appIcon)
 	native.SetIcon(appIcon)
-	native.Resize(fyne.NewSize(1180, 780))
+	native.Resize(windowSize(application))
 	native.CenterOnScreen()
 	ui := newFyneUI(ctx, application, native, bridge)
 	for key, text := range window.drafts {
@@ -91,6 +91,7 @@ func showFyneWindow(ctx context.Context, window page) error {
 	}()
 	go ui.start()
 	showAndRun(native)
+	keepWindowSize(application, native.Canvas().Size())
 	if exe, going, ok := bridge.Restart(); ok {
 		if going.Session == "" {
 			going.Session = bridge.state.Thread
@@ -99,6 +100,32 @@ func showFyneWindow(ctx context.Context, window page) error {
 		return handOver(exe, going)
 	}
 	return ctx.Err()
+}
+
+// The size the window had when it closed, which it opens with again, as a
+// native window does.
+const (
+	widthPreferenceKey  = "ouroboros.gui.width"
+	heightPreferenceKey = "ouroboros.gui.height"
+)
+
+// windowSize is the size the window opens with: the one it closed with,
+// 1180×780 the first time, and never below the smallest it allows.
+func windowSize(app fyne.App) fyne.Size {
+	prefs := app.Preferences()
+	return fyne.NewSize(
+		fyne.Max(360, float32(prefs.FloatWithFallback(widthPreferenceKey, 1180))),
+		fyne.Max(420, float32(prefs.FloatWithFallback(heightPreferenceKey, 780))))
+}
+
+// keepWindowSize keeps the size the window closed with; a window that never
+// showed has none to keep.
+func keepWindowSize(app fyne.App, size fyne.Size) {
+	if size.Width <= 0 || size.Height <= 0 {
+		return
+	}
+	app.Preferences().SetFloat(widthPreferenceKey, float64(size.Width))
+	app.Preferences().SetFloat(heightPreferenceKey, float64(size.Height))
 }
 
 // unsentDrafts carries text only, not pending sends or stale error state.

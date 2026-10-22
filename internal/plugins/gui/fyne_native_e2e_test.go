@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -74,6 +75,16 @@ func fyneShots(dir string) error {
 		for _, size := range []fyne.Size{{Width: 1400, Height: 900}, {Width: 900, Height: 640}, {Width: 420, Height: 700}} {
 			fyne.DoAndWait(func() { native.Resize(size) })
 			shot("gl-" + sizeName(size))
+		}
+		if os.Getenv("OURO_TEST_FYNE_IDLE") != "" {
+			// Only what the window costs while it waits with the composer
+			// focused, on whatever display it was given.
+			fyne.DoAndWait(func() { native.Resize(fyne.NewSize(1400, 900)); ui.focusComposer() })
+			time.Sleep(2 * time.Second)
+			before, start := cpuTime(), time.Now()
+			time.Sleep(20 * time.Second)
+			fmt.Printf("idle with focused composer: %.1f%% of a core\n", 100*float64(cpuTime()-before)/float64(time.Since(start)))
+			return
 		}
 		if path := os.Getenv("OURO_TEST_FYNE_PROFILE"); path != "" {
 			// What the window costs while it waits with the composer
@@ -139,4 +150,11 @@ func x11Environ() []string {
 		}
 	}
 	return env
+}
+
+// cpuTime is the CPU time the process used so far.
+func cpuTime() time.Duration {
+	var usage syscall.Rusage
+	syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
 }

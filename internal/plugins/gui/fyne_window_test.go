@@ -202,3 +202,21 @@ func TestRunFyne(t *testing.T) {
 		t.Fatal("a broken handover opened the window")
 	}
 }
+
+// The window opens in the size it closed with, the first time in its
+// default, and never below the smallest it allows.
+func TestFyneWindowKeepsItsSize(t *testing.T) {
+	application := newLoopApp(t)
+	if got := windowSize(application); got != fyne.NewSize(1180, 780) {
+		t.Fatalf("first size %v", got)
+	}
+	keepWindowSize(application, fyne.Size{})
+	keepWindowSize(application, fyne.NewSize(900, 640))
+	if got := windowSize(application); got != fyne.NewSize(900, 640) {
+		t.Fatalf("kept size %v", got)
+	}
+	keepWindowSize(application, fyne.NewSize(100, 100))
+	if got := windowSize(application); got != fyne.NewSize(360, 420) {
+		t.Fatalf("a tiny size opens as %v", got)
+	}
+}

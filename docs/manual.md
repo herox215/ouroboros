@@ -160,7 +160,8 @@ follows the light or dark appearance of the desktop while the window is open.
 The Fyne window behaves like a native one: buttons, session cards and links answer the
 pointer and show the keyboard focus, Enter and Space press what has the focus, and text
 in the transcript can be selected and copied. Enter sends, Shift+Enter starts a new line,
-and the composer grows with what is written up to eight lines. Escape leaves a dialog or
+and the composer grows with what is written up to eight lines; a right click on
+selected text offers to copy it, and the window opens again in the size it closed with. Escape leaves a dialog or
 closes the sessions drawer from wherever the focus is; Ctrl+, opens the settings, Ctrl+L
 puts the keyboard into the composer, Ctrl+Q and Ctrl+W close the window. Below 1100
 pixels the context rail goes; below 640 the sessions move into a drawer behind the menu
