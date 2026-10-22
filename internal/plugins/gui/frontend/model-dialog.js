@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 // One instance can be opened from any entry point with an explicit profile.
 // The native dialog provides focus trapping, Escape and focus restoration.
 let nextDialog = 0;
@@ -9,7 +11,7 @@ export function createModelDialog(bridge, doc = document) {
   dialog.setAttribute('tabindex', '-1');
   const heading = doc.createElement('h2');
   heading.id = 'model-dialog-title-' + ++nextDialog;
-  heading.textContent = 'Modell einstellen';
+  heading.textContent = t('dialog.model.title');
   dialog.setAttribute('aria-labelledby', heading.id);
   // A button that shows only a symbol; its name is for screen readers and the tooltip.
   const icon = (symbol, label) => {
@@ -24,8 +26,8 @@ export function createModelDialog(bridge, doc = document) {
   // Back is there when the dialog was opened from a page to go back to.
   const header = doc.createElement('div');
   header.className = 'dialog-header';
-  const back = icon('‹', 'Zurück');
-  const close = icon('×', 'Schließen');
+  const back = icon('‹', t('dialog.back'));
+  const close = icon('×', t('dialog.close'));
   header.append(back);
   header.append(heading);
   header.append(close);
@@ -33,11 +35,11 @@ export function createModelDialog(bridge, doc = document) {
   description.className = 'model-dialog-description';
   const form = doc.createElement('form');
   const accessLabel = doc.createElement('label');
-  accessLabel.textContent = 'Zugang';
+  accessLabel.textContent = t('model.access');
   const access = doc.createElement('select');
   accessLabel.append(access);
   const modelLabel = doc.createElement('label');
-  modelLabel.textContent = 'Modell';
+  modelLabel.textContent = t('model.model');
   const model = doc.createElement('select');
   modelLabel.append(model);
   const status = doc.createElement('p');
@@ -53,19 +55,19 @@ export function createModelDialog(bridge, doc = document) {
   confirm.setAttribute('role', 'alertdialog');
   confirm.hidden = true;
   const question = doc.createElement('p');
-  question.textContent = 'Die Änderung ist noch nicht gespeichert.';
+  question.textContent = t('dialog.unsaved');
   const confirmActions = doc.createElement('div');
   confirmActions.className = 'model-dialog-actions';
   const keep = doc.createElement('button');
   keep.type = 'button';
-  keep.textContent = 'Weiter bearbeiten';
+  keep.textContent = t('dialog.keepEditing');
   const discard = doc.createElement('button');
   discard.type = 'button';
-  discard.textContent = 'Verwerfen';
+  discard.textContent = t('dialog.discard');
   const saveAndLeave = doc.createElement('button');
   saveAndLeave.type = 'button';
   saveAndLeave.className = 'model-dialog-save';
-  saveAndLeave.textContent = 'Speichern';
+  saveAndLeave.textContent = t('dialog.save');
   confirmActions.append(keep);
   confirmActions.append(discard);
   confirmActions.append(saveAndLeave);
@@ -76,7 +78,7 @@ export function createModelDialog(bridge, doc = document) {
   const save = doc.createElement('button');
   save.type = 'submit';
   save.className = 'model-dialog-save';
-  save.textContent = 'Speichern';
+  save.textContent = t('dialog.save');
   actions.append(save);
   form.append(accessLabel);
   form.append(modelLabel);
@@ -137,8 +139,8 @@ export function createModelDialog(bridge, doc = document) {
     model.disabled = models.length === 0;
     save.disabled = model.disabled;
     error.hidden = true;
-    if (entry?.error) fail('Modellliste konnte nicht vollständig geladen werden: ' + entry.error);
-    status.textContent = models.length ? '' : 'Für diesen Zugang sind keine Modelle verfügbar.';
+    if (entry?.error) fail(t('dialog.failed') + ' ' + entry.error);
+    status.textContent = models.length ? '' : t('model.none');
   };
   const lock = (locked) => {
     access.disabled = model.disabled = save.disabled = back.disabled = close.disabled = locked;
@@ -150,7 +152,7 @@ export function createModelDialog(bridge, doc = document) {
     const current = version;
     saving = true;
     lock(true);
-    status.textContent = 'Modell wird gespeichert …';
+    status.textContent = t('model.saving');
     error.hidden = true;
     try {
       await bridge.SetModel(profile, access.value, model.value);
@@ -158,7 +160,7 @@ export function createModelDialog(bridge, doc = document) {
     } catch (cause) {
       if (current === version) {
         unask();
-        fail('Modell konnte nicht gespeichert werden: ' + String(cause));
+        fail(t('dialog.failed') + ' ' + String(cause));
         status.textContent = '';
       }
     } finally {
@@ -193,14 +195,14 @@ export function createModelDialog(bridge, doc = document) {
       goBack = backTo;
       back.hidden = !backTo;
       const current = ++version;
-      description.textContent = 'Standardmodell für ' + (name || 'dieses Profil') + '. Gilt ab der nächsten Nachricht, auch in anderen Sitzungen.';
+      description.textContent = t('model.default', { name: name || t('model.thisProfile') });
       access.replaceChildren();
       model.replaceChildren();
       lock(false);
       access.disabled = model.disabled = save.disabled = true;
       unask();
       error.hidden = true;
-      status.textContent = 'Modelle werden geladen …';
+      status.textContent = t('dialog.loading');
       dialog.showModal();
       dialog.focus();
       try {
@@ -212,11 +214,11 @@ export function createModelDialog(bridge, doc = document) {
         access.disabled = data.accesses.length === 0;
         renderModels();
         shown = { access: access.value, model: model.value };
-        if (!data.accesses.length) status.textContent = 'Keine Zugänge eingerichtet. Bitte zuerst die Einrichtung in der TUI durchführen.';
+        if (!data.accesses.length) status.textContent = t('model.noAccess');
       } catch (cause) {
         if (current === version) {
           status.textContent = '';
-          fail('Modelle konnten nicht geladen werden: ' + String(cause));
+          fail(t('dialog.failed') + ' ' + String(cause));
         }
       }
     },

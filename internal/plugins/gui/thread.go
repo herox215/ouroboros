@@ -16,7 +16,7 @@ func (w *Window) placeThread(ctx context.Context, p Profile, profile int) string
 		return ""
 	}
 	if err := p.sessions.SetDirectory(ctx, plugin.ThreadID, w.directory); err != nil {
-		return "Der Thread behält sein Projekt: " + err.Error()
+		return "the thread keeps its project: " + err.Error()
 	}
 	w.threads[profile] = true
 	return ""

@@ -172,11 +172,15 @@ hides the calls of its agent, so it tells those as events of their own, also whe
 back from the archive. Front ends that do not know the kind leave it out. The
 sidebar shows the time of the part and its sessions with their state, or **Noch keine**,
 refreshed every three seconds without reopening the conversation; a session opened from it
-keeps the part beside it. The context rail shows the artefacts of those sessions: their last calls
-of tools, as `SessionSteps` reads them. Older messages fade out at the top while older ones
-are above. Opening a tool result also shows it in that rail, using the same lazy request and cache.
-It may stay beside the thread when returning from its session, labelled with its source;
-switching profiles clears it. The rail is a saved result, not a live browser view.
+keeps the part beside it. The context rail shows where those sessions stand, as `SessionTrace`
+reads them: the phase of the loop to the answer (thinking, calling a tool, writing the answer,
+asking the owner), the call on its way and what it does, the call it did last, and what comes
+next. Under that stand, a chart draws the calls over the time of the session in lanes of its
+most used tools, so that its rhythm and its mix show at a glance rather than every call as a
+line. Older messages fade out at the top while older ones are above. Opening a tool result
+also shows it in that rail, using the same lazy request and cache. It may stay beside the thread
+when returning from its session, labelled with its source; switching profiles clears it. The
+rail is a saved result, not a live browser view.
 `ouro --profile NAME gui` selects the initial profile. Switching is local to the window and does not
 change configuration. Profiles with the GUI plugin disabled are omitted. The window starts the
 node through the same sessions API as the TUI when needed, and releases nodes it started on close;

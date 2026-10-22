@@ -1,3 +1,4 @@
+import { t, locale, applyDocument } from './i18n.js';
 import { createModelDialog } from './model-dialog.js';
 import { createSettingsDialog } from './settings-dialog.js';
 import { createThemePreference } from './theme.js';
@@ -18,28 +19,28 @@ export function mount(state, doc = document) {
 
 export function dateGroup(value, now = new Date()) {
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return 'Ohne Datum';
+  if (!Number.isFinite(date.getTime())) return t('date.undated');
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
-  if (date >= today) return 'Heute';
-  if (date >= yesterday) return 'Gestern';
-  return 'Älter';
+  if (date >= today) return t('date.today');
+  if (date >= yesterday) return t('date.yesterday');
+  return t('date.older');
 }
 
-const dateFormat = new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
-const clockFormat = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
+const dateFormat = () => new Intl.DateTimeFormat(locale(), { dateStyle: 'medium', timeStyle: 'short' });
+const clockFormat = () => new Intl.DateTimeFormat(locale(), { hour: '2-digit', minute: '2-digit' });
 
 // The time above a message, as the terminal UI writes it: the clock today, the
 // date with it before.
 function clock(value, now = new Date()) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
-  return date.toDateString() === now.toDateString() ? clockFormat.format(date) : dateFormat.format(date);
+  return date.toDateString() === now.toDateString() ? clockFormat().format(date) : dateFormat().format(date);
 }
 function formatDate(value) {
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? dateFormat.format(date) : '';
+  return Number.isFinite(date.getTime()) ? dateFormat().format(date) : '';
 }
 
 // Keep very large tool output out of layout until explicitly requested.
@@ -52,11 +53,11 @@ function appendText(parent, value, doc) {
   const expand = doc.createElement('button');
   expand.type = 'button';
   expand.className = 'expand-text';
-  expand.textContent = 'Vollständigen Text anzeigen (' + value.length.toLocaleString('de-DE') + ' Zeichen)';
+  expand.textContent = t('transcript.expandCount', { n: value.length.toLocaleString(locale()) });
   expand.addEventListener('click', () => {
     const open = text.textContent.length > limit;
     text.textContent = open ? value.slice(0, limit) : value;
-    expand.textContent = open ? 'Vollständigen Text anzeigen' : 'Text einklappen';
+    expand.textContent = open ? t('transcript.expand') : t('transcript.collapse');
   });
   parent.append(expand);
 }
@@ -106,7 +107,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
   const apply = (event) => {
     onEvent(event);
     switch (event.kind) {
-      case 'message': closeQuestion(); exchange = { at: event.at, sessions: new Set() }; message('user', 'Du', event.text, event.at); break;
+      case 'message': closeQuestion(); exchange = { at: event.at, sessions: new Set() }; message('user', t('speaker.you'), event.text, event.at); break;
       case 'say':
         clearPartial();
         if (event.text?.trim()) message('assistant', agent, event.text, event.at);
@@ -119,7 +120,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
         break;
       case 'answering':
         if (!partial) {
-          const item = message('assistant', agent + ' · schreibt …', '', event.at);
+          const item = message('assistant', agent + ' · ' + t('transcript.writing'), '', event.at);
           const text = doc.createElement('pre');
           item.append(text);
           partial = { item, text };
@@ -137,7 +138,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
         const key = event.call_id || event.tool;
         let call = calls.get(key);
         if (!call || (!event.done && call.done)) {
-          const item = message('tool', 'Tool', '', event.at);
+          const item = message('tool', t('speaker.tool'), '', event.at);
           const details = doc.createElement('details');
           details.className = 'tool-call';
           const summary = doc.createElement('summary');
@@ -155,49 +156,49 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
               call.note = doc.createElement('p');
               details.append(call.note);
             }
-            call.note.textContent = 'Tool-Ergebnis wird geladen …';
+            call.note.textContent = t('tool.loading');
             try {
               const result = await bridge.ToolResult(profile, id, ref);
               if (!active()) return;
               if (result.found) {
                 if (result.arguments) appendText(details, result.arguments, doc);
-                appendText(details, result.content || '(Leeres Ergebnis)', doc);
+                appendText(details, result.content || t('tool.empty'), doc);
                 call.loaded = true;
                 call.result = result;
                 inspect(event.tool, result);
               }
-              call.note.textContent = result.found ? '' : 'Noch kein gespeichertes Ergebnis. Zum erneuten Laden auf- und zuklappen.';
+              call.note.textContent = result.found ? '' : t('tool.missing');
             } catch (cause) {
-              if (active()) call.note.textContent = 'Tool-Ergebnis konnte nicht geladen werden: ' + String(cause) + '. Zum Wiederholen auf- und zuklappen.';
+              if (active()) call.note.textContent = t('tool.failed', { error: String(cause) });
             } finally {
               call.loading = false;
             }
           });
         }
         call.done = event.done;
-        call.summary.textContent = (event.text || event.tool || 'Tool') +
-          (event.call_id ? ' · Ergebnis aufklappen' : '');
+        call.summary.textContent = (event.text || event.tool || t('speaker.tool')) +
+          (event.call_id ? t('tool.expandHint') : '');
         break;
       }
       case 'asked': {
         clearPartial();
         closeQuestion();
         const question = event.question;
-        message('question', event.done ? 'Beantwortet' : 'Frage',
+        message('question', t(event.done ? 'speaker.answered' : 'speaker.question'),
           question?.text || event.text || '', event.at);
         if (!event.done && id.startsWith('owner/')) {
           setQuestion({ ...(question || { text: event.text || '', options: [] }), at: event.at });
         }
         break;
       }
-      case 'queued': message('other', 'Warteschlange', event.text || 'Nachricht eingereiht', event.at); break;
+      case 'queued': message('other', t('speaker.queue'), event.text || t('queue.text'), event.at); break;
       case 'failed':
       case 'canceled':
         closeQuestion();
         clearPartial();
-        message('end', 'Status', event.kind === 'canceled' ? 'Antwort gestoppt' : (event.text || 'Antwort fehlgeschlagen'), event.at);
+        message('end', t('speaker.status'), event.kind === 'canceled' ? t('end.stopped') : (event.text || t('end.failed')), event.at);
         break;
-      case 'task': message('task', '↳ Aufgabe', event.text, event.at); break;
+      case 'task': message('task', t('speaker.task'), event.text, event.at); break;
       case 'thought': break;
     }
   };
@@ -210,6 +211,225 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
     }
   };
   return render;
+}
+
+// Where a session stands, from what its events tell: the phase of the loop to
+// its answer, the call it is in, the one it did last, and what comes next. The
+// counts come after this, as context, not before.
+function sessionPhase(trace, running) {
+  let phase = 'empty', since = '', call = null, last = null, question = '', jobs = '';
+  for (const event of trace) {
+    switch (event.kind) {
+      case 'step':
+        since = event.at || since;
+        if (event.done) {
+          last = event;
+          call = null;
+          if (phase !== 'asked') phase = 'thinking';
+        } else {
+          call = event;
+          phase = 'tool';
+        }
+        break;
+      case 'asked':
+        since = event.at || since;
+        if (event.done) {
+          question = '';
+          if (phase === 'asked') phase = 'thinking';
+        } else {
+          phase = 'asked';
+          question = event.question?.text || '';
+        }
+        break;
+      case 'answering':
+        // A piece of the answer being written: that it is written, not what.
+        since = event.at || since;
+        if (phase !== 'asked') phase = 'answering';
+        break;
+      case 'jobs':
+        jobs = String(event.text || '').trim();
+        break;
+      case 'message': case 'say': case 'task':
+        since = event.at || since;
+        if (phase !== 'asked') phase = 'thinking';
+        break;
+      case 'answer':
+        phase = 'done'; since = event.at || since; call = null; question = '';
+        break;
+      case 'failed':
+        phase = 'failed'; since = event.at || since; call = null;
+        break;
+      case 'canceled':
+        phase = 'canceled'; since = event.at || since; call = null;
+        break;
+    }
+  }
+  const settled = phase === 'done' || phase === 'failed' || phase === 'canceled' || phase === 'empty';
+  // A session the list does not know is taken as working while its phase says
+  // so: better a state that may be stale than one that says "done" to a
+  // session that works.
+  const live = !settled && running !== false;
+  const word = phase === 'asked' ? t('phase.asked')
+    : phase === 'tool' ? (live ? t('phase.calling') : t('phase.ready'))
+      : phase === 'thinking' ? (live ? t('phase.thinking') : t('phase.ready'))
+        : phase === 'answering' ? (live ? t('phase.answering') : t('phase.ready'))
+          : phase === 'done' ? t('phase.done')
+            : phase === 'failed' ? t('phase.failed')
+              : phase === 'canceled' ? t('phase.canceled')
+                : t('phase.empty');
+  // The call of a tool says its name and what it does with it.
+  let what = '';
+  if (phase === 'tool' && live && call) {
+    const tool = call.tool || t('common.tool'), text = String(call.text || '');
+    what = text.startsWith(tool + ' · ') ? text.slice(tool.length + 3) : text === tool ? '' : text;
+  }
+  const next = phase === 'asked' ? t('phase.nextAnswer')
+    : phase === 'tool' && live ? t('phase.nextResult', { tool: call?.tool || t('common.tool') })
+      : phase === 'answering' && live ? t('phase.nextEnd')
+        : phase === 'thinking' && live ? t('phase.nextTool')
+          : t('phase.nextNothing');
+  return { phase, since, word, what, next, question, jobs, last, call, live: live || phase === 'asked' };
+}
+
+// The tools of a session as one picture instead of their calls one by one:
+// one lane per tool, its calls where their time puts them, so that its mix and
+// its rhythm read under the state. A call on its way pulses, and a dashed line
+// marks where now is.
+const lanesShown = 6;
+function toolChart(doc, calls, pending, running) {
+  const width = 240, labels = 64, counts = 16, row = 12, pad = 2;
+  const name = step => step.tool || String(step.text || '').split(' · ')[0] || t('common.tool');
+  const all = pending ? [...calls, pending] : calls;
+  const tally = new Map();
+  for (const step of all) tally.set(name(step), (tally.get(name(step)) || 0) + 1);
+  const lanes = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, lanesShown);
+  const lane = new Map(lanes.map(([tool], index) => [tool, index]));
+  const height = lanes.length * row + 2 * pad;
+  // A call sits where its time puts it, over the session up to now; without
+  // stamps its order spreads it over the lane.
+  const stamps = all.map(step => Date.parse(step.at)).filter(Number.isFinite);
+  const first = Math.min(...stamps);
+  const span = Math.max(...stamps, running ? Date.now() : -Infinity) - first;
+  const at = (step, index) => {
+    const stamp = Date.parse(step.at);
+    const offset = span > 0 && Number.isFinite(stamp) ? (stamp - first) / span : index / Math.max(1, all.length);
+    return Math.min(1, Math.max(0, offset));
+  };
+  const plot = width - counts - labels;
+  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'artefact-chart');
+  svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', all.length
+    ? (running ? t('chart.running') : t('chart.done')) + all.length + (all.length === 1 ? t('chart.oneTool') : t('chart.tools')) +
+      lanes.map(([tool, n]) => tool + ' ' + n).join(', ') +
+      (tally.size > lanes.length ? t('chart.more', { n: tally.size - lanes.length }) : '')
+    : t('chart.none'));
+  const mark = (tag, attributes) => {
+    const node = doc.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+    svg.append(node);
+    return node;
+  };
+  const text = (x, y, content, anchor) => {
+    const node = mark('text', { x, y, 'text-anchor': anchor });
+    node.textContent = content;
+    return node;
+  };
+  lanes.forEach(([tool, n], index) => {
+    const centre = pad + index * row + row / 2;
+    text(0, centre + 2.8, tool.length > 12 ? tool.slice(0, 11) + '…' : tool);
+    text(width, centre + 2.8, String(n), 'end');
+    mark('line', { class: 'chart-lane lane-' + index, x1: labels, x2: labels + plot, y1: centre, y2: centre });
+  });
+  const tick = (step, index, extra) => {
+    const shade = lane.get(name(step));
+    if (shade === undefined) return null;
+    const centre = pad + shade * row + row / 2;
+    return mark('rect', {
+      class: 'chart-tick lane-' + shade + (extra ? ' ' + extra : ''),
+      x: (labels + at(step, index) * plot - 1.2).toFixed(2),
+      y: centre - 3.5,
+      width: 2.4,
+      height: 7,
+    });
+  };
+  calls.forEach((step, index) => tick(step, index, ''));
+  // A call that was on its way when the session stopped does not pulse.
+  if (pending) tick(pending, all.length - 1, running ? 'chart-live' : '');
+  if (running) {
+    mark('line', { class: 'chart-now', x1: labels + plot - 1.2, x2: labels + plot - 1.2, y1: pad, y2: height - pad });
+  }
+  return { svg, lanes, calls: all.length, kinds: tally.size };
+}
+
+// One session beside the thread: where it stands, what it did last and what it
+// does next, with the chart of its tools under it.
+function artefactBlock(doc, entry, trace) {
+  const state = sessionPhase(trace, entry.running);
+  const block = doc.createElement('section');
+  block.className = 'artefact';
+  const title = doc.createElement('h3');
+  title.textContent = (entry.title || entry.id) + (state.live ? t('artefact.working') : '');
+  block.append(title);
+  const line = doc.createElement('p');
+  line.className = 'artefact-state' + (state.live ? ' live' : '') + (state.phase === 'failed' ? ' bad' : '');
+  const dot = doc.createElement('span');
+  dot.className = 'artefact-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  const word = doc.createElement('span');
+  word.className = 'artefact-word';
+  word.textContent = state.word;
+  line.append(dot, word);
+  if (state.what) {
+    const what = doc.createElement('span');
+    what.className = 'artefact-what';
+    what.textContent = state.what;
+    line.append(what);
+  }
+  if (state.since) {
+    const time = doc.createElement('span');
+    time.className = 'artefact-time';
+    time.textContent = clock(state.since);
+    line.append(time);
+  }
+  block.append(line);
+  const fact = (key, value, time, extra) => {
+    const row = doc.createElement('p');
+    row.className = 'artefact-fact' + (extra ? ' ' + extra : '');
+    const name = doc.createElement('span');
+    name.className = 'artefact-key';
+    name.textContent = key;
+    const text = doc.createElement('span');
+    text.className = 'artefact-value';
+    text.textContent = value;
+    row.append(name, text);
+    if (time) {
+      const at = doc.createElement('span');
+      at.className = 'artefact-time';
+      at.textContent = time;
+      row.append(at);
+    }
+    return row;
+  };
+  if (state.question) block.append(fact(t('artefact.question'), state.question));
+  block.append(fact(t('artefact.last'), state.last ? state.last.text : t('artefact.noCall'),
+    state.last ? clock(state.last.at) : '', state.last?.failed ? 'bad' : ''));
+  block.append(fact(t('artefact.next'), state.next));
+  if (state.jobs) block.append(fact(t('artefact.running'), state.jobs.split('\n')[0] + (state.jobs.includes('\n') ? ' …' : '')));
+  // Without a call there is nothing to draw; the stand above says it.
+  const calls = trace.filter(step => step.kind === 'step' && step.done);
+  const drawn = toolChart(doc, calls, state.call, state.live);
+  if (drawn.calls) {
+    block.append(drawn.svg);
+    const summary = doc.createElement('p');
+    summary.className = 'artefact-summary';
+    summary.textContent = t(drawn.calls === 1 ? 'artefact.oneTool' : 'artefact.tools', { n: drawn.calls }) +
+      drawn.kinds + t(drawn.kinds === 1 ? 'artefact.oneKind' : 'artefact.kinds') +
+      (drawn.kinds > drawn.lanes.length ? t('artefact.lanes', { n: drawn.lanes.length }) : '');
+    block.append(summary);
+  }
+  return block;
 }
 
 export function browse(bridge, doc = document, resume = '', threadID = '') {
@@ -236,11 +456,11 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
   let inspecting = null;
   const inspect = (tool, result) => {
     inspecting = { profile: context.profile, id: context.id };
-    contextTitle.textContent = '[' + (tool || 'Werkzeug') + ']';
-    contextNote.textContent = 'Werkzeug-Ergebnis · ' + context.id;
+    contextTitle.textContent = '[' + (tool || t('common.tool')) + ']';
+    contextNote.textContent = t('context.toolResult', { id: context.id });
     contextDetails.replaceChildren();
     if (result.arguments) appendText(contextDetails, result.arguments, doc);
-    appendText(contextDetails, result.content || '(Leeres Ergebnis)', doc);
+    appendText(contextDetails, result.content || t('tool.empty'), doc);
   };
   const drafts = new Map();
   const localEntries = new Map();
@@ -321,8 +541,22 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       void artefacts();
     },
   };
-  // The artefacts of the sessions of the part in view: the last calls of
-  // their tools, as the plugins of the tools tell them.
+  // A session opened on its own, not the thread: where it stands, as its
+  // events tell it. Without any, the rail keeps its hint.
+  const own = [];
+  let heard = false; // an event of it came live, after its replay
+  const ownArtefacts = () => {
+    if (!context || context.id === threadID || inspecting || !own.length) return;
+    // It works as the list says, or as its own events tell since it was
+    // opened: the list learns of new work only with its next refresh.
+    const listed = entries.find(item => item.id === context.id) || { id: context.id };
+    const entry = { ...listed, running: !!listed.running || (heard && activity.busy) };
+    contextTitle.textContent = t('context.stand');
+    contextNote.textContent = 'T – ' + clock(own[own.length - 1].at);
+    contextDetails.replaceChildren(artefactBlock(doc, entry, own));
+  };
+  // The artefacts of the sessions of the part in view: where each stands and
+  // what its tools did, as the session tells it rather than call by call.
   const steps = new Map();
   let drawing = 0;
   const artefacts = async () => {
@@ -333,27 +567,19 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     // changed, see read.
     const stale = () => draw !== drawing || context?.id !== threadID || context?.profile !== profile;
     const shown = entries.filter(inSection);
-    contextTitle.textContent = '[Artefakte]';
-    contextNote.textContent = shown.length ? 'T – ' + clock(section.at) : 'Noch keine';
+    contextTitle.textContent = t('context.stand');
+    contextNote.textContent = shown.length ? 'T – ' + clock(section.at) : t('common.none');
     const blocks = [];
     for (const entry of shown) {
       // What was read while the session worked is read once more after it ended.
       const kept = steps.get(entry.id);
       let list = kept?.list;
       if (!kept || entry.running || kept.running) {
-        try { list = await bridge.SessionSteps(profile, entry.id) || []; } catch { list = list || []; }
+        try { list = await bridge.SessionTrace(profile, entry.id) || []; } catch { list = list || []; }
         if (stale()) return;
         steps.set(entry.id, { list, running: !!entry.running });
       }
-      const block = doc.createElement('section');
-      block.className = 'artefact';
-      const title = doc.createElement('h3');
-      title.textContent = (entry.title || entry.id) + ' · ' + (entry.running ? 'arbeitet' : 'fertig');
-      block.append(title);
-      const lines = doc.createElement('pre');
-      lines.textContent = list.slice(-8).map(step => step.text || step.tool).join('\n') || 'Noch keine Werkzeuge';
-      block.append(lines);
-      blocks.push(block);
+      blocks.push(artefactBlock(doc, entry, list));
     }
     if (stale()) return;
     contextDetails.replaceChildren(...blocks);
@@ -378,10 +604,10 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     if (!ready) return;
     const central = context?.id === threadID;
     const active = Math.max(0, activity.n - (activity.own ? 1 : 0));
-    status.textContent = !context?.id.startsWith('owner/') ? 'Peer-Session · Nur lesen' :
+    status.textContent = !context?.id.startsWith('owner/') ? t('status.peer') :
       (central ? 'Thread' : 'Session') + ' · ' +
-      (asking ? 'Braucht deine Antwort' : activity.busy ? 'Arbeitet …' : 'Bereit') +
-      (central ? ' · ' + active + (active === 1 ? ' aktive Session' : ' aktive Sessions') : '');
+      (asking ? t('status.needsAnswer') : activity.busy ? t('status.working') : t('status.ready')) +
+      (central ? t(active === 1 ? 'status.oneActive' : 'status.active', { n: active }) : '');
   };
   const questionPanel = doc.getElementById('question-panel');
   const questionText = doc.getElementById('question-text');
@@ -400,7 +626,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         const button = doc.createElement('button');
         button.type = 'button';
         button.className = 'question-option';
-        button.textContent = option + (option === question.recommended ? ' · Empfohlen' : '');
+        button.textContent = option + (option === question.recommended ? t('question.recommended') : '');
         if (option === question.recommended) button.className += ' recommended';
         button.addEventListener('click', () => {
           if (asking === current && !button.disabled) void submit(option, true);
@@ -432,15 +658,14 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     if (asking) {
       const sent = context?.state.sentQuestion === asking.key;
       asking.buttons.forEach(button => { button.disabled = !writable() || sent; });
-      questionHint.textContent = sent ? 'Antwort übergeben – der Assistent fährt fort …' :
-        'Wähle eine Antwort oder antworte unten in eigenen Worten.';
+      questionHint.textContent = sent ? t('question.sent') : t('question.hint');
     }
     draft.disabled = !ready || !context?.id.startsWith('owner/');
     send.disabled = !writable() || !draft.value.trim();
     stop.disabled = !ready || !context?.id.startsWith('owner/') || !activity.busy || activity.stopping;
     sendError.textContent = context?.state.error || '';
     sendError.hidden = !sendError.textContent;
-    sendStatus.textContent = context?.state.pending ? 'Wird gesendet …' : (context?.state.notice || '');
+    sendStatus.textContent = context?.state.pending ? t('composer.sending') : (context?.state.notice || '');
     updateStatus();
   };
   stop.addEventListener('click', async () => {
@@ -453,7 +678,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     try {
       await bridge.StopSession(target.profile, target.id);
     } catch (cause) {
-      target.state.error = 'Antwort konnte nicht gestoppt werden: ' + String(cause);
+      target.state.error = t('composer.stopFailed', { error: String(cause) });
     } finally {
       current.stopping = false;
       if (context === target) updateComposer();
@@ -476,9 +701,9 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       await bridge.SendMessage(target.profile, target.id, text);
       if (question) state.sentQuestion = question.key;
       if (!fromOption && state.text === original) state.text = '';
-      state.notice = 'Nachricht übergeben';
+      state.notice = t('composer.sent');
     } catch (cause) {
-      state.error = 'Nachricht konnte nicht gesendet werden: ' + String(cause);
+      state.error = t('composer.sendFailed', { error: String(cause) });
     } finally {
       state.pending = false;
       if (context?.state === state) {
@@ -543,8 +768,10 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
         subtitle.className = 'session-meta';
         // As the sessions in the demo: what it works on, its state, and a bar that
         // runs while it works. No progress is made up: the bar only says running or not.
-        subtitle.textContent = 'Zustand: ' + (entry.running ? 'arbeitet' : 'bereit') + ' · ' +
-          (entry.id.startsWith('owner/') ? 'eigene' : 'peer') +
+        subtitle.textContent = t('session.state', {
+          state: entry.running ? t('session.working') : t('phase.ready'),
+          owner: entry.id.startsWith('owner/') ? t('session.own') : t('session.peer'),
+        }) +
           (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
         const bar = doc.createElement('span');
         bar.className = 'session-bar';
@@ -561,7 +788,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     if (!groups.size) {
       const empty = doc.createElement('p');
       empty.className = 'list-empty';
-      empty.textContent = threadID ? 'Noch keine' : 'Noch keine Sessions.';
+      empty.textContent = threadID ? t('common.none') : t('sessions.none');
       sessions.append(empty);
     }
   };
@@ -577,6 +804,8 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     activity = { busy: false, n: 0, own: false, stopping: false };
     setQuestion(null);
     context = { profile, id: entry.id, state: sessionState(profile, entry.id) };
+    own.length = 0;
+    heard = false;
     draft.value = context.state.text;
     updateComposer();
     content.replaceChildren();
@@ -591,39 +820,53 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     if (entry.id !== threadID || inspecting?.profile !== profile) {
       inspecting = null;
       contextTitle.textContent = '[' + (entry.id === threadID ? 'Thread' : 'Session') + ']';
-      contextNote.textContent = 'Öffne ein Werkzeug-Ergebnis im Verlauf, um es hier zu lesen.';
+      contextNote.textContent = t('context.hint');
       contextDetails.replaceChildren();
     }
     error.hidden = true;
     title.textContent = entry.title || entry.id;
     meta.textContent = entry.id + (formatDate(entry.modified) ? ' · ' + formatDate(entry.modified) : '');
-    status.textContent = 'Verlauf wird geladen …';
+    status.textContent = t('session.loading');
     try {
       const snapshot = await bridge.OpenSession(profile, entry.id);
       const active = () => version === generation && current === selection;
       if (!active()) return;
       context.state.notice = snapshot.notice || '';
+      // The stand of a session opened on its own follows its events; beside
+      // the thread, the rail reads each session for itself.
+      const stand = event => {
+        if (entry.id === threadID) return;
+        own.push(event);
+        ownArtefacts();
+      };
       const onEvent = event => {
+        if (ready) heard = true;
         switch (event.kind) {
           case 'working':
             activity.n = event.n || 0;
             activity.own = !!event.own;
             activity.busy = activity.n > 0;
             break;
-          case 'message': case 'task': case 'answering': case 'thought': case 'calling':
+          case 'message': case 'task':
+            activity.busy = true;
+            stand(event);
+            break;
+          case 'answering':
+            activity.busy = true;
+            // One piece of the answer being written is enough to tell it.
+            if (own[own.length - 1]?.kind !== 'answering') stand(event);
+            break;
+          case 'thought': case 'calling':
             activity.busy = true;
             break;
-          case 'asked': if (!event.done) activity.busy = true; break;
+          case 'asked': if (!event.done) activity.busy = true; stand(event); break;
           case 'answer': case 'failed': case 'canceled':
             activity.busy = entry.id === threadID && activity.n > (activity.own ? 1 : 0);
+            stand(event);
             break;
-          case 'directory': meta.textContent = event.text || 'Profil-Workspace'; break;
-          case 'step':
-            if (!contextDetails.children.length) {
-              contextTitle.textContent = '[' + (event.tool || 'Werkzeug') + ']';
-              contextNote.textContent = event.text || event.tool || '';
-            }
-            break;
+          case 'directory': meta.textContent = event.text || t('session.workspace'); break;
+          case 'step': stand(event); break;
+          case 'jobs': case 'say': stand(event); break;
           case 'title':
             if (entry.id !== threadID && event.text) {
               entry.title = event.text;
@@ -647,7 +890,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
           while (active() && snapshot.token && entry.id.startsWith('owner/')) {
             const events = await bridge.PollSession(snapshot.token);
             if (!active()) return;
-            if (events === null) throw new Error('Session-Verbindung beendet');
+            if (events === null) throw new Error(t('session.ended'));
             // A poll comes back every 150 ms, mostly empty. Moving the history to
             // its end each time, at its end already, took back the bounce of a
             // pull past it: it is moved only when the history grew.
@@ -660,8 +903,8 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
           if (active()) {
             ready = false;
             setQuestion(null);
-            status.textContent = 'Verbindung unterbrochen';
-            fail('Verbindung zur Session unterbrochen. Bitte aktualisieren', cause);
+            status.textContent = t('session.disconnected');
+            fail(t('session.disconnectedHint'), cause);
           }
         }
       };
@@ -669,7 +912,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     } catch (cause) {
       if (version !== generation || current !== selection) return;
       status.textContent = '';
-      fail('Verlauf konnte nicht geladen werden', cause);
+      fail(t('session.loadFailed'), cause);
     }
   };
   const load = async (reset = false) => {
@@ -685,16 +928,16 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
     entries = [];
     if (reset || !inspecting) {
       inspecting = null;
-      contextTitle.textContent = '[Kontext]';
+      contextTitle.textContent = t('context.title');
       contextNote.textContent = '';
       contextDetails.replaceChildren();
     }
     sessions.replaceChildren();
     content.replaceChildren();
     error.hidden = true;
-    title.textContent = 'Sessions';
-    meta.textContent = 'Unterhaltungen des Nodes';
-    status.textContent = 'Sessions werden geladen …';
+    title.textContent = t('sessions.title');
+    meta.textContent = t('sessions.subtitle');
+    status.textContent = t('sessions.loading');
     try {
       let result = [], listError;
       try { result = await bridge.Sessions(profiles.selectedIndex) || []; }
@@ -706,14 +949,14 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       entries = [...result, ...locals.values()].filter(entry => entry.id !== threadID)
         .sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
       renderList();
-      status.textContent = entries.length ? 'Wähle eine Session.' : 'Noch keine Sessions.';
+      status.textContent = entries.length ? t('sessions.choose') : t('sessions.none');
       const target = threadID && previous === threadID ? threadEntry : entries.find(entry => entry.id === previous);
       if (threadID || entries.length) await read(target || (threadID ? threadEntry : entries[0]));
-      if (listError && version === generation) fail('Sessions konnten nicht geladen werden', listError);
+      if (listError && version === generation) fail(t('sessions.loadFailed'), listError);
     } catch (cause) {
       if (version !== generation) return;
       status.textContent = '';
-      fail('Sessions konnten nicht geladen werden', cause);
+      fail(t('sessions.loadFailed'), cause);
     }
   };
   profiles.addEventListener('change', () => { load(true); });
@@ -735,6 +978,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
       if (JSON.stringify(nextEntries) === JSON.stringify(entries)) return;
       entries = nextEntries;
       renderList();
+      ownArtefacts();
       if (entries.some(inSection)) void artefacts();
     } catch { /* Keep the last list; explicit refresh reports errors. */ }
     finally { listing = false; }
@@ -745,6 +989,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '') {
 export async function start(bridge, doc = document) {
   const theme = createThemePreference(doc);
   try {
+    applyDocument(doc);
     const state = await bridge.InitialState();
     mount(state, doc);
     const modelDialog = createModelDialog(bridge, doc);
@@ -756,7 +1001,7 @@ export async function start(bridge, doc = document) {
     await browse(bridge, doc, state.resume, state.thread);
   } catch (error) {
     const message = doc.getElementById('error');
-    message.textContent = 'Profile konnten nicht geladen werden: ' + String(error);
+    message.textContent = t('profiles.loadFailed', { error: String(error) });
     message.hidden = false;
   }
 }

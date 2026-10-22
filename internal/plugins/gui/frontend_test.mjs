@@ -3,18 +3,21 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 // A data URL keeps this test independent of package.json's module mode.
+const i18nSource = await readFile(new URL('./frontend/i18n.js', import.meta.url), 'utf8');
+const i18nURL = 'data:text/javascript;base64,' + Buffer.from(i18nSource).toString('base64');
+const { t, locale, setLocale } = await import(i18nURL);
 const source = await readFile(new URL('./frontend/app.js', import.meta.url), 'utf8');
 const dialogSource = await readFile(new URL('./frontend/model-dialog.js', import.meta.url), 'utf8');
-const dialogURL = 'data:text/javascript;base64,' + Buffer.from(dialogSource).toString('base64');
+const dialogURL = 'data:text/javascript;base64,' + Buffer.from(dialogSource.replace("'./i18n.js'", JSON.stringify(i18nURL))).toString('base64');
 const { createModelDialog } = await import(dialogURL);
 const themeSource = await readFile(new URL('./frontend/theme.js', import.meta.url), 'utf8');
 const themeURL = 'data:text/javascript;base64,' + Buffer.from(themeSource).toString('base64');
 const { createThemePreference } = await import(themeURL);
 const settingsSource = await readFile(new URL('./frontend/settings-dialog.js', import.meta.url), 'utf8');
-const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource.replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64');
+const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource.replace("'./theme.js'", JSON.stringify(themeURL)).replace("'./i18n.js'", JSON.stringify(i18nURL))).toString('base64');
 const { createSettingsDialog } = await import(settingsURL);
 const { mount, start, browse, dateGroup } = await import(
-  'data:text/javascript;base64,' + Buffer.from(source.replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL)).replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64')
+  'data:text/javascript;base64,' + Buffer.from(source.replace("'./i18n.js'", JSON.stringify(i18nURL)).replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL)).replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64')
 );
 
 class Element extends EventTarget {
@@ -59,8 +62,9 @@ class Element extends EventTarget {
     this.selectedIndex = -1;
   }
 
-  append(child) {
-    this.children.push(child);
+  // As in the DOM, append takes any number of children.
+  append(...children) {
+    this.children.push(...children);
     if (this.tagName === 'select' && this.selectedIndex === -1) {
       this.selectedIndex = 0;
     }
@@ -139,6 +143,11 @@ function documentFixture() {
       assert.ok(['option', 'section', 'h2', 'h3', 'pre', 'p', 'button', 'span', 'details', 'summary', 'dialog', 'form', 'label', 'select', 'div', 'input'].includes(tagName));
       return new Element(tagName);
     },
+    createElementNS(namespace, tagName) {
+      assert.equal(namespace, 'http://www.w3.org/2000/svg');
+      assert.ok(['svg', 'line', 'rect', 'text'].includes(tagName));
+      return new Element(tagName);
+    },
   };
 }
 
@@ -159,7 +168,7 @@ test('HTML supplies the module and accessible profile/error elements', async () 
     assert.doesNotMatch(html, new RegExp('id="' + id + '"'));
   }
   assert.doesNotMatch(html, /class="brand"/);
-  assert.match(html, /<select\b(?=[^>]*id="profile")(?=[^>]*aria-label="Profil")(?=[^>]*hidden)(?=[^>]*disabled)[^>]*>/);
+  assert.match(html, /<select\b(?=[^>]*id="profile")(?=[^>]*aria-label="Profile")(?=[^>]*hidden)(?=[^>]*disabled)[^>]*>/);
   assert.match(html, /<[^>]+(?=[^>]*id="error")(?=[^>]*role="alert")(?=[^>]*hidden)[^>]*>/);
   assert.match(html, /<[^>]+(?=[^>]*id="session-status")(?=[^>]*role="status")[^>]*>/);
 });
@@ -373,7 +382,7 @@ test('an asynchronous bridge rejection reveals the error instead of rejecting st
     },
   }, doc));
   assert.equal(doc.error.hidden, false);
-  assert.equal(doc.error.textContent, 'Profile konnten nicht geladen werden: Error: bridge unavailable');
+  assert.equal(doc.error.textContent, 'The profiles could not be loaded: Error: bridge unavailable');
   assert.deepEqual(doc.profile.children, []);
 });
 
@@ -392,6 +401,26 @@ function archiveFixture() {
 function buttons(doc) {
   return doc.sessions.children.flatMap(group => group.children.filter(child => child.tagName === 'button'));
 }
+// What one artefact block tells: its heading, its stand, the facts under it,
+// the chart and the counts below.
+function blockParts(block) {
+  const parts = { title: block.children[0].textContent, stand: null, facts: {}, svg: null, summary: '' };
+  for (const child of block.children) {
+    if (child.tagName === 'svg') { parts.svg = child; continue; }
+    if (child.tagName !== 'p') continue;
+    if (child.className.startsWith('artefact-state')) { parts.stand = child; continue; }
+    if (child.className.startsWith('artefact-fact')) { parts.facts[child.children[0].textContent] = child.children[1].textContent; continue; }
+    parts.summary = child.textContent;
+  }
+  parts.words = parts.stand.children.map(child => child.textContent).filter(Boolean);
+  parts.word = parts.stand.children.find(child => child.className === 'artefact-word')?.textContent ?? '';
+  parts.what = parts.stand.children.find(child => child.className === 'artefact-what')?.textContent ?? '';
+  return parts;
+}
+function chartText(block) {
+  const svg = block.children.find(child => child.tagName === 'svg');
+  return svg.children.filter(child => child.tagName === 'text').map(child => child.textContent);
+}
 function choose(doc, id) {
   const button = buttons(doc).find(button => button.title === id);
   assert.ok(button, 'Missing session: ' + id);
@@ -403,13 +432,13 @@ function current(doc) {
 
 test('dateGroup uses local calendar boundaries, including invalid dates', () => {
   const now = new Date(2026, 0, 1, 12);
-  assert.equal(dateGroup(new Date(2026, 0, 1, 0), now), 'Heute');
-  assert.equal(dateGroup(new Date(2026, 0, 1, 23, 59), now), 'Heute');
-  assert.equal(dateGroup(new Date(2025, 11, 31, 0), now), 'Gestern');
-  assert.equal(dateGroup(new Date(2025, 11, 31, 23, 59), now), 'Gestern');
-  assert.equal(dateGroup(new Date(2025, 11, 30, 23, 59), now), 'Älter');
-  assert.equal(dateGroup('not a date', now), 'Ohne Datum');
-  assert.equal(dateGroup(undefined, now), 'Ohne Datum');
+  assert.equal(dateGroup(new Date(2026, 0, 1, 0), now), 'Today');
+  assert.equal(dateGroup(new Date(2026, 0, 1, 23, 59), now), 'Today');
+  assert.equal(dateGroup(new Date(2025, 11, 31, 0), now), 'Yesterday');
+  assert.equal(dateGroup(new Date(2025, 11, 31, 23, 59), now), 'Yesterday');
+  assert.equal(dateGroup(new Date(2025, 11, 30, 23, 59), now), 'Older');
+  assert.equal(dateGroup('not a date', now), 'No date');
+  assert.equal(dateGroup(undefined, now), 'No date');
 });
 
 test('sessions are sorted newest first and grouped without mutating bridge data', async () => {
@@ -429,12 +458,12 @@ test('sessions are sorted newest first and grouped without mutating bridge data'
   ].map(Object.freeze));
   await browse({ async Sessions() { return entries; }, async OpenSession() { return { token: 0, events: [] }; } }, doc);
   assert.deepEqual(doc.sessions.children.map(group => [group.tagName, group.children[0].textContent]),
-    [['section', 'Heute'], ['section', 'Gestern'], ['section', 'Älter'], ['section', 'Ohne Datum']]);
+    [['section', 'Today'], ['section', 'Yesterday'], ['section', 'Older'], ['section', 'No date']]);
   assert.deepEqual(buttons(doc).map(button => button.title),
     ['owner/latest', 'owner/early', 'owner/yesterday', 'owner/old', 'owner/invalid']);
   assert.equal(entries[0].id, 'owner/invalid');
   assert.deepEqual(current(doc), ['owner/latest']);
-  assert.match(doc['session-status'].textContent, /Session · Bereit/);
+  assert.match(doc['session-status'].textContent, /Session · Ready/);
 });
 
 test('opening and switching sessions scrolls to the end only after the full replay', async () => {
@@ -574,16 +603,16 @@ test('whole conversation replays projected events literally, with paired tools a
   assert.match(doc['session-meta'].textContent, /owner\/0/);
   const texts = descendants(doc.content, 'pre');
   assert.deepEqual(visibleTexts(doc.content),
-    [unsafe, unsafe, 'Spoken answer', 'Suggested answer', unsafe, unsafe, 'Antwort fehlgeschlagen', 'Antwort gestoppt']);
+    [unsafe, unsafe, 'Spoken answer', 'Suggested answer', unsafe, unsafe, 'Answer failed', 'Answer stopped']);
   for (const text of texts) assert.deepEqual(text.children, []);
   assert.ok(!visibleTexts(doc.content).includes('partial answer'));
   assert.ok(doc.content.children.some(item => item.hidden && descendants(item, 'pre').some(text => text.textContent === 'partial answer')));
-  assert.match(doc.content.children[0].children[0].textContent, /^Du · /);
+  assert.match(doc.content.children[0].children[0].textContent, /^You · /);
   const details = descendants(doc.content, 'details');
   assert.equal(details.length, 1);
   assert.equal(details[0].children.length, 1);
-  assert.match(details[0].children[0].textContent, /File read.*Ergebnis aufklappen/);
-  assert.equal(doc['session-status'].textContent, 'Session · Bereit');
+  assert.match(details[0].children[0].textContent, /File read.*show the result/);
+  assert.equal(doc['session-status'].textContent, 'Session · Ready');
   choose(doc, 'owner/64');
   await settle();
   assert.deepEqual(current(doc), ['owner/64']);
@@ -605,7 +634,7 @@ test('projected events without their optional fields still render literally', as
     },
   }, doc);
   assert.deepEqual(descendants(doc.content, 'summary').map(item => item.textContent), ['files.read', 'Tool']);
-  assert.deepEqual(visibleTexts(doc.content), ['Nachricht eingereiht']);
+  assert.deepEqual(visibleTexts(doc.content), ['Message queued']);
   assert.equal(doc['question-panel'].hidden, false);
   assert.equal(doc['question-text'].textContent, '');
   assert.deepEqual(doc['question-options'].children, []);
@@ -624,7 +653,7 @@ test('a tool call that starts again after its result opens a second detail', asy
     },
   }, doc);
   assert.deepEqual(descendants(doc.content, 'summary').map(item => item.textContent),
-    ['File read · Ergebnis aufklappen', 'Reading it again · Ergebnis aufklappen']);
+    ['File read · show the result', 'Reading it again · show the result']);
   assert.equal(descendants(doc.content, 'details').length, 2);
 });
 
@@ -657,10 +686,10 @@ test('tool arguments and content load only on open, once, and huge results expan
   for (let i = 0; i < 2; i++) {
     expand.dispatchEvent(new Event('click'));
     assert.equal(result.textContent, content);
-    assert.equal(expand.textContent, 'Text einklappen');
+    assert.equal(expand.textContent, 'Collapse the text');
     expand.dispatchEvent(new Event('click'));
     assert.equal(result.textContent, content.slice(0, 8000));
-    assert.match(expand.textContent, /Vollständigen Text anzeigen/);
+    assert.match(expand.textContent, /Show the full text/);
     toggle(detail, false);
     toggle(detail, true);
     await settle();
@@ -687,16 +716,16 @@ test('tool detail errors and not-yet-found results retry after close and reopen'
   const [detail] = descendants(doc.content, 'details');
   toggle(detail, true);
   await settle();
-  assert.match(detail.children[1].textContent, /detail failed.*Wiederholen/);
+  assert.match(detail.children[1].textContent, /detail failed.*Open and close it to retry/);
   assert.equal(descendants(detail, 'pre').length, 0);
   toggle(detail, false);
   toggle(detail, true);
   await settle();
-  assert.match(detail.children[1].textContent, /Noch kein gespeichertes Ergebnis/);
+  assert.match(detail.children[1].textContent, /No stored result yet/);
   toggle(detail, false);
   toggle(detail, true);
   await settle();
-  assert.equal(descendants(detail, 'pre')[0].textContent, '(Leeres Ergebnis)');
+  assert.equal(descendants(detail, 'pre')[0].textContent, '(Empty result)');
   assert.equal(detail.children[1].textContent, '');
   toggle(detail, false);
   toggle(detail, true);
@@ -754,7 +783,7 @@ test('live polling appends events, pairs start/done across batches and exposes c
   await settle();
   assert.deepEqual(polls, [17, 17, 17]);
   const [detail] = descendants(doc.content, 'details');
-  assert.equal(descendants(doc.content, 'summary')[0].textContent, 'File read · Ergebnis aufklappen');
+  assert.equal(descendants(doc.content, 'summary')[0].textContent, 'File read · show the result');
   toggle(detail, true);
   await settle();
   assert.equal(detailReads, 1);
@@ -762,7 +791,7 @@ test('live polling appends events, pairs start/done across batches and exposes c
   pending[2].reject(new Error('disconnected'));
   await settle();
   assert.equal(doc.error.hidden, false);
-  assert.match(doc.error.textContent, /Verbindung.*disconnected/);
+  assert.match(doc.error.textContent, /interrupted.*disconnected/);
 });
 
 test('closed live streams stop polling instead of spinning', async () => {
@@ -776,7 +805,7 @@ test('closed live streams stop polling instead of spinning', async () => {
   await settle();
   assert.equal(polls, 1);
   assert.equal(doc.error.hidden, false);
-  assert.match(doc.error.textContent, /Verbindung.*beendet/);
+  assert.match(doc.error.textContent, /interrupted.*ended/);
 });
 
 test('a live poll without events leaves the transcript alone and keeps following', async () => {
@@ -877,7 +906,7 @@ test('composer sends Enter/form, not Shift+Enter, IME, blank or duplicate submis
   assert.equal(doc.send.disabled, true);
   submit(doc);
   assert.deepEqual(calls, [[0, 'owner/a', 'hello\nworld']]);
-  assert.match(doc['send-status'].textContent, /gesendet/);
+  assert.match(doc['send-status'].textContent, /Sending/);
   typeDraft(doc, 'new draft while sending');
   pending.resolve();
   await settle();
@@ -959,7 +988,7 @@ test('questions render literally with recommendations, free replies, queued and 
   }, doc);
   assert.deepEqual(visibleTexts(doc.content), ['<b>Choose?</b>']);
   const [yes, no] = doc['question-options'].children;
-  assert.equal(yes.textContent, '<yes> · Empfohlen');
+  assert.equal(yes.textContent, '<yes> · Recommended');
   typeDraft(doc, 'free form draft');
   yes.dispatchEvent(new Event('click'));
   no.dispatchEvent(new Event('click'));
@@ -1180,7 +1209,7 @@ test('a second open is ignored and an access whose model list failed is reported
   assert.equal(el.access.value, 'b');
   assert.equal(el.model.value, 'old');
   assert.equal(el.error.hidden, false);
-  assert.match(el.error.textContent, /Modellliste konnte nicht vollständig geladen werden: Zeitüberschreitung/);
+  assert.equal(el.error.textContent, t('dialog.failed') + ' Zeitüberschreitung');
   assert.equal(el.save.disabled, false);
 });
 
@@ -1197,7 +1226,7 @@ test('a running save refuses a second submit and Escape, and locks the dialog', 
   el.model.value = 'n';
   el.form.dispatchEvent(new Event('submit', { cancelable: true }));
   assert.equal(el.close.disabled, true);
-  assert.equal(el.status.textContent, 'Modell wird gespeichert …');
+  assert.equal(el.status.textContent, 'Saving the model …');
   el.form.dispatchEvent(new Event('submit', { cancelable: true }));
   const escape = new Event('cancel', { cancelable: true });
   el.dialog.dispatchEvent(escape);
@@ -1250,7 +1279,7 @@ test('the gear changes appearance immediately and keeps it across settings and p
   const dialog = doc.body.children.at(-1);
   const appearance = () => dialog.children.find(e => e.tagName === 'label').children[0];
   assert.equal(appearance().value, 'system');
-  assert.deepEqual(appearance().children.map(e => [e.value, e.textContent]), [['system', 'System'], ['light', 'Hell'], ['dark', 'Dunkel']]);
+  assert.deepEqual(appearance().children.map(e => [e.value, e.textContent]), [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]);
   appearance().value = 'dark';
   appearance().dispatchEvent(new Event('change'));
   assert.equal(doc.documentElement.getAttribute('data-theme'), 'dark');
@@ -1278,6 +1307,20 @@ test('settings opens on the dialog, not with the focus ring on its first button'
   assert.match(css, /\.settings-dialog > button[^{]*\{[^}]*border-radius/);
 });
 
+// A click into the chat focuses main, which carries tabindex="-1" for the skip
+// link; the ring it would draw there shows only as bars at the window's edges.
+test('main draws no focus ring when the chat is clicked', async () => {
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.match(css, /#main:focus \{[^}]*outline: none/);
+});
+
+// Typing into the composer leaves the divider above it as quiet as it is
+// otherwise; it does not take the accent and read as a bold bar.
+test('the line above the composer stays quiet while typing', async () => {
+  const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /\.composer:focus-within \{[^}]*border-top-color/);
+});
+
 test('settings icon navigates to the model dialog for the selected profile', async () => {
   const doc = documentFixture();
   const loaded = [];
@@ -1293,7 +1336,7 @@ test('settings icon navigates to the model dialog for the selected profile', asy
   await settle();
   assert.deepEqual(loaded, [1]);
   assert.equal(dialogElements(doc).dialog.open, true);
-  assert.match(dialogElements(doc).status.textContent, /Keine Zugänge/);
+  assert.match(dialogElements(doc).status.textContent, /No access is set up/);
   // The arrow leads back to the settings it was opened from.
   const el = dialogElements(doc);
   assert.equal(el.back.hidden, false);
@@ -1441,10 +1484,10 @@ test('model dialog has an X and, opened from a page, a back arrow instead of a c
   const picker = createModelDialog({ Models: async () => ({ access: 'a', model: 'm', accesses: [{ id: 'a', label: 'A', models: ['m'] }] }) }, doc);
   await picker.open(0, 'Privat');
   const el = dialogElements(doc);
-  assert.equal(el.title.textContent, 'Modell einstellen');
-  assert.equal(el.close.getAttribute('aria-label'), 'Schließen');
+  assert.equal(el.title.textContent, 'Set up the model');
+  assert.equal(el.close.getAttribute('aria-label'), 'Close');
   assert.equal(el.back.hidden, true, 'nowhere to go back to');
-  assert.deepEqual(el.actions.children.map(b => b.textContent), ['Speichern']);
+  assert.deepEqual(el.actions.children.map(b => b.textContent), ['Save']);
   assert.equal(el.dialog.focused, true);
   el.close.dispatchEvent(new Event('click'));
   assert.equal(el.dialog.open, false, 'nothing changed, so it closes at once');
@@ -1609,23 +1652,23 @@ test('thread work, relayed questions, replies and stopping use the shared sessio
     SendMessage: async (...args) => { sent.push(args); },
     StopSession: async (...args) => { stopped.push(args); },
   }, doc, '', 'owner/thread');
-  assert.match(doc['session-status'].textContent, /Arbeitet.*2 aktive Sessions/);
+  assert.match(doc['session-status'].textContent, /Working.*2 active sessions/);
   assert.equal(doc['session-meta'].textContent, '/project');
   assert.equal(doc['send-status'].textContent, 'keeps project');
   assert.equal(doc.stop.disabled, false);
   pending[0].resolve([{ kind: 'working', n: 2, own: false }, { kind: 'asked', question: { text: 'Which topic?', options: ['first', 'second'] } }]);
   await settle();
-  assert.match(doc['session-status'].textContent, /Braucht deine Antwort.*2 aktive Sessions/);
+  assert.match(doc['session-status'].textContent, /Needs your answer.*2 active sessions/);
   doc['question-options'].children[0].dispatchEvent(new Event('click')); await settle();
   assert.deepEqual(sent, [[0, 'owner/thread', 'first']]);
   pending[1].resolve([{ kind: 'asked', done: true, text: 'first' }, { kind: 'answer', text: 'done' }]);
   await settle();
   assert.equal(doc['question-panel'].hidden, true);
-  assert.match(doc['session-status'].textContent, /Arbeitet/);
+  assert.match(doc['session-status'].textContent, /Working/);
   doc.stop.dispatchEvent(new Event('click')); await settle();
   assert.deepEqual(stopped, [[0, 'owner/thread']]);
   pending[2].resolve([{ kind: 'working', n: 0, own: false }]); await settle();
-  assert.match(doc['session-status'].textContent, /Bereit.*0 aktive Sessions/);
+  assert.match(doc['session-status'].textContent, /Ready.*0 active sessions/);
   assert.equal(doc.stop.disabled, true);
 });
 
@@ -1657,7 +1700,8 @@ test('the context rail reuses explicitly loaded tool results and clears them whe
     ToolResult: async () => { requests++; return {found: true, arguments: '<input>', content: '<output>'}; },
   }, doc, 'owner/a', 'owner/thread');
   assert.equal(requests, 0);
-  assert.equal(doc['context-details'].children.length, 0);
+  assert.equal(doc['context-details'].children.length, 1, 'the rail shows where the opened session stands');
+  assert.equal(blockParts(doc['context-details'].children[0]).summary, '1 tool · 1 kind');
   const detail = descendants(doc.content, 'details')[0];
   detail.open = true; detail.dispatchEvent(new Event('toggle')); await settle();
   assert.equal(requests, 1);
@@ -1710,22 +1754,22 @@ test('the thread reads as in the terminal UI and the demo: you, the agent by nam
     ] }; },
   }, doc);
   const [mine, theirs, task] = doc.content.children;
-  const time = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(now);
-  assert.equal(mine.children[0].textContent, 'Du · ' + time);
+  const time = new Intl.DateTimeFormat(locale(), { hour: '2-digit', minute: '2-digit' }).format(now);
+  assert.equal(mine.children[0].textContent, 'You · ' + time);
   assert.equal(theirs.children[0].textContent, 'luna · ' + time);
   assert.equal(task.className, 'message message-task');
-  assert.match(task.children[0].textContent, /^↳ Aufgabe · 01\.01\.2026/);
+  assert.match(task.children[0].textContent, /^↳ Task · 1 Jan 2026/);
   // A session tells its state and runs its bar while it works, without a made-up progress.
   const session = doc.sessions.children[0].children.find(e => e.tagName === 'button');
   assert.equal(session.getAttribute('data-running'), 'true');
-  assert.match(session.children[1].textContent, /^Zustand: arbeitet · eigene/);
+  assert.match(session.children[1].textContent, /^State: working · own/);
   assert.equal(session.children[2].className, 'session-bar');
 });
 
 test('the composer is one line behind a prompt with a round send button, as in the demo', async () => {
   const html = await readFile(new URL('./frontend/index.html', import.meta.url), 'utf8');
   assert.match(html, /<div class="composer-row">\s*<span class="composer-prompt" aria-hidden="true">›<\/span>\s*<textarea id="draft" rows="1"/);
-  assert.match(html, /<button id="send" type="submit" aria-label="Senden"[^>]*><span aria-hidden="true">↑<\/span><\/button>/);
+  assert.match(html, /<button id="send" type="submit"[^>]*aria-label="Send"[^>]*><span aria-hidden="true">↑<\/span><\/button>/);
   const css = await readFile(new URL('./frontend/style.css', import.meta.url), 'utf8');
   // The fade is a still layer over the top of the history, not a mask on the
   // scrolling history, which WebKit composited anew each frame of a scroll.
@@ -1747,7 +1791,7 @@ test('the fade at the top is off while the start of the thread is in view, so a 
   assert.match(css, /\.transcript-scroller\.at-start \+ \.transcript-fade \{ opacity: 0; \}/);
 });
 
-test('beside the thread show the sessions of the part in view, else "Noch keine"', async () => {
+test('beside the thread show the sessions of the part in view, else "None yet"', async () => {
   const doc = archiveFixture();
   const now = new Date().toISOString();
   const stepsOf = { 'owner/aaaa1111-x': [{ kind: 'step', done: true, tool: 'browser_use', text: 'browser_use · navigate spec.matrix.org' }] };
@@ -1761,7 +1805,7 @@ test('beside the thread show the sessions of the part in view, else "Noch keine"
       { kind: 'handed', text: 'bbbb2222', at: now },
       { kind: 'handed', text: 'bbbb2222', at: now },
     ] }; },
-    async SessionSteps(profile, id) { return stepsOf[id] || []; },
+    async SessionTrace(profile, id) { return stepsOf[id] || []; },
   }, doc, '', 'owner/thread');
   await settle();
   const [band] = doc.marks.filter(mark => mark.options.rootMargin === '-45% 0px -45% 0px');
@@ -1773,8 +1817,16 @@ test('beside the thread show the sessions of the part in view, else "Noch keine"
   await settle();
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/aaaa1111-x']);
   assert.match(doc.sessions.children[0].textContent, /^T – /);
-  assert.equal(doc['context-title'].textContent, '[Artefakte]');
-  assert.match(doc['context-details'].children[0].children[1].textContent, /browser_use · navigate spec\.matrix\.org/);
+  assert.equal(doc['context-title'].textContent, '[State]');
+  const block = doc['context-details'].children[0];
+  const parts = blockParts(block);
+  assert.equal(parts.summary, '1 tool · 1 kind');
+  assert.equal(parts.svg.tagName, 'svg');
+  assert.deepEqual(chartText(block), ['browser_use', '1']);
+  // A session whose call ended and that still works stands in its loop.
+  assert.deepEqual(parts.words, ['thinks']);
+  assert.match(parts.stand.className, /artefact-state live/);
+  assert.equal(parts.facts.last, 'browser_use · navigate spec.matrix.org');
   // Scrolled on to the second part, the session it addressed shows instead.
   band.run([{ isIntersecting: false, target: items[0] }, { isIntersecting: false, target: items[1] }, { isIntersecting: true, target: items[2] }]);
   assert.equal(items[2].exchange.sessions.size, 1, 'a session handed twice in a part counts once');
@@ -1784,6 +1836,94 @@ test('beside the thread show the sessions of the part in view, else "Noch keine"
   doc.marks.find(mark => mark.target === doc['transcript-end']).run([{ isIntersecting: true }]);
   await settle();
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/bbbb2222-y']);
+});
+
+// The artefact area tells where a session stands before it counts anything:
+// the phase of its loop, the call in it, what it did last, what it does next.
+async function standOf(trace, running) {
+  const doc = archiveFixture();
+  const at = index => new Date(Date.now() - (100 - index) * 1000).toISOString();
+  const events = trace.map((event, index) => ({ at: at(index), ...event }));
+  await browse({
+    async Sessions() { return [{ id: 'owner/a', title: 'Recherche', running }]; },
+    async OpenSession(profile, id) { return { token: 0, events: id === 'owner/a' ? events : [] }; },
+    PollSession() { return new Promise(() => {}); },
+  }, doc, 'owner/a', 'owner/thread');
+  await settle();
+  return blockParts(doc['context-details'].children[0]);
+}
+const said = parts => [parts.word, parts.what].filter(Boolean).join(' ');
+
+test('the artefacts tell where a session stands: its phase, its call, its last and next step', async () => {
+  // A call of a tool is on its way: the session stands at it, and waits for it.
+  const running = await standOf([
+    { kind: 'message', text: 'schau mal' },
+    { kind: 'step', tool: 'bash', text: 'bash · go test ./internal/…', done: false },
+  ], true);
+  assert.equal(running.title, 'Recherche · working');
+  assert.equal(said(running), 'calls go test ./internal/…');
+  assert.match(running.stand.className, /artefact-state live/);
+  assert.deepEqual([running.facts.last, running.facts.next], ['no call yet', 'the result of bash']);
+  // Its chart marks the call on its way and where now is.
+  assert.equal(running.svg.children.at(-1).getAttribute('class'), 'chart-now');
+  assert.match(running.svg.children.find(child => child.tagName === 'rect').getAttribute('class'), /chart-live$/);
+  assert.equal(running.summary, '1 tool · 1 kind');
+
+  // The answer is being written: the session stands at its answer.
+  const answering = await standOf([
+    { kind: 'message', text: 'schau mal' },
+    { kind: 'step', tool: 'read', text: 'read · app.js', done: true },
+    { kind: 'answering', text: 'Ich habe' },
+  ], true);
+  assert.equal(said(answering), 'writes the answer');
+  assert.deepEqual([answering.facts.last, answering.facts.next], ['read · app.js', 'the end of the answer']);
+
+  // The agent asks the owner: the question stands, and the owner is next.
+  const asked = await standOf([
+    { kind: 'message', text: 'schau mal' },
+    { kind: 'asked', question: { text: 'Welche Datei?' } },
+  ], true);
+  assert.equal(said(asked), 'asks you');
+  assert.equal(asked.facts.question, 'Welche Datei?');
+  assert.equal(asked.facts.next, 'your answer');
+
+  // Ended: the answer stands, nothing comes next, and the call that failed is marked.
+  const done = await standOf([
+    { kind: 'message', text: 'schau mal' },
+    { kind: 'step', tool: 'read', text: 'read · fehlt', done: true, failed: true },
+    { kind: 'step', tool: 'read', text: 'read · app.js', done: true },
+    { kind: 'answer', text: 'fertig' },
+  ], false);
+  assert.equal(done.title, 'Recherche', 'only a working session says so in its heading');
+  assert.equal(said(done), 'done');
+  assert.equal(done.facts.next, 'nothing');
+  assert.equal(done.facts.last, 'read · app.js');
+  // Nothing runs: no call pulses and no line marks now.
+  const ticks = done.svg.children.filter(child => child.tagName === 'rect');
+  assert.equal(ticks.length, 2);
+  assert.equal(ticks.some(tick => /chart-live/.test(tick.getAttribute('class'))), false);
+  assert.equal(done.svg.children.some(child => child.getAttribute('class') === 'chart-now'), false);
+  assert.equal(done.summary, '2 tools · 1 kind');
+  // A session that does not run stands still, whatever its trace said last.
+  const stale = await standOf([{ kind: 'message', text: 'go' }, { kind: 'step', tool: 'bash', text: 'bash · sleep', done: false }], false);
+  assert.equal(said(stale), 'ready');
+  assert.deepEqual([stale.facts.next], ['nothing']);
+  // Nor does its chart pulse the call it stood at. Review of #61.
+  assert.equal(stale.svg.children.some(child => /chart-live/.test(child.getAttribute('class') || '')), false);
+  assert.equal(stale.svg.children.some(child => child.getAttribute('class') === 'chart-now'), false);
+  // A failed answer and a stopped one have their own word.
+  assert.equal(said(await standOf([{ kind: 'message', text: 'go' }, { kind: 'failed', text: 'kaputt' }], false)), 'failed');
+  assert.equal(said(await standOf([{ kind: 'message', text: 'go' }, { kind: 'canceled', text: '' }], false)), 'canceled');
+});
+
+test('the chart counts every kind of call, also those beyond the lanes it can show', async () => {
+  const trace = [{ kind: 'message', text: 'go' }];
+  const tools = ['read', 'bash', 'edit', 'search', 'write', 'list', 'web_search', 'delegate', 'browser'];
+  tools.forEach((tool, index) => trace.push({ kind: 'step', tool, text: tool + ' · x', done: true }));
+  trace.push({ kind: 'answer', text: 'fertig' });
+  const parts = await standOf(trace, false);
+  assert.equal(parts.summary, '9 tools · 9 kinds · 6 lanes');
+  assert.equal(parts.svg.children.filter(child => child.tagName === 'text').length, 12, 'six lanes, each with its name and count');
 });
 
 // Review of #54: an opened session keeps the part of the thread and its
@@ -1803,14 +1943,15 @@ test('beside an opened session its siblings stay, ended sessions are read anew, 
         ? [{ kind: 'message', text: 'go', at: now }, { kind: 'handed', text: 'aaaa1111' }, { kind: 'handed', text: 'bbbb2222' }]
         : [{ kind: 'message', text: 'inside', at: now }, { kind: 'answer', text: 'done', at: now }] };
     },
-    async SessionSteps(profile, id) {
+    async SessionTrace(profile, id) {
       reads.push(id);
       if (slow) return slow.promise;
-      return [{ text: id === 'owner/aaaa1111-x' && !running ? 'FINAL TOOL RESULT' : 'tool still starting' }];
+      const text = id === 'owner/aaaa1111-x' && !running ? 'FINAL TOOL RESULT' : 'tool still starting';
+      return [{ kind: 'step', tool: 'read', text, done: true }];
     },
   }, doc, '', 'owner/thread');
   await settle();
-  const rail = () => doc['context-details'].children.map(block => block.children[1].textContent).join(' | ');
+  const rail = () => doc['context-details'].children.map(block => blockParts(block).facts.last).join(' | ');
   assert.deepEqual(buttons(doc).map(b => b.title), ['owner/aaaa1111-x', 'owner/bbbb2222-y']);
   assert.match(rail(), /tool still starting/);
   // A ends: the next overview reads its last steps once more.
@@ -1827,9 +1968,42 @@ test('beside an opened session its siblings stay, ended sessions are read anew, 
   await tick();
   choose(doc, 'owner/bbbb2222-y'); await settle();
   const before = doc['context-details'].children.length;
-  slow.resolve([{ text: 'OLD THREAD RESULT' }]); await settle();
+  slow.resolve([{ kind: 'step', tool: 'read', text: 'OLD THREAD RESULT', done: true }]); await settle();
   assert.equal(doc['context-details'].children.length, before);
   assert.doesNotMatch(rail(), /OLD THREAD RESULT/);
+});
+
+// Review of #61: a session opened while it does not work stands as working
+// once new work comes in live, before the list knows it, and the next list
+// that says it ended is drawn too.
+test('an opened session stands as working once its own events say so, and as the list says after', async () => {
+  const doc = archiveFixture();
+  let tick, running = false;
+  doc.defaultView.setInterval = (run) => { tick = run; };
+  const now = new Date().toISOString();
+  const pending = [];
+  await browse({
+    async Sessions() { return [{ id: 'owner/a', title: 'A', running }]; },
+    async OpenSession() { return { token: 1, events: [{ kind: 'message', text: 'go', at: now }, { kind: 'answer', text: 'done', at: now }] }; },
+    PollSession() { const next = deferred(); pending.push(next); return next.promise; },
+  }, doc, 'owner/a');
+  await settle();
+  const stand = () => blockParts(doc['context-details'].children[0]);
+  assert.equal(stand().word, 'done');
+  pending[0].resolve([{ kind: 'message', text: 'more', at: now }, { kind: 'step', tool: 'bash', text: 'bash · make', done: false, at: now }]);
+  await settle();
+  assert.equal(said(stand()), 'calls make');
+  assert.equal(stand().facts.next, 'the result of bash');
+  assert.match(stand().svg.children.find(child => child.tagName === 'rect').getAttribute('class'), /chart-live$/);
+  // The list learns that it works, and then that it ended: the rail follows it.
+  running = true;
+  await tick(); await settle();
+  assert.equal(said(stand()), 'calls make');
+  pending[1].resolve([{ kind: 'canceled', text: '', at: now }]);
+  running = false;
+  await settle(); await tick(); await settle();
+  assert.equal(stand().word, 'canceled');
+  assert.equal(stand().facts.next, 'nothing');
 });
 
 test('of the thread only its last six hours show, as in the terminal UI; individual sessions show in full', async () => {
@@ -1856,4 +2030,17 @@ test('of the thread only its last six hours show, as in the terminal UI; individ
   }, plain);
   await settle();
   assert.equal(visibleTexts(plain.content).length, 5, 'an individual session shows all of it');
+});
+
+test('the catalogue speaks English by default and German after setLocale, and keeps a missing key', () => {
+  assert.equal(t('date.today'), 'Today');
+  assert.equal(locale(), 'en-GB');
+  assert.equal(setLocale('de'), 'de');
+  assert.equal(t('date.today'), 'Heute');
+  assert.equal(t('session.state', { state: t('phase.thinking'), owner: t('session.own') }), 'Zustand: denkt · eigene');
+  assert.equal(locale(), 'de-DE');
+  assert.equal(t('no.such.key'), 'no.such.key');
+  assert.equal(setLocale('en'), 'en');
+  assert.equal(t('date.today'), 'Today');
+  assert.equal(locale(), 'en-GB');
 });
