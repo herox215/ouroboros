@@ -173,6 +173,7 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #content .markdown .md-heading { margin-bottom: 0; color: inherit; font-size: 1em; font-weight: 700; line-height: 1.7; }
 #content .markdown .md-h1, #content .markdown .md-h2 { color: var(--accent); }
 #content .markdown ul, #content .markdown ol { padding-left: 1.6em; }
+#content .markdown ol { padding-left: 2.2em; }
 #content .markdown ul { list-style: disc; }
 #content .markdown ul ul { list-style: circle; }
 #content .markdown li > * + * { margin-top: 4px; }
