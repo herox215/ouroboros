@@ -178,3 +178,24 @@ func TestFyneEmptyThreadHint(t *testing.T) {
 	sessions.live <- plugin.SessionEvent{Kind: plugin.SessionMessage, Text: "Hi", At: time.Now()}
 	waitFor(t, func() bool { return !ui.emptyHint.Visible() })
 }
+
+// A session opened while it writes its answer shows that the beginning of
+// the answer is not there: its past keeps the writing, not the text.
+func TestFyneJoinsAnAnswerBeingWritten(t *testing.T) {
+	sessions := newE2ESessions()
+	live := make(chan plugin.SessionEvent, 4)
+	sessions.watch = func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		return []plugin.SessionEvent{
+			{Kind: plugin.SessionMessage, Text: "Tell a story", At: time.Now()},
+			{Kind: plugin.SessionAnswering, At: time.Now()},
+		}, live, nil
+	}
+	ui := e2eWindowWith(t, fyne.NewSize(1180, 780), sessions)
+	live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: "under the snow", At: time.Now()}
+	waitFor(t, func() bool { return ui.chat.partial != nil && ui.chat.partial.body.Text == "… under the snow" })
+	// A live answer from its start has no ellipsis.
+	live <- plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "Done.", At: time.Now()}
+	live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, At: time.Now()}
+	live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: "Once", At: time.Now()}
+	waitFor(t, func() bool { return ui.chat.partial != nil && ui.chat.partial.body.Text == "Once" })
+}

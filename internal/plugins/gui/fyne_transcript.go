@@ -110,6 +110,11 @@ func (c *fyneChat) apply(event ChatEvent) {
 				item.box.Objects = append(item.box.Objects, body)
 			}
 			c.partial = &fynePartial{item: item, body: body}
+			// The past of a session tells an answer being written without
+			// what was written: the window joins it in the middle.
+			if event.Text == "" && !c.ui.ready.Load() {
+				body.SetText("… ")
+			}
 		}
 		c.partial.body.SetText(c.partial.body.Text + event.Text)
 	case plugin.SessionHanded:

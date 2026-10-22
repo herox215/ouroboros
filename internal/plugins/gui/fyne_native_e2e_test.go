@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,21 @@ func fyneShots(dir string) error {
 		for _, size := range []fyne.Size{{Width: 1400, Height: 900}, {Width: 900, Height: 640}, {Width: 420, Height: 700}} {
 			fyne.DoAndWait(func() { native.Resize(size) })
 			shot("gl-" + sizeName(size))
+		}
+		if path := os.Getenv("OURO_TEST_FYNE_PROFILE"); path != "" {
+			// What the window costs while it waits with the composer
+			// focused: the caret blinks, nothing else happens.
+			fyne.DoAndWait(func() { native.Resize(fyne.NewSize(1400, 900)); ui.focusComposer() })
+			time.Sleep(time.Second)
+			f, err := os.Create(path)
+			if err != nil {
+				failure = err
+				return
+			}
+			pprof.StartCPUProfile(f)
+			time.Sleep(10 * time.Second)
+			pprof.StopCPUProfile()
+			f.Close()
 		}
 		fyne.DoAndWait(ui.openDrawer)
 		shot("gl-drawer")
