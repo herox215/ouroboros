@@ -2184,10 +2184,10 @@ test('a long answer is cut between two blocks and expands to everything', async 
   const item = doc.content.children[0];
   const body = item.children[1], expand = item.children[2];
   assert.equal(body.children.length, cut.split('\n\n').length);
-  assert.match(expand.textContent, /^Vollständigen Text anzeigen \(/);
+  assert.match(expand.textContent, /^Show the full text \(/);
   expand.dispatchEvent(new Event('click'));
   assert.equal(body.children.length, 400);
-  assert.equal(expand.textContent, 'Text einklappen');
+  assert.equal(expand.textContent, t('transcript.collapse'));
   expand.dispatchEvent(new Event('click'));
   assert.equal(body.children.length, cut.split('\n\n').length);
 });
