@@ -1,10 +1,11 @@
 import { createThemePreference } from './theme.js';
+import { t } from './i18n.js';
 
 // Profile is captured on open; changing the main profile picker cannot redirect a save.
 export function createSettingsDialog(bridge, modelDialog, doc = document, theme = createThemePreference(doc)) {
   const dialog = doc.createElement('dialog');
   dialog.className = 'model-dialog settings-dialog';
-  dialog.setAttribute('aria-label', 'Settings');
+  dialog.setAttribute('aria-label', t('settings.title'));
   // Opening a page focuses the dialog itself, not its first button, which
   // would otherwise wear the focus ring before anything was chosen, and the
   // focus is not lost with the button of the page before; Tab reaches them.
@@ -33,19 +34,19 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     version++;
     clearPassword(); secrets = [];
     const header = el('div'); header.className = 'dialog-header';
-    if (back) header.append(icon('‹', 'Back', back));
+    if (back) header.append(icon('‹', t('dialog.back'), back));
     header.append(el('h2', title));
-    header.append(icon('×', 'Close', () => dialog.close()));
+    header.append(icon('×', t('dialog.close'), () => dialog.close()));
     dialog.replaceChildren(header);
     if (dialog.open) dialog.focus();
   };
   const home = () => {
-    page('Settings · ' + name);
-    dialog.append(button('Model', () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
-    dialog.append(button('Gateways', gateways));
-    const label = el('label', 'Darstellung');
+    page(t('settings.title') + ' · ' + name);
+    dialog.append(button(t('settings.model'), () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
+    dialog.append(button(t('settings.gateways'), gateways));
+    const label = el('label', t('settings.appearance'));
     const select = el('select');
-    for (const [value, text] of [['system', 'System'], ['light', 'Hell'], ['dark', 'Dunkel']]) {
+    for (const [value, text] of [['system', t('settings.system')], ['light', t('settings.light')], ['dark', t('settings.dark')]]) {
       const option = el('option', text); option.value = value; select.append(option);
     }
     select.value = theme.value;
@@ -54,22 +55,22 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
   };
   const failure = () => {
     // Never reflect backend error strings: they may contain credentials.
-    dialog.append(el('p', 'Gateway operation failed. Check the settings and try again.'));
+    dialog.append(el('p', t('settings.gatewayFailed')));
   };
   const gateways = async () => {
-    page('Settings › Gateways', home);
+    page(t('settings.title') + ' › ' + t('settings.gateways'), home);
     const current = ++version;
-    const status = el('p', 'Loading …'); dialog.append(status);
+    const status = el('p', t('dialog.loading')); dialog.append(status);
     try {
       const list = await bridge.Gateways(profile);
       if (current !== version || !dialog.open) return;
-      status.textContent = list.length ? '' : 'No gateway plugins available for this profile.';
+      status.textContent = list.length ? '' : t('settings.noGateways');
       status.hidden = !status.textContent;
       for (const item of list) dialog.append(button(item.Title || item.Name, () => gateway(item)));
     } catch { if (current === version) { status.textContent = ''; status.hidden = true; failure(); } }
   };
   const gateway = item => {
-    page('Settings › Gateways › ' + (item.Title || item.Name), () => { clearPassword(); gateways(); });
+    page(t('settings.title') + ' › ' + t('settings.gateways') + ' › ' + (item.Title || item.Name), () => { clearPassword(); gateways(); });
     const form = el('form');
     const field = (label, value, type = 'text') => {
       const l = el('label', label), input = el('input');
@@ -77,7 +78,7 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
       if (type === 'checkbox') input.checked = !!value; else input.value = value || '';
       l.append(input); form.append(l); return input;
     };
-    const enabled = field('Enabled', item.Enabled, 'checkbox');
+    const enabled = field(t('settings.enabled'), item.Enabled, 'checkbox');
     const schema = item.Fields?.length ? item.Fields : null;
     const inputs = new Map();
     let homeserver, user, password, users;
@@ -93,17 +94,17 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
         inputs.set(f.Key, input);
       }
     } else {
-      homeserver = field('Homeserver', item.Homeserver);
-      user = field('User ID', item.UserID);
-      password = secret('Password (empty keeps current login)');
-      users = field('Allowed user IDs (comma separated)', (item.AllowedUsers || []).join(', '));
+      homeserver = field(t('settings.homeserver'), item.Homeserver);
+      user = field(t('settings.user'), item.UserID);
+      password = secret(t('settings.password'));
+      users = field(t('settings.allowedUsers'), (item.AllowedUsers || []).join(', '));
     }
-    form.append(el('p', 'Allowlisted users are delegated this profile’s agent tools, INCLUDING permission answers, not just chat. An empty allowlist denies all users.'));
-    const status = el('p', (item.LoggedIn ? 'Logged in' : 'Not logged in') + (item.Status ? ' · ' + item.Status : ''));
+    form.append(el('p', t('settings.allowlistWarning')));
+    const status = el('p', (item.LoggedIn ? t('settings.loggedIn') : t('settings.loggedOut')) + (item.Status ? ' · ' + item.Status : ''));
     status.setAttribute('role', 'status'); form.append(status);
-    const save = el('button', 'Login / Save'); save.type = 'submit'; form.append(save);
-    const logout = button('Logout', () => submit(true)); form.append(logout);
-    const cancel = button('Cancel', () => { clearPassword(); gateways(); }); form.append(cancel);
+    const save = el('button', t('settings.loginSave')); save.type = 'submit'; form.append(save);
+    const logout = button(t('settings.logout'), () => submit(true)); form.append(logout);
+    const cancel = button(t('dialog.cancel'), () => { clearPassword(); gateways(); }); form.append(cancel);
     const submit = async loggingOut => {
       if (busy) return;
       const splitList = value => value.split(/[,\n]/).map(s => s.trim()).filter(Boolean);

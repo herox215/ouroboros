@@ -491,9 +491,10 @@ func TestPollWithoutAStream(t *testing.T) {
 	}
 }
 
-// SessionSteps reads the finished calls of tools of an owner session for the
-// artefacts beside the thread, and nothing of a peer's.
-func TestSessionSteps(t *testing.T) {
+// SessionTrace reads what an owner session did for the artefacts beside the
+// thread, and nothing of a peer's: its calls with their start and their end,
+// its messages, and one piece of an answer being written, without its text.
+func TestSessionTrace(t *testing.T) {
 	var watched []string
 	fail := false
 	s := &testSessions{watch: func(_ context.Context, id string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
@@ -504,27 +505,63 @@ func TestSessionSteps(t *testing.T) {
 		return []plugin.SessionEvent{
 			{Kind: plugin.SessionMessage, Text: "go"},
 			{Kind: plugin.SessionStep, Tool: "echo", CallID: "running"},
+			{Kind: plugin.SessionTitle, Text: "name"},
 			{Kind: plugin.SessionStep, Tool: "echo", CallID: "done", Done: true},
+			{Kind: plugin.SessionAnswering, Text: "a piece"},
+			{Kind: plugin.SessionAnswer, Text: "whole"},
 		}, nil, nil
 	}}
 	w := sessionWindow(t, s)
-	steps, err := w.SessionSteps(0, "owner/a")
-	if err != nil || len(steps) != 1 || steps[0].CallID != "done" || steps[0].Text != "echo" {
-		t.Fatalf("steps %+v %v", steps, err)
+	trace, err := w.SessionTrace(0, "owner/a")
+	if err != nil || len(trace) != 4 {
+		t.Fatalf("trace %+v %v", trace, err)
+	}
+	if kinds := trace[0].Kind + "," + trace[1].Kind + "," + trace[2].Kind + "," + trace[3].Kind; kinds != "message,step,step,answer" {
+		t.Fatalf("kinds %s", kinds)
+	}
+	if trace[1].Done || !trace[2].Done || trace[2].Text != "echo" {
+		t.Fatalf("steps %+v", trace[1:3])
 	}
 	if strings.Join(watched, "|") != "a" {
 		t.Fatal(watched)
 	}
 	for _, id := range []string{"peer-key/conv", "owner/../a"} {
-		if _, err := w.SessionSteps(0, id); err == nil {
+		if _, err := w.SessionTrace(0, id); err == nil {
 			t.Fatalf("accepted %q", id)
 		}
 	}
-	if _, err := w.SessionSteps(9, "owner/a"); err == nil {
+	if _, err := w.SessionTrace(9, "owner/a"); err == nil {
 		t.Fatal("accepted a missing profile")
 	}
 	fail = true
-	if _, err := w.SessionSteps(0, "owner/a"); err == nil {
+	if _, err := w.SessionTrace(0, "owner/a"); err == nil {
 		t.Fatal("a failed watch was not reported")
+	}
+}
+
+// A session that is writing its answer tells it by the last piece: it comes
+// with the trace, without what it says, and not at all when something else
+// came after it.
+func TestSessionTraceEndsWriting(t *testing.T) {
+	events := []plugin.SessionEvent{
+		{Kind: plugin.SessionMessage, Text: "go"},
+		{Kind: plugin.SessionAnswering, Text: "a "},
+		{Kind: plugin.SessionAnswering, Text: "piece"},
+	}
+	s := &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		return events, nil, nil
+	}}
+	w := sessionWindow(t, s)
+	trace, err := w.SessionTrace(0, "owner/a")
+	if err != nil || len(trace) != 2 {
+		t.Fatalf("trace %+v %v", trace, err)
+	}
+	if trace[1].Kind != plugin.SessionAnswering || trace[1].Text != "" {
+		t.Fatalf("writing %+v", trace[1])
+	}
+	events = append(events, plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "done"})
+	trace, err = w.SessionTrace(0, "owner/a")
+	if err != nil || len(trace) != 2 || trace[1].Kind != plugin.SessionAnswer {
+		t.Fatalf("answered %+v %v", trace, err)
 	}
 }

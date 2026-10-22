@@ -558,11 +558,14 @@ func (w *Window) SessionRecords(profile int, id string) ([]plugin.ArchivedRecord
 	return out, nil
 }
 
-// SessionSteps returns the calls of tools an owner session made, as the
+// SessionTrace returns what an owner session did, in the order it came, as the
 // thread shows its artefacts beside the part of it that started or addressed
-// that session. It watches the session only for its past and lets it go: the
+// that session: the messages, the calls of tools with their start and their
+// end, the questions and the answers, and as the last event the piece of an
+// answer being written, without its text. A front end tells from it where the
+// session stands. It watches the session only for its past and lets it go: the
 // watch of the selected conversation stays as it is.
-func (w *Window) SessionSteps(profile int, id string) ([]ChatEvent, error) {
+func (w *Window) SessionTrace(profile int, id string) ([]ChatEvent, error) {
 	p, err := w.profile(profile)
 	if err != nil {
 		return nil, err
@@ -580,11 +583,25 @@ func (w *Window) SessionSteps(profile int, id string) ([]ChatEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	steps := []ChatEvent{}
-	for _, e := range p.events(past) {
-		if e.Kind == plugin.SessionStep && e.Done {
-			steps = append(steps, e)
+	out := []ChatEvent{}
+	// The newest piece of an answer being written tells that it is written,
+	// when nothing else came after it; what it says is not part of the trace.
+	var writing plugin.SessionEvent
+	written, kept := -1, -1
+	for i, e := range past {
+		switch e.Kind {
+		case plugin.SessionMessage, plugin.SessionSay, plugin.SessionStep,
+			plugin.SessionAsked, plugin.SessionAnswer, plugin.SessionFailed,
+			plugin.SessionCanceled, plugin.SessionTask, plugin.SessionJobs:
+			out = append(out, p.event(e))
+			kept = i
+		case plugin.SessionAnswering:
+			writing, written = e, i
 		}
 	}
-	return steps, nil
+	if written > kept {
+		writing.Text = ""
+		out = append(out, p.event(writing))
+	}
+	return out, nil
 }

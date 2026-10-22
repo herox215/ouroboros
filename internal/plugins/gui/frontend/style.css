@@ -80,6 +80,10 @@ button { cursor: pointer; }
 button:disabled, select:disabled { cursor: default; color: var(--muted); }
 a { color: var(--accent); }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+/* A click into the chat focuses main, which carries tabindex="-1" for the skip
+   link; the region is the whole column, so a ring on it only shows as bars at
+   the window's edges. It is named by its heading, not by a box. */
+#main:focus { outline: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .skip-link { position: fixed; top: 12px; left: 12px; z-index: 10; padding: 10px 16px; background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; transform: translateY(-160%); }
 .skip-link:focus { transform: translateY(0); }
@@ -234,9 +238,9 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 .composer-row { display: flex; align-items: flex-end; gap: 10px; }
 .composer-prompt { flex: none; padding: 7px 0; color: var(--muted); }
 .composer-row #draft { flex: 1; min-height: 0; max-height: 30vh; resize: none; overflow-y: auto; }
-/* The line is the field: focus shows on the line below it, not as a box. */
+/* The line above the field is a divider, not the field: it stays as quiet as
+   when the composer is not focused, and the caret shows where typing goes. */
 .composer-row #draft:focus-visible { outline: none; }
-.composer:focus-within { border-top-color: var(--accent); }
 .composer #send { flex: none; display: grid; place-items: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 50%; font-size: 15px; line-height: 1; }
 .composer #send:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
 .composer #stop:disabled { display: none; }
@@ -262,7 +266,43 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 .sessions-heading h2 { white-space: nowrap; }
 /* The time of the part of the thread in view, above its sessions, as in the demo. */
 #sessions .section-time { margin: 0 0 6px; color: var(--muted); font-size: 10px; letter-spacing: .06em; }
-/* The artefacts of the sessions of the part in view: their last tool calls. */
+/* The artefacts of the sessions of the part in view: where each stands, what
+   it did last and what it does next, with the chart of its tools under it. */
 #context-details .artefact + .artefact { margin-top: 14px; }
-#context-details .artefact h3 { margin-bottom: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-#context-details .artefact pre { margin: 0; padding: 8px 10px; border: 1px solid var(--line); font-size: 10px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+#context-details .artefact h3 { margin-bottom: 2px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+/* The stand of the session: a dot that beats while it works, the word of its
+   phase, what the call in it does, and the time it stands there since. */
+#context-details .artefact-state { display: flex; align-items: baseline; gap: 6px; margin: 0 0 4px; font-size: 11px; line-height: 1.5; }
+#context-details .artefact-dot { align-self: center; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
+#context-details .artefact-state.live .artefact-dot { background: var(--accent); animation: artefact-beat 1.6s ease-in-out infinite; }
+#context-details .artefact-state.bad .artefact-dot { background: var(--error); }
+#context-details .artefact-word { flex: none; font-weight: 600; }
+#context-details .artefact-state.bad .artefact-word { color: var(--error); }
+#context-details .artefact-what,
+#context-details .artefact-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#context-details .artefact-what { color: var(--muted); }
+#context-details .artefact-time { flex: none; margin-left: auto; color: var(--muted); font-size: 10px; }
+/* What it did last and what it does next, as the two facts under its stand. */
+#context-details .artefact-fact { display: flex; gap: 6px; margin: 0; font-size: 10px; line-height: 1.6; }
+#context-details .artefact-key { flex: none; width: 46px; color: var(--muted); }
+#context-details .artefact-fact.bad .artefact-value { color: var(--error); }
+#context-details .artefact-summary { margin: 2px 0 4px; color: var(--muted); font-size: 10px; }
+#context-details .artefact-chart { display: block; width: 100%; height: auto; margin: 0 0 2px; color: var(--accent); }
+#context-details .artefact-chart text { fill: currentColor; font: 8px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+#context-details .artefact-chart .chart-lane { stroke: currentColor; stroke-opacity: .22; stroke-width: 1; }
+#context-details .artefact-chart .chart-tick { fill: currentColor; }
+#context-details .artefact-chart .chart-now { stroke: currentColor; stroke-opacity: .5; stroke-width: 1; stroke-dasharray: 2 3; }
+#context-details .artefact-chart .chart-live { animation: artefact-live 1.2s ease-in-out infinite; }
+@keyframes artefact-live { 50% { opacity: .15; } }
+@keyframes artefact-beat { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) {
+  #context-details .artefact-chart .chart-live { animation: none; }
+  #context-details .artefact-state.live .artefact-dot { animation: none; }
+}
+/* One shade per tool, strongest for the most used. */
+#context-details .lane-0 { opacity: 1; }
+#context-details .lane-1 { opacity: .74; }
+#context-details .lane-2 { opacity: .55; }
+#context-details .lane-3 { opacity: .4; }
+#context-details .lane-4 { opacity: .28; }
+#context-details .lane-5 { opacity: .18; }
