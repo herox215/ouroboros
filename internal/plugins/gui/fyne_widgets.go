@@ -1303,5 +1303,29 @@ func (l *dialogLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	objects[0].Resize(fyne.NewSize(width, height))
 }
 
+// scrim shades the window behind a dialog or the open drawer and takes the
+// taps that miss them. It names no pointer, so the arrow shows over it and
+// over what of the dialog takes no clicks, as over a native dialog.
+type scrim struct {
+	widget.BaseWidget
+	onTap func()
+}
+
+func newScrim(onTap func()) *scrim {
+	s := &scrim{onTap: onTap}
+	s.ExtendBaseWidget(s)
+	return s
+}
+
+func (s *scrim) Tapped(*fyne.PointEvent) {
+	if s.onTap != nil {
+		s.onTap()
+	}
+}
+
+func (s *scrim) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(newPaint(func(r *canvas.Rectangle, _ *palette) { r.FillColor = scrimColor() }))
+}
+
 // scrimColor is the shade over the window behind a dialog or the drawer.
 func scrimColor() color.NRGBA { return color.NRGBA{R: 0x14, G: 0x15, B: 0x10, A: 0x66} }

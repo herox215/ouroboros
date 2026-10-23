@@ -455,7 +455,7 @@ func (ui *fyneUI) build() {
 		ui.contextScroll,
 	))
 
-	drawerScrim := newTapBox(newPaint(func(r *canvas.Rectangle, _ *palette) { r.FillColor = scrimColor() }), ui.closeDrawer)
+	drawerScrim := newScrim(ui.closeDrawer)
 	ui.columns = container.New(&columnsLayout{ui: ui}, ui.main, ui.rail, drawerScrim, ui.sidebarPanel)
 
 	ui.overlayBody = container.NewVBox()
@@ -468,7 +468,7 @@ func (ui *fyneUI) build() {
 	cardContent := inset(22, 22, 22, 22, ui.overlayBody)
 	ui.overlayScroll = container.NewVScroll(cardContent)
 	card := container.NewStack(cardBackground, ui.overlayScroll)
-	scrim := newTapBox(newPaint(func(r *canvas.Rectangle, _ *palette) { r.FillColor = scrimColor() }), func() {})
+	scrim := newScrim(nil)
 	ui.overlay = container.NewStack(scrim, container.New(&dialogLayout{max: 460, maxHeight: 720, measure: cardContent}, card))
 	ui.overlay.Hide()
 

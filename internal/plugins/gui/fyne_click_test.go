@@ -3,6 +3,7 @@
 package gui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -29,11 +30,35 @@ var clickSizes = []fyne.Size{
 
 // hitAt is the object a click at pos reaches, found as the desktop driver
 // finds it: the deepest and last visible object under the pointer that takes
-// taps, the focus or the mouse, inside the scrollers that clip it, and only
-// in the top overlay while there is one.
+// taps, the focus or the mouse.
 func hitAt(c fyne.Canvas, pos fyne.Position) (fyne.CanvasObject, fyne.Position) {
 	var found fyne.CanvasObject
 	var at fyne.Position
+	under(c, pos, func(o fyne.CanvasObject, p fyne.Position) {
+		switch o.(type) {
+		case fyne.Tappable, fyne.SecondaryTappable, fyne.DoubleTappable, fyne.Focusable, desktop.Mouseable:
+			found, at = o, p
+		}
+	})
+	return found, at
+}
+
+// cursorAt is the pointer the desktop driver shows at pos: that of the last
+// object under it that names one, the arrow where none does.
+func cursorAt(c fyne.Canvas, pos fyne.Position) desktop.Cursor {
+	cursor := desktop.Cursor(desktop.DefaultCursor)
+	under(c, pos, func(o fyne.CanvasObject, _ fyne.Position) {
+		if named, ok := o.(desktop.Cursorable); ok {
+			cursor = named.Cursor()
+		}
+	})
+	return cursor
+}
+
+// under visits the visible objects under pos from the back to the front,
+// with pos inside each, as the desktop driver walks them: inside the
+// scrollers that clip them, and only in the top overlay while there is one.
+func under(c fyne.Canvas, pos fyne.Position, visit func(fyne.CanvasObject, fyne.Position)) {
 	var walk func(o fyne.CanvasObject, origin fyne.Position, clipPos fyne.Position, clipSize fyne.Size)
 	walk = func(o fyne.CanvasObject, origin, clipPos fyne.Position, clipSize fyne.Size) {
 		if o == nil || !o.Visible() {
@@ -46,10 +71,7 @@ func hitAt(c fyne.Canvas, pos fyne.Position) (fyne.CanvasObject, fyne.Position) 
 		}
 		inside := pos.X >= p.X && pos.Y >= p.Y && pos.X < p.X+size.Width && pos.Y < p.Y+size.Height
 		if inside {
-			switch o.(type) {
-			case fyne.Tappable, fyne.SecondaryTappable, fyne.DoubleTappable, fyne.Focusable, desktop.Mouseable:
-				found, at = o, pos.Subtract(p)
-			}
+			visit(o, pos.Subtract(p))
 		}
 		if _, ok := o.(*container.Scroll); ok {
 			// A scroller clips what it holds to itself.
@@ -75,7 +97,6 @@ func hitAt(c fyne.Canvas, pos fyne.Position) (fyne.CanvasObject, fyne.Position) 
 	} else {
 		walk(c.Content(), fyne.Position{}, fyne.Position{}, whole)
 	}
-	return found, at
 }
 
 // click presses at pos as the desktop driver does: the object hit takes the
@@ -394,6 +415,48 @@ func TestFyneClickSettings(t *testing.T) {
 	}
 }
 
+// Over a dialog the pointer is the arrow, as over a native one: the hand
+// shows only over what takes a click there.
+func TestFyneDialogCursor(t *testing.T) {
+	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
+	fyne.DoAndWait(func() { ui.openSettings(ui.profile, ui.profileName()) })
+	waitFor(t, func() bool { return ui.overlay.Visible() })
+	settle(ui.win)
+	var beside, edge desktop.Cursor
+	var wrong []string
+	hands := 0
+	fyne.DoAndWait(func() {
+		c := ui.win.Canvas()
+		beside = cursorAt(c, fyne.NewPos(4, 4))
+		card, _ := absolute(ui, ui.overlayScroll)
+		size := ui.overlayScroll.Size()
+		edge = cursorAt(c, card.Add(fyne.NewPos(8, 8)))
+		for y := float32(2); y < size.Height; y += 4 {
+			for x := float32(2); x < size.Width; x += 4 {
+				pos := card.Add(fyne.NewPos(x, y))
+				if cursorAt(c, pos) != desktop.PointerCursor {
+					continue
+				}
+				hands++
+				switch hit, _ := hitAt(c, pos); hit.(type) {
+				case *flatButton, *tapText, *tapBox:
+				default:
+					wrong = append(wrong, fmt.Sprintf("%T at %v", hit, pos))
+				}
+			}
+		}
+	})
+	if beside != desktop.DefaultCursor || edge != desktop.DefaultCursor {
+		t.Errorf("beside the dialog the pointer is %v, on its edge %v", beside, edge)
+	}
+	if len(wrong) > 0 {
+		t.Errorf("the hand shows over %d points that take no click, as %s", len(wrong), wrong[0])
+	}
+	if hands == 0 {
+		t.Error("no button of the dialog shows the hand")
+	}
+}
+
 // findButton is the first icon button in what a dialog shows: its close
 // button, which is the last of its header.
 func findButton(o fyne.CanvasObject, icon bool) *flatButton {
@@ -423,6 +486,11 @@ func TestFyneClickDrawer(t *testing.T) {
 	settle(ui.win)
 	var size fyne.Size
 	fyne.DoAndWait(func() { size = ui.win.Canvas().Size() })
+	var cursor desktop.Cursor
+	fyne.DoAndWait(func() { cursor = cursorAt(ui.win.Canvas(), fyne.NewPos(size.Width-10, size.Height-30)) })
+	if cursor != desktop.DefaultCursor {
+		t.Errorf("beside the drawer the pointer is %v", cursor)
+	}
 	click(t, ui, fyne.NewPos(size.Width-10, size.Height-30))
 	waitFor(t, func() bool { return !ui.drawerOpen })
 	if len(sessions.sent()) != 0 || len(sessions.stopped()) != 0 {
