@@ -810,6 +810,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '', retry
       renderList();
     }
     ready = false;
+    gone = '';
     activity = { busy: false, n: 0, own: false, stopping: false };
     setQuestion(null);
     context = { profile, id: entry.id, state: sessionState(profile, entry.id) };
@@ -912,7 +913,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '', retry
           if (!active()) return;
           // The stream ended, as when the node starts anew: the session is
           // opened again.
-          if (events === null) return reconnect();
+          if (events === null) return await reconnect();
           // A stream that answers earns its retries back; one that ends
           // right after each opening uses them up instead of spinning.
           attempts = 0;
@@ -976,6 +977,7 @@ export function browse(bridge, doc = document, resume = '', threadID = '', retry
     const version = ++generation;
     ++selection;
     ready = false;
+    gone = '';
     context = null;
     setQuestion(null);
     draft.value = '';

@@ -866,6 +866,31 @@ test('a node that does not come back is said once, in view, keeps the transcript
   assert.equal(doc.draft.disabled, false);
 });
 
+test('a lost session says nothing beside the composer of the next one, and a broken new snapshot is lost', async () => {
+  const doc = archiveFixture();
+  let opens = 0;
+  await browse({
+    async Sessions() { return [{ id: 'owner/closed' }, { id: 'owner/other' }]; },
+    async OpenSession(_, id) {
+      if (id === 'owner/other') throw new Error('no such session');
+      opens++;
+      if (opens === 1) return { token: 5, events: [{ kind: 'message', text: 'hello' }] };
+      if (opens === 2) throw new Error('the node is not running');
+      // A snapshot the transcript cannot replay.
+      return { token: 6, events: [null] };
+    },
+    PollSession() { return Promise.resolve(null); },
+  }, doc, '', '', [0, 0]);
+  await until(() => !doc.error.hidden);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(opens, 3);
+  assert.equal(doc['session-status'].textContent, 'Connection interrupted');
+  assert.equal(doc.draft.disabled, true);
+  choose(doc, 'owner/other');
+  await until(() => /no such session/.test(doc.error.textContent));
+  assert.doesNotMatch(doc['send-error'].textContent, /did not start again|Connection|events/);
+});
+
 test('closed live streams use up their retries instead of spinning', async () => {
   const doc = archiveFixture();
   let opens = 0, polls = 0;
