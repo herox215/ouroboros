@@ -69,6 +69,25 @@ func (ui *fyneUI) renderList() {
 		objects = append(objects, inset(12, 10, 12, 10, muted(message, theme.SizeNameText)))
 	}
 	setChildren(ui.sidebarList, objects...)
+	ui.showSessions(len(ui.entries) > 0)
+}
+
+// showSessions shows the heading and the list of the sidebar only once there
+// is a session to list.
+func (ui *fyneUI) showSessions(show bool) {
+	for _, object := range []fyne.CanvasObject{ui.sessionsHead, ui.sessionsScroll} {
+		if object == nil || object.Visible() == show {
+			continue
+		}
+		if show {
+			object.Show()
+		} else {
+			object.Hide()
+		}
+		if ui.sidebar != nil {
+			ui.sidebar.Refresh()
+		}
+	}
 }
 
 func runningRank(entry SessionEntry) int {

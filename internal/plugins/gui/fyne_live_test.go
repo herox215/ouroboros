@@ -31,7 +31,7 @@ func TestFyneLiveAnswer(t *testing.T) {
 		sessions.live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: "piece " + strconv.Itoa(i) + " ", At: time.Now()}
 	}
 	waitFor(t, func() bool {
-		return ui.chat.partial != nil && len(ui.chat.partial.body.Text) > 0 && ui.chat.partial.body.Text[len(ui.chat.partial.body.Text)-3:] == "29 "
+		return ui.chat.partial != nil && len(ui.chat.partial.body.Text()) > 0 && ui.chat.partial.body.Text()[len(ui.chat.partial.body.Text())-3:] == "29 "
 	})
 	settle(ui.win)
 	waitFor(t, func() bool { return atEnd(ui) })
@@ -192,10 +192,10 @@ func TestFyneJoinsAnAnswerBeingWritten(t *testing.T) {
 	}
 	ui := e2eWindowWith(t, fyne.NewSize(1180, 780), sessions)
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: "under the snow", At: time.Now()}
-	waitFor(t, func() bool { return ui.chat.partial != nil && ui.chat.partial.body.Text == "… under the snow" })
+	waitFor(t, func() bool { return ui.chat.partial != nil && ui.chat.partial.body.Text() == "… under the snow" })
 	// A live answer from its start has no ellipsis.
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "Done.", At: time.Now()}
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, At: time.Now()}
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: "Once", At: time.Now()}
-	waitFor(t, func() bool { return ui.chat.partial != nil && ui.chat.partial.body.Text == "Once" })
+	waitFor(t, func() bool { return ui.chat.partial != nil && ui.chat.partial.body.Text() == "Once" })
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -115,7 +116,7 @@ func TestFyneSettingsNavigation(t *testing.T) {
 	dcTap(model)
 	waitFor(t, func() bool {
 		s := selectsIn(ui.overlayBody)
-		return len(s) == 2 && !s[0].Disabled()
+		return len(s) == 2 && !s[0].Disabled() && dcShownLabel(ui, tr("model.refreshing", nil)) == nil
 	})
 	// Unchanged, the model goes back to the settings without asking.
 	fyne.DoAndWait(func() { back = dcIcon(ui.overlayBody, theme.NavigateBackIcon()) })
@@ -130,7 +131,7 @@ func TestFyneSettingsNavigation(t *testing.T) {
 	dcTap(model)
 	waitFor(t, func() bool {
 		s := selectsIn(ui.overlayBody)
-		return len(s) == 2 && !s[0].Disabled()
+		return len(s) == 2 && !s[0].Disabled() && dcShownLabel(ui, tr("model.refreshing", nil)) == nil
 	})
 	var closeButton *flatButton
 	fyne.DoAndWait(func() { closeButton = dcIcon(ui.overlayBody, theme.CancelIcon()) })
@@ -400,6 +401,14 @@ func dcModelPickers(t *testing.T, ui *fyneUI) (access, model *picker) {
 	return access, model
 }
 
+// These dialog tests exercise the freshly listed models, not the cache.
+func dcRefreshedModelPickers(t *testing.T, ui *fyneUI) (access, model *picker) {
+	t.Helper()
+	access, model = dcModelPickers(t, ui)
+	waitFor(t, func() bool { return dcShownLabel(ui, tr("model.refreshing", nil)) == nil })
+	return access, model
+}
+
 // The model page names the model the list lost, says what an access lacks,
 // and asks before an unsaved change is left: Escape answers the question,
 // keep stays, discard goes back, and an access without models saves nothing.
@@ -409,7 +418,7 @@ func TestFyneModelAccesses(t *testing.T) {
 	ui := dialogWindow(t, w)
 	backs := 0
 	fyne.DoAndWait(func() { ui.openModelDialog(0, "", func() { backs++ }) })
-	access, model := dcModelPickers(t, ui)
+	access, model := dcRefreshedModelPickers(t, ui)
 	fyne.DoAndWait(func() {
 		if len(access.Options) != 3 || access.Selected != "Account" {
 			t.Errorf("accesses %q, %q", access.Options, access.Selected)
@@ -496,7 +505,7 @@ func TestFyneModelStore(t *testing.T) {
 	second := dcAccesses(t, dirs[0])
 	ui := dialogWindow(t, w)
 	fyne.DoAndWait(func() { ui.openModelDialog(0, "Test", nil) })
-	access, model := dcModelPickers(t, ui)
+	access, model := dcRefreshedModelPickers(t, ui)
 	var save, closeButton *flatButton
 	fyne.DoAndWait(func() {
 		if dcIcon(ui.overlayBody, theme.NavigateBackIcon()) != nil {
@@ -536,7 +545,7 @@ func TestFyneModelStore(t *testing.T) {
 	// The page closes while the choice is saved: the choice is kept, the
 	// page stays closed.
 	fyne.DoAndWait(func() { ui.openModelDialog(0, "Test", nil) })
-	_, model = dcModelPickers(t, ui)
+	_, model = dcRefreshedModelPickers(t, ui)
 	fyne.DoAndWait(func() {
 		model.SetSelected("two-small")
 		dcShownButton(ui, tr("dialog.save", nil)).Tapped(&fyne.PointEvent{})
@@ -596,6 +605,13 @@ func TestFyneModelNoAccess(t *testing.T) {
 	ui := dialogWindow(t, w)
 	fyne.DoAndWait(func() { ui.openModelDialog(0, "Test", nil) })
 	waitFor(t, func() bool { return dcShownLabel(ui, tr("model.noAccess", nil)) != nil })
+	// The cached empty list is visible before the background refresh has
+	// written its cache; let that write finish before TempDir is removed.
+	waitFor(t, func() bool {
+		_, err := os.ReadFile(dirs[0].Models())
+		return err == nil
+	})
+	dcSettle()
 	fyne.DoAndWait(func() {
 		s := selectsIn(ui.overlayBody)
 		if !s[0].Disabled() || !s[1].Disabled() || len(s[1].Options) != 0 || !dcShownButton(ui, tr("dialog.save", nil)).disabled {

@@ -29,6 +29,8 @@ func tcText(o fyne.CanvasObject) string {
 			out = append(out, o.Text)
 		case *widget.RichText:
 			out = append(out, o.String())
+		case *markdownText:
+			out = append(out, o.Text())
 		case *fyne.Container:
 			for _, child := range o.Objects {
 				walk(child)
@@ -115,8 +117,8 @@ func TestFyneTranscriptEventKinds(t *testing.T) {
 			t.Errorf("%d messages added, want 6", len(ui.content.Objects)-before)
 		}
 
-		// Thoughts, calls of the model and empty words add nothing, but
-		// tell that the thread works.
+		// A thought shows as such, calls of the model and empty words add
+		// nothing, and all tell that the thread works.
 		count := len(ui.content.Objects)
 		ui.activity.busy = false
 		apply(ChatEvent{Kind: plugin.SessionThought, Text: "hmm", At: now})
@@ -130,8 +132,8 @@ func TestFyneTranscriptEventKinds(t *testing.T) {
 		if !ui.activity.busy {
 			t.Error("a call of the model does not tell the thread works")
 		}
-		if len(ui.content.Objects) != count {
-			t.Errorf("thoughts and empty words added %d messages", len(ui.content.Objects)-count)
+		if len(ui.content.Objects) != count+1 {
+			t.Errorf("a thought and empty words added %d messages, want 1", len(ui.content.Objects)-count)
 		}
 
 		// An answer of the thread leaves it working while other sessions
@@ -263,23 +265,24 @@ func TestFyneTranscriptExpandableText(t *testing.T) {
 		if button.Text != tr("transcript.expandCount", map[string]any{"n": textLimit + 5}) {
 			t.Errorf("button %q", button.Text)
 		}
-		var body *widget.Label
+		var body *markdownText
 		for _, label := range labelsIn(ui.content.Objects[len(ui.content.Objects)-1]) {
-			if l, ok := label.(*widget.Label); ok && l.Selectable {
+			if l, ok := label.(*markdownText); ok {
 				body = l
 			}
 		}
-		if body == nil || len([]rune(body.Text)) != textLimit {
-			t.Fatalf("the long text is not cut: %v", body)
+		if body == nil || len([]rune(body.Text())) != textLimit {
+			t.Errorf("the long text is not cut: %v", body)
+			return
 		}
 		ui.following = true
 		button.Tapped(nil)
-		if ui.following || body.Text != long || button.Text != tr("transcript.collapse", nil) {
-			t.Errorf("expanded: following %v, %d runes, button %q", ui.following, len([]rune(body.Text)), button.Text)
+		if ui.following || body.Text() != long || button.Text != tr("transcript.collapse", nil) {
+			t.Errorf("expanded: following %v, %d runes, button %q", ui.following, len([]rune(body.Text())), button.Text)
 		}
 		button.Tapped(nil)
-		if len([]rune(body.Text)) != textLimit || button.Text != tr("transcript.expand", nil) {
-			t.Errorf("collapsed: %d runes, button %q", len([]rune(body.Text)), button.Text)
+		if len([]rune(body.Text())) != textLimit || button.Text != tr("transcript.expand", nil) {
+			t.Errorf("collapsed: %d runes, button %q", len([]rune(body.Text())), button.Text)
 		}
 	})
 	if cutText("short") != "short" {
@@ -674,6 +677,112 @@ func TestFyneSidebarCard(t *testing.T) {
 		renderer.Refresh()
 		if background.rect.StrokeWidth != 1 {
 			t.Errorf("unfocused card stroke %v", background.rect.StrokeWidth)
+		}
+	})
+}
+
+// A queued message shows until the answer takes it: then it shows once, as
+// the owner's. One taken back goes.
+func TestFyneTranscriptQueueTaken(t *testing.T) {
+	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
+	now := time.Now()
+	fyne.DoAndWait(func() {
+		apply := func(events ...ChatEvent) { ui.applyEvents(events) }
+		count := func(text string) (queued, mine int) {
+			for _, o := range ui.content.Objects {
+				got := tcText(o)
+				if !strings.Contains(got, text) {
+					continue
+				}
+				if strings.Contains(got, tr("speaker.queue", nil)) {
+					queued++
+				} else {
+					mine++
+				}
+			}
+			return queued, mine
+		}
+		apply(ChatEvent{Kind: plugin.SessionQueued, Text: "first in line", At: now},
+			ChatEvent{Kind: plugin.SessionQueued, Text: "second in line", At: now})
+		if q, _ := count("in line"); q != 2 {
+			t.Fatalf("%d queued show", q)
+		}
+		apply(ChatEvent{Kind: plugin.SessionUnqueued, At: now})
+		if q, _ := count("second in line"); q != 0 {
+			t.Fatal("the message taken back still shows")
+		}
+		apply(ChatEvent{Kind: plugin.SessionMessage, Text: "first in line", At: now})
+		if q, mine := count("first in line"); q != 0 || mine != 1 {
+			t.Fatalf("taken: %d queued, %d of the owner", q, mine)
+		}
+	})
+}
+
+// While the model thinks the transcript shows it, with the end of what it
+// thinks; once the round goes on that folds into a line that opens it. A
+// While the model thinks the transcript shows an animation of its own at its
+// end, not a message, with the last words of the thought; once the round
+// goes on it goes, and what was thought stays as a line that opens it. A
+// round without thoughts leaves nothing.
+func TestFyneTranscriptThinking(t *testing.T) {
+	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
+	now := time.Now()
+	fyne.DoAndWait(func() {
+		apply := func(events ...ChatEvent) { ui.applyEvents(events) }
+		chat := ui.chat
+		apply(ChatEvent{Kind: plugin.SessionMessage, Text: "Think it over", At: now})
+		thinking := chat.thinking
+		if thinking == nil || !holds(ui.content.Objects[len(ui.content.Objects)-1], thinking.pulse) {
+			t.Fatal("the model thinking shows no animation at the end")
+		}
+		if got := tcLast(ui); got != "" {
+			t.Fatalf("the animation reads as a message: %q", got)
+		}
+		count := len(ui.content.Objects)
+		apply(ChatEvent{Kind: plugin.SessionThought, Text: "First I look ", At: now},
+			ChatEvent{Kind: plugin.SessionThought, Text: strings.Repeat("closer ", 80) + "at the end.", At: now})
+		if len(ui.content.Objects) != count {
+			t.Fatal("pieces of a thought add messages")
+		}
+		target := string(thinking.pulse.target)
+		if !strings.HasSuffix(target, "at the end.") || !strings.HasPrefix(target, "…") || len([]rune(target)) > pulseWords+2 {
+			t.Fatalf("the end of the thought does not show: %q", target)
+		}
+		for range len(thinking.pulse.target) {
+			thinking.pulse.frame(0.5)
+		}
+		if thinking.pulse.line.Text != target {
+			t.Fatalf("the thought does not decode: %q", thinking.pulse.line.Text)
+		}
+		if label := thinking.pulse.label.Text; !strings.Contains(label, strings.ToUpper(tr("pulse.thinking", nil))) || !strings.Contains(label, "0:0") {
+			t.Fatalf("the animation reads %q", label)
+		}
+
+		apply(ChatEvent{Kind: plugin.SessionAnswer, Text: "Done.", At: now})
+		if chat.thinking != nil || !thinking.pulse.stopped {
+			t.Fatal("the animation stays once the answer is there")
+		}
+		for _, o := range ui.content.Objects {
+			if holds(o, thinking.pulse) {
+				t.Fatal("the animation stays in the transcript")
+			}
+		}
+		if thinking.body.Visible() || !strings.Contains(tcText(thinking.item.item), tr("transcript.thought", nil)) {
+			t.Fatalf("the thought is not kept folded: %q", tcText(thinking.item.item))
+		}
+		if !strings.Contains(tcLast(ui), "Done.") {
+			t.Fatal("the answer does not follow the thought")
+		}
+		thinking.toggle.Tapped(nil)
+		if !thinking.body.Visible() || !strings.HasPrefix(thinking.body.Text, "First I look") {
+			t.Fatal("the folded thought does not open in full")
+		}
+
+		count = len(ui.content.Objects)
+		apply(ChatEvent{Kind: plugin.SessionMessage, Text: "Quick one", At: now},
+			ChatEvent{Kind: plugin.SessionAnswer, Text: "Sure.", At: now})
+		if len(ui.content.Objects) != count+2 {
+			t.Fatalf("a round without thoughts added %d messages, want 2", len(ui.content.Objects)-count)
 		}
 	})
 }

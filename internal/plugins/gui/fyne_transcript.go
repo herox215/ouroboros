@@ -35,7 +35,19 @@ type fyneMessage struct {
 // fynePartial is an answer being written, as its pieces arrive.
 type fynePartial struct {
 	item *fyneMessage
-	body *widget.Label
+	body *markdownText
+}
+
+// fyneThinking is what the model thinks in a round of the loop, as the
+// stream brings it: an animation shows it while the model thinks, and a line
+// that opens it keeps it once the round goes on.
+type fyneThinking struct {
+	item   *fyneMessage
+	at     time.Time
+	pulse  *thinkingPulse
+	body   *widget.Label
+	toggle *tapText
+	text   strings.Builder
 }
 
 // fyneToolCall is one call of a tool in the transcript, with the result that
@@ -66,6 +78,15 @@ type fyneChat struct {
 	cutoff   time.Time
 	partial  *fynePartial
 	calls    map[string]*fyneToolCall
+	// queued are the messages that wait for the answer on its way, as the
+	// transcript shows them until the answer takes them.
+	queued []*fyneMessage
+	// thinking is what the model thinks in the round of the loop that is on.
+	thinking *fyneThinking
+	// stream lets the words of the answer being added stream in; seen are
+	// when those the answer being written showed appeared.
+	stream bool
+	seen   []time.Time
 }
 
 func newFyneChat(ui *fyneUI, profile int, id string, thread bool) *fyneChat {
@@ -87,36 +108,55 @@ func (c *fyneChat) apply(event ChatEvent) {
 	case plugin.SessionMessage:
 		c.ui.setQuestion(nil)
 		c.exchange = &fyneExchange{at: event.At}
+		// A message that was queued is the first of them: it shows now as
+		// the owner's.
+		if len(c.queued) > 0 {
+			c.ui.removeItem(c.queued[0])
+			c.queued = c.queued[1:]
+		}
+		c.endThinking()
 		c.message("user", tr("speaker.you", nil), event.Text, event.At)
+		c.think(event.At, "")
 	case plugin.SessionSay:
-		c.clearPartial()
+		c.endThinking()
+		seen := c.clearPartial()
 		if strings.TrimSpace(event.Text) != "" {
-			c.message("assistant", c.agent, event.Text, event.At)
+			c.answer(event.Text, event.At, seen)
 		}
 	case plugin.SessionAnswer, plugin.SessionSuggestion:
 		if event.Kind == plugin.SessionAnswer {
 			c.ui.setQuestion(nil)
 		}
-		c.clearPartial()
+		c.endThinking()
+		seen := c.clearPartial()
 		if strings.TrimSpace(event.Text) != "" {
-			c.message("assistant", c.agent, event.Text, event.At)
+			c.answer(event.Text, event.At, seen)
 		}
 	case plugin.SessionAnswering:
+		c.endThinking()
 		if c.partial == nil {
 			item := c.message("assistant", c.agent+" · "+tr("transcript.writing", nil), "", event.At)
-			body := plain("", sizeBody, false)
-			body.Wrapping = fyne.TextWrapWord
+			body := newMarkdownText("")
+			body.words = true
+			if c.ui.transcript != nil {
+				body.outer = c.ui.transcript
+			}
 			if item.box != nil {
-				item.box.Objects = append(item.box.Objects, body)
+				pad := theme.InnerPadding()
+				item.box.Objects = []fyne.CanvasObject{tightVBox(-4, item.box.Objects[0], inset(pad, pad, pad, pad, body))}
 			}
 			c.partial = &fynePartial{item: item, body: body}
 			// The past of a session tells an answer being written without
 			// what was written: the window joins it in the middle.
 			if event.Text == "" && !c.ui.ready.Load() {
-				body.SetText("… ")
+				body.SetMarkdown("… ")
 			}
 		}
-		c.partial.body.SetText(c.partial.body.Text + event.Text)
+		// Live, the words of the answer stream in as they come.
+		c.partial.body.streaming = c.ui.ready.Load()
+		if event.Text != "" {
+			c.partial.body.SetMarkdown(c.partial.body.Text() + event.Text)
+		}
 	case plugin.SessionHanded:
 		if c.exchange == nil {
 			c.exchange = &fyneExchange{}
@@ -126,9 +166,11 @@ func (c *fyneChat) apply(event ChatEvent) {
 			c.ui.artefacts()
 		}
 	case plugin.SessionStep:
+		c.endThinking()
 		c.clearPartial()
 		c.step(event)
 	case plugin.SessionAsked:
+		c.endThinking()
 		c.clearPartial()
 		c.ui.setQuestion(nil)
 		label := tr("speaker.question", nil)
@@ -153,9 +195,15 @@ func (c *fyneChat) apply(event ChatEvent) {
 		if text == "" {
 			text = tr("queue.text", nil)
 		}
-		c.message("other", tr("speaker.queue", nil), text, event.At)
+		c.queued = append(c.queued, c.message("other", tr("speaker.queue", nil), text, event.At))
+	case plugin.SessionUnqueued:
+		if n := len(c.queued); n > 0 {
+			c.ui.removeItem(c.queued[n-1])
+			c.queued = c.queued[:n-1]
+		}
 	case plugin.SessionFailed, plugin.SessionCanceled:
 		c.ui.setQuestion(nil)
+		c.endThinking()
 		c.clearPartial()
 		text := event.Text
 		if event.Kind == plugin.SessionCanceled {
@@ -167,7 +215,11 @@ func (c *fyneChat) apply(event ChatEvent) {
 	case plugin.SessionTask:
 		c.task(event)
 	case plugin.SessionThought:
-		// Thoughts are not part of the transcript.
+		c.think(event.At, event.Text)
+	case plugin.SessionWorking:
+		if event.N == 0 {
+			c.endThinking()
+		}
 	}
 }
 
@@ -184,20 +236,114 @@ func questionKey(event ChatEvent) string {
 	return fmt.Sprintf("%s|%s|%v|%d", text, recommended, options, event.At.UnixNano())
 }
 
-// clearPartial takes the answer being written out of the transcript, once
-// what it became is there.
-func (c *fyneChat) clearPartial() {
-	if c.partial == nil {
+// think shows that the model thinks, with text the next piece of what it
+// thinks, "" for none yet: an animation of its own at the end of the
+// transcript, apart from the messages.
+func (c *fyneChat) think(at time.Time, text string) {
+	if c.thinking == nil {
+		pulse := newThinkingPulse(c.agent, at)
+		thinking := &fyneThinking{at: at, pulse: pulse}
+		thinking.item = c.add(at, inset(10, 0, 14, 0, pulse))
+		c.thinking = thinking
+	}
+	if text == "" {
 		return
 	}
-	item := c.partial.item
+	c.thinking.text.WriteString(text)
+	c.thinking.pulse.add(c.thinking.text.String(), text)
+}
+
+// endThinking takes the animation away once the round goes on, and keeps
+// what the model thought as a line that opens it.
+func (c *fyneChat) endThinking() {
+	thinking := c.thinking
+	if thinking == nil {
+		return
+	}
+	c.thinking = nil
+	thinking.pulse.stop()
+	c.ui.removeItem(thinking.item)
+	text := strings.TrimSpace(thinking.text.String())
+	if text == "" {
+		return
+	}
+	item := c.message("assistant", c.agent+" · "+tr("transcript.thought", nil), "", thinking.at)
+	body := muted(text, sizeBody)
+	body.TextStyle.Italic = true
+	body.Wrapping = fyne.TextWrapWord
+	body.Hide()
+	toggle := newTapText(tr("transcript.showThought", map[string]any{"n": len([]rune(text))}),
+		sizeSmall, fyne.TextStyle{Monospace: true}, func() {
+			c.ui.following = false
+			if body.Visible() {
+				body.Hide()
+			} else {
+				body.Show()
+			}
+		})
+	thinking.body, thinking.toggle = body, toggle
+	if item.box != nil {
+		item.box.Objects = []fyne.CanvasObject{tightVBox(-4, item.box.Objects[0], toggle, body)}
+	}
+	thinking.item = item
+}
+
+// stopThinking ends the animation of a session the window leaves.
+func (c *fyneChat) stopThinking() {
+	if c.thinking != nil {
+		c.thinking.pulse.stop()
+	}
+}
+
+// add puts an object of the transcript at its end, once the part of the
+// thread it is in shows.
+func (c *fyneChat) add(at time.Time, object fyne.CanvasObject) *fyneMessage {
+	if !c.shown && !at.Before(c.cutoff) {
+		c.shown = true
+	}
+	message := &fyneMessage{item: object}
+	if !c.shown {
+		return message
+	}
+	message.exchange = c.exchange
+	c.ui.addItem(message)
+	return message
+}
+
+// clearPartial takes the answer being written out of the transcript, once
+// what it became is there, and returns when each of its words appeared.
+func (c *fyneChat) clearPartial() []time.Time {
+	if c.partial == nil {
+		return nil
+	}
+	item, body := c.partial.item, c.partial.body
 	c.partial = nil
+	body.stopRevealAnimation()
 	c.ui.removeItem(item)
+	return body.born
+}
+
+// answer adds what the agent says or answers. Live, its words stream in;
+// those the answer being written showed already stand, or go on their way.
+func (c *fyneChat) answer(body string, at time.Time, seen []time.Time) {
+	c.stream, c.seen = c.ui.ready.Load(), seen
+	c.markdownMessage(c.agent, body, at)
+	c.stream, c.seen = false, nil
 }
 
 // message adds a message to the transcript, once the part of the thread it is
 // in shows.
 func (c *fyneChat) message(kind, label, body string, at time.Time) *fyneMessage {
+	return c.messageAs(kind, label, body, at, false)
+}
+
+// markdownMessage adds what the agent says or answers to the transcript,
+// formatted from its markdown.
+func (c *fyneChat) markdownMessage(label, body string, at time.Time) *fyneMessage {
+	return c.messageAs("assistant", label, body, at, true)
+}
+
+func (c *fyneChat) messageAs(kind, label, body string, at time.Time, markdown bool) *fyneMessage {
 	if !c.shown && !at.Before(c.cutoff) {
 		c.shown = true
 	}
@@ -217,7 +363,11 @@ func (c *fyneChat) message(kind, label, body string, at time.Time) *fyneMessage 
 	default:
 		line := text(header, sizeSmall, theme.ColorNameDisabled, fyne.TextStyle{Monospace: true, Bold: true})
 		if body != "" {
-			box.Objects = append(box.Objects, tightVBox(-4, line, c.expandable(body)))
+			content := c.expandable(body)
+			if markdown {
+				content = markdownExpandable(c.ui, body, c.stream, c.seen)
+			}
+			box.Objects = append(box.Objects, tightVBox(-4, line, content))
 		} else {
 			box.Objects = append(box.Objects, line)
 		}
@@ -259,6 +409,38 @@ func expandableText(ui *fyneUI, value string) fyne.CanvasObject {
 			}
 		})
 	return container.NewVBox(body, button)
+}
+
+// markdownExpandable is formatted text that offers its rest once it is very
+// long, as expandableText does.
+func markdownExpandable(ui *fyneUI, value string, stream bool, seen []time.Time) fyne.CanvasObject {
+	body := newMarkdownText(cutText(value))
+	if stream {
+		body.words, body.streaming = true, true
+		body.born = append([]time.Time(nil), seen...)
+	}
+	if ui != nil && ui.transcript != nil {
+		body.outer = ui.transcript
+	}
+	// The text keeps the inner padding a label has, as the other messages do.
+	pad := theme.InnerPadding()
+	padded := inset(pad, pad, pad, pad, body)
+	if len([]rune(value)) <= textLimit {
+		return padded
+	}
+	var button *tapText
+	button = newTapText(tr("transcript.expandCount", map[string]any{"n": len([]rune(value))}),
+		sizeSmall, fyne.TextStyle{Monospace: true}, func() {
+			ui.following = false
+			if len([]rune(body.Text())) > textLimit {
+				body.SetMarkdown(cutText(value))
+				button.SetText(tr("transcript.expand", nil))
+			} else {
+				body.SetMarkdown(value)
+				button.SetText(tr("transcript.collapse", nil))
+			}
+		})
+	return container.NewVBox(padded, button)
 }
 
 func cutText(value string) string {

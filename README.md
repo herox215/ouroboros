@@ -66,6 +66,10 @@ ouro fyne                # the same window, drawn with Fyne
 ouro update              # build and install the newest main
 ```
 
+The Fyne chat reveals new assistant answers word by word, fading and rising
+into place. Live text keeps its reveal progress when the final answer arrives;
+conversation history appears immediately without replaying the animation.
+
 ## Docs
 
 The full manual — terminal UI, sessions, profiles, every tool, providers, peers, trust, the log —

@@ -1190,6 +1190,12 @@ func (l *sidebarLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		listHeight = fyne.Min(scroll.Content.MinSize().Height, size.Height*share)
 	}
 	listHeight = fyne.Max(listHeight, 40)
+	if !heading.Visible() {
+		headingHeight = 0
+	}
+	if !list.Visible() {
+		listHeight = 0
+	}
 	listHeight = fyne.Min(listHeight, fyne.Max(0, size.Height-headingHeight-footerHeight))
 	free := fyne.Max(0, size.Height-headingHeight-listHeight-footerHeight)
 	y := free / 2

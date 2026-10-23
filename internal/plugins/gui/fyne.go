@@ -255,6 +255,7 @@ type fyneUI struct {
 	sidebarPaints  []*paint
 	sidebarList    *fyne.Container
 	sessionsScroll *container.Scroll
+	sessionsHead   fyne.CanvasObject
 	settingsButton *flatButton
 	main           *fyne.Container
 	dock           *fyne.Container
@@ -332,6 +333,7 @@ func (ui *fyneUI) build() {
 	ui.sessionsScroll = container.NewVScroll(ui.sidebarList)
 	heading := inset(0, 0, 7, 0, text(strings.ToUpper(tr("sessions.title", nil)), sizeSection, theme.ColorNameDisabled,
 		fyne.TextStyle{Monospace: true}))
+	ui.sessionsHead = heading
 	ui.settingsButton = newIconButton(theme.SettingsIcon(), func() {
 		ui.openSettings(ui.profile, ui.profileName())
 	})
@@ -833,6 +835,9 @@ func (ui *fyneUI) read(entry SessionEntry) {
 	}
 	ui.meta.SetText(meta)
 	ui.setStatus(tr("session.loading", nil))
+	if ui.chat != nil {
+		ui.chat.stopThinking()
+	}
 	ui.chat = newFyneChat(ui, profile, entry.ID, entry.ID == ui.thread)
 	id := entry.ID
 	go func() {

@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/lang"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
@@ -251,7 +252,7 @@ func labelsIn(o fyne.CanvasObject) []fyne.CanvasObject {
 	var walk func(o fyne.CanvasObject)
 	walk = func(o fyne.CanvasObject) {
 		switch o := o.(type) {
-		case *widget.Label, *widget.RichText:
+		case *widget.Label, *widget.RichText, *markdownText:
 			out = append(out, o)
 		case *fyne.Container:
 			for _, child := range o.Objects {
@@ -548,10 +549,13 @@ func sizeName(size fyne.Size) string {
 // A right click on what was said offers to copy it, as native text does.
 func TestFyneRightClickCopies(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
-	var body *widget.Label
+	var body fyne.CanvasObject
 	fyne.DoAndWait(func() {
 		for _, o := range labelsIn(ui.content) {
 			if l, ok := o.(*widget.Label); ok && l.Selectable && strings.Contains(l.Text, "Polish the window") {
+				body = l
+			}
+			if l, ok := o.(*markdownText); ok && strings.Contains(l.Text(), "Polish the window") {
 				body = l
 			}
 		}
@@ -582,7 +586,7 @@ func TestFyneRightClickCopies(t *testing.T) {
 			walk = func(o fyne.CanvasObject) {
 				switch o := o.(type) {
 				case *canvas.Text:
-					found = found || o.Text == "Copy"
+					found = found || o.Text == lang.L(tr("transcript.copy", nil))
 				case *fyne.Container:
 					for _, c := range o.Objects {
 						walk(c)
