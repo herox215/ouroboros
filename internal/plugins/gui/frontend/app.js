@@ -2,8 +2,11 @@ import { t, locale, applyDocument } from './i18n.js';
 import { createModelDialog } from './model-dialog.js';
 import { createSettingsDialog } from './settings-dialog.js';
 import { createThemePreference } from './theme.js';
+import { markdownPreview, renderMarkdown } from './markdown.js';
 
-// Session text is rendered literally, including questions and tool output.
+// What the agent says and answers is rendered as markdown. Everything else is
+// rendered literally: the messages of the owner, questions, tool arguments and
+// results.
 export function mount(state, doc = document) {
   const picker = doc.getElementById('profile');
   picker.replaceChildren();
@@ -43,21 +46,29 @@ function formatDate(value) {
   return Number.isFinite(date.getTime()) ? dateFormat().format(date) : '';
 }
 
-// Keep very large tool output out of layout until explicitly requested.
-function appendText(parent, value, doc) {
+// Keep very large tool output out of layout until explicitly requested. Markdown
+// is cut between two blocks, so that no element is cut in the middle.
+function appendText(parent, value, doc, markdown = false) {
   const limit = 8000;
-  const text = doc.createElement('pre');
-  text.textContent = value.slice(0, limit);
+  const show = full => {
+    const source = full ? value : markdown ? markdownPreview(value, limit) : value.slice(0, limit);
+    if (!markdown) { text.textContent = source; return; }
+    text.replaceChildren(...renderMarkdown(source, doc).children);
+  };
+  const text = doc.createElement(markdown ? 'div' : 'pre');
+  if (markdown) text.className = 'markdown';
+  show(false);
   parent.append(text);
   if (value.length <= limit) return;
   const expand = doc.createElement('button');
   expand.type = 'button';
   expand.className = 'expand-text';
   expand.textContent = t('transcript.expandCount', { n: value.length.toLocaleString(locale()) });
+  let open = false;
   expand.addEventListener('click', () => {
-    const open = text.textContent.length > limit;
-    text.textContent = open ? value.slice(0, limit) : value;
-    expand.textContent = open ? t('transcript.expand') : t('transcript.collapse');
+    open = !open;
+    show(open);
+    expand.textContent = open ? t('transcript.collapse') : t('transcript.expand');
   });
   parent.append(expand);
 }
@@ -90,7 +101,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
   // started or handed a message to on it belong to that part, as its Handed
   // events tell, see browse.
   let exchange = { at: null, sessions: new Set() };
-  const message = (kind, label, text, at) => {
+  const message = (kind, label, text, at, markdown = false) => {
     if (!shown && !(Date.parse(at) < cutoff)) shown = true;
     const item = doc.createElement('section');
     item.className = 'message message-' + kind;
@@ -98,7 +109,7 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
     const time = clock(at);
     heading.textContent = label + (time ? ' · ' + time : '');
     item.append(heading);
-    if (text) appendText(item, text, doc);
+    if (text) appendText(item, text, doc, markdown);
     if (!shown) return item;
     content.append(item);
     item.exchange = exchange;
@@ -115,13 +126,13 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
       case 'message': closeQuestion(); exchange = { at: event.at, sessions: new Set() }; message('user', t('speaker.you'), event.text, event.at); break;
       case 'say':
         clearPartial();
-        if (event.text?.trim()) message('assistant', agent, event.text, event.at);
+        if (event.text?.trim()) message('assistant', agent, event.text, event.at, true);
         break;
       case 'answer':
         closeQuestion();
       case 'suggestion':
         clearPartial();
-        if (event.text?.trim()) message('assistant', agent, event.text, event.at);
+        if (event.text?.trim()) message('assistant', agent, event.text, event.at, true);
         break;
       case 'answering':
         if (!partial) {
