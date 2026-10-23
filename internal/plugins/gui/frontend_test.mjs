@@ -2114,6 +2114,14 @@ test('markdown keeps the line breaks of a paragraph', () => {
   assert.equal(md('first\nsecond\n\nthird'), 'p(first\nsecond)p(third)');
 });
 
+test('markdown with many marks that never close renders in linear time', () => {
+  const globs = '*.go _x ~~y '.repeat(20000);
+  const started = Date.now();
+  const shape = md(globs);
+  assert.ok(Date.now() - started < 2000, 'took ' + (Date.now() - started) + ' ms');
+  assert.equal(shape, 'p(' + globs.trim() + ')');
+});
+
 test('markdown never makes HTML of what the model wrote', () => {
   const evil = '<img src=x onerror="bad()"> <script>alert(1)</script> <a href="javascript:bad()">x</a>';
   assert.equal(md(evil), 'p(' + evil + ')');
@@ -2173,9 +2181,13 @@ test('a long answer is cut between two blocks and expands to everything', async 
   assert.ok(paragraphs.some(p => p === cut.split('\n\n').at(-1)), 'ends with a whole paragraph');
   const code = '```\n' + 'x'.repeat(30) + '\n'.repeat(1) + ('line\n'.repeat(3000)) + '```';
   const closed = markdownPreview('intro\n\n' + code, 8000);
-  assert.equal(closed, 'intro');
+  assert.ok(closed.startsWith('intro\n\n```\n') && closed.endsWith('\n```') && closed.length > 7000);
   assert.match(markdownPreview(code, 8000), /\n```$/);
   assert.equal(markdownPreview('short', 8000), 'short');
+  const line = 'b'.repeat(9000);
+  assert.equal(markdownPreview(line, 8000), 'b'.repeat(8000));
+  assert.equal(markdownPreview('\n' + line, 8000), '\n' + 'b'.repeat(7999));
+  assert.equal(markdownPreview('intro\n\n' + line, 8000), 'intro\n\n' + 'b'.repeat(7993));
   const doc = archiveFixture();
   await browse({
     async Sessions() { return [{ id: 'owner/long' }]; },

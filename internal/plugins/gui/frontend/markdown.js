@@ -77,6 +77,9 @@ function inline(text, parent, doc, bare = true) {
     inline(inner, node, doc, bare);
     parent.append(node);
   };
+  // A mark without a closer after some opener has none after a later one
+  // either, so that text full of lone stars is not scanned again and again.
+  const unclosed = new Map();
   let i = 0;
   while (i < text.length) {
     const c = text[i];
@@ -148,8 +151,9 @@ function inline(text, parent, doc, bare = true) {
       else if (c !== '~') mark = c;
       const next = text[i + mark.length] ?? ' ';
       const inWord = c === '_' && /[\p{L}\p{N}]/u.test(text[i - 1] ?? ' ');
-      if (mark && !/\s/.test(next) && !inWord) {
+      if (mark && !/\s/.test(next) && !inWord && !(unclosed.get(mark) <= i)) {
         const end = closer(text, i, mark);
+        if (end < 0) unclosed.set(mark, i);
         if (end > i + mark.length) {
           wrap(c === '~' ? 'del' : mark.length === 2 ? 'strong' : 'em', text.slice(i + mark.length, end));
           i = end + mark.length;
@@ -379,18 +383,21 @@ function list(lines, start, parent, doc) {
 export function markdownPreview(source, limit) {
   if (source.length <= limit) return source;
   const lines = source.split('\n');
-  let used = 0, fence = null, cut = -1;
+  let used = 0, fence = null, cut = -1, before = 0, next = '';
   const shown = [];
   for (const line of lines) {
-    if (used + line.length + 1 > limit) break;
+    if (used + line.length + 1 > limit) { next = line; break; }
     shown.push(line);
     used += line.length + 1;
     const open = FENCE.exec(line);
     if (open && !fence) fence = open[2];
     else if (open && fence && open[2][0] === fence[0] && open[2].length >= fence.length && !open[3]) fence = null;
-    if (blank(line) && !fence) cut = shown.length;
+    if (blank(line) && !fence) { cut = shown.length; before = used; }
   }
-  if (cut > 0) return shown.slice(0, cut).join('\n').trimEnd();
+  if (cut > 0 && before >= limit / 2) return shown.slice(0, cut).join('\n').trimEnd();
+  // Whole blocks or lines would show too little of it, as a long paragraph or
+  // a line of minified JSON does: the line after them is cut instead.
+  if (used < limit / 2) shown.push(next.slice(0, limit - used));
   const text = shown.join('\n');
   return fence ? text + '\n' + fence : text;
 }
