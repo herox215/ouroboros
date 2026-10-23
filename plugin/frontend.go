@@ -161,6 +161,10 @@ type (
 	// answer, with the answers to choose from: a front end offers them, and
 	// to answer in own words instead. See SessionAsked.
 	OwnerQuestion = assistant.Question
+	// NodeInstance names the image of ouro the node runs: its ID changes
+	// each time the node starts anew. A front end that is no part of the
+	// node learns of a new build by it, see session.Instance.
+	NodeInstance = session.Instance
 )
 
 // What a SessionEvent tells.

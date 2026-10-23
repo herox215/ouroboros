@@ -804,18 +804,146 @@ test('live polling appends events, pairs start/done across batches and exposes c
   assert.match(doc.error.textContent, /interrupted.*disconnected/);
 });
 
-test('closed live streams stop polling instead of spinning', async () => {
+// Waits until the reconnect of a closed stream, which waits on timers, is through.
+async function until(condition) {
+  for (let i = 0; i < 200 && !condition(); i++) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.ok(condition(), 'condition not reached');
+}
+
+test('a closed live stream opens the session again and replays it once the node is back', async () => {
+  for (const thread of [false, true]) {
+    const doc = archiveFixture();
+    const id = thread ? 'owner/thread' : 'owner/closed';
+    let opens = 0, polls = 0;
+    const later = deferred();
+    await browse({
+      async Sessions() { return thread ? [] : [{ id }]; },
+      async OpenSession(profile, opened) {
+        assert.equal(opened, id);
+        opens++;
+        // The node starts anew: it is not there for a moment, then gives the
+        // whole session, the answer that asked for the new build included.
+        if (opens === 1) return { token: 5, events: [{ kind: 'message', text: 'rebuild' }] };
+        if (opens === 2) throw new Error('the node is not running');
+        return { token: 6, events: [{ kind: 'message', text: 'rebuild' }, { kind: 'answer', text: 'neu gebaut' }] };
+      },
+      PollSession(token) {
+        polls++;
+        if (token === 5) return Promise.resolve(null);
+        return polls === 2 ? later.promise : new Promise(() => {});
+      },
+    }, doc, '', thread ? id : '', [0, 0, 0]);
+    assert.equal(doc.draft.disabled, true);
+    await until(() => opens === 3 && polls === 2);
+    assert.deepEqual(visibleTexts(doc.content), ['rebuild', 'neu gebaut']);
+    assert.equal(doc.error.hidden, true);
+    assert.equal(doc.draft.disabled, false);
+    // The new stream goes on where the snapshot ended.
+    later.resolve([{ kind: 'message', text: 'weiter' }]);
+    await until(() => polls === 3);
+    assert.deepEqual(visibleTexts(doc.content), ['rebuild', 'neu gebaut', 'weiter']);
+  }
+});
+
+test('a node that does not come back is said once, in view, keeps the transcript and stops polling', async () => {
   const doc = archiveFixture();
-  let polls = 0;
+  let opens = 0, polls = 0;
   await browse({
     async Sessions() { return [{ id: 'owner/closed' }]; },
-    async OpenSession() { return { token: 5, events: [] }; },
-    async PollSession() { polls++; return null; },
-  }, doc);
-  await settle();
+    async OpenSession() {
+      opens++;
+      if (opens > 1 && opens < 5) throw new Error('the node is not running');
+      return { token: 5, events: [{ kind: 'message', text: 'hello' }] };
+    },
+    PollSession() { polls++; return polls === 1 ? Promise.resolve(null) : new Promise(() => {}); },
+  }, doc, '', '', [0, 0, 0]);
+  await until(() => !doc.error.hidden);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(opens, 4);
   assert.equal(polls, 1);
-  assert.equal(doc.error.hidden, false);
-  assert.match(doc.error.textContent, /interrupted.*ended/);
+  assert.match(doc.error.textContent, /did not start again.*not running/);
+  // The error at the start of the history may have scrolled away: beside the
+  // composer it is in view.
+  assert.equal(doc['send-error'].hidden, false);
+  assert.match(doc['send-error'].textContent, /did not start again.*not running/);
+  assert.equal(doc['session-status'].textContent, 'Connection interrupted');
+  assert.equal(doc.draft.disabled, true);
+  assert.deepEqual(visibleTexts(doc.content), ['hello']);
+  // Once the node is back, opening the session again clears it.
+  choose(doc, 'owner/closed');
+  await until(() => polls === 2);
+  assert.equal(doc['send-error'].hidden, true);
+  assert.equal(doc.draft.disabled, false);
+});
+
+test('a lost session says nothing beside the composer of the next one, and a broken new snapshot is lost', async () => {
+  const doc = archiveFixture();
+  let opens = 0;
+  await browse({
+    async Sessions() { return [{ id: 'owner/closed' }, { id: 'owner/other' }]; },
+    async OpenSession(_, id) {
+      if (id === 'owner/other') throw new Error('no such session');
+      opens++;
+      if (opens === 1) return { token: 5, events: [{ kind: 'message', text: 'hello' }] };
+      if (opens === 2) throw new Error('the node is not running');
+      // A snapshot the transcript cannot replay.
+      return { token: 6, events: [null] };
+    },
+    PollSession() { return Promise.resolve(null); },
+  }, doc, '', '', [0, 0]);
+  await until(() => !doc.error.hidden);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(opens, 3);
+  assert.equal(doc['session-status'].textContent, 'Connection interrupted');
+  assert.equal(doc.draft.disabled, true);
+  choose(doc, 'owner/other');
+  await until(() => /no such session/.test(doc.error.textContent));
+  assert.doesNotMatch(doc['send-error'].textContent, /did not start again|Connection|events/);
+});
+
+test('closed live streams use up their retries instead of spinning', async () => {
+  const doc = archiveFixture();
+  let opens = 0, polls = 0;
+  await browse({
+    async Sessions() { return [{ id: 'owner/closed' }]; },
+    async OpenSession() { opens++; return { token: 5, events: [{ kind: 'message', text: 'hello' }] }; },
+    async PollSession() { polls++; return null; },
+  }, doc, '', '', [0, 0]);
+  await until(() => !doc.error.hidden);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(opens, 3);
+  assert.equal(polls, 3);
+  assert.match(doc.error.textContent, /Session connection ended/);
+  assert.deepEqual(visibleTexts(doc.content), ['hello']);
+});
+
+test('a stream that answered earns its retries back, and a newer selection stops a reconnect', async () => {
+  const doc = archiveFixture();
+  let opens = 0, polls = 0;
+  const hold = deferred();
+  await browse({
+    async Sessions() { return [{ id: 'owner/a' }, { id: 'owner/b' }]; },
+    async OpenSession(_, id) {
+      if (id === 'owner/b') return { token: 9, events: [{ kind: 'message', text: 'b' }] };
+      opens++;
+      if (opens === 4) return hold.promise;
+      return { token: opens, events: [{ kind: 'message', text: 'a' }] };
+    },
+    async PollSession(token) {
+      if (token === 9) return new Promise(() => {});
+      polls++;
+      // Each stream answers once, then ends: a node that is back each time.
+      return polls % 2 ? [] : null;
+    },
+  }, doc, '', '', [0]);
+  // With one retry only, a stream that answered starts its retries anew.
+  await until(() => opens === 4);
+  choose(doc, 'owner/b');
+  hold.resolve({ token: 4, events: [{ kind: 'message', text: 'stale' }] });
+  await settle();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(visibleTexts(doc.content), ['b']);
+  assert.equal(doc.error.hidden, true);
 });
 
 test('a live poll without events leaves the transcript alone and keeps following', async () => {

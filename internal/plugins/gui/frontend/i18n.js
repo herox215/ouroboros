@@ -128,6 +128,8 @@ const en = {
   'session.disconnected': 'Connection interrupted',
   'session.disconnectedHint': 'The connection to the session was interrupted. Please refresh',
   'session.ended': 'Session connection ended',
+  'session.reconnecting': 'Reconnecting …',
+  'session.gone': 'Ouro did not start again. The transcript stays; the window no longer reconnects by itself',
   'session.working': 'working',
 
   // The dialogs, opened from the sidebar.
@@ -286,6 +288,8 @@ const de = {
   'session.disconnected': 'Verbindung unterbrochen',
   'session.disconnectedHint': 'Verbindung zur Session unterbrochen. Bitte aktualisieren',
   'session.ended': 'Session-Verbindung beendet',
+  'session.reconnecting': 'Verbindung wird wiederhergestellt …',
+  'session.gone': 'Ouro ist nicht wieder angelaufen. Der Verlauf bleibt; das Fenster verbindet sich nicht mehr von selbst',
   'session.working': 'arbeitet',
 
   'dialog.model.title': 'Modell einstellen',

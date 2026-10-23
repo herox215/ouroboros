@@ -102,6 +102,10 @@ func Handler(s *Service) http.Handler {
 		out, err := s.RunningSessions(r.Context())
 		reply(w, out, err)
 	})
+	mux.HandleFunc("GET /instance", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.Instance(r.Context())
+		reply(w, out, err)
+	})
 	mux.HandleFunc("GET /activity", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.Activity(r.Context())
 		reply(w, out, err)

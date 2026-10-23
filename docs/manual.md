@@ -201,7 +201,13 @@ The message field sends with Enter; Shift+Enter inserts a newline. Sending uses 
 remain read-only. Refresh reloads the session list. Like the TUI, opening an owner session
 restores it in the node and watches its events; when a tool asks ouro to start anew from a
 new build, the window closes, and the new process opens one again showing the profile and
-the session the window before showed. There are no configuration operations.
+the session the window before showed. The same happens when the node starts anew without
+the watched session asking for it, as after a rebuild in another session, `ouro update` or
+a rebuild by a peer: once the live stream ends, the window opens the session again a few
+times over about half a minute, and a node that says it runs another image (`GET /instance`
+on its socket) makes the window start the binary that node runs. Where the window cannot
+close itself, it shows the whole session from the new node instead. A node that does not
+come back is reported once; the transcript stays. There are no configuration operations.
 
 Native builds need CGO and the [Wails prerequisites](https://wails.io/docs/gettingstarted/installation/).
 On Linux the build uses GTK 3 and **WebKitGTK 4.1** (Debian/Ubuntu:
