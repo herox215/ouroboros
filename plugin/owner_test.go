@@ -133,6 +133,9 @@ func TestOwnerSetsUpTheNode(t *testing.T) {
 	if _, err := owner(t, broken).Models(context.Background(), llms(broken)); err == nil {
 		t.Fatal("models of a configuration that cannot be read: want error")
 	}
+	if _, err := owner(t, broken).KnownModels(llms(broken)); err == nil {
+		t.Fatal("known models of a configuration that cannot be read: want error")
+	}
 	if _, err := owner(t, broken).SetModel("a", "m"); err == nil {
 		t.Fatal("a model for a configuration that cannot be read: want error")
 	}
@@ -219,6 +222,10 @@ func TestOwnerChangesTheModel(t *testing.T) {
 		t.Fatalf("back to the first access: %v, %v", switched, err)
 	}
 	listed, err = o.Models(context.Background(), llms(s))
+	// What was listed is known without asking the accesses again.
+	if known, err := o.KnownModels(llms(s)); err != nil || len(known) != 2 || !slices.Equal(known[1].Models, listed[1].Models) {
+		t.Fatalf("known %+v, %v", known, err)
+	}
 	if err != nil || len(listed) != 2 || !listed[0].Access.Active || listed[1].Access.Active ||
 		!slices.Equal(listed[1].Models, []string{"two-small", "two-large"}) || listed[1].Access.Label != "Test two" {
 		t.Fatalf("got %+v, %v", listed, err)

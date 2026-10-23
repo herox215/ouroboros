@@ -269,6 +269,17 @@ func (o *Owner) Models(ctx context.Context, providers []Provider) ([]AccessModel
 	return s.Models(ctx)
 }
 
+// KnownModels lists the models of every access of the node as they were
+// listed the last time, without asking any access: what a front end shows at
+// once while Models asks them anew. It fails with ErrNotSetUp like Models.
+func (o *Owner) KnownModels(providers []Provider) ([]AccessModels, error) {
+	s, err := o.Setup(providers)
+	if err != nil {
+		return nil, err
+	}
+	return s.Known()
+}
+
 // SetModel makes model of the access what the agents of the node answer
 // with, from the next message they get: no restart is needed. It reports
 // whether they answer through another access than before, whose provider

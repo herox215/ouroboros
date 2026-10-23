@@ -233,6 +233,20 @@ func (w *Window) modelProfile(profile int) (Profile, error) {
 // Models lists each access independently, preserving cached models and provider
 // errors just as the terminal model picker does. It need not start the node.
 func (w *Window) Models(profile int) (ModelSelection, error) {
+	return w.models(profile, func(p Profile, providers []plugin.Provider) ([]plugin.AccessModels, error) {
+		return p.owner.Models(w.ctx, providers)
+	})
+}
+
+// KnownModels is Models as the accesses listed them the last time, without
+// asking them: what the model dialog shows at once while Models asks anew.
+func (w *Window) KnownModels(profile int) (ModelSelection, error) {
+	return w.models(profile, func(p Profile, providers []plugin.Provider) ([]plugin.AccessModels, error) {
+		return p.owner.KnownModels(providers)
+	})
+}
+
+func (w *Window) models(profile int, list func(Profile, []plugin.Provider) ([]plugin.AccessModels, error)) (ModelSelection, error) {
 	p, err := w.modelProfile(profile)
 	if err != nil {
 		return ModelSelection{}, err
@@ -241,7 +255,7 @@ func (w *Window) Models(profile int) (ModelSelection, error) {
 	if p.ctx != nil {
 		providers = plugin.All[plugin.Provider](p.ctx)
 	}
-	listed, err := p.owner.Models(w.ctx, providers)
+	listed, err := list(p, providers)
 	if err != nil {
 		return ModelSelection{}, fmt.Errorf("list models: %w", err)
 	}

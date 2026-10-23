@@ -418,14 +418,25 @@ func TestModels(t *testing.T) {
 	if _, err := s.Models(ctx); !errors.Is(err, config.ErrIncomplete) {
 		t.Fatalf("a node that is not set up: %v", err)
 	}
+	if _, err := s.Known(); !errors.Is(err, config.ErrIncomplete) {
+		t.Fatalf("known of a node that is not set up: %v", err)
+	}
 	one := signedIn(t, s, "one", "good-1", "one-large")
 	two := signedIn(t, s, "flaky", "good-2", "flaky-small")
 	never, _ := s.book.Store.Put(credentials.Access{Provider: "one", Name: "Never", Credentials: llm.Credentials{Secret: []byte(`{"token":"good-down"}`)}})
 	gone, _ := s.book.Store.Put(credentials.Access{Provider: "gone", Credentials: llm.Credentials{Secret: []byte(`{"token":"good"}`)}})
 
+	// Before any list came, the accesses are known without models.
+	if known, err := s.Known(); err != nil || len(known) != 4 || known[0].Models != nil {
+		t.Fatalf("known before listing: %+v, %v", known, err)
+	}
 	got, err := s.Models(ctx)
 	if err != nil || len(got) != 4 {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+	// What was listed is known without asking, and errors are not.
+	if known, err := s.Known(); err != nil || !reflect.DeepEqual(known[0].Models, got[0].Models) || known[2].Err != "" || known[2].Models != nil {
+		t.Fatalf("known after listing: %+v, %v", known, err)
 	}
 	want := []Listed{
 		{Access: Access{ID: one.ID, Provider: "one", Label: "Test one", About: "account good-1"}, Models: []string{"one-small", "one-large"}},
@@ -622,6 +633,9 @@ func TestSaveFails(t *testing.T) {
 	s.cfg = config.Config{Access: "a", Model: "m", Name: "n"}
 	if _, err := s.Models(context.Background()); err == nil {
 		t.Fatal("Models should report a configuration it cannot read")
+	}
+	if _, err := s.Known(); err == nil {
+		t.Fatal("Known should report a configuration it cannot read")
 	}
 }
 

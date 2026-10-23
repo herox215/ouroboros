@@ -379,6 +379,28 @@ func (s *Session) Models(ctx context.Context) ([]Listed, error) {
 	return listed, nil
 }
 
+// Known lists the models of every access of the node as they were listed
+// the last time, without asking any of them: what a front end shows at once
+// while Models asks anew. An access never listed has none.
+func (s *Session) Known() ([]Listed, error) {
+	if !s.cfg.Complete() {
+		return nil, config.ErrIncomplete
+	}
+	accesses, err := s.Accesses()
+	if err != nil {
+		return nil, err
+	}
+	known := map[string][]string{}
+	if b, err := os.ReadFile(s.home.Models()); err == nil {
+		json.Unmarshal(b, &known) // what cannot be read is not known
+	}
+	listed := make([]Listed, len(accesses))
+	for i, a := range accesses {
+		listed[i] = Listed{Access: a, Models: known[a.ID]}
+	}
+	return listed, nil
+}
+
 // remember keeps the lists that came in the file of the node, and fills
 // those that did not come with what the file has of them.
 func (s *Session) remember(listed []Listed) {

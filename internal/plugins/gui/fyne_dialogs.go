@@ -388,15 +388,65 @@ func (ui *fyneUI) openModelDialog(profile int, name string, back func()) {
 	ui.onEscape = func() bool { return dialog.escape() }
 	setChildren(ui.overlayBody, dialog.page())
 	ui.showOverlay()
+	// The models the accesses listed the last time show at once; asking
+	// the accesses anew takes as long as the slowest of them.
 	go func() {
-		result, err := ui.bridge.Models(profile)
+		current := func() bool { return dialog.version == ui.dialogVersion && ui.overlay.Visible() }
+		known, knownErr := ui.bridge.KnownModels(profile)
 		fyne.Do(func() {
-			if dialog.version != ui.dialogVersion || !ui.overlay.Visible() {
-				return
+			if current() && knownErr == nil {
+				dialog.loaded(known, nil)
+				dialog.refreshing()
 			}
-			dialog.loaded(result, err)
+		})
+		listed, listErr := ui.bridge.Models(profile)
+		fyne.Do(func() {
+			if current() {
+				dialog.refreshed(listed, listErr)
+			}
 		})
 	}()
+}
+
+// refreshing says that the models shown are asked for anew.
+func (d *fyneModel) refreshing() {
+	if d.ready && (d.status.Text == "" || d.status.Text == tr("model.none", nil)) && !d.failure.Visible() {
+		d.status.SetText(tr("model.refreshing", nil))
+	}
+}
+
+// refreshed shows the models the accesses listed just now in place of the
+// ones they listed the last time, and keeps what the owner already chose
+// where it is still there. While a choice is saved, the list stays.
+func (d *fyneModel) refreshed(selection ModelSelection, err error) {
+	if !d.ready {
+		d.loaded(selection, err)
+		return
+	}
+	if d.saving {
+		return
+	}
+	if err != nil {
+		d.status.SetText("")
+		d.fail(tr("dialog.failed", nil) + " " + err.Error())
+		return
+	}
+	changed := d.changed()
+	access, model := d.selectedAccess(), d.model.Selected
+	d.loaded(selection, nil)
+	if !changed {
+		return
+	}
+	for i, id := range d.accessIDs {
+		if id == access {
+			d.access.SetSelectedIndex(i)
+		}
+	}
+	for _, name := range d.model.Options {
+		if name == model {
+			d.model.SetSelected(model)
+		}
+	}
 }
 
 func (d *fyneModel) build() {
