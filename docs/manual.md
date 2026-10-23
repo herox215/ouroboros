@@ -168,7 +168,9 @@ closes the sessions drawer from wherever the focus is; Ctrl+, opens the settings
 puts the keyboard into the composer, Ctrl+Q and Ctrl+W close the window. Below 1100
 pixels the context rail goes; below 640 the sessions move into a drawer behind the menu
 button in the header. While the end of the history is in view, the window keeps it there
-as answers stream in; scrolled up to older messages, it stays where it is.
+as answers stream in; scrolled up to older messages, it stays where it is. Of a long
+history the window keeps the newest messages ready and brings older ones back as you
+scroll up to them, so that a long thread neither opens slowly nor slows the window down.
 The tests of the Fyne window click through it with the hit testing of the desktop driver
 in every size from 360×420 to 1400×900. Two optional checks open the real desktop driver
 and need an X server, never the owner's desktop:

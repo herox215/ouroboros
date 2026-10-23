@@ -229,13 +229,15 @@ type fyneUI struct {
 	heard    bool
 	own      []ChatEvent
 
-	section    *fyneExchange
-	latest     *fyneExchange
-	visible    []*fyneMessage
-	steps      map[string]*fyneTrace
-	inspecting *fyneInspect
-	following  bool
-	listing    bool
+	section       *fyneExchange
+	latest        *fyneExchange
+	visible       []*fyneMessage
+	steps         map[string]*fyneTrace
+	inspecting    *fyneInspect
+	following     bool
+	listing       bool
+	first         int  // the first of visible the transcript shows, see syncContent
+	addingEarlier bool // older messages are being added, see earlier
 
 	// While a batch of events is applied, the transcript and the composer
 	// are laid out once at its end, see applyEvents.
@@ -299,6 +301,9 @@ type fyneUI struct {
 	shownTitle    string // the title of the session shown
 
 	noticeTime time.Duration // how long a notice under the composer stays
+	// replayTime is how long the window applies the past of a session at a
+	// time before it draws a frame and takes input again.
+	replayTime time.Duration
 
 	// The settings pages keep the profile they were opened for, so that a
 	// save cannot be redirected by another profile.
@@ -310,6 +315,7 @@ type fyneUI struct {
 func newFyneUI(ctx context.Context, application fyne.App, native fyne.Window, bridge *Window) *fyneUI {
 	return &fyneUI{
 		noticeTime: 4 * time.Second,
+		replayTime: 12 * time.Millisecond,
 		app:        application,
 		win:        native,
 		bridge:     bridge,
@@ -379,7 +385,7 @@ func (ui *fyneUI) build() {
 	ui.emptyHint.Wrapping = fyne.TextWrapWord
 	ui.emptyHint.Hide()
 	frame := container.NewVBox(ui.errorBox, ui.emptyHint, ui.content)
-	history := container.New(&anchorLayout{ui: ui, inner: centerMaxLayout{max: 760, gutter: 24}}, inset(18, 0, 22, 0, frame))
+	history := container.New(&anchorLayout{ui: ui, inner: centerMaxLayout{max: 760, gutter: 24}}, inset(historyTop, 0, 22, 0, frame))
 	ui.transcript = container.NewVScroll(history)
 	ui.transcript.OnScrolled = func(fyne.Position) { ui.scrolled() }
 	ui.fade = canvas.NewRaster(fadeGradient)
@@ -723,6 +729,7 @@ func (ui *fyneUI) load(reset bool) {
 	setChildren(ui.sidebarList)
 	setChildren(ui.content)
 	ui.visible = nil
+	ui.first = 0
 	ui.errorBox.Hide()
 	setTitleText(ui.title, strings.ToUpper(tr("sessions.title", nil)))
 	ui.meta.SetText(tr("sessions.subtitle", nil))
@@ -791,6 +798,7 @@ func (ui *fyneUI) read(entry SessionEntry) {
 	ui.updateComposer()
 	setChildren(ui.content)
 	ui.visible = nil
+	ui.first = 0
 	ui.steps = make(map[string]*fyneTrace)
 	if entry.ID == ui.thread {
 		ui.section = nil
@@ -839,23 +847,22 @@ func (ui *fyneUI) read(entry SessionEntry) {
 			})
 			return
 		}
-		// Replay in chunks and yield between them, so that switching
-		// sessions stays responsive, as the front end does every 40
-		// events. A chunk for a session the owner left ends the replay.
+		// Replay in slices of replayTime and yield between them, so that
+		// the window stays responsive while a long history opens. A slice
+		// for a session the owner left ends the replay.
 		events := snapshot.Events
-		for i := 0; ; i += 40 {
-			chunk := events[min(i, len(events)):min(i+40, len(events))]
-			last := i+40 >= len(events)
-			var stale bool
+		for i := 0; ; {
+			first := i == 0
+			var stale, last bool
 			fyne.DoAndWait(func() {
 				if stale = ui.epoch.Load() != epoch; stale {
 					return
 				}
-				if i == 0 {
+				if first {
 					ui.ctx.state.notice = snapshot.Notice
 				}
-				ui.applyEvents(chunk)
-				if last {
+				i = ui.applyFor(events, i, ui.replayTime)
+				if last = i >= len(events); last {
 					ui.ready.Store(true)
 					ui.updateComposer()
 					ui.stick()
@@ -916,9 +923,15 @@ func (ui *fyneUI) scrolled() {
 	offset := ui.transcript.Offset.Y
 	height := ui.transcript.Size().Height
 	ui.following = offset >= content.Size().Height-height-48
+	if offset < height/2 {
+		ui.earlier()
+	}
 	ui.updateFade()
 	ui.pick()
 }
+
+// historyTop is the room above the first message of the history.
+const historyTop = 18
 
 // anchorLayout lays the history out and, while the owner follows it, keeps
 // its end in view: the desktop driver lays the history out anew whenever
@@ -997,8 +1010,9 @@ func (ui *fyneUI) pick() {
 		ui.show(ui.latest)
 		return
 	}
-	middle := ui.transcript.Offset.Y + ui.transcript.Size().Height/2
-	for _, message := range ui.visible {
+	// The messages lie in ui.content, below the top inset of the history.
+	middle := ui.transcript.Offset.Y + ui.transcript.Size().Height/2 - ui.content.Position().Y - historyTop
+	for _, message := range ui.visible[ui.first:] {
 		top := message.item.Position().Y
 		bottom := top + message.item.Size().Height
 		if middle >= top && middle <= bottom {

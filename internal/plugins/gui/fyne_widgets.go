@@ -101,9 +101,76 @@ func (r *borderlessEntryRenderer) Refresh() {
 }
 
 // picker is a select that hands Escape to the window, so that a dialog
-// leaves from it as from anywhere else.
+// leaves from it as from anywhere else. It draws as a field of the window:
+// one rounded box in the colour of the fields, whose line shows the pointer
+// and the focus, instead of the box Fyne fills differently in each state.
 type picker struct {
 	widget.Select
+	hovered, focused bool
+}
+
+func (c *picker) MouseIn(e *desktop.MouseEvent) {
+	c.hovered = true
+	c.Select.MouseIn(e)
+}
+
+func (c *picker) MouseOut() {
+	c.hovered = false
+	c.Select.MouseOut()
+}
+
+func (c *picker) FocusGained() {
+	c.focused = true
+	c.Select.FocusGained()
+}
+
+func (c *picker) FocusLost() {
+	c.focused = false
+	c.Select.FocusLost()
+}
+
+func (c *picker) CreateRenderer() fyne.WidgetRenderer {
+	return &pickerRenderer{WidgetRenderer: c.Select.CreateRenderer(), picker: c}
+}
+
+// pickerRenderer restyles the background Fyne's select draws first.
+type pickerRenderer struct {
+	fyne.WidgetRenderer
+	picker *picker
+}
+
+// pickerPad is the room above and below the text, as in the fields.
+const pickerPad = 4
+
+func (r *pickerRenderer) MinSize() fyne.Size {
+	return r.WidgetRenderer.MinSize().AddWidthHeight(0, 2*pickerPad)
+}
+
+func (r *pickerRenderer) Layout(size fyne.Size) {
+	r.WidgetRenderer.Layout(size)
+	r.style()
+}
+
+func (r *pickerRenderer) Refresh() {
+	r.WidgetRenderer.Refresh()
+	r.style()
+}
+
+func (r *pickerRenderer) style() {
+	box := r.Objects()[0].(*canvas.Rectangle) // Fyne's select draws its background first
+	p := pal()
+	box.FillColor = p.field
+	box.StrokeColor = p.line
+	box.StrokeWidth = 1
+	box.CornerRadius = 8
+	switch {
+	case r.picker.focused:
+		box.StrokeColor = p.accent
+		box.StrokeWidth = 2
+	case r.picker.hovered && !r.picker.Disabled():
+		box.StrokeColor = p.lineStrong
+	}
+	box.Refresh()
 }
 
 func newPicker(options []string, changed func(string)) *picker {

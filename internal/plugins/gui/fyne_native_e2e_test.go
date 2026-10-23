@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -17,6 +18,8 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+
+	"ouroboros/plugin"
 )
 
 // The window on the real desktop driver, drawn by OpenGL, in a disposable
@@ -36,9 +39,16 @@ func init() {
 }
 
 func fyneShots(dir string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	sessions := newE2ESessions()
+	if n, _ := strconv.Atoi(os.Getenv("OURO_TEST_FYNE_EVENTS")); n > 0 {
+		// A long thread, to drive the window by hand.
+		thread := bigThread(n)
+		sessions.watch = func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+			return thread, make(chan plugin.SessionEvent), nil
+		}
+	}
 	bridge := newWindowContext(ctx, page{choices: []choice{{name: "herox", id: "herox"}}, profiles: []*Profile{{sessions: sessions}}})
 	defer bridge.Close()
 	application := app.NewWithID("dev.ouroboros.gui.fyne.test")
@@ -52,7 +62,7 @@ func fyneShots(dir string) error {
 	go func() {
 		defer fyne.Do(native.Close)
 		ui.start()
-		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		for deadline := time.Now().Add(120 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 			var ready bool
 			fyne.DoAndWait(func() { ready = ui.ready.Load() })
 			if ready {
@@ -62,6 +72,11 @@ func fyneShots(dir string) error {
 				failure = fmt.Errorf("the thread did not load")
 				return
 			}
+		}
+		if hold, _ := strconv.Atoi(os.Getenv("OURO_TEST_FYNE_HOLD")); hold > 0 {
+			fmt.Println("ready")
+			time.Sleep(time.Duration(hold) * time.Second)
+			return
 		}
 		shot := func(name string) {
 			time.Sleep(500 * time.Millisecond)

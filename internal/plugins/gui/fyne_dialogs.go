@@ -43,6 +43,14 @@ func (ui *fyneUI) closeOverlay() {
 	ui.focusComposer()
 }
 
+// dialogLabel is a line of a dialog that wraps in the width of the card, so
+// that a long message cannot widen the dialog beyond the window.
+func dialogLabel(value string) *widget.Label {
+	l := widget.NewLabel(value)
+	l.Wrapping = fyne.TextWrapWord
+	return l
+}
+
 // dialogHeader is the head of a dialog: back where there is a page to go back
 // to, the title, and the X in the corner.
 func dialogHeader(title string, back func(), close func()) fyne.CanvasObject {
@@ -110,7 +118,7 @@ func (ui *fyneUI) settingsHome() {
 			}
 		}
 	}
-	body.Add(outline(selectTheme))
+	body.Add(selectTheme)
 	setChildren(ui.overlayBody, body)
 }
 
@@ -122,7 +130,7 @@ func (ui *fyneUI) settingsGateways() {
 	body := container.NewVBox()
 	body.Add(dialogHeader(tr("settings.title", nil)+" › "+tr("settings.gateways", nil),
 		ui.settingsHome, ui.closeOverlay))
-	status := widget.NewLabel(tr("dialog.loading", nil))
+	status := dialogLabel(tr("dialog.loading", nil))
 	status.Importance = widget.LowImportance
 	body.Add(status)
 	setChildren(ui.overlayBody, body)
@@ -136,7 +144,7 @@ func (ui *fyneUI) settingsGateways() {
 			if err != nil {
 				status.SetText("")
 				status.Hide()
-				failure := widget.NewLabel(tr("settings.gatewayFailed", nil))
+				failure := dialogLabel(tr("settings.gatewayFailed", nil))
 				failure.Importance = widget.DangerImportance
 				body.Add(failure)
 				body.Refresh()
@@ -236,7 +244,7 @@ func (ui *fyneUI) settingsGateway(item plugin.GatewaySettings) {
 		password = secret(tr("settings.password", nil))
 		users = field(tr("settings.allowedUsers", nil), strings.Join(item.AllowedUsers, ", "))
 	}
-	warning := widget.NewLabel(tr("settings.allowlistWarning", nil))
+	warning := dialogLabel(tr("settings.allowlistWarning", nil))
 	warning.Wrapping = fyne.TextWrapWord
 	warning.Importance = widget.LowImportance
 	form.Objects = append(form.Objects, warning)
@@ -247,7 +255,7 @@ func (ui *fyneUI) settingsGateway(item plugin.GatewaySettings) {
 	if item.Status != "" {
 		login += " · " + item.Status
 	}
-	status := widget.NewLabel(login)
+	status := dialogLabel(login)
 	form.Objects = append(form.Objects, status)
 
 	var save, logout, cancel *flatButton
@@ -312,7 +320,7 @@ func (ui *fyneUI) settingsGateway(item plugin.GatewaySettings) {
 				}
 				lock(false)
 				if err != nil {
-					failure := widget.NewLabel(tr("settings.gatewayFailed", nil))
+					failure := dialogLabel(tr("settings.gatewayFailed", nil))
 					failure.Importance = widget.DangerImportance
 					form.Objects = append(form.Objects, failure)
 					form.Refresh()
@@ -408,10 +416,20 @@ func (ui *fyneUI) openModelDialog(profile int, name string, back func()) {
 	}()
 }
 
+// say writes the status line of the page, which takes no room while empty.
+func (d *fyneModel) say(text string) {
+	d.status.SetText(text)
+	if text == "" {
+		d.status.Hide()
+	} else {
+		d.status.Show()
+	}
+}
+
 // refreshing says that the models shown are asked for anew.
 func (d *fyneModel) refreshing() {
 	if d.ready && (d.status.Text == "" || d.status.Text == tr("model.none", nil)) && !d.failure.Visible() {
-		d.status.SetText(tr("model.refreshing", nil))
+		d.say(tr("model.refreshing", nil))
 	}
 }
 
@@ -427,7 +445,7 @@ func (d *fyneModel) refreshed(selection ModelSelection, err error) {
 		return
 	}
 	if err != nil {
-		d.status.SetText("")
+		d.say("")
 		d.fail(tr("dialog.failed", nil) + " " + err.Error())
 		return
 	}
@@ -454,9 +472,9 @@ func (d *fyneModel) build() {
 	d.access.Disable()
 	d.model = newPicker(nil, nil)
 	d.model.Disable()
-	d.status = widget.NewLabel(tr("dialog.loading", nil))
+	d.status = dialogLabel(tr("dialog.loading", nil))
 	d.status.Importance = widget.LowImportance
-	d.failure = widget.NewLabel("")
+	d.failure = dialogLabel("")
 	d.failure.Importance = widget.DangerImportance
 	d.failure.Hide()
 	d.save = newDialogAction(tr("dialog.save", nil), true, func() { d.store(d.closing()) })
@@ -477,7 +495,7 @@ func (d *fyneModel) build() {
 	d.saveAndLeave = newDialogAction(tr("dialog.save", nil), true, func() { d.store(d.leaving) })
 	confirmButtons := newFlowBox(8)
 	confirmButtons.SetObjects(d.keep, d.discard, d.saveAndLeave)
-	unsaved := widget.NewLabel(tr("dialog.unsaved", nil))
+	unsaved := dialogLabel(tr("dialog.unsaved", nil))
 	unsaved.Wrapping = fyne.TextWrapWord
 	d.confirm = container.NewVBox(unsaved, confirmButtons)
 	d.confirm.Hide()
@@ -497,9 +515,9 @@ func (d *fyneModel) page() fyne.CanvasObject {
 	description.Wrapping = fyne.TextWrapWord
 	form := container.NewVBox(
 		text(tr("model.access", nil), sizeBody, theme.ColorNameForeground, fyne.TextStyle{Monospace: true, Bold: true}),
-		outline(d.access),
+		d.access,
 		text(tr("model.model", nil), sizeBody, theme.ColorNameForeground, fyne.TextStyle{Monospace: true, Bold: true}),
-		outline(d.model),
+		d.model,
 		d.status, d.failure, d.confirm, d.actions,
 	)
 	return container.NewVBox(header, description, form)
@@ -514,7 +532,7 @@ func (d *fyneModel) displayName() string {
 
 func (d *fyneModel) loaded(selection ModelSelection, err error) {
 	if err != nil {
-		d.status.SetText("")
+		d.say("")
 		d.fail(tr("dialog.failed", nil) + " " + err.Error())
 		return
 	}
@@ -536,7 +554,7 @@ func (d *fyneModel) loaded(selection ModelSelection, err error) {
 		// Without an access there is nothing to pick: the model and the save
 		// stay disabled as build left them, and the status says why.
 		d.access.Disable()
-		d.status.SetText(tr("model.noAccess", nil))
+		d.say(tr("model.noAccess", nil))
 		return
 	}
 	d.access.Enable()
@@ -594,11 +612,11 @@ func (d *fyneModel) renderModels() {
 	if len(models) == 0 {
 		d.model.Disable()
 		d.save.Disable()
-		d.status.SetText(tr("model.none", nil))
+		d.say(tr("model.none", nil))
 	} else {
 		d.model.Enable()
 		d.save.Enable()
-		d.status.SetText("")
+		d.say("")
 	}
 }
 
@@ -709,7 +727,7 @@ func (d *fyneModel) store(then func()) {
 	current := d.version
 	d.saving = true
 	d.lock(true)
-	d.status.SetText(tr("model.saving", nil))
+	d.say(tr("model.saving", nil))
 	d.clearFailure()
 	go func() {
 		_, err := d.ui.bridge.SetModel(d.profile, d.selectedAccess(), d.model.Selected)
@@ -720,7 +738,7 @@ func (d *fyneModel) store(then func()) {
 			if err != nil {
 				d.unask()
 				d.fail(tr("dialog.failed", nil) + " " + err.Error())
-				d.status.SetText("")
+				d.say("")
 			} else {
 				d.shown = false
 				then()

@@ -192,20 +192,7 @@ func (c *fyneChat) clearPartial() {
 	}
 	item := c.partial.item
 	c.partial = nil
-	objects := c.ui.content.Objects
-	for i, object := range objects {
-		if object == item.item {
-			c.ui.content.Objects = append(objects[:i:i], objects[i+1:]...)
-			c.ui.contentChanged()
-			break
-		}
-	}
-	for i, message := range c.ui.visible {
-		if message == item {
-			c.ui.visible = append(c.ui.visible[:i:i], c.ui.visible[i+1:]...)
-			break
-		}
-	}
+	c.ui.removeItem(item)
 }
 
 // message adds a message to the transcript, once the part of the thread it is
@@ -240,9 +227,7 @@ func (c *fyneChat) message(kind, label, body string, at time.Time) *fyneMessage 
 		return message
 	}
 	message.exchange = c.exchange
-	c.ui.content.Objects = append(c.ui.content.Objects, message.item)
-	c.ui.contentChanged()
-	c.ui.visible = append(c.ui.visible, message)
+	c.ui.addItem(message)
 	c.ui.latest = c.exchange
 	return message
 }
@@ -396,10 +381,7 @@ func (c *fyneChat) task(event ChatEvent) {
 	if !c.shown {
 		return
 	}
-	message := &fyneMessage{item: item, box: box, exchange: c.exchange}
-	c.ui.content.Objects = append(c.ui.content.Objects, item)
-	c.ui.contentChanged()
-	c.ui.visible = append(c.ui.visible, message)
+	c.ui.addItem(&fyneMessage{item: item, box: box, exchange: c.exchange})
 	c.ui.latest = c.exchange
 }
 
@@ -407,17 +389,35 @@ func (c *fyneChat) task(event ChatEvent) {
 // transcript and the composer are laid out once for the batch, not once for
 // each event, so that a long history opens without stalling the window.
 func (ui *fyneUI) applyEvents(events []ChatEvent) {
+	ui.applyFor(events, 0, 0)
+}
+
+// applyFor applies events from from on as one batch, for as long as budget
+// allows, at least twenty of them; no budget applies all. It returns where
+// it stopped.
+func (ui *fyneUI) applyFor(events []ChatEvent, from int, budget time.Duration) int {
 	if ui.chat == nil {
-		return
+		return len(events)
 	}
+	start := time.Now()
 	ui.applying = true
-	for _, event := range events {
-		ui.chat.apply(event)
+	i := from
+	for ; i < len(events); i++ {
+		if budget > 0 && i-from >= 20 && (i-from)%20 == 0 && time.Since(start) >= budget {
+			break
+		}
+		ui.chat.apply(events[i])
 	}
 	ui.applying = false
+	ui.flush()
+	return i
+}
+
+// flush lays out once what a batch of events changed.
+func (ui *fyneUI) flush() {
 	if ui.contentDirty {
 		ui.contentDirty = false
-		ui.content.Refresh()
+		ui.syncContent()
 	}
 	if ui.composerDirty {
 		ui.composerDirty = false
@@ -432,7 +432,67 @@ func (ui *fyneUI) contentChanged() {
 		ui.contentDirty = true
 		return
 	}
+	ui.syncContent()
+}
+
+// The transcript holds at most about transcriptWindow messages as widgets:
+// the desktop driver walks every widget of the window before each frame, so
+// a long history would slow down every frame and every click. Older ones
+// come back transcriptStep at a time as the owner scrolls up to them.
+const (
+	transcriptWindow = 150
+	transcriptStep   = 100
+)
+
+// addItem adds a message at the end of the transcript.
+func (ui *fyneUI) addItem(message *fyneMessage) {
+	ui.visible = append(ui.visible, message)
+	ui.contentChanged()
+}
+
+// removeItem takes a message out of the transcript.
+func (ui *fyneUI) removeItem(message *fyneMessage) {
+	for i, m := range ui.visible {
+		if m == message {
+			ui.visible = append(ui.visible[:i:i], ui.visible[i+1:]...)
+			if i < ui.first {
+				ui.first--
+			}
+			ui.contentChanged()
+			return
+		}
+	}
+}
+
+// syncContent shows the messages from ui.first on. While the owner follows
+// the end, or the history is still read, the oldest go beyond the window.
+func (ui *fyneUI) syncContent() {
+	if (ui.following || !ui.ready.Load()) && len(ui.visible)-ui.first > transcriptWindow+transcriptStep {
+		ui.first = len(ui.visible) - transcriptWindow
+	}
+	objects := make([]fyne.CanvasObject, 0, len(ui.visible)-ui.first)
+	for _, message := range ui.visible[ui.first:] {
+		objects = append(objects, message.item)
+	}
+	ui.content.Objects = objects
 	ui.content.Refresh()
+}
+
+// earlier shows older messages above the ones shown, where the owner
+// scrolled up to the first, and keeps in view what was in view.
+func (ui *fyneUI) earlier() {
+	if ui.first == 0 || ui.addingEarlier {
+		return
+	}
+	ui.addingEarlier = true
+	defer func() { ui.addingEarlier = false }()
+	content := ui.transcript.Content
+	before := content.MinSize().Height
+	ui.first = max(0, ui.first-transcriptStep)
+	ui.syncContent()
+	after := content.MinSize().Height
+	content.Resize(fyne.NewSize(content.Size().Width, fyne.Max(after, ui.transcript.Size().Height)))
+	ui.transcript.ScrollToOffset(fyne.NewPos(0, ui.transcript.Offset.Y+after-before))
 }
 
 // composerChanged updates the composer, or once at the end of the batch of
