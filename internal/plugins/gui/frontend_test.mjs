@@ -16,8 +16,11 @@ const { createThemePreference } = await import(themeURL);
 const settingsSource = await readFile(new URL('./frontend/settings-dialog.js', import.meta.url), 'utf8');
 const settingsURL = 'data:text/javascript;base64,' + Buffer.from(settingsSource.replace("'./theme.js'", JSON.stringify(themeURL)).replace("'./i18n.js'", JSON.stringify(i18nURL))).toString('base64');
 const { createSettingsDialog } = await import(settingsURL);
+const markdownSource = await readFile(new URL('./frontend/markdown.js', import.meta.url), 'utf8');
+const markdownURL = 'data:text/javascript;base64,' + Buffer.from(markdownSource).toString('base64');
+const { renderMarkdown, markdownPreview } = await import(markdownURL);
 const { mount, start, browse, dateGroup } = await import(
-  'data:text/javascript;base64,' + Buffer.from(source.replace("'./i18n.js'", JSON.stringify(i18nURL)).replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL)).replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64')
+  'data:text/javascript;base64,' + Buffer.from(source.replace("'./markdown.js'", JSON.stringify(markdownURL)).replace("'./i18n.js'", JSON.stringify(i18nURL)).replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL)).replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64')
 );
 
 class Element extends EventTarget {
@@ -140,7 +143,7 @@ function documentFixture() {
       return elements[id];
     },
     createElement(tagName) {
-      assert.ok(['option', 'section', 'h2', 'h3', 'pre', 'p', 'button', 'span', 'details', 'summary', 'dialog', 'form', 'label', 'select', 'div', 'input'].includes(tagName));
+      assert.ok(['option', 'section', 'h2', 'h3', 'pre', 'p', 'button', 'span', 'details', 'summary', 'dialog', 'form', 'label', 'select', 'div', 'input', 'h4', 'ul', 'ol', 'li', 'blockquote', 'code', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'strong', 'em', 'del'].includes(tagName), 'Unexpected tag: ' + tagName);
       return new Element(tagName);
     },
     createElementNS(namespace, tagName) {
@@ -148,6 +151,8 @@ function documentFixture() {
       assert.ok(['svg', 'line', 'rect', 'text'].includes(tagName));
       return new Element(tagName);
     },
+
+    createTextNode(text) { return { nodeType: 3, textContent: text, children: [] }; },
   };
 }
 
@@ -514,7 +519,7 @@ test('late list responses or errors cannot leak into the newly selected profile'
     else old.resolve([{ id: 'owner/old' }]);
     await loading;
     assert.deepEqual(buttons(doc).map(button => button.title), ['owner/new']);
-    assert.equal(doc.content.children[0].children[1].textContent, 'new profile');
+    assert.equal(plain(doc.content.children[0].children[1]), 'new profile');
     assert.deepEqual(reads, [[1, 'owner/new']]);
     assert.equal(doc.error.hidden, true);
   }
@@ -538,7 +543,7 @@ test('late snapshots and errors cannot replace a newer session or profile', asyn
       if (reject) old.reject(new Error('stale failure'));
       else old.resolve({ token: 0, events: [{ kind: 'message', text: 'stale content' }] });
       await loading;
-      assert.equal(doc.content.children[0].children[1].textContent, 'latest');
+      assert.equal(plain(doc.content.children[0].children[1]), 'latest');
       assert.deepEqual(current(doc), [switchProfile ? 'peer/new' : 'owner/new']);
       assert.equal(doc.error.hidden, true);
     }
@@ -551,8 +556,13 @@ function descendants(element, tag) {
     ...(child.tagName === tag ? [child] : []), ...descendants(child, tag),
   ]);
 }
+// The text of a node, the blocks of formatted text on lines of their own.
+function plain(node) {
+  return node.textContent || node.children.map(plain).join(node.className === 'markdown' ? '\n' : '');
+}
 function visibleTexts(element) {
   if (element.hidden) return [];
+  if (element.className === 'markdown') return [plain(element)];
   return [
     ...(element.tagName === 'pre' ? [element.textContent] : []),
     ...element.children.flatMap(visibleTexts),
@@ -752,7 +762,7 @@ test('stale tool detail success or failure is ignored after session or profile s
       if (reject) old.reject(new Error('stale details'));
       else old.resolve({ found: true, arguments: 'stale args', content: 'stale result' });
       await settle();
-      assert.deepEqual(descendants(doc.content, 'pre').map(text => text.textContent), ['latest']);
+      assert.deepEqual(visibleTexts(doc.content), ['latest']);
       assert.equal(descendants(detail, 'pre').length, 0);
       assert.equal(detail.children[1].textContent, loadingNote);
       toggle(detail, false);
@@ -2043,4 +2053,153 @@ test('the catalogue speaks English by default and German after setLocale, and ke
   assert.equal(setLocale('en'), 'en');
   assert.equal(t('date.today'), 'Today');
   assert.equal(locale(), 'en-GB');
+});
+
+// The structure of rendered markdown as a string: tag(children), text as itself.
+function shape(node) {
+  if (node.nodeType === 3) return node.textContent;
+  const inner = node.textContent || node.children.map(shape).join('');
+  return node.tagName + (node.children.length || node.textContent ? '(' + inner + ')' : '');
+}
+const md = source => renderMarkdown(source, documentFixture()).children.map(shape).join('');
+
+test('markdown renders emphasis, code, links and strikethrough without their marks', () => {
+  assert.equal(md('**bold** and __bold__'), 'p(strong(bold) and strong(bold))');
+  assert.equal(md('*it* and _it_ and snake_case_name'), 'p(em(it) and em(it) and snake_case_name)');
+  assert.equal(md('~~gone~~ **a *b* c**'), 'p(del(gone) strong(a em(b) c))');
+  assert.equal(md('use `a * b` here'), 'p(use code(a * b) here)');
+  assert.equal(md('2 * 3 * 4 and a_b'), 'p(2 * 3 * 4 and a_b)');
+  assert.equal(md('\\*literal\\*'), 'p(*literal*)');
+  assert.equal(md('[docs](https://x.org/a)'), 'p(span(docs)span( (https://x.org/a)))');
+  assert.equal(md('[https://x.org](https://x.org)'), 'p(span(https://x.org))');
+  assert.equal(md('see https://x.org/a, ok'), 'p(see span(https://x.org/a), ok)');
+  assert.equal(md('![cat](c.png)'), 'p(span([image: cat] c.png))');
+});
+
+test('markdown renders headings, quotes, rules and fenced and indented code', () => {
+  assert.equal(md('# One\n\n### Three ###\n\nSetext\n====='), 'h4(One)h4(Three)h4(Setext)');
+  assert.equal(md('> quoted\n> more\n\nafter'), 'blockquote(p(quoted\nmore))p(after)');
+  assert.equal(md('a\n\n---\n\nb'), 'p(a)hrp(b)');
+  const fenced = renderMarkdown('```go\nfunc main() {}\n  **kept**\n```\ntext', documentFixture());
+  assert.equal(fenced.children[0].tagName, 'pre');
+  assert.equal(fenced.children[0].children[0].textContent, 'func main() {}\n  **kept**');
+  assert.equal(fenced.children[0].children[0].className, 'language-go');
+  assert.equal(shape(fenced.children[1]), 'p(text)');
+  assert.equal(md('```\nunclosed\n**x**'), 'pre(code(unclosed\n**x**))');
+  assert.equal(md('    indented\n      more\n\nafter'), 'pre(code(indented\n  more))p(after)');
+});
+
+test('markdown renders lists, nested and tight, ordered and task lists', () => {
+  assert.equal(md('- one\n- two\n- **three**'), 'ul(li(span(one))li(span(two))li(span(strong(three))))');
+  assert.equal(md('1. a\n2. b'), 'ol(li(span(a))li(span(b)))');
+  assert.equal(md('- a\n  - b\n- c'), 'ul(li(span(a)ul(li(span(b))))li(span(c)))');
+  assert.equal(md('- a\n\n- b'), 'ul(li(p(a))li(p(b)))');
+  assert.equal(md('- [x] done\n- [ ] open'), 'ul(li(span(☑ )span(done))li(span(☐ )span(open)))');
+  const start = renderMarkdown('3. c\n4. d', documentFixture()).children[0];
+  assert.equal(start.getAttribute('start'), '3');
+  assert.equal(md('text\n- item'), 'p(text)ul(li(span(item)))');
+  assert.equal(md('- a\n  lazy'), 'ul(li(span(a\nlazy)))');
+});
+
+test('markdown renders tables with their alignment', () => {
+  const table = renderMarkdown('| Name | Wert |\n|:--|--:|\n| **a** | 1 |\n| b \\| c | 2 |', documentFixture()).children[0];
+  assert.equal(shape(table), 'table(thead(tr(th(Name)th(Wert)))tbody(tr(td(strong(a))td(1))tr(td(b | c)td(2))))');
+  const row = table.children[1].children[0];
+  assert.equal(row.children[0].className, '');
+  assert.equal(row.children[1].className, 'align-right');
+  assert.equal(md('a | b\nplain'), 'p(a | b\nplain)');
+});
+
+test('markdown keeps the line breaks of a paragraph', () => {
+  assert.equal(md('first\nsecond\n\nthird'), 'p(first\nsecond)p(third)');
+});
+
+test('markdown with many marks that never close renders in linear time', () => {
+  const globs = '*.go _x ~~y '.repeat(20000);
+  const started = Date.now();
+  const shape = md(globs);
+  assert.ok(Date.now() - started < 2000, 'took ' + (Date.now() - started) + ' ms');
+  assert.equal(shape, 'p(' + globs.trim() + ')');
+});
+
+test('markdown never makes HTML of what the model wrote', () => {
+  const evil = '<img src=x onerror="bad()"> <script>alert(1)</script> <a href="javascript:bad()">x</a>';
+  assert.equal(md(evil), 'p(' + evil + ')');
+  assert.equal(md('[x](javascript:bad())'), 'p(span(x)span( (javascript:bad())))');
+  assert.equal(md('**<b onclick=bad()>**'), 'p(strong(<b onclick=bad()>))');
+  assert.equal(md('<div>\n**x**\n</div>'), 'p(<div>\nstrong(x)\n</div>)');
+  const doc = documentFixture();
+  const walk = node => [node.tagName, ...(node.children ?? []).flatMap(walk)];
+  const tags = renderMarkdown(evil + '\n\n```\n<img src=x>\n```\n\n| <b> |\n|-|\n| <i> |', doc).children.flatMap(walk);
+  for (const tag of tags.filter(Boolean)) assert.ok(!['img', 'script', 'a', 'b', 'i', 'div'].includes(tag), tag);
+});
+
+test('only what the agent says is markdown: the owner, tools and questions stay literal', async () => {
+  const doc = archiveFixture();
+  await browse({
+    async Sessions() { return [{ id: 'owner/md' }]; },
+    async OpenSession() {
+      return { token: 0, events: [
+        { kind: 'message', text: '**mine**' },
+        { kind: 'answer', text: '**bold** and `code`' },
+        { kind: 'say', text: '- a\n- b' },
+        { kind: 'asked', text: '**ask**?' },
+        { kind: 'task', text: '**task**' },
+        { kind: 'step', tool: 'files.read', text: '**tool**' },
+      ] };
+    },
+  }, doc);
+  const parts = doc.content.children.map(item => item.children[1]);
+  assert.equal(parts[0].tagName, 'pre');
+  assert.equal(parts[0].textContent, '**mine**');
+  assert.equal(shape(parts[1]), 'div(p(strong(bold) and code(code)))');
+  assert.equal(parts[1].className, 'markdown');
+  assert.equal(shape(parts[2]), 'div(ul(li(span(a))li(span(b))))');
+  assert.equal(parts[3].tagName, 'pre');
+  assert.equal(parts[3].textContent, '**ask**?');
+  assert.equal(parts[4].textContent, '**task**');
+  assert.equal(parts[5].tagName, 'details');
+  assert.equal(parts[5].children[0].textContent, '**tool**');
+});
+
+test('a streamed answer is plain while it arrives and formatted when it is complete', async () => {
+  const doc = archiveFixture();
+  await browse({
+    async Sessions() { return [{ id: 'owner/live' }]; },
+    async OpenSession() { return { token: 0, events: [{ kind: 'answering', text: '**bo' }, { kind: 'answering', text: 'ld**' }] }; },
+    PollSession() { return new Promise(() => {}); },
+  }, doc);
+  assert.deepEqual(visibleTexts(doc.content), ['**bold**']);
+  assert.equal(doc.content.children[0].children[1].tagName, 'pre');
+});
+
+test('a long answer is cut between two blocks and expands to everything', async () => {
+  const paragraphs = Array.from({ length: 400 }, (_, i) => 'paragraph **' + i + '** with some more words');
+  const source = paragraphs.join('\n\n');
+  const cut = markdownPreview(source, 8000);
+  assert.ok(cut.length <= 8000 && cut.length > 7000);
+  assert.ok(paragraphs.some(p => p === cut.split('\n\n').at(-1)), 'ends with a whole paragraph');
+  const code = '```\n' + 'x'.repeat(30) + '\n'.repeat(1) + ('line\n'.repeat(3000)) + '```';
+  const closed = markdownPreview('intro\n\n' + code, 8000);
+  assert.ok(closed.startsWith('intro\n\n```\n') && closed.endsWith('\n```') && closed.length > 7000);
+  assert.match(markdownPreview(code, 8000), /\n```$/);
+  assert.equal(markdownPreview('short', 8000), 'short');
+  const line = 'b'.repeat(9000);
+  assert.equal(markdownPreview(line, 8000), 'b'.repeat(8000));
+  assert.equal(markdownPreview('\n' + line, 8000), '\n' + 'b'.repeat(7999));
+  assert.equal(markdownPreview('intro\n\n' + line, 8000), 'intro\n\n' + 'b'.repeat(7993));
+  const doc = archiveFixture();
+  await browse({
+    async Sessions() { return [{ id: 'owner/long' }]; },
+    async OpenSession() { return { token: 0, events: [{ kind: 'answer', text: source }] }; },
+  }, doc);
+  const item = doc.content.children[0];
+  const body = item.children[1], expand = item.children[2];
+  assert.equal(body.children.length, cut.split('\n\n').length);
+  assert.match(expand.textContent, /^Show the full text \(/);
+  expand.dispatchEvent(new Event('click'));
+  assert.equal(body.children.length, 400);
+  assert.equal(expand.textContent, t('transcript.collapse'));
+  expand.dispatchEvent(new Event('click'));
+  assert.equal(body.children.length, cut.split('\n\n').length);
 });
