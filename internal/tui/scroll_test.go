@@ -306,33 +306,24 @@ func TestHistoryGlidesToWhatComes(t *testing.T) {
 	}
 }
 
-// The box of the input that comes or goes while the history glides to its
-// end moves the end: the history goes on to where the end is then, and what
+// The composer that grows or shrinks while the history glides to its end
+// moves the end: the history goes on to where the end is then, and what
 // comes after is glided to as well.
-func TestHistoryFollowsItsEndWhileTheInputMoves(t *testing.T) {
-	for _, shown := range []bool{true, false} {
-		m, _ := newModel(t)
-		fill(m, 80)
-		m.inputShown = shown
-		m.layout()
-		say := func(kind plugin.SessionKind, text string) {
-			m.Update(eventMsg{id: m.chat.contextID, event: Event{Kind: kind, Text: text, At: m.now()}})
-		}
-		say(plugin.SessionMessage, "go")
-		say(plugin.SessionAnswer, "started")
-		m.inputShown = !shown
-		for cmd := m.fadeInput(); cmd != nil; {
-			_, cmd = m.Update(inputFadeMsg{})
-		}
-		if !m.followsEnd() {
-			t.Fatalf("shown %v: the history no longer follows its end: at %d of %d, %+v", shown, m.history.YOffset(), topLine(&m.history), m.glide)
-		}
-		say(plugin.SessionAnswer, "one\ntwo\nthree")
-		say(plugin.SessionAnswer, "four")
-		scroll(t, m, scrollTick())
-		if !m.history.AtBottom() {
-			t.Fatalf("shown %v: the history rests at %d of %d", shown, m.history.YOffset(), topLine(&m.history))
-		}
+func TestHistoryFollowsItsEndWhileTheComposerGrows(t *testing.T) {
+	m, _ := newModel(t)
+	fill(m, 80)
+	say := func(kind plugin.SessionKind, text string) {
+		m.Update(eventMsg{id: m.chat.contextID, event: Event{Kind: kind, Text: text, At: m.now()}})
+	}
+	say(plugin.SessionMessage, "go")
+	say(plugin.SessionAnswer, "started")
+	m.Update(tea.PasteMsg{Content: "one\ntwo\nthree"})
+	if m.input.Height() != 3 || !m.followsEnd() {
+		t.Fatalf("the history no longer follows its end: composer %d, at %d of %d, %+v", m.input.Height(), m.history.YOffset(), topLine(&m.history), m.glide)
+	}
+	say(plugin.SessionAnswer, "one\ntwo\nthree")
+	if !m.followsEnd() {
+		t.Fatal("what came after is not followed")
 	}
 }
 
@@ -359,44 +350,32 @@ func fades(t *testing.T, m *Model, shown []string, port string) string {
 	return got.String()
 }
 
-// The history fades out over two lines at an edge of the box where more of it
-// is beyond: at the bottom only at the top, scrolled up at both edges, at the
-// top only at the bottom, and the lines between stay as they are. Behind the
-// panel of the commands offered for what is typed all of the chat fades.
-func TestHistoryFadesAtItsEdges(t *testing.T) {
+// The older lines fade out towards the top while there are older ones above,
+// over two fifths of the history, as in the GUI: the first nearly the
+// background, the lines below them as they are. At the top nothing fades.
+func TestHistoryFadesAtTheTop(t *testing.T) {
 	m, _ := newModel(t)
 	fill(m, 80)
-	faded := func() string {
-		return fades(t, m, strings.Split(m.chatView(), "\n")[1:], m.history.View()) // below the border
-	}
-	n := m.history.Height()
-	if got, want := faded(), "ed"+strings.Repeat(".", n-2); got != want {
-		t.Fatalf("at the bottom only the top should fade: %s, want %s", got, want)
-	}
-	scroll(t, m, press(m, "pgup"))
-	if got, want := faded(), "ed"+strings.Repeat(".", n-4)+"de"; got != want {
-		t.Fatalf("scrolled up both edges should fade: %s, want %s", got, want)
-	}
-	m.history.SetYOffset(0)
-	if got, want := faded(), strings.Repeat(".", n-2)+"de"; got != want {
-		t.Fatalf("at the top only the bottom should fade: %s, want %s", got, want)
-	}
-	press(m, "/", "s")
-	edge := lipgloss.NewStyle().Foreground(fadeColor(m.light))
-	top := m.panelTop(m.panel())
-	if top != n-2 {
-		t.Fatalf("the panel of four commands begins at row %d of a history of %d", top, n)
-	}
-	for i, line := range strings.Split(m.chatView(), "\n")[:top] {
-		if line != edge.Render(ansi.Strip(line)) {
-			t.Fatalf("row %d behind the panel should fade: %q", i, line)
+	shown, port := m.historyLines(), strings.Split(m.history.View(), "\n")
+	n := len(shown) * 2 / 5
+	for i := range shown {
+		if ansi.Strip(shown[i]) != ansi.Strip(port[i]) {
+			t.Fatalf("line %d is not the history: %q", i, shown[i])
+		}
+		if faded := shown[i] != port[i]; faded != (i < n) {
+			t.Fatalf("line %d of %d faded %v: %q", i, len(shown), faded, shown[i])
 		}
 	}
+	m.history.SetYOffset(0)
+	shown, port = m.historyLines(), strings.Split(m.history.View(), "\n")
+	if !slices.Equal(shown, port) {
+		t.Fatal("at the top the history should not fade")
+	}
 	if got := m.fadeEdges([]string{"a", "b", "c"}, true, true); !slices.Equal(got, []string{"a", "b", "c"}) {
-		t.Fatalf("a history of three lines should not fade: %q", got)
+		t.Fatalf("a box of three lines should not fade: %q", got)
 	}
 	if got := m.fadeEdges([]string{"a", "b", "c", "d"}, true, true); got[0] == "a" || got[3] == "d" {
-		t.Fatalf("a history of four lines should fade at both edges: %q", got)
+		t.Fatalf("a box of four lines should fade at both edges: %q", got)
 	}
 	if fadeColor(true) == fadeColor(false) {
 		t.Fatal("the faded edge should follow the background")

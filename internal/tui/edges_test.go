@@ -34,10 +34,12 @@ func settle(m *Model, cmd tea.Cmd) {
 func footer(m *Model) string {
 	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
 	hint := ansi.Strip(m.footerHint())
-	if last := strings.TrimRight(lines[len(lines)-1], " "); !strings.HasSuffix(last, hint) {
-		return last
+	for _, l := range lines {
+		if hint != "" && strings.Contains(l, hint) {
+			return hint
+		}
 	}
-	return hint
+	return strings.TrimRight(lines[len(lines)-1], " ")
 }
 
 // shortRefresh makes the UI refresh at once instead of every ten seconds.
@@ -117,9 +119,11 @@ func TestOtherMessages(t *testing.T) {
 	if m.light {
 		t.Fatal("a black background is dark")
 	}
+	// Once the UI paints the terminal, it answers with the palette: a later
+	// answer tells nothing of it.
 	m.Update(tea.BackgroundColorMsg{Color: lipgloss.Color("#ffffff")})
-	if !m.light {
-		t.Fatal("a white background is light")
+	if m.light || m.terminalLight {
+		t.Fatal("a later answer changed the look")
 	}
 	if _, cmd := m.Update(m.spinner.Tick()); cmd == nil {
 		t.Fatal("the spinner should keep turning")

@@ -155,6 +155,7 @@ func onboard(t *testing.T) (*Model, *fakeBackend, *fakeSetup) {
 	t.Helper()
 	b := &fakeBackend{setup: newFakeSetup()}
 	m := New(b, nil, nil)
+	t.Cleanup(func() { applyPalette(false) }) // a light background is of the test that told it
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.Init()
 	if m.onboard == nil || !m.onboard.first || m.splash.show {

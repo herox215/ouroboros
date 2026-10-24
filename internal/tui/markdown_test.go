@@ -29,7 +29,9 @@ func TestMarkdownBlocks(t *testing.T) {
 		"Title", "", "Small", "", "Some bold and italic, code, gone,", "soft", "hard.", "",
 		"• one", "• two", "  • nested", "• ☑ done", "• ☐ open", "", "3. three", "4. four", "",
 		"• loose", "", "• items", "", "│ quoted", "│", "│ twice", "",
-		"  go", "  func main() {}", "", "  indented", "", strings.Repeat("─", 40), "",
+		"╭" + strings.Repeat("─", 38) + "╮", "│ func main() {}" + strings.Repeat(" ", 23) + "│", "╰" + strings.Repeat("─", 38) + "╯", "",
+		"╭" + strings.Repeat("─", 38) + "╮", "│ indented" + strings.Repeat(" ", 29) + "│", "╰" + strings.Repeat("─", 38) + "╯", "",
+		strings.Repeat("─", 40), "",
 		"<div>", "html", "</div>", "",
 		"┌──────┬───────┐", "│ Name │ Value │", "├──────┼───────┤", "│ a    │ 1     │", "└──────┴───────┘",
 	}, "\n")
@@ -42,7 +44,8 @@ func TestMarkdownBlocks(t *testing.T) {
 	}
 	// The styles stand for the marks, also one inside another.
 	styled := renderMarkdown("**bold `code` on**", 40)
-	if !strings.Contains(styled, "\x1b[1m") || !strings.Contains(styled, "\x1b[1;33m") || !strings.HasSuffix(styled, "\x1b[1m on\x1b[m") {
+	code := boldStyle.Foreground(codeColor).Background(ui.hover).Render("x")
+	if !strings.Contains(styled, "\x1b[1m") || !strings.Contains(styled, code[:strings.Index(code, "x")]) || !strings.HasSuffix(styled, "\x1b[1m on\x1b[m") {
 		t.Fatalf("styles %q", styled)
 	}
 }
@@ -65,7 +68,7 @@ func TestMarkdownLinks(t *testing.T) {
 }
 
 // Text is wrapped to the width, below a bullet indented; a table that is too
-// wide is made narrower, and so are long lines of code.
+// wide is made narrower, and long lines of code are broken inside their box.
 func TestMarkdownWraps(t *testing.T) {
 	if got := plainMarkdown("- one two three four", 10); got != "• one two\n  three\n  four" {
 		t.Fatalf("list %q", got)
@@ -76,7 +79,7 @@ func TestMarkdownWraps(t *testing.T) {
 			t.Fatalf("table wider than 20:\n%s", table)
 		}
 	}
-	if got := plainMarkdown("```\n0123456789\n```", 8); got != "  012345\n  6789" {
+	if got := plainMarkdown("```\n0123456789\n```", 8); got != "╭──────╮\n│ 0123 │\n│ 4567 │\n│ 89   │\n╰──────╯" {
 		t.Fatalf("code %q", got)
 	}
 	if got := plainMarkdown("", 0); got != "" {
@@ -116,7 +119,7 @@ func TestMarkdownStyles(t *testing.T) {
 		}
 	}
 	table := strings.Split(renderMarkdown("| Name |\n|---|\n| a |\n", 40), "\n")
-	if len(table) != 5 || !strings.Contains(table[1], "\x1b[1m") || strings.Contains(table[3], "\x1b[1m") {
+	if len(table) != 5 || !strings.Contains(table[1], "\x1b[1;") || strings.Contains(table[3], "\x1b[1") {
 		t.Fatalf("table %q", table)
 	}
 }

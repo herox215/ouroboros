@@ -54,40 +54,43 @@ func texts(m *Model) string {
 	return strings.Join(got, "|")
 }
 
-// fits reports whether the chat takes the room between the header and the
-// footer, whatever the box of the input shows.
-func fits(m *Model) bool { return lipgloss.Height(m.chatView()) == m.bodyHeight() }
+// fits reports whether the chat takes the window, whatever is asked above
+// the composer.
+func fits(m *Model) bool { return lipgloss.Height(m.chatScreen()) == m.height }
 
-// A question of the agent is part of the conversation, and where the input
-// is its answers are to choose from, the one recommended selected: the arrow
-// keys select another, enter gives it, and it is part of the conversation
-// too.
+// A question of the agent is part of the conversation, and above the
+// composer its answers are to choose from, as buttons, the one recommended
+// selected: the arrow keys select another, enter gives it, and it is part
+// of the conversation too.
 func TestQuestion(t *testing.T) {
 	m, _ := asked(t)
 	c := m.chat
-	view := ansi.Strip(m.chatView())
-	for _, want := range []string{"? Which database?", "  SQLite", "› Postgres  recommended", "  Chat about it  write your own answer"} {
+	view := ansi.Strip(m.chatScreen())
+	for _, want := range []string{"YOUR DECISION", "Which database?", " SQLite ", " Postgres · Recommended ", "Choose an answer or write your own below.", "Write a message"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q in:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Keep on dreaming") || !fits(m) || m.givenUp() != 0 {
-		t.Fatalf("the input is not there to write in, and the chat fits (gives up %d):\n%s", m.givenUp(), view)
+	if !fits(m) {
+		t.Fatalf("the chat does not fit:\n%s", view)
 	}
 	if got := m.waiting(); got != "alpha waits for your answer" {
 		t.Fatalf("waiting: %q", got)
 	}
+	if !strings.Contains(view, "NEEDS YOUR ANSWER") {
+		t.Fatalf("the status:\n%s", view)
+	}
 	if m.notice != "" {
 		t.Fatalf("asked in the conversation shown, there is nothing to notice: %q", m.notice)
 	}
-	if got := ansi.Strip(m.footerView()); !strings.Contains(got, "↑↓ choose · enter answer · esc stop") {
-		t.Fatalf("footer: %q", got)
+	if got := ansi.Strip(m.footerHint()); !strings.Contains(got, "↑↓ choose · enter answer · esc stop") {
+		t.Fatalf("keys: %q", got)
 	}
 	if got := texts(m); got != ">go|Which database?" {
 		t.Fatalf("the conversation: %s", got)
 	}
-	// Up and down go around the rows; the last is the one for own words,
-	// which shows the input, and up in an empty input takes it again.
+	// Up and down go around the answers and the composer, for own words;
+	// up in an empty composer takes the answers again.
 	press(m, "up")
 	if c.asking.sel != 0 {
 		t.Fatalf("at the top: %d", c.asking.sel)
@@ -97,8 +100,8 @@ func TestQuestion(t *testing.T) {
 		t.Fatalf("up at the first goes to own words: %d", c.asking.sel)
 	}
 	press(m, "down", "down")
-	if view := ansi.Strip(m.chatView()); !c.asking.own() || !strings.Contains(view, "› Chat about it") || !strings.Contains(view, "Keep on dreaming") || !fits(m) || m.givenUp() != 3 {
-		t.Fatalf("own words (gives up %d):\n%s", m.givenUp(), view)
+	if view := ansi.Strip(m.chatScreen()); !c.asking.own() || !strings.Contains(view, "› Write your own answer below") || !fits(m) {
+		t.Fatalf("own words:\n%s", view)
 	}
 	if cmd := press(m, "enter"); cmd != nil || c.asking == nil {
 		t.Fatal("nothing written is no answer")
@@ -107,25 +110,15 @@ func TestQuestion(t *testing.T) {
 	if c.asking.sel != 1 {
 		t.Fatalf("back at the answers: %d", c.asking.sel)
 	}
-	// A window with room for them shows all of the answers; one with little
-	// room those around the one selected.
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
-	if view := ansi.Strip(m.chatView()); !fits(m) || !strings.Contains(view, "  SQLite") || !strings.Contains(view, "› Postgres") || !strings.Contains(view, "  Chat about it") {
-		t.Fatalf("room for all:\n%s", view)
-	}
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
-	if view := ansi.Strip(m.chatView()); !fits(m) || !strings.Contains(view, "› Postgres") || strings.Contains(view, "SQLite") || strings.Contains(view, "Chat about it") {
-		t.Fatalf("little room:\n%s", view)
-	}
-	press(m, "down")
-	if view := ansi.Strip(m.chatView()); !fits(m) || !strings.Contains(view, "› Chat about it") || strings.Contains(view, "SQLite") {
-		t.Fatalf("little room:\n%s", view)
+	// A low window keeps the question and its answers, and the chat fits.
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 14})
+	if view := ansi.Strip(m.chatScreen()); !fits(m) || !strings.Contains(view, " SQLite ") || !strings.Contains(view, " Postgres") {
+		t.Fatalf("a low window:\n%s", view)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m, "up")
 
 	cmd := press(m, "enter")
-	if !c.asking.sent || strings.Contains(ansi.Strip(m.chatView()), "? Which") {
+	if !c.asking.sent || !strings.Contains(ansi.Strip(m.chatScreen()), "Answer delivered") {
 		t.Fatal("the answer is on its way: nothing is left to choose")
 	}
 	if again, ok := m.handleQuestionKey(tea.KeyPressMsg{Code: tea.KeyEnter}); ok || again != nil {
@@ -135,7 +128,7 @@ func TestQuestion(t *testing.T) {
 	if got := texts(m); got != ">go|Which database?|>Postgres|using Postgres" || c.asking != nil {
 		t.Fatalf("answered: %s, asking %+v", got, c.asking)
 	}
-	if view := ansi.Strip(m.chatView()); strings.Contains(view, "? Which") || !fits(m) || m.givenUp() != 0 || m.waiting() != "" || m.notice != "" {
+	if view := ansi.Strip(m.chatScreen()); strings.Contains(view, "YOUR DECISION") || !fits(m) || m.waiting() != "" || m.notice != "" {
 		t.Fatalf("after the answer (notice %q):\n%s", m.notice, view)
 	}
 }
@@ -154,7 +147,7 @@ func TestQuestionInOwnWords(t *testing.T) {
 		t.Fatal("up left what was written")
 	}
 	cmd := press(m, "enter")
-	if !c.asking.sent || strings.Contains(ansi.Strip(m.chatView()), "? Which") {
+	if !c.asking.sent || !strings.Contains(ansi.Strip(m.chatScreen()), "Answer delivered") {
 		t.Fatal("the answer is on its way: nothing is left to answer")
 	}
 	drive(t, m, cmd, func() bool { return !c.pending })
@@ -173,7 +166,7 @@ func TestQuestionNotAnswered(t *testing.T) {
 	if c.asking == nil || c.asking.sent || !c.asking.own() || m.input.Value() != "Postgres" || m.notice != "the node is gone" {
 		t.Fatalf("not taken: %+v, input %q, notice %q", c.asking, m.input.Value(), m.notice)
 	}
-	if view := ansi.Strip(m.chatView()); !strings.Contains(view, "? Which database?") {
+	if view := ansi.Strip(m.chatScreen()); !strings.Contains(view, "YOUR DECISION") {
 		t.Fatalf("the question is not offered again:\n%s", view)
 	}
 	b.fail = nil
@@ -197,7 +190,7 @@ func TestQuestionElsewhere(t *testing.T) {
 	if m.notice != "alpha asks you in “go” · /session" || m.chat.asking != nil {
 		t.Fatalf("notice %q", m.notice)
 	}
-	if view := ansi.Strip(m.chatView()); strings.Contains(view, "? Which") || m.givenUp() != 0 {
+	if view := ansi.Strip(m.chatScreen()); strings.Contains(view, "YOUR DECISION") {
 		t.Fatalf("the question shows in another conversation:\n%s", view)
 	}
 	// Nothing is asked without a question: the keys are the chat's.
@@ -216,8 +209,8 @@ func TestQuestionWithoutOptions(t *testing.T) {
 	}
 	c := m.chat
 	drive(t, m, say(t, m, "go"), func() bool { return c.asking != nil })
-	if view := ansi.Strip(m.inputView(96, 20)); !c.asking.own() || !strings.HasPrefix(view, "? What is it called?\n") || !strings.Contains(view, "Keep on dreaming") || strings.Contains(view, ownWords) {
-		t.Fatalf("the input alone:\n%s", view)
+	if view := ansi.Strip(strings.Join(m.panelLines(), "\n")); !c.asking.own() || !strings.HasPrefix(view, "YOUR DECISION\nWhat is it called?\n") || !strings.Contains(view, "Write your answer below.") {
+		t.Fatalf("the question alone:\n%s", view)
 	}
 	// There is no row to go up or down to.
 	press(m, "up", "down")
@@ -244,32 +237,34 @@ func asksThis(t *testing.T, question string) *Model {
 	return m
 }
 
-// A question longer than the panel is wide is cut to a line of it.
+// A question longer than there is room for above the composer is cut, and
+// says so; its answers stay.
 func TestLongQuestionIsCut(t *testing.T) {
-	m := asksThis(t, `{"question":"`+strings.Repeat("why ", 60)+`","options":["a","b"]}`)
-	panel := strings.Split(ansi.Strip(m.panel()), "\n")
-	if len(panel) != 6 {
-		t.Fatalf("the panel has %d rows:\n%s", len(panel), strings.Join(panel, "\n"))
+	m := asksThis(t, `{"question":"`+strings.Repeat("why ", 600)+`","options":["a","b"]}`)
+	panel := m.panelLines()
+	if len(panel) > m.height*panelShare/100 || !fits(m) {
+		t.Fatalf("the panel has %d rows:\n%s", len(panel), ansi.Strip(strings.Join(panel, "\n")))
+	}
+	text := ansi.Strip(strings.Join(panel, "\n"))
+	if !strings.Contains(text, "why why") || !strings.Contains(text, "…") || !strings.Contains(text, " a ") || !strings.Contains(text, " b ") {
+		t.Fatalf("the panel:\n%s", text)
 	}
 	for _, row := range panel {
-		if lipgloss.Width(row) != 96 {
+		if lipgloss.Width(row) > m.transcriptWidth() {
 			t.Fatalf("a row of %d cells: %q", lipgloss.Width(row), row)
 		}
 	}
-	if want := "│ ? " + strings.Repeat("why ", 22) + "w… │"; panel[1] != want {
-		t.Fatalf("the question: %q, want %q", panel[1], want)
-	}
 }
 
-// Commands offered while the agent asks leave the answers what room there
-// is: in a small window the one selected alone.
+// Commands offered while the agent asks go below the question, and the
+// chat still fits.
 func TestQuestionWithSuggestions(t *testing.T) {
 	m, _ := asked(t)
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 19})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	press(m, "/", "s")
-	view := ansi.Strip(m.chatView())
-	if !fits(m) || len(suggested(m)) != 4+2 || !strings.Contains(view, "› Chat about it") || strings.Contains(view, "SQLite") || strings.Contains(view, "Postgres") {
-		t.Fatalf("%d rows of the panel above the input:\n%s", len(suggested(m)), view)
+	view := ansi.Strip(m.chatScreen())
+	if !fits(m) || !strings.Contains(view, "YOUR DECISION") || !strings.Contains(view, "/session") {
+		t.Fatalf("the panel above the composer:\n%s", view)
 	}
 }
 

@@ -84,13 +84,13 @@ func TestFirstProfileSwitchLoadsStatusBeforeDrawing(t *testing.T) {
 func TestHeaderTellsWhichProfile(t *testing.T) {
 	root, terra, luna, _ := profiles(t)
 	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if head := ansi.Strip(terra.headerView()); !strings.Contains(head, " alpha [1/2] ") || terra.View().WindowTitle != "ouro · alpha (1/2)" {
+	if head := ansi.Strip(terra.headerView()); !strings.Contains(head, " · ALPHA 1/2 · ") || terra.View().WindowTitle != "ouro · alpha (1/2)" {
 		t.Fatalf("Terra: %q, %q", head, terra.View().WindowTitle)
 	}
 	root.Update(shiftTab)
 	root.Update(headerMorphMsg{generation: root.profiles.morph.generation, at: root.profiles.morph.start.Add(headerMorphDuration)})
 	luna.Update(luna.refreshStatus())
-	if head := ansi.Strip(luna.headerView()); !strings.Contains(head, " Luna [2/2] ") || luna.View().WindowTitle != "ouro · Luna (2/2)" {
+	if head := ansi.Strip(luna.headerView()); !strings.Contains(head, " · LUNA 2/2 · ") || luna.View().WindowTitle != "ouro · Luna (2/2)" {
 		t.Fatalf("Luna: %q, %q", head, luna.View().WindowTitle)
 	}
 	single, _ := newModel(t)

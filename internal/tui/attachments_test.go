@@ -53,7 +53,7 @@ func TestFileLabelsAreSentRestoredAndRecalled(t *testing.T) {
 	ctrlV(t, m, plugin.Picture{}, plugin.ErrNoPicture, quote(path))
 	m.input.InsertString("read this [File_0] [File_2] [File_99999999999999999999]")
 	input := m.input.Value()
-	if !strings.Contains(m.chatView(), imageStyle.Render("[File_1]")) {
+	if !strings.Contains(m.chatScreen(), imageStyle.Render("[File_1]")) {
 		t.Fatal("input must color file labels")
 	}
 	b.fail = map[string]error{"ask": errors.New("busy")}

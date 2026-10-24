@@ -11,18 +11,25 @@ import (
 	"ouroboros/plugin"
 )
 
-// The history is as wide as the box leaves it, and an answer is wrapped to
-// it below its indent: every line of it begins with the indent.
+// The history is as wide as its column leaves it, at most as wide as it
+// reads well, and an answer is wrapped to it below its head, as the GUI
+// writes it: every line of it begins with its text.
 func TestAnswerIsWrappedToTheHistory(t *testing.T) {
 	m, b := newModel(t)
-	if m.history.Width() != 96 {
-		t.Fatalf("the history is %d wide in 100", m.history.Width())
+	if w := m.history.Width(); w != 100-columnWidth(100)-2*columnPad {
+		t.Fatalf("the history is %d wide in 100", w)
 	}
+	m.Update(tea.WindowSizeMsg{Width: 300, Height: 30})
+	if w := m.history.Width(); w != transcriptMax {
+		t.Fatalf("the history is %d wide in 300", w)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	width := m.history.Width()
 	b.reply = numbered(200)
 	answered(t, m, say(t, m, "ping"))
 	lines := strings.Split(ansi.Strip(m.history.GetContent()), "\n")
 	for _, l := range lines[4:] {
-		if !strings.HasPrefix(l, "  w") || ansi.StringWidth(l) > 96 {
+		if !strings.HasPrefix(l, "w") || ansi.StringWidth(l) > width {
 			t.Fatalf("a line of the answer %q in\n%s", l, strings.Join(lines, "\n"))
 		}
 	}
@@ -125,9 +132,8 @@ func TestSuggestionsInALowWindow(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
 	m.input.SetValue("/")
-	m.inputShown = true
 	m.layout()
-	if rows := strings.Count(m.View().Content, "\n") + 1; rows != 16 || strings.Contains(view(m), "│ alpha") || len(m.suggestionLines(m.chatHeight()-3)) != m.chatHeight()-3 {
+	if rows := strings.Count(m.View().Content, "\n") + 1; rows != 16 || m.chatHeight() != 1 || len(m.panelLines()) != min(maxSuggestions, m.panelHeight()) {
 		t.Fatalf("%d rows:\n%s", rows, view(m))
 	}
 }
@@ -141,7 +147,7 @@ func TestChatTitleNeedsAConversation(t *testing.T) {
 		t.Errorf("a chat without a word: %q", got)
 	}
 	fill(m, 1)
-	if got := ansi.Strip(m.chatTitle()); !strings.HasPrefix(got, " context ") {
+	if got := ansi.Strip(m.chatTitle()); !strings.HasPrefix(got, "context ") {
 		t.Errorf("with a word: %q", got)
 	}
 	m.status.Configured = false
@@ -160,7 +166,7 @@ func TestFooterFitsTheWindow(t *testing.T) {
 	m, _ := newModel(t)
 	fill(m, 1)
 	m.chat.context, m.chat.pending = 1200, true
-	title, hint := ansi.Strip(m.chatTitle()), "esc stop "
+	title, hint := " "+ansi.Strip(m.chatTitle()), "esc stop "
 	wide := lipgloss.Width(title)
 	for _, width := range []int{100, len(hint) + wide + 1, len(hint) + wide, len(hint) + 3, len(hint) + 1, len(hint)} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
@@ -250,8 +256,10 @@ func TestPendingScreenSuggestions(t *testing.T) {
 	if marked < 0 || !strings.Contains(lines[marked+1], "the second") {
 		t.Fatalf("the second suggestion is not the one selected:\n%s", v)
 	}
+	w, _ := m.dialogSize()
+	x := (m.width - w) / 2
 	for _, l := range lines {
-		if inner := strings.TrimPrefix(strings.TrimSpace(l), "│ "); strings.Contains(inner, "faster") && !strings.HasPrefix(inner, "    ") {
+		if inner := strings.TrimPrefix(ansi.Cut(l, x, x+w), "│ "); strings.Contains(inner, "faster") && !strings.HasPrefix(inner, "    ") {
 			t.Errorf("a line of the suggestion is not indented: %q", l)
 		}
 	}
@@ -269,13 +277,11 @@ func TestSuggestionEntryFitsTheChat(t *testing.T) {
 	}
 }
 
-// Without the box of the input the footer says how to stop an answer on its
-// way, not how to write; with the list of the jobs it says how to hide it,
-// after what else it says.
-func TestFooterHintsWithoutTheInput(t *testing.T) {
+// The line below the composer says how to stop an answer on its way; with
+// the list of the jobs it says how to hide it, after what else it says.
+func TestFooterHints(t *testing.T) {
 	m, _ := newModel(t)
-	m.inputShown = false
-	if got := ansi.Strip(m.footerHint()); got != "type to write" {
+	if got := ansi.Strip(m.footerHint()); got != "" {
 		t.Errorf("idle: %q", got)
 	}
 	m.chat.pending = true
@@ -286,7 +292,7 @@ func TestFooterHintsWithoutTheInput(t *testing.T) {
 	if got := ansi.Strip(m.footerHint()); got != "esc stop · "+jobsKey+" hide" {
 		t.Errorf("with the jobs: %q", got)
 	}
-	m.chat.pending, m.inputShown = false, true
+	m.chat.pending = false
 	if got := ansi.Strip(m.footerHint()); got != jobsKey+" hide" {
 		t.Errorf("with the jobs alone: %q", got)
 	}
@@ -361,5 +367,43 @@ func TestSuggestionTextIsNotCutByTheDialog(t *testing.T) {
 		if strings.Contains(l, "faster") && strings.HasSuffix(strings.TrimSpace(l), "…") {
 			t.Fatalf("a line of the suggestion is cut: %q", l)
 		}
+	}
+}
+
+// What the owner writes stands to the right: the head of its message above
+// its words, all of them at one inset, the block ending at the right edge of
+// the chat. What the agent answers stays at the left.
+func TestMessageOfTheOwnerStandsToTheRight(t *testing.T) {
+	m, _ := newModel(t)
+	answered(t, m, say(t, m, "ping"))
+	lines := strings.Split(ansi.Strip(m.history.GetContent()), "\n")
+	width := m.history.Width()
+	head, words, answer := lines[0], lines[1], lines[3]
+	at := len(head) - len(strings.TrimLeft(head, " "))
+	if at <= width/2 || lipgloss.Width(head) != width {
+		t.Fatalf("the head of the message stands at %d of %d, not at the right: %q", at, width, head)
+	}
+	if got := len(words) - len(strings.TrimLeft(words, " ")); got != at || !strings.HasSuffix(words, "ping") {
+		t.Fatalf("the words of the owner stand at %d, its head at %d: %q", got, at, words)
+	}
+	if !strings.HasPrefix(answer, "alpha · ") {
+		t.Fatalf("the answer of the agent does not stand at the left: %q", answer)
+	}
+	// A long message is wrapped narrower than the chat, its lines at that
+	// one inset as well, so that what the owner writes stays to the right.
+	long := strings.Split(ansi.Strip(mineBlock("You · 12:00", strings.Repeat("word ", 60), width)), "\n")
+	inset, widest := -1, 0
+	for _, l := range long {
+		left := len(l) - len(strings.TrimLeft(l, " "))
+		if inset < 0 {
+			inset = left
+		}
+		if left != inset || lipgloss.Width(strings.TrimLeft(l, " ")) > bubbleWidth(width) {
+			t.Fatalf("the lines of a long message stand at %d, not at %d: %q", left, inset, l)
+		}
+		widest = max(widest, lipgloss.Width(l))
+	}
+	if widest != width {
+		t.Fatalf("the message ends at %d, not at the right edge %d", widest, width)
 	}
 }

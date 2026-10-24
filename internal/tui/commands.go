@@ -30,6 +30,7 @@ var own = []command{
 	{"model", "choose the model of the provider", (*Model).openModel},
 	{"effort", "choose how much the model thinks before it answers", (*Model).openEffort},
 	{"settings", "the configuration", (*Model).openSettings},
+	{"appearance", "light, dark, or as the terminal is: the next of them", (*Model).nextAppearance},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
 	{"suggestions", "review suggested changes of ouro", (*Model).openSuggestions},
@@ -142,14 +143,11 @@ func (m *Model) handleSuggestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // suggestionLines is the list of suggestions, a command a line, the one
-// selected marked. It takes at most rows lines and shows those around the
-// one selected.
-func (m *Model) suggestionLines(rows int) []string {
+// selected marked. It takes at most maxSuggestions lines and shows those
+// around the one selected, of which it says the first.
+func (m *Model) suggestionLines() ([]string, int) {
 	found, selected := m.suggestions()
-	rows = min(rows, maxSuggestions, len(found))
-	if rows <= 0 {
-		return nil
-	}
+	rows := min(maxSuggestions, len(found))
 	top := max(0, selected-rows+1)
 	width := 0
 	for _, c := range found {
@@ -164,7 +162,7 @@ func (m *Model) suggestionLines(rows int) []string {
 		}
 		lines[i] = ansi.Truncate("  "+mark+name.Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help), m.width, "…")
 	}
-	return lines
+	return lines, top
 }
 
 // toggleDebug turns the debug mode of the node on or off. The header shows
@@ -177,18 +175,23 @@ func (m *Model) toggleDebug() tea.Cmd {
 	return func() tea.Msg { return actionMsg{done, m.backend.SetDebug(on)} }
 }
 
-// helpView lists the commands.
-func (m *Model) helpView() string {
+// helpView lists the commands: a click on one runs it.
+func (m *Model) helpView() (string, []hit) {
 	width := 0
 	for _, c := range m.commands {
 		width = max(width, len(c.name))
 	}
 	lines := []string{boldStyle.Render("Commands"), ""}
+	var hits []hit
 	for _, c := range m.commands {
+		hits = append(hits, onLine(len(lines), func() tea.Cmd {
+			m.screen = screenChat
+			return c.run(m)
+		}))
 		lines = append(lines, lipgloss.NewStyle().Foreground(accent).Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help))
 	}
 	lines = append(lines, "", mutedStyle.Render("Type them into the message input. A message that starts with a slash takes two: //etc"))
-	return m.dialog(lines)
+	return m.dialog(lines), hits
 }
 
 // choices shows names in a row, the one at selected marked.

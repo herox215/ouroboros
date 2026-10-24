@@ -149,8 +149,8 @@ func TestEmptyChatIsDrawnAsItWas(t *testing.T) {
 		w, h int
 		want string
 	}{
-		{38, 6, "9735661a"},
-		{60, 12, "8bad2908"},
+		{38, 6, "07bb2a99"},
+		{60, 12, "17d786c9"},
 	} {
 		frame := emptyChat("Luna", tt.w, tt.h, "stay curious")
 		if got := drawn(frame); got != tt.want {

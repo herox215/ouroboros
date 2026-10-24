@@ -479,13 +479,13 @@ func TestChatSumsUpTheCallsOfAnAnswer(t *testing.T) {
 	cmd := say(t, m, "read a.go")
 	drive(t, m, cmd, func() bool { return m.chat.doing == "reading a.go" }) // the call is announced
 	view := trimmedLines(m)
-	if !strings.Contains(view, "│   ↳ Used 2 tools, 1 failed\n") || strings.Count(view, "↳") != 2 ||
-		!strings.Contains(view, "│   ↳ Used 1 tool\n") {
+	if !strings.Contains(view, "│ ↳ Used 2 tools, 1 failed\n") || strings.Count(view, "↳") != 2 ||
+		!strings.Contains(view, "│ ↳ Used 1 tool\n") {
 		t.Fatalf("the answer before is summed up, the one on its way too:\n%s", view)
 	}
 	close(gate)
 	drive(t, m, nil, func() bool { return !m.chat.pending })
-	if view := trimmedLines(m); !strings.Contains(view, "│   ↳ Used 1 tool\n") || strings.Contains(view, "↳ ·") {
+	if view := trimmedLines(m); !strings.Contains(view, "│ ↳ Used 1 tool\n") || strings.Contains(view, "↳ ·") {
 		t.Fatalf("the answer is in:\n%s", view)
 	}
 }

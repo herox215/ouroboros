@@ -15,6 +15,7 @@ import (
 func TestDialogLiesOverTheChat(t *testing.T) {
 	for _, open := range []string{"/effort", "/model", "/suggestions"} {
 		m, b := newModel(t)
+		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30}) // the conversation goes on beside the dialog
 		b.offers = []Models{local("gpt-4o", "gpt-4o-mini")}
 		answered(t, m, say(t, m, "ping"))
 		deliver(m, run(m, open))
@@ -33,21 +34,26 @@ func TestDialogLiesOverTheChat(t *testing.T) {
 		}
 
 		// The chat is behind it, in the color of a faded line only.
+		w, _ := m.dialogSize()
+		x := (m.width - w) / 2
 		fade := lipgloss.NewStyle().Foreground(fadeColor(false)).Render("x")
 		fade = fade[:strings.Index(fade, "x")]
-		for _, want := range []string{"ping", "you · "} {
+		// What the dialog leaves of the chat: the answer of the agent on
+		// the left. What the owner wrote stands to the right, where the
+		// dialog lies.
+		for _, want := range []string{"pong", "alpha · "} {
 			at := lineWith(lines, want)
 			if at < 0 {
 				t.Fatalf("%s: the chat should show behind the dialog: %q\n%s", open, want, ansi.Strip(view))
 			}
-			if l := lines[at]; !strings.HasPrefix(l, fade) || strings.Contains(l, "\x1b[1") || strings.Contains(l, "\x1b[36") {
+			l := lines[at]
+			if l = l[:strings.Index(l, want)]; !strings.HasPrefix(l, fade) || strings.Contains(l, "\x1b[1") {
 				t.Errorf("%s: the chat should be faded behind the dialog: %q", open, l)
 			}
 		}
 
-		// The dialog is in the middle of the body, in the accent color.
-		w, _ := m.dialogSize()
-		x := (m.width - w) / 2
+		// The dialog is in the middle of the window, its keys below it, in
+		// the color of the lines of the GUI.
 		top, bottom := -1, -1
 		for i, l := range lines {
 			switch r := []rune(ansi.Strip(l)); {
@@ -60,17 +66,22 @@ func TestDialogLiesOverTheChat(t *testing.T) {
 		if top < 0 || bottom < 0 {
 			t.Fatalf("%s: the dialog should begin at column %d:\n%s", open, x, ansi.Strip(view))
 		}
-		above, below := top-1, m.bodyHeight()-bottom // the header is above the body
+		above, below := top, m.height-bottom-2 // the line of the keys is below it
 		if d := above - below; d < -1 || d > 1 {
 			t.Errorf("%s: the dialog should be in the middle: %d lines above it, %d below:\n%s", open, above, below, ansi.Strip(view))
 		}
-		if !strings.Contains(lines[top], "\x1b[36m╭") {
-			t.Errorf("%s: the dialog should be framed in the accent color: %q", open, lines[top])
+		frame := lipgloss.NewStyle().Foreground(ui.lineStrong).Render("╭")
+		if !strings.Contains(lines[top], frame[:strings.Index(frame, "╭")]+"╭") {
+			t.Errorf("%s: the dialog should be framed in the color of the lines: %q", open, lines[top])
+		}
+		if !strings.Contains(ansi.Strip(lines[bottom+1]), ansi.Strip(m.footerHint())) {
+			t.Errorf("%s: the keys should be below the dialog: %q", open, lines[bottom+1])
 		}
 
 		// Esc closes it, and the chat is as it was.
 		press(m, "esc")
-		if m.inDialog() || !strings.Contains(m.View().Content, "\x1b[1;36myou") {
+		head := boldStyle.Foreground(muted).Render("You · ")
+		if m.inDialog() || !strings.Contains(m.View().Content, head[:strings.Index(head, "You")]+"You · ") {
 			t.Errorf("%s: esc should close the dialog: screen %v", open, m.screen)
 		}
 	}
@@ -155,7 +166,7 @@ func TestDialogDoesNotWrap(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 32})
 	run(m, "/help")
-	view := ansi.Strip(m.helpView())
+	view := ansi.Strip(drawnOf(m.helpView()))
 	if strings.Contains(view, "much more") || !strings.Contains(view, "…") {
 		t.Fatalf("long descriptions should be truncated, not wrapped: %s", view)
 	}
@@ -199,7 +210,9 @@ func TestKeysOpenInDialog(t *testing.T) {
 	}
 }
 
-func TestSessionsActiveCountInChatCorner(t *testing.T) {
+// The thread says in its status, at the right above the composer, how many
+// sessions work beside it, as the GUI does.
+func TestSessionsActiveCountInTheStatus(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
 	m.chat = m.thread()
@@ -207,21 +220,17 @@ func TestSessionsActiveCountInChatCorner(t *testing.T) {
 	m.conversation("idle").title = "idle"
 	for _, active := range []bool{true, false} {
 		m.chats["working"].running = active
-		want := "0 active sessions"
+		want := "0 ACTIVE SESSIONS"
 		if active {
-			want = "1 active session"
+			want = "1 ACTIVE SESSION"
 		}
-		view := ansi.Strip(m.chatView())
-		lines := strings.Split(view, "\n")
-		line := lines[m.chatHeight()-2]
-		at := m.chatWidth() - 2 - len(want)
-		index := strings.Index(line, want)
-		if index < 0 || lipgloss.Width(line[:index]) != at || strings.Count(view, want) != 1 {
-			t.Fatalf("active count should be at the bottom right of the chat, in the thread: %q", line)
+		status := ansi.Strip(m.statusLine(m.transcriptWidth()))
+		if !strings.HasSuffix(status, want) || lipgloss.Width(status) != m.transcriptWidth() || strings.Count(ansi.Strip(m.chatScreen()), want) != 1 {
+			t.Fatalf("the count should be at the right of the status, in the thread: %q", status)
 		}
 	}
 	m.chat = m.conversation("idle")
-	if strings.Contains(ansi.Strip(m.chatView()), "active sessions") {
+	if strings.Contains(ansi.Strip(m.chatScreen()), "ACTIVE SESSION") {
 		t.Fatal("the count belongs to the thread only")
 	}
 }
@@ -281,7 +290,7 @@ func TestOneProfileIsNotCounted(t *testing.T) {
 	m, _ := newModel(t)
 	for of, counted := range map[int]bool{0: false, 1: false, 2: true} {
 		m.profileAt, m.profileOf = 1, of
-		if got := strings.Contains(ansi.Strip(m.headerView()), fmt.Sprintf("[1/%d]", of)); got != counted {
+		if got := strings.Contains(ansi.Strip(m.headerView()), fmt.Sprintf(" 1/%d", of)); got != counted {
 			t.Errorf("of %d profiles: the header counts them: %v", of, got)
 		}
 		if got := strings.Contains(ansi.Strip(m.keysView()), "shift+tab"); got != counted {
@@ -291,10 +300,11 @@ func TestOneProfileIsNotCounted(t *testing.T) {
 }
 
 // Beside a dialog, a line of wide letters stays as it is: the dialog lies
-// over it where it belongs, the chat goes on right of it up to its border,
-// and the window keeps its size.
+// over it where it belongs, the chat goes on right of it, and the window
+// keeps its size.
 func TestDialogOverWideLetters(t *testing.T) {
 	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 	for range 30 {
 		m.chat.add(entry{text: strings.Repeat("两个", 40)})
 	}
@@ -317,9 +327,6 @@ func TestDialogOverWideLetters(t *testing.T) {
 			if strings.ContainsAny(right, "两个") {
 				beside++
 			}
-			if !strings.HasSuffix(right, "│") {
-				t.Errorf("line %d lost the border of the chat: %q", i, l)
-			}
 		}
 	}
 	if beside == 0 {
@@ -334,7 +341,7 @@ func TestDialogOverWideLetters(t *testing.T) {
 // chat shows neither through it nor not around it.
 func TestDialogCoversTheChat(t *testing.T) {
 	m, _ := newModel(t)
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 60})
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
 	m.chat.add(entry{text: strings.Repeat("% ", 2000)})
 	m.renderHistory(true)
 	run(m, "/effort")

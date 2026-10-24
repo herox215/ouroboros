@@ -119,7 +119,7 @@ func (s *effortScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 
 // view shows, in a dialog, the efforts on a line, the slider below them at
 // the one it is at, the mesh of that one above them, and what it does.
-func (s *effortScreen) view(m *Model) string {
+func (s *effortScreen) view(m *Model) (string, []hit) {
 	var names []string
 	at := 0 // where the name the slider is at begins
 	for i, effort := range s.choices {
@@ -144,6 +144,22 @@ func (s *effortScreen) view(m *Model) string {
 		boldStyle.Render("Effort"), "",
 		mutedStyle.Render("How much the model thinks before it answers you in this session."), "",
 	}
+	// A click on a name moves the slider there, and on the one it is at
+	// sets it.
+	w, _ := m.dialogSize()
+	widest := 0
+	for _, l := range slider {
+		widest = max(widest, lipgloss.Width(l))
+	}
+	x, hits := max(0, (w-4-widest)/2), []hit(nil)
+	for i, effort := range s.choices {
+		name := len(effortName(effort))
+		hits = append(hits, hit{line: len(lines) + len(slider) - 2, from: x, to: x + name, do: choosing(i == s.at, func() {
+			s.at = i
+			s.net.growTo(effort, m.ticks)
+		}, func() tea.Cmd { return s.handleKey(m, enterKey) })})
+		x += name + effortGap
+	}
 	lines = append(lines, m.centered(slider...)...)
 	lines = append(lines, "")
 	lines = append(lines, m.centered(efforts[effortName(s.choices[s.at])])...)
@@ -153,7 +169,7 @@ func (s *effortScreen) view(m *Model) string {
 		mutedStyle.Render("Other sessions keep theirs; a new one starts with the last chosen."),
 		mutedStyle.Render("Peers are answered with the model's own effort."),
 	)
-	return m.dialog(lines)
+	return m.dialog(lines), hits
 }
 
 // about says where the choices come from, for model.

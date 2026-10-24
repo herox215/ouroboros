@@ -7,6 +7,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
 )
 
 // The UI takes the mouse, for the wheel, so the terminal does not select
@@ -15,11 +17,6 @@ import (
 // to the clipboard. A click selects nothing, and a key drops the selection.
 // Nothing is marked before the drag begins, so a press alone leaves no mark
 // under the pointer.
-
-// The history starts below the header and the top of the box, and right of
-// the border and padding of the box, and of the list of the jobs if it is
-// shown.
-const historyTop, historyLeft = 2, 2
 
 // spot is a cell of the content of the history: its line and column.
 type spot struct{ line, col int }
@@ -63,36 +60,61 @@ func (s *selection) cols(line int) (from, to int, ok bool) {
 // historySpot is the cell of the history at x and y on the screen, the rows
 // above and below the history taken as its first and its last.
 func (m *Model) historySpot(x, y int) spot {
-	hidden := m.givenUp() // the bottom rows covered by the panel
-	row := min(max(0, y-historyTop), max(0, m.history.Height()-hidden-1))
-	return spot{m.history.YOffset() + row, max(0, x-historyLeft)}
+	row := min(max(0, y-m.historyTop()), max(0, m.history.Height()-1))
+	return spot{m.history.YOffset() + row, max(0, x-m.transcriptLeft())}
 }
 
 // onHistory tells if x and y are on the history of the chat.
 func (m *Model) onHistory(x, y int) bool {
-	hidden := m.givenUp()
-	return x >= historyLeft && x < historyLeft+m.history.Width() &&
-		y >= historyTop && y < historyTop+m.history.Height()-hidden
+	left, top := m.transcriptLeft(), m.historyTop()
+	return x >= left && x < left+m.history.Width() && y >= top && y < top+m.history.Height()
 }
 
 // mouse selects text of the history with the mouse and copies it. A press
 // only remembers where it went down: the selection begins with the drag, so
 // a click marks nothing.
 func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
-	if m.onboard != nil || m.splash.show || m.screen != screenChat || !m.status.Configured {
+	if m.onboard != nil || m.splash.show {
 		return nil
 	}
+	at := msg.Mouse()
+	if _, ok := msg.(tea.MouseClickMsg); ok && at.Button == tea.MouseLeft {
+		switch {
+		case m.inDialog():
+			return m.clickDialog(at.X, at.Y)
+		case m.screen == screenPlugin:
+			return m.clickPlugin(at.X, at.Y)
+		}
+	}
+	if m.screen != screenChat || !m.status.Configured {
+		return nil
+	}
+	if _, ok := msg.(tea.MouseMotionMsg); !ok || m.pressed != nil {
+		if gone := m.unhover(); gone != nil {
+			return tea.Batch(gone, m.mouseOnChat(msg))
+		}
+	}
+	return m.mouseOnChat(msg)
+}
+
+// mouseOnChat does what the mouse does on the chat, see mouse.
+func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 	at := msg.Mouse()
 	switch msg.(type) {
 	case tea.MouseClickMsg:
 		m.selected, m.pressed = nil, nil
+		if at.Button == tea.MouseLeft {
+			if cmd, ok := m.click(at.X, at.Y); ok {
+				return cmd
+			}
+		}
 		if at.Button == tea.MouseLeft && m.onHistory(at.X, at.Y) {
 			s := m.historySpot(at.X, at.Y)
 			m.pressed = &s // the drag has not begun, so nothing is marked yet
 		}
 	case tea.MouseMotionMsg:
 		if m.pressed == nil {
-			return nil
+			return m.rest(at.X, at.Y)
 		}
 		to := m.historySpot(at.X, at.Y)
 		if m.selected == nil {
@@ -113,6 +135,58 @@ func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
 		return m.copySelection()
 	}
 	return nil
+}
+
+// click does what is clicked beside the history, as in the GUI: a session
+// of the sidebar or of the column on the right shows it, the button of the
+// settings opens them, and those of the head and the composer take the owner
+// to the thread, stop the answer and send. What is asked or offered above
+// the composer is answered or run, and a click into the composer puts its
+// cursor there. It reports whether something was there.
+func (m *Model) click(x, y int) (tea.Cmd, bool) {
+	side := m.sideWidth()
+	if x < side {
+		if c := m.sidebarAt(y); c != nil {
+			return m.switchTo(c), true
+		}
+		if y == m.height-2 && x >= columnPad && x < columnPad+2 {
+			return m.openSettings(), true
+		}
+		return nil, false
+	}
+	// The name of the conversation, and the button beside it, are in the
+	// middle of the head.
+	right := side + m.chatWidth() - columnPad
+	if y == m.headerHeight()/2 && m.chat.contextID != plugin.ThreadID && x < right && x >= right-lipgloss.Width(threadButton()) {
+		return m.openThread(), true
+	}
+	left := m.transcriptLeft()
+	row := m.historyTop() + m.chatHeight() + 2 // below the status and the line above the composer
+	if panel, hits := m.panel(); len(panel) > 0 {
+		if do := hitAt(hits, y-row, x-left); do != nil {
+			return do(), true
+		}
+		row += len(panel) + 1
+	}
+	if r, col := y-row, x-left-promptWidth; r >= 0 && r < m.composerRows() && col >= 0 && col < m.composerInner() {
+		m.clickComposer(r, col)
+		return nil, true
+	}
+	if x >= side+m.chatWidth() {
+		if c := m.railAt(y); c != nil {
+			return m.switchTo(c), true
+		}
+	}
+	if y == m.height-2-m.pendingRows() {
+		stop := left + promptWidth + m.composerInner() + 1
+		switch {
+		case x >= stop && x < stop+stopWidth && m.chat.pending && m.chat.peer == "":
+			return m.cancel(), true
+		case x >= stop+stopWidth+1 && x < stop+stopWidth+1+sendWidth:
+			return m.send(), true
+		}
+	}
+	return nil, false
 }
 
 // copySelection puts the text selected on the clipboard, without its styles

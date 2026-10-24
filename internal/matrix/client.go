@@ -15,6 +15,12 @@ import (
 	"maunium.net/go/mautrix/id"
 )
 
+// ErrRoomRefused marks a send the room's state forbids: Ouro is not joined,
+// the room is not encrypted, or the peer is not the one allowed and alone.
+// Retrying cannot help until the room's state changes, so a caller that
+// delivers on a timer stops instead of trying again every round.
+var ErrRoomRefused = errors.New("the Matrix room does not allow the send")
+
 type Credentials struct{ Homeserver, UserID, Token, DeviceID string }
 type Config struct {
 	Homeserver, UserID, Token, DeviceID, StateDir string
@@ -142,7 +148,7 @@ func (c *Client) safeState(events []*event.Event) (id.UserID, error) {
 			continue
 		}
 		if err := e.Content.ParseRaw(e.Type); err != nil && !errors.Is(err, event.ErrContentAlreadyParsed) {
-			return "", errors.New("invalid room state")
+			return "", fmt.Errorf("%w: invalid room state", ErrRoomRefused)
 		}
 		switch e.Type.Type {
 		case event.StateEncryption.Type:
@@ -152,7 +158,7 @@ func (c *Client) safeState(events []*event.Event) (id.UserID, error) {
 		}
 	}
 	if !encrypted || members[c.cli.UserID] != event.MembershipJoin {
-		return "", errors.New("room is not an encrypted joined room")
+		return "", fmt.Errorf("%w: room is not an encrypted joined room", ErrRoomRefused)
 	}
 	var peer id.UserID
 	for user, membership := range members {
@@ -164,15 +170,15 @@ func (c *Client) safeState(events []*event.Event) (id.UserID, error) {
 			continue
 		case event.MembershipJoin:
 			if peer != "" || !c.allowed[user] {
-				return "", errors.New("room is not an allowed 1:1")
+				return "", fmt.Errorf("%w: room is not an allowed 1:1", ErrRoomRefused)
 			}
 			peer = user
 		default:
-			return "", errors.New("room has invited or unknown members")
+			return "", fmt.Errorf("%w: room has invited or unknown members", ErrRoomRefused)
 		}
 	}
 	if peer == "" {
-		return "", errors.New("room has no allowed peer")
+		return "", fmt.Errorf("%w: room has no allowed peer", ErrRoomRefused)
 	}
 	return peer, nil
 }
@@ -252,7 +258,7 @@ func (c *Client) sendEvent(ctx context.Context, room string, expectedPeer id.Use
 	}
 	// Bind queued replies before any encryption or key sharing.
 	if expectedPeer != "" && peer != expectedPeer {
-		return nil, errors.New("the peer of the Matrix room changed")
+		return nil, fmt.Errorf("%w: the peer of the Matrix room changed", ErrRoomRefused)
 	}
 	if check != nil {
 		if err := check(); err != nil {
@@ -269,7 +275,7 @@ func (c *Client) sendEvent(ctx context.Context, room string, expectedPeer id.Use
 		return nil, err
 	}
 	if current != peer {
-		return nil, errors.New("the peer of the Matrix room changed")
+		return nil, fmt.Errorf("%w: the peer of the Matrix room changed", ErrRoomRefused)
 	}
 	if check != nil {
 		if err := check(); err != nil {

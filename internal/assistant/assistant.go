@@ -340,6 +340,8 @@ func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 	// A helper gets the other tools the owner allows, as they are set up.
 	if at := slices.IndexFunc(allowed, func(t agent.Tool) bool { return t.Name == ToolDelegate }); at >= 0 {
 		allowed[at] = b.delegate(cfg, allowed)
+		// The tasks run in the background: the agent reaches them with these.
+		allowed = append(allowed, taskTools()...)
 	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.

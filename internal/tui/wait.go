@@ -4,9 +4,6 @@ import (
 	"math"
 	"strings"
 	"time"
-
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // art is a picture that moves behind what the agent is waiting for, a row of
@@ -126,16 +123,3 @@ func (m *Model) waitingFor() string {
 
 // toolShown is how long a tool runs before the chat names it.
 const toolShown = 300 * time.Millisecond
-
-// waitView is what the chat shows while an answer is on its way: a picture
-// that moves, w cells wide, and in its middle what the agent waits for.
-func (m *Model) waitView(w int) string {
-	label := m.waiting()
-	if label == "" {
-		return ""
-	}
-	label = ansi.Truncate(" "+label+" ", w, "…")
-	from := (w - lipgloss.Width(label)) / 2
-	row := arts[m.chat.art%len(arts)].row(w, m.ticks)
-	return mutedStyle.Render(string(row[:from])) + label + mutedStyle.Render(string(row[from+lipgloss.Width(label):]))
-}

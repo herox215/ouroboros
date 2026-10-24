@@ -34,14 +34,15 @@ func (m *Model) inDialog() bool {
 // dialogSize is how wide and how high a dialog may be in the body, with its
 // border and padding: it leaves a margin of the chat around it.
 func (m *Model) dialogSize() (width, height int) {
-	width, height = dialogWidth, m.bodyHeight()-2
+	room := m.height - 4 - m.pendingRows() // a margin, and the line of the keys below the dialog
+	width, height = dialogWidth, room
 	switch m.screen {
 	case screenHelp: // the commands, each with what it does
 		width = m.width - 4
 	case screenSessions: // as high as the list it shows, not as high as the chat
 		width, height = sessionsWidth, sessionsRows+7
 	}
-	return max(1, min(width, m.width-4)), max(1, min(height, m.bodyHeight()-2))
+	return max(1, min(width, m.width-4)), max(1, min(height, room))
 }
 
 // dialog renders lines in the box of a dialog, as wide as the body allows.
@@ -74,14 +75,17 @@ func (m *Model) centered(lines ...string) []string {
 	return out
 }
 
-// overlay lays dialog over the chat, in the middle of the body. The chat is
-// faded behind it, so that only the dialog stands out.
+// overlay lays dialog over the chat, in the middle of the window, as the
+// GUI opens its dialogs: the chat faded behind it, so that only the dialog
+// stands out, and below it what happened and the keys that do something in
+// it.
 func (m *Model) overlay(dialog string) string {
-	w, h := m.width, m.bodyHeight()
-	back := strings.Split(m.chatView(), "\n")
+	w, h := m.width, m.height
+	back := strings.Split(m.chatScreen(), "\n")
+	hint := m.footerHint()
 	dw, dh := lipgloss.Width(dialog), lipgloss.Height(dialog)
 	x := max(0, (w-dw)/2)
-	y := max(0, (h-dh)/2)
+	y := max(0, (h-dh-1)/2)
 	// The layer of the dialog clears all it covers before it is drawn: the
 	// chat does not show through it, and stays whole around it, also where
 	// its letters are wide.
@@ -89,11 +93,16 @@ func (m *Model) overlay(dialog string) string {
 	for i, l := range back {
 		back[i] = style.Render(ansi.Strip(l))
 	}
-	canvas := lipgloss.NewCanvas(w, h)
-	canvas.Compose(lipgloss.NewCompositor(
+	layers := []*lipgloss.Layer{
 		lipgloss.NewLayer(strings.Join(back, "\n")),
 		lipgloss.NewLayer(dialog).X(x).Y(y).Z(1),
-	))
-	// The canvas trims what is blank at the end; the body keeps its height.
+	}
+	if hint != "" {
+		hint = ansi.Truncate(hint, w, "…")
+		layers = append(layers, lipgloss.NewLayer(hint).X(max(0, (w-lipgloss.Width(hint))/2)).Y(min(h-1, y+dh)).Z(1))
+	}
+	canvas := lipgloss.NewCanvas(w, h)
+	canvas.Compose(lipgloss.NewCompositor(layers...))
+	// The canvas trims what is blank at the end; the window keeps its height.
 	return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(canvas.Render())
 }
