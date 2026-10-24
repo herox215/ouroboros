@@ -3,12 +3,14 @@ package matrix
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	transport "ouroboros/internal/matrix"
 	"ouroboros/plugin"
 )
 
@@ -164,6 +166,31 @@ func TestDeliveryRetriesFailedSend(t *testing.T) {
 	}
 	if len(conn.messages()) != 1 {
 		t.Fatal("retry missing")
+	}
+}
+
+// A room whose state forbids the send is dropped, not tried again every
+// second: no attempt can change what that state says. A message from the room
+// opens the conversation again when the room allows delivery.
+func TestDeliveryStopsForARoomThatRefuses(t *testing.T) {
+	c, entry, sessions := deliveryConversation(t)
+	conn := &recordingConnection{fail: []error{fmt.Errorf("%w: room has no allowed peer", transport.ErrRoomRefused)}}
+	events := []plugin.SessionEvent{{Kind: plugin.SessionAnswer, PresentationID: "refused", Text: "hello"}}
+	if err := c.publish(t.Context(), conn, entry, events); err != nil {
+		t.Fatalf("a refusal is not an error to retry: %v", err)
+	}
+	if len(c.entries) != 0 {
+		t.Fatal("kept a conversation whose room refuses its output")
+	}
+	reopened, err := openConversations(c.store, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reopened.entries) != 0 {
+		t.Fatal("kept a refused conversation across a restart")
+	}
+	if got := conn.messages(); len(got) != 0 {
+		t.Fatalf("sent into a refused room: %v", got)
 	}
 }
 

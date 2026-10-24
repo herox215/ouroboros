@@ -178,6 +178,11 @@ func TestSafeState(t *testing.T) {
 			if (err == nil) != tc.ok {
 				t.Fatalf("safeState error=%v want safe=%v", err, tc.ok)
 			}
+			// A room whose state forbids the send says so: the gateway stops
+			// delivering there instead of trying every second.
+			if !tc.ok && !errors.Is(err, ErrRoomRefused) {
+				t.Fatalf("safeState error=%v is not a refusal", err)
+			}
 		})
 	}
 }

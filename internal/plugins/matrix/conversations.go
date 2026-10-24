@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	transport "ouroboros/internal/matrix"
 	"ouroboros/internal/safefile"
 	"ouroboros/plugin"
 )
@@ -259,7 +260,7 @@ func (c *conversations) poll(ctx context.Context, conn connection) {
 	defer typing.stop(conn)
 	for {
 		c.mu.Lock()
-		for _, entry := range c.entries {
+		for key, entry := range c.entries {
 			events, err := c.adapter.Poll(ctx, entry.Identity, entry.Session)
 			if err != nil {
 				typing.update(ctx, conn, entry, false, time.Now())
@@ -268,6 +269,11 @@ func (c *conversations) poll(ctx context.Context, conn connection) {
 			typing.update(ctx, conn, entry, answering(entry.Session, events), time.Now())
 			// A failure waits for the next round; later output must not overtake it.
 			_ = c.publish(ctx, conn, entry, events)
+			if _, ok := c.entries[key]; !ok {
+				// A room that refuses delivery is forgotten: no typing notice
+				// is to be renewed there either.
+				delete(typing, entry)
+			}
 		}
 		c.mu.Unlock()
 		select {
@@ -350,6 +356,14 @@ func (c *conversations) publish(ctx context.Context, conn connection, entry *con
 			continue
 		}
 		if err := conn.SendTo(ctx, entry.Room, peer, presented(events[i])); err != nil {
+			if errors.Is(err, transport.ErrRoomRefused) {
+				// The room no longer allows what Ouro sends, and another try
+				// cannot change that: the poll stops delivering there. A
+				// message from the room opens the conversation again when the
+				// room allows it.
+				c.forget(entry)
+				return nil
+			}
 			return err
 		}
 		entry.Sent[key] = true
@@ -359,4 +373,13 @@ func (c *conversations) publish(ctx context.Context, conn connection, entry *con
 		}
 	}
 	return nil
+}
+
+// forget drops the conversation of a room that no longer allows delivery, so
+// the poll stops sending there. Its ledger goes with it: a room that allows
+// delivery again is sent what comes from then on, not what it missed. c.mu is
+// held.
+func (c *conversations) forget(entry *conversation) {
+	delete(c.entries, entry.Identity.Gateway+"\n"+entry.Identity.Subject)
+	_ = c.save()
 }
