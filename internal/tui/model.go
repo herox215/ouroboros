@@ -197,27 +197,37 @@ func (s *modelScreen) forPeers(m *Model, access plugin.SetupAccess, model string
 
 // modelView shows, in a dialog, the models of the accesses, the one in use
 // marked and the one selected ready to be set with enter.
-func (s *modelScreen) view(m *Model) string {
+func (s *modelScreen) view(m *Model) (string, []hit) {
 	w, h := m.dialogSize()
 	lines := []string{boldStyle.Render("Model") + mutedStyle.Render("  "+m.modelText()), ""}
+	var hits []hit
 	switch {
 	case s.busy != "":
 		lines = append(lines, m.spinner.View()+mutedStyle.Render(" "+s.busy+"…"))
 	case s.err != nil:
 		lines = append(lines, errStyle.Render("✗ "+s.err.Error()))
 	default:
-		lines = append(lines, s.list(m, w, max(1, h-6))...) // border, title and count
+		list, choices := s.list(m, w, max(1, h-6)) // border, title and count
+		// A click on a model selects it, and on the one selected sets it.
+		for i, n := range choices {
+			if n >= 0 {
+				hits = append(hits, onLine(len(lines)+i, choosing(n == s.sel, func() { s.sel = n }, func() tea.Cmd { return s.handleKey(m, enterKey) })))
+			}
+		}
+		lines = append(lines, list...)
 	}
-	return m.dialog(lines)
+	return m.dialog(lines), hits
 }
 
 // modelList shows the models around the one selected, in at most height
 // lines, each below the access it belongs to: what the access is called and
-// what tells it apart, and why it did not list its models, if it did not.
-func (s *modelScreen) list(m *Model, width, height int) []string {
+// what tells it apart, and why it did not list its models, if it did not;
+// and of each line the model of choices it shows, -1 for none.
+func (s *modelScreen) list(m *Model, width, height int) ([]string, []int) {
 	type line struct {
-		text string
-		head string // of a model: the line of its access, "" for another line
+		text   string
+		head   string // of a model: the line of its access, "" for another line
+		choice int
 	}
 	var all []line
 	at, n := 0, 0
@@ -228,15 +238,15 @@ func (s *modelScreen) list(m *Model, width, height int) []string {
 		}
 		head = ansi.Truncate(head, max(0, width-4), "…")
 		if i > 0 {
-			all = append(all, line{})
+			all = append(all, line{choice: -1})
 		}
-		all = append(all, line{text: head})
+		all = append(all, line{text: head, choice: -1})
 		if l.Err != "" {
 			why := "✗ " + l.Err
 			if len(l.Models) > 0 {
 				why += " – the models it listed the last time:"
 			}
-			all = append(all, line{text: errStyle.Render(ansi.Truncate(why, max(0, width-6), "…"))})
+			all = append(all, line{text: errStyle.Render(ansi.Truncate(why, max(0, width-6), "…")), choice: -1})
 		}
 		for _, model := range l.Models {
 			name := ansi.Truncate(model, max(0, width-14), "…")
@@ -255,19 +265,20 @@ func (s *modelScreen) list(m *Model, width, height int) []string {
 			} else {
 				name = "  " + name
 			}
-			all = append(all, line{name, head})
+			all = append(all, line{name, head, n})
 			n++
 		}
 	}
 	first := max(0, min(at-height/2, len(all)-height))
 	shown := all[first:min(len(all), first+height)]
 	lines := make([]string, len(shown))
+	choices := make([]int, len(shown))
 	for i, l := range shown {
-		lines[i] = l.text
+		lines[i], choices[i] = l.text, l.choice
 	}
 	// The access of the models at the top stays in sight.
 	if len(shown) > 1 && shown[0].head != "" {
-		lines[0] = shown[0].head
+		lines[0], choices[0] = shown[0].head, -1
 	}
-	return append(lines, "", mutedStyle.Render(fmt.Sprintf("%d of %d", min(s.sel+1, len(s.choices)), len(s.choices))))
+	return append(lines, "", mutedStyle.Render(fmt.Sprintf("%d of %d", min(s.sel+1, len(s.choices)), len(s.choices)))), choices
 }

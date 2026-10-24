@@ -1,0 +1,1041 @@
+package tui
+
+import (
+	"cmp"
+	"fmt"
+	"image/color"
+	"slices"
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
+)
+
+// The chat is laid out as the window of the GUI is: the sessions on the
+// left, the conversation in the middle, below its head and above the
+// composer, and on the right where the sessions stand. Nothing is framed: a
+// line above the composer parts it from the conversation, and the
+// conversation is as wide as it reads well, in the middle of its column.
+// A narrow window leaves out the column on the right first, then the one on
+// the left, as the GUI does.
+
+const (
+	sideMin, sideMax = 24, 40 // how wide the columns beside the conversation are, with their margins
+	sideFrom         = 80     // a narrower window has no sidebar
+	railFrom         = 120    // and no column on the right, unless the jobs are listed there
+	transcriptMax    = 100    // how wide the conversation is at most
+	sendWidth        = 3      // the button that sends, " ↑ "
+	stopWidth        = 6      // the button that stops the answer, " Stop "
+	buttonsWidth     = 2 + stopWidth + sendWidth
+	promptWidth      = 2  // "› " before the composer
+	columnPad        = 2  // the margin inside the columns beside the conversation
+	composerShare    = 30 // percent of the window the composer grows to at most
+	panelShare       = 40 // and the question above it
+)
+
+// columnWidth is how wide a column beside the conversation is in a window
+// w cells wide: a fourth of it, within bounds.
+func columnWidth(w int) int { return min(sideMax, max(sideMin, w*23/100)) }
+
+// sideWidth is how wide the sidebar of the sessions is, 0 without it.
+func (m *Model) sideWidth() int {
+	if m.width < sideFrom {
+		return 0
+	}
+	return columnWidth(m.width)
+}
+
+// railWidth is how wide the column on the right is, 0 without it. The jobs
+// get it in any window, a third of it at most.
+func (m *Model) railWidth() int {
+	switch {
+	case m.width >= railFrom:
+		return columnWidth(m.width)
+	case m.jobsShown:
+		return min(columnWidth(m.width), m.width/3)
+	}
+	return 0
+}
+
+// chatWidth is how wide the column of the conversation is: what the
+// columns beside it leave of the window.
+func (m *Model) chatWidth() int { return max(1, m.width-m.sideWidth()-m.railWidth()) }
+
+// transcriptWidth is how wide the conversation and the composer are.
+func (m *Model) transcriptWidth() int { return max(1, min(transcriptMax, m.chatWidth()-2*columnPad)) }
+
+// transcriptLeft is the column of the screen the conversation begins at.
+func (m *Model) transcriptLeft() int {
+	return m.sideWidth() + (m.chatWidth()-m.transcriptWidth())/2
+}
+
+// compact reports whether the window is too low for the margins of the
+// head.
+func (m *Model) compact() bool { return m.height < 24 }
+
+// headerHeight is how many rows the head of the conversation takes, with
+// its margins.
+func (m *Model) headerHeight() int {
+	if m.compact() {
+		return 3
+	}
+	return 5
+}
+
+// historyTop is the row of the screen the conversation begins at.
+func (m *Model) historyTop() int { return m.headerHeight() }
+
+// composerInner is how wide the field of the composer is: what the prompt
+// and the buttons leave of it.
+func (m *Model) composerInner() int { return max(1, m.transcriptWidth()-promptWidth-buttonsWidth) }
+
+// composerRows is how many rows the composer takes: as many as what is
+// written needs, from one to a share of the window.
+func (m *Model) composerRows() int {
+	w := m.composerInner()
+	rows := 0
+	for _, line := range strings.Split(m.chat.showLabels(m.input.Value()), "\n") {
+		rows += max(1, (ansi.StringWidth(line)+w)/w)
+	}
+	return min(max(1, rows), max(1, m.height*composerShare/100))
+}
+
+// bottomRows is how many rows are below the conversation: the line of the
+// status, the line above the composer, what is asked or offered above it,
+// the composer, the line of the actions and what waits for a decision.
+func (m *Model) bottomRows() int {
+	rows := 3 + m.composerRows() + m.pendingRows()
+	if panel := m.panelLines(); len(panel) > 0 {
+		rows += len(panel) + 1
+	}
+	return rows
+}
+
+// chatHeight is how high the conversation is.
+func (m *Model) chatHeight() int { return max(1, m.height-m.headerHeight()-m.bottomRows()) }
+
+// pad fills s with spaces to w cells, cut to w if it is wider.
+func pad(s string, w int) string {
+	s = ansi.Truncate(s, w, "…")
+	return s + strings.Repeat(" ", max(0, w-lipgloss.Width(s)))
+}
+
+// spread puts left at the start and right at the end of w cells; left gives
+// way where both do not fit.
+func spread(left, right string, w int) string {
+	right = ansi.Truncate(right, w, "…")
+	left = ansi.Truncate(left, max(0, w-lipgloss.Width(right)-1), "…")
+	return left + strings.Repeat(" ", max(0, w-lipgloss.Width(left)-lipgloss.Width(right))) + right
+}
+
+// lineStyle draws the lines that part, as the GUI draws its borders.
+func lineStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(ui.line) }
+
+// chatScreen is the whole window of the chat: the three columns side by
+// side, each as high as the window.
+func (m *Model) chatScreen() string {
+	h := m.height
+	columns := []string{}
+	if w := m.sideWidth(); w > 0 {
+		columns = append(columns, m.sidebarView(w, h))
+	}
+	columns = append(columns, m.mainView())
+	if w := m.railWidth(); w > 0 {
+		columns = append(columns, m.railView(w, h))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+}
+
+// mainView is the column of the conversation: its head, the conversation
+// and below it the composer.
+func (m *Model) mainView() string {
+	w := m.chatWidth()
+	tw := m.transcriptWidth()
+	left := strings.Repeat(" ", (w-tw)/2)
+	var lines []string
+	for _, l := range m.headerLines(w - 2*columnPad) {
+		lines = append(lines, pad(strings.Repeat(" ", columnPad)+l, w))
+	}
+	for _, l := range m.historyLines() {
+		lines = append(lines, pad(left+l, w))
+	}
+	for _, l := range m.bottomLines(tw) {
+		lines = append(lines, pad(left+l, w))
+	}
+	for len(lines) < m.height {
+		lines = append(lines, strings.Repeat(" ", w))
+	}
+	return strings.Join(lines[:m.height], "\n")
+}
+
+// headerLines is the head of the conversation, w cells wide: what the GUI
+// heads its window with, the conversation shown, and where it works with
+// which model.
+func (m *Model) headerLines(w int) []string {
+	c := m.chat
+	eyebrow := "OUROBOROS"
+	if m.profileOf > 1 {
+		eyebrow += fmt.Sprintf(" · %s %d/%d", strings.ToUpper(m.headerName()), m.profileAt, m.profileOf)
+	}
+	var marks []string
+	if n := m.suggestionRequests.unread; n > 0 {
+		marks = append(marks, lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("✦ %d SUGGESTIONS", n)))
+	}
+	if m.status.Debug {
+		marks = append(marks, boldStyle.Foreground(ui.background).Background(warn).Render(" DEBUG MODE "))
+	}
+	head := spread(boldStyle.Foreground(muted).Render(eyebrow), strings.Join(marks, "  "), w)
+	back := ""
+	if c.contextID != plugin.ThreadID {
+		back = threadButton()
+	}
+	title := spread(strings.ToUpper(m.chatName()), back, w)
+	meta := spread(m.metaText(), "", w)
+	if m.compact() {
+		return []string{head, title, meta}
+	}
+	return []string{"", head, title, meta, ""}
+}
+
+// threadButton is what takes the owner back to the thread, as the GUI's
+// "To the thread" does.
+func threadButton() string {
+	return lipgloss.NewStyle().Foreground(muted).Background(ui.field).Render(" To the thread ")
+}
+
+// chatName is what the head calls the conversation shown.
+func (m *Model) chatName() string {
+	c := m.chat
+	switch {
+	case c.contextID == plugin.ThreadID:
+		return "Thread"
+	case c.peer != "":
+		return c.peer + " · " + cmp.Or(c.title, "conversation")
+	}
+	return cmp.Or(short(c.title, 80), "New conversation")
+}
+
+// metaText is the line below the name of the conversation: where it works,
+// and with which model, or what the node needs first.
+func (m *Model) metaText() string {
+	s := m.status
+	parts := []string{cmp.Or(m.chat.directory, "Profile workspace")}
+	switch {
+	case !s.Configured:
+		return mutedStyle.Render(parts[0]+" · ") + lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  type /setup")
+	case s.Running:
+		if s.Debug {
+			parts = append(parts, fmt.Sprintf("%s:%d", s.ID, s.Port))
+		}
+		if model := strings.TrimLeft(m.modelText(), " ·"); model != "" { // the effort without a model
+			parts = append(parts, model)
+		}
+	default:
+		parts = append(parts, "type /start")
+	}
+	return mutedStyle.Render(strings.Join(parts, " · "))
+}
+
+// historyLines are the rows of the conversation as the column shows them,
+// the selection marked and the older lines faded out at the top. A node that
+// is not set up has none yet: it shows how to set it up.
+func (m *Model) historyLines() []string {
+	tw, h := m.transcriptWidth(), m.chatHeight()
+	if !m.status.Configured {
+		hint := mutedStyle.Render("Type /setup to set up your node and chat with its agent.")
+		lines := []string{hint}
+		if tw >= logoWidth() && h >= len(logoLines)+2 {
+			lines = append(strings.Split(lipgloss.NewStyle().Foreground(accent).Render(logoText(logoLines, tw)), "\n"), "", hint)
+		}
+		for len(lines) < h {
+			lines = append(lines, "")
+		}
+		return lines[:h]
+	}
+	lines := m.highlight(strings.Split(m.history.View(), "\n"))
+	lines = append(lines, make([]string, max(0, h-len(lines)))...)[:h] // the viewport is as high once laid out
+	if m.history.YOffset() > 0 {
+		m.fadeTop(lines)
+	}
+	return lines
+}
+
+// fadeTop fades the older lines out towards the top, as the GUI does while
+// there are older ones above: over the upper two fifths, the first line
+// nearly the background.
+func (m *Model) fadeTop(lines []string) {
+	n := len(lines) * 2 / 5
+	for i := 0; i < n && i < len(lines); i++ {
+		p := float64(i) / float64(n)
+		cover := 0.7 * (1 - (p-0.14)/0.86)
+		if p < 0.14 {
+			cover = 1 - p/0.14*0.3
+		}
+		lines[i] = fadeLine(lines[i], cover)
+	}
+}
+
+// fadeLine is line with each of its colors the share cover of the way to
+// the background, as a translucent layer of the background over it looks.
+// What has no color of its own has that of the text.
+func fadeLine(line string, cover float64) string {
+	toward := func(c color.Color) string {
+		r, g, b, _ := blend(ui.background, c, cover).RGBA()
+		return fmt.Sprintf("2;%d;%d;%d", r>>8, g>>8, b>>8)
+	}
+	text := "38;" + toward(ui.text)
+	faded := sgr.ReplaceAllStringFunc(line, func(seq string) string {
+		params := strings.FieldsFunc(seq[2:len(seq)-1], func(r rune) bool { return r == ';' || r == ':' })
+		if len(params) == 0 {
+			return "\x1b[0;" + text + "m"
+		}
+		var out []string
+		for i := 0; i < len(params); i++ {
+			switch p := params[i]; {
+			case (p == "38" || p == "48") && i+4 < len(params) && params[i+1] == "2":
+				var r, g, b uint8
+				fmt.Sscan(params[i+2], &r)
+				fmt.Sscan(params[i+3], &g)
+				fmt.Sscan(params[i+4], &b)
+				out = append(out, p+";"+toward(color.RGBA{r, g, b, 0xff}))
+				i += 4
+			case (p == "38" || p == "48") && i+2 < len(params) && params[i+1] == "5":
+				if p == "38" {
+					out = append(out, text)
+				}
+				i += 2
+			case p == "0" || p == "39":
+				out = append(out, p, text)
+			default:
+				out = append(out, p)
+			}
+		}
+		return "\x1b[" + strings.Join(out, ";") + "m"
+	})
+	return "\x1b[" + text + "m" + faded + "\x1b[m"
+}
+
+// bottomLines are the rows below the conversation, w cells wide: the line of
+// the status, the line above the composer, what is asked or offered, the
+// composer, and the line of what happened and the keys.
+func (m *Model) bottomLines(w int) []string {
+	divider := lineStyle().Render(strings.Repeat("─", w))
+	lines := []string{m.statusLine(w), divider}
+	if panel := m.panelLines(); len(panel) > 0 {
+		lines = append(lines, panel...)
+		lines = append(lines, divider)
+	}
+	lines = append(lines, m.composerLines(w)...)
+	hint := m.footerHint()
+	if m.inDialog() {
+		hint = "" // a dialog says its keys below itself
+	}
+	lines = append(lines, spread(m.chatTitle(), hint, w))
+	if m.pendingRows() > 0 {
+		lines = append(lines, m.suggestionRequests.pendingView(m, w))
+	}
+	return lines
+}
+
+// statusLine says on the right where the conversation stands, as the GUI
+// says it above its composer, and on the left a picture moves while an
+// answer is on its way.
+func (m *Model) statusLine(w int) string {
+	c := m.chat
+	text := "Peer session · read only"
+	if c.peer == "" {
+		kind, state := "Session", "Ready"
+		if c.contextID == plugin.ThreadID {
+			kind = "Thread"
+		}
+		if label := m.waiting(); label != "" {
+			state = label
+		}
+		if a := c.asking; a != nil && !a.sent {
+			state = "Needs your answer"
+		}
+		text = kind + " · " + state
+		if c.contextID == plugin.ThreadID {
+			n := m.activeSessions()
+			text += fmt.Sprintf(" · %d active sessions", n)
+			if n == 1 {
+				text = strings.TrimSuffix(text, "s")
+			}
+		}
+	}
+	label := mutedStyle.Render(ansi.Truncate(strings.ToUpper(text), w, "…"))
+	room := w - lipgloss.Width(label) - 2
+	if m.waiting() == "" || room <= 0 {
+		return pad(strings.Repeat(" ", max(0, w-lipgloss.Width(label)))+label, w)
+	}
+	art := arts[c.art%len(arts)].row(room, m.ticks)
+	return lipgloss.NewStyle().Foreground(faded(muted, 0.4)).Render(string(art)) + "  " + label
+}
+
+// activeSessions is how many sessions work besides the thread.
+func (m *Model) activeSessions() int {
+	n := 0
+	for _, c := range m.chats {
+		if c.contextID != plugin.ThreadID && c.running {
+			n++
+		}
+	}
+	return n
+}
+
+// composerLines is the composer, w cells wide: the prompt, the field and on
+// its last row the buttons that stop and send.
+func (m *Model) composerLines(w int) []string {
+	inner := m.composerInner()
+	field := strings.Split(m.chat.showLabels(m.input.View()), "\n")
+	stop := strings.Repeat(" ", stopWidth)
+	if m.chat.pending && m.chat.peer == "" {
+		stop = lipgloss.NewStyle().Foreground(bad).Background(ui.errBackground).Render(" Stop ")
+	}
+	send := lipgloss.NewStyle().Foreground(muted).Background(ui.field).Render(" ↑ ")
+	if m.canSend() {
+		send = boldStyle.Foreground(accent).Background(ui.hover).Render(" ↑ ")
+	}
+	lines := make([]string, len(field))
+	for i, f := range field {
+		prompt := "  "
+		if i == 0 {
+			prompt = mutedStyle.Render("› ")
+		}
+		buttons := strings.Repeat(" ", buttonsWidth)
+		if i == len(field)-1 {
+			buttons = " " + stop + " " + send
+		}
+		lines[i] = pad(prompt+pad(f, inner)+buttons, w)
+	}
+	return lines
+}
+
+// canSend reports whether what is written can be sent.
+func (m *Model) canSend() bool {
+	return m.status.Configured && m.chat.peer == "" && strings.TrimSpace(m.input.Value()) != ""
+}
+
+// panelLines is what lies above the composer: the question of the agent
+// with its answers, as the GUI asks for a decision, or the commands that fit
+// what is typed. None without either.
+func (m *Model) panelLines() []string {
+	lines, _ := m.panel()
+	return lines
+}
+
+// panel is what lies above the composer, as panelLines says, and where a
+// click on it does something: on a command, it runs it.
+func (m *Model) panel() ([]string, []hit) {
+	w := m.transcriptWidth()
+	var lines []string
+	var hits []hit
+	if a := m.chat.asking; a != nil {
+		lines, hits = m.questionLines(a, w)
+	}
+	if found, _ := m.suggestions(); len(found) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		suggested, top := m.suggestionLines()
+		for i, line := range suggested {
+			hits = append(hits, onLine(len(lines), func() tea.Cmd {
+				m.suggest = top + i
+				cmd, _ := m.handleSuggestionKey(enterKey)
+				return cmd
+			}))
+			lines = append(lines, pad(strings.TrimPrefix(line, "  "), w))
+		}
+	}
+	return lines, hits
+}
+
+// sidebarSessions are the sessions the sidebar lists: beside the thread
+// those of the part of it in view, with the time it began, else all of the
+// owner's.
+func (m *Model) sidebarSessions() (list []*conversation, at time.Time, thread bool) {
+	c := m.chat
+	if c.contextID == plugin.ThreadID {
+		ex := m.sectionShown()
+		if ex >= 0 && ex < len(c.entries) {
+			at = c.entries[ex].at
+		}
+		handles := c.handed[ex]
+		if len(handles) == 0 {
+			return nil, at, true
+		}
+		for _, s := range m.chats {
+			if s.contextID != plugin.ThreadID && s.peer == "" && handedTo(s.contextID, handles) {
+				list = append(list, s)
+			}
+		}
+	} else {
+		for _, s := range m.chats {
+			if s.contextID != plugin.ThreadID && s.peer == "" && (s.title != "" || len(s.entries) > 0 || s == c) {
+				list = append(list, s)
+			}
+		}
+	}
+	slices.SortFunc(list, func(a, b *conversation) int {
+		if a.running != b.running {
+			if a.running {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Or(b.last.Compare(a.last), strings.Compare(a.contextID, b.contextID))
+	})
+	return list, at, c.contextID == plugin.ThreadID
+}
+
+// handedTo reports whether the session id is one of those a part of the
+// thread names: by its ID, or by the handle the thread knows it by.
+func handedTo(id string, handles []string) bool {
+	tail := id[strings.Index(id, "/")+1:]
+	for _, h := range handles {
+		if h != "" && (strings.HasPrefix(id, h) || strings.HasPrefix(tail, h)) {
+			return true
+		}
+	}
+	return false
+}
+
+// sideRow is a row of the sidebar, and the session it shows, if it does.
+type sideRow struct {
+	text string
+	c    *conversation
+}
+
+// sidebarRows are the rows of the list of the sidebar, inner cells wide.
+func (m *Model) sidebarRows(inner int) []sideRow {
+	rows := []sideRow{{text: "SESSIONS"}, {}}
+	list, at, thread := m.sidebarSessions()
+	if thread && !at.IsZero() {
+		rows = append(rows, sideRow{text: mutedStyle.Render("T – " + clock(at, m.now()))}, sideRow{})
+	}
+	var groups []string
+	byGroup := map[string][]*conversation{}
+	for _, c := range list {
+		at := c.last
+		if at.IsZero() && c == m.chat {
+			at = m.now() // the conversation begun here and now
+		}
+		g := dateGroup(at, m.now())
+		if c.running {
+			g = "Active"
+		}
+		if _, ok := byGroup[g]; !ok {
+			groups = append(groups, g)
+		}
+		byGroup[g] = append(byGroup[g], c)
+	}
+	for i, g := range groups {
+		if i > 0 {
+			rows = append(rows, sideRow{})
+		}
+		rows = append(rows, sideRow{text: boldStyle.Foreground(muted).Render(strings.ToUpper(g))}, sideRow{})
+		for _, c := range byGroup[g] {
+			rows = append(rows, m.sessionItem(c, inner)...)
+		}
+	}
+	if len(groups) == 0 {
+		none := "No sessions yet."
+		if thread {
+			none = "None yet"
+		}
+		rows = append(rows, sideRow{text: mutedStyle.Render(none)})
+	}
+	return rows
+}
+
+// sessionItem is a session in the sidebar, as the GUI lists it: its name,
+// where it stands, a bar that runs while it works, and the line below it.
+// The one shown stands out.
+func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
+	selected := c == m.chat
+	// The one shown is on the background of the selection, all of its width.
+	on := func(st lipgloss.Style) lipgloss.Style {
+		if selected {
+			return st.Background(ui.selected)
+		}
+		return st
+	}
+	title := on(lipgloss.NewStyle())
+	if c.running {
+		title = title.Bold(true)
+	}
+	if selected {
+		title = title.Foreground(accent)
+	}
+	state, when := "ready", ""
+	if c.running {
+		state = "working"
+	}
+	if !c.last.IsZero() {
+		when = " · " + c.last.Format("2 Jan 2006, 15:04")
+	}
+	bar := make([]rune, inner)
+	for x := range bar {
+		bar[x] = '▪'
+		if c.running && (x-m.ticks/2)%3 == 0 { // the dashes run while it works
+			bar[x] = ' '
+		}
+	}
+	barStyle := lipgloss.NewStyle().Foreground(faded(muted, 0.45))
+	if c.running {
+		barStyle = lipgloss.NewStyle().Foreground(accent)
+	}
+	border := lineStyle()
+	if selected {
+		border = lipgloss.NewStyle().Foreground(accent)
+	}
+	return []sideRow{
+		{title.Render(pad(strings.ToUpper(cmp.Or(c.title, "new conversation")), inner)), c},
+		{on(mutedStyle).Render(pad("State: "+state+" · own"+when, inner)), c},
+		{on(barStyle).Render(string(bar)), c},
+		{border.Render(strings.Repeat("─", inner)), c},
+		{},
+	}
+}
+
+// sidebarLayout is where the rows of the sidebar go in a column h rows high:
+// the rows that fit, from the first of them shown, and the row of the screen
+// they begin at. As in the GUI, the list sits between the top and the button
+// of the settings at the bottom, and it scrolls to the session shown.
+func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
+	rows = m.sidebarRows(inner)
+	most := max(4, h*48/100+2)
+	if len(rows) > most {
+		at := slices.IndexFunc(rows, func(r sideRow) bool { return r.c == m.chat })
+		first := 2 // the heading stays
+		if at > first+most-6 {
+			first = min(at-2, len(rows)-(most-2))
+		}
+		rows = append(rows[:2:2], rows[first:first+most-2]...)
+	}
+	free := max(0, h-3-len(rows)) // the margins and the button below
+	return rows, 1 + free/2
+}
+
+// sidebarView is the sidebar, w cells wide and h rows high.
+func (m *Model) sidebarView(w, h int) string {
+	inner := max(1, w-2*columnPad)
+	rows, top := m.sidebarLayout(inner, h)
+	margin := strings.Repeat(" ", columnPad)
+	lines := make([]string, h)
+	for i := range lines {
+		lines[i] = strings.Repeat(" ", w)
+	}
+	for i, r := range rows {
+		if y := top + i; y < h-2 {
+			lines[y] = pad(margin+r.text, w)
+		}
+	}
+	if h >= 2 {
+		lines[h-2] = pad(margin+mutedStyle.Render(gear), w)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// gear is the button of the settings at the bottom of the sidebar, as the
+// GUI has it: drawn as text, not as a picture twice as wide.
+const gear = "⚙\ufe0e"
+
+// sidebarAt is the session the sidebar shows at the row y of the screen,
+// nil for none.
+func (m *Model) sidebarAt(y int) *conversation {
+	w := m.sideWidth()
+	if w == 0 {
+		return nil
+	}
+	rows, top := m.sidebarLayout(max(1, w-2*columnPad), m.height)
+	if i := y - top; i >= 0 && i < len(rows) && y < m.height-2 {
+		return rows[i].c
+	}
+	return nil
+}
+
+// dateGroup is the group of the sidebar a session is in by when it last
+// changed.
+func dateGroup(t, now time.Time) string {
+	if t.IsZero() {
+		return "No date"
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	switch {
+	case !t.Before(today):
+		return "Today"
+	case !t.Before(today.AddDate(0, 0, -1)):
+		return "Yesterday"
+	}
+	return "Older"
+}
+
+// clock is the time t as the GUI writes it above a message: the time of
+// day today, the date with it before.
+func clock(t, now time.Time) string {
+	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
+		return t.Format("15:04")
+	}
+	return t.Format("2 Jan 2006, 15:04")
+}
+
+// railView is the column on the right, w cells wide and h rows high: where
+// the sessions of the part of the thread in view stand, or the session
+// shown, or the jobs once ctrl+j lists them there. As in the GUI, it stands
+// at the bottom of its column.
+func (m *Model) railView(w, h int) string {
+	inner := max(1, w-2*columnPad)
+	content, top := m.railLayout(inner, h)
+	margin := strings.Repeat(" ", columnPad)
+	lines := make([]string, h)
+	for i := range lines {
+		lines[i] = strings.Repeat(" ", w)
+	}
+	for i, l := range content {
+		if y := top + i; y < h {
+			lines[y] = pad(margin+ansi.Truncate(l, inner, "…"), w)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// railHead is how many lines of the column on the right are above its
+// details: what it is, its title, the note and the line below them.
+const railHead = 5
+
+// railLayout is what the column on the right shows, in a column h rows
+// high, and the row it begins at: the details cut where they would take
+// more than its room.
+func (m *Model) railLayout(inner, h int) (content []string, top int) {
+	title, note, details := m.railContent(inner)
+	most := max(1, h*58/100)
+	if len(details) > most {
+		details = append(details[:most-1], mutedStyle.Render("…"))
+	}
+	content = []string{boldStyle.Foreground(muted).Render("CONTEXT"), "", title, mutedStyle.Render(note)}
+	if len(details) > 0 {
+		content = append(content, lineStyle().Render(strings.Repeat("─", inner)))
+		content = append(content, details...)
+	}
+	return content, max(0, h-2-len(content))
+}
+
+// railAt is the session the column on the right shows at the row y of the
+// screen beside the thread, nil for none: a click on it shows it, as one
+// on it in the sidebar does.
+func (m *Model) railAt(y int) *conversation {
+	w := m.railWidth()
+	if w == 0 || m.jobsShown || m.chat.contextID != plugin.ThreadID {
+		return nil
+	}
+	content, top := m.railLayout(max(1, w-2*columnPad), m.height)
+	_, owners := m.railArtefacts(max(1, w-2*columnPad))
+	if i := y - top - railHead; i >= 0 && i < len(owners) && y-top < len(content) {
+		return owners[i]
+	}
+	return nil
+}
+
+// railArtefacts are the lines of the sessions of the part of the thread in
+// view, and the session of each, nil for a line between them.
+func (m *Model) railArtefacts(inner int) (details []string, owners []*conversation) {
+	list, _, _ := m.sidebarSessions()
+	for i, s := range list {
+		if i > 0 {
+			details, owners = append(details, ""), append(owners, nil)
+		}
+		for _, l := range m.artefact(s, inner) {
+			details, owners = append(details, l), append(owners, s)
+		}
+	}
+	return details, owners
+}
+
+// railContent is what the column on the right shows: its title, the note
+// below it and the lines of its details, inner cells wide.
+func (m *Model) railContent(inner int) (title, note string, details []string) {
+	if m.jobsShown {
+		return "[JOBS]", "In the background", m.jobLines(inner)
+	}
+	c := m.chat
+	if c.contextID != plugin.ThreadID {
+		if len(c.entries) == 0 {
+			return "[STATE]", "None yet", nil
+		}
+		return "[STATE]", "T – " + clock(c.last, m.now()), m.artefact(c, inner)
+	}
+	_, at, _ := m.sidebarSessions()
+	if details, _ = m.railArtefacts(inner); len(details) == 0 {
+		return "[STATE]", "None yet", nil
+	}
+	return "[STATE]", "T – " + clock(at, m.now()), details
+}
+
+// jobLines lists the jobs of the session shown, the tasks it delegated and
+// the services that run past the answers, inner cells wide.
+func (m *Model) jobLines(inner int) []string {
+	heading := func(s string) string { return boldStyle.Render(strings.ToUpper(s)) }
+	wrap := func(text string) []string {
+		wrapped := strings.Split(lipgloss.Wrap(text, max(1, inner-2), ""), "\n")
+		for i := 1; i < len(wrapped); i++ {
+			wrapped[i] = "  " + wrapped[i]
+		}
+		return wrapped
+	}
+	lines := []string{heading("Jobs")}
+	if len(m.chat.jobs) == 0 {
+		lines = append(lines, mutedStyle.Render("No command runs in the background."))
+	}
+	for _, job := range m.chat.jobs {
+		lines = append(lines, wrap(job)...)
+	}
+	if len(m.chat.tasks) > 0 {
+		lines = append(lines, "", heading("Tasks"))
+	}
+	for _, task := range m.chat.tasks {
+		lines = append(lines, wrap(task)...)
+	}
+	if len(m.services) > 0 {
+		lines = append(lines, "", heading("Services"))
+	}
+	for _, sv := range m.services {
+		text := sv.Name
+		if sv.PeerKey != "" {
+			text += " · " + sv.Peer
+		}
+		if sv.Port > 0 {
+			text += fmt.Sprintf(" · :%d", sv.Port)
+		}
+		lines = append(lines, wrap(text)...)
+		for _, l := range wrap(sv.Command) {
+			lines = append(lines, mutedStyle.Render("  "+l))
+		}
+	}
+	return lines
+}
+
+// stand is where a session stands, as its events tell: the phase of the
+// loop to its answer, the call it is in, the one it did last, and what comes
+// next. See sessionPhase in the app.js of the GUI.
+type stand struct {
+	phase, word, what, next, question string
+	live, bad                         bool
+	last, pending                     *call
+	calls                             []call
+}
+
+// standOf is where the session c stands.
+func standOf(c *conversation) stand {
+	var s stand
+	for i := range c.entries {
+		for j := range c.entries[i].calls {
+			call := c.entries[i].calls[j]
+			if call.done {
+				s.calls = append(s.calls, call)
+				s.last = &s.calls[len(s.calls)-1]
+			} else {
+				s.pending = &c.entries[i].calls[j]
+			}
+		}
+	}
+	if s.last != nil { // the slice may have grown since
+		s.last = &s.calls[len(s.calls)-1]
+	}
+	working := c.pending || c.running
+	if !working {
+		s.pending = nil
+	}
+	switch {
+	case c.asking != nil && !c.asking.sent:
+		s.phase, s.question = "asked", c.asking.question
+	case working && s.pending != nil:
+		s.phase = "tool"
+	case working && c.partial != "":
+		s.phase = "answering"
+	case working:
+		s.phase = "thinking"
+	case len(c.entries) == 0:
+		s.phase = "empty"
+	default:
+		last := c.entries[len(c.entries)-1]
+		s.phase = "done"
+		if last.failed {
+			s.phase = "failed"
+			if last.text == "stopped before it answered" {
+				s.phase = "canceled"
+			}
+		}
+	}
+	s.live = working || s.phase == "asked"
+	s.bad = s.phase == "failed"
+	s.word = map[string]string{"asked": "asks you", "tool": "calls", "thinking": "thinks", "answering": "writes the answer",
+		"done": "done", "failed": "failed", "canceled": "canceled", "empty": "nothing yet"}[s.phase]
+	s.next = "nothing"
+	switch s.phase {
+	case "asked":
+		s.next = "your answer"
+	case "tool":
+		tool := cmp.Or(s.pending.tool, "tool")
+		s.next = "the result of " + tool
+		s.what = strings.TrimPrefix(s.pending.text, tool+" · ")
+		if s.what == tool {
+			s.what = ""
+		}
+	case "answering":
+		s.next = "the end of the answer"
+	case "thinking":
+		s.next = "a tool or the answer"
+	}
+	return s
+}
+
+// The lanes of the chart of the tools of a session: at most so many, one
+// per tool, the most used strongest.
+var laneShades = []float64{1, 0.74, 0.55, 0.4, 0.28, 0.18}
+
+// artefact is a session as the column on the right shows it, inner cells
+// wide: its name, where it stands, what it did last and what it does next,
+// and the chart of its tools under it.
+func (m *Model) artefact(c *conversation, inner int) []string {
+	s := standOf(c)
+	name := strings.ToUpper(cmp.Or(c.title, c.contextID))
+	if s.live {
+		name += " · WORKING"
+	}
+	lines := []string{boldStyle.Render(ansi.Truncate(name, inner, "…"))}
+	dot := lipgloss.NewStyle().Foreground(ui.lineStrong)
+	word := boldStyle
+	switch {
+	case s.bad:
+		dot, word = errStyle, boldStyle.Foreground(bad)
+	case s.live:
+		dot = lipgloss.NewStyle().Foreground(accent)
+		if m.ticks/8%2 == 1 { // it beats while the session works
+			dot = lipgloss.NewStyle().Foreground(faded(accent, 0.3))
+		}
+	}
+	state := dot.Render("●") + " " + word.Render(s.word)
+	if s.what != "" {
+		state += " " + mutedStyle.Render(s.what)
+	}
+	lines = append(lines, spread(state, mutedStyle.Render(clock(c.last, m.now())), inner))
+	fact := func(key, value, at string, bad bool) string {
+		v := lipgloss.NewStyle()
+		if bad {
+			v = errStyle
+		}
+		return spread(mutedStyle.Render(fmt.Sprintf("%-6s", key))+v.Render(value), mutedStyle.Render(at), inner)
+	}
+	if s.question != "" {
+		lines = append(lines, fact("question", " "+short(s.question, inner), "", false))
+	}
+	if s.last != nil {
+		lines = append(lines, fact("last", s.last.text, clock(s.last.at, m.now()), s.last.failed))
+	} else {
+		lines = append(lines, fact("last", "no call yet", "", false))
+	}
+	lines = append(lines, fact("next", s.next, "", false))
+	if len(c.jobs) > 0 {
+		job := c.jobs[0]
+		if len(c.jobs) > 1 {
+			job += " …"
+		}
+		lines = append(lines, fact("running", " "+job, "", false))
+	}
+	return append(lines, m.toolChart(s, inner)...)
+}
+
+// toolChart draws the tools of a session as one picture instead of their
+// calls one by one: a lane per tool, its calls where their time puts them,
+// so that its mix and its rhythm read under the state. A call on its way
+// blinks, and a dashed line marks where now is.
+func (m *Model) toolChart(s stand, inner int) []string {
+	all := s.calls
+	if s.pending != nil {
+		all = append(slices.Clone(all), *s.pending)
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	name := func(c call) string { return cmp.Or(c.tool, strings.Split(c.text, " · ")[0], "tool") }
+	tally := map[string]int{}
+	var tools []string
+	for _, c := range all {
+		if tally[name(c)] == 0 {
+			tools = append(tools, name(c))
+		}
+		tally[name(c)]++
+	}
+	slices.SortStableFunc(tools, func(a, b string) int { return tally[b] - tally[a] })
+	lanes := tools[:min(len(tools), len(laneShades))]
+	const labels, counts = 9, 3
+	plot := inner - labels - counts
+	if plot < 4 {
+		return nil
+	}
+	var first, last time.Time
+	for _, c := range all {
+		if c.at.IsZero() {
+			continue
+		}
+		if first.IsZero() || c.at.Before(first) {
+			first = c.at
+		}
+		if c.at.After(last) {
+			last = c.at
+		}
+	}
+	if s.live && m.now().After(last) {
+		last = m.now()
+	}
+	span := last.Sub(first)
+	at := func(c call, i int) int {
+		offset := float64(i) / float64(max(1, len(all)))
+		if span > 0 && !c.at.IsZero() {
+			offset = float64(c.at.Sub(first)) / float64(span)
+		}
+		return min(plot-1, max(0, int(offset*float64(plot-1)+0.5)))
+	}
+	var lines []string
+	for lane, tool := range lanes {
+		shade := laneShades[lane]
+		row := make([]string, plot)
+		base := lipgloss.NewStyle().Foreground(faded(accent, 0.22*shade+0.12)).Render("─")
+		for x := range row {
+			row[x] = base
+		}
+		if s.live {
+			row[plot-1] = lipgloss.NewStyle().Foreground(faded(accent, 0.5)).Render("┊")
+		}
+		tick := lipgloss.NewStyle().Foreground(faded(accent, shade)).Render("┃")
+		for i, c := range all {
+			if name(c) != tool {
+				continue
+			}
+			pending := s.pending != nil && i == len(all)-1
+			if pending && s.live && m.ticks/6%2 == 1 {
+				continue // it blinks while it is on its way
+			}
+			row[at(c, i)] = tick
+		}
+		label := ansi.Truncate(tool, labels-1, "…")
+		lines = append(lines, lipgloss.NewStyle().Foreground(accent).Render(pad(label, labels))+strings.Join(row, "")+
+			lipgloss.NewStyle().Foreground(accent).Render(fmt.Sprintf("%*d", counts, tally[tool])))
+	}
+	summary := fmt.Sprintf("%d tools · %d kinds", len(all), len(tools))
+	if len(all) == 1 {
+		summary = strings.Replace(summary, "tools", "tool", 1)
+	}
+	if len(tools) == 1 {
+		summary = strings.TrimSuffix(summary, "s")
+	}
+	if len(tools) > len(lanes) {
+		summary += fmt.Sprintf(" · %d lanes", len(lanes))
+	}
+	return append(lines, mutedStyle.Render(summary))
+}

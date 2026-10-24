@@ -113,6 +113,11 @@ func (d Dir) Models() string { return d.Root().path("models.json") }
 // efforts they take, see modelsdev.
 func (d Dir) Catalog() string { return d.Root().path("catalog.json") }
 
+// Appearance is the file the terminal UI keeps whether it is light, dark,
+// or follows the terminal in: one for all profiles, as the GUI keeps its
+// own for all of them.
+func (d Dir) Appearance() string { return d.Root().path("appearance") }
+
 // SaveConfig writes the configuration. The identity of the node is not given
 // up by it: a configuration without a key, read before the key was generated,
 // keeps the one that was persisted since.

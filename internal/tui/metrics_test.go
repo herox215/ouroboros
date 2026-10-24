@@ -51,7 +51,7 @@ func TestHeaderOmitsTPS(t *testing.T) {
 	}
 	b.cache = plugin.SessionCache{Metrics: assistant.CallMetrics{Calls: 1, Output: 327, TPS: 104.52}}
 	answered(t, m, say(t, m, "hi"))
-	if head := ansi.Strip(m.headerView()); strings.Contains(head, "TPS") || !strings.HasSuffix(head, "  flash · effort high") {
+	if head := ansi.Strip(m.headerView()); strings.Contains(head, "TPS") || !strings.HasSuffix(head, " · flash · effort high") {
 		t.Fatalf("after a call: %s", head)
 	}
 	drive(t, m, run(m, "/new"), func() bool { return true })
@@ -69,7 +69,7 @@ func TestHeaderShowsTheEffortTaken(t *testing.T) {
 	m.Update(m.refreshStatus())
 	b.cache = plugin.SessionCache{Metrics: assistant.CallMetrics{Calls: 1, Effort: "max", Took: "high", Fell: true}}
 	answered(t, m, say(t, m, "hi"))
-	if head := ansi.Strip(m.headerView()); !strings.HasSuffix(head, "  flash · effort max → high") {
+	if head := ansi.Strip(m.headerView()); !strings.HasSuffix(head, " · flash · effort max → high") {
 		t.Fatalf("taken as less: %s", head)
 	}
 	m.chat.cache.Metrics.Took = ""

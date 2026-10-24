@@ -30,7 +30,7 @@ func TestRenderMessage(t *testing.T) {
 	if got := stripped(lines); !slices.Equal(got, want) {
 		t.Fatalf("%q, want %q", got, want)
 	}
-	badge := lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(accent).Bold(true).Padding(0, 1).Render("user")
+	badge := lipgloss.NewStyle().Foreground(ui.background).Background(accent).Bold(true).Padding(0, 1).Render("user")
 	if !strings.HasPrefix(lines[0], badge) || !strings.HasPrefix(lines[1], lipgloss.NewStyle().Foreground(accent).Render(bar)) {
 		t.Fatalf("the badge and the bar should have the color of the role: %q", lines[:2])
 	}
@@ -46,8 +46,8 @@ func TestRenderMessage(t *testing.T) {
 // its own, and one that is not known is muted.
 func TestRoleColor(t *testing.T) {
 	for role, want := range map[string]color.Color{
-		"user": accent, "assistant": peer, "system": lipgloss.Color("7"), "tool": good,
-		"tool read": lipgloss.Color("4"), "plugin diagnostic": bad, "developer": muted,
+		"user": accent, "assistant": ui.text, "system": ui.lineStrong, "tool": muted,
+		"tool read": warn, "plugin diagnostic": bad, "developer": muted,
 	} {
 		if got := roleColor(role); got != want {
 			t.Errorf("%s: %v, want %v", role, got, want)

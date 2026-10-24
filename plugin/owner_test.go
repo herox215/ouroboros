@@ -623,6 +623,29 @@ func TestOwnerSetsDebug(t *testing.T) {
 	}
 }
 
+// The owner keeps how the terminal UI looks, for all profiles: system until
+// another is chosen, and only one of the appearances.
+func TestOwnerKeepsTheAppearance(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.Env(t, s)
+	o := owner(t, s)
+	if got := o.Appearance(); got != "system" {
+		t.Fatalf("before a choice: %q", got)
+	}
+	if err := o.SetAppearance("light"); err != nil || o.Appearance() != "light" {
+		t.Fatalf("light: %v, %q", err, o.Appearance())
+	}
+	if err := o.SetAppearance("pink"); err == nil || o.Appearance() != "light" {
+		t.Fatalf("pink: %v, %q", err, o.Appearance())
+	}
+	if err := os.WriteFile(home.Dir(s.Home).Appearance(), []byte("pink\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.Appearance(); got != "system" {
+		t.Fatalf("a file of another: %q", got)
+	}
+}
+
 // A provider that is no part of ouro tells the debug log of the node what
 // its calls send and get, with what the package hands out and nothing else.
 func TestProviderTrace(t *testing.T) {

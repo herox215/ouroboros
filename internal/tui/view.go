@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
-	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -19,59 +18,58 @@ import (
 	"ouroboros/plugin"
 )
 
-const inputHeight = 3 // text rows of the message input
-
-// The 16 ANSI colors follow the terminal theme, so they work on light and dark backgrounds.
+// The colors of the UI are those of the guiPalette of the GUI, see guiPalette.go:
+// these are what is drawn with, set by applyPalette.
 var (
-	accent = lipgloss.Color("6")
-	peer   = lipgloss.Color("5")
-	muted  = lipgloss.Color("8")
-	good   = lipgloss.Color("2")
-	bad    = lipgloss.Color("1")
-	warn   = lipgloss.Color("3")
+	accent color.Color
+	peer   color.Color
+	muted  color.Color
+	good   color.Color
+	bad    color.Color
+	warn   color.Color
 
-	mutedStyle = lipgloss.NewStyle().Foreground(muted)
-	imageStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("4")) // the label of a picture, like [Image_1]
-	errStyle   = lipgloss.NewStyle().Foreground(bad)
+	mutedStyle lipgloss.Style
+	imageStyle lipgloss.Style // the label of a picture, like [Image_1]
+	errStyle   lipgloss.Style
 	boldStyle  = lipgloss.NewStyle().Bold(true)
 )
 
-// borderMuted is the color of a box that does not have focus. It is a subtle
-// gray that follows the terminal background, so the frame recedes behind the
-// content instead of standing out.
-func borderMuted(light bool) color.Color {
-	if light {
-		return lipgloss.Color("252")
-	}
-	return lipgloss.Color("237")
-}
+// borderMuted is the color of a box that does not have focus: the color of
+// the lines of the GUI.
+func borderMuted(bool) color.Color { return ui.line }
 
-func box(focused, light bool) lipgloss.Style {
-	color := borderMuted(light)
+// box is a frame as the dialogs of the GUI have it: rounded, in the color of
+// its lines, a stronger one for what has the focus.
+func box(focused, _ bool) lipgloss.Style {
+	color := ui.line
 	if focused {
-		color = accent
+		color = ui.lineStrong
 	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).Padding(0, 1)
 }
 
-// inputStyles is the style of the message input. The cursor line has no
-// background, so the line the cursor is on does not look like a black bar.
+// inputStyles is the style of the composer: no background on the line the
+// cursor is on, the cursor in the accent, and what it shows when empty in
+// the muted color.
 func inputStyles(light bool) textarea.Styles {
 	s := textarea.DefaultStyles(!light)
-	s.Cursor.Color = lipgloss.Color("250")
-	if light {
-		s.Cursor.Color = lipgloss.Color("242")
+	s.Cursor.Color = accent
+	for _, st := range []*textarea.StyleState{&s.Focused, &s.Blurred} {
+		st.CursorLine = lipgloss.NewStyle()
+		st.Base = lipgloss.NewStyle()
+		st.Text = lipgloss.NewStyle().Foreground(ui.text)
+		st.Placeholder = lipgloss.NewStyle().Foreground(muted)
+		st.EndOfBuffer = lipgloss.NewStyle().Foreground(ui.background)
 	}
-	s.Focused.CursorLine = lipgloss.NewStyle()
-	s.Blurred.CursorLine = lipgloss.NewStyle()
 	return s
 }
 
-// bodyHeight is the height between the header and the footer, and the line
-// below the footer if something is pending.
+// bodyHeight is the height between the header and the footer of a screen
+// that takes the whole window, and the line below the footer if something
+// is pending.
 func (m *Model) bodyHeight() int { return max(0, m.height-2-m.pendingRows()) }
 
-// pendingRows is how many rows the line below the footer takes: one while
+// pendingRows is how many rows the line below the composer takes: one while
 // something waits for a decision, except on the screen that lists it.
 func (m *Model) pendingRows() int {
 	if m.suggestionRequests.trust.waiting() == 0 || m.screen == screenSuggestions {
@@ -80,10 +78,10 @@ func (m *Model) pendingRows() int {
 	return 1
 }
 
-// pendingView is the line below the footer: how much waits for a decision,
-// where to decide, and what it is. The command comes before what waits, so
-// that a narrow window cuts off the latter.
-func (r *requestsScreen) pendingView(m *Model) string {
+// pendingView is the line below the composer, w cells wide: how much waits
+// for a decision, where to decide, and what it is. The command comes before
+// what waits, so that a narrow window cuts off the latter.
+func (r *requestsScreen) pendingView(m *Model, w int) string {
 	n := len(r.trust.Suggestions)
 	what := "a review suggests a change of ouro"
 	if n > 1 {
@@ -92,53 +90,25 @@ func (r *requestsScreen) pendingView(m *Model) string {
 	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d suggestions", n)) +
 		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/suggestions") +
 		mutedStyle.Render(" to decide · "+what)
-	return ansi.Truncate(" "+line, m.width, "…")
+	return ansi.Truncate(line, w, "…")
 }
 
-// chatHeight is the height of the conversation box above the input box;
-// what the box of the input does not take of its room, the chat does.
-func (m *Model) chatHeight() int { return max(4, m.bodyHeight()-m.inputRows()) }
-
-// inputBoxRows is how high the box of the input is: its rows and border.
-const inputBoxRows = inputHeight + 2
-
-// inputRows is how many rows of the body the box of the input takes: all of
-// them once it is in, none while it is out, and on its way in or out the
-// ones it has come up so far, slowing down as it arrives.
-func (m *Model) inputRows() int {
-	t := float64(m.inputLevel) / inputFrames
-	return int(math.Round((1 - math.Pow(1-t, 3)) * inputBoxRows))
-}
-
-// inputVisible reports whether the box of the input is drawn under the
-// chat: from a key on the chat until it is empty and idle, and whenever it
-// holds text or a question of the agent waits in it.
-func (m *Model) inputVisible() bool {
-	if a := m.chat.asking; a != nil && !a.sent {
-		return true
-	}
-	return m.inputShown || m.input.Value() != ""
-}
-
-// layout sizes the widgets after the window changed. The box of the input,
-// unless it is on its way, is where inputVisible says at once.
+// layout sizes the widgets after the window, or what is below the
+// conversation, changed.
 func (m *Model) layout() {
-	if !m.inputFading {
-		m.inputLevel = 0
-		if m.inputVisible() {
-			m.inputLevel = inputFrames
-		}
-	}
 	atBottom := m.history.AtBottom()
 	// A history on its way to its end goes on to where its end is now: the
-	// box of the input moves it, as it comes and goes, while an answer and
-	// what follows it come in.
+	// composer moves it, as it grows and shrinks, while an answer and what
+	// follows it come in.
 	toEnd := m.glide != nil && m.glide.view == &m.history && m.glide.target == topLine(&m.history)
-	m.selected, m.pressed = nil, nil // its lines are wrapped anew
-	inner := max(1, m.chatWidth()-4) // border and padding
-	m.input.SetWidth(inner)
-	m.history.SetWidth(inner)
-	m.history.SetHeight(max(1, m.chatHeight()-3)) // border and typing line
+	width := m.transcriptWidth()
+	if m.history.Width() != width {
+		m.selected, m.pressed = nil, nil // its lines are wrapped anew
+	}
+	m.input.SetWidth(m.composerInner())
+	m.input.SetHeight(m.composerRows())
+	m.history.SetWidth(width)
+	m.history.SetHeight(m.chatHeight())
 	m.renderHistory(atBottom && !toEnd)
 	if toEnd {
 		m.glideTo(&m.history, topLine(&m.history)) // on its way already: no frame to ask for
@@ -147,10 +117,13 @@ func (m *Model) layout() {
 }
 
 // renderHistory fills the history viewport with the conversation, the loop of
-// every answer included.
+// every answer included. Each message is headed as the GUI heads it, who
+// wrote it and when, its text below the head, and a blank line between two
+// of them.
 func (m *Model) renderHistory(toBottom bool) {
 	c := m.chat
 	first := m.threadStart(c)
+	m.blockStarts = nil
 	if first == len(c.entries) && !c.pending && len(c.queued) == 0 {
 		c.shown = rendered{first: first}
 		if m.resuming == c {
@@ -167,15 +140,16 @@ func (m *Model) renderHistory(toBottom bool) {
 		return
 	}
 	width := m.history.Width()
-	body := lipgloss.NewStyle().Width(width).PaddingLeft(2)
+	body := lipgloss.NewStyle().Width(width)
 	// What the agent says is markdown, and shown formatted. Every block is
 	// wrapped here and not by the viewport, which would measure all of the
 	// history on every step of scrolling.
-	render := func(s string) string {
-		return "  " + strings.ReplaceAll(renderMarkdown(s, width-2), "\n", "\n  ")
-	}
+	render := func(s string) string { return renderMarkdown(s, width) }
 	wrap := func(s string) string { return lipgloss.Wrap(s, width, "") }
 	summaries := c.summaries()
+	// owners are the entries the blocks are of, a block each: which part of
+	// the thread a line is in, see sectionShown.
+	var owners []int
 	// one adds what the chat shows of the entry i to blocks and says whether
 	// the last block there is the words of a round of an answer that is in,
 	// below which the line of its calls goes.
@@ -187,41 +161,47 @@ func (m *Model) renderHistory(toBottom bool) {
 		if e.reveal != nil {
 			e.text = string(e.reveal.runes[:e.reveal.shown])
 		}
-		// The report of a task is a line of its own: what the agent makes
-		// of it is its answer.
+		add := func(block string) { blocks, owners = append(blocks, block), append(owners, i) }
+		// The report of a task is a line of its own, as the GUI writes what
+		// the agent handed to a session: what the agent makes of it is its
+		// answer.
 		if e.task {
-			line := mutedStyle.Render("◆ " + e.text)
+			line := mutedStyle.Render("↳ " + strings.ToUpper(e.text))
 			if e.failed {
-				line = lipgloss.NewStyle().Foreground(bad).Render("◆ " + e.text)
+				line = errStyle.Render("↳ " + strings.ToUpper(e.text))
 			}
-			return append(blocks, wrap("  "+line)), false
+			add(wrap(line))
+			return blocks, false
 		}
 		// What the review of an answer proposes is a faint line below it:
 		// a thought of the agent, not part of the conversation, which waits
 		// in /suggestions to be taken or dropped.
 		if e.suggestion {
-			lines := strings.Split(lipgloss.Wrap(e.text, max(20, width-4), ""), "\n")
-			return append(blocks, mutedStyle.Render("  ✦ "+strings.Join(lines, "\n    ")+" · /suggestions")), false
+			lines := strings.Split(lipgloss.Wrap(e.text, max(20, width-2), ""), "\n")
+			add(mutedStyle.Render("✦ " + strings.Join(lines, "\n  ") + " · /suggestions"))
+			return blocks, false
 		}
 		if !m.thoughtsHidden && e.thought != "" {
-			blocks, words = append(blocks, wrap(thoughtBlock(e.thought, width))), false
+			add(wrap(thoughtBlock(e.thought, width)))
+			words = false
 		}
 		// A round of the loop is its words; the calls of all the rounds of
 		// an answer are one line below its last words, also while the
-		// answer is on its way: what the agent waits for is below the
-		// input meanwhile, and what every call was is on the context
-		// screen (/context).
+		// answer is on its way, drawn as the GUI draws a call: on a line
+		// hung from the left. What every call was is on the context screen
+		// (/context), and the sessions it concerned are beside the chat.
 		if len(e.calls) > 0 {
 			if e.text != "" {
-				blocks, words = append(blocks, wrap(render(e.text))), true
+				add(wrap(m.entryHead(e) + "\n" + render(e.text)))
+				words = true
 			}
 			if used := summaries[i]; used != "" {
 				// The line goes right below the last words of the answer.
-				line := wrap(c.muted("  ↳ " + used))
+				line := wrap(lineStyle().Render("│ ") + c.muted("↳ "+used))
 				if words {
 					blocks[len(blocks)-1] += "\n" + line
 				} else {
-					blocks = append(blocks, line)
+					add(line)
 				}
 				words = false
 			}
@@ -233,36 +213,43 @@ func (m *Model) renderHistory(toBottom bool) {
 		if strings.TrimSpace(e.text) == "" && !e.mine && !e.failed {
 			return blocks, words
 		}
-		head := m.entryHead(e)
-		text := render(e.text)
+		// What the owner wrote stands to the right, as the GUI shows a
+		// message of the owner, apart from what the agent answers.
 		if e.mine {
-			text = body.Render(c.showLabels(c.labelled(e.text)))
+			add(mineBlock(m.entryHead(e), c.showLabels(c.labelled(e.text)), width))
+			return blocks, false
 		}
+		text := render(e.text)
 		if e.failed {
-			text = body.Foreground(bad).Render("✗ " + e.text)
+			text = body.Foreground(bad).Render(e.text)
 		}
-		return append(blocks, wrap(head+"\n"+text)), false
+		add(wrap(m.entryHead(e) + "\n" + text))
+		return blocks, false
 	}
 	// What an answer has written stays as it is: the entries that cannot
 	// change anymore are drawn once and kept, so that an answer on its way
 	// costs only its own words, however long the conversation is.
 	settled, kept := c.settled(), c.shown.n
-	blocks := c.shown.blocks
+	blocks, owners := c.shown.blocks, c.shown.owners
 	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || kept > settled {
-		kept, blocks = 0, nil
+		kept, blocks, owners = 0, nil, nil
 	}
 	words := false // the last block is the words of a round of an answer that is in
 	for i := kept; i < settled; i++ {
 		blocks, words = one(i, blocks, words)
 	}
-	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, blocks: blocks}
+	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, blocks: blocks, owners: owners}
+	blocks, owners = slices.Clone(blocks), slices.Clone(owners)
 	for i := settled; i < len(c.entries); i++ {
 		blocks, words = one(i, blocks, words)
 	}
+	last := len(c.entries) - 1
 	// The answer the model is still writing, as far as the stream has brought
 	// it; the Answer of the end replaces it with the whole of it.
 	if c.pending && c.partial != "" {
-		blocks = append(blocks, wrap(render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
+		head := boldStyle.Foreground(muted).Render(m.agentName() + " · writing …")
+		blocks = append(blocks, wrap(head+"\n"+render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
+		owners = append(owners, last)
 	}
 	// What waits for the answer on its way to take it comes last.
 	for i, text := range c.queued {
@@ -270,14 +257,58 @@ func (m *Model) renderHistory(toBottom bool) {
 		if i == len(c.queued)-1 {
 			state += ", ↑ takes it back"
 		}
-		head := boldStyle.Foreground(accent).Render("you") + mutedStyle.Render(state)
-		blocks = append(blocks, wrap(head+"\n"+body.Faint(true).Render(c.showLabels(c.labelled(text)))))
+		head := boldStyle.Foreground(muted).Render(cmp.Or(c.peer, "You") + state)
+		blocks = append(blocks, mineBlock(head, lipgloss.NewStyle().Faint(true).Render(c.showLabels(c.labelled(text))), width))
+		owners = append(owners, last)
+	}
+	line := 0
+	for k, b := range blocks {
+		m.blockStarts = append(m.blockStarts, blockStart{line, owners[k]})
+		line += strings.Count(b, "\n") + 2
 	}
 	m.history.SetContent(m.behind(strings.Join(blocks, "\n\n")))
 	if toBottom {
 		m.stopGlide(&m.history) // the bottom is where it goes now
 		m.history.GotoBottom()
 	}
+}
+
+// blockStart is where a block of the history begins, and the entry it is
+// of.
+type blockStart struct{ line, entry int }
+
+// sectionShown is the part of the thread in view, by the entry of the
+// message of the owner that opened it, -1 for what came before the first:
+// the part of the line in the middle of the history, or the newest one at
+// its end, as the GUI tells it.
+func (m *Model) sectionShown() int {
+	c := m.chat
+	if len(m.blockStarts) == 0 {
+		return c.exchangeOf(len(c.entries) - 1)
+	}
+	if m.followsEnd() {
+		return c.exchangeOf(m.blockStarts[len(m.blockStarts)-1].entry)
+	}
+	mid := m.history.YOffset() + m.history.Height()/2
+	entry := m.blockStarts[0].entry
+	for _, b := range m.blockStarts {
+		if b.line > mid {
+			break
+		}
+		entry = b.entry
+	}
+	return c.exchangeOf(entry)
+}
+
+// exchangeOf is the message of the owner the entry i answers, by its index:
+// the last one at or before it, -1 for none.
+func (c *conversation) exchangeOf(i int) int {
+	for i = min(i, len(c.entries)-1); i >= 0; i-- {
+		if c.entries[i].mine {
+			return i
+		}
+	}
+	return -1
 }
 
 // rendered are the entries of a conversation as the chat shows them, the
@@ -288,6 +319,7 @@ type rendered struct {
 	width    int      // the width of the chat they are wrapped for
 	thoughts bool     // whether what the model thought was shown then
 	blocks   []string // what the chat shows of them, a block for every entry
+	owners   []int    // the entry each block is of
 }
 
 // settled is how many of the entries of c are shown as they will stay: all of
@@ -446,13 +478,48 @@ func (c *conversation) summary(calls []call) string {
 	return line
 }
 
-// entryHead is the line above the text of a message: who wrote it and when.
-func (m *Model) entryHead(e entry) string {
-	name, color := m.agentName(), peer
-	if e.mine {
-		name, color = cmp.Or(m.chat.peer, "you"), accent
+// bubbleShare is how much of the width of the chat a message of the owner
+// takes at most, in quarters: the rest stays free on its left, so that what
+// the owner wrote stands apart from what the agent answers, as the GUI shows
+// it.
+const bubbleShare = 3 // of 4
+
+// bubbleWidth is how wide the words of a message of the owner are wrapped in
+// a chat width cells wide: most of it, but never all of it, unless the chat
+// is too narrow for that.
+func bubbleWidth(width int) int { return min(width, max(24, width*bubbleShare/4)) }
+
+// mineBlock lays out a message of the owner in a chat width cells wide: what
+// heads it and what it says, wrapped narrower than the chat and laid out to
+// the right, the block as wide as its longest line, so that its right edge
+// is the right edge of the chat. The head goes with the block: what the
+// owner wrote reads as one.
+func mineBlock(head, text string, width int) string {
+	lines := strings.Split(lipgloss.Wrap(head+"\n"+text, bubbleWidth(width), ""), "\n")
+	longest := 0
+	for _, l := range lines {
+		longest = max(longest, lipgloss.Width(l))
 	}
-	return boldStyle.Foreground(color).Render(name) + mutedStyle.Render(" · "+e.at.Format("15:04"))
+	indent := strings.Repeat(" ", max(0, width-longest))
+	for i := range lines {
+		lines[i] = indent + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// entryHead is the line above the text of a message, as the GUI heads it:
+// who wrote it and when, in the muted color.
+func (m *Model) entryHead(e entry) string {
+	name := m.agentName()
+	switch {
+	case e.mine:
+		name = cmp.Or(m.chat.peer, "You")
+	case e.question:
+		name = "Question"
+	case e.failed:
+		name = "Status"
+	}
+	return boldStyle.Foreground(muted).Render(name + " · " + clock(e.at, m.now()))
 }
 
 func (m *Model) View() tea.View {
@@ -461,8 +528,14 @@ func (m *Model) View() tea.View {
 	}
 	v := tea.NewView("")
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeAllMotion // a mouse that rests shows a picture, see hover
 	v.WindowTitle = m.windowTitle()
+	// The terminal takes the colors of the window of the GUI once it said
+	// whether its background is light: asked before, it would answer with
+	// those, and the UI could not follow the terminal again.
+	if m.backgroundKnown {
+		v.BackgroundColor, v.ForegroundColor = ui.background, ui.text
+	}
 	if m.width == 0 {
 		return v
 	}
@@ -476,34 +549,24 @@ func (m *Model) View() tea.View {
 	}
 	var body string
 	switch m.screen {
-	case screenSuggestions:
-		body = m.overlay(m.suggestionRequests.view(m))
-	case screenHelp:
-		body = m.overlay(m.helpView())
-	case screenKeys:
-		body = m.overlay(m.keysView())
-	case screenPlugin:
-		body = m.plugins.view(m)
-	case screenModel:
-		body = m.overlay(m.picker.view(m))
-	case screenContext:
-		body = m.context.view(m)
-	case screenSettings:
-		body = m.overlay(m.config.view(m))
-	case screenSessions:
-		body = m.overlay(m.sessions.view(m))
-	case screenEffort:
-		body = m.overlay(m.effort.view(m))
-	case screenJobs:
-		body = m.overlay(m.jobs.view(m))
+	case screenSuggestions, screenHelp, screenKeys, screenModel, screenSettings, screenSessions, screenEffort, screenJobs:
+		dialog, _ := m.dialogView()
+		body = m.overlay(dialog)
+	case screenPlugin, screenContext:
+		// A screen that takes the whole window keeps a line above and below it.
+		screen := m.context.view(m)
+		if m.screen == screenPlugin {
+			screen = m.plugins.view(m)
+		}
+		parts := []string{m.headerView(), screen, m.footerView()}
+		if m.pendingRows() > 0 {
+			parts = append(parts, " "+m.suggestionRequests.pendingView(m, m.width-1))
+		}
+		body = lipgloss.JoinVertical(lipgloss.Left, parts...)
 	default:
-		body = m.chatView()
+		body = m.withPreview(m.chatScreen())
 	}
-	parts := []string{m.headerView(), body, m.footerView()}
-	if m.pendingRows() > 0 {
-		parts = append(parts, m.suggestionRequests.pendingView(m))
-	}
-	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	v.SetContent(body)
 	return v
 }
 
@@ -520,11 +583,18 @@ func (m *Model) windowTitle() string {
 }
 
 // view lists the changes of ouro the reviews of answers suggested.
-func (r *requestsScreen) view(m *Model) string {
+func (r *requestsScreen) view(m *Model) (string, []hit) {
 	w, h := m.dialogSize()
 	title, bulk := "Suggestions", "a: accept all · suggestions go into one new chat"
 	lines := []string{boldStyle.Render(title), ""}
+	// A click on an entry selects it, and on Accept all selected accepts
+	// them all; a click on accept or reject below the one selected decides.
+	var hits []hit
+	choose := func(i int) func() tea.Cmd {
+		return choosing(i == r.sel, func() { r.selectAt(m, i) }, func() tea.Cmd { return r.decide(m, m.choice == accept) })
+	}
 	if r.trust.waiting() > 0 {
+		hits = append(hits, onLine(len(lines), choose(r.trust.waiting())), onLine(len(lines)+1, choose(r.trust.waiting())))
 		marker := "  "
 		if r.sel == r.trust.waiting() {
 			marker = lipgloss.NewStyle().Foreground(accent).Render("› ")
@@ -552,6 +622,10 @@ func (r *requestsScreen) view(m *Model) string {
 			return nil
 		}
 		selectedEnd = len(lines) + 1
+		hits = append(hits, choiceHits(len(lines), 4, []string{"accept", "reject"}, func(j int) tea.Cmd {
+			m.choice = j
+			return r.decide(m, j == accept)
+		})...)
 		return []string{"    " + choices([]string{"accept", "reject"}, m.choice)}
 	}
 	if len(r.trust.Suggestions) > 0 {
@@ -560,6 +634,7 @@ func (r *requestsScreen) view(m *Model) string {
 	}
 	for i, s := range r.trust.Suggestions {
 		at := i
+		from := len(lines)
 		// The text is what an LLM says; what was measured is what the node says.
 		lines = append(lines, selected(at)+boldStyle.Render("suggestion")+"  "+mutedStyle.Render("· "+s.At.Format("15:04")))
 		for _, l := range strings.Split(lipgloss.Wrap(s.Text, max(1, w-8), ""), "\n") {
@@ -568,15 +643,19 @@ func (r *requestsScreen) view(m *Model) string {
 		if len(s.Signals) > 0 {
 			lines = append(lines, "    "+mutedStyle.Render("measured: "+strings.Join(s.Signals, "; ")))
 		}
+		for l := from; l < len(lines); l++ {
+			hits = append(hits, onLine(l, choose(at)))
+		}
 		lines = append(lines, decide(at)...)
 	}
 	// Keep the selected decision in view, also with many or long suggestions.
 	rows := max(1, h-4)
 	if selectedEnd > rows+2 {
 		top := max(2, selectedEnd-rows)
+		hits = shifted(hits, top, 2, len(lines))
 		lines = append([]string{boldStyle.Render(title), ""}, lines[top:]...)
 	}
-	return m.dialog(lines)
+	return m.dialog(lines), hits
 }
 
 // shortKey abbreviates a base64 public key for display.
@@ -644,54 +723,34 @@ func (m *Model) chatEffort() string {
 }
 
 func (m *Model) headerView() string {
-	s := m.status
-	// The profile is known by its name; one that has none yet by the program.
-	title := boldStyle.Foreground(accent).Render(" " + m.headerName() + " ")
+	// The head of the chat on one line: what the GUI heads its window with,
+	// the conversation shown, and where it works with which model.
+	eyebrow := "OUROBOROS"
 	if m.profileOf > 1 { // of how many profiles of the node this is the one shown
-		title += mutedStyle.Render(fmt.Sprintf("[%d/%d]", m.profileAt, m.profileOf))
+		eyebrow += fmt.Sprintf(" · %s %d/%d", strings.ToUpper(m.headerName()), m.profileAt, m.profileOf)
 	}
-	// Which profile it is, and where it listens, is said only for debugging.
-	var id, where string
-	if s.Debug {
-		id = s.ID + " · "
-		where = fmt.Sprintf("%s:%d · ", id, s.Port)
+	line := " " + boldStyle.Foreground(muted).Render(eyebrow) + mutedStyle.Render(" · ") +
+		strings.ToUpper(m.chatName()) + mutedStyle.Render(" · ") + m.metaText()
+	if n := m.suggestionRequests.unread; n > 0 {
+		line += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✦ %d SUGGESTIONS", n))
 	}
-	// Whether the node is online is not said: while the UI is open it is.
-	var state string
-	switch {
-	case s.Running:
-		state = mutedStyle.Render(where + m.modelText())
-	case !s.Configured:
-		state = lipgloss.NewStyle().Foreground(warn).Render("○ not configured") + mutedStyle.Render("  type /setup")
-	default:
-		state = mutedStyle.Render(id + "type /start")
-	}
-	if m.suggestionRequests.unread > 0 {
-		state += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✦ %d suggestions", m.suggestionRequests.unread))
-	}
-	if m.chat.contextID == plugin.ThreadID {
-		title += mutedStyle.Render(" ·") + boldStyle.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7")).Render(" thread ")
-	}
-	if m.chat.directory != "" {
-		title += mutedStyle.Render(" · " + m.chat.directory)
-	}
-	if !s.Debug {
-		return ansi.Truncate(title+" "+state, m.width, "…")
+	if !m.status.Debug {
+		return ansi.Truncate(line, m.width, "…")
 	}
 	// The debug mode is not to be missed: on the right, whatever the rest
 	// leaves of the line.
-	debug := boldStyle.Foreground(lipgloss.Color("0")).Background(warn).Render(" DEBUG MODE ")
+	debug := boldStyle.Foreground(ui.background).Background(warn).Render(" DEBUG MODE ")
 	if m.width <= lipgloss.Width(debug) {
 		return ansi.Truncate(debug, m.width, "")
 	}
-	left := ansi.Truncate(title+" "+state, m.width-lipgloss.Width(debug)-1, "…")
-	return left + strings.Repeat(" ", m.width-lipgloss.Width(left)-lipgloss.Width(debug)) + debug
+	return spread(line, debug, m.width)
 }
 
-// chatTitle is what the footer says of the conversation on its left: whose
-// it is, if a peer's, how fast and at what cost the last call was, and how
-// much of the context it took. Who answers is in the header. A chat without
-// a word yet has none, nor has a node that is not set up.
+// chatTitle is what the line below the composer, or the footer of a screen
+// that takes the window, says of the conversation on its left: whose it is,
+// if a peer's, how fast and at what cost the last call was, and how much of
+// the context it took. Who answers is in the head. A chat without a word yet
+// has none, nor has a node that is not set up.
 func (m *Model) chatTitle() string {
 	c := m.chat
 	if !m.status.Configured || len(c.entries) == 0 && c.peer == "" {
@@ -720,131 +779,7 @@ func (m *Model) chatTitle() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return " " + strings.Join(parts, mutedStyle.Render("  · "))
-}
-
-// chatWidth is how wide the chat and the input are: what the list of the
-// jobs leaves of the width, if it is shown.
-func (m *Model) chatWidth() int { return max(1, m.width-m.jobsWidth()) }
-
-// chatView is the chat with the input below it, and the list of the jobs on
-// the right of both if it is shown.
-func (m *Model) chatView() string {
-	chat := m.chatColumn()
-	if m.jobsWidth() == 0 {
-		return chat
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, chat, m.jobsList())
-}
-
-// chatColumn is the chat with the input below it.
-func (m *Model) chatColumn() string {
-	w, h := m.chatWidth(), m.chatHeight()
-	inner := max(1, w-4)
-	c := m.chat
-	var content string
-	if !m.status.Configured {
-		hint := mutedStyle.Render("Type /setup to set up your node and chat with its agent.")
-		if inner >= logoWidth() && h-2 >= len(logoLines)+2 { // border, blank line and hint
-			content = lipgloss.JoinVertical(lipgloss.Left,
-				lipgloss.NewStyle().Foreground(accent).Render(logoText(logoLines, inner)), "", hint)
-		} else {
-			content = hint
-		}
-	} else {
-		history := m.highlight(strings.Split(m.history.View(), "\n"))
-		history = m.fadeEdges(history, m.history.YOffset() > 0, !m.history.AtBottom())
-		content = lipgloss.JoinVertical(lipgloss.Left, strings.Join(history, "\n"), m.waitView(inner))
-	}
-	chat := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(content)
-	if c.contextID == plugin.ThreadID && m.screen == screenChat {
-		active := 0
-		for _, c := range m.chats {
-			if c.contextID != plugin.ThreadID && c.running {
-				active++
-			}
-		}
-		label := fmt.Sprintf("%d active sessions", active)
-		if active == 1 {
-			label = "1 active session"
-		}
-		label = ansi.Truncate(label, max(1, m.chatWidth()-4), "…")
-		canvas := lipgloss.NewCanvas(w, h)
-		canvas.Compose(lipgloss.NewCompositor(
-			lipgloss.NewLayer(chat),
-			lipgloss.NewLayer(mutedStyle.Render(label)).
-				X(max(0, w-2-lipgloss.Width(label))).Y(h-2).Z(1),
-		))
-		chat = lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(canvas.Render())
-	}
-	// Suggestions and answers lie over the bottom of the chat, in a panel.
-	// Its size and the positions of its history stay unchanged behind them.
-	panel := m.panel()
-	rows := m.inputRows()
-	if rows == 0 {
-		return chat
-	}
-	input := box(false, m.light).Width(w).Render(c.showLabels(m.input.View()))
-	if m.inputLevel < inputFrames {
-		input = m.arriving(input, rows)
-	}
-	if panel == "" {
-		return lipgloss.JoinVertical(lipgloss.Left, chat, input)
-	}
-	back := strings.Split(lipgloss.JoinVertical(lipgloss.Left, chat, input), "\n")
-	style := lipgloss.NewStyle().Foreground(fadeColor(m.light))
-	for i, line := range back {
-		back[i] = style.Render(ansi.Strip(line))
-	}
-	height := m.bodyHeight()
-	canvas := lipgloss.NewCanvas(w, height)
-	canvas.Compose(lipgloss.NewCompositor(
-		lipgloss.NewLayer(strings.Join(back, "\n")),
-		lipgloss.NewLayer(panel).X(2).Y(m.panelTop(panel)).Z(1), // in the middle: it is four cells narrower
-	))
-	return lipgloss.NewStyle().Width(w).Height(height).MaxHeight(height).Render(canvas.Render())
-}
-
-// arriving is the box of the input on its way: the rows of it that have come
-// up from below, the gray of a faded edge first, then dim, until it is in.
-func (m *Model) arriving(input string, rows int) string {
-	lines := strings.Split(input, "\n")[:rows]
-	t := float64(m.inputLevel) / inputFrames
-	for i, line := range lines {
-		if t < 0.5 {
-			lines[i] = lipgloss.NewStyle().Foreground(fadeColor(m.light)).Render(ansi.Strip(line))
-		} else {
-			lines[i] = faint(line)
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-// panel is the box that lies over the bottom of the chat: the commands that
-// fit what is typed, or the answers to a question of the agent, above the
-// input. Like the centered dialogs it has a border of its own and leaves the
-// faded frame of the chat to be seen around it. It is "" without either.
-func (m *Model) panel() string {
-	w, h := m.chatWidth(), m.chatHeight()
-	suggested := m.suggestionLines(h - 6)
-	if a := m.chat.asking; len(suggested) == 0 && (a == nil || a.sent) {
-		return ""
-	}
-	panelWidth := max(1, w-4)
-	panelInner := max(1, panelWidth-4)
-	typing := m.inputView(panelInner, h-6-len(suggested))
-	lines := make([]string, len(suggested))
-	for i, line := range suggested {
-		lines[i] = ansi.Truncate(strings.TrimPrefix(line, "  "), panelInner, "…")
-	}
-	lines = append(lines, m.chat.showLabels(typing))
-	return box(true, m.light).Width(panelWidth).Render(strings.Join(lines, "\n"))
-}
-
-// panelTop is the row of the body panel begins at: a row of the box of the
-// input stays below it.
-func (m *Model) panelTop(panel string) int {
-	return max(0, m.bodyHeight()-lipgloss.Height(panel)-1)
+	return strings.Join(parts, mutedStyle.Render("  · "))
 }
 
 // sgr is a sequence that sets how the text after it looks.
@@ -870,13 +805,14 @@ func (m *Model) fadeEdges(lines []string, above, below bool) []string {
 	return lines
 }
 
-// fadeColor is the color of the line at a faded edge: a gray a few steps
-// from the background of the terminal.
+// fadeColor is the color of the line at a faded edge, and of what lies
+// behind a dialog: the muted color, nearly gone into the background.
 func fadeColor(light bool) color.Color {
+	p := guiDark
 	if light {
-		return lipgloss.Color("250")
+		p = guiLight
 	}
-	return lipgloss.Color("239")
+	return blend(p.muted, p.background, 0.35)
 }
 
 // faint dims a line and keeps its colors. Every sequence in it may turn the
@@ -902,8 +838,9 @@ func cacheRate(c plugin.SessionCache) string {
 	return fmt.Sprintf("%d%%, session %d%%", c.Cached*100/c.Tokens, c.AllCached*100/max(c.AllTokens, 1))
 }
 
-// footerHint is what the footer says on its right: the keys that do
-// something here, after what there is to notice.
+// footerHint is what the line below the composer, a dialog or a screen
+// that takes the window says on its right: the keys that do something
+// here, after what there is to notice.
 func (m *Model) footerHint() string {
 	help := ""
 	if m.chat.pending {
@@ -917,10 +854,6 @@ func (m *Model) footerHint() string {
 	}
 	if found, _ := m.suggestions(); len(found) > 0 {
 		help = "↑↓ select · tab complete · enter run"
-	}
-	// Without the box of the input it says, softly, that a key brings it.
-	if help == "" && m.screen == screenChat && !m.inputVisible() && m.chat.peer == "" {
-		help = "type to write"
 	}
 	switch m.screen {
 	case screenSuggestions:
@@ -994,8 +927,8 @@ func (m *Model) footerView() string {
 	left := ""
 	switch m.screen {
 	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings, screenSessions: // the dialogs lie over the chat
-		if room := m.width - lipgloss.Width(right) - 1; room > 0 {
-			left = ansi.Truncate(m.chatTitle(), room, "…")
+		if room := m.width - lipgloss.Width(right) - 1; room > 0 && m.chatTitle() != "" {
+			left = ansi.Truncate(" "+m.chatTitle(), room, "…")
 		}
 	}
 	return left + strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))) + right

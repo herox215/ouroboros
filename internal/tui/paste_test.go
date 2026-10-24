@@ -95,7 +95,7 @@ func TestLabelsAreSentAsPaths(t *testing.T) {
 	m.input.InsertString("and ")
 	m.Update(tea.PasteMsg{Content: "'" + filepath.Join(dir, `my "dog".png`) + "'"})
 	m.input.InsertString("but not [Image_3] [Image_0] [Image_99999999999999999999]")
-	if !strings.Contains(m.chatView(), imageStyle.Render("[Image_2]")) {
+	if !strings.Contains(m.chatScreen(), imageStyle.Render("[Image_2]")) {
 		t.Error("the input should color the labels")
 	}
 	answered(t, m, press(m, "enter"))
@@ -260,6 +260,7 @@ func TestSummaryShowsThePictures(t *testing.T) {
 	m.chat.add(entry{text: "a cat", at: m.now()})
 	m.renderHistory(true)
 	want := "↳ Used 5 tools · [Image_1] 768×384 of 2400×1200 (effort low) · a\\b.png 10×10 · [Image_9].png"
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 30}) // a line wide enough for all of it
 	shown := m.history.View()
 	if !strings.Contains(ansi.Strip(shown), want) || !strings.Contains(shown, imageStyle.Render("[Image_1]")) || strings.Contains(shown, imageStyle.Render("[Image_9]")) {
 		t.Fatalf("the chat shows %q, want %q", ansi.Strip(shown), want)

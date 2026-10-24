@@ -86,7 +86,7 @@ func pick(t *testing.T, m *Model, section, label, name string) {
 }
 
 // dialogView is the settings dialog alone, without the chat behind it.
-func dialogView(m *Model) string { return ansi.Strip(m.config.view(m)) }
+func dialogView(m *Model) string { return ansi.Strip(drawnOf(m.config.view(m))) }
 
 // do runs the action selected and what follows it.
 func do(m *Model) { deliver(m, press(m, "enter")) }
@@ -368,7 +368,7 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.config.shown(m)) - 1 {
 		press(m, "down")
 	}
-	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 9 {
+	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 10 {
 		t.Errorf("below the last: %d of %d", m.config.sel, len(m.config.shown(m)))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
@@ -1191,7 +1191,7 @@ func TestSettingsWindowMarks(t *testing.T) {
 		}
 		for _, info := range []*row{nil, {label: "a", note: strings.Repeat("a long explanation ", 40)}} {
 			m.config.info = info
-			if got := lipgloss.Height(m.config.view(m)); got > h {
+			if got := lipgloss.Height(drawnOf(m.config.view(m))); got > h {
 				t.Errorf("at a height of %d the dialog is %d high, not at most %d", height, got, h)
 			}
 		}

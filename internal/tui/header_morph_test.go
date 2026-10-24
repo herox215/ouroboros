@@ -132,7 +132,7 @@ func TestProfileSwitchMorphsOnlyTheHeaderName(t *testing.T) {
 	if _, ok := batch[len(batch)-1]().(headerMorphMsg); !ok {
 		t.Fatal("header frames must go to the shared UI, not a profile")
 	}
-	if head := ansi.Strip(luna.headerView()); !strings.HasPrefix(head, " alpha [2/2] ") || luna.View().WindowTitle != "ouro · Luna (2/2)" || luna.input.Value() != "Luna draft" {
+	if head := ansi.Strip(luna.headerView()); !strings.HasPrefix(head, " OUROBOROS · ALPHA 2/2 · ") || luna.View().WindowTitle != "ouro · Luna (2/2)" || luna.input.Value() != "Luna draft" {
 		t.Fatalf("only the header name should keep the old profile: %q", head)
 	}
 	root.Update(headerMorphMsg{generation: a.generation, at: at.Add(headerMorphDuration / 2)})
@@ -147,10 +147,10 @@ func TestProfileSwitchMorphsOnlyTheHeaderName(t *testing.T) {
 	if _, cmd := root.Update(headerMorphMsg{generation: a.generation, at: at.Add(headerMorphDuration)}); cmd != nil || a.active {
 		t.Fatal("the final frame should stop requesting ticks")
 	}
-	if head := ansi.Strip(luna.headerView()); !strings.HasPrefix(head, " Luna [2/2] ") {
+	if head := ansi.Strip(luna.headerView()); !strings.HasPrefix(head, " OUROBOROS · LUNA 2/2 · ") {
 		t.Fatalf("the new name did not settle: %q", head)
 	}
-	if view := ansi.Strip(root.View().Content); strings.Contains(view, "Type /setup") || strings.Contains(view, "Renamed [") {
+	if view := ansi.Strip(root.View().Content); strings.Contains(view, "Type /setup") || strings.Contains(view, "RENAMED ") {
 		t.Fatalf("the morph changed the profile's view:\n%s", view)
 	}
 }

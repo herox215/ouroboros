@@ -90,7 +90,7 @@ func TestEmptyChatUsesCurrentProfileAndDisappears(t *testing.T) {
 	if view := ansi.Strip(view(m)); !strings.Contains(view, marker) || strings.Contains(view, "No messages yet") {
 		t.Fatalf("empty profile chat:\n%s", view)
 	}
-	if line := strings.Split(ansi.Strip(m.chatView()), "\n")[1]; strings.Contains(line, "Luna") {
+	if line := strings.Split(ansi.Strip(m.chatScreen()), "\n")[1]; strings.Contains(line, "Luna") {
 		t.Fatalf("empty chat still has a corner title: %s", line)
 	}
 	m.chat.entries = []entry{{mine: true, text: "hello"}}
@@ -106,13 +106,16 @@ func TestEmptyChatFitsTheNameToTheWindow(t *testing.T) {
 	m, b := newModel(t)
 	b.status.Name = "herox215"
 	m.Update(m.refreshStatus())
-	for width, want := range map[int]string{
-		86: strings.TrimSpace(nameArt("herox215", nameScale)[5]),
-		82: strings.TrimSpace(nameArt("herox215", nameScale)[5]),
-		81: "herox215",
-		42: "herox215",
-	} {
+	big := strings.TrimSpace(nameArt("herox215", nameScale)[5])
+	for width, fits := range map[int]bool{200: true, 170: true, 79: false, 42: false} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+		if got := fitName("herox215", m.history.Width(), m.history.Height()) != nil; got != fits {
+			t.Fatalf("%d columns: the name fits %v in a history of %d", width, got, m.history.Width())
+		}
+		want := "herox215"
+		if fits {
+			want = big
+		}
 		if view := ansi.Strip(view(m)); !strings.Contains(view, want) {
 			t.Errorf("%d columns: no %q:\n%s", width, want, view)
 		}

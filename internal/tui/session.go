@@ -303,6 +303,8 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.add(entry{suggestion: true, text: e.Text, at: e.At})
 	case plugin.SessionTitle:
 		c.title = e.Text
+	case plugin.SessionHanded:
+		c.hand(e.Text)
 	case "directory":
 		c.directory = e.Text
 	case plugin.SessionEffort:
@@ -314,6 +316,22 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// hand notes that the part of the thread on its way concerns the session
+// handle names, as the sidebar and the column on the right show it.
+func (c *conversation) hand(handle string) {
+	if handle == "" {
+		return
+	}
+	ex := c.exchangeOf(len(c.entries) - 1)
+	if slices.Contains(c.handed[ex], handle) {
+		return
+	}
+	if c.handed == nil {
+		c.handed = map[int][]string{}
+	}
+	c.handed[ex] = append(c.handed[ex], handle)
 }
 
 // say begins a round of the loop: what the agent says along with the tools
@@ -353,9 +371,9 @@ func (c *conversation) step(e Event) {
 	}
 	r := &c.entries[c.round-1]
 	if !e.Done {
-		r.calls = append(r.calls, call{text: e.Text})
+		r.calls = append(r.calls, call{text: e.Text, tool: e.Tool, at: e.At})
 	} else if i := r.started(e.Text); i >= 0 {
-		r.calls[i] = call{text: e.Text, done: true, failed: e.Failed}
+		r.calls[i] = call{text: e.Text, done: true, failed: e.Failed, tool: cmp.Or(e.Tool, r.calls[i].tool), at: e.At}
 	}
 	if doing := r.waitingFor(); doing != c.doing {
 		c.doing, c.since = doing, e.At
@@ -779,7 +797,7 @@ func (m *Model) runningFrame() string { return running[m.ticks/3%len(running)] }
 // sessionsView lists the sessions in a dialog: the one selected marked, the
 // one shown said, those whose answer is on its way moving, and below the
 // tabs what is typed to filter the list.
-func (l *sessionsScreen) view(m *Model) string {
+func (l *sessionsScreen) view(m *Model) (string, []hit) {
 	w, h := m.dialogSize()
 	rows, all := l.rows(m), l.all(m)
 	yours, peers, about := boldStyle.Render("Sessions"), mutedStyle.Render("Peers"), "  each goes on in the background"
@@ -787,6 +805,15 @@ func (l *sessionsScreen) view(m *Model) string {
 		yours, peers, about = mutedStyle.Render("Sessions"), boldStyle.Render("Peers"), "  how peers talked with "+m.agentName()+", only to read"
 	}
 	lines := []string{yours + mutedStyle.Render(" · ") + peers + mutedStyle.Render(about), ""}
+	// A click on the tab that is not open opens it, and one on a
+	// conversation shows it.
+	tab := func() tea.Cmd { return l.handleKey(m, tea.KeyPressMsg{Code: tea.KeyTab}) }
+	hits := []hit{{line: 0, from: 0, to: 8, do: tab}, {line: 0, from: 11, to: 16, do: tab}}
+	if l.peerTab {
+		hits = hits[:1]
+	} else {
+		hits = hits[1:]
+	}
 	shown := max(1, h-6) // border, tabs, blank lines and count
 	if l.filter != "" {
 		lines = append(lines, mutedStyle.Render("find ")+ansi.Truncate(l.filter, max(1, w-12), "…"), "")
@@ -810,6 +837,10 @@ func (l *sessionsScreen) view(m *Model) string {
 			after += mutedStyle.Render("  · shown")
 		}
 		line := short(title, max(10, w-8-lipgloss.Width(after))) + after
+		hits = append(hits, onLine(len(lines), func() tea.Cmd {
+			l.sel = i
+			return l.handleKey(m, enterKey)
+		}))
 		if i == l.sel {
 			lines = append(lines, lipgloss.NewStyle().Foreground(accent).Render("▸ ")+line)
 		} else {
@@ -832,7 +863,7 @@ func (l *sessionsScreen) view(m *Model) string {
 		count = fmt.Sprintf("%d of %d %s", len(rows), len(all), noun)
 	}
 	lines = append(lines, "", mutedStyle.Render(count))
-	return m.dialog(lines)
+	return m.dialog(lines), hits
 }
 
 // when is the time t as a list shows it: the time of day for today, with

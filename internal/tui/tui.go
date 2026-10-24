@@ -23,9 +23,9 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"ouroboros/plugin"
 )
@@ -233,6 +233,7 @@ type entry struct {
 	text       string
 	at         time.Time
 	failed     bool
+	question   bool   // what the agent asked the owner
 	calls      []call // of a round of the loop; none for a message
 	// thought is what the model thought before this round of the loop, as
 	// the events of Thought brought it; "" for a round that thought nothing
@@ -248,7 +249,9 @@ func (e entry) asks() bool { return e.mine || e.task }
 type call struct {
 	text   string // like "asking beta"; once done, with what became of it: "asking beta ✓ 1.2s"; "" for a call nothing is shown of
 	done   bool
-	failed bool // it ended with an error
+	failed bool      // it ended with an error
+	tool   string    // the name of its tool
+	at     time.Time // when it started, or once done, when it ended
 }
 
 // conversation is a session of the chat with the agent of this node, as far
@@ -298,6 +301,13 @@ type conversation struct {
 	images []string
 	// files are other pasted attachments, indexed by [File_1], [File_2], ….
 	files []string
+	// besideWatched is whether it was watched for the column on the right,
+	// as a session the part of the thread in view concerns.
+	besideWatched bool
+	// handed are the sessions each part of the thread concerns, by the
+	// entry of the message of the owner that opened it, -1 for what came
+	// before the first: the handles the events of Handed name them by.
+	handed map[int][]string
 }
 
 // Model is the UI state.
@@ -351,10 +361,6 @@ type Model struct {
 	// jobsShown is whether the jobs of the session shown are listed on the
 	// right of the chat, for ctrl+j, instead of in the line of the wait.
 	jobsShown bool
-	// jobsLevel is how far the list of the jobs has faded in, from 0 for not
-	// at all to jobsFrames for whole; jobsFading is whether it is on its way.
-	jobsLevel  int
-	jobsFading bool
 	// services are the services that run past the answers, as the list of
 	// the jobs shows them: asked for anew every jobsEvery while it is
 	// shown. servicesAsked counts how often it was shown: what was asked
@@ -369,28 +375,30 @@ type Model struct {
 	width, height int
 	splash        splashScreen // the splash, and the frames of what moves
 	onboard       *onboarding  // the setup, while it is open
-	light         bool         // the background of the terminal is light
+	light         bool         // the UI is drawn in the light palette, see applyLook
+	// terminalLight is whether the background of the terminal is light,
+	// and appearance how the UI looks, one of appearances: as the terminal
+	// is for "system".
+	terminalLight bool
+	appearance    string
 	input         textarea.Model
-	// inputShown is whether the box of the input is drawn under the chat: a
-	// key on the chat shows it, and with an empty input it hides again 3s
-	// after the last key. A question of the agent shows it meanwhile.
-	inputShown bool
-	// inputIdle is when the last key on the chat was: the empty input hides
-	// 3s after it.
-	inputIdle time.Time
-	// inputLevel is how far the box of the input has come in, from 0 for
-	// not at all to inputFrames for whole; inputFading is whether it is on
-	// its way in or out.
-	inputLevel  int
-	inputFading bool
-	history     viewport.Model
-	glide       *glide     // the viewport on its way to a line, if one is
-	selected    *selection // what the mouse selected of the history
-	pressed     *spot      // where the mouse went down, before the drag began
-	spinner     spinner.Model
+	history       viewport.Model
+	glide         *glide     // the viewport on its way to a line, if one is
+	selected      *selection // what the mouse selected of the history
+	pressed       *spot      // where the mouse went down, before the drag began
+	hover         hover      // where the mouse rests, and the picture it shows there
+	graphics      graphics   // what the terminal told of its pictures
+	spinner       spinner.Model
 
 	// nameAnimation is how the name of the agent moves in an empty chat.
 	nameAnimation nameAnimation
+
+	// blockStarts are where the blocks of the history begin, and the
+	// entries they are of: which part of the thread is in view.
+	blockStarts []blockStart
+	// backgroundKnown is whether the terminal said what its background is:
+	// from then on the UI paints it in the colors of the GUI.
+	backgroundKnown bool
 }
 
 // New returns the UI for backend, with the screens and commands the plugins
@@ -398,10 +406,10 @@ type Model struct {
 // says in its footer when it opens: see bind.
 func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Model {
 	input := textarea.New()
-	input.Placeholder = "Keep on dreaming"
+	input.Placeholder = "Write a message"
 	input.ShowLineNumbers = false
 	input.Prompt = ""
-	input.SetHeight(inputHeight)
+	input.SetHeight(1)
 	input.SetStyles(inputStyles(false))
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 
@@ -423,6 +431,13 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 	m.input.Focus() // the input is where everything is typed, commands too
 	// The owner talks in the thread, unless they want a conversation of its own.
 	m.chat = m.thread()
+	m.appearance = appearances[0]
+	if b, ok := backend.(appearanceBackend); ok {
+		m.appearance = b.Appearance()
+	}
+	if m.appearance != appearances[0] {
+		m.applyLook() // light or dark, whatever the terminal says
+	}
 	var problems []string
 	m.plugins.screens, slashes, problems = bind(ownNames(), screens, slashes)
 	m.commands = append(m.commands, own...)
@@ -436,80 +451,6 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		m.setNotice(strings.Join(problems, "; "), true)
 	}
 	return m
-}
-
-// inputIdleTime is how long an empty box of the input stays after the last
-// key on the chat.
-const inputIdleTime = 3 * time.Second
-
-// showInput brings the box of the input, from text typed on the chat, and
-// starts the clock of the idle input anew. A box that is not there yet
-// comes in.
-func (m *Model) showInput() tea.Cmd {
-	m.inputIdle = m.now()
-	if m.inputShown {
-		return nil
-	}
-	there := m.inputVisible() // with text or a question in it
-	m.inputShown = true
-	if there {
-		return nil
-	}
-	return m.fadeInput()
-}
-
-// typed reports whether a key writes text, and is no shortcut such as
-// ctrl+k, enter or the arrows, which have none.
-func typed(msg tea.KeyPressMsg) bool { return msg.Text != "" }
-
-// hideStaleInput takes the box of the input out again inputIdleTime after
-// the last key on the chat, if it is empty by then. The ticks of the
-// spinner look.
-func (m *Model) hideStaleInput() tea.Cmd {
-	if !m.inputShown || m.input.Value() != "" || m.now().Sub(m.inputIdle) < inputIdleTime {
-		return nil
-	}
-	m.inputShown = false
-	return m.fadeInput()
-}
-
-// The box of the input slides in from below and out again over inputFrames
-// frames, one every inputFrame, and the chat gives it its rows or takes them
-// back as it goes.
-const (
-	inputFrames = 10
-	inputFrame  = 25 * time.Millisecond
-)
-
-// inputFadeMsg is a frame of the box of the input on its way in or out.
-type inputFadeMsg struct{}
-
-// fadeInput starts the box of the input on its way to what inputVisible
-// says, unless it is on its way already: then the frames turn around.
-func (m *Model) fadeInput() tea.Cmd {
-	if m.inputFading {
-		return nil
-	}
-	m.inputFading = true
-	return tea.Tick(inputFrame, func(time.Time) tea.Msg { return inputFadeMsg{} })
-}
-
-// inputFaded takes the box of the input a frame further on its way, and asks
-// for the next until it is whole or gone.
-func (m *Model) inputFaded() tea.Cmd {
-	if m.inputVisible() {
-		m.inputLevel = min(inputFrames, m.inputLevel+1)
-	} else {
-		m.inputLevel = max(0, m.inputLevel-1)
-	}
-	if m.inputLevel == 0 || m.inputLevel == inputFrames {
-		m.inputFading = false
-	}
-	m.layout()
-	if !m.inputFading {
-		return nil
-	}
-	return tea.Tick(inputFrame, func(time.Time) tea.Msg { return inputFadeMsg{} })
 }
 
 type (
@@ -549,7 +490,7 @@ func (m *Model) Init() tea.Cmd {
 		m.openSetup(true)
 	}
 	m.splash.animating = true
-	return tea.Batch(m.goOnline, m.loadContacts, m.loadSessions, m.watch(m.chat), tick(), m.spinner.Tick, tea.RequestBackgroundColor, splashTick())
+	return tea.Batch(m.goOnline, m.loadContacts, m.loadSessions, m.watch(m.chat), tick(), m.spinner.Tick, tea.RequestBackgroundColor, tea.Raw(terminalQuery), splashTick())
 }
 
 func splashTick() tea.Cmd {
@@ -593,6 +534,34 @@ func (m *Model) refresh() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	if m.profiles == nil {
+		if watch := m.watchBeside(); watch != nil {
+			cmd = tea.Batch(cmd, watch)
+		}
+	}
+	return model, cmd
+}
+
+// watchBeside watches the sessions beside the part of the thread in view
+// once, so that the column on the right can say where they stand: the UI
+// knows of a session that ended only what the list of the node says.
+func (m *Model) watchBeside() tea.Cmd {
+	if m.chat.contextID != plugin.ThreadID || !m.status.Running {
+		return nil
+	}
+	list, _, _ := m.sidebarSessions()
+	var cmds []tea.Cmd
+	for _, c := range list {
+		if !c.watching && !c.besideWatched {
+			c.besideWatched = true
+			cmds = append(cmds, m.watch(c))
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer func() {
 		if m.profiles == nil {
 			m.syncNameAnimation()
@@ -601,24 +570,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.profiles != nil {
 		return m, m.profiles.update(msg)
 	}
-	// The line below the footer comes and goes with what is pending, and
-	// with it the room for everything above.
-	// So does the box of the input, with a question of the agent that waits
-	// in it.
-	defer func(rows int, shown bool) {
-		if m.pendingRows() != rows || m.inputVisible() != shown {
+	// What is below the conversation grows and shrinks with what is
+	// written, asked, offered and pending, and with it the room for the
+	// conversation.
+	defer func(rows int) {
+		if m.bottomRows() != rows || m.input.Height() != m.composerRows() {
 			m.layout()
 		}
-	}(m.pendingRows(), m.inputVisible())
+	}(m.bottomRows())
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.unhover() // the screen is drawn anew anyway
 		m.layout()
 	case tea.BackgroundColorMsg:
-		m.light = !msg.IsDark()
-		m.input.SetStyles(inputStyles(m.light))
-		if m.onboard != nil {
-			m.onboard.input.SetStyles(textinput.DefaultStyles(msg.IsDark()))
+		// Only the first answer tells what the terminal is: once the UI
+		// paints it, it answers with the colors of the palette.
+		if !m.backgroundKnown {
+			for _, o := range m.siblings() {
+				o.terminalLight, o.backgroundKnown = !msg.IsDark(), true
+				o.applyLook()
+			}
 		}
 	case tickMsg:
 		if m.threadStart(m.chat) != m.chat.shown.first {
@@ -715,10 +687,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setNotice(msg.done, false)
 		return m, m.refresh()
 	case spinner.TickMsg:
-		var hide tea.Cmd
 		if msg.ID == m.spinner.ID() {
 			m.ticks++
-			hide = m.hideStaleInput()
 			if a := &m.nameAnimation; a.active || !a.fading.IsZero() {
 				a.elapsed = m.now().Sub(a.start)
 				if !a.active && a.faded(m.now()) == 0 {
@@ -729,9 +699,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, tea.Batch(cmd, hide)
-	case inputFadeMsg:
-		return m, m.inputFaded()
+		return m, cmd
 	case revealMsg:
 		return m, m.revealFrame(msg)
 	case answerMsg:
@@ -749,17 +717,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		return m, m.mouse(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
+		gone := m.unhover()
 		if m.inDialog() {
-			return m, nil
+			return m, gone
 		}
 		if m.screen == screenContext {
 			m.wheel(&m.context.port, msg)
-			return m, nil
+			return m, gone
 		}
 		m.wheel(&m.history, msg)
-		return m, nil
-	case jobsFadeMsg:
-		return m, m.jobsFaded()
+		return m, gone
 	case servicesMsg:
 		return m, m.servicesLoaded(msg)
 	case servicesTick:
@@ -773,18 +740,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, scrollTick()
 		}
 		return m, nil
+	case hoverMsg:
+		return m, m.hovered(msg)
+	case previewMsg:
+		return m, m.previewed(msg)
+	case sixelMsg:
+		return m, m.drawSixel(msg)
+	case uv.PrimaryDeviceAttributesEvent, uv.CellSizeEvent:
+		m.told(msg)
+		return m, nil
 	case tea.KeyPressMsg:
+		gone := m.unhover()
 		if m.onboard != nil {
-			return m, m.onboardKey(msg)
+			return m, tea.Batch(gone, m.onboardKey(msg))
 		}
 		if m.splash.show {
-			return m, m.splash.handleKey(m, msg)
+			return m, tea.Batch(gone, m.splash.handleKey(m, msg))
 		}
-		var show tea.Cmd
-		if m.screen == screenChat && (m.inputVisible() || typed(msg)) {
-			show = m.showInput()
-		}
-		return m, tea.Batch(m.handleKey(msg), show)
+		return m, tea.Batch(gone, m.handleKey(msg))
 	default:
 		var cmd tea.Cmd
 		if m.onboard != nil {
@@ -1005,9 +978,9 @@ func (m *Model) taken(msg takenMsg) tea.Cmd {
 	m.removeSuggestion(msg.suggestion.ID)
 	c := m.newChat()
 	c.pending, c.art = true, 1
-	text := plugin.SuggestedTask(msg.suggestion)
+	text, id := plugin.SuggestedTask(msg.suggestion), c.contextID // c is replayed meanwhile
 	ask := func() tea.Msg {
-		return askedMsg{c.contextID, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), c.contextID, text)}
+		return askedMsg{id, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
 	}
 	m.setNotice(m.agentName()+" makes the suggestion in the background", false)
 	return tea.Batch(m.watch(c), ask, m.refresh())

@@ -187,6 +187,7 @@ const (
 	SessionJobs      = session.Jobs      // the commands that run in the background for the answer, a line each in Text
 	SessionTask      = session.Task      // the report of a task the agent delegated, taken like a message: N, Remark, Text, Err
 	SessionTasks     = session.Tasks     // the tasks the agent delegated that run, a line each in Text
+	SessionHanded    = session.Handed    // the session a part of the thread concerns, its ID or handle in Text
 	// SessionWorking is how much works for the thread, in N: while any
 	// does, it is thinking as far as the owner is shown. Own tells that the
 	// thread itself answers, not only the sessions it handed messages to.

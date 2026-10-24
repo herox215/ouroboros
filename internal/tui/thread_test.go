@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
@@ -40,7 +39,7 @@ func TestTheThreadIsShownFirst(t *testing.T) {
 	if b.calls != 1 || b.id != plugin.ThreadID || b.path != "/start" || m.notice != "" {
 		t.Fatalf("directory %+v, notice %q", b, m.notice)
 	}
-	if header := ansi.Strip(m.headerView()); !strings.Contains(header, "· thread") || !strings.HasSuffix(strings.TrimSpace(header), "· effort low") {
+	if header := ansi.Strip(m.headerView()); !strings.Contains(header, "· THREAD ·") || !strings.HasSuffix(strings.TrimSpace(header), "· effort low") {
 		t.Fatalf("header %q", header)
 	}
 	if cmd := run(m, "/thread"); cmd != nil || m.notice != "this is the thread: say what is to be done" {
@@ -165,7 +164,8 @@ func TestThreadQuestionOutlivesAnAnswer(t *testing.T) {
 	}
 }
 
-// The thread shortcut preserves both drafts and marks the thread in the header.
+// The thread shortcut preserves both drafts and names the thread in the head,
+// where a conversation of its own offers the way back to it.
 func TestThreadShortcutAndHighlight(t *testing.T) {
 	m, _ := threadModel(t, "", nil)
 	thread := m.chat
@@ -173,16 +173,16 @@ func TestThreadShortcutAndHighlight(t *testing.T) {
 	settle(m, m.newConversation())
 	topic := m.chat
 	m.input.SetValue("topic draft")
-	badge := boldStyle.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("7")).Render(" thread ")
-	if strings.Contains(m.headerView(), badge) {
-		t.Fatal("a topic is marked as the thread")
+	head := func() string { return ansi.Strip(strings.Join(m.headerLines(m.chatWidth()-2*columnPad), "\n")) }
+	if strings.Contains(head(), "THREAD") || !strings.Contains(head(), "To the thread") {
+		t.Fatalf("a topic is named as the thread:\n%s", head())
 	}
 	settle(m, m.handleKey(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}))
 	if m.chat != thread || m.input.Value() != "thread draft" || m.thoughtsHidden {
 		t.Fatalf("thread shortcut: chat %q, draft %q, thoughts hidden %v", m.chat.contextID, m.input.Value(), m.thoughtsHidden)
 	}
-	if !strings.Contains(m.headerView(), badge) {
-		t.Fatalf("thread lacks highlight: %q", m.headerView())
+	if !strings.Contains(head(), "THREAD") || strings.Contains(head(), "To the thread") {
+		t.Fatalf("the thread is not named:\n%s", head())
 	}
 	settle(m, m.switchTo(topic))
 	if m.input.Value() != "topic draft" {

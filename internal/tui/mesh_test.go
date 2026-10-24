@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -98,7 +99,8 @@ func TestMeshConnectionsGrowAndFire(t *testing.T) {
 	n := neuralNet{w: 20, nodes: []dot{{0.5, 1.5}, {38.5, 1.5}}, parents: [][]int{nil, {0}}, from: 1, to: 2}
 	half := n.view("max", 3) // grown 1.5
 	nodes, _, braille := meshCount(half)
-	if nodes != 1 || braille < 6 || braille > 15 || !strings.Contains(half[0], "\x1b[31m") {
+	hot := lipgloss.NewStyle().Foreground(bad).Render("x")
+	if nodes != 1 || braille < 6 || braille > 15 || !strings.Contains(half[0], hot[:strings.Index(hot, "x")]) {
 		t.Fatalf("half a connection: %d nerve cells, %d cells of it:\n%q", nodes, braille, half)
 	}
 	if nodes, _, braille = meshCount(n.view("none", 6)); nodes != 2 || braille != 18 {
