@@ -231,14 +231,14 @@ func (m *Model) renderHistory(toBottom bool) {
 	// costs only its own words, however long the conversation is.
 	settled, kept := c.settled(), c.shown.n
 	blocks, owners := c.shown.blocks, c.shown.owners
-	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || kept > settled {
+	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || c.shown.light != m.light || kept > settled {
 		kept, blocks, owners = 0, nil, nil
 	}
 	words := false // the last block is the words of a round of an answer that is in
 	for i := kept; i < settled; i++ {
 		blocks, words = one(i, blocks, words)
 	}
-	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, blocks: blocks, owners: owners}
+	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks, owners: owners}
 	blocks, owners = slices.Clone(blocks), slices.Clone(owners)
 	for i := settled; i < len(c.entries); i++ {
 		blocks, words = one(i, blocks, words)
@@ -318,6 +318,7 @@ type rendered struct {
 	n        int      // of the entries, how many are in blocks
 	width    int      // the width of the chat they are wrapped for
 	thoughts bool     // whether what the model thought was shown then
+	light    bool     // the palette the cached blocks were drawn in
 	blocks   []string // what the chat shows of them, a block for every entry
 	owners   []int    // the entry each block is of
 }

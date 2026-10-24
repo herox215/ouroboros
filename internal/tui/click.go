@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 )
 
 // The mouse does what it does in the window of the GUI. Beside the history,
@@ -142,9 +145,48 @@ func (m *Model) clickPlugin(x, y int) tea.Cmd {
 // clickComposer puts the cursor of the composer where it was clicked: on
 // the row and the column of what is written, or after its end.
 func (m *Model) clickComposer(row, col int) {
-	m.input.MoveToBegin()
-	for range row {
-		m.input.CursorDown()
+	// Resolve the visible row with the textarea's own word wrapping. Do this
+	// on a copy: moving to the beginning must not scroll the real field.
+	// Update also detaches the textarea's shared viewport pointer before we
+	// navigate the copy. A plain struct copy would scroll the original.
+	target, _ := m.input.Update(nil)
+	top := target.ScrollYOffset()
+	target.MoveToBegin()
+	for range top + max(0, row) {
+		target.CursorDown()
+		target.SetCursorColumn(target.LineInfo().StartColumn)
 	}
-	m.input.SetCursorColumn(m.input.LineInfo().StartColumn + max(0, col))
+	line, info := target.Line(), target.LineInfo()
+
+	// Both the old cursor and the clicked row are in view. Moving directly
+	// between them keeps that viewport, including when it starts mid-wrap.
+	for m.input.Line() != line || m.input.LineInfo().RowOffset != info.RowOffset {
+		m.input.SetCursorColumn(m.input.LineInfo().StartColumn)
+		if m.input.Line() < line || m.input.Line() == line && m.input.LineInfo().RowOffset < info.RowOffset {
+			m.input.CursorDown()
+		} else {
+			m.input.CursorUp()
+		}
+	}
+
+	// SetCursorColumn takes a rune index, not a display-cell column. Keep
+	// clicks within a wide glyph on that glyph, and skip whole graphemes
+	// (including combining marks) when advancing to the next cell.
+	runes := []rune(strings.Split(m.input.Value(), "\n")[line])
+	end := min(len(runes), info.StartColumn+info.Width)
+	if info.RowOffset+1 < info.Height {
+		// The boundary itself belongs to the next wrapped row.
+		end = min(end, info.StartColumn+info.Width-1)
+	}
+	column, cells := info.StartColumn, 0
+	g := uniseg.NewGraphemes(string(runes[info.StartColumn:end]))
+	for g.Next() {
+		width := g.Width()
+		if cells+width > max(0, col) {
+			break
+		}
+		cells += width
+		column += len(g.Runes())
+	}
+	m.input.SetCursorColumn(column)
 }

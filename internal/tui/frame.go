@@ -420,6 +420,13 @@ func (m *Model) canSend() bool {
 	return m.status.Configured && m.chat.peer == "" && strings.TrimSpace(m.input.Value()) != ""
 }
 
+// panelHeight reserves the composer, controls and one history row before
+// assigning space to questions and command suggestions.
+func (m *Model) panelHeight() int {
+	available := m.height - m.headerHeight() - (3 + m.composerRows() + m.pendingRows()) - 2
+	return max(0, available)
+}
+
 // panelLines is what lies above the composer: the question of the agent
 // with its answers, as the GUI asks for a decision, or the commands that fit
 // what is typed. None without either.
@@ -442,6 +449,10 @@ func (m *Model) panel() ([]string, []hit) {
 			lines = append(lines, "")
 		}
 		suggested, top := m.suggestionLines()
+		_, selected := m.suggestions()
+		room := min(len(suggested), max(0, m.panelHeight()-len(lines)))
+		start := max(0, min(selected-top-room+1, len(suggested)-room))
+		suggested, top = suggested[start:start+room], top+start
 		for i, line := range suggested {
 			hits = append(hits, onLine(len(lines), func() tea.Cmd {
 				m.suggest = top + i
@@ -451,7 +462,8 @@ func (m *Model) panel() ([]string, []hit) {
 			lines = append(lines, pad(strings.TrimPrefix(line, "  "), w))
 		}
 	}
-	return lines, hits
+	limit := min(len(lines), m.panelHeight())
+	return lines[:limit], shifted(hits, 0, 0, limit)
 }
 
 // sidebarSessions are the sessions the sidebar lists: beside the thread

@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,6 +117,213 @@ func labelCell(t *testing.T, m *Model, label string) (int, int) {
 	}
 	t.Fatalf("%s is not drawn", label)
 	return 0, 0
+}
+
+func TestRestingOnAPathPreviewsItsPicture(t *testing.T) {
+	m, _ := newModel(t)
+	path := filepath.Join(t.TempDir(), "red.png")
+	writePNG(t, path, 64, 32, color.NRGBA{255, 0, 0, 255})
+	// Insert literal text rather than paste, which would create an attachment.
+	m.chat.directory = filepath.Dir(path)
+	m.input.SetValue("./red.png")
+	x, y := labelCell(t, m, "./red.png")
+	m.Update(tea.MouseMotionMsg{X: x + 3, Y: y})
+	_, cmd := m.Update(hoverMsg{m.hover.seq})
+	if cmd == nil {
+		t.Fatal("the path under the mouse must be read")
+	}
+	m.Update(cmd())
+	if !strings.Contains(m.View().Content, "38;2;255;0;0") {
+		t.Fatal("the path must show its red picture")
+	}
+	m.Update(tea.MouseMotionMsg{X: 0, Y: 0})
+	if m.hover.view != "" {
+		t.Fatal("moving must dismiss the preview")
+	}
+}
+
+func TestPicturePathAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "red.png")
+	spaced := filepath.Join(dir, "my picture.png")
+	writePNG(t, path, 2, 2, color.White)
+	writePNG(t, spaced, 2, 2, color.White)
+	for _, tc := range []struct {
+		name, want string
+	}{
+		{path, path},
+		{"red.png", path},
+		{"./red.png", path},
+		{"`red.png`", path},
+		{"(" + path + ").", path},
+		{quote(spaced), spaced},
+		{"'" + spaced + "'", spaced},
+		{strings.ReplaceAll(spaced, " ", `\ `), spaced},
+		{"file://" + strings.ReplaceAll(spaced, " ", "%20"), spaced},
+		{"missing.png", ""},
+		{"https://example.org/red.png", ""},
+		{"notes.txt", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := "界 look "
+			line := prefix + tc.name + " end"
+			got, ok := picturePathAt(line, ansi.StringWidth(prefix)+2, dir)
+			if got != tc.want || ok != (tc.want != "") {
+				t.Fatalf("got %q, %v; want %q", got, ok, tc.want)
+			}
+			if _, ok := picturePathAt(line, 0, dir); ok {
+				t.Fatal("text beside a path must not preview it")
+			}
+		})
+	}
+	if _, ok := picturePathAt("red.png", 2, ""); ok {
+		t.Fatal("a relative path without a known project must not use the process cwd")
+	}
+}
+
+func TestProfileSwitchInvalidatesPreview(t *testing.T) {
+	for _, stage := range []string{"decoding", "waiting for sixel", "drawn"} {
+		t.Run(stage, func(t *testing.T) {
+			root, m, _, _ := profiles(t)
+			root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+			m.graphics.sixel = true
+			path := filepath.Join(t.TempDir(), "red.png")
+			writePNG(t, path, 8, 8, color.White)
+			m.Update(tea.PasteMsg{Content: path})
+			x, y := labelCell(t, m, "[Image_1]")
+			m.Update(tea.MouseMotionMsg{X: x, Y: y})
+			seq := m.hover.seq
+			_, decode := m.Update(hoverMsg{seq})
+			if decode == nil {
+				t.Fatal("no preview read")
+			}
+			result := decode()
+			if stage != "decoding" {
+				m.Update(result)
+			}
+			if stage == "drawn" {
+				_, draw := m.Update(sixelMsg{seq})
+				if draw == nil {
+					t.Fatal("no sixel draw")
+				}
+			}
+			_, switched := root.Update(shiftTab)
+			if m.hover.seq == seq || m.hover.view != "" || m.hover.sixel != "" || m.hover.drawn {
+				t.Fatal("leaving a profile must invalidate its preview")
+			}
+			if stage == "drawn" {
+				batch := switched().(tea.BatchMsg)
+				if len(batch) == 0 || fmt.Sprintf("%T", batch[0]()) != fmt.Sprintf("%T", tea.ClearScreen()) {
+					t.Fatal("leaving a drawn sixel must clear the screen")
+				}
+			}
+			for _, msg := range []tea.Msg{hoverMsg{seq}, result, sixelMsg{seq}} {
+				if _, cmd := root.Update(profileMsg{0, msg}); cmd != nil {
+					t.Fatalf("hidden callback %T returned a command", msg)
+				}
+			}
+			root.Update(shiftTab)
+			for _, msg := range []tea.Msg{result, sixelMsg{seq}} {
+				if _, cmd := root.Update(profileMsg{0, msg}); cmd != nil {
+					t.Fatalf("old callback %T survived switching back", msg)
+				}
+			}
+			if m.hover.view != "" || m.hover.drawn {
+				t.Fatal("switching back must not restore an old preview")
+			}
+		})
+	}
+}
+
+func TestHiddenProfileGuardsPreviewCallbacks(t *testing.T) {
+	root, m, _, _ := profiles(t)
+	path := filepath.Join(t.TempDir(), "red.png")
+	writePNG(t, path, 1, 1, color.White)
+	m.Update(tea.PasteMsg{Content: path})
+	x, y := labelCell(t, m, "[Image_1]")
+	root.profiles.shown = 1 // exercise visibility independently of invalidation
+	m.hover = hover{x: x, y: y, seq: 7, view: "box", sixel: "picture"}
+	for _, msg := range []tea.Msg{hoverMsg{7}, previewMsg{7, "new box", "new picture"}, sixelMsg{7}} {
+		if _, cmd := root.Update(profileMsg{0, msg}); cmd != nil {
+			t.Fatalf("hidden callback %T returned a command", msg)
+		}
+	}
+	if m.hover.view != "box" || m.hover.sixel != "picture" || m.hover.drawn {
+		t.Fatal("hidden callbacks changed the preview")
+	}
+}
+
+// A header advertising too many original pixels must never reach Decode.
+// A tiny registered fixture proves rejection before allocation, without
+// allocating a huge source image just to test the limit.
+func TestPreviewRejectsLargeSources(t *testing.T) {
+	for _, config := range []image.Config{
+		{Width: previewMaxDimension + 1, Height: 1},
+		{Width: 1, Height: previewMaxDimension + 1},
+		{Width: 8192, Height: 8192},
+		{Width: int(^uint(0) >> 1), Height: int(^uint(0) >> 1)},
+		{Width: 0, Height: 1},
+		{Width: 1, Height: -1},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", config.Width, config.Height), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "source")
+			magic := "preview-limit:" + path
+			decoded := false
+			image.RegisterFormat(magic, magic, func(io.Reader) (image.Image, error) {
+				decoded = true
+				return image.NewRGBA(image.Rect(0, 0, 1, 1)), nil
+			}, func(io.Reader) (image.Config, error) { return config, nil })
+			if err := os.WriteFile(path, []byte(magic), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if view, sixel := preview(path, graphics{}); view != "" || sixel != "" || decoded {
+				t.Fatal("an unsafe source reached Decode or produced a preview")
+			}
+		})
+	}
+	t.Run("file size", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "large.png")
+		writePNG(t, path, 1, 1, color.White)
+		if err := os.Truncate(path, previewMaxBytes+1); err != nil {
+			t.Fatal(err)
+		}
+		if view, sixel := preview(path, graphics{}); view != "" || sixel != "" {
+			t.Fatal("an oversized file produced a preview")
+		}
+	})
+}
+
+func TestPreviewBoundsConcurrentWork(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "source")
+	magic := "preview-concurrency:" + path
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan string, 1)
+	image.RegisterFormat(magic, magic, func(io.Reader) (image.Image, error) {
+		close(entered)
+		<-release
+		return image.NewRGBA(image.Rect(0, 0, 1, 1)), nil
+	}, func(io.Reader) (image.Config, error) { return image.Config{Width: 1, Height: 1}, nil })
+	if err := os.WriteFile(path, []byte(magic), 0600); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		view, _ := preview(path, graphics{})
+		done <- view
+	}()
+	<-entered
+	// This call must return immediately, not wait for the active decoder.
+	view, sixel := preview(path, graphics{})
+	close(release)
+	if view != "" || sixel != "" {
+		t.Error("a busy decoder must skip another preview")
+	}
+	if <-done == "" {
+		t.Fatal("the active preview did not finish")
+	}
+	valid := filepath.Join(t.TempDir(), "small.png")
+	writePNG(t, valid, 1, 1, color.White)
+	if view, _ := preview(valid, graphics{}); view == "" {
+		t.Fatal("finished work did not release the decode slot")
+	}
 }
 
 func writePNG(t *testing.T, path string, w, h int, c color.Color) {

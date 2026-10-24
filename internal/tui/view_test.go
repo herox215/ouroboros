@@ -133,7 +133,7 @@ func TestSuggestionsInALowWindow(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
 	m.input.SetValue("/")
 	m.layout()
-	if rows := strings.Count(m.View().Content, "\n") + 1; rows != 16 || m.chatHeight() != 1 || len(m.panelLines()) != maxSuggestions {
+	if rows := strings.Count(m.View().Content, "\n") + 1; rows != 16 || m.chatHeight() != 1 || len(m.panelLines()) != min(maxSuggestions, m.panelHeight()) {
 		t.Fatalf("%d rows:\n%s", rows, view(m))
 	}
 }

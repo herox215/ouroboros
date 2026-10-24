@@ -118,12 +118,19 @@ func (m *Model) choose(option string) tea.Cmd {
 // out. A click on an answer gives it, as in the GUI, and one on what to do
 // below them selects the composer: the hits say where.
 func (m *Model) questionLines(a *asking, w int) ([]string, []hit) {
-	lines := []string{boldStyle.Foreground(accent).Render("YOUR DECISION")}
+	most := min(m.panelHeight(), max(4, m.height*panelShare/100))
+	if most == 0 {
+		return nil, nil
+	}
+	var lines []string
+	if most >= 4 {
+		lines = append(lines, boldStyle.Foreground(accent).Render("YOUR DECISION"))
+	}
 	question := strings.Split(lipgloss.Wrap(a.question, w, ""), "\n")
-	most := max(4, m.height*panelShare/100)
 	var buttons []string
 	var hits []hit // of the rows of buttons, from the first
 	row := ""
+	selectedRow := 0
 	for i, name := range a.options {
 		label := name
 		if name == a.recommended {
@@ -142,6 +149,9 @@ func (m *Model) questionLines(a *asking, w int) ([]string, []hit) {
 		}
 		if row != "" {
 			row += " "
+		}
+		if i == a.sel {
+			selectedRow = len(buttons)
 		}
 		hits = append(hits, hit{line: len(buttons), from: lipgloss.Width(row), to: lipgloss.Width(row) + lipgloss.Width(button), do: func() tea.Cmd {
 			if a.sent || m.chat.asking != a {
@@ -163,16 +173,22 @@ func (m *Model) questionLines(a *asking, w int) ([]string, []hit) {
 	case len(a.options) == 0:
 		hint = mutedStyle.Render("Write your answer below.")
 	}
-	room := most - 2 - len(buttons) // the heading and the hint
-	if len(buttons) > 0 {
-		room--
-	}
-	if len(question) > max(1, room) {
-		question = append(question[:max(1, room)-1], mutedStyle.Render("…"))
+	// Keep the selected answer visible while navigating a long list. The
+	// question and hint each get a row before any extra text or spacing.
+	buttonRoom := max(0, most-len(lines)-2)
+	first := max(0, min(selectedRow-buttonRoom/2, len(buttons)-buttonRoom))
+	count := min(len(buttons), buttonRoom)
+	buttons = buttons[first : first+count]
+	hits = shifted(hits, first, 0, count)
+	room := max(0, most-len(lines)-1-len(buttons))
+	if len(question) > room {
+		question = question[:room]
+		if room > 0 {
+			question[room-1] = ansi.Truncate(question[room-1], max(0, w-1), "") + "…"
+		}
 	}
 	lines = append(lines, question...)
 	if len(buttons) > 0 {
-		lines = append(lines, "")
 		hits = shifted(hits, 0, len(lines), len(buttons))
 		lines = append(lines, buttons...)
 		hits = append(hits, onLine(len(lines), func() tea.Cmd { a.write(); return nil }))

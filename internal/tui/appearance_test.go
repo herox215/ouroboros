@@ -107,3 +107,36 @@ func TestProfilesLookAlike(t *testing.T) {
 		t.Fatalf("the other profile is %q", luna.appearance)
 	}
 }
+
+// Settled messages are cached in the palette they were drawn in. A change
+// recolors both the visible conversation and one opened again afterwards.
+func TestAppearanceRecolorsCachedHistory(t *testing.T) {
+	m, _ := newModel(t)
+	t.Cleanup(func() { applyPalette(false) })
+	m.appearance = "dark"
+	m.applyLook()
+	first := m.chat
+	second := m.conversation("other")
+	for _, c := range []*conversation{first, second} {
+		m.chat = c
+		c.add(entry{mine: true, text: "hello", at: m.now()})
+		c.add(entry{text: "# Heading\n\n`code`", at: m.now()})
+		m.renderHistory(true)
+	}
+	m.chat = first
+	dark := strings.Join(first.shown.blocks, "\n")
+	m.setAppearance("light")
+	for _, c := range []*conversation{first, second} {
+		m.chat = c
+		m.renderHistory(true)
+		light := strings.Join(c.shown.blocks, "\n")
+		if dark == light || !c.shown.light {
+			t.Fatal("settled history kept the dark palette")
+		}
+		c.shown = rendered{}
+		m.renderHistory(true)
+		if fresh := strings.Join(c.shown.blocks, "\n"); fresh != light {
+			t.Fatal("cached history differs from a fresh light render")
+		}
+	}
+}

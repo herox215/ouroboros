@@ -83,6 +83,7 @@ func (p *profileViews) update(msg tea.Msg) tea.Cmd {
 // the splash, which the first one showed.
 func (p *profileViews) next() tea.Cmd {
 	from := p.current().headerName()
+	clear := p.current().unhover()
 	p.shown = (p.shown + 1) % len(p.models)
 	m := p.current()
 	var cmd tea.Cmd
@@ -105,7 +106,7 @@ func (p *profileViews) next() tea.Cmd {
 	}
 	// These frames belong to the shared header, not to either profile.
 	morph := p.morph.begin(from, cmp.Or(m.status.Name, "ouroboros"), m.now())
-	return tea.Batch(tagged(p.shown, tea.Batch(cmd, resized)), morph)
+	return tea.Batch(clear, tagged(p.shown, tea.Batch(cmd, resized)), morph)
 }
 
 // tagged is cmd, whose messages go to the Model of profile: the messages of

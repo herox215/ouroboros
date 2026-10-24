@@ -8,6 +8,8 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -42,6 +44,15 @@ const sixelDelay = 50 * time.Millisecond
 // The preview of cells is at most so many cells wide and pixels high, and
 // that of a sixel at most so many pixels wide and high.
 const previewCols, previewPixels, sixelPixels = 32, 32, 240
+
+// Bound the source, not just the thumbnail: decoding allocates the original
+// pixels. Only one preview may decode/render at a time across all profiles;
+// a busy preview is skipped rather than queued behind an obsolete hover.
+const previewMaxBytes = 32 << 20
+const previewMaxPixels = 16 << 20
+const previewMaxDimension = 16384
+
+var previewWork = make(chan struct{}, 1)
 
 // terminalQuery asks the terminal whether it draws sixels, and how large its
 // cells are in pixels: see graphics.
@@ -122,7 +133,7 @@ func (m *Model) unhover() tea.Cmd {
 
 // hovered reads the picture of the label under the mouse that rested.
 func (m *Model) hovered(msg hoverMsg) tea.Cmd {
-	if msg.seq != m.hover.seq || m.screen != screenChat || m.pressed != nil {
+	if msg.seq != m.hover.seq || !m.shown() || m.screen != screenChat || m.pressed != nil {
 		return nil
 	}
 	path, ok := m.pictureAt(m.hover.x, m.hover.y)
@@ -139,7 +150,7 @@ func (m *Model) hovered(msg hoverMsg) tea.Cmd {
 // previewed shows the picture read for where the mouse still rests: a sixel
 // once its box is on the screen.
 func (m *Model) previewed(msg previewMsg) tea.Cmd {
-	if msg.seq != m.hover.seq {
+	if msg.seq != m.hover.seq || !m.shown() || m.screen != screenChat {
 		return nil
 	}
 	m.hover.view, m.hover.sixel = msg.view, msg.sixel
@@ -152,7 +163,7 @@ func (m *Model) previewed(msg previewMsg) tea.Cmd {
 // drawSixel draws the sixel into its box, where the box still is: at the
 // first cell inside its border, the cursor kept where the UI has it.
 func (m *Model) drawSixel(msg sixelMsg) tea.Cmd {
-	if msg.seq != m.hover.seq || m.hover.sixel == "" || m.screen != screenChat {
+	if msg.seq != m.hover.seq || !m.shown() || m.hover.sixel == "" || m.screen != screenChat {
 		return nil
 	}
 	x, y := m.previewAt()
@@ -160,8 +171,8 @@ func (m *Model) drawSixel(msg sixelMsg) tea.Cmd {
 	return tea.Raw(ansi.SaveCursor + ansi.CursorPosition(x+2, y+2) + m.hover.sixel + ansi.RestoreCursor)
 }
 
-// pictureAt is the file of the picture whose label is at x and y on the
-// chat, as it is drawn: in the history or in the composer.
+// pictureAt is the file of the picture whose label or path is at x and y on
+// the chat, as it is drawn: in the history or in the composer.
 func (m *Model) pictureAt(x, y int) (string, bool) {
 	lines := strings.Split(m.chatScreen(), "\n")
 	if y < 0 || y >= len(lines) {
@@ -175,6 +186,43 @@ func (m *Model) pictureAt(x, y int) (string, bool) {
 		}
 		path, ok := m.chat.attachment(line[at[0]:at[1]])
 		return path, ok && plugin.IsPicture(path)
+	}
+	return picturePathAt(line, x, m.chat.directory)
+}
+
+// pictureNames keeps quoted paths with spaces together. Markdown punctuation
+// separates bare paths from the surrounding prose; ANSI has already been removed.
+var pictureNames = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)+\"|'[^']+'|`[^`]+`|(?:\\\\.|[^\\s\"'`<>\\[\\]()])+")
+
+// picturePathAt resolves only the name under the mouse, never a remote URL.
+// Relative names belong to the conversation's project, not the UI process cwd.
+func picturePathAt(line string, x int, directory string) (string, bool) {
+	for _, at := range pictureNames.FindAllStringIndex(line, -1) {
+		name := line[at[0]:at[1]]
+		from := ansi.StringWidth(line[:at[0]])
+		if x < from || x >= from+ansi.StringWidth(name) {
+			continue
+		}
+		if name[0] == '`' {
+			name = strings.Trim(name, "`")
+		} else if parsed, ok := words(name); ok && len(parsed) == 1 {
+			name = parsed[0]
+		}
+		name = strings.TrimRight(name, ".,;:!?")
+		path := plugin.LocalPath(name)
+		if !filepath.IsAbs(path) {
+			if directory == "" || strings.Contains(name, "://") {
+				return "", false
+			}
+			path = filepath.Join(directory, path)
+		}
+		if !plugin.IsPicture(path) {
+			return "", false
+		}
+		if file, ok := attachmentPath(path); ok {
+			return file, true
+		}
+		return "", false
 	}
 	return "", false
 }
@@ -209,11 +257,30 @@ func (m *Model) withPreview(screen string) string {
 // and if it draws sixels, the box blank and the sixel for it. "" if the
 // picture cannot be read.
 func preview(path string, g graphics) (view, sixel string) {
+	select {
+	case previewWork <- struct{}{}:
+		defer func() { <-previewWork }()
+	default:
+		return "", ""
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", ""
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > previewMaxBytes {
+		return "", ""
+	}
+	config, _, err := image.DecodeConfig(f)
+	if err != nil || config.Width <= 0 || config.Height <= 0 ||
+		config.Width > previewMaxDimension || config.Height > previewMaxDimension ||
+		config.Width > previewMaxPixels/config.Height {
+		return "", ""
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return "", ""
+	}
 	img, _, err := image.Decode(f)
 	if err != nil || img.Bounds().Empty() {
 		return "", ""
