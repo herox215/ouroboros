@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
 	"ouroboros/internal/proposal"
+	"ouroboros/internal/safefile"
 	"ouroboros/internal/setup"
 	"ouroboros/internal/suggestion"
 )
@@ -204,6 +207,29 @@ func (o *Owner) DropSuggestion(id string) error {
 
 // Status reports how the node is configured and whether it is running.
 func (o *Owner) Status() (NodeStatus, error) { return o.local.Status() }
+
+// Appearances are how the terminal UI can look: as the background of the
+// terminal is, or light or dark whatever it is.
+var Appearances = []string{"system", "light", "dark"}
+
+// Appearance is how the terminal UI looks, one of Appearances: "system"
+// until another was chosen.
+func (o *Owner) Appearance() string {
+	data, _ := os.ReadFile(o.home.Appearance())
+	if a := strings.TrimSpace(string(data)); slices.Contains(Appearances, a) {
+		return a
+	}
+	return Appearances[0]
+}
+
+// SetAppearance keeps how the terminal UI looks, one of Appearances, for
+// all of its profiles and the next time it opens.
+func (o *Owner) SetAppearance(a string) error {
+	if !slices.Contains(Appearances, a) {
+		return fmt.Errorf("no appearance %q: %s", a, strings.Join(Appearances, ", "))
+	}
+	return safefile.Write(o.home.Appearance(), []byte(a+"\n"), 0o600)
+}
 
 // SetDebug turns the debug mode of the node on or off: in it, the log tells
 // much more of every call of the LLM. It holds from the next call on.

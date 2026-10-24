@@ -330,7 +330,8 @@ func TestDelegationScopeGuidance(t *testing.T) {
 			for _, rule := range []string{
 				"For delegated code analysis, give each helper a clear scope with minimal overlap, and say what findings it should report.",
 				"Before delegating, briefly tell the owner how you are splitting the work.",
-				"The conversation waits for all helpers before your next model step and delivers their reports together.",
+				"The helpers run in the background, past your answer: end it once you started them and did what is left outside their scopes, and the conversation takes what the owner says meanwhile.",
+				"With task_tell you tell a helper what changed, like what the owner asked of the work, and with task_stop you stop one that is no longer needed.",
 				"Combine all results into one final answer; do not present a partial result as the conclusion or send separate final answers for individual helpers.",
 				"First investigate the remaining areas outside the delegated scopes; do not repeat a helper's search or reading while it works.",
 				"Then use the helper reports to bring the analysis together, and check delegated code yourself only where a report leaves a specific uncertainty or finding to verify; do not broadly reread delegated paths or repeat the analysis.",
@@ -346,9 +347,27 @@ func TestDelegationScopeGuidance(t *testing.T) {
 // started is what Start of a fake Tasks was handed, and starts as it is
 // told.
 type started struct {
-	tasks []Task
-	first int
-	err   error
+	tasks   []Task
+	first   int
+	err     error
+	stopped []int
+	told    []string
+}
+
+func (s *started) Stop(n int) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.stopped = append(s.stopped, n)
+	return nil
+}
+
+func (s *started) Tell(n int, text string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.told = append(s.told, fmt.Sprint(n, ": ", text))
+	return nil
 }
 
 func (s *started) Start(tasks []Task) ([]int, error) {
@@ -371,8 +390,8 @@ func TestDelegateStartsTheTasks(t *testing.T) {
 	background := &started{first: 2}
 	ctx := WithTasks(context.Background(), background)
 	got, err := delegating(llm).Run(ctx, tasks("first\nmore", "b"))
-	if err != nil || got != "Started tasks 2 and 3. The report of each comes with the other task reports before your next model step. "+
-		"The conversation waits for all helpers; combine their results into one final answer." {
+	if err != nil || got != "Started tasks 2 and 3. The report of each comes with the other task reports once the last task ended, as a message that starts an answer. "+
+		"Meanwhile the conversation takes what the owner says; reach a task with task_tell and task_stop. Combine their results into one final answer then." {
 		t.Fatalf("got %q, %v", got, err)
 	}
 	if len(background.tasks) != 2 || background.tasks[0].Title != "first" || background.tasks[1].Title != "b" || len(llm.asked) != 0 {
@@ -389,6 +408,58 @@ func TestDelegateStartsTheTasks(t *testing.T) {
 	background.err = errTest
 	if _, err := delegating(llm).Run(ctx, tasks("c")); !errors.Is(err, errTest) {
 		t.Fatalf("none started: %v", err)
+	}
+}
+
+// task_stop and task_tell reach the tasks of the conversation, for the
+// owner's agent alone; where none run in the background they say so.
+func TestTaskTools(t *testing.T) {
+	tools := taskTools()
+	stop, tell := tools[0], tools[1]
+	if stop.Name != ToolTaskStop || tell.Name != ToolTaskTell || !stop.OwnerOnly || !tell.OwnerOnly {
+		t.Fatalf("tools %+v", tools)
+	}
+	background := &started{}
+	ctx := WithTasks(context.Background(), background)
+	if got, err := stop.Run(ctx, json.RawMessage(`{"task":2}`)); err != nil || got != "Task 2 is stopped; its report says so." {
+		t.Fatalf("stop: %q, %v", got, err)
+	}
+	if got, err := tell.Run(ctx, json.RawMessage(`{"task":3,"text":"be quick"}`)); err != nil || !strings.HasPrefix(got, "Told task 3;") {
+		t.Fatalf("tell: %q, %v", got, err)
+	}
+	if fmt.Sprint(background.stopped) != "[2]" || fmt.Sprint(background.told) != "[3: be quick]" {
+		t.Fatalf("stopped %v, told %v", background.stopped, background.told)
+	}
+	for name, call := range map[string]func() error{
+		"empty text": func() error { _, err := tell.Run(ctx, json.RawMessage(`{"task":3,"text":" "}`)); return err },
+		"unknown":    func() error { _, err := stop.Run(ctx, json.RawMessage(`{"task":3,"why":"x"}`)); return err },
+		"no tasks":   func() error { _, err := stop.Run(context.Background(), json.RawMessage(`{"task":1}`)); return err },
+		"for a peer": func() error {
+			_, err := tell.Run(a2a.WithOrigin(ctx, a2a.Origin{PublicKey: "k"}), json.RawMessage(`{"task":1,"text":"x"}`))
+			return err
+		},
+		"not running": func() error {
+			background.err = errTest
+			_, err := stop.Run(ctx, json.RawMessage(`{"task":9}`))
+			return err
+		},
+	} {
+		if call() == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	// A helper hands nothing on, and so reaches no task.
+	if got := forHelpers(tools); len(got) != 0 {
+		t.Fatalf("helpers get %+v", got)
+	}
+}
+
+// A helper takes what the agent tells it, and nothing the owner says.
+func TestHelperTakesWhatItIsTold(t *testing.T) {
+	ctx := agent.WithMessageSteering(context.Background(), func() []openai.Message { return []openai.Message{{Content: "owner"}} })
+	ctx = WithTaskSteering(ctx, func() []openai.Message { return []openai.Message{{Role: "user", Content: "be quick"}} })
+	if got := agent.SteeredMessages(helping(ctx)); len(got) != 1 || got[0].Content != "be quick" {
+		t.Fatalf("steered %+v", got)
 	}
 }
 

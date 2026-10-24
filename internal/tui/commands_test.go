@@ -47,18 +47,14 @@ func TestCommands(t *testing.T) {
 	}
 }
 
-// suggested are the lines of the list of suggestions in the view, without
-// colors and with one space between the words: what the panel over the chat
-// shows above the input.
+// suggested are the lines of the list of suggestions above the composer,
+// without colors and with one space between the words.
 func suggested(m *Model) []string {
 	var lines []string
-	for _, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
-		// The panel lies two cells right of the border of the chat.
-		if cells := []rune(l); len(cells) > 4 && cells[2] == '│' {
-			lines = append(lines, strings.Join(strings.Fields(string(cells[3:len(cells)-3])), " "))
-		}
+	for _, l := range m.panelLines() {
+		lines = append(lines, strings.Join(strings.Fields(ansi.Strip(l)), " "))
 	}
-	return lines[:max(0, len(lines)-inputHeight)]
+	return lines
 }
 
 // While a command is typed, a list above the input offers those that fit:
@@ -122,7 +118,7 @@ func TestCommandSuggestions(t *testing.T) {
 
 	// More commands than the list has rows: it scrolls to the one selected.
 	m.input.SetValue("/")
-	if got := suggested(m); len(got) != maxSuggestions || got[0] != "› /new start a conversation of its own, outside the thread; the one shown goes on" {
+	if got := suggested(m); len(got) != maxSuggestions || !strings.HasPrefix(got[0], "› /new start a conversation of its own, outside the thread") {
 		t.Fatalf("suggested %q", got)
 	}
 	press(m, "up")
@@ -147,7 +143,7 @@ func TestHelp(t *testing.T) {
 	}
 	view := ansi.Strip(m.View().Content)
 	// Descriptions can wrap within the narrower dialog.
-	helpText := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(m.helpView()), "│", " ")), " ")
+	helpText := strings.Join(strings.Fields(strings.ReplaceAll(ansi.Strip(drawnOf(m.helpView())), "│", " ")), " ")
 	for _, c := range own {
 		if !strings.Contains(view, "/"+c.name) || !strings.Contains(helpText, c.help) {
 			t.Fatalf("help lacks /%s:\n%s", c.name, view)
@@ -164,11 +160,11 @@ func TestHelp(t *testing.T) {
 	}
 }
 
-// /debug turns the debug mode of the node on and off again, and the header
+// /debug turns the debug mode of the node on and off again, and the head
 // says so on the right while it is on.
 func TestDebug(t *testing.T) {
 	m, b := newModel(t)
-	header := func() string { return strings.Split(ansi.Strip(m.View().Content), "\n")[0] }
+	header := func() string { return strings.Split(ansi.Strip(m.View().Content), "\n")[1] }
 	if strings.Contains(header(), "DEBUG MODE") {
 		t.Fatalf("header %q", header())
 	}
@@ -179,7 +175,7 @@ func TestDebug(t *testing.T) {
 
 	b.status.Debug = true
 	m.Update(m.refreshStatus())
-	if h := header(); !strings.HasSuffix(h, " DEBUG MODE ") || ansi.StringWidth(h) != m.width || !strings.HasPrefix(h, " alpha ") {
+	if h := header(); !strings.HasSuffix(strings.TrimRight(h, " "), " DEBUG MODE") || ansi.StringWidth(h) != m.width || !strings.Contains(h, "OUROBOROS") {
 		t.Fatalf("header %q", h)
 	}
 	settle(m, run(m, "/debug"))
@@ -188,8 +184,8 @@ func TestDebug(t *testing.T) {
 	}
 
 	// A narrow window keeps the mark, not the rest.
-	m.Update(tea.WindowSizeMsg{Width: 12, Height: 30})
-	if h := header(); h != " DEBUG MODE " {
+	m.Update(tea.WindowSizeMsg{Width: 16, Height: 30})
+	if h := header(); strings.TrimSpace(h) != "DEBUG MODE" {
 		t.Fatalf("header %q", h)
 	}
 }

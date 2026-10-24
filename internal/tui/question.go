@@ -13,15 +13,12 @@ import (
 
 // The agent may ask the owner a question on its way to an answer, with
 // answers to choose from, and waits for theirs: see plugin.SessionAsked. The
-// question goes into the conversation like what the agent says, and where
-// the input is the owner answers it: the arrow keys select an answer, enter
-// gives it. Below the answers is a row to answer in own words instead: with
-// it selected the input is there to write in, and what is sent from it is
-// the answer. Typing selects it. esc stops the answer on its way, as ever.
-
-// ownWords is the row below the answers of a question: with it selected the
-// owner writes what they answer.
-const ownWords = "Chat about it"
+// question goes into the conversation like what the agent says, and above
+// the composer the owner answers it, as the GUI asks for a decision: the
+// arrow keys select an answer, enter gives it. Below the answers the
+// composer is there to answer in own words instead: with it selected, what
+// is sent from it is the answer. Typing selects it. esc stops the answer on
+// its way, as ever.
 
 // asking is a question the agent asks the owner in a conversation, while it
 // waits for the answer.
@@ -29,7 +26,7 @@ type asking struct {
 	question    string
 	options     []string // the answers to choose from
 	recommended string   // the one of them the agent would choose, "" for none
-	sel         int      // the row selected: one of options, or len(options) for ownWords
+	sel         int      // the answer selected, or len(options) for own words
 	sent        bool     // the answer chosen is on its way to the node
 }
 
@@ -58,7 +55,7 @@ func (a *asking) unsent() {
 // the owner answered.
 func (c *conversation) ask(e Event) {
 	if !e.Done {
-		c.add(entry{text: e.Text, at: e.At})
+		c.add(entry{text: e.Text, at: e.At, question: true})
 		c.asking = &asking{question: e.Text, options: e.Options, recommended: e.Recommended,
 			sel: max(0, slices.Index(e.Options, e.Recommended))}
 		return
@@ -113,59 +110,72 @@ func (m *Model) choose(option string) tea.Cmd {
 	}
 }
 
-// inputView is what the box of the input shows, width cells wide: the
-// input, or while the agent asks in the conversation shown, the question on
-// a line, the answers to choose from and the row for own words, with the
-// input below it once that is selected. rows is how many rows there are for
-// it beyond those of the input: answers that do not fit are left out around
-// the one selected.
-func (m *Model) inputView(width, rows int) string {
-	a := m.chat.asking
-	if a == nil || a.sent {
-		return m.input.View()
-	}
-	// A question without answers to choose from is answered in own words:
-	// there is no row to select for that.
-	var names []string
-	if len(a.options) > 0 {
-		names = append(slices.Clone(a.options), ownWords)
-	}
-	list := make([]string, len(names))
-	for i, name := range names {
-		mark, style := "  ", lipgloss.NewStyle()
-		if i == a.sel {
-			mark, style = boldStyle.Foreground(accent).Render("› "), boldStyle.Foreground(accent)
+// questionLines is the question of the agent above the composer, w cells
+// wide, as the GUI asks for a decision: the question, its answers to choose
+// from as buttons, the one selected standing out, and what to do. Below the
+// answers the composer is there to answer in own words: typing selects it,
+// and so does up from the first answer. Answers that do not fit are left
+// out. A click on an answer gives it, as in the GUI, and one on what to do
+// below them selects the composer: the hits say where.
+func (m *Model) questionLines(a *asking, w int) ([]string, []hit) {
+	lines := []string{boldStyle.Foreground(accent).Render("YOUR DECISION")}
+	question := strings.Split(lipgloss.Wrap(a.question, w, ""), "\n")
+	most := max(4, m.height*panelShare/100)
+	var buttons []string
+	var hits []hit // of the rows of buttons, from the first
+	row := ""
+	for i, name := range a.options {
+		label := name
+		if name == a.recommended {
+			label += " · Recommended"
 		}
-		line := mark + style.Render(name)
+		style := lipgloss.NewStyle().Foreground(ui.text).Background(ui.hover)
 		switch {
-		case i == len(a.options):
-			line += mutedStyle.Render("  write your own answer")
+		case i == a.sel && !a.sent:
+			style = boldStyle.Foreground(ui.background).Background(accent)
 		case name == a.recommended:
-			line += mutedStyle.Render("  recommended")
+			style = style.Foreground(accent)
 		}
-		list[i] = ansi.Truncate(line, width, "…")
+		button := style.Render(" " + ansi.Truncate(label, max(1, w-2), "…") + " ")
+		if row != "" && lipgloss.Width(row)+1+lipgloss.Width(button) > w {
+			buttons, row = append(buttons, row), ""
+		}
+		if row != "" {
+			row += " "
+		}
+		hits = append(hits, hit{line: len(buttons), from: lipgloss.Width(row), to: lipgloss.Width(row) + lipgloss.Width(button), do: func() tea.Cmd {
+			if a.sent || m.chat.asking != a {
+				return nil
+			}
+			return m.choose(name)
+		}})
+		row += button
 	}
-	fixed := 1 // the question
-	if a.own() {
-		fixed += inputHeight
+	if row != "" {
+		buttons = append(buttons, row)
 	}
-	shown := min(len(list), max(1, rows+inputHeight-fixed))
-	top := max(0, min(a.sel-shown+1, len(list)-shown))
-	lines := []string{boldStyle.Foreground(accent).Render("? ") + boldStyle.Render(short(a.question, max(1, width-2)))}
-	lines = append(lines, list[top:top+shown]...)
-	if a.own() {
-		lines = append(lines, m.input.View())
+	hint := mutedStyle.Render("Choose an answer or write your own below.")
+	switch {
+	case a.sent:
+		hint = mutedStyle.Render("Answer delivered – the assistant goes on …")
+	case a.own() && len(a.options) > 0:
+		hint = boldStyle.Foreground(accent).Render("› ") + mutedStyle.Render("Write your own answer below · ↑ back to the answers")
+	case len(a.options) == 0:
+		hint = mutedStyle.Render("Write your answer below.")
 	}
-	return strings.Join(lines, "\n")
-}
-
-// givenUp is how many bottom rows of the history the panel covers: with
-// commands that fit what is typed, or answers to a question of the agent.
-func (m *Model) givenUp() int {
-	panel := m.panel()
-	if panel == "" {
-		return 0
+	room := most - 2 - len(buttons) // the heading and the hint
+	if len(buttons) > 0 {
+		room--
 	}
-	// The history begins below the top border of the chat.
-	return min(m.history.Height(), max(0, m.history.Height()+1-m.panelTop(panel)))
+	if len(question) > max(1, room) {
+		question = append(question[:max(1, room)-1], mutedStyle.Render("…"))
+	}
+	lines = append(lines, question...)
+	if len(buttons) > 0 {
+		lines = append(lines, "")
+		hits = shifted(hits, 0, len(lines), len(buttons))
+		lines = append(lines, buttons...)
+		hits = append(hits, onLine(len(lines), func() tea.Cmd { a.write(); return nil }))
+	}
+	return append(lines, hint), hits
 }

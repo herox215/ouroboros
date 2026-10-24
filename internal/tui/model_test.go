@@ -173,13 +173,13 @@ func TestModelScreenScrolls(t *testing.T) {
 	}
 	// A list that starts with the line of an access keeps it.
 	m.picker.sel = 0
-	lines := m.picker.list(m, 80, 3)
+	lines, _ := m.picker.list(m, 80, 3)
 	if !strings.Contains(ansi.Strip(lines[0]), "OpenCode Go") {
 		t.Fatalf("the top of the list: %q", lines)
 	}
 	// One line is the model selected, not the name of its access.
 	m.picker.sel = 5
-	if lines = m.picker.list(m, 80, 1); !strings.Contains(ansi.Strip(lines[0]), "▸ model-04") {
+	if lines, _ = m.picker.list(m, 80, 1); !strings.Contains(ansi.Strip(lines[0]), "▸ model-04") {
 		t.Fatalf("one line: %q", lines)
 	}
 }
@@ -266,7 +266,7 @@ func TestModelListLayout(t *testing.T) {
 	never.Err, never.Access.Label, never.Access.About = "API key rejected", "Work", ""
 	m.picker.loaded(m, modelsMsg{models: []Models{down, never, local("llama3")}})
 	var got []string
-	for _, l := range m.picker.list(m, 80, 20) {
+	for _, l := range linesOf(m.picker.list(m, 80, 20)) {
 		got = append(got, ansi.Strip(l))
 	}
 	want := []string{
@@ -291,7 +291,7 @@ func TestModelListLayout(t *testing.T) {
 	long := local(strings.Repeat("m", 60))
 	long.Err = strings.Repeat("e", 60)
 	m.picker.loaded(m, modelsMsg{models: []Models{long}})
-	lines := m.picker.list(m, 40, 20)
+	lines, _ := m.picker.list(m, 40, 20)
 	for i, width := range []int{36, 34, 28} {
 		if w := ansi.StringWidth(ansi.Strip(lines[i])); w != width || !strings.HasSuffix(ansi.Strip(lines[i]), "…") {
 			t.Errorf("line %d is %d cells wide, want %d: %q", i, w, width, ansi.Strip(lines[i]))
@@ -311,7 +311,7 @@ func TestModelListWindow(t *testing.T) {
 	shown := func(sel int) []string {
 		m.picker.sel = sel
 		var lines []string
-		for _, l := range m.picker.list(m, 80, 10) {
+		for _, l := range linesOf(m.picker.list(m, 80, 10)) {
 			lines = append(lines, strings.TrimSpace(ansi.Strip(l)))
 		}
 		return lines[:10]

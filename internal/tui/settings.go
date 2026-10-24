@@ -541,11 +541,16 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 		debug, turn = "on", "turn off"
 	}
 	model := action{"open /model", (*Model).openModel}
+	var looks []action
+	for _, a := range appearances {
+		looks = append(looks, action{a, func(m *Model) tea.Cmd { return m.setAppearance(a) }})
+	}
 	return []row{
 		{section: nodeSection, label: "Model for peers", value: peers, note: "what your agent answers peers with; p on /model chooses it", actions: []action{model}},
 		{section: nodeSection, label: "Fallbacks", value: fallback, note: "what your agent goes on with when the model cannot answer for now; f on /model adds or removes one", actions: []action{model}},
 		{section: nodeSection, label: "Effort", value: effortName(m.status.Effort), note: "how much the model thinks before it answers you", actions: []action{{"open /effort", (*Model).openEffort}}},
 		{section: nodeSection, label: "Debug mode", value: debug, note: "the log of the node (ouro.log) tells much more of every call of the LLM", actions: []action{{turn, (*Model).toggleDebug}}},
+		{section: nodeSection, label: "Appearance", value: m.appearanceText(), note: "how this terminal UI looks, in the colors of the GUI: light, dark, or system, as the background of the terminal is; for all profiles, also the next time; /appearance changes it too", actions: looks},
 	}
 }
 
@@ -864,11 +869,21 @@ func (c *settingsScreen) title() []string {
 // it, and the text that is typed. It moves the window and keeps it (top),
 // which the key handler cannot: only here is known how many lines a row
 // takes.
-func (c *settingsScreen) view(m *Model) string {
+func (c *settingsScreen) view(m *Model) (string, []hit) {
 	w, h := m.settingsSize()
 	inner := max(10, w-4)
 	head := c.title()
 	var lines []string
+	// A click on a line selects what it is of, and on what is selected
+	// does the action chosen; one on an action chooses it and does it.
+	var hits []hit
+	enter := func() tea.Cmd { return c.handleKey(m, enterKey) }
+	act := func(names []string) {
+		hits = append(hits, choiceHits(len(lines), 4, names, func(j int) tea.Cmd {
+			m.choice = j
+			return enter()
+		})...)
+	}
 	at, height := 0, 1 // where what is selected is, and how many lines it takes
 	selected := lipgloss.NewStyle().Foreground(accent)
 	if c.info != nil {
@@ -882,7 +897,7 @@ func (c *settingsScreen) view(m *Model) string {
 		lines = []string{boldStyle.Render(ansi.Truncate(c.info.label+" · Info", inner, "…")), ""}
 		lines = append(lines, text[c.infoTop:min(len(text), c.infoTop+room)]...)
 		body := lipgloss.NewStyle().Width(inner).MaxHeight(max(1, h-2)).Render(strings.Join(lines, "\n"))
-		return box(true, m.light).Width(w).Render(body)
+		return box(true, m.light).Width(w).Render(body), nil
 	}
 	switch {
 	case c.err != nil:
@@ -900,9 +915,14 @@ func (c *settingsScreen) view(m *Model) string {
 				at = len(lines)
 				marker, name = selected.Render("› "), selected.Bold(true).Width(nameWidth+2).Render(s)
 			}
+			hits = append(hits, onLine(len(lines), choosing(i == c.category, func() { c.category, m.choice = i, 0 }, func() tea.Cmd {
+				m.choice = 0 // the name opens it
+				return enter()
+			})))
 			lines = append(lines, ansi.Truncate(marker+name, inner, "…"))
 			doing := ""
 			if i == c.category {
+				act([]string{"open", "Info"})
 				doing = choices([]string{"open", "Info"}, m.choice)
 				height = 2
 			}
@@ -934,8 +954,12 @@ func (c *settingsScreen) view(m *Model) string {
 			if r.sub {
 				label = style.Render(ansi.Truncate(r.label, max(inner-6, 1), "…"))
 			}
+			from := len(lines)
 			lines = append(lines, ansi.Truncate(marker+mutedStyle.Render(indent)+label+r.value, inner, "…"))
 			lines = append(lines, details(r.details, inner)...)
+			for l := from; l < len(lines); l++ {
+				hits = append(hits, onLine(l, choosing(i == c.sel, func() { c.sel, m.choice = i, 0 }, enter)))
+			}
 			// What can be done with a line holds a line of its own on every
 			// row, empty on those not selected: the rows below it stay where
 			// they are while the selection moves.
@@ -946,6 +970,7 @@ func (c *settingsScreen) view(m *Model) string {
 					names[j] = a.name
 				}
 				if len(names) > 0 {
+					act(names)
 					doing = choices(names, m.choice)
 				}
 				height = len(lines) + 1 - at
@@ -973,6 +998,7 @@ func (c *settingsScreen) view(m *Model) string {
 	top = max(0, min(top, max(0, len(lines)-room)))
 	c.top = top
 	below := len(lines) - top - room
+	hits = shifted(hits, top, len(head), room)
 	lines = lines[top:min(len(lines), top+room)]
 	if scrolls {
 		more := ""
@@ -989,7 +1015,10 @@ func (c *settingsScreen) view(m *Model) string {
 		all[i] = ansi.Truncate(l, inner, "…")
 	}
 	body := lipgloss.NewStyle().Width(inner).MaxHeight(max(1, h-2)).Render(strings.Join(all, "\n"))
-	return box(true, m.light).Width(w).Render(body)
+	if c.editing != nil {
+		hits = nil // what is typed is kept or not by its keys
+	}
+	return box(true, m.light).Width(w).Render(body), hits
 }
 
 // details are the lines that show what the settings of a row are set to,

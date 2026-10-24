@@ -33,24 +33,18 @@ var (
 	noteStyle    = mutedStyle.Italic(true)                // a note in brackets
 )
 
-// roleColors are the colors of the roles of messages: the user and the agent
-// have theirs of the chat.
-var roleColors = map[string]color.Color{
-	"user":              accent,
-	"assistant":         peer,
-	"system":            lipgloss.Color("7"),
-	"tool":              good, // what a tool returned
-	"plugin diagnostic": bad,
-}
+// roleColors are the colors of the roles of messages, in the palette of the
+// GUI: what a tool returned in the muted color. Set by applyPalette.
+var roleColors map[string]color.Color
 
 // roleColor is the color of the messages of role: a tool the LLM is offered
-// is blue, a role that is not known muted.
+// stands out, a role that is not known is muted.
 func roleColor(role string) color.Color {
 	if c, ok := roleColors[role]; ok {
 		return c
 	}
 	if strings.HasPrefix(role, "tool ") {
-		return lipgloss.Color("4")
+		return warn
 	}
 	return muted
 }
@@ -75,7 +69,7 @@ func renderMessage(c Message, i int, width int, light bool) string {
 // badge with label in col, a note after it, a rule and end, and lines that
 // hang on a bar of col, two cells narrower.
 func block(label string, col color.Color, note, end string, lines []string, width int, light bool) string {
-	badge := lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(col).Bold(true).Padding(0, 1).Render(label)
+	badge := lipgloss.NewStyle().Foreground(ui.background).Background(col).Bold(true).Padding(0, 1).Render(label)
 	note, end = " "+note, " "+end
 	rule := strings.Repeat("─", max(0, width-lipgloss.Width(badge)-lipgloss.Width(note)-lipgloss.Width(end)-1))
 	out := []string{badge + mutedStyle.Render(note) + lipgloss.NewStyle().Foreground(borderMuted(light)).Render(" "+rule) + mutedStyle.Render(end)}

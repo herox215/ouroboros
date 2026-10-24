@@ -543,8 +543,7 @@ func (s *Service) hand(ctx context.Context, id, text string, pictures []openai.I
 		s.busy()
 		return title, "queued: the answer on its way there takes it", nil
 	}
-	s.begin(se, p, append(se.queue, message)...)
-	se.queue = nil
+	s.begin(se, p, append(ready(se), message)...)
 	return title, "the session answers it now", nil
 }
 

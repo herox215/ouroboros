@@ -1,0 +1,458 @@
+package tui
+
+import (
+	"fmt"
+	"image"
+	"image/color"
+	_ "image/gif" // the pictures a preview can show
+	_ "image/jpeg"
+	_ "image/png"
+	"os"
+	"slices"
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
+
+	"ouroboros/plugin"
+)
+
+// A picture that was dropped or pasted shows as its label, [Image_n]. The
+// mouse that rests on such a label for a moment shows the picture above it,
+// small. A terminal that draws sixels, as foot does, gets the picture as it
+// is: the UI keeps a box of blank cells free for it, and once the box is on
+// the screen the picture is drawn into it. Any other terminal gets it in
+// cells of two pixels each: the upper half of ▀ in the color of its
+// foreground, the lower in that of its background. Once the mouse moves, or a
+// key or the wheel is used, it is gone; a sixel is not part of what the UI
+// draws, so the screen is drawn anew. A picture that cannot be read, or of a
+// kind Go does not read, as webp, shows nothing.
+
+// hoverDelay is how long the mouse rests on a label before its picture shows.
+const hoverDelay = time.Second
+
+// sixelDelay is how long the box for a sixel is on the screen before the
+// picture is drawn into it: the frame with the box must be written first, or
+// it would write its blanks over the picture.
+const sixelDelay = 50 * time.Millisecond
+
+// The preview of cells is at most so many cells wide and pixels high, and
+// that of a sixel at most so many pixels wide and high.
+const previewCols, previewPixels, sixelPixels = 32, 32, 240
+
+// terminalQuery asks the terminal whether it draws sixels, and how large its
+// cells are in pixels: see graphics.
+var terminalQuery = ansi.RequestPrimaryDeviceAttributes + ansi.WindowOp(ansi.RequestCellSizeWinOp)
+
+// graphics is what the terminal told of its pictures.
+type graphics struct {
+	sixel bool
+	cellW int // the size of a cell in pixels, 0 while not known
+	cellH int
+}
+
+// cell is the size of a cell in pixels, as the terminal told it or as most are.
+func (g graphics) cell() (int, int) {
+	if g.cellW <= 0 || g.cellH <= 0 {
+		return 10, 20
+	}
+	return g.cellW, g.cellH
+}
+
+// hover is where the mouse rests and the preview it shows there, if any.
+type hover struct {
+	x, y  int
+	seq   int    // counts the moves, so that a late tick of an old one is dropped
+	view  string // the preview shown, boxed
+	sixel string // the picture to draw into the box of view, if a sixel
+	drawn bool   // the sixel is on the screen
+}
+
+// hoverMsg is the tick of a mouse that rested since the move seq.
+type hoverMsg struct{ seq int }
+
+// previewMsg is the picture of the label the mouse rests on since the move
+// seq: the box to show, "" if it could not be read, and the sixel to draw
+// into it, if any.
+type previewMsg struct {
+	seq         int
+	view, sixel string
+}
+
+// sixelMsg is the tick of the box of the sixel of the move seq on the screen.
+type sixelMsg struct{ seq int }
+
+// told takes what the terminal told of its pictures, for every profile.
+func (m *Model) told(msg tea.Msg) {
+	for _, o := range m.siblings() {
+		switch msg := msg.(type) {
+		case uv.PrimaryDeviceAttributesEvent:
+			o.graphics.sixel = slices.Contains(msg, 4)
+		case uv.CellSizeEvent:
+			o.graphics.cellW, o.graphics.cellH = msg.Width, msg.Height
+		}
+	}
+}
+
+// rest notes the mouse at x and y, without a button down: what it showed is
+// gone, and if it stays, its tick comes.
+func (m *Model) rest(x, y int) tea.Cmd {
+	if m.hover.x == x && m.hover.y == y && m.hover.view != "" {
+		return nil
+	}
+	cmd := m.unhover()
+	m.hover.x, m.hover.y = x, y
+	seq := m.hover.seq
+	return tea.Batch(cmd, tea.Tick(hoverDelay, func(time.Time) tea.Msg { return hoverMsg{seq} }))
+}
+
+// unhover takes the preview away, and the tick of where the mouse was. A
+// sixel drawn goes with the screen drawn anew.
+func (m *Model) unhover() tea.Cmd {
+	drawn := m.hover.drawn
+	m.hover = hover{x: m.hover.x, y: m.hover.y, seq: m.hover.seq + 1}
+	if drawn {
+		return tea.ClearScreen
+	}
+	return nil
+}
+
+// hovered reads the picture of the label under the mouse that rested.
+func (m *Model) hovered(msg hoverMsg) tea.Cmd {
+	if msg.seq != m.hover.seq || m.screen != screenChat || m.pressed != nil {
+		return nil
+	}
+	path, ok := m.pictureAt(m.hover.x, m.hover.y)
+	if !ok {
+		return nil
+	}
+	seq, g := m.hover.seq, m.graphics
+	return func() tea.Msg {
+		view, sixel := preview(path, g)
+		return previewMsg{seq, view, sixel}
+	}
+}
+
+// previewed shows the picture read for where the mouse still rests: a sixel
+// once its box is on the screen.
+func (m *Model) previewed(msg previewMsg) tea.Cmd {
+	if msg.seq != m.hover.seq {
+		return nil
+	}
+	m.hover.view, m.hover.sixel = msg.view, msg.sixel
+	if msg.sixel == "" {
+		return nil
+	}
+	return tea.Tick(sixelDelay, func(time.Time) tea.Msg { return sixelMsg{msg.seq} })
+}
+
+// drawSixel draws the sixel into its box, where the box still is: at the
+// first cell inside its border, the cursor kept where the UI has it.
+func (m *Model) drawSixel(msg sixelMsg) tea.Cmd {
+	if msg.seq != m.hover.seq || m.hover.sixel == "" || m.screen != screenChat {
+		return nil
+	}
+	x, y := m.previewAt()
+	m.hover.drawn = true
+	return tea.Raw(ansi.SaveCursor + ansi.CursorPosition(x+2, y+2) + m.hover.sixel + ansi.RestoreCursor)
+}
+
+// pictureAt is the file of the picture whose label is at x and y on the
+// chat, as it is drawn: in the history or in the composer.
+func (m *Model) pictureAt(x, y int) (string, bool) {
+	lines := strings.Split(m.chatScreen(), "\n")
+	if y < 0 || y >= len(lines) {
+		return "", false
+	}
+	line := ansi.Strip(lines[y])
+	for _, at := range labels.FindAllStringIndex(line, -1) {
+		from := ansi.StringWidth(line[:at[0]])
+		if x < from || x >= from+at[1]-at[0] {
+			continue
+		}
+		path, ok := m.chat.attachment(line[at[0]:at[1]])
+		return path, ok && plugin.IsPicture(path)
+	}
+	return "", false
+}
+
+// previewAt is where the preview lies: above the mouse, or below it where
+// there is no room above, and inside the window.
+func (m *Model) previewAt() (x, y int) {
+	w, h := lipgloss.Width(m.hover.view), lipgloss.Height(m.hover.view)
+	x = min(max(0, m.hover.x-w/2), max(0, m.width-w))
+	y = m.hover.y - h
+	if y < 0 {
+		y = min(m.hover.y+1, max(0, m.height-h))
+	}
+	return x, y
+}
+
+// withPreview lays the preview over the chat.
+func (m *Model) withPreview(screen string) string {
+	if m.hover.view == "" {
+		return screen
+	}
+	x, y := m.previewAt()
+	canvas := lipgloss.NewCanvas(m.width, m.height)
+	canvas.Compose(lipgloss.NewCompositor(
+		lipgloss.NewLayer(screen),
+		lipgloss.NewLayer(m.hover.view).X(x).Y(y).Z(1),
+	))
+	return lipgloss.NewStyle().Width(m.width).Height(m.height).MaxHeight(m.height).Render(canvas.Render())
+}
+
+// preview reads the picture at path and draws it boxed for a terminal of g,
+// and if it draws sixels, the box blank and the sixel for it. "" if the
+// picture cannot be read.
+func preview(path string, g graphics) (view, sixel string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", ""
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil || img.Bounds().Empty() {
+		return "", ""
+	}
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ui.line)
+	if !g.sixel {
+		return box.Render(halfBlocks(img, previewCols, previewPixels)), ""
+	}
+	w, h := fit(img.Bounds(), sixelPixels, sixelPixels, false)
+	cw, ch := g.cell()
+	// The cells that the picture covers, also the last band of six pixels
+	// of it, whole.
+	cols, rows := (w+cw-1)/cw, ((h+5)/6*6+ch-1)/ch
+	blank := strings.Repeat(strings.Repeat(" ", cols)+"\n", rows)
+	return box.Render(strings.TrimSuffix(blank, "\n")), encodeSixel(scaled(img, w, h))
+}
+
+// fit is the size of a picture of bounds b in at most w×h, as it is, and
+// larger than it is only if grow.
+func fit(b image.Rectangle, w, h int, grow bool) (int, int) {
+	scale := min(float64(w)/float64(b.Dx()), float64(h)/float64(b.Dy()))
+	if !grow {
+		scale = min(scale, 1)
+	}
+	return max(1, int(float64(b.Dx())*scale+0.5)), max(1, int(float64(b.Dy())*scale+0.5))
+}
+
+// scaled is img in w×h pixels, each the average of those it covers, on the
+// background of the UI where they are transparent.
+func scaled(img image.Image, w, h int) *image.RGBA {
+	b := img.Bounds()
+	back := opaque(ui.background)
+	out := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := range h {
+		for x := range w {
+			out.SetRGBA(x, y, average(img, b, x*b.Dx()/w, (x+1)*b.Dx()/w, y*b.Dy()/h, (y+1)*b.Dy()/h, back))
+		}
+	}
+	return out
+}
+
+// halfBlocks draws img in at most cols cells wide and pixels high, two
+// pixels a cell.
+func halfBlocks(img image.Image, cols, pixels int) string {
+	w, h := fit(img.Bounds(), cols, pixels, true)
+	h += h % 2 // a cell has two pixels
+	px := scaled(img, w, h)
+	var s strings.Builder
+	for y := 0; y < h; y += 2 {
+		if y > 0 {
+			s.WriteByte('\n')
+		}
+		for x := range w {
+			top, bottom := px.RGBAAt(x, y), px.RGBAAt(x, y+1)
+			fmt.Fprintf(&s, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm▀", top.R, top.G, top.B, bottom.R, bottom.G, bottom.B)
+		}
+		s.WriteString("\x1b[m")
+	}
+	return s.String()
+}
+
+// average is the color of the pixels of img from x0 to x1 and y0 to y1 of
+// its bounds b, on back where they are transparent. A large picture is
+// sampled, at most 8×8 pixels each.
+func average(img image.Image, b image.Rectangle, x0, x1, y0, y1 int, back color.RGBA) color.RGBA {
+	x1, y1 = max(x1, x0+1), max(y1, y0+1)
+	sx, sy := max(1, (x1-x0)/8), max(1, (y1-y0)/8)
+	var r, g, bl, n uint32
+	for y := y0; y < y1; y += sy {
+		for x := x0; x < x1; x += sx {
+			c := color.NRGBAModel.Convert(img.At(b.Min.X+x, b.Min.Y+y)).(color.NRGBA)
+			a := uint32(c.A)
+			r += (uint32(c.R)*a + uint32(back.R)*(255-a)) / 255
+			g += (uint32(c.G)*a + uint32(back.G)*(255-a)) / 255
+			bl += (uint32(c.B)*a + uint32(back.B)*(255-a)) / 255
+			n++
+		}
+	}
+	return color.RGBA{uint8(r / n), uint8(g / n), uint8(bl / n), 255}
+}
+
+// opaque is c as 8 bits a channel.
+func opaque(c color.Color) color.RGBA {
+	r, g, b, _ := c.RGBA()
+	return color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), 255}
+}
+
+// encodeSixel writes img as a sixel: in at most 256 colors, those it has
+// most of, the rest dithered with them.
+func encodeSixel(img *image.RGBA) string {
+	b := img.Bounds()
+	p := dither(img, paletteOf(img, 256))
+	w, h := b.Dx(), b.Dy()
+	var s strings.Builder
+	// The pixels of no color are left as they are; the size is w×h.
+	fmt.Fprintf(&s, "\x1bP0;1;0q\"1;1;%d;%d", w, h)
+	for i, c := range p.Palette {
+		r, g, bl, _ := c.RGBA()
+		fmt.Fprintf(&s, "#%d;2;%d;%d;%d", i, r*100/0xffff, g*100/0xffff, bl*100/0xffff)
+	}
+	used := make([]bool, len(p.Palette))
+	for y0 := 0; y0 < h; y0 += 6 {
+		clear(used)
+		for y := y0; y < min(y0+6, h); y++ {
+			for _, i := range p.Pix[y*p.Stride : y*p.Stride+w] {
+				used[i] = true
+			}
+		}
+		first := true
+		for i, u := range used {
+			if !u {
+				continue
+			}
+			if !first {
+				s.WriteByte('$') // back to the start of the band, for the next color
+			}
+			first = false
+			fmt.Fprintf(&s, "#%d", i)
+			run, last := 0, byte(0)
+			flush := func() {
+				switch {
+				case run > 3:
+					fmt.Fprintf(&s, "!%d%c", run, last)
+				default:
+					s.WriteString(strings.Repeat(string(last), run))
+				}
+			}
+			for x := range w {
+				bits := byte(0)
+				for k := range 6 {
+					if y := y0 + k; y < h && int(p.Pix[y*p.Stride+x]) == i {
+						bits |= 1 << k
+					}
+				}
+				if ch := 63 + bits; ch == last {
+					run++
+				} else {
+					flush()
+					run, last = 1, ch
+				}
+			}
+			flush()
+		}
+		s.WriteByte('-') // the next band
+	}
+	s.WriteString("\x1b\\")
+	return s.String()
+}
+
+// dither is img in the colors of pal, the error of each pixel spread to
+// those right of and below it, as Floyd and Steinberg do.
+func dither(img *image.RGBA, pal color.Palette) *image.Paletted {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	out := image.NewPaletted(image.Rect(0, 0, w, h), pal)
+	cols := make([][3]int, len(pal))
+	for i, c := range pal {
+		r, g, bl, _ := c.RGBA()
+		cols[i] = [3]int{int(r >> 8), int(g >> 8), int(bl >> 8)}
+	}
+	// The errors carried to this line and the next, in 1/16, one pixel
+	// more on each side.
+	line, next := make([][3]int, w+2), make([][3]int, w+2)
+	for y := range h {
+		for x := range w {
+			o := img.PixOffset(b.Min.X+x, b.Min.Y+y)
+			var want [3]int
+			for c := range 3 {
+				want[c] = min(255, max(0, int(img.Pix[o+c])+line[x+1][c]/16))
+			}
+			best, dist := 0, 1<<30
+			for i, c := range cols {
+				dr, dg, db := want[0]-c[0], want[1]-c[1], want[2]-c[2]
+				if d := dr*dr + dg*dg + db*db; d < dist {
+					best, dist = i, d
+				}
+			}
+			out.Pix[y*out.Stride+x] = uint8(best)
+			for c := range 3 {
+				e := want[c] - cols[best][c]
+				line[x+2][c] += e * 7
+				next[x][c] += e * 3
+				next[x+1][c] += e * 5
+				next[x+2][c] += e
+			}
+		}
+		line, next = next, line
+		clear(next)
+	}
+	return out
+}
+
+// paletteOf is a palette of at most n colors for img, by median cut: the
+// pixels are split in two at the middle of the channel they differ most in,
+// the box with the widest range first, until there are n boxes, and each
+// box gives the average of its pixels.
+func paletteOf(img *image.RGBA, n int) color.Palette {
+	px := make([][3]uint8, 0, len(img.Pix)/4)
+	for i := 0; i < len(img.Pix); i += 4 {
+		px = append(px, [3]uint8{img.Pix[i], img.Pix[i+1], img.Pix[i+2]})
+	}
+	// widest is the channel the pixels of box differ most in, and by how much.
+	widest := func(box [][3]uint8) (int, int) {
+		lo, hi := [3]uint8{255, 255, 255}, [3]uint8{}
+		for _, p := range box {
+			for c := range 3 {
+				lo[c], hi[c] = min(lo[c], p[c]), max(hi[c], p[c])
+			}
+		}
+		at, wide := 0, -1
+		for c := range 3 {
+			if d := int(hi[c]) - int(lo[c]); d > wide {
+				at, wide = c, d
+			}
+		}
+		return at, wide
+	}
+	boxes := [][][3]uint8{px}
+	for len(boxes) < n {
+		at, channel, wide := -1, 0, 0
+		for i, box := range boxes {
+			if c, w := widest(box); len(box) > 1 && w > wide {
+				at, channel, wide = i, c, w
+			}
+		}
+		if at < 0 {
+			break // every box has one color
+		}
+		box := boxes[at]
+		slices.SortFunc(box, func(a, b [3]uint8) int { return int(a[channel]) - int(b[channel]) })
+		boxes[at], boxes = box[:len(box)/2], append(boxes, box[len(box)/2:])
+	}
+	p := make(color.Palette, 0, len(boxes))
+	for _, box := range boxes {
+		var sum [3]int
+		for _, q := range box {
+			sum[0], sum[1], sum[2] = sum[0]+int(q[0]), sum[1]+int(q[1]), sum[2]+int(q[2])
+		}
+		p = append(p, color.RGBA{uint8(sum[0] / len(box)), uint8(sum[1] / len(box)), uint8(sum[2] / len(box)), 255})
+	}
+	return p
+}

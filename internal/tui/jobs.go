@@ -3,13 +3,9 @@ package tui
 import (
 	"cmp"
 	"fmt"
-	"math"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
 )
@@ -114,11 +110,18 @@ func (s *jobsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // view shows, in a dialog, each job with where it runs and for how long.
-func (s *jobsScreen) view(m *Model) string {
+func (s *jobsScreen) view(m *Model) (string, []hit) {
 	lines := []string{
 		boldStyle.Render("Jobs"), "",
 		mutedStyle.Render("The commands the agent runs in the background for the answers on their way:"),
 		mutedStyle.Render("in your sessions and in the conversations of peers. They end with their answer."), "",
+	}
+	// A click on a job or a service selects it, and on the one selected
+	// stops it.
+	var hits []hit
+	entry := func(i int) {
+		do := choosing(i == s.sel, func() { s.sel = i }, func() tea.Cmd { return s.handleKey(m, enterKey) })
+		hits = append(hits, onLine(len(lines), do), onLine(len(lines)+1, do))
 	}
 	switch {
 	case s.err != nil:
@@ -138,6 +141,7 @@ func (s *jobsScreen) view(m *Model) string {
 			mark, name = "› ", boldStyle.Foreground(accent).Render(name)
 		}
 		took := m.now().Sub(j.Since).Round(time.Second)
+		entry(i)
 		lines = append(lines, mark+name, "    "+mutedStyle.Render(fmt.Sprintf("%s · for %s", where, took)))
 	}
 	if len(s.services) > 0 {
@@ -157,108 +161,25 @@ func (s *jobsScreen) view(m *Model) string {
 		if sv.Port > 0 {
 			about += fmt.Sprintf(" · localhost:%d", sv.Port)
 		}
+		entry(len(s.list) + i)
 		lines = append(lines, mark+name, "    "+mutedStyle.Render(about))
 	}
-	return m.dialog(lines)
+	return m.dialog(lines), hits
 }
 
 // jobsKey is the key that shows the list of the jobs, and hides it again.
 const jobsKey = "ctrl+j"
 
-// jobsListWidth is how wide the list of the jobs on the right is at most,
-// with its border.
-const jobsListWidth = 30
-
-// jobsWidth is how wide the list of the jobs on the right is: a third of the
-// window at most, 0 while it is hidden. On its way it slows down as it
-// arrives, just like the box of the input.
-func (m *Model) jobsWidth() int {
-	t := float64(m.jobsLevel) / jobsFrames
-	return int(math.Round((1 - math.Pow(1-t, 3)) * float64(min(jobsListWidth, m.width/3))))
-}
-
-// jobsList lists the jobs of the session shown on the right of the chat,
-// and the services below them, as high as the chat and the input. A job too long for a line goes on in the
-// next ones, indented.
-func (m *Model) jobsList() string {
-	w, h := min(jobsListWidth, m.width/3), m.bodyHeight()
-	inner := max(1, w-4) // border and padding
-	lines := []string{boldStyle.Render("Jobs")}
-	if len(m.chat.jobs) == 0 {
-		lines = append(lines, mutedStyle.Render(lipgloss.Wrap("No command runs in the background.", inner, "")))
-	}
-	// A line too long goes on in the next ones, indented.
-	wrap := func(text string) []string {
-		wrapped := strings.Split(lipgloss.Wrap(text, max(1, inner-2), ""), "\n")
-		for i := 1; i < len(wrapped); i++ {
-			wrapped[i] = "  " + wrapped[i]
-		}
-		return wrapped
-	}
-	for _, job := range m.chat.jobs {
-		lines = append(lines, wrap(job)...)
-	}
-	if len(m.chat.tasks) > 0 {
-		lines = append(lines, "", boldStyle.Render("Tasks"))
-	}
-	for _, task := range m.chat.tasks {
-		lines = append(lines, wrap(task)...)
-	}
-	if len(m.services) > 0 {
-		lines = append(lines, "", boldStyle.Render("Services"))
-	}
-	for _, sv := range m.services {
-		text := sv.Name
-		if sv.PeerKey != "" {
-			text += " · " + sv.Peer
-		}
-		if sv.Port > 0 {
-			text += fmt.Sprintf(" · :%d", sv.Port)
-		}
-		lines = append(lines, wrap(text)...)
-		for _, l := range wrap(sv.Command) {
-			lines = append(lines, mutedStyle.Render("  "+l))
-		}
-	}
-	list := box(false, m.light).Width(w).Height(h).MaxHeight(h).Render(strings.Join(lines, "\n"))
-	if m.jobsLevel >= jobsFrames {
-		return list
-	}
-	lines = strings.Split(list, "\n")
-	for i, line := range lines {
-		line = ansi.Cut(line, 0, m.jobsWidth())
-		if m.jobsLevel*2 < jobsFrames {
-			lines[i] = lipgloss.NewStyle().Foreground(fadeColor(m.light)).Render(ansi.Strip(line))
-		} else {
-			lines[i] = faint(line)
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-// The list slides in from the right with the same timing as the input.
-const (
-	jobsFrames = inputFrames
-	jobsFrame  = inputFrame
-)
-
-// jobsFadeMsg is a frame of the list of the jobs on its way in or out.
-type jobsFadeMsg struct{}
-
-// toggleJobs slides the list of the jobs in or out. The chat and the input
-// give it room or take it back with every frame.
+// toggleJobs lists the jobs in the column on the right, or what stands
+// there again. A window too narrow for the column gets it for the jobs.
 func (m *Model) toggleJobs() tea.Cmd {
 	m.jobsShown = !m.jobsShown
-	var load tea.Cmd
-	if m.jobsShown {
-		m.servicesAsked++
-		load = m.loadServices()
+	m.layout()
+	if !m.jobsShown {
+		return nil
 	}
-	if m.jobsFading {
-		return load // the frames on their way turn around
-	}
-	m.jobsFading = true
-	return tea.Batch(load, tea.Tick(jobsFrame, func(time.Time) tea.Msg { return jobsFadeMsg{} }))
+	m.servicesAsked++
+	return m.loadServices()
 }
 
 type (
@@ -289,20 +210,4 @@ func (m *Model) servicesLoaded(msg servicesMsg) tea.Cmd {
 	}
 	m.services = msg.list
 	return tea.Tick(jobsEvery, func(time.Time) tea.Msg { return servicesTick{msg.asked} })
-}
-
-// jobsFaded takes the list of the jobs a frame further on its way, and asks
-// for the next until it is whole or gone.
-func (m *Model) jobsFaded() tea.Cmd {
-	if m.jobsShown {
-		m.jobsLevel = min(jobsFrames, m.jobsLevel+1)
-	} else {
-		m.jobsLevel = max(0, m.jobsLevel-1)
-	}
-	m.layout() // the chat and the input follow the list on its way
-	if m.jobsLevel == 0 || m.jobsLevel == jobsFrames {
-		m.jobsFading = false
-		return nil
-	}
-	return tea.Tick(jobsFrame, func(time.Time) tea.Msg { return jobsFadeMsg{} })
 }

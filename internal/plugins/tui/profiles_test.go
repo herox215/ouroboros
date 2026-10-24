@@ -56,12 +56,12 @@ func TestProfilesInOneUI(t *testing.T) {
 	tuiplugin.Use(t, func(m *tui.Model) error {
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 		m.Update(key(' ')) // skips the splash
-		drive(t, m, m.Init(), shows(m, "Terra"))
+		drive(t, m, m.Init(), shows(m, "TERRA 1/2"))
 		_, cmd := m.Update(shiftTab)
 		if !shows(m, "profile Luna ("+lunaID.ID()+") · shift+tab shows the next")() {
 			t.Errorf("no word of the profile:\n%s", ansi.Strip(m.View().Content))
 		}
-		drive(t, m, cmd, func() bool { return shows(m, " Luna [2/2]")() && shows(m, "localhost / gpt-")() }) // the header names the profile shown
+		drive(t, m, cmd, func() bool { return shows(m, " LUNA 2/2")() && shows(m, "localhost / gpt-")() }) // the head names the profile shown
 		drive(t, m, typed(m, "hello Luna"), shows(m, "last=hello Luna"))
 		if m.Profile() != lunaID.ID() {
 			t.Errorf("the UI shows %q", m.Profile())

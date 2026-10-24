@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -16,11 +17,12 @@ import (
 )
 
 // The answers of the agent are markdown, as the models write it. The chat
-// shows them formatted: headings, emphasis, code, lists, quotes, tables and
-// links in the colors of the terminal theme, and without the marks.
+// shows them formatted as the GUI does: headings, emphasis, code, lists,
+// quotes, tables and links in the colors of its palette, and without the
+// marks.
 
-// codeColor is the color of code, in a line and in a block.
-var codeColor = lipgloss.Color("3")
+// codeColor is the color of code in a line, set by applyPalette.
+var codeColor color.Color
 
 var markdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
@@ -34,6 +36,7 @@ func renderMarkdown(src string, width int) string {
 
 type mdRenderer struct {
 	source []byte
+	base   lipgloss.Style // what the text is drawn in: muted in a quote
 }
 
 // blocks are the lines of the children of n, a blank line between two of
@@ -65,22 +68,24 @@ func (r mdRenderer) block(n ast.Node, width int) []string {
 	case *ast.List:
 		return r.list(n, width)
 	case *ast.Blockquote:
-		lines := r.blocks(n, width-2)
+		quote := r
+		quote.base = r.base.Foreground(muted)
+		lines := quote.blocks(n, width-2)
 		for i, l := range lines {
-			lines[i] = mutedStyle.Render("│ ") + l
+			lines[i] = lineStyle().Render("│ ") + l
 		}
 		return lines
 	case *ast.FencedCodeBlock, *ast.CodeBlock:
 		return r.code(n, width)
 	case *ast.ThematicBreak:
-		return []string{mutedStyle.Render(strings.Repeat("─", width))}
+		return []string{lineStyle().Render(strings.Repeat("─", width))}
 	case *ast.HTMLBlock:
 		return r.lines(n)
 	case *east.Table:
 		return r.table(n, width)
 	}
 	// A paragraph, or a block of text in a tight list.
-	return r.wrap(r.inlines(n, lipgloss.NewStyle()), width)
+	return r.wrap(r.inlines(n, r.base), width)
 }
 
 // list is the lines of a list: every item with its bullet or number, its
@@ -101,7 +106,7 @@ func (r mdRenderer) list(n *ast.List, width int) []string {
 		item := r.blocks(item, width-len(pad))
 		for i, l := range item {
 			if i == 0 {
-				l = mutedStyle.Render(bullet) + l
+				l = r.base.Render(bullet) + l
 			} else if l != "" {
 				l = pad + l
 			}
@@ -111,21 +116,18 @@ func (r mdRenderer) list(n *ast.List, width int) []string {
 	return lines
 }
 
-// code is the lines of a block of code, with its language above it.
+// code is the lines of a block of code, in a box on the background of the
+// tools, as the GUI shows it.
 func (r mdRenderer) code(n ast.Node, width int) []string {
+	inner := max(1, width-4) // the border and the padding
 	var lines []string
-	if f, ok := n.(*ast.FencedCodeBlock); ok {
-		if lang := string(f.Language(r.source)); lang != "" {
-			lines = append(lines, mutedStyle.Render(lang))
-		}
-	}
-	style := lipgloss.NewStyle().Foreground(codeColor)
 	for _, l := range r.lines(n) {
-		for _, l := range strings.Split(ansi.Hardwrap(l, max(1, width-2), true), "\n") {
-			lines = append(lines, style.Render(l))
-		}
+		l = strings.ReplaceAll(l, "\t", "  ")
+		lines = append(lines, strings.Split(ansi.Hardwrap(l, inner, true), "\n")...)
 	}
-	return indent(lines, "  ")
+	block := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ui.line).
+		Background(ui.toolBackground).Foreground(ui.text).Padding(0, 1).Width(max(5, width))
+	return strings.Split(block.Render(strings.Join(lines, "\n")), "\n")
 }
 
 // lines is the raw lines of n, a block of code or of HTML.
@@ -146,7 +148,7 @@ func (r mdRenderer) table(n *east.Table, width int) []string {
 	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
 		var cells []string
 		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
-			cells = append(cells, r.inlines(cell, lipgloss.NewStyle()))
+			cells = append(cells, r.inlines(cell, r.base))
 		}
 		if row.Kind() == east.KindTableHeader {
 			head = cells
@@ -154,10 +156,10 @@ func (r mdRenderer) table(n *east.Table, width int) []string {
 		}
 		rows = append(rows, cells)
 	}
-	t := table.New().Border(lipgloss.NormalBorder()).BorderStyle(mutedStyle).Headers(head...).Rows(rows...).
+	t := table.New().Border(lipgloss.NormalBorder()).BorderStyle(lineStyle()).Headers(head...).Rows(rows...).
 		StyleFunc(func(row, _ int) lipgloss.Style {
 			if row == table.HeaderRow {
-				return boldStyle.Padding(0, 1)
+				return boldStyle.Background(ui.hover).Padding(0, 1)
 			}
 			return lipgloss.NewStyle().Padding(0, 1)
 		})
@@ -198,7 +200,7 @@ func (r mdRenderer) inline(n ast.Node, style lipgloss.Style) string {
 		}
 		return s
 	case *ast.CodeSpan:
-		return r.inlines(n, style.Foreground(codeColor))
+		return r.inlines(n, style.Foreground(codeColor).Background(ui.hover))
 	case *ast.Emphasis:
 		// Within each other, as ***x*** is, they add up.
 		if n.Level == 1 {
@@ -233,16 +235,4 @@ func (r mdRenderer) inline(n ast.Node, style lipgloss.Style) string {
 	}
 	// Emphasis, or an inline of no style of its own.
 	return r.inlines(n, style)
-}
-
-// indent puts prefix before every line but the empty ones.
-func indent(lines []string, prefix string) []string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		if l != "" {
-			l = prefix + l
-		}
-		out[i] = l
-	}
-	return out
 }

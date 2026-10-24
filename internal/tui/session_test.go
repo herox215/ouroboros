@@ -23,7 +23,7 @@ func view(m *Model) string { return ansi.Strip(m.View().Content) }
 func sessionLines(m *Model) []string {
 	var lines []string
 	listing := false
-	for _, l := range strings.Split(ansi.Strip(m.sessions.view(m)), "\n") {
+	for _, l := range strings.Split(ansi.Strip(drawnOf(m.sessions.view(m))), "\n") {
 		l = strings.Trim(l, " │")
 		switch {
 		case strings.HasPrefix(l, "Sessions"):
@@ -104,7 +104,7 @@ func TestSessionsScreen(t *testing.T) {
 	}
 	m.Update(press(m, "enter"))
 	m.now = func() time.Time { return time.Now().Add(toolShown) } // the tool has run long enough to be named
-	if m.screen != screenChat || m.chat != second || m.input.Value() != "" || !strings.Contains(view(m), "asking beta") {
+	if m.screen != screenChat || m.chat != second || m.input.Value() != "" || !strings.Contains(view(m), "ASKING BETA") {
 		t.Fatalf("shown %+v:\n%s", m.chat, view(m))
 	}
 	// Its answer comes in here.
@@ -867,7 +867,7 @@ func TestBlankRoundsLeaveNoSpace(t *testing.T) {
 	}
 	m.renderHistory(true)
 	lines := strings.Split(ansi.Strip(m.history.GetContent()), "\n")
-	if len(lines) != 4 || strings.TrimSpace(lines[2]) != "" || strings.TrimSpace(lines[3]) != "↳ Used 3 tools" {
+	if len(lines) != 4 || strings.TrimSpace(lines[2]) != "" || strings.TrimSpace(lines[3]) != "│ ↳ Used 3 tools" {
 		t.Fatalf("the history:\n%s", strings.Join(lines, "\n"))
 	}
 }
@@ -1083,7 +1083,7 @@ func TestTaskReportStartsTheWait(t *testing.T) {
 	if c.art != 1 {
 		t.Fatalf("a report in an answer on its way: picture %d", c.art)
 	}
-	if m.renderHistory(true); !strings.Contains(ansi.Strip(m.history.GetContent()), "task 3") {
+	if m.renderHistory(true); !strings.Contains(ansi.Strip(m.history.GetContent()), "TASK 3") {
 		t.Fatalf("the reports:\n%s", ansi.Strip(m.history.GetContent()))
 	}
 }

@@ -46,10 +46,10 @@ func TestSuggestionsArePending(t *testing.T) {
 		},
 	}
 	m.Update(m.loadContacts())
-	if line := ansi.Strip(m.suggestionRequests.pendingView(m)); !strings.Contains(line, "2 suggestions") || !strings.Contains(line, "reviews suggest 2") {
+	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "2 suggestions") || !strings.Contains(line, "reviews suggest 2") {
 		t.Fatalf("the line of what is pending: %q", line)
 	}
-	if v := view(m); !strings.Contains(v, "✦ 2 suggestions") || strings.Contains(v, "pending") || strings.Contains(v, "/pending") {
+	if v := view(m); !strings.Contains(v, "✦ 2 SUGGESTIONS") || strings.Contains(v, "pending") || strings.Contains(v, "/pending") {
 		t.Fatalf("suggestions-only indicator: %s", v)
 	}
 	first := m.chat
@@ -96,7 +96,7 @@ func TestSuggestionsArePending(t *testing.T) {
 	b.trust.Suggestions = []plugin.Suggestion{{ID: "s3", Text: "one more"}}
 	b.mu.Unlock()
 	m.Update(m.loadContacts())
-	if line := ansi.Strip(m.suggestionRequests.pendingView(m)); !strings.Contains(line, "a review suggests") {
+	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "a review suggests") {
 		t.Fatalf("one suggestion: %q", line)
 	}
 	m.suggestionRequests.selectAt(m, 0)

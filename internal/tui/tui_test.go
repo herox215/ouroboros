@@ -399,10 +399,10 @@ func newModelOn(t *testing.T, b *fakeBackend) *Model {
 	delete(m.chats, plugin.ThreadID)
 	m.chat = m.newChat()
 	t.Cleanup(m.quit)
+	t.Cleanup(func() { applyPalette(false) }) // a light background is of the test that told it
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m.splash.show = false // dismiss the start screen; its own test is below
 	m.Update(m.refreshStatus())
-	m.inputShown = true // the tests here take the box of the input as shown
 	m.layout()
 	return m
 }
@@ -641,7 +641,7 @@ func TestChatIsFocusedOnStart(t *testing.T) {
 func TestViewIsTheChatOnly(t *testing.T) {
 	m, _ := newModel(t)
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"alpha", nameRow(m.agentName())} {
+	for _, want := range []string{"OUROBOROS", "SESSIONS", nameRow(m.agentName())} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q", want)
 		}
@@ -674,7 +674,7 @@ func TestChat(t *testing.T) {
 	if !m.chat.pending || m.input.Value() != "" {
 		t.Fatal("message should be pending and the input cleared")
 	}
-	if !strings.Contains(m.View().Content, "alpha is thinking") {
+	if !strings.Contains(m.View().Content, "ALPHA IS THINKING") {
 		t.Fatal("a pending answer should be announced")
 	}
 	answered(t, m, cmd)
@@ -710,7 +710,7 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	// announced and still running.
 	drive(t, m, say(t, m, "ask beta for the time"), func() bool { return m.chat.doing == "asking beta" })
 	m.now = func() time.Time { return time.Now().Add(toolShown) } // the tool has run long enough to be named
-	if !m.chat.pending || !strings.Contains(m.View().Content, "I will ask beta") || !strings.Contains(m.View().Content, "asking beta") {
+	if !m.chat.pending || !strings.Contains(m.View().Content, "I will ask beta") || !strings.Contains(m.View().Content, "ASKING BETA") {
 		t.Fatalf("what the agent says on the way belongs in the chat:\n%s", m.View().Content)
 	}
 	close(gate) // beta answered, the agent thinks again and answers
@@ -725,7 +725,7 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	}
 	view := trimmedLines(m)
 	// Once the answer is in, its calls are summed up below the words.
-	for _, want := range []string{"I will ask beta\n│   ↳ Used 1 tool", "beta says it is noon"} {
+	for _, want := range []string{"I will ask beta\n│ ↳ Used 1 tool", "beta says it is noon"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the history should show %q:\n%s", want, view)
 		}
@@ -770,7 +770,7 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	}
 	drive(t, m, say(t, m, "fix it"), func() bool { return m.chat.doing == "writing c.go" })
 	// While it is on its way, the calls that are already there are one line.
-	if !strings.Contains(trimmedLines(m), "│   ↳ Used 4 tools, 1 failed\n") {
+	if !strings.Contains(trimmedLines(m), "│ ↳ Used 4 tools, 1 failed\n") {
 		t.Fatalf("the calls should be one line: %+v\n%s", m.chat, trimmedLines(m))
 	}
 	close(written)
@@ -786,11 +786,11 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	}
 	view := ansi.Strip(m.View().Content)
 	// The calls of all the rounds of the answer are one line, whatever they were.
-	if !strings.Contains(trimmedLines(m), "I read both\n│   ↳ Used 4 tools, 1 failed\n") ||
+	if !strings.Contains(trimmedLines(m), "I read both\n│ ↳ Used 4 tools, 1 failed\n") ||
 		strings.Contains(view, "↳ ·") {
 		t.Fatalf("the calls should be one line:\n%s", view)
 	}
-	if strings.Contains(view, " …") {
+	if strings.Contains(trimmedLines(m), " …") {
 		t.Fatalf("no call is waited for any more:\n%s", view)
 	}
 
@@ -807,8 +807,9 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 // spaces and the border at its end.
 func trimmedLines(m *Model) string {
 	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	left := m.transcriptLeft()
 	for i, l := range lines {
-		lines[i] = strings.TrimRight(strings.TrimRight(strings.TrimRight(l, " "), "│"), " ")
+		lines[i] = strings.TrimRight(ansi.Cut(l, left, left+m.transcriptWidth()), " ")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -816,7 +817,8 @@ func trimmedLines(m *Model) string {
 // sameEntries reports whether got are the entries of want, the time aside.
 func sameEntries(got, want []entry) bool {
 	return slices.EqualFunc(got, want, func(g, w entry) bool {
-		return g.mine == w.mine && g.text == w.text && g.failed == w.failed && slices.Equal(g.calls, w.calls)
+		return g.mine == w.mine && g.text == w.text && g.failed == w.failed &&
+			slices.EqualFunc(g.calls, w.calls, func(g, w call) bool { return g.text == w.text && g.done == w.done && g.failed == w.failed })
 	})
 }
 
@@ -837,7 +839,7 @@ func TestNewConversationLeavesTheAnswerGoingOn(t *testing.T) {
 	if c == old || c.contextID == old.contextID || len(c.entries) != 0 || c.pending || c.doing != "" {
 		t.Fatalf("conversation not new: %+v", c)
 	}
-	if view := ansi.Strip(m.View().Content); strings.Contains(view, "asking beta") {
+	if view := trimmedLines(m); strings.Contains(strings.ToLower(view), "asking beta") {
 		t.Fatalf("the new conversation shows the old one:\n%s", view)
 	}
 	close(gate)
@@ -1014,7 +1016,7 @@ func TestNodeLifecycleCommandsAreCLIOnly(t *testing.T) {
 		if cmd := run(m, "/"+name); cmd != nil || m.notice != "unknown command /"+name+": /help lists them" {
 			t.Fatalf("/%s should not be a UI command: %q", name, m.notice)
 		}
-		if len(m.matching("/"+name)) != 0 || strings.Contains(m.helpView(), "/"+name) {
+		if len(m.matching("/"+name)) != 0 || strings.Contains(drawnOf(m.helpView()), "/"+name) {
 			t.Fatalf("/%s should not be suggested or listed in help", name)
 		}
 	}

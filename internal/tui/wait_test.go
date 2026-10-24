@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -43,10 +42,14 @@ func TestArtsDraw(t *testing.T) {
 	}
 }
 
+// While an answer is on its way, the line of the status above the composer
+// says what is waited for, as the GUI says where the conversation stands,
+// and a picture moves on its left.
 func TestWaitIsShownOnAPicture(t *testing.T) {
 	m, b := newModel(t)
-	if m.waiting() != "" || m.waitView(96) != "" {
-		t.Fatal("nothing is waited for before a message")
+	w := m.transcriptWidth()
+	if m.waiting() != "" || ansi.Strip(m.statusLine(w)) != strings.Repeat(" ", w-15)+"SESSION · READY" {
+		t.Fatalf("nothing is waited for before a message: %q", ansi.Strip(m.statusLine(w)))
 	}
 	gate := make(chan struct{})
 	release := sync.OnceFunc(func() { close(gate) })
@@ -57,48 +60,47 @@ func TestWaitIsShownOnAPicture(t *testing.T) {
 		return "pong", nil
 	}
 	cmd := say(t, m, "ping")
-	// The picture is the next one, and what is waited for stands in its
-	// middle, in the row below the history.
-	label := " alpha is thinking "
+	// The picture is the next one, and what is waited for stands on its
+	// right, in the line above the composer.
+	label := "alpha is thinking"
 	wait := func() string {
-		row, from := arts[1].row(96, m.ticks), (96-lipgloss.Width(label))/2
-		return "│ " + string(row[:from]) + label + string(row[from+lipgloss.Width(label):]) + " │\n╰"
+		text := strings.ToUpper("Session · " + label)
+		return string(arts[m.chat.art%len(arts)].row(w-lipgloss.Width(text)-2, m.ticks)) + "  " + text
 	}
 	if m.chat.art != 1 || !strings.Contains(ansi.Strip(m.View().Content), wait()) {
-		t.Fatalf("the wait should be shown on picture 1 as\n%s\nnot on %d:\n%s", wait(), m.chat.art, m.View().Content)
+		t.Fatalf("the wait should be shown on picture 1 as\n%s\nnot on %d:\n%s", wait(), m.chat.art, ansi.Strip(m.View().Content))
 	}
-	if got := m.waitView(96); !strings.Contains(got, label) || strings.Contains(got, "…") || lipgloss.Width(got) != 96 {
-		t.Fatalf("the wait is one row of 96 cells, what is waited for as it is: %q", got)
+	if got := m.statusLine(w); lipgloss.Width(got) != w || strings.Contains(got, "…") {
+		t.Fatalf("the status is one row of %d cells, what is waited for as it is: %q", w, got)
 	}
 	// It moves with the spinner.
-	before := m.waitView(96)
+	before := m.statusLine(w)
 	m.Update(m.spinner.Tick())
-	if m.ticks != 1 || m.waitView(96) == before || !strings.Contains(ansi.Strip(m.View().Content), wait()) {
-		t.Fatalf("the picture should move:\n%s", m.View().Content)
+	if m.ticks != 1 || m.statusLine(w) == before || !strings.Contains(ansi.Strip(m.View().Content), wait()) {
+		t.Fatalf("the picture should move:\n%s", ansi.Strip(m.View().Content))
 	}
 	// What the agent waits for takes the place of its thinking once it has
 	// run for a while: a call that ends at once does not flash its name.
 	drive(t, m, cmd, func() bool { return m.chat.doing == "asking beta" })
 	m.now = func() time.Time { return m.chat.since.Add(toolShown - time.Millisecond) }
 	if !strings.Contains(ansi.Strip(m.View().Content), wait()) {
-		t.Fatalf("a call that just began should leave the agent thinking:\n%s", m.View().Content)
+		t.Fatalf("a call that just began should leave the agent thinking:\n%s", ansi.Strip(m.View().Content))
 	}
 	m.now = func() time.Time { return m.chat.since.Add(toolShown) }
-	label = " asking beta "
+	label = "asking beta"
 	if m.chat.art != 1 || !strings.Contains(ansi.Strip(m.View().Content), wait()) {
-		t.Fatalf("the call should stand on the same picture, not on %d:\n%s", m.chat.art, m.View().Content)
+		t.Fatalf("the call should stand on the same picture, not on %d:\n%s", m.chat.art, ansi.Strip(m.View().Content))
 	}
-	// In a window too narrow for it, what is waited for is cut.
-	m.Update(tea.WindowSizeMsg{Width: 12, Height: 30})
-	if got := ansi.Strip(m.waitView(8)); got != " asking…" {
+	// In a line too narrow for it, what is waited for is cut, and no
+	// picture is left.
+	if got := ansi.Strip(m.statusLine(12)); got != "SESSION · A…" {
 		t.Fatalf("a narrow wait: %q", got)
 	}
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	release()
 	drive(t, m, nil, func() bool { return !m.chat.pending })
-	if m.waiting() != "" || strings.Contains(m.View().Content, " asking beta ") {
-		t.Fatalf("no wait is shown once the answer is in:\n%s", m.View().Content)
+	if m.waiting() != "" || strings.Contains(m.View().Content, "ASKING BETA") {
+		t.Fatalf("no wait is shown once the answer is in:\n%s", ansi.Strip(m.View().Content))
 	}
 	// The next message gets the next picture, also one of another client.
 	c := m.chat
@@ -111,8 +113,8 @@ func TestWaitIsShownOnAPicture(t *testing.T) {
 	}
 	// After the last picture comes the first.
 	c.art = len(arts)
-	if want := string(arts[0].row(96, m.ticks)[:30]); !strings.HasPrefix(ansi.Strip(m.waitView(96)), want) {
-		t.Fatalf("after the last picture comes the first:\n%s", m.waitView(96))
+	if want := string(arts[0].row(w, m.ticks)[:20]); !strings.HasPrefix(ansi.Strip(m.statusLine(w)), want) {
+		t.Fatalf("after the last picture comes the first:\n%s", m.statusLine(w))
 	}
 }
 
@@ -142,8 +144,8 @@ func TestJobsAreShown(t *testing.T) {
 	if got := m.waiting(); got != "alpha is thinking · job 1 · npm run dev · job 2 · go test ./..." {
 		t.Fatalf("with jobs: %q", got)
 	}
-	if !strings.Contains(ansi.Strip(m.waitView(120)), " alpha is thinking · job 1 · npm run dev") {
-		t.Fatalf("view:\n%s", m.waitView(120))
+	if !strings.Contains(ansi.Strip(m.statusLine(120)), "ALPHA IS THINKING · JOB 1 · NPM RUN DEV") {
+		t.Fatalf("view:\n%s", m.statusLine(120))
 	}
 	m.apply(c, Event{Kind: plugin.SessionJobs}, true)
 	if got := m.waiting(); got != "alpha is thinking" {

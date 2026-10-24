@@ -27,17 +27,16 @@ func TestTasksAreShown(t *testing.T) {
 		t.Fatalf("the line of the chat: %q", got)
 	}
 	_, fade := m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	fadeAll(m, fade)
-	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	loaded(m, fade)
 	var list []string
-	for _, l := range lines[1 : len(lines)-1] {
-		list = append(list, strings.Trim(ansi.Cut(l, m.width-30, m.width), "│╭╮╰╯─ "))
+	for _, l := range strings.Split(ansi.Strip(m.railView(m.railWidth(), m.height)), "\n") {
+		list = append(list, strings.TrimSpace(l))
 	}
-	if text := strings.Join(list, "\n"); !strings.Contains(text, "Tasks\ntask 1 · find the\ncallers\ntask 2 · read the tests") {
+	if text := strings.Join(list, "\n"); !strings.Contains(text, "TASKS\ntask 1 · find the\ncallers\ntask 2 · read the\ntests") {
 		t.Fatalf("the list:\n%s", text)
 	}
 	_, fade = m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
-	fadeAll(m, fade)
+	loaded(m, fade)
 	cmd := press(m, "esc")
 	if cmd == nil || m.notice != "stopping the tasks…" {
 		t.Fatalf("esc: %q", m.notice)
@@ -78,7 +77,7 @@ func TestTaskReportIsShown(t *testing.T) {
 	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "it failed"}, true)
 	m.renderHistory(false)
 	view := ansi.Strip(m.history.View())
-	for _, want := range []string{"◆ task 1 · find the callers ✓ 3s", "↳ Used 1 tool", "they call it twice", "◆ task 2 · read the tests ✗ it broke"} {
+	for _, want := range []string{"↳ TASK 1 · FIND THE CALLERS ✓ 3S", "│ ↳ Used 1 tool", "they call it twice", "↳ TASK 2 · READ THE TESTS ✗ IT BROKE"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q in:\n%s", want, view)
 		}
