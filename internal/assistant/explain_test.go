@@ -134,7 +134,7 @@ func TestPeerAgentExplainsErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := owner.Respond(context.Background(), "c", "hi")
-	if !strings.HasSuffix(got, "tools: list_peers,ask_peer,answer_peer,tell_peer,ask_back,user_question,delegate") {
+	if !strings.HasSuffix(got, "tools: list_peers,ask_peer,answer_peer,tell_peer,ask_back,user_question,delegate,task_stop,task_tell") {
 		t.Fatalf("the owner's agent: %q", got)
 	}
 	// It knows that an error ID can be asked about, and that nothing is known

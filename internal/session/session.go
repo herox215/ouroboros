@@ -614,8 +614,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 	case se.cancel != nil:
 		return ErrBusy
 	}
-	s.begin(se, p, append(se.queue, message)...)
-	se.queue = nil
+	s.begin(se, p, append(ready(se), message)...)
 	return nil
 }
 
@@ -795,13 +794,11 @@ func (s *Service) saying(se *session, id, text string) {
 }
 
 // steered hands the answer on its way in se the messages that are queued
-// for it: see taken.
+// for it, as far as they are ready: see ready and taken.
 func (s *Service) steered(se *session) []openai.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	texts := s.taken(se, se.queue)
-	se.queue = nil
-	return texts
+	return s.taken(se, ready(se))
 }
 
 // taken tells that the answer in se takes messages, each a Message of the
@@ -985,13 +982,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.emit(se, Event{Kind: Suggestion, Text: text})
 	})
-	ctx = agent.WithMessageSteering(ctx, func() []openai.Message {
-		s.waitTasks(ctx, se)
-		if ctx.Err() != nil {
-			return nil
-		}
-		return s.steered(se)
-	})
+	ctx = agent.WithMessageSteering(ctx, func() []openai.Message { return s.steered(se) })
 	ctx = assistant.WithTasks(ctx, delegating{s, se})
 	ctx = s.threadContext(ctx, se)
 	ctx = agent.WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (agent.OwnerReply, error) {
@@ -1082,10 +1073,10 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	se.goOn = false
 	// What was queued too late for this answer is the next message, unless
 	// the node takes none: then it is lost with the process.
-	if len(se.queue) > 0 && !s.closed && p.successor == "" {
-		messages := se.queue
-		se.queue = nil
-		s.begin(se, p, messages...)
+	if !s.closed && p.successor == "" {
+		if messages := ready(se); len(messages) > 0 {
+			s.begin(se, p, messages...)
+		}
 	}
 	s.busy()
 	p.settle()
@@ -1365,6 +1356,7 @@ func (s *Service) Cancel(_ context.Context, id string) error {
 		se.cancel()
 	}
 	for _, t := range se.tasks {
+		t.stopped = false // the owner stopped it: nobody is told
 		t.cancel()
 	}
 	if id == ThreadID {

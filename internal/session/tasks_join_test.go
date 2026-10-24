@@ -6,136 +6,109 @@ import (
 	"testing"
 	"time"
 
-	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
-	"ouroboros/internal/openai"
 )
 
-// joinModel would finish immediately after delegation if the session let it.
-type joinModel struct {
-	calls int
-	seen  chan []openai.Message
-}
-
-func (m *joinModel) Complete(_ context.Context, _ string, messages []openai.Message, _ []openai.Tool) (openai.Message, error) {
-	m.calls++
-	if m.calls == 1 {
-		return openai.Message{Content: "I am splitting the work into parallel checks.", ToolCalls: []openai.ToolCall{{ID: "split", Type: "function", Function: openai.FunctionCall{Name: "split", Arguments: "{}"}}}}, nil
-	}
-	m.seen <- messages
-	return openai.Message{Content: "Combined conclusion"}, nil
-}
-
-func joiningService(t *testing.T, tasks ...assistant.Task) (*Service, <-chan Event, <-chan []openai.Message) {
+// noAnswerYet fails if the agent of a session was asked something: s.List
+// waits for what holds the lock of s, like the end of a task.
+func noAnswerYet(t *testing.T, s *Service, asked texts) {
 	t.Helper()
-	m := &joinModel{seen: make(chan []openai.Message, 4)}
-	tool := agent.NewTool("split", "Split independent checks", nil, func(ctx context.Context, _ struct{}) (string, error) {
-		_, err := assistant.TasksOf(ctx).Start(tasks)
-		return "started", err
-	})
-	bot := agent.New(m, "test", "system", tool)
-	s := service(t, &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), say func(string)) (string, error) {
-		return bot.Run(ctx, "s1", text, agent.Observer{Call: func(c agent.Call) {
-			if c.Done && c.Err == nil && c.ToolCalls > 0 {
-				say(c.Content)
-			}
-		}})
-	}})
-	_, live, err := s.Watch(context.Background(), "s1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Ask(context.Background(), "s1", "check"); err != nil {
-		t.Fatal(err)
-	}
-	return s, live, m.seen
-}
-
-func noJoinedConclusion(t *testing.T, seen <-chan []openai.Message) {
-	t.Helper()
+	s.List(context.Background())
 	select {
-	case messages := <-seen:
-		t.Fatalf("model resumed before all helpers ended: %+v", messages)
-	case <-time.After(30 * time.Millisecond):
-	}
-}
-
-// Reports are collected before the next model request (and hence before any
-// final streaming), including failures, rather than triggering later answers.
-func TestTasksJoinBeforeNextModelRound(t *testing.T) {
-	first, last := make(chan struct{}), make(chan struct{})
-	_, live, seen := joiningService(t, waiting("first", first, "found it", nil), waiting("last", last, "", errTest))
-	initial := until(t, live, Tasks)
-	if initial[1].Kind != Say {
-		t.Fatalf("no announcement before tasks: %+v", initial)
-	}
-	noJoinedConclusion(t, seen)
-	close(first)
-	until(t, live, Tasks)
-	noJoinedConclusion(t, seen)
-	close(last)
-	events := until(t, live, Answer)
-	reports := 0
-	for _, e := range events {
-		if e.Kind == Task {
-			reports++
-		}
-	}
-	if reports != 2 || events[len(events)-1].Text != "Combined conclusion" {
-		t.Fatalf("events: %+v", events)
-	}
-	select {
-	case messages := <-seen:
-		found := 0
-		for _, m := range messages {
-			if m.Content == assistant.TaskReport(1, "first", "found it", nil) || m.Content == assistant.TaskReport(2, "last", "", errTest) {
-				found++
-			}
-		}
-		if found != 2 {
-			t.Fatalf("missing joined results: %+v", messages)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("no combined model request")
-	}
-	select {
-	case extra := <-seen:
-		t.Fatalf("extra conclusion: %+v", extra)
+	case text := <-asked:
+		t.Fatalf("asked %q", text)
 	default:
 	}
 }
 
-func TestTasksJoinCanBeCanceled(t *testing.T) {
-	for _, stop := range []string{"cancel", "close"} {
-		t.Run(stop, func(t *testing.T) {
-			gate := make(chan struct{})
-			s, live, seen := joiningService(t, waiting("blocked", gate, "not used", nil))
-			until(t, live, Tasks)
-			noJoinedConclusion(t, seen)
-			if stop == "cancel" {
-				if err := s.Cancel(context.Background(), "s1"); err != nil {
-					t.Fatal(err)
-				}
-				events := until(t, live, Canceled)
-				for _, e := range events {
-					if e.Kind == Answer {
-						t.Fatalf("final answer on cancellation: %+v", events)
-					}
-				}
-			} else {
-				done := make(chan struct{})
-				go func() { s.Close(); close(done) }()
-				select {
-				case <-done:
-				case <-time.After(time.Second):
-					t.Fatal("close blocked joining helpers")
-				}
+// Tasks run past the answer that started them, and keep no message of the
+// owner waiting: the session answers it while they run. The reports wait
+// for the last task, and come together in one answer.
+func TestTasksRunPastTheAnswer(t *testing.T) {
+	first, last := make(chan struct{}), make(chan struct{})
+	asked := make(texts, 8)
+	s := service(t, delegator(asked, waiting("first", first, "found it", nil), waiting("last", last, "", errTest)))
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	if err := s.Ask(ctx, "s1", "start"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, live, Answer)
+	<-asked
+	// The owner is answered while the tasks run.
+	if err := s.Steer(ctx, "s1", "quicker, please"); err != nil {
+		t.Fatal(err)
+	}
+	if got := until(t, live, Answer); got[len(got)-1].Text != "on quicker, please" || <-asked != "quicker, please" {
+		t.Fatalf("events %+v", got)
+	}
+	// The report of the first waits for the last.
+	close(first)
+	until(t, live, Tasks)
+	noAnswerYet(t, s, asked)
+	close(last)
+	got := until(t, live, Answer)
+	if kinds(got) != "tasks task task answer" {
+		t.Fatalf("events %+v", got)
+	}
+	want := assistant.TaskReport(1, "first", "found it", nil) + "\n\n" + assistant.TaskReport(2, "last", "", errTest)
+	if text := <-asked; text != want {
+		t.Fatalf("asked %q", text)
+	}
+}
+
+// The agent tells the helper of a task that runs what changed, and stops a
+// task: its report says so. A task that does not run is neither.
+func TestAgentReachesItsTasks(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	listen := assistant.Task{Title: "listen", Run: func(ctx context.Context) (string, error) {
+		told := assistant.TaskSteering(ctx)
+		for {
+			if said := told(); len(said) > 0 {
+				return "heard " + said[0].Content, nil
 			}
 			select {
-			case messages := <-seen:
-				t.Fatalf("model called after %s: %s", stop, strings.TrimSpace(messages[len(messages)-1].Content))
-			default:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Millisecond):
 			}
-		})
+		}
+	}}
+	var tasks assistant.Tasks
+	asked := make(texts, 4)
+	a := delegator(asked, listen, waiting("wait", gate, "", nil))
+	run := a.run
+	a.run = func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error) {
+		tasks = assistant.TasksOf(ctx)
+		return run(ctx, text, observe, say)
+	}
+	s := service(t, a)
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "start")
+	until(t, live, Answer)
+	<-asked
+	if err := tasks.Stop(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.Tell(1, "be quick"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, live, Answer)
+	text := <-asked
+	for _, report := range []string{
+		assistant.TaskReport(1, "listen", "heard be quick", nil),
+		assistant.TaskReport(2, "wait", "", errStoppedByAgent),
+	} {
+		if !strings.Contains(text, report) {
+			t.Fatalf("asked %q, without %q", text, report)
+		}
+	}
+	if err := tasks.Stop(1); err == nil || err.Error() != "task 1 does not run: it ended, or never started" {
+		t.Fatalf("stopped what ended: %v", err)
+	}
+	if err := tasks.Tell(3, "x"); err == nil {
+		t.Fatal("told what never started")
 	}
 }
