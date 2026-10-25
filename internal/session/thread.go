@@ -609,10 +609,10 @@ func (s *Service) note(id, text string) {
 }
 
 // asking asks the owner in the thread the question an answer in se asks
-// them, if that answer took a message the thread handed on, see relayed:
-// at once, unless the thread asks another one. s.mu is held.
+// them, if it took a message the thread handed on or has one waiting behind
+// its current tool: at once, unless the thread asks another one. s.mu is held.
 func (s *Service) asking(se *session, question json.RawMessage) {
-	if !se.routed {
+	if !se.routed && !slices.ContainsFunc(se.queue, func(m queued) bool { return m.routed }) {
 		return
 	}
 	thread := s.get(ThreadID)
