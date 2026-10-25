@@ -425,7 +425,9 @@ type session struct {
 	tasks     []*task
 	delegated int
 	// routed says that the answer on its way took a message the thread
-	// handed on: the thread shows what comes of it, see relay.
+	// handed on, or a report continuing such an answer: the thread shows
+	// what comes of it, see relay. Tasks snapshot this bit at delegation;
+	// keeping it on the session between answers would route unrelated input.
 	routed bool
 	// questions are, of the thread, the questions of sessions it asks the
 	// owner, the first of them now; working is how much works for it, and
@@ -455,7 +457,7 @@ type queued struct {
 	hasAttachments bool
 	source         MessageSource
 	generated      bool // backend input, not a message from an interface
-	routed         bool // handed on by the thread
+	routed         bool // handed on by the thread, or a task continuing that work
 	task           *Event
 }
 
@@ -1355,13 +1357,21 @@ func (s *Service) Cancel(_ context.Context, id string) error {
 	if se.cancel != nil {
 		se.cancel()
 	}
+	se.routed = false
+	for i := range se.queue {
+		if se.queue[i].task != nil {
+			se.queue[i].routed = false
+		}
+	}
 	for _, t := range se.tasks {
+		t.routed = false
 		t.stopped = false // the owner stopped it: nobody is told
 		t.cancel()
 	}
 	if id == ThreadID {
 		s.stopThread()
 	}
+	s.busy()
 	return nil
 }
 

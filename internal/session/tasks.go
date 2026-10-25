@@ -22,6 +22,7 @@ type task struct {
 	cancel  context.CancelFunc
 	told    []openai.Message // what the agent told its helper, for it to take
 	stopped bool             // by the agent, with Stop: reported as stopped
+	routed  bool             // continuation of an answer handed on by the thread
 }
 
 // errStoppedByAgent is why a task the agent stopped ended, as its report
@@ -56,7 +57,7 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 	for i, t := range tasks {
 		ctx, cancel := context.WithCancel(s.ctx)
 		se.delegated++
-		running := &task{n: se.delegated, title: t.Title, cancel: cancel}
+		running := &task{n: se.delegated, title: t.Title, cancel: cancel, routed: se.routed}
 		ctx = workdir.With(ctx, se.directory)
 		ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 		ctx = assistant.WithTaskSteering(ctx, func() []openai.Message { return s.told(running) })
@@ -75,10 +76,12 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	defer s.answers.Done()
 	start := s.now()
 	answer, err := do(ctx)
-	stopped := ctx.Err() != nil
-	t.cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Serialize completion with Cancel: a canceled task must not deliver a
+	// result just because its helper returned before Cancel acquired the lock.
+	stopped := ctx.Err() != nil
+	t.cancel()
 	p := s.node
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -93,6 +96,7 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	case !stopped:
 		s.deliver(se, p, t, answer, err, s.now().Sub(start))
 	}
+	s.busy()
 	p.settle()
 }
 
@@ -177,7 +181,10 @@ func (s *Service) deliver(se *session, p *process, t *task, answer string, err e
 	if err != nil {
 		e.Err = err.Error()
 	}
-	report := queued{text: assistant.TaskReport(t.n, t.title, answer, err), task: e}
+	// Routing belongs to the task's originating answer, not whichever answer
+	// happens to be running when it finishes. Taking this report restores it
+	// for exactly that continuation, including any tasks it delegates in turn.
+	report := queued{text: assistant.TaskReport(t.n, t.title, answer, err), task: e, routed: t.routed}
 	se.queue = append(se.queue, report)
 	if se.cancel != nil || s.closed || p.successor != "" || len(se.tasks) > 0 {
 		return
