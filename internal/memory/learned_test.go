@@ -78,19 +78,24 @@ func TestTopicMemories(t *testing.T) {
 	}
 }
 
-// Tidy archives what expired and what was loaded ArchiveLoads times and
-// never used; an archived memory is found by a search alone, and one that is
-// remembered again is no longer archived.
+// Tidy archives what expired and what was loaded StaleLoads times and never
+// used; an archived memory is found by a search alone, and one that is
+// remembered again is no longer archived. A stale memory is chosen for no
+// topic anymore, which is why it has to be archived on that bound: no topic
+// would count its loads up to a later one.
 func TestTidy(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	expired := remember(t, s, "", "issue", "working on issue 77", time.Now().Add(-time.Minute))
 	later := remember(t, s, "", "release", "release on friday", time.Now().Add(time.Hour))
 	unused := remember(t, s, "", "unused", "a fact", time.Time{})
-	for range ArchiveLoads {
+	for range StaleLoads {
 		if err := s.Loaded(ctx, []string{unused.ID}); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if related, err := s.Related(ctx, "", []string{"fact"}, 10); err != nil || len(related) != 0 {
+		t.Fatalf("a stale memory is chosen for a topic: %+v, %v", related, err)
 	}
 	if n, err := s.Tidy(ctx); err != nil || n != 2 {
 		t.Fatalf("tidied %d, %v", n, err)

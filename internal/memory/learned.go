@@ -9,13 +9,11 @@ import (
 	"unicode"
 )
 
-// What a memory that is loaded and never used comes to: it is chosen for no
-// topic once it was loaded StaleLoads times, and archived by Tidy at
-// ArchiveLoads. Core memories are loaded with every answer, and not counted.
-const (
-	StaleLoads   = 10
-	ArchiveLoads = 20
-)
+// StaleLoads is what a memory that is loaded and never used comes to: from
+// that many loads on it is chosen for no topic, see active, and Tidy then
+// archives it, which only a search finds anymore. Core memories are loaded
+// with every answer, and not counted.
+const StaleLoads = 10
 
 // excerpt are the columns of a memory with at most 256 characters of its
 // content, as a search or a topic gets it.
@@ -103,11 +101,13 @@ func (s *Store) count(ctx context.Context, column string, ids []string) error {
 }
 
 // Tidy archives the memories that expired, and those that are no core ones
-// and were loaded ArchiveLoads times and never used. It returns how many.
+// and were loaded StaleLoads times and never used: a stale one is chosen for
+// no topic anymore, so nothing counts its loads up to a later bound. It
+// returns how many.
 func (s *Store) Tidy(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		r, err := tx.ExecContext(ctx, "UPDATE memories SET archived=1 WHERE archived=0 AND ((expires<>'' AND expires<=?) OR (core=0 AND used=0 AND loaded>=?))", now(), ArchiveLoads)
+		r, err := tx.ExecContext(ctx, "UPDATE memories SET archived=1 WHERE archived=0 AND ((expires<>'' AND expires<=?) OR (core=0 AND used=0 AND loaded>=?))", now(), StaleLoads)
 		if err == nil {
 			n, err = r.RowsAffected()
 		}
