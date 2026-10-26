@@ -115,7 +115,16 @@ func (c *controller) run(ctx context.Context) {
 									statusMu.Unlock()
 									err := c.receive(msgCtx, guarded, msg)
 									if err != nil && !errors.Is(err, plugin.ErrGatewayDenied) {
-										_ = guarded.SendTo(msgCtx, msg.RoomID, msg.Sender, "Ouro could not accept this message. Check the local session and gateway settings.")
+										text := "Ouro could not accept this message. Check the local session and gateway settings."
+										// Send only canonical session messages, never wrapper text:
+										// errors from a gateway can contain request secrets.
+										for _, known := range []error{plugin.ErrBusy, plugin.ErrRestarting, plugin.ErrSessionStopped} {
+											if errors.Is(err, known) {
+												text = known.Error()
+												break
+											}
+										}
+										_ = guarded.SendTo(msgCtx, msg.RoomID, msg.Sender, text)
 									}
 									return err
 								})

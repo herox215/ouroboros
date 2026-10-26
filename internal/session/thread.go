@@ -522,7 +522,7 @@ func (s *Service) hand(ctx context.Context, id, text string, pictures []openai.I
 	switch {
 	case s.closed:
 		return "", "", ErrStopped
-	case p.successor != "":
+	case p.successor != "" && (s.sessions[id] == nil || s.sessions[id].asked == nil):
 		return "", "", ErrRestarting
 	}
 	if err := may(); err != nil {
