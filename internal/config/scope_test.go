@@ -17,6 +17,9 @@ func TestSessionAndThreadLLM(t *testing.T) {
 		{"the sessions", Config{Access: "a", Model: "m", SessionAccess: "b", SessionModel: "s"}, [2]string{"b", "s"}, [2]string{"a", "m"}},
 		{"the thread", Config{Access: "a", Model: "m", ThreadAccess: "c", ThreadModel: "t"}, [2]string{"a", "m"}, [2]string{"c", "t"}},
 		{"one of the two is no choice", Config{Access: "a", Model: "m", SessionAccess: "b", ThreadModel: "t"}, [2]string{"a", "m"}, [2]string{"a", "m"}},
+		{"only the model of the sessions", Config{Access: "a", Model: "m", SessionModel: "s"}, [2]string{"a", "m"}, [2]string{"a", "m"}},
+		{"only the access of the thread", Config{Access: "a", Model: "m", ThreadAccess: "c"}, [2]string{"a", "m"}, [2]string{"a", "m"}},
+		{"both scopes", Config{Access: "a", Model: "m", SessionAccess: "b", SessionModel: "s", ThreadAccess: "c", ThreadModel: "t"}, [2]string{"b", "s"}, [2]string{"c", "t"}},
 	} {
 		if got, model, own := tt.cfg.SessionLLM(); own != (tt.sessions != [2]string{"a", "m"}) || [2]string{got, model} != tt.sessions {
 			t.Errorf("%s: sessions %q of %q (own %v)", tt.name, model, got, own)

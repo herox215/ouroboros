@@ -92,7 +92,7 @@ func TestYoloRebuildsTheAgent(t *testing.T) {
 	a := New(func() (config.Config, error) { return cfg, nil }, b, func(string, ...any) {}).WithYolo(func() bool { return yolo })
 
 	prompt := func() string {
-		bot, _, err := a.current(false)
+		bot, _, err := a.current(false, "")
 		if err != nil {
 			t.Fatal(err)
 		}

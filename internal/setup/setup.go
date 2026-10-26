@@ -183,9 +183,9 @@ var ErrLastAccess = errors.New("the last access cannot be removed: add another o
 // the access, they answer through the first of the others from then on, with
 // the model that one offers by default: an access that does not list its
 // models cannot take over, and nothing is removed then. Nor is an access
-// another profile of the node answers through. Peers that were answered
-// through the access are answered like the owner again, and the fallbacks
-// of the access are none any more. It returns what the owner
+// another profile of the node answers through. Peers, sessions and the thread
+// that were answered through the access are answered like the owner again,
+// and the fallbacks of the access are none any more. It returns what the owner
 // should know of how it went, "" if nothing.
 func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 	saved, err := s.book.Store.List()
@@ -259,6 +259,17 @@ func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 	s.forget(id)
 	if s.cfg.Access == id {
 		s.cfg.Access, s.cfg.Model = next.ID, model
+	}
+	// The setup goes on from the configuration it read, and Save writes it
+	// after a removal: no scope answers through the access any more.
+	if s.cfg.PeerAccess == id {
+		s.cfg.PeerAccess, s.cfg.PeerModel = "", ""
+	}
+	if s.cfg.SessionAccess == id {
+		s.cfg.SessionAccess, s.cfg.SessionModel = "", ""
+	}
+	if s.cfg.ThreadAccess == id {
+		s.cfg.ThreadAccess, s.cfg.ThreadModel = "", ""
 	}
 	if next.ID != "" {
 		note = strings.TrimSpace(fmt.Sprintf("the agents answer with %s of %s now. %s", model, next.Label(), note))

@@ -129,7 +129,9 @@ func (s *modelScreen) loaded(m *Model, msg modelsMsg) {
 	s.lists, s.fallbacks = msg.models, msg.fallbacks
 	for i, l := range msg.models {
 		for _, model := range l.Models {
-			if l.Access.Active && model == m.status.Model {
+			// The screen preselects what enter would repeat: the choice of
+			// its scope, or the model of the node on the node's screen.
+			if s.chosen(m, l.Access, model) || (s.scope == scopeNode && l.Access.Active && model == m.status.Model) {
 				s.sel = len(s.choices)
 			}
 			s.choices = append(s.choices, choice{i, model})
@@ -137,9 +139,11 @@ func (s *modelScreen) loaded(m *Model, msg modelsMsg) {
 	}
 }
 
-// handleModelKey handles keys on the model screen: up and down select a
-// model, enter makes the one selected the model of the node, esc goes back
-// to the chat.
+// handleKey handles keys on the model screen: up and down select a model,
+// enter makes the one selected the model of the screen's scope – that of the
+// node, of the sessions or of the thread – and esc goes back to the chat. On
+// the node's screen p makes it the model of the peers and f one of the
+// fallbacks; a scope's screen has neither.
 func (s *modelScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
@@ -154,14 +158,18 @@ func (s *modelScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		}
 		picked := s.choices[s.sel]
 		access := s.lists[picked.access].Access
+		if s.scope != scopeNode {
+			// Peers and fallbacks are those of the node, not of a scope.
+			if msg.String() != "enter" {
+				return nil
+			}
+			return s.pickForScope(m, access, picked.model)
+		}
 		if msg.String() == "p" {
 			return s.pickForPeers(m, access, picked.model)
 		}
 		if msg.String() == "f" {
 			return s.toggleFallback(m, access, picked.model)
-		}
-		if s.scope != scopeNode {
-			return s.pickForScope(m, access, picked.model)
 		}
 		changed := picked.model != m.status.Model
 		return func() tea.Msg {
@@ -256,6 +264,28 @@ func (s *modelScreen) fallbacksSet(m *Model, msg fallbacksMsg) {
 	m.setNotice(msg.done, false)
 }
 
+// text is what the screen says beside its title: the model of the node, or
+// the one the scope is answered with, "the same as yours" if the scope has
+// none of its own.
+func (s *modelScreen) text(m *Model) string {
+	if s.scope == scopeNode {
+		return m.modelText()
+	}
+	access, model := m.status.SessionAccess, m.status.SessionModel
+	if s.scope == scopeThreads {
+		access, model = m.status.ThreadAccess, m.status.ThreadModel
+	}
+	if model == "" {
+		return "the same as yours: " + m.modelText()
+	}
+	for _, l := range s.lists {
+		if l.Access.ID == access {
+			return model + " · " + l.Access.Label
+		}
+	}
+	return model
+}
+
 // forPeers reports whether model of access is what the owner chose to
 // answer peers with.
 func (s *modelScreen) forPeers(m *Model, access plugin.SetupAccess, model string) bool {
@@ -273,7 +303,7 @@ func (s *modelScreen) view(m *Model) (string, []hit) {
 	case scopeThreads:
 		title = "Model for the thread"
 	}
-	lines := []string{boldStyle.Render(title) + mutedStyle.Render("  "+m.modelText()), ""}
+	lines := []string{boldStyle.Render(title) + mutedStyle.Render("  "+s.text(m)), ""}
 	var hits []hit
 	switch {
 	case s.busy != "":

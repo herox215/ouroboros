@@ -47,7 +47,7 @@ type Status struct {
 	// "" otherwise.
 	SessionAccess, SessionModel string
 	ThreadAccess, ThreadModel   string
-	Port                  int // A2A port while running
+	Port                        int // A2A port while running
 	// Debug says that the node is in debug mode, see home.Dir.Debug.
 	Debug bool
 	// Yolo says that the node is in yolo mode, see home.Dir.Yolo: its agent

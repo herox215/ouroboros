@@ -555,10 +555,10 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 	}
 	sessions, threads := "the same as yours", "the same as yours"
 	if m.status.SessionModel != "" {
-		sessions = m.status.SessionModel
+		sessions = m.status.SessionModel + " · " + m.status.SessionAccess
 	}
 	if m.status.ThreadModel != "" {
-		threads = m.status.ThreadModel
+		threads = m.status.ThreadModel + " · " + m.status.ThreadAccess
 	}
 	return []row{
 		{section: nodeSection, label: "Model for peers", value: peers, note: "what your agent answers peers with; p on /model chooses it", actions: []action{model}},
@@ -567,8 +567,8 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 		{section: nodeSection, label: "Debug mode", value: debug, note: "the log of the node (ouro.log) tells much more of every call of the LLM", actions: []action{{turnDebug, (*Model).toggleDebug}}},
 		{section: nodeSection, label: "Yolo mode", value: yolo, note: "no rule of tools.ask asks you before a tool call; questions to you still wait for you", actions: []action{{turnYolo, (*Model).toggleYolo}}},
 		{section: nodeSection, label: "Appearance", value: m.appearanceText(), note: "how this terminal UI looks, in the colors of the GUI: light, dark, or system, as the background of the terminal is; for all profiles, also the next time; /appearance changes it too", actions: looks},
-		{section: nodeSection, label: "Model for sessions", value: sessions, note: "what your agent answers your sessions with; enter on /model chooses it, enter on the chosen one makes it yours again", actions: []action{{"open the models", (*Model).openSessionModel}}},
-		{section: nodeSection, label: "Model for the thread", value: threads, note: "what your agent answers the thread with; enter on /model chooses it, enter on the chosen one makes it yours again", actions: []action{{"open the models", (*Model).openThreadModel}}},
+		{section: nodeSection, label: "Model for sessions", value: sessions, note: "what your agent answers your sessions with; enter opens the models, enter there sets the one chosen, and on the chosen one makes it the model of the node again", actions: []action{{"open the models", (*Model).openSessionModel}}},
+		{section: nodeSection, label: "Model for the thread", value: threads, note: "what your agent answers the thread with; enter opens the models, enter there sets the one chosen, and on the chosen one makes it the model of the node again", actions: []action{{"open the models", (*Model).openThreadModel}}},
 	}
 }
 

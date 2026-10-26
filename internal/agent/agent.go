@@ -962,13 +962,33 @@ func (m *Memory) Restore(contextID string, msgs []openai.Message) {
 // conversation: the messages and the results of the tools stay. It is for a
 // memory that goes on with another provider, which is not sent what the one
 // before thought, in a form that is its own.
-func (m *Memory) Unthink() {
+func (m *Memory) Unthink() { m.UnthinkExcept("") }
+
+// UnthinkExcept clears what the LLM thought in every conversation but the
+// one with the ID keep.
+func (m *Memory) UnthinkExcept(keep string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, c := range m.conversations {
-		for i := range c.msgs {
-			c.msgs[i].Reasoning, c.msgs[i].ReasoningField = "", ""
+	for id, c := range m.conversations {
+		if id != keep {
+			unthink(c)
 		}
+	}
+}
+
+// UnthinkOne clears what the LLM thought in the conversation contextID.
+func (m *Memory) UnthinkOne(contextID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.conversations[contextID]; ok {
+		unthink(c)
+	}
+}
+
+// unthink forgets what the LLM thought in c.
+func unthink(c *conversation) {
+	for i := range c.msgs {
+		c.msgs[i].Reasoning, c.msgs[i].ReasoningField = "", ""
 	}
 }
 
