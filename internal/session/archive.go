@@ -67,9 +67,17 @@ func (s *Service) ForgetPeers(forget func(contextID string)) {
 // in place of a message of the owner.
 const goOnText = "[Not from the owner: ouro runs the build you asked for now. Go on with what you were doing.]"
 
+// interruptedText is what a session is told whose answer was on its way when
+// the node went away, and which goes on with it now: unlike an answer that
+// ended before ouro started anew, this one stopped in the middle, and what it
+// had started ended with the process.
+const interruptedText = "[Not from the owner: this answer was stopped in the middle when ouro started anew, and the background jobs and tasks it had started ended with it. What it changed before may be incomplete. Check the state of what you were doing and go on with the task.]"
+
 // GoOn lets the sessions of the owner go on that asked to once ouro started
-// anew from the build they asked for, see AskGoOn: each is told goOnText,
-// once. A node calls it when it starts.
+// anew from the build they asked for, see AskGoOn, and those whose answer the
+// previous image could not finish, see history.BeginAnswer: a session that
+// asked is told goOnText, an interrupted one interruptedText, each once. A
+// node calls it when it starts.
 func (s *Service) GoOn() {
 	s.mu.Lock()
 	a := s.archive
@@ -81,8 +89,25 @@ func (s *Service) GoOn() {
 	if err != nil {
 		a.log("which sessions go on by themselves cannot be read: %v", err)
 	}
+	interrupted, err := a.Interrupted()
+	if err != nil {
+		a.log("which answers were interrupted cannot be read: %v", err)
+	}
+	told := make(map[string]string, len(ids)+len(interrupted))
 	for _, id := range ids {
-		if err := s.askInput(context.Background(), strings.TrimPrefix(id, "owner/"), goOnText, true); err != nil {
+		told[id] = goOnText
+	}
+	order := slices.Clone(ids)
+	// An answer that asked to go on carries its own note of what was pending;
+	// one that was only interrupted is told that it stopped in the middle.
+	for _, id := range interrupted {
+		if _, ok := told[id]; !ok {
+			order = append(order, id)
+			told[id] = interruptedText
+		}
+	}
+	for _, id := range order {
+		if err := s.askInput(context.Background(), strings.TrimPrefix(id, "owner/"), told[id], true); err != nil {
 			a.log("the session %s does not go on by itself: %v", id, err)
 		}
 	}

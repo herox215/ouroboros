@@ -73,9 +73,10 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A database from before the model of a session was kept gets its
-	// column here: the schema above creates a new one with it.
-	var modelColumn bool
+	// A database from before the model of a session was kept, or before an
+	// answer on its way was marked, gets its column here: the schema above
+	// creates a new one with it.
+	present := map[string]bool{}
 	columns, err := tx.Query("PRAGMA table_info(history_sessions)")
 	if err != nil {
 		return nil, err
@@ -88,16 +89,20 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 			columns.Close()
 			return nil, err
 		}
-		if name == "model" {
-			modelColumn = true
-		}
+		present[name] = true
 	}
 	columns.Close()
 	if err = columns.Err(); err != nil {
 		return nil, err
 	}
-	if !modelColumn {
-		if _, err = tx.Exec("ALTER TABLE history_sessions ADD COLUMN model TEXT"); err != nil {
+	for _, column := range []struct{ name, kind string }{
+		{"model", "TEXT"},
+		{"answering", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if present[column.name] {
+			continue
+		}
+		if _, err = tx.Exec("ALTER TABLE history_sessions ADD COLUMN " + column.name + " " + column.kind); err != nil {
 			return nil, err
 		}
 	}
@@ -141,7 +146,7 @@ CREATE TABLE IF NOT EXISTS history_sessions(
  id TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0,
  deleted INTEGER NOT NULL DEFAULT 0, modified INTEGER NOT NULL DEFAULT 0,
  size INTEGER NOT NULL DEFAULT 0, title TEXT, effort TEXT, model TEXT, directory TEXT,
- goon INTEGER NOT NULL DEFAULT 0
+ goon INTEGER NOT NULL DEFAULT 0, answering INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS history_restarts(
  session_id TEXT PRIMARY KEY REFERENCES history_sessions(id),
