@@ -737,6 +737,8 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 	source := se.queue[last].source
 	se.queue = slices.Delete(se.queue, last, last+1)
 	s.emit(se, Event{Kind: Unqueued, Text: text, Source: source})
+	s.withdraw(se)
+	s.busy()
 	return text, nil
 }
 
@@ -788,7 +790,7 @@ func (s *Service) saying(se *session, id, text string) {
 	defer s.mu.Unlock()
 	e := Event{Kind: Say, PresentationID: id, Text: text}
 	s.emit(se, e)
-	if se.routed && se.id != ThreadID {
+	if forThread(se) && se.id != ThreadID {
 		s.emit(s.get(ThreadID), e)
 	}
 }

@@ -56,7 +56,8 @@ var previewWork = make(chan struct{}, 1)
 
 // terminalQuery asks the terminal whether it draws sixels, and how large its
 // cells are in pixels: see graphics.
-var terminalQuery = ansi.RequestPrimaryDeviceAttributes + ansi.WindowOp(ansi.RequestCellSizeWinOp)
+// 16 reports the cell size in pixels; ansi deprecated its name for it.
+var terminalQuery = ansi.RequestPrimaryDeviceAttributes + ansi.WindowOp(16)
 
 // graphics is what the terminal told of its pictures.
 type graphics struct {
