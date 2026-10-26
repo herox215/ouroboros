@@ -657,8 +657,9 @@ said last holds. What it keeps is told in the chat at once, and `/undo` takes it
 Memories are of three scopes, and of three layers. **Core** memories are short facts about who the owner is and how
 they want answers: they are in the system prompt of every answer to the owner, the oldest first,
 and all of them together have at most 2,000 characters. A write that would make them more fails;
-the agent then merges or shortens core memories with `memory_update`, and what the review would
-keep there is kept as a global memory instead. **Global** memories are available across projects,
+the agent then merges or shortens core memories with `memory_update`, and a memory the review would
+keep there is kept as a global one instead, unless it corrects a core memory: that one stays as it
+is until the core memories are merged. **Global** memories are available across projects,
 **project** memories with the trusted selected project directory; both are found with
 `memory_search`. Other profiles remain separate.
 
@@ -672,8 +673,8 @@ the core. Everything else is the **archive**, which only `memory_search` and `hi
 
 The review may remember a state that will change, as what the owner works on now, for some days,
 at most 30: then it expires. Each memory counts how often a topic was given it and how often the agent
-read it or found it by words. One that was given 10 times and never used is given to no topic anymore;
-at 20 it is archived, and so is one that expired. Nothing is deleted: `memory_search` still finds an
+read it or found it by words. One that was given 10 times and never used is given to no topic anymore,
+and the next tidying archives it, as it does one that expired. Nothing is deleted: `memory_search` still finds an
 archived memory, marked as such, and remembering it again takes it out of the archive. Once the owner
 left for 2 hours, the memories are tidied, and at most once a week the LLM looks for memories of one
 scope that say the same and merges them into one, of which the newer holds: the others are archived.

@@ -771,6 +771,13 @@ func (a *Assistant) learn(ctx context.Context, chat string, l lesson, to review,
 		}
 		e, was, err = store.Remember(ctx, project, l.key, l.content, chat, l.scope == "core", expires)
 		if errors.Is(err, memory.ErrCoreFull) {
+			// A core memory that the review corrects is not kept as a global
+			// one: that would take it out of every prompt, which is worse than
+			// the correction waiting until the core memories are merged.
+			if coreKey(ctx, store, l.key) {
+				log("the core memories are full: %q stays as it is, merge or shorten them first", l.key)
+				return
+			}
 			log("the core memories are full: %q is kept as a global memory", l.key)
 			e, was, err = store.Remember(ctx, "", l.key, l.content, chat, false, expires)
 		}
@@ -783,6 +790,13 @@ func (a *Assistant) learn(ctx context.Context, chat string, l lesson, to review,
 	if to.remembered != nil {
 		to.remembered(Remembered{e, was})
 	}
+}
+
+// coreKey reports whether a core memory under key exists: what the review of
+// an answer corrects then is not kept as a global memory, see learn.
+func coreKey(ctx context.Context, store *memory.Store, key string) bool {
+	core, err := store.Core(ctx)
+	return err == nil && slices.ContainsFunc(core, func(e memory.Entry) bool { return e.Key == key })
 }
 
 // Effort is how much the model thinks before it answers the owner where the

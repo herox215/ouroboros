@@ -112,12 +112,22 @@ func TestLearn(t *testing.T) {
 	if len(told) != 1 || told[0].Memory.Project != "" {
 		t.Fatalf("a memory of no project: %+v", told)
 	}
-	if _, err := store.CreateCore(context.Background(), "big", strings.Repeat("x", memory.MaxCore), "owner"); err != nil {
+	big, err := store.CreateCore(context.Background(), "big", strings.Repeat("x", memory.MaxCore), "owner")
+	if err != nil {
 		t.Fatal(err)
 	}
 	a.learn(context.Background(), "c", lesson{"core", "style", "short answers", 0}, to, logf)
 	if len(told) != 2 || told[1].Memory.Core || told[1].Memory.Key != "style" {
 		t.Fatalf("a core memory that does not fit: %+v", told)
+	}
+	// A core memory that the review corrects is not kept as a global one,
+	// which would take it out of every prompt, and it is not cut either.
+	a.learn(context.Background(), "c", lesson{"core", "big", strings.Repeat("y", memory.MaxCore+100), 0}, to, logf)
+	if len(told) != 2 {
+		t.Fatalf("a full core memory was kept anyway: %+v", told)
+	}
+	if e, err := store.Read(context.Background(), "", big.ID); err != nil || e.Content != strings.Repeat("x", memory.MaxCore) {
+		t.Fatalf("the core memory changed: %+v, %v", e, err)
 	}
 	a.learn(context.Background(), "c", lesson{"global", "", "no key", 0}, to, logf)
 	b, blog := recorded(t, ownerConfig(), &titleLLM{reply: "done"})
@@ -132,6 +142,7 @@ func TestLearn(t *testing.T) {
 	a.learn(context.Background(), "c", lesson{"global", "editor", "vim", 0}, review{}, logf)
 	lines := log.take()
 	if len(told) != 2 || !slices.Contains(lines, `chat c: the core memories are full: "style" is kept as a global memory`) ||
+		!slices.Contains(lines, `chat c: the core memories are full: "big" stays as it is, merge or shorten them first`) ||
 		!slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, `chat c: the memory "" is not kept: `) }) ||
 		!slices.Contains(lines, `chat c: review: remembered "editor"`) {
 		t.Fatalf("told %+v, log:\n%s", told, strings.Join(lines, "\n"))
