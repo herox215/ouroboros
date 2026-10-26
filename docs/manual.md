@@ -312,6 +312,11 @@ the conversation; what the agent is sent has the paths.
   the quotes a `"` is `\"` and a `\` is `\\`; a space is a space. Only text that is nothing but the paths of
   files that are there and pictures by their extension (`png` `jpg` `jpeg` `webp` `gif` `bmp` `tif` `tiff`
   `heic` `avif` `svg`) is changed: any other text is pasted as it is.
+A hover over the label or the path of a picture previews it. Beyond `png`, `jpg` and `gif` that is
+`webp`, `bmp`, `tiff` (its first page), `avif`, `heic` and `svg`; an SVG is rasterized without its scripts
+and without anything it names elsewhere. A PDF shows its first page where the system has `pdftoppm`
+(poppler): without it there is no preview, and the PDF is still sent as the file it is.
+
 - **A picture that is no file**, like a screenshot on the clipboard: `ctrl+v` reads it from the clipboard of
   the system and keeps it as a file, whose path it types. A terminal that pastes such a picture as nothing
   does the same. A file copied in a file manager is typed as its own path. Without a picture, `ctrl+v` pastes
