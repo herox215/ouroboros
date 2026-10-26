@@ -614,8 +614,9 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 	if generated && text == goOnText {
 		// The durable restart note, not transient Routed flags, restores where
 		// the unanswered question must be offered after loading the archive.
+		// Only the last message counts: an older note was answered already.
 		for _, e := range slices.Backward(se.events) {
-			if e.Kind == Message && strings.Contains(e.Text, restartQuestionHead) {
+			if e.Kind == Message {
 				message.routed = strings.HasPrefix(e.Text, restartThreadQuestionHead)
 				break
 			}
