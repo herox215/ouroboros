@@ -223,7 +223,7 @@ func TestBounded(t *testing.T) {
 func TestReviewFails(t *testing.T) {
 	tools := toolsOf{}
 	a := New(func() (config.Config, error) { return config.Config{}, errors.New("no config") }, Builder{}, discard)
-	if _, err := a.review(context.Background(), nil, nil, tools); err == nil {
+	if _, err := a.review(context.Background(), nil, nil, tools, nil); err == nil {
 		t.Error("reviewed without a configuration")
 	}
 	opened := 0 // the agent opens the access first, the review again
@@ -236,12 +236,12 @@ func TestReviewFails(t *testing.T) {
 		},
 		Tools: func() []agent.Tool { return nil },
 	}, discard)
-	if _, err := a.review(context.Background(), nil, nil, tools); err == nil {
+	if _, err := a.review(context.Background(), nil, nil, tools, nil); err == nil {
 		t.Error("reviewed without an access")
 	}
 	b, log := recorded(t, ownerConfig(), &titleLLM{err: errors.New("down")})
 	got := ""
-	b.reviewed("c", []Signal{{SignalSlowTool, "bash took 42s"}}, []string{"x"}, tools, func(text string) { got = text })
+	b.reviewed("c", []Signal{{SignalSlowTool, "bash took 42s"}}, []string{"x"}, tools, review{suggest: func(text string) { got = text }})
 	if lines := log.take(); got != "" || len(lines) != 1 || lines[0] != "chat c: review failed: down" {
 		t.Fatalf("suggested %q, log %q", got, lines)
 	}
@@ -254,7 +254,7 @@ func TestSuggestionNotKept(t *testing.T) {
 	a, log := recorded(t, ownerConfig(), &titleLLM{reply: "CHANGE: add grep."})
 	a.builder = a.builder.WithSuggestions(suggestion.Open(path))
 	got := ""
-	a.reviewed("c", nil, nil, toolsOf{}, func(text string) { got = text })
+	a.reviewed("c", nil, nil, toolsOf{}, review{suggest: func(text string) { got = text }})
 	lines := log.take()
 	if got != "add grep." || len(lines) != 2 || !strings.HasPrefix(lines[1], "chat c: the suggestion is not kept: ") {
 		t.Fatalf("suggested %q, log %q", got, lines)

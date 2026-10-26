@@ -199,6 +199,8 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #content .message-end { color: var(--muted); font-size: 12px; border-bottom: 0; }
 .expand-text { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font: inherit; cursor: pointer; }
 .expand-text { margin-top: 8px; font-size: 12px; }
+#content .message-remembered { color: var(--muted); font-size: 13px; }
+.undo-remembered { margin-top: 6px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font: inherit; font-size: 12px; cursor: pointer; }
 /* The composer sits below the history, not in it, and is compact, so that the
    history keeps the room: one row for the hint, the status and Send. */
 .composer-dock { flex: none; width: 100%; max-width: 760px; margin: 0 auto; padding: 0 0 22px; }

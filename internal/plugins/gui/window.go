@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -38,6 +39,9 @@ type ChatEvent struct {
 	N        int                `json:"n"`
 	Own      bool               `json:"own"`
 	Question *ChatQuestion      `json:"question,omitempty"`
+	// Remembered is what takes back the memory of a SessionRemembered, as
+	// JSON, see Window.UndoRemembered.
+	Remembered string `json:"remembered,omitempty"`
 }
 
 // ChatQuestion contains the displayable fields of an owner question.
@@ -306,6 +310,16 @@ func (w *Window) SetModel(profile int, access, model string) (bool, error) {
 	return switched, nil
 }
 
+// UndoRemembered takes back the memory the review of an answer kept, as the
+// Remembered of its ChatEvent tells it.
+func (w *Window) UndoRemembered(profile int, remembered string) error {
+	p, err := w.profile(profile)
+	if err != nil {
+		return err
+	}
+	return p.owner.UndoRemembered(json.RawMessage(remembered))
+}
+
 // NewSession creates an owner session using the node's existing session API.
 func (w *Window) NewSession(profile int) (string, error) {
 	p, err := w.ready(profile)
@@ -521,6 +535,9 @@ func (p *Profile) event(e plugin.SessionEvent) ChatEvent {
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		out.Question = &ChatQuestion{Text: q.Question, Options: q.Options, Recommended: q.Recommended}
+	}
+	if e.Kind == plugin.SessionRemembered {
+		out.Remembered = string(e.Args)
 	}
 	if e.Kind == plugin.SessionStep {
 		s := e.AsStep()

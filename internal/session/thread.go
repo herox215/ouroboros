@@ -593,6 +593,15 @@ func (s *Service) relay(se *session, end Event) {
 	s.notify(report)
 }
 
+// remembered shows e, a memory the review of an answer in se kept, in se,
+// and also in the thread if the answer worked for it. s.mu is held.
+func (s *Service) remembered(se *session, e Event, forThread bool) {
+	s.emit(se, e)
+	if forThread {
+		s.emit(s.get(ThreadID), e)
+	}
+}
+
 // notify queues generated result data for the thread, or starts its answer.
 // s.mu and the process lock are held.
 func (s *Service) notify(report queued) {

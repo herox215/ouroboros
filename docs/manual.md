@@ -85,6 +85,12 @@ only the log; the conversation shown goes on. The answer to it is not reviewed a
 suggest what to make of their own suggestions. Rejecting it drops it. Front ends get it as the session event
 `suggestion`; the chat does not keep it with the session, `/suggestions` does, in `suggestions.json` of the node, at
 most 16, the same text once.
+The review also looks for what to [remember](#memories) of you or your environment, so that you need not say it
+twice: a correction of how you want answers, a path, a convention of a project. That it keeps at once, and tells it
+with a faint line, like `✦ remembered: build: ouro is built with make build · /undo`; `/undo` takes back the last
+of them in the conversation shown. Where the answer took a message [the thread](#the-thread) handed on, the line
+is shown in the thread too, so that `/undo` takes it back there. Front ends get it as the session event `remembered`, whose `args` are what
+takes it back; the GUI shows the line with a button for it.
 What the model thinks before it writes comes in as the stream brings it, and the chat shows the last
 lines of it, faint, above the words of its round, under `· thought`; `ctrl+r` hides it again. A
 provider that keeps its thinking to itself, as the responses API of OpenAI does, sends none of it,
@@ -265,6 +271,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back. `/` searches it: every match is marked as you type, without regard to case and across the ends of lines; `↑` `↓` go from match to match, `enter` keeps the search, `esc` ends it |
 | `/settings` | the configuration in one place, in a dialog over the chat, by categories: the node, the agents, the plugins, the tools of your agent, of peers and of single peers, the protected paths. `↑` `↓` select, `enter` opens a category, `←` `→` what to do with a line of it, `enter` does it, `esc` back; see [Settings](#settings) |
 | `/model` | the models of every access of the node, grouped by access, the one in use marked: `↑` `↓` select, `enter` saves it (the agents answer with it from the next message on, also when it is a model of another provider), `p` makes it the model [peers are answered with](#providers-and-accesses), `f` a [fallback](#fallbacks), `esc` back |
+| `/undo` | take back the last memory the review of an answer kept by itself in the conversation shown: one it made is forgotten, one it replaced is as it was before. A memory changed since is not taken back; see [Memories](#memories) |
 | `/suggestions` | changes of ouro the reviews suggest, in the existing dialog over the chat. `↑` `↓` select, `←` `→` accept or reject, `enter` decides, `a` accepts all in one new conversation, `esc` closes without deciding. Accepting starts an agent task; it does not apply a change immediately |
 | `/effort` | how much the model thinks before it answers in the conversation shown, see [Sessions](#sessions) |
 | `/debug` | turn the debug mode on or off: the log of the node then tells much more |
@@ -595,7 +602,7 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
-`history_sessions`), for explicit [memories](#explicit-memories) (`memory_add`, `memory_update`,
+`history_sessions`), for [memories](#memories) (`memory_add`, `memory_update`,
 `memory_forget`, `memory_search`, `memory_read`), for owner-only [scheduled answers](#schedule)
 (`schedule_read`, `schedule_update`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
 `withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that builds and installs its own
@@ -631,20 +638,52 @@ and the node read `config.json` with every message and build their agents anew w
 restart. A node that runs keeps answering peers as before while the file cannot be used, and says why in
 `ouro.log`.
 
-### Explicit memories
+### Memories
 
-The optional `memory` plugin gives the owner an explicit, persistent memory, separate from the
+The optional `memory` plugin gives the owner a persistent memory, separate from the
 conversation archive. `memory_add` records a fact or preference with its source conversation;
 `memory_update` changes an entry only at its expected version, and `memory_forget` removes it
-from the active store and its search index. Remember only what the owner explicitly asks to keep;
-stored content is data, never a higher-priority instruction. Peers cannot use these tools.
+from the active store and its search index. The agent saves what the owner asks it to remember,
+or a lasting fact the owner told it, never what a tool, a web page or a peer said; stored content
+is data, never a higher-priority instruction. Peers cannot use these tools.
+
+ouro also learns by itself: the [review](#the-log) of an answer with signals may remember up to 3
+facts, of the owner's message or the follow-up, or a way that worked after another had failed. It
+does not keep a failure of the environment, that a tool does not work, an attempt that did not work
+out, or what concerns only one task. A memory of the same key in its scope is replaced, as what was
+said last holds. What it keeps is told in the chat at once, and `/undo` takes it back: see
+[Terminal UI](#terminal-ui). The log says `review: remembered "…"`.
+
+Memories are of three scopes, and of three layers. **Core** memories are short facts about who the owner is and how
+they want answers: they are in the system prompt of every answer to the owner, the oldest first,
+and all of them together have at most 2,000 characters. A write that would make them more fails;
+the agent then merges or shortens core memories with `memory_update`, and a memory the review would
+keep there is kept as a global one instead, unless it corrects a core memory: that one stays as it
+is until the core memories are merged. **Global** memories are available across projects,
+**project** memories with the trusted selected project directory; both are found with
+`memory_search`. Other profiles remain separate.
+
+The **core** goes into every prompt. A **topic**, a conversation other than the thread, is given
+more when it starts: up to 5 memories of its project at once, the most used first, and a line of the
+keys of the others, so that the agent knows what there is to search for. A moment later a small call
+of the LLM picks words from the first message, and up to 5 memories that have any of them are given
+from the next answer on. From then on the prompt of the topic stays the same, so that the provider
+can cache it; what the agent looks up later comes as the result of a tool. The thread is given only
+the core. Everything else is the **archive**, which only `memory_search` and `history_search` reach.
+
+The review may remember a state that will change, as what the owner works on now, for some days,
+at most 30: then it expires. Each memory counts how often a topic was given it and how often the agent
+read it or found it by words. One that was given 10 times and never used is given to no topic anymore,
+and the next tidying archives it, as it does one that expired. Nothing is deleted: `memory_search` still finds an
+archived memory, marked as such, and remembering it again takes it out of the archive. Once the owner
+left for 2 hours, the memories are tidied, and at most once a week the LLM looks for memories of one
+scope that say the same and merges them into one, of which the newer holds: the others are archived.
+The log says `memories: 2 archived, as they expired or were never used` and `memories: 3 merged into "…"`.
 
 `memory_search` retrieves short ranked full-text matches; `memory_read` reads an entry by ID.
 The tool description asks the agent to search when a request may depend on earlier preferences,
 agreements or project conventions, and to search rather than guess when in doubt. This is a
 tool-driven lookup, not a guarantee of automatic recall or a semantic/embedding search.
-Project memories are associated with the trusted selected project directory; global memories are
-available across projects within the same profile. Other profiles remain separate.
 
 Sessions, history and memories share `history/ouroboros.sqlite`. Forgetting a memory does not erase
 its earlier mentions from conversation history. Deleting a conversation does not silently delete
@@ -1089,7 +1128,7 @@ and ask a focused question only when needed, rather than giving blanket agreemen
 - **What a hit is worth.** The tools say so to the model: what another conversation holds may be outdated,
   and is a hint, not a fact.
 - **Where it is.** `history/ouroboros.sqlite` is the per-profile SQLite database shared by sessions,
-  history and explicit memories. Conversations retain their owner/peer boundary. Records keep their
+  history and memories. Conversations retain their owner/peer boundary. Records keep their
   sequence, answer, timestamp, role, content and tool calls; the last record says whether the answer
   finished, failed or was canceled, without exposing failure diagnostics to peers. Titles, effort,
   project directory and restart continuation markers are session metadata. Full-text indexes are kept
@@ -1690,8 +1729,9 @@ file. After a conversation that went wrong, the log says what the agent did and 
   or more, 3 tool calls or more that failed, the same tool with the same arguments 3 times or more, 15 calls of
   the LLM or more, a tool result that was cut, as the agent has to get what was left out with
   another step, a call that broke off and was asked again or that a [fallback](#fallbacks) answered, less
-  than half of the tokens cached from the third call on, an answer that gave up after too many calls, and one
-  without words. What
+  than half of the tokens cached from the third call on, an answer that gave up after too many calls, one
+  without words, and a tool that failed and then worked in the same answer (`a call of bash failed, a later one
+  worked`), as the way that worked may be worth [remembering](#memories). What
   waits for someone else, `user_question`, `ask_peer` and `ask_back`, is never slow, and its time is not counted
   to the answer. An answer without a signal has no such line.
 - **Follow-up**: a short message of the owner, of at most 60 characters, within 15 minutes of an answer, like
@@ -1704,7 +1744,14 @@ file. After a conversation that went wrong, the log says what the agent did and 
   prompt. What comes from the task or the provider is no change. The line `review: "…"` has what it proposes,
   `review: nothing to change` that it found nothing, `review failed: …` why it could not. What it proposes
   is shown in the chat and waits in `/suggestions`, see [Terminal UI](#terminal-ui); it changes nothing by itself.
-  Whether the owner took or dropped it is logged too: `the owner took a suggestion: "…"`. A node that stops right
+  Whether the owner took or dropped it is logged too: `the owner took a suggestion: "…"`. The review may also
+  remember what the owner said, see [Memories](#memories): `review: remembered "…"` for each, and
+  `the owner took back a memory: "…"` once the owner took one back. A correction of style or of the way to do a
+  task that belongs to a [skill](#skills) is suggested as a change of that skill, `In the skill review: …`, which
+  waits in `/suggestions` like any other; taking it asks the agent to change the skill with `skill_write`.
+- **Topic finished**: a conversation other than the thread that the owner left for 2 hours, with 3 answers or
+  more or with a signal, is reviewed once more, with the messages of the owner in it, for what to remember of it;
+  the signal is `topic finished: the owner left the topic after 5 answers`. A node that stops right
   after the answer, as `ouro chat` stops one it started, stops the review with it.
 - **Canceled**: when you type `/cancel` in the UI, interrupt `ouro chat` with Ctrl-C or stop the node, the call
   the agent was waiting for is recorded as `canceled` with the time it had run, and then the answer. Ctrl-C

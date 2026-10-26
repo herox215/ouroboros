@@ -34,6 +34,7 @@ var own = []command{
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
 	{"suggestions", "review suggested changes of ouro", (*Model).openSuggestions},
+	{"undo", "take back the last memory ouro kept by itself here", (*Model).undo},
 	{"keys", "list the keys (ctrl+k does too)", (*Model).openKeys},
 	{"help", "list the commands", func(m *Model) tea.Cmd { m.screen = screenHelp; return nil }},
 	{"quit", "quit (ctrl+c does too)", (*Model).leave},

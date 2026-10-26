@@ -21,6 +21,7 @@ import (
 	"ouroboros/internal/identity"
 	"ouroboros/internal/llm"
 	"ouroboros/internal/llm/llmtest"
+	"ouroboros/internal/memory"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
 	openaiplugin "ouroboros/internal/plugins/openai"
@@ -764,5 +765,55 @@ func TestOwnerDecidesOnSuggestions(t *testing.T) {
 		if !strings.Contains(string(logged), want) {
 			t.Fatalf("the log lacks %q: %s", want, logged)
 		}
+	}
+}
+
+// What the review of an answer remembered the owner can take back: a new
+// memory is forgotten, one it replaced is as it was. What changed since, or
+// is no memory, is not taken back, and what is taken back is in the log.
+func TestOwnerUndoesWhatWasRemembered(t *testing.T) {
+	s := clitest.Settings(t)
+	o := owner(t, s)
+	store, err := memory.Open(home.Dir(s.Home).History())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	args := func(e, was memory.Entry) json.RawMessage {
+		raw, _ := json.Marshal(plugin.Remembered{Memory: e, Was: was})
+		return raw
+	}
+	e, was, _ := store.Remember(ctx, "", "style", "short answers", "c", false, time.Time{})
+	again, before, _ := store.Remember(ctx, "", "style", "very short answers", "c", false, time.Time{})
+	if err := o.UndoRemembered(args(again, before)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.Read(ctx, "", e.ID); got.Content != "short answers" {
+		t.Fatalf("not as it was: %+v", got)
+	}
+	if err := o.UndoRemembered(args(again, before)); !errors.Is(err, plugin.ErrMemoryChanged) {
+		t.Fatalf("taken back twice: %v", err)
+	}
+	now, _ := store.Read(ctx, "", e.ID)
+	if err := o.UndoRemembered(args(now, was)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(ctx, "", e.ID); !errors.Is(err, memory.ErrNotFound) {
+		t.Fatalf("a new memory is not forgotten: %v", err)
+	}
+	if err := o.UndoRemembered(json.RawMessage(`"nope"`)); err == nil {
+		t.Fatal("took back what is no memory")
+	}
+	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
+	if strings.Count(string(logged), `the owner took back a memory: "style"`) != 2 {
+		t.Fatalf("the log: %s", logged)
+	}
+	bad := clitest.Settings(t)
+	if err := os.WriteFile(home.Dir(bad.Home).History(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner(t, bad).UndoRemembered(args(e, was)); err == nil {
+		t.Fatal("took back without a store")
 	}
 }

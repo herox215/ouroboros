@@ -123,7 +123,7 @@ func TestToolsRefuseWhatTheyCannotDo(t *testing.T) {
 	}{
 		{workdir.With(ctx, "relative/project"), Search, `{}`, "current project must be an absolute trusted path"},
 		{ctx, Create, `{"key":"k","content":"c","scope":"project"}`, "no current project selected"},
-		{project, Create, `{"key":"k","content":"c","scope":"everywhere"}`, "scope must be global or project"},
+		{project, Create, `{"key":"k","content":"c","scope":"everywhere"}`, "scope must be global, core or project"},
 		{ctx, Create, `{"id":"x","key":"k","content":"c"}`, "create takes no ID or version"},
 		{ctx, Create, `{"version":1,"key":"k","content":"c"}`, "create takes no ID or version"},
 		{ctx, Update, `{` + id + `,"version":1,"key":"drink","content":"tea","scope":"project"}`, "no current project selected"},
@@ -137,5 +137,50 @@ func TestToolsRefuseWhatTheyCannotDo(t *testing.T) {
 	}
 	if got, err := s.Read(ctx, "", e.ID); err != nil || got != e {
 		t.Fatalf("refused calls changed the memory: %+v, %v", got, err)
+	}
+}
+
+// A memory of scope core is global and a core one; read, update and forget
+// find it as a global one.
+func TestCoreScope(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := workdir.With(context.Background(), "/project/a")
+	var e store.Entry
+	if err := json.Unmarshal([]byte(call(t, s, ctx, "owner", Create, `{"key":"name","content":"Lu","scope":"core"}`)), &e); err != nil {
+		t.Fatal(err)
+	}
+	if !e.Core || e.Project != "" {
+		t.Fatalf("core: %+v", e)
+	}
+	if out := call(t, s, ctx, "owner", Read, `{"id":"`+e.ID+`","scope":"core"}`); !strings.Contains(out, `"core":true`) {
+		t.Fatalf("read: %s", out)
+	}
+	if core, err := s.Core(ctx); err != nil || len(core) != 1 || core[0].ID != e.ID {
+		t.Fatalf("core: %+v, %v", core, err)
+	}
+}
+
+// What the agent reads, or finds by words, counts as used; a list of the
+// latest does not.
+func TestReadAndSearchCountAsUsed(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	e, err := s.Create(ctx, "", "drink", "oolong", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call(t, s, ctx, "owner", Read, `{"id":"`+e.ID+`"}`)
+	call(t, s, ctx, "owner", Search, `{"query":"oolong"}`)
+	call(t, s, ctx, "owner", Search, `{}`)
+	if got, err := s.Read(ctx, "", e.ID); err != nil || got.Used != 2 || got.Version != 1 {
+		t.Fatalf("used: %+v, %v", got, err)
 	}
 }

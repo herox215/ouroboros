@@ -1,4 +1,10 @@
-// Package memory stores only explicit user memories, not inferred facts or transcripts.
+// Package memory stores the memories of the owner: what they asked to be
+// remembered, and what the review of an answer learned from what they said,
+// see Remember. It keeps no transcripts. Core memories are the few that go
+// into every prompt of the owner's agent; together they have at most MaxCore
+// characters. Others are chosen for a topic, see Related, and counted when
+// they are loaded and used: one that is loaded often and never used, or that
+// expired, is archived, see Tidy. Nothing is deleted but by Forget.
 package memory
 
 import (
@@ -22,11 +28,15 @@ const (
 	MaxContent = 8192
 	MaxKey     = 128
 	MaxHits    = 20
+	// MaxCore is how many characters the contents of all core memories have
+	// together: a write that would make them more fails with ErrCoreFull.
+	MaxCore = 2000
 )
 
 var (
 	ErrNotFound = errors.New("memory not found in this scope")
 	ErrConflict = errors.New("memory version conflict; read it again before changing it")
+	ErrCoreFull = fmt.Errorf("core memories are full (%d characters together): merge or shorten core memories with memory_update first", MaxCore)
 )
 
 // Entry is the current version only. Source is a trusted owner conversation ID,
@@ -40,6 +50,19 @@ type Entry struct {
 	Created string `json:"created"`
 	Updated string `json:"updated"`
 	Source  string `json:"source_session"`
+	// Core says that it goes into every prompt of the owner's agent. Core
+	// memories are global.
+	Core bool `json:"core,omitempty"`
+	// Expires is when a memory of a state ends, in RFC 3339, "" for never:
+	// then Tidy archives it.
+	Expires string `json:"expires,omitempty"`
+	// Loaded and Used count how often it was put into the prompt of a topic
+	// and how often the agent read it or found it.
+	Loaded int64 `json:"loaded,omitempty"`
+	Used   int64 `json:"used,omitempty"`
+	// Archived says that it is chosen for no topic anymore: only a search
+	// finds it.
+	Archived bool `json:"archived,omitempty"`
 }
 
 type Store struct {
@@ -70,6 +93,16 @@ func Open(dir string) (*Store, error) {
 	return s, nil
 }
 
+// added are the columns of memories that came after its first version, with
+// their type.
+var added = [][2]string{
+	{"core", "INTEGER NOT NULL DEFAULT 0"},
+	{"expires", "TEXT NOT NULL DEFAULT ''"},
+	{"loaded", "INTEGER NOT NULL DEFAULT 0"},
+	{"used", "INTEGER NOT NULL DEFAULT 0"},
+	{"archived", "INTEGER NOT NULL DEFAULT 0"},
+}
+
 // New installs the memory tables without changing other shared tables.
 func New(db *sql.DB) (*Store, error) {
 	tx, err := db.Begin()
@@ -89,6 +122,20 @@ func New(db *sql.DB) (*Store, error) {
  INSERT INTO memory_fts(rowid,key,content) VALUES(new.rowid,new.key,new.content); END;
  CREATE TRIGGER IF NOT EXISTS memory_delete AFTER DELETE ON memories BEGIN
  DELETE FROM memory_fts WHERE rowid=old.rowid; END;`)
+	// A table of a version before a column gets it.
+	for _, column := range added {
+		if err != nil {
+			break
+		}
+		var has int
+		err = tx.QueryRow("SELECT count(*) FROM pragma_table_info('memories') WHERE name=?", column[0]).Scan(&has)
+		if err == nil && has == 0 {
+			_, err = tx.Exec("ALTER TABLE memories ADD COLUMN " + column[0] + " " + column[1])
+		}
+	}
+	if err == nil {
+		_, err = tx.Exec("CREATE TABLE IF NOT EXISTS memory_meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("memory schema: %w", err)
 	}
@@ -111,12 +158,12 @@ func validate(key, content, source string) error {
 	return nil
 }
 
-const columns = "id,key,content,project,version,created,updated,source"
+const columns = "id,key,content,project,version,created,updated,source,core,expires,loaded,used,archived"
 
 type scanner interface{ Scan(...any) error }
 
 func scan(row scanner) (e Entry, err error) {
-	err = row.Scan(&e.ID, &e.Key, &e.Content, &e.Project, &e.Version, &e.Created, &e.Updated, &e.Source)
+	err = row.Scan(&e.ID, &e.Key, &e.Content, &e.Project, &e.Version, &e.Created, &e.Updated, &e.Source, &e.Core, &e.Expires, &e.Loaded, &e.Used, &e.Archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -124,21 +171,133 @@ func scan(row scanner) (e Entry, err error) {
 }
 
 func (s *Store) Create(ctx context.Context, project, key, content, source string) (Entry, error) {
+	return s.create(ctx, project, key, content, source, false)
+}
+
+// CreateCore creates a global core memory, see Entry.Core.
+func (s *Store) CreateCore(ctx context.Context, key, content, source string) (Entry, error) {
+	return s.create(ctx, "", key, content, source, true)
+}
+
+func (s *Store) create(ctx context.Context, project, key, content, source string, core bool) (Entry, error) {
 	if err := validate(key, content, source); err != nil {
 		return Entry{}, err
 	}
-	var id [16]byte
-	rand.Read(id[:]) // never fails
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	e := Entry{ID: hex.EncodeToString(id[:]), Key: key, Content: content, Project: project, Version: 1, Created: now, Updated: now, Source: source}
+	e := fresh(project, key, content, source, core, time.Time{})
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO memories ("+columns+") VALUES(?,?,?,?,?,?,?,?)", e.ID, e.Key, e.Content, e.Project, e.Version, e.Created, e.Updated, e.Source)
-		return err
+		return insert(ctx, tx, e)
 	})
 	if err != nil {
 		return Entry{}, err
 	}
 	return e, nil
+}
+
+// fresh is a new memory, at version 1, which expires, if it is not zero.
+func fresh(project, key, content, source string, core bool, expires time.Time) Entry {
+	var id [16]byte
+	rand.Read(id[:]) // never fails
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	return Entry{ID: hex.EncodeToString(id[:]), Key: key, Content: content, Project: project, Version: 1, Created: now, Updated: now, Source: source, Core: core, Expires: until(expires)}
+}
+
+// until is t as Entry.Expires has it.
+func until(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// insert writes e, which must still fit with the other core memories if it
+// is one.
+func insert(ctx context.Context, tx *sql.Tx, e Entry) error {
+	_, err := tx.ExecContext(ctx, "INSERT INTO memories ("+columns+") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", e.ID, e.Key, e.Content, e.Project, e.Version, e.Created, e.Updated, e.Source, e.Core, e.Expires, e.Loaded, e.Used, e.Archived)
+	if err == nil && e.Core {
+		err = full(ctx, tx)
+	}
+	return err
+}
+
+// full is ErrCoreFull when the core memories have more than MaxCore
+// characters together: it is asked after a write, which is then rolled back.
+func full(ctx context.Context, tx *sql.Tx) error {
+	var used int
+	if err := tx.QueryRowContext(ctx, "SELECT coalesce(sum(length(content)),0) FROM memories WHERE core=1").Scan(&used); err != nil {
+		return err
+	}
+	if used > MaxCore {
+		return ErrCoreFull
+	}
+	return nil
+}
+
+// Core returns the core memories, the oldest first.
+func (s *Store) Core(ctx context.Context) ([]Entry, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+columns+" FROM memories WHERE core=1 AND "+current+" ORDER BY created,id", now())
+	if err != nil {
+		return nil, err
+	}
+	return entries(rows)
+}
+
+// Remember keeps content under key in the scope of project, as the review of
+// an answer learned it, not the owner asked for it: a memory of the same key
+// is replaced, as what was said last holds. It returns the memory and what it
+// replaced, an Entry without ID if nothing, which Undo needs. A core memory
+// is global and must fit, see MaxCore. A memory of a state expires, if
+// expires is not zero. What it replaces is no longer archived.
+func (s *Store) Remember(ctx context.Context, project, key, content, source string, core bool, expires time.Time) (e, was Entry, err error) {
+	if err = validate(key, content, source); err != nil {
+		return Entry{}, Entry{}, err
+	}
+	if core && project != "" {
+		return Entry{}, Entry{}, errors.New("core memories are global")
+	}
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		was, err = scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM memories WHERE project=? AND key=?", project, key))
+		if errors.Is(err, ErrNotFound) {
+			was, e = Entry{}, fresh(project, key, content, source, core, expires)
+			return insert(ctx, tx, e)
+		}
+		if err != nil {
+			return err
+		}
+		e = was
+		e.Content, e.Source, e.Core, e.Version, e.Expires, e.Archived = content, source, core, was.Version+1, until(expires), false
+		e.Updated = time.Now().UTC().Format(time.RFC3339Nano)
+		return replace(ctx, tx, e)
+	})
+	if err != nil {
+		return Entry{}, Entry{}, err
+	}
+	return e, was, nil
+}
+
+// replace writes e over the version before it, which must still fit with
+// the other core memories if it is one.
+func replace(ctx context.Context, tx *sql.Tx, e Entry) error {
+	_, err := tx.ExecContext(ctx, "UPDATE memories SET content=?,source=?,core=?,updated=?,version=?,expires=?,archived=? WHERE id=?", e.Content, e.Source, e.Core, e.Updated, e.Version, e.Expires, e.Archived, e.ID)
+	if err == nil && e.Core {
+		err = full(ctx, tx)
+	}
+	return err
+}
+
+// Undo takes back what Remember made e of was: it forgets e if was has no
+// ID, and writes was back otherwise. It fails with ErrConflict if e was
+// changed since.
+func (s *Store) Undo(ctx context.Context, e, was Entry) error {
+	if was.ID == "" {
+		return s.Forget(ctx, e.Project, e.ID, e.Version)
+	}
+	return s.write(ctx, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, "UPDATE memories SET content=?,source=?,core=?,expires=?,archived=?,updated=?,version=version+1 WHERE id=? AND project=? AND version=?", was.Content, was.Source, was.Core, was.Expires, was.Archived, time.Now().UTC().Format(time.RFC3339Nano), e.ID, e.Project, e.Version)
+		if err != nil {
+			return err
+		}
+		return changed(ctx, tx, r, e.Project, e.ID)
+	})
 }
 
 func (s *Store) Read(ctx context.Context, project, id string) (Entry, error) {
@@ -162,6 +321,9 @@ func (s *Store) Update(ctx context.Context, project, id string, version int64, k
 			return err
 		}
 		e, err = scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM memories WHERE id=? AND project=?", id, project))
+		if err == nil && e.Core {
+			err = full(ctx, tx)
+		}
 		return err
 	})
 	if err != nil {
@@ -280,10 +442,15 @@ func (s *Store) Search(ctx context.Context, project, scope, query string, limit 
 		return []Entry{}, nil
 	}
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, "SELECT m.id,m.key,substr(m.content,1,256),m.project,m.version,m.created,m.updated,m.source FROM "+from+" WHERE "+where+" ORDER BY "+order+" LIMIT ?", args...)
+	rows, err := s.db.QueryContext(ctx, "SELECT "+excerpt+" FROM "+from+" WHERE "+where+" ORDER BY "+order+" LIMIT ?", args...)
 	if err != nil {
 		return nil, err
 	}
+	return entries(rows)
+}
+
+// entries are the memories rows has, which it closes.
+func entries(rows *sql.Rows) ([]Entry, error) {
 	defer rows.Close()
 	out := []Entry{}
 	for rows.Next() {

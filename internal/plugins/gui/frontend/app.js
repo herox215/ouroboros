@@ -134,6 +134,30 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
         clearPartial();
         if (event.text?.trim()) message('assistant', agent, event.text, event.at, true);
         break;
+      case 'remembered': {
+        // What the review remembered is a faint line, which the owner can
+        // take back, as /undo does in the terminal UI.
+        clearPartial();
+        const item = message('remembered', t('speaker.remembered'), event.text, event.at);
+        if (!event.remembered) break;
+        const undo = doc.createElement('button');
+        undo.type = 'button';
+        undo.className = 'undo-remembered';
+        undo.textContent = t('remembered.undo');
+        undo.addEventListener('click', async () => {
+          undo.disabled = true;
+          try {
+            await bridge.UndoRemembered(profile, event.remembered);
+            undo.textContent = t('remembered.undone');
+            undo.title = '';
+          } catch (cause) {
+            undo.disabled = false;
+            undo.title = t('remembered.failed', { error: String(cause) });
+          }
+        });
+        item.append(undo);
+        break;
+      }
       case 'answering':
         if (!partial) {
           const item = message('assistant', agent + ' · ' + t('transcript.writing'), '', event.at);

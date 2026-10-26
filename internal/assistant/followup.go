@@ -23,6 +23,8 @@ type answered struct {
 	signals []Signal
 	trail   []string // the lines of the log of it, see record
 	task    bool     // it was to a suggestion the owner took, see SuggestedTask
+	// memories are those its prompt had, as the review is told them.
+	memories []string
 }
 
 // keep keeps what an answer in the conversation chat left, for a follow-up.

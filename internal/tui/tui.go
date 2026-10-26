@@ -17,6 +17,7 @@ package tui
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -116,6 +117,9 @@ type Backend interface {
 	// and TakeSuggestion returns it, for the agent to make.
 	TakeSuggestion(id string) (plugin.Suggestion, error)
 	DropSuggestion(id string) error
+	// UndoRemembered takes back the memory the review of an answer kept,
+	// as the Args of a plugin.SessionRemembered tell it.
+	UndoRemembered(args json.RawMessage) error
 	// Setup starts the setup of the node.
 	Setup() (Setup, error)
 	// Models lists the models of every access of the node, for the model
@@ -198,6 +202,9 @@ type Event struct {
 	N int
 	// Routed says of a message that the thread handed it on.
 	Routed bool
+	// Remembered is what takes back the memory of a
+	// plugin.SessionRemembered, see Backend.UndoRemembered.
+	Remembered json.RawMessage
 }
 
 // screen is the top-level view: the chat, the suggestions dialog, the list
@@ -230,6 +237,12 @@ type entry struct {
 	// suggestion is what the review of the answer before it proposes to
 	// change of ouro: text is its line.
 	suggestion bool
+	// remembered is what takes back a memory the review of the answer
+	// before it kept, see Backend.UndoRemembered: text is its line. It is
+	// nil for every other entry. undoes is the line that tells a memory is
+	// taken back.
+	remembered json.RawMessage
+	undoes     bool
 	text       string
 	at         time.Time
 	failed     bool
@@ -308,6 +321,9 @@ type conversation struct {
 	// entry of the message of the owner that opened it, -1 for what came
 	// before the first: the handles the events of Handed name them by.
 	handed map[int][]string
+	// undone are the memories the review kept that /undo took back here,
+	// by what took them back.
+	undone map[string]bool
 }
 
 // Model is the UI state.
@@ -658,6 +674,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.asked(msg)
 	case takenMsg:
 		return m, m.taken(msg)
+	case undoneMsg:
+		m.undone(msg)
 	case acceptedAllMsg:
 		return m, m.acceptedAll(msg)
 	case unsteeredMsg:

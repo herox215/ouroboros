@@ -198,6 +198,10 @@ const (
 	// SessionSuggestion is what the review of an answer proposes to change
 	// of ouro, in Text, after the answer ended. It changes nothing.
 	SessionSuggestion = session.Suggestion
+	// SessionRemembered is a memory the review of an answer kept, after
+	// the answer ended: its key and what it says in Text, and in Args what
+	// Owner.UndoRemembered takes back.
+	SessionRemembered = session.Remembered
 	// SessionAsked is a question the agent asks the owner and waits for,
 	// see SessionEvent.AsQuestion: what the owner says next in the session,
 	// with Sessions.Steer, answers it. With Done the wait is over, and Text

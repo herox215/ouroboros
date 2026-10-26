@@ -11,11 +11,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/plugin"
 )
 
 // Write is the owner-only tool that creates and updates skill files.
-const Write = "skill_write"
+const Write = assistant.ToolSkillWrite
 
 type writeArgs struct {
 	Name      string `json:"name"`

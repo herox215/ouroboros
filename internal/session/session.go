@@ -105,6 +105,11 @@ const (
 	// is reviewed, see assistant.Signal. It changes nothing by itself, and
 	// is not kept with the session.
 	Suggestion Kind = "suggestion"
+	// Remembered is a memory the review of an answer kept, once the answer
+	// ended: Text is its key and what it says, Args the
+	// assistant.Remembered, which the owner can take back. It is not kept
+	// with the session.
+	Remembered Kind = "remembered"
 	// Calling is how much of calls of tools the model has written in the call
 	// of the LLM on its way, N bytes, as the stream brings them: it tells
 	// that the model writes when none of it is text. It is not recorded.
@@ -1027,6 +1032,21 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.emit(se, Event{Kind: Suggestion, Text: text})
 	})
+	// What the review of an answer that worked for the thread kept is shown
+	// in the thread too, where the owner wrote it.
+	var remembered []Event
+	forThread := false
+	ctx = assistant.WithRemembered(ctx, func(r assistant.Remembered) {
+		args, _ := json.Marshal(r) // of strings, numbers and bools only
+		e := Event{Kind: Remembered, Text: r.Memory.Key + ": " + r.Memory.Content, Args: args}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !over {
+			remembered = append(remembered, e)
+			return
+		}
+		s.remembered(se, e, forThread)
+	})
 	ctx = agent.WithMessageSteering(ctx, func() []openai.Message { return s.steered(se) })
 	ctx = assistant.WithTasks(ctx, delegating{s, se})
 	ctx = s.threadContext(ctx, se)
@@ -1099,6 +1119,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	if !handedOn(se, end) {
 		s.emit(se, end)
 	}
+	forThread = se.routed
 	s.relay(se, end)
 	if scheduled != nil {
 		scheduled.stop()
@@ -1108,6 +1129,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	}
 	if suggested != "" {
 		s.emit(se, Event{Kind: Suggestion, Text: suggested})
+	}
+	for _, e := range remembered {
+		s.remembered(se, e, forThread)
 	}
 	if se.restart != "" {
 		// Commit the completion intent before the replacement can be scheduled.
