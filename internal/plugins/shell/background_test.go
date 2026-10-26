@@ -135,7 +135,7 @@ func TestBackground(t *testing.T) {
 		"job 2 runs in the background",
 		"job 2 was stopped after 0s; what it printed:\n",
 		"error: there is no job 3: this answer started jobs 1 to 2",
-		`error: "job" goes without "command"`,
+		`error: "job" and "command" do not go together: a call runs a command with "command", as a job with "background"; it looks at a job with "job" alone, with "timeout" or "stop"`,
 		`error: "stop" goes with "job"`,
 		"job 3 runs in the background",
 		"job 3 was stopped after 1s; what it printed:\nshort\n",

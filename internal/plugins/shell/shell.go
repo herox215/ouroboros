@@ -529,7 +529,7 @@ func (j *jobs) ending(n int, automatic bool) string {
 // job is canceled first. Waiting also ends when the calling context is canceled.
 func look(ctx context.Context, a args) (string, error) {
 	if a.Command != "" {
-		return "", errors.New(`"job" goes without "command": a job runs one command`)
+		return "", errors.New(`"job" and "command" do not go together: a call runs a command with "command", as a job with "background"; it looks at a job with "job" alone, with "timeout" or "stop"`)
 	}
 	var p *process
 	var err error
