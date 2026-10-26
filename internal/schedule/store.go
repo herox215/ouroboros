@@ -236,7 +236,7 @@ func validate(j *Job, now time.Time, recalculate bool) error {
 	}
 	if j.Zone == "" || j.Zone == "Local" {
 		var err error
-		j.Zone, err = machineZone()
+		j.Zone, err = MachineZone()
 		if err != nil {
 			return err
 		}
@@ -278,9 +278,13 @@ func validate(j *Job, now time.Time, recalculate bool) error {
 	return nil
 }
 
+func firstLine(text string) string {
+	line, _, _ := strings.Cut(text, "\n")
+	return strings.TrimSuffix(line, "\r")
+}
+
 func appendRun(j *Job, r Run) {
-	r.Result, _, _ = strings.Cut(r.Result, "\n")
-	r.Result = strings.TrimSuffix(r.Result, "\r")
+	r.Result = firstLine(r.Result)
 	j.Runs = append(j.Runs, r)
 	if len(j.Runs) > 10 {
 		j.Runs = slices.Clone(j.Runs[len(j.Runs)-10:])
@@ -359,7 +363,7 @@ func (s *Store) Finish(id string, r Run) error {
 				if r.At.IsZero() {
 					r.At = j.Runs[idx].At
 				}
-				r.Result, _, _ = strings.Cut(r.Result, "\n")
+				r.Result = firstLine(r.Result)
 				j.Runs[idx] = r
 			} else {
 				appendRun(j, r)
@@ -370,9 +374,11 @@ func (s *Store) Finish(id string, r Run) error {
 	})
 }
 
-// Persist a name rather than Local: Local would silently follow a machine zone
-// change on restart. If no IANA name is discoverable, require an explicit zone.
-func machineZone() (string, error) {
+// MachineZone returns the IANA name of the machine's time zone. Persist a name
+// rather than Local or today's offset: Local would silently follow a machine
+// zone change on restart, and an offset would break cron across daylight
+// saving. If no IANA name is discoverable, require an explicit zone.
+func MachineZone() (string, error) {
 	candidates := []string{strings.TrimPrefix(os.Getenv("TZ"), ":"), time.Local.String()}
 	if path, err := filepath.EvalSymlinks("/etc/localtime"); err == nil {
 		if _, name, ok := strings.Cut(path, "/zoneinfo/"); ok {

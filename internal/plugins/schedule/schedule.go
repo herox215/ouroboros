@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -398,29 +397,6 @@ func parseAt(text, zone string) (string, error) {
 	return "", errors.New("at must be RFC3339 or YYYY-MM-DDTHH:MM in the job's time zone; use an explicit offset for ambiguous daylight-saving times")
 }
 
-// machineZone saves an IANA name, not today's fixed UTC offset, so cron
-// keeps its wall-clock time across daylight-saving transitions.
-func machineZone() (string, error) {
-	candidates := []string{strings.TrimPrefix(os.Getenv("TZ"), ":")}
-	if path, err := filepath.EvalSymlinks("/etc/localtime"); err == nil {
-		if _, zone, ok := strings.Cut(path, "/zoneinfo/"); ok {
-			candidates = append(candidates, zone)
-		}
-	}
-	if data, err := os.ReadFile("/etc/timezone"); err == nil {
-		candidates = append(candidates, strings.TrimSpace(string(data)))
-	}
-	candidates = append(candidates, time.Local.String())
-	for _, zone := range candidates {
-		if zone == "" || zone == "Local" || filepath.IsAbs(zone) {
-			continue
-		}
-		if _, err := time.LoadLocation(zone); err == nil {
-			return zone, nil
-		}
-	}
-	return "", errors.New("cannot determine machine IANA time zone")
-}
 func output(v any, err error) (string, error) {
 	if err != nil {
 		return "", err
@@ -506,11 +482,10 @@ func (s *scheduler) update(ctx context.Context, raw json.RawMessage) (string, er
 		return "", err
 	}
 	// Some model interfaces supply empty strings for unused optional fields.
-	if a.At != nil && *a.At == "" {
-		a.At = nil
-	}
-	if a.Cron != nil && *a.Cron == "" {
-		a.Cron = nil
+	for _, field := range []**string{&a.Name, &a.Text, &a.At, &a.Cron, &a.Ask} {
+		if *field != nil && **field == "" {
+			*field = nil
+		}
 	}
 	if err := a.validate(); err != nil {
 		return "", err
@@ -525,7 +500,7 @@ func (s *scheduler) update(ctx context.Context, raw json.RawMessage) (string, er
 	var err error
 	switch a.Action {
 	case "create":
-		zone, e := machineZone()
+		zone, e := store.MachineZone()
 		if e != nil {
 			return "", e
 		}
