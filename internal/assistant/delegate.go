@@ -440,6 +440,9 @@ func (b Builder) helper(cfg config.Config, tools []agent.Tool) (*agent.Agent, er
 	if has(append(slices.Clone(fileTools), ToolBash)...) {
 		prompt += workHint
 	}
+	if has(fileTools...) && has(ToolBash) {
+		prompt += exploreHint
+	}
 	prompt += machineHint(today()) + b.workspaceHint()
 	llm, err := b.LLM(cfg.Access)
 	if err != nil {

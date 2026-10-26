@@ -75,6 +75,12 @@ const (
 		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
 		`Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown, ` +
 		`rather than stopping at an unverified guess. `
+	// exploreHint is added for an agent that has the tools for files and bash
+	// at once: files are explored with their own tools, which return the part
+	// that was asked for, where a command prints pages that are read again.
+	exploreHint = `Explore files with read, search and list, not with ` + ToolBash + ` and grep, sed or find: ` +
+		`the tools for files return the part you asked for and say where to continue, while every command is a round of its own whose output you then read again. ` +
+		`Use ` + ToolBash + ` for what the tools for files cannot do. `
 	// improveHint is added for an owner whose agent may build ouro anew and
 	// improve it (config.SelfImproveBuild): what a task needs and ouro
 	// lacks, it may build.
@@ -345,6 +351,9 @@ func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	if has(fileTools...) {
 		prompt += peerFilesHint
 	}
+	if has(fileTools...) && has(ToolBash) {
+		prompt += exploreHint
+	}
 	if has(ToolRebuild) {
 		prompt += buildHint
 		if b.Source != "" {
@@ -396,6 +405,9 @@ func (b Builder) forOwner(cfg config.Config, yolo bool) (*agent.Agent, error) {
 	}
 	if has(append(slices.Clone(fileTools), ToolBash)...) {
 		prompt += workHint
+	}
+	if has(fileTools...) && has(ToolBash) {
+		prompt += exploreHint
 	}
 	if has(ToolRebuild) {
 		if cfg.Improves() {
