@@ -11,6 +11,7 @@
 //	history    the archive of the conversations, and the tools to search it
 //	memory     explicit memories, their sources, and project-scoped search
 //	openai     the provider for OpenAI-compatible APIs
+//	deepseek   the provider for DeepSeek, by its API key alone
 //	opencode-go  the provider for OpenCode Go, by its API key alone
 //	chatgpt    the provider that signs in with ChatGPT
 //	assistant  the agents
@@ -69,6 +70,7 @@ import (
 	chatgptplugin "ouroboros/internal/plugins/chatgpt"
 	claudecodeplugin "ouroboros/internal/plugins/claudecode"
 	computerplugin "ouroboros/internal/plugins/computer"
+	deepseekplugin "ouroboros/internal/plugins/deepseek"
 	desktopplugin "ouroboros/internal/plugins/desktop"
 	"ouroboros/internal/plugins/discovery"
 	filesplugin "ouroboros/internal/plugins/files"
@@ -103,11 +105,12 @@ const Version = "0.1.0"
 
 // Settings come from the environment and are not persisted.
 type Settings struct {
-	Home      string // config, PID and log directory
-	HTTPPort  int    // A2A port; falls back to a free port if taken
-	DiscoPort int    // UDP discovery port
-	BaseURL   string // default LLM endpoint offered during setup
-	APIKey    string // key for BaseURL offered during setup
+	Home        string // config, PID and log directory
+	HTTPPort    int    // A2A port; falls back to a free port if taken
+	DiscoPort   int    // UDP discovery port
+	BaseURL     string // default LLM endpoint offered during setup
+	APIKey      string // key for BaseURL offered during setup
+	DeepSeekKey string // DeepSeek API key offered during setup
 	// ChatGPTAuth and ChatGPTAPI are where the chatgpt provider signs in and
 	// answers, those of OpenAI if empty. They are no setting of the user:
 	// tests point them at a fake.
@@ -117,7 +120,8 @@ type Settings struct {
 	OpenCodeGo string
 }
 
-// SettingsFromEnv reads OURO_HOME, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL and OPENAI_API_KEY.
+// SettingsFromEnv reads OURO_HOME, OURO_PORT, OURO_DISCO_PORT, OPENAI_BASE_URL,
+// OPENAI_API_KEY and DEEPSEEK_API_KEY.
 func SettingsFromEnv() (Settings, error) {
 	home := os.Getenv(homeEnv)
 	if home == "" {
@@ -136,11 +140,12 @@ func SettingsFromEnv() (Settings, error) {
 		return Settings{}, err
 	}
 	return Settings{
-		Home:      home,
-		HTTPPort:  httpPort,
-		DiscoPort: discoPort,
-		BaseURL:   cmp.Or(os.Getenv("OPENAI_BASE_URL"), openai.DefaultBaseURL),
-		APIKey:    os.Getenv("OPENAI_API_KEY"),
+		Home:        home,
+		HTTPPort:    httpPort,
+		DiscoPort:   discoPort,
+		BaseURL:     cmp.Or(os.Getenv("OPENAI_BASE_URL"), openai.DefaultBaseURL),
+		APIKey:      os.Getenv("OPENAI_API_KEY"),
+		DeepSeekKey: os.Getenv("DEEPSEEK_API_KEY"),
 	}, nil
 }
 
@@ -201,6 +206,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		abilitiesplugin.Plugin(),
 		whatsappplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
+		deepseekplugin.Plugin(deepseekplugin.Options{APIKey: s.DeepSeekKey}),
 		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),
 		opencodeplugin.Plugin(opencodeplugin.Options{BaseURL: s.OpenCodeGo}),
 		claudecodeplugin.Plugin(claudecode.Options{Dir: filepath.Join(string(dir), "claude-code")}),

@@ -90,7 +90,7 @@ func TestTUIBackendSetup(t *testing.T) {
 	for _, p := range set.Providers() {
 		names = append(names, p.Name)
 	}
-	if !slices.Equal(names, []string{"openai", "chatgpt", "opencode-go", "claude-code"}) {
+	if !slices.Equal(names, []string{"openai", "deepseek", "chatgpt", "opencode-go", "claude-code"}) {
 		t.Fatalf("the providers to sign in with: %v", names)
 	}
 	if err := os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600); err != nil {

@@ -75,6 +75,7 @@ func Env(t *testing.T, s cli.Settings) {
 	t.Setenv("OURO_DISCO_PORT", fmt.Sprint(s.DiscoPort))
 	t.Setenv("OPENAI_BASE_URL", s.BaseURL)
 	t.Setenv("OPENAI_API_KEY", s.APIKey)
+	t.Setenv("DEEPSEEK_API_KEY", s.DeepSeekKey)
 }
 
 // freeUDPPort returns a UDP port that is currently unused.
