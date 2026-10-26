@@ -445,7 +445,13 @@ func (b Builder) ownerTools(cfg config.Config) ([]agent.Tool, error) {
 // Available are the tools the owner picks from for the lists of the
 // configuration: what the plugins contributed, the tool that asks the owner,
 // the one that hands tasks to helpers, and the tools for the configuration of the node if the blueprint has one.
-func (b Builder) Available() []agent.Tool { return b.all() }
+func (b Builder) Available() []agent.Tool {
+	tools, err := agent.ExpandAbilities(b.all())
+	if err != nil {
+		return b.all()
+	} // building reports the invalid catalog
+	return tools
+}
 
 // all are the tools the owner picks from: what the plugins contributed, the
 // tool that asks the owner, the one that hands tasks to helpers, and the

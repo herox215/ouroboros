@@ -9,6 +9,16 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <div id="restart-effect" class="restart-effect" role="status" aria-live="polite" hidden>
+    <div class="restart-terminal">
+      <pre class="restart-noise" aria-hidden="true"><span>+----------------------------+
+|  OUROBOROS :: REBOOT        |
+|  &gt; /dev/ouro  [####....]    |
+|  0101 // :: __ // 1010      |
++----------------------------+</span></pre>
+      <p>OUROBOROS // RESTARTING<span class="restart-cursor" aria-hidden="true">_</span></p>
+    </div>
+  </div>
   <a class="skip-link" href="#main" data-i18n="nav.skip">To the session content</a>
   <aside id="sidebar" class="sidebar" data-i18n-aria="nav.sessions" aria-label="Session navigation">
     <!-- Beside the thread only the sessions of the part of it in view, as in the

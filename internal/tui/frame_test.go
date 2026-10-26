@@ -96,6 +96,35 @@ func TestBesideThePartOfTheThreadInView(t *testing.T) {
 	}
 }
 
+func TestExpiredThreadHasNoSessionsBesideIt(t *testing.T) {
+	m, _, fix := threadWithSessions(t, 170, 46)
+	entries := len(m.chat.entries)
+	now := m.now().Add(24 * time.Hour)
+	m.now = func() time.Time { return now }
+	m.Update(tickMsg{})
+	if len(m.chat.entries) != entries || len(m.blockStarts) != 0 {
+		t.Fatal("expired thread was not hidden or archived entries were changed")
+	}
+	if list, at, thread := m.sidebarSessions(); len(list) != 0 || !at.IsZero() || !thread {
+		t.Fatalf("empty thread has %d sessions beside it, at %v", len(list), at)
+	}
+	if title, note, details := m.railContent(30); title != "[STATE]" || note != "None yet" || len(details) != 0 {
+		t.Fatalf("empty thread context: %q, %q, %v", title, note, details)
+	}
+	view := strip(m.View().Content)
+	for _, old := range []string{"FIX", "TESTS", "T –", "go test"} {
+		if strings.Contains(view, old) {
+			t.Fatalf("empty thread still shows %q:\n%s", old, view)
+		}
+	}
+	m.apply(m.chat, Event{Kind: plugin.SessionMessage, Text: "continue fixing", At: now}, false)
+	m.apply(m.chat, Event{Kind: plugin.SessionHanded, Text: "c3d4"}, false)
+	m.renderHistory(true)
+	if list, _, _ := m.sidebarSessions(); len(list) != 1 || list[0] != fix {
+		t.Fatal("new visible exchange does not show its own session")
+	}
+}
+
 // A part of the thread that is handed to no session has none beside it, and
 // another conversation lists all of the sessions of the owner, the one shown
 // selected, with its own stand on the right.

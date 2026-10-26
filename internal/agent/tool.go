@@ -15,9 +15,14 @@ import (
 
 // Tool is something the agent can do while it answers.
 type Tool struct {
-	Name        string
-	Description string
-	Schema      string // JSON schema of the arguments
+	// AbilityCatalog is set only on the ability loader. It is read when tools
+	// are selected, after every plugin has started, never during plugin start.
+	AbilityCatalog func() []Ability
+	ability        *Ability
+	catalog        []Ability
+	Name           string
+	Description    string
+	Schema         string // JSON schema of the arguments
 	// Run executes the tool. Its result, or its error, is handed to the LLM.
 	Run func(ctx context.Context, args json.RawMessage) (string, error)
 	// Configure returns the tool as it runs with settings: the JSON object
