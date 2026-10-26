@@ -141,9 +141,10 @@ func TestThreadCancelQueuedTaskRoute(t *testing.T) {
 	}
 }
 
-// A report can be taken as steering by a newer, direct answer instead of
-// starting an answer of its own. It must restore routing there too.
-func TestThreadTaskReportSteersDirectAnswer(t *testing.T) {
+// A report of thread work that ends during a direct answer is not steered
+// into it: it waits for an answer of its own, which the thread shows, and
+// the thread is not shown the direct answer.
+func TestThreadTaskReportWaitsForItsOwnAnswer(t *testing.T) {
 	ctx := context.Background()
 	gate, resume := make(chan struct{}), make(chan struct{})
 	entered := make(chan struct{})
@@ -153,17 +154,19 @@ func TestThreadTaskReportSteersDirectAnswer(t *testing.T) {
 			reports <- text
 			return "explained " + text, nil
 		}
-		if text == "start" {
+		switch text {
+		case "start":
 			_, err := assistant.TasksOf(ctx).Start([]assistant.Task{waiting("work", gate, "finding", nil)})
 			return "pending", err
+		case "status?":
+			close(entered)
+			<-resume
+			if steered := agent.Steered(ctx); len(steered) != 0 {
+				return "steered " + steered[0], nil
+			}
+			return "status ok", nil
 		}
-		close(entered)
-		<-resume
-		steered := agent.Steered(ctx)
-		if len(steered) != 1 {
-			return "missing task report", nil
-		}
-		return "complete " + steered[0], nil
+		return "complete " + text, nil
 	}}
 	s := service(t, a)
 	_, child, _ := s.Watch(ctx, "s1")
@@ -181,9 +184,12 @@ func TestThreadTaskReportSteersDirectAnswer(t *testing.T) {
 	close(gate)
 	until(t, child, Tasks)
 	close(resume)
+	if got := until(t, child, Answer); got[len(got)-1].Text != "status ok" {
+		t.Fatalf("direct answer: %+v", got[len(got)-1])
+	}
 	until(t, main, Answer)
-	if text := <-reports; !strings.Contains(text, "complete ") || !strings.Contains(text, "finding") {
-		t.Fatalf("lost steered result: %q", text)
+	if text := <-reports; !strings.Contains(text, "complete ") || !strings.Contains(text, "finding") || strings.Contains(text, "status ok") {
+		t.Fatalf("thread was told %q", text)
 	}
 	s.answers.Wait()
 	noAnswerYet(t, s, reports)
@@ -242,4 +248,49 @@ func TestThreadCancelLeavesUnrelatedTasks(t *testing.T) {
 	}
 	s.answers.Wait()
 	noAnswerYet(t, s, reports)
+}
+
+// A report that came while the owner stopped the answer does not start an
+// answer by itself: it waits for the owner's next message.
+func TestCancelHoldsTaskReports(t *testing.T) {
+	ctx := context.Background()
+	gate, entered := make(chan struct{}), make(chan struct{})
+	asked := make(texts, 8)
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		switch text {
+		case "start":
+			_, err := assistant.TasksOf(ctx).Start([]assistant.Task{waiting("work", gate, "finding", nil)})
+			return "pending", err
+		case "busy":
+			close(entered)
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		asked <- text
+		return "on " + text, nil
+	}}
+	s := service(t, a)
+	_, child, _ := s.Watch(ctx, "s1")
+	if err := s.Ask(ctx, "s1", "start"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, child, Answer)
+	if err := s.Ask(ctx, "s1", "busy"); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	close(gate)
+	until(t, child, Tasks)
+	if err := s.Cancel(ctx, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, child, Canceled)
+	s.answers.Wait()
+	noAnswerYet(t, s, asked)
+	if err := s.Ask(ctx, "s1", "next"); err != nil {
+		t.Fatal(err)
+	}
+	if text := <-asked; !strings.Contains(text, "finding") || !strings.Contains(text, "next") {
+		t.Fatalf("the next answer was asked %q", text)
+	}
 }

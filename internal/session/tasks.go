@@ -171,6 +171,41 @@ func ready(se *session) []queued {
 	return now
 }
 
+// stopTask stops the task t for the owner: nobody is told, and the thread
+// no longer waits for it. s.mu is held.
+func stopTask(t *task) {
+	t.routed = false
+	t.stopped = false
+	t.cancel()
+}
+
+// unroute keeps what waits in se from the thread, with reports only what
+// tasks reported: it no longer shows what comes of it. s.mu is held.
+func unroute(se *session, reports bool) {
+	for i := range se.queue {
+		if !reports || se.queue[i].task != nil {
+			se.queue[i].routed = false
+		}
+	}
+}
+
+// direct is what waits in se for an answer to a message of the owner, see
+// ready, but for the reports of tasks that continue work of the thread:
+// they wait for an answer of their own, which the thread shows, rather than
+// make the thread show the owner's direct answer. s.mu is held.
+func direct(se *session) []queued {
+	var held []queued
+	messages := slices.DeleteFunc(ready(se), func(m queued) bool {
+		if m.task != nil && m.routed {
+			held = append(held, m)
+			return true
+		}
+		return false
+	})
+	se.queue = append(held, se.queue...)
+	return messages
+}
+
 // deliver hands the agent of se the report of the task t that ended with
 // answer, or with err, after took: the answer on its way takes it as it
 // takes a message of the owner, or one starts for it, once no other task

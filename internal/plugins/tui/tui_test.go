@@ -754,7 +754,9 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 
 	var shown string
 	tuiplugin.Use(t, func(m *tui.Model) error {
-		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+		// Wide enough that a long working directory, as in the temporary tree of
+		// the pre-commit hook, leaves the model in the head.
+		m.Update(tea.WindowSizeMsg{Width: 320, Height: 30})
 		m.Update(key(' ')) // skips the splash
 		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "gpt-") })
 		drive(t, m, typed(m, "/new"), func() bool { return m.Current() != plugin.ThreadID }) // the thread hands on, and starts nothing anew
