@@ -312,11 +312,13 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		{config.Named("edit"), start + filesHint + workHint + end},
 		{config.Named("search"), start + filesHint + workHint + end},
 		{config.Named(ToolBash), start + workHint + end},
+		{config.Named("edit", ToolBash), start + filesHint + workHint + exploreHint + end},
+		{config.Named(toolSearch, ToolBash), start + filesHint + workHint + exploreHint + end},
 		{config.Named(toolAskPeer, ToolBash), start + askHint + workHint + claimHint + end},
 		{config.Named(ToolRebuild), start + improveHint + end},
 		{config.Named(ToolUserQuestion), start + questionHint + end},
 		{config.Named(ToolDelegate), start + delegateHint + end},
-		{config.Named("*"), start + askHint + filesHint + workHint + improveHint + claimHint + questionHint + delegateHint + end},
+		{config.Named("*"), start + askHint + filesHint + workHint + exploreHint + improveHint + claimHint + questionHint + delegateHint + end},
 	} {
 		cfg.Tools = &config.Tools{H2A: tt.tools}
 		got, err := a.Ask(context.Background(), "chat", "?system", nil)
@@ -364,6 +366,33 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	}
 	if strings.Join(fileTools, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools for files: %v", fileTools)
+	}
+}
+
+// A helper reads files with the tools for files too, when it has both kinds
+// of tools: exploring them with a command of the shell costs a round for
+// every lookup.
+func TestHelperExploresFilesWithTheirTools(t *testing.T) {
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	read := agent.NewTool("read", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	bash := agent.NewTool(ToolBash, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	b := Builder{LLM: overHTTP}
+	for _, tt := range []struct {
+		tools []agent.Tool
+		want  bool
+	}{
+		{[]agent.Tool{read}, false},
+		{[]agent.Tool{bash}, false},
+		{[]agent.Tool{read, bash}, true},
+	} {
+		helper, err := b.helper(cfg, tt.tools)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt, _ := helper.Prompt()
+		if got := strings.Contains(prompt, exploreHint); got != tt.want {
+			t.Errorf("with %s: rule present = %v, want %v", names(tt.tools), got, tt.want)
+		}
 	}
 }
 
