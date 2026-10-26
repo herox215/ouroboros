@@ -84,7 +84,7 @@ opens a new conversation that asks your agent to make it, after checking it agai
 only the log; the conversation shown goes on. The answer to it is not reviewed again, so that reviews do not
 suggest what to make of their own suggestions. Rejecting it drops it. Front ends get it as the session event
 `suggestion`; the chat does not keep it with the session, `/suggestions` does, in `suggestions.json` of the node, at
-most 16, the same text once.
+most 16, the same text once, and what is suggested beyond that drops the oldest.
 The review also looks for what to [remember](#memories) of you or your environment, so that you need not say it
 twice: a correction of how you want answers, a path, a convention of a project. That it keeps at once, and tells it
 with a faint line, like `✦ remembered: build: ouro is built with make build · /undo`; `/undo` takes back the last

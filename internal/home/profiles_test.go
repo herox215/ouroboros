@@ -68,7 +68,7 @@ func TestAddProfile(t *testing.T) {
 	if luna.Services() != filepath.Join(string(luna), "services.json") {
 		t.Fatalf("the services of the profile are in %s", luna.Services())
 	}
-	if _, err := luna.Suggestions().Add("rename it", nil, "s1"); err != nil {
+	if _, _, err := luna.Suggestions().Add("rename it", nil, "s1"); err != nil {
 		t.Fatal(err)
 	}
 	if list, err := root.Suggestions().List(); err != nil || len(list) != 0 {

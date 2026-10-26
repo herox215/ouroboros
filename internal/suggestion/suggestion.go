@@ -18,19 +18,16 @@ import (
 )
 
 const (
-	// Max is how many suggestions wait for the owner at most. Beyond it a
-	// new one is not recorded: the reviews do not fill the file.
+	// Max is how many suggestions wait for the owner at most. Beyond it the
+	// oldest is dropped: the reviews do not fill the file, and lose what
+	// they suggest now.
 	Max = 16
 	// MaxText is how much of the text of a suggestion is kept, in bytes.
 	MaxText = 1000
 )
 
-var (
-	// ErrFull is the error of Add when Max suggestions are waiting.
-	ErrFull = errors.New("too many suggestions are waiting for the owner")
-	// ErrGone means there is no such suggestion.
-	ErrGone = errors.New("no such suggestion")
-)
+// ErrGone means there is no such suggestion.
+var ErrGone = errors.New("no such suggestion")
 
 // Suggestion is one change of ouro a review suggested.
 type Suggestion struct {
@@ -98,11 +95,14 @@ func (s *Store) List() ([]Suggestion, error) {
 
 // Add records text as a suggestion of the review of an answer in session,
 // which had signals. The same text is not recorded twice: Add returns the one
-// that waits. With Max suggestions waiting a new one fails with ErrFull.
-func (s *Store) Add(text string, signals []string, session string) (Suggestion, error) {
+// that waits, and no dropped one. With Max suggestions waiting, the oldest is
+// dropped to make room, and returned as such, without ID if none was: what
+// was suggested now is not lost because the list was full.
+func (s *Store) Add(text string, signals []string, session string) (Suggestion, Suggestion, error) {
 	if len(text) > MaxText {
 		text = strings.ToValidUTF8(text[:MaxText], "")
 	}
+	var dropped Suggestion
 	n := Suggestion{ID: newID(), Text: text, Signals: signals, Session: session, At: time.Now()}
 	err := s.update(func(list *[]Suggestion) error {
 		if i := slices.IndexFunc(*list, func(w Suggestion) bool { return w.Text == text }); i >= 0 {
@@ -110,15 +110,16 @@ func (s *Store) Add(text string, signals []string, session string) (Suggestion, 
 			return errUnchanged
 		}
 		if len(*list) >= Max {
-			return ErrFull
+			dropped = (*list)[0]
+			*list = slices.Delete(*list, 0, 1)
 		}
 		*list = append(*list, n)
 		return nil
 	})
 	if err != nil {
-		return Suggestion{}, err
+		return Suggestion{}, Suggestion{}, err
 	}
-	return n, nil
+	return n, dropped, nil
 }
 
 // Remove drops the suggestion id and returns it: the owner took it, or not.

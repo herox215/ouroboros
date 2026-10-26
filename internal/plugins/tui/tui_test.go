@@ -547,7 +547,7 @@ func TestTUIBackendContacts(t *testing.T) {
 	}
 	os.Remove(filepath.Join(s.Home, "proposals.json"))
 	// And with them what the reviews suggested.
-	if _, err := home.Dir(s.Home).Suggestions().Add("add grep", nil, "s1"); err != nil {
+	if _, _, err := home.Dir(s.Home).Suggestions().Add("add grep", nil, "s1"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := u.Contacts(); err != nil || len(got.Suggestions) != 1 || got.Suggestions[0].Text != "add grep" {

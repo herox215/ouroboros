@@ -17,14 +17,14 @@ func TestAddListRemove(t *testing.T) {
 	if list, err := s.List(); err != nil || len(list) != 0 {
 		t.Fatalf("empty: %v, %v", list, err)
 	}
-	a, err := s.Add("let bash run long commands as jobs", []string{"bash took 42s"}, "s1")
+	a, _, err := s.Add("let bash run long commands as jobs", []string{"bash took 42s"}, "s1")
 	if err != nil || a.ID == "" || a.Session != "s1" || a.Signals[0] != "bash took 42s" {
 		t.Fatalf("added %+v, %v", a, err)
 	}
-	if again, err := s.Add("let bash run long commands as jobs", nil, "s2"); err != nil || again.ID != a.ID {
+	if again, dropped, err := s.Add("let bash run long commands as jobs", nil, "s2"); err != nil || again.ID != a.ID || dropped.ID != "" {
 		t.Fatalf("the same again: %+v, %v", again, err)
 	}
-	b, _ := s.Add("say which files are near", nil, "s2")
+	b, _, _ := s.Add("say which files are near", nil, "s2")
 	list, err := Open(path).List()
 	if err != nil || len(list) != 2 || list[0].ID != a.ID || list[1].ID != b.ID {
 		t.Fatalf("list %+v, %v", list, err)
@@ -43,25 +43,30 @@ func TestAddListRemove(t *testing.T) {
 	}
 }
 
-// No more than Max wait, and a text is cut to MaxText.
+// No more than Max wait: one more drops the oldest. A text is cut to
+// MaxText.
 func TestBounds(t *testing.T) {
 	s := Open(filepath.Join(t.TempDir(), "suggestions.json"))
 	for i := range Max {
-		if _, err := s.Add(fmt.Sprint(i), nil, ""); err != nil {
+		if _, _, err := s.Add(fmt.Sprint(i), nil, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.Add("one more", nil, ""); !errors.Is(err, ErrFull) {
-		t.Fatalf("one more: %v", err)
+	n, dropped, err := s.Add("one more", nil, "")
+	if err != nil || dropped.Text != "0" {
+		t.Fatalf("one more: %+v dropped %+v, %v", n, dropped, err)
+	}
+	if list, _ := s.List(); len(list) != Max || list[0].Text != "1" || list[len(list)-1].ID != n.ID {
+		t.Fatalf("the list after one more: %+v", list)
 	}
 	s = Open(filepath.Join(t.TempDir(), "suggestions.json"))
-	if n, _ := s.Add(strings.Repeat("a", MaxText+1), nil, ""); len(n.Text) != MaxText {
+	if n, _, _ := s.Add(strings.Repeat("a", MaxText+1), nil, ""); len(n.Text) != MaxText {
 		t.Fatalf("kept %d bytes", len(n.Text))
 	}
 	// One of MaxText bytes is not cut: it stays as it is, byte for byte,
 	// where a cut would leave out what is no UTF-8.
 	exact := strings.Repeat("b", MaxText-1) + "\xff"
-	if n, _ := s.Add(exact, nil, ""); n.Text != exact {
+	if n, _, _ := s.Add(exact, nil, ""); n.Text != exact {
 		t.Fatalf("a text of MaxText bytes became %d bytes", len(n.Text))
 	}
 }
@@ -76,7 +81,7 @@ func TestErrors(t *testing.T) {
 	if _, err := s.List(); err == nil {
 		t.Error("List of a broken file")
 	}
-	if _, err := s.Add("x", nil, ""); err == nil {
+	if _, _, err := s.Add("x", nil, ""); err == nil {
 		t.Error("Add to a broken file")
 	}
 	if b, _ := os.ReadFile(path); string(b) != "nope" {
