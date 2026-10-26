@@ -33,6 +33,7 @@ var own = []command{
 	{"appearance", "light, dark, or as the terminal is: the next of them", (*Model).nextAppearance},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
+	{"yolo", "turn the yolo mode on or off: then no permission is asked before a tool call", (*Model).toggleYolo},
 	{"suggestions", "review suggested changes of ouro", (*Model).openSuggestions},
 	{"undo", "take back the last memory ouro kept by itself here", (*Model).undo},
 	{"keys", "list the keys (ctrl+k does too)", (*Model).openKeys},
@@ -174,6 +175,17 @@ func (m *Model) toggleDebug() tea.Cmd {
 		done = "debug mode on: the log of the node (ouro.log) tells much more"
 	}
 	return func() tea.Msg { return actionMsg{done, m.backend.SetDebug(on)} }
+}
+
+// toggleYolo turns the yolo mode of the node on or off: in it, no rule of
+// the owner asks them before a tool call, so the call just runs. The head
+// shows it while it is on.
+func (m *Model) toggleYolo() tea.Cmd {
+	on, done := !m.status.Yolo, "yolo mode off"
+	if on {
+		done = "yolo mode on: no permission is asked before a tool call"
+	}
+	return func() tea.Msg { return actionMsg{done, m.backend.SetYolo(on)} }
 }
 
 // helpView lists the commands: a click on one runs it.

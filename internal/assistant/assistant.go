@@ -110,6 +110,12 @@ const (
 		`Ask as a person does in a chat: one short, plain sentence in the language of the conversation, about what it is about, without code or commands; ` +
 		`the options, if any, a few words each. Some front ends show only the question, so it has to make sense without them: ` +
 		`the user may answer in their own words, and you read what they meant. `
+	// yoloHint is added while the yolo mode of the node is on, see
+	// Assistant.WithYolo: the rules of the owner that ask them before a call
+	// are off, so every call runs.
+	yoloHint = `Yolo mode is on: the rules of the owner that would ask them whether a tool call may run are off, ` +
+		`and every call runs without asking. Questions to them work as usual. ` +
+		`Take care with what cannot be undone, and say in your answer what you did without asking. `
 	// approvalHint also applies without user_question: tools can ask for permission themselves.
 	approvalHint = `If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run. ` +
 		`Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again. `
@@ -244,6 +250,7 @@ type Assistant struct {
 	builder Builder
 	log     func(format string, args ...any)
 	debug   func() bool // whether the log is to tell much more, see WithDebug
+	yolo    func() bool // whether the rules that ask the owner before a call are off, see WithYolo
 
 	mu     sync.Mutex
 	agent  *agent.Agent
@@ -269,7 +276,10 @@ type Assistant struct {
 }
 
 // setup is the part of the configuration an agent is built from.
-type setup struct{ access, revision, model, name, id, tools, provider, fallbacks, day string }
+type setup struct {
+	access, revision, model, name, id, tools, provider, fallbacks, day string
+	yolo                                                               bool
+}
 
 // New returns the assistant of the node with the given configuration, which
 // is read anew for every question. What it does on the way to an answer is
@@ -283,6 +293,17 @@ func New(config func() (config.Config, error), b Builder, log func(format string
 // line, so that the mode holds from the next call on.
 func (a *Assistant) WithDebug(debug func() bool) *Assistant {
 	a.debug = debug
+	return a
+}
+
+// WithYolo makes the agent of the owner run its tool calls without asking
+// while yolo says so: the rules of tools.ask are not enforced then, see
+// permitted. What else the agent asks is asked as usual, also a question to
+// the owner and a change of the configuration: only the leave that the rules
+// want is skipped. yolo is asked anew each time an agent is built, so that
+// the mode holds from the next message on.
+func (a *Assistant) WithYolo(yolo func() bool) *Assistant {
+	a.yolo = yolo
 	return a
 }
 
@@ -316,7 +337,7 @@ func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	if len(allowed) == 0 {
 		return b.build(cfg, prompt)
 	}
-	allowed = b.permitted(cfg, allowed) // nobody can be asked: what needs the owner's leave is refused
+	allowed = b.permitted(cfg, allowed, false) // nobody can be asked: what needs the owner's leave is refused
 	prompt += toolsHint
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
@@ -337,7 +358,7 @@ func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	return b.build(cfg, prompt, allowed...)
 }
 
-func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
+func (b Builder) forOwner(cfg config.Config, yolo bool) (*agent.Agent, error) {
 	allowed, err := b.ownerTools(cfg)
 	if err != nil {
 		return nil, err
@@ -352,8 +373,9 @@ func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 		})
 	}
 	// What the owner wants to be asked about first runs once they allowed
-	// it, for helpers too, which get these tools.
-	allowed = b.permitted(cfg, allowed)
+	// it, for helpers too, which get these tools; in yolo mode the rules
+	// are off.
+	allowed = b.permitted(cfg, allowed, yolo)
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
 	}
@@ -396,6 +418,9 @@ func (b Builder) forOwner(cfg config.Config) (*agent.Agent, error) {
 	}
 	if has(ToolUserQuestion) {
 		prompt += questionHint
+	}
+	if yolo {
+		prompt += yoloHint
 	}
 	if has(ToolDelegate) {
 		prompt += delegateHint
@@ -1006,11 +1031,13 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 		return nil, cfg, config.ErrIncomplete
 	}
 	tools, _ := json.Marshal(cfg.OwnerTools()) // an entry that cannot be written is reported by forOwner
-	want := setup{cfg.Access, a.builder.revision(cfg.Access), cfg.Model, cfg.Name, cfg.ID(), string(tools), cfg.ContextProvider, a.builder.fallbacksOf(cfg), today()}
+	yolo := a.yolo != nil && a.yolo()
+	want := setup{access: cfg.Access, revision: a.builder.revision(cfg.Access), model: cfg.Model, name: cfg.Name, id: cfg.ID(),
+		tools: string(tools), provider: cfg.ContextProvider, fallbacks: a.builder.fallbacksOf(cfg), day: today(), yolo: yolo}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.agent == nil || a.built != want {
-		bot, err := a.builder.forOwner(cfg)
+		bot, err := a.builder.forOwner(cfg, yolo)
 		if err != nil {
 			return nil, cfg, err
 		}

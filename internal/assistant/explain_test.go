@@ -129,7 +129,7 @@ func TestPeerAgentExplainsErrors(t *testing.T) {
 		t.Fatal("explain_error is not among the tools to pick from")
 	}
 	cfg.Tools = nil
-	owner, err := b.forOwner(cfg)
+	owner, err := b.forOwner(cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}

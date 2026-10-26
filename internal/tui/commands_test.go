@@ -190,6 +190,30 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+// /yolo turns the yolo mode of the node on and off again, and the head says
+// so on the right while it is on.
+func TestYolo(t *testing.T) {
+	m, b := newModel(t)
+	header := func() string { return strings.Split(ansi.Strip(m.View().Content), "\n")[1] }
+	if strings.Contains(header(), "YOLO MODE") {
+		t.Fatalf("header %q", header())
+	}
+	settle(m, run(m, "/yolo"))
+	if !slices.Equal(b.yolo, []bool{true}) || !strings.HasPrefix(m.notice, "yolo mode on") {
+		t.Fatalf("yolo %v, notice %q", b.yolo, m.notice)
+	}
+
+	b.status.Yolo = true
+	m.Update(m.refreshStatus())
+	if h := header(); !strings.HasSuffix(strings.TrimRight(h, " "), " YOLO MODE") {
+		t.Fatalf("header %q", h)
+	}
+	settle(m, run(m, "/yolo"))
+	if !slices.Equal(b.yolo, []bool{true, false}) || m.notice != "yolo mode off" {
+		t.Fatalf("yolo %v, notice %q", b.yolo, m.notice)
+	}
+}
+
 // A paste that leaves fewer commands to offer than the one selected selects
 // the first again.
 func TestPasteNarrowsTheSuggestions(t *testing.T) {

@@ -374,6 +374,26 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+// The yolo mode is off until it is turned on, and off again after.
+func TestYolo(t *testing.T) {
+	d := Dir(t.TempDir())
+	if d.Yolo() {
+		t.Fatal("on from the start")
+	}
+	for _, on := range []bool{true, false} {
+		if err := d.SetYolo(on); err != nil || d.Yolo() != on {
+			t.Fatalf("set %v: %v, yolo %v", on, err, d.Yolo())
+		}
+	}
+	// The two modes are their own.
+	if err := d.SetYolo(true); err != nil {
+		t.Fatal(err)
+	}
+	if d.Debug() {
+		t.Fatal("the yolo mode turned the debug mode on")
+	}
+}
+
 // A configuration from before there were accesses names an endpoint and a
 // key. Reading it moves them into the credentials: the configuration names
 // the access, and holds no key any more.

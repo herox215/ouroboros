@@ -32,10 +32,15 @@ func (b Builder) WithAllowing(allow func(config.Call) error) Builder {
 // permitted returns tools as they run for the owner: a call that a rule of
 // config.Tools.Ask matches, and that the owner did not allow for good, runs
 // once the owner allowed it in a question, see agent.AskOwner. Where nobody
-// can be asked, as for a peer or a helper, it is refused. The rules and the
-// calls allowed are read at each call, from the configuration of the node or,
+// can be asked, as for a peer or a helper, it is refused. While yolo says
+// that the node is in yolo mode, the rules are not enforced: every call
+// runs, and nobody is asked, see Assistant.WithYolo. The rules and the calls
+// allowed are read at each call, from the configuration of the node or,
 // without one, from cfg.
-func (b Builder) permitted(cfg config.Config, tools []agent.Tool) []agent.Tool {
+func (b Builder) permitted(cfg config.Config, tools []agent.Tool, yolo bool) []agent.Tool {
+	if yolo {
+		return slices.Clone(tools) // the owner turned the rules off for now
+	}
 	current := func() (config.Config, error) { return cfg, nil }
 	if b.node != nil {
 		current = b.node.config

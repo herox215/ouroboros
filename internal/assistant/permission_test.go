@@ -25,7 +25,7 @@ func gated(t *testing.T, name string, cfg config.Config, kept *[]config.Call) (a
 		*kept = append(*kept, c)
 		return nil
 	})
-	return b.permitted(cfg, []agent.Tool{tool})[0], &runs
+	return b.permitted(cfg, []agent.Tool{tool}, false)[0], &runs
 }
 
 // answering is a context whose owner answers every question with answer,
@@ -163,12 +163,12 @@ func TestPermittedFailing(t *testing.T) {
 		return "done", nil
 	}}
 	unreadable := Builder{}.WithConfig(func() (config.Config, error) { return config.Config{}, errors.New("broken") }, nil)
-	if _, err := unreadable.permitted(config.Config{}, []agent.Tool{tool})[0].Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "broken") || ran != 0 {
+	if _, err := unreadable.permitted(config.Config{}, []agent.Tool{tool}, false)[0].Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "broken") || ran != 0 {
 		t.Fatalf("unreadable: %v", err)
 	}
 	failing := Builder{}.WithAllowing(func(config.Call) error { return errors.New("disk full") })
 	for _, b := range []Builder{failing, {}} {
-		if _, err := b.permitted(config.Config{}, []agent.Tool{tool})[0].Run(answering(AllowAlways, new([]Question)), json.RawMessage(`{"path":"x"}`)); err != nil {
+		if _, err := b.permitted(config.Config{}, []agent.Tool{tool}, false)[0].Run(answering(AllowAlways, new([]Question)), json.RawMessage(`{"path":"x"}`)); err != nil {
 			t.Fatalf("allowed always: %v", err)
 		}
 	}
@@ -187,7 +187,7 @@ func TestPermittedLeavesTheQuestionAlone(t *testing.T) {
 	runs := 0
 	question := agent.Tool{Name: ToolUserQuestion, Run: func(context.Context, json.RawMessage) (string, error) { return "answered", nil }}
 	bash := agent.Tool{Name: ToolBash, Run: func(context.Context, json.RawMessage) (string, error) { runs++; return "done", nil }}
-	tools := Builder{}.permitted(config.Config{}, []agent.Tool{question, bash})
+	tools := Builder{}.permitted(config.Config{}, []agent.Tool{question, bash}, false)
 	var asked []Question
 	ctx := answering(AllowNot, &asked)
 	rm := json.RawMessage(`{"command": "rm -rf build"}`)
@@ -274,7 +274,7 @@ func TestPermittedInOwnWords(t *testing.T) {
 		tool := b.permitted(config.Config{}, []agent.Tool{{Name: ToolBash, Run: func(context.Context, json.RawMessage) (string, error) {
 			runs++
 			return "done", nil
-		}}})[0]
+		}}}, false)[0]
 		var asked []Question
 		var said []string
 		ctx := agent.WithOwner(context.Background(), func(_ context.Context, raw json.RawMessage) (string, error) {
