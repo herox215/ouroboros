@@ -345,6 +345,15 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 				t.Errorf("with %s: research rule %q present = %v, want %v", tt.tools, research, strings.Contains(got, research), wantWorkflow)
 			}
 		}
+		for _, verification := range []string{
+			`For pure verification requests ("just check and report"), do not mount a verification battle: ` +
+				"long or repeated test runs and coverage or mutation checks rarely add to what the report says.",
+			"When the check is about open issues, fetch them all in one gh issue list --json number,title,body and check each issue with a targeted code search.",
+		} {
+			if strings.Contains(got, verification) != wantWorkflow {
+				t.Errorf("with %s: verification rule %q present = %v, want %v", tt.tools, verification, strings.Contains(got, verification), wantWorkflow)
+			}
+		}
 		for _, diagnosis := range []string{
 			"When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering:",
 			"check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate.",

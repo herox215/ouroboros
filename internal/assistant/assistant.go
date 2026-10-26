@@ -71,6 +71,10 @@ const (
 		`For commit-only requests, default to status, diff and secret checks plus appropriate short tests. ` +
 		`Do not automatically start a comprehensive review or delegate review tasks; expand the scope only if the user asks or a specific finding requires it. ` +
 		`Write the tests a change needs and no more, and do not run again what passed without a reason. ` +
+		`For pure verification requests ("just check and report"), do not mount a verification battle: ` +
+		`long or repeated test runs and coverage or mutation checks rarely add to what the report says. ` +
+		`When the check is about open issues, fetch them all in one gh issue list --json number,title,body ` +
+		`and check each issue with a targeted code search. ` +
 		`When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering: ` +
 		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
 		`Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown, ` +
