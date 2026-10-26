@@ -628,7 +628,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 	}
 	se := s.get(id)
 	message := queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx), generated: generated}
-	if generated && text == goOnText {
+	if generated && (text == goOnText || text == interruptedText) {
 		// The durable restart note, not transient Routed flags, restores where
 		// the unanswered question must be offered after loading the archive.
 		// Only the last message counts: an older note was answered already.
@@ -700,6 +700,13 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 		se.resumed = time.Time{}
 	}
 	ctx = agent.WithInputMessages(ctx, s.inThread(se, inputs))
+	// The answer is kept as on its way before it starts, so that an image of
+	// ouro that ends with it brings it on again, see GoOn.
+	if s.archive != nil {
+		if err := s.archive.BeginAnswer(history.Owner(se.id)); err != nil {
+			s.archive.log("the answer of the session %s cannot be kept as on its way: %v", se.id, err)
+		}
+	}
 	s.answers.Add(1)
 	go s.answer(ctx, se, text, p.replace != nil, named)
 	s.busy()
@@ -1111,6 +1118,14 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	defer p.mu.Unlock()
 	p.answering--
 	over = true
+	// An answer that ends because the node goes away is brought on again by
+	// the next image, see GoOn; one that ended of itself or was stopped by
+	// the owner takes its mark back.
+	if s.archive != nil && !(end.Kind == Canceled && (p.successor != "" || s.closed)) {
+		if err := s.archive.EndAnswer(history.Owner(se.id)); err != nil {
+			s.archive.log("the end of the answer of the session %s cannot be kept: %v", se.id, err)
+		}
+	}
 	delete(s.jobs, se.id)
 	if jobs != "" {
 		s.emit(se, Event{Kind: Jobs})
