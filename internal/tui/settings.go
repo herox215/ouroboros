@@ -520,9 +520,19 @@ func rows(s Settings) []row {
 	return out
 }
 
+// onOff says whether a mode of the node is on, and what the action that
+// changes it does.
+func onOff(on bool) (value, action string) {
+	if on {
+		return "on", "turn off"
+	}
+	return "off", "turn on"
+}
+
 // modelRows are the lines of the node that its status says: the model for
-// peers, the fallbacks, the effort and the debug mode. /model, /effort and
-// /debug change them, and the status says them as it is read anew.
+// peers, the fallbacks, the effort, the debug mode and the yolo mode. /model,
+// /effort, /debug and /yolo change them, and the status says them as it is
+// read anew.
 func modelRows(m *Model, fallbacks []Fallback) []row {
 	peers := "the same as yours"
 	if m.status.PeerModel != "" {
@@ -536,10 +546,8 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 	if len(names) > 0 {
 		fallback = strings.Join(names, " → ")
 	}
-	debug, turn := "off", "turn on"
-	if m.status.Debug {
-		debug, turn = "on", "turn off"
-	}
+	debug, turnDebug := onOff(m.status.Debug)
+	yolo, turnYolo := onOff(m.status.Yolo)
 	model := action{"open /model", (*Model).openModel}
 	var looks []action
 	for _, a := range appearances {
@@ -549,7 +557,8 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 		{section: nodeSection, label: "Model for peers", value: peers, note: "what your agent answers peers with; p on /model chooses it", actions: []action{model}},
 		{section: nodeSection, label: "Fallbacks", value: fallback, note: "what your agent goes on with when the model cannot answer for now; f on /model adds or removes one", actions: []action{model}},
 		{section: nodeSection, label: "Effort", value: effortName(m.status.Effort), note: "how much the model thinks before it answers you", actions: []action{{"open /effort", (*Model).openEffort}}},
-		{section: nodeSection, label: "Debug mode", value: debug, note: "the log of the node (ouro.log) tells much more of every call of the LLM", actions: []action{{turn, (*Model).toggleDebug}}},
+		{section: nodeSection, label: "Debug mode", value: debug, note: "the log of the node (ouro.log) tells much more of every call of the LLM", actions: []action{{turnDebug, (*Model).toggleDebug}}},
+		{section: nodeSection, label: "Yolo mode", value: yolo, note: "no rule of tools.ask asks you before a tool call; questions to you still wait for you", actions: []action{{turnYolo, (*Model).toggleYolo}}},
 		{section: nodeSection, label: "Appearance", value: m.appearanceText(), note: "how this terminal UI looks, in the colors of the GUI: light, dark, or system, as the background of the terminal is; for all profiles, also the next time; /appearance changes it too", actions: looks},
 	}
 }

@@ -75,7 +75,39 @@ func TestYoloKeepsQuestions(t *testing.T) {
 	if !strings.Contains(prompt, yoloHint) || !strings.Contains(prompt, questionHint) {
 		t.Errorf("the prompt of the yolo mode:\n%s", prompt)
 	}
-	if plain, _ := plain.Prompt(); strings.Contains(plain, yoloHint) || !strings.Contains(plain, questionHint) {
-		t.Errorf("the prompt without yolo:\n%s", plain)
+	if prompt, _ := plain.Prompt(); strings.Contains(prompt, yoloHint) || !strings.Contains(prompt, questionHint) {
+		t.Errorf("the prompt without yolo:\n%s", prompt)
+	}
+}
+
+// The mode holds from the next agent on: current asks the switch anew, and
+// builds the agent anew when it changed, so that the rules are off while it
+// is on and back after.
+func TestYoloRebuildsTheAgent(t *testing.T) {
+	cfg := config.Config{Access: openaitest.Key, Model: "gpt-4o", Name: "me", Tools: &config.Tools{H2A: config.Named(config.AllTools)}}
+	yolo := false
+	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool {
+		return PeerTools(nil, func() string { return "" })
+	}}.WithConfig(func() (config.Config, error) { return cfg, nil }, nil)
+	a := New(func() (config.Config, error) { return cfg, nil }, b, func(string, ...any) {}).WithYolo(func() bool { return yolo })
+
+	prompt := func() string {
+		bot, _, err := a.current()
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, _ := bot.Prompt()
+		return text
+	}
+	if plain := prompt(); strings.Contains(plain, yoloHint) {
+		t.Fatalf("the prompt without yolo names it:\n%s", plain)
+	}
+	yolo = true
+	if on := prompt(); !strings.Contains(on, yoloHint) {
+		t.Fatalf("the prompt with yolo does not name it:\n%s", on)
+	}
+	yolo = false
+	if plain := prompt(); strings.Contains(plain, yoloHint) {
+		t.Fatalf("the prompt after yolo still names it:\n%s", plain)
 	}
 }

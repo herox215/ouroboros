@@ -368,7 +368,7 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.config.shown(m)) - 1 {
 		press(m, "down")
 	}
-	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 10 {
+	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 11 {
 		t.Errorf("below the last: %d of %d", m.config.sel, len(m.config.shown(m)))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
@@ -806,8 +806,8 @@ func TestSettingsSinglePeers(t *testing.T) {
 	}
 }
 
-// The node shows the model for peers, the fallbacks, the effort and the
-// debug mode, which open or turn from here.
+// The node shows the model for peers, the fallbacks, the effort, the debug
+// mode and the yolo mode, which open or turn from here.
 func TestSettingsModelRows(t *testing.T) {
 	m, b := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -815,7 +815,7 @@ func TestSettingsModelRows(t *testing.T) {
 	m.status.PeerModel, m.status.Effort = "small", "high" // as the status says
 	b.fallbacks = []Fallback{{Access: "a", Model: "one"}, {Access: "b", Model: "two"}}
 	deliver(m, run(m, "/settings"))
-	for label, want := range map[string]string{"Model for peers": "small", "Fallbacks": "one → two", "Effort": "high", "Debug mode": "off"} {
+	for label, want := range map[string]string{"Model for peers": "small", "Fallbacks": "one → two", "Effort": "high", "Debug mode": "off", "Yolo mode": "off"} {
 		pick(t, m, nodeSection, label, "")
 		if r := m.config.selectedRow(m); r.value != want {
 			t.Errorf("%s: %q", label, r.value)
@@ -832,6 +832,19 @@ func TestSettingsModelRows(t *testing.T) {
 	}
 	if do(m); !slices.Equal(b.debug, []bool{true, false}) {
 		t.Errorf("debug: %v", b.debug)
+	}
+
+	pick(t, m, nodeSection, "Yolo mode", "turn on")
+	if do(m); !slices.Equal(b.yolo, []bool{true}) {
+		t.Errorf("yolo: %v", b.yolo)
+	}
+	m.status.Yolo = true // as the status says once it is read anew
+	pick(t, m, nodeSection, "Yolo mode", "turn off")
+	if r := m.config.selectedRow(m); r.value != "on" {
+		t.Errorf("yolo on: %q", r.value)
+	}
+	if do(m); !slices.Equal(b.yolo, []bool{true, false}) {
+		t.Errorf("yolo: %v", b.yolo)
 	}
 }
 

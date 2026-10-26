@@ -275,6 +275,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/suggestions` | changes of ouro the reviews suggest, in the existing dialog over the chat. `↑` `↓` select, `←` `→` accept or reject, `enter` decides, `a` accepts all in one new conversation, `esc` closes without deciding. Accepting starts an agent task; it does not apply a change immediately |
 | `/effort` | how much the model thinks before it answers in the conversation shown, see [Sessions](#sessions) |
 | `/debug` | turn the debug mode on or off: the log of the node then tells much more |
+| `/yolo` | turn the yolo mode on or off: in it, a tool call that a rule of `tools.ask` would ask you about just runs, while a question of the agent still waits for you; also in `/settings` |
 | `/help` | list the commands, those of the plugins too |
 | `/keys` | list the keys of the chat in a dialog, `esc` back |
 | `/quit` | quit |
@@ -720,7 +721,8 @@ Its input is generated scheduled work, not a fresh message from you. The session
 routes its result into your thread, including connected front ends such as Matrix.
 `ask: "thread"` is the default: questions and permission requests are relayed to the
 thread, and the run waits for your answer. With `ask: "never"`, questions receive an
-unattended answer and tools requiring permission are refused, not run silently.
+unattended answer and tools requiring permission are refused, not run silently: only
+in yolo mode (`/yolo`) do they run there too, as everywhere else of the node.
 A run is limited to one hour. If a job is due again while its previous run is still
 active, that occurrence is recorded as `skipped` rather than overlapping.
 
@@ -1201,7 +1203,7 @@ and no peer reaches it.
 
 | Category | Shows | Changes |
 |---|---|---|
-| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode | the name and the description (empty is the default); the debug mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
+| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode, the yolo mode | the name and the description (empty is the default); the debug mode and the yolo mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
 | The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it | both |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |
