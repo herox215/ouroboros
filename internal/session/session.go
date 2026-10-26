@@ -1397,16 +1397,17 @@ func (s *Service) effort(se *session) string {
 	return s.agent.Effort()
 }
 
-// modeler is an agent that says which model it answers with: an Assistant
-// that cannot tell is one whose sessions are continued as they are.
+// modeler is an agent that says which model it answers with in a scope: an
+// Assistant that cannot tell is one whose sessions are continued as they are.
 type modeler interface {
-	Model() string
+	Model(thread bool) string
 }
 
-// model is the model the agent answers with now, "" if it cannot tell.
-func (s *Service) model() string {
+// model is the model the agent answers the session id with now, "" if it
+// cannot tell.
+func (s *Service) model(id string) string {
 	if m, ok := s.agent.(modeler); ok {
-		return m.Model()
+		return m.Model(id == ThreadID)
 	}
 	return ""
 }
@@ -1433,7 +1434,7 @@ func modelNote(model string) string {
 // none of the conversation cached, so it is not continued: the agent forgets
 // it, and the archive notes where the new context starts. s.mu is held.
 func (s *Service) modelFor(se *session) string {
-	model := s.model()
+	model := s.model(se.id)
 	if model == "" {
 		return ""
 	}

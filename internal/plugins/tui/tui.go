@@ -445,6 +445,26 @@ func (u *ui) SetPeerModel(access, model string) error {
 	return err
 }
 
+// SetSessionModel saves the model the owner picked for the sessions in the
+// model screen, like SetPeerModel.
+func (u *ui) SetSessionModel(access, model string) error {
+	err := u.Owner.SetSessionModel(access, model)
+	if errors.Is(err, plugin.ErrNotSetUp) {
+		return fmt.Errorf("%w, type /setup", err)
+	}
+	return err
+}
+
+// SetThreadModel saves the model the owner picked for the thread in the
+// model screen, like SetPeerModel.
+func (u *ui) SetThreadModel(access, model string) error {
+	err := u.Owner.SetThreadModel(access, model)
+	if errors.Is(err, plugin.ErrNotSetUp) {
+		return fmt.Errorf("%w, type /setup", err)
+	}
+	return err
+}
+
 func (u *ui) Contacts() (tui.Contacts, error) {
 	incoming, outgoing, err := u.Requests()
 	if err != nil {

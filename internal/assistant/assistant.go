@@ -54,7 +54,7 @@ const (
 	// bash: how it goes about what the user gives it to do.
 	workHint = `When the user asks for something to be done, do it, and go on until it is done: ` +
 		`do not stop at a plan or at an offer to go on. Treat a hint that something you agreed to or promised before is missing, like a review of your answer naming it, as the order to make up for it: take its reversible local steps, to write, edit, build and test, without a new leave, and ask before only what cannot be undone or gates that the rules for what to ask already name. ` +
-		`For research, batch related read and search calls whose inputs you already know together, rather than returning to the model after each small excerpt. ` +
+		`For research, batch related read and search calls whose inputs you already know together: each call on its own costs a round of the answer. ` +
 		`For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit. ` +
 		`Read coherent sections large enough to answer the current question, within tool output limits. ` +
 		`Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch. ` +
@@ -71,10 +71,26 @@ const (
 		`For commit-only requests, default to status, diff and secret checks plus appropriate short tests. ` +
 		`Do not automatically start a comprehensive review or delegate review tasks; expand the scope only if the user asks or a specific finding requires it. ` +
 		`Write the tests a change needs and no more, and do not run again what passed without a reason. ` +
+		`For pure verification requests ("just check and report"), do not mount a verification battle: ` +
+		`long or repeated test runs and coverage or mutation checks rarely add to what the report says. ` +
+		`When the check is about open issues, fetch them all in one gh issue list --json number,title,body ` +
+		`and check each issue with a targeted code search. ` +
 		`When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering: ` +
 		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
 		`Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown, ` +
 		`rather than stopping at an unverified guess. `
+	// bashHint is added for an agent that has bash: how it uses bash to
+	// answer a question, where the tools for files cannot.
+	bashHint = `When ` + ToolBash + ` is what answers a question (what the tools for files cannot do), ` +
+		`put the commands it takes, such as grep, sed and git, into one call, joined with ` + "`;`" + ` as the shell takes them, ` +
+		`rather than one call for each small search. ` +
+		`The exit status is that of the last command, so read the output of each, not only the status of the call. `
+	// exploreHint is added for an agent that has the tools for files and bash
+	// at once: files are explored with their own tools, which return the part
+	// that was asked for, where a command prints pages that are read again.
+	exploreHint = `Explore files with read, search and list, not with ` + ToolBash + ` and grep, sed or find: ` +
+		`the tools for files return the part you asked for and say where to continue, while a command prints pages that you then read again. ` +
+		`Use ` + ToolBash + ` for what the tools for files cannot do. `
 	// improveHint is added for an owner whose agent may build ouro anew and
 	// improve it (config.SelfImproveBuild): what a task needs and ouro
 	// lacks, it may build.
@@ -252,10 +268,13 @@ type Assistant struct {
 	debug   func() bool // whether the log is to tell much more, see WithDebug
 	yolo    func() bool // whether the rules that ask the owner before a call are off, see WithYolo
 
-	mu     sync.Mutex
-	agent  *agent.Agent
-	built  setup         // what agent was built for
-	memory *agent.Memory // of the conversations, for every agent there is
+	mu       sync.Mutex
+	agent    *agent.Agent
+	built    setup         // what agent was built for
+	thread   *agent.Agent  // the agent of the thread, kept apart from the sessions'
+	tbuilt   setup         // what thread was built for
+	threadID string        // the conversation the thread agent answers in
+	memory   *agent.Memory // of the conversations, for every agent there is
 
 	sizing sync.Mutex
 	sizes  map[string]int   // what the last call of the LLM sent, by conversation
@@ -345,6 +364,9 @@ func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	if has(fileTools...) {
 		prompt += peerFilesHint
 	}
+	if has(fileTools...) && has(ToolBash) {
+		prompt += exploreHint
+	}
 	if has(ToolRebuild) {
 		prompt += buildHint
 		if b.Source != "" {
@@ -396,6 +418,12 @@ func (b Builder) forOwner(cfg config.Config, yolo bool) (*agent.Agent, error) {
 	}
 	if has(append(slices.Clone(fileTools), ToolBash)...) {
 		prompt += workHint
+	}
+	if has(ToolBash) {
+		prompt += bashHint
+	}
+	if has(fileTools...) && has(ToolBash) {
+		prompt += exploreHint
 	}
 	if has(ToolRebuild) {
 		if cfg.Improves() {
@@ -536,7 +564,7 @@ func (b Builder) workspaceHint() string {
 // Ready reports whether the assistant can answer: config.ErrIncomplete if the
 // node was not set up yet.
 func (a *Assistant) Ready() error {
-	_, _, err := a.current()
+	_, _, err := a.current(false, "")
 	return err
 }
 
@@ -558,7 +586,7 @@ func (a *Assistant) Ask(ctx context.Context, contextID, text string, observe fun
 // nothing along with them, and before the Steps of those tools: a front end
 // tells the rounds of the loop apart by it.
 func (a *Assistant) Run(ctx context.Context, contextID, text string, observe func(Step), say func(string)) (string, error) {
-	bot, cfg, err := a.current()
+	bot, cfg, err := a.current(ThreadOf(ctx) != nil, contextID)
 	if err != nil {
 		return "", err
 	}
@@ -767,8 +795,12 @@ func (a *Assistant) reviewed(chat string, signals []Signal, trail []string, tool
 		}
 		log("review: %s", strconv.Quote(text))
 		if store := a.builder.suggestions; store != nil {
-			if _, err := store.Add(text, measured, chat); err != nil {
+			_, dropped, err := store.Add(text, measured, chat)
+			if err != nil {
 				log("the suggestion is not kept: %v", err)
+			}
+			if dropped.ID != "" {
+				log("the oldest suggestion is dropped: %q", dropped.Text)
 			}
 		}
 		to.suggest(text)
@@ -835,12 +867,17 @@ func (a *Assistant) Effort() string {
 	return cfg.Effort
 }
 
-// Model is the model the agents answer with now: the model of the
-// configuration, "" if it cannot be read.
-func (a *Assistant) Model() string {
+// Model is the model the agents answer with in the scope thread tells: that
+// of the configuration of the scope, "" if it cannot be read.
+func (a *Assistant) Model(thread bool) string {
 	cfg, err := a.config()
 	if err != nil {
 		return ""
+	}
+	if thread {
+		_, cfg.Model, _ = cfg.ThreadLLM()
+	} else {
+		_, cfg.Model, _ = cfg.SessionLLM()
 	}
 	return cfg.Model
 }
@@ -887,12 +924,17 @@ func (a *Assistant) Cache(contextID string) Cache {
 // It does not invoke plugins or prepare speculative context.
 func (a *Assistant) Inspection(contextID string) (agent.Inspection, bool) {
 	a.mu.Lock()
-	bot := a.agent
+	agents := []*agent.Agent{a.agent, a.thread}
 	a.mu.Unlock()
-	if bot == nil {
-		return agent.Inspection{}, false
+	for _, bot := range agents {
+		if bot == nil {
+			continue
+		}
+		if in, ok := bot.Inspection(contextID); ok {
+			return in, true
+		}
 	}
-	return bot.Inspection(contextID)
+	return agent.Inspection{}, false
 }
 
 // Contents is what the next call of the LLM in a conversation is sent: the
@@ -915,7 +957,7 @@ func (a *Assistant) Contents(contextID string) (Contents, error) {
 // the prompt and tools of the thread under a context of it, see WithThread.
 func (a *Assistant) ContentsContext(ctx context.Context, contextID string) (Contents, error) {
 	c := Contents{Messages: a.memory.Conversation(contextID)}
-	bot, cfg, err := a.current()
+	bot, cfg, err := a.current(ThreadOf(ctx) != nil, contextID)
 	if err != nil {
 		return c, err
 	}
@@ -1000,11 +1042,12 @@ func (a *Assistant) RestoreStatistics(contextID string, size int, cache Cache) {
 	a.sizes[contextID], a.caches[contextID] = size, cache
 }
 
-// Note makes the agent remember text in the conversation contextID as
-// something it was told without being asked, for its next answer there, and
-// keeps it where answers are kept: see agent.Agent.Note.
+// Note makes the agent of the scope ctx tells, the thread or the sessions,
+// remember text in the conversation contextID as something it was told
+// without being asked, for its next answer there, and keeps it where answers
+// are kept: see agent.Agent.Note.
 func (a *Assistant) Note(ctx context.Context, contextID, text string) error {
-	bot, _, err := a.current()
+	bot, _, err := a.current(ThreadOf(ctx) != nil, contextID)
 	if err != nil {
 		return err
 	}
@@ -1018,11 +1061,13 @@ func (a *Assistant) Forget(contextID string) {
 	a.forget(contextID)
 }
 
-// current returns the agent for the configuration as it is now. The agent is
-// kept between questions, and rebuilt when the node is configured anew or the
-// day its prompt names is over: with
-// the memory of the one before, so that it goes on with its conversations.
-func (a *Assistant) current() (*agent.Agent, config.Config, error) {
+// current returns the agent for the configuration as it is now, of the scope
+// thread tells: the sessions, or the thread, which answers in the
+// conversation contextID. The agent is kept between questions, and rebuilt
+// when the node or the scope is configured anew or the day its prompt names
+// is over: with the memory of the one before, so that it goes on with its
+// conversations.
+func (a *Assistant) current(thread bool, contextID string) (*agent.Agent, config.Config, error) {
 	cfg, err := a.config()
 	if err != nil {
 		return nil, cfg, err
@@ -1030,23 +1075,41 @@ func (a *Assistant) current() (*agent.Agent, config.Config, error) {
 	if !cfg.Complete() {
 		return nil, cfg, config.ErrIncomplete
 	}
+	// What the owner chose for the scope, or else their own model.
+	if thread {
+		cfg.Access, cfg.Model, _ = cfg.ThreadLLM()
+	} else {
+		cfg.Access, cfg.Model, _ = cfg.SessionLLM()
+	}
 	tools, _ := json.Marshal(cfg.OwnerTools()) // an entry that cannot be written is reported by forOwner
 	yolo := a.yolo != nil && a.yolo()
 	want := setup{access: cfg.Access, revision: a.builder.revision(cfg.Access), model: cfg.Model, name: cfg.Name, id: cfg.ID(),
 		tools: string(tools), provider: cfg.ContextProvider, fallbacks: a.builder.fallbacksOf(cfg), day: today(), yolo: yolo}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.agent == nil || a.built != want {
-		bot, err := a.builder.forOwner(cfg, yolo)
+	if thread && contextID != "" {
+		a.threadID = contextID
+	}
+	bot, built := &a.agent, &a.built
+	if thread {
+		bot, built = &a.thread, &a.tbuilt
+	}
+	if *bot == nil || *built != want {
+		next, err := a.builder.forOwner(cfg, yolo)
 		if err != nil {
 			return nil, cfg, err
 		}
-		// Another access is another provider, or another account of it:
-		// what the LLM thought so far is not sent there.
-		if a.agent != nil && a.built.access != want.access {
-			a.memory.Unthink()
+		// Another access is another provider, or another account of it: what
+		// the LLM thought so far is not sent there. Only the conversations
+		// of the scope are concerned, the other scope answers on.
+		if *bot != nil && built.access != want.access {
+			if thread {
+				a.memory.UnthinkOne(contextID)
+			} else {
+				a.memory.UnthinkExcept(a.threadID)
+			}
 		}
-		a.agent, a.built = bot.WithMemory(a.memory), want
+		*bot, *built = next.WithMemory(a.memory), want
 	}
-	return a.agent, cfg, nil
+	return *bot, cfg, nil
 }

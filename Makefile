@@ -5,7 +5,7 @@ OURO_REPO ?= $(shell git remote get-url origin 2>/dev/null)
 # The tool "rebuild" builds the checkout the binary was built from. "ouro update"
 # builds in a directory of its own and passes on the checkout of the old binary.
 OURO_SOURCE ?= $(CURDIR)
-LDFLAGS := -s -w $(if $(OURO_REPO),-X ouroboros/internal/update.Repo=$(OURO_REPO)) \
+LDFLAGS := -s -w $(if $(OURO_REPO),-X 'ouroboros/internal/update.Repo=$(OURO_REPO)') \
 	$(if $(OURO_SOURCE),-X 'ouroboros/internal/update.Source=$(OURO_SOURCE)')
 
 # Go is often installed outside PATH (install.sh puts it into ~/.local/go).
@@ -39,7 +39,7 @@ test-gui:
 # tests and that binary write into one directory; cover.out is both merged.
 cover:
 	rm -rf .cover cover.out && mkdir .cover
-	OURO_E2E_COVERDIR=$(CURDIR)/.cover go test -tags goolm -count=1 -cover -coverpkg=ouroboros/... ./... -args -test.gocoverdir=$(CURDIR)/.cover >.cover/test.log 2>&1 || { cat .cover/test.log; exit 1; }
+	OURO_E2E_COVERDIR="$(CURDIR)/.cover" go test -tags goolm -count=1 -cover -coverpkg=ouroboros/... ./... -args -test.gocoverdir="$(CURDIR)/.cover" >.cover/test.log 2>&1 || { cat .cover/test.log; exit 1; }
 	go tool covdata textfmt -i=.cover -o=cover.out
 	go tool covdata percent -i=.cover
 
@@ -82,4 +82,4 @@ install: build
 	install -m755 "$(BIN)" "$(PREFIX)/bin/$$(basename "$(BIN)")"
 
 clean:
-	rm -rf $(BIN) .cover cover.out .mutation
+	rm -rf "$(BIN)" .cover cover.out .mutation

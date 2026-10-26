@@ -734,8 +734,8 @@ func TestOwnerDecidesOnSuggestions(t *testing.T) {
 		t.Fatalf("nothing suggested: %+v, %v", list, err)
 	}
 	store := home.Dir(s.Home).Suggestions()
-	a, _ := store.Add("let bash run long commands as jobs", []string{"bash took 42s"}, "s1")
-	b, _ := store.Add("say which files are near", nil, "s2")
+	a, _, _ := store.Add("let bash run long commands as jobs", []string{"bash took 42s"}, "s1")
+	b, _, _ := store.Add("say which files are near", nil, "s2")
 	if list, err := o.Suggestions(); err != nil || len(list) != 2 || list[0].ID != a.ID || list[1].ID != b.ID {
 		t.Fatalf("waiting: %+v, %v", list, err)
 	}

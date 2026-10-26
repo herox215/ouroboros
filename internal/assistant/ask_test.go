@@ -311,12 +311,14 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		{config.Named(toolAskPeer), start + askHint + end},
 		{config.Named("edit"), start + filesHint + workHint + end},
 		{config.Named("search"), start + filesHint + workHint + end},
-		{config.Named(ToolBash), start + workHint + end},
-		{config.Named(toolAskPeer, ToolBash), start + askHint + workHint + claimHint + end},
+		{config.Named(ToolBash), start + workHint + bashHint + end},
+		{config.Named("edit", ToolBash), start + filesHint + workHint + bashHint + exploreHint + end},
+		{config.Named(toolSearch, ToolBash), start + filesHint + workHint + bashHint + exploreHint + end},
+		{config.Named(toolAskPeer, ToolBash), start + askHint + workHint + bashHint + claimHint + end},
 		{config.Named(ToolRebuild), start + improveHint + end},
 		{config.Named(ToolUserQuestion), start + questionHint + end},
 		{config.Named(ToolDelegate), start + delegateHint + end},
-		{config.Named("*"), start + askHint + filesHint + workHint + improveHint + claimHint + questionHint + delegateHint + end},
+		{config.Named("*"), start + askHint + filesHint + workHint + bashHint + exploreHint + improveHint + claimHint + questionHint + delegateHint + end},
 	} {
 		cfg.Tools = &config.Tools{H2A: tt.tools}
 		got, err := a.Ask(context.Background(), "chat", "?system", nil)
@@ -328,13 +330,22 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		wantWorkflow := slices.ContainsFunc(tt.tools, func(e config.Entry) bool {
 			return e.Tool == "edit" || e.Tool == toolSearch || e.Tool == ToolBash || e.Tool == "*"
 		})
+		// The bash rule hangs on bash alone, not on the workflow rules:
+		// an agent without bash has no commands of its own to batch.
+		wantBash := slices.ContainsFunc(tt.tools, func(e config.Entry) bool {
+			return e.Tool == ToolBash || e.Tool == "*"
+		})
+		bashRule := "When bash is what answers a question (what the tools for files cannot do), put the commands it takes, such as grep, sed and git, into one call, joined with `;` as the shell takes them, rather than one call for each small search. The exit status is that of the last command, so read the output of each, not only the status of the call."
+		if strings.Contains(got, bashRule) != wantBash {
+			t.Errorf("with %s: bash rule present = %v, want %v", tt.tools, strings.Contains(got, bashRule), wantBash)
+		}
 		workflow := "Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, " +
 			"unless you still need information to make those changes safely."
 		if strings.Contains(got, workflow) != wantWorkflow {
 			t.Errorf("with %s: workflow rule present = %v, want %v", tt.tools, strings.Contains(got, workflow), wantWorkflow)
 		}
 		for _, research := range []string{
-			"For research, batch related read and search calls whose inputs you already know together, rather than returning to the model after each small excerpt.",
+			"For research, batch related read and search calls whose inputs you already know together: each call on its own costs a round of the answer.",
 			"For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit.",
 			"Read coherent sections large enough to answer the current question, within tool output limits.",
 			"Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch.",
@@ -343,6 +354,15 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		} {
 			if strings.Contains(got, research) != wantWorkflow {
 				t.Errorf("with %s: research rule %q present = %v, want %v", tt.tools, research, strings.Contains(got, research), wantWorkflow)
+			}
+		}
+		for _, verification := range []string{
+			`For pure verification requests ("just check and report"), do not mount a verification battle: ` +
+				"long or repeated test runs and coverage or mutation checks rarely add to what the report says.",
+			"When the check is about open issues, fetch them all in one gh issue list --json number,title,body and check each issue with a targeted code search.",
+		} {
+			if strings.Contains(got, verification) != wantWorkflow {
+				t.Errorf("with %s: verification rule %q present = %v, want %v", tt.tools, verification, strings.Contains(got, verification), wantWorkflow)
 			}
 		}
 		for _, diagnosis := range []string{
@@ -364,6 +384,37 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	}
 	if strings.Join(fileTools, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools for files: %v", fileTools)
+	}
+}
+
+// A helper follows its tools: it reads files with the tools for files when
+// it has both kinds, and it batches the commands of a question when it has
+// bash.
+func TestHelperPromptFollowsTheTools(t *testing.T) {
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	read := agent.NewTool("read", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	bash := agent.NewTool(ToolBash, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	b := Builder{LLM: overHTTP}
+	for _, tt := range []struct {
+		tools       []agent.Tool
+		wantExplore bool
+		wantBash    bool
+	}{
+		{[]agent.Tool{read}, false, false},
+		{[]agent.Tool{bash}, false, true},
+		{[]agent.Tool{read, bash}, true, true},
+	} {
+		helper, err := b.helper(cfg, tt.tools)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt, _ := helper.Prompt()
+		if got := strings.Contains(prompt, exploreHint); got != tt.wantExplore {
+			t.Errorf("with %s: explore rule present = %v, want %v", names(tt.tools), got, tt.wantExplore)
+		}
+		if got := strings.Contains(prompt, bashHint); got != tt.wantBash {
+			t.Errorf("with %s: bash rule present = %v, want %v", names(tt.tools), got, tt.wantBash)
+		}
 	}
 }
 

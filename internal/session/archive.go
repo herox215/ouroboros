@@ -182,7 +182,7 @@ func (s *Service) load(id string) *session {
 	// A conversation whose model changed is not resumed: the model of the
 	// node has none of it cached, so it would be sent in full. What follows
 	// starts anew, see modelFor.
-	if now := s.model(); model == "" || now == "" || model == now {
+	if now := s.model(id); model == "" || now == "" || model == now {
 		if err := s.agent.Resume(id, memory); err != nil {
 			s.archive.log("what the agent remembers of the session %s is lost: %v", id, err)
 		}

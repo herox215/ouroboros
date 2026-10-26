@@ -1,23 +1,38 @@
 package tui
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/gif" // the pictures a preview can show
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gen2brain/avif"
+	"github.com/gen2brain/heic"
+	"github.com/srwiley/oksvg"
+	"github.com/srwiley/rasterx"
+	_ "golang.org/x/image/bmp" // the kinds Go does not read by itself
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
 
 	"ouroboros/plugin"
 )
@@ -30,8 +45,8 @@ import (
 // cells of two pixels each: the upper half of ▀ in the color of its
 // foreground, the lower in that of its background. Once the mouse moves, or a
 // key or the wheel is used, it is gone; a sixel is not part of what the UI
-// draws, so the screen is drawn anew. A picture that cannot be read, or of a
-// kind Go does not read, as webp, shows nothing.
+// draws, so the screen is drawn anew. A picture that cannot be read shows
+// nothing; a PDF page is drawn with pdftoppm, where the system has it.
 
 // hoverDelay is how long the mouse rests on a label before its picture shows.
 const hoverDelay = time.Second
@@ -195,6 +210,13 @@ func (m *Model) pictureAt(x, y int) (string, bool) {
 // separates bare paths from the surrounding prose; ANSI has already been removed.
 var pictureNames = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)+\"|'[^']+'|`[^`]+`|(?:\\\\.|[^\\s\"'`<>\\[\\]()])+")
 
+// previewable reports whether a preview is made of the file at path: of a
+// picture, and of a PDF, whose first page it shows. A PDF stays a file
+// attachment in the chat; it is no picture that is handed to a model.
+func previewable(path string) bool {
+	return plugin.IsPicture(path) || strings.EqualFold(filepath.Ext(path), ".pdf")
+}
+
 // picturePathAt resolves only the name under the mouse, never a remote URL.
 // Relative names belong to the conversation's project, not the UI process cwd.
 func picturePathAt(line string, x int, directory string) (string, bool) {
@@ -217,7 +239,7 @@ func picturePathAt(line string, x int, directory string) (string, bool) {
 			}
 			path = filepath.Join(directory, path)
 		}
-		if !plugin.IsPicture(path) {
+		if !previewable(path) {
 			return "", false
 		}
 		if file, ok := attachmentPath(path); ok {
@@ -273,16 +295,7 @@ func preview(path string, g graphics) (view, sixel string) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > previewMaxBytes {
 		return "", ""
 	}
-	config, _, err := image.DecodeConfig(f)
-	if err != nil || config.Width <= 0 || config.Height <= 0 ||
-		config.Width > previewMaxDimension || config.Height > previewMaxDimension ||
-		config.Width > previewMaxPixels/config.Height {
-		return "", ""
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return "", ""
-	}
-	img, _, err := image.Decode(f)
+	img, err := readPreview(f, path)
 	if err != nil || img.Bounds().Empty() {
 		return "", ""
 	}
@@ -297,6 +310,144 @@ func preview(path string, g graphics) (view, sixel string) {
 	cols, rows := (w+cw-1)/cw, ((h+5)/6*6+ch-1)/ch
 	blank := strings.Repeat(strings.Repeat(" ", cols)+"\n", rows)
 	return box.Render(strings.TrimSuffix(blank, "\n")), encodeSixel(scaled(img, w, h))
+}
+
+// readPreview reads the picture at path from f. The kinds Go reads are bounded
+// by their header before they are decoded; a vector or a page is drawn in a
+// size that is bounded as well. An unreadable file, a missing decoder and a
+// missing renderer only keep the preview away, never the UI.
+func readPreview(f *os.File, path string) (image.Image, error) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".svg":
+		return svgPreview(f)
+	case ".pdf":
+		return pdfPreview(path)
+	case ".avif":
+		return boundedPreview(f, avif.DecodeConfig, func() (image.Image, error) {
+			return avif.Decode(f, avif.Options{AutoRotate: true})
+		})
+	case ".heic":
+		return boundedPreview(f, heic.DecodeConfig, func() (image.Image, error) { return heic.Decode(f) })
+	}
+	return boundedPreview(f, imageConfig, func() (image.Image, error) {
+		img, _, err := image.Decode(f)
+		return img, err
+	})
+}
+
+// imageConfig is image.DecodeConfig without the name of the kind.
+func imageConfig(r io.Reader) (image.Config, error) {
+	c, _, err := image.DecodeConfig(r)
+	return c, err
+}
+
+// boundedPreview checks the header of f against the limits of a preview and
+// decodes the picture from the start of f.
+func boundedPreview(f io.ReadSeeker, config func(io.Reader) (image.Config, error), decode func() (image.Image, error)) (image.Image, error) {
+	c, err := config(f)
+	if err != nil {
+		return nil, err
+	}
+	if c.Width <= 0 || c.Height <= 0 || c.Width > previewMaxDimension ||
+		c.Height > previewMaxDimension || c.Width > previewMaxPixels/c.Height {
+		return nil, errors.New("a picture of that size is not shown")
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	return decode()
+}
+
+// svgRaster is the longer side in pixels an SVG is drawn at: both forms of
+// the preview are smaller than that.
+const svgRaster = 512
+
+// svgMaxBytes bounds an SVG tighter than a picture: rasterizing many paths
+// takes time, and one preview slot serves every hover.
+const svgMaxBytes = 2 << 20
+
+// svgPreview draws the shapes of the SVG in f. It is a vector image, so it is
+// rasterized here, with oksvg and rasterx alone: no script it holds runs and
+// nothing it names elsewhere is loaded.
+func svgPreview(f io.Reader) (image.Image, error) {
+	data, err := io.ReadAll(io.LimitReader(f, svgMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > svgMaxBytes {
+		return nil, errors.New("an SVG of that size is not shown")
+	}
+	icon, err := oksvg.ReadIconStream(bytes.NewReader(data), oksvg.IgnoreErrorMode)
+	if err != nil {
+		return nil, err
+	}
+	w, h := icon.ViewBox.W, icon.ViewBox.H
+	if math.IsNaN(w) || math.IsNaN(h) || w <= 0 || h <= 0 ||
+		w > previewMaxDimension || h > previewMaxDimension {
+		return nil, errors.New("an SVG needs a viewBox of a size that can be shown")
+	}
+	tw, th := fit(image.Rect(0, 0, int(w+0.5), int(h+0.5)), svgRaster, svgRaster, false)
+	img := image.NewRGBA(image.Rect(0, 0, tw, th))
+	icon.SetTarget(0, 0, float64(tw), float64(th))
+	icon.Draw(rasterx.NewDasher(tw, th, rasterx.NewScannerGV(tw, th, img, img.Bounds())), 1)
+	return img, nil
+}
+
+// pdfRaster is the longer side in pixels a PDF page is drawn at: both forms
+// of the preview are smaller than that, and the renderer is bounded before it
+// writes a picture that would be too large.
+const pdfRaster = 512
+
+// pdfTimeout bounds how long the first page of a PDF may take to be drawn. It
+// is a variable so that a test can shorten it.
+var pdfTimeout = 10 * time.Second
+
+// pdfRenderer is the program that draws a PDF page. It is looked up once, so a
+// poppler installed while ouro runs is found after a restart, not on the next
+// hover. A test puts its own renderer in its place.
+var pdfRenderer = sync.OnceValue(func() string {
+	path, err := exec.LookPath("pdftoppm")
+	if err != nil {
+		return ""
+	}
+	return path
+})
+
+// pdfPreview draws the first page of the PDF at path with pdftoppm, which only
+// some systems have: without it the preview stays away, and the PDF is still
+// handed on as the file it is.
+func pdfPreview(path string) (image.Image, error) {
+	bin := pdfRenderer()
+	if bin == "" {
+		return nil, exec.ErrNotFound
+	}
+	dir, err := os.MkdirTemp("", "ouro-pdf-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	out := filepath.Join(dir, "page")
+	ctx, cancel := context.WithTimeout(context.Background(), pdfTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "-png", "-f", "1", "-l", "1", "-singlefile",
+		"-scale-to", strconv.Itoa(pdfRaster), path, out)
+	// A timeout takes the renderer's children along with it.
+	detached(cmd)
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(out + ".png")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || info.Size() > previewMaxBytes {
+		return nil, errors.New("the first page is too large to show")
+	}
+	return boundedPreview(f, imageConfig, func() (image.Image, error) {
+		img, _, err := image.Decode(f)
+		return img, err
+	})
 }
 
 // fit is the size of a picture of bounds b in at most w×h, as it is, and

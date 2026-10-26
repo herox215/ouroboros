@@ -141,6 +141,13 @@ type Backend interface {
 	// with, whatever it answers the owner with; with the access "", what it
 	// answers the owner with again. Status says what it is.
 	SetPeerModel(access, model string) error
+	// SetSessionModel makes model of the access what the node answers its
+	// sessions with, whatever it answers the owner elsewhere; with the access
+	// "", what it answers the owner with again. Status says what it is.
+	SetSessionModel(access, model string) error
+	// SetThreadModel makes model of the access what the node answers the
+	// thread with, like SetSessionModel for the sessions.
+	SetThreadModel(access, model string) error
 	// SetDebug turns the debug mode of the node on or off: in it, the log
 	// of the node tells much more of every call of the LLM. Status says
 	// whether it is on.
@@ -318,8 +325,8 @@ type conversation struct {
 	images []string
 	// files are other pasted attachments, indexed by [File_1], [File_2], ….
 	files []string
-	// besideWatched is whether it was watched for the column on the right,
-	// as a session the part of the thread in view concerns.
+	// besideWatched is whether it was watched for the columns beside the
+	// conversation, as a session that runs.
 	besideWatched bool
 	// handed are the sessions each part of the thread concerns, by the
 	// entry of the message of the owner that opened it, -1 for what came
@@ -347,9 +354,15 @@ type Model struct {
 	ctx  context.Context
 	quit context.CancelFunc
 
-	status    Status
-	chat      *conversation            // the session shown
-	chats     map[string]*conversation // every session the UI knows, by its ID
+	status Status
+	chat   *conversation            // the session shown
+	chats  map[string]*conversation // every session the UI knows, by its ID
+	// runOrder is where each session that runs stands in the columns beside
+	// the conversation, by the number it got when it began to run, and
+	// runNext is the number the next of them gets: a session keeps its place
+	// while it runs, so that the columns do not jump about.
+	runOrder  map[string]int
+	runNext   int
 	notice    string
 	noticeErr bool
 
@@ -557,23 +570,22 @@ func (m *Model) refresh() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
 	if m.profiles == nil {
-		if watch := m.watchBeside(); watch != nil {
+		if watch := m.watchRunning(); watch != nil {
 			cmd = tea.Batch(cmd, watch)
 		}
 	}
 	return model, cmd
 }
 
-// watchBeside watches the sessions beside the part of the thread in view
-// once, so that the column on the right can say where they stand: the UI
+// watchRunning watches the sessions that run while the thread is shown, so
+// that both columns beside the conversation can say where they stand: the UI
 // knows of a session that ended only what the list of the node says.
-func (m *Model) watchBeside() tea.Cmd {
+func (m *Model) watchRunning() tea.Cmd {
 	if m.chat.contextID != plugin.ThreadID || !m.status.Running {
 		return nil
 	}
-	list, _, _ := m.sidebarSessions()
 	var cmds []tea.Cmd
-	for _, c := range list {
+	for _, c := range m.runningSessions() {
 		if !c.watching && !c.besideWatched {
 			c.besideWatched = true
 			cmds = append(cmds, m.watch(c))

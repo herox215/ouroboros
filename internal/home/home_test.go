@@ -170,7 +170,7 @@ func TestFiles(t *testing.T) {
 	if got := d.Skills(); got != filepath.Join(string(d), "skills") {
 		t.Errorf("skills %q", got)
 	}
-	if _, err := d.Suggestions().Add("rename it", nil, "s1"); err != nil {
+	if _, _, err := d.Suggestions().Add("rename it", nil, "s1"); err != nil {
 		t.Errorf("a suggestion should be kept: %v", err)
 	}
 	if list, _ := d.Suggestions().List(); len(list) != 1 || list[0].Text != "rename it" {

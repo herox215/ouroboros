@@ -112,7 +112,8 @@ func TestPickWithSettings(t *testing.T) {
 func TestPeerPromptFollowsTheTools(t *testing.T) {
 	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
 	file := agent.NewTool("read", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
-	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file) }}
+	bash := agent.NewTool(ToolBash, "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return append(PeerTools(nil, func() string { return "" }), file, bash) }}
 	for _, tt := range []struct {
 		tools []config.Entry
 		want  string
@@ -120,6 +121,7 @@ func TestPeerPromptFollowsTheTools(t *testing.T) {
 		{nil, `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.`},
 		{config.Named(toolListPeers), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint},
 		{config.Named("read"), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint + peerFilesHint},
+		{config.Named("read", ToolBash), `You are "me", an Ouroboros agent reachable via A2A. Be helpful and concise.` + toolsHint + peerFilesHint + exploreHint},
 	} {
 		cfg.Tools = &config.Tools{A2A: tt.tools}
 		bot, err := b.ForPeers(cfg)

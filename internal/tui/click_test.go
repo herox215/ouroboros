@@ -268,13 +268,10 @@ func TestClicksAboveAndInTheComposer(t *testing.T) {
 // head shows nothing.
 func TestClickOnASessionOnTheRight(t *testing.T) {
 	m, _, fix := threadWithSessions(t, 170, 46)
-	if clickOn(t, m, "CONTEXT", 0); m.chat == fix {
+	if clickOn(t, m, "RUNNING", 0); m.chat == fix {
 		t.Fatal("a click on the head of the column shows a session")
 	}
 	if clickOn(t, m, "FIX · WORKING", 0); m.chat != fix {
 		t.Fatal("a click on a session on the right shows it")
-	}
-	if m.railAt(10) != nil {
-		t.Fatal("beside a conversation of its own, the column lists no session")
 	}
 }

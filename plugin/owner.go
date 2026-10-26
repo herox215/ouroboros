@@ -404,6 +404,35 @@ func (o *Owner) SetPeerModel(access, model string) error {
 	return err
 }
 
+// SetSessionModel makes model of the access what the agent of the node
+// answers the sessions with, whatever it answers the owner elsewhere: from
+// the next message of a session on, without a restart. With the access ""
+// sessions are answered with what the owner is again.
+func (o *Owner) SetSessionModel(access, model string) error {
+	s, err := o.Setup(nil)
+	if err != nil {
+		return err
+	}
+	if err = s.PickForSessions(access, model); err == nil {
+		o.home.Log("the owner picked the model %q of the access %q for sessions", model, access)
+	}
+	return err
+}
+
+// SetThreadModel makes model of the access what the agent of the node
+// answers the thread with, like SetSessionModel for the sessions. With the
+// access "" the thread is answered with what the owner is again.
+func (o *Owner) SetThreadModel(access, model string) error {
+	s, err := o.Setup(nil)
+	if err != nil {
+		return err
+	}
+	if err = s.PickForThread(access, model); err == nil {
+		o.home.Log("the owner picked the model %q of the access %q for the thread", model, access)
+	}
+	return err
+}
+
 // Fallback is an access of the node and a model of it that the agent goes on
 // with when the one it answers the owner with cannot for now.
 type Fallback = config.Fallback

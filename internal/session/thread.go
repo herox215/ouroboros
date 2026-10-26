@@ -618,7 +618,8 @@ func (s *Service) notify(report queued) {
 // occurrence id, so that it is the same when the thread goes on from the
 // archive. s.mu is held.
 func (s *Service) note(id, text string) {
-	if err := s.agent.Note(presentation.As(context.Background(), id), ThreadID, text); err != nil && s.archive != nil {
+	ctx := assistant.WithThread(presentation.As(context.Background(), id), threading{s})
+	if err := s.agent.Note(ctx, ThreadID, text); err != nil && s.archive != nil {
 		s.archive.log("the thread cannot keep what it showed: %v", err)
 	}
 }
