@@ -15,6 +15,7 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
+	"ouroboros/internal/memory"
 	"ouroboros/internal/openai"
 )
 
@@ -1110,5 +1111,50 @@ func TestStopThreadStopsOnlyWhatItHandedMessagesTo(t *testing.T) {
 	s.mu.Unlock()
 	if !slices.Equal(stopped, []string{"routed"}) {
 		t.Fatalf("stopped %v", stopped)
+	}
+}
+
+// What the review of an answer that took a message the thread handed on kept
+// is shown in the thread too, also when it comes after the end of the
+// answer; what it kept of an answer in the session directly is not.
+func TestThreadShowsWhatWasRemembered(t *testing.T) {
+	told := make(chan string, 4)
+	later := make(chan struct{})
+	a := dispatcher(told, func(ctx context.Context, text string) (string, error) {
+		remembered := assistant.RememberedOf(ctx)
+		remembered(assistant.Remembered{Memory: memory.Entry{ID: "a", Key: "build", Content: text}})
+		go func() {
+			<-later
+			remembered(assistant.Remembered{Memory: memory.Entry{ID: "b", Key: "late", Content: text}})
+		}()
+		return "pong:" + text, nil
+	})
+	s := service(t, a)
+	ctx := context.Background()
+	_, thread, _ := s.Watch(ctx, ThreadID)
+	ask(t, s, "new fix the login")
+	<-told
+	if got := until(t, thread, Remembered); got[len(got)-1].Text != "build: fix the login" || !strings.Contains(string(got[len(got)-1].Args), `"id":"a"`) {
+		t.Fatalf("the thread was not shown it: %+v", got)
+	}
+	later <- struct{}{}
+	if got := until(t, thread, Remembered); got[len(got)-1].Text != "late: fix the login" {
+		t.Fatalf("the thread was not shown what came later: %+v", got)
+	}
+	list, _ := s.List(ctx)
+	_, direct, _ := s.Watch(ctx, list[0].ID)
+	asked(t, s, list[0].ID, "directly")
+	until(t, direct, Remembered)
+	close(later)
+	until(t, direct, Remembered)
+	for {
+		select {
+		case e := <-thread:
+			if e.Kind == Remembered {
+				t.Fatalf("the thread was shown what was kept in the session directly: %+v", e)
+			}
+		case <-time.After(50 * time.Millisecond):
+			return
+		}
 	}
 }

@@ -37,7 +37,7 @@ import (
 )
 
 // Tool is the name of the tool.
-const Tool = "skill"
+const Tool = assistant.ToolSkill
 
 // file is the file of a skill that holds its name, its description and its
 // instructions.

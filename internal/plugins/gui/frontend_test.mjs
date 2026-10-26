@@ -630,6 +630,42 @@ test('whole conversation replays projected events literally, with paired tools a
   assert.deepEqual(calls, [[0, 'owner/0'], [0, 'owner/64']]);
 });
 
+test('what the review remembered is a line with a button that takes it back once', async () => {
+  const doc = archiveFixture();
+  const calls = [];
+  let fail = true;
+  await browse({
+    async Sessions() { return [{ id: 'owner/m' }]; },
+    async OpenSession() {
+      return { token: 0, events: [
+        { kind: 'remembered', text: 'build: make build', remembered: '{"memory":{"id":"a"}}' },
+        { kind: 'remembered', text: 'style: short answers' },
+      ] };
+    },
+    async UndoRemembered(...args) {
+      calls.push(args);
+      if (fail) throw new Error('memory version conflict');
+    },
+  }, doc);
+  assert.deepEqual(visibleTexts(doc.content), ['build: make build', 'style: short answers']);
+  assert.match(doc.content.children[0].children[0].textContent, /^✦ Remembered/);
+  const [undo, ...rest] = descendants(doc.content, 'button');
+  assert.deepEqual(rest, []);
+  assert.equal(undo.textContent, 'Undo');
+  undo.dispatchEvent(new Event('click'));
+  assert.equal(undo.disabled, true);
+  await settle();
+  assert.equal(undo.disabled, false);
+  assert.equal(undo.title, 'Could not take it back: Error: memory version conflict');
+  fail = false;
+  undo.dispatchEvent(new Event('click'));
+  await settle();
+  assert.equal(undo.textContent, 'Taken back');
+  assert.equal(undo.disabled, true);
+  assert.equal(undo.title, '');
+  assert.deepEqual(calls, [[0, '{"memory":{"id":"a"}}'], [0, '{"memory":{"id":"a"}}']]);
+});
+
 test('projected events without their optional fields still render literally', async () => {
   const doc = archiveFixture();
   await browse({

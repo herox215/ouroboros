@@ -263,7 +263,7 @@ func TestSearchFails(t *testing.T) {
 		t.Fatalf("stopped: %v", err)
 	}
 	// SQLite keeps what it is given, also a version that is no number.
-	if _, err := s.db.Exec("INSERT INTO memories (" + columns + ") VALUES('bad','key','content','','x','t','t','owner')"); err != nil {
+	if _, err := s.db.Exec("INSERT INTO memories (" + columns + ") VALUES('bad','key','content','','x','t','t','owner',0,'',0,0,0)"); err != nil {
 		t.Fatal(err)
 	}
 	if hits, err := s.Search(context.Background(), "", "global", "", 10); err == nil {
@@ -337,7 +337,7 @@ func heldStores(t *testing.T, busySeen func()) (*Store, *Store, *sql.Tx) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { held.Rollback() })
-	if _, err := held.Exec("INSERT INTO memories (" + columns + ") VALUES('held','held','held','',1,'t','t','owner')"); err != nil {
+	if _, err := held.Exec("INSERT INTO memories (" + columns + ") VALUES('held','held','held','',1,'t','t','owner',0,'',0,0,0)"); err != nil {
 		t.Fatal(err)
 	}
 	return holder, waiter, held

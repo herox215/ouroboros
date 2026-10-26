@@ -18,6 +18,7 @@ import (
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/home"
 	"ouroboros/internal/llm"
+	"ouroboros/internal/memory"
 	"ouroboros/internal/modelsdev"
 	"ouroboros/internal/node"
 	"ouroboros/internal/peers"
@@ -204,6 +205,34 @@ func (o *Owner) DropSuggestion(id string) error {
 	}
 	return err
 }
+
+// Remembered is a memory the review of an answer kept by itself, as the
+// Args of a SessionRemembered tell it.
+type Remembered = assistant.Remembered
+
+// UndoRemembered takes back the memory the review of an answer kept, which
+// args of a SessionRemembered tell: one it created is forgotten, one it
+// replaced is as it was before. It fails with ErrMemoryChanged if the memory
+// was changed since.
+func (o *Owner) UndoRemembered(args json.RawMessage) error {
+	var r Remembered
+	if err := json.Unmarshal(args, &r); err != nil {
+		return fmt.Errorf("no memory to take back: %w", err)
+	}
+	store, err := memory.Open(o.home.History())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err = store.Undo(context.Background(), r.Memory, r.Was); err == nil {
+		o.home.Log("the owner took back a memory: %q", r.Memory.Key)
+	}
+	return err
+}
+
+// ErrMemoryChanged means that a memory was changed or forgotten since what
+// is to be taken back of it.
+var ErrMemoryChanged = memory.ErrConflict
 
 // Status reports how the node is configured and whether it is running.
 func (o *Owner) Status() (NodeStatus, error) { return o.local.Status() }

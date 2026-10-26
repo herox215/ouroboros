@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/credentials"
@@ -16,6 +17,7 @@ import (
 	"ouroboros/internal/kernel"
 	"ouroboros/internal/llm"
 	"ouroboros/internal/llm/llmtest"
+	"ouroboros/internal/memory"
 	"ouroboros/plugin"
 )
 
@@ -139,5 +141,34 @@ func TestWindowModelsFailures(t *testing.T) {
 	w.profiles[1].ctx = k.Context()
 	if _, err := w.Models(1); err == nil || !strings.HasPrefix(err.Error(), "read selected model: ") {
 		t.Fatalf("unreadable selection: %v", err)
+	}
+}
+
+// A memory the review kept comes with what takes it back, and the window
+// takes it back for the profile it is of.
+func TestWindowUndoesRemembered(t *testing.T) {
+	w, dirs := modelWindow(t)
+	store, err := memory.Open(dirs[1].History())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	e, was, err := store.Remember(context.Background(), "", "style", "short answers", "c", false, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(plugin.Remembered{Memory: e, Was: was})
+	shown := (&Profile{}).event(plugin.SessionEvent{Kind: plugin.SessionRemembered, Text: "style: short answers", Args: args})
+	if shown.Remembered != string(args) || shown.Text != "style: short answers" {
+		t.Fatalf("event %+v", shown)
+	}
+	if err := w.UndoRemembered(7, shown.Remembered); err == nil {
+		t.Fatal("taken back for no profile")
+	}
+	if err := w.UndoRemembered(1, shown.Remembered); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(context.Background(), "", e.ID); !errors.Is(err, memory.ErrNotFound) {
+		t.Fatalf("not taken back: %v", err)
 	}
 }

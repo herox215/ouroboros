@@ -301,6 +301,8 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 	case plugin.SessionSuggestion:
 		c.add(entry{suggestion: true, text: e.Text, at: e.At})
+	case plugin.SessionRemembered:
+		c.add(entry{remembered: rememberedArgs(e.Remembered), text: e.Text, at: e.At})
 	case plugin.SessionTitle:
 		c.title = e.Text
 	case plugin.SessionHanded:

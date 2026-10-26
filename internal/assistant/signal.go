@@ -34,6 +34,11 @@ const (
 	SignalLowCache    SignalKind = "low cache"
 	SignalGaveUp      SignalKind = "gave up"
 	SignalEmpty       SignalKind = "empty answer"
+	// SignalRecovered is a tool that failed and then worked in the same
+	// answer: the way that worked may be worth remembering.
+	SignalRecovered SignalKind = "failed, then worked"
+	// SignalFinished is of a topic the owner left, see Assistant.finish.
+	SignalFinished SignalKind = "topic finished"
 	// SignalFollowUp is of the message after the answer, see followed.
 	SignalFollowUp SignalKind = "follow-up"
 )
@@ -62,6 +67,8 @@ type measures struct {
 	same     map[string]int           // calls by tool and arguments
 	retried  int                      // calls of the LLM asked again
 	fallback int                      // calls of the LLM a fallback answered
+	broke    map[string]bool          // tools a call of which failed
+	worked   map[string]bool          // of those, tools a later call of which did not
 }
 
 // step records each completed direct call exactly once.
@@ -76,6 +83,15 @@ func (m *measures) step(tool, args string, took time.Duration, failed bool) {
 	}
 	if failed {
 		m.failed++
+		if m.broke == nil {
+			m.broke = map[string]bool{}
+		}
+		m.broke[tool] = true
+	} else if m.broke[tool] {
+		if m.worked == nil {
+			m.worked = map[string]bool{}
+		}
+		m.worked[tool] = true
 	}
 	if m.same == nil {
 		m.same = map[string]int{}
@@ -101,6 +117,9 @@ func (m *measures) signals(took time.Duration, llm, tokens, cached int, reply st
 	}
 	if m.failed >= failedTools {
 		add(SignalFailedTools, "%d tool calls failed", m.failed)
+	}
+	for _, tool := range slices.Sorted(maps.Keys(m.worked)) {
+		add(SignalRecovered, "a call of %s failed, a later one worked", tool)
 	}
 	for _, call := range slices.Sorted(maps.Keys(m.same)) {
 		if n := m.same[call]; n >= repeatedCalls {

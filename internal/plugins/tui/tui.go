@@ -242,6 +242,9 @@ func (u *ui) event(e plugin.SessionEvent) tui.Event {
 	if e.Kind == plugin.SessionWorking {
 		shown.N = e.N
 	}
+	if e.Kind == plugin.SessionRemembered {
+		shown.Remembered = e.Args
+	}
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended

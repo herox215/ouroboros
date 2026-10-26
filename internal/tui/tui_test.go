@@ -83,6 +83,7 @@ type fakeBackend struct {
 	*fakeAgent
 	sessions *session.Service
 
+	undone  []string // what UndoRemembered was given
 	status  Status
 	started int
 	// efforts are what the model takes, once effortsKnown says it is listed.
@@ -321,6 +322,10 @@ func (f *fakeBackend) TakeSuggestion(id string) (plugin.Suggestion, error) {
 		}
 	}
 	return plugin.Suggestion{}, plugin.ErrNoSuggestion
+}
+func (f *fakeBackend) UndoRemembered(args json.RawMessage) error {
+	f.undone = append(f.undone, string(args))
+	return f.fail["undo"]
 }
 func (f *fakeBackend) DropSuggestion(id string) error {
 	f.rejected = append(f.rejected, "suggestion "+id)

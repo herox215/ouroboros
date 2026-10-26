@@ -44,3 +44,12 @@ func TestDirectoryEventForwarding(t *testing.T) {
 		}
 	}
 }
+
+// A memory the review kept comes with what takes it back.
+func TestRememberedEventForwarding(t *testing.T) {
+	u := &ui{}
+	e := u.event(plugin.SessionEvent{Kind: plugin.SessionRemembered, Text: "build: make build", Args: []byte(`{"memory":{}}`)})
+	if e.Text != "build: make build" || string(e.Remembered) != `{"memory":{}}` {
+		t.Fatalf("event %+v", e)
+	}
+}

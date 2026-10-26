@@ -181,6 +181,17 @@ func (m *Model) renderHistory(toBottom bool) {
 			add(mutedStyle.Render("✦ " + strings.Join(lines, "\n  ") + " · /suggestions"))
 			return blocks, false
 		}
+		// What the review remembered is a faint line too, which /undo takes
+		// back, and so is the line that tells it is taken back.
+		if e.remembered != nil || e.undoes {
+			what, undo := "✦ remembered: ", " · /undo"
+			if e.undoes {
+				what, undo = "✦ taken back: ", ""
+			}
+			lines := strings.Split(lipgloss.Wrap(what+e.text+undo, max(20, width-2), ""), "\n")
+			add(mutedStyle.Render(strings.Join(lines, "\n  ")))
+			return blocks, false
+		}
 		if !m.thoughtsHidden && e.thought != "" {
 			add(wrap(thoughtBlock(e.thought, width)))
 			words = false

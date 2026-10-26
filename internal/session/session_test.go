@@ -13,6 +13,7 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/memory"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/presentation"
 )
@@ -836,6 +837,33 @@ func TestSuggestionAfterTheAnswer(t *testing.T) {
 	}
 	close(later)
 	if got := until(t, live, Suggestion); kinds(got) != "suggestion" || got[0].Text != "late" {
+		t.Fatalf("events %+v", got)
+	}
+}
+
+// What the review of an answer remembers comes after the end of the
+// answer, also when it is in before, with the memory in Args.
+func TestRememberedAfterTheAnswer(t *testing.T) {
+	later := make(chan struct{})
+	s := New(&fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		remembered := assistant.RememberedOf(ctx)
+		remembered(assistant.Remembered{Memory: memory.Entry{ID: "a", Key: "build", Content: "make build"}})
+		go func() {
+			<-later
+			remembered(assistant.Remembered{Memory: memory.Entry{ID: "b", Key: "style", Content: "short"}})
+		}()
+		return "pong", nil
+	}})
+	defer s.Close()
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "hi")
+	got := until(t, live, Remembered)
+	if kinds(got) != "message answer remembered" || got[2].Text != "build: make build" || !strings.Contains(string(got[2].Args), `"id":"a"`) {
+		t.Fatalf("events %+v", got)
+	}
+	close(later)
+	if got := until(t, live, Remembered); kinds(got) != "remembered" || got[0].Text != "style: short" {
 		t.Fatalf("events %+v", got)
 	}
 }
