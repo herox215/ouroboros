@@ -26,7 +26,7 @@ func TestCheckSanityTool(t *testing.T) {
 		if got := plugin.ToolLine(ctx, plugin.Step{Tool: tool.Name, Args: json.RawMessage(`{}`)}); !strings.Contains(got, "checking tests and coverage") {
 			t.Fatal(got)
 		}
-		if _, err := tool.Run(context.Background(), json.RawMessage(`{"gui":"yes"}`)); err == nil {
+		if _, err := tool.Run(context.Background(), json.RawMessage(`{"timeout_minutes":"yes"}`)); err == nil {
 			t.Fatal("accepted invalid arguments")
 		}
 		if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "source checkout") {

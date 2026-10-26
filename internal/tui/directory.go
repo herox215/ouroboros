@@ -65,7 +65,7 @@ func (m *Model) changeDirectory(path string) tea.Cmd {
 	if path == "" {
 		return m.showDirectory()
 	}
-	if m.chat.peer != "" {
+	if m.chat.Peer != "" {
 		m.setNotice("the conversation of a peer is only to read", true)
 		return nil
 	}

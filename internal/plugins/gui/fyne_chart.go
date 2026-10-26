@@ -10,7 +10,7 @@ import (
 	"fyne.io/fyne/v2/container"
 )
 
-// The geometry of the chart, as frontend/app.js writes it.
+// The geometry of the chart.
 const (
 	chartWidth  = float32(240)
 	chartLabels = float32(64)

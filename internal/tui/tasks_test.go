@@ -69,7 +69,7 @@ func TestTaskReportIsShown(t *testing.T) {
 	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "look"}, true)
 	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "started"}, true)
 	m.apply(c, Event{Kind: plugin.SessionTask, Text: "task 1 · find the callers ✓ 3s"}, true)
-	if !c.pending || !c.running {
+	if !c.Pending || !c.Running {
 		t.Fatal("no answer is on its way for the report")
 	}
 	m.apply(c, Event{Kind: plugin.SessionStep, Tool: "read", Text: "reading a file"}, true)

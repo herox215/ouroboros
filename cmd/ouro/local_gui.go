@@ -15,15 +15,14 @@ import (
 )
 
 // localGUI checks only an explicit GUI launch from a source checkout. Go's
-// build cache checks the actual inputs, including uncommitted and embedded
-// files; neither a clean git status nor timestamps prove a binary is current.
+// build cache checks the actual inputs, including uncommitted files; neither a clean git status nor timestamps prove a binary is current.
 func localGUI(ctx context.Context, args []string) error {
 	if len(args) > 0 && strings.HasPrefix(args[0], "--profile=") {
 		args = args[1:]
 	} else if len(args) > 1 && args[0] == "--profile" {
 		args = args[2:]
 	}
-	if !(len(args) == 1 && (args[0] == "gui" || args[0] == "fyne")) &&
+	if !(len(args) == 1 && args[0] == "gui") &&
 		!(len(args) == 2 && args[0] == "desktop" && args[1] == "open") {
 		return nil
 	}

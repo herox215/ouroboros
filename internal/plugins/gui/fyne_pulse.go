@@ -20,16 +20,17 @@ import (
 // thinks and for how long, and the last words of the thought, which decode
 // from noise as they arrive.
 const (
-	pulseDots    = 14
-	pulseRadius  = 11
+	pulseDots    = 12
+	pulseRadius  = 8
+	pulseGap     = 8 // between the ring and the label
 	pulsePeriod  = 1400 * time.Millisecond
 	pulseTail    = 0.7
-	pulseHeight  = 74
+	pulseHeight  = 64
 	pulseWords   = 64
 	pulseDecode  = 2
 	pulseNoise   = 5
 	pulseGlyphs  = "·:+*#/\\<>=_"
-	pulseLineMax = 560
+	pulseLineMax = 420
 )
 
 // thinkingPulse is the animation the transcript shows while the model
@@ -116,7 +117,7 @@ func (p *thinkingPulse) frame(f float32) {
 		if behind < pulseTail {
 			glow = math.Pow(1-behind/pulseTail, 1.6)
 		}
-		radius := float32(1.4 + 1.6*glow)
+		radius := float32(1.1 + 1.3*glow)
 		dot.FillColor = withAlpha(accent, uint8(30+225*glow))
 		dot.Resize(fyne.NewSize(radius*2, radius*2))
 		dot.Refresh()
@@ -170,10 +171,10 @@ func (r *pulseRenderer) Layout(size fyne.Size) {
 	p := r.pulse
 	p.layoutDots(size.Width)
 	labelHeight := p.label.MinSize().Height
-	p.label.Move(fyne.NewPos(0, 6+2*pulseRadius+12))
+	p.label.Move(fyne.NewPos(0, 6+2*pulseRadius+pulseGap))
 	p.label.Resize(fyne.NewSize(size.Width, labelHeight))
 	width := fyne.Min(size.Width, pulseLineMax)
-	p.line.Move(fyne.NewPos((size.Width-width)/2, 6+2*pulseRadius+12+labelHeight+2))
+	p.line.Move(fyne.NewPos((size.Width-width)/2, 6+2*pulseRadius+pulseGap+labelHeight+2))
 	p.line.Resize(fyne.NewSize(width, p.line.MinSize().Height))
 }
 

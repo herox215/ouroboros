@@ -203,10 +203,10 @@ func TestSessionsActiveCountInChatCorner(t *testing.T) {
 	m, _ := newModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
 	m.chat = m.thread()
-	m.conversation("working").running = true
+	m.conversation("working").Running = true
 	m.conversation("idle").title = "idle"
 	for _, active := range []bool{true, false} {
-		m.chats["working"].running = active
+		m.chats["working"].Running = active
 		want := "0 active sessions"
 		if active {
 			want = "1 active session"

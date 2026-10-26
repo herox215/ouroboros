@@ -19,6 +19,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -52,6 +53,13 @@ func (s *e2eSessions) Watch(ctx context.Context, id string) ([]plugin.SessionEve
 	watch := s.watch
 	s.fn.RUnlock()
 	return watch(ctx, id)
+}
+
+func (s *e2eSessions) Unsteer(ctx context.Context, id string) (string, error) {
+	s.fn.RLock()
+	unsteer := s.unsteer
+	s.fn.RUnlock()
+	return unsteer(ctx, id)
 }
 
 func (s *e2eSessions) Ask(ctx context.Context, id, text string) error {
@@ -145,10 +153,17 @@ func newE2ESessions() *e2eSessions {
 		s.asked = append(s.asked, id+": "+text)
 		return nil
 	}
+	// An answer to a question shows as such among what was sent.
+	s.steer = func(_ context.Context, id, text string) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.asked = append(s.asked, "answer "+id+": "+text)
+		return nil
+	}
 	return s
 }
 
-// e2eWindow opens the whole window on the test driver, as showFyneWindow
+// e2eWindow opens the whole window on the test driver, as showWindow
 // opens it on the desktop, and waits until the thread is read.
 func e2eWindow(t *testing.T, size fyne.Size) (*fyneUI, *e2eSessions) {
 	t.Helper()
@@ -159,9 +174,15 @@ func e2eWindow(t *testing.T, size fyne.Size) (*fyneUI, *e2eSessions) {
 // e2eWindowWith opens the window on the sessions given.
 func e2eWindowWith(t *testing.T, size fyne.Size, sessions *e2eSessions) *fyneUI {
 	t.Helper()
-	application := newLoopApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	return e2eWindowUntil(t, ctx, size, sessions)
+}
+
+// e2eWindowUntil opens the window on the sessions given until ctx ends.
+func e2eWindowUntil(t *testing.T, ctx context.Context, size fyne.Size, sessions *e2eSessions) *fyneUI {
+	t.Helper()
+	application := newLoopApp(t)
 	bridge := newWindowContext(ctx, page{
 		choices:  []choice{{name: "herox", id: "herox"}},
 		profiles: []*Profile{{sessions: sessions}},
@@ -419,7 +440,7 @@ func TestFynePerformance(t *testing.T) {
 		event := plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: "piece " + strconv.Itoa(i) + " ", At: time.Now()}
 		took := time.Now()
 		fyne.DoAndWait(func() {
-			ui.applyEvents([]ChatEvent{bridge.profiles[0].event(event)})
+			ui.applyEvents([]chat.Event{chat.Show(bridge.profiles[0].ctx, event)})
 			ui.stick()
 			relayout(ui.win.Canvas().Content())
 		})

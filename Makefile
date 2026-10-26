@@ -12,28 +12,17 @@ LDFLAGS := -s -w $(if $(OURO_REPO),-X ouroboros/internal/update.Repo=$(OURO_REPO
 # A go that is already in PATH wins.
 export PATH := $(PATH):$(or $(OURO_GO_DIR),$(HOME)/.local/go)/bin:/usr/local/go/bin
 
-# Wails v2.16 uses UTType in its macOS file dialogs but does not link the
-# framework that defines it.
-ifeq ($(shell uname -s),Darwin)
-export CGO_LDFLAGS += -framework UniformTypeIdentifiers
-endif
-
-.PHONY: build test test-gui cover install clean \
+.PHONY: build test cover install clean \
 	check fmt-check vet lint cover-check mutation tools hooks unhooks
 
 build:
-	go build -tags "production,webkit2_41,goolm" -trimpath -ldflags="$(LDFLAGS)" -o "$(BIN)" ./cmd/ouro
+	go build -tags goolm -trimpath -ldflags="$(LDFLAGS)" -o "$(BIN)" ./cmd/ouro
 
 vet:
 	go vet -tags goolm ./...
 
 test: vet
 	go test -race -tags goolm ./...
-
-# Optional native GUI checks need the desktop libraries and Node for the frontend tests.
-test-gui:
-	go test -race -tags "production,webkit2_41,goolm" ./internal/plugins/gui
-	node --test internal/plugins/gui/frontend_test.mjs
 
 # Coverage including the end-to-end test, which runs the real binary. The unit
 # tests and that binary write into one directory; cover.out is both merged.

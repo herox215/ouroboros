@@ -3,7 +3,7 @@
 package gui
 
 import (
-	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -65,8 +66,7 @@ type fyneToolCall struct {
 	result  plugin.SessionToolResult
 }
 
-// fyneChat renders the events of one session, as frontend/app.js renders them
-// into the transcript.
+// fyneChat renders the events of one session into the transcript.
 type fyneChat struct {
 	ui       *fyneUI
 	profile  int
@@ -79,8 +79,10 @@ type fyneChat struct {
 	partial  *fynePartial
 	calls    map[string]*fyneToolCall
 	// queued are the messages that wait for the answer on its way, as the
-	// transcript shows them until the answer takes them.
-	queued []*fyneMessage
+	// transcript shows them until the answer takes them, and shownQueue
+	// what they say: see showQueue.
+	queued     []*fyneMessage
+	shownQueue []string
 	// thinking is what the model thinks in the round of the loop that is on.
 	thinking *fyneThinking
 	// stream lets the words of the answer being added stream in; seen are
@@ -102,18 +104,12 @@ func newFyneChat(ui *fyneUI, profile int, id string, thread bool) *fyneChat {
 }
 
 // apply shows one event of the session.
-func (c *fyneChat) apply(event ChatEvent) {
+func (c *fyneChat) apply(event chat.Event) {
 	c.ui.onEvent(event)
 	switch event.Kind {
 	case plugin.SessionMessage:
-		c.ui.setQuestion(nil)
 		c.exchange = &fyneExchange{at: event.At}
-		// A message that was queued is the first of them: it shows now as
-		// the owner's.
-		if len(c.queued) > 0 {
-			c.ui.removeItem(c.queued[0])
-			c.queued = c.queued[1:]
-		}
+		c.showQueue(event.At) // one that was queued shows now as the owner's
 		c.endThinking()
 		c.message("user", tr("speaker.you", nil), event.Text, event.At)
 		c.think(event.At, "")
@@ -124,9 +120,6 @@ func (c *fyneChat) apply(event ChatEvent) {
 			c.answer(event.Text, event.At, seen)
 		}
 	case plugin.SessionAnswer, plugin.SessionSuggestion:
-		if event.Kind == plugin.SessionAnswer {
-			c.ui.setQuestion(nil)
-		}
 		c.endThinking()
 		seen := c.clearPartial()
 		if strings.TrimSpace(event.Text) != "" {
@@ -172,37 +165,16 @@ func (c *fyneChat) apply(event ChatEvent) {
 	case plugin.SessionAsked:
 		c.endThinking()
 		c.clearPartial()
-		c.ui.setQuestion(nil)
-		label := tr("speaker.question", nil)
+		kind, label := "question", tr("speaker.question", nil)
 		if event.Done {
-			label = tr("speaker.answered", nil)
+			// A completed question carries the owner's reply, not the
+			// original question: keep it on the owner's side.
+			kind, label = "user", tr("speaker.answered", nil)
 		}
-		body := event.Text
-		if event.Question != nil && event.Question.Text != "" {
-			body = event.Question.Text
-		}
-		c.message("question", label, body, event.At)
-		if !event.Done && c.ui.owner(c.id) {
-			question := &fyneQuestion{text: body, key: questionKey(event)}
-			if event.Question != nil {
-				question.options = append([]string(nil), event.Question.Options...)
-				question.recommended = event.Question.Recommended
-			}
-			c.ui.setQuestion(question)
-		}
-	case plugin.SessionQueued:
-		text := event.Text
-		if text == "" {
-			text = tr("queue.text", nil)
-		}
-		c.queued = append(c.queued, c.message("other", tr("speaker.queue", nil), text, event.At))
-	case plugin.SessionUnqueued:
-		if n := len(c.queued); n > 0 {
-			c.ui.removeItem(c.queued[n-1])
-			c.queued = c.queued[:n-1]
-		}
+		c.message(kind, label, event.Text, event.At)
+	case plugin.SessionQueued, plugin.SessionUnqueued:
+		c.showQueue(event.At)
 	case plugin.SessionFailed, plugin.SessionCanceled:
-		c.ui.setQuestion(nil)
 		c.endThinking()
 		c.clearPartial()
 		text := event.Text
@@ -223,17 +195,30 @@ func (c *fyneChat) apply(event ChatEvent) {
 	}
 }
 
-// questionKey tells one question from another, as the window compares the
-// question it sent with the one it shows.
-func questionKey(event ChatEvent) string {
-	question := event.Question
-	text, recommended := "", ""
-	var options []string
-	if question != nil {
-		text, recommended = question.Text, question.Recommended
-		options = question.Options
+// showQueue shows the messages queued for the answer on its way as the
+// State of the session says, at the end of the transcript, from at on.
+func (c *fyneChat) showQueue(at time.Time) {
+	var queued []string
+	if c.ui.ctx != nil {
+		queued = c.ui.ctx.session.Queued
 	}
-	return fmt.Sprintf("%s|%s|%v|%d", text, recommended, options, event.At.UnixNano())
+	if slices.Equal(queued, c.shownQueue) {
+		return
+	}
+	for _, item := range c.queued {
+		c.ui.removeItem(item)
+	}
+	c.queued, c.shownQueue = nil, slices.Clone(queued)
+	for i, text := range queued {
+		if text == "" {
+			text = tr("queue.text", nil)
+		}
+		label := tr("speaker.queue", nil)
+		if i == len(queued)-1 {
+			label += tr("queue.takeBack", nil)
+		}
+		c.queued = append(c.queued, c.message("queued", label, text, at))
+	}
 }
 
 // think shows that the model thinks, with text the next piece of what it
@@ -243,7 +228,7 @@ func (c *fyneChat) think(at time.Time, text string) {
 	if c.thinking == nil {
 		pulse := newThinkingPulse(c.agent, at)
 		thinking := &fyneThinking{at: at, pulse: pulse}
-		thinking.item = c.add(at, inset(10, 0, 14, 0, pulse))
+		thinking.item = c.add(at, inset(6, 0, 10, 0, pulse))
 		c.thinking = thinking
 	}
 	if text == "" {
@@ -373,6 +358,13 @@ func (c *fyneChat) messageAs(kind, label, body string, at time.Time, markdown bo
 		}
 		message.item = inset(8, 0, 10, 0, box)
 	}
+	if kind == "user" || kind == "queued" {
+		width := fyne.MeasureText(header, theme.Size(sizeSmall), fyne.TextStyle{Monospace: true, Bold: true}).Width
+		for _, line := range strings.Split(cutText(body), "\n") {
+			width = max(width, fyne.MeasureText(line, theme.Size(sizeBody), fyne.TextStyle{Monospace: true}).Width)
+		}
+		message.item = container.New(ownerMessageLayout{width: width + 2*theme.InnerPadding()}, message.item)
+	}
 	if !c.shown {
 		return message
 	}
@@ -453,7 +445,7 @@ func cutText(value string) string {
 
 // step is one call of a tool: its line, and the result that loads when the
 // owner opens it.
-func (c *fyneChat) step(event ChatEvent) {
+func (c *fyneChat) step(event chat.Event) {
 	key := event.CallID
 	if key == "" {
 		key = event.Tool
@@ -549,7 +541,7 @@ func (c *fyneChat) toggle(call *fyneToolCall) {
 }
 
 // task is what the agent handed to a session, a line of its own.
-func (c *fyneChat) task(event ChatEvent) {
+func (c *fyneChat) task(event chat.Event) {
 	if !c.shown && !event.At.Before(c.cutoff) {
 		c.shown = true
 	}
@@ -570,14 +562,14 @@ func (c *fyneChat) task(event ChatEvent) {
 // applyEvents shows a batch of events of the session in view. The
 // transcript and the composer are laid out once for the batch, not once for
 // each event, so that a long history opens without stalling the window.
-func (ui *fyneUI) applyEvents(events []ChatEvent) {
+func (ui *fyneUI) applyEvents(events []chat.Event) {
 	ui.applyFor(events, 0, 0)
 }
 
 // applyFor applies events from from on as one batch, for as long as budget
 // allows, at least twenty of them; no budget applies all. It returns where
 // it stopped.
-func (ui *fyneUI) applyFor(events []ChatEvent, from int, budget time.Duration) int {
+func (ui *fyneUI) applyFor(events []chat.Event, from int, budget time.Duration) int {
 	if ui.chat == nil {
 		return len(events)
 	}
@@ -689,51 +681,29 @@ func (ui *fyneUI) composerChanged() {
 
 // onEvent keeps the state of the window: how much works, what a session of
 // its own did, and where the header stands.
-func (ui *fyneUI) onEvent(event ChatEvent) {
+func (ui *fyneUI) onEvent(event chat.Event) {
 	if ui.ready.Load() {
 		ui.heard = true
 	}
+	// What is on its way, queued and asked: the same as in the terminal UI.
+	if ui.ctx != nil {
+		ui.ctx.session.Apply(event)
+	}
+	ui.showQuestion()
 	switch event.Kind {
-	case plugin.SessionWorking:
-		ui.activity.n = event.N
-		ui.activity.own = event.Own
-		ui.activity.busy = event.N > 0
-	case plugin.SessionMessage, plugin.SessionTask:
-		ui.activity.busy = true
+	case plugin.SessionMessage, plugin.SessionTask, plugin.SessionAsked, plugin.SessionAnswer,
+		plugin.SessionFailed, plugin.SessionCanceled, plugin.SessionStep, plugin.SessionJobs, plugin.SessionSay:
 		ui.stand(event)
 	case plugin.SessionAnswering:
-		ui.activity.busy = true
 		if len(ui.own) == 0 || ui.own[len(ui.own)-1].Kind != plugin.SessionAnswering {
 			ui.stand(event)
 		}
-	case plugin.SessionThought, plugin.SessionCalling:
-		ui.activity.busy = true
-	case plugin.SessionAsked:
-		if !event.Done {
-			ui.activity.busy = true
-		}
-		ui.stand(event)
-	case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled:
-		if ui.ctx != nil && ui.ctx.id == ui.thread {
-			active := ui.activity.n
-			if ui.activity.own {
-				active--
-			}
-			ui.activity.busy = active > 0
-		} else {
-			ui.activity.busy = false
-		}
-		ui.stand(event)
 	case sessionDirectory:
 		text := event.Text
 		if text == "" {
 			text = tr("session.workspace", nil)
 		}
 		ui.meta.SetText(text)
-	case plugin.SessionStep:
-		ui.stand(event)
-	case plugin.SessionJobs, plugin.SessionSay:
-		ui.stand(event)
 	case plugin.SessionTitle:
 		if ui.ctx != nil && ui.ctx.id != ui.thread && event.Text != "" {
 			for i := range ui.entries {
@@ -750,10 +720,24 @@ func (ui *fyneUI) onEvent(event ChatEvent) {
 
 // stand adds an event to what the session shown on its own did, for the
 // artefacts beside it.
-func (ui *fyneUI) stand(event ChatEvent) {
+func (ui *fyneUI) stand(event chat.Event) {
 	if ui.ctx == nil || ui.ctx.id == ui.thread {
 		return
 	}
 	ui.own = append(ui.own, event)
 	ui.ownArtefacts()
+}
+
+// ownerMessageLayout keeps the owner's messages on the right, with room on
+// the left even for long messages. The text itself remains left-aligned.
+type ownerMessageLayout struct{ width float32 }
+
+func (l ownerMessageLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return objects[0].MinSize()
+}
+
+func (l ownerMessageLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	width := min(l.width, size.Width*0.8)
+	objects[0].Move(fyne.NewPos(size.Width-width, 0))
+	objects[0].Resize(fyne.NewSize(width, size.Height))
 }

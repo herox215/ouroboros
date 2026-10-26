@@ -8,6 +8,7 @@ import (
 	"image/draw"
 	"math"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -215,11 +216,13 @@ const composerRows = 8
 
 // composerEntry keeps multiline editing but sends on Enter instead of inserting
 // a newline. Shift+Enter remains available for writing multiline messages.
-// It grows with what is written, up to composerRows lines.
+// Up goes to onUp first, which reports whether it took the key. It grows
+// with what is written, up to composerRows lines.
 type composerEntry struct {
 	borderlessEntry
 	shiftLeft, shiftRight bool
 	onSend                func(string)
+	onUp                  func() bool
 	rows                  int
 }
 
@@ -239,6 +242,9 @@ func (e *composerEntry) TypedKey(key *fyne.KeyEvent) {
 			e.onSend(e.Text)
 			return
 		}
+	}
+	if key.Name == fyne.KeyUp && e.onUp != nil && !e.Disabled() && e.onUp() {
+		return
 	}
 	e.borderlessEntry.TypedKey(key)
 }
@@ -567,7 +573,58 @@ const (
 // thread below 640. Its objects are the main column, the rail, the scrim of
 // the drawer and the sidebar, in this order, so that the drawer lies on top.
 type columnsLayout struct {
-	ui *fyneUI
+	ui                  *fyneUI
+	left, right         float32
+	fromLeft, fromRight float32
+	showLeft, showRight bool
+	animation           *fyne.Animation
+}
+
+// frame moves the chat edges together with the panels, without reflowing the
+// panels themselves as they slide in or out. It lays the columns out again
+// only: a refresh of the container would refresh the whole thread each frame.
+func (l *columnsLayout) frame(progress float32) {
+	left, right := l.targets()
+	l.left = l.fromLeft + (left-l.fromLeft)*progress
+	l.right = l.fromRight + (right-l.fromRight)*progress
+	l.Layout(l.ui.columns.Objects, l.ui.columns.Size())
+}
+
+// targets are the shares of the sidebar and the rail at the end of the slide.
+func (l *columnsLayout) targets() (left, right float32) {
+	if l.showLeft {
+		left = 1
+	}
+	if l.showRight {
+		right = 1
+	}
+	return left, right
+}
+
+// spans are the shares the width of the chat leaves to the sidebar and the
+// rail. While they slide, the chat keeps the wider of its two widths and
+// slides under the panels, so that its text wraps at the start and the end
+// only and not in every frame.
+func (l *columnsLayout) spans() (left, right float32) {
+	left, right = l.targets()
+	if left == l.left && right == l.right {
+		return left, right
+	}
+	return fyne.Min(left, l.fromLeft), fyne.Min(right, l.fromRight)
+}
+
+func (l *columnsLayout) reveal(left, right bool) {
+	if left == l.showLeft && right == l.showRight {
+		return
+	}
+	if l.animation != nil {
+		l.animation.Stop()
+	}
+	l.showLeft, l.showRight = left, right
+	l.fromLeft, l.fromRight = l.left, l.right
+	l.animation = fyne.NewAnimation(80*time.Millisecond, l.frame)
+	l.animation.Curve = fyne.AnimationEaseInOut
+	l.animation.Start()
 }
 
 func (l *columnsLayout) MinSize([]fyne.CanvasObject) fyne.Size {
@@ -578,6 +635,16 @@ func (l *columnsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	main, rail, scrim, sidebar := objects[0], objects[1], objects[2], objects[3]
 	ui := l.ui
 	narrow := size.Width < narrowWidth
+	hasSessions := ui.sessionsHead != nil && ui.sessionsHead.Visible()
+	hasContext := ui.contextDetails != nil && len(ui.contextDetails.Objects) > 0
+	l.reveal(!narrow && hasSessions, !narrow && size.Width > railWidth && hasContext)
+	if ui.emptySettings != nil {
+		if !narrow && !hasSessions {
+			ui.emptySettings.Show()
+		} else {
+			ui.emptySettings.Hide()
+		}
+	}
 	if narrow != ui.narrow {
 		ui.setNarrow(narrow)
 	}
@@ -600,24 +667,31 @@ func (l *columnsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		return
 	}
 	scrim.Hide()
-	sidebar.Show()
 	sideWidth := clamp(220, size.Width*0.23, 400)
 	if size.Width <= 900 {
 		sideWidth = 220
 	}
-	sidebar.Move(fyne.NewPos(0, 0))
+	sidebar.Move(fyne.NewPos(sideWidth*(l.left-1), 0))
 	sidebar.Resize(fyne.NewSize(sideWidth, size.Height))
+	if l.left > 0 {
+		sidebar.Show()
+	} else {
+		sidebar.Hide()
+	}
 	railSize := float32(0)
-	if size.Width > railWidth {
+	if l.right > 0 || l.showRight {
 		railSize = clamp(200, size.Width*0.23, 400)
+	}
+	if l.right > 0 {
 		rail.Show()
-		rail.Move(fyne.NewPos(size.Width-railSize, 0))
+		rail.Move(fyne.NewPos(size.Width-railSize*l.right, 0))
 		rail.Resize(fyne.NewSize(railSize, size.Height))
 	} else {
 		rail.Hide()
 	}
-	main.Move(fyne.NewPos(sideWidth, 0))
-	main.Resize(fyne.NewSize(fyne.Max(0, size.Width-sideWidth-railSize), size.Height))
+	main.Move(fyne.NewPos(sideWidth*l.left, 0))
+	spanLeft, spanRight := l.spans()
+	main.Resize(fyne.NewSize(fyne.Max(0, size.Width-sideWidth*spanLeft-railSize*spanRight), size.Height))
 }
 
 func clamp(minimum, value, maximum float32) float32 {

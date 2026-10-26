@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -87,9 +88,9 @@ func shown(ui *fyneUI) int { return len(ui.content.Objects) }
 // A batch with a budget stops after it, twenty events at a time.
 func TestFyneApplyForBudget(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
-	events := make([]ChatEvent, 60)
+	events := make([]chat.Event, 60)
 	for i := range events {
-		events[i] = ChatEvent{Kind: plugin.SessionSay, Text: "x", At: time.Now()}
+		events[i] = chat.Event{Kind: plugin.SessionSay, Text: "x", At: time.Now()}
 	}
 	fyne.DoAndWait(func() {
 		if got := ui.applyFor(events, 0, time.Nanosecond); got != 20 {

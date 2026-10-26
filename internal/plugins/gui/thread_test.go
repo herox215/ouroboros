@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -73,10 +74,10 @@ func TestBusyThreadKeepsProjectAndRemainsUsable(t *testing.T) {
 	if err != nil || snapshot.Notice == "" {
 		t.Fatalf("snapshot: %+v, %v", snapshot, err)
 	}
-	if err := w.SendMessage(0, id, "keep going"); err != nil {
+	if err := w.Deliver(0, id, "keep going", chat.Steer); err != nil {
 		t.Fatal(err)
 	}
-	if asks != 1 || steers != 1 {
+	if asks != 0 || steers != 1 {
 		t.Fatal(asks, steers)
 	}
 }

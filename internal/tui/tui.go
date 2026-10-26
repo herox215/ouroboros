@@ -27,6 +27,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -165,40 +166,8 @@ type Backend interface {
 	ChangeSetting(s Setting) (string, error)
 }
 
-// Event is what happened in a session, as the UI shows it: see
-// plugin.SessionEvent, whose Kind it has.
-type Event struct {
-	Kind plugin.SessionKind
-	// Text is the message, what the agent said along with the tools it asks
-	// for, the answer, why it failed, or the binary ouro starts anew from.
-	// Of a call of a tool it is what is shown of it, like "asking beta", ""
-	// for nothing; once Done, it may say more, like how long the call took.
-	// For kind "directory", it is the absolute project path, or empty to use
-	// the session workspace again.
-	Text string
-	Done bool
-	At   time.Time
-	// Tool is the name of the tool of a call, and Failed says that the
-	// call ended with an error.
-	Tool   string
-	Failed bool
-	// Context is how long the context of the session is: what the last call
-	// of the LLM in it sent, in bytes. 0 if none was made.
-	Context int
-	// Cache is how much of what the LLM was sent in the session the
-	// provider had cached.
-	Cache plugin.SessionCache
-	// Options and Recommended are of a question the agent asks the owner,
-	// plugin.SessionAsked, whose Text is the question: the answers to
-	// choose from, and the one of them the agent would choose, "" for none.
-	// Once Done, Text is what the owner answered, "" if they did not.
-	Options     []string
-	Recommended string
-	// N is how much works for the thread, of plugin.SessionWorking.
-	N int
-	// Routed says of a message that the thread handed it on.
-	Routed bool
-}
+// Event is what happened in a session, as the UI shows it: see chat.Event.
+type Event = chat.Event
 
 // screen is the top-level view: the chat, the suggestions dialog, the list
 // of the commands or a screen a plugin contributed.
@@ -254,6 +223,9 @@ type call struct {
 // conversation is a session of the chat with the agent of this node, as far
 // as its events came in.
 type conversation struct {
+	// State is what is on its way in it, the question the agent asks there
+	// and whether it is a peer's, only to read: see chat.State.
+	chat.State
 	contextID string
 	entries   []entry
 	// shown are the entries as the chat shows them, as far as they cannot
@@ -266,11 +238,8 @@ type conversation struct {
 	// "3.2 KiB", as the events of Calling tell it; "" while it writes none.
 	calling  string
 	thread   thread              // how far its newest word is drawn in, see advance
-	pending  bool                // request submitted or answer on its way: what is sent meanwhile is queued
-	queued   []string            // the messages that wait for the answer on its way to take them
-	running  bool                // the node has said an answer is on its way
 	doing    string              // what the agent is waiting for, like "asking beta"
-	asking   *asking             // what the agent asks the owner and waits for; nil without a question
+	choice   int                 // the row of the question of the agent selected: one of its options, or the one for own words
 	jobs     []string            // the commands that run in the background for the answer, like "job 1 · npm run dev"
 	tasks    []string            // the tasks the agent delegated that run, like "task 2 · find the callers"
 	since    time.Time           // when it began to wait for that
@@ -287,9 +256,6 @@ type conversation struct {
 	// directory is the absolute project path; empty uses the session workspace.
 	directory string
 	fresh     bool // created by this UI; its initial directory has not been stored yet
-	// peer is the peer a conversation of a peer with the agent is with: it
-	// is only to read. "" for a session of the owner.
-	peer string
 	// routed says that the answer on its way took what the thread handed
 	// on: the thread shows what comes of it, so the footer does not.
 	routed bool
@@ -735,7 +701,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case revealMsg:
 		return m, m.revealFrame(msg)
 	case answerMsg:
-		if !m.streaming || !m.chat.pending || m.chat.partial == "" {
+		if !m.streaming || !m.chat.Pending || m.chat.partial == "" {
 			m.streaming = false // the answer is over, or wrote nothing since
 			return m, nil
 		}
@@ -875,7 +841,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		// In the chat there is nothing to go back from: it stops the answer
 		// on its way here, and the tasks the agent delegated, as /cancel does.
-		if m.chat.pending || len(m.chat.tasks) > 0 {
+		if m.chat.Pending || len(m.chat.tasks) > 0 {
 			return m.cancel()
 		}
 		return nil
@@ -884,7 +850,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+v":
 		return m.pasteClipboard() // a picture too, which the input does not paste
 	case "up":
-		if m.input.Value() == "" && len(m.chat.queued) > 0 {
+		if m.chat.TakesBack(m.input.Value()) {
 			return m.unsteer()
 		}
 	}
@@ -893,7 +859,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.input, cmd = m.input.Update(msg)
 	if m.input.Value() != typed {
 		m.suggest = 0 // other commands fit now
-		m.chat.asking.write()
+		m.chat.write()
 	}
 	return cmd
 }
@@ -1004,13 +970,10 @@ func (m *Model) taken(msg takenMsg) tea.Cmd {
 	}
 	m.removeSuggestion(msg.suggestion.ID)
 	c := m.newChat()
-	c.pending, c.art = true, 1
+	c.Pending, c.art = true, 1
 	text := plugin.SuggestedTask(msg.suggestion)
-	ask := func() tea.Msg {
-		return askedMsg{c.contextID, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), c.contextID, text)}
-	}
 	m.setNotice(m.agentName()+" makes the suggestion in the background", false)
-	return tea.Batch(m.watch(c), ask, m.refresh())
+	return tea.Batch(m.watch(c), m.deliver(c, text, chat.Ask), m.refresh())
 }
 
 func (r *requestsScreen) apply(m *Model, trust Contacts) {
@@ -1058,36 +1021,34 @@ func (m *Model) send() tea.Cmd {
 		m.setNotice("set up the node first: /setup", true)
 		return nil
 	}
-	if c.peer != "" {
-		m.setNotice("this is how "+c.peer+" and "+m.agentName()+" talked: it is only to read · /new", true)
+	// What is written while the agent asks is its answer: the question is
+	// over with it, as with one of the answers to choose from. While the
+	// answer is on its way, the answer takes it as soon as it can: until
+	// then it is queued, as the node says.
+	way, err := c.Send()
+	if err != nil { // the conversation of a peer
+		m.setNotice("this is how "+c.Peer+" and "+m.agentName()+" talked: it is only to read · /new", true)
 		return nil
 	}
-	// What is written while the agent asks and the row for own words is
-	// selected is its answer: the question is over with it, as with one of
-	// the answers to choose from.
-	if a := c.asking; a != nil && !a.sent && a.own() {
-		m.input.Reset()
-		return m.choose(text)
-	}
-	id := c.contextID
-	if c.pending {
-		// The answer on its way takes it as soon as it can: until then it is
-		// queued, as the node says.
-		m.input.Reset()
-		return func() tea.Msg {
-			return askedMsg{id, text, m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
-		}
+	m.input.Reset()
+	if way != chat.Ask {
+		return m.deliver(c, text, way)
 	}
 	// The message shows once the node says it is on its way; the agent is
 	// thinking from now on.
-	c.pending, c.round = true, 0
+	c.round = 0
 	c.art++
-	m.input.Reset()
 	m.renderHistory(true)
-	ask := func() tea.Msg {
-		return askedMsg{id, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
+	return tea.Batch(m.deliver(c, text, way), m.watch(c))
+}
+
+// deliver gives text to the session c the way its State said, see
+// chat.State.Send.
+func (m *Model) deliver(c *conversation, text string, way chat.Way) tea.Cmd {
+	id := c.contextID
+	return func() tea.Msg {
+		return askedMsg{id, text, chat.Deliver(m.ctx, m.backend, id, text, way, "tui")}
 	}
-	return tea.Batch(ask, m.watch(c))
 }
 
 // askedMsg is what the backend said to a message: whether the answer is on
@@ -1104,8 +1065,8 @@ func (m *Model) asked(msg askedMsg) {
 		return
 	}
 	c := m.chats[msg.id]
-	c.pending = c.running
-	c.asking.unsent()
+	c.Unsent()
+	c.write()
 	if c == m.chat {
 		if m.input.Value() == "" {
 			m.input.SetValue(c.labelled(msg.text))
@@ -1146,10 +1107,10 @@ func (m *Model) unsteered(msg unsteeredMsg) {
 	c := m.chats[msg.id]
 	text := c.labelled(msg.text)
 	if c != m.chat {
-		c.draft = strings.TrimSuffix(text+"\n"+c.draft, "\n")
+		c.draft = chat.TakenBack(text, c.draft)
 		return
 	}
-	m.input.SetValue(strings.TrimSuffix(text+"\n"+m.input.Value(), "\n"))
+	m.input.SetValue(chat.TakenBack(text, m.input.Value()))
 }
 
 // started returns the call of e that the call ended, which done tells of,
@@ -1200,7 +1161,7 @@ func (m *Model) Current() string {
 	if m.profiles != nil {
 		return m.profiles.current().Current()
 	}
-	if m.chat.peer != "" {
+	if m.chat.Peer != "" {
 		return plugin.NewID()
 	}
 	return m.chat.contextID

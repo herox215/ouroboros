@@ -155,16 +155,20 @@ func TestFyneShortcutsFromComposer(t *testing.T) {
 	})
 }
 
-// The notice of a sent message goes again after a while.
-func TestFyneSentNoticeFades(t *testing.T) {
-	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
-	fyne.DoAndWait(func() { ui.noticeTime = 50 * time.Millisecond })
+// A sent message needs no success notice under the composer.
+func TestFyneSentWithoutNotice(t *testing.T) {
+	ui, sessions := e2eWindow(t, fyne.NewSize(1180, 780))
 	fyne.DoAndWait(func() {
 		test.Type(ui.draft, "hello")
 		ui.submit(ui.draft.Text, false)
 	})
-	waitFor(t, func() bool { return ui.sendStatus.Visible() && ui.sendStatus.Text == tr("composer.sent", nil) })
-	waitFor(t, func() bool { return !ui.sendStatus.Visible() })
+	waitFor(t, func() bool { return len(sessions.sent()) == 1 })
+	settle(ui.win)
+	fyne.DoAndWait(func() {
+		if ui.ctx.state.notice != "" || ui.sendStatus.Visible() {
+			t.Errorf("sent message shows a notice: %q", ui.sendStatus.Text)
+		}
+	})
 }
 
 // An empty conversation says what to do instead of showing nothing.

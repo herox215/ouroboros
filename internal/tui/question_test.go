@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -36,7 +37,7 @@ func asked(t *testing.T) (*Model, *fakeBackend) {
 	close(gate)
 	asks(b, gate)
 	c := m.chat
-	drive(t, m, say(t, m, "go"), func() bool { return c.asking != nil })
+	drive(t, m, say(t, m, "go"), func() bool { return c.Asking != nil })
 	return m, b
 }
 
@@ -89,23 +90,23 @@ func TestQuestion(t *testing.T) {
 	// Up and down go around the rows; the last is the one for own words,
 	// which shows the input, and up in an empty input takes it again.
 	press(m, "up")
-	if c.asking.sel != 0 {
-		t.Fatalf("at the top: %d", c.asking.sel)
+	if c.choice != 0 {
+		t.Fatalf("at the top: %d", c.choice)
 	}
 	press(m, "up")
-	if !c.asking.own() {
-		t.Fatalf("up at the first goes to own words: %d", c.asking.sel)
+	if !c.ownWords() {
+		t.Fatalf("up at the first goes to own words: %d", c.choice)
 	}
 	press(m, "down", "down")
-	if view := ansi.Strip(m.chatView()); !c.asking.own() || !strings.Contains(view, "› Chat about it") || !strings.Contains(view, "Keep on dreaming") || !fits(m) || m.givenUp() != 3 {
+	if view := ansi.Strip(m.chatView()); !c.ownWords() || !strings.Contains(view, "› Chat about it") || !strings.Contains(view, "Keep on dreaming") || !fits(m) || m.givenUp() != 3 {
 		t.Fatalf("own words (gives up %d):\n%s", m.givenUp(), view)
 	}
-	if cmd := press(m, "enter"); cmd != nil || c.asking == nil {
+	if cmd := press(m, "enter"); cmd != nil || c.Asking == nil {
 		t.Fatal("nothing written is no answer")
 	}
 	press(m, "up")
-	if c.asking.sel != 1 {
-		t.Fatalf("back at the answers: %d", c.asking.sel)
+	if c.choice != 1 {
+		t.Fatalf("back at the answers: %d", c.choice)
 	}
 	// A window with room for them shows all of the answers; one with little
 	// room those around the one selected.
@@ -125,15 +126,15 @@ func TestQuestion(t *testing.T) {
 	press(m, "up")
 
 	cmd := press(m, "enter")
-	if !c.asking.sent || strings.Contains(ansi.Strip(m.chatView()), "? Which") {
+	if !c.Asking.Sent || strings.Contains(ansi.Strip(m.chatView()), "? Which") {
 		t.Fatal("the answer is on its way: nothing is left to choose")
 	}
 	if again, ok := m.handleQuestionKey(tea.KeyPressMsg{Code: tea.KeyEnter}); ok || again != nil {
 		t.Fatal("it is not given twice")
 	}
-	drive(t, m, cmd, func() bool { return !c.pending })
-	if got := texts(m); got != ">go|Which database?|>Postgres|using Postgres" || c.asking != nil {
-		t.Fatalf("answered: %s, asking %+v", got, c.asking)
+	drive(t, m, cmd, func() bool { return !c.Pending })
+	if got := texts(m); got != ">go|Which database?|>Postgres|using Postgres" || c.Asking != nil {
+		t.Fatalf("answered: %s, asking %+v", got, c.Asking)
 	}
 	if view := ansi.Strip(m.chatView()); strings.Contains(view, "? Which") || !fits(m) || m.givenUp() != 0 || m.waiting() != "" || m.notice != "" {
 		t.Fatalf("after the answer (notice %q):\n%s", m.notice, view)
@@ -146,20 +147,20 @@ func TestQuestionInOwnWords(t *testing.T) {
 	m, _ := asked(t)
 	c := m.chat
 	press(m, "n", "o")
-	if !c.asking.own() || m.input.Value() != "no" {
-		t.Fatalf("typing: row %d, %q", c.asking.sel, m.input.Value())
+	if !c.ownWords() || m.input.Value() != "no" {
+		t.Fatalf("typing: row %d, %q", c.choice, m.input.Value())
 	}
 	// Up is the input's while something is written.
-	if _, ok := m.handleQuestionKey(tea.KeyPressMsg{Code: tea.KeyUp}); ok || !c.asking.own() {
+	if _, ok := m.handleQuestionKey(tea.KeyPressMsg{Code: tea.KeyUp}); ok || !c.ownWords() {
 		t.Fatal("up left what was written")
 	}
 	cmd := press(m, "enter")
-	if !c.asking.sent || strings.Contains(ansi.Strip(m.chatView()), "? Which") {
+	if !c.Asking.Sent || strings.Contains(ansi.Strip(m.chatView()), "? Which") {
 		t.Fatal("the answer is on its way: nothing is left to answer")
 	}
-	drive(t, m, cmd, func() bool { return !c.pending })
-	if got := texts(m); got != ">go|Which database?|>no|using no" || c.asking != nil {
-		t.Fatalf("answered: %s, asking %+v", got, c.asking)
+	drive(t, m, cmd, func() bool { return !c.Pending })
+	if got := texts(m); got != ">go|Which database?|>no|using no" || c.Asking != nil {
+		t.Fatalf("answered: %s, asking %+v", got, c.Asking)
 	}
 }
 
@@ -170,16 +171,16 @@ func TestQuestionNotAnswered(t *testing.T) {
 	c := m.chat
 	b.fail = map[string]error{"steer": errors.New("the node is gone")}
 	deliver(m, press(m, "enter"))
-	if c.asking == nil || c.asking.sent || !c.asking.own() || m.input.Value() != "Postgres" || m.notice != "the node is gone" {
-		t.Fatalf("not taken: %+v, input %q, notice %q", c.asking, m.input.Value(), m.notice)
+	if c.Asking == nil || c.Asking.Sent || !c.ownWords() || m.input.Value() != "Postgres" || m.notice != "the node is gone" {
+		t.Fatalf("not taken: %+v, input %q, notice %q", c.Asking, m.input.Value(), m.notice)
 	}
 	if view := ansi.Strip(m.chatView()); !strings.Contains(view, "? Which database?") {
 		t.Fatalf("the question is not offered again:\n%s", view)
 	}
 	b.fail = nil
-	drive(t, m, press(m, "esc"), func() bool { return !c.pending })
-	if got := texts(m); got != ">go|Which database?|stopped before it answered" || c.asking != nil {
-		t.Fatalf("stopped: %s, asking %+v", got, c.asking)
+	drive(t, m, press(m, "esc"), func() bool { return !c.Pending })
+	if got := texts(m); got != ">go|Which database?|stopped before it answered" || c.Asking != nil {
+		t.Fatalf("stopped: %s, asking %+v", got, c.Asking)
 	}
 }
 
@@ -190,11 +191,11 @@ func TestQuestionElsewhere(t *testing.T) {
 	gate := make(chan struct{})
 	asks(b, gate)
 	first := m.chat
-	drive(t, m, say(t, m, "go"), func() bool { return first.running })
+	drive(t, m, say(t, m, "go"), func() bool { return first.Running })
 	cmd := m.newConversation()
 	close(gate)
-	drive(t, m, cmd, func() bool { return first.asking != nil })
-	if m.notice != "alpha asks you in “go” · /session" || m.chat.asking != nil {
+	drive(t, m, cmd, func() bool { return first.Asking != nil })
+	if m.notice != "alpha asks you in “go” · /session" || m.chat.Asking != nil {
 		t.Fatalf("notice %q", m.notice)
 	}
 	if view := ansi.Strip(m.chatView()); strings.Contains(view, "? Which") || m.givenUp() != 0 {
@@ -215,17 +216,17 @@ func TestQuestionWithoutOptions(t *testing.T) {
 		return "called " + answer, err
 	}
 	c := m.chat
-	drive(t, m, say(t, m, "go"), func() bool { return c.asking != nil })
-	if view := ansi.Strip(m.inputView(96, 20)); !c.asking.own() || !strings.HasPrefix(view, "? What is it called?\n") || !strings.Contains(view, "Keep on dreaming") || strings.Contains(view, ownWords) {
+	drive(t, m, say(t, m, "go"), func() bool { return c.Asking != nil })
+	if view := ansi.Strip(m.inputView(96, 20)); !c.ownWords() || !strings.HasPrefix(view, "? What is it called?\n") || !strings.Contains(view, "Keep on dreaming") || strings.Contains(view, ownWords) {
 		t.Fatalf("the input alone:\n%s", view)
 	}
 	// There is no row to go up or down to.
 	press(m, "up", "down")
-	if !c.asking.own() {
-		t.Fatalf("row %d", c.asking.sel)
+	if !c.ownWords() {
+		t.Fatalf("row %d", c.choice)
 	}
 	m.input.SetValue("ouro")
-	drive(t, m, press(m, "enter"), func() bool { return !c.pending })
+	drive(t, m, press(m, "enter"), func() bool { return !c.Pending })
 	if got := texts(m); got != ">go|What is it called?|>ouro|called ouro" {
 		t.Fatalf("answered: %s", got)
 	}
@@ -240,7 +241,7 @@ func asksThis(t *testing.T, question string) *Model {
 		return agent.AskOwner(ctx, json.RawMessage(question))
 	}
 	c := m.chat
-	drive(t, m, say(t, m, "go"), func() bool { return c.asking != nil })
+	drive(t, m, say(t, m, "go"), func() bool { return c.Asking != nil })
 	return m
 }
 
@@ -299,5 +300,17 @@ func TestQuestionIsNoticedElsewhereOnly(t *testing.T) {
 		if got := m.notice != ""; got != tt.noticed {
 			t.Errorf("shown %v, done %v, live %v: noticed %q", tt.c == m.chat, tt.e.Done, tt.live, m.notice)
 		}
+	}
+}
+
+// A question in the conversation of a peer is only to read: choosing an
+// answer sends nothing.
+func TestQuestionOfAPeer(t *testing.T) {
+	m, b := newModel(t)
+	c := &conversation{State: chat.State{Peer: "beta"}, contextID: "peer-aa/c1"}
+	m.apply(c, Event{Kind: plugin.SessionAsked, Text: "Which?", Options: []string{"a", "b"}}, false)
+	m.chat = c
+	if cmd := press(m, "enter"); cmd != nil || c.Asking.Sent || len(b.sent) != 0 {
+		t.Fatalf("answered a peer: %+v, sent %q", c.Asking, b.sent)
 	}
 }

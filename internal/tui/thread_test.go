@@ -103,13 +103,13 @@ func TestThreadStaysAvailableWhileTopicsWork(t *testing.T) {
 	m.apply(thread, Event{Kind: plugin.SessionWorking, N: 1}, true)
 	m.chat = thread
 	m.renderHistory(true)
-	if thread.pending || m.waiting() != "" {
-		t.Fatalf("pending %v, waiting %q", thread.pending, m.waiting())
+	if thread.Pending || m.waiting() != "" {
+		t.Fatalf("pending %v, waiting %q", thread.Pending, m.waiting())
 	}
 	m.apply(thread, Event{Kind: plugin.SessionAnswer, Text: "the photos are sorted"}, true)
 	m.apply(thread, Event{Kind: plugin.SessionWorking}, true)
-	if thread.pending || thread.running || m.waiting() != "" {
-		t.Fatalf("pending %v, waiting %q", thread.pending, m.waiting())
+	if thread.Pending || thread.Running || m.waiting() != "" {
+		t.Fatalf("pending %v, waiting %q", thread.Pending, m.waiting())
 	}
 	m.renderHistory(true)
 	view := ansi.Strip(m.View().Content)
@@ -152,7 +152,7 @@ func TestThreadQuestionOutlivesAnAnswer(t *testing.T) {
 	m.apply(thread, Event{Kind: plugin.SessionAsked, Text: "Which folder?", Options: []string{"Pictures", "Documents"}}, true)
 	m.apply(thread, Event{Kind: plugin.SessionAnswer, Text: "the login is fixed"}, true)
 	m.apply(thread, Event{Kind: plugin.SessionWorking, N: 1}, true)
-	if thread.asking == nil || m.waiting() != "alpha waits for your answer" {
+	if thread.Asking == nil || m.waiting() != "alpha waits for your answer" {
 		t.Fatalf("the question is gone: %q", m.waiting())
 	}
 	cmd := press(m, "enter")
@@ -160,7 +160,7 @@ func TestThreadQuestionOutlivesAnAnswer(t *testing.T) {
 		t.Fatal("enter answers nothing")
 	}
 	cmd()
-	if len(b.sent) != 0 || !thread.asking.sent {
+	if len(b.sent) != 0 || !thread.Asking.Sent {
 		t.Fatalf("sent %+v", b.sent)
 	}
 }
@@ -197,15 +197,15 @@ func TestWorkingElsewhereKeepsTheThreadPending(t *testing.T) {
 	thread := m.conversation(plugin.ThreadID)
 	m.chat = thread
 	m.apply(thread, Event{Kind: plugin.SessionMessage, Text: "fix the login"}, true)
-	if !thread.pending {
+	if !thread.Pending {
 		t.Fatal("the thread is not pending with a message on its way")
 	}
 	m.apply(thread, Event{Kind: plugin.SessionWorking, N: 2}, true)
-	if !thread.pending || !thread.running {
+	if !thread.Pending || !thread.Running {
 		t.Fatal("work elsewhere freed the thread")
 	}
 	m.apply(thread, Event{Kind: plugin.SessionWorking}, true)
-	if thread.pending || thread.running {
+	if thread.Pending || thread.Running {
 		t.Fatal("the end of the work left the thread pending")
 	}
 }

@@ -159,7 +159,7 @@ func TestChatTitleNeedsAConversation(t *testing.T) {
 func TestFooterFitsTheWindow(t *testing.T) {
 	m, _ := newModel(t)
 	fill(m, 1)
-	m.chat.context, m.chat.pending = 1200, true
+	m.chat.context, m.chat.Pending = 1200, true
 	title, hint := ansi.Strip(m.chatTitle()), "esc stop "
 	wide := lipgloss.Width(title)
 	for _, width := range []int{100, len(hint) + wide + 1, len(hint) + wide, len(hint) + 3, len(hint) + 1, len(hint)} {
@@ -192,7 +192,7 @@ func TestFooterFitsTheWindow(t *testing.T) {
 	if got := m.footerHint(); got != notice+mutedStyle.Render("  │  ")+mutedStyle.Render("esc stop") {
 		t.Errorf("a notice with a hint: %q", got)
 	}
-	m.chat.pending = false
+	m.chat.Pending = false
 	if got := m.footerHint(); got != notice+mutedStyle.Render("") {
 		t.Errorf("a notice alone: %q", got)
 	}
@@ -278,7 +278,7 @@ func TestFooterHintsWithoutTheInput(t *testing.T) {
 	if got := ansi.Strip(m.footerHint()); got != "type to write" {
 		t.Errorf("idle: %q", got)
 	}
-	m.chat.pending = true
+	m.chat.Pending = true
 	if got := ansi.Strip(m.footerHint()); got != "esc stop" {
 		t.Errorf("an answer on its way: %q", got)
 	}
@@ -286,7 +286,7 @@ func TestFooterHintsWithoutTheInput(t *testing.T) {
 	if got := ansi.Strip(m.footerHint()); got != "esc stop · "+jobsKey+" hide" {
 		t.Errorf("with the jobs: %q", got)
 	}
-	m.chat.pending, m.inputShown = false, true
+	m.chat.Pending, m.inputShown = false, true
 	if got := ansi.Strip(m.footerHint()); got != jobsKey+" hide" {
 		t.Errorf("with the jobs alone: %q", got)
 	}

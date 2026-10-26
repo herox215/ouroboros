@@ -400,6 +400,7 @@ type session struct {
 	cancel          context.CancelFunc // of the answer on its way; nil without one
 	since           time.Time          // when that answer began
 	queue           []queued           // the messages that wait for that answer to take them
+	interrupt       chan struct{}      // tells that answer of a message for it, see agent.WithInterrupt
 	asked           chan queued        // takes what the owner answers the question that answer waits for; nil without one
 	restart         string             // the binary a tool of that answer asked to start anew from
 	goOn            bool               // the session goes on by itself in that build, see GoOn
@@ -610,6 +611,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 		message.source = message.source.Normalized()
 		se.queue = append(se.queue, message)
 		s.emit(se, Event{Kind: Queued, Text: text, Source: message.source})
+		s.interrupt(se)
 		return nil
 	case se.cancel != nil:
 		return ErrBusy
@@ -624,6 +626,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 func (s *Service) begin(se *session, p *process, messages ...queued) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	se.cancel, se.since = cancel, s.now()
+	se.interrupt = make(chan struct{}, 1)
 	p.answering++
 	p.release = false // somebody wants the node
 	se.routed, se.said, se.pictures = false, nil, nil
@@ -709,6 +712,7 @@ func (s *Service) steerMedia(ctx context.Context, id, text string, images []open
 		}
 		se.queue = append(se.queue, queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx).Normalized()})
 		s.emit(se, Event{Kind: Queued, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()})
+		s.interrupt(se)
 		return nil
 	}
 	s.mu.Unlock()
@@ -791,6 +795,20 @@ func (s *Service) saying(se *session, id, text string) {
 	s.emit(se, e)
 	if se.routed && se.id != ThreadID {
 		s.emit(s.get(ThreadID), e)
+	}
+}
+
+// interrupt tells the answer on its way in se of a message for it: what the
+// LLM writes now never reaches the owner, and it writes anew with the
+// message, see agent.WithInterrupt. While tasks run the message waits for
+// them, as steered does. s.mu is held.
+func (s *Service) interrupt(se *session) {
+	if len(se.tasks) > 0 {
+		return
+	}
+	select {
+	case se.interrupt <- struct{}{}:
+	default: // one told already
 	}
 }
 
@@ -985,6 +1003,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.emit(se, Event{Kind: Suggestion, Text: text})
 	})
+	s.mu.Lock()
+	ctx = agent.WithInterrupt(ctx, se.interrupt)
+	s.mu.Unlock()
 	ctx = agent.WithMessageSteering(ctx, func() []openai.Message {
 		s.waitTasks(ctx, se)
 		if ctx.Err() != nil {

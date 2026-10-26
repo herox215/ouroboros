@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"ouroboros/internal/chat"
 	"ouroboros/internal/openai"
-	"ouroboros/plugin"
 )
 
 func TestMessageSourcePerSend(t *testing.T) {
@@ -19,28 +19,21 @@ func TestMessageSourcePerSend(t *testing.T) {
 	s := &testSessions{
 		open:       func(ctx context.Context) (bool, error) { check(ctx, ""); return false, nil },
 		newSession: func(ctx context.Context) (string, error) { check(ctx, ""); return "chat", nil },
-		ask: func(ctx context.Context, _, _ string) error {
-			check(ctx, "gui")
-			asks++
-			if asks == 2 {
-				return plugin.ErrBusy
-			}
-			return nil
-		},
-		steer: func(ctx context.Context, _, _ string) error { check(ctx, "gui"); steers++; return nil },
+		ask:        func(ctx context.Context, _, _ string) error { check(ctx, "gui"); asks++; return nil },
+		steer:      func(ctx context.Context, _, _ string) error { check(ctx, "gui"); steers++; return nil },
 	}
 	w := sessionWindow(t, s)
 	id, err := w.NewSession(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{"hello", "answer the question"} {
-		if err := w.SendMessage(0, id, text); err != nil {
+	for _, way := range []chat.Way{chat.Ask, chat.Steer, chat.Answer} {
+		if err := w.Deliver(0, id, "hello", way); err != nil {
 			t.Fatal(err)
 		}
 	}
 	check(w.ctx, "")
-	if asks != 2 || steers != 1 {
+	if asks != 1 || steers != 2 {
 		t.Fatalf("asks %d steers %d", asks, steers)
 	}
 }

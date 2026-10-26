@@ -540,6 +540,7 @@ func (s *Service) hand(ctx context.Context, id, text string, pictures []openai.I
 	case se.cancel != nil:
 		se.queue = append(se.queue, message)
 		s.emit(se, Event{Kind: Queued, Text: text, Source: message.source, Routed: true})
+		s.interrupt(se)
 		s.busy()
 		return title, "queued: the answer on its way there takes it", nil
 	}

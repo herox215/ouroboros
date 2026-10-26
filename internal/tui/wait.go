@@ -108,7 +108,7 @@ func (m *Model) waiting() string {
 func (m *Model) waitingFor() string {
 	c := m.chat
 	switch {
-	case c.asking != nil:
+	case c.Asking != nil:
 		return m.agentName() + " waits for your answer"
 	case c.calling != "":
 		// Nothing of a call shows until it is written: what grows is
@@ -118,7 +118,7 @@ func (m *Model) waitingFor() string {
 		return m.agentName() + " is writing"
 	case c.doing != "" && m.now().Sub(c.since) >= toolShown:
 		return c.doing
-	case c.doing != "" || c.pending:
+	case c.doing != "" || c.Pending:
 		return m.agentName() + " is thinking"
 	}
 	return ""

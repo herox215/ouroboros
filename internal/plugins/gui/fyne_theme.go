@@ -17,8 +17,8 @@ var appIconData []byte
 
 var appIcon = fyne.NewStaticResource("ouroboros.png", appIconData)
 
-// The palette of the window, taken from frontend/style.css: the same
-// background, text, muted line and accent colours, light and dark.
+// The palette of the window: its background, text, muted line and accent
+// colours, light and dark.
 type palette struct {
 	background        color.NRGBA
 	text              color.NRGBA
@@ -109,7 +109,7 @@ type ouroTheme struct {
 
 // dark reports whether the window draws dark in the variant the desktop
 // asks for: always with the dark choice, never with the light one, and as
-// the desktop does with the system one, as the web view of the GUI does.
+// the desktop does with the system one.
 func (t *ouroTheme) dark(variant fyne.ThemeVariant) bool {
 	switch t.pref {
 	case "dark":

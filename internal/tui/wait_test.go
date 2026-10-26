@@ -96,7 +96,7 @@ func TestWaitIsShownOnAPicture(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	release()
-	drive(t, m, nil, func() bool { return !m.chat.pending })
+	drive(t, m, nil, func() bool { return !m.chat.Pending })
 	if m.waiting() != "" || strings.Contains(m.View().Content, " asking beta ") {
 		t.Fatalf("no wait is shown once the answer is in:\n%s", m.View().Content)
 	}
@@ -104,9 +104,9 @@ func TestWaitIsShownOnAPicture(t *testing.T) {
 	c := m.chat
 	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "again"}, true)
 	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "again"}, true) // the wait is shown already
-	c.pending = false
+	c.Pending = false
 	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "again"}, false) // read again, it was shown before
-	if c.art != 2 || !c.pending {
+	if c.art != 2 || !c.Pending {
 		t.Fatalf("picture %d", c.art)
 	}
 	// After the last picture comes the first.

@@ -365,8 +365,11 @@ func TestPluginsImportOnlyThePluginPackage(t *testing.T) {
 		allowed []string
 	}{
 		"the example plugin": {[]string{"plugin", "example"}, []string{"ouroboros/plugin"}},
-		"the tui plugin":     {[]string{"internal", "plugins", "tui"}, []string{"ouroboros/plugin", "ouroboros/internal/tui", "ouroboros/internal/workdir"}},
-		"the terminal UI":    {[]string{"internal", "tui"}, []string{"ouroboros/plugin"}},
+		"the tui plugin":     {[]string{"internal", "plugins", "tui"}, []string{"ouroboros/plugin", "ouroboros/internal/chat", "ouroboros/internal/tui", "ouroboros/internal/workdir"}},
+		"the terminal UI":    {[]string{"internal", "tui"}, []string{"ouroboros/plugin", "ouroboros/internal/chat"}},
+		// What the front ends share of a conversation is built on the plugin
+		// package alone, as they are.
+		"the shared chat": {[]string{"internal", "chat"}, []string{"ouroboros/plugin"}},
 	} {
 		found := imports(t, test.dir...)
 		if !slices.Contains(found, "ouroboros/plugin") {

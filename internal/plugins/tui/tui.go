@@ -13,11 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"ouroboros/internal/chat"
 	"ouroboros/internal/tui"
 	"ouroboros/internal/workdir"
 	"ouroboros/plugin"
@@ -222,50 +221,8 @@ func (u *ui) Watch(ctx context.Context, id string) ([]tui.Event, <-chan tui.Even
 	return shown, out, nil
 }
 
-// event is e as the UI shows it.
-func (u *ui) event(e plugin.SessionEvent) tui.Event {
-	shown := tui.Event{Kind: e.Kind, Text: e.Text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache, Routed: e.Routed}
-	if e.Kind == plugin.SessionStep {
-		s := e.AsStep()
-		shown.Tool, shown.Failed = s.Tool, s.Done && s.Err != nil
-		shown.Text = plugin.ToolLine(u.ctx, s)
-		if shown.Text != "" && s.Done {
-			shown.Text = plugin.ToolDetail(u.ctx, s, shown.Text)
-		}
-	}
-	if e.Kind == plugin.SessionTask {
-		shown.Text, shown.Failed = taskLine(e), e.Err != ""
-	}
-	if e.Kind == plugin.SessionCalling {
-		shown.Text = size(e.N)
-	}
-	if e.Kind == plugin.SessionWorking {
-		shown.N = e.N
-	}
-	if e.Kind == plugin.SessionAsked && !e.Done {
-		q := e.AsQuestion()
-		shown.Text, shown.Options, shown.Recommended = q.Question, q.Options, q.Recommended
-	}
-	return shown
-}
-
-// size is n bytes as the chat tells them: "512 bytes", "3.2 KiB".
-func size(n int) string {
-	if n < 1024 {
-		return fmt.Sprintf("%d bytes", n)
-	}
-	return fmt.Sprintf("%.1f KiB", float64(n)/1024)
-}
-
-// taskLine is what the chat shows of the report of a task the agent
-// delegated: its number and what it was, and how it ended.
-func taskLine(e plugin.SessionEvent) string {
-	line := fmt.Sprintf("task %d · %s", e.N, e.Remark)
-	if e.Err != "" {
-		return line + " ✗ " + strings.Join(strings.Fields(e.Err), " ")
-	}
-	return line + " ✓ " + e.Took.Round(time.Second).String()
-}
+// event is e as the UI shows it, see chat.Show.
+func (u *ui) event(e plugin.SessionEvent) tui.Event { return chat.Show(u.ctx, e) }
 
 // Steer gives text to the answer on its way in the session id.
 func (u *ui) Steer(ctx context.Context, id, text string) error {

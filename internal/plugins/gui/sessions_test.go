@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/chat"
 	"ouroboros/internal/kernel"
 	"ouroboros/plugin"
 )
@@ -24,6 +25,7 @@ type testSessions struct {
 	newSession func(context.Context) (string, error)
 	ask        func(context.Context, string, string) error
 	steer      func(context.Context, string, string) error
+	unsteer    func(context.Context, string) (string, error)
 	open       func(context.Context) (bool, error)
 	release    func(context.Context) error
 	directory  func(context.Context, string, string) error
@@ -59,6 +61,9 @@ func (s *testSessions) New(ctx context.Context) (string, error)        { return 
 func (s *testSessions) Ask(ctx context.Context, id, text string) error { return s.ask(ctx, id, text) }
 func (s *testSessions) Steer(ctx context.Context, id, text string) error {
 	return s.steer(ctx, id, text)
+}
+func (s *testSessions) Unsteer(ctx context.Context, id string) (string, error) {
+	return s.unsteer(ctx, id)
 }
 
 func (s *testSessions) List(ctx context.Context) ([]plugin.SessionInfo, error) {
@@ -104,6 +109,34 @@ func canceled(t *testing.T, ctx context.Context) {
 	}
 }
 
+// received is the next event of live, which comes within a second.
+func received(t *testing.T, live <-chan chat.Event) chat.Event {
+	t.Helper()
+	select {
+	case e, ok := <-live:
+		if !ok {
+			t.Fatal("the stream ended")
+		}
+		return e
+	case <-time.After(time.Second):
+		t.Fatal("no event came")
+	}
+	return chat.Event{}
+}
+
+// ended waits for live to close, and fails on events that still come.
+func ended(t *testing.T, live <-chan chat.Event) {
+	t.Helper()
+	select {
+	case e, ok := <-live:
+		if ok {
+			t.Fatalf("event of an ended stream: %+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the stream did not end")
+	}
+}
+
 func TestSessionServiceSelection(t *testing.T) {
 	var watched context.Context
 	a := &testSessions{
@@ -138,22 +171,14 @@ func TestSessionServiceSelection(t *testing.T) {
 		t.Fatalf("owner: %+v %v", owner, err)
 	}
 	peer, err := w.OpenSession(0, "peer-key/conv")
-	if err != nil || peer.Events[0].Text != "peer" || peer.Token != 0 {
+	if err != nil || peer.Events[0].Text != "peer" || peer.Live != nil {
 		t.Fatalf("peer: %+v %v", peer, err)
 	}
 	canceled(t, watched)
-	if events := w.PollSession(owner.Token); events == nil || len(events) != 0 {
-		t.Fatalf("stale: %+v", events)
-	}
-	if events := w.PollSession(peer.Token); events == nil || len(events) != 0 {
-		t.Fatalf("peer poll: %+v", events)
-	}
+	ended(t, owner.Live)
 	other, err := w.OpenSession(1, "owner/shared")
 	if err != nil || other.Events[0].Text != "profile B" {
 		t.Fatalf("profile isolation: %+v %v", other, err)
-	}
-	if other.Token == owner.Token || other.Token == peer.Token {
-		t.Fatal("token reused")
 	}
 	// Listing another profile is also a selection, not a second simultaneous watch.
 	_, _ = w.OpenSession(0, "owner/shared")
@@ -161,45 +186,32 @@ func TestSessionServiceSelection(t *testing.T) {
 	canceled(t, watched)
 }
 
-func TestSessionPolling(t *testing.T) {
+// What happens in the session shown comes in its order, and the stream ends
+// with the watch of the node.
+func TestSessionLive(t *testing.T) {
 	live := make(chan plugin.SessionEvent, 205)
 	for i := 0; i < 205; i++ {
 		live <- plugin.SessionEvent{Kind: plugin.SessionAnswering, Text: fmt.Sprint(i)}
 	}
 	close(live)
-	var ctx context.Context
 	w := sessionWindow(t, &testSessions{watch: func(c context.Context, _ string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
-		ctx = c
 		return nil, live, nil
 	}})
-	snapshot, err := w.OpenSession(0, "owner/a")
-	if err != nil || snapshot.Events == nil {
-		t.Fatalf("open: %+v %v", snapshot, err)
+	opened, err := w.OpenSession(0, "owner/a")
+	if err != nil || opened.Events == nil {
+		t.Fatalf("open: %+v %v", opened, err)
 	}
-	next := 0
-	for _, count := range []int{100, 100, 5, 0} {
-		events := w.PollSession(snapshot.Token)
-		if len(events) != count {
-			t.Fatalf("batch: %d, want %d", len(events), count)
-		}
-		if count == 0 && events != nil {
-			t.Fatal("closed stream must signal EOF, not trigger endless polling")
-		}
-		for _, e := range events {
-			if e.Text != fmt.Sprint(next) {
-				t.Fatalf("lost event %d: %+v", next, e)
-			}
-			next++
+	for i := range 205 {
+		if e := received(t, opened.Live); e.Text != fmt.Sprint(i) {
+			t.Fatalf("lost event %d: %+v", i, e)
 		}
 	}
-	w.Close()
-	canceled(t, ctx)
-	if events := w.PollSession(snapshot.Token); events == nil || len(events) != 0 {
-		t.Fatalf("closed: %+v", events)
-	}
+	ended(t, opened.Live)
 }
 
-func TestPollWaitAndShutdown(t *testing.T) {
+// The stream of the session shown ends when the window shuts down, also
+// while it waits for what happens next.
+func TestLiveWaitAndShutdown(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var watched context.Context
@@ -210,38 +222,42 @@ func TestPollWaitAndShutdown(t *testing.T) {
 	}}}}}
 	w := newWindowContext(parent, p)
 	defer w.Close()
-	snapshot, err := w.OpenSession(0, "owner/a")
+	opened, err := w.OpenSession(0, "owner/a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
-	if got := w.PollSession(snapshot.Token); got == nil || len(got) != 0 {
-		t.Fatal(got)
-	}
-	if elapsed := time.Since(start); elapsed < 100*time.Millisecond || elapsed > time.Second {
-		t.Fatalf("wait: %s", elapsed)
-	}
-	result := make(chan []ChatEvent, 1)
-	go func() { result <- w.PollSession(snapshot.Token) }()
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "later"}
-	select {
-	case events := <-result:
-		if len(events) != 1 || events[0].Text != "later" {
-			t.Fatal(events)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("poll stalled")
+	if e := received(t, opened.Live); e.Text != "later" {
+		t.Fatal(e)
 	}
-	go func() { result <- w.PollSession(snapshot.Token) }()
 	cancel()
 	canceled(t, watched)
-	select {
-	case events := <-result:
-		if len(events) != 0 {
-			t.Fatal(events)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("shutdown poll stalled")
+	ended(t, opened.Live)
+}
+
+// An event that comes as the window shuts down is not handed on.
+func TestLiveShutdownWhileHanding(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	live := make(chan plugin.SessionEvent, 1)
+	w := newWindowContext(parent, page{choices: []choice{{name: "a"}}, profiles: []*Profile{{sessions: &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+		return nil, live, nil
+	}}}}})
+	defer w.Close()
+	opened, err := w.OpenSession(0, "owner/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live <- plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "unread"}
+	// The event is taken from the node before the window shuts down; nobody
+	// reads it from the window.
+	for len(live) > 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	time.Sleep(10 * time.Millisecond)
+	for e := range opened.Live {
+		t.Fatalf("event of a window that shut down: %+v", e)
 	}
 }
 
@@ -272,8 +288,8 @@ func TestConcurrentOpenCancelsPending(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("open stalled")
 	}
-	if got := w.PollSession(latest.Token); got == nil || len(got) != 0 {
-		t.Fatal(got)
+	if latest.Live != nil {
+		t.Fatal("a stream without a watch")
 	}
 }
 
@@ -283,9 +299,6 @@ func TestChatFormattingAndLazyDetails(t *testing.T) {
 	if err := k.Start(plugin.New("views", func(ctx *plugin.Context, _ struct{}) error {
 		pctx = ctx
 		plugin.Add(ctx, plugin.ToolView{Tool: "read", Show: func(json.RawMessage) string { return "reading file" }, Detail: func(s plugin.Step) string {
-			if s.Remark != "" || (s.Err != nil && s.Err.Error() != "failed") {
-				t.Fatal("raw result/error reached detail")
-			}
 			return "✓"
 		}})
 		return nil
@@ -314,17 +327,12 @@ func TestChatFormattingAndLazyDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Events[0].Text != "reading file ✓" || !snap.Events[0].Failed || snap.Events[1].Text != "echo" || snap.Events[1].CallID != "echo-call" || snap.Events[1].Failed {
+	// A call without a view of a plugin shows as nothing, as in the
+	// terminal UI: the window names its tool.
+	if snap.Events[0].Text != "reading file ✓" || !snap.Events[0].Failed || snap.Events[1].Text != "" || snap.Events[1].Tool != "echo" || snap.Events[1].CallID != "echo-call" || snap.Events[1].Failed {
 		t.Fatalf("format: %+v", snap)
 	}
-	b, _ := json.Marshal(snap)
-	for _, secret := range []string{`"args"`, `"result"`, `"err"`, "secret", "raw error", "full result"} {
-		if strings.Contains(string(b), secret) {
-			t.Fatalf("leaked %q: %s", secret, b)
-		}
-	}
 	_, _ = w.Sessions(0)
-	_ = w.PollSession(snap.Token)
 	if details != 0 {
 		t.Fatal("details fetched eagerly")
 	}
@@ -386,26 +394,25 @@ func TestSessionBridgeErrors(t *testing.T) {
 	}
 }
 
-// Without the views of plugins a step shows as the name of its tool.
+// Without the views of plugins a step shows nothing but its tool.
 func TestStepWithoutPlugins(t *testing.T) {
 	w := sessionWindow(t, &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
 		return []plugin.SessionEvent{{Kind: plugin.SessionStep, Tool: "read", CallID: "call", Done: true, Err: "raw error", Text: "full result"}}, nil, nil
 	}})
 	snap, err := w.OpenSession(0, "owner/a")
-	if err != nil || len(snap.Events) != 1 || snap.Events[0].Text != "read" || !snap.Events[0].Failed {
+	if err != nil || len(snap.Events) != 1 || snap.Events[0].Text != "" || snap.Events[0].Tool != "read" || !snap.Events[0].Failed {
 		t.Fatalf("step: %+v %v", snap, err)
 	}
 }
 
-// A window that closes or shuts down while a poll reads the live stream gets
-// nothing of it: whether that happens while the poll waits for more, or as
-// the batch fills. Here a restart does it, as the driver does.
-func TestPollClosedWhileReading(t *testing.T) {
+// A restart in the live stream leaves the window, which ends the stream:
+// whether the window closes or shuts down, and whether events came before.
+func TestLiveEndsWithTheRestart(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		before   int  // events in the stream before the restart
 		shutdown bool // the restart cancels the context of the window rather than closing it
-	}{{"closed while waiting", 0, false}, {"shut down as the batch fills", 99, true}} {
+	}{{"closed", 0, false}, {"shut down after events", 99, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			live := make(chan plugin.SessionEvent, 100)
 			for i := range tc.before {
@@ -423,12 +430,11 @@ func TestPollClosedWhileReading(t *testing.T) {
 			} else {
 				w.OnRestart(w.Close)
 			}
-			snapshot, err := w.OpenSession(0, "owner/s1")
+			opened, err := w.OpenSession(0, "owner/s1")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if events := w.PollSession(snapshot.Token); events == nil || len(events) != 0 {
-				t.Fatalf("events of a closed window: %+v", events)
+			for range opened.Live {
 			}
 			if exe, _, ok := w.Restart(); !ok || exe != "/new/ouro" {
 				t.Fatalf("restart: %q %v", exe, ok)
@@ -463,34 +469,6 @@ func TestOpenWhileShuttingDown(t *testing.T) {
 	}
 }
 
-// A window that never opened a session, or that shut down, has nothing to
-// poll: an empty batch, never the end of a stream it does not read.
-func TestPollWithoutAStream(t *testing.T) {
-	if events := sessionWindow(t, &testSessions{}).PollSession(0); events == nil || len(events) != 0 {
-		t.Fatalf("no session: %#v", events)
-	}
-	live := make(chan plugin.SessionEvent)
-	close(live)
-	parent, shutdown := context.WithCancel(context.Background())
-	defer shutdown()
-	w := newWindowContext(parent, page{choices: []choice{{name: "a"}}, profiles: []*Profile{{sessions: &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
-		return nil, live, nil
-	}}}}})
-	t.Cleanup(w.Close)
-	snapshot, err := w.OpenSession(0, "owner/s1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shutdown()
-	// The stream ended as well: whichever of the two a poll could see first,
-	// it sees the shutdown.
-	for range 32 {
-		if events := w.PollSession(snapshot.Token); events == nil || len(events) != 0 {
-			t.Fatalf("shut down: %#v", events)
-		}
-	}
-}
-
 // SessionTrace reads what an owner session did for the artefacts beside the
 // thread, and nothing of a peer's: its calls with their start and their end,
 // its messages, and one piece of an answer being written, without its text.
@@ -519,7 +497,7 @@ func TestSessionTrace(t *testing.T) {
 	if kinds := trace[0].Kind + "," + trace[1].Kind + "," + trace[2].Kind + "," + trace[3].Kind; kinds != "message,step,step,answer" {
 		t.Fatalf("kinds %s", kinds)
 	}
-	if trace[1].Done || !trace[2].Done || trace[2].Text != "echo" {
+	if trace[1].Done || !trace[2].Done || trace[2].Tool != "echo" {
 		t.Fatalf("steps %+v", trace[1:3])
 	}
 	if strings.Join(watched, "|") != "a" {

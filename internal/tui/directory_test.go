@@ -79,12 +79,12 @@ func TestDirectoryCommandShowAndErrors(t *testing.T) {
 			t.Fatalf("invalid %q: notice %q, input %q", line, m.notice, m.input.Value())
 		}
 	}
-	m.chat.peer = "peer"
+	m.chat.Peer = "peer"
 	if cmd := run(m, "/cd /tmp"); cmd != nil || !m.noticeErr || b.calls != 0 {
 		t.Fatal("changed a peer conversation")
 	}
-	m.chat.peer = ""
-	m.chat.pending, m.chat.running = true, true
+	m.chat.Peer = ""
+	m.chat.Pending, m.chat.Running = true, true
 	b.err = plugin.ErrBusy
 	cmd := run(m, "/cd /tmp")
 	if cmd == nil {

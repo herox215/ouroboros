@@ -484,7 +484,7 @@ func TestChatSumsUpTheCallsOfAnAnswer(t *testing.T) {
 		t.Fatalf("the answer before is summed up, the one on its way too:\n%s", view)
 	}
 	close(gate)
-	drive(t, m, nil, func() bool { return !m.chat.pending })
+	drive(t, m, nil, func() bool { return !m.chat.Pending })
 	if view := trimmedLines(m); !strings.Contains(view, "│   ↳ Used 1 tool\n") || strings.Contains(view, "↳ ·") {
 		t.Fatalf("the answer is in:\n%s", view)
 	}
@@ -503,7 +503,7 @@ func TestSummaries(t *testing.T) {
 		"first entry": {conversation{entries: []entry{{calls: read}, {text: "done"}}}, map[int]string{0: (&conversation{}).summary(read)}},
 		"two rounds":  {conversation{entries: []entry{{calls: read}, {calls: read}}}, map[int]string{0: "", 1: (&conversation{}).summary(both)}},
 		"no calls":    {conversation{entries: []entry{{mine: true, text: "hi"}, {text: "hello"}}}, map[int]string{}},
-		"on its way":  {conversation{entries: []entry{{calls: read}, {calls: read}}, pending: true}, map[int]string{0: "", 1: (&conversation{}).summary(both)}},
+		"on its way":  {conversation{entries: []entry{{calls: read}, {calls: read}}, Pending: true}, map[int]string{0: "", 1: (&conversation{}).summary(both)}},
 	} {
 		if got := tc.c.summaries(); !maps.Equal(got, tc.want) {
 			t.Errorf("%s: %v, want %v", name, got, tc.want)

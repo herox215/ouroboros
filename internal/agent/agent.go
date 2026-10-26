@@ -23,9 +23,10 @@ import (
 // emptyNote is what a model that answered with nothing at all is told.
 const emptyNote = "[Your last message was empty, which is no answer: go on with the task, or answer with what is done and what is not.]"
 
-// DraftHead begins what the agent remembers of an answer the model wrote
-// while more came for it, which did not reach the user: the draft follows
-// it, and what came follows the draft.
+// DraftHead began what the agent of an older build remembered of an answer
+// the model wrote while more came for it, which did not reach the user.
+// Archives may still hold it; the agent no longer writes it: what the model
+// wrote meanwhile is dropped, see WithInterrupt.
 const DraftHead = "[Not from the owner: you wrote the answer below, but more came meanwhile, which follows it, and it did not reach the owner. Answer once, taking in both: only that answer reaches them.]\n\n"
 
 const (
@@ -557,7 +558,13 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			observe.Call(Call{Sent: sent})
 		}
 		start := time.Now()
-		msg, err := a.llm.Complete(ctx, a.model, msgs, a.specs)
+		call, stop, interrupted := interrupting(ctx)
+		msg, err := a.llm.Complete(call, a.model, msgs, a.specs)
+		stop()
+		if err != nil && ctx.Err() == nil && interrupted() {
+			err = nil // what the LLM wrote is dropped below, and it writes anew
+			msg = openai.Message{}
+		}
 		if err == nil {
 			msg.PresentationID = presentation.Next(ctx)
 		}
@@ -570,15 +577,18 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		msg.Role = "assistant"
 		msg.Source = openai.MessageSource{}
-		// What the user said while the model wrote its answer would come
-		// as a second answer after it: the model writes one instead, which
-		// takes in both, and what it wrote is told to it as a draft.
-		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) != "" {
-			if steered := steeredMessages(ctx); len(steered) > 0 {
+		// What the user said while the model wrote would come after an
+		// answer they never saw, or after calls of tools they did not ask
+		// for any more: what the model wrote is dropped, and it writes anew
+		// with what came. It is never told of what it wrote, which never
+		// reached the owner. Calls of tools that were written in full run:
+		// what came follows their results.
+		if len(msg.ToolCalls) == 0 && (interrupted() || strings.TrimSpace(msg.Content) != "") {
+			if steered := steeredMessages(ctx); len(steered) > 0 || interrupted() {
 				if observe.Draft != nil {
 					observe.Draft(msg.Content)
 				}
-				for _, m := range append([]openai.Message{{Role: "user", Content: DraftHead + msg.Content}}, steered...) {
+				for _, m := range steered {
 					if err := emit(m); err != nil {
 						return abandon(err)
 					}

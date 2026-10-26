@@ -34,11 +34,11 @@ func TestSteering(t *testing.T) {
 
 	// Up is the input's while nothing waits.
 	press(m, "up")
-	drive(t, m, say(t, m, "also this"), func() bool { return len(c.queued) == 1 })
-	if m.input.Value() != "" || m.notice != "" || !c.pending {
+	drive(t, m, say(t, m, "also this"), func() bool { return len(c.Queued) == 1 })
+	if m.input.Value() != "" || m.notice != "" || !c.Pending {
 		t.Fatalf("input %q, notice %q", m.input.Value(), m.notice)
 	}
-	drive(t, m, say(t, m, "and that"), func() bool { return len(c.queued) == 2 })
+	drive(t, m, say(t, m, "and that"), func() bool { return len(c.Queued) == 2 })
 	view := m.View().Content
 	if strings.Count(view, " · queued") != 2 || strings.Count(view, "queued, ↑ takes it back") != 1 ||
 		strings.Index(view, "also this") > strings.Index(view, "and that") || strings.Index(view, "also this") < strings.Index(view, "ping") {
@@ -59,16 +59,16 @@ func TestSteering(t *testing.T) {
 		t.Errorf("up in the second line: at line %d of %q", m.input.Line(), m.input.Value())
 	}
 	m.input.Reset()
-	drive(t, m, press(m, "up"), func() bool { return m.input.Value() == "and that" && len(c.queued) == 1 })
+	drive(t, m, press(m, "up"), func() bool { return m.input.Value() == "and that" && len(c.Queued) == 1 })
 	if view := m.View().Content; strings.Count(view, " · queued") != 1 || !strings.Contains(view, "queued, ↑ takes it back") {
 		t.Fatalf("one still waits:\n%s", view)
 	}
 
 	// The answer takes what waits: it is a message of the conversation now.
 	close(tools)
-	drive(t, m, nil, func() bool { return !c.pending })
-	if len(c.queued) != 0 || len(c.entries) != 4 || !c.entries[2].mine || c.entries[2].text != "also this" || c.entries[3].text != "took also this" {
-		t.Fatalf("entries %+v, queued %q", c.entries, c.queued)
+	drive(t, m, nil, func() bool { return !c.Pending })
+	if len(c.Queued) != 0 || len(c.entries) != 4 || !c.entries[2].mine || c.entries[2].text != "also this" || c.entries[3].text != "took also this" {
+		t.Fatalf("entries %+v, queued %q", c.entries, c.Queued)
 	}
 	if strings.Contains(m.View().Content, "queued") {
 		t.Fatalf("nothing waits any more:\n%s", m.View().Content)
@@ -87,7 +87,7 @@ func TestTakenBack(t *testing.T) {
 	c := m.chat
 	drive(t, m, say(t, m, "ping"), func() bool { return c.doing == "asking beta" })
 	for i, text := range []string{"one", "two", "three"} {
-		drive(t, m, say(t, m, text), func() bool { return len(c.queued) == i+1 })
+		drive(t, m, say(t, m, text), func() bool { return len(c.Queued) == i+1 })
 	}
 
 	back := press(m, "up")()
@@ -128,8 +128,8 @@ func TestSteeringFails(t *testing.T) {
 	drive(t, m, say(t, m, "ping"), func() bool { return c.doing == "asking beta" })
 	b.fail = map[string]error{"steer": errors.New("the node is gone")}
 	drive(t, m, say(t, m, "also this"), func() bool { return m.notice != "" })
-	if m.input.Value() != "also this" || m.notice != "the node is gone" || !c.pending || len(c.queued) != 0 {
-		t.Fatalf("input %q, notice %q, pending %v", m.input.Value(), m.notice, c.pending)
+	if m.input.Value() != "also this" || m.notice != "the node is gone" || !c.Pending || len(c.Queued) != 0 {
+		t.Fatalf("input %q, notice %q, pending %v", m.input.Value(), m.notice, c.Pending)
 	}
 }
 
@@ -143,12 +143,12 @@ func TestQueueEvents(t *testing.T) {
 	m.apply(c, Event{Kind: plugin.SessionQueued, Text: "b"}, true)
 	m.apply(c, Event{Kind: plugin.SessionQueued, Text: "c"}, true)
 	m.apply(c, Event{Kind: plugin.SessionUnqueued, Text: "c"}, true)
-	if strings.Join(c.queued, ",") != "a,b" {
-		t.Fatalf("queued %q", c.queued)
+	if strings.Join(c.Queued, ",") != "a,b" {
+		t.Fatalf("queued %q", c.Queued)
 	}
 	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "a"}, true)
-	if strings.Join(c.queued, ",") != "b" || len(c.entries) != 1 {
-		t.Fatalf("queued %q, entries %+v", c.queued, c.entries)
+	if strings.Join(c.Queued, ",") != "b" || len(c.entries) != 1 {
+		t.Fatalf("queued %q, entries %+v", c.Queued, c.entries)
 	}
 }
 

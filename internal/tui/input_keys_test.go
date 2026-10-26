@@ -24,7 +24,7 @@ func TestChatNewlineKeys(t *testing.T) {
 			if got := m.input.Value(); got != tc.want {
 				t.Fatalf("input = %q, want %q", got, tc.want)
 			}
-			if m.chat.pending {
+			if m.chat.Pending {
 				t.Fatal("newline keys should not send a message")
 			}
 		})

@@ -44,7 +44,7 @@ func (m *Model) handleRecallKey(msg tea.KeyPressMsg) bool {
 		if found, _ := m.suggestions(); len(found) > 0 {
 			return false // they select a command
 		}
-		if m.input.Value() == "" && len(m.chat.queued) > 0 {
+		if m.chat.TakesBack(m.input.Value()) {
 			return false // up takes back what is queued
 		}
 	}

@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -111,7 +112,7 @@ func (m *Model) conversation(id string) *conversation {
 // watch asks for the events of the session c, unless they come already. A
 // conversation of a peer is read, not watched.
 func (m *Model) watch(c *conversation) tea.Cmd {
-	if c == nil || c.watching || c.peer != "" {
+	if c == nil || c.watching || c.Peer != "" {
 		return nil
 	}
 	c.watching = true
@@ -177,7 +178,8 @@ func (m *Model) unwatched(id string) tea.Cmd {
 		return nil
 	}
 	c.watching = false
-	c.pending, c.running, c.doing, c.round, c.asking, c.jobs = false, false, "", 0, nil, nil
+	c.Lost()
+	c.doing, c.round, c.jobs = "", 0, nil
 	c.partial = ""
 	if c == m.chat {
 		m.renderHistory(m.followsEnd())
@@ -195,7 +197,7 @@ func (m *Model) rewatch(id string) tea.Cmd {
 
 // replay builds the session c anew from what happened in it.
 func (m *Model) replay(c *conversation, past []Event) {
-	*c = conversation{contextID: c.contextID, draft: c.draft, images: c.images, files: c.files, art: c.art, watching: true, pending: c.pending && len(past) == 0}
+	*c = conversation{contextID: c.contextID, draft: c.draft, images: c.images, files: c.files, art: c.art, watching: true, State: chat.State{Pending: c.Pending && len(past) == 0}}
 	for _, e := range past {
 		m.apply(c, e, false)
 	}
@@ -234,38 +236,28 @@ func (m *Model) event(msg eventMsg) tea.Cmd {
 // in the footer, and ouro starting anew makes the UI quit for it.
 func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 	c.last, c.context, c.cache = e.At, e.Context, e.Cache
+	waited := c.Pending
+	c.State.Apply(e) // what is on its way, queued and asked: the same in every front end
 	switch e.Kind {
 	case plugin.SessionMessage:
 		c.add(entry{mine: true, text: e.Text, at: e.At})
-		c.queued = c.queued[min(1, len(c.queued)):] // one that was queued is the first of them
-		if live && !c.pending {                     // else the wait was shown, or is shown already
+		if live && !waited { // else the wait was shown, or is shown already
 			c.art++
 		}
-		c.pending, c.running, c.round, c.doing = true, true, 0, ""
+		c.round, c.doing = 0, ""
 		c.title = cmp.Or(c.title, e.Text)
 		c.routed = e.Routed
 	case plugin.SessionTask:
-		// The report of a task starts an answer, or goes into the one on its
-		// way, as a message of the owner does.
 		c.add(entry{task: true, text: e.Text, failed: e.Failed, at: e.At})
-		if live && !c.pending {
+		if live && !waited {
 			c.art++
 		}
-		c.pending, c.running, c.round, c.doing = true, true, 0, ""
-	case plugin.SessionWorking:
-		// Background topics do not occupy the conversation input.
-		if e.N == 0 {
-			c.pending, c.running = false, false
-		}
+		c.round, c.doing = 0, ""
 	case plugin.SessionTasks:
 		c.tasks = nil
 		if e.Text != "" {
 			c.tasks = strings.Split(e.Text, "\n")
 		}
-	case plugin.SessionQueued:
-		c.queued = append(c.queued, e.Text)
-	case plugin.SessionUnqueued:
-		c.queued = c.queued[:max(0, len(c.queued)-1)]
 	case plugin.SessionSay:
 		c.say(e)
 	case plugin.SessionThought:
@@ -363,11 +355,9 @@ func (c *conversation) step(e Event) {
 }
 
 // end shows how the answer ended: the answer, why it failed, or that it was
-// stopped. A question that waits goes on waiting: the question of an answer
-// ends before it, and in the thread the answer of one session comes while
-// another asks.
+// stopped. A question that waits goes on waiting, see chat.State.Apply.
 func (c *conversation) end(e Event) {
-	c.pending, c.running, c.doing, c.round = false, false, "", 0   // the loop of this answer is over
+	c.doing, c.round = "", 0                                       // the loop of this answer is over
 	c.jobs, c.partial, c.thread, c.calling = nil, "", thread{}, "" // its jobs end with it, and with
 	// them the clock the answer was drawn on: its next frame sees pending gone
 	last := entry{text: e.Text, at: e.At}
@@ -442,7 +432,7 @@ func (m *Model) sessionsLoaded(msg sessionsMsg) tea.Cmd {
 		}
 		// What the list says, until the events say it all: a title it was
 		// given meanwhile too.
-		c.title, c.last, c.pending, c.running = cmp.Or(info.Title, c.title), info.Last, info.Running, info.Running
+		c.title, c.last, c.Pending, c.Running = cmp.Or(info.Title, c.title), info.Last, info.Running, info.Running
 		if info.Running {
 			cmds = append(cmds, m.watch(c))
 		}
@@ -454,7 +444,7 @@ func (m *Model) sessionsLoaded(msg sessionsMsg) tea.Cmd {
 // among the conversations of peers if it is one of them.
 func (m *Model) openSessions() tea.Cmd {
 	m.screen = screenSessions
-	m.sessions.peerTab, m.sessions.filter = m.chat.peer != "", ""
+	m.sessions.peerTab, m.sessions.filter = m.chat.Peer != "", ""
 	m.sessions.hits, m.sessions.hitsFor = nil, ""
 	m.sessions.sel = m.sessions.pick(m)
 	return tea.Batch(m.loadSessions, func() tea.Msg { return m.sessions.loadPeers(m) })
@@ -475,7 +465,7 @@ func (l *sessionsScreen) peersLoaded(m *Model, msg peersMsg) {
 	selected := l.rows(m)
 	l.peers = nil
 	for _, info := range msg.list {
-		c := &conversation{contextID: info.ID, peer: info.Peer, title: info.Title, last: info.Last}
+		c := &conversation{State: chat.State{Peer: info.Peer}, contextID: info.ID, title: info.Title, last: info.Last}
 		if m.chat.contextID == info.ID {
 			c = m.chat
 		}
@@ -509,8 +499,8 @@ func (m *Model) read(msg readMsg) {
 	for _, e := range msg.events {
 		m.apply(c, e, false)
 	}
-	c.pending = false // what is not over yet is shown as far as it got
-	if m.chat.peer == "" {
+	c.Pending = false // what is not over yet is shown as far as it got
+	if m.chat.Peer == "" {
 		m.chat.draft = m.input.Value()
 		m.input.Reset()
 	}
@@ -538,7 +528,7 @@ func (l *sessionsScreen) rows(m *Model) []*conversation {
 	}
 	var rows []*conversation
 	for _, c := range all {
-		if strings.Contains(strings.ToLower(c.peer+" "+cmp.Or(c.title, "new conversation")), want) || hits[c.contextID] {
+		if strings.Contains(strings.ToLower(c.Peer+" "+cmp.Or(c.title, "new conversation")), want) || hits[c.contextID] {
 			rows = append(rows, c)
 		}
 	}
@@ -653,7 +643,7 @@ func (l *sessionsScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		if len(rows) == 0 {
 			return nil
 		}
-		if c := one(); c.peer != "" {
+		if c := one(); c.Peer != "" {
 			return m.showPeer(c)
 		}
 		return m.switchTo(one())
@@ -682,7 +672,7 @@ func (m *Model) switchTo(c *conversation) tea.Cmd {
 	if c == m.chat {
 		return nil
 	}
-	if m.chat.peer != "" {
+	if m.chat.Peer != "" {
 		m.chat = c
 		m.input.SetValue(m.input.Value() + c.draft)
 		c.draft = ""
@@ -706,12 +696,12 @@ func (l *sessionsScreen) delete(m *Model, c, selected *conversation) tea.Cmd {
 	case c.title == "":
 		m.setNotice("nothing to delete here yet", false)
 		return nil
-	case c.pending:
+	case c.Pending:
 		m.setNotice("an answer is on its way there: /cancel it first", true)
 		return nil
-	case c != selected && c.peer != "":
+	case c != selected && c.Peer != "":
 		l.deleting = c
-		m.setNotice("press ctrl+d again to delete the conversation of "+c.peer+" “"+short(c.title, 40)+"”", false)
+		m.setNotice("press ctrl+d again to delete the conversation of "+c.Peer+" “"+short(c.title, 40)+"”", false)
 		return nil
 	case c != selected:
 		l.deleting = c
@@ -752,14 +742,14 @@ func (m *Model) deleted(msg deletedMsg) tea.Cmd {
 // cancel stops the answer on its way in the session shown, and the tasks
 // the agent delegated in it.
 func (m *Model) cancel() tea.Cmd {
-	if !m.chat.pending && len(m.chat.tasks) == 0 {
+	if !m.chat.Pending && len(m.chat.tasks) == 0 {
 		m.setNotice("no answer is on its way here", false)
 		return nil
 	}
 	id := m.chat.contextID
 	what := "answer"
 	switch {
-	case !m.chat.pending:
+	case !m.chat.Pending:
 		what = "tasks"
 	case len(m.chat.tasks) > 0:
 		what = "answer and the tasks"
@@ -796,11 +786,11 @@ func (l *sessionsScreen) view(m *Model) string {
 	for i := first; i < min(len(rows), first+shown); i++ {
 		c := rows[i]
 		title := cmp.Or(c.title, "new conversation")
-		if c.peer != "" {
-			title = c.peer + ": " + title
+		if c.Peer != "" {
+			title = c.Peer + ": " + title
 		}
 		var after string
-		if c.pending {
+		if c.Pending {
 			after = " " + lipgloss.NewStyle().Foreground(accent).Render(m.runningFrame())
 		}
 		if !c.last.IsZero() {

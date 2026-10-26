@@ -149,11 +149,6 @@ func TestTUIBackendAsk(t *testing.T) {
 	if len(calling) == 0 || !strings.HasSuffix(calling[0], " bytes") {
 		t.Fatalf("calling %q", calling)
 	}
-	for n, want := range map[int]string{3277: "3.2 KiB", 1024: "1.0 KiB", 1023: "1023 bytes"} {
-		if got := tuiplugin.Size(n); got != want {
-			t.Fatalf("a call of %d bytes: %q", n, got)
-		}
-	}
 	var kinds []string
 	for _, e := range events {
 		kinds = append(kinds, string(e.Kind))

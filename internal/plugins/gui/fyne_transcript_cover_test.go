@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -84,84 +85,92 @@ func TestFyneTranscriptEventKinds(t *testing.T) {
 	now := time.Now()
 	fyne.DoAndWait(func() {
 		before := len(ui.content.Objects)
-		apply := func(events ...ChatEvent) { ui.applyEvents(events) }
+		apply := func(events ...chat.Event) { ui.applyEvents(events) }
 
-		apply(ChatEvent{Kind: plugin.SessionQueued, Text: "Later, please.", At: now})
+		apply(chat.Event{Kind: plugin.SessionQueued, Text: "Later, please.", At: now})
 		if got := tcLast(ui); !strings.Contains(got, "Later, please.") || !strings.Contains(got, tr("speaker.queue", nil)) {
 			t.Errorf("queued message shows %q", got)
 		}
-		apply(ChatEvent{Kind: plugin.SessionQueued, At: now})
+		apply(chat.Event{Kind: plugin.SessionQueued, At: now})
 		if got := tcLast(ui); !strings.Contains(got, tr("queue.text", nil)) {
 			t.Errorf("queued message without text shows %q", got)
 		}
-		apply(ChatEvent{Kind: plugin.SessionFailed, At: now})
+		apply(chat.Event{Kind: plugin.SessionFailed, At: now})
 		if got := tcLast(ui); !strings.Contains(got, tr("end.failed", nil)) || !strings.Contains(got, tr("speaker.status", nil)) {
 			t.Errorf("failed answer shows %q", got)
 		}
-		apply(ChatEvent{Kind: plugin.SessionFailed, Text: "the provider is down", At: now})
+		apply(chat.Event{Kind: plugin.SessionFailed, Text: "the provider is down", At: now})
 		if got := tcLast(ui); !strings.Contains(got, "the provider is down") {
 			t.Errorf("failed answer with reason shows %q", got)
 		}
-		apply(ChatEvent{Kind: plugin.SessionCanceled, Text: "ignored", At: now})
+		apply(chat.Event{Kind: plugin.SessionCanceled, Text: "ignored", At: now})
 		if got := tcLast(ui); !strings.Contains(got, tr("end.stopped", nil)) || strings.Contains(got, "ignored") {
 			t.Errorf("stopped answer shows %q", got)
 		}
-		apply(ChatEvent{Kind: plugin.SessionAsked, Done: true, Text: "raw", Question: &ChatQuestion{Text: "Tabs or one page?"}, At: now})
-		if got := tcLast(ui); !strings.Contains(got, tr("speaker.answered", nil)) || !strings.Contains(got, "Tabs or one page?") {
+		apply(chat.Event{Kind: plugin.SessionAsked, Text: "Tabs or one page?", At: now})
+		question := ui.content.Objects[len(ui.content.Objects)-1].(*fyne.Container)
+		if _, right := question.Layout.(ownerMessageLayout); right {
+			t.Fatal("the agent's question is on the owner's side")
+		}
+		apply(chat.Event{Kind: plugin.SessionAsked, Done: true, Text: "Tabs", At: now})
+		reply := ui.content.Objects[len(ui.content.Objects)-1].(*fyne.Container)
+		reply.Resize(fyne.NewSize(600, 150))
+		if _, right := reply.Layout.(ownerMessageLayout); !right || reply.Objects[0].Position().X <= 0 {
+			t.Fatal("the owner's reply is not on the right")
+		}
+		if _, right := question.Layout.(ownerMessageLayout); right {
+			t.Fatal("answering moved the original question to the right")
+		}
+		if got := tcLast(ui); !strings.Contains(got, tr("speaker.answered", nil)) || !strings.Contains(got, "Tabs") {
 			t.Errorf("answered question shows %q", got)
 		}
 		if ui.asking != nil {
 			t.Error("an answered question waits for an answer")
 		}
-		if len(ui.content.Objects) != before+6 {
-			t.Errorf("%d messages added, want 6", len(ui.content.Objects)-before)
+		if len(ui.content.Objects) != before+7 {
+			t.Errorf("%d messages added, want 7", len(ui.content.Objects)-before)
 		}
 
-		// A thought shows as such, calls of the model and empty words add
-		// nothing, and all tell that the thread works.
+		// A thought shows as such, and calls of the model and empty words
+		// add nothing.
 		count := len(ui.content.Objects)
-		ui.activity.busy = false
-		apply(ChatEvent{Kind: plugin.SessionThought, Text: "hmm", At: now})
-		if !ui.activity.busy {
-			t.Error("a thought does not tell the thread works")
-		}
-		ui.activity.busy = false
-		apply(ChatEvent{Kind: plugin.SessionCalling, At: now},
-			ChatEvent{Kind: plugin.SessionSay, Text: "   ", At: now},
-			ChatEvent{Kind: plugin.SessionSuggestion, Text: "", At: now})
-		if !ui.activity.busy {
-			t.Error("a call of the model does not tell the thread works")
-		}
+		apply(chat.Event{Kind: plugin.SessionThought, Text: "hmm", At: now})
+		apply(chat.Event{Kind: plugin.SessionCalling, At: now},
+			chat.Event{Kind: plugin.SessionSay, Text: "   ", At: now},
+			chat.Event{Kind: plugin.SessionSuggestion, Text: "", At: now})
 		if len(ui.content.Objects) != count+1 {
 			t.Errorf("a thought and empty words added %d messages, want 1", len(ui.content.Objects)-count)
 		}
 
-		// An answer of the thread leaves it working while other sessions
-		// work, not counting the thread itself.
-		apply(ChatEvent{Kind: plugin.SessionWorking, N: 1, Own: true})
-		apply(ChatEvent{Kind: plugin.SessionAnswer, At: now})
-		if ui.activity.busy {
-			t.Error("the thread works on after its own answer")
+		// An answer of the thread ends its own work; the sessions it handed
+		// messages to are counted beside it, as in the terminal UI.
+		apply(chat.Event{Kind: plugin.SessionMessage, Text: "go on", At: now})
+		apply(chat.Event{Kind: plugin.SessionWorking, N: 2, Own: true})
+		if !ui.ctx.session.Pending || ui.ctx.session.Active() != 1 {
+			t.Errorf("working: %+v", ui.ctx.session)
 		}
-		apply(ChatEvent{Kind: plugin.SessionWorking, N: 2, Own: true})
-		apply(ChatEvent{Kind: plugin.SessionCanceled, At: now})
-		if !ui.activity.busy {
-			t.Error("the thread stops working while a session works")
+		apply(chat.Event{Kind: plugin.SessionAnswer, At: now})
+		if ui.ctx.session.Pending || ui.ctx.session.Active() != 1 {
+			t.Errorf("after its answer: %+v", ui.ctx.session)
+		}
+		apply(chat.Event{Kind: plugin.SessionWorking})
+		if ui.ctx.session.Active() != 0 {
+			t.Errorf("idle: %+v", ui.ctx.session)
 		}
 
 		// The workspace of the session stands beside its title.
-		apply(ChatEvent{Kind: sessionDirectory, Text: "/home/lucas/work"})
+		apply(chat.Event{Kind: sessionDirectory, Text: "/home/lucas/work"})
 		if ui.meta.Text != "/home/lucas/work" {
 			t.Errorf("meta %q", ui.meta.Text)
 		}
-		apply(ChatEvent{Kind: sessionDirectory})
+		apply(chat.Event{Kind: sessionDirectory})
 		if ui.meta.Text != tr("session.workspace", nil) {
 			t.Errorf("meta without workspace %q", ui.meta.Text)
 		}
 
 		// The thread keeps its title.
 		title := ui.title.String()
-		apply(ChatEvent{Kind: plugin.SessionTitle, Text: "Renamed"})
+		apply(chat.Event{Kind: plugin.SessionTitle, Text: "Renamed"})
 		if ui.title.String() != title {
 			t.Errorf("the thread was renamed to %q", ui.title.String())
 		}
@@ -174,11 +183,11 @@ func TestFyneTranscriptSessionTitle(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
 	tcSession(t, ui, SessionEntry{ID: "owner/s1", Title: "Review the sidebar"})
 	fyne.DoAndWait(func() {
-		ui.applyEvents([]ChatEvent{{Kind: plugin.SessionTitle}})
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionTitle}})
 		if got := ui.title.String(); got != "REVIEW THE SIDEBAR" {
 			t.Errorf("an empty title changed the header to %q", got)
 		}
-		ui.applyEvents([]ChatEvent{{Kind: plugin.SessionTitle, Text: "Sidebar review"}})
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionTitle, Text: "Sidebar review"}})
 		if got := ui.title.String(); got != "SIDEBAR REVIEW" {
 			t.Errorf("header %q", got)
 		}
@@ -206,26 +215,26 @@ func TestFyneTranscriptCutoffAndHanded(t *testing.T) {
 		// Without a chat there is nothing to apply to.
 		ui.chat = nil
 		count := len(ui.content.Objects)
-		ui.applyEvents([]ChatEvent{{Kind: plugin.SessionMessage, Text: "lost", At: time.Now()}})
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionMessage, Text: "lost", At: time.Now()}})
 		if len(ui.content.Objects) != count {
 			t.Error("events applied without a chat")
 		}
 
-		chat := newFyneChat(ui, 0, ui.thread, true)
-		ui.chat = chat
-		ui.applyEvents([]ChatEvent{{Kind: plugin.SessionHanded, Text: "s5", At: old}})
-		if chat.exchange == nil || !chat.exchange.sessions["s5"] {
-			t.Fatalf("the handed session is in no part: %+v", chat.exchange)
+		talk := newFyneChat(ui, 0, ui.thread, true)
+		ui.chat = talk
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionHanded, Text: "s5", At: old}})
+		if talk.exchange == nil || !talk.exchange.sessions["s5"] {
+			t.Fatalf("the handed session is in no part: %+v", talk.exchange)
 		}
-		ui.applyEvents([]ChatEvent{
+		ui.applyEvents([]chat.Event{
 			{Kind: plugin.SessionMessage, Text: "An old message", At: old},
 			{Kind: plugin.SessionTask, Text: "An old task", At: old},
 		})
-		if chat.shown || len(ui.content.Objects) != count {
-			t.Errorf("events before the window show: shown %v, %d added", chat.shown, len(ui.content.Objects)-count)
+		if talk.shown || len(ui.content.Objects) != count {
+			t.Errorf("events before the window show: shown %v, %d added", talk.shown, len(ui.content.Objects)-count)
 		}
-		ui.applyEvents([]ChatEvent{{Kind: plugin.SessionTask, Text: "A new task", At: time.Now()}})
-		if !chat.shown || len(ui.content.Objects) != count+1 || !strings.Contains(tcLast(ui), "A new task") {
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionTask, Text: "A new task", At: time.Now()}})
+		if !talk.shown || len(ui.content.Objects) != count+1 || !strings.Contains(tcLast(ui), "A new task") {
 			t.Errorf("a recent task does not show: %q", tcLast(ui))
 		}
 		if !strings.Contains(tcLast(ui), tr("speaker.task", nil)) {
@@ -243,7 +252,7 @@ func TestFyneTranscriptCutoffAndHanded(t *testing.T) {
 		if strings.Contains(tcText(ui.sidebarList), "REVIEW THE SIDEBAR") {
 			t.Fatal("s1 is in the sidebar before it is handed to")
 		}
-		ui.applyEvents([]ChatEvent{{Kind: plugin.SessionHanded, Text: "s1", At: time.Now()}})
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionHanded, Text: "s1", At: time.Now()}})
 		if !strings.Contains(tcText(ui.sidebarList), "REVIEW THE SIDEBAR") {
 			t.Errorf("sidebar %q", tcText(ui.sidebarList))
 		}
@@ -256,7 +265,7 @@ func TestFyneTranscriptExpandableText(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
 	long := strings.Repeat("ä", textLimit+5)
 	fyne.DoAndWait(func() {
-		ui.applyEvents([]ChatEvent{{Kind: plugin.SessionSay, Text: long, At: time.Now()}})
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionSay, Text: long, At: time.Now()}})
 		buttons := tcTapTexts(ui.content.Objects[len(ui.content.Objects)-1])
 		if len(buttons) != 1 {
 			t.Fatalf("%d buttons on a long text", len(buttons))
@@ -294,7 +303,7 @@ func TestFyneTranscriptExpandableText(t *testing.T) {
 func TestFyneTranscriptStepLines(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
 	fyne.DoAndWait(func() {
-		ui.applyEvents([]ChatEvent{
+		ui.applyEvents([]chat.Event{
 			{Kind: plugin.SessionStep, Tool: "bash", At: time.Now()},
 			{Kind: plugin.SessionStep, At: time.Now()},
 			{Kind: plugin.SessionStep, CallID: "x9", At: time.Now()},
@@ -335,11 +344,11 @@ func TestFyneTranscriptToggle(t *testing.T) {
 	ui := e2eWindowWith(t, fyne.NewSize(1400, 900), sessions)
 	calls := map[string]*fyneToolCall{}
 	fyne.DoAndWait(func() {
-		var events []ChatEvent
+		var events []chat.Event
 		for _, id := range []string{"broken", "gone", "empty", "slow", "stale"} {
-			events = append(events, ChatEvent{Kind: plugin.SessionStep, Tool: "read", CallID: id, Done: true, At: time.Now()})
+			events = append(events, chat.Event{Kind: plugin.SessionStep, Tool: "read", CallID: id, Done: true, At: time.Now()})
 		}
-		events = append(events, ChatEvent{Kind: plugin.SessionStep, Tool: "plain", Done: true, At: time.Now()})
+		events = append(events, chat.Event{Kind: plugin.SessionStep, Tool: "plain", Done: true, At: time.Now()})
 		ui.applyEvents(events)
 		for _, id := range []string{"broken", "gone", "empty", "slow", "stale", "plain"} {
 			calls[id] = ui.chat.calls[id]
@@ -424,10 +433,9 @@ func TestFyneTranscriptChangedOutsideBatch(t *testing.T) {
 // Where a session stands reads from its trace for every phase.
 func TestSessionPhaseOfMore(t *testing.T) {
 	at := time.Date(2026, 10, 22, 20, 0, 0, 0, time.UTC)
-	question := &ChatQuestion{Text: "Which?"}
 	cases := []struct {
 		name     string
-		trace    []ChatEvent
+		trace    []chat.Event
 		running  bool
 		phase    string
 		word     string
@@ -437,37 +445,37 @@ func TestSessionPhaseOfMore(t *testing.T) {
 	}{
 		{
 			name:    "a question answered",
-			trace:   []ChatEvent{{Kind: plugin.SessionAsked, Question: question, At: at}, {Kind: plugin.SessionAsked, Done: true, At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionAsked, Text: "Which?", At: at}, {Kind: plugin.SessionAsked, Done: true, At: at}},
 			running: true, phase: "thinking", word: tr("phase.thinking", nil), next: tr("phase.nextTool", nil),
 		},
 		{
 			name:    "a question without text",
-			trace:   []ChatEvent{{Kind: plugin.SessionAsked, At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionAsked, At: at}},
 			running: true, phase: "asked", word: tr("phase.asked", nil), next: tr("phase.nextAnswer", nil),
 		},
 		{
 			name:    "writing an answer",
-			trace:   []ChatEvent{{Kind: plugin.SessionMessage, At: at}, {Kind: plugin.SessionAnswering, At: at}, {Kind: plugin.SessionJobs, Text: "  make test \n"}},
+			trace:   []chat.Event{{Kind: plugin.SessionMessage, At: at}, {Kind: plugin.SessionAnswering, At: at}, {Kind: plugin.SessionJobs, Text: "  make test \n"}},
 			running: true, phase: "answering", word: tr("phase.answering", nil), next: tr("phase.nextEnd", nil), jobs: "make test",
 		},
 		{
 			name:    "an answer left unwritten",
-			trace:   []ChatEvent{{Kind: plugin.SessionAnswering}},
+			trace:   []chat.Event{{Kind: plugin.SessionAnswering}},
 			running: false, phase: "answering", word: tr("phase.ready", nil), next: tr("phase.nextNothing", nil),
 		},
 		{
 			name:    "writing while asked",
-			trace:   []ChatEvent{{Kind: plugin.SessionAsked, Question: question}, {Kind: plugin.SessionAnswering}, {Kind: plugin.SessionSay}},
+			trace:   []chat.Event{{Kind: plugin.SessionAsked, Text: "Which?"}, {Kind: plugin.SessionAnswering}, {Kind: plugin.SessionSay}},
 			running: true, phase: "asked", word: tr("phase.asked", nil), next: tr("phase.nextAnswer", nil), question: "Which?",
 		},
 		{
 			name:    "a thought left unthought",
-			trace:   []ChatEvent{{Kind: plugin.SessionTask}},
+			trace:   []chat.Event{{Kind: plugin.SessionTask}},
 			running: false, phase: "thinking", word: tr("phase.ready", nil), next: tr("phase.nextNothing", nil),
 		},
 		{
 			name:    "a failed answer",
-			trace:   []ChatEvent{{Kind: plugin.SessionStep, Tool: "bash"}, {Kind: plugin.SessionFailed, At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionStep, Tool: "bash"}, {Kind: plugin.SessionFailed, At: at}},
 			running: true, phase: "failed", word: tr("phase.failed", nil), next: tr("phase.nextNothing", nil),
 		},
 	}
@@ -489,17 +497,17 @@ func TestSessionPhaseOfMore(t *testing.T) {
 
 // What a call does is its text without its tool.
 func TestFynePhaseWhat(t *testing.T) {
-	live := func(call ChatEvent) fynePhase { return fynePhase{phase: "tool", live: true, call: &call} }
+	live := func(call chat.Event) fynePhase { return fynePhase{phase: "tool", live: true, call: &call} }
 	cases := []struct {
 		phase fynePhase
 		want  string
 	}{
-		{live(ChatEvent{Tool: "read", Text: "read · a file"}), "a file"},
-		{live(ChatEvent{Tool: "read", Text: "read"}), ""},
-		{live(ChatEvent{Tool: "read", Text: "something else"}), "something else"},
-		{live(ChatEvent{Text: tr("common.tool", nil) + " · x"}), "x"},
-		{live(ChatEvent{Text: "plain"}), "plain"},
-		{fynePhase{phase: "tool", call: &ChatEvent{Text: "x"}}, ""},
+		{live(chat.Event{Tool: "read", Text: "read · a file"}), "a file"},
+		{live(chat.Event{Tool: "read", Text: "read"}), ""},
+		{live(chat.Event{Tool: "read", Text: "something else"}), "something else"},
+		{live(chat.Event{Text: tr("common.tool", nil) + " · x"}), "x"},
+		{live(chat.Event{Text: "plain"}), "plain"},
+		{fynePhase{phase: "tool", call: &chat.Event{Text: "x"}}, ""},
 		{fynePhase{phase: "tool", live: true}, ""},
 	}
 	for _, tc := range cases {
@@ -518,8 +526,8 @@ func TestFyneArtefactBlock(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
 	at := time.Now().Add(-time.Minute)
 	fyne.DoAndWait(func() {
-		working := ui.artefactBlock(SessionEntry{ID: "owner/x1", Running: true}, []ChatEvent{
-			{Kind: plugin.SessionAsked, Question: &ChatQuestion{Text: "Which file?"}, At: at},
+		working := ui.artefactBlock(SessionEntry{ID: "owner/x1", Running: true}, []chat.Event{
+			{Kind: plugin.SessionAsked, Text: "Which file?", At: at},
 			{Kind: plugin.SessionJobs, Text: "make test\nmake lint"},
 			{Kind: plugin.SessionStep, Tool: "grep", Text: "grep · pattern", At: at},
 		})
@@ -534,7 +542,7 @@ func TestFyneArtefactBlock(t *testing.T) {
 			}
 		}
 
-		failed := ui.artefactBlock(SessionEntry{ID: "owner/x2", Title: "Broken build"}, []ChatEvent{
+		failed := ui.artefactBlock(SessionEntry{ID: "owner/x2", Title: "Broken build"}, []chat.Event{
 			{Kind: plugin.SessionJobs, Text: "make"},
 			{Kind: plugin.SessionStep, Tool: "bash", Text: "bash · go build", Done: true, Failed: true, At: at},
 			{Kind: plugin.SessionStep, Tool: "read", Text: "read · x", Done: true, At: at},
@@ -566,20 +574,20 @@ func TestFyneArtefactBlock(t *testing.T) {
 // The lanes of a chart are named by tool, by the start of the text, or as a
 // tool; no more than six show, and calls without a time keep their order.
 func TestToolChartLanes(t *testing.T) {
-	if got := chartToolName(ChatEvent{Text: "grep · pattern"}); got != "grep" {
+	if got := chartToolName(chat.Event{Text: "grep · pattern"}); got != "grep" {
 		t.Errorf("lane %q", got)
 	}
-	if got := chartToolName(ChatEvent{}); got != tr("common.tool", nil) {
+	if got := chartToolName(chat.Event{}); got != tr("common.tool", nil) {
 		t.Errorf("lane %q", got)
 	}
 	start := time.Date(2026, 10, 22, 20, 0, 0, 0, time.UTC)
-	var calls []ChatEvent
+	var calls []chat.Event
 	for i, tool := range []string{"a", "b", "c", "d", "e", "f", "g", "a"} {
 		at := start.Add(time.Duration(i) * time.Minute)
 		if tool == "b" {
 			at = time.Time{}
 		}
-		calls = append(calls, ChatEvent{Kind: plugin.SessionStep, Tool: tool, Done: true, At: at})
+		calls = append(calls, chat.Event{Kind: plugin.SessionStep, Tool: tool, Done: true, At: at})
 	}
 	chart := toolChartOf(calls, nil, false)
 	if len(chart.lanes) != chartLanes || chart.lanes[0].name != "a" || chart.lanes[0].count != 2 {
@@ -618,7 +626,7 @@ func TestFyneArtefactsRail(t *testing.T) {
 	fyne.DoAndWait(func() {
 		ui.inspecting = nil
 		ui.section = &fyneExchange{at: time.Now(), sessions: map[string]bool{"s1": true}}
-		ui.steps["owner/s1"] = &fyneTrace{list: []ChatEvent{{Kind: plugin.SessionFailed, At: time.Now()}}}
+		ui.steps["owner/s1"] = &fyneTrace{list: []chat.Event{{Kind: plugin.SessionFailed, At: time.Now()}}}
 		ui.artefacts()
 		ui.artefacts()
 	})
@@ -687,7 +695,7 @@ func TestFyneTranscriptQueueTaken(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
 	now := time.Now()
 	fyne.DoAndWait(func() {
-		apply := func(events ...ChatEvent) { ui.applyEvents(events) }
+		apply := func(events ...chat.Event) { ui.applyEvents(events) }
 		count := func(text string) (queued, mine int) {
 			for _, o := range ui.content.Objects {
 				got := tcText(o)
@@ -702,16 +710,16 @@ func TestFyneTranscriptQueueTaken(t *testing.T) {
 			}
 			return queued, mine
 		}
-		apply(ChatEvent{Kind: plugin.SessionQueued, Text: "first in line", At: now},
-			ChatEvent{Kind: plugin.SessionQueued, Text: "second in line", At: now})
+		apply(chat.Event{Kind: plugin.SessionQueued, Text: "first in line", At: now},
+			chat.Event{Kind: plugin.SessionQueued, Text: "second in line", At: now})
 		if q, _ := count("in line"); q != 2 {
 			t.Fatalf("%d queued show", q)
 		}
-		apply(ChatEvent{Kind: plugin.SessionUnqueued, At: now})
+		apply(chat.Event{Kind: plugin.SessionUnqueued, At: now})
 		if q, _ := count("second in line"); q != 0 {
 			t.Fatal("the message taken back still shows")
 		}
-		apply(ChatEvent{Kind: plugin.SessionMessage, Text: "first in line", At: now})
+		apply(chat.Event{Kind: plugin.SessionMessage, Text: "first in line", At: now})
 		if q, mine := count("first in line"); q != 0 || mine != 1 {
 			t.Fatalf("taken: %d queued, %d of the owner", q, mine)
 		}
@@ -728,10 +736,10 @@ func TestFyneTranscriptThinking(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
 	now := time.Now()
 	fyne.DoAndWait(func() {
-		apply := func(events ...ChatEvent) { ui.applyEvents(events) }
-		chat := ui.chat
-		apply(ChatEvent{Kind: plugin.SessionMessage, Text: "Think it over", At: now})
-		thinking := chat.thinking
+		apply := func(events ...chat.Event) { ui.applyEvents(events) }
+		talk := ui.chat
+		apply(chat.Event{Kind: plugin.SessionMessage, Text: "Think it over", At: now})
+		thinking := talk.thinking
 		if thinking == nil || !holds(ui.content.Objects[len(ui.content.Objects)-1], thinking.pulse) {
 			t.Fatal("the model thinking shows no animation at the end")
 		}
@@ -739,8 +747,8 @@ func TestFyneTranscriptThinking(t *testing.T) {
 			t.Fatalf("the animation reads as a message: %q", got)
 		}
 		count := len(ui.content.Objects)
-		apply(ChatEvent{Kind: plugin.SessionThought, Text: "First I look ", At: now},
-			ChatEvent{Kind: plugin.SessionThought, Text: strings.Repeat("closer ", 80) + "at the end.", At: now})
+		apply(chat.Event{Kind: plugin.SessionThought, Text: "First I look ", At: now},
+			chat.Event{Kind: plugin.SessionThought, Text: strings.Repeat("closer ", 80) + "at the end.", At: now})
 		if len(ui.content.Objects) != count {
 			t.Fatal("pieces of a thought add messages")
 		}
@@ -758,8 +766,8 @@ func TestFyneTranscriptThinking(t *testing.T) {
 			t.Fatalf("the animation reads %q", label)
 		}
 
-		apply(ChatEvent{Kind: plugin.SessionAnswer, Text: "Done.", At: now})
-		if chat.thinking != nil || !thinking.pulse.stopped {
+		apply(chat.Event{Kind: plugin.SessionAnswer, Text: "Done.", At: now})
+		if talk.thinking != nil || !thinking.pulse.stopped {
 			t.Fatal("the animation stays once the answer is there")
 		}
 		for _, o := range ui.content.Objects {
@@ -779,10 +787,45 @@ func TestFyneTranscriptThinking(t *testing.T) {
 		}
 
 		count = len(ui.content.Objects)
-		apply(ChatEvent{Kind: plugin.SessionMessage, Text: "Quick one", At: now},
-			ChatEvent{Kind: plugin.SessionAnswer, Text: "Sure.", At: now})
+		apply(chat.Event{Kind: plugin.SessionMessage, Text: "Quick one", At: now},
+			chat.Event{Kind: plugin.SessionAnswer, Text: "Sure.", At: now})
 		if len(ui.content.Objects) != count+2 {
 			t.Fatalf("a round without thoughts added %d messages, want 2", len(ui.content.Objects)-count)
+		}
+	})
+}
+
+// A question waits past the end of the answer that asked it, until its wait
+// is over, as in the terminal UI: in the thread, which relays the questions
+// of the sessions it handed messages to, and in a session.
+func TestFyneQuestionOutlivesItsAnswer(t *testing.T) {
+	ui, _ := e2eWindow(t, fyne.NewSize(1400, 900))
+	now := time.Now()
+	question := chat.Event{Kind: plugin.SessionAsked, Text: "Ohne Commit-Hooks?", Options: []string{"Einmal erlauben", "Nicht ausführen"}, At: now}
+	// Fatal would stop the goroutine of Fyne, not the test, and DoAndWait
+	// would wait for good: a failure returns instead.
+	fyne.DoAndWait(func() {
+		for _, id := range []string{ui.thread, "owner/s1"} {
+			ui.ctx = &fyneContext{id: id, state: &fyneSessionState{}}
+			ui.chat = newFyneChat(ui, 0, id, id == ui.thread)
+			ui.applyEvents([]chat.Event{
+				{Kind: plugin.SessionMessage, Text: "Ohne Commit Hooks!", At: now},
+				question,
+				{Kind: plugin.SessionAnswer, Text: "Alles klar.", At: now},
+			})
+			if ui.asking == nil || ui.asking.question.Text != "Ohne Commit-Hooks?" {
+				t.Errorf("%s: the answer ended the question: %+v", id, ui.asking)
+				return
+			}
+			ui.applyEvents([]chat.Event{{Kind: plugin.SessionFailed, At: now}, {Kind: plugin.SessionMessage, Text: "hm", At: now}})
+			if ui.asking == nil {
+				t.Errorf("%s: a failed answer or a message ended the question", id)
+				return
+			}
+			ui.applyEvents([]chat.Event{{Kind: plugin.SessionAsked, Done: true, Text: "Einmal erlauben", At: now}})
+			if ui.asking != nil {
+				t.Errorf("%s: the question waits after its wait is over", id)
+			}
 		}
 	})
 }

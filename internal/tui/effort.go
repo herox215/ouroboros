@@ -61,7 +61,7 @@ func (m *Model) openEffort() tea.Cmd {
 		m.setNotice("set up the node first: /setup", true)
 		return nil
 	}
-	if m.chat.peer != "" {
+	if m.chat.Peer != "" {
 		m.setNotice("the conversation of a peer is answered with the model's own effort", true)
 		return nil
 	}

@@ -127,12 +127,11 @@ func TestRunFakeGo(t *testing.T) {
 				"printf '%%s\\n' '{\"Action\":\"skip\",\"Package\":\"example\",\"Test\":\"Optional\"}' '{\"Action\":\"%s\",\"Package\":\"example\",\"Test\":\"Main\"}'\nexit %d\n"
 			body = strings.ReplaceAll(body, "REPLACE", "$"+"{profile#-coverprofile=}")
 			exe := runnerShell(t, source, fmt.Sprintf(body, action, status))
-			gui := false
-			report, err := Run(context.Background(), source, exe, Options{GUI: &gui})
+			report, err := Run(context.Background(), source, exe, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			runnerContains(t, report, "SKIP: example Optional", "Statement coverage: 75.0%", "example/p.go:4-5", "explicitly skipped (gui=false)")
+			runnerContains(t, report, "SKIP: example Optional", "Statement coverage: 75.0%", "example/p.go:4-5")
 			if status != 0 {
 				runnerContains(t, report, "FAIL: example Main", "Coverage is partial", "RESULT: problems found")
 			} else {
@@ -161,11 +160,6 @@ func TestRunFakeGo(t *testing.T) {
 			dir := filepath.Dir(profile)
 			runnerContains(t, report, "Full logs and coverage: "+dir)
 			runnerContains(t, runnerRead(t, filepath.Join(dir, "go-tests.json")), "Optional", "Main")
-			for _, name := range []string{"gui-tests.json", "frontend.log"} {
-				if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
-					t.Fatalf("unexpected %s: %v", name, err)
-				}
-			}
 		})
 	}
 }
@@ -211,55 +205,21 @@ func TestRunCancelledContext(t *testing.T) {
 	}
 }
 
-func TestRunWithGUI(t *testing.T) {
-	yes := true
-	for _, tc := range []struct {
-		name             string
-		gui              *bool
-		failGo, failNode bool
-		result           string
-	}{
-		{"by default", nil, false, false, "RESULT: selected test commands passed"},
-		{"asked for", &yes, false, false, "RESULT: selected test commands passed"},
-		{"after failed tests", nil, true, false, "RESULT: problems found"},
-		{"frontend fails", nil, false, true, "RESULT: problems found"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			source := runnerSource(t)
-			t.Setenv("TMPDIR", t.TempDir())
-			// Go is called by its absolute path and leads PATH for the tests
-			// that call Go themselves; node is looked up in PATH.
-			toolchain, tools := t.TempDir(), t.TempDir()
-			t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
-			goBody := "printf '%s\\n' \"$*\" >> calls\nprintf '%s\\n' \"$PATH\" > path\n" +
-				"for a in \"$@\"; do case $a in -coverprofile=*) printf 'mode: set\\nexample/p.go:1.1,2.2 1 1\\n' > \"${a#-coverprofile=}\";; esac; done\n"
-			if tc.failGo {
-				goBody += "case \"$*\" in *./...) exit 1;; esac\n"
-			}
-			nodeBody := "printf 'node %s\\n' \"$*\" >> calls\n"
-			if tc.failNode {
-				nodeBody += "exit 3\n"
-			}
-			goTool := runnerScript(t, filepath.Join(toolchain, "go"), goBody)
-			runnerScript(t, filepath.Join(tools, "node"), nodeBody)
-			report, err := Run(context.Background(), source, goTool, Options{GUI: tc.gui})
-			if err != nil {
-				t.Fatal(err)
-			}
-			gui := goTool + " test -json -count=1 -race -timeout=5m -tags=production,webkit2_41 ./internal/plugins/gui"
-			frontend := "node --test internal/plugins/gui/frontend_test.mjs"
-			runnerContains(t, report, "$ "+gui+"\n", "$ "+frontend+"\n", "Statement coverage: 100.0%", tc.result)
-			calls := strings.Split(runnerRead(t, filepath.Join(source, "calls")), "\n")
-			if len(calls) != 4 || !strings.HasSuffix(calls[0], " ./...") || calls[1] != strings.TrimPrefix(gui, goTool+" ") || calls[2] != frontend {
-				t.Fatalf("calls=%q", calls)
-			}
-			if path := runnerRead(t, filepath.Join(source, "path")); !strings.HasPrefix(path, toolchain+string(os.PathListSeparator)+tools+string(os.PathListSeparator)) {
-				t.Fatalf("PATH of go: %s", path)
-			}
-			if strings.Contains(report, "explicitly skipped") {
-				t.Fatal(report)
-			}
-		})
+// Go called by its absolute path leads PATH, for the tests that call Go
+// themselves.
+func TestRunPutsGoFirstInPath(t *testing.T) {
+	source := runnerSource(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	toolchain := t.TempDir()
+	goTool := runnerScript(t, filepath.Join(toolchain, "go"), "printf '%s\\n' \"$PATH\" > path\n"+
+		"for a in \"$@\"; do case $a in -coverprofile=*) printf 'mode: set\\nexample/p.go:1.1,2.2 1 1\\n' > \"${a#-coverprofile=}\";; esac; done\n")
+	report, err := Run(context.Background(), source, goTool, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runnerContains(t, report, "Statement coverage: 100.0%", "RESULT: selected test commands passed")
+	if path := runnerRead(t, filepath.Join(source, "path")); !strings.HasPrefix(path, toolchain+string(os.PathListSeparator)) {
+		t.Fatalf("PATH of go: %s", path)
 	}
 }
 
@@ -267,8 +227,7 @@ func TestRunWithoutCoverage(t *testing.T) {
 	source := runnerSource(t)
 	t.Setenv("TMPDIR", t.TempDir())
 	exe := runnerShell(t, source, "exit 0\n")
-	gui := false
-	report, err := Run(context.Background(), source, exe, Options{GUI: &gui})
+	report, err := Run(context.Background(), source, exe, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

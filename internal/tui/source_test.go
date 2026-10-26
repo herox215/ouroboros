@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/openai"
 	"ouroboros/plugin"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 type sourceBackend struct {
@@ -41,7 +43,7 @@ func TestMessageSourcePerSend(t *testing.T) {
 	}
 	m.input.SetValue("queued")
 	m.send()()
-	m.chat.asking = &asking{}
+	m.chat.Asking = &chat.Question{}
 	m.choose("SQLite")()
 	if len(b.asks) != 1 || len(b.steers) != 2 {
 		t.Fatalf("asks %d steers %d", len(b.asks), len(b.steers))

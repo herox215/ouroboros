@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -71,7 +72,7 @@ func TestFyneReturnSends(t *testing.T) {
 	}
 	waitFor(t, func() bool { return ui.draft.Text == "" })
 	on(func() {
-		if notice := ui.ctx.state.notice; notice != tr("composer.sent", nil) {
+		if notice := ui.ctx.state.notice; notice != "" {
 			t.Errorf("notice %q", notice)
 		}
 	})
@@ -82,6 +83,7 @@ func TestFyneReturnWhenNotWritable(t *testing.T) {
 	ui, asked := fyneFixture(t)
 	on(func() {
 		ui.ctx.id = "peer-abc/one"
+		ui.ctx.session.Peer = peerOf(ui.ctx.id)
 		ui.draft.SetText("hallo")
 		ui.updateComposer()
 		ui.win.Canvas().Focus(ui.draft)
@@ -188,10 +190,9 @@ func TestFyneTypingDoesNotRefreshSessionStatus(t *testing.T) {
 
 func TestSessionPhaseOf(t *testing.T) {
 	at := time.Date(2026, 10, 22, 20, 0, 0, 0, time.UTC)
-	question := &ChatQuestion{Text: "Which?", Options: []string{"a", "b"}}
 	cases := []struct {
 		name    string
-		trace   []ChatEvent
+		trace   []chat.Event
 		running bool
 		phase   string
 		word    string
@@ -205,28 +206,28 @@ func TestSessionPhaseOf(t *testing.T) {
 		},
 		{
 			name:    "a call on its way",
-			trace:   []ChatEvent{{Kind: plugin.SessionStep, Tool: "read", Text: "read · a file", At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionStep, Tool: "read", Text: "read · a file", At: at}},
 			running: true, phase: "tool", word: tr("phase.calling", nil), next: tr("phase.nextResult", map[string]any{"tool": "read"}),
 			live: true, what: "a file",
 		},
 		{
 			name:    "a call that ended",
-			trace:   []ChatEvent{{Kind: plugin.SessionStep, Tool: "read", Text: "read · a file", Done: true, At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionStep, Tool: "read", Text: "read · a file", Done: true, At: at}},
 			running: true, phase: "thinking", word: tr("phase.thinking", nil), next: tr("phase.nextTool", nil), live: true,
 		},
 		{
 			name:    "a question",
-			trace:   []ChatEvent{{Kind: plugin.SessionAsked, Question: question, At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionAsked, Text: "Which?", Options: []string{"a", "b"}, At: at}},
 			running: true, phase: "asked", word: tr("phase.asked", nil), next: tr("phase.nextAnswer", nil), live: true,
 		},
 		{
 			name:    "an answer",
-			trace:   []ChatEvent{{Kind: plugin.SessionAnswer, Text: "done", At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionAnswer, Text: "done", At: at}},
 			running: false, phase: "done", word: tr("phase.done", nil), next: tr("phase.nextNothing", nil),
 		},
 		{
 			name:    "a stopped answer",
-			trace:   []ChatEvent{{Kind: plugin.SessionCanceled, At: at}},
+			trace:   []chat.Event{{Kind: plugin.SessionCanceled, At: at}},
 			running: false, phase: "canceled", word: tr("phase.canceled", nil), next: tr("phase.nextNothing", nil),
 		},
 	}
@@ -245,12 +246,12 @@ func TestSessionPhaseOf(t *testing.T) {
 
 func TestToolChartOf(t *testing.T) {
 	start := time.Date(2026, 10, 22, 20, 0, 0, 0, time.UTC)
-	calls := []ChatEvent{
+	calls := []chat.Event{
 		{Kind: plugin.SessionStep, Tool: "read", Text: "read · a", Done: true, At: start},
 		{Kind: plugin.SessionStep, Tool: "bash", Text: "bash · b", Done: true, At: start.Add(time.Minute)},
 		{Kind: plugin.SessionStep, Tool: "read", Text: "read · c", Done: true, At: start.Add(2 * time.Minute)},
 	}
-	pending := ChatEvent{Kind: plugin.SessionStep, Tool: "bash", Text: "bash · d", At: start.Add(3 * time.Minute)}
+	pending := chat.Event{Kind: plugin.SessionStep, Tool: "bash", Text: "bash · d", At: start.Add(3 * time.Minute)}
 	chart := toolChartOf(calls, &pending, true)
 	if len(chart.lanes) != 2 || chart.lanes[0].name != "read" || chart.lanes[0].count != 2 {
 		t.Fatalf("lanes %+v", chart.lanes)

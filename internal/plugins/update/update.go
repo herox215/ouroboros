@@ -74,8 +74,8 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		}, Detail: assistant.HowItEnded})
 		plugin.Add(ctx, plugin.Tool{
 			Name:        "check_sanity",
-			Description: "Run all Ouroboros Go tests with race detection and coverage, then native GUI and JavaScript frontend tests. Report failing packages/tests, skips and uncovered source line ranges that may need tests. Runs the source checkout of this build, not the current conversation directory. Keeps full logs/profile in a temporary directory; does not install a build. Expensive: use when explicitly requested, not after every edit. Coverage measures statements, not assertion quality or all branches; failures can leave it incomplete. Missing GUI dependencies are reported as failures, never silently skipped.",
-			Schema:      `{"type":"object","properties":{"timeout_minutes":{"type":"integer","minimum":1,"maximum":60,"description":"overall timeout in minutes, default 8"},"gui":{"type":"boolean","description":"include native GUI and frontend tests, default true; false reports these as skipped"}},"additionalProperties":false}`,
+			Description: "Run all Ouroboros Go tests with race detection and coverage. Report failing packages/tests, skips and uncovered source line ranges that may need tests. Runs the source checkout of this build, not the current conversation directory. Keeps full logs/profile in a temporary directory; does not install a build. Expensive: use when explicitly requested, not after every edit. Coverage measures statements, not assertion quality or all branches; failures can leave it incomplete.",
+			Schema:      `{"type":"object","properties":{"timeout_minutes":{"type":"integer","minimum":1,"maximum":60,"description":"overall timeout in minutes, default 8"}},"additionalProperties":false}`,
 			Trusted:     true,
 			Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 				var args sanity.Options

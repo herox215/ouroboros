@@ -69,7 +69,7 @@ func (ui *fyneUI) renderList() {
 		objects = append(objects, inset(12, 10, 12, 10, muted(message, theme.SizeNameText)))
 	}
 	setChildren(ui.sidebarList, objects...)
-	ui.showSessions(len(ui.entries) > 0)
+	ui.showSessions(len(order) > 0)
 }
 
 // showSessions shows the heading and the list of the sidebar only once there
@@ -87,6 +87,9 @@ func (ui *fyneUI) showSessions(show bool) {
 		if ui.sidebar != nil {
 			ui.sidebar.Refresh()
 		}
+	}
+	if ui.columns != nil {
+		ui.columns.Refresh()
 	}
 }
 

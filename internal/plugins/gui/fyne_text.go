@@ -10,7 +10,7 @@ import (
 	"ouroboros/plugin"
 )
 
-// The texts of the window, ported from frontend/i18n.js: English is what it
+// The texts of the window: English is what it
 // opens with, German stays beside it so that both wordings live in one place.
 // A text that is not in the table is shown as its key, which is what a
 // missing translation then looks like.
@@ -54,6 +54,7 @@ var fyneTexts = map[string]map[string]string{
 		"tool.failed":            "The tool result could not be loaded: {error}. Open and close it to retry.",
 		"tool.expandHint":        " · show the result",
 		"queue.text":             "Message queued",
+		"queue.takeBack":         " · ↑ takes it back",
 		"end.stopped":            "Answer stopped",
 		"end.failed":             "Answer failed",
 
@@ -103,16 +104,15 @@ var fyneTexts = map[string]map[string]string{
 		"question.sent":        "Answer delivered – the assistant goes on …",
 		"question.hint":        "Choose an answer or write your own below.",
 
-		"composer.label":       "Write a message",
-		"composer.draftLabel":  "Message / own answer",
-		"composer.placeholder": "Write a message",
-		"composer.stop":        "Stop",
-		"composer.send":        "Send",
-		"composer.enterHint":   "Enter sends · Shift+Enter for a new line",
-		"composer.sending":     "Sending …",
-		"composer.sent":        "Message delivered",
-		"composer.sendFailed":  "The message could not be sent: {error}",
-		"composer.stopFailed":  "The answer could not be stopped: {error}",
+		"composer.label":          "Write a message",
+		"composer.draftLabel":     "Message / own answer",
+		"composer.placeholder":    "Write a message",
+		"composer.stop":           "Stop",
+		"composer.send":           "Send",
+		"composer.enterHint":      "Enter sends · Shift+Enter for a new line",
+		"composer.sendFailed":     "The message could not be sent: {error}",
+		"composer.stopFailed":     "The answer could not be stopped: {error}",
+		"composer.takeBackFailed": "The message could not be taken back: {error}",
 
 		"sessions.title":           "Sessions",
 		"sessions.subtitle":        "Conversations of the node",
@@ -210,6 +210,7 @@ var fyneTexts = map[string]map[string]string{
 		"tool.failed":            "Tool-Ergebnis konnte nicht geladen werden: {error}. Zum Wiederholen auf- und zuklappen.",
 		"tool.expandHint":        " · Ergebnis aufklappen",
 		"queue.text":             "Nachricht eingereiht",
+		"queue.takeBack":         " · ↑ holt sie zurück",
 		"end.stopped":            "Antwort gestoppt",
 		"end.failed":             "Antwort fehlgeschlagen",
 
@@ -259,16 +260,15 @@ var fyneTexts = map[string]map[string]string{
 		"question.sent":        "Antwort übergeben – der Assistent fährt fort …",
 		"question.hint":        "Wähle eine Antwort oder antworte unten in eigenen Worten.",
 
-		"composer.label":       "Nachricht verfassen",
-		"composer.draftLabel":  "Nachricht / eigene Antwort",
-		"composer.placeholder": "Nachricht schreiben",
-		"composer.stop":        "Stoppen",
-		"composer.send":        "Senden",
-		"composer.enterHint":   "Enter sendet · Shift+Enter für eine neue Zeile",
-		"composer.sending":     "Wird gesendet …",
-		"composer.sent":        "Nachricht übergeben",
-		"composer.sendFailed":  "Nachricht konnte nicht gesendet werden: {error}",
-		"composer.stopFailed":  "Antwort konnte nicht gestoppt werden: {error}",
+		"composer.label":          "Nachricht verfassen",
+		"composer.draftLabel":     "Nachricht / eigene Antwort",
+		"composer.placeholder":    "Nachricht schreiben",
+		"composer.stop":           "Stoppen",
+		"composer.send":           "Senden",
+		"composer.enterHint":      "Enter sendet · Shift+Enter für eine neue Zeile",
+		"composer.sendFailed":     "Nachricht konnte nicht gesendet werden: {error}",
+		"composer.stopFailed":     "Antwort konnte nicht gestoppt werden: {error}",
+		"composer.takeBackFailed": "Nachricht konnte nicht zurückgeholt werden: {error}",
 
 		"sessions.title":           "Sessions",
 		"sessions.subtitle":        "Unterhaltungen des Nodes",

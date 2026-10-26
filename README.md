@@ -62,13 +62,16 @@ ouro start               # node in the background
 ouro list                # who is on the network
 ouro ask <ID|name> "hi"  # write to another node
 ouro gui                 # native window
-ouro fyne                # the same window, drawn with Fyne
 ouro update              # build and install the newest main
 ```
 
-The Fyne chat reveals new assistant answers word by word, fading and rising
+The Fyne chat places your messages on the right and assistant replies on the left.
+Agent questions stay on the left; your replies to them appear on the right.
+It reveals new assistant answers word by word, fading and rising
 into place. Live text keeps its reveal progress when the final answer arrives;
 conversation history appears immediately without replaying the animation.
+Empty session and context sidebars take no space; when content appears or
+disappears, the panels slide and the chat smoothly adjusts its position and width.
 
 ## Docs
 

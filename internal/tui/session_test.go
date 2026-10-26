@@ -109,7 +109,7 @@ func TestSessionsScreen(t *testing.T) {
 	}
 	// Its answer comes in here.
 	close(release)
-	drive(t, m, nil, func() bool { return !second.pending })
+	drive(t, m, nil, func() bool { return !second.Pending })
 	if !strings.Contains(view(m), "beta is fine") || m.notice != "" {
 		t.Fatalf("view:\n%s", view(m))
 	}
@@ -142,7 +142,7 @@ func TestBackgroundSessions(t *testing.T) {
 	old := m.chat
 	drive(t, m, run(m, "/new"), func() bool { return true })
 	close(release)
-	drive(t, m, nil, func() bool { return !old.pending })
+	drive(t, m, nil, func() bool { return !old.Pending })
 	if m.notice != "answered in “wait for beta” · /session" || m.noticeErr || len(m.chat.entries) != 0 {
 		t.Fatalf("notice %q, shown %+v", m.notice, m.chat.entries)
 	}
@@ -150,9 +150,9 @@ func TestBackgroundSessions(t *testing.T) {
 	b.ask, b.err = nil, errors.New("the LLM is down")
 	shown := m.chat
 	m.switchTo(old)
-	drive(t, m, say(t, m, "again"), func() bool { return old.pending })
+	drive(t, m, say(t, m, "again"), func() bool { return old.Pending })
 	m.switchTo(shown)
-	drive(t, m, nil, func() bool { return !old.pending })
+	drive(t, m, nil, func() bool { return !old.Pending })
 	if m.notice != "no answer in “wait for beta” · /session" || !m.noticeErr {
 		t.Fatalf("notice %q", m.notice)
 	}
@@ -168,7 +168,7 @@ func TestSessionsOfOtherFrontEnds(t *testing.T) {
 	}
 	drive(t, m, m.loadSessions, func() bool { c := m.chats["elsewhere"]; return c != nil && c.doing == "asking beta" })
 	c := m.chats["elsewhere"]
-	if c.title != "wait, asked in ouro chat" || !c.pending {
+	if c.title != "wait, asked in ouro chat" || !c.Pending {
 		t.Fatalf("the session of another front end: %+v", c)
 	}
 	// Known already, it is not watched twice.
@@ -178,7 +178,7 @@ func TestSessionsOfOtherFrontEnds(t *testing.T) {
 		}
 	}
 	close(gate)
-	drive(t, m, nil, func() bool { return !c.pending })
+	drive(t, m, nil, func() bool { return !c.Pending })
 
 	// Without a node the list stays as it is.
 	b.fail = map[string]error{"sessions": errors.New("the node is not running")}
@@ -199,12 +199,12 @@ func TestSessionsAreWatchedAgain(t *testing.T) {
 	c := m.chat
 
 	// The node stops: the events end, and with them the answer on its way.
-	c.pending, c.running, c.doing = true, true, "asking beta"
+	c.Pending, c.Running, c.doing = true, true, "asking beta"
 	_, cmd := m.Update(unwatchedMsg{c.contextID})
 	if c.watching || cmd == nil {
 		t.Fatal("the session should be watched again")
 	}
-	if c.pending || c.running || c.doing != "" || strings.Contains(view(m), "thinking") {
+	if c.Pending || c.Running || c.doing != "" || strings.Contains(view(m), "thinking") {
 		t.Fatalf("the answer is still on its way:\n%s", view(m))
 	}
 	msg := cmd()
@@ -243,7 +243,7 @@ func TestRefusedMessageOfAnotherSession(t *testing.T) {
 	old := m.chat
 	m.newConversation()
 	drive(t, m, cmd, func() bool { return m.noticeErr })
-	if old.pending || old.draft != "hello" || m.input.Value() != "" || m.notice != plugin.ErrBusy.Error() {
+	if old.Pending || old.draft != "hello" || m.input.Value() != "" || m.notice != plugin.ErrBusy.Error() {
 		t.Fatalf("old %+v, input %q, notice %q", old, m.input.Value(), m.notice)
 	}
 }
@@ -326,8 +326,8 @@ func TestRejectedAskPreservesObservedAnswer(t *testing.T) {
 					if background {
 						draft = c.draft
 					}
-					if c.pending != !finished || draft != "my draft" {
-						t.Fatalf("node running=%v, UI pending=%v, draft=%q", !finished, c.pending, draft)
+					if c.Pending != !finished || draft != "my draft" {
+						t.Fatalf("node running=%v, UI pending=%v, draft=%q", !finished, c.Pending, draft)
 					}
 					if c.entries[0].text != "from another client" {
 						t.Fatal("observed history changed", c.entries)
@@ -435,7 +435,7 @@ func TestDeleteSession(t *testing.T) {
 
 	// The session shown.
 	close(release)
-	drive(t, m, nil, func() bool { return !second.pending })
+	drive(t, m, nil, func() bool { return !second.Pending })
 	m.switchTo(second)
 	m.input.SetValue("typed")
 	m.Update(ctrlS)
@@ -450,7 +450,7 @@ func TestDeleteSession(t *testing.T) {
 	press(m, "esc")
 	m.input.Reset()
 	drive(t, m, run(m, "/new"), func() bool { return m.chat.contextID != plugin.ThreadID })
-	drive(t, m, say(t, m, "third"), func() bool { return !m.chat.pending && m.chat.title != "" })
+	drive(t, m, say(t, m, "third"), func() bool { return !m.chat.Pending && m.chat.title != "" })
 	b.fail = map[string]error{"delete": errors.New("the node is not running")}
 	m.Update(ctrlS)
 	press(m, "ctrl+d")
@@ -489,7 +489,7 @@ func TestPeerConversations(t *testing.T) {
 
 	m.Update(press(m, "enter")())
 	c := m.chat
-	if m.screen != screenChat || c.peer != "beta" || c.pending || m.input.Value() != "" || mine.draft != "typed for mine" {
+	if m.screen != screenChat || c.Peer != "beta" || c.Pending || m.input.Value() != "" || mine.draft != "typed for mine" {
 		t.Fatalf("shown %+v, input %q", c, m.input.Value())
 	}
 	if v := view(m); !strings.Contains(v, "beta · only to read") || !strings.Contains(v, "beta · 14:00") || !strings.Contains(v, "hello beta") {
@@ -533,7 +533,7 @@ func TestPeerConversations(t *testing.T) {
 	}
 	_, watch := m.Update(press(m, "ctrl+d")())
 	drive(t, m, watch, func() bool { return true })
-	if len(b.peers) != 1 || len(m.sessions.peers) != 1 || m.chat.peer != "" || m.chat == mine || m.notice != "deleted “hello alpha”" {
+	if len(b.peers) != 1 || len(m.sessions.peers) != 1 || m.chat.Peer != "" || m.chat == mine || m.notice != "deleted “hello alpha”" {
 		t.Fatalf("peers %+v, shown %+v, notice %q", m.sessions.peers, m.chat, m.notice)
 	}
 
@@ -569,16 +569,16 @@ func TestPeerConversations(t *testing.T) {
 func TestReplayKeepsWaitingOnlyForWhatWaited(t *testing.T) {
 	m, _ := newModel(t)
 	idle := &conversation{contextID: "idle"}
-	if m.replay(idle, nil); idle.pending {
+	if m.replay(idle, nil); idle.Pending {
 		t.Fatal("a session that did not wait is waiting")
 	}
-	asked := &conversation{contextID: "asked", pending: true, art: 3}
-	if m.replay(asked, nil); !asked.pending || asked.art != 3 {
-		t.Fatalf("a session that waited: pending %v, art %d", asked.pending, asked.art)
+	asked := &conversation{contextID: "asked", Pending: true, art: 3}
+	if m.replay(asked, nil); !asked.Pending || asked.art != 3 {
+		t.Fatalf("a session that waited: pending %v, art %d", asked.Pending, asked.art)
 	}
-	answered := &conversation{contextID: "answered", pending: true}
+	answered := &conversation{contextID: "answered", Pending: true}
 	m.replay(answered, []Event{{Kind: plugin.SessionMessage, Text: "hi"}, {Kind: plugin.SessionAnswer, Text: "ho"}})
-	if answered.pending {
+	if answered.Pending {
 		t.Fatal("a session whose answer is known is waiting")
 	}
 }
@@ -596,9 +596,9 @@ func TestReplayIsPendingOnlyWithoutEvents(t *testing.T) {
 		{false, nil, false},
 		{true, []Event{{Kind: plugin.SessionSay}}, false},
 	} {
-		c := &conversation{contextID: "c", pending: tc.pending}
-		if m.replay(c, tc.past); c.pending != tc.want {
-			t.Errorf("pending %v with %d events: %v", tc.pending, len(tc.past), c.pending)
+		c := &conversation{contextID: "c", Pending: tc.pending}
+		if m.replay(c, tc.past); c.Pending != tc.want {
+			t.Errorf("pending %v with %d events: %v", tc.pending, len(tc.past), c.Pending)
 		}
 	}
 }
@@ -648,7 +648,7 @@ func TestSessionSelectionStopsAtTheLast(t *testing.T) {
 	if m.chat != m.chats["a"] || m.notice != "" {
 		t.Fatalf("shown %+v, notice %q", m.chat, m.notice)
 	}
-	m.sessions.peers = []*conversation{{contextID: "peer-aa/c1", peer: "beta", title: "hello"}}
+	m.sessions.peers = []*conversation{{contextID: "peer-aa/c1", Peer: "beta", title: "hello"}}
 	m.screen, m.sessions.peerTab, m.sessions.sel = screenSessions, true, 5
 	if cmd := press(m, "enter"); cmd == nil {
 		t.Fatal("the last conversation of a peer should be read")
@@ -849,7 +849,7 @@ func TestOpeningTheSessionsAsksForThePeers(t *testing.T) {
 	for _, cmd := range batch {
 		m.Update(cmd())
 	}
-	if len(m.sessions.peers) != 1 || m.sessions.peers[0].peer != "luna" || m.screen != screenSessions {
+	if len(m.sessions.peers) != 1 || m.sessions.peers[0].Peer != "luna" || m.screen != screenSessions {
 		t.Fatalf("peers %+v", m.sessions.peers)
 	}
 }
@@ -884,7 +884,7 @@ func TestRenderedEntriesAreKept(t *testing.T) {
 	}
 	c.shown.blocks[0] = "kept"
 	c.entries = append(c.entries, entry{mine: true, text: "three"})
-	c.pending = true
+	c.Pending = true
 	m.renderHistory(true)
 	if !strings.Contains(ansi.Strip(m.history.GetContent()), "kept") {
 		t.Fatal("what an answer wrote is drawn again")
@@ -1053,12 +1053,12 @@ func TestAnswerFramesFollowTheEnd(t *testing.T) {
 		{true, true, ""},
 		{true, false, "it was"},
 	} {
-		m.streaming, c.pending, c.partial = tt.streaming, tt.pending, tt.partial
+		m.streaming, c.Pending, c.partial = tt.streaming, tt.pending, tt.partial
 		if _, next := m.Update(answerMsg{}); next != nil || m.streaming {
 			t.Errorf("%+v: the frames go on", tt)
 		}
 	}
-	m.streaming, c.pending, c.partial = true, true, "it was"
+	m.streaming, c.Pending, c.partial = true, true, "it was"
 	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "it was a dark night"}, true)
 	if _, next := m.Update(answerMsg{}); next != nil || m.streaming {
 		t.Fatal("the frames go on after the answer")
@@ -1074,10 +1074,10 @@ func TestTaskReportStartsTheWait(t *testing.T) {
 	if c.art != 0 {
 		t.Fatalf("a replayed report: picture %d", c.art)
 	}
-	c.pending = false
+	c.Pending = false
 	m.apply(c, Event{Kind: plugin.SessionTask, Text: "task 2 · read ✓ 1s"}, true)
-	if c.art != 1 || !c.pending {
-		t.Fatalf("a live report: picture %d, pending %v", c.art, c.pending)
+	if c.art != 1 || !c.Pending {
+		t.Fatalf("a live report: picture %d, pending %v", c.art, c.Pending)
 	}
 	m.apply(c, Event{Kind: plugin.SessionTask, Text: "task 3 · read ✓ 1s"}, true)
 	if c.art != 1 {

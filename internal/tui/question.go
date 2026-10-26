@@ -7,8 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"ouroboros/plugin"
 )
 
 // The agent may ask the owner a question on its way to an answer, with
@@ -23,47 +21,29 @@ import (
 // owner writes what they answer.
 const ownWords = "Chat about it"
 
-// asking is a question the agent asks the owner in a conversation, while it
-// waits for the answer.
-type asking struct {
-	question    string
-	options     []string // the answers to choose from
-	recommended string   // the one of them the agent would choose, "" for none
-	sel         int      // the row selected: one of options, or len(options) for ownWords
-	sent        bool     // the answer chosen is on its way to the node
+// ownWords reports whether the owner answers the question of the agent in
+// own words: the row for them is selected, and the input is shown.
+func (c *conversation) ownWords() bool {
+	return c.Asking != nil && c.choice == len(c.Asking.Options)
 }
-
-// own reports whether the owner answers in own words: the input is shown.
-func (a *asking) own() bool { return a.sel == len(a.options) }
 
 // write selects the row to answer in own words, as typing does. Without a
 // question it does nothing.
-func (a *asking) write() {
-	if a != nil {
-		a.sel = len(a.options)
+func (c *conversation) write() {
+	if c.Asking != nil {
+		c.choice = len(c.Asking.Options)
 	}
 }
 
-// unsent offers the question again, whose answer the node did not take: it
-// is back in the input, to send again.
-func (a *asking) unsent() {
-	if a != nil {
-		a.sent = false
-		a.write()
-	}
-}
-
-// ask takes a question of the agent, or with Done that the wait for its
+// ask shows a question of the agent, or with Done that the wait for its
 // answer is over. The question is part of the conversation, and so is what
-// the owner answered.
+// the owner answered. Whether it waits is the State's, see chat.State.Apply.
 func (c *conversation) ask(e Event) {
 	if !e.Done {
 		c.add(entry{text: e.Text, at: e.At})
-		c.asking = &asking{question: e.Text, options: e.Options, recommended: e.Recommended,
-			sel: max(0, slices.Index(e.Options, e.Recommended))}
+		c.choice = max(0, slices.Index(e.Options, e.Recommended))
 		return
 	}
-	c.asking = nil
 	if e.Text != "" {
 		c.add(entry{mine: true, text: e.Text, at: e.At})
 	}
@@ -75,26 +55,27 @@ func (c *conversation) ask(e Event) {
 // but for up in an empty input, which goes back to the answers. It reports
 // whether the key was one of them.
 func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	a := m.chat.asking
-	if a == nil || a.sent {
+	c := m.chat
+	a := c.Asking
+	if a == nil || a.Sent {
 		return nil, false
 	}
 	switch msg.String() {
 	case "up":
-		if a.own() && m.input.Value() != "" {
+		if c.ownWords() && m.input.Value() != "" {
 			return nil, false
 		}
-		a.sel = cycle(a.sel, -1, len(a.options)+1)
+		c.choice = cycle(c.choice, -1, len(a.Options)+1)
 	case "down":
-		if a.own() {
+		if c.ownWords() {
 			return nil, false
 		}
-		a.sel = cycle(a.sel, 1, len(a.options)+1)
+		c.choice = cycle(c.choice, 1, len(a.Options)+1)
 	case "enter":
-		if a.own() {
+		if c.ownWords() {
 			return nil, false // what is written is sent, and answers
 		}
-		return m.choose(a.options[a.sel]), true
+		return m.choose(a.Options[c.choice]), true
 	default:
 		return nil, false
 	}
@@ -106,11 +87,11 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // for an answer is that answer.
 func (m *Model) choose(option string) tea.Cmd {
 	c := m.chat
-	c.asking.sent = true
-	id := c.contextID
-	return func() tea.Msg {
-		return askedMsg{id, option, m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, option)}
+	way, err := c.Send()
+	if err != nil {
+		return nil
 	}
+	return m.deliver(c, option, way)
 }
 
 // inputView is what the box of the input shows, width cells wide: the
@@ -120,40 +101,41 @@ func (m *Model) choose(option string) tea.Cmd {
 // it beyond those of the input: answers that do not fit are left out around
 // the one selected.
 func (m *Model) inputView(width, rows int) string {
-	a := m.chat.asking
-	if a == nil || a.sent {
+	c := m.chat
+	a := c.Asking
+	if a == nil || a.Sent {
 		return m.input.View()
 	}
 	// A question without answers to choose from is answered in own words:
 	// there is no row to select for that.
 	var names []string
-	if len(a.options) > 0 {
-		names = append(slices.Clone(a.options), ownWords)
+	if len(a.Options) > 0 {
+		names = append(slices.Clone(a.Options), ownWords)
 	}
 	list := make([]string, len(names))
 	for i, name := range names {
 		mark, style := "  ", lipgloss.NewStyle()
-		if i == a.sel {
+		if i == c.choice {
 			mark, style = boldStyle.Foreground(accent).Render("› "), boldStyle.Foreground(accent)
 		}
 		line := mark + style.Render(name)
 		switch {
-		case i == len(a.options):
+		case i == len(a.Options):
 			line += mutedStyle.Render("  write your own answer")
-		case name == a.recommended:
+		case name == a.Recommended:
 			line += mutedStyle.Render("  recommended")
 		}
 		list[i] = ansi.Truncate(line, width, "…")
 	}
 	fixed := 1 // the question
-	if a.own() {
+	if c.ownWords() {
 		fixed += inputHeight
 	}
 	shown := min(len(list), max(1, rows+inputHeight-fixed))
-	top := max(0, min(a.sel-shown+1, len(list)-shown))
-	lines := []string{boldStyle.Foreground(accent).Render("? ") + boldStyle.Render(short(a.question, max(1, width-2)))}
+	top := max(0, min(c.choice-shown+1, len(list)-shown))
+	lines := []string{boldStyle.Foreground(accent).Render("? ") + boldStyle.Render(short(a.Text, max(1, width-2)))}
 	lines = append(lines, list[top:top+shown]...)
-	if a.own() {
+	if c.ownWords() {
 		lines = append(lines, m.input.View())
 	}
 	return strings.Join(lines, "\n")

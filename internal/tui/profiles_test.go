@@ -33,10 +33,10 @@ func profiles(t *testing.T) (root, terra, luna *Model, lb *fakeBackend) {
 func TestProfileSwitchKeepsDraftAndRoutesLateEvents(t *testing.T) {
 	root, terra, luna, _ := profiles(t)
 	terra.input.SetValue("Terra draft")
-	terra.chat.pending = true
+	terra.chat.Pending = true
 	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	root.Update(shiftTab)
-	if root.profiles.shown != 1 || luna.splash.show || luna.width != 100 || !terra.chat.pending {
+	if root.profiles.shown != 1 || luna.splash.show || luna.width != 100 || !terra.chat.Pending {
 		t.Fatal("the switch changed the other profile")
 	}
 	if view := ansi.Strip(root.View().Content); !strings.Contains(view, "profile Luna (bbb222) · shift+tab shows the next") {
@@ -44,7 +44,7 @@ func TestProfileSwitchKeepsDraftAndRoutesLateEvents(t *testing.T) {
 	}
 	luna.input.SetValue("Luna draft")
 	root.Update(profileMsg{0, eventMsg{id: terra.chat.contextID, event: Event{Kind: plugin.SessionAnswer, Text: "Terra answer"}}})
-	if terra.chat.pending || !containsText(terra.chat, "Terra answer") || containsText(luna.chat, "Terra answer") {
+	if terra.chat.Pending || !containsText(terra.chat, "Terra answer") || containsText(luna.chat, "Terra answer") {
 		t.Fatal("what came in for Terra went to Luna")
 	}
 	root.Update(shiftTab)

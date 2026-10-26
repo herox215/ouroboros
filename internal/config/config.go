@@ -221,6 +221,14 @@ func DefaultProtected() []string {
 	}
 }
 
+// gitAsk matches the git commands that reach beyond the machine or lose work
+// for good, also behind the options of git itself, as in git -c
+// core.hooksPath=/dev/null push or git -C dir push.
+const gitAsk = `\bgit(\s+(-[cC]\s*` + shellWord + `|--(git-dir|work-tree|namespace|config-env|super-prefix|attr-source)(=|\s+)` + shellWord + `|-[-\w]+(=` + shellWord + `)?))*\s+(push|reset\s+--hard|clean|branch\s+-D)`
+
+// shellWord is one word of a shell command, quoted or not.
+const shellWord = `("[^"]*"|'[^']*'|\S+)`
+
 // DefaultAsk are the calls the agent of the owner asks about unless the owner
 // says otherwise: what deletes for good, what reaches beyond the machine or
 // changes the system, what reads keys, ouro building itself anew, and typing
@@ -228,7 +236,7 @@ func DefaultProtected() []string {
 func DefaultAsk() []Rule {
 	return []Rule{
 		{Tool: "bash", Match: `\brm\s+-\w*[rf]`},
-		{Tool: "bash", Match: `\bgit\s+(push|reset\s+--hard|clean|branch\s+-D)`},
+		{Tool: "bash", Match: gitAsk},
 		{Tool: "bash", Match: `\bsudo\b|\b(pacman|yay|apt|apt-get|brew|pip|pip3)\s+(install|remove|uninstall|-S|-R)|\bnpm\s+(install|i)\s+-g`},
 		{Tool: "bash", Match: `\b(systemctl|crontab|dd|mkfs)\b`},
 		{Tool: "bash", Match: `~/\.(ssh|gnupg|aws)|\.env\b`},

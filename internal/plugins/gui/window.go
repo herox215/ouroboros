@@ -9,56 +9,37 @@ import (
 	"sync"
 	"time"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
 // State is the read-only profile snapshot handed to the window.
 type State struct {
-	Profiles []ProfileOption `json:"profiles"`
-	Selected int             `json:"selected"`
-	Thread   string          `json:"thread"`
+	Profiles []ProfileOption
+	Selected int
+	Thread   string
 	// Resume is the session the window before showed, "" to show the thread:
 	// the process that started this one handed it over, see handOver.
-	Resume string `json:"resume,omitempty"`
+	Resume string
 }
 type ProfileOption struct {
-	Name string `json:"name"`
-	ID   string `json:"id"`
+	Name string
+	ID   string
 }
 
-// ChatEvent is presentation data, never the raw tool arguments or output.
-type ChatEvent struct {
-	Kind     plugin.SessionKind `json:"kind"`
-	Text     string             `json:"text"`
-	Tool     string             `json:"tool"`
-	Done     bool               `json:"done"`
-	Failed   bool               `json:"failed"`
-	At       time.Time          `json:"at"`
-	CallID   string             `json:"call_id"`
-	N        int                `json:"n"`
-	Own      bool               `json:"own"`
-	Question *ChatQuestion      `json:"question,omitempty"`
-}
-
-// ChatQuestion contains the displayable fields of an owner question.
-type ChatQuestion struct {
-	Text        string   `json:"text"`
-	Options     []string `json:"options"`
-	Recommended string   `json:"recommended,omitempty"`
-}
-
-type ChatSnapshot struct {
-	Token  int         `json:"token"`
-	Events []ChatEvent `json:"events"`
-	Notice string      `json:"notice,omitempty"`
+// Opened is a session the window shows: what happened in it so far, what
+// happens from now on, nil for the conversation of a peer, which is only to
+// read, and what the window notices of it, like a thread that keeps its
+// project.
+type Opened struct {
+	Events []chat.Event
+	Live   <-chan chat.Event
+	Notice string
 }
 
 type sessionWatch struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	profile Profile
-	live    <-chan plugin.SessionEvent
-	poll    sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // Window exposes the same sessions service as the terminal UI. Profile data
@@ -66,11 +47,9 @@ type sessionWatch struct {
 type Window struct {
 	state     State
 	profiles  []Profile
-	archives  []archiveAccess // legacy methods only; Plugin never supplies these
 	ctx       context.Context
 	cancel    context.CancelFunc
 	mu        sync.Mutex
-	token     int
 	selected  int
 	active    *sessionWatch
 	lifecycle sync.Mutex
@@ -93,10 +72,8 @@ func newWindowContext(ctx context.Context, p page) *Window {
 	for i, profile := range p.profiles {
 		profiles[i] = *profile
 	}
-	archives := make([]archiveAccess, len(p.choices))
-	copy(archives, p.archives)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Window{state: state, profiles: profiles, archives: archives, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool), directory: p.directory, threads: make(map[int]bool)}
+	return &Window{state: state, profiles: profiles, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool), directory: p.directory, threads: make(map[int]bool)}
 }
 func (w *Window) InitialState() State {
 	state := w.state
@@ -161,9 +138,8 @@ func (w *Window) Restart() (exe string, r resume, ok bool) {
 	return w.restarts, r, true
 }
 
-// invalidate is called with mu held. Tokens are never reused, even on failure.
+// invalidate ends the watch of the session shown. It is called with mu held.
 func (w *Window) invalidate() {
-	w.token++
 	if w.active != nil {
 		w.active.cancel()
 		w.active = nil
@@ -204,16 +180,16 @@ func (w *Window) ready(profile int) (Profile, error) {
 
 // ModelAccess contains only the displayable fields of an access, never credentials.
 type ModelAccess struct {
-	ID     string   `json:"id"`
-	Label  string   `json:"label"`
-	Models []string `json:"models"`
-	Error  string   `json:"error,omitempty"`
+	ID     string
+	Label  string
+	Models []string
+	Error  string
 }
 
 type ModelSelection struct {
-	Accesses []ModelAccess `json:"accesses"`
-	Access   string        `json:"access"`
-	Model    string        `json:"model"`
+	Accesses []ModelAccess
+	Access   string
+	Model    string
 }
 
 func (w *Window) modelProfile(profile int) (Profile, error) {
@@ -301,38 +277,47 @@ func (w *Window) NewSession(profile int) (string, error) {
 	return "owner/" + id, nil
 }
 
-// SendMessage starts an answer or, if one is already running, gives it the
-// message through Steer, just as the terminal frontend does. This also answers
-// owner questions. Peer transcripts are never writable.
-func (w *Window) SendMessage(profile int, id, text string) error {
+// Deliver gives text to the session id the way the State of the window said,
+// see chat.State.Send, as the terminal UI does. Peer transcripts are never
+// writable.
+func (w *Window) Deliver(profile int, id, text string, way chat.Way) error {
 	serviceID, owner, err := sessionID(id)
 	if err != nil {
 		return err
 	}
 	if !owner {
-		return errors.New("peer sessions are read-only")
-	}
-	if strings.TrimSpace(text) == "" {
-		return errors.New("the message is empty")
+		return chat.ErrReadOnly
 	}
 	p, err := w.ready(profile)
 	if err != nil {
 		return err
 	}
-	ctx := plugin.WithMessageSource(w.ctx, plugin.MessageSource{Interface: "gui"})
-	err = p.sessions.Ask(ctx, serviceID, text)
-	if errors.Is(err, plugin.ErrBusy) {
-		return p.sessions.Steer(ctx, serviceID, text)
+	return chat.Deliver(w.ctx, p.sessions, serviceID, text, way, "gui")
+}
+
+// Unsteer takes back the last message queued in the session id, as the
+// terminal UI does, and returns it: "" if none is.
+func (w *Window) Unsteer(profile int, id string) (string, error) {
+	serviceID, owner, err := sessionID(id)
+	if err != nil {
+		return "", err
 	}
-	return err
+	if !owner {
+		return "", chat.ErrReadOnly
+	}
+	p, err := w.ready(profile)
+	if err != nil {
+		return "", err
+	}
+	return p.sessions.Unsteer(w.ctx, serviceID)
 }
 
 // SessionEntry is the existing session list with its live running state.
 type SessionEntry struct {
-	ID       string    `json:"id"`
-	Title    string    `json:"title"`
-	Modified time.Time `json:"modified"`
-	Running  bool      `json:"running"`
+	ID       string
+	Title    string
+	Modified time.Time
+	Running  bool
 }
 
 // Sessions lists owner IDs qualified with owner/ and unchanged peer IDs.
@@ -383,21 +368,20 @@ func sessionID(id string) (string, bool, error) {
 }
 
 // OpenSession replaces the active watch. Peers are read-only snapshots.
-func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
+func (w *Window) OpenSession(profile int, id string) (Opened, error) {
 	p, err := w.ready(profile)
 	if err != nil {
-		return ChatSnapshot{}, err
+		return Opened{}, err
 	}
 	serviceID, owner, err := sessionID(id)
 	if err != nil {
-		return ChatSnapshot{}, err
+		return Opened{}, err
 	}
 	w.mu.Lock()
 	w.invalidate()
 	w.selected = profile
-	token := w.token
 	ctx, cancel := context.WithCancel(w.ctx)
-	watch := &sessionWatch{ctx: ctx, cancel: cancel, profile: p}
+	watch := &sessionWatch{ctx: ctx, cancel: cancel}
 	w.active = watch // publish before I/O, so another selection can cancel it
 	w.session = id
 	w.mu.Unlock()
@@ -416,108 +400,52 @@ func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
 	defer w.mu.Unlock()
 	if w.active != watch || ctx.Err() != nil {
 		cancel()
-		return ChatSnapshot{}, context.Canceled
+		return Opened{}, context.Canceled
 	}
 	if err != nil {
 		w.invalidate()
-		return ChatSnapshot{}, err
+		return Opened{}, err
 	}
-	watch.live = live
-	if !owner {
-		token = 0 // peer snapshots have no live stream
+	opened := Opened{Events: p.events(past), Notice: notice}
+	if live != nil {
+		opened.Live = w.follow(ctx, p, live)
 	}
-	return ChatSnapshot{Token: token, Events: p.events(past), Notice: notice}, nil
+	return opened, nil
 }
 
-// PollSession waits at most 150ms, returning no more than 100 events. It reads
-// directly from the service channel without a lossy intermediate buffer. A live
-// restart event closes the window, see OnRestart.
-func (w *Window) PollSession(token int) []ChatEvent {
-	empty := []ChatEvent{}
-	w.mu.Lock()
-	watch := w.active
-	if token != w.token || watch == nil {
-		w.mu.Unlock()
-		return empty
-	}
-	w.mu.Unlock()
-	watch.poll.Lock()
-	defer watch.poll.Unlock()
-	w.mu.Lock()
-	if token != w.token || watch.ctx.Err() != nil {
-		w.mu.Unlock()
-		return empty
-	}
-	live := watch.live
-	w.mu.Unlock()
-	if live == nil {
-		return empty
-	}
-	timer := time.NewTimer(150 * time.Millisecond)
-	defer timer.Stop()
-	out := make([]ChatEvent, 0, 100)
-	finish := func() []ChatEvent {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		if token != w.token || watch.ctx.Err() != nil {
-			return empty
-		}
-		return out
-	}
-	for len(out) < 100 {
-		select {
-		case <-watch.ctx.Done():
-			return empty
-		case <-timer.C:
-			return finish()
-		case e, ok := <-live:
-			if !ok {
-				if len(out) == 0 {
-					return nil // JSON null tells the frontend the stream ended
+// follow shows what happens in the session watched from now on, until the
+// watch ends or the node stops: then the channel closes. A restart event
+// closes the window, see OnRestart.
+func (w *Window) follow(ctx context.Context, p Profile, live <-chan plugin.SessionEvent) <-chan chat.Event {
+	out := make(chan chat.Event)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e, ok := <-live:
+				if !ok {
+					return
 				}
-				return finish()
+				if e.Kind == plugin.SessionRestart {
+					w.restart(e.Text)
+				}
+				select {
+				case out <- chat.Show(p.ctx, e):
+				case <-ctx.Done():
+					return
+				}
 			}
-			if e.Kind == plugin.SessionRestart {
-				w.restart(e.Text)
-			}
-			out = append(out, watch.profile.event(e))
 		}
-	}
-	return finish()
-}
-
-func (p *Profile) events(events []plugin.SessionEvent) []ChatEvent {
-	out := make([]ChatEvent, len(events))
-	for i, e := range events {
-		out[i] = p.event(e)
-	}
+	}()
 	return out
 }
-func (p *Profile) event(e plugin.SessionEvent) ChatEvent {
-	out := ChatEvent{Kind: e.Kind, Text: e.Text, Tool: e.Tool, Done: e.Done, At: e.At, CallID: e.CallID, N: e.N, Own: e.Own}
-	if e.Kind == plugin.SessionAsked && !e.Done {
-		q := e.AsQuestion()
-		out.Question = &ChatQuestion{Text: q.Question, Options: q.Options, Recommended: q.Recommended}
-	}
-	if e.Kind == plugin.SessionStep {
-		s := e.AsStep()
-		out.Failed = s.Done && s.Err != nil
-		if p.ctx != nil {
-			out.Text = plugin.ToolLine(p.ctx, s)
-		} else {
-			out.Text = ""
-		}
-		if strings.TrimSpace(out.Text) == "" {
-			out.Text = s.Tool
-		}
-		// Detail sees timing and failure, not raw errors or arbitrary result remarks.
-		s.Remark = ""
-		if s.Err != nil {
-			s.Err = errors.New("failed")
-		}
-		if s.Done && p.ctx != nil {
-			out.Text = plugin.ToolDetail(p.ctx, s, out.Text)
-		}
+
+func (p *Profile) events(events []plugin.SessionEvent) []chat.Event {
+	out := make([]chat.Event, len(events))
+	for i, e := range events {
+		out[i] = chat.Show(p.ctx, e)
 	}
 	return out
 }
@@ -542,36 +470,6 @@ func (w *Window) ToolResult(profile int, id, callID string) (plugin.SessionToolR
 	return details.ToolResult(w.ctx, serviceID, callID)
 }
 
-// SessionPage and SessionRecords are retained for legacy archive tests only.
-// Production profiles never carry archive callbacks.
-func (w *Window) SessionPage(profile int, id string, after int) (plugin.ArchivedPage, error) {
-	if profile < 0 || profile >= len(w.archives) {
-		return plugin.ArchivedPage{}, fmt.Errorf("invalid GUI profile index %d", profile)
-	}
-	page := w.archives[profile].page
-	if page == nil {
-		return plugin.ArchivedPage{}, fmt.Errorf("GUI profile %d has no archive page access", profile)
-	}
-	return page(id, after)
-}
-func (w *Window) SessionRecords(profile int, id string) ([]plugin.ArchivedRecord, error) {
-	if profile < 0 || profile >= len(w.archives) {
-		return nil, fmt.Errorf("invalid GUI profile index %d", profile)
-	}
-	records := w.archives[profile].records
-	if records == nil {
-		return nil, fmt.Errorf("GUI profile %d has no archive", profile)
-	}
-	out, err := records(id)
-	if err != nil {
-		return nil, err
-	}
-	if out == nil {
-		out = []plugin.ArchivedRecord{}
-	}
-	return out, nil
-}
-
 // SessionTrace returns what an owner session did, in the order it came, as the
 // thread shows its artefacts beside the part of it that started or addressed
 // that session: the messages, the calls of tools with their start and their
@@ -579,7 +477,7 @@ func (w *Window) SessionRecords(profile int, id string) ([]plugin.ArchivedRecord
 // answer being written, without its text. A front end tells from it where the
 // session stands. It watches the session only for its past and lets it go: the
 // watch of the selected conversation stays as it is.
-func (w *Window) SessionTrace(profile int, id string) ([]ChatEvent, error) {
+func (w *Window) SessionTrace(profile int, id string) ([]chat.Event, error) {
 	p, err := w.profile(profile)
 	if err != nil {
 		return nil, err
@@ -597,7 +495,7 @@ func (w *Window) SessionTrace(profile int, id string) ([]ChatEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []ChatEvent{}
+	out := []chat.Event{}
 	// The newest piece of an answer being written tells that it is written,
 	// when nothing else came after it; what it says is not part of the trace.
 	var writing plugin.SessionEvent
@@ -607,7 +505,7 @@ func (w *Window) SessionTrace(profile int, id string) ([]ChatEvent, error) {
 		case plugin.SessionMessage, plugin.SessionSay, plugin.SessionStep,
 			plugin.SessionAsked, plugin.SessionAnswer, plugin.SessionFailed,
 			plugin.SessionCanceled, plugin.SessionTask, plugin.SessionJobs:
-			out = append(out, p.event(e))
+			out = append(out, chat.Show(p.ctx, e))
 			kept = i
 		case plugin.SessionAnswering:
 			writing, written = e, i
@@ -615,7 +513,7 @@ func (w *Window) SessionTrace(profile int, id string) ([]ChatEvent, error) {
 	}
 	if written > kept {
 		writing.Text = ""
-		out = append(out, p.event(writing))
+		out = append(out, chat.Show(p.ctx, writing))
 	}
 	return out, nil
 }

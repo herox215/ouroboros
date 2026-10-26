@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -22,15 +23,15 @@ import (
 type fynePhase struct {
 	phase    string
 	since    time.Time
-	call     *ChatEvent
-	last     *ChatEvent
+	call     *chat.Event
+	last     *chat.Event
 	question string
 	jobs     string
 	live     bool
 }
 
 // sessionPhaseOf reads the trace of a session as the window reads it.
-func sessionPhaseOf(trace []ChatEvent, running bool) fynePhase {
+func sessionPhaseOf(trace []chat.Event, running bool) fynePhase {
 	state := fynePhase{phase: "empty"}
 	for i := range trace {
 		event := trace[i]
@@ -60,10 +61,7 @@ func sessionPhaseOf(trace []ChatEvent, running bool) fynePhase {
 				}
 			} else {
 				state.phase = "asked"
-				state.question = ""
-				if event.Question != nil {
-					state.question = event.Question.Text
-				}
+				state.question = event.Text
 			}
 		case plugin.SessionAnswering:
 			if !event.At.IsZero() {
@@ -171,7 +169,7 @@ func (p fynePhase) next() string {
 
 // artefactBlock is one session beside the thread: where it stands, what it
 // did last and what it does next, with the chart of its tools under it.
-func (ui *fyneUI) artefactBlock(entry SessionEntry, trace []ChatEvent) fyne.CanvasObject {
+func (ui *fyneUI) artefactBlock(entry SessionEntry, trace []chat.Event) fyne.CanvasObject {
 	state := sessionPhaseOf(trace, entry.Running)
 	box := tightVBox(-6)
 	title := entry.Title
@@ -210,7 +208,8 @@ func (ui *fyneUI) artefactBlock(entry SessionEntry, trace []ChatEvent) fyne.Canv
 		fact(tr("artefact.question", nil), state.question, time.Time{}, false)
 	}
 	if state.last != nil {
-		fact(tr("artefact.last", nil), state.last.Text, state.last.At, state.last.Failed)
+		// A call nothing is shown of names its tool, as the transcript does.
+		fact(tr("artefact.last", nil), cmp.Or(state.last.Text, state.last.Tool), state.last.At, state.last.Failed)
 	} else {
 		fact(tr("artefact.last", nil), tr("artefact.noCall", nil), time.Time{}, false)
 	}
@@ -223,7 +222,7 @@ func (ui *fyneUI) artefactBlock(entry SessionEntry, trace []ChatEvent) fyne.Canv
 		fact(tr("artefact.running", nil), jobs, time.Time{}, false)
 	}
 
-	calls := make([]ChatEvent, 0, len(trace))
+	calls := make([]chat.Event, 0, len(trace))
 	for _, event := range trace {
 		if event.Kind == plugin.SessionStep && event.Done {
 			calls = append(calls, event)
@@ -253,7 +252,7 @@ func (ui *fyneUI) artefactBlock(entry SessionEntry, trace []ChatEvent) fyne.Canv
 }
 
 // chartToolName is the lane a call belongs to.
-func chartToolName(event ChatEvent) string {
+func chartToolName(event chat.Event) string {
 	if event.Tool != "" {
 		return event.Tool
 	}
@@ -263,11 +262,10 @@ func chartToolName(event ChatEvent) string {
 	return tr("common.tool", nil)
 }
 
-// toolChartOf lays the calls of a session on their lanes, as frontend/app.js
-// lays them out: by their time over the session, or by their order without
+// toolChartOf lays the calls of a session on their lanes: by their time over the session, or by their order without
 // stamps.
-func toolChartOf(calls []ChatEvent, pending *ChatEvent, running bool) toolChart {
-	all := append([]ChatEvent(nil), calls...)
+func toolChartOf(calls []chat.Event, pending *chat.Event, running bool) toolChart {
+	all := append([]chat.Event(nil), calls...)
 	if pending != nil {
 		all = append(all, *pending)
 	}
@@ -310,7 +308,7 @@ func toolChartOf(calls []ChatEvent, pending *ChatEvent, running bool) toolChart 
 		last = time.Now()
 	}
 	span := last.Sub(first)
-	at := func(step ChatEvent, index int) float64 {
+	at := func(step chat.Event, index int) float64 {
 		if has && span > 0 && !step.At.IsZero() {
 			offset := float64(step.At.Sub(first)) / float64(span)
 			return clamp01(offset)
@@ -369,13 +367,13 @@ func (ui *fyneUI) artefacts() {
 	}
 	type traceResult struct {
 		entry SessionEntry
-		list  []ChatEvent
+		list  []chat.Event
 	}
 	go func() {
 		results := make([]traceResult, 0, len(shown))
 		for _, entry := range shown {
 			kept := known[entry.ID]
-			list := []ChatEvent{}
+			list := []chat.Event{}
 			if kept != nil {
 				list = kept.list
 			}
@@ -395,7 +393,7 @@ func (ui *fyneUI) artefacts() {
 				ui.steps[result.entry.ID] = &fyneTrace{list: result.list, running: result.entry.Running}
 				blocks = append(blocks, ui.artefactBlock(result.entry, result.list))
 			}
-			setChildren(ui.contextDetails, blocks...)
+			ui.setContextDetails(blocks...)
 		})
 	}()
 }
@@ -412,10 +410,10 @@ func (ui *fyneUI) ownArtefacts() {
 			listed = entry
 		}
 	}
-	listed.Running = listed.Running || (ui.heard && ui.activity.busy)
+	listed.Running = listed.Running || (ui.heard && ui.ctx.session.Pending)
 	setContextTitle(ui, tr("context.stand", nil))
 	ui.contextNote.SetText("T – " + clock(ui.own[len(ui.own)-1].At, time.Now()))
-	setChildren(ui.contextDetails, ui.artefactBlock(listed, ui.own))
+	ui.setContextDetails(ui.artefactBlock(listed, ui.own))
 }
 
 // inspect shows a tool result in the rail, as the transcript asks for it.
@@ -438,7 +436,7 @@ func (ui *fyneUI) inspect(tool string, result plugin.SessionToolResult) {
 		content = tr("tool.empty", nil)
 	}
 	objects = append(objects, expandableText(ui, content))
-	setChildren(ui.contextDetails, objects...)
+	ui.setContextDetails(objects...)
 }
 
 // setContextTitle writes the heading of the rail, in capitals as the
@@ -458,4 +456,12 @@ func tableRow(key, value string, at time.Time, bad bool) fyne.CanvasObject {
 		right = inset(6, 0, 0, 0, muted(clock(at, time.Now()), sizeSmall))
 	}
 	return container.NewBorder(nil, nil, fixedWidth(46, muted(key, sizeSmall)), right, valueLine)
+}
+
+// setContextDetails updates both the rail contents and the space it occupies.
+func (ui *fyneUI) setContextDetails(objects ...fyne.CanvasObject) {
+	setChildren(ui.contextDetails, objects...)
+	if ui.columns != nil {
+		ui.columns.Refresh()
+	}
 }

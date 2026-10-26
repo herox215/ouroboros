@@ -2,25 +2,22 @@ package gui
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"ouroboros/internal/chat"
 	"testing"
-
-	"ouroboros/plugin"
 )
 
+// What the owner writes goes the way the State of the window said: Ask
+// starts an answer, Steer and an answer to a question go through Steer
+// alone, as in the terminal UI. Conversations of peers are only to read.
 func TestCreateAndSendThroughSessions(t *testing.T) {
 	sentinel := errors.New("service unavailable")
 	var calls []string
-	busy := false
 	s := &testSessions{
 		newSession: func(context.Context) (string, error) { calls = append(calls, "new"); return "created", nil },
 		ask: func(_ context.Context, id, text string) error {
 			calls = append(calls, "ask:"+id+":"+text)
-			if busy {
-				return fmt.Errorf("running: %w", plugin.ErrBusy)
-			}
 			return nil
 		},
 		steer: func(_ context.Context, id, text string) error {
@@ -34,14 +31,16 @@ func TestCreateAndSendThroughSessions(t *testing.T) {
 	if err != nil || id != "owner/created" {
 		t.Fatalf("new: %q %v", id, err)
 	}
-	if err := w.SendMessage(0, id, " hello\nworld "); err != nil {
+	if err := w.Deliver(0, id, " hello\nworld ", chat.Ask); err != nil {
 		t.Fatal(err)
 	}
-	busy = true
-	if err := w.SendMessage(0, id, "next"); !errors.Is(err, sentinel) {
+	if err := w.Deliver(0, id, "next", chat.Steer); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
-	want := "[new ask:created: hello\nworld  ask:created:next steer:created:next]"
+	if err := w.Deliver(0, "owner/thread", "Ja", chat.Answer); !errors.Is(err, sentinel) {
+		t.Fatal(err)
+	}
+	want := "[new ask:created: hello\nworld  steer:created:next steer:thread:Ja]"
 	if fmt.Sprint(calls) != want {
 		t.Fatalf("calls: %q", fmt.Sprint(calls))
 	}
@@ -50,12 +49,12 @@ func TestCreateAndSendThroughSessions(t *testing.T) {
 	}
 	before := len(calls)
 	for _, id := range []string{"plain", "peer-key/chat", "owner/..", "owner/a/b"} {
-		if err := w.SendMessage(0, id, "hello"); err == nil {
+		if err := w.Deliver(0, id, "hello", chat.Ask); err == nil {
 			t.Fatalf("accepted %s", id)
 		}
 	}
-	if err := w.SendMessage(0, "owner/created", " \n\t "); err == nil {
-		t.Fatal("empty message accepted")
+	if err := w.Deliver(0, "peer-key/chat", "hello", chat.Answer); !errors.Is(err, chat.ErrReadOnly) {
+		t.Fatalf("answered a peer: %v", err)
 	}
 	if len(calls) != before {
 		t.Fatal("invalid input reached service")
@@ -64,16 +63,12 @@ func TestCreateAndSendThroughSessions(t *testing.T) {
 		if _, err := w.NewSession(i); err == nil {
 			t.Fatal("invalid profile")
 		}
-		if err := w.SendMessage(i, "owner/a", "hello"); err == nil {
+		if err := w.Deliver(i, "owner/a", "hello", chat.Ask); err == nil {
 			t.Fatal("invalid send profile")
 		}
 	}
 	s.newSession = func(context.Context) (string, error) { return "", sentinel }
 	if _, err := w.NewSession(0); !errors.Is(err, sentinel) {
-		t.Fatal(err)
-	}
-	s.ask = func(context.Context, string, string) error { return sentinel }
-	if err := w.SendMessage(0, "owner/created", "hello"); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 }
@@ -119,20 +114,39 @@ func TestWindowNodeLifecycle(t *testing.T) {
 	if _, err := w.NewSession(0); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
-	if err := w.SendMessage(0, "owner/a", "hello"); !errors.Is(err, sentinel) {
+	if err := w.Deliver(0, "owner/a", "hello", chat.Ask); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 }
 
-func TestQuestionProjection(t *testing.T) {
-	p := &Profile{}
-	event := plugin.SessionEvent{Kind: plugin.SessionAsked, Args: json.RawMessage(`{"question":"Which database?","options":["SQLite","Postgres"],"recommended":"SQLite"}`)}
-	got := p.event(event)
-	if got.Question == nil || got.Question.Text != "Which database?" || len(got.Question.Options) != 2 || got.Question.Recommended != "SQLite" {
-		t.Fatalf("question: %+v", got)
+// The last message queued comes back as the terminal UI takes it back, only
+// from a session of the owner.
+func TestUnsteerThroughSessions(t *testing.T) {
+	sentinel := errors.New("cannot start")
+	var asked []string
+	w := sessionWindow(t, &testSessions{unsteer: func(_ context.Context, id string) (string, error) {
+		asked = append(asked, id)
+		return "later", nil
+	}})
+	if text, err := w.Unsteer(0, "owner/a"); err != nil || text != "later" {
+		t.Fatalf("taken back %q %v", text, err)
 	}
-	event.Done = true
-	if p.event(event).Question != nil {
-		t.Fatal("completed question has choices")
+	if _, err := w.Unsteer(0, "peer-key/chat"); !errors.Is(err, chat.ErrReadOnly) {
+		t.Fatalf("a peer: %v", err)
+	}
+	for _, id := range []string{"plain", "owner/.."} {
+		if _, err := w.Unsteer(0, id); err == nil {
+			t.Fatalf("accepted %s", id)
+		}
+	}
+	if _, err := w.Unsteer(1, "owner/a"); err == nil {
+		t.Fatal("invalid profile")
+	}
+	if fmt.Sprint(asked) != "[a]" {
+		t.Fatalf("asked %q", asked)
+	}
+	broken := sessionWindow(t, &testSessions{open: func(context.Context) (bool, error) { return false, sentinel }})
+	if _, err := broken.Unsteer(0, "owner/a"); !errors.Is(err, sentinel) {
+		t.Fatal(err)
 	}
 }

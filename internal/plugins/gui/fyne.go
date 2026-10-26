@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"ouroboros/internal/chat"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -22,27 +23,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// The fyne command opens the same window as gui, drawn with Fyne instead of a
-// web view: the same sessions service, the same profile picker, the same
-// thread, composer and context rail. It is a command of its own so that both
-// windows can be tried beside each other.
-func (p *Profile) runFyne(ctx context.Context, args []string) error {
-	if len(args) != 0 {
-		return errors.New("usage: ouro [--profile PROFILE] fyne")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	window, err := p.windowPage(ctx)
-	if err != nil {
-		return err
-	}
-	return showFyne(ctx, window)
-}
-
-// showFyne is replaced by tests, so that no window has to open.
-var showFyne = showFyneWindow
-
 // newFyneApp and showAndRun are the desktop driver, which tests replace with
 // the test driver.
 var (
@@ -50,7 +30,10 @@ var (
 	showAndRun = fyne.Window.ShowAndRun
 )
 
-func showFyneWindow(ctx context.Context, window page) error {
+// showWindow opens the window, drawn with Fyne: the sessions service of the
+// terminal UI, a profile picker, the thread, the composer and the context
+// rail.
+func showWindow(ctx context.Context, window page) error {
 	bridge := newWindowContext(ctx, window)
 	defer bridge.Close()
 	application := newFyneApp()
@@ -140,21 +123,20 @@ func (ui *fyneUI) unsentDrafts() map[string]string {
 }
 
 // fyneSessionState is what the composer of one session keeps: its draft, the
-// error of the last attempt, whether a message is on its way and what a send
-// told.
+// error of the last attempt and what a send told.
 type fyneSessionState struct {
-	text         string
-	error        string
-	pending      bool
-	notice       string
-	sentQuestion string
+	text   string
+	error  string
+	notice string
 }
 
-// fyneContext is the session the window shows.
+// fyneContext is the session the window shows, with what is on its way in
+// it, its queue and the question the agent asks there: see chat.State.
 type fyneContext struct {
 	profile int
 	id      string
 	state   *fyneSessionState
+	session chat.State
 }
 
 // fyneExchange is one part of the thread: an owner message and the sessions
@@ -175,26 +157,16 @@ func (e *fyneExchange) handed(id string) bool {
 	return true
 }
 
-// fyneActivity is how much works for the shown session.
-type fyneActivity struct {
-	busy     bool
-	n        int
-	own      bool
-	stopping bool
-}
-
-// fyneQuestion is the question panel as it shows.
+// fyneQuestion is the question panel as it shows: the question of the State
+// of the session shown, and its answers to choose from.
 type fyneQuestion struct {
-	key         string
-	text        string
-	options     []string
-	recommended string
-	buttons     []*flatButton
+	question *chat.Question
+	buttons  []*flatButton
 }
 
 // fyneTrace is what was read of a session of the part of the thread in view.
 type fyneTrace struct {
-	list    []ChatEvent
+	list    []chat.Event
 	running bool
 }
 
@@ -204,8 +176,8 @@ type fyneInspect struct {
 	id      string
 }
 
-// fyneUI is the state of the Fyne window: the same state frontend/app.js
-// keeps, and the widgets that show it.
+// fyneUI is the state of the window and the widgets that show it; what is
+// on its way in the session shown is the chat.State of its fyneContext.
 type fyneUI struct {
 	app    fyne.App
 	win    fyne.Window
@@ -223,11 +195,11 @@ type fyneUI struct {
 	selected string
 
 	ctx      *fyneContext
-	activity fyneActivity
+	stopping bool // the answer shown is being stopped
 	asking   *fyneQuestion
 	drafts   map[string]*fyneSessionState
 	heard    bool
-	own      []ChatEvent
+	own      []chat.Event
 
 	section       *fyneExchange
 	latest        *fyneExchange
@@ -257,6 +229,7 @@ type fyneUI struct {
 	sessionsScroll *container.Scroll
 	sessionsHead   fyne.CanvasObject
 	settingsButton *flatButton
+	emptySettings  *flatButton
 	main           *fyne.Container
 	dock           *fyne.Container
 	rail           *fyne.Container
@@ -301,7 +274,6 @@ type fyneUI struct {
 	shortcuts     map[fyne.KeyName]func()
 	shownTitle    string // the title of the session shown
 
-	noticeTime time.Duration // how long a notice under the composer stays
 	// replayTime is how long the window applies the past of a session at a
 	// time before it draws a frame and takes input again.
 	replayTime time.Duration
@@ -315,7 +287,6 @@ type fyneUI struct {
 
 func newFyneUI(ctx context.Context, application fyne.App, native fyne.Window, bridge *Window) *fyneUI {
 	return &fyneUI{
-		noticeTime: 4 * time.Second,
 		replayTime: 12 * time.Millisecond,
 		app:        application,
 		win:        native,
@@ -370,7 +341,8 @@ func (ui *fyneUI) build() {
 	ui.back.Hide()
 	ui.menu = newIconButton(theme.MenuIcon(), ui.toggleDrawer)
 	ui.menu.Hide()
-	ui.header = inset(22, 0, 10, 0, container.NewBorder(nil, nil, container.NewCenter(ui.menu), container.NewCenter(ui.back),
+	ui.emptySettings = newIconButton(theme.SettingsIcon(), func() { ui.openSettings(ui.profile, ui.profileName()) })
+	ui.header = inset(22, 0, 10, 0, container.NewBorder(nil, nil, container.NewCenter(ui.menu), container.NewCenter(container.NewHBox(ui.back, ui.emptySettings)),
 		tightVBox(-5, ui.eyebrow, ui.title, ui.meta)))
 
 	ui.errorInk = text("", sizeBody, theme.ColorNameError, fyne.TextStyle{Monospace: true})
@@ -411,6 +383,7 @@ func (ui *fyneUI) build() {
 	ui.questionBox.Hide()
 
 	ui.draft = newComposerEntry(func(value string) { ui.submit(value, false) })
+	ui.draft.onUp = ui.takeBack
 	ui.draft.Wrapping = fyne.TextWrapWord
 	ui.draft.PlaceHolder = tr("composer.placeholder", nil)
 	ui.draft.TextStyle = fyne.TextStyle{Monospace: true}
@@ -593,7 +566,7 @@ func (ui *fyneUI) focusComposer() {
 }
 
 // start reads the profiles and opens the thread or the session the process
-// before handed over, as frontend/app.js does on document readiness.
+// before handed over.
 func (ui *fyneUI) start() {
 	state := ui.bridge.InitialState()
 	fyne.Do(func() {
@@ -687,7 +660,16 @@ func (ui *fyneUI) profileName() string {
 	return ""
 }
 
-func (ui *fyneUI) owner(id string) bool { return strings.HasPrefix(id, "owner/") }
+func (ui *fyneUI) owner(id string) bool { return peerOf(id) == "" }
+
+// peerOf is the peer of the conversation id as the window names it, "" for
+// a session of the owner.
+func peerOf(id string) string {
+	if party, _, _ := strings.Cut(id, "/"); party != "owner" {
+		return party
+	}
+	return ""
+}
 
 func (ui *fyneUI) sessionState(profile int, id string) *fyneSessionState {
 	key := fmt.Sprintf("%d:%s", profile, id)
@@ -709,7 +691,7 @@ func (ui *fyneUI) load(reset bool) {
 	epoch := ui.epoch.Add(1)
 	ui.ready.Store(false)
 	ui.ctx = nil
-	ui.setQuestion(nil)
+	ui.showQuestion()
 	if ui.draft != nil {
 		ui.draft.SetText("")
 	}
@@ -726,7 +708,7 @@ func (ui *fyneUI) load(reset bool) {
 		ui.inspecting = nil
 		setContextTitle(ui, tr("context.title", nil))
 		ui.contextNote.SetText("")
-		setChildren(ui.contextDetails)
+		ui.setContextDetails()
 	}
 	setChildren(ui.sidebarList)
 	setChildren(ui.content)
@@ -791,9 +773,10 @@ func (ui *fyneUI) read(entry SessionEntry) {
 		ui.renderList()
 	}
 	ui.ready.Store(false)
-	ui.activity = fyneActivity{}
-	ui.setQuestion(nil)
-	ui.ctx = &fyneContext{profile: profile, id: entry.ID, state: ui.sessionState(profile, entry.ID)}
+	ui.stopping = false
+	ui.ctx = &fyneContext{profile: profile, id: entry.ID, state: ui.sessionState(profile, entry.ID),
+		session: chat.State{Peer: peerOf(entry.ID)}}
+	ui.showQuestion()
 	ui.own = nil
 	ui.heard = false
 	ui.draft.SetText(ui.ctx.state.text)
@@ -814,7 +797,7 @@ func (ui *fyneUI) read(entry SessionEntry) {
 		}
 		setContextTitle(ui, label)
 		ui.contextNote.SetText(tr("context.hint", nil))
-		setChildren(ui.contextDetails)
+		ui.setContextDetails()
 	}
 	ui.errorBox.Hide()
 	title := entry.Title
@@ -841,7 +824,7 @@ func (ui *fyneUI) read(entry SessionEntry) {
 	ui.chat = newFyneChat(ui, profile, entry.ID, entry.ID == ui.thread)
 	id := entry.ID
 	go func() {
-		snapshot, err := ui.bridge.OpenSession(profile, id)
+		opened, err := ui.bridge.OpenSession(profile, id)
 		if err != nil {
 			fyne.Do(func() {
 				if ui.epoch.Load() != epoch {
@@ -855,7 +838,7 @@ func (ui *fyneUI) read(entry SessionEntry) {
 		// Replay in slices of replayTime and yield between them, so that
 		// the window stays responsive while a long history opens. A slice
 		// for a session the owner left ends the replay.
-		events := snapshot.Events
+		events := opened.Events
 		for i := 0; ; {
 			first := i == 0
 			var stale, last bool
@@ -864,7 +847,7 @@ func (ui *fyneUI) read(entry SessionEntry) {
 					return
 				}
 				if first {
-					ui.ctx.state.notice = snapshot.Notice
+					ui.ctx.state.notice = opened.Notice
 				}
 				i = ui.applyFor(events, i, ui.replayTime)
 				if last = i >= len(events); last {
@@ -872,7 +855,9 @@ func (ui *fyneUI) read(entry SessionEntry) {
 					ui.updateComposer()
 					ui.stick()
 					ui.focusComposer()
-					go ui.follow(epoch, profile, id, snapshot.Token)
+					if opened.Live != nil {
+						go ui.follow(epoch, entry, opened.Live)
+					}
 				}
 			})
 			if stale || last {
@@ -883,31 +868,38 @@ func (ui *fyneUI) read(entry SessionEntry) {
 	}()
 }
 
-// follow reads the live stream of the shown session, one poll at a time, as
-// the front end does every 150 ms.
-func (ui *fyneUI) follow(epoch int64, profile int, id string, token int) {
-	for ui.epoch.Load() == epoch && token != 0 && ui.owner(id) && ui.run.Err() == nil {
-		asked := time.Now()
-		events := ui.bridge.PollSession(token)
-		if events == nil {
-			fyne.Do(func() {
-				if ui.epoch.Load() != epoch {
-					return
-				}
-				ui.ready.Store(false)
-				ui.setQuestion(nil)
-				ui.setStatus(tr("session.disconnected", nil))
-				ui.fail(tr("session.disconnectedHint", nil), errors.New(tr("session.ended", nil)))
-			})
+// follow shows what happens in the session shown from now on, a batch of
+// what came at a time. Once its events stop coming, as when the node
+// stopped, what was on its way is not any more as far as the window knows,
+// and the session is read anew in a while, as the terminal UI watches it
+// again: what became of it is in what it shows then.
+func (ui *fyneUI) follow(epoch int64, entry SessionEntry, live <-chan chat.Event) {
+	for ui.epoch.Load() == epoch {
+		var events []chat.Event
+		select {
+		case <-ui.run.Done():
 			return
-		}
-		if len(events) == 0 {
-			// A poll waits for events; one that came back at once has no
-			// stream to wait on, and is not asked again at full speed.
-			if time.Since(asked) < 20*time.Millisecond {
-				time.Sleep(100 * time.Millisecond)
+		case e, ok := <-live:
+			if !ok {
+				// A stream the closing window ended is no stream lost.
+				if ui.run.Err() == nil && ui.bridge.ctx.Err() == nil {
+					fyne.Do(func() { ui.lost(epoch, entry) })
+				}
+				return
 			}
-			continue
+			events = append(events, e)
+		}
+	batch:
+		for len(events) < 100 {
+			select {
+			case e, ok := <-live:
+				if !ok {
+					break batch // the next round tells it
+				}
+				events = append(events, e)
+			default:
+				break batch
+			}
 		}
 		fyne.Do(func() {
 			if ui.epoch.Load() != epoch {
@@ -919,6 +911,34 @@ func (ui *fyneUI) follow(epoch int64, profile int, id string, token int) {
 			}
 		})
 	}
+}
+
+// rewatchDelay is how long the window waits before it reads a session anew
+// whose events stopped coming.
+var rewatchDelay = 2 * time.Second
+
+// lost tells that the events of the session shown stopped coming, and reads
+// it anew in a while.
+func (ui *fyneUI) lost(epoch int64, entry SessionEntry) {
+	if ui.epoch.Load() != epoch {
+		return
+	}
+	ui.ready.Store(false)
+	ui.ctx.session.Lost()
+	ui.showQuestion()
+	ui.updateComposer()
+	ui.setStatus(tr("session.disconnected", nil))
+	ui.fail(tr("session.disconnectedHint", nil), errors.New(tr("session.ended", nil)))
+	time.AfterFunc(rewatchDelay, func() {
+		if ui.run.Err() != nil {
+			return // the window is gone
+		}
+		fyne.Do(func() {
+			if ui.epoch.Load() == epoch {
+				ui.read(entry)
+			}
+		})
+	})
 }
 
 // scrolled follows the history while the owner is at its end, and shows the
@@ -1051,22 +1071,17 @@ func (ui *fyneUI) updateStatus() {
 	if !ui.ready.Load() {
 		return
 	}
-	central := ui.ctx != nil && ui.ctx.id == ui.thread
-	active := ui.activity.n
-	if ui.activity.own {
-		active--
-	}
-	if active < 0 {
-		active = 0
-	}
-	if ui.ctx == nil || !ui.owner(ui.ctx.id) {
+	if ui.ctx == nil || ui.ctx.session.Peer != "" {
 		ui.setStatus(tr("status.peer", nil))
 		return
 	}
+	session := &ui.ctx.session
+	central := ui.ctx.id == ui.thread
+	active := session.Active()
 	word := tr("status.ready", nil)
-	if ui.asking != nil {
+	if session.Asking != nil {
 		word = tr("status.needsAnswer", nil)
-	} else if ui.activity.busy {
+	} else if session.Pending {
 		word = tr("status.working", nil)
 	}
 	which := "Session"
@@ -1086,7 +1101,7 @@ func (ui *fyneUI) updateStatus() {
 
 // writable reports whether the composer may send into the shown session.
 func (ui *fyneUI) writable() bool {
-	return ui.ready.Load() && ui.ctx != nil && ui.owner(ui.ctx.id) && !ui.ctx.state.pending
+	return ui.ready.Load() && ui.ctx != nil && ui.ctx.session.Peer == ""
 }
 
 // updateSend is the only composer state that depends on each keystroke.
@@ -1100,7 +1115,7 @@ func (ui *fyneUI) updateSend() {
 
 func (ui *fyneUI) updateComposer() {
 	if ui.asking != nil {
-		sent := ui.ctx != nil && ui.ctx.state.sentQuestion == ui.asking.key
+		sent := ui.asking.question.Sent
 		for _, button := range ui.asking.buttons {
 			if !ui.writable() || sent {
 				button.Disable()
@@ -1114,7 +1129,7 @@ func (ui *fyneUI) updateComposer() {
 			ui.questionHint.SetText(tr("question.hint", nil))
 		}
 	}
-	owner := ui.ctx != nil && ui.owner(ui.ctx.id)
+	owner := ui.ctx != nil && ui.ctx.session.Peer == ""
 	// A loading or disconnected stream prevents sending, not drafting.
 	if !owner {
 		ui.draft.Disable()
@@ -1122,7 +1137,7 @@ func (ui *fyneUI) updateComposer() {
 		ui.draft.Enable()
 	}
 	ui.updateSend()
-	if !ui.ready.Load() || !owner || !ui.activity.busy || ui.activity.stopping {
+	if !ui.ready.Load() || !owner || !ui.ctx.session.Pending || ui.stopping {
 		ui.stop.Hide()
 	} else {
 		ui.stop.Show()
@@ -1134,11 +1149,7 @@ func (ui *fyneUI) updateComposer() {
 		} else {
 			ui.sendError.Show()
 		}
-		notice := ui.ctx.state.notice
-		if ui.ctx.state.pending {
-			notice = tr("composer.sending", nil)
-		}
-		ui.sendStatus.SetText(notice)
+		ui.sendStatus.SetText(ui.ctx.state.notice)
 	} else {
 		ui.sendError.Hide()
 		ui.sendStatus.SetText("")
@@ -1150,7 +1161,7 @@ func (ui *fyneUI) updateComposer() {
 	}
 	ui.updateStatus()
 	if ui.emptyHint != nil {
-		if ui.ready.Load() && ui.ctx != nil && ui.owner(ui.ctx.id) && len(ui.visible) == 0 {
+		if ui.ready.Load() && owner && len(ui.visible) == 0 {
 			ui.emptyHint.Show()
 		} else {
 			ui.emptyHint.Hide()
@@ -1158,22 +1169,36 @@ func (ui *fyneUI) updateComposer() {
 	}
 }
 
-func (ui *fyneUI) setQuestion(question *fyneQuestion) {
-	ui.asking = question
+// showQuestion shows the question the agent asks in the session shown, as
+// its State says, or hides the panel without one. Of the conversation of a
+// peer the question shows only in its history.
+func (ui *fyneUI) showQuestion() {
+	var asked *chat.Question
+	if ui.ctx != nil && ui.ctx.session.Peer == "" {
+		asked = ui.ctx.session.Asking
+	}
+	if ui.asking == nil && asked == nil || ui.asking != nil && ui.asking.question == asked {
+		return
+	}
+	ui.setQuestion(asked)
+}
+
+func (ui *fyneUI) setQuestion(question *chat.Question) {
 	if question == nil {
+		ui.asking = nil
 		ui.questionBox.Hide()
 		ui.questionOpt.SetObjects()
 		return
 	}
-	ui.questionTxt.Segments = []widget.RichTextSegment{&widget.TextSegment{Text: question.text,
+	current := &fyneQuestion{question: question}
+	ui.asking = current
+	ui.questionTxt.Segments = []widget.RichTextSegment{&widget.TextSegment{Text: question.Text,
 		Style: widget.RichTextStyle{SizeName: sizeBody, ColorName: theme.ColorNameForeground, TextStyle: fyne.TextStyle{Monospace: true}}}}
 	ui.questionTxt.Refresh()
-	question.buttons = question.buttons[:0]
-	options := make([]fyne.CanvasObject, 0, len(question.options))
-	current := question
-	for _, option := range question.options {
+	options := make([]fyne.CanvasObject, 0, len(question.Options))
+	for _, option := range question.Options {
 		label := option
-		recommended := option == question.recommended
+		recommended := option == question.Recommended
 		if recommended {
 			label += tr("question.recommended", nil)
 		}
@@ -1191,51 +1216,36 @@ func (ui *fyneUI) setQuestion(question *fyneQuestion) {
 	ui.composerChanged()
 }
 
+// submit sends what the owner wrote or chose where the State of the session
+// shown says, as the terminal UI does: an answer to the question the agent
+// asks, a message queued for the answer on its way, or one that starts an
+// answer. What the node did not take goes back into the composer.
 func (ui *fyneUI) submit(value string, fromOption bool) {
 	if !ui.writable() || strings.TrimSpace(value) == "" {
 		return
 	}
 	ui.stick()
 	target := ui.ctx
-	question := ui.asking
 	state := target.state
-	original := state.text
-	state.pending = true
+	way, _ := target.session.Send() // writable: the session is the owner's
 	state.error = ""
 	state.notice = ""
+	if !fromOption {
+		state.text = ""
+		ui.draft.SetText("")
+	}
 	ui.updateComposer()
 	go func() {
-		err := ui.bridge.SendMessage(target.profile, target.id, value)
+		err := ui.bridge.Deliver(target.profile, target.id, value, way)
 		fyne.Do(func() {
 			if err != nil {
+				target.session.Unsent()
 				state.error = tr("composer.sendFailed", map[string]any{"error": err})
-			} else {
-				if question != nil {
-					state.sentQuestion = question.key
+				if !fromOption && state.text == "" {
+					state.text = value
 				}
-				if !fromOption && state.text == original {
-					state.text = ""
-				}
-				state.notice = tr("composer.sent", nil)
-				// The notice goes again after a while, as a native toast does.
-				notice := state.notice
-				time.AfterFunc(ui.noticeTime, func() {
-					if ui.run.Err() != nil {
-						return // the window is gone
-					}
-					fyne.Do(func() {
-						if state.notice != notice || state.pending {
-							return
-						}
-						state.notice = ""
-						if ui.ctx != nil && ui.ctx.state == state {
-							ui.updateComposer()
-						}
-					})
-				})
 			}
-			state.pending = false
-			if ui.ctx != nil && ui.ctx.state == state {
+			if ui.ctx == target {
 				ui.draft.SetText(state.text)
 				ui.updateComposer()
 			}
@@ -1243,12 +1253,38 @@ func (ui *fyneUI) submit(value string, fromOption bool) {
 	}()
 }
 
+// takeBack takes back the last message queued for the answer on its way,
+// as up does in the terminal UI: it is the owner's again in the composer,
+// before what they wrote meanwhile. It reports whether it took the key.
+func (ui *fyneUI) takeBack() bool {
+	if !ui.writable() || !ui.ctx.session.TakesBack(ui.draft.Text) {
+		return false
+	}
+	target := ui.ctx
+	state := target.state
+	go func() {
+		text, err := ui.bridge.Unsteer(target.profile, target.id)
+		fyne.Do(func() {
+			if err != nil {
+				state.error = tr("composer.takeBackFailed", map[string]any{"error": err})
+			} else {
+				state.text = chat.TakenBack(text, state.text)
+			}
+			if ui.ctx == target {
+				ui.draft.SetText(state.text)
+				ui.updateComposer()
+			}
+		})
+	}()
+	return true
+}
+
 func (ui *fyneUI) stopAnswer() {
-	if !ui.ready.Load() || ui.ctx == nil || !ui.owner(ui.ctx.id) || !ui.activity.busy || ui.activity.stopping {
+	if !ui.ready.Load() || ui.ctx == nil || ui.ctx.session.Peer != "" || !ui.ctx.session.Pending || ui.stopping {
 		return
 	}
 	target := ui.ctx
-	ui.activity.stopping = true
+	ui.stopping = true
 	target.state.error = ""
 	ui.updateComposer()
 	go func() {
@@ -1257,7 +1293,7 @@ func (ui *fyneUI) stopAnswer() {
 			if err != nil {
 				target.state.error = tr("composer.stopFailed", map[string]any{"error": err})
 			}
-			ui.activity.stopping = false
+			ui.stopping = false
 			if ui.ctx == target {
 				ui.updateComposer()
 			}

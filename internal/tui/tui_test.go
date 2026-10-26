@@ -509,7 +509,7 @@ func answered(t *testing.T, m *Model, cmd tea.Cmd) {
 	t.Helper()
 	c := m.chat
 	n := len(c.entries)
-	drive(t, m, cmd, func() bool { return !c.pending && len(c.entries) > n+1 })
+	drive(t, m, cmd, func() bool { return !c.Pending && len(c.entries) > n+1 })
 }
 
 func TestSplashShowsLogoUntilKey(t *testing.T) {
@@ -671,7 +671,7 @@ func TestViewShowsTheProviderOfTheModel(t *testing.T) {
 func TestChat(t *testing.T) {
 	m, b := newModel(t) // the agent needs no other node
 	cmd := say(t, m, "  ping  ")
-	if !m.chat.pending || m.input.Value() != "" {
+	if !m.chat.Pending || m.input.Value() != "" {
 		t.Fatal("message should be pending and the input cleared")
 	}
 	if !strings.Contains(m.View().Content, "alpha is thinking") {
@@ -682,7 +682,7 @@ func TestChat(t *testing.T) {
 	if got := b.messages(); len(got) != 1 || got[0] != (sent{c.contextID, "ping"}) {
 		t.Fatalf("sent %+v", got)
 	}
-	if c.pending || len(c.entries) != 2 || c.entries[0].text != "ping" || !c.entries[0].mine || c.entries[1].text != "pong" || c.entries[1].mine {
+	if c.Pending || len(c.entries) != 2 || c.entries[0].text != "ping" || !c.entries[0].mine || c.entries[1].text != "pong" || c.entries[1].mine {
 		t.Fatalf("entries %+v", c.entries)
 	}
 	if view := m.View().Content; !strings.Contains(view, "ping") || !strings.Contains(view, "pong") {
@@ -710,11 +710,11 @@ func TestChatShowsTheLoopToTheAnswer(t *testing.T) {
 	// announced and still running.
 	drive(t, m, say(t, m, "ask beta for the time"), func() bool { return m.chat.doing == "asking beta" })
 	m.now = func() time.Time { return time.Now().Add(toolShown) } // the tool has run long enough to be named
-	if !m.chat.pending || !strings.Contains(m.View().Content, "I will ask beta") || !strings.Contains(m.View().Content, "asking beta") {
+	if !m.chat.Pending || !strings.Contains(m.View().Content, "I will ask beta") || !strings.Contains(m.View().Content, "asking beta") {
 		t.Fatalf("what the agent says on the way belongs in the chat:\n%s", m.View().Content)
 	}
 	close(gate) // beta answered, the agent thinks again and answers
-	drive(t, m, nil, func() bool { return !m.chat.pending })
+	drive(t, m, nil, func() bool { return !m.chat.Pending })
 
 	c := m.chat
 	// The call these words belong to goes below them.
@@ -743,8 +743,8 @@ func TestSendError(t *testing.T) {
 	}
 	b.fail = map[string]error{"ask": errors.New("the node is not running, type /start")}
 	drive(t, m, say(t, m, "again"), func() bool { return m.noticeErr })
-	if m.chat.pending || len(m.chat.entries) != 2 || m.input.Value() != "again" || m.notice != "the node is not running, type /start" {
-		t.Fatalf("pending %v, entries %+v, input %q, notice %q", m.chat.pending, m.chat.entries, m.input.Value(), m.notice)
+	if m.chat.Pending || len(m.chat.entries) != 2 || m.input.Value() != "again" || m.notice != "the node is not running, type /start" {
+		t.Fatalf("pending %v, entries %+v, input %q, notice %q", m.chat.Pending, m.chat.entries, m.input.Value(), m.notice)
 	}
 }
 
@@ -776,7 +776,7 @@ func TestChatShowsEveryCallOfTheLoop(t *testing.T) {
 	close(written)
 	drive(t, m, nil, func() bool { return m.chat.doing == "reading d.go" }) // the read still runs
 	close(read)
-	drive(t, m, nil, func() bool { return !m.chat.pending })
+	drive(t, m, nil, func() bool { return !m.chat.Pending })
 
 	want := []entry{{mine: true, text: "fix it"},
 		{text: "I read both", calls: []call{{text: "reading a.go ✓ 3ms", done: true}, {text: "reading b.go ✗ no such file", done: true}}},
@@ -834,14 +834,14 @@ func TestNewConversationLeavesTheAnswerGoingOn(t *testing.T) {
 	old := m.chat
 	drive(t, m, run(m, "/new"), func() bool { return true })
 	c := m.chat
-	if c == old || c.contextID == old.contextID || len(c.entries) != 0 || c.pending || c.doing != "" {
+	if c == old || c.contextID == old.contextID || len(c.entries) != 0 || c.Pending || c.doing != "" {
 		t.Fatalf("conversation not new: %+v", c)
 	}
 	if view := ansi.Strip(m.View().Content); strings.Contains(view, "asking beta") {
 		t.Fatalf("the new conversation shows the old one:\n%s", view)
 	}
 	close(gate)
-	drive(t, m, nil, func() bool { return !old.pending })
+	drive(t, m, nil, func() bool { return !old.Pending })
 	if m.chat != c || len(c.entries) != 0 || old.entries[len(old.entries)-1].text != "beta is fine" {
 		t.Fatalf("the answer belongs to the old conversation: %+v, %+v", old.entries, c.entries)
 	}
@@ -885,7 +885,7 @@ func TestEscapeStopsTheAnswer(t *testing.T) {
 
 	// On a screen esc goes back, and the answer goes on.
 	run(m, "/help")
-	if press(m, "esc") != nil || m.screen != screenChat || len(b.canceled) != 0 || !first.pending {
+	if press(m, "esc") != nil || m.screen != screenChat || len(b.canceled) != 0 || !first.Pending {
 		t.Fatalf("esc on a screen: screen %v, canceled %v", m.screen, b.canceled)
 	}
 
@@ -900,11 +900,11 @@ func TestEscapeStopsTheAnswer(t *testing.T) {
 	if m.notice != "stopping the answer…" {
 		t.Fatalf("notice %q", m.notice)
 	}
-	drive(t, m, cmd, func() bool { return !second.pending && m.notice == "answer stopped" })
+	drive(t, m, cmd, func() bool { return !second.Pending && m.notice == "answer stopped" })
 	if e := second.entries[len(second.entries)-1]; !e.failed || e.text != "stopped before it answered" {
 		t.Fatalf("entries %+v", second.entries)
 	}
-	if !first.pending || len(b.canceled) != 1 || b.canceled[0] != second.contextID {
+	if !first.Pending || len(b.canceled) != 1 || b.canceled[0] != second.contextID {
 		t.Fatalf("only the session shown is stopped: %v", b.canceled)
 	}
 
@@ -943,7 +943,7 @@ func TestCancelStopsTheAnswer(t *testing.T) {
 	if m.notice != "stopping the answer…" {
 		t.Fatalf("notice %q", m.notice)
 	}
-	drive(t, m, cmd, func() bool { return !m.chat.pending && m.notice == "answer stopped" })
+	drive(t, m, cmd, func() bool { return !m.chat.Pending && m.notice == "answer stopped" })
 	awaitStop(t, stopped)
 	c := m.chat
 	if e := c.entries[len(c.entries)-1]; !e.failed || e.text != "stopped before it answered" {
@@ -962,7 +962,7 @@ func TestCancelStopsTheAnswer(t *testing.T) {
 
 	// What cannot be stopped says why.
 	b.fail = map[string]error{"cancel": errors.New("boom")}
-	c.pending = true
+	c.Pending = true
 	m.Update(run(m, "/cancel")())
 	if m.notice != "boom" || !m.noticeErr {
 		t.Fatalf("notice %q", m.notice)

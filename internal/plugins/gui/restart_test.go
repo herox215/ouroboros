@@ -20,7 +20,7 @@ func TestWindowLeavesForANewBuild(t *testing.T) {
 	if _, _, ok := w.Restart(); ok {
 		t.Fatal("restarted without a tool asking for it")
 	}
-	snapshot, err := w.OpenSession(0, "owner/s1")
+	opened, err := w.OpenSession(0, "owner/s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,23 +28,19 @@ func TestWindowLeavesForANewBuild(t *testing.T) {
 		t.Fatal("a restart that happened before made the window leave")
 	}
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "done"}
-	if events := w.PollSession(snapshot.Token); len(events) != 1 {
-		t.Fatalf("events: %+v", events)
-	}
+	received(t, opened.Live)
 	if _, _, ok := w.Restart(); ok || leaves != 0 {
 		t.Fatal("an answer alone left the window")
 	}
 	live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/new/ouro"}
-	if events := w.PollSession(snapshot.Token); len(events) != 1 {
-		t.Fatalf("restart event: %+v", events)
-	}
+	received(t, opened.Live)
 	exe, going, ok := w.Restart()
 	if !ok || exe != "/new/ouro" || going.Session != "owner/s1" || leaves != 1 {
 		t.Fatalf("restart: %q %+v %v, leaves %d", exe, going, ok, leaves)
 	}
 	// Another build of another answer does not leave a second time.
 	live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/other/ouro"}
-	w.PollSession(snapshot.Token)
+	received(t, opened.Live)
 	if exe, _, ok := w.Restart(); !ok || exe != "/new/ouro" || leaves != 1 {
 		t.Fatalf("second restart: %q %v, leaves %d", exe, ok, leaves)
 	}
@@ -57,12 +53,12 @@ func TestNobodyClosesTheWindow(t *testing.T) {
 	w := sessionWindow(t, &testSessions{watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
 		return nil, live, nil
 	}})
-	snapshot, err := w.OpenSession(0, "owner/s1")
+	opened, err := w.OpenSession(0, "owner/s1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/new/ouro"}
-	w.PollSession(snapshot.Token)
+	received(t, opened.Live)
 	if _, _, ok := w.Restart(); ok {
 		t.Fatal("restarted without a window to close")
 	}

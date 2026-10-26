@@ -1,5 +1,6 @@
 // Package gui contributes the explicit "gui" command, a session chat window
-// with a profile picker. It does not replace the default terminal front end.
+// with a profile picker, drawn with Fyne. It does not replace the default
+// terminal front end.
 package gui
 
 import (
@@ -19,7 +20,6 @@ type Profile struct {
 	status   func() (plugin.NodeStatus, error)
 	sessions plugin.Sessions
 	ctx      *plugin.Context
-	archive  archiveAccess
 	profiles []*Profile
 }
 
@@ -29,7 +29,6 @@ func Plugin(owner *plugin.Owner, profile func(*Profile)) plugin.Plugin {
 	return plugin.New("gui", func(ctx *plugin.Context, n struct{ Sessions plugin.Sessions }) error {
 		p := &Profile{owner: owner, status: owner.Status, sessions: n.Sessions, ctx: ctx}
 		plugin.Add(ctx, plugin.Command{Name: "gui", Help: "chat in a window with a profile picker", Run: p.run})
-		plugin.Add(ctx, plugin.Command{Name: "fyne", Help: "chat in the same window, drawn with Fyne", Run: p.runFyne})
 		if profile != nil {
 			profile(p)
 		}
@@ -51,15 +50,9 @@ func Together(profiles []*Profile) {
 	}
 }
 
-type archiveAccess struct {
-	page    func(string, int) (plugin.ArchivedPage, error)
-	records func(string) ([]plugin.ArchivedRecord, error)
-}
-
 type choice struct{ name, id string }
 type page struct {
 	choices   []choice
-	archives  []archiveAccess // legacy archive tests only
 	profiles  []*Profile
 	selected  int
 	session   string            // the session the window goes on with, "" to show the thread
@@ -83,7 +76,6 @@ func (p *Profile) page() (page, error) {
 			name = "Not set up"
 		}
 		out.choices = append(out.choices, choice{name: name, id: status.ID})
-		out.archives = append(out.archives, profile.archive)
 		out.profiles = append(out.profiles, profile)
 		if profile == p {
 			out.selected = i
@@ -105,6 +97,9 @@ func (p *Profile) run(ctx context.Context, args []string) error {
 	}
 	return show(ctx, page)
 }
+
+// show is replaced by tests so command tests never open a desktop window.
+var show = showWindow
 
 // windowPage is the page a window opens on: the profiles, the one named, the
 // start directory and the session and drafts a process before handed over.
@@ -129,9 +124,6 @@ func (p *Profile) windowPage(ctx context.Context) (page, error) {
 	}
 	return window, nil
 }
-
-// show is replaced by tests so command tests never open a desktop window.
-var show = showWindow
 
 // resumeEnv carries what the window of a new process goes on with: the
 // variable the terminal front end hands over the same way.

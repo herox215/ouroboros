@@ -15,8 +15,7 @@ ouro list                 # find nodes on the network
 ouro chat "ask beta …"    # one answer from your agent, for scripts; without a message → the terminal UI
 ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
-ouro gui                  # native Wails GUI: chat, create sessions, switch profiles
-ouro fyne                 # the same window, drawn with Fyne instead of a web view
+ouro gui                  # native window (Fyne): chat, create sessions, switch profiles
 ouro stop
 ouro update               # build and install the newest main
 ouro rollback             # the build before the last update or rebuild again
@@ -151,12 +150,15 @@ without a command, and `ouro chat` talks line by line. If the list of plugins ho
 ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that open them (`ouro tui`, …),
 which keep working.
 
-The optional `gui` plugin contributes only the explicit `ouro gui` and `ouro fyne` commands, not a default front end.
-`ouro fyne` opens the same window drawn with Fyne instead of a web view: the same profile,
-the same thread, sessions, composer and context rail, from the same session service. It is
-built with cgo; a build without cgo refuses the command. Both windows keep their appearance
-preference separately (`System`, `Light`, `Dark` in the settings); `System`, the default,
+The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
+It opens a native window drawn with Fyne, on the same session service as the terminal UI. It is
+built with cgo; a build without cgo refuses the command. The window keeps its appearance
+preference (`System`, `Light`, `Dark` in the settings); `System`, the default,
 follows the light or dark appearance of the desktop while the window is open.
+The terminal UI and the window share what they know of a conversation: the package
+`internal/chat` shows the events of a session, and its `State` says what is on its way,
+the messages queued for it, the question the agent asks and where what the owner writes
+goes. Both front ends only draw it.
 The Fyne window behaves like a native one: buttons, session cards and links answer the
 pointer and show the keyboard focus, Enter and Space press what has the focus, and text
 in the transcript can be selected and copied. Enter sends, Shift+Enter starts a new line,
@@ -184,7 +186,7 @@ the selected profile, session and unsent composer drafts. A build with identical
 contents does not restart the window; failed builds leave it running unchanged.
 This detects installation, not completion of the node's deferred restart: running
 answers continue in the node. Source edits alone do not update an installed GUI.
-It opens a Wails v2 window with the profile's thread, the same
+The window opens with the profile's thread, the same
 conversation the TUI shows first. Say what is to be done there; the node routes topics,
 relays questions and gathers results through its existing thread implementation.
 Of the thread the GUI shows the last six hours, as the TUI does and as its agent
@@ -193,7 +195,11 @@ as in the demo: no profile picker, search, new session or toggle; the profile is
 start (`ouro --profile NAME gui`). **Zum Thread** returns from an individual session.
 The status shows work in progress, questions and the number of active sessions the thread
 handed work to. **Stoppen** calls the same session cancellation as the TUI, including
-stopping the thread's delegated answers. Messages can still be sent while work runs.
+stopping the thread's delegated answers. Messages can still be sent while work runs: they
+are queued for the answer on its way, as in the TUI, and ↑ in the empty composer takes the
+last of them back, before what is written meanwhile. A question of the agent waits until
+its wait is over, not only until the answer that asked it ends; what the owner writes or
+chooses meanwhile answers it.
 `ouro gui [DIRECTORY]` uses the same initial-project handling as `ouro tui [DIRECTORY]`:
 the current directory by default. A busy thread keeps its project and shows a notice.
 Beside the thread, the sidebar follows the part of it in view, as in the demo: the part
@@ -221,40 +227,30 @@ running answers continue in the node.
 The gear button opens the settings, including **Darstellung**: **System** (the default),
 **Hell** or **Dunkel**. System follows changes to the OS appearance immediately. The choice
 is saved locally for the GUI across profiles and restarts.
-The frontend is plain HTML/CSS/JavaScript embedded in the executable: no Node, npm,
-Wails CLI, separate web server, or frontend build is needed. The Go binding supplies
-the profiles and session list (owner and peer conversations, newest first).
-The sidebar groups sessions by date. The GUI opens chats through the same session service as the TUI: owner sessions use
-`Watch`, peer conversations use `Read`, and live events update the selected chat. Tool results
-and arguments are not included in the GUI transcript payload; opening a tool call requests
-its saved result separately. Long texts show an 8,000-character preview until expanded.
+The window lists the profiles and sessions (owner and peer conversations, newest first),
+grouped by date. It opens chats through the same session service as the TUI: owner sessions use
+`Watch`, peer conversations use `Read`, and live events update the selected chat. Opening a tool
+call requests its saved result separately. Long texts show an 8,000-character preview until expanded.
 Create an owner session with **Neue Session**, or select an existing one to continue it.
 The message field sends with Enter; Shift+Enter inserts a newline. Sending uses `Ask`, and
-`Steer` while an answer is running (including replies to agent questions). Peer conversations
-remain read-only. Refresh reloads the session list. Like the TUI, opening an owner session
-restores it in the node and watches its events; when a tool asks ouro to start anew from a
-new build, the window closes, and the new process opens one again showing the profile and
-the session the window before showed. There are no configuration operations.
+`Steer` while an answer is on its way or a question waits, as `chat.State.Send` says for both
+front ends. Peer conversations remain read-only. When the events of the session shown stop
+coming, as when the node stopped, the window reads it anew after a moment. Like the TUI,
+opening an owner session restores it in the node and watches its events; when a tool asks
+ouro to start anew from a new build, the window closes, and the new process opens one again
+showing the profile and the session the window before showed. There are no configuration operations.
 
-Native builds need CGO and the [Wails prerequisites](https://wails.io/docs/gettingstarted/installation/).
-On Linux the build uses GTK 3 and **WebKitGTK 4.1** (Debian/Ubuntu:
-`build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev`; Arch:
-`base-devel pkgconf gtk3 webkit2gtk-4.1`). On macOS install the Xcode command-line tools.
-`make build` supplies Wails' `production` tag and the Linux `webkit2_41` tag;
-installation, update and rebuild use this same build recipe. When the executable is in the
-source checkout, `./ouro gui` checks this recipe through Go’s build cache before opening
-the window. Changed build inputs (including uncommitted code and embedded frontend files)
-are rebuilt into a staging directory; only a successful, different build replaces the
+The window needs a build with cgo and the system libraries of Fyne (on Linux the OpenGL and
+X11 headers, see the [Fyne prerequisites](https://docs.fyne.io/started/)); on macOS install the
+Xcode command-line tools. `make build` builds it; installation, update and rebuild use this same
+build recipe. When the executable is in the source checkout, `./ouro gui` checks this recipe
+through Go’s build cache before opening the window. Changed build inputs (including uncommitted
+code) are rebuilt into a staging directory; only a successful, different build replaces the
 binary and restarts it with the same arguments and environment. A build failure stops
 the launch rather than opening a stale GUI. Installed copies outside the checkout do
-not perform this development check. A direct native Go build
-must likewise use `go build -tags production,webkit2_41 ./cmd/ouro`.
-`CGO_ENABLED=0 make build` still produces a headless binary, whose `gui` command explains
-that a native build is needed. Plain `go test` does not require desktop libraries; native
-GUI tests can also run with `go test -tags production,webkit2_41 ./internal/plugins/gui`.
-Frontend tests run with `node --test internal/plugins/gui/frontend_test.mjs`; Node is needed
-only for these tests, not to build or run ouro. `make test-gui` runs both native GUI
-and frontend tests.
+not perform this development check. `CGO_ENABLED=0 make build` still produces a headless
+binary, whose `gui` command explains that cgo is needed. The tests of the window run with
+the other tests; the test driver of Fyne needs no desktop.
 
 Other plugins add to the UI, see [Extending](#extending):
 
@@ -411,8 +407,10 @@ So an answer does not depend on the UI:
   on. Stopping the node stops every answer and every task.
 - **Steering.** What you send while an answer is on its way is queued, and shown as that below the
   conversation. The agent takes it as soon as the tools it waits for have run, as a message of yours after
-  their results, or, if the answer is given before, as your next message. Either way it goes at the end of
-  the conversation, so what the provider cached of it stays. `↑` in an empty input takes the last queued
+  their results. While the model writes, it takes it at once: what the model wrote so far is dropped, as
+  you never saw it, and the model writes anew with your message, without being told of what it dropped.
+  While tasks the agent delegated run, the message waits for them. Either way it goes at the end of the
+  conversation, so what the provider cached of it stays. `↑` in an empty input takes the last queued
   message back into the input, and it is not queued any more.
 
 The node **keeps the sessions** in its [archive](#history), so that they outlive it: after `ouro stop`, a
@@ -2231,15 +2229,13 @@ make hooks   # once per clone: the checks before every commit, the mutation test
 `make cover` only measures and prints the percentages; `make tools` builds the two tools ahead of time.
 
 The agent tool `check_sanity({})` runs the whole Go test suite without cached results,
-with race detection and statement coverage, followed by native GUI and JavaScript
-frontend tests. It reports named failures, skips and uncovered source ranges ranked
+with race detection and statement coverage, the window included. It reports named failures, skips and uncovered source ranges ranked
 by missing statements. Full logs and the coverage profile remain in the private
 temporary directory named in its result. The default overall timeout is eight
-minutes (`timeout_minutes`: 1–60). `gui: false` explicitly skips both GUI checks.
-Missing GUI libraries or Node are reported as problems, not silently skipped.
+minutes (`timeout_minutes`: 1–60).
 This uses the checkout the running binary was built from, not the conversation
 directory, and installs nothing. Coverage is raw (including test-helper packages),
-excludes subprocess execution and the separate tagged GUI run, and can be incomplete
+excludes subprocess execution, and can be incomplete
 after test failures. It identifies candidates for new tests, not assertion quality
 or branch coverage. Other platforms/build tags, lint and mutation tests are outside
 this tool’s scope; `make check` remains the comprehensive quality gate.

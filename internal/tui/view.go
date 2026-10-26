@@ -114,7 +114,7 @@ func (m *Model) inputRows() int {
 // chat: from a key on the chat until it is empty and idle, and whenever it
 // holds text or a question of the agent waits in it.
 func (m *Model) inputVisible() bool {
-	if a := m.chat.asking; a != nil && !a.sent {
+	if a := m.chat.Asking; a != nil && !a.Sent {
 		return true
 	}
 	return m.inputShown || m.input.Value() != ""
@@ -151,7 +151,7 @@ func (m *Model) layout() {
 func (m *Model) renderHistory(toBottom bool) {
 	c := m.chat
 	first := m.threadStart(c)
-	if first == len(c.entries) && !c.pending && len(c.queued) == 0 {
+	if first == len(c.entries) && !c.Pending && len(c.Queued) == 0 {
 		c.shown = rendered{first: first}
 		if m.resuming == c {
 			m.history.SetContent("")
@@ -261,13 +261,13 @@ func (m *Model) renderHistory(toBottom bool) {
 	}
 	// The answer the model is still writing, as far as the stream has brought
 	// it; the Answer of the end replaces it with the whole of it.
-	if c.pending && c.partial != "" {
+	if c.Pending && c.partial != "" {
 		blocks = append(blocks, wrap(render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
 	}
 	// What waits for the answer on its way to take it comes last.
-	for i, text := range c.queued {
+	for i, text := range c.Queued {
 		state := " · queued"
-		if i == len(c.queued)-1 {
+		if i == len(c.Queued)-1 {
 			state += ", ↑ takes it back"
 		}
 		head := boldStyle.Foreground(accent).Render("you") + mutedStyle.Render(state)
@@ -299,7 +299,7 @@ func (c *conversation) settled() int {
 			return i
 		}
 	}
-	if !c.pending {
+	if !c.Pending {
 		return len(c.entries)
 	}
 	for i := len(c.entries) - 1; i >= 0; i-- {
@@ -450,7 +450,7 @@ func (c *conversation) summary(calls []call) string {
 func (m *Model) entryHead(e entry) string {
 	name, color := m.agentName(), peer
 	if e.mine {
-		name, color = cmp.Or(m.chat.peer, "you"), accent
+		name, color = cmp.Or(m.chat.Peer, "you"), accent
 	}
 	return boldStyle.Foreground(color).Render(name) + mutedStyle.Render(" · "+e.at.Format("15:04"))
 }
@@ -694,12 +694,12 @@ func (m *Model) headerView() string {
 // a word yet has none, nor has a node that is not set up.
 func (m *Model) chatTitle() string {
 	c := m.chat
-	if !m.status.Configured || len(c.entries) == 0 && c.peer == "" {
+	if !m.status.Configured || len(c.entries) == 0 && c.Peer == "" {
 		return ""
 	}
 	var parts []string
-	if c.peer != "" {
-		parts = append(parts, boldStyle.Foreground(accent).Render(c.peer)+mutedStyle.Render(" · only to read"))
+	if c.Peer != "" {
+		parts = append(parts, boldStyle.Foreground(accent).Render(c.Peer)+mutedStyle.Render(" · only to read"))
 	}
 	if n := len(c.tasks); n > 0 {
 		running := "1 task runs"
@@ -760,7 +760,7 @@ func (m *Model) chatColumn() string {
 	if c.contextID == plugin.ThreadID && m.screen == screenChat {
 		active := 0
 		for _, c := range m.chats {
-			if c.contextID != plugin.ThreadID && c.running {
+			if c.contextID != plugin.ThreadID && c.Running {
 				active++
 			}
 		}
@@ -827,7 +827,7 @@ func (m *Model) arriving(input string, rows int) string {
 func (m *Model) panel() string {
 	w, h := m.chatWidth(), m.chatHeight()
 	suggested := m.suggestionLines(h - 6)
-	if a := m.chat.asking; len(suggested) == 0 && (a == nil || a.sent) {
+	if a := m.chat.Asking; len(suggested) == 0 && (a == nil || a.Sent) {
 		return ""
 	}
 	panelWidth := max(1, w-4)
@@ -906,12 +906,12 @@ func cacheRate(c plugin.SessionCache) string {
 // something here, after what there is to notice.
 func (m *Model) footerHint() string {
 	help := ""
-	if m.chat.pending {
+	if m.chat.Pending {
 		help = "esc stop"
 	}
-	if m.chat.asking != nil {
+	if m.chat.Asking != nil {
 		help = "↑↓ choose · enter answer"
-		if m.chat.pending {
+		if m.chat.Pending {
 			help += " · esc stop"
 		}
 	}
@@ -919,7 +919,7 @@ func (m *Model) footerHint() string {
 		help = "↑↓ select · tab complete · enter run"
 	}
 	// Without the box of the input it says, softly, that a key brings it.
-	if help == "" && m.screen == screenChat && !m.inputVisible() && m.chat.peer == "" {
+	if help == "" && m.screen == screenChat && !m.inputVisible() && m.chat.Peer == "" {
 		help = "type to write"
 	}
 	switch m.screen {

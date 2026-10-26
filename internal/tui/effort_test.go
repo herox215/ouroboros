@@ -78,11 +78,11 @@ func TestEffort(t *testing.T) {
 	b.fail = nil
 
 	// The conversation of a peer has no effort to set.
-	m.chat.peer = "beta"
+	m.chat.Peer = "beta"
 	if run(m, "/effort"); m.screen != screenChat || !m.noticeErr || !strings.Contains(m.notice, "the model's own effort") {
 		t.Fatalf("a peer: screen %v, notice %q", m.screen, m.notice)
 	}
-	m.chat.peer = ""
+	m.chat.Peer = ""
 
 	b.status.Configured = false
 	m.Update(m.refreshStatus())
@@ -139,7 +139,7 @@ func TestEffortPerSession(t *testing.T) {
 		t.Errorf("the header shows the effort of the session shown: %s", ansi.Strip(m.headerView()))
 	}
 	close(release)
-	drive(t, m, nil, func() bool { return !first.pending && !second.pending })
+	drive(t, m, nil, func() bool { return !first.Pending && !second.Pending })
 	last := func(c *conversation) string { return c.entries[len(c.entries)-1].text }
 	if last(first) != "answered with high" || last(second) != "answered with low" {
 		t.Fatalf("first %q, second %q", last(first), last(second))

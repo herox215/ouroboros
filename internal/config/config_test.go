@@ -405,7 +405,7 @@ func TestProtected(t *testing.T) {
 	// What the setup writes.
 	tools := DefaultTools()
 	b, _ := json.Marshal(tools)
-	want := `{"h2a":["*"],"a2a":[],"protected":["~/.ssh","~/.gnupg","~/.aws","~/.kube","~/.config/gcloud","~/.docker/config.json","~/.netrc","~/.password-store","~/.local/share/keyrings"],"ask":[{"tool":"bash","match":"\\brm\\s+-\\w*[rf]"},{"tool":"bash","match":"\\bgit\\s+(push|reset\\s+--hard|clean|branch\\s+-D)"},{"tool":"bash","match":"\\bsudo\\b|\\b(pacman|yay|apt|apt-get|brew|pip|pip3)\\s+(install|remove|uninstall|-S|-R)|\\bnpm\\s+(install|i)\\s+-g"},{"tool":"bash","match":"\\b(systemctl|crontab|dd|mkfs)\\b"},{"tool":"bash","match":"~/\\.(ssh|gnupg|aws)|\\.env\\b"},{"tool":"delete","match":".*"},{"tool":"rebuild","match":".*"},{"tool":"browser","match":"\"action\":\"type\""}]}`
+	want := `{"h2a":["*"],"a2a":[],"protected":["~/.ssh","~/.gnupg","~/.aws","~/.kube","~/.config/gcloud","~/.docker/config.json","~/.netrc","~/.password-store","~/.local/share/keyrings"],"ask":[{"tool":"bash","match":"\\brm\\s+-\\w*[rf]"},{"tool":"bash","match":"\\bgit(\\s+(-[cC]\\s*(\"[^\"]*\"|'[^']*'|\\S+)|--(git-dir|work-tree|namespace|config-env|super-prefix|attr-source)(=|\\s+)(\"[^\"]*\"|'[^']*'|\\S+)|-[-\\w]+(=(\"[^\"]*\"|'[^']*'|\\S+))?))*\\s+(push|reset\\s+--hard|clean|branch\\s+-D)"},{"tool":"bash","match":"\\bsudo\\b|\\b(pacman|yay|apt|apt-get|brew|pip|pip3)\\s+(install|remove|uninstall|-S|-R)|\\bnpm\\s+(install|i)\\s+-g"},{"tool":"bash","match":"\\b(systemctl|crontab|dd|mkfs)\\b"},{"tool":"bash","match":"~/\\.(ssh|gnupg|aws)|\\.env\\b"},{"tool":"delete","match":".*"},{"tool":"rebuild","match":".*"},{"tool":"browser","match":"\"action\":\"type\""}]}`
 	if string(b) != want {
 		t.Errorf("the default tools: %s", b)
 	}

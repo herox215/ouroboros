@@ -811,7 +811,7 @@ func TestNameAnimationNeedsAnEmptyChatOnTheScreen(t *testing.T) {
 		"the setup":        func(m *Model) func() { m.onboard = &onboarding{}; return func() { m.onboard = nil } },
 		"another screen":   func(m *Model) func() { m.screen = screenSessions; return func() { m.screen = screenChat } },
 		"no configuration": func(m *Model) func() { m.status.Configured = false; return func() { m.status.Configured = true } },
-		"a peer":           func(m *Model) func() { m.chat.peer = "beta"; return func() { m.chat.peer = "" } },
+		"a peer":           func(m *Model) func() { m.chat.Peer = "beta"; return func() { m.chat.Peer = "" } },
 		"a message":        func(m *Model) func() { m.chat.entries = []entry{{text: "hi"}}; return func() { m.chat.entries = nil } },
 	} {
 		m, _ := newModel(t)

@@ -30,6 +30,3 @@ func Show(ctx context.Context, m *tui.Model) error { return show(ctx, m) }
 
 // Shown is e as the UI of the plugins of ctx shows it.
 func Shown(ctx *plugin.Context, e plugin.SessionEvent) tui.Event { return (&ui{ctx: ctx}).event(e) }
-
-// Size is how the chat tells n bytes.
-func Size(n int) string { return size(n) }

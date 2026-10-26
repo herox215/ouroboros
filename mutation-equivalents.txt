@@ -13,7 +13,7 @@
 # behaviour does not belong here: it needs a test.
 
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
-internal/agent/agent.go:1043:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
+internal/agent/agent.go:1053:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
 internal/kernel/kernel.go:429:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
 internal/update/update.go:109:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
 internal/plugins/files/files.go:263:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
@@ -24,11 +24,11 @@ internal/plugins/files/files.go:937:10 CONDITIONALS_BOUNDARY  # end is never 0 a
 internal/plugins/files/files.go:939:5 INVERT_LOOPCTRL  # a place beyond the limit leaves end where it was, so every later match starts a place beyond the limit too and adds nothing
 internal/proposal/proposal.go:127:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
 internal/memory/memory.go:247:11 CONDITIONALS_BOUNDARY  # a limit of exactly MaxHits set to MaxHits is the same limit
-internal/agent/agent.go:734:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
-internal/agent/agent.go:960:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:965:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
-internal/agent/agent.go:1033:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
-internal/agent/agent.go:515:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
+internal/agent/agent.go:744:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
+internal/agent/agent.go:970:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:975:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
+internal/agent/agent.go:1043:4 INVERT_LOOPCTRL  # every user message before the one it stops at has more messages and bytes after it: none of them is taken either
+internal/agent/agent.go:516:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
 internal/cli/profiles.go:79:15 CONDITIONALS_BOUNDARY  # gui.Together of no profiles joins nothing: calling it with none changes no profile
 internal/openai/client.go:533:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
 internal/tui/wait.go:43:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
@@ -86,16 +86,16 @@ internal/tui/settings.go:935:58 INVERT_NEGATIVES  # the whole line is cut to the
 internal/tui/view.go:684:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
 internal/tui/view.go:305:33 CONDITIONALS_BOUNDARY  # where the first entry asks, the loop returns 0 for it; where it does not, the loop ends and returns 0: the same either way
 internal/tui/view.go:326:11 CONDITIONALS_BOUNDARY  # at the last frame every letter is settled anyway: a seed modulo settleFrames is never below settleFrames less settleFrames, so the word stands as it is
-internal/session/session.go:1036:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
+internal/session/session.go:1057:16 CONDITIONALS_BOUNDARY  # a title of exactly history.MaxTitle bytes cut to history.MaxTitle bytes stays as it is
 internal/session/running_sessions.go:34:18 CONDITIONALS_BOUNDARY  # a title of exactly maxTitle bytes cut to maxTitle bytes stays as it is
-internal/session/session.go:615:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
+internal/session/session.go:617:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
 internal/storage/storage.go:95:17 ARITHMETIC_BASE  # 10/time.Millisecond is 0: the retries spin instead of sleeping, and the open still waits until the lock is free or the deadline passed
 internal/history/history.go:787:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
-internal/tui/tui.go:1022:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
-internal/tui/tui.go:964:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way
-internal/tui/session.go:643:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
-internal/tui/session.go:648:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
+internal/tui/tui.go:985:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/tui/tui.go:930:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way
+internal/tui/session.go:633:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
+internal/tui/session.go:638:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
 internal/tui/nav.go:11:7 CONDITIONALS_BOUNDARY  # with one entry, (at + by%1 + 1) % 1 is 0 as well
 internal/tui/nav.go:14:8 CONDITIONALS_BOUNDARY  # at 0 set to 0 stays where it was
 internal/assistant/metrics.go:40:17 CONDITIONALS_BOUNDARY  # no tokens written in a time above zero are 0 tokens a second, which the TPS is set to before
@@ -120,8 +120,8 @@ internal/tui/jobs.go:52:10 INCREMENT_DECREMENT  # the count of openings only tel
 internal/tui/jobs.go:254:18 INCREMENT_DECREMENT  # the count of showings only tells services asked for before the list was shown again apart: counted down it is as unique as counted up
 internal/tui/header_morph.go:86:13 CONDITIONALS_BOUNDARY  # with no time elapsed every letter is still the old one and the width that of the old name: the name it returns at once
 internal/tui/header_morph.go:89:13 CONDITIONALS_BOUNDARY  # at the end every letter is the new one and the width that of the new name: the name it returns at once
-internal/tui/question.go:152:44 ARITHMETIC_BASE  # the row selected is one of the list, so the first row shown is never past the last window of rows; with no rows both are 0
-internal/tui/question.go:152:44 INVERT_NEGATIVES  # the row selected is one of the list, so the first row shown is never past the last window of rows; with no rows both are 0
+internal/tui/question.go:134:44 ARITHMETIC_BASE  # the row selected is one of the list, so the first row shown is never past the last window of rows; with no rows both are 0
+internal/tui/question.go:134:44 INVERT_NEGATIVES  # the row selected is one of the list, so the first row shown is never past the last window of rows; with no rows both are 0
 internal/plugins/files/picture.go:66:53 CONDITIONALS_BOUNDARY  # an effort without a size of its own sets the size to 0, which is no size: nothing is made smaller, and nothing said of it
 internal/plugins/files/picture.go:125:32 CONDITIONALS_BOUNDARY  # a picture whose longer side is the size asked for keeps both sides when it is made that size
 internal/plugins/files/picture.go:126:8 CONDITIONALS_BOUNDARY  # a square is made the same size by its width as by its height
@@ -131,7 +131,7 @@ internal/plugins/files/picture.go:172:47 ARITHMETIC_BASE  # a picture is never m
 internal/plugins/files/picture.go:172:56 ARITHMETIC_BASE  # a picture is never made larger, so the next column begins at least one further: the lower bound of one column never decides, and less of it neither
 internal/tui/dialog.go:57:45 ARITHMETIC_BASE  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
 internal/tui/dialog.go:57:45 INVERT_NEGATIVES  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
-internal/tui/tui.go:883:50 CONDITIONALS_BOUNDARY  # up in an empty input with nothing queued brings back what was entered and never comes here
+internal/tui/tui.go:849:50 CONDITIONALS_BOUNDARY  # up in an empty input with nothing queued brings back what was entered and never comes here
 internal/tui/view.go:977:56 CONDITIONALS_BOUNDARY  # with no room the conversation is cut to nothing: the footer is the hint alone either way
 internal/tui/mesh.go:122:12 CONDITIONALS_BOUNDARY  # of two free cells as far from the nerve cells before, either is as good: which of them is taken is left to chance either way
 internal/tui/mesh.go:186:11 CONDITIONALS_BOUNDARY  # a connection that did not begin to grow has its tip on the nerve cell it grows from, which is drawn over it
@@ -170,14 +170,13 @@ internal/desktop/tray/model_linux.go:64:71 CONDITIONALS_BOUNDARY  # the ring is 
 internal/desktop/tray/model_linux.go:65:43 CONDITIONALS_BOUNDARY  # the ring is drawn at 22 and 32 pixels only, and no sample of those lies exactly on this edge: the pixels TestModelAndProtocol pins stay the same
 internal/desktop/tray/model_linux.go:68:39 CONDITIONALS_BOUNDARY  # the ring is drawn at 22 and 32 pixels only, and no sample of those lies exactly on this edge: the pixels TestModelAndProtocol pins stay the same
 internal/desktop/tray/tray_linux.go:108:46 INVERT_LOGICAL  # a failed type assertion leaves owner "", so ok || owner != "" is false exactly when ok && owner != "" is
-internal/plugins/gui/window.go:159:9 INCREMENT_DECREMENT  # the token only tells the watches apart, and only a peer snapshot has 0: counted down from 0 it is as unique and never 0 either, and the front end only tests it for 0
 internal/matrix/client.go:153:4 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next member is looked at either way
 internal/matrix/client.go:284:63 CONDITIONALS_BOUNDARY  # started is read from the wall clock in Run, which tests cannot set: no event can be made to carry exactly that millisecond, the only one the two forms treat differently
 internal/matrix/client.go:316:121 CONDITIONALS_BOUNDARY  # started is read from the wall clock in Run, which tests cannot set: no event can be made to carry exactly that millisecond, the only one the two forms treat differently
 internal/matrix/client.go:373:116 CONDITIONALS_BOUNDARY  # started is read from the wall clock in Run, which tests cannot set: no event can be made to carry exactly that millisecond, the only one the two forms treat differently
 internal/matrix/client.go:382:42 CONDITIONALS_BOUNDARY  # only events not older than the start of Run wait for a retry: one is exactly 30000 ms old no sooner than 30 s into Run, and then for one millisecond of the wall clock, which tests cannot set
 internal/plugins/matrix/store.go:84:152 CONDITIONALS_BOUNDARY  # time.Since counts nanoseconds of a clock tests cannot set: no status can be read at exactly 15 s of age, the only age the two forms treat differently
-internal/session/session.go:630:18 CONDITIONALS_BOUNDARY  # the inputs always hold the message that began the answer, so the guard holds either way
+internal/session/session.go:633:18 CONDITIONALS_BOUNDARY  # the inputs always hold the message that began the answer, so the guard holds either way
 internal/session/thread.go:200:99 CONDITIONALS_BOUNDARY  # the content begins with the footer, which begins with a space: the head cannot match either way
 internal/session/thread.go:295:17 INVERT_LOGICAL  # a text with no space after the head cannot hold a footer, which begins with a space: the longer path ends in nil, false too
 internal/tui/view.go:136:74 CONDITIONALS_NEGATION  # a glide aimed at the last line sits on the line the layout aims it at again, and a history at the bottom is where rendering it to the bottom puts it

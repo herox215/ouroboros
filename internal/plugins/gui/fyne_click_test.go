@@ -351,7 +351,7 @@ func TestFyneClickQuestionOption(t *testing.T) {
 			}
 			clickOn(t, ui, option)
 			waitFor(t, func() bool { return len(sessions.sent()) == 1 })
-			if got := sessions.sent()[0]; got != plugin.ThreadID+": One page" {
+			if got := sessions.sent()[0]; got != "answer "+plugin.ThreadID+": One page" {
 				t.Fatalf("sent %q", got)
 			}
 			waitFor(t, func() bool { return option.Disabled() })
@@ -359,7 +359,8 @@ func TestFyneClickQuestionOption(t *testing.T) {
 	}
 }
 
-// Writing and clicking the send button sends; the stop button stops.
+// Writing and clicking the send button sends, while the thread asks a
+// question as its answer; the stop button stops.
 func TestFyneClickSendAndStop(t *testing.T) {
 	for _, size := range clickSizes {
 		t.Run(sizeName(size), func(t *testing.T) {
@@ -373,7 +374,7 @@ func TestFyneClickSendAndStop(t *testing.T) {
 			fyne.DoAndWait(func() { test.Type(ui.draft, "Make it native") })
 			clickOn(t, ui, ui.send)
 			waitFor(t, func() bool { return len(sessions.sent()) == 1 && ui.draft.Text == "" })
-			if got := sessions.sent()[0]; got != plugin.ThreadID+": Make it native" {
+			if got := sessions.sent()[0]; got != "answer "+plugin.ThreadID+": Make it native" {
 				t.Fatalf("sent %q", got)
 			}
 			waitFor(t, func() bool { return ui.stop.Visible() })

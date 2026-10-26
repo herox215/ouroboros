@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -823,6 +824,27 @@ func TestSteeringIsObserved(t *testing.T) {
 	}
 }
 
+// A provider that cannot take what the user said while the model wrote its
+// answer ends the answer too.
+func TestSteeringWhileAnsweringIsObserved(t *testing.T) {
+	boom := errors.New("boom")
+	p := ContextProvider{Name: "p", Prepare: func(_ context.Context, p Preparation) ([]openai.Message, error) { return p.Messages, nil },
+		Observe: func(_ context.Context, _ Processing, m openai.Message) error {
+			if m.Content == "no" {
+				return boom
+			}
+			return nil
+		}}
+	a, err := New(&fakeLLM{}, "gpt", "sys").WithExtensions("p", []ContextProvider{p}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithSteering(context.Background(), func() []string { return []string{"no"} })
+	if _, err := a.Run(ctx, "c1", "hi", Observer{}); !errors.Is(err, boom) {
+		t.Fatalf("err %v", err)
+	}
+}
+
 // What the user says on the way is between the calls before it and after
 // it: a call the LLM asks for again after it is run, as the user may have
 // asked for just that.
@@ -1048,8 +1070,9 @@ func TestWithoutInputMessages(t *testing.T) {
 }
 
 // What the user says while the model writes its answer does not come after
-// that answer as a second one: the model is told its answer as a draft,
-// with what the user said after it, and answers once.
+// that answer as a second one: the answer is dropped, and the model answers
+// anew with what the user said. It is never told of what it wrote, which
+// the user never saw.
 func TestSteeringWhileAnswering(t *testing.T) {
 	var sent [][]openai.Message
 	llm := llmFunc(func(msgs []openai.Message) openai.Message {
@@ -1075,7 +1098,89 @@ func TestSteeringWhileAnswering(t *testing.T) {
 	for _, m := range a.memory.history("c1") {
 		said = append(said, m.Role+": "+m.Content)
 	}
-	if want := []string{"user: hi", "user: " + DraftHead + "answer 1", "user: one more thing", "assistant: answer 2"}; !slices.Equal(said, want) {
+	if want := []string{"user: hi", "user: one more thing", "assistant: answer 2"}; !slices.Equal(said, want) {
 		t.Fatalf("remembered %q", said)
+	}
+}
+
+// interruptedLLM writes until its call ends, the first time, and answers at
+// once after that.
+type interruptedLLM struct {
+	calls   int
+	writing chan struct{}
+	sent    [][]openai.Message
+}
+
+func (l *interruptedLLM) Complete(ctx context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	l.calls++
+	l.sent = append(l.sent, msgs)
+	if l.calls == 1 {
+		close(l.writing)
+		<-ctx.Done()
+		return openai.Message{}, ctx.Err()
+	}
+	return openai.Message{Content: fmt.Sprint("answer ", l.calls)}, nil
+}
+
+// A message that comes while the model writes stops that call: the model
+// writes anew with it at once, and is not told of what it wrote.
+func TestInterruptWhileWriting(t *testing.T) {
+	llm := &interruptedLLM{writing: make(chan struct{})}
+	a := New(llm, "gpt", "sys")
+	interrupt := make(chan struct{}, 1)
+	interrupt <- struct{}{} // of a message taken before: it stops no call
+	var queue []string
+	var mu sync.Mutex
+	ctx := WithInterrupt(context.Background(), interrupt)
+	ctx = WithSteering(ctx, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		said := queue
+		queue = nil
+		return said
+	})
+	go func() {
+		<-llm.writing
+		mu.Lock()
+		queue = []string{"one more thing"}
+		mu.Unlock()
+		interrupt <- struct{}{}
+	}()
+	drafts := 0
+	got, err := a.Run(ctx, "c1", "hi", Observer{Draft: func(string) { drafts++ }})
+	if err != nil || got != "answer 2" || llm.calls != 2 || drafts != 1 {
+		t.Fatalf("got %q, %v, %d calls, %d drafts", got, err, llm.calls, drafts)
+	}
+	last := llm.sent[1]
+	if m := last[len(last)-1]; m.Content != "one more thing" || last[len(last)-2].Content != "hi" {
+		t.Fatalf("sent %+v", last)
+	}
+}
+
+// A call that a message ended which nobody took is made again.
+func TestInterruptWithoutMessage(t *testing.T) {
+	llm := &interruptedLLM{writing: make(chan struct{})}
+	interrupt := make(chan struct{}, 1)
+	go func() {
+		<-llm.writing
+		interrupt <- struct{}{}
+	}()
+	got, err := New(llm, "gpt", "sys").Run(WithInterrupt(context.Background(), interrupt), "c1", "hi", Observer{})
+	if err != nil || got != "answer 2" || llm.calls != 2 {
+		t.Fatalf("got %q, %v, %d calls", got, err, llm.calls)
+	}
+}
+
+// An answer that is stopped while the model writes is stopped, not written
+// anew.
+func TestStoppedWhileWriting(t *testing.T) {
+	llm := &interruptedLLM{writing: make(chan struct{})}
+	ctx, cancel := context.WithCancel(WithInterrupt(context.Background(), make(chan struct{})))
+	go func() {
+		<-llm.writing
+		cancel()
+	}()
+	if _, err := New(llm, "gpt", "sys").Run(ctx, "c1", "hi", Observer{}); !errors.Is(err, context.Canceled) || llm.calls != 1 {
+		t.Fatalf("%v, %d calls", err, llm.calls)
 	}
 }

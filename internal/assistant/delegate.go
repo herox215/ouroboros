@@ -318,6 +318,7 @@ func narrowed(tools []agent.Tool, names []string) ([]agent.Tool, error) {
 func helping(ctx context.Context) context.Context {
 	ctx = agent.WithSteering(ctx, func() []string { return nil })
 	ctx = agent.WithMessageSteering(ctx, nil)
+	ctx = agent.WithInterrupt(ctx, nil) // nor does it stop what a helper writes
 	ctx = agent.WithoutInputMessages(ctx)
 	ctx = openai.WithoutMessageSource(ctx)
 	ctx = openai.WithThought(ctx, nil)

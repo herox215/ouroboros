@@ -166,6 +166,9 @@ func TestHelpingIsNotTheOwnersAnswer(t *testing.T) {
 	if got := agent.Steered(helping(ctx)); got != nil {
 		t.Fatalf("got %q", got)
 	}
+	if agent.Interrupt(helping(agent.WithInterrupt(ctx, make(chan struct{})))) != nil {
+		t.Fatal("what the owner says stops what a helper writes")
+	}
 	var streamed []string
 	sink := func(text string) { streamed = append(streamed, text) }
 	ctx = openai.WithAnswering(openai.WithThought(context.Background(), sink), sink)

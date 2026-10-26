@@ -785,6 +785,59 @@ func TestSteer(t *testing.T) {
 	}
 }
 
+// What the owner says while the LLM writes interrupts it, once for what
+// came until the answer looks; while tasks run it waits for them instead.
+func TestSteerInterrupts(t *testing.T) {
+	ready, goOn := make(chan struct{}), make(chan struct{})
+	looked := make(chan string, 2)
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if text != "a" {
+			return "then", nil
+		}
+		<-ready
+		<-agent.Interrupt(ctx)
+		select {
+		case <-agent.Interrupt(ctx):
+			looked <- "told twice"
+		default:
+			looked <- strings.Join(agent.Steered(ctx), ",")
+		}
+		<-goOn
+		select {
+		case <-agent.Interrupt(ctx):
+			looked <- "told while tasks ran"
+		default:
+			looked <- strings.Join(agent.Steered(ctx), ",")
+		}
+		return "done", nil
+	}}
+	s := service(t, a)
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	if err := s.Steer(ctx, "s1", "a"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, live, Message)
+	s.Steer(ctx, "s1", "b")
+	s.Steer(ctx, "s1", "c") // told once for both
+	close(ready)
+	if got := <-looked; got != "b,c" {
+		t.Errorf("taken %q", got)
+	}
+	s.mu.Lock()
+	s.sessions["s1"].tasks = []*task{{done: make(chan struct{})}}
+	s.mu.Unlock()
+	s.Steer(ctx, "s1", "d")
+	s.mu.Lock()
+	s.sessions["s1"].tasks = nil
+	s.mu.Unlock()
+	close(goOn)
+	if got := <-looked; got != "d" {
+		t.Errorf("taken after the tasks %q", got)
+	}
+	until(t, live, Answer)
+}
+
 // What waits when ouro is to start anew is not answered by the build that
 // goes: the node takes no message until then.
 func TestQueueIsLostWhenRestarting(t *testing.T) {

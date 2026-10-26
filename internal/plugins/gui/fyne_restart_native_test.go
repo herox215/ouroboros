@@ -80,7 +80,7 @@ func fyneRestartFixture() error {
 			}()
 			return nil, make(chan plugin.SessionEvent), nil
 		}}}}
-	err = showFyneWindow(ctx, window)
+	err = showWindow(ctx, window)
 	if phase == "reopened" {
 		if !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("reopened window: %v", err)

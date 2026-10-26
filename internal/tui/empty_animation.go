@@ -63,7 +63,7 @@ func (m *Model) behind(content string) string {
 func (m *Model) syncNameAnimation() {
 	a := &m.nameAnimation
 	onScreen := m.shown() && !m.splash.show && m.onboard == nil && m.screen == screenChat &&
-		m.status.Configured && m.chat.peer == "" && m.resuming != m.chat
+		m.status.Configured && m.chat.Peer == "" && m.resuming != m.chat
 	if !onScreen || len(m.chat.entries) > 0 {
 		if a.active && onScreen && a.chat == m.chat {
 			a.fading = m.now()

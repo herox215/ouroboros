@@ -5,12 +5,15 @@ package gui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
 
+	"ouroboros/internal/chat"
 	"ouroboros/plugin"
 )
 
@@ -217,8 +220,13 @@ func TestFyneLoadFailures(t *testing.T) {
 	waitFor(t, func() bool { return ui.errorBox.Visible() })
 }
 
-// A stream that ends says the connection is gone and stops sending.
+// A stream that ends says the connection is gone and stops sending, and the
+// window reads the session anew after a while, as the terminal UI watches it
+// again: what was on its way is what the session says then.
 func TestFyneStreamEnds(t *testing.T) {
+	old := rewatchDelay
+	rewatchDelay = 50 * time.Millisecond
+	t.Cleanup(func() { rewatchDelay = old })
 	sessions := newE2ESessions()
 	live := make(chan plugin.SessionEvent)
 	watch := sessions.watch
@@ -229,8 +237,51 @@ func TestFyneStreamEnds(t *testing.T) {
 		}
 	})
 	ui := e2eWindowWith(t, fyne.NewSize(1180, 780), sessions)
+	fyne.DoAndWait(func() {
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionMessage, Text: "go", At: time.Now()},
+			{Kind: plugin.SessionAsked, Text: "Which?", At: time.Now()}})
+	})
 	close(live)
 	waitFor(t, func() bool { return !ui.ready.Load() && ui.errorBox.Visible() })
+	fyne.DoAndWait(func() {
+		if ui.ctx.session.Pending || ui.asking != nil || ui.questionBox.Visible() {
+			t.Errorf("what was on its way stays: %+v", ui.ctx.session)
+		}
+	})
+	sessions.swap(func() {
+		sessions.watch = func(ctx context.Context, id string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
+			past, _, err := watch(ctx, id)
+			return past, make(chan plugin.SessionEvent), err
+		}
+	})
+	waitFor(t, func() bool { return ui.ready.Load() && !ui.errorBox.Visible() })
+}
+
+// A window that closes stops reading the session shown, also while the
+// session is about to be read anew.
+func TestFyneStreamEndsWithTheWindow(t *testing.T) {
+	old := rewatchDelay
+	rewatchDelay = 20 * time.Millisecond
+	t.Cleanup(func() { rewatchDelay = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ui := e2eWindowUntil(t, ctx, fyne.NewSize(1180, 780), newE2ESessions())
+	epoch := ui.epoch.Load()
+	entry := SessionEntry{ID: ui.thread}
+	fyne.DoAndWait(func() { ui.lost(epoch, entry) })
+	cancel()
+	time.Sleep(60 * time.Millisecond)
+	if ui.ready.Load() || ui.epoch.Load() != epoch {
+		t.Error("a closed window read the session anew")
+	}
+	// What follows a stream stops with the window.
+	done := make(chan struct{})
+	go func() { ui.follow(epoch, entry, make(chan chat.Event)); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("following outlived the window")
+	}
 }
 
 // Sending and stopping that fail say why, and keep the draft.
@@ -238,6 +289,7 @@ func TestFyneSendAndStopFailures(t *testing.T) {
 	ui, sessions := e2eWindow(t, fyne.NewSize(1180, 780))
 	sessions.swap(func() {
 		sessions.ask = func(context.Context, string, string) error { return errors.New("offline") }
+		sessions.steer = sessions.ask
 	})
 	sessions.swap(func() {
 		sessions.cancel = func(context.Context, string) error { return errors.New("not stopped") }
@@ -249,11 +301,11 @@ func TestFyneSendAndStopFailures(t *testing.T) {
 	waitFor(t, func() bool { return ui.sendError.Visible() && ui.draft.Text == "hello" })
 	waitFor(t, func() bool { return ui.stop.Visible() })
 	fyne.DoAndWait(ui.stopAnswer)
-	waitFor(t, func() bool { return !ui.activity.stopping && ui.ctx.state.error != "" })
+	waitFor(t, func() bool { return !ui.stopping && ui.ctx.state.error != "" })
 	fyne.DoAndWait(func() {
-		ui.activity.busy = false
+		ui.ctx.session.Pending = false
 		ui.stopAnswer()
-		if ui.activity.stopping {
+		if ui.stopping {
 			t.Error("stopped what does not work")
 		}
 		ui.submit("  ", false)
@@ -363,12 +415,12 @@ func TestFyneStatusCountsSessions(t *testing.T) {
 	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
 	fyne.DoAndWait(func() {
 		ui.setQuestion(nil)
-		ui.activity = fyneActivity{n: 0, own: true, busy: true}
+		ui.ctx.session = chat.State{Own: true, Pending: true}
 		ui.updateStatus()
 		if ui.statusLabel.Text == "" {
 			t.Error("no status")
 		}
-		ui.activity = fyneActivity{n: 2, own: true, busy: true}
+		ui.ctx.session = chat.State{Working: 2, Own: true, Pending: true}
 		ui.updateStatus()
 	})
 }
@@ -400,10 +452,9 @@ func TestFynePickFollowsScrolling(t *testing.T) {
 
 // The last uncommon turns of the window: an unchanged list, a load that a
 // newer one replaced, a reload on the thread, events for a session left
-// while they were on their way, and a notice replaced before it went.
+// while they were on their way.
 func TestFyneLateAndUnchanged(t *testing.T) {
 	ui, sessions := e2eWindow(t, fyne.NewSize(1180, 780))
-	fyne.DoAndWait(func() { ui.noticeTime = 100 * time.Millisecond })
 	fyne.DoAndWait(ui.relist)
 	waitFor(t, func() bool { return !ui.listing })
 
@@ -422,16 +473,84 @@ func TestFyneLateAndUnchanged(t *testing.T) {
 	})
 	waitFor(t, func() bool { return ui.ready.Load() && ui.selected == "owner/s1" })
 
-	fyne.DoAndWait(func() { ui.submit("hello", false) })
-	waitFor(t, func() bool { return ui.ctx.state.notice == tr("composer.sent", nil) })
-	fyne.DoAndWait(func() { ui.ctx.state.notice = "something else" })
-	time.Sleep(250 * time.Millisecond)
 	fyne.DoAndWait(func() {
-		if ui.ctx.state.notice != "something else" {
-			t.Errorf("a newer notice went with the old one: %q", ui.ctx.state.notice)
-		}
 		if (&followLayout{ui: ui}).MinSize([]fyne.CanvasObject{ui.transcript}) != ui.transcript.MinSize() {
 			t.Error("the history asks for other room than its scroller")
 		}
+	})
+}
+
+// What came before the stream ended is shown, and then that it ended.
+func TestFyneFollowsABatchToItsEnd(t *testing.T) {
+	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
+	live := make(chan chat.Event, 1)
+	live <- chat.Event{Kind: plugin.SessionQueued, Text: "later", At: time.Now()}
+	close(live)
+	ui.follow(ui.epoch.Load(), SessionEntry{ID: ui.thread}, live)
+	waitFor(t, func() bool { return !ui.ready.Load() && ui.errorBox.Visible() })
+	fyne.DoAndWait(func() {
+		if len(ui.ctx.session.Queued) != 1 {
+			t.Errorf("the batch before the end: %+v", ui.ctx.session)
+		}
+	})
+}
+
+// A stream the closing window ends tells nothing of a lost connection.
+func TestFyneStreamEndsAsTheWindowCloses(t *testing.T) {
+	ui, _ := e2eWindow(t, fyne.NewSize(1180, 780))
+	ui.bridge.Close()
+	live := make(chan chat.Event)
+	close(live)
+	ui.follow(ui.epoch.Load(), SessionEntry{ID: ui.thread}, live)
+	fyne.DoAndWait(func() {})
+	if !ui.ready.Load() || ui.errorBox.Visible() {
+		t.Error("the closing window told of a lost connection")
+	}
+}
+
+// Up in an empty composer takes back the last message queued, as in the
+// terminal UI: before what is written meanwhile, and not over what is
+// written. What fails says why.
+func TestFyneTakesBackTheQueue(t *testing.T) {
+	ui, sessions := e2eWindow(t, fyne.NewSize(1180, 780))
+	var taken []string
+	sessions.swap(func() {
+		sessions.unsteer = func(_ context.Context, id string) (string, error) {
+			taken = append(taken, id)
+			return "later", nil
+		}
+	})
+	up := &fyne.KeyEvent{Name: fyne.KeyUp}
+	fyne.DoAndWait(func() {
+		ui.draft.TypedKey(up) // nothing queued: up moves in the composer
+		ui.applyEvents([]chat.Event{{Kind: plugin.SessionQueued, Text: "later", At: time.Now()}})
+		if !strings.Contains(tcText(ui.content), tr("queue.takeBack", nil)) {
+			t.Error("the queue does not say how to take it back")
+		}
+		ui.draft.SetText("typed")
+		ui.draft.TypedKey(up) // what is written is moved in, not taken back over
+		ui.draft.SetText("")
+		ui.draft.TypedKey(up)
+	})
+	waitFor(t, func() bool { return ui.draft.Text == "later" })
+	sessions.swap(func() {
+		sessions.unsteer = func(context.Context, string) (string, error) { return "", nil }
+	})
+	fyne.DoAndWait(func() {
+		ui.draft.SetText("")
+		ui.draft.TypedKey(up) // the answer took it meanwhile
+	})
+	sessions.swap(func() {
+		sessions.unsteer = func(context.Context, string) (string, error) { return "", errors.New("gone") }
+	})
+	fyne.DoAndWait(func() { ui.draft.TypedKey(up) })
+	waitFor(t, func() bool { return ui.sendError.Visible() })
+	if fmt.Sprint(taken) != "["+strings.TrimPrefix(ui.thread, "owner/")+"]" {
+		t.Fatalf("taken back from %q", taken)
+	}
+	fyne.DoAndWait(func() {
+		ui.draft.Disable()
+		ui.draft.TypedKey(up)
+		ui.draft.Enable()
 	})
 }

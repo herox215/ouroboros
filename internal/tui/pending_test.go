@@ -156,7 +156,7 @@ func TestAcceptedAllWithoutSuggestionsSendsNothing(t *testing.T) {
 	if m.chat != first || len(m.chats) != chats || m.notice != "all suggestions processed" || cmd == nil {
 		t.Fatalf("chat %q, %d chats, notice %q, cmd %v", m.chat.contextID, len(m.chats), m.notice, cmd)
 	}
-	if b.accepted != nil || m.chat.pending {
-		t.Fatalf("accepted %v, pending %v", b.accepted, m.chat.pending)
+	if b.accepted != nil || m.chat.Pending {
+		t.Fatalf("accepted %v, pending %v", b.accepted, m.chat.Pending)
 	}
 }

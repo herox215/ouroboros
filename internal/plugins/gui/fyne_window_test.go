@@ -68,7 +68,7 @@ func TestFyneWindowClosesWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- showFyneWindow(ctx, page{choices: []choice{{name: "herox", id: "herox"}}, profiles: []*Profile{{sessions: sessions}}})
+		done <- showWindow(ctx, page{choices: []choice{{name: "herox", id: "herox"}}, profiles: []*Profile{{sessions: sessions}}})
 	}()
 	time.Sleep(100 * time.Millisecond)
 	cancel()
@@ -102,7 +102,7 @@ func TestFyneWindowHandsOverToNewBuild(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- showFyneWindow(context.Background(), page{
+		done <- showWindow(context.Background(), page{
 			choices:  []choice{{name: "herox", id: "herox"}},
 			profiles: []*Profile{{sessions: sessions}},
 			drafts:   map[string]string{"0:owner/s1": "half a thought"},
@@ -140,7 +140,7 @@ func TestFyneWindowHandsOverTheThreadBeforeItOpened(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- showFyneWindow(context.Background(), page{choices: []choice{{name: "herox", id: "herox"}}, profiles: []*Profile{{sessions: sessions}}})
+		done <- showWindow(context.Background(), page{choices: []choice{{name: "herox", id: "herox"}}, profiles: []*Profile{{sessions: sessions}}})
 	}()
 	<-asked
 	install(t, exe)
@@ -172,35 +172,6 @@ func handedOver(t *testing.T, r *plugin.Restarting) resume {
 	}
 	t.Fatal("nothing handed over")
 	return resume{}
-}
-
-// The command takes no arguments, nothing after its context ended, and opens
-// the window on the page of its profile.
-func TestRunFyne(t *testing.T) {
-	old := showFyne
-	t.Cleanup(func() { showFyne = old })
-	var got page
-	showFyne = func(_ context.Context, p page) error { got = p; return nil }
-	p := fake("Luna", "aaa")
-	if err := p.runFyne(context.Background(), []string{"extra"}); err == nil {
-		t.Fatal("arguments accepted")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := p.runFyne(ctx, nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ended context: %v", err)
-	}
-	t.Setenv(resumeEnv, `{"profile":"aaa","session":"owner/s1","drafts":{"0:owner/s1":"x"}}`)
-	if err := p.runFyne(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	if got.session != "owner/s1" || got.drafts["0:owner/s1"] != "x" {
-		t.Fatalf("page %+v", got)
-	}
-	t.Setenv(resumeEnv, "not json")
-	if err := p.runFyne(context.Background(), nil); err == nil {
-		t.Fatal("a broken handover opened the window")
-	}
 }
 
 // The window opens in the size it closed with, the first time in its

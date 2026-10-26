@@ -76,7 +76,7 @@ func TestPastedPicturesAreTypedAsLabels(t *testing.T) {
 		if got := m.input.Value(); got != "see "+want.text || !slices.Equal(m.chat.images, want.paths) {
 			t.Errorf("%q typed %q with %q, want %q with %q", pasted, got, m.chat.images, "see "+want.text, want.paths)
 		}
-		if len(b.messages()) != 0 || m.chat.pending {
+		if len(b.messages()) != 0 || m.chat.Pending {
 			t.Errorf("%q: nothing is sent by pasting", pasted)
 		}
 	}
@@ -104,7 +104,7 @@ func TestLabelsAreSentAsPaths(t *testing.T) {
 	if got := b.messages(); len(got) != 1 || got[0].text != want {
 		t.Fatalf("sent %q, want %q", got, want)
 	}
-	m.chat.queued = []string{"queued " + dog}
+	m.chat.Queued = []string{"queued " + dog}
 	m.renderHistory(true)
 	shown := m.history.View()
 	if !strings.Contains(shown, imageStyle.Render("[Image_1]")) || !strings.Contains(shown, "queued "+imageStyle.Render("[Image_2]")) ||
