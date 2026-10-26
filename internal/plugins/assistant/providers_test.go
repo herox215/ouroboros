@@ -63,7 +63,7 @@ func TestTheAgentAnswersThroughTheAccessTheOwnerPicks(t *testing.T) {
 	for _, p := range providers {
 		names = append(names, p.Name)
 	}
-	if strings.Join(names, ",") != "openai,chatgpt,opencode-go,claude-code,counted,two" {
+	if strings.Join(names, ",") != "openai,deepseek,chatgpt,opencode-go,claude-code,counted,two" {
 		t.Fatalf("the providers of this ouro: %v", names)
 	}
 	owner := plugin.OwnerOf(dir, nil)
