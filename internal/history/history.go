@@ -897,6 +897,27 @@ func (a *Archive) NoteModel(id, model string) error {
 	return tx.Commit()
 }
 
+// FirstUser returns the first message of the user in the conversation id, as
+// List names it: what it was asked first, "" without one.
+func (a *Archive) FirstUser(id string) (string, error) {
+	path, err := a.path(id)
+	if err != nil {
+		return "", err
+	}
+	var text string
+	err = a.records(path, func(r Record) bool {
+		if r.Role != "user" {
+			return true
+		}
+		text = r.Content
+		return false
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("%w: %s", ErrNotArchived, id)
+	}
+	return text, err
+}
+
 // Records returns every record of the conversation id, as List names it, in
 // order.
 func (a *Archive) Records(id string) ([]Record, error) {
