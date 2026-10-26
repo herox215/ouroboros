@@ -612,12 +612,46 @@ func (s *Service) note(id, text string) {
 // them, if it took a message the thread handed on or has one waiting behind
 // its current tool: at once, unless the thread asks another one. s.mu is held.
 func (s *Service) asking(se *session, question json.RawMessage) {
-	if !se.routed && !slices.ContainsFunc(se.queue, func(m queued) bool { return m.routed }) {
+	if !forThread(se) {
 		return
 	}
 	thread := s.get(ThreadID)
 	thread.questions = append(thread.questions, &relayed{se: se, question: question})
 	if len(thread.questions) == 1 {
+		s.ask1(thread)
+	}
+}
+
+// forThread reports whether se works for the thread: the answer on its way
+// took a message the thread handed on, or one waits for it. s.mu is held.
+func forThread(se *session) bool {
+	return se.routed || waitsForThread(se)
+}
+
+// waitsForThread reports whether a message the thread handed on waits in
+// the queue of se. s.mu is held.
+func waitsForThread(se *session) bool {
+	return slices.ContainsFunc(se.queue, func(m queued) bool { return m.routed })
+}
+
+// withdraw takes back the question of se the thread relays, once nothing in
+// se works for the thread any more: it waits on in se alone. s.mu is held.
+func (s *Service) withdraw(se *session) {
+	thread := s.sessions[ThreadID]
+	if forThread(se) || thread == nil {
+		return
+	}
+	i := slices.IndexFunc(thread.questions, func(q *relayed) bool { return q.se == se })
+	if i < 0 {
+		return
+	}
+	q := thread.questions[i]
+	thread.questions = slices.Delete(thread.questions, i, i+1)
+	if i > 0 {
+		return // it was not asked yet
+	}
+	s.emit(thread, Event{Kind: Asked, PresentationID: q.id, Done: true})
+	if len(thread.questions) > 0 {
 		s.ask1(thread)
 	}
 }
@@ -672,6 +706,7 @@ func (s *Service) answerRelayedImages(message queued) bool {
 	se := thread.questions[0].se
 	se.asked <- message
 	se.asked = nil
+	se.routed = true // the owner answered in the thread: it shows what comes of it
 	return true
 }
 
@@ -686,7 +721,7 @@ func (s *Service) busy() {
 	n := 0
 	own := thread.cancel != nil
 	for _, se := range s.sessions {
-		if se.cancel != nil && (se == thread || se.routed) || slices.ContainsFunc(se.queue, func(m queued) bool { return m.routed }) {
+		if se.cancel != nil && (se == thread || se.routed) || waitsForThread(se) {
 			n++
 		}
 	}
@@ -697,13 +732,20 @@ func (s *Service) busy() {
 }
 
 // stopThread stops, with the answer of the thread, the answers of the
-// sessions it handed messages to. s.mu is held.
+// sessions it handed messages to. What it handed on that still waits stays
+// with the session, but the thread no longer shows what comes of it, nor
+// asks its questions. s.mu is held.
 func (s *Service) stopThread() {
 	for _, se := range s.sessions {
 		if se.routed && se.cancel != nil {
 			se.cancel()
 		}
+		for i := range se.queue {
+			se.queue[i].routed = false
+		}
+		s.withdraw(se)
 	}
+	s.busy()
 }
 
 // quietly is ctx for the answer in se: under which nothing of what the
