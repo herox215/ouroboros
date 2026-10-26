@@ -312,10 +312,15 @@ the conversation; what the agent is sent has the paths.
   the quotes a `"` is `\"` and a `\` is `\\`; a space is a space. Only text that is nothing but the paths of
   files that are there and pictures by their extension (`png` `jpg` `jpeg` `webp` `gif` `bmp` `tif` `tiff`
   `heic` `avif` `svg`) is changed: any other text is pasted as it is.
-A hover over the label or the path of a picture previews it. Beyond `png`, `jpg` and `gif` that is
-`webp`, `bmp`, `tiff` (its first page), `avif`, `heic` and `svg`; an SVG is rasterized without its scripts
-and without anything it names elsewhere. A PDF shows its first page where the system has `pdftoppm`
-(poppler): without it there is no preview, and the PDF is still sent as the file it is.
+
+  A hover over the label or the path of a picture previews it. Beyond `png`, `jpg`/`jpeg` and `gif` that
+  is `webp`, `bmp`, `tif`/`tiff` (its first page), `avif`, `heic` and `svg`. An SVG is drawn as its shapes
+  alone: `oksvg` does not draw `<text>` or `<image>`, and a `<use>` of another file is not loaded; its
+  scripts do not run and nothing it names elsewhere is opened. An SVG over 2 MiB is not previewed. AVIF
+  and HEIC decode without cgo: with the system's `libavif`/`libheif` where it has them, otherwise with a
+  built-in WASM decoder. A PDF shows its first page where the system has `pdftoppm` (poppler): without it
+  there is no preview, and the PDF is still sent as the file it is. A PDF previews on the path of its file
+  only, not on its `[File_n]` label.
 
 - **A picture that is no file**, like a screenshot on the clipboard: `ctrl+v` reads it from the clipboard of
   the system and keeps it as a file, whose path it types. A terminal that pastes such a picture as nothing

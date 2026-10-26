@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,7 +17,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -320,7 +323,9 @@ func readPreview(f *os.File, path string) (image.Image, error) {
 	case ".pdf":
 		return pdfPreview(path)
 	case ".avif":
-		return boundedPreview(f, avif.DecodeConfig, func() (image.Image, error) { return avif.Decode(f) })
+		return boundedPreview(f, avif.DecodeConfig, func() (image.Image, error) {
+			return avif.Decode(f, avif.Options{AutoRotate: true})
+		})
 	case ".heic":
 		return boundedPreview(f, heic.DecodeConfig, func() (image.Image, error) { return heic.Decode(f) })
 	}
@@ -357,11 +362,22 @@ func boundedPreview(f io.ReadSeeker, config func(io.Reader) (image.Config, error
 // the preview are smaller than that.
 const svgRaster = 512
 
+// svgMaxBytes bounds an SVG tighter than a picture: rasterizing many paths
+// takes time, and one preview slot serves every hover.
+const svgMaxBytes = 2 << 20
+
 // svgPreview draws the shapes of the SVG in f. It is a vector image, so it is
 // rasterized here, with oksvg and rasterx alone: no script it holds runs and
 // nothing it names elsewhere is loaded.
 func svgPreview(f io.Reader) (image.Image, error) {
-	icon, err := oksvg.ReadIconStream(f, oksvg.IgnoreErrorMode)
+	data, err := io.ReadAll(io.LimitReader(f, svgMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > svgMaxBytes {
+		return nil, errors.New("an SVG of that size is not shown")
+	}
+	icon, err := oksvg.ReadIconStream(bytes.NewReader(data), oksvg.IgnoreErrorMode)
 	if err != nil {
 		return nil, err
 	}
@@ -377,16 +393,33 @@ func svgPreview(f io.Reader) (image.Image, error) {
 	return img, nil
 }
 
-// pdfTimeout bounds how long the first page of a PDF may take to be drawn.
-const pdfTimeout = 10 * time.Second
+// pdfRaster is the longer side in pixels a PDF page is drawn at: both forms
+// of the preview are smaller than that, and the renderer is bounded before it
+// writes a picture that would be too large.
+const pdfRaster = 512
+
+// pdfTimeout bounds how long the first page of a PDF may take to be drawn. It
+// is a variable so that a test can shorten it.
+var pdfTimeout = 10 * time.Second
+
+// pdfRenderer is the program that draws a PDF page. It is looked up once, so a
+// poppler installed while ouro runs is found after a restart, not on the next
+// hover. A test puts its own renderer in its place.
+var pdfRenderer = sync.OnceValue(func() string {
+	path, err := exec.LookPath("pdftoppm")
+	if err != nil {
+		return ""
+	}
+	return path
+})
 
 // pdfPreview draws the first page of the PDF at path with pdftoppm, which only
 // some systems have: without it the preview stays away, and the PDF is still
 // handed on as the file it is.
 func pdfPreview(path string) (image.Image, error) {
-	bin, err := exec.LookPath("pdftoppm")
-	if err != nil {
-		return nil, err
+	bin := pdfRenderer()
+	if bin == "" {
+		return nil, exec.ErrNotFound
 	}
 	dir, err := os.MkdirTemp("", "ouro-pdf-")
 	if err != nil {
@@ -396,7 +429,11 @@ func pdfPreview(path string) (image.Image, error) {
 	out := filepath.Join(dir, "page")
 	ctx, cancel := context.WithTimeout(context.Background(), pdfTimeout)
 	defer cancel()
-	if err := exec.CommandContext(ctx, bin, "-png", "-f", "1", "-l", "1", "-singlefile", "-r", "96", path, out).Run(); err != nil {
+	cmd := exec.CommandContext(ctx, bin, "-png", "-f", "1", "-l", "1", "-singlefile",
+		"-scale-to", strconv.Itoa(pdfRaster), path, out)
+	// A timeout takes the renderer's children along with it.
+	detached(cmd)
+	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 	f, err := os.Open(out + ".png")
