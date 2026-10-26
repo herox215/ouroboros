@@ -425,7 +425,9 @@ type session struct {
 	tasks     []*task
 	delegated int
 	// routed says that the answer on its way took a message the thread
-	// handed on: the thread shows what comes of it, see relay.
+	// handed on, or a report continuing such an answer: the thread shows
+	// what comes of it, see relay. Tasks snapshot this bit at delegation;
+	// keeping it on the session between answers would route unrelated input.
 	routed bool
 	// questions are, of the thread, the questions of sessions it asks the
 	// owner, the first of them now; working is how much works for it, and
@@ -455,7 +457,7 @@ type queued struct {
 	hasAttachments bool
 	source         MessageSource
 	generated      bool // backend input, not a message from an interface
-	routed         bool // handed on by the thread
+	routed         bool // handed on by the thread, or a task continuing that work
 	task           *Event
 }
 
@@ -614,7 +616,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 	case se.cancel != nil:
 		return ErrBusy
 	}
-	s.begin(se, p, append(ready(se), message)...)
+	s.begin(se, p, append(direct(se), message)...)
 	return nil
 }
 
@@ -800,7 +802,10 @@ func (s *Service) saying(se *session, id, text string) {
 func (s *Service) steered(se *session) []openai.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.taken(se, ready(se))
+	if se.routed {
+		return s.taken(se, ready(se))
+	}
+	return s.taken(se, direct(se))
 }
 
 // taken tells that the answer in se takes messages, each a Message of the
@@ -1076,7 +1081,13 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	// What was queued too late for this answer is the next message, unless
 	// the node takes none: then it is lost with the process.
 	if !s.closed && p.successor == "" {
-		if messages := ready(se); len(messages) > 0 {
+		messages := ready(se)
+		switch {
+		case end.Kind == Canceled && !slices.ContainsFunc(messages, func(m queued) bool { return m.task == nil }):
+			// The owner stopped the answer: what its tasks reported waits
+			// for their next message.
+			se.queue = append(messages, se.queue...)
+		case len(messages) > 0:
 			s.begin(se, p, messages...)
 		}
 	}
@@ -1358,12 +1369,13 @@ func (s *Service) Cancel(_ context.Context, id string) error {
 		se.cancel()
 	}
 	for _, t := range se.tasks {
-		t.stopped = false // the owner stopped it: nobody is told
-		t.cancel()
+		stopTask(t)
 	}
+	unroute(se, true)
 	if id == ThreadID {
 		s.stopThread()
 	}
+	s.busy()
 	return nil
 }
 

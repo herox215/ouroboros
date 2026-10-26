@@ -22,6 +22,7 @@ type task struct {
 	cancel  context.CancelFunc
 	told    []openai.Message // what the agent told its helper, for it to take
 	stopped bool             // by the agent, with Stop: reported as stopped
+	routed  bool             // continuation of an answer handed on by the thread
 }
 
 // errStoppedByAgent is why a task the agent stopped ended, as its report
@@ -56,7 +57,7 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 	for i, t := range tasks {
 		ctx, cancel := context.WithCancel(s.ctx)
 		se.delegated++
-		running := &task{n: se.delegated, title: t.Title, cancel: cancel}
+		running := &task{n: se.delegated, title: t.Title, cancel: cancel, routed: se.routed}
 		ctx = workdir.With(ctx, se.directory)
 		ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 		ctx = assistant.WithTaskSteering(ctx, func() []openai.Message { return s.told(running) })
@@ -75,10 +76,12 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	defer s.answers.Done()
 	start := s.now()
 	answer, err := do(ctx)
-	stopped := ctx.Err() != nil
-	t.cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Serialize completion with Cancel: a canceled task must not deliver a
+	// result just because its helper returned before Cancel acquired the lock.
+	stopped := ctx.Err() != nil
+	t.cancel()
 	p := s.node
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -93,6 +96,7 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	case !stopped:
 		s.deliver(se, p, t, answer, err, s.now().Sub(start))
 	}
+	s.busy()
 	p.settle()
 }
 
@@ -167,6 +171,41 @@ func ready(se *session) []queued {
 	return now
 }
 
+// stopTask stops the task t for the owner: nobody is told, and the thread
+// no longer waits for it. s.mu is held.
+func stopTask(t *task) {
+	t.routed = false
+	t.stopped = false
+	t.cancel()
+}
+
+// unroute keeps what waits in se from the thread, with reports only what
+// tasks reported: it no longer shows what comes of it. s.mu is held.
+func unroute(se *session, reports bool) {
+	for i := range se.queue {
+		if !reports || se.queue[i].task != nil {
+			se.queue[i].routed = false
+		}
+	}
+}
+
+// direct is what waits in se for an answer to a message of the owner, see
+// ready, but for the reports of tasks that continue work of the thread:
+// they wait for an answer of their own, which the thread shows, rather than
+// make the thread show the owner's direct answer. s.mu is held.
+func direct(se *session) []queued {
+	var held []queued
+	messages := slices.DeleteFunc(ready(se), func(m queued) bool {
+		if m.task != nil && m.routed {
+			held = append(held, m)
+			return true
+		}
+		return false
+	})
+	se.queue = append(held, se.queue...)
+	return messages
+}
+
 // deliver hands the agent of se the report of the task t that ended with
 // answer, or with err, after took: the answer on its way takes it as it
 // takes a message of the owner, or one starts for it, once no other task
@@ -177,7 +216,10 @@ func (s *Service) deliver(se *session, p *process, t *task, answer string, err e
 	if err != nil {
 		e.Err = err.Error()
 	}
-	report := queued{text: assistant.TaskReport(t.n, t.title, answer, err), task: e}
+	// Routing belongs to the task's originating answer, not whichever answer
+	// happens to be running when it finishes. Taking this report restores it
+	// for exactly that continuation, including any tasks it delegates in turn.
+	report := queued{text: assistant.TaskReport(t.n, t.title, answer, err), task: e, routed: t.routed}
 	se.queue = append(se.queue, report)
 	if se.cancel != nil || s.closed || p.successor != "" || len(se.tasks) > 0 {
 		return

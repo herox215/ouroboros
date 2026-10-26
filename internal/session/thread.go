@@ -721,7 +721,8 @@ func (s *Service) busy() {
 	n := 0
 	own := thread.cancel != nil
 	for _, se := range s.sessions {
-		if se.cancel != nil && (se == thread || se.routed) || waitsForThread(se) {
+		if se.cancel != nil && (se == thread || se.routed) || waitsForThread(se) ||
+			slices.ContainsFunc(se.tasks, func(t *task) bool { return t.routed }) {
 			n++
 		}
 	}
@@ -732,17 +733,22 @@ func (s *Service) busy() {
 }
 
 // stopThread stops, with the answer of the thread, the answers of the
-// sessions it handed messages to. What it handed on that still waits stays
-// with the session, but the thread no longer shows what comes of it, nor
-// asks its questions. s.mu is held.
+// sessions it handed messages to and the tasks that continue them, also
+// those that outlived an answer that already ended. Other tasks are left
+// alone. What it handed on that still waits, and the reports of the tasks,
+// stay with the session, but the thread no longer shows what comes of them,
+// nor asks their questions. s.mu is held.
 func (s *Service) stopThread() {
 	for _, se := range s.sessions {
 		if se.routed && se.cancel != nil {
 			se.cancel()
 		}
-		for i := range se.queue {
-			se.queue[i].routed = false
+		for _, t := range se.tasks {
+			if t.routed {
+				stopTask(t)
+			}
 		}
+		unroute(se, false)
 		s.withdraw(se)
 	}
 	s.busy()
