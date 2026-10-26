@@ -701,8 +701,9 @@ func (s *Service) begin(se *session, p *process, messages ...queued) {
 	}
 	ctx = agent.WithInputMessages(ctx, s.inThread(se, inputs))
 	// The answer is kept as on its way before it starts, so that an image of
-	// ouro that ends with it brings it on again, see GoOn.
-	if s.archive != nil {
+	// ouro that ends with it brings it on again, see GoOn. A scheduled run has
+	// nobody to report to: the next run begins a conversation of its own.
+	if s.archive != nil && se.scheduled == nil {
 		if err := s.archive.BeginAnswer(history.Owner(se.id)); err != nil {
 			s.archive.log("the answer of the session %s cannot be kept as on its way: %v", se.id, err)
 		}
@@ -1121,7 +1122,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	// An answer that ends because the node goes away is brought on again by
 	// the next image, see GoOn; one that ended of itself or was stopped by
 	// the owner takes its mark back.
-	if s.archive != nil && !(end.Kind == Canceled && (p.successor != "" || s.closed)) {
+	if s.archive != nil && se.scheduled == nil && !(end.Kind == Canceled && (p.successor != "" || s.closed)) {
 		if err := s.archive.EndAnswer(history.Owner(se.id)); err != nil {
 			s.archive.log("the end of the answer of the session %s cannot be kept: %v", se.id, err)
 		}

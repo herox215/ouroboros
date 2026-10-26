@@ -66,3 +66,27 @@ func TestAnsweringMarks(t *testing.T) {
 		t.Fatalf("interrupted after migration: %v %v", got, err)
 	}
 }
+
+// A mark does not bring a conversation back that the owner deleted.
+func TestMarkKeepsADeletedConversationDeleted(t *testing.T) {
+	a := Open(t.TempDir())
+	defer a.Close()
+	for _, step := range []func(string) error{a.BeginAnswer, a.EndAnswer} {
+		if err := step("owner/gone"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := a.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("UPDATE history_sessions SET deleted=1 WHERE id='owner/gone'"); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.BeginAnswer("owner/gone"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := a.Interrupted(); err != nil || len(got) != 0 {
+		t.Fatalf("interrupted: %v, %v", got, err)
+	}
+}

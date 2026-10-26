@@ -19,7 +19,8 @@ func (a *Archive) BeginAnswer(id string) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec("INSERT INTO history_sessions(id,answering) VALUES(?,1) ON CONFLICT(id) DO UPDATE SET deleted=0,answering=1", id)
+	// A deleted conversation stays deleted: a mark is no reason to list it.
+	_, err = db.Exec("INSERT INTO history_sessions(id,answering) VALUES(?,1) ON CONFLICT(id) DO UPDATE SET answering=1", id)
 	return err
 }
 

@@ -91,3 +91,37 @@ func TestStoppedAnswerDoesNotGoOn(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+// A scheduled job is not brought on: its conversation has nobody to report
+// to, and the next run begins one of its own.
+func TestScheduledAnswerIsNotInterrupted(t *testing.T) {
+	dir := t.TempDir()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s := service(t, &fakeAgent{run: func(_ context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return "done", nil
+	}})
+	s.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
+	if _, _, err := s.RunScheduled(context.Background(), "daily", "work", dir, false); err != nil {
+		t.Fatal(err)
+	}
+	<-started // the mark is written before the answer runs
+	told := make(chan string, 1)
+	next := service(t, &fakeAgent{run: func(_ context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		told <- text
+		return "answered", nil
+	}})
+	next.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
+	next.GoOn()
+	close(release)
+	select {
+	case got := <-told:
+		t.Fatalf("a scheduled answer went on: %q", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
