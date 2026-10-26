@@ -5,7 +5,7 @@ OURO_REPO ?= $(shell git remote get-url origin 2>/dev/null)
 # The tool "rebuild" builds the checkout the binary was built from. "ouro update"
 # builds in a directory of its own and passes on the checkout of the old binary.
 OURO_SOURCE ?= $(CURDIR)
-LDFLAGS := -s -w $(if $(OURO_REPO),-X ouroboros/internal/update.Repo=$(OURO_REPO)) \
+LDFLAGS := -s -w $(if $(OURO_REPO),-X 'ouroboros/internal/update.Repo=$(OURO_REPO)') \
 	$(if $(OURO_SOURCE),-X 'ouroboros/internal/update.Source=$(OURO_SOURCE)')
 
 # Go is often installed outside PATH (install.sh puts it into ~/.local/go).
@@ -82,4 +82,4 @@ install: build
 	install -m755 "$(BIN)" "$(PREFIX)/bin/$$(basename "$(BIN)")"
 
 clean:
-	rm -rf $(BIN) .cover cover.out .mutation
+	rm -rf "$(BIN)" .cover cover.out .mutation
