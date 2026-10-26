@@ -214,7 +214,7 @@ func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if p != s.home && (c.Access == id || c.PeerAccess == id) {
+		if p != s.home && (c.Access == id || c.PeerAccess == id || c.SessionAccess == id || c.ThreadAccess == id) {
 			return "", fmt.Errorf("%s is in use by the profile %s: give it another access first", saved[at].Label(), c.Name)
 		}
 	}
@@ -243,6 +243,12 @@ func (s *Session) Remove(ctx context.Context, id string) (string, error) {
 		}
 		if c.PeerAccess == id { // peers are answered like the owner again
 			c.PeerAccess, c.PeerModel = "", ""
+		}
+		if c.SessionAccess == id { // sessions are answered like the owner again
+			c.SessionAccess, c.SessionModel = "", ""
+		}
+		if c.ThreadAccess == id { // the thread is answered like the owner again
+			c.ThreadAccess, c.ThreadModel = "", ""
 		}
 		c.Fallbacks = slices.DeleteFunc(c.Fallbacks, func(f config.Fallback) bool { return f.Access == id })
 		return s.book.Store.Remove(id)
@@ -440,6 +446,35 @@ func (s *Session) Pick(id, model string) (switched bool, err error) {
 // with, whatever it answers the owner with, from the next message of a peer
 // on. With the id "" peers are answered with what the owner is again.
 func (s *Session) PickForPeers(id, model string) error {
+	return s.pickForScope(id, model, func(c *config.Config) (*string, *string) {
+		return &c.PeerAccess, &c.PeerModel
+	})
+}
+
+// PickForSessions makes model of the access id what the agent answers the
+// sessions with, whatever it answers the owner with, from the next message
+// of a session on. With the id "" sessions are answered with what the owner
+// is again.
+func (s *Session) PickForSessions(id, model string) error {
+	return s.pickForScope(id, model, func(c *config.Config) (*string, *string) {
+		return &c.SessionAccess, &c.SessionModel
+	})
+}
+
+// PickForThread makes model of the access id what the agent answers the
+// thread with, whatever it answers the owner elsewhere, from the next
+// message of the thread on. With the id "" the thread is answered with what
+// the owner is again.
+func (s *Session) PickForThread(id, model string) error {
+	return s.pickForScope(id, model, func(c *config.Config) (*string, *string) {
+		return &c.ThreadAccess, &c.ThreadModel
+	})
+}
+
+// pickForScope makes model of the access id what the agent answers a scope
+// with, as fields names the access and the model of it in the configuration.
+// With the id "" the scope is answered with what the owner is again.
+func (s *Session) pickForScope(id, model string, fields func(*config.Config) (*string, *string)) error {
 	model = strings.TrimSpace(model)
 	if id == "" {
 		model = ""
@@ -452,7 +487,8 @@ func (s *Session) PickForPeers(id, model string) error {
 		if !c.Complete() {
 			return config.ErrIncomplete
 		}
-		c.PeerAccess, c.PeerModel = id, model
+		access, want := fields(c)
+		*access, *want = id, model
 		return nil
 	})
 }

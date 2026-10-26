@@ -41,6 +41,18 @@ type Config struct {
 	// Without both, peers are answered with Access and Model: see PeerLLM.
 	PeerAccess string `json:"peer_access,omitempty"`
 	PeerModel  string `json:"peer_model,omitempty"`
+	// SessionAccess and SessionModel are the access and the model the agent
+	// answers the sessions of the owner with, if the owner chose others for
+	// them than for themselves. Without both, sessions are answered with
+	// Access and Model: see SessionLLM.
+	SessionAccess string `json:"session_access,omitempty"`
+	SessionModel  string `json:"session_model,omitempty"`
+	// ThreadAccess and ThreadModel are the access and the model the agent
+	// answers the thread with, if the owner chose others for it than for
+	// themselves. Without both, the thread is answered with Access and
+	// Model: see ThreadLLM.
+	ThreadAccess string `json:"thread_access,omitempty"`
+	ThreadModel  string `json:"thread_model,omitempty"`
 	// Fallbacks are what the agent goes on with, in this order, when the
 	// access it answers the owner with cannot answer for now: see Fallback.
 	// Without them, such an answer stops with why.
@@ -399,8 +411,28 @@ type Fallback struct {
 // those the owner chose for them, which own reports, or else those it
 // answers the owner with.
 func (c Config) PeerLLM() (access, model string, own bool) {
-	if c.PeerAccess != "" && c.PeerModel != "" {
-		return c.PeerAccess, c.PeerModel, true
+	return c.llm(c.PeerAccess, c.PeerModel)
+}
+
+// SessionLLM returns the access and the model the agent answers the sessions
+// of the owner with: those the owner chose for them, which own reports, or
+// else those it answers the owner with.
+func (c Config) SessionLLM() (access, model string, own bool) {
+	return c.llm(c.SessionAccess, c.SessionModel)
+}
+
+// ThreadLLM returns the access and the model the agent answers the thread
+// with: those the owner chose for it, which own reports, or else those it
+// answers the owner with.
+func (c Config) ThreadLLM() (access, model string, own bool) {
+	return c.llm(c.ThreadAccess, c.ThreadModel)
+}
+
+// llm is the access and the model of a scope that has its own, or else those
+// the owner is answered with.
+func (c Config) llm(access, model string) (string, string, bool) {
+	if access != "" && model != "" {
+		return access, model, true
 	}
 	return c.Access, c.Model, false
 }

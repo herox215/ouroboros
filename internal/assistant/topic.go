@@ -79,7 +79,7 @@ func (a *Assistant) CheckTopic(ctx context.Context, check TopicCheck) (TopicDeci
 	}
 	ctx, cancel := context.WithTimeout(ctx, topicTimeout)
 	defer cancel()
-	_, cfg, err := a.current()
+	_, cfg, err := a.current(false)
 	if err != nil {
 		return TopicDecision{}, err
 	}

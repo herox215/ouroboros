@@ -196,7 +196,7 @@ type lesson struct {
 // and the tools of the agent. The call is part of no conversation; the
 // access of the agent is asked first, then its fallbacks.
 func (a *Assistant) review(ctx context.Context, signals []Signal, trail []string, tools toolsOf, memories []string) (verdict, error) {
-	_, cfg, err := a.current()
+	_, cfg, err := a.current(false)
 	if err != nil {
 		return verdict{}, err
 	}

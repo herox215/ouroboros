@@ -41,6 +41,12 @@ type Status struct {
 	// agent answers peers with, if the owner chose others for them than
 	// for themselves; "" otherwise.
 	PeerAccess, PeerModel string
+	// SessionAccess and SessionModel are the access and the model the agent
+	// answers the sessions with, and ThreadAccess and ThreadModel those it
+	// answers the thread with, if the owner chose others than their own;
+	// "" otherwise.
+	SessionAccess, SessionModel string
+	ThreadAccess, ThreadModel   string
 	Port                  int // A2A port while running
 	// Debug says that the node is in debug mode, see home.Dir.Debug.
 	Debug bool
@@ -65,6 +71,12 @@ func (l Local) Status() (Status, error) {
 	}
 	if access, model, own := cfg.PeerLLM(); own {
 		s.PeerAccess, s.PeerModel = access, model
+	}
+	if access, model, own := cfg.SessionLLM(); own {
+		s.SessionAccess, s.SessionModel = access, model
+	}
+	if access, model, own := cfg.ThreadLLM(); own {
+		s.ThreadAccess, s.ThreadModel = access, model
 	}
 	if p, ok := l.Running(); ok {
 		s.Running, s.Port = true, p.Port

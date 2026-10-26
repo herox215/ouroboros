@@ -89,7 +89,7 @@ func (a *fakeAgent) Effort() string {
 	return a.effort
 }
 
-func (a *fakeAgent) Model() string {
+func (a *fakeAgent) Model(thread bool) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.model

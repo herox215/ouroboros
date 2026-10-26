@@ -69,7 +69,7 @@ func TestModelWithoutAModelerOrAnArchive(t *testing.T) {
 	}
 	s := New(an)
 	t.Cleanup(s.Close)
-	if got := s.model(); got != "" {
+	if got := s.model("s1"); got != "" {
 		t.Fatalf("model %q", got)
 	}
 	se := &session{id: "s1"}

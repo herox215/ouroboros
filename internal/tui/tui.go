@@ -141,6 +141,13 @@ type Backend interface {
 	// with, whatever it answers the owner with; with the access "", what it
 	// answers the owner with again. Status says what it is.
 	SetPeerModel(access, model string) error
+	// SetSessionModel makes model of the access what the node answers its
+	// sessions with, whatever it answers the owner elsewhere; with the access
+	// "", what it answers the owner with again. Status says what it is.
+	SetSessionModel(access, model string) error
+	// SetThreadModel makes model of the access what the node answers the
+	// thread with, like SetSessionModel for the sessions.
+	SetThreadModel(access, model string) error
 	// SetDebug turns the debug mode of the node on or off: in it, the log
 	// of the node tells much more of every call of the LLM. Status says
 	// whether it is on.
