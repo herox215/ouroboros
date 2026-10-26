@@ -347,9 +347,15 @@ type Model struct {
 	ctx  context.Context
 	quit context.CancelFunc
 
-	status    Status
-	chat      *conversation            // the session shown
-	chats     map[string]*conversation // every session the UI knows, by its ID
+	status Status
+	chat   *conversation            // the session shown
+	chats  map[string]*conversation // every session the UI knows, by its ID
+	// runOrder is where each session that runs stands in the columns beside
+	// the conversation, by the number it got when it began to run, and
+	// runNext is the number the next of them gets: a session keeps its place
+	// while it runs, so that the columns do not jump about.
+	runOrder  map[string]int
+	runNext   int
 	notice    string
 	noticeErr bool
 

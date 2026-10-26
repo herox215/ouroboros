@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -176,7 +177,69 @@ func TestStandOfASession(t *testing.T) {
 	}
 }
 
-// The tools of a session are one chart: a lane for each of the most used,
+// The sessions that run keep their place in both columns while they work,
+// and one that began anew stands last.
+func TestRunningSessionsKeepTheirPlace(t *testing.T) {
+	m, _ := newModel(t)
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.Local)
+	m.now = func() time.Time { return at }
+	m.Update(tea.WindowSizeMsg{Width: 170, Height: 40})
+	ids := []string{"s1", "s2", "s3"}
+	for i, id := range ids {
+		m.apply(m.conversation(id), Event{Kind: plugin.SessionMessage, Text: id, At: at.Add(time.Duration(i) * time.Minute)}, false)
+	}
+	order := func() []string {
+		var got []string
+		for _, c := range m.runningSessions() {
+			got = append(got, c.contextID)
+		}
+		return got
+	}
+	if got := order(); !slices.Equal(got, ids) {
+		t.Fatalf("begun in a row: %v", got)
+	}
+	// A session that works on changes nothing of the order of the others.
+	m.apply(m.chats["s2"], Event{Kind: plugin.SessionStep, Tool: "bash", Text: "bash · go test", At: at.Add(20 * time.Minute)}, false)
+	m.apply(m.chats["s1"], Event{Kind: plugin.SessionAnswering, Text: "so", At: at.Add(21 * time.Minute)}, false)
+	if got := order(); !slices.Equal(got, ids) {
+		t.Fatalf("while they work: %v", got)
+	}
+	// One that ended gives its place up, and one that begins anew stands last.
+	m.apply(m.chats["s1"], Event{Kind: plugin.SessionAnswer, Text: "done", At: at.Add(22 * time.Minute)}, false)
+	if got := order(); !slices.Equal(got, []string{"s2", "s3"}) {
+		t.Fatalf("after one ended: %v", got)
+	}
+	m.apply(m.chats["s1"], Event{Kind: plugin.SessionMessage, Text: "again", At: at.Add(23 * time.Minute)}, false)
+	if got := order(); !slices.Equal(got, []string{"s2", "s3", "s1"}) {
+		t.Fatalf("after one began anew: %v", got)
+	}
+	// The column on the right shows them in the same order.
+	rail := strip(m.railView(m.railWidth(), m.height))
+	s2, s3, s1 := strings.Index(rail, "S2 · WORKING"), strings.Index(rail, "S3 · WORKING"), strings.Index(rail, "S1 · WORKING")
+	if s2 < 0 || s3 < 0 || s1 < 0 || !(s2 < s3 && s3 < s1) {
+		t.Fatalf("the column on the right is in another order (%d, %d, %d):\n%s", s2, s3, s1, rail)
+	}
+}
+
+// A lane of the chart keeps its place and its shade while its tool is used
+// more: the way an answer goes about its tools does not make the picture
+// jump about.
+func TestToolChartKeepsTheOrderOfItsLanes(t *testing.T) {
+	m, _ := newModel(t)
+	at := time.Unix(1000, 0)
+	used := func(tool string, minute int) call {
+		return call{tool: tool, text: tool, done: true, at: at.Add(time.Duration(minute) * time.Minute)}
+	}
+	first := m.toolChart(stand{calls: []call{used("read", 0), used("bash", 1), used("bash", 2)}}, 40)
+	again := m.toolChart(stand{calls: []call{used("read", 0), used("bash", 1), used("bash", 2), used("bash", 3)}}, 40)
+	if len(first) != 3 || !strings.HasPrefix(strip(first[0]), "read ") || !strings.HasPrefix(strip(first[1]), "bash ") {
+		t.Fatalf("the chart:\n%s", strip(strings.Join(first, "\n")))
+	}
+	if first[0] != again[0] || !strings.HasPrefix(strip(again[1]), "bash ") || !strings.HasSuffix(strip(again[1]), " 3") {
+		t.Fatalf("the lanes moved:\n%s\n%s", strip(strings.Join(first, "\n")), strip(strings.Join(again, "\n")))
+	}
+}
+
 // their calls where their time puts them, the call on its way blinking.
 func TestToolChart(t *testing.T) {
 	m, _ := newModel(t)

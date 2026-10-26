@@ -472,15 +472,36 @@ func (m *Model) panel() ([]string, []hit) {
 // runningSessions are the sessions that run now, besides the thread: what the
 // sidebar lists and the column on the right says of, wherever the
 // conversation stands. One that ends leaves both.
+//
+// A session keeps its place among them while it runs, as the place it got
+// when it began to run says, so that neither column changes its order while
+// the sessions work: a session that ended and begins anew stands last.
 func (m *Model) runningSessions() []*conversation {
-	var list []*conversation
+	var fresh, list []*conversation
+	order := make(map[string]int, len(m.runOrder))
 	for _, s := range m.chats {
-		if s.contextID != plugin.ThreadID && s.peer == "" && s.running {
-			list = append(list, s)
+		if s.contextID == plugin.ThreadID || s.peer != "" || !s.running {
+			continue
 		}
+		n, ok := m.runOrder[s.contextID]
+		if !ok {
+			fresh = append(fresh, s)
+		}
+		order[s.contextID] = n
+		list = append(list, s)
 	}
+	// Those that began to run in the same moment stand in the order of what
+	// they did last, then of their ID, as nothing else tells them apart.
+	slices.SortFunc(fresh, func(a, b *conversation) int {
+		return cmp.Or(a.last.Compare(b.last), strings.Compare(a.contextID, b.contextID))
+	})
+	for _, s := range fresh {
+		order[s.contextID] = m.runNext
+		m.runNext++
+	}
+	m.runOrder = order // one that ended gives its place up
 	slices.SortFunc(list, func(a, b *conversation) int {
-		return cmp.Or(b.last.Compare(a.last), strings.Compare(a.contextID, b.contextID))
+		return cmp.Or(order[a.contextID]-order[b.contextID], strings.Compare(a.contextID, b.contextID))
 	})
 	return list
 }
@@ -885,15 +906,25 @@ func (m *Model) toolChart(s stand, inner int) []string {
 	}
 	name := func(c call) string { return cmp.Or(c.tool, strings.Split(c.text, " · ")[0], "tool") }
 	tally := map[string]int{}
-	var tools []string
+	var tools []string // every tool, in the order in which it was used first
 	for _, c := range all {
 		if tally[name(c)] == 0 {
 			tools = append(tools, name(c))
 		}
 		tally[name(c)]++
 	}
-	slices.SortStableFunc(tools, func(a, b string) int { return tally[b] - tally[a] })
-	lanes := tools[:min(len(tools), len(laneShades))]
+	// The lanes are the tools used most; among them each keeps the place and
+	// the shade it got when it was used first, so that the chart does not
+	// jump about while the session works.
+	most := slices.Clone(tools)
+	slices.SortStableFunc(most, func(a, b string) int { return tally[b] - tally[a] })
+	most = most[:min(len(most), len(laneShades))]
+	var lanes []string
+	for _, tool := range tools {
+		if slices.Contains(most, tool) {
+			lanes = append(lanes, tool)
+		}
+	}
 	const labels, counts = 9, 3
 	plot := inner - labels - counts
 	if plot < 4 {
