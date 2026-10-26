@@ -54,7 +54,7 @@ const (
 	// bash: how it goes about what the user gives it to do.
 	workHint = `When the user asks for something to be done, do it, and go on until it is done: ` +
 		`do not stop at a plan or at an offer to go on. Treat a hint that something you agreed to or promised before is missing, like a review of your answer naming it, as the order to make up for it: take its reversible local steps, to write, edit, build and test, without a new leave, and ask before only what cannot be undone or gates that the rules for what to ask already name. ` +
-		`For research, batch related read and search calls whose inputs you already know together, rather than returning to the model after each small excerpt. ` +
+		`For research, batch related read and search calls whose inputs you already know together: each call on its own costs a round of the answer. ` +
 		`For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit. ` +
 		`Read coherent sections large enough to answer the current question, within tool output limits. ` +
 		`Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch. ` +
@@ -79,11 +79,17 @@ const (
 		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
 		`Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown, ` +
 		`rather than stopping at an unverified guess. `
+	// bashHint is added for an agent that has bash: how it uses bash to
+	// answer a question, where the tools for files cannot.
+	bashHint = `When ` + ToolBash + ` is what answers a question (what the tools for files cannot do), ` +
+		`put the commands it takes, such as grep, sed and git, into one call, joined with ` + "`;`" + ` as the shell takes them, ` +
+		`rather than one call for each small search. ` +
+		`The exit status is that of the last command, so read the output of each, not only the status of the call. `
 	// exploreHint is added for an agent that has the tools for files and bash
 	// at once: files are explored with their own tools, which return the part
 	// that was asked for, where a command prints pages that are read again.
 	exploreHint = `Explore files with read, search and list, not with ` + ToolBash + ` and grep, sed or find: ` +
-		`the tools for files return the part you asked for and say where to continue, while every command is a round of its own whose output you then read again. ` +
+		`the tools for files return the part you asked for and say where to continue, while a command prints pages that you then read again. ` +
 		`Use ` + ToolBash + ` for what the tools for files cannot do. `
 	// improveHint is added for an owner whose agent may build ouro anew and
 	// improve it (config.SelfImproveBuild): what a task needs and ouro
@@ -409,6 +415,9 @@ func (b Builder) forOwner(cfg config.Config, yolo bool) (*agent.Agent, error) {
 	}
 	if has(append(slices.Clone(fileTools), ToolBash)...) {
 		prompt += workHint
+	}
+	if has(ToolBash) {
+		prompt += bashHint
 	}
 	if has(fileTools...) && has(ToolBash) {
 		prompt += exploreHint
