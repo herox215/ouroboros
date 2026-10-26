@@ -628,7 +628,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 	}
 	se := s.get(id)
 	message := queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx), generated: generated}
-	if generated && (text == goOnText || text == interruptedText) {
+	if generated && restartNote(text) {
 		// The durable restart note, not transient Routed flags, restores where
 		// the unanswered question must be offered after loading the archive.
 		// Only the last message counts: an older note was answered already.

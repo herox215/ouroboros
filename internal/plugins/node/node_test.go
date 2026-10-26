@@ -396,7 +396,10 @@ func TestServeGoesOnWithTheSessionsThatAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 	wentOn := func(e plugin.SessionEvent) bool {
-		return e.Kind == plugin.SessionAnswer && strings.HasPrefix(e.Text, "[gpt-4o] turns=3 ") && strings.HasSuffix(e.Text, "[Not from the owner: ouro runs the build you asked for now. Go on with what you were doing.]")
+		return e.Kind == plugin.SessionAnswer && strings.HasPrefix(e.Text, "[gpt-4o] turns=3 ") &&
+			strings.Contains(e.Text, "[Not from the owner: ouro runs the build you asked for now. Go on with what you were doing.]") &&
+			strings.Contains(e.Text, `This chat is "c1" in the history archive.`) &&
+			strings.Contains(e.Text, "build it")
 	}
 	if slices.ContainsFunc(past, wentOn) {
 		return

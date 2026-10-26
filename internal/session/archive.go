@@ -63,21 +63,52 @@ func (s *Service) ForgetPeers(forget func(contextID string)) {
 	}
 }
 
-// goOnText is what a session that goes on by itself in a new build is told,
-// in place of a message of the owner.
+// goOnText is the head of what a session that goes on by itself in a new
+// build is told, in place of a message of the owner; resumeNote adds where it
+// is and what it was asked, see GoOn.
 const goOnText = "[Not from the owner: ouro runs the build you asked for now. Go on with what you were doing.]"
 
-// interruptedText is what a session is told whose answer was on its way when
-// the node went away, and which goes on with it now: unlike an answer that
-// ended before ouro started anew, this one stopped in the middle, and what it
-// had started ended with the process.
+// interruptedText is the head of what a session is told whose answer was on
+// its way when the node went away, and which goes on with it now: unlike an
+// answer that ended before ouro started anew, this one stopped in the middle,
+// and what it had started ended with the process.
 const interruptedText = "[Not from the owner: this answer was stopped in the middle when ouro started anew, and the background jobs and tasks it had started ended with it. What it changed before may be incomplete. Check the state of what you were doing and go on with the task.]"
+
+// maxTaskNote is how many bytes of the first task resumeNote repeats, the
+// ellipsis that marks a cut included.
+const maxTaskNote = 1000
+
+// restartNote reports whether text is a note GoOn gives a session that goes on
+// by itself, or an answer that stopped in the middle.
+func restartNote(text string) bool {
+	return strings.HasPrefix(text, goOnText) || strings.HasPrefix(text, interruptedText)
+}
+
+// resumeNote names the chat of the session id, as the archive lists it, and
+// the task it was asked first, so that a session that goes on by itself need
+// not reconstruct them from the log and the archive.
+func (a *archive) resumeNote(id string) string {
+	chat := strings.TrimPrefix(id, "owner/")
+	task, err := a.FirstUser(id)
+	if err != nil && !errors.Is(err, history.ErrNotArchived) {
+		a.log("the first task of the session %s cannot be read: %v", id, err)
+	}
+	task = strings.TrimSpace(task)
+	if task == "" {
+		return "\n\nThis chat is \"" + chat + "\" in the history archive."
+	}
+	if len(task) > maxTaskNote {
+		task = strings.ToValidUTF8(task[:maxTaskNote-len("…")], "") + "…"
+	}
+	return "\n\nThis chat is \"" + chat + "\" in the history archive. Its first task, as the owner put it:\n" + task
+}
 
 // GoOn lets the sessions of the owner go on that asked to once ouro started
 // anew from the build they asked for, see AskGoOn, and those whose answer the
 // previous image could not finish, see history.BeginAnswer: a session that
-// asked is told goOnText, an interrupted one interruptedText, each once. A
-// node calls it when it starts.
+// asked is told goOnText, an interrupted one interruptedText, and either which
+// chat it is and what it was asked first, see resumeNote, each once. A node
+// calls it when it starts.
 func (s *Service) GoOn() {
 	s.mu.Lock()
 	a := s.archive
@@ -95,7 +126,7 @@ func (s *Service) GoOn() {
 	}
 	told := make(map[string]string, len(ids)+len(interrupted))
 	for _, id := range ids {
-		told[id] = goOnText
+		told[id] = goOnText + a.resumeNote(id)
 	}
 	order := slices.Clone(ids)
 	// An answer that asked to go on carries its own note of what was pending;
@@ -103,7 +134,7 @@ func (s *Service) GoOn() {
 	for _, id := range interrupted {
 		if _, ok := told[id]; !ok {
 			order = append(order, id)
-			told[id] = interruptedText
+			told[id] = interruptedText + a.resumeNote(id)
 		}
 	}
 	for _, id := range order {

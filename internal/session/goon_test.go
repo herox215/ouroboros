@@ -20,11 +20,18 @@ func TestGoOn(t *testing.T) {
 		t.Fatal("outside an answer of a node somebody goes on")
 	}
 	dir := t.TempDir()
+	// The chat was asked something before it asked for the build: the note it
+	// goes on with names the chat and the task it was asked first.
+	seed := history.Open(dir)
+	if err := seed.Append(history.Who{Session: "s1"}, []openai.Message{{Role: "user", Content: "fix issue 70"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
 	var logged []string
 	log := func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
 	told := make(chan string, 4)
 	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
-		if text == "build" {
+		if strings.HasSuffix(text, "build issue 70") {
 			AskRestart(ctx, "/new/ouro")
 			AskGoOn(ctx)
 			return "built", nil
@@ -40,17 +47,23 @@ func TestGoOn(t *testing.T) {
 		return s, replaced
 	}
 	s, replaced := inNode(dir)
-	s.Ask(context.Background(), "s1", "build")
+	s.Ask(context.Background(), "s1", "build issue 70")
 	if exe := <-replaced; exe != "/new/ouro" {
 		t.Fatalf("replaced by %q", exe)
 	}
+	s.answers.Wait()
 
 	next, _ := inNode(dir) // the new build
 	next.GoOn()
 	select {
 	case got := <-told:
-		if got != goOnText {
+		if !strings.Contains(got, goOnText) {
 			t.Fatalf("told %q", got)
+		}
+		for _, want := range []string{`This chat is "s1" in the history archive`, "fix issue 70"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("told %q, want %q", got, want)
+			}
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the session did not go on")
@@ -70,7 +83,7 @@ func TestGoOn(t *testing.T) {
 	service(t, a).GoOn()
 	s, replaced = inNode(t.TempDir())
 	s.archive.Archive = unavailableArchive(t)
-	s.Ask(context.Background(), "s1", "build")
+	s.Ask(context.Background(), "s1", "build issue 70")
 	s.answers.Wait() // restart is refused when its pending marker cannot be kept
 	select {
 	case exe := <-replaced:
