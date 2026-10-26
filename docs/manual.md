@@ -586,7 +586,7 @@ Endpoint examples: `https://api.openai.com/v1` (default), `http://localhost:1143
 | Process | the node holds a lock on `ouro.pid` (`PID PORT`) while it runs. Only a locked file counts as a running node, so one left behind by a crash or reboot is ignored and never gets a foreign process signalled |
 
 Environment: `OURO_HOME`, `OURO_PORT`, `OURO_DISCO_PORT`, `OURO_MODELS_DEV` (see [Sessions](#sessions)), and `OPENAI_BASE_URL` / `OPENAI_API_KEY` as what the
-provider for OpenAI-compatible APIs offers in the setup.
+provider for OpenAI-compatible APIs offers in the setup; `DEEPSEEK_API_KEY` offers the key for DeepSeek.
 `ouro start --setup` reconfigures, `ouro serve` runs in the foreground (e.g. for systemd).
 
 Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
@@ -1282,15 +1282,22 @@ The file tools cannot do any of this: `config.json` is locked for them, see [Fil
 
 ### Providers and accesses
 
-A **provider** is a kind of LLM a node can talk to. This ouro has four, which the setup offers by these
+A **provider** is a kind of LLM a node can talk to. This ouro has five, which the setup offers by these
 names:
 
 | Provider | Signs in with | Answers through |
 |---|---|---|
 | **Custom Provider** (`openai`) | an endpoint and an API key, which may be none (a local Ollama): any OpenAI-compatible API | `POST /chat/completions` at the endpoint |
+| **DeepSeek** (`deepseek`) | an API key from [DeepSeek Platform](https://platform.deepseek.com/api_keys), with API credit | `POST /chat/completions` at `https://api.deepseek.com` |
 | **ChatGPT** (`chatgpt`) | your ChatGPT account, in the browser ("Sign in with ChatGPT") | `POST /v1/responses` at `api.openai.com`, within the limits of your plan |
 | **OpenCode Go** (`opencode-go`) | the API key of your OpenCode Go subscription, from the OpenCode console, and nothing else | `POST /chat/completions` at `https://opencode.ai/zen/go/v1` |
 | **Claude Code** (`claude-code`, experimental) | the login of the official Claude Code CLI (`claude auth login`), with your Claude Pro, Max or Team plan | the CLI, which sends one `POST /v1/messages` to `api.anthropic.com` per call |
+
+**DeepSeek** asks only for an API key, not an endpoint. The key is kept with the other credentials.
+`DEEPSEEK_API_KEY` optionally offers it during setup; it does not change an existing access.
+Models are fetched from `GET /models`, with `deepseek-flash` preferred when available. API usage
+is billed separately from the DeepSeek chat app and needs API credit. Existing custom-provider
+accesses pointing at DeepSeek are left unchanged.
 
 **OpenCode Go** needs no endpoint from you: where it is reached is part of ouro. The key is kept with the
 other credentials and sent as `Authorization: Bearer …`, with the ID of the conversation in
@@ -1811,8 +1818,9 @@ internal/cli         the list of plugins that make up ouro, and the frame they d
 internal/plugins     the standard plugins, one package each: commands, setup dialog, wiring
   assistant          builds the agents of the node
   base               the console and the dispatcher of the commands of all plugins
-  chatgpt, openai,   the providers of LLMs: ChatGPT, OpenAI-compatible APIs, OpenCode Go,
-    opencode,        Claude Code
+  chatgpt, openai,    the providers of LLMs: ChatGPT, OpenAI-compatible APIs, DeepSeek,
+    deepseek,        OpenCode Go and Claude Code
+    opencode,
     claudecode
   discovery,         finds the nodes online, on the network and on the tailnet
     tailscale
