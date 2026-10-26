@@ -311,8 +311,7 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.effort, c.efforted = e.Text, true
 	case plugin.SessionRestart:
 		if live {
-			m.restarts = e.Text
-			return m.leave()
+			return m.beginRestart(e.Text)
 		}
 	}
 	return nil

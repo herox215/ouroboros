@@ -62,6 +62,7 @@ import (
 	"ouroboros/internal/node"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/peers"
+	abilitiesplugin "ouroboros/internal/plugins/abilities"
 	"ouroboros/internal/plugins/assistant"
 	"ouroboros/internal/plugins/base"
 	browserplugin "ouroboros/internal/plugins/browser"
@@ -88,6 +89,7 @@ import (
 	"ouroboros/internal/plugins/tui"
 	updateplugin "ouroboros/internal/plugins/update"
 	"ouroboros/internal/plugins/websearch"
+	whatsappplugin "ouroboros/internal/plugins/whatsapp"
 	"ouroboros/internal/proposal"
 	"ouroboros/internal/setup"
 	"ouroboros/internal/suggestion"
@@ -194,6 +196,8 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		historyplugin.Plugin(dir),
 		memoryplugin.Plugin(dir),
 		skillsplugin.Plugin(dir),
+		abilitiesplugin.Plugin(),
+		whatsappplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
 		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),
 		opencodeplugin.Plugin(opencodeplugin.Options{BaseURL: s.OpenCodeGo}),

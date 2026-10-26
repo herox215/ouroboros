@@ -332,3 +332,27 @@ h1 { margin-top: 4px; font-size: 14px; line-height: 1.5; letter-spacing: .06em; 
 #context-details .lane-3 { opacity: .4; }
 #context-details .lane-4 { opacity: .28; }
 #context-details .lane-5 { opacity: .18; }
+
+/* Low-contrast terminal interference, not full-screen strobing. */
+.restart-effect:not([hidden]) {
+  position: fixed; inset: 0; z-index: 10000;
+  display: grid; place-items: center;
+  background: var(--background); color: var(--accent);
+  cursor: progress;
+}
+.restart-terminal { max-width: 100%; padding: 1rem; overflow: hidden; }
+.restart-noise { font: inherit; line-height: 1.5; white-space: pre; }
+.restart-noise span { display: block; animation: restart-glitch 320ms steps(1, end) infinite; }
+.restart-terminal p { font-size: .85rem; letter-spacing: .12em; }
+.restart-cursor { animation: restart-cursor 600ms steps(1, end) infinite; }
+@keyframes restart-glitch {
+  0%, 100% { transform: translateX(0); opacity: 1; }
+  22% { transform: translateX(3px); opacity: .75; }
+  28% { transform: translateX(-2px); }
+  35%, 80% { transform: translateX(0); opacity: 1; }
+  84% { transform: translateX(1px); opacity: .85; }
+}
+@keyframes restart-cursor { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .restart-noise span, .restart-cursor { animation: none; }
+}

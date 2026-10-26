@@ -19,7 +19,7 @@ const { createSettingsDialog } = await import(settingsURL);
 const markdownSource = await readFile(new URL('./frontend/markdown.js', import.meta.url), 'utf8');
 const markdownURL = 'data:text/javascript;base64,' + Buffer.from(markdownSource).toString('base64');
 const { renderMarkdown, markdownPreview } = await import(markdownURL);
-const { mount, start, browse, dateGroup } = await import(
+const { mount, start, browse, dateGroup, createRestartEffect } = await import(
   'data:text/javascript;base64,' + Buffer.from(source.replace("'./markdown.js'", JSON.stringify(markdownURL)).replace("'./i18n.js'", JSON.stringify(i18nURL)).replace("'./model-dialog.js'", JSON.stringify(dialogURL)).replace("'./settings-dialog.js'", JSON.stringify(settingsURL)).replace("'./theme.js'", JSON.stringify(themeURL))).toString('base64')
 );
 
@@ -92,6 +92,7 @@ class Scroller extends Element {
 
 function documentFixture() {
   const elements = {
+    'restart-effect': new Element('div'),
     settings: new Element('button'),
     sidebar: new Element('aside'),
     profile: new Element('select'),
@@ -2330,4 +2331,22 @@ test('a long answer is cut between two blocks and expands to everything', async 
   assert.equal(expand.textContent, t('transcript.collapse'));
   expand.dispatchEvent(new Event('click'));
   assert.equal(body.children.length, cut.split('\n\n').length);
+});
+
+
+test('restart event reveals the ASCII overlay and completion removes it', () => {
+  const overlay = { hidden: true };
+  let event, callback;
+  const effect = createRestartEffect({
+    getElementById: id => { assert.equal(id, 'restart-effect'); return overlay; },
+    defaultView: { runtime: { EventsOn: (name, handler) => { event = name; callback = handler; } } },
+  });
+  assert.equal(event, 'ouro:restarting');
+  assert.equal(overlay.hidden, true);
+  callback();
+  assert.equal(overlay.hidden, false);
+  effect.hide();
+  assert.equal(overlay.hidden, true);
+  effect.show();
+  assert.equal(overlay.hidden, false);
 });

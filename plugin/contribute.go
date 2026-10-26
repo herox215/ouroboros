@@ -20,6 +20,9 @@ type (
 	// for the owner's agent by default and for peers only when the
 	// configuration lists it.
 	Tool = agent.Tool
+	// Ability groups lazily loaded owner tools and instructions. Contribute it
+	// with Add; do not also contribute its tools as standalone Tool values.
+	Ability = agent.Ability
 	// Param is a text argument of a Tool.
 	Param = agent.Param
 	// Option is a setting a Tool takes, which the owner sets on the

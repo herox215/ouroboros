@@ -333,8 +333,9 @@ type Model struct {
 	notice    string
 	noticeErr bool
 
-	resuming *conversation // the resumed chat waits for its history before showing empty artwork
-	restarts string        // the binary the UI quit for ouro to start anew from
+	resuming     *conversation // the resumed chat waits for its history before showing empty artwork
+	restarts     string        // the binary the UI quit for ouro to start anew from
+	restartFrame int           // ASCII transition before handing over the process
 
 	sessions sessionsScreen // the list of the sessions, for /session
 	ticks    int            // of the spinner, which the sessions screen animates with
@@ -562,6 +563,15 @@ func (m *Model) watchBeside() tea.Cmd {
 }
 
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.restartFrame > 0 {
+		switch msg := msg.(type) {
+		case restartFrameMsg:
+			return m, m.advanceRestart()
+		case tea.WindowSizeMsg:
+			m.width, m.height = msg.Width, msg.Height
+		}
+		return m, nil
+	}
 	defer func() {
 		if m.profiles == nil {
 			m.syncNameAnimation()

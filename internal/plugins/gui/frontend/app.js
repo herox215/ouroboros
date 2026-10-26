@@ -1056,11 +1056,22 @@ export function browse(bridge, doc = document, resume = '', threadID = '', retry
   return load();
 }
 
+// CSS supplies the glitch frames, so no animation timers survive a restart.
+export function createRestartEffect(doc = document) {
+  const overlay = doc.getElementById('restart-effect');
+  const show = () => { if (overlay) overlay.hidden = false; };
+  const hide = () => { if (overlay) overlay.hidden = true; };
+  doc.defaultView?.runtime?.EventsOn?.('ouro:restarting', show);
+  return { show, hide };
+}
+
 export async function start(bridge, doc = document) {
   const theme = createThemePreference(doc);
+  const restart = createRestartEffect(doc);
   try {
     applyDocument(doc);
     const state = await bridge.InitialState();
+    if (state.resume) restart.show();
     mount(state, doc);
     const modelDialog = createModelDialog(bridge, doc);
     const settingsDialog = createSettingsDialog(bridge, modelDialog, doc, theme);
@@ -1073,6 +1084,8 @@ export async function start(bridge, doc = document) {
     const message = doc.getElementById('error');
     message.textContent = t('profiles.loadFailed', { error: String(error) });
     message.hidden = false;
+  } finally {
+    restart.hide();
   }
 }
 

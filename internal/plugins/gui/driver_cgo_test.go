@@ -65,6 +65,10 @@ func TestNativeWindow(t *testing.T) {
 // A tool that asks for a new build closes the window, and the process that
 // takes its place opens it again with the profile and the session it showed.
 func TestNativeWindowRestart(t *testing.T) {
+	oldEmit := emitWindow
+	t.Cleanup(func() { emitWindow = oldEmit })
+	emitted := make(chan string, 1)
+	emitWindow = func(_ context.Context, name string, _ ...interface{}) { emitted <- name }
 	oldRun, oldQuit := runWindow, quitWindow
 	t.Cleanup(func() { runWindow, quitWindow = oldRun, oldQuit })
 	live := make(chan plugin.SessionEvent, 1)
@@ -85,6 +89,19 @@ func TestNativeWindowRestart(t *testing.T) {
 		}
 		live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/new/ouro"}
 		w.PollSession(snapshot.Token)
+		select {
+		case name := <-emitted:
+			if name != "ouro:restarting" {
+				t.Fatalf("event = %q", name)
+			}
+		default:
+			t.Fatal("restart did not announce the effect")
+		}
+		select {
+		case <-quit:
+			t.Fatal("window closed before the effect could paint")
+		default:
+		}
 		select {
 		case <-quit:
 		case <-time.After(5 * time.Second):

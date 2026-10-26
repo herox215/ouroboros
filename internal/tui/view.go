@@ -284,7 +284,7 @@ type blockStart struct{ line, entry int }
 func (m *Model) sectionShown() int {
 	c := m.chat
 	if len(m.blockStarts) == 0 {
-		return c.exchangeOf(len(c.entries) - 1)
+		return -1
 	}
 	if m.followsEnd() {
 		return c.exchangeOf(m.blockStarts[len(m.blockStarts)-1].entry)
@@ -525,6 +525,11 @@ func (m *Model) entryHead(e entry) string {
 
 func (m *Model) View() tea.View {
 	if m.profiles != nil {
+		for _, model := range m.profiles.models {
+			if model.restartFrame > 0 {
+				return model.View()
+			}
+		}
 		return m.profiles.current().View()
 	}
 	v := tea.NewView("")
@@ -538,6 +543,10 @@ func (m *Model) View() tea.View {
 		v.BackgroundColor, v.ForegroundColor = ui.background, ui.text
 	}
 	if m.width == 0 {
+		return v
+	}
+	if m.restartFrame > 0 {
+		v.SetContent(m.restartView())
 		return v
 	}
 	if m.onboard != nil {
