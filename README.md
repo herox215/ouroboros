@@ -37,6 +37,11 @@ Hand independent tasks to helper agents and bring their results back into one an
 
 Let Ouro modify, test and rebuild its own source, with your permission.
 
+While a new build is waiting to take over, replies to pending questions are still
+accepted, including through gateways. After one minute, unfinished answers are
+cancelled so the restart can proceed. Unanswered agent questions are saved for
+the conversation to ask again after the restart; a restart never grants approval.
+
 ### Your rules for access
 
 Configure tools separately for yourself and other nodes, with protected paths and per-peer

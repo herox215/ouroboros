@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"sync"
@@ -215,6 +216,51 @@ func TestControllerHandsMessagesOverWhileTheSettingsHold(t *testing.T) {
 	mu.Unlock()
 	c.stop()
 	waitStatus(t, s, "2", "Stopped")
+}
+
+func TestControllerReportsOnlySafeSessionErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"busy", plugin.ErrBusy, "wait for the answer first"},
+		{"wrapped busy", fmt.Errorf("secret access token: %w", plugin.ErrBusy), "wait for the answer first"},
+		{"restarting", plugin.ErrRestarting, "ouro is starting anew with a new build, ask again in a moment"},
+		{"wrapped restarting", fmt.Errorf("secret access token: %w", plugin.ErrRestarting), "ouro is starting anew with a new build, ask again in a moment"},
+		{"stopped", plugin.ErrSessionStopped, "the node is stopping"},
+		{"wrapped stopped", fmt.Errorf("secret access token: %w", plugin.ErrSessionStopped), "the node is stopping"},
+		{"unknown", errors.New("secret access token"), "Ouro could not accept this message. Check the local session and gateway settings."},
+		{"wrapped unknown", fmt.Errorf("secret access token: %w", errors.New("private session details")), "Ouro could not accept this message. Check the local session and gateway settings."},
+		{"denied", plugin.ErrGatewayDenied, ""},
+		{"wrapped denied", fmt.Errorf("secret access token: %w", plugin.ErrGatewayDenied), ""},
+		{"success", nil, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := store{t.TempDir()}
+			if err := s.save(configuration{Enabled: true, Token: "token", Revision: "1"}); err != nil {
+				t.Fatal(err)
+			}
+			conn := newLiveConnection()
+			c := &controller{store: s,
+				connect: func(context.Context, configuration) (connection, error) { return conn, nil },
+				receive: func(context.Context, connection, incoming) error { return tt.err }}
+			c.start()
+			defer c.stop()
+			deliver := conn.running(t)
+			msg := incoming{RoomID: "!room:test", Sender: "@owner:test", Text: "hello"}
+			if err := deliver(context.Background(), msg); err != tt.err {
+				t.Fatalf("receive: %v, want original error %v", err, tt.err)
+			}
+			var want []string
+			if tt.want != "" {
+				want = []string{"!room:test @owner:test " + tt.want}
+			}
+			if sent := conn.messages(); !slices.Equal(sent, want) {
+				t.Fatalf("sent %q, want %q", sent, want)
+			}
+		})
+	}
 }
 
 func TestControllerReportsAndRetriesAFailedConnection(t *testing.T) {
