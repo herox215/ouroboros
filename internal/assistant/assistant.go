@@ -767,8 +767,12 @@ func (a *Assistant) reviewed(chat string, signals []Signal, trail []string, tool
 		}
 		log("review: %s", strconv.Quote(text))
 		if store := a.builder.suggestions; store != nil {
-			if _, err := store.Add(text, measured, chat); err != nil {
+			_, dropped, err := store.Add(text, measured, chat)
+			if err != nil {
 				log("the suggestion is not kept: %v", err)
+			}
+			if dropped.ID != "" {
+				log("the oldest suggestion is dropped: %q", dropped.Text)
 			}
 		}
 		to.suggest(text)
