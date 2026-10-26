@@ -54,7 +54,9 @@ func TestProfilesInOneUI(t *testing.T) {
 		return func() bool { return strings.Contains(ansi.Strip(m.View().Content), text) }
 	}
 	tuiplugin.Use(t, func(m *tui.Model) error {
-		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+		// Wide enough that a long working directory, as in the temporary tree of
+		// the pre-commit hook, leaves the model in the head.
+		m.Update(tea.WindowSizeMsg{Width: 320, Height: 30})
 		m.Update(key(' ')) // skips the splash
 		drive(t, m, m.Init(), shows(m, "TERRA 1/2"))
 		_, cmd := m.Update(shiftTab)

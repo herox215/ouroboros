@@ -116,6 +116,11 @@ func TestCommandLog(t *testing.T) {
 			got, err := os.ReadFile(p.capture.file.Name())
 			want := append([]byte("start\n"), make([]byte, 100000)...)
 			want = append(want, []byte("end\n")...)
+			if stopped && bytes.HasPrefix(got, want) && bytes.Contains(got[len(want):], []byte("Killed")) {
+				// bash may report the kill of its child before the signal of
+				// the group reaches bash itself.
+				got = got[:len(want)]
+			}
 			if err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("log: %d bytes, %v", len(got), err)
 			}

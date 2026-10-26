@@ -616,7 +616,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 	case se.cancel != nil:
 		return ErrBusy
 	}
-	s.begin(se, p, append(ready(se), message)...)
+	s.begin(se, p, append(direct(se), message)...)
 	return nil
 }
 
@@ -739,6 +739,8 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 	source := se.queue[last].source
 	se.queue = slices.Delete(se.queue, last, last+1)
 	s.emit(se, Event{Kind: Unqueued, Text: text, Source: source})
+	s.withdraw(se)
+	s.busy()
 	return text, nil
 }
 
@@ -790,7 +792,7 @@ func (s *Service) saying(se *session, id, text string) {
 	defer s.mu.Unlock()
 	e := Event{Kind: Say, PresentationID: id, Text: text}
 	s.emit(se, e)
-	if se.routed && se.id != ThreadID {
+	if forThread(se) && se.id != ThreadID {
 		s.emit(s.get(ThreadID), e)
 	}
 }
@@ -800,7 +802,10 @@ func (s *Service) saying(se *session, id, text string) {
 func (s *Service) steered(se *session) []openai.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.taken(se, ready(se))
+	if se.routed {
+		return s.taken(se, ready(se))
+	}
+	return s.taken(se, direct(se))
 }
 
 // taken tells that the answer in se takes messages, each a Message of the
@@ -1076,7 +1081,13 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	// What was queued too late for this answer is the next message, unless
 	// the node takes none: then it is lost with the process.
 	if !s.closed && p.successor == "" {
-		if messages := ready(se); len(messages) > 0 {
+		messages := ready(se)
+		switch {
+		case end.Kind == Canceled && !slices.ContainsFunc(messages, func(m queued) bool { return m.task == nil }):
+			// The owner stopped the answer: what its tasks reported waits
+			// for their next message.
+			se.queue = append(messages, se.queue...)
+		case len(messages) > 0:
 			s.begin(se, p, messages...)
 		}
 	}
@@ -1357,17 +1368,10 @@ func (s *Service) Cancel(_ context.Context, id string) error {
 	if se.cancel != nil {
 		se.cancel()
 	}
-	se.routed = false
-	for i := range se.queue {
-		if se.queue[i].task != nil {
-			se.queue[i].routed = false
-		}
-	}
 	for _, t := range se.tasks {
-		t.routed = false
-		t.stopped = false // the owner stopped it: nobody is told
-		t.cancel()
+		stopTask(t)
 	}
+	unroute(se, true)
 	if id == ThreadID {
 		s.stopThread()
 	}
