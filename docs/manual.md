@@ -1818,7 +1818,7 @@ internal/cli         the list of plugins that make up ouro, and the frame they d
 internal/plugins     the standard plugins, one package each: commands, setup dialog, wiring
   assistant          builds the agents of the node
   base               the console and the dispatcher of the commands of all plugins
-  chatgpt, openai,    the providers of LLMs: ChatGPT, OpenAI-compatible APIs, DeepSeek,
+  chatgpt, openai,   the providers of LLMs: ChatGPT, OpenAI-compatible APIs, DeepSeek,
     deepseek,        OpenCode Go and Claude Code
     opencode,
     claudecode
