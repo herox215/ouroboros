@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16" viewBox="0 0 32 16">
+  <rect width="32" height="16" fill="#ff0000"/>
+  <script>alert('no')</script>
+  <image href="https://example.org/x.png" width="32" height="16"/>
+  <a href="https://example.org/"><rect x="0" y="0" width="8" height="8" fill="#00ff00"/></a>
+</svg>
