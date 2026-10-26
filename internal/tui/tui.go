@@ -318,8 +318,8 @@ type conversation struct {
 	images []string
 	// files are other pasted attachments, indexed by [File_1], [File_2], ….
 	files []string
-	// besideWatched is whether it was watched for the column on the right,
-	// as a session the part of the thread in view concerns.
+	// besideWatched is whether it was watched for the columns beside the
+	// conversation, as a session that runs.
 	besideWatched bool
 	// handed are the sessions each part of the thread concerns, by the
 	// entry of the message of the owner that opened it, -1 for what came
@@ -557,23 +557,22 @@ func (m *Model) refresh() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
 	if m.profiles == nil {
-		if watch := m.watchBeside(); watch != nil {
+		if watch := m.watchRunning(); watch != nil {
 			cmd = tea.Batch(cmd, watch)
 		}
 	}
 	return model, cmd
 }
 
-// watchBeside watches the sessions beside the part of the thread in view
-// once, so that the column on the right can say where they stand: the UI
+// watchRunning watches the sessions that run while the thread is shown, so
+// that both columns beside the conversation can say where they stand: the UI
 // knows of a session that ended only what the list of the node says.
-func (m *Model) watchBeside() tea.Cmd {
+func (m *Model) watchRunning() tea.Cmd {
 	if m.chat.contextID != plugin.ThreadID || !m.status.Running {
 		return nil
 	}
-	list, _, _ := m.sidebarSessions()
 	var cmds []tea.Cmd
-	for _, c := range list {
+	for _, c := range m.runningSessions() {
 		if !c.watching && !c.besideWatched {
 			c.besideWatched = true
 			cmds = append(cmds, m.watch(c))

@@ -653,7 +653,7 @@ func TestChatIsFocusedOnStart(t *testing.T) {
 func TestViewIsTheChatOnly(t *testing.T) {
 	m, _ := newModel(t)
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"OUROBOROS", "SESSIONS", nameRow(m.agentName())} {
+	for _, want := range []string{"OUROBOROS", "RUNNING", nameRow(m.agentName())} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q", want)
 		}

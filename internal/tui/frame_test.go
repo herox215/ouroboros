@@ -55,40 +55,46 @@ func threadWithSessions(t *testing.T, w, h int) (m *Model, done, fix *conversati
 // strip is what the screen shows of s, without its colors.
 func strip(s string) string { return ansi.Strip(s) }
 
-// Beside the thread, the sidebar lists the sessions of the part of it in
-// view, as the GUI does, and the column on the right says where they stand:
-// at the end the newest part, scrolled up the part in the middle.
-func TestBesideThePartOfTheThreadInView(t *testing.T) {
+// The columns beside the thread show the sessions that run now, wherever it
+// is scrolled: the sidebar lists them, the column on the right says where
+// they stand, and one that ends leaves both.
+func TestColumnsShowTheSessionsThatRun(t *testing.T) {
 	m, done, fix := threadWithSessions(t, 170, 46)
-	if got := m.chat.handed[m.chat.exchangeOf(len(m.chat.entries)-1)]; len(got) != 1 || got[0] != "c3d4" {
-		t.Fatalf("the newest part is handed to %q", got)
-	}
-	list, at, thread := m.sidebarSessions()
-	if len(list) != 1 || list[0] != fix || !thread || at.IsZero() {
-		t.Fatalf("beside the newest part: %d sessions, at %v", len(list), at)
+	if list := m.runningSessions(); len(list) != 1 || list[0] != fix {
+		t.Fatalf("running: %v", list)
 	}
 	view := strip(m.View().Content)
-	for _, want := range []string{"SESSIONS", "T – 09:30", "ACTIVE", "FIX", "State: working · own", "CONTEXT", "[STATE]",
-		"FIX · WORKING", "● calls go test ./...", "next  the result of bash", "4 tools · 3 kinds", "THREAD · READY · 1 ACTIVE SESSION"} {
+	for _, want := range []string{"RUNNING", "FIX", "State: working · own", "FIX · WORKING",
+		"● calls go test ./...", "next  the result of bash", "4 tools · 3 kinds", "THREAD · READY · 1 ACTIVE SESSION"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q beside the thread:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "TESTS") {
-		t.Fatalf("a session of the older part is beside the newest:\n%s", view)
+	if strings.Contains(view, "TESTS") || strings.Contains(view, "TODAY") {
+		t.Fatalf("a session that does not run is beside the thread:\n%s", view)
 	}
-
+	// Scrolling the thread changes nothing beside it.
 	m.history.GotoTop()
-	if list, _, _ := m.sidebarSessions(); len(list) != 1 || list[0] != done {
-		t.Fatalf("scrolled up, %d sessions are beside it", len(list))
+	if list := m.runningSessions(); len(list) != 1 || list[0] != fix {
+		t.Fatalf("scrolled up, %v runs", list)
+	}
+	if view := strip(m.View().Content); !strings.Contains(view, "FIX · WORKING") || strings.Contains(view, "TESTS") {
+		t.Fatalf("scrolled up:\n%s", view)
+	}
+	// A session that ends leaves both columns.
+	m.apply(fix, Event{Kind: plugin.SessionAnswer, Text: "fixed", At: m.now()}, false)
+	if list := m.runningSessions(); len(list) != 0 || done.running {
+		t.Fatalf("still running: %v", list)
 	}
 	view = strip(m.View().Content)
-	for _, want := range []string{"T – 09:00", "TODAY", "TESTS", "TESTS", "● done", "last  bash · go test", "1 tool · 1 kind"} {
+	for _, want := range []string{"RUNNING", "Nothing runs."} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("no %q beside the older part:\n%s", want, view)
+			t.Fatalf("no %q when nothing runs:\n%s", want, view)
 		}
 	}
-	// Each column is as wide as it is, and the screen as the window.
+	if strings.Contains(view, "FIX · WORKING") || strings.Contains(view, "● calls") {
+		t.Fatalf("a session that ended is still shown:\n%s", view)
+	}
 	for _, l := range strings.Split(m.View().Content, "\n") {
 		if w := lipgloss.Width(l); w != m.width {
 			t.Fatalf("a line of %d cells in %d: %q", w, m.width, strip(l))
@@ -96,59 +102,27 @@ func TestBesideThePartOfTheThreadInView(t *testing.T) {
 	}
 }
 
-func TestExpiredThreadHasNoSessionsBesideIt(t *testing.T) {
-	m, _, fix := threadWithSessions(t, 170, 46)
-	entries := len(m.chat.entries)
-	now := m.now().Add(24 * time.Hour)
-	m.now = func() time.Time { return now }
-	m.Update(tickMsg{})
-	if len(m.chat.entries) != entries || len(m.blockStarts) != 0 {
-		t.Fatal("expired thread was not hidden or archived entries were changed")
-	}
-	if list, at, thread := m.sidebarSessions(); len(list) != 0 || !at.IsZero() || !thread {
-		t.Fatalf("empty thread has %d sessions beside it, at %v", len(list), at)
-	}
-	if title, note, details := m.railContent(30); title != "[STATE]" || note != "None yet" || len(details) != 0 {
-		t.Fatalf("empty thread context: %q, %q, %v", title, note, details)
-	}
-	view := strip(m.View().Content)
-	for _, old := range []string{"FIX", "TESTS", "T –", "go test"} {
-		if strings.Contains(view, old) {
-			t.Fatalf("empty thread still shows %q:\n%s", old, view)
-		}
-	}
-	m.apply(m.chat, Event{Kind: plugin.SessionMessage, Text: "continue fixing", At: now}, false)
-	m.apply(m.chat, Event{Kind: plugin.SessionHanded, Text: "c3d4"}, false)
-	m.renderHistory(true)
-	if list, _, _ := m.sidebarSessions(); len(list) != 1 || list[0] != fix {
-		t.Fatal("new visible exchange does not show its own session")
-	}
-}
-
-// A part of the thread that is handed to no session has none beside it, and
-// another conversation lists all of the sessions of the owner, the one shown
-// selected, with its own stand on the right.
+// A conversation of its own has the sessions that run beside it too, and a
+// conversation that does not run is not listed.
 func TestBesideAConversationOfItsOwn(t *testing.T) {
 	m, _, fix := threadWithSessions(t, 170, 46)
-	m.apply(m.chat, Event{Kind: plugin.SessionMessage, Text: "and now?", At: m.now()}, false)
-	m.renderHistory(true)
-	if view := strip(m.View().Content); !strings.Contains(view, "None yet") || strings.Contains(view, "FIX") {
-		t.Fatalf("a part handed to none:\n%s", view)
-	}
 	m.switchTo(fix)
 	view := strip(m.View().Content)
-	for _, want := range []string{"To the thread", "FIX", "TESTS", "SESSION · ", "FIX · WORKING", "T – "} {
+	for _, want := range []string{"To the thread", "RUNNING", "FIX · WORKING", "State: working · own"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q beside a conversation of its own:\n%s", want, view)
 		}
 	}
+	if strings.Contains(view, "CONTEXT") || strings.Contains(view, "T – ") {
+		t.Fatalf("the context of a part of the thread is beside a conversation of its own:\n%s", view)
+	}
 	empty := m.newChat()
 	m.switchTo(empty)
-	if title, note, details := m.railContent(30); title != "[STATE]" || note != "None yet" || details != nil {
-		t.Fatalf("a new conversation stands at %q, %q, %q", title, note, details)
+	if view := strip(m.View().Content); !strings.Contains(view, "FIX · WORKING") {
+		t.Fatalf("the sessions that run are not beside a new conversation:\n%s", view)
 	}
-	if rows := m.sidebarRows(30); !strings.Contains(strip(rows[len(rows)-5].text), "NEW CONVERSATION") {
-		t.Fatalf("the new conversation is not listed: %+v", rows)
+	if rows := m.sidebarRows(30); strings.Contains(strip(rows[len(rows)-1].text), "NEW CONVERSATION") {
+		t.Fatalf("a conversation that does not run is listed: %+v", rows)
 	}
 }
 
@@ -291,37 +265,19 @@ func TestClicksBesideTheHistory(t *testing.T) {
 	}
 }
 
-// The sessions of the sidebar are grouped by when they last changed.
-func TestDateGroups(t *testing.T) {
-	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.Local)
-	for at, want := range map[time.Time]string{
-		{}:                       "No date",
-		now.Add(-time.Hour):      "Today",
-		now.Add(-20 * time.Hour): "Yesterday",
-		now.AddDate(0, 0, -3):    "Older",
-	} {
-		if got := dateGroup(at, now); got != want {
-			t.Errorf("%v: %q, want %q", at, got, want)
-		}
-	}
-	if got := clock(now.AddDate(0, 0, -3), now); got != "20 Oct 2026, 12:00" {
-		t.Errorf("another day: %q", got)
-	}
-}
-
-// A part of the thread handed to more sessions than the column on the right
-// has room for says the rest is cut, and the sidebar scrolls to the one
-// shown.
-func TestManySessionsBesideThePart(t *testing.T) {
+// More sessions than the column on the right has room for say the rest is
+// cut; the sidebar lists them and scrolls to the one shown.
+func TestManyRunningSessionsBeside(t *testing.T) {
 	m, _, _ := threadWithSessions(t, 170, 24)
 	for _, id := range []string{"c3d4-a", "c3d4-b", "c3d4-c", "c3d4-d"} {
 		s := m.conversation(id)
 		m.apply(s, Event{Kind: plugin.SessionMessage, Text: id, At: m.now()}, false)
-		m.apply(s, Event{Kind: plugin.SessionAnswer, Text: "ok", At: m.now()}, false)
 	}
-	_, _, details := m.railContent(30)
+	if n := len(m.runningSessions()); n != 5 {
+		t.Fatalf("%d sessions run", n)
+	}
 	rail := strip(m.railView(m.railWidth(), m.height))
-	if len(details) < m.height || !strings.Contains(rail, "…") {
+	if !strings.Contains(rail, "…") {
 		t.Fatalf("the column on the right:\n%s", rail)
 	}
 	m.switchTo(m.chats["c3d4-d"])
@@ -330,7 +286,7 @@ func TestManySessionsBesideThePart(t *testing.T) {
 	for _, r := range rows {
 		shown = shown || r.c == m.chat
 	}
-	if !shown || strip(rows[0].text) != "SESSIONS" {
+	if !shown || strip(rows[0].text) != "RUNNING" {
 		t.Fatalf("the sidebar does not scroll to the one shown: %+v", rows)
 	}
 }

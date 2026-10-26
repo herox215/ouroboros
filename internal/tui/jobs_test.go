@@ -124,7 +124,7 @@ func TestJobsList(t *testing.T) {
 		list = append(list, strings.TrimSpace(l))
 	}
 	text := strings.Join(list, "\n")
-	if !strings.Contains(text, "[JOBS]") || !strings.Contains(text, "JOBS\njob 1 · npm run\ndev\njob 2 · go test") || !strings.Contains(text, "-count=1") {
+	if !strings.Contains(text, "JOBS") || !strings.Contains(text, "job 1 · npm run\ndev") || !strings.Contains(text, "job 2 · go test") || !strings.Contains(text, "-count=1") {
 		t.Fatalf("the list:\n%s", text)
 	}
 	if got := ansi.Strip(m.footerHint()); !strings.Contains(got, jobsKey+" hide") {
