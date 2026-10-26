@@ -84,7 +84,7 @@ func TestAbilityAllowlistSettingsAndPermissions(t *testing.T) {
 			if denied {
 				cfg.Tools = &config.Tools{Ask: &[]config.Rule{{Tool: "ability_fixture", Match: ".*"}}}
 			}
-			guarded := (Builder{}).permitted(cfg, picked)
+			guarded := (Builder{}).permitted(cfg, picked, false)
 			a := agent.New(llm, "model", "system", guarded...)
 			if _, err := a.Respond(t.Context(), "one", "test"); err != nil {
 				t.Fatal(err)

@@ -80,7 +80,7 @@ func TestPermissionTopicChangeReturnsToAgent(t *testing.T) {
 	llm := &askingLLM{phrased: `{"question":"Allow?","once":"Yes","always":"Always","not":"No"}`, decided: "MESSAGE: Ignore this follow-up"}
 	runs := 0
 	b := Builder{LLM: func(string) (agent.LLM, error) { return llm, nil }}
-	tool := b.permitted(config.Config{}, []agent.Tool{{Name: ToolRebuild, Run: func(context.Context, json.RawMessage) (string, error) { runs++; return "done", nil }}})[0]
+	tool := b.permitted(config.Config{}, []agent.Tool{{Name: ToolRebuild, Run: func(context.Context, json.RawMessage) (string, error) { runs++; return "done", nil }}}, false)[0]
 	var asked []Question
 	_, err := tool.Run(answering("Tell me about cats", &asked), json.RawMessage(`{}`))
 	if err == nil || runs != 0 || len(asked) != 1 || !strings.Contains(err.Error(), "Tell me about cats") {

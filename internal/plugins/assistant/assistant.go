@@ -58,7 +58,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Workspace: dir.WorkingDir(),
 			Source:    update.Source,
 		}.WithConfig(dir.Config, dir.Proposals()).WithSuggestions(dir.Suggestions()).WithMemories(memories.Store).WithAllowing(dir.Allow)
-		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug)
+		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug).WithYolo(dir.Yolo)
 		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolDelegate, Show: assistant.Delegating, Detail: assistant.HowItEnded})
 		return services{builder, bot}, nil
 	})

@@ -211,11 +211,28 @@ func (d Dir) Debug() bool {
 
 // SetDebug turns the debug mode of the node on or off. It holds from the next
 // call of the LLM on, without a restart.
-func (d Dir) SetDebug(on bool) error {
+func (d Dir) SetDebug(on bool) error { return d.setFlag("debug", on) }
+
+// Yolo reports whether the node is in yolo mode: then its agent runs the
+// calls that the rules of tools.ask would put to the owner without asking,
+// see SetYolo. The mode is a file, so that the node and the front ends, which
+// are other processes, see it alike.
+func (d Dir) Yolo() bool {
+	_, err := os.Stat(d.path("yolo"))
+	return err == nil
+}
+
+// SetYolo turns the yolo mode of the node on or off. It holds from the next
+// message on, without a restart.
+func (d Dir) SetYolo(on bool) error { return d.setFlag("yolo", on) }
+
+// setFlag turns on the mode that the file name of the directory stands for,
+// or off again: the file is there while the mode is.
+func (d Dir) setFlag(name string, on bool) error {
 	if on {
-		return safefile.Write(d.path("debug"), nil, 0o600)
+		return safefile.Write(d.path(name), nil, 0o600)
 	}
-	if err := os.Remove(d.path("debug")); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(d.path(name)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil

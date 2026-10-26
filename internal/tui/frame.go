@@ -188,6 +188,9 @@ func (m *Model) headerLines(w int) []string {
 	if m.status.Debug {
 		marks = append(marks, boldStyle.Foreground(ui.background).Background(warn).Render(" DEBUG MODE "))
 	}
+	if m.status.Yolo {
+		marks = append(marks, boldStyle.Foreground(ui.background).Background(accent).Render(" YOLO MODE "))
+	}
 	head := spread(boldStyle.Foreground(muted).Render(eyebrow), strings.Join(marks, "  "), w)
 	back := ""
 	if c.contextID != plugin.ThreadID {

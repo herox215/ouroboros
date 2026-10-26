@@ -274,6 +274,21 @@ func (o *Owner) SetDebug(on bool) error {
 	return nil
 }
 
+// SetYolo turns the yolo mode of the node on or off: in it, the agent of the
+// owner runs a call that a rule of tools.ask would put to it without asking,
+// and asks its questions as usual. It holds from the next message on.
+func (o *Owner) SetYolo(on bool) error {
+	if err := o.home.SetYolo(on); err != nil {
+		return err
+	}
+	if on {
+		o.home.Log("yolo mode on")
+	} else {
+		o.home.Log("yolo mode off")
+	}
+	return nil
+}
+
 // Running reports whether the node is running.
 func (o *Owner) Running() bool {
 	_, running := o.local.Running()

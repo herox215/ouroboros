@@ -86,7 +86,7 @@ func TestPermissionWaitDoesNotLimitTool(t *testing.T) {
 			return "done", ctx.Err()
 		}}
 		cfg := config.Config{Tools: &config.Tools{Ask: &[]config.Rule{{Match: ".*"}}}}
-		guarded := (Builder{}).permitted(cfg, []agent.Tool{tool})[0]
+		guarded := (Builder{}).permitted(cfg, []agent.Tool{tool}, false)[0]
 		ctx := agent.WithOwner(context.Background(), func(ctx context.Context, _ json.RawMessage) (string, error) {
 			time.Sleep(time.Second)
 			return AllowOnce, ctx.Err()
@@ -100,7 +100,7 @@ func TestPermissionWaitDoesNotLimitTool(t *testing.T) {
 func TestUserQuestionIsNotAPermissionWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := config.Config{Tools: &config.Tools{Ask: &[]config.Rule{{Match: ".*"}}}}
-		tool := (Builder{}).permitted(cfg, []agent.Tool{userQuestion()})[0]
+		tool := (Builder{}).permitted(cfg, []agent.Tool{userQuestion()}, false)[0]
 		ctx := agent.WithOwner(context.Background(), func(ctx context.Context, _ json.RawMessage) (string, error) {
 			time.Sleep(time.Minute)
 			return "answer", ctx.Err()
