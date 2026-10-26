@@ -354,6 +354,20 @@ func (f *fakeBackend) SetPeerModel(access, model string) error {
 	f.status.PeerAccess, f.status.PeerModel = access, model
 	return nil
 }
+func (f *fakeBackend) SetSessionModel(access, model string) error {
+	if err := f.fail["setsessionmodel"]; err != nil {
+		return err
+	}
+	f.status.SessionAccess, f.status.SessionModel = access, model
+	return nil
+}
+func (f *fakeBackend) SetThreadModel(access, model string) error {
+	if err := f.fail["setthreadmodel"]; err != nil {
+		return err
+	}
+	f.status.ThreadAccess, f.status.ThreadModel = access, model
+	return nil
+}
 func (f *fakeBackend) SetModel(access, model string) (bool, error) {
 	f.set = append(f.set, access+" "+model)
 	return f.switched, f.fail["setmodel"]

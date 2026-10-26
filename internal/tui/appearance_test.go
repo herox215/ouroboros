@@ -72,7 +72,12 @@ func TestAppearance(t *testing.T) {
 		t.Fatalf("the settings do not show it:\n%s", ansi.Strip(m.View().Content))
 	}
 	rows := m.config.shown(m)
-	appearance := rows[len(rows)-1]
+	var appearance row
+	for _, r := range rows {
+		if r.label == "Appearance" {
+			appearance = r
+		}
+	}
 	if appearance.label != "Appearance" || appearance.value != "system · light" || len(appearance.actions) != 4 {
 		t.Fatalf("the row %+v", appearance)
 	}

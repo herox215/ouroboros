@@ -214,7 +214,7 @@ func (a *Assistant) keywords(chat, text, project string, shown []string) {
 // searchWords asks the LLM of the agent for the words to find the memories
 // of a topic by, which text starts.
 func (a *Assistant) searchWords(ctx context.Context, text string) ([]string, error) {
-	_, cfg, err := a.current()
+	_, cfg, err := a.current(false, "")
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +290,7 @@ func (a *Assistant) finish(now time.Time) {
 		return
 	}
 	slices.SortFunc(due, func(x, y left) int { return cmp.Compare(x.chat, y.chat) })
-	_, cfg, err := a.current()
+	_, cfg, err := a.current(false, "")
 	if err != nil {
 		a.logf("the topics left cannot be reviewed: %v", err)
 		return
@@ -370,7 +370,7 @@ func (a *Assistant) consolidate(ctx context.Context, store *memory.Store, now ti
 
 // merges asks the LLM of the agent which of the memories active to merge.
 func (a *Assistant) merges(ctx context.Context, active []memory.Entry) ([]merge, error) {
-	_, cfg, err := a.current()
+	_, cfg, err := a.current(false, "")
 	if err != nil {
 		return nil, err
 	}

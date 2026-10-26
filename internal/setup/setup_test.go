@@ -744,6 +744,45 @@ func TestRemoveTakesBackTheChoiceForPeers(t *testing.T) {
 	}
 }
 
+// The choices of the scopes that were answered through an access that is
+// removed are taken back, in the configuration the setup goes on from too:
+// the wizard saves that one after the removal.
+func TestRemoveTakesBackTheChoicesForScopes(t *testing.T) {
+	ctx := context.Background()
+	s := session(t)
+	one := signedIn(t, s, "one", "good-1", "one-large")
+	two := signedIn(t, s, "two", "good-2", "two-large")
+	for _, pick := range []func(string, string) error{s.PickForPeers, s.PickForSessions, s.PickForThread} {
+		if err := pick(one.ID, "one-small"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The wizard goes on from the configuration it read, with the choices.
+	cfg, err := s.home.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg = cfg
+	if _, err := s.Remove(ctx, one.ID); err != nil {
+		t.Fatal(err)
+	}
+	if s.cfg.PeerAccess != "" || s.cfg.SessionAccess != "" || s.cfg.ThreadAccess != "" {
+		t.Fatalf("the choices stay in the setup: %+v", s.cfg)
+	}
+	// What the wizard saves after the removal does not write them back.
+	if err := s.Save("two-large", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = s.home.Config()
+	if cfg.PeerAccess != "" || cfg.PeerModel != "" || cfg.SessionAccess != "" || cfg.SessionModel != "" ||
+		cfg.ThreadAccess != "" || cfg.ThreadModel != "" {
+		t.Fatalf("the removed access is saved again: %+v", cfg)
+	}
+	if cfg.Access != two.ID || cfg.Model != "two-large" || !cfg.Complete() {
+		t.Fatalf("the node answers with %+v", cfg)
+	}
+}
+
 // The owner lists the fallbacks of the node in the order they are added, and
 // takes one out again. The model the node answers with is none of its own.
 func TestToggleFallback(t *testing.T) {

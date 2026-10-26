@@ -42,7 +42,7 @@ const titlePrompt = `Name the topic of the conversation the user gives you in a 
 // The call is part of no conversation, and not in the log; the access of the
 // agent is asked first, then its fallbacks, as for an answer.
 func (a *Assistant) Title(ctx context.Context, conversation []openai.Message) (string, error) {
-	_, cfg, err := a.current()
+	_, cfg, err := a.current(false, "")
 	if err != nil {
 		return "", err
 	}
