@@ -440,6 +440,9 @@ func (b Builder) helper(cfg config.Config, tools []agent.Tool) (*agent.Agent, er
 	if has(append(slices.Clone(fileTools), ToolBash)...) {
 		prompt += workHint
 	}
+	if has(ToolBash) {
+		prompt += bashHint
+	}
 	if has(fileTools...) && has(ToolBash) {
 		prompt += exploreHint
 	}
