@@ -191,6 +191,9 @@ func (d Dir) Gateways() string { return d.path("gateways") }
 // what a node that ended without stopping them left of them is stopped.
 func (d Dir) Services() string { return d.path("services.json") }
 
+// Schedule is the profile-local file of scheduled owner jobs.
+func (d Dir) Schedule() string { return d.path("schedule.json") }
+
 // Skills is the directory of the skills the owner wrote for the agents of
 // the node, one directory per skill. The profiles share it.
 func (d Dir) Skills() string { return d.Root().path("skills") }

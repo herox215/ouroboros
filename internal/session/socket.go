@@ -98,6 +98,8 @@ type (
 // Handler serves s on the socket of the node.
 func Handler(s *Service) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /notify", s.serveNotification)
+	mux.HandleFunc("POST /run-scheduled", s.serveScheduled)
 	mux.HandleFunc("GET /running-sessions", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.RunningSessions(r.Context())
 		reply(w, out, err)

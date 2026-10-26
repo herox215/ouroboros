@@ -212,6 +212,14 @@ type API interface {
 	// New returns the ID of a new session. It holds nothing until the
 	// first message.
 	New(ctx context.Context) (string, error)
+	// Notify enqueues generated background result data in the owner thread,
+	// without starting a work session. The thread contextualizes it as a
+	// notification, not as an owner request. Success means accepted, not delivered.
+	Notify(ctx context.Context, name, text string) error
+	// RunScheduled starts generated, routed owner work; ctx controls its lifetime.
+	// The channel receives one terminal result and closes. With ask false,
+	// owner questions and approvals are unavailable.
+	RunScheduled(ctx context.Context, name, text, directory string, ask bool) (id string, result <-chan ScheduledResult, err error)
 	// Ask starts the answer to text in the session id and returns at once:
 	// what happens on the way is told to those who Watch it. It fails with
 	// ErrBusy while an answer is on its way in that session.
@@ -390,6 +398,10 @@ type process struct {
 
 // session is one conversation of the owner with the agent.
 type session struct {
+	// scheduled belongs only to the initial scheduled answer, under s.mu.
+	scheduled *scheduledRun
+	// Scheduled unattended sessions also forbid questions in task continuations.
+	denyOwner bool
 	// concernPictures keeps original request images for routing evidence while
 	// live. Images, like other image input, are intentionally not archived.
 	concernPictures []openai.Image
@@ -624,6 +636,12 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 // ended, in se. s.mu and the mu of p, the process of s, are held.
 func (s *Service) begin(se *session, p *process, messages ...queued) {
 	ctx, cancel := context.WithCancel(s.ctx)
+	if run := se.scheduled; run != nil {
+		run.stop = context.AfterFunc(run.ctx, cancel)
+		if run.ctx.Err() != nil {
+			cancel()
+		}
+	}
 	se.cancel, se.since = cancel, s.now()
 	p.answering++
 	p.release = false // somebody wants the node
@@ -949,6 +967,8 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	ctx = presentation.New(ctx)
 	s.mu.Lock()
 	ctx = workdir.With(ctx, se.directory)
+	scheduled := se.scheduled
+	denyOwner := se.denyOwner
 	s.mu.Unlock()
 	if restartable {
 		ctx = WithRestart(ctx, func(exe string) {
@@ -995,6 +1015,11 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	ctx = agent.WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (agent.OwnerReply, error) {
 		return s.ask(ctx, se, question)
 	})
+	if denyOwner {
+		// Do not auto-answer approvals with unattended text: permission guards
+		// must see that nobody can be asked and refuse the operation.
+		ctx = agent.WithoutOwner(ctx)
+	}
 	ctx = agent.WithSaying(ctx, func(id, text string) { s.saying(se, id, text) })
 	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 	thought, rest := s.thoughts(se)
@@ -1019,6 +1044,13 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.along(se, Event{Kind: Say, PresentationID: id, Text: said})
 	})
+	if scheduled != nil {
+		if cause := scheduled.ctx.Err(); cause != nil {
+			err = cause
+		} else if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+	}
 	rest() // the end of the thinking belongs before the end of the answer
 	<-named
 	id := presentation.Current(ctx)
@@ -1050,6 +1082,12 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		s.emit(se, end)
 	}
 	s.relay(se, end)
+	if scheduled != nil {
+		scheduled.stop()
+		se.scheduled = nil
+		scheduled.result <- ScheduledResult{Text: reply, Err: err}
+		close(scheduled.result)
+	}
 	if suggested != "" {
 		s.emit(se, Event{Kind: Suggestion, Text: suggested})
 	}
