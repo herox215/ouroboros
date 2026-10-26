@@ -105,6 +105,9 @@ func (r *Restarting) Error() string { return "ouro is to be started anew from " 
 // on when the front end is closed. Await asks and waits for one answer.
 type Sessions = session.API
 
+// ScheduledResult is the terminal result of a scheduled owner session.
+type ScheduledResult = session.ScheduledResult
+
 // ThreadID is the ID of the session that is the thread: the one
 // conversation in which the owner says what is to be done, and its agent
 // hands it to the session it belongs to, or starts one for it. Sessions.List

@@ -596,7 +596,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
 `history_sessions`), for explicit [memories](#explicit-memories) (`memory_add`, `memory_update`,
-`memory_forget`, `memory_search`, `memory_read`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
+`memory_forget`, `memory_search`, `memory_read`), for owner-only [scheduled answers](#schedule)
+(`schedule_read`, `schedule_update`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
 `withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that builds and installs its own
 source ([`rebuild`](#updates)), one that asks you a question (`user_question`, see below) and one that hands tasks to
 helpers (`delegate`, see below). It calls them directly with structured arguments, see [Structured tool calls](#structured-tool-calls).
@@ -648,6 +649,53 @@ available across projects within the same profile. Other profiles remain separat
 Sessions, history and memories share `history/ouroboros.sqlite`. Forgetting a memory does not erase
 its earlier mentions from conversation history. Deleting a conversation does not silently delete
 independent memories derived from it. Legacy JSONL backups may still contain old conversation text.
+
+### Schedule
+
+The optional `schedule` plugin gives you two owner-only tools: `schedule_read` and
+`schedule_update`. Peers cannot use them, even through an explicit peer tool list or `*`.
+Jobs live in your profile's `schedule.json`, survive rebuilds and restarts, and run while
+that profile's node is serving. Each run is a new model answer and has the usual cost;
+it is not a free alarm or a shell cron job.
+
+Use `schedule_update` with `action: "create"`, a short `name`, `text` (at most 4 KiB),
+and exactly one of:
+
+- `at`: a future RFC3339 timestamp, or `YYYY-MM-DDTHH:MM` in the node's time zone.
+  Give an explicit UTC offset for an ambiguous daylight-saving time.
+- `cron`: five fields (minute, hour, day of month, month, weekday), with `*`, lists,
+  ranges and steps. For example, `0 9 * * 1-5` runs at 09:00 on weekdays.
+
+The job saves the current conversation's project directory and the machine's IANA
+time zone. Recurring jobs keep their local wall-clock time across daylight-saving
+changes. There may be at most 32 jobs; recurring runs must be at least 15 minutes apart.
+The response includes the ID and up to three upcoming runs, with weekday and zone.
+`schedule_read` lists jobs; with `id`, it reads one job and its last ten run records.
+`schedule_update` with `action: "update"`, `id` and changed fields edits a job; `at`
+and `cron` replace each other. Set `paused: true` to pause, or `false` to resume.
+`action: "remove"` takes only `id` and removes the job; it does not cancel an already
+running answer. The saved directory and zone cannot be supplied through these tools.
+
+Each run has its own session, titled with the job's name, in its saved project.
+Its input is generated scheduled work, not a fresh message from you. The session
+routes its result into your thread, including connected front ends such as Matrix.
+`ask: "thread"` is the default: questions and permission requests are relayed to the
+thread, and the run waits for your answer. With `ask: "never"`, questions receive an
+unattended answer and tools requiring permission are refused, not run silently.
+A run is limited to one hour. If a job is due again while its previous run is still
+active, that occurrence is recorded as `skipped` rather than overlapping.
+
+When the node starts after downtime, a job up to 24 hours late runs once with its
+planned time in the generated request; a recurring job then resumes its regular
+schedule rather than replaying every missed occurrence. Jobs more than 24 hours late
+are recorded as `missed`, logged and reported as generated notifications in your thread,
+without executing the stored job text. The thread may use a model answer to explain
+the notification; no job session is started. Notification acceptance is best-effort:
+failures are logged, and a restart after the durable claim can lose an undelivered
+notification. A claim is persisted before dispatch,
+so a restart does not repeat it; unfinished claims are marked `interrupted` on the
+next process start. Pausing preserves the planned time, so resuming can also produce
+a late or missed run.
 
 ### Files
 

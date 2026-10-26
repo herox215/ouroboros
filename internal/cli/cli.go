@@ -81,6 +81,7 @@ import (
 	openaiplugin "ouroboros/internal/plugins/openai"
 	opencodeplugin "ouroboros/internal/plugins/opencode"
 	peersplugin "ouroboros/internal/plugins/peers"
+	scheduleplugin "ouroboros/internal/plugins/schedule"
 	sessionplugin "ouroboros/internal/plugins/session"
 	shellplugin "ouroboros/internal/plugins/shell"
 	skillsplugin "ouroboros/internal/plugins/skills"
@@ -195,6 +196,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		computerplugin.Plugin(),
 		historyplugin.Plugin(dir),
 		memoryplugin.Plugin(dir),
+		scheduleplugin.Plugin(dir),
 		skillsplugin.Plugin(dir),
 		abilitiesplugin.Plugin(),
 		whatsappplugin.Plugin(dir),
