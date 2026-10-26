@@ -15,9 +15,9 @@ import (
 	"ouroboros/plugin"
 )
 
-// The chat is laid out as the window of the GUI is: the sessions on the
-// left, the conversation in the middle, below its head and above the
-// composer, and on the right where the sessions stand. Nothing is framed: a
+// The chat is laid out as the window of the GUI is: the sessions that run now
+// on the left, the conversation in the middle, below its head and above the
+// composer, and on the right where those sessions stand. Nothing is framed: a
 // line above the composer parts it from the conversation, and the
 // conversation is as wide as it reads well, in the middle of its column.
 // A narrow window leaves out the column on the right first, then the one on
@@ -469,54 +469,41 @@ func (m *Model) panel() ([]string, []hit) {
 	return lines[:limit], shifted(hits, 0, 0, limit)
 }
 
-// sidebarSessions are the sessions the sidebar lists: beside the thread
-// those of the part of it in view, with the time it began, else all of the
-// owner's.
-func (m *Model) sidebarSessions() (list []*conversation, at time.Time, thread bool) {
-	c := m.chat
-	if c.contextID == plugin.ThreadID {
-		ex := m.sectionShown()
-		if ex >= 0 && ex < len(c.entries) {
-			at = c.entries[ex].at
+// runningSessions are the sessions that run now, besides the thread: what the
+// sidebar lists and the column on the right says of, wherever the
+// conversation stands. One that ends leaves both.
+//
+// A session keeps its place among them while it runs, as the place it got
+// when it began to run says, so that neither column changes its order while
+// the sessions work: a session that ended and begins anew stands last.
+func (m *Model) runningSessions() []*conversation {
+	var fresh, list []*conversation
+	order := make(map[string]int, len(m.runOrder))
+	for _, s := range m.chats {
+		if s.contextID == plugin.ThreadID || s.peer != "" || !s.running {
+			continue
 		}
-		handles := c.handed[ex]
-		if len(handles) == 0 {
-			return nil, at, true
+		n, ok := m.runOrder[s.contextID]
+		if !ok {
+			fresh = append(fresh, s)
 		}
-		for _, s := range m.chats {
-			if s.contextID != plugin.ThreadID && s.peer == "" && handedTo(s.contextID, handles) {
-				list = append(list, s)
-			}
-		}
-	} else {
-		for _, s := range m.chats {
-			if s.contextID != plugin.ThreadID && s.peer == "" && (s.title != "" || len(s.entries) > 0 || s == c) {
-				list = append(list, s)
-			}
-		}
+		order[s.contextID] = n
+		list = append(list, s)
 	}
-	slices.SortFunc(list, func(a, b *conversation) int {
-		if a.running != b.running {
-			if a.running {
-				return -1
-			}
-			return 1
-		}
-		return cmp.Or(b.last.Compare(a.last), strings.Compare(a.contextID, b.contextID))
+	// Those that began to run in the same moment stand in the order of what
+	// they did last, then of their ID, as nothing else tells them apart.
+	slices.SortFunc(fresh, func(a, b *conversation) int {
+		return cmp.Or(a.last.Compare(b.last), strings.Compare(a.contextID, b.contextID))
 	})
-	return list, at, c.contextID == plugin.ThreadID
-}
-
-// handedTo reports whether the session id is one of those a part of the
-// thread names: by its ID, or by the handle the thread knows it by.
-func handedTo(id string, handles []string) bool {
-	tail := id[strings.Index(id, "/")+1:]
-	for _, h := range handles {
-		if h != "" && (strings.HasPrefix(id, h) || strings.HasPrefix(tail, h)) {
-			return true
-		}
+	for _, s := range fresh {
+		order[s.contextID] = m.runNext
+		m.runNext++
 	}
-	return false
+	m.runOrder = order // one that ended gives its place up
+	slices.SortFunc(list, func(a, b *conversation) int {
+		return cmp.Or(order[a.contextID]-order[b.contextID], strings.Compare(a.contextID, b.contextID))
+	})
+	return list
 }
 
 // sideRow is a row of the sidebar, and the session it shows, if it does.
@@ -525,51 +512,23 @@ type sideRow struct {
 	c    *conversation
 }
 
-// sidebarRows are the rows of the list of the sidebar, inner cells wide.
+// sidebarRows are the rows of the list of the sidebar, inner cells wide: the
+// sessions that run now, oldest change last. Nothing else is listed, and
+// where the thread is scrolled changes nothing.
 func (m *Model) sidebarRows(inner int) []sideRow {
-	rows := []sideRow{{text: "SESSIONS"}, {}}
-	list, at, thread := m.sidebarSessions()
-	if thread && !at.IsZero() {
-		rows = append(rows, sideRow{text: mutedStyle.Render("T – " + clock(at, m.now()))}, sideRow{})
+	rows := []sideRow{{text: boldStyle.Foreground(muted).Render("RUNNING")}, {}}
+	for _, c := range m.runningSessions() {
+		rows = append(rows, m.sessionItem(c, inner)...)
 	}
-	var groups []string
-	byGroup := map[string][]*conversation{}
-	for _, c := range list {
-		at := c.last
-		if at.IsZero() && c == m.chat {
-			at = m.now() // the conversation begun here and now
-		}
-		g := dateGroup(at, m.now())
-		if c.running {
-			g = "Active"
-		}
-		if _, ok := byGroup[g]; !ok {
-			groups = append(groups, g)
-		}
-		byGroup[g] = append(byGroup[g], c)
-	}
-	for i, g := range groups {
-		if i > 0 {
-			rows = append(rows, sideRow{})
-		}
-		rows = append(rows, sideRow{text: boldStyle.Foreground(muted).Render(strings.ToUpper(g))}, sideRow{})
-		for _, c := range byGroup[g] {
-			rows = append(rows, m.sessionItem(c, inner)...)
-		}
-	}
-	if len(groups) == 0 {
-		none := "No sessions yet."
-		if thread {
-			none = "None yet"
-		}
-		rows = append(rows, sideRow{text: mutedStyle.Render(none)})
+	if len(rows) == 2 {
+		rows = append(rows, sideRow{text: mutedStyle.Render("Nothing runs.")})
 	}
 	return rows
 }
 
-// sessionItem is a session in the sidebar, as the GUI lists it: its name,
-// where it stands, a bar that runs while it works, and the line below it.
-// The one shown stands out.
+// sessionItem is a session that runs now in the sidebar: its name, that it
+// works, a bar that runs with it, and the line below it. The one shown
+// stands out.
 func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 	selected := c == m.chat
 	// The one shown is on the background of the selection, all of its width.
@@ -579,30 +538,20 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 		}
 		return st
 	}
-	title := on(lipgloss.NewStyle())
-	if c.running {
-		title = title.Bold(true)
-	}
+	title := on(lipgloss.NewStyle().Bold(true))
 	if selected {
 		title = title.Foreground(accent)
 	}
-	state, when := "ready", ""
-	if c.running {
-		state = "working"
-	}
+	when := ""
 	if !c.last.IsZero() {
 		when = " · " + c.last.Format("2 Jan 2006, 15:04")
 	}
 	bar := make([]rune, inner)
 	for x := range bar {
 		bar[x] = '▪'
-		if c.running && (x-m.ticks/2)%3 == 0 { // the dashes run while it works
+		if (x-m.ticks/2)%3 == 0 { // the dashes run while it works
 			bar[x] = ' '
 		}
-	}
-	barStyle := lipgloss.NewStyle().Foreground(faded(muted, 0.45))
-	if c.running {
-		barStyle = lipgloss.NewStyle().Foreground(accent)
 	}
 	border := lineStyle()
 	if selected {
@@ -610,8 +559,8 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 	}
 	return []sideRow{
 		{title.Render(pad(strings.ToUpper(cmp.Or(c.title, "new conversation")), inner)), c},
-		{on(mutedStyle).Render(pad("State: "+state+" · own"+when, inner)), c},
-		{on(barStyle).Render(string(bar)), c},
+		{on(mutedStyle).Render(pad("State: working · own"+when, inner)), c},
+		{on(lipgloss.NewStyle().Foreground(accent)).Render(string(bar)), c},
 		{border.Render(strings.Repeat("─", inner)), c},
 		{},
 	}
@@ -674,22 +623,6 @@ func (m *Model) sidebarAt(y int) *conversation {
 	return nil
 }
 
-// dateGroup is the group of the sidebar a session is in by when it last
-// changed.
-func dateGroup(t, now time.Time) string {
-	if t.IsZero() {
-		return "No date"
-	}
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	switch {
-	case !t.Before(today):
-		return "Today"
-	case !t.Before(today.AddDate(0, 0, -1)):
-		return "Yesterday"
-	}
-	return "Older"
-}
-
 // clock is the time t as the GUI writes it above a message: the time of
 // day today, the date with it before.
 func clock(t, now time.Time) string {
@@ -705,7 +638,7 @@ func clock(t, now time.Time) string {
 // at the bottom of its column.
 func (m *Model) railView(w, h int) string {
 	inner := max(1, w-2*columnPad)
-	content, top := m.railLayout(inner, h)
+	content, _, top := m.railLayout(inner, h)
 	margin := strings.Repeat(" ", columnPad)
 	lines := make([]string, h)
 	for i := range lines {
@@ -719,76 +652,70 @@ func (m *Model) railView(w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
-// railHead is how many lines of the column on the right are above its
-// details: what it is, its title, the note and the line below them.
-const railHead = 5
+// railHead is how many lines of the column on the right stand above its
+// details: its heading and the line below it.
+const railHead = 2
 
 // railLayout is what the column on the right shows, in a column h rows
-// high, and the row it begins at: the details cut where they would take
-// more than its room.
-func (m *Model) railLayout(inner, h int) (content []string, top int) {
-	title, note, details := m.railContent(inner)
+// high, the session of each row and the row it begins at: the details cut
+// where they would take more than its room.
+func (m *Model) railLayout(inner, h int) (content []string, owners []*conversation, top int) {
+	content, owners = m.railRows(inner)
 	most := max(1, h*58/100)
-	if len(details) > most {
-		details = append(details[:most-1], mutedStyle.Render("…"))
+	if len(content) > railHead+most {
+		content = append(content[:railHead+most-1], mutedStyle.Render("…"))
+		owners = owners[:len(content)]
 	}
-	content = []string{boldStyle.Foreground(muted).Render("CONTEXT"), "", title, mutedStyle.Render(note)}
-	if len(details) > 0 {
-		content = append(content, lineStyle().Render(strings.Repeat("─", inner)))
-		content = append(content, details...)
+	return content, owners, max(0, h-2-len(content))
+}
+
+// railRows are the lines of the column on the right and the session of each,
+// nil for a line that shows none: the sessions that run now, wherever the
+// conversation stands, or the jobs once ctrl+j lists them there.
+func (m *Model) railRows(inner int) (lines []string, owners []*conversation) {
+	title := "RUNNING"
+	if m.jobsShown {
+		title = "JOBS"
 	}
-	return content, max(0, h-2-len(content))
+	add := func(text string, c *conversation) {
+		lines, owners = append(lines, text), append(owners, c)
+	}
+	add(boldStyle.Foreground(muted).Render(title), nil)
+	add(lineStyle().Render(strings.Repeat("─", inner)), nil)
+	if m.jobsShown {
+		for _, l := range m.jobLines(inner) {
+			add(l, nil)
+		}
+		return lines, owners
+	}
+	list := m.runningSessions()
+	if len(list) == 0 {
+		add(mutedStyle.Render("Nothing runs."), nil)
+		return lines, owners
+	}
+	for i, s := range list {
+		if i > 0 {
+			add("", nil)
+		}
+		for _, l := range m.artefact(s, inner) {
+			add(l, s)
+		}
+	}
+	return lines, owners
 }
 
 // railAt is the session the column on the right shows at the row y of the
-// screen beside the thread, nil for none: a click on it shows it, as one
-// on it in the sidebar does.
+// screen, nil for none: a click on it shows it, as one in the sidebar does.
 func (m *Model) railAt(y int) *conversation {
 	w := m.railWidth()
-	if w == 0 || m.jobsShown || m.chat.contextID != plugin.ThreadID {
+	if w == 0 {
 		return nil
 	}
-	content, top := m.railLayout(max(1, w-2*columnPad), m.height)
-	_, owners := m.railArtefacts(max(1, w-2*columnPad))
-	if i := y - top - railHead; i >= 0 && i < len(owners) && y-top < len(content) {
+	_, owners, top := m.railLayout(max(1, w-2*columnPad), m.height)
+	if i := y - top; i >= railHead && i < len(owners) {
 		return owners[i]
 	}
 	return nil
-}
-
-// railArtefacts are the lines of the sessions of the part of the thread in
-// view, and the session of each, nil for a line between them.
-func (m *Model) railArtefacts(inner int) (details []string, owners []*conversation) {
-	list, _, _ := m.sidebarSessions()
-	for i, s := range list {
-		if i > 0 {
-			details, owners = append(details, ""), append(owners, nil)
-		}
-		for _, l := range m.artefact(s, inner) {
-			details, owners = append(details, l), append(owners, s)
-		}
-	}
-	return details, owners
-}
-
-// railContent is what the column on the right shows: its title, the note
-// below it and the lines of its details, inner cells wide.
-func (m *Model) railContent(inner int) (title, note string, details []string) {
-	if m.jobsShown {
-		return "[JOBS]", "In the background", m.jobLines(inner)
-	}
-	c := m.chat
-	if c.contextID != plugin.ThreadID {
-		if len(c.entries) == 0 {
-			return "[STATE]", "None yet", nil
-		}
-		return "[STATE]", "T – " + clock(c.last, m.now()), m.artefact(c, inner)
-	}
-	_, at, _ := m.sidebarSessions()
-	if details, _ = m.railArtefacts(inner); len(details) == 0 {
-		return "[STATE]", "None yet", nil
-	}
-	return "[STATE]", "T – " + clock(at, m.now()), details
 }
 
 // jobLines lists the jobs of the session shown, the tasks it delegated and
@@ -802,7 +729,7 @@ func (m *Model) jobLines(inner int) []string {
 		}
 		return wrapped
 	}
-	lines := []string{heading("Jobs")}
+	var lines []string
 	if len(m.chat.jobs) == 0 {
 		lines = append(lines, mutedStyle.Render("No command runs in the background."))
 	}
@@ -979,15 +906,25 @@ func (m *Model) toolChart(s stand, inner int) []string {
 	}
 	name := func(c call) string { return cmp.Or(c.tool, strings.Split(c.text, " · ")[0], "tool") }
 	tally := map[string]int{}
-	var tools []string
+	var tools []string // every tool, in the order in which it was used first
 	for _, c := range all {
 		if tally[name(c)] == 0 {
 			tools = append(tools, name(c))
 		}
 		tally[name(c)]++
 	}
-	slices.SortStableFunc(tools, func(a, b string) int { return tally[b] - tally[a] })
-	lanes := tools[:min(len(tools), len(laneShades))]
+	// The lanes are the tools used most; among them each keeps the place and
+	// the shade it got when it was used first, so that the chart does not
+	// jump about while the session works.
+	most := slices.Clone(tools)
+	slices.SortStableFunc(most, func(a, b string) int { return tally[b] - tally[a] })
+	most = most[:min(len(most), len(laneShades))]
+	var lanes []string
+	for _, tool := range tools {
+		if slices.Contains(most, tool) {
+			lanes = append(lanes, tool)
+		}
+	}
 	const labels, counts = 9, 3
 	plot := inner - labels - counts
 	if plot < 4 {
