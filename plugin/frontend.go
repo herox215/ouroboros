@@ -205,6 +205,11 @@ const (
 var (
 	// ErrBusy means that an answer is on its way in the session already.
 	ErrBusy = session.ErrBusy
+	// ErrRestarting means the node is starting anew with a new build.
+	ErrRestarting = session.ErrRestarting
+	// ErrSessionStopped means the node that holds the sessions is stopping.
+	// ErrStopped instead describes an agent-to-agent channel closing.
+	ErrSessionStopped = session.ErrStopped
 	// ErrNoJob means a job that does not run, see Sessions.StopJob.
 	ErrNoJob = session.ErrNoJob
 	// ErrNoService means a service that does not run, see

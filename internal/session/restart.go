@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"slices"
+	"time"
 
 	"ouroboros/internal/presentation"
 )
@@ -48,4 +50,47 @@ func AskRestart(ctx context.Context, exe string) bool {
 		restart(exe)
 	}
 	return ok
+}
+
+// restartGrace lets answers finish and pending questions receive replies before
+// cancelling work that would otherwise keep the new build waiting indefinitely.
+const restartGrace = time.Minute
+
+const restartQuestionHead = "[Not from the owner: a restart interrupted this unanswered question. Ask it again with user_question before continuing; no permission was granted.]\n"
+
+const restartThreadQuestionHead = "[Resume this pending question in the shared thread.]\n" + restartQuestionHead
+
+// scheduleRestart is called once, with p.mu held. The timer never takes a
+// service lock while holding p.mu: the normal order is service, then process.
+func (p *process) scheduleRestart() {
+	wait := p.restartWait
+	if wait == 0 {
+		wait = restartGrace
+	}
+	p.restartTimer = time.AfterFunc(wait, func() {
+		for _, s := range p.services {
+			s.mu.Lock()
+			p.mu.Lock()
+			pending := p.successor != "" && p.replace != nil
+			p.mu.Unlock()
+			if pending && !s.closed {
+				for _, se := range s.sessions {
+					if se.cancel == nil {
+						continue
+					}
+					if se.asked != nil && !se.backendQuestion {
+						for i := len(se.events) - 1; i >= 0; i-- {
+							if e := se.events[i]; e.Kind == Asked && !e.Done {
+								se.parked = slices.Clone(e.Args)
+								se.parkedRouted = forThread(se)
+								break
+							}
+						}
+					}
+					se.cancel()
+				}
+			}
+			s.mu.Unlock()
+		}
+	})
 }

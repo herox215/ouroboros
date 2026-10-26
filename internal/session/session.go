@@ -377,11 +377,14 @@ type Service struct {
 // of them keeps it running for all. Its mu is taken with the mu of a
 // Service held, never the other way round.
 type process struct {
-	mu        sync.Mutex
-	answering int  // answers on their way
-	release   bool // stop the node once no answer is on its way
-	kept      bool // the owner wants the node to run: no front end stops it
-	successor string
+	mu           sync.Mutex
+	answering    int  // answers on their way
+	release      bool // stop the node once no answer is on its way
+	kept         bool // the owner wants the node to run: no front end stops it
+	successor    string
+	restartTimer *time.Timer
+	restartWait  time.Duration // zero uses restartGrace
+	services     []*Service    // fixed before serving, see Share
 	// stopNode and replace are what the node does once it is to stop or to
 	// be replaced by successor, see Attach.
 	stopNode func()
@@ -401,6 +404,8 @@ type session struct {
 	since           time.Time          // when that answer began
 	queue           []queued           // the messages that wait for that answer to take them
 	asked           chan queued        // takes what the owner answers the question that answer waits for; nil without one
+	parked          json.RawMessage    // question to offer again after a restart deadline
+	parkedRouted    bool               // offer the parked question in the shared thread
 	restart         string             // the binary a tool of that answer asked to start anew from
 	goOn            bool               // the session goes on by itself in that build, see GoOn
 	// resumed is when the last answer ended of a session that was loaded
@@ -464,7 +469,9 @@ type queued struct {
 // New returns the Service of the sessions with agent.
 func New(agent Assistant) *Service {
 	ctx, stop := context.WithCancel(context.Background())
-	return &Service{agent: agent, now: time.Now, ctx: ctx, stop: stop, sessions: map[string]*session{}, jobs: map[string]running{}, node: &process{}}
+	s := &Service{agent: agent, now: time.Now, ctx: ctx, stop: stop, sessions: map[string]*session{}, jobs: map[string]running{}}
+	s.node = &process{services: []*Service{s}}
+	return s
 }
 
 // Share lets the Services of the profiles of one node run in one process,
@@ -472,7 +479,7 @@ func New(agent Assistant) *Service {
 // no answer of any of them is on its way, and an answer of any of them keeps
 // it running. Attach one of them, which attaches all.
 func Share(services ...*Service) {
-	node := &process{}
+	node := &process{services: slices.Clone(services)}
 	for _, s := range services {
 		s.mu.Lock()
 		s.node = node
@@ -604,6 +611,17 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 	}
 	se := s.get(id)
 	message := queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx), generated: generated}
+	if generated && text == goOnText {
+		// The durable restart note, not transient Routed flags, restores where
+		// the unanswered question must be offered after loading the archive.
+		// Only the last message counts: an older note was answered already.
+		for _, e := range slices.Backward(se.events) {
+			if e.Kind == Message {
+				message.routed = strings.HasPrefix(e.Text, restartThreadQuestionHead)
+				break
+			}
+		}
+	}
 	switch {
 	case se.cancel != nil && se.id == ThreadID:
 		// The thread takes what the owner says at any time: the answer on its
@@ -1068,6 +1086,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			s.emit(se, Event{Kind: Restart, PresentationID: presentation.NewID(), Text: se.restart})
 			if p.successor == "" { // the first build asked for is the one
 				p.successor = se.restart
+				p.scheduleRestart()
 			}
 		}
 		if durable && se.goOn && s.archive != nil {
@@ -1076,6 +1095,22 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			}
 		}
 		se.restart = ""
+	}
+	if len(se.parked) > 0 {
+		head := restartQuestionHead
+		if se.parkedRouted {
+			head = restartThreadQuestionHead
+		}
+		if err := s.agent.Note(presentation.As(context.Background(), presentation.NewID()), se.id, head+string(se.parked)); err != nil && s.archive != nil {
+			s.archive.log("the pending question of session %s cannot be kept: %v", se.id, err)
+		}
+		if s.archive != nil {
+			if err := s.archive.GoOn(history.Owner(se.id)); err != nil {
+				s.archive.log("the pending question of session %s cannot be resumed: %v", se.id, err)
+			}
+		}
+		se.parked = nil
+		se.parkedRouted = false
 	}
 	se.goOn = false
 	// What was queued too late for this answer is the next message, unless
@@ -1178,7 +1213,14 @@ func (p *process) settle() {
 	}
 	switch {
 	case p.successor != "":
-		p.replace(p.successor)
+		if p.restartTimer != nil {
+			p.restartTimer.Stop()
+		}
+		if p.replace != nil {
+			replace := p.replace
+			p.replace = nil // schedule the replacement only once
+			replace(p.successor)
+		}
 	case p.release && p.stopNode != nil:
 		p.release = false
 		p.stopNode()
