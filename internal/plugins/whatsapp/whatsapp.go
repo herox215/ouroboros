@@ -74,6 +74,24 @@ func (s *service) local() error {
 	}
 	return nil
 }
+
+// connecting is the client whatsapp_connect connects, made if there is
+// none yet.
+func (s *service) connecting(ctx context.Context) (backend, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.local(); err != nil {
+		return nil, err
+	}
+	if s.client == nil {
+		var err error
+		s.client, err = s.makeClient(ctx, s.path, s.store)
+		if err != nil {
+			return nil, errors.New("cannot initialize private WhatsApp session")
+		}
+	}
+	return s.client, nil
+}
 func output(v any) (string, error) { b, err := json.Marshal(v); return string(b), err }
 func exactJID(raw string) (string, error) {
 	j, err := types.ParseJID(raw)
@@ -120,19 +138,12 @@ func owner(t plugin.Tool) plugin.Tool {
 }
 func (s *service) ability() plugin.Ability {
 	connect := plugin.NewTool("whatsapp_connect", "Explicitly connect WhatsApp; if unpaired, create a private local QR PNG. Scan locally with WhatsApp Linked devices; never share or display the QR in chat.", nil, func(ctx context.Context, _ struct{}) (string, error) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if err := s.local(); err != nil {
+		client, err := s.connecting(ctx)
+		if err != nil {
 			return "", err
 		}
-		if s.client == nil {
-			var err error
-			s.client, err = s.makeClient(ctx, s.path, s.store)
-			if err != nil {
-				return "", errors.New("cannot initialize private WhatsApp session")
-			}
-		}
-		st, err := s.client.Connect(ctx)
+		// Connect may wait for a QR: the other tools do not wait with it.
+		st, err := client.Connect(ctx)
 		if err != nil {
 			return "", errors.New("WhatsApp connection failed; retry explicit connect")
 		}

@@ -118,7 +118,7 @@ func TestConnectSessionSurvivesToolCallAndStopsWithClient(t *testing.T) {
 	call, finishCall := context.WithCancel(context.Background())
 	defer finishCall()
 	var session context.Context
-	err := connectSession(call, lifetime, func(ctx context.Context) error {
+	_, err := connectSession(call, lifetime, func(ctx context.Context) error {
 		session = ctx
 		return nil
 	})
@@ -147,7 +147,7 @@ func TestConnectSessionCancellationAndFailure(t *testing.T) {
 	t.Run("canceled before dial", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err := connectSession(ctx, context.Background(), func(context.Context) error {
+		_, err := connectSession(ctx, context.Background(), func(context.Context) error {
 			t.Fatal("dial called after cancellation")
 			return nil
 		})
@@ -158,7 +158,7 @@ func TestConnectSessionCancellationAndFailure(t *testing.T) {
 	t.Run("canceled during dial", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		err := connectSession(ctx, context.Background(), func(session context.Context) error {
+		_, err := connectSession(ctx, context.Background(), func(session context.Context) error {
 			cancel()
 			select {
 			case <-session.Done():
@@ -175,7 +175,7 @@ func TestConnectSessionCancellationAndFailure(t *testing.T) {
 	t.Run("dial failure", func(t *testing.T) {
 		var session context.Context
 		want := errors.New("fixture dial failure")
-		err := connectSession(context.Background(), context.Background(), func(ctx context.Context) error {
+		_, err := connectSession(context.Background(), context.Background(), func(ctx context.Context) error {
 			session = ctx
 			return want
 		})

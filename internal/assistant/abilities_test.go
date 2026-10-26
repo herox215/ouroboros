@@ -20,7 +20,9 @@ func (f abilityTestLLM) Complete(_ context.Context, _ string, msgs []openai.Mess
 func TestAbilityAllowlistSettingsAndPermissions(t *testing.T) {
 	hidden := agent.Configurable(agent.Tool{Name: "ability_fixture", Schema: `{"type":"object"}`}, func(s struct {
 		Prefix string `json:"prefix"`
-	}) (agent.RunFunc, error) { return func(context.Context, json.RawMessage) (string, error) { return s.Prefix + "result", nil }, nil })
+	}) (agent.RunFunc, error) {
+		return func(context.Context, json.RawMessage) (string, error) { return s.Prefix + "result", nil }, nil
+	})
 	loader := agent.NewTool("ability_load", "load", nil, func(ctx context.Context, _ struct{}) (string, error) { return agent.LoadAbility(ctx, "fixture") })
 	loader.OwnerOnly = true
 	loader.AbilityCatalog = func() []agent.Ability { return []agent.Ability{{Name: "fixture", Tools: []agent.Tool{hidden}}} }

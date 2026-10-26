@@ -7,11 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 )
 
 const retainedMessages = 5000
+
+// maxText is how many bytes of a text are kept.
+const maxText = 16000
 
 type message struct {
 	Chat   string `json:"chat"`
@@ -109,16 +113,10 @@ func openTextStore(path string) (*textStore, error) {
 	return &textStore{db: db}, nil
 }
 func (s *textStore) close() { s.mu.Lock(); defer s.mu.Unlock(); _ = s.db.Close() }
-func (s *textStore) put(m message) error {
-	if m.Text == "" || m.ID == "" {
-		return nil
-	}
-	if _, err := exactJID(m.Chat); err != nil {
-		return nil
-	}
-	if len(m.Text) > 16000 {
-		m.Text = m.Text[:16000]
-	}
+
+// put keeps messages, in one transaction, and lets go of the oldest beyond
+// retainedMessages.
+func (s *textStore) put(messages ...message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
@@ -126,9 +124,18 @@ func (s *textStore) put(m message) error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`INSERT INTO messages(chat,id,sender,text,time,from_me) VALUES(?,?,?,?,?,?) ON CONFLICT(chat,id) DO UPDATE SET text=excluded.text`, m.Chat, m.ID, m.Sender, m.Text, m.Time, m.FromMe)
-	if err != nil {
-		return err
+	for _, m := range messages {
+		if m.Text == "" || m.ID == "" {
+			continue
+		}
+		if _, err := exactJID(m.Chat); err != nil {
+			continue
+		}
+		m.Text = capped(m.Text, maxText)
+		_, err = tx.Exec(`INSERT INTO messages(chat,id,sender,text,time,from_me) VALUES(?,?,?,?,?,?) ON CONFLICT(chat,id) DO UPDATE SET text=excluded.text`, m.Chat, m.ID, m.Sender, m.Text, m.Time, m.FromMe)
+		if err != nil {
+			return err
+		}
 	}
 	_, err = tx.Exec(`DELETE FROM messages WHERE rowid IN (SELECT rowid FROM messages ORDER BY time DESC,rowid DESC LIMIT -1 OFFSET ?)`, retainedMessages)
 	if err != nil {
@@ -136,6 +143,18 @@ func (s *textStore) put(m message) error {
 	}
 	return tx.Commit()
 }
+
+// capped is text cut to at most n bytes, at the start of a character.
+func capped(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	for n > 0 && !utf8.RuneStart(text[n]) {
+		n--
+	}
+	return text[:n]
+}
+
 func (s *textStore) read(jid string, n int) ([]message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

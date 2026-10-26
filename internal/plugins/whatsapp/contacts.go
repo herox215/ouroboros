@@ -22,12 +22,13 @@ type contact struct {
 
 func (c *client) Contacts(ctx context.Context, query string, limit int) ([]contact, error) {
 	out := []contact{}
+	cli := c.current()
 	// A new, unpaired device has no initialized contact store. Never connect or
 	// request pairing to populate it; an existing saved device is usable offline.
-	if c.cli.Store.ID == nil {
+	if cli.Store.ID == nil {
 		return out, nil
 	}
-	all, err := c.cli.Store.Contacts.GetAllContacts(ctx)
+	all, err := cli.Store.Contacts.GetAllContacts(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -54,9 +55,9 @@ func (c *client) Contacts(ctx context.Context, query string, limit int) ([]conta
 		v := contact{JID: jid.String(), Aliases: []string{jid.String()}, FirstName: info.FirstName, FullName: info.FullName, PushName: info.PushName, BusinessName: info.BusinessName}
 		var alias types.JID
 		if jid.Server == types.DefaultUserServer {
-			alias, err = c.cli.Store.LIDs.GetLIDForPN(ctx, jid)
+			alias, err = cli.Store.LIDs.GetLIDForPN(ctx, jid)
 		} else {
-			alias, err = c.cli.Store.LIDs.GetPNForLID(ctx, jid)
+			alias, err = cli.Store.LIDs.GetPNForLID(ctx, jid)
 		}
 		if err != nil {
 			return nil, err

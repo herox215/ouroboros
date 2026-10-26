@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,7 +20,9 @@ import (
 )
 
 type client struct {
-	cli           *whatsmeow.Client
+	connectMu     sync.Mutex         // serializes Connect, which may wait for a QR
+	cli           *whatsmeow.Client  // swapped under stateMu, see current
+	stopSession   context.CancelFunc // of the last connected session
 	devices       *sqlstore.Container
 	texts         *textStore
 	path          string
@@ -56,9 +59,27 @@ func newClient(ctx context.Context, path string, texts *textStore) (backend, err
 	lifetime, cancel := context.WithCancel(context.Background())
 	c := &client{cli: whatsmeow.NewClient(device, nil), devices: devices, texts: texts, path: path, ctx: lifetime, cancel: cancel}
 	c.paired.Store(device.ID != nil)
-	c.cli.InitialAutoReconnect = false
-	c.handler = c.cli.AddEventHandler(c.event)
+	c.watch()
 	return c, nil
+}
+
+// watch takes the events of the current whatsmeow client. Each handler
+// keeps its own client, so an event of a replaced one is parsed with the
+// device store it came from. stateMu is not held.
+func (c *client) watch() {
+	cli := c.current()
+	cli.InitialAutoReconnect = false
+	handler := cli.AddEventHandler(func(raw any) { c.eventOf(cli, raw) })
+	c.stateMu.Lock()
+	c.handler = handler
+	c.stateMu.Unlock()
+}
+
+// current is the whatsmeow client in use.
+func (c *client) current() *whatsmeow.Client {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.cli
 }
 func (c *client) Status() status {
 	c.stateMu.Lock()
@@ -68,7 +89,7 @@ func (c *client) Status() status {
 		st.QRPath = c.qrPath
 	}
 	if c.storageFailed.Load() {
-		st.Note = "Some received/history text could not be persisted; local history is incomplete."
+		st.Note = strings.TrimSpace(st.Note + " Some received/history text could not be persisted; local history is incomplete.")
 	}
 	return st
 }
@@ -80,6 +101,11 @@ func (c *client) clearQR() {
 	c.qrExpires = time.Time{}
 }
 func (c *client) Connect(ctx context.Context) (status, error) {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+	if err := c.ctx.Err(); err != nil {
+		return status{}, err
+	}
 	if c.Status().Connected {
 		return c.Status(), nil
 	}
@@ -95,18 +121,21 @@ func (c *client) Connect(ctx context.Context) (status, error) {
 	}
 	c.clearQR()
 	if c.resetSession.Swap(false) {
-		c.cli.Disconnect()
-		c.cli.RemoveEventHandler(c.handler)
+		old := c.current()
+		old.Disconnect()
+		c.stateMu.Lock()
+		old.RemoveEventHandler(c.handler)
 		c.cli = whatsmeow.NewClient(c.devices.NewDevice(), nil)
-		c.cli.InitialAutoReconnect = false
-		c.handler = c.cli.AddEventHandler(c.event)
+		c.stateMu.Unlock()
+		c.watch()
 	}
+	cli := c.current()
 	if !c.paired.Load() {
 		// A QR channel must be installed before connecting. Its context outlives
 		// the tool call so codes can rotate while the owner scans locally.
 		qrCtx, cancel := context.WithCancel(c.ctx)
 		c.qrCancel = cancel
-		ch, err := c.cli.GetQRChannel(qrCtx)
+		ch, err := cli.GetQRChannel(qrCtx)
 		if err != nil {
 			cancel()
 			return status{}, err
@@ -118,9 +147,9 @@ func (c *client) Connect(ctx context.Context) (status, error) {
 		c.stateMu.Unlock()
 		c.wg.Add(1)
 		go c.consumeQR(qrCtx, ch, ready)
-		if err = connectSession(ctx, c.ctx, c.cli.ConnectContext); err != nil {
+		if err = c.connect(ctx, cli); err != nil {
 			cancel()
-			c.cli.Disconnect()
+			cli.Disconnect()
 			c.wg.Wait()
 			return status{}, err
 		}
@@ -130,14 +159,23 @@ func (c *client) Connect(ctx context.Context) (status, error) {
 		case <-ready:
 		case <-ctx.Done():
 			cancel()
-			c.cli.Disconnect()
+			cli.Disconnect()
 			c.wg.Wait()
 			return status{}, ctx.Err()
+		case <-c.ctx.Done(): // Close waits for Connect
 		case <-timer.C:
 		}
 		return c.Status(), nil
 	}
-	if err := connectSession(ctx, c.ctx, c.cli.ConnectContext); err != nil {
+	if cli.IsConnected() {
+		// Right after pairing, or while whatsmeow reconnects, the socket is
+		// open but not logged in yet.
+		c.stateMu.Lock()
+		c.note = "Connected; authentication is still in progress."
+		c.stateMu.Unlock()
+		return c.Status(), nil
+	}
+	if err := c.connect(ctx, cli); err != nil {
 		return status{}, err
 	}
 	c.stateMu.Lock()
@@ -146,12 +184,31 @@ func (c *client) Connect(ctx context.Context) (status, error) {
 	return c.Status(), nil
 }
 
+// connect connects cli in a session of its own, see connectSession, and
+// ends the session of the last connect, whose socket is gone. A socket that
+// opened meanwhile counts as connected. connectMu is held.
+func (c *client) connect(ctx context.Context, cli *whatsmeow.Client) error {
+	stop, err := connectSession(ctx, c.ctx, cli.ConnectContext)
+	if errors.Is(err, whatsmeow.ErrAlreadyConnected) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if c.stopSession != nil {
+		c.stopSession()
+	}
+	c.stopSession = stop
+	return nil
+}
+
 // connectSession lets the caller cancel the initial dial without tying the
 // authenticated socket and whatsmeow's reconnect loop to a finished tool call.
-// Successful sessions remain children of the client's lifetime until Close.
-func connectSession(ctx, lifetime context.Context, connect func(context.Context) error) error {
+// A successful session remains a child of the client's lifetime until the
+// returned function ends it, or Close does.
+func connectSession(ctx, lifetime context.Context, connect func(context.Context) error) (context.CancelFunc, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	session, cancel := context.WithCancel(lifetime)
 	stop := context.AfterFunc(ctx, cancel)
@@ -159,13 +216,13 @@ func connectSession(ctx, lifetime context.Context, connect func(context.Context)
 	stopped := stop()
 	if err != nil {
 		cancel()
-		return err
+		return nil, err
 	}
 	if !stopped {
 		cancel()
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
-	return nil
+	return cancel, nil
 }
 
 func (c *client) consumeQR(ctx context.Context, ch <-chan whatsmeow.QRChannelItem, ready chan<- struct{}) {
@@ -246,7 +303,10 @@ func (c *client) writeQR(png []byte) error {
 	}
 	return os.Rename(f.Name(), filepath.Join(c.path, "pairing.png"))
 }
-func (c *client) event(raw any) {
+func (c *client) event(raw any) { c.eventOf(c.current(), raw) }
+
+// eventOf handles raw, an event of cli.
+func (c *client) eventOf(cli *whatsmeow.Client, raw any) {
 	switch e := raw.(type) {
 	case *events.Connected:
 		c.paired.Store(true)
@@ -270,36 +330,52 @@ func (c *client) event(raw any) {
 		}
 		c.stateMu.Unlock()
 	case *events.Message:
-		c.save(e)
+		if m, ok := retained(e); ok {
+			c.save(m)
+		}
 	case *events.HistorySync:
+		// One transaction for the whole sync: it can bring thousands of
+		// messages, and blocks whatsmeow's event dispatch while it is saved.
+		var all []message
 		for _, conv := range e.Data.GetConversations() {
 			jid, err := types.ParseJID(conv.GetID())
 			if err != nil {
 				continue
 			}
 			for _, entry := range conv.GetMessages() {
-				m, err := c.cli.ParseWebMessage(jid, entry.GetMessage())
-				if err == nil && m != nil {
-					c.save(m)
+				parsed, err := cli.ParseWebMessage(jid, entry.GetMessage())
+				if err != nil || parsed == nil {
+					continue
+				}
+				if m, ok := retained(parsed); ok {
+					all = append(all, m)
 				}
 			}
 		}
+		c.save(all...)
 	}
 }
-func (c *client) save(e *events.Message) {
+
+// retained is the text of e that is kept, if any.
+func retained(e *events.Message) (message, bool) {
 	// Do not retain disappearing/view-once content in a permanent text store.
 	if e.IsEphemeral || e.IsViewOnce || e.IsViewOnceV2 || e.IsViewOnceV2Extension {
-		return
+		return message{}, false
 	}
 	text := e.Message.GetConversation()
 	if text == "" {
 		text = e.Message.GetExtendedTextMessage().GetText()
 	}
 	if text == "" {
+		return message{}, false
+	}
+	return message{Chat: e.Info.Chat.String(), ID: e.Info.ID, Sender: e.Info.Sender.String(), Text: text, Time: e.Info.Timestamp.Unix(), FromMe: e.Info.IsFromMe}, true
+}
+func (c *client) save(messages ...message) {
+	if len(messages) == 0 {
 		return
 	}
-	m := message{Chat: e.Info.Chat.String(), ID: e.Info.ID, Sender: e.Info.Sender.String(), Text: text, Time: e.Info.Timestamp.Unix(), FromMe: e.Info.IsFromMe}
-	if err := c.texts.put(m); err != nil {
+	if err := c.texts.put(messages...); err != nil {
 		c.storageFailed.Store(true)
 	}
 }
@@ -308,7 +384,7 @@ func (c *client) Send(ctx context.Context, jid, text string) (message, error) {
 	if err != nil {
 		return message{}, errors.New("invalid JID")
 	}
-	resp, err := c.cli.SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
+	resp, err := c.current().SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
 	if err != nil {
 		return message{}, err
 	}
@@ -316,12 +392,17 @@ func (c *client) Send(ctx context.Context, jid, text string) (message, error) {
 }
 func (c *client) Close() {
 	c.cancel()
+	c.connectMu.Lock() // a Connect ends once the lifetime does
+	defer c.connectMu.Unlock()
 	if c.qrCancel != nil {
 		c.qrCancel()
 	}
-	c.cli.Disconnect()
+	cli := c.current()
+	cli.Disconnect()
 	c.wg.Wait()
-	c.cli.RemoveEventHandler(c.handler)
+	c.stateMu.Lock()
+	cli.RemoveEventHandler(c.handler)
+	c.stateMu.Unlock()
 	c.clearQR()
 	_ = c.devices.Close()
 }

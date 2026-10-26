@@ -182,6 +182,9 @@ func (r *abilityRuntime) find(name string) (Ability, error) {
 // response batch cannot use newly loaded tools, even if the model guesses names.
 func (r *abilityRuntime) activate() {
 	r.fresh = map[string]bool{}
+	if len(r.pending) == 0 {
+		return // the prompt and the tools are as the last round left them
+	}
 	for _, name := range r.pending {
 		a, err := r.find(name)
 		if err != nil {
