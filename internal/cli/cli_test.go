@@ -36,8 +36,9 @@ func TestSettingsFromEnv(t *testing.T) {
 	t.Setenv("OURO_DISCO_PORT", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENAI_API_KEY", "sk-env")
+	t.Setenv("DEEPSEEK_API_KEY", "sk-deepseek-env")
 	s, err := cli.SettingsFromEnv()
-	want := cli.Settings{Home: "/tmp/ouro", HTTPPort: 1234, DiscoPort: 41338, BaseURL: "https://api.openai.com/v1", APIKey: "sk-env"}
+	want := cli.Settings{Home: "/tmp/ouro", HTTPPort: 1234, DiscoPort: 41338, BaseURL: "https://api.openai.com/v1", APIKey: "sk-env", DeepSeekKey: "sk-deepseek-env"}
 	if err != nil || s != want {
 		t.Fatalf("got %+v, %v", s, err)
 	}
