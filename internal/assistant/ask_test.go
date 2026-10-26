@@ -337,6 +337,7 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		}
 		for _, research := range []string{
 			"For research, batch related read and search calls whose inputs you already know together, rather than returning to the model after each small excerpt.",
+			"When you explore code with bash, put the several grep, sed and git commands that answer one question into one call, one after another as the shell takes them, rather than one call for each small search: every call costs a round of the answer.",
 			"For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit.",
 			"Read coherent sections large enough to answer the current question, within tool output limits.",
 			"Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch.",
