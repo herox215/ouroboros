@@ -674,8 +674,7 @@ func (a *Archive) List() ([]Entry, error) {
 	return out, nil
 }
 
-// ErrNotArchived is the error of Delete for a session the archive does not
-// have.
+// ErrNotArchived is the error for a session the archive does not have.
 var ErrNotArchived = errors.New("the archive has no such session")
 
 // party is what the directory of a party may be called.
@@ -897,8 +896,10 @@ func (a *Archive) NoteModel(id, model string) error {
 	return tx.Commit()
 }
 
-// FirstUser returns the first message of the user in the conversation id, as
-// List names it: what it was asked first, "" without one.
+// FirstUser returns the first message of the user in the archived conversation
+// id, as List names it: what it was asked first. It returns ErrNotArchived if
+// the conversation has no archived answer, and "" if its messages hold none of
+// the user.
 func (a *Archive) FirstUser(id string) (string, error) {
 	path, err := a.path(id)
 	if err != nil {
@@ -915,7 +916,10 @@ func (a *Archive) FirstUser(id string) (string, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("%w: %s", ErrNotArchived, id)
 	}
-	return text, err
+	if err != nil {
+		return "", err
+	}
+	return text, nil
 }
 
 // Records returns every record of the conversation id, as List names it, in

@@ -32,6 +32,13 @@ func TestFirstUser(t *testing.T) {
 	if got, err := a.FirstUser("owner/tools"); err != nil || got != "" {
 		t.Errorf("without a user: %q, %v", got, err)
 	}
+	// An empty first message is still the first one.
+	if err := a.Append(Who{Session: "empty"}, []openai.Message{{Role: "user", Content: ""}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := a.FirstUser("owner/empty"); err != nil || got != "" {
+		t.Errorf("empty first message: %q, %v", got, err)
+	}
 	if _, err := a.FirstUser("nonsense"); err == nil || !strings.Contains(err.Error(), "names no session") {
 		t.Errorf("bad id: %v", err)
 	}

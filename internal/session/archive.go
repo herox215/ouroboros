@@ -74,7 +74,8 @@ const goOnText = "[Not from the owner: ouro runs the build you asked for now. Go
 // and what it had started ended with the process.
 const interruptedText = "[Not from the owner: this answer was stopped in the middle when ouro started anew, and the background jobs and tasks it had started ended with it. What it changed before may be incomplete. Check the state of what you were doing and go on with the task.]"
 
-// maxTaskNote is how much of the first task resumeNote repeats.
+// maxTaskNote is how many bytes of the first task resumeNote repeats, the
+// ellipsis that marks a cut included.
 const maxTaskNote = 1000
 
 // restartNote reports whether text is a note GoOn gives a session that goes on
@@ -97,7 +98,7 @@ func (a *archive) resumeNote(id string) string {
 		return "\n\nThis chat is \"" + chat + "\" in the history archive."
 	}
 	if len(task) > maxTaskNote {
-		task = strings.ToValidUTF8(task[:maxTaskNote], "") + "…"
+		task = strings.ToValidUTF8(task[:maxTaskNote-len("…")], "") + "…"
 	}
 	return "\n\nThis chat is \"" + chat + "\" in the history archive. Its first task, as the owner put it:\n" + task
 }

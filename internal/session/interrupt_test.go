@@ -52,6 +52,9 @@ func TestInterruptedAnswerGoesOnInTheNextImage(t *testing.T) {
 		if !strings.Contains(got, interruptedText) {
 			t.Fatalf("told %q", got)
 		}
+		if want := `This chat is "work" in the history archive`; !strings.Contains(got, want) {
+			t.Errorf("told %q, want %q", got, want)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the interrupted answer did not go on")
 	}
