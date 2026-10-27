@@ -12,8 +12,8 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
-	"ouroboros/internal/openai"
 )
 
 // ToolDelegate is the tool with which the owner's agent hands tasks to
@@ -102,14 +102,14 @@ type taskSteeringKey struct{}
 
 // WithTaskSteering returns the context a task runs under, whose helper takes
 // what told returns, see Tasks.Tell.
-func WithTaskSteering(ctx context.Context, told func() []openai.Message) context.Context {
+func WithTaskSteering(ctx context.Context, told func() []chat.Message) context.Context {
 	return context.WithValue(ctx, taskSteeringKey{}, told)
 }
 
 // TaskSteering is what a helper under ctx takes of what it is told, nil
 // for nothing.
-func TaskSteering(ctx context.Context) func() []openai.Message {
-	told, _ := ctx.Value(taskSteeringKey{}).(func() []openai.Message)
+func TaskSteering(ctx context.Context) func() []chat.Message {
+	told, _ := ctx.Value(taskSteeringKey{}).(func() []chat.Message)
 	return told
 }
 
@@ -417,9 +417,9 @@ func helping(ctx context.Context) context.Context {
 	ctx = agent.WithSteering(ctx, func() []string { return nil })
 	ctx = agent.WithMessageSteering(ctx, TaskSteering(ctx))
 	ctx = agent.WithoutInputMessages(ctx)
-	ctx = openai.WithoutMessageSource(ctx)
-	ctx = openai.WithThought(ctx, nil)
-	ctx = openai.WithAnswering(ctx, nil)
+	ctx = chat.WithoutMessageSource(ctx)
+	ctx = chat.WithThought(ctx, nil)
+	ctx = chat.WithAnswering(ctx, nil)
 	ctx = agent.WithoutOwner(ctx) // nobody can be asked, see helperPrompt: a call that needs the owner's leave is refused
 	return ctx
 }

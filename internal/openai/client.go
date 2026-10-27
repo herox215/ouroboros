@@ -8,20 +8,18 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
+	"ouroboros/internal/chat"
 	"ouroboros/internal/credentials"
 )
 
@@ -104,100 +102,6 @@ func Saved(c credentials.Credentials) (baseURL, apiKey string, err error) {
 	return data.BaseURL, secret.APIKey, nil
 }
 
-type sessionKey struct{}
-
-// WithSession returns a context whose requests are sent with the stable
-// session ID id, letting providers route and cache per conversation.
-func WithSession(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, sessionKey{}, id)
-}
-
-// SessionOf is the session WithSession gave ctx, "" if none: another kind of
-// provider sends it its own way.
-func SessionOf(ctx context.Context) string {
-	session, _ := ctx.Value(sessionKey{}).(string)
-	return session
-}
-
-// Message is a single chat message.
-type Message struct {
-	// PresentationID identifies this message locally and is never sent to a provider.
-	PresentationID string `json:"-"`
-	Role           string `json:"role"`
-	Content        string `json:"content"`
-	// Source is owner-origin metadata, kept locally but never sent as an API field.
-	Source MessageSource `json:"source,omitzero"`
-	// At is when the answer the message belongs to ended, as it is
-	// remembered; zero for one of the answer on its way. It is kept locally
-	// but never sent as an API field.
-	At time.Time `json:"at,omitzero"`
-	// Reasoning is what the model thought before it wrote an assistant
-	// message, and ReasoningField the field of the API it came in. Sent back
-	// in that field ("reasoning" if none), the model goes on from what it
-	// thought between calls of tools instead of thinking it all anew.
-	Reasoning      string `json:"-"`
-	ReasoningField string `json:"-"`
-	// ToolCalls are the tools an assistant message wants to have run.
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	// ToolCallID names the call a "tool" message answers.
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	// Usage is what the call that brought an assistant message cost, as far
-	// as the API told. It is not sent back.
-	Usage Usage `json:"-"`
-	// Via is what answered instead of the access and the model that were
-	// asked, like "model-a of Ollama local", and Instead why those could not:
-	// a node with fallbacks sets them, see config.Config.Fallbacks. They are
-	// not sent back.
-	Via     string `json:"-"`
-	Instead string `json:"-"`
-	// Retried are why the call was asked again before it was answered, one
-	// for each time: see IsTransient. They are not sent back.
-	Retried []string `json:"-"`
-	// Effort is the effort the call that brought an assistant message was
-	// asked with, and what the API took of it. It is not sent back.
-	Effort Took `json:"-"`
-	// Images are pictures the message shows the model along with Content: a
-	// tool that read a picture gives it here. They are sent, but not written
-	// where the message is saved, nor counted where its size is: see
-	// Client.Complete for how an API that takes no pictures in the result of
-	// a tool is sent them.
-	Images []Image `json:"-"`
-	// breakpoint makes the message a cache_control breakpoint: see
-	// breakpoints.
-	breakpoint bool
-	// sent makes the message written with its Images, as it is sent: see
-	// shown.
-	sent bool
-}
-
-// Image is a picture for the model: its media type, like "image/png", and
-// its bytes.
-type Image struct {
-	Type string
-	Data []byte
-}
-
-// URL is the picture as a data URL, which the APIs take in place of a link.
-func (i Image) URL() string {
-	return "data:" + i.Type + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
-}
-
-// ReasoningItems is the ReasoningField of what a provider with a form of its
-// own keeps of the thoughts of its model, to hand back to that provider and
-// to no other: an OpenAI-compatible API is not sent it.
-const ReasoningItems = "reasoning_items"
-
-// Usage is what one call of the LLM cost in tokens: Prompt are the tokens of
-// what was sent, and Cached those of them the provider had cached from an
-// earlier call. Both are 0 when the API did not say.
-type Usage struct {
-	Prompt, Cached int
-	Output         int
-	// CostUSD is the charge reported by the API; nil means unknown.
-	CostUSD *float64
-	InPlan  bool
-}
-
 // usage is how APIs tell what a call cost: OpenAI and most others the cached
 // tokens in prompt_tokens_details, DeepSeek in prompt_cache_hit_tokens.
 type usage struct {
@@ -244,104 +148,6 @@ func (r reasoning) first() (text, field string) {
 	return "", ""
 }
 
-// MarshalJSON writes the reasoning of m into the field it came in. The
-// content of a breakpoint is a part of text marked for the cache, and that
-// of a message with pictures, as it is sent, its text and the pictures, each
-// a part.
-func (m Message) MarshalJSON() ([]byte, error) {
-	type plain Message
-	out := struct {
-		plain
-		reasoning
-	}{plain: plain(m)}
-	switch m.ReasoningField {
-	case "reasoning_content":
-		out.ReasoningContent = m.Reasoning
-	case "reasoning_text":
-		out.ReasoningText = m.Reasoning
-	case ReasoningItems:
-		out.ReasoningItems = m.Reasoning
-	default:
-		out.reasoning.Reasoning = m.Reasoning
-	}
-	images := m.Images
-	if !m.sent {
-		images = nil
-	}
-	if !m.breakpoint && len(images) == 0 {
-		return json.Marshal(out)
-	}
-	type url struct {
-		URL string `json:"url"`
-	}
-	type part struct {
-		Type         string            `json:"type"`
-		Text         *string           `json:"text,omitempty"`
-		ImageURL     *url              `json:"image_url,omitempty"`
-		CacheControl map[string]string `json:"cache_control,omitempty"`
-	}
-	text := part{Type: "text", Text: &m.Content}
-	if m.breakpoint {
-		text.CacheControl = map[string]string{"type": "ephemeral"}
-	}
-	parts := []part{text}
-	for _, image := range images {
-		parts = append(parts, part{Type: "image_url", ImageURL: &url{image.URL()}})
-	}
-	return json.Marshal(struct {
-		Role    string `json:"role"`
-		Content []part `json:"content"`
-		plain
-		reasoning
-	}{m.Role, parts, out.plain, out.reasoning})
-}
-
-// UnmarshalJSON reads a message with its reasoning from any of the fields.
-func (m *Message) UnmarshalJSON(b []byte) error {
-	type plain Message
-	var in struct {
-		plain
-		reasoning
-	}
-	if err := json.Unmarshal(b, &in); err != nil {
-		return err
-	}
-	*m = Message(in.plain)
-	m.Reasoning, m.ReasoningField = in.first()
-	return nil
-}
-
-// ToolCall is the model's request to run a tool.
-type ToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Function FunctionCall `json:"function"`
-}
-
-// FunctionCall names a function and its arguments as a JSON object.
-type FunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-// Tool describes a function the model may call.
-type Tool struct {
-	Type     string   `json:"type"`
-	Function Function `json:"function"`
-}
-
-// Function is the signature of a tool; Parameters is a JSON schema.
-type Function struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-}
-
-// NewTool returns a function tool taking the arguments described by the JSON schema.
-func NewTool(name, description, schema string) Tool {
-	return Tool{Type: "function", Function: Function{name, description, json.RawMessage(schema)}}
-}
-
 // APIError is a non-2xx response from the API.
 type APIError struct {
 	Status  int
@@ -357,55 +163,17 @@ func (e *APIError) Unauthorized() bool {
 	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden
 }
 
-// Unavailable marks err as the error of a call the API cannot answer for
-// now, whatever it is asked: see IsUnavailable. It is for a provider whose
-// errors do not tell by themselves.
-func Unavailable(err error) error { return &unavailable{err} }
+// Unavailable marks err as a call the API cannot answer for now.
+// Deprecated: use chat.Unavailable from internal/chat.
+func Unavailable(err error) error { return chat.NewUnavailable(err) }
 
-type unavailable struct{ error }
+// IsUnavailable reports whether err means the API cannot answer for now.
+// Deprecated: use chat.IsUnavailable from internal/chat.
+func IsUnavailable(err error) bool { return chat.IsUnavailable(err) }
 
-func (u *unavailable) Unwrap() error { return u.error }
-
-// IsUnavailable reports whether err says that the API cannot answer for now,
-// whatever it is asked: a limit or a quota is reached (HTTP 429 or 402), the
-// service fails (5xx), it is not reached at all, or its provider marked the
-// error with Unavailable. A node with fallbacks goes on with another access
-// then. An error of what was asked is none, like a key that is refused or a
-// context that is too long, nor is a call that was stopped.
-func IsUnavailable(err error) bool {
-	if errors.Is(err, context.Canceled) {
-		return false
-	}
-	if marked := (*unavailable)(nil); errors.As(err, &marked) {
-		return true
-	}
-	if api := (*APIError)(nil); errors.As(err, &api) {
-		return api.Status == http.StatusTooManyRequests || api.Status == http.StatusPaymentRequired || api.Status >= http.StatusInternalServerError
-	}
-	var network net.Error
-	return errors.As(err, &network)
-}
-
-// IsTransient reports whether err says that a call broke off on its way,
-// and asked again it is likely answered: the connection was closed or reset
-// before the answer was in, as a gateway does that closes a connection it
-// kept open meanwhile, or a gateway or the service is overloaded for a
-// moment (HTTP 502, 503, 504 or 529). A call that was stopped, that waited
-// too long, or that was refused for what it asked, is none.
-func IsTransient(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	if api := (*APIError)(nil); errors.As(err, &api) {
-		switch api.Status {
-		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
-			return true
-		}
-		return false
-	}
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE)
-}
+// IsTransient reports whether err is likely answered when asked again.
+// Deprecated: use chat.IsTransient from internal/chat.
+func IsTransient(err error) bool { return chat.IsTransient(err) }
 
 // Client talks to an OpenAI-compatible API.
 type Client struct {
@@ -484,36 +252,36 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 // cache, also behind a gateway that spreads them over servers. A Claude
 // model caches only up to breakpoints, which are set, see breakpoints. An API
 // that refuses one of these parameters is asked without it from then on.
+type options struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 func (c *Client) Complete(ctx context.Context, model string, msgs []Message, tools []Tool) (Message, error) {
-	msgs = MessagesForModel(msgs)
-	type options struct {
-		IncludeUsage bool `json:"include_usage"`
-	}
-	msgs = shown(own(msgs))
+	msgs = shown(own(MessagesForModel(msgs)))
 	effort := EffortOf(ctx)
 	efforts := c.efforts.Of(model, effort)
 	in := struct {
-		Model           string    `json:"model"`
-		Messages        []Message `json:"messages"`
-		Tools           []Tool    `json:"tools,omitempty"`
-		Stream          bool      `json:"stream"`
-		StreamOptions   *options  `json:"stream_options,omitempty"`
-		PromptCacheKey  string    `json:"prompt_cache_key,omitempty"`
-		ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	}{Model: model, Messages: msgs, Tools: tools, Stream: true, ReasoningEffort: efforts[0]}
+		Model           string        `json:"model"`
+		Messages        []wireMessage `json:"messages"`
+		Tools           []Tool        `json:"tools,omitempty"`
+		Stream          bool          `json:"stream"`
+		StreamOptions   *options      `json:"stream_options,omitempty"`
+		PromptCacheKey  string        `json:"prompt_cache_key,omitempty"`
+		ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	}{Model: model, Tools: tools, Stream: true, ReasoningEffort: efforts[0]}
 	if !c.refused[streamOptions].Load() {
 		in.StreamOptions = &options{IncludeUsage: true}
 	}
 	if !c.refused[promptCacheKey].Load() {
 		in.PromptCacheKey = c.sessionOf(ctx)
 	}
+	// The breakpoints are set in the same pass that writes the messages: a
+	// second pass would encode the pictures again.
 	marked := 0
-	if claude(model) && !c.refused[cacheControl].Load() {
-		in.Messages, marked = breakpoints(msgs)
-	}
+	in.Messages, marked = wireMessages(msgs, claude(model) && !c.refused[cacheControl].Load())
 	t := traceOf(ctx)
 	if t != nil {
-		c.traceRequest(t, c.sessionOf(ctx), model, msgs, tools, in.StreamOptions != nil, in.PromptCacheKey != "", marked)
+		c.traceRequest(t, c.sessionOf(ctx), model, in.Messages, tools, in.StreamOptions != nil, in.PromptCacheKey != "", marked)
 		if in.ReasoningEffort != "" {
 			t("llm request: reasoning_effort %q", in.ReasoningEffort)
 		}
@@ -539,7 +307,7 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 		case promptCacheKey:
 			in.PromptCacheKey = ""
 		case cacheControl:
-			in.Messages, marked = msgs, 0
+			in.Messages, marked = wireMessages(msgs, false)
 		}
 		if t != nil {
 			t("llm request: the API refused %s, asked again without it", optional[i])
@@ -598,11 +366,10 @@ func shown(msgs []Message) []Message {
 			images = append(images, m.Images...)
 			m.Images = nil
 		}
-		m.sent = true
 		out = append(out, m)
 		last := i == len(msgs)-1 || msgs[i+1].Role != "tool"
 		if last && len(images) > 0 {
-			out = append(out, Message{Role: "user", Content: "[The pictures the tools above returned.]", Images: images, sent: true})
+			out = append(out, Message{Role: "user", Content: "[The pictures the tools above returned.]", Images: images})
 			images = nil
 		}
 	}
@@ -627,17 +394,17 @@ func claude(model string) bool { return strings.Contains(strings.ToLower(model),
 // system prompt, along with the tools before it, and the conversation up to
 // one of the last messages of the request before, also when the last of
 // them is not sent again. msgs is not changed.
-func breakpoints(msgs []Message) ([]Message, int) {
+func breakpoints(msgs []wireMessage) ([]wireMessage, int) {
 	out := slices.Clone(msgs)
 	marked := 0
-	first := slices.IndexFunc(out, func(m Message) bool { return m.Role == "system" })
-	if first >= 0 && out[first].Content != "" {
+	first := slices.IndexFunc(out, func(m wireMessage) bool { return m.Role == "system" })
+	if first >= 0 && textOf(out[first]) != "" {
 		out[first].breakpoint = true
 		marked++
 	}
 	last := 0
 	for i := len(out) - 1; i > first && last < maxBreakpoints; i-- {
-		if out[i].Content != "" {
+		if textOf(out[i]) != "" {
 			out[i].breakpoint = true
 			last++
 		}
@@ -657,7 +424,7 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		var out struct {
 			Choices []struct {
-				Message Message `json:"message"`
+				Message wireReply `json:"message"`
 			} `json:"choices"`
 			Usage *usage `json:"usage"`
 		}
@@ -676,11 +443,11 @@ func (c *Client) complete(ctx context.Context, in any, alive func()) (Message, e
 		if len(out.Choices) == 0 {
 			return Message{}, errors.New("openai: response has no choices")
 		}
-		msg := out.Choices[0].Message
+		msg := out.Choices[0].Message.message()
 		msg.Usage = out.Usage.read()
 		return msg, nil
 	}
-	return readStream(resp.Body, alive, t, thoughtOf(ctx), AnsweringOf(ctx), CallingOf(ctx))
+	return readStream(resp.Body, alive, t, chat.ThoughtOf(ctx), AnsweringOf(ctx), CallingOf(ctx))
 }
 
 // readStream puts together the message a stream of server-sent events tells
@@ -861,3 +628,12 @@ func (c *Client) do(ctx context.Context, method, path string, in any) (*http.Res
 	}
 	return resp, nil
 }
+
+// textOf is the text content of a message that has not been made parts.
+func textOf(w wireMessage) string {
+	text, _ := w.Content.(string)
+	return text
+}
+
+// Category says what the status means to fallbacks, retries and diagnosis.
+func (e *APIError) Category() chat.Category { return chat.StatusCategory(e.Status) }

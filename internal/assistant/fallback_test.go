@@ -265,3 +265,20 @@ func TestTitleFallsBack(t *testing.T) {
 		t.Fatalf("asked wrong: %v", err)
 	}
 }
+
+// A call an adapter gave up on for a stall is handed to the fallback: the
+// caller's context is still live. A call the caller itself stopped is not.
+func TestFallbacksOnAStall(t *testing.T) {
+	now := time.Unix(1000, 0)
+	stall := fmt.Errorf("openai: no data from the API: %w", context.DeadlineExceeded)
+	a, b, c := &accessLLM{name: "A", err: stall}, &accessLLM{name: "B"}, &accessLLM{name: "C"}
+	if msg, err := chain(&now, a, b, c).Complete(context.Background(), "big", nil, nil); err != nil || msg.Content != "mid of B" {
+		t.Fatalf("a stall answered %+v, %v", msg, err)
+	}
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	a, b, c = &accessLLM{name: "A", err: stall}, &accessLLM{name: "B"}, &accessLLM{name: "C"}
+	if msg, err := chain(&now, a, b, c).Complete(stopped, "big", nil, nil); !errors.Is(err, stall) || b.asked != 0 {
+		t.Fatalf("a stopped call answered %+v, %v; B asked %d times", msg, err, b.asked)
+	}
+}

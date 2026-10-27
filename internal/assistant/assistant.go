@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
 	"ouroboros/internal/memory"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/suggestion"
 	"ouroboros/internal/workdir"
 )
@@ -328,7 +328,7 @@ func New(config func() (config.Config, error), b Builder, log func(format string
 }
 
 // WithDebug makes a tell, while debug says so, much more of every call of
-// the LLM to the log: see openai.WithTrace. debug is asked anew for every
+// the LLM to the log: see chat.WithTrace. debug is asked anew for every
 // line, so that the mode holds from the next call on.
 func (a *Assistant) WithDebug(debug func() bool) *Assistant {
 	a.debug = debug
@@ -610,14 +610,14 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	if err != nil {
 		return "", err
 	}
-	if !openai.HasEffort(ctx) { // a session brings its own
-		ctx = openai.WithEffort(ctx, cfg.Effort)
+	if !chat.HasEffort(ctx) { // a session brings its own
+		ctx = chat.WithEffort(ctx, cfg.Effort)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r := a.begin(ctx, cancel, contextID, cfg, text)
 	if a.debug != nil {
-		ctx = openai.WithTrace(ctx, func(format string, args ...any) {
+		ctx = chat.WithTrace(ctx, func(format string, args ...any) {
 			if a.debug() {
 				r.trace(format, args...)
 			}
@@ -640,7 +640,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		}
 	}
 	asked := ctx
-	ctx = agent.WithMessageSteering(ctx, func() []openai.Message {
+	ctx = agent.WithMessageSteering(ctx, func() []chat.Message {
 		messages := agent.SteeredMessages(asked)
 		for _, message := range messages {
 			r.steered(message.Content)
@@ -961,8 +961,8 @@ func (a *Assistant) Inspection(contextID string) (agent.Inspection, bool) {
 // system prompt, the tools and the conversation so far.
 type Contents struct {
 	System   string
-	Tools    []openai.Tool
-	Messages []openai.Message
+	Tools    []chat.Tool
+	Messages []chat.Message
 }
 
 // Contents returns a next-context preview without extensions, or the last
@@ -1047,7 +1047,7 @@ func (a *Assistant) Conversation(contextID string) json.RawMessage {
 // Resume makes the agent remember the conversation contextID as
 // Conversation returned it in another process.
 func (a *Assistant) Resume(contextID string, conversation json.RawMessage) error {
-	var msgs []openai.Message
+	var msgs []chat.Message
 	if err := json.Unmarshal(conversation, &msgs); err != nil {
 		return err
 	}

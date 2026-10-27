@@ -9,8 +9,8 @@ import (
 func TestPresentationIDIsLocalOnly(t *testing.T) {
 	for _, m := range []Message{
 		{Role: "assistant", Content: "hello", PresentationID: "local-presentation-id"},
-		{Role: "assistant", Content: "hello", PresentationID: "local-presentation-id", breakpoint: true},
-		{Role: "user", Content: "hello", PresentationID: "local-presentation-id", sent: true, Images: []Image{{}}},
+		{Role: "assistant", Content: "hello", PresentationID: "local-presentation-id"},
+		{Role: "user", Content: "hello", PresentationID: "local-presentation-id", Images: []Image{{}}},
 	} {
 		b, err := json.Marshal(m)
 		if err != nil {

@@ -59,14 +59,14 @@ func TestCompleteSendsTheEffort(t *testing.T) {
 		want    []string
 		took    Took
 	}{
-		{"", nil, []string{"-"}, Took{"", "", true}},
-		{"high", nil, []string{"high"}, Took{"high", "high", true}},
-		{"max", nil, []string{"max"}, Took{"max", "max", true}},
-		{"xhigh", []string{"xhigh"}, []string{"xhigh", "high"}, Took{"xhigh", "high", true}},
-		{"minimal", []string{"minimal"}, []string{"minimal", "low"}, Took{"minimal", "low", true}},
-		{"none", []string{"none", "minimal"}, []string{"none", "minimal", "low"}, Took{"none", "low", true}},
-		{"none", []string{"none", "minimal"}, []string{"low"}, Took{"none", "low", true}}, // what it took the last time
-		{"low", []string{"low"}, []string{"low", "-"}, Took{"low", "", true}},
+		{"", nil, []string{"-"}, Took{Asked: "", Value: "", Told: true}},
+		{"high", nil, []string{"high"}, Took{Asked: "high", Value: "high", Told: true}},
+		{"max", nil, []string{"max"}, Took{Asked: "max", Value: "max", Told: true}},
+		{"xhigh", []string{"xhigh"}, []string{"xhigh", "high"}, Took{Asked: "xhigh", Value: "high", Told: true}},
+		{"minimal", []string{"minimal"}, []string{"minimal", "low"}, Took{Asked: "minimal", Value: "low", Told: true}},
+		{"none", []string{"none", "minimal"}, []string{"none", "minimal", "low"}, Took{Asked: "none", Value: "low", Told: true}},
+		{"none", []string{"none", "minimal"}, []string{"low"}, Took{Asked: "none", Value: "low", Told: true}}, // what it took the last time
+		{"low", []string{"low"}, []string{"low", "-"}, Took{Asked: "low", Value: "", Told: true}},
 	} {
 		sent, refuses = nil, map[string]bool{}
 		for _, e := range tt.refuses {

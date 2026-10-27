@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ouroboros/internal/chat"
 )
 
 func TestGatewayMetadataSnapshotAndArchive(t *testing.T) {
@@ -54,7 +56,7 @@ func TestGatewayMetadataValidation(t *testing.T) {
 	for name, fields := range map[string]map[string]any{
 		"unsupported": {"value": make(chan int)},
 		"nonfinite":   {"value": math.Inf(1)},
-		"oversize":    {"value": strings.Repeat("x", maxGatewayMetadata)},
+		"oversize":    {"value": strings.Repeat("x", chat.MaxGatewayMetadata)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewGatewayMetadata(fields); err == nil {
@@ -67,7 +69,7 @@ func TestGatewayMetadataValidation(t *testing.T) {
 	if _, err := NewGatewayMetadata(cycle); err == nil {
 		t.Fatal("accepted cyclic metadata")
 	}
-	for _, raw := range []string{`[]`, `"text"`, `42`, `true`, `{`, `{"x":}`, `{"x":1} {}`, `{"x":"` + strings.Repeat("x", maxGatewayMetadata) + `"}`} {
+	for _, raw := range []string{`[]`, `"text"`, `42`, `true`, `{`, `{"x":}`, `{"x":1} {}`, `{"x":"` + strings.Repeat("x", chat.MaxGatewayMetadata) + `"}`} {
 		t.Run(raw[:min(len(raw), 24)], func(t *testing.T) {
 			m := GatewayMetadata(`{"keep":true}`)
 			if err := json.Unmarshal([]byte(raw), &m); err == nil {
@@ -96,8 +98,8 @@ func TestGatewayMetadataValidation(t *testing.T) {
 		}
 	}
 	// The size bound includes the JSON object syntax, not only the value.
-	atLimit := map[string]any{"x": strings.Repeat("x", maxGatewayMetadata-len(`{"x":""}`))}
-	if got, err := NewGatewayMetadata(atLimit); err != nil || len(got) != maxGatewayMetadata {
+	atLimit := map[string]any{"x": strings.Repeat("x", chat.MaxGatewayMetadata-len(`{"x":""}`))}
+	if got, err := NewGatewayMetadata(atLimit); err != nil || len(got) != chat.MaxGatewayMetadata {
 		t.Fatalf("exact limit: len=%d, err=%v", len(got), err)
 	}
 	atLimit["x"] = atLimit["x"].(string) + "x"

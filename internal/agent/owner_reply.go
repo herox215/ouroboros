@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/presentation"
 )
 
@@ -13,10 +13,10 @@ import (
 // Images are transient and excluded from JSON; AskOwnerReply shows them to
 // the model with the calling tool result, including when Text is empty.
 type OwnerReply struct {
-	HasAttachments bool                 `json:"-"` // Generic files are never approval evidence.
-	Images         []openai.Image       `json:"-"` // Live model input only; never approval evidence.
-	Text           string               `json:"answer"`
-	Source         openai.MessageSource `json:"source,omitzero"`
+	HasAttachments bool               `json:"-"` // Generic files are never approval evidence.
+	Images         []chat.Image       `json:"-"` // Live model input only; never approval evidence.
+	Text           string             `json:"answer"`
+	Source         chat.MessageSource `json:"source,omitzero"`
 }
 
 // WithOwnerReply is WithOwner with per-reply source metadata.
@@ -49,7 +49,7 @@ func Say(ctx context.Context, text string) bool {
 	}
 	id := presentation.NewID()
 	say(id, text)
-	keep(ctx, openai.Message{Role: "user", Content: SaidHead + text, PresentationID: id})
+	keep(ctx, chat.Message{Role: "user", Content: SaidHead + text, PresentationID: id})
 	return true
 }
 
@@ -58,10 +58,10 @@ func Say(ctx context.Context, text string) bool {
 // message of its own after the results of the round, which is archived with
 // the answer. It reports false outside of an answer.
 func Keep(ctx context.Context, text string) bool {
-	return keep(ctx, openai.Message{Role: "user", Content: text})
+	return keep(ctx, chat.Message{Role: "user", Content: text})
 }
 
-func keep(ctx context.Context, m openai.Message) bool {
+func keep(ctx context.Context, m chat.Message) bool {
 	a := AnswerOf(ctx)
 	if a == nil {
 		return false
@@ -74,7 +74,7 @@ func keep(ctx context.Context, m openai.Message) bool {
 
 // takeKept returns what the tools of the round asked the answer to keep,
 // see Keep, once.
-func (a *Answer) takeKept() []openai.Message {
+func (a *Answer) takeKept() []chat.Message {
 	a.keptMu.Lock()
 	defer a.keptMu.Unlock()
 	kept := a.kept

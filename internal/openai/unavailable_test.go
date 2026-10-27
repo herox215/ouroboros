@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"ouroboros/internal/chat"
 	"syscall"
 	"testing"
 )
@@ -86,6 +87,29 @@ func TestIsTransient(t *testing.T) {
 	} {
 		if got := IsTransient(tc.err); got != tc.want {
 			t.Errorf("%s: %v is transient: %v", name, tc.err, got)
+		}
+	}
+}
+
+// The adapter maps its HTTP status onto the shared categories.
+func TestAPIErrorCategory(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   chat.Category
+	}{
+		{401, chat.Unauthorized},
+		{403, chat.Unauthorized},
+		{429, chat.Unavailable | chat.RateLimited},
+		{402, chat.Unavailable | chat.Rejected},
+		{400, chat.Rejected},
+		{500, chat.Unavailable | chat.ServiceFailure},
+		{502, chat.Unavailable | chat.ServiceFailure | chat.Transient},
+		{503, chat.Unavailable | chat.ServiceFailure | chat.Transient},
+		{504, chat.Unavailable | chat.ServiceFailure | chat.Transient},
+		{529, chat.Unavailable | chat.ServiceFailure | chat.Transient},
+	} {
+		if got := (&APIError{Status: tc.status}).Category(); got != tc.want {
+			t.Errorf("HTTP %d is %b, want %b", tc.status, got, tc.want)
 		}
 	}
 }

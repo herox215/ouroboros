@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"ouroboros/internal/a2a"
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 )
 
 // Ability is a lazily exposed group of tools and their operating instructions.
@@ -203,7 +203,7 @@ func (r *abilityRuntime) activate() {
 			tool := r.hidden[t.Name]
 			r.agent.tools[t.Name] = tool
 			r.fresh[t.Name] = true
-			r.agent.specs = append(r.agent.specs, openai.NewTool(tool.Name, tool.Description, tool.Schema))
+			r.agent.specs = append(r.agent.specs, chat.NewTool(tool.Name, tool.Description, tool.Schema))
 		}
 		r.loaded = append(r.loaded, name)
 	}

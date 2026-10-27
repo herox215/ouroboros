@@ -662,7 +662,7 @@ func TestBreakpoints(t *testing.T) {
 			{Role: "user", Content: "c"}, {Role: "user", Content: "d"}}, []bool{true, false, true, true, true}},
 		"none": {nil, []bool{}},
 	} {
-		got, n := breakpoints(tc.msgs)
+		got, n := breakpoints(wireOf(tc.msgs))
 		marks := []bool{}
 		count := 0
 		for _, m := range got {
@@ -698,7 +698,7 @@ func TestCompleteReadsTheStreamUntilTheUsage(t *testing.T) {
 func TestReasoningItemsAreKept(t *testing.T) {
 	msg := Message{Role: "assistant", Content: "a", Reasoning: `[{"type":"reasoning"}]`, ReasoningField: ReasoningItems}
 	b, err := json.Marshal(msg)
-	if err != nil || string(b) != `{"role":"assistant","content":"a","reasoning_items":"[{\"type\":\"reasoning\"}]"}` {
+	if err != nil || string(b) != `{"role":"assistant","content":"a","reasoning":"[{\"type\":\"reasoning\"}]","reasoning_field":"reasoning_items"}` {
 		t.Fatalf("written as %s, %v", b, err)
 	}
 	var back Message

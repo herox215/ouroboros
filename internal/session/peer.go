@@ -5,8 +5,8 @@ import (
 	"errors"
 	"sync"
 
+	"ouroboros/internal/chat"
 	"ouroboros/internal/history"
-	"ouroboros/internal/openai"
 )
 
 // Peer runs answer, an answer of the agent to a peer, as an answer of the
@@ -58,7 +58,7 @@ func (s *Service) Peer(ctx context.Context, contextID string, answer func(contex
 // publicKey in its conversation id, as the archive kept it: what the agent
 // remembers of it, cut as any conversation is. Nil for one that is not
 // there.
-func (s *Service) Recall(publicKey, id string) []openai.Message {
+func (s *Service) Recall(publicKey, id string) []chat.Message {
 	s.mu.Lock()
 	a := s.archive
 	s.mu.Unlock()

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 )
 
 // The bounds of what the LLM is sent to name a conversation: the start of
@@ -41,7 +41,7 @@ const titlePrompt = `Name the topic of the conversation the user gives you in a 
 // answers, not the calls of tools. It is "" while no topic can be told yet.
 // The call is part of no conversation, and not in the log; the access of the
 // agent is asked first, then its fallbacks, as for an answer.
-func (a *Assistant) Title(ctx context.Context, conversation []openai.Message) (string, error) {
+func (a *Assistant) Title(ctx context.Context, conversation []chat.Message) (string, error) {
 	_, cfg, err := a.current(false, "")
 	if err != nil {
 		return "", err
@@ -68,8 +68,8 @@ func (a *Assistant) Title(ctx context.Context, conversation []openai.Message) (s
 		return "", err
 	}
 	// The fallbacks of the owner name it as they answer it.
-	ctx = openai.WithEffort(ctx, titleEffort)
-	reply, err := a.builder.withFallbacks(llm, cfg).Complete(ctx, cfg.Model, []openai.Message{
+	ctx = chat.WithEffort(ctx, titleEffort)
+	reply, err := a.builder.withFallbacks(llm, cfg).Complete(ctx, cfg.Model, []chat.Message{
 		{Role: "system", Content: titlePrompt},
 		{Role: "user", Content: "<conversation>\n" + talk.String() + "</conversation>\n\n" + titleAsk},
 	}, nil)

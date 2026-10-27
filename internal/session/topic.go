@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/history"
-	"ouroboros/internal/openai"
 )
 
 // concern returns the immutable original request, never a changing title or
@@ -51,8 +51,8 @@ func concernBound(text string, limit int) string {
 
 // concernEvidence keeps only the latest conversational statements. Tool
 // payloads are neither needed nor trustworthy evidence of the owner's intent.
-func concernEvidence(events []Event) []openai.Message {
-	var evidence []openai.Message
+func concernEvidence(events []Event) []chat.Message {
+	var evidence []chat.Message
 	for i := len(events) - 1; i >= 0 && len(evidence) < 6; i-- {
 		e := events[i]
 		role, text := "", e.Text
@@ -69,7 +69,7 @@ func concernEvidence(events []Event) []openai.Message {
 			}
 		}
 		if role != "" && strings.TrimSpace(text) != "" {
-			evidence = append(evidence, openai.Message{Role: role, Content: concernBound(text, 2000)})
+			evidence = append(evidence, chat.Message{Role: role, Content: concernBound(text, 2000)})
 		}
 	}
 	for i, j := 0, len(evidence)-1; i < j; i, j = i+1, j-1 {
@@ -89,7 +89,7 @@ type checkedConcern struct {
 	threadRevision int
 }
 
-func (t threading) checkConcern(ctx context.Context, id, text string, pictures []openai.Image, pendingReply bool) (checkedConcern, assistant.TopicDecision, error) {
+func (t threading) checkConcern(ctx context.Context, id, text string, pictures []chat.Image, pendingReply bool) (checkedConcern, assistant.TopicDecision, error) {
 	if err := ctx.Err(); err != nil {
 		return checkedConcern{}, assistant.TopicDecision{}, err
 	}

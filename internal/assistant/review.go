@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"ouroboros/internal/chat"
 	"ouroboros/internal/memory"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/workdir"
 )
 
@@ -208,8 +208,8 @@ func (a *Assistant) review(ctx context.Context, signals []Signal, trail []string
 	for i, s := range signals {
 		texts[i] = "- " + string(s.Kind) + ": " + s.Text
 	}
-	ctx = openai.WithEffort(ctx, reviewEffort)
-	reply, err := a.builder.withFallbacks(llm, cfg).Complete(ctx, cfg.Model, []openai.Message{
+	ctx = chat.WithEffort(ctx, reviewEffort)
+	reply, err := a.builder.withFallbacks(llm, cfg).Complete(ctx, cfg.Model, []chat.Message{
 		{Role: "system", Content: reviewPrompt},
 		{Role: "user", Content: "<tools>\n" + strings.Join(tools.allowed, "\n") + "\n</tools>\n\n" +
 			"<withheld>\n" + strings.Join(tools.withheld, ", ") + "\n</withheld>\n\n" +

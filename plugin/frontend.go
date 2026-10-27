@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"ouroboros/internal/chat"
 	"strings"
 
 	"ouroboros/internal/assistant"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/pasteboard"
 	"ouroboros/internal/session"
 )
@@ -125,11 +125,11 @@ type ReplyImageSessions = session.ReplyImageAPI
 var ErrImage = session.ErrImage
 
 // MessageSource identifies the interface sending one owner message.
-type MessageSource = openai.MessageSource
+type MessageSource = chat.MessageSource
 
 // WithMessageSource attributes an Ask or Steer call, not the whole session.
 func WithMessageSource(ctx context.Context, source MessageSource) context.Context {
-	return openai.WithMessageSource(ctx, source)
+	return chat.WithMessageSource(ctx, source)
 }
 
 // SessionToolDetails optionally loads archived tool arguments and output on demand.

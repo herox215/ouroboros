@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/openai"
 )
 
@@ -42,6 +43,7 @@ func TestClassify(t *testing.T) {
 		{&openai.APIError{Status: 401, Message: "Incorrect API key provided: sk-live-123"}, CauseLLMAuth},
 		{&openai.APIError{Status: 403, Message: "organisation hunter2 is suspended"}, CauseLLMAuth},
 		{&openai.APIError{Status: 429, Message: "quota of tok_abc exceeded"}, CauseLLMRateLimited},
+		{chat.Mark(errors.New("plan limit reached: tok_abc"), chat.Unavailable|chat.RateLimited), CauseLLMRateLimited},
 		{&openai.APIError{Status: 400, Message: "context length exceeded"}, CauseLLMRejected},
 		{&openai.APIError{Status: 404, Message: "model gpt-secret not found"}, CauseLLMRejected},
 		{&openai.APIError{Status: 503, Message: "upstream 10.0.0.5 is down"}, CauseLLMFailed},

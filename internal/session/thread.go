@@ -12,8 +12,8 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/history"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/presentation"
 )
 
@@ -199,7 +199,7 @@ const relayGap = "\n[…]\n"
 // message on its own and the same each time, and leaves out none: so each
 // call of the LLM begins with all the one before sent, which is what the
 // caches of providers keep.
-func shaped(msgs []openai.Message) []openai.Message {
+func shaped(msgs []chat.Message) []chat.Message {
 	msgs = slices.Clone(msgs)
 	for i, m := range msgs {
 		if m.Role != "user" {
@@ -220,20 +220,20 @@ func shaped(msgs []openai.Message) []openai.Message {
 // none. Messages without a time are of the answer on its way, and new. The
 // last list of the sessions it was told before that stays first: it is told
 // it anew only once it changes, see inThread.
-func recentOf(msgs []openai.Message, now time.Time) []openai.Message {
-	start := slices.IndexFunc(msgs, func(m openai.Message) bool {
+func recentOf(msgs []chat.Message, now time.Time) []chat.Message {
+	start := slices.IndexFunc(msgs, func(m chat.Message) bool {
 		return m.Role == "user" && (m.At.IsZero() || now.Sub(m.At) <= assistant.ThreadWindow)
 	})
 	if start < 0 {
 		start = len(msgs)
 	}
 	kept := msgs[start:]
-	if slices.ContainsFunc(kept, func(m openai.Message) bool { return m.Role == "user" && isRoster(m.Content) }) {
+	if slices.ContainsFunc(kept, func(m chat.Message) bool { return m.Role == "user" && isRoster(m.Content) }) {
 		return kept
 	}
 	for _, m := range slices.Backward(msgs[:start]) {
 		if m.Role == "user" && isRoster(m.Content) {
-			return append([]openai.Message{m}, kept...)
+			return append([]chat.Message{m}, kept...)
 		}
 	}
 	return kept
@@ -247,7 +247,7 @@ func (s *Service) shapedFor(ctx context.Context, se *session) context.Context {
 		return ctx
 	}
 	now := s.now()
-	return agent.WithSent(ctx, func(msgs []openai.Message) []openai.Message {
+	return agent.WithSent(ctx, func(msgs []chat.Message) []chat.Message {
 		return shaped(recentOf(msgs, now))
 	})
 }
@@ -262,7 +262,7 @@ const rosterEvery = 6
 // told rosterEvery answers ago; for another session, messages. What the
 // thread is told stays as it was told it: so the list of the sessions is kept
 // with the conversation rather than sent anew each time. s.mu is held.
-func (s *Service) inThread(se *session, messages []openai.Message) []openai.Message {
+func (s *Service) inThread(se *session, messages []chat.Message) []chat.Message {
 	if se.id != ThreadID {
 		return messages
 	}
@@ -272,7 +272,7 @@ func (s *Service) inThread(se *session, messages []openai.Message) []openai.Mess
 		return messages
 	}
 	se.roster, se.told = sessions, 0
-	return append([]openai.Message{{Role: "user", Content: sessions}}, messages...)
+	return append([]chat.Message{{Role: "user", Content: sessions}}, messages...)
 }
 
 // resolve is id, the handle of a session or the start of its ID, as the
@@ -487,7 +487,7 @@ func handedBy(step Event, result string) string {
 // session gets the words of the owner, and not what the agent of the thread
 // makes of them. The pictures of those messages go with it either way: the
 // agent of the thread cannot hand them on in words.
-func (s *Service) words(text string) (string, []openai.Image) {
+func (s *Service) words(text string) (string, []chat.Image) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	thread := s.get(ThreadID)
@@ -504,7 +504,7 @@ func (s *Service) words(text string) (string, []openai.Image) {
 // answers the question the session waits for, the answer on its way takes
 // it, or one starts for it. The thread shows what comes of that answer, see
 // relay.
-func (s *Service) hand(ctx context.Context, id, text string, pictures []openai.Image, may func() error) (string, string, error) {
+func (s *Service) hand(ctx context.Context, id, text string, pictures []chat.Image, may func() error) (string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
@@ -555,7 +555,7 @@ func (s *Service) threadSource() MessageSource {
 			return e.Source
 		}
 	}
-	return openai.MessageSource{Interface: "unknown"}
+	return chat.MessageSource{Interface: "unknown"}
 }
 
 // threadContext is ctx for the session se: under which the agent answers as
@@ -777,7 +777,7 @@ func (s *Service) quietly(ctx context.Context, se *session) context.Context {
 	if se.id != ThreadID {
 		return ctx
 	}
-	return openai.WithThought(openai.WithAnswering(openai.WithCalling(ctx, nil), nil), nil)
+	return chat.WithThought(chat.WithAnswering(chat.WithCalling(ctx, nil), nil), nil)
 }
 
 // along tells e, of what the agent does on its way to the answer in se,

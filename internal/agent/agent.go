@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"ouroboros/internal/a2a"
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/presentation"
 )
 
@@ -76,10 +76,10 @@ const (
 var ErrTooManyToolCalls = errors.New("agent: gave up after too many tool calls")
 
 // LLM generates a reply for a conversation or asks for tools to be run.
-// openai.Client implements it; another provider has to translate to and from
+// chat.Client implements it; another provider has to translate to and from
 // the OpenAI message types.
 type LLM interface {
-	Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error)
+	Complete(ctx context.Context, model string, msgs []chat.Message, tools []chat.Tool) (chat.Message, error)
 }
 
 // Step reports a tool call: once when it starts and again, with Done set,
@@ -115,13 +115,13 @@ type Call struct {
 	InPlan  bool
 	Thought int
 	// Via is what answered instead of the access and the model of the agent,
-	// and Instead why those could not: see openai.Message.
+	// and Instead why those could not: see chat.Message.
 	Via, Instead string
 	// Retried is why the call was asked again, each time, see
-	// openai.Message; "" if it was not.
+	// chat.Message; "" if it was not.
 	Retried string
-	// Effort is what the API took of the effort, see openai.Message.
-	Effort    openai.Took
+	// Effort is what the API took of the effort, see chat.Message.
+	Effort    chat.Took
 	Done      bool
 	Took      time.Duration
 	ToolCalls int
@@ -177,13 +177,13 @@ func Remark(ctx context.Context, text string) bool {
 // shownImages are the pictures a call of a tool shows the LLM.
 type shownImages struct {
 	mu     sync.Mutex
-	images []openai.Image
+	images []chat.Image
 }
 
 // Show makes the LLM see images along with the result of the call of a tool
 // that ctx is run for: the result says in words what they are. It reports
 // false outside of a call, where they would go nowhere.
-func Show(ctx context.Context, images ...openai.Image) bool {
+func Show(ctx context.Context, images ...chat.Image) bool {
 	s, ok := ctx.Value(imagesKey{}).(*shownImages)
 	if !ok {
 		return false
@@ -204,7 +204,7 @@ type Answer struct {
 	ended   atomic.Bool // by End
 	// kept is what the tools of the round keep, see Keep.
 	keptMu sync.Mutex
-	kept   []openai.Message
+	kept   []chat.Message
 }
 
 // End makes the answer of ctx end once the tools of its round ran, without a
@@ -287,8 +287,8 @@ type talkKey struct{}
 // Talk is the conversation the answer of ctx started with, up to the message
 // it answers, nil outside of an answer: a tool can tell from it in what
 // language the owner speaks.
-func Talk(ctx context.Context) []openai.Message {
-	talk, _ := ctx.Value(talkKey{}).([]openai.Message)
+func Talk(ctx context.Context) []chat.Message {
+	talk, _ := ctx.Value(talkKey{}).([]chat.Message)
 	return talk
 }
 
@@ -303,7 +303,7 @@ func WithoutOwner(ctx context.Context) context.Context {
 // it was asked the last time: see WithSteering. Who is told does not hear it
 // again.
 func Steered(ctx context.Context) []string {
-	if steer, ok := ctx.Value(messageSteeringKey{}).(func() []openai.Message); ok && steer != nil {
+	if steer, ok := ctx.Value(messageSteeringKey{}).(func() []chat.Message); ok && steer != nil {
 		var texts []string
 		for _, m := range steer() {
 			texts = append(texts, m.Content)
@@ -336,9 +336,9 @@ func ContextID(ctx context.Context) string {
 type Agent struct {
 	llm        LLM
 	model      string
-	system     openai.Message
+	system     chat.Message
 	tools      map[string]Tool
-	specs      []openai.Tool
+	specs      []chat.Tool
 	sizeOf     int // of specs, as JSON
 	memory     *Memory
 	extensions extensions
@@ -362,11 +362,11 @@ type conversation struct {
 	// notes are what the user told since the last answer without asking,
 	// see Agent.Note: the next answer starts with them.
 	abilities  []string // live grants only; deliberately absent from exported history
-	notes      []openai.Message
+	notes      []chat.Message
 	lastUsed   uint64
 	inspected  bool
 	inspection Inspection
-	msgs       []openai.Message
+	msgs       []chat.Message
 }
 
 // New returns an agent that answers with model as told by the system prompt
@@ -375,7 +375,7 @@ func New(llm LLM, model, system string, tools ...Tool) *Agent {
 	a := &Agent{
 		llm:    llm,
 		model:  model,
-		system: openai.Message{Role: "system", Content: system},
+		system: chat.Message{Role: "system", Content: system},
 		tools:  map[string]Tool{},
 		memory: NewMemory(),
 	}
@@ -384,7 +384,7 @@ func New(llm LLM, model, system string, tools ...Tool) *Agent {
 		if t.ability != nil {
 			continue
 		}
-		a.specs = append(a.specs, openai.NewTool(t.Name, t.Description, t.Schema))
+		a.specs = append(a.specs, chat.NewTool(t.Name, t.Description, t.Schema))
 	}
 	specs, _ := json.Marshal(a.specs) // texts and JSON: cannot fail
 	a.sizeOf = len(specs)
@@ -403,7 +403,7 @@ func (a *Agent) WithMemory(m *Memory) *Agent {
 // immutable tool definitions are shared; concurrent conversations are unaffected.
 func (a *Agent) WithSystem(system string) *Agent {
 	copy := *a
-	copy.system = openai.Message{Role: "system", Content: system}
+	copy.system = chat.Message{Role: "system", Content: system}
 	return &copy
 }
 
@@ -417,7 +417,7 @@ func (a *Agent) WithTools(tools ...Tool) *Agent {
 
 // Prompt returns what the agent sends with every call of the LLM before the
 // conversation: its system prompt and its tools.
-func (a *Agent) Prompt() (system string, tools []openai.Tool) {
+func (a *Agent) Prompt() (system string, tools []chat.Tool) {
 	return a.system.Content, slices.Clone(a.specs)
 }
 
@@ -441,27 +441,27 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	ctx, end := context.WithCancel(ctx)
 	defer end() // after the hooks that are told how the answer ended
 	ctx = context.WithValue(ctx, answerKey{}, &Answer{ctx: ctx})
-	ctx = openai.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
+	ctx = chat.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
 	spent := &atomic.Int64{}
 	ctx = context.WithValue(ctx, spentKey{}, spent)
 	// What the user told meanwhile without asking comes before what it asks.
 	history := append(a.memory.history(contextID), a.memory.noted(contextID)...)
 	asked := len(history) // where this answer starts
-	input, ok := ctx.Value(inputMessagesKey{}).([]openai.Message)
+	input, ok := ctx.Value(inputMessagesKey{}).([]chat.Message)
 	if !ok {
-		input = []openai.Message{{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx)}}
+		input = []chat.Message{{Role: "user", Content: text, Source: chat.MessageSourceFrom(ctx)}}
 	}
 	history = append(history, copyMessages(input)...)
 	ctx = context.WithValue(ctx, talkKey{}, copyMessages(history))
 	origin, peer := a2a.OriginFrom(ctx)
 	processing := Processing{a.llm, a.model, Conversation{contextID, peer, origin}}
-	var contributions, events []openai.Message
+	var contributions, events []chat.Message
 	var diagnostics []Diagnostic
-	emit := func(m openai.Message) error {
-		events = append(events, copyMessages([]openai.Message{m})[0])
+	emit := func(m chat.Message) error {
+		events = append(events, copyMessages([]chat.Message{m})[0])
 		if p := a.extensions.provider; p != nil && p.Observe != nil {
-			if err := p.Observe(ctx, processing, copyMessages([]openai.Message{m})[0]); err != nil {
+			if err := p.Observe(ctx, processing, copyMessages([]chat.Message{m})[0]); err != nil {
 				return fmt.Errorf("context provider %s observe: %w", p.Name, err)
 			}
 		}
@@ -499,7 +499,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	}
 	for _, h := range a.extensions.hooks {
 		if h.Before != nil {
-			extra, err := h.Before(ctx, Preparation{processing, copyMessages(append([]openai.Message{a.system}, history...)), copyMessages(contributions)})
+			extra, err := h.Before(ctx, Preparation{processing, copyMessages(append([]chat.Message{a.system}, history...)), copyMessages(contributions)})
 			if err != nil {
 				return abandon(fmt.Errorf("answer hook %s before: %w", h.Name, err))
 			}
@@ -519,7 +519,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	report := func() (bool, error) {
 		texts := AnswerOf(ctx).reported()
 		for _, text := range texts {
-			said := openai.Message{Role: "user", Content: text}
+			said := chat.Message{Role: "user", Content: text}
 			if err := emit(said); err != nil {
 				return false, err
 			}
@@ -535,9 +535,9 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			return abandon(err)
 		}
 		abilities.activate()
-		msgs := sent(ctx, append([]openai.Message{a.system}, history...))
+		msgs := sent(ctx, append([]chat.Message{a.system}, history...))
 		if note := notes(round, int(spent.Load())); note != "" && msgs[len(msgs)-1].Role == "tool" {
-			msgs = append(msgs, openai.Message{Role: "user", Content: note})
+			msgs = append(msgs, chat.Message{Role: "user", Content: note})
 		}
 		if p := a.extensions.provider; p != nil {
 			prepared, err := p.Prepare(ctx, Preparation{processing, copyMessages(msgs), copyMessages(contributions)})
@@ -551,12 +551,12 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			}
 			msgs = copyMessages(prepared)
 		} else if len(contributions) > 0 {
-			msgs = append(append([]openai.Message{a.system}, copyMessages(contributions)...), msgs[1:]...)
+			msgs = append(append([]chat.Message{a.system}, copyMessages(contributions)...), msgs[1:]...)
 		}
 		if err := ctx.Err(); err != nil {
 			return abandon(err)
 		}
-		msgs = openai.MessagesForModel(msgs)
+		msgs = chat.MessagesForModel(msgs)
 		a.inspect(contextID, Inspection{Messages: msgs, Tools: a.specs})
 		sent := 0
 		if observe.Call != nil {
@@ -577,7 +577,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			return abandon(err)
 		}
 		msg.Role = "assistant"
-		msg.Source = openai.MessageSource{}
+		msg.Source = chat.MessageSource{}
 		// What the user said while the model wrote its answer would come
 		// as a second answer after it: the model writes one instead, which
 		// takes in both, and what it wrote is told to it as a draft.
@@ -586,7 +586,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 				if observe.Draft != nil {
 					observe.Draft(msg.Content)
 				}
-				for _, m := range append([]openai.Message{{Role: "user", Content: DraftHead + msg.Content}}, steered...) {
+				for _, m := range append([]chat.Message{{Role: "user", Content: DraftHead + msg.Content}}, steered...) {
 					if err := emit(m); err != nil {
 						return abandon(err)
 					}
@@ -603,7 +603,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		// result, is asked once to go on: nothing is no answer.
 		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged {
 			nudged = true
-			history = append(history, openai.Message{Role: "user", Content: emptyNote})
+			history = append(history, chat.Message{Role: "user", Content: emptyNote})
 			continue
 		}
 		if len(msg.ToolCalls) == 0 {
@@ -620,7 +620,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		before := history[asked : len(history)-1]
 		toolCtx := withInputImages(ctx, history)
 		for _, call := range msg.ToolCalls {
-			var result openai.Message
+			var result chat.Message
 			// A formerly hidden call failed before activation. It is not a
 			// repetition of an executable call now that the tool is exposed.
 			if !abilities.fresh[call.Function.Name] {
@@ -682,10 +682,10 @@ const maxNotes = 32
 // kept where answers are, as presented with the current identity of ctx, if
 // it has one: see presentation.As.
 func (a *Agent) Note(ctx context.Context, contextID, text string) error {
-	note := openai.Message{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx), PresentationID: presentation.Current(ctx)}
+	note := chat.Message{Role: "user", Content: text, Source: chat.MessageSourceFrom(ctx), PresentationID: presentation.Current(ctx)}
 	a.memory.note(contextID, note)
 	origin, peer := a2a.OriginFrom(ctx)
-	told := AnswerOutcome{Processing{a.llm, a.model, Conversation{contextID, peer, origin}}, []openai.Message{note}, "", nil}
+	told := AnswerOutcome{Processing{a.llm, a.model, Conversation{contextID, peer, origin}}, []chat.Message{note}, "", nil}
 	var failed error
 	for _, h := range a.extensions.hooks {
 		if h.After != nil {
@@ -698,7 +698,7 @@ func (a *Agent) Note(ctx context.Context, contextID, text string) error {
 }
 
 // note keeps msg for the next answer of the conversation contextID.
-func (m *Memory) note(contextID string, msg openai.Message) {
+func (m *Memory) note(contextID string, msg chat.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clock++
@@ -718,7 +718,7 @@ func (m *Memory) note(contextID string, msg openai.Message) {
 
 // noted returns the notes of the conversation contextID, which are part of
 // its next answer from now on.
-func (m *Memory) noted(contextID string) []openai.Message {
+func (m *Memory) noted(contextID string) []chat.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c := m.conversations[contextID]
@@ -737,7 +737,7 @@ func (m *Memory) noted(contextID string) []openai.Message {
 // failed is not part of it, so that no later context leaks the cause. Nor
 // are the pictures the tools showed: a model that takes none would fail with
 // them again on every answer.
-func Abandon(msgs []openai.Message) []openai.Message {
+func Abandon(msgs []chat.Message) []chat.Message {
 	msgs = slices.Clone(msgs)
 	pending := []string{}
 	for i, m := range msgs {
@@ -750,9 +750,9 @@ func Abandon(msgs []openai.Message) []openai.Message {
 		}
 	}
 	for _, id := range pending {
-		msgs = append(msgs, openai.Message{Role: "tool", ToolCallID: id, Content: "[This call did not finish.]"})
+		msgs = append(msgs, chat.Message{Role: "tool", ToolCallID: id, Content: "[This call did not finish.]"})
 	}
-	return append(msgs, openai.Message{Role: "assistant", Content: abandoned})
+	return append(msgs, chat.Message{Role: "assistant", Content: abandoned})
 }
 
 // notes is what the LLM is told after the results of the tools when round,
@@ -798,7 +798,7 @@ func searching(round int) string {
 // repeated returns the result of call when it is the same as each of the
 // last maxRepeats calls in msgs, which the LLM asked for in a row: it is not
 // run again. Otherwise it returns a message without content.
-func repeated(call openai.ToolCall, msgs []openai.Message) openai.Message {
+func repeated(call chat.ToolCall, msgs []chat.Message) chat.Message {
 	same := 0
 	for _, m := range slices.Backward(msgs) {
 		if m.Role == "tool" {
@@ -812,20 +812,20 @@ func repeated(call openai.ToolCall, msgs []openai.Message) openai.Message {
 			break
 		}
 		if same++; same == maxRepeats {
-			return openai.Message{Role: "tool", ToolCallID: call.ID, Content: fmt.Sprintf(
+			return chat.Message{Role: "tool", ToolCallID: call.ID, Content: fmt.Sprintf(
 				"error: this is the call of %s you asked for %d times in a row, with the same arguments: "+
 					"it was not run again, as it would give the same. Do something else, or answer with what you have.",
 				call.Function.Name, maxRepeats+1)}
 		}
 	}
-	return openai.Message{}
+	return chat.Message{}
 }
 
 // once returns result without the pictures history shows already: its
 // content names the call they came with instead. What the LLM saw once is
 // not sent twice.
-func once(result openai.Message, history []openai.Message) openai.Message {
-	var kept []openai.Image
+func once(result chat.Message, history []chat.Message) chat.Message {
+	var kept []chat.Image
 	for _, image := range result.Images {
 		if call := shownWith(image, history); call != "" {
 			result.Content += fmt.Sprintf("\n[The picture is the same as the one shown above with the result of the call %s: it is not sent again.]", call)
@@ -839,7 +839,7 @@ func once(result openai.Message, history []openai.Message) openai.Message {
 
 // shownWith returns the call whose result in history shows image, "" if
 // none does.
-func shownWith(image openai.Image, history []openai.Message) string {
+func shownWith(image chat.Image, history []chat.Message) string {
 	for _, m := range history {
 		for _, seen := range m.Images {
 			if bytes.Equal(seen.Data, image.Data) {
@@ -864,7 +864,7 @@ func gathered(n int) string {
 // line says what was left out. Empty lines go along with a run. Only the
 // results of the same answer count: what came before it may be cut from the
 // conversation, while the answer is kept whole.
-func unrepeated(result string, msgs []openai.Message) string {
+func unrepeated(result string, msgs []chat.Message) string {
 	if len(result) < minRepeated {
 		return result
 	}
@@ -914,7 +914,7 @@ func unrepeated(result string, msgs []openai.Message) string {
 }
 
 // call runs one tool call and returns its result as a message for the LLM.
-func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
+func (a *Agent) call(ctx context.Context, call chat.ToolCall) chat.Message {
 	name, args := call.Function.Name, json.RawMessage(call.Function.Arguments)
 	tool, ok := a.tools[name]
 	if !ok {
@@ -925,9 +925,9 @@ func (a *Agent) call(ctx context.Context, call openai.ToolCall) openai.Message {
 	shown := &shownImages{}
 	content, err := invoke(context.WithValue(ctx, imagesKey{}, shown), tool, args, call.ID)
 	if err != nil {
-		return openai.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error()}
+		return chat.Message{Role: "tool", ToolCallID: call.ID, Content: "error: " + err.Error()}
 	}
-	return openai.Message{Role: "tool", ToolCallID: call.ID, Content: content, Images: shown.images}
+	return chat.Message{Role: "tool", ToolCallID: call.ID, Content: content, Images: shown.images}
 }
 
 func invoke(ctx context.Context, tool Tool, args json.RawMessage, id string) (string, error) {
@@ -948,11 +948,11 @@ func invoke(ctx context.Context, tool Tool, args json.RawMessage, id string) (st
 
 // Conversation returns what m remembers of the conversation contextID, to go
 // on with in another memory: see Restore.
-func (m *Memory) Conversation(contextID string) []openai.Message { return m.history(contextID) }
+func (m *Memory) Conversation(contextID string) []chat.Message { return m.history(contextID) }
 
 // Restore makes m remember msgs as the conversation contextID, as far as it
 // keeps of one.
-func (m *Memory) Restore(contextID string, msgs []openai.Message) {
+func (m *Memory) Restore(contextID string, msgs []chat.Message) {
 	m.mu.Lock()
 	if c := m.conversations[contextID]; c != nil {
 		c.abilities = nil
@@ -1004,7 +1004,7 @@ func (m *Memory) Forget(contextID string) {
 	delete(m.conversations, contextID)
 }
 
-func (m *Memory) history(contextID string) []openai.Message {
+func (m *Memory) history(contextID string) []chat.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.conversations[contextID]; ok {
@@ -1013,7 +1013,7 @@ func (m *Memory) history(contextID string) []openai.Message {
 	return nil
 }
 
-func (m *Memory) remember(contextID string, msgs []openai.Message) {
+func (m *Memory) remember(contextID string, msgs []chat.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clock++
@@ -1049,7 +1049,7 @@ func (m *Memory) remember(contextID string, msgs []openai.Message) {
 // Without a cut, what the LLM thought is left out once it is at least half of
 // the conversation from the first message that has it on: the cache of that
 // part is lost, but every later call sends less.
-func trim(msgs []openai.Message) []openai.Message {
+func trim(msgs []chat.Message) []chat.Message {
 	size := sizes(msgs)
 	start := cut(msgs, size, len(msgs), size[0])
 	if len(msgs) <= maxHistory && size[0] <= maxHistoryBytes {
@@ -1076,10 +1076,10 @@ func trim(msgs []openai.Message) []openai.Message {
 
 // Thoughtless returns msgs without what the LLM thought: for another access
 // than the one that thought it, which is not sent it.
-func Thoughtless(msgs []openai.Message) []openai.Message { return thoughtless(msgs) }
+func Thoughtless(msgs []chat.Message) []chat.Message { return thoughtless(msgs) }
 
 // thoughtless returns msgs without what the LLM thought.
-func thoughtless(msgs []openai.Message) []openai.Message {
+func thoughtless(msgs []chat.Message) []chat.Message {
 	msgs = slices.Clone(msgs)
 	for i := range msgs {
 		msgs[i].Reasoning, msgs[i].ReasoningField = "", ""
@@ -1089,7 +1089,7 @@ func thoughtless(msgs []openai.Message) []openai.Message {
 
 // sizes returns the sizes of msgs as JSON, which leaves out their pictures:
 // sizes[i] is that of msgs[i:].
-func sizes(msgs []openai.Message) []int {
+func sizes(msgs []chat.Message) []int {
 	sizes := make([]int, len(msgs)+1)
 	for i := len(msgs) - 1; i >= 0; i-- {
 		b, _ := json.Marshal(msgs[i]) // texts and JSON: cannot fail
@@ -1100,7 +1100,7 @@ func sizes(msgs []openai.Message) []int {
 
 // lastImages returns msgs with no more than the last maxImages pictures:
 // those before are left out of their messages, and msgs is not changed.
-func lastImages(msgs []openai.Message) []openai.Message {
+func lastImages(msgs []chat.Message) []chat.Message {
 	kept := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
 		images := msgs[i].Images
@@ -1121,7 +1121,7 @@ func lastImages(msgs []openai.Message) []openai.Message {
 // cut returns the first user message of msgs after which there are at most
 // keep messages and keepBytes, by sizes; the last one if there is none, and
 // len(msgs) if there is no user message at all.
-func cut(msgs []openai.Message, sizes []int, keep, keepBytes int) int {
+func cut(msgs []chat.Message, sizes []int, keep, keepBytes int) int {
 	last := len(msgs)
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if msgs[i].Role != "user" {

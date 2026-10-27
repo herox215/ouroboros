@@ -2,17 +2,17 @@ package plugin
 
 import (
 	"context"
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 )
 
 // GatewayMetadata is an immutable, bounded JSON context snapshot, serialized as
 // an object in archives and source envelopes.
-type GatewayMetadata = openai.GatewayMetadata
+type GatewayMetadata = chat.GatewayMetadata
 
 // NewGatewayMetadata copies a gateway's descriptive context as JSON. Invalid or
 // oversized (over 16 KiB) objects return an error. It confers no permissions.
 func NewGatewayMetadata(fields map[string]any) (GatewayMetadata, error) {
-	return openai.NewGatewayMetadata(fields)
+	return chat.NewGatewayMetadata(fields)
 }
 
 type gatewayMetadataKey struct{}
