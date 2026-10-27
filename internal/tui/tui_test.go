@@ -311,6 +311,30 @@ func (f *fakeBackend) Memories(_ context.Context, project string, all bool) (plu
 	f.memoryProject, f.memoryAll = project, all
 	return f.memories, f.fail["memories"]
 }
+
+// SetMemory is the store of the fake, as the dialog writes to it: the memory
+// is replaced if its version is the one read, and fails with
+// plugin.ErrMemoryChanged otherwise.
+func (f *fakeBackend) SetMemory(_ context.Context, project, id string, version int64, key, content string) (plugin.Memory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.fail["setmemory"]; err != nil {
+		return plugin.Memory{}, err
+	}
+	for i := range f.memories.Memories {
+		e := &f.memories.Memories[i]
+		if e.ID != id || e.Project != project {
+			continue
+		}
+		if e.Version != version {
+			return plugin.Memory{}, plugin.ErrMemoryChanged
+		}
+		e.Key, e.Content, e.Version = key, content, e.Version+1
+		e.Updated = time.Now().UTC().Format(time.RFC3339Nano)
+		return *e, nil
+	}
+	return plugin.Memory{}, errors.New("no such memory")
+}
 func (f *fakeBackend) Read(ctx context.Context, id string) ([]Event, error) {
 	if err := f.fail["read"]; err != nil {
 		return nil, err
@@ -476,6 +500,10 @@ func press(m *Model, keys ...string) tea.Cmd {
 		case "ctrl+d":
 			msg.Code, msg.Mod = 'd', tea.ModCtrl
 		default:
+			if key, ok := strings.CutPrefix(k, "ctrl+"); ok {
+				msg.Code, msg.Mod = rune(key[0]), tea.ModCtrl
+				break
+			}
 			msg.Code, msg.Text = rune(k[0]), k
 		}
 		_, cmd := m.Update(msg)

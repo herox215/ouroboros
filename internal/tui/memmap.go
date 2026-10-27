@@ -401,6 +401,17 @@ func (s *memoryScreen) choose(i int) func() tea.Cmd {
 	return choosing(i == s.sel, func() { s.sel = i }, func() tea.Cmd { return s.open(i) })
 }
 
+// openEdit edits the memory i of those the filter leaves.
+func (s *memoryScreen) openEdit(m *Model, i int) tea.Cmd {
+	rows := s.rows()
+	if len(rows) == 0 {
+		return nil
+	}
+	edit, cmd := editing(rows[max(0, min(i, len(rows)-1))], m.light)
+	s.edit = edit
+	return cmd
+}
+
 // open reads the memory i of those the filter leaves in full.
 func (s *memoryScreen) open(i int) tea.Cmd {
 	rows := s.rows()

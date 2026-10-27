@@ -256,6 +256,24 @@ func (o *Owner) Memories(ctx context.Context, project string, all bool) (MemoryL
 	return store.List(ctx, project, all, 0)
 }
 
+// SetMemory replaces the memory id of the project, as the owner typed it in
+// a dialog: version is the one they read, and the store refuses the write
+// with ErrMemoryChanged if the memory changed since. It returns the memory
+// as it is then.
+func (o *Owner) SetMemory(ctx context.Context, project, id string, version int64, key, content string) (Memory, error) {
+	store, err := memory.Open(o.home.History())
+	if err != nil {
+		return Memory{}, err
+	}
+	defer store.Close()
+	e, err := store.Update(ctx, project, id, version, key, content, "owner")
+	if err != nil {
+		return Memory{}, err
+	}
+	o.home.Log("the owner edited a memory: %q", e.Key)
+	return e, nil
+}
+
 // Status reports how the node is configured and whether it is running.
 func (o *Owner) Status() (NodeStatus, error) { return o.local.Status() }
 

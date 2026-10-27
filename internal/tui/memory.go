@@ -60,6 +60,8 @@ type memoryScreen struct {
 	detail    *plugin.Memory // the memory read in full, nil while the list is shown
 	detailAt  int            // the first line of the memory that is read
 	readLines int            // how many lines the memory that is read has, as the view last laid it out
+	edit      *memoryEdit    // the memory being edited, nil while none is
+	pick      string         // the id of a memory to select once the listing came, "" for none
 }
 
 // memoriesMsg is the memories of the node, on the way to the screen.
@@ -96,6 +98,16 @@ func (m *Model) memoriesLoaded(msg memoriesMsg) tea.Cmd {
 	}
 	s.listing, s.err, s.loaded = msg.listing, msg.err, true
 	s.sel = max(0, min(s.sel, len(s.rows())-1))
+	// A memory that was saved is selected where it is now, the latest
+	// updated first, so that the chart shows it where the edit left it.
+	if s.pick != "" {
+		for i, e := range s.rows() {
+			if e.ID == s.pick {
+				s.sel = i
+			}
+		}
+		s.pick = ""
+	}
 	return nil
 }
 
@@ -120,8 +132,11 @@ func (s *memoryScreen) rows() []plugin.Memory {
 // archived and expired ones too, and esc takes back what is typed and then
 // goes back to the chat.
 func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	if s.edit != nil {
+		return s.editKey(m, msg)
+	}
 	if s.detail != nil {
-		return s.readingKey(msg)
+		return s.readingKey(m, msg)
 	}
 	rows := s.rows()
 	move := func(to int) { s.sel = max(0, min(to, len(rows)-1)) }
@@ -133,6 +148,8 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 			s.filter, s.sel, s.top = "", 0, 0
 		}
 		return nil
+	case "ctrl+e": // a letter of its own, as a typed one filters the list
+		return s.openEdit(m, s.sel)
 	case "up":
 		move(s.sel - 1)
 	case "down":
@@ -170,10 +187,14 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 
 // readingKey handles keys on a memory that is read in full: esc and enter go
 // back to the list, and the rest moves through what it holds.
-func (s *memoryScreen) readingKey(msg tea.KeyPressMsg) tea.Cmd {
+func (s *memoryScreen) readingKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "enter":
 		s.detail = nil
+	case "e": // no letter types here, as none filters the list
+		edit, cmd := editing(*s.detail, m.light)
+		s.edit = edit
+		return cmd
 	case "up":
 		s.detailAt = max(0, s.detailAt-1)
 	case "down":
@@ -195,6 +216,9 @@ func (s *memoryScreen) readingKey(msg tea.KeyPressMsg) tea.Cmd {
 func (s *memoryScreen) view(m *Model) (string, []hit) {
 	w, h := m.dialogSize()
 	inner := max(10, w-4)
+	if s.edit != nil {
+		return s.editingView(m, w, h, inner), nil
+	}
 	if s.detail != nil {
 		return s.reading(m, w, h, inner), nil
 	}

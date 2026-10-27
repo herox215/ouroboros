@@ -846,11 +846,13 @@ func (m *Model) footerHint() string {
 	case screenJobs:
 		help = "↑↓ select · enter stop · esc back"
 	case screenMemory:
-		help = "↑↓ select · enter read · tab archived · esc back"
-		if m.memories.detail != nil {
-			help = "↑↓ pgup/pgdn scroll · esc back"
+		help = "↑↓ select · enter read · ctrl+e edit · tab archived · esc back"
+		if m.memories.edit != nil {
+			help = "tab key/content · ctrl+s save · esc cancel"
+		} else if m.memories.detail != nil {
+			help = "↑↓ pgup/pgdn scroll · e edit · esc back"
 		} else if m.memories.filter != "" {
-			help = "type to filter · ↑↓ select · enter read · esc clear"
+			help = "type to filter · ↑↓ select · enter read · ctrl+e edit · esc clear"
 		}
 	case screenModel:
 		help = "↑↓ choose · enter set · p for peers · f fallback · esc back"

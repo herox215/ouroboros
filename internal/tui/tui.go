@@ -125,6 +125,11 @@ type Backend interface {
 	// global ones, core ones among them, and those of project, the latest
 	// updated first. Archived and expired ones only if all is true.
 	Memories(ctx context.Context, project string, all bool) (plugin.MemoryListing, error)
+	// SetMemory replaces the memory id of the project as the owner typed
+	// it: version is the one they read, and a memory that changed since
+	// fails with plugin.ErrMemoryChanged. It returns the memory as it is
+	// then.
+	SetMemory(ctx context.Context, project, id string, version int64, key, content string) (plugin.Memory, error)
 	// Setup starts the setup of the node.
 	Setup() (Setup, error)
 	// Models lists the models of every access of the node, for the model
@@ -717,6 +722,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.jobsTicked(msg)
 	case memoriesMsg:
 		return m, m.memoriesLoaded(msg)
+	case memorySavedMsg:
+		return m, m.memorySaved(msg)
 	case peersMsg:
 		m.sessions.peersLoaded(m, msg)
 	case findMsg:
@@ -833,6 +840,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.screen == screenMemory { // what is pasted filters the list too
+				if m.memories.edit != nil { // or goes into the field of the edit
+					return m, m.memories.paste(pasted.Content)
+				}
 				m.memories.filter += strings.TrimSpace(strings.SplitN(pasted.Content, "\n", 2)[0])
 				m.memories.sel = 0
 				return m, nil
