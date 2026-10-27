@@ -11,8 +11,8 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/history"
-	"ouroboros/internal/openai"
 )
 
 // The node archives every answer of its agents (see history.Archive): of the
@@ -333,9 +333,9 @@ func (s *Service) loadTasks(se *session) {
 // What is archived is what the agent was sent and gave, so the events lack
 // what only the front ends were told: the calls of tools a script made, which
 // are a call of run, why an answer failed, and the size of the context.
-func replay(records []history.Record) ([]Event, []openai.Message) {
+func replay(records []history.Record) ([]Event, []chat.Message) {
 	var events []Event
-	var msgs []openai.Message
+	var msgs []chat.Message
 	steps := map[string]Event{} // the calls of tools that started, by ID
 	start := 0
 	var size int
@@ -359,7 +359,7 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			// resumed, and it is not shown again.
 			msgs = nil
 		case "user":
-			msgs = append(msgs, openai.Message{Role: "user", Content: r.Content, Source: r.Source, At: r.Time})
+			msgs = append(msgs, chat.Message{Role: "user", Content: r.Content, Source: r.Source, At: r.Time})
 			if strings.HasPrefix(unnoted(r.Content), backgroundHead) {
 				// An internal background result, not a message of the owner: it
 				// tells which session the part of the thread it begins concerns.
@@ -394,7 +394,7 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			}
 			events = append(events, Event{Kind: Message, At: at, Text: unnoted(r.Content), Source: r.Source.Normalized()})
 		case "assistant":
-			m := openai.Message{Role: "assistant", Content: r.Content, At: r.Time}
+			m := chat.Message{Role: "assistant", Content: r.Content, At: r.Time}
 			if len(r.ToolCalls) == 0 {
 				msgs = append(msgs, m)
 				events = append(events, Event{Kind: Answer, PresentationID: id, At: at, Text: r.Content})
@@ -402,14 +402,14 @@ func replay(records []history.Record) ([]Event, []openai.Message) {
 			}
 			events = append(events, Event{Kind: Say, PresentationID: id, At: at, Text: r.Content})
 			for _, c := range r.ToolCalls {
-				m.ToolCalls = append(m.ToolCalls, openai.ToolCall{ID: c.ID, Type: "function", Function: openai.FunctionCall{Name: c.Name, Arguments: c.Arguments}})
+				m.ToolCalls = append(m.ToolCalls, chat.ToolCall{ID: c.ID, Type: "function", Function: chat.FunctionCall{Name: c.Name, Arguments: c.Arguments}})
 				step := Event{Kind: Step, At: at, CallID: c.ID, Tool: c.Name, Args: args(c.Arguments)}
 				steps[c.ID] = step
 				events = append(events, step)
 			}
 			msgs = append(msgs, m)
 		case "tool":
-			msgs = append(msgs, openai.Message{Role: "tool", ToolCallID: r.ToolCallID, Content: r.Content, At: r.Time})
+			msgs = append(msgs, chat.Message{Role: "tool", ToolCallID: r.ToolCallID, Content: r.Content, At: r.Time})
 			if step, ok := steps[r.ToolCallID]; ok {
 				step.At, step.Done = at, true
 				if failed, ok := strings.CutPrefix(r.Content, "error: "); ok {

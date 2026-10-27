@@ -662,7 +662,7 @@ func TestBreakpoints(t *testing.T) {
 			{Role: "user", Content: "c"}, {Role: "user", Content: "d"}}, []bool{true, false, true, true, true}},
 		"none": {nil, []bool{}},
 	} {
-		got, n := breakpoints(tc.msgs)
+		got, n := breakpoints(wireOf(tc.msgs))
 		marks := []bool{}
 		count := 0
 		for _, m := range got {

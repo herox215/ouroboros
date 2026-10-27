@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"ouroboros/internal/chat"
 	"strings"
 
 	"ouroboros/internal/openai"
@@ -204,8 +205,8 @@ func (b *block) input() json.RawMessage {
 
 // message is the message the capture brought, in the form of the agents: its
 // text, the calls of tools and what goes back with the next request of it.
-func (c *capture) message() openai.Message {
-	msg := openai.Message{Role: "assistant"}
+func (c *capture) message() chat.Message {
+	msg := chat.Message{Role: "assistant"}
 	var text strings.Builder
 	var blocks []json.RawMessage
 	thought := false
@@ -221,8 +222,8 @@ func (c *capture) message() openai.Message {
 			var id, name string
 			json.Unmarshal(b.start["id"], &id)
 			json.Unmarshal(b.start["name"], &name)
-			msg.ToolCalls = append(msg.ToolCalls, openai.ToolCall{ID: id, Type: "function",
-				Function: openai.FunctionCall{Name: name, Arguments: string(b.input())}})
+			msg.ToolCalls = append(msg.ToolCalls, chat.ToolCall{ID: id, Type: "function",
+				Function: chat.FunctionCall{Name: name, Arguments: string(b.input())}})
 		case "thinking", "redacted_thinking":
 			thought = true
 		}
@@ -237,10 +238,10 @@ func (c *capture) message() openai.Message {
 	// What the model thought goes back with the next request, signed as the
 	// API sent it: the model goes on from it between calls of tools.
 	if thought {
-		msg.Reasoning, msg.ReasoningField = keepThoughts(blocks), openai.ReasoningItems
+		msg.Reasoning, msg.ReasoningField = keepThoughts(blocks), chat.ReasoningItems
 	}
 	u := c.usage
-	msg.Usage = openai.Usage{Prompt: u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens,
+	msg.Usage = chat.Usage{Prompt: u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens,
 		Cached: u.CacheReadInputTokens, Output: u.OutputTokens, InPlan: true}
 	return msg
 }
@@ -262,8 +263,8 @@ func keepThoughts(blocks []json.RawMessage) string {
 // thoughtsOf are the blocks kept of the assistant message m, nil if it keeps
 // none of this provider, or if m is no longer what they were sent as: what
 // was changed of it since goes back as it is now, without them.
-func thoughtsOf(m openai.Message) []json.RawMessage {
-	if m.ReasoningField != openai.ReasoningItems || m.Reasoning == "" {
+func thoughtsOf(m chat.Message) []json.RawMessage {
+	if m.ReasoningField != chat.ReasoningItems || m.Reasoning == "" {
 		return nil
 	}
 	var t thoughts
@@ -271,7 +272,7 @@ func thoughtsOf(m openai.Message) []json.RawMessage {
 		return nil
 	}
 	var text strings.Builder
-	var calls []openai.ToolCall
+	var calls []chat.ToolCall
 	for _, raw := range t.Content {
 		var b struct {
 			Type  string          `json:"type"`
@@ -285,7 +286,7 @@ func thoughtsOf(m openai.Message) []json.RawMessage {
 		case "text":
 			text.WriteString(b.Text)
 		case "tool_use":
-			calls = append(calls, openai.ToolCall{ID: b.ID, Function: openai.FunctionCall{Name: b.Name, Arguments: string(b.Input)}})
+			calls = append(calls, chat.ToolCall{ID: b.ID, Function: chat.FunctionCall{Name: b.Name, Arguments: string(b.Input)}})
 		}
 	}
 	if text.String() != m.Content || len(calls) != len(m.ToolCalls) {

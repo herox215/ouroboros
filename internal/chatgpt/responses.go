@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"ouroboros/internal/chat"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -75,7 +76,7 @@ type part struct {
 
 // withImages is the text of m, and with pictures its text and the pictures,
 // each a part.
-func withImages(m openai.Message) any {
+func withImages(m chat.Message) any {
 	if len(m.Images) == 0 {
 		return m.Content
 	}
@@ -129,7 +130,7 @@ type reasoning struct {
 // system in the input. What the model thought before a message goes back
 // before it, as far as it is of this provider: the thoughts of another one
 // are left out.
-func translate(msgs []openai.Message) (instructions string, input []json.RawMessage) {
+func translate(msgs []chat.Message) (instructions string, input []json.RawMessage) {
 	add := func(v any) {
 		b, _ := json.Marshal(v) // texts: cannot fail
 		input = append(input, b)
@@ -145,7 +146,7 @@ func translate(msgs []openai.Message) (instructions string, input []json.RawMess
 		case "tool":
 			add(item{Type: "function_call_output", CallID: m.ToolCallID, Output: withImages(m)})
 		case "assistant":
-			if m.ReasoningField == openai.ReasoningItems {
+			if m.ReasoningField == chat.ReasoningItems {
 				var thoughts []json.RawMessage
 				json.Unmarshal([]byte(m.Reasoning), &thoughts) // what cannot be read is left out
 				input = append(input, thoughts...)
@@ -166,10 +167,10 @@ func translate(msgs []openai.Message) (instructions string, input []json.RawMess
 // Complete sends msgs to model, which may answer with calls to tools instead
 // of a reply. The answer is streamed, and it counts only once the API said
 // that it is complete.
-func (c *client) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+func (c *client) Complete(ctx context.Context, model string, msgs []chat.Message, tools []chat.Tool) (chat.Message, error) {
 	in := request{Model: model, Stream: true}
 	in.Instructions, in.Input = translate(msgs)
-	effort := openai.EffortOf(ctx)
+	effort := chat.EffortOf(ctx)
 	efforts := c.efforts.Of(model, effort)
 	if efforts[0] != "" {
 		in.Reasoning = &reasoning{efforts[0]}
@@ -182,7 +183,7 @@ func (c *client) Complete(ctx context.Context, model string, msgs []openai.Messa
 		in.Tools = []group{g}
 	}
 	if !c.noCacheKey.Load() {
-		in.PromptCacheKey = openai.SessionOf(ctx)
+		in.PromptCacheKey = chat.SessionOf(ctx)
 	}
 	// Given up when nothing comes for idle, from the request on.
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -193,12 +194,12 @@ func (c *client) Complete(ctx context.Context, model string, msgs []openai.Messa
 	defer watch.Stop()
 	alive := func() { watch.Reset(idle) }
 
-	session := openai.SessionOf(ctx)
-	t := openai.TraceOf(ctx)
+	session := chat.SessionOf(ctx)
+	t := chat.TraceOf(ctx)
 	if t != nil {
 		c.traceRequest(t, session, in)
 	}
-	var msg openai.Message
+	var msg chat.Message
 	var err error
 	for try := 0; ; {
 		msg, err = c.complete(ctx, session, in, alive, t)
@@ -241,10 +242,10 @@ func (c *client) Complete(ctx context.Context, model string, msgs []openai.Messa
 			took = in.Reasoning.Effort
 		}
 		c.efforts.Took(model, effort, took)
-		msg.Effort = openai.Took{Asked: effort, Value: took, Told: true}
+		msg.Effort = chat.Took{Asked: effort, Value: took, Told: true}
 	}
 	if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, context.Canceled) {
-		return openai.Message{}, cause
+		return chat.Message{}, cause
 	}
 	return msg, err
 }
@@ -273,7 +274,7 @@ func (c *client) traceRequest(t func(string, ...any), session string, in request
 
 // complete sends in and reads the answer, telling alive whenever data came
 // and the trace t, if not nil, what the API said besides the answer.
-func (c *client) complete(ctx context.Context, session string, in request, alive func(), t func(string, ...any)) (openai.Message, error) {
+func (c *client) complete(ctx context.Context, session string, in request, alive func(), t func(string, ...any)) (chat.Message, error) {
 	body, _ := json.Marshal(in) // texts and JSON that was read: cannot fail
 	start := time.Now()
 	resp, err := c.o.send(ctx, c.access, func(string) (*http.Request, error) {
@@ -291,7 +292,7 @@ func (c *client) complete(ctx context.Context, session string, in request, alive
 		if t != nil {
 			t("llm response: none after %s: %v", time.Since(start).Round(time.Millisecond), err)
 		}
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
 	defer resp.Body.Close()
 	alive()
@@ -303,9 +304,9 @@ func (c *client) complete(ctx context.Context, session string, in request, alive
 		if t != nil {
 			t("llm response: failed: %v", err)
 		}
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
-	return readStream(resp.Body, alive, t, openai.AnsweringOf(ctx), openai.CallingOf(ctx))
+	return readStream(resp.Body, alive, t, chat.AnsweringOf(ctx), chat.CallingOf(ctx))
 }
 
 // event is one event of the stream of a response.
@@ -356,10 +357,10 @@ type output struct {
 // kept as the API sent it to go back with the next request. Only a stream
 // that ends with "response.completed" is an answer. A trace t, if not nil,
 // is told what the API said besides the message.
-func readStream(body io.Reader, alive func(), t func(string, ...any), answering func(text string), calling func(bytes int)) (openai.Message, error) {
-	written := 0 // of calls of tools, see openai.WithCalling
+func readStream(body io.Reader, alive func(), t func(string, ...any), answering func(text string), calling func(bytes int)) (chat.Message, error) {
+	written := 0 // of calls of tools, see chat.WithCalling
 	events := 0
-	msg := openai.Message{Role: "assistant"}
+	msg := chat.Message{Role: "assistant"}
 	var content strings.Builder
 	var thoughts []json.RawMessage
 	lines := bufio.NewScanner(body)
@@ -373,7 +374,7 @@ func readStream(body io.Reader, alive func(), t func(string, ...any), answering 
 		events++
 		var e event
 		if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &e); err != nil {
-			return openai.Message{}, fmt.Errorf("chatgpt: the stream has an event that is no JSON: %w", err)
+			return chat.Message{}, fmt.Errorf("chatgpt: the stream has an event that is no JSON: %w", err)
 		}
 		switch e.Type {
 		case "response.output_text.delta":
@@ -388,7 +389,7 @@ func readStream(body io.Reader, alive func(), t func(string, ...any), answering 
 		case "response.output_item.done":
 			var o output
 			if err := json.Unmarshal(e.Item, &o); err != nil {
-				return openai.Message{}, fmt.Errorf("chatgpt: the stream has an item that cannot be read: %w", err)
+				return chat.Message{}, fmt.Errorf("chatgpt: the stream has an item that cannot be read: %w", err)
 			}
 			switch o.Type {
 			case "message":
@@ -398,8 +399,8 @@ func readStream(body io.Reader, alive func(), t func(string, ...any), answering 
 					}
 				}
 			case "function_call":
-				msg.ToolCalls = append(msg.ToolCalls, openai.ToolCall{ID: o.CallID, Type: "function",
-					Function: openai.FunctionCall{Name: o.Name, Arguments: o.Arguments}})
+				msg.ToolCalls = append(msg.ToolCalls, chat.ToolCall{ID: o.CallID, Type: "function",
+					Function: chat.FunctionCall{Name: o.Name, Arguments: o.Arguments}})
 			case "reasoning":
 				thoughts = append(thoughts, thought(e.Item))
 			}
@@ -413,30 +414,30 @@ func readStream(body io.Reader, alive func(), t func(string, ...any), answering 
 				} `json:"input_tokens_details"`
 			}
 			json.Unmarshal(e.Response.Usage, &used) // a usage that cannot be read is none
-			msg.Usage = openai.Usage{Prompt: used.InputTokens, Cached: used.InputTokensDetails.CachedTokens, Output: used.OutputTokens, InPlan: true}
+			msg.Usage = chat.Usage{Prompt: used.InputTokens, Cached: used.InputTokensDetails.CachedTokens, Output: used.OutputTokens, InPlan: true}
 			if t != nil {
 				t("llm answered: id %q, model %q, events %d, usage %s", e.Response.ID, e.Response.Model, events, orDefault(string(e.Response.Usage), "none"))
 			}
 			if len(thoughts) > 0 {
 				b, _ := json.Marshal(thoughts) // JSON that was read: cannot fail
-				msg.Reasoning, msg.ReasoningField = string(b), openai.ReasoningItems
+				msg.Reasoning, msg.ReasoningField = string(b), chat.ReasoningItems
 			}
 			return msg, nil
 		case "response.failed":
 			if e.Response.Error == nil {
-				return openai.Message{}, errors.New("chatgpt: the response failed, the API did not say why")
+				return chat.Message{}, errors.New("chatgpt: the response failed, the API did not say why")
 			}
-			return openai.Message{}, (&apiError{Status: http.StatusOK, failed: *e.Response.Error}).known()
+			return chat.Message{}, (&apiError{Status: http.StatusOK, failed: *e.Response.Error}).known()
 		case "response.incomplete":
-			return openai.Message{}, fmt.Errorf("chatgpt: the response is incomplete: %s", orDefault(e.Response.IncompleteDetails.Reason, "the API did not say why"))
+			return chat.Message{}, fmt.Errorf("chatgpt: the response is incomplete: %s", orDefault(e.Response.IncompleteDetails.Reason, "the API did not say why"))
 		case "error":
-			return openai.Message{}, (&apiError{Status: http.StatusOK, failed: e.failed}).known()
+			return chat.Message{}, (&apiError{Status: http.StatusOK, failed: e.failed}).known()
 		}
 	}
 	if err := lines.Err(); err != nil {
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
-	return openai.Message{}, errors.New("chatgpt: the stream ended before the response was complete")
+	return chat.Message{}, errors.New("chatgpt: the stream ended before the response was complete")
 }
 
 // thought is an item of reasoning as it goes back with the next request:

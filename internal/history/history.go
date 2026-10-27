@@ -24,7 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/storage"
 )
 
@@ -75,12 +75,12 @@ type Record struct {
 	Time   time.Time `json:"time"`   // when the answer ended
 	// Role is that of the message: user, assistant or tool, and end for the
 	// record that closes an answer with its Outcome.
-	Role           string               `json:"role"`
-	Content        string               `json:"content,omitempty"`
-	Source         openai.MessageSource `json:"source,omitzero"`
-	ToolCalls      []Call               `json:"tool_calls,omitempty"`
-	ToolCallID     string               `json:"tool_call_id,omitempty"`
-	PresentationID string               `json:"presentation_id,omitempty"`
+	Role           string             `json:"role"`
+	Content        string             `json:"content,omitempty"`
+	Source         chat.MessageSource `json:"source,omitzero"`
+	ToolCalls      []Call             `json:"tool_calls,omitempty"`
+	ToolCallID     string             `json:"tool_call_id,omitempty"`
+	PresentationID string             `json:"presentation_id,omitempty"`
 	// Outcome is Answered, Failed or Canceled. Why an answer failed is not
 	// kept: a peer reads its archive, and must not learn the cause from it.
 	Outcome string `json:"outcome,omitempty"`
@@ -165,17 +165,17 @@ func (a *Archive) file(who Who, session string) string {
 }
 
 // Append atomically keeps one complete answer, continuing the SQL sequence.
-func (a *Archive) Append(who Who, msgs []openai.Message, answerErr error, statistics ...Statistics) error {
+func (a *Archive) Append(who Who, msgs []chat.Message, answerErr error, statistics ...Statistics) error {
 	return a.append(who, msgs, answerErr, "", statistics...)
 }
 
 // AppendWithPresentationID keeps an answer with an end presentation ID and no
 // usage statistics. Use Append with Statistics when usage is available.
-func (a *Archive) AppendWithPresentationID(who Who, msgs []openai.Message, answerErr error, presentationID string) error {
+func (a *Archive) AppendWithPresentationID(who Who, msgs []chat.Message, answerErr error, presentationID string) error {
 	return a.append(who, msgs, answerErr, presentationID)
 }
 
-func (a *Archive) append(who Who, msgs []openai.Message, answerErr error, presentationID string, statistics ...Statistics) error {
+func (a *Archive) append(who Who, msgs []chat.Message, answerErr error, presentationID string, statistics ...Statistics) error {
 	db, err := a.database()
 	if err != nil {
 		return err

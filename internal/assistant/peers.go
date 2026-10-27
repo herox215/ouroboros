@@ -8,9 +8,9 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
 	"ouroboros/internal/identity"
-	"ouroboros/internal/openai"
 )
 
 // Peers answers the peers of a node, with the agent for the configuration of
@@ -29,7 +29,7 @@ type Peers struct {
 	memory *agent.Memory     // of the conversations, for every agent there is
 	// recall returns what the agent said in a conversation it does not
 	// remember, as the archive kept it; nil without an archive.
-	recall func(ctx context.Context, contextID string) []openai.Message
+	recall func(ctx context.Context, contextID string) []chat.Message
 }
 
 // built is an agent and the configuration it was built for.
@@ -48,7 +48,7 @@ func (b Builder) Peers(config func() (config.Config, error), log func(format str
 // Recall makes the agent go on with a conversation it does not remember,
 // as after a new build of ouro, with what recall returns of it: what was
 // said in it, as the archive kept it.
-func (p *Peers) Recall(recall func(ctx context.Context, contextID string) []openai.Message) {
+func (p *Peers) Recall(recall func(ctx context.Context, contextID string) []chat.Message) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.recall = recall

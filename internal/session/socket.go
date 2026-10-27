@@ -13,10 +13,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
-	"ouroboros/internal/openai"
 )
 
 // The front ends reach the Service of the node over its socket (see
@@ -52,11 +52,11 @@ type failure struct {
 
 type (
 	askRequest struct {
-		ID          string         `json:"id"`
-		Text        string         `json:"text"`
-		Images      []openai.Image `json:"images,omitempty"`
-		Attachments []Attachment   `json:"attachments,omitempty"`
-		Source      MessageSource  `json:"source,omitzero"`
+		ID          string        `json:"id"`
+		Text        string        `json:"text"`
+		Images      []chat.Image  `json:"images,omitempty"`
+		Attachments []Attachment  `json:"attachments,omitempty"`
+		Source      MessageSource `json:"source,omitzero"`
 	}
 	idRequest struct {
 		ID string `json:"id"`
@@ -401,17 +401,17 @@ func (c *Client) New(ctx context.Context) (string, error) {
 
 // Ask starts the answer to text in the session id.
 func (c *Client) Ask(ctx context.Context, id, text string) error {
-	return c.do(ctx, http.MethodPost, "/ask", askRequest{ID: id, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+	return c.do(ctx, http.MethodPost, "/ask", askRequest{ID: id, Text: text, Source: chat.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // AskImages starts an answer with text and pictures; see ImageAPI.
-func (c *Client) AskImages(ctx context.Context, id, text string, images []openai.Image) error {
-	return c.do(ctx, http.MethodPost, "/ask-images", askRequest{ID: id, Text: text, Images: images, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+func (c *Client) AskImages(ctx context.Context, id, text string, images []chat.Image) error {
+	return c.do(ctx, http.MethodPost, "/ask-images", askRequest{ID: id, Text: text, Images: images, Source: chat.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // Steer gives text to the answer on its way in the session id.
 func (c *Client) Steer(ctx context.Context, id, text string) error {
-	return c.do(ctx, http.MethodPost, "/steer", askRequest{ID: id, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+	return c.do(ctx, http.MethodPost, "/steer", askRequest{ID: id, Text: text, Source: chat.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // Unsteer takes back the last message that is queued in the session id.
@@ -596,16 +596,16 @@ func (c *Client) Release(ctx context.Context) error {
 }
 
 // SteerImages delivers conversational text and pictures; see ReplyImageAPI.
-func (c *Client) SteerImages(ctx context.Context, id, text string, images []openai.Image) error {
-	return c.do(ctx, http.MethodPost, "/steer-images", askRequest{ID: id, Text: text, Images: images, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+func (c *Client) SteerImages(ctx context.Context, id, text string, images []chat.Image) error {
+	return c.do(ctx, http.MethodPost, "/steer-images", askRequest{ID: id, Text: text, Images: images, Source: chat.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // AskAttachments starts an answer with bounded files; see AttachmentAPI.
 func (c *Client) AskAttachments(ctx context.Context, id, text string, files []Attachment) error {
-	return c.do(ctx, http.MethodPost, "/ask-attachments", askRequest{ID: id, Text: text, Attachments: files, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+	return c.do(ctx, http.MethodPost, "/ask-attachments", askRequest{ID: id, Text: text, Attachments: files, Source: chat.MessageSourceFrom(ctx).Normalized()}, nil)
 }
 
 // SteerAttachments delivers file-bearing replies; see ReplyAttachmentAPI.
 func (c *Client) SteerAttachments(ctx context.Context, id, text string, files []Attachment) error {
-	return c.do(ctx, http.MethodPost, "/steer-attachments", askRequest{ID: id, Text: text, Attachments: files, Source: openai.MessageSourceFrom(ctx).Normalized()}, nil)
+	return c.do(ctx, http.MethodPost, "/steer-attachments", askRequest{ID: id, Text: text, Attachments: files, Source: chat.MessageSourceFrom(ctx).Normalized()}, nil)
 }

@@ -16,15 +16,13 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"net"
-	"net/http"
 	"os"
+	"ouroboros/internal/chat"
 	"slices"
 	"sync"
 	"time"
 
 	"ouroboros/internal/agent"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/safefile"
 )
 
@@ -83,8 +81,6 @@ func (c Cause) Explain() string {
 // Classify returns the category of the error an answer failed with. The
 // category is all that is taken from err.
 func Classify(err error) Cause {
-	var api *openai.APIError
-	var network net.Error
 	switch {
 	case errors.Is(err, agent.ErrTooManyToolCalls):
 		return CauseTooManyToolCalls
@@ -92,20 +88,19 @@ func Classify(err error) Cause {
 		return CauseCancelled
 	case errors.Is(err, context.DeadlineExceeded):
 		return CauseTimeout
-	case errors.As(err, &api):
-		switch {
-		case api.Unauthorized():
-			return CauseLLMAuth
-		case api.Status == http.StatusTooManyRequests:
-			return CauseLLMRateLimited
-		case api.Status >= 500:
-			return CauseLLMFailed
-		}
+	}
+	switch category := chat.Of(err); {
+	case category&chat.Unauthorized != 0:
+		return CauseLLMAuth
+	case category&chat.RateLimited != 0:
+		return CauseLLMRateLimited
+	case category&chat.ServiceFailure != 0:
+		return CauseLLMFailed
+	case category&chat.Rejected != 0:
 		return CauseLLMRejected
-	case errors.As(err, &network):
-		if network.Timeout() {
-			return CauseTimeout
-		}
+	case category&chat.Timeout != 0:
+		return CauseTimeout
+	case category&chat.Unavailable != 0:
 		return CauseLLMUnreachable
 	}
 	return CauseInternal

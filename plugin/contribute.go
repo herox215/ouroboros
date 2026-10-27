@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"ouroboros/internal/chat"
 	"time"
 
 	"ouroboros/internal/a2a"
@@ -114,7 +115,7 @@ func OptionsOf[S any]() []Option { return agent.OptionsOf[S]() }
 
 // Image is a picture received from the user or shown by a Tool: its media type, like
 // "image/png", and its bytes.
-type Image = openai.Image
+type Image = chat.Image
 
 // InputImages returns the pictures from the most recent user message with
 // pictures in the current tool's conversation, looking past text-only turns.
@@ -183,8 +184,8 @@ type (
 	// run. Another provider translates to and from the OpenAI message types.
 	Model = agent.LLM
 	// ChatMessage and ChatTool are what a Model is asked with and answers.
-	ChatMessage = openai.Message
-	ChatTool    = openai.Tool
+	ChatMessage = chat.Message
+	ChatTool    = chat.Tool
 )
 
 // What a Model does for the cache of its API is its own business: which
@@ -205,13 +206,13 @@ type (
 // together. The lines of the providers of ouro start with "llm request: ",
 // "llm prefix: ", "llm response: " and "llm answered: ". No secret of the
 // node shows in them: the log replaces every one.
-func Trace(ctx context.Context) func(format string, args ...any) { return openai.TraceOf(ctx) }
+func Trace(ctx context.Context) func(format string, args ...any) { return chat.TraceOf(ctx) }
 
 // Effort is how much the owner wants the model to think before it answers,
 // for a Model to send the way its API takes it: one of AllEfforts, like
 // "low" or "max", and "" to leave it to the model. Peers are answered with
 // "". A model that does not know the effort takes the nearest it knows.
-func Effort(ctx context.Context) string { return openai.EffortOf(ctx) }
+func Effort(ctx context.Context) string { return chat.EffortOf(ctx) }
 
 // Requests keeps the last request of every conversation a Model traced, to
 // say with Compare how far the next one begins like it: what the API can

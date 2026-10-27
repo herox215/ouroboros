@@ -26,9 +26,9 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
 	"ouroboros/internal/history"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/presentation"
 	"ouroboros/internal/workdir"
 )
@@ -349,7 +349,7 @@ type Assistant interface {
 	Conversation(contextID string) json.RawMessage
 	Resume(contextID string, conversation json.RawMessage) error
 	Forget(contextID string)
-	Title(ctx context.Context, conversation []openai.Message) (string, error)
+	Title(ctx context.Context, conversation []chat.Message) (string, error)
 	// CheckTopic independently verifies a proposed continuation before delivery.
 	CheckTopic(ctx context.Context, check assistant.TopicCheck) (assistant.TopicDecision, error)
 	Effort() string
@@ -412,7 +412,7 @@ type session struct {
 	denyOwner bool
 	// concernPictures keeps original request images for routing evidence while
 	// live. Images, like other image input, are intentionally not archived.
-	concernPictures []openai.Image
+	concernPictures []chat.Image
 	backendQuestion bool // backend approval, not an agent's topical conversation
 	id              string
 	events          []Event
@@ -468,7 +468,7 @@ type session struct {
 	// writes, as long as nothing came after it; zero otherwise. Who starts to
 	// watch then is told that it writes, see Watch.
 	writing  time.Time
-	pictures []openai.Image
+	pictures []chat.Image
 	roster   string
 	told     int
 }
@@ -478,7 +478,7 @@ type session struct {
 // thread, with the Event that tells of it once it is taken.
 type queued struct {
 	text           string
-	images         []openai.Image
+	images         []chat.Image
 	hasAttachments bool
 	source         MessageSource
 	generated      bool // backend input, not a message from an interface
@@ -604,11 +604,11 @@ func (s *Service) askInput(ctx context.Context, id, text string, generated bool)
 	return s.askImages(ctx, id, text, nil, generated)
 }
 
-func (s *Service) askImages(ctx context.Context, id, text string, images []openai.Image, generated bool) error {
+func (s *Service) askImages(ctx context.Context, id, text string, images []chat.Image, generated bool) error {
 	return s.askMedia(ctx, id, text, images, generated, false)
 }
 
-func (s *Service) askMedia(ctx context.Context, id, text string, images []openai.Image, generated, hasAttachments bool) error {
+func (s *Service) askMedia(ctx context.Context, id, text string, images []chat.Image, generated, hasAttachments bool) error {
 	if err := valid(id); err != nil {
 		return err
 	}
@@ -630,7 +630,7 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []openai
 		return ErrRestarting
 	}
 	se := s.get(id)
-	message := queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx), generated: generated}
+	message := queued{text: text, images: images, hasAttachments: hasAttachments, source: chat.MessageSourceFrom(ctx), generated: generated}
 	if generated && restartNote(text) {
 		// The durable restart note, not transient Routed flags, restores where
 		// the unanswered question must be offered after loading the archive.
@@ -722,11 +722,11 @@ func (s *Service) Steer(ctx context.Context, id, text string) error {
 	return s.steerImages(ctx, id, text, nil)
 }
 
-func (s *Service) steerImages(ctx context.Context, id, text string, images []openai.Image) error {
+func (s *Service) steerImages(ctx context.Context, id, text string, images []chat.Image) error {
 	return s.steerMedia(ctx, id, text, images, false)
 }
 
-func (s *Service) steerMedia(ctx context.Context, id, text string, images []openai.Image, hasAttachments bool) error {
+func (s *Service) steerMedia(ctx context.Context, id, text string, images []chat.Image, hasAttachments bool) error {
 	if err := valid(id); err != nil {
 		return err
 	}
@@ -736,7 +736,7 @@ func (s *Service) steerMedia(ctx context.Context, id, text string, images []open
 	// A reply in the shared conversation is not necessarily an answer to its
 	// outstanding question. Verify the concern before consuming that wait.
 	if id == ThreadID {
-		answered, err := s.replyToConcern(ctx, queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx)})
+		answered, err := s.replyToConcern(ctx, queued{text: text, images: images, hasAttachments: hasAttachments, source: chat.MessageSourceFrom(ctx)})
 		if err != nil || answered {
 			return err
 		}
@@ -746,7 +746,7 @@ func (s *Service) steerMedia(ctx context.Context, id, text string, images []open
 		defer s.mu.Unlock()
 		if se.asked != nil {
 			// What the owner says now answers the question: ask tells it.
-			se.asked <- queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx)}
+			se.asked <- queued{text: text, images: images, hasAttachments: hasAttachments, source: chat.MessageSourceFrom(ctx)}
 			se.asked = nil
 			return nil
 		}
@@ -760,8 +760,8 @@ func (s *Service) steerMedia(ctx context.Context, id, text string, images []open
 		if handing {
 			return ErrRestarting
 		}
-		se.queue = append(se.queue, queued{text: text, images: images, hasAttachments: hasAttachments, source: openai.MessageSourceFrom(ctx).Normalized()})
-		s.emit(se, Event{Kind: Queued, Text: text, Source: openai.MessageSourceFrom(ctx).Normalized()})
+		se.queue = append(se.queue, queued{text: text, images: images, hasAttachments: hasAttachments, source: chat.MessageSourceFrom(ctx).Normalized()})
+		s.emit(se, Event{Kind: Queued, Text: text, Source: chat.MessageSourceFrom(ctx).Normalized()})
 		return nil
 	}
 	s.mu.Unlock()
@@ -851,7 +851,7 @@ func (s *Service) saying(se *session, id, text string) {
 
 // steered hands the answer on its way in se the messages that are queued
 // for it, as far as they are ready: see ready and taken.
-func (s *Service) steered(se *session) []openai.Message {
+func (s *Service) steered(se *session) []chat.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if se.routed {
@@ -863,10 +863,10 @@ func (s *Service) steered(se *session) []openai.Message {
 // taken tells that the answer in se takes messages, each a Message of the
 // owner or the Task or Report whose report it is, and returns their texts.
 // s.mu is held.
-func (s *Service) taken(se *session, messages []queued) []openai.Message {
-	texts := make([]openai.Message, len(messages))
+func (s *Service) taken(se *session, messages []queued) []chat.Message {
+	texts := make([]chat.Message, len(messages))
 	for i, m := range messages {
-		texts[i] = openai.Message{Role: "user", Content: m.text, Images: m.images, Source: m.source}
+		texts[i] = chat.Message{Role: "user", Content: m.text, Images: m.images, Source: m.source}
 		se.routed = se.routed || m.routed
 		if m.generated && strings.HasPrefix(m.text, backgroundHead) {
 			// An internal result, never a visible message of the owner: the
@@ -958,7 +958,7 @@ func (s *Service) answering(se *session) (func(string), func(), func()) {
 const callingStep = 512
 
 // calling tells how much of calls of tools the model of the answer in se has
-// written, see openai.WithCalling: at first and then every callingStep bytes,
+// written, see chat.WithCalling: at first and then every callingStep bytes,
 // and anew with the next call of the LLM. What the model wrote and thought
 // before is sent first, as it writes no more of it in this call.
 func (s *Service) calling(se *session, flush ...func()) func(int) {
@@ -1058,7 +1058,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		s.remembered(se, e, forThread)
 	})
-	ctx = agent.WithMessageSteering(ctx, func() []openai.Message { return s.steered(se) })
+	ctx = agent.WithMessageSteering(ctx, func() []chat.Message { return s.steered(se) })
 	ctx = assistant.WithTasks(ctx, delegating{s, se})
 	ctx = s.threadContext(ctx, se)
 	ctx = agent.WithOwnerReply(ctx, func(ctx context.Context, question json.RawMessage) (agent.OwnerReply, error) {
@@ -1070,12 +1070,12 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		ctx = agent.WithoutOwner(ctx)
 	}
 	ctx = agent.WithSaying(ctx, func(id, text string) { s.saying(se, id, text) })
-	ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
+	ctx = chat.WithEffortOf(ctx, func() string { return s.effort(se) })
 	thought, rest := s.thoughts(se)
-	ctx = openai.WithThought(ctx, thought)
+	ctx = chat.WithThought(ctx, thought)
 	writing, drop, flush := s.answering(se)
-	ctx = openai.WithAnswering(ctx, writing)
-	ctx = openai.WithCalling(ctx, s.calling(se, flush, rest))
+	ctx = chat.WithAnswering(ctx, writing)
+	ctx = chat.WithCalling(ctx, s.calling(se, flush, rest))
 	ctx = s.quietly(ctx, se)
 	ctx = s.shapedFor(ctx, se)
 	reply, err := s.agent.Run(ctx, se.id, text, func(st assistant.Step) {
@@ -1214,7 +1214,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 // name asks the agent for the title of se, with what was said in it, while
 // the answer to the last message runs, and tells it once it has one: it is
 // kept along with the session. named is closed then.
-func (s *Service) name(ctx context.Context, se *session, conversation []openai.Message, named chan<- struct{}) {
+func (s *Service) name(ctx context.Context, se *session, conversation []chat.Message, named chan<- struct{}) {
 	defer close(named)
 	asking, stop := context.WithTimeout(ctx, titleTime)
 	defer stop()
@@ -1241,14 +1241,14 @@ func (s *Service) name(ctx context.Context, se *session, conversation []openai.M
 
 // said is what the owner and the agent said in events: the messages and the
 // answers.
-func said(events []Event) []openai.Message {
-	var msgs []openai.Message
+func said(events []Event) []chat.Message {
+	var msgs []chat.Message
 	for _, e := range events {
 		switch e.Kind {
 		case Message:
-			msgs = append(msgs, openai.Message{Role: "user", Content: e.Text, Source: e.Source})
+			msgs = append(msgs, chat.Message{Role: "user", Content: e.Text, Source: e.Source})
 		case Answer:
-			msgs = append(msgs, openai.Message{Role: "assistant", Content: e.Text})
+			msgs = append(msgs, chat.Message{Role: "assistant", Content: e.Text})
 		}
 	}
 	return msgs

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/memory"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/workdir"
 )
 
@@ -222,7 +222,7 @@ func (a *Assistant) searchWords(ctx context.Context, text string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	reply, err := a.builder.withFallbacks(llm, cfg).Complete(openai.WithEffort(ctx, "low"), cfg.Model, []openai.Message{
+	reply, err := a.builder.withFallbacks(llm, cfg).Complete(chat.WithEffort(ctx, "low"), cfg.Model, []chat.Message{
 		{Role: "system", Content: keywordPrompt},
 		{Role: "user", Content: topicBound(text, topicTextLimit)},
 	}, nil)
@@ -383,7 +383,7 @@ func (a *Assistant) merges(ctx context.Context, active []memory.Entry) ([]merge,
 		scope := cmp.Or(e.Project, "global")
 		lines[i] = e.ID + " | " + scope + " | " + e.Updated + " | " + e.Key + ": " + e.Content
 	}
-	reply, err := a.builder.withFallbacks(llm, cfg).Complete(openai.WithEffort(ctx, reviewEffort), cfg.Model, []openai.Message{
+	reply, err := a.builder.withFallbacks(llm, cfg).Complete(chat.WithEffort(ctx, reviewEffort), cfg.Model, []chat.Message{
 		{Role: "system", Content: consolidatePrompt},
 		{Role: "user", Content: strings.Join(lines, "\n")},
 	}, nil)

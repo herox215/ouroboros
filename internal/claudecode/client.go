@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"ouroboros/internal/chat"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"ouroboros/internal/llm"
-	"ouroboros/internal/openai"
 )
 
 // tempDir makes the directory of a call; tests replace it.
@@ -60,7 +60,7 @@ func textOf(block json.RawMessage) string {
 }
 
 // image is a block with a picture.
-func image(i openai.Image) json.RawMessage {
+func image(i chat.Image) json.RawMessage {
 	return raw(map[string]any{"type": "image", "source": map[string]string{
 		"type": "base64", "media_type": i.Type, "data": base64.StdEncoding.EncodeToString(i.Data)}})
 }
@@ -70,7 +70,7 @@ func image(i openai.Image) json.RawMessage {
 // system prompt; one that follows is told the model as a text of the user.
 // What the model thought before an assistant message goes back with it, as
 // far as it is of this provider and the message is what the model wrote.
-func translate(msgs []openai.Message) (system string, frames []frame, err error) {
+func translate(msgs []chat.Message) (system string, frames []frame, err error) {
 	var prompt []string
 	add := func(role string, blocks ...json.RawMessage) {
 		// Old conversations and captured answers can contain empty text
@@ -190,16 +190,16 @@ func effortOf(effort string) string {
 // Complete sends msgs to model through the CLI, which may answer with calls
 // to tools instead of a reply. The answer is the one request the relay let
 // through, read as it passed: what the CLI does after it is of no account.
-func (c *client) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+func (c *client) Complete(ctx context.Context, model string, msgs []chat.Message, tools []chat.Tool) (chat.Message, error) {
 	acct, err := c.o.saved(c.access)
 	if err != nil {
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
 	system, frames, err := translate(msgs)
 	if err != nil {
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
-	effort := openai.EffortOf(ctx)
+	effort := chat.EffortOf(ctx)
 	value := effortOf(effort)
 
 	// Given up when nothing comes for idle, from the start on.
@@ -211,55 +211,55 @@ func (c *client) Complete(ctx context.Context, model string, msgs []openai.Messa
 	defer watch.Stop()
 	alive := func() { watch.Reset(idle) }
 
-	o := relayOptions{upstream: c.o.upstream(), frames: frames, answering: openai.AnsweringOf(ctx), calling: openai.CallingOf(ctx), alive: alive}
+	o := relayOptions{upstream: c.o.upstream(), frames: frames, answering: chat.AnsweringOf(ctx), calling: chat.CallingOf(ctx), alive: alive}
 	for _, t := range tools {
 		o.tools = append(o.tools, apiTool{Name: t.Function.Name, Description: t.Function.Description, InputSchema: schema(t.Function.Parameters)})
 	}
 	r, err := newRelay(ctx, o)
 	if err != nil {
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
 	defer r.close()
 
 	tmp, err := tempDir("", "ouro-claude-")
 	if err != nil {
-		return openai.Message{}, fmt.Errorf("claude-code: %w", err)
+		return chat.Message{}, fmt.Errorf("claude-code: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 	prompt := filepath.Join(tmp, "system.md")
 	if err := os.WriteFile(prompt, []byte(system), 0o600); err != nil {
-		return openai.Message{}, fmt.Errorf("claude-code: %w", err)
+		return chat.Message{}, fmt.Errorf("claude-code: %w", err)
 	}
-	session := sessionID(openai.SessionOf(ctx), system, frames)
+	session := sessionID(chat.SessionOf(ctx), system, frames)
 	args := slices.Concat(streamArgs, []string{"--model", model, "--system-prompt-file", prompt, "--max-turns", "1",
 		"--permission-mode", "dontAsk", "--session-id", session})
 	if value != "" {
 		args = append(args, "--effort", value)
 	}
-	if t := openai.TraceOf(ctx); t != nil {
+	if t := chat.TraceOf(ctx); t != nil {
 		t("llm request: Claude Code %s, model %s, session %s, system %.1f KiB, %d frames, %d tools, effort %q",
 			acct.Command, model, session, float64(len(system))/1024, len(frames), len(tools), value)
 	}
 	n, err := c.o.start(ctx, acct, r.url, args, alive)
 	if err != nil {
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
 	defer n.end()
 
 	events, err := converse(ctx, n, frames)
 	if err != nil {
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
 	sent, err := r.result(ctx)
 	switch {
 	case !sent:
-		return openai.Message{}, failed(events, n.said())
+		return chat.Message{}, failed(events, n.said())
 	case err != nil:
-		return openai.Message{}, err
+		return chat.Message{}, err
 	}
 	msg := r.capture.message()
-	msg.Effort = openai.Took{Asked: effort, Value: value, Told: true}
-	if t := openai.TraceOf(ctx); t != nil {
+	msg.Effort = chat.Took{Asked: effort, Value: value, Told: true}
+	if t := chat.TraceOf(ctx); t != nil {
 		t("llm answered: id %q, model %q, stop_reason %q, usage %s", r.capture.id, r.capture.model, r.capture.stop, raw(r.capture.usage))
 	}
 	return msg, nil

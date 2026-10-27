@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 )
 
 const (
@@ -27,12 +27,12 @@ const (
 // Callers retain immutable initial image evidence and handle unavailable archives.
 type TopicCheck struct {
 	Anchor       string
-	AnchorImages []openai.Image
-	Recent       []openai.Message
-	Context      []openai.Message
+	AnchorImages []chat.Image
+	Recent       []chat.Message
+	Context      []chat.Message
 	Pending      string
 	Message      string
-	Images       []openai.Image
+	Images       []chat.Image
 }
 
 // TopicDecision explains whether Message belongs to the target concern.
@@ -88,16 +88,16 @@ func (a *Assistant) CheckTopic(ctx context.Context, check TopicCheck) (TopicDeci
 		return TopicDecision{}, err
 	}
 	data, err := json.Marshal(struct {
-		Anchor  string           `json:"anchor"`
-		Recent  []openai.Message `json:"recent"`
-		Context []openai.Message `json:"context"`
-		Pending string           `json:"pending"`
-		Message string           `json:"message"`
+		Anchor  string         `json:"anchor"`
+		Recent  []chat.Message `json:"recent"`
+		Context []chat.Message `json:"context"`
+		Pending string         `json:"pending"`
+		Message string         `json:"message"`
 	}{topicBound(check.Anchor, topicTextLimit), topicEvidence(check.Recent), topicEvidence(check.Context), topicBound(check.Pending, topicTextLimit), topicBound(check.Message, topicTextLimit)})
 	if err != nil {
 		return TopicDecision{}, err
 	}
-	msgs := []openai.Message{
+	msgs := []chat.Message{
 		{Role: "system", Content: topicPrompt},
 		{Role: "user", Content: string(data)},
 	}
@@ -105,12 +105,12 @@ func (a *Assistant) CheckTopic(ctx context.Context, check TopicCheck) (TopicDeci
 		msgs[0].Content += topicImagePrompt
 	}
 	if len(check.AnchorImages) != 0 {
-		msgs = append(msgs, openai.Message{Role: "user", Content: "Original request image evidence", Images: check.AnchorImages})
+		msgs = append(msgs, chat.Message{Role: "user", Content: "Original request image evidence", Images: check.AnchorImages})
 	}
 	if len(check.Images) != 0 {
-		msgs = append(msgs, openai.Message{Role: "user", Content: "Proposed message image evidence", Images: check.Images})
+		msgs = append(msgs, chat.Message{Role: "user", Content: "Proposed message image evidence", Images: check.Images})
 	}
-	reply, err := a.builder.withFallbacks(llm, cfg).Complete(openai.WithEffort(ctx, "low"), cfg.Model, msgs, nil)
+	reply, err := a.builder.withFallbacks(llm, cfg).Complete(chat.WithEffort(ctx, "low"), cfg.Model, msgs, nil)
 	if err != nil {
 		return TopicDecision{}, err
 	}
@@ -122,7 +122,7 @@ func (a *Assistant) CheckTopic(ctx context.Context, check TopicCheck) (TopicDeci
 
 // topicValidateImages checks transport safety, not image decoding: callers
 // validate the image contents. Reject oversized evidence rather than losing it.
-func topicValidateImages(sides ...[]openai.Image) error {
+func topicValidateImages(sides ...[]chat.Image) error {
 	total := 0
 	for _, images := range sides {
 		if len(images) > topicImageLimit {
@@ -156,12 +156,12 @@ func topicBound(text string, limit int) string {
 
 // topicEvidence keeps the latest visible statements, in chronological order,
 // without tool output, calls, images, or other message metadata.
-func topicEvidence(messages []openai.Message) []openai.Message {
-	out := make([]openai.Message, 0, topicRecentLimit)
+func topicEvidence(messages []chat.Message) []chat.Message {
+	out := make([]chat.Message, 0, topicRecentLimit)
 	for i := len(messages) - 1; i >= 0 && len(out) < topicRecentLimit; i-- {
 		m := messages[i]
 		if (m.Role == "user" || m.Role == "assistant") && strings.TrimSpace(m.Content) != "" {
-			out = append(out, openai.Message{Role: m.Role, Content: topicBound(m.Content, topicMessageLimit)})
+			out = append(out, chat.Message{Role: m.Role, Content: topicBound(m.Content, topicMessageLimit)})
 		}
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {

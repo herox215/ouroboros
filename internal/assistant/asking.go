@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
-	"ouroboros/internal/openai"
 )
 
 // What a decision on a call can be, see decide: the owner allows it once or
@@ -198,8 +198,8 @@ func (a asking) acknowledge(ctx context.Context, q Question, answer string) {
 
 // complete asks the LLM with prompt about text, outside of any conversation.
 func (a asking) complete(ctx context.Context, prompt, text string) (string, error) {
-	ctx = openai.WithEffort(ctx, askingEffort)
-	reply, err := a.llm.Complete(ctx, a.model, []openai.Message{
+	ctx = chat.WithEffort(ctx, askingEffort)
+	reply, err := a.llm.Complete(ctx, a.model, []chat.Message{
 		{Role: "system", Content: prompt},
 		{Role: "user", Content: text},
 	}, nil)

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/history"
-	"ouroboros/internal/openai"
 	"ouroboros/internal/workdir"
 )
 
@@ -22,9 +22,9 @@ type task struct {
 	title   string
 	since   time.Time
 	cancel  context.CancelFunc
-	told    []openai.Message // what the agent told its helper, for it to take
-	stopped bool             // by the agent, with Stop: reported as stopped
-	routed  bool             // continuation of an answer handed on by the thread
+	told    []chat.Message // what the agent told its helper, for it to take
+	stopped bool           // by the agent, with Stop: reported as stopped
+	routed  bool           // continuation of an answer handed on by the thread
 }
 
 // errStoppedByAgent is why a task the agent stopped ended, as its report
@@ -61,8 +61,8 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 		se.delegated++
 		running := &task{n: se.delegated, title: t.Title, since: s.now(), cancel: cancel, routed: se.routed}
 		ctx = workdir.With(ctx, se.directory)
-		ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
-		ctx = assistant.WithTaskSteering(ctx, func() []openai.Message { return s.told(running) })
+		ctx = chat.WithEffortOf(ctx, func() string { return s.effort(se) })
+		ctx = assistant.WithTaskSteering(ctx, func() []chat.Message { return s.told(running) })
 		se.tasks = append(se.tasks, running)
 		started[i] = running.n
 		p.answering++
@@ -159,12 +159,12 @@ func (d delegating) Tell(n int, text string) error {
 	if t == nil {
 		return errNotRunning(d.se, n)
 	}
-	t.told = append(t.told, openai.Message{Role: "user", Content: text})
+	t.told = append(t.told, chat.Message{Role: "user", Content: text})
 	return nil
 }
 
 // told takes what the agent told the helper of t since the last time.
-func (s *Service) told(t *task) []openai.Message {
+func (s *Service) told(t *task) []chat.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	told := t.told

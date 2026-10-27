@@ -3,18 +3,18 @@ package agent
 import (
 	"context"
 
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 )
 
 // WithInputMessages replaces Run's text input with distinct messages, including
 // an explicitly empty slice. A copy is taken so the caller can reuse its input.
-func WithInputMessages(ctx context.Context, messages []openai.Message) context.Context {
+func WithInputMessages(ctx context.Context, messages []chat.Message) context.Context {
 	return context.WithValue(ctx, inputMessagesKey{}, copyMessages(messages))
 }
 
 // WithMessageSteering is WithSteering with per-message metadata. When present,
 // it takes precedence over the older string callback, even if it returns none.
-func WithMessageSteering(ctx context.Context, steer func() []openai.Message) context.Context {
+func WithMessageSteering(ctx context.Context, steer func() []chat.Message) context.Context {
 	return context.WithValue(ctx, messageSteeringKey{}, steer)
 }
 
@@ -25,33 +25,33 @@ type sentKey struct{}
 // prompt: what is kept of the conversation stays as it is. shape is to keep
 // every call of a tool next to its results, and to make the same of the same
 // messages, so that what the provider cached of them holds.
-func WithSent(ctx context.Context, shape func([]openai.Message) []openai.Message) context.Context {
+func WithSent(ctx context.Context, shape func([]chat.Message) []chat.Message) context.Context {
 	return context.WithValue(ctx, sentKey{}, shape)
 }
 
 // sent is what the call of the LLM of the answer of ctx is sent of msgs, the
 // system prompt first, see WithSent.
-func sent(ctx context.Context, msgs []openai.Message) []openai.Message {
-	shape, ok := ctx.Value(sentKey{}).(func([]openai.Message) []openai.Message)
+func sent(ctx context.Context, msgs []chat.Message) []chat.Message {
+	shape, ok := ctx.Value(sentKey{}).(func([]chat.Message) []chat.Message)
 	if !ok || shape == nil {
 		return msgs
 	}
 	return append(msgs[:1:1], shape(copyMessages(msgs[1:]))...)
 }
 
-func steeredMessages(ctx context.Context) []openai.Message {
+func steeredMessages(ctx context.Context) []chat.Message {
 	return SteeredMessages(ctx)
 }
 
 // SteeredMessages consumes pending steering with its per-message metadata,
 // falling back to legacy text steering attributed to the context source.
-func SteeredMessages(ctx context.Context) []openai.Message {
-	if steer, ok := ctx.Value(messageSteeringKey{}).(func() []openai.Message); ok && steer != nil {
+func SteeredMessages(ctx context.Context) []chat.Message {
+	if steer, ok := ctx.Value(messageSteeringKey{}).(func() []chat.Message); ok && steer != nil {
 		return copyMessages(steer())
 	}
-	var messages []openai.Message
+	var messages []chat.Message
 	for _, text := range Steered(ctx) {
-		messages = append(messages, openai.Message{Role: "user", Content: text, Source: openai.MessageSourceFrom(ctx)})
+		messages = append(messages, chat.Message{Role: "user", Content: text, Source: chat.MessageSourceFrom(ctx)})
 	}
 	return messages
 }

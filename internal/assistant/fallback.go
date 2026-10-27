@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
-	"ouroboros/internal/openai"
 )
 
 // The owner may list fallbacks: accesses of the node, each with a model, that
 // the agent goes on with, in their order, when the access it answers with
-// cannot answer for now, see openai.IsUnavailable. Nothing is switched that
+// cannot answer for now, see chat.IsUnavailable. Nothing is switched that
 // is not listed, and only for the owner: a peer is answered through the
 // access chosen for peers or not at all.
 //
@@ -49,7 +49,7 @@ type fallbacks struct {
 // Complete answers through the first link that can: one that cannot answer
 // for now hands on to the next. A fallback that answered goes on answering
 // for retryFirst, so that not every call waits for an access that is down.
-func (f *fallbacks) Complete(ctx context.Context, _ string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+func (f *fallbacks) Complete(ctx context.Context, _ string, msgs []chat.Message, tools []chat.Tool) (chat.Message, error) {
 	from, why := f.start()
 	var first error
 	for i := from; ; i++ {
@@ -71,7 +71,7 @@ func (f *fallbacks) Complete(ctx context.Context, _ string, msgs []openai.Messag
 			return msg, nil
 		}
 		first = cmp.Or(first, err)
-		if i == len(f.links)-1 || ctx.Err() != nil || !openai.IsUnavailable(err) {
+		if i == len(f.links)-1 || ctx.Err() != nil || !chat.IsUnavailable(err) {
 			f.stick(0, "")
 			if i > from {
 				return msg, fmt.Errorf("%w; the fallback %s of %s did not answer either: %v", first, l.model, l.label, err)
@@ -146,24 +146,24 @@ func (b Builder) fallbacksOf(cfg config.Config) string {
 
 // retryAfter are how long an access waits before it asks again, once for
 // each: a call that broke off on its way is likely answered when it is
-// asked again, see openai.IsTransient. A connection a gateway closed is
+// asked again, see chat.IsTransient. A connection a gateway closed is
 // open again at once; one that is overloaded needs a moment.
 var retryAfter = []time.Duration{time.Second, 4 * time.Second}
 
 // retrying is an LLM that asks again when a call broke off on its way,
 // after each of retryAfter, as long as ctx goes on. An answer says why it
-// was asked again, see openai.Message; the error of a call that was never
+// was asked again, see chat.Message; the error of a call that was never
 // answered says how often it was asked.
 type retrying struct {
 	agent.LLM
 	wait func(ctx context.Context, d time.Duration) error
 }
 
-func (r retrying) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+func (r retrying) Complete(ctx context.Context, model string, msgs []chat.Message, tools []chat.Tool) (chat.Message, error) {
 	msg, err := r.LLM.Complete(ctx, model, msgs, tools)
 	var why []string
 	for _, d := range retryAfter {
-		if !openai.IsTransient(err) || r.wait(ctx, d) != nil {
+		if !chat.IsTransient(err) || r.wait(ctx, d) != nil {
 			break
 		}
 		why = append(why, err.Error())

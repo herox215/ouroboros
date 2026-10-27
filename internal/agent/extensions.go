@@ -8,7 +8,7 @@ import (
 	"slices"
 
 	"ouroboros/internal/a2a"
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 )
 
 // Conversation identifies the trusted caller. ID is local to an agent's memory;
@@ -31,23 +31,23 @@ type Processing struct {
 // Providers own persistence; Observe receives new messages before trimming.
 type Preparation struct {
 	Processing
-	Messages []openai.Message
-	Context  []openai.Message
+	Messages []chat.Message
+	Context  []chat.Message
 }
 
 // ContextProvider is inactive until its Name is selected in configuration.
 // Observe is optional; Prepare is required. Callbacks must respect cancellation.
 type ContextProvider struct {
 	Name    string
-	Observe func(context.Context, Processing, openai.Message) error
-	Prepare func(context.Context, Preparation) ([]openai.Message, error)
+	Observe func(context.Context, Processing, chat.Message) error
+	Prepare func(context.Context, Preparation) ([]chat.Message, error)
 }
 
 // AnswerOutcome is delivered once, even after failure or cancellation. Messages
 // contains this answer's raw source events, including unreduced tool results.
 type AnswerOutcome struct {
 	Processing
-	Messages []openai.Message
+	Messages []chat.Message
 	Reply    string
 	Err      error
 }
@@ -56,7 +56,7 @@ type AnswerOutcome struct {
 // later hooks see earlier contributions. After errors never replace the answer.
 type AnswerHook struct {
 	Name   string
-	Before func(context.Context, Preparation) ([]openai.Message, error)
+	Before func(context.Context, Preparation) ([]chat.Message, error)
 	After  func(context.Context, AnswerOutcome) error
 }
 
@@ -68,8 +68,8 @@ type Diagnostic struct {
 
 // Inspection is the last attempted preparation, not a side-effecting preview.
 type Inspection struct {
-	Tools       []openai.Tool
-	Messages    []openai.Message
+	Tools       []chat.Tool
+	Messages    []chat.Message
 	Err         error
 	Diagnostics []Diagnostic
 }
@@ -105,7 +105,7 @@ func (a *Agent) WithExtensions(name string, providers []ContextProvider, hooks [
 	a.extensions = e
 	return a, nil
 }
-func copyMessages(ms []openai.Message) []openai.Message {
+func copyMessages(ms []chat.Message) []chat.Message {
 	out := slices.Clone(ms)
 	for i := range out {
 		out[i].ToolCalls = slices.Clone(out[i].ToolCalls)
@@ -113,7 +113,7 @@ func copyMessages(ms []openai.Message) []openai.Message {
 	}
 	return out
 }
-func validatePrepared(system openai.Message, ms []openai.Message) error {
+func validatePrepared(system chat.Message, ms []chat.Message) error {
 	if len(ms) == 0 || !reflect.DeepEqual(ms[0], system) {
 		return fmt.Errorf("system instruction must be preserved as first message")
 	}
@@ -223,7 +223,7 @@ func (a *Agent) HasExtensions() bool {
 	return a.extensions.provider != nil || slices.ContainsFunc(a.extensions.hooks, func(h AnswerHook) bool { return h.Before != nil })
 }
 
-func copyTools(ts []openai.Tool) []openai.Tool {
+func copyTools(ts []chat.Tool) []chat.Tool {
 	out := slices.Clone(ts)
 	for i := range out {
 		out[i].Function.Parameters = slices.Clone(out[i].Function.Parameters)
