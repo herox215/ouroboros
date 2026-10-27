@@ -881,6 +881,16 @@ func (m *Model) footerHint() string {
 		help += jobsKey + " hide"
 	}
 	right := mutedStyle.Render(help)
+	if a := m.chat.awaiting; a != nil {
+		// A message waits for the node to come back: say what runs and that
+		// it goes out by itself, instead of what there was to notice.
+		waiting := lipgloss.NewStyle().Foreground(accent).Render("ouro restarts with the new build " + m.runningFrame())
+		waiting += mutedStyle.Render(" · your message goes out when it is back")
+		if help != "" {
+			waiting += mutedStyle.Render("  │  ") + right
+		}
+		return waiting
+	}
 	if m.notice != "" {
 		style := lipgloss.NewStyle().Foreground(accent)
 		if m.noticeErr {

@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -295,6 +296,7 @@ type conversation struct {
 	thread    thread              // how far its newest word is drawn in, see advance
 	pending   bool                // request submitted or answer on its way: what is sent meanwhile is queued
 	queued    []string            // the messages that wait for the answer on its way to take them
+	awaiting  *awaitingSend       // a message the node refused while it starts anew, see retryAwaiting
 	running   bool                // the node has said an answer is on its way
 	doing     string              // what the agent is waiting for, like "asking beta"
 	asking    *asking             // what the agent asks the owner and waits for; nil without a question
@@ -684,8 +686,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.unwatched(msg.id)
 	case rewatchMsg:
 		return m, m.watch(m.chats[msg.id])
+	case restartRetryMsg:
+		return m, m.retryRestarting()
 	case askedMsg:
-		m.asked(msg)
+		return m, m.asked(msg)
 	case takenMsg:
 		return m, m.taken(msg)
 	case undoneMsg:
@@ -1022,7 +1026,7 @@ func (m *Model) taken(msg takenMsg) tea.Cmd {
 	c.pending, c.art = true, 1
 	text, id := plugin.SuggestedTask(msg.suggestion), c.contextID // c is replayed meanwhile
 	ask := func() tea.Msg {
-		return askedMsg{id, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
+		return askedMsg{id: id, text: text, err: m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
 	}
 	m.setNotice(m.agentName()+" makes the suggestion in the background", false)
 	return tea.Batch(m.watch(c), ask, m.refresh())
@@ -1084,13 +1088,19 @@ func (m *Model) send() tea.Cmd {
 		m.input.Reset()
 		return m.choose(text)
 	}
+	if a := c.awaiting; a != nil {
+		if m.input.Value() == a.typed {
+			return nil // it waits already, and goes out by itself
+		}
+		c.awaiting = nil // what is typed now is another message
+	}
 	id := c.contextID
 	if c.pending {
 		// The answer on its way takes it as soon as it can: until then it is
 		// queued, as the node says.
 		m.input.Reset()
 		return func() tea.Msg {
-			return askedMsg{id, text, m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
+			return askedMsg{id: id, text: text, steer: true, err: m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
 		}
 	}
 	// The message shows once the node says it is on its way; the agent is
@@ -1100,7 +1110,7 @@ func (m *Model) send() tea.Cmd {
 	m.input.Reset()
 	m.renderHistory(true)
 	ask := func() tea.Msg {
-		return askedMsg{id, text, m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
+		return askedMsg{id: id, text: text, err: m.backend.Ask(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, text)}
 	}
 	return tea.Batch(ask, m.watch(c))
 }
@@ -1109,18 +1119,37 @@ func (m *Model) send() tea.Cmd {
 // its way.
 type askedMsg struct {
 	id, text string
+	steer    bool // the message was to steer the answer on its way
 	err      error
 }
 
 // asked takes what the backend said to a message. One that is not on its
 // way goes back into the input, unless something else was typed meanwhile.
-func (m *Model) asked(msg askedMsg) {
+// One the node refused because it starts anew with a new build waits there
+// and goes out by itself once the node is back, see retryAwaiting.
+func (m *Model) asked(msg askedMsg) tea.Cmd {
 	if msg.err == nil {
-		return
+		return nil
 	}
 	c := m.chats[msg.id]
 	c.pending = c.running
 	c.asking.unsent()
+	if errors.Is(msg.err, plugin.ErrRestarting) {
+		typed := c.labelled(msg.text)
+		c.awaiting = &awaitingSend{text: msg.text, typed: typed, steer: msg.steer, since: m.now()}
+		if c == m.chat {
+			if m.input.Value() == "" {
+				m.input.SetValue(typed)
+			}
+			m.renderHistory(m.history.AtBottom())
+		} else {
+			if c.draft == "" {
+				c.draft = typed
+			}
+			m.setNotice("ouro restarts with the new build · the message in "+place(c)+" goes out when it is back", false)
+		}
+		return retryRestart()
+	}
 	if c == m.chat {
 		if m.input.Value() == "" {
 			m.input.SetValue(c.labelled(msg.text))
@@ -1130,6 +1159,7 @@ func (m *Model) asked(msg askedMsg) {
 		c.draft = c.labelled(msg.text)
 	}
 	m.setNotice(msg.err.Error(), true)
+	return nil
 }
 
 // unsteeredMsg is the last message that was queued in a session, taken back:
