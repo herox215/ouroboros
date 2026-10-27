@@ -1926,6 +1926,18 @@ internal/peers       the other nodes: who is online, who is connected, how to ta
 internal/home        the node's directory: config, credentials, identity, contacts, failed answers, PID and log file, which it rotates
 internal/a2a         A2A protocol: types, HTTP handler, client; channels between nodes
 internal/agent       conversation memory and tool loop on top of an LLM
+internal/chat          provider-neutral messages, tools, usage, context hooks and error categories
+
+The `internal/chat` package is the boundary between the core and every
+provider: it holds what a conversation, a tool, the usage of a call and a
+failed call mean, with no wire format. Adapters convert their own request and
+answer forms to it. Errors are classified into `chat.Category` bits, which
+fallback (Unavailable), retry (Transient) and diagnosis decisions read:
+HTTP 401/403 -> Unauthorized; 429 -> Unavailable+RateLimited; 402 ->
+Unavailable+Rejected; 502/503/504/529 -> Unavailable+ServiceFailure+Transient;
+other 5xx -> Unavailable+ServiceFailure; other 4xx -> Rejected; canceled ->
+Canceled; deadline -> Timeout+Unavailable; network -> Unavailable; EOF ->
+Transient.
 internal/openai      minimal OpenAI-compatible client (+ openaitest fake)
 internal/discovery   LAN discovery, plus sources of hosts to probe directly (Tailscale)
 internal/daemon      background process + PID file
