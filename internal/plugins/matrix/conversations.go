@@ -138,6 +138,14 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 	if len(msg.Images) == 0 && len(msg.Attachments) == 0 && text == "/new" {
 		return conn.SendTo(ctx, msg.RoomID, msg.Sender, "There is one conversation here, about everything: just write, and Ouro keeps the topics apart.")
 	}
+	if len(msg.Images) == 0 && len(msg.Attachments) == 0 {
+		if text == "/project" || text == "/cd" {
+			return c.showProject(ctx, conn, msg, who, entry.Session)
+		}
+		if path, ok := strings.CutPrefix(text, "/cd "); ok {
+			return c.changeProject(ctx, conn, msg, who, entry.Session, strings.TrimSpace(path))
+		}
+	}
 	if len(msg.Images) == 0 && len(msg.Attachments) == 0 && text == "/cancel" {
 		return c.adapter.Cancel(ctx, who, entry.Session)
 	}
@@ -206,6 +214,70 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 	return err
 }
 
+// project is where the session of the room works: its project directory, ""
+// for the profile workspace, as the last directory event of its snapshot
+// says. A session that was never moved to a project has none.
+func (c *conversations) project(ctx context.Context, who plugin.GatewayIdentity, id string) (string, error) {
+	events, err := c.adapter.Poll(ctx, who, id)
+	if err != nil {
+		return "", err
+	}
+	project := ""
+	for _, e := range events {
+		if e.Kind == plugin.SessionDirectory {
+			project = e.Text
+		}
+	}
+	return project, nil
+}
+
+// projectLine says where the conversation works, as a room is told it: the
+// one conversation of the owner is shared by every room and by the terminal,
+// so its project is no property of a room.
+func projectLine(project string) string {
+	if project == "" {
+		return "No project: this conversation runs in the profile workspace. /cd PATH names a project."
+	}
+	return "Project: " + project
+}
+
+// showProject answers where the conversation works.
+func (c *conversations) showProject(ctx context.Context, conn connection, msg incoming, who plugin.GatewayIdentity, id string) error {
+	project, err := c.project(ctx, who, id)
+	if err != nil {
+		return err
+	}
+	return conn.SendTo(ctx, msg.RoomID, msg.Sender, projectLine(project))
+}
+
+// changeProject moves the conversation to the project path, "" for the
+// profile workspace, and answers where it works then: the path as the node
+// resolved it. A path that is no directory, and a conversation that answers
+// or works on a delegated task, change nothing and are told why.
+func (c *conversations) changeProject(ctx context.Context, conn connection, msg incoming, who plugin.GatewayIdentity, id, path string) error {
+	switch {
+	case path == "--workspace":
+		path = ""
+	case strings.HasPrefix(path, "\"") || strings.HasPrefix(path, "'"):
+		if len(path) < 2 || path[len(path)-1] != path[0] {
+			return conn.SendTo(ctx, msg.RoomID, msg.Sender, "The project did not change: close the quote around the path.")
+		}
+		path = path[1 : len(path)-1]
+	}
+	if err := c.adapter.SetDirectory(ctx, who, id, path); err != nil {
+		if errors.Is(err, plugin.ErrBusy) {
+			return conn.SendTo(ctx, msg.RoomID, msg.Sender, "The project did not change: an answer is in progress. /cancel stops it, then /cd again.")
+		}
+		return conn.SendTo(ctx, msg.RoomID, msg.Sender, "The project did not change: "+err.Error())
+	}
+	project, err := c.project(ctx, who, id)
+	if err != nil {
+		return err
+	}
+	return conn.SendTo(ctx, msg.RoomID, msg.Sender, projectLine(project))
+}
+
+// presented is what a room is told of an event, "" for what it does not see.
 func presented(e plugin.SessionEvent) string {
 	switch e.Kind {
 	case plugin.SessionMessage:

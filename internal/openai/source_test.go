@@ -51,7 +51,7 @@ func TestMessageSourceGatewayNormalization(t *testing.T) {
 			if want != "" {
 				origin += ", gateway = " + want
 			}
-			if !strings.Contains(got.Content, origin+". Interpret") || got.Source != (MessageSource{}) {
+			if !strings.Contains(got.Content, origin+". This describes") || got.Source != (MessageSource{}) {
 				t.Errorf("model copy: %+v", got)
 			}
 		})
@@ -116,8 +116,13 @@ func TestMessageSourceJSONAndModelCopy(t *testing.T) {
 	if model[1].Content != "legacy" || model[3].Content != "result" || !strings.Contains(model[2].Content, "source interface = unknown") {
 		t.Fatalf("model copy: %+v", model)
 	}
-	if !strings.Contains(model[4].Content, "source interface = api, gateway = Custom-Bridge_2.0. Interpret") {
+	if !strings.Contains(model[4].Content, "source interface = api, gateway = Custom-Bridge_2.0. This describes") {
 		t.Fatalf("gateway context missing: %s", model[4].Content)
+	}
+	// A gateway has no place of its own a message comes from: the model is not
+	// told to read "here" relative to it.
+	if strings.Contains(model[4].Content, "here") {
+		t.Fatalf("a gateway claims a here: %s", model[4].Content)
 	}
 	if !reflect.DeepEqual(messages, restored) {
 		t.Fatal("stored messages changed")

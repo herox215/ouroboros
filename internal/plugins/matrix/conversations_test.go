@@ -21,6 +21,8 @@ type testSessions struct {
 	mu                              sync.Mutex
 	created, asks, replies, cancels int
 	events                          []plugin.SessionEvent
+	directories                     []string
+	dirErr                          error
 	askErr, watchErr                error
 	asked                           chan string
 	replied                         string
@@ -53,6 +55,16 @@ func (s *testSessions) Cancel(context.Context, string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cancels++
+	return nil
+}
+func (s *testSessions) SetDirectory(_ context.Context, _, path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.directories = append(s.directories, path)
+	if s.dirErr != nil {
+		return s.dirErr
+	}
+	s.events = append(s.events, plugin.SessionEvent{Kind: plugin.SessionDirectory, Text: path})
 	return nil
 }
 func (s *testSessions) Watch(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {

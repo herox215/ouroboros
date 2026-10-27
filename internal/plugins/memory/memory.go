@@ -145,7 +145,7 @@ func scope(project, scope string) (string, bool, error) {
 		if project != "" {
 			return project, false, nil
 		}
-		return "", false, errors.New("no current project selected")
+		return "", false, errors.New("no current project selected: /cd names one in the conversation")
 	default:
 		return "", false, errors.New("scope must be global, core or project")
 	}
