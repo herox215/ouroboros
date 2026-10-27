@@ -446,6 +446,9 @@ type session struct {
 	// had the number delegated.
 	tasks     []*task
 	delegated int
+	// lost are the tasks that were delegated before the node started anew,
+	// by number and what they were to do, see errNotRunning.
+	lost map[int]string
 	// routed says that the answer on its way took a message the thread
 	// handed on, or a report continuing such an answer: the thread shows
 	// what comes of it, see relay. Tasks snapshot this bit at delegation;

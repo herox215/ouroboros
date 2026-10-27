@@ -136,12 +136,22 @@ const (
 		`Ask as a person does in a chat: one short, plain sentence in the language of the conversation, about what it is about, without code or commands; ` +
 		`the options, if any, a few words each. Some front ends show only the question, so it has to make sense without them: ` +
 		`the user may answer in their own words, and you read what they meant. `
+	// mandateHint says what a message of the owner is: a question is answered
+	// or discussed, not implemented, and what they did not ask for waits for
+	// their yes where it cannot be undone cheaply, a merge above all.
+	mandateHint = `A question is not a task: when the user asks what something is, does or should be, answer it or discuss it, and change nothing. ` +
+		`If you believe a change is clearly wanted, say so in one line and let the user choose. ` +
+		`Before anything they did not ask for and that cannot be cheaply undone, such as a merge, a design choice with alternatives or a change of the configuration, ` +
+		`say what you would do and wait for their yes in the conversation; a merge needs an explicit yes from the user, never your inference that it is wanted. ` +
+		`When they say they want to talk first, nothing runs in the background either. `
 	// yoloHint is added while the yolo mode of the node is on, see
 	// Assistant.WithYolo: the rules of the owner that ask them before a call
-	// are off, so every call runs.
+	// are off, so every call runs. It names merging as a step that cannot be
+	// undone, which the mode does not put aside.
 	yoloHint = `Yolo mode is on: the rules of the owner that would ask them whether a tool call may run are off, ` +
 		`and every call runs without asking. Questions to them work as usual. ` +
-		`Take care with what cannot be undone, and say in your answer what you did without asking. `
+		`Take care with what cannot be undone, a merge above all, and say in your answer what you did without asking. ` +
+		`A merge still needs the user's explicit request or yes; yolo mode does not stand in for it. `
 	// approvalHint also applies without user_question: tools can ask for permission themselves.
 	approvalHint = `If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run. ` +
 		`Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again. `
@@ -419,7 +429,7 @@ func (b Builder) forOwner(cfg config.Config, yolo bool) (*agent.Agent, error) {
 	}
 	// How the agent acts comes first: it calls its tools as tools of their
 	// own when it reads this late.
-	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + validationHint + researchHint + approvalHint
+	prompt := fmt.Sprintf(ownerPrompt, cfg.Name) + validationHint + researchHint + approvalHint + mandateHint
 	if has(toolAskPeer) {
 		prompt += askHint
 	}

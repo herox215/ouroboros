@@ -152,6 +152,12 @@ CREATE TABLE IF NOT EXISTS history_restarts(
  session_id TEXT PRIMARY KEY REFERENCES history_sessions(id),
  process_id TEXT NOT NULL, presentation_id TEXT NOT NULL, binary TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS history_tasks(
+ session_id TEXT NOT NULL REFERENCES history_sessions(id),
+ n INTEGER NOT NULL, title TEXT NOT NULL, since INTEGER NOT NULL,
+ ended TEXT NOT NULL DEFAULT '', process_id TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(session_id,n)
+);
 CREATE TABLE IF NOT EXISTS history_records(
  rowid INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES history_sessions(id),
  ordinal INTEGER NOT NULL, seq INTEGER NOT NULL, answer INTEGER NOT NULL,

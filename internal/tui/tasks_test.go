@@ -138,3 +138,23 @@ func TestTheWaitForTasksCounts(t *testing.T) {
 		t.Fatalf("busy %v with %d sessions beside", c.busy(), len(m.runningSessions()))
 	}
 }
+
+// A session whose tasks ended with the node says so in the conversation, and
+// the tasks it waited for are cleared beside it: the owner is shown that the
+// work is gone.
+func TestTasksEndedWithTheNodeAreShown(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "look"}, true)
+	m.apply(c, Event{Kind: plugin.SessionTasks, Text: "task 1 · find the callers"}, true)
+	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "started"}, true)
+	note := "[Not from the owner: ouro started anew, and the tasks this conversation delegated ended with it before they could report. Their work is lost:\ntask 1 · find the callers\n\nDelegate them again if their work is needed.]"
+	m.apply(c, Event{Kind: plugin.SessionTasks}, false)
+	if c.busy() || len(c.tasks) != 0 {
+		t.Fatalf("busy %v with the tasks %q", c.busy(), c.tasks)
+	}
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: note}, false)
+	if n := len(c.entries); n == 0 || c.entries[n-1].text != note {
+		t.Fatalf("the conversation does not end with the note: %+v", c.entries)
+	}
+}

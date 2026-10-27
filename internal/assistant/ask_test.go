@@ -307,7 +307,7 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	old := now
 	now = func() time.Time { return day }
 	t.Cleanup(func() { now = old })
-	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + validationHint + researchHint + approvalHint
+	start := `You are "me", the personal agent of the owner of this Ouroboros node. ` + validationHint + researchHint + approvalHint + mandateHint
 	end := ownerStyle + " Today is Saturday, 10 October 2026; this machine runs " + runtime.GOOS + "/" + runtime.GOARCH + "."
 	for _, tt := range []struct {
 		tools []config.Entry
@@ -405,6 +405,31 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 	}
 	if strings.Join(fileTools, ",") != "read,write,edit,list,delete,search" {
 		t.Errorf("the tools for files: %v", fileTools)
+	}
+}
+
+// A question is not a mandate: the instructions of the owner's agent say to
+// answer or discuss it instead of implementing it, to wait for a yes before
+// what cannot be cheaply undone, and that a merge needs an explicit yes.
+func TestQuestionIsNotAMandate(t *testing.T) {
+	cfg := config.Config{Access: openaitest.NewServerWithKey(t, ""), Model: "gpt-4o", Name: "me"}
+	edit := agent.NewTool("edit", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	b := Builder{LLM: overHTTP, Tools: func() []agent.Tool { return []agent.Tool{edit} }}
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	cfg.Tools = &config.Tools{H2A: config.Named("edit")}
+	got, err := a.Ask(context.Background(), "chat", "?system", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []string{
+		"A question is not a task",
+		"answer it or discuss it, and change nothing",
+		"a merge needs an explicit yes from the user",
+		"nothing runs in the background either",
+	} {
+		if !strings.Contains(got, rule) {
+			t.Errorf("the prompt does not say %q:\n%s", rule, got)
+		}
 	}
 }
 

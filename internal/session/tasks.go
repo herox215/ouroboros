@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/workdir"
 )
@@ -19,6 +20,7 @@ import (
 type task struct {
 	n       int
 	title   string
+	since   time.Time
 	cancel  context.CancelFunc
 	told    []openai.Message // what the agent told its helper, for it to take
 	stopped bool             // by the agent, with Stop: reported as stopped
@@ -57,7 +59,7 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 	for i, t := range tasks {
 		ctx, cancel := context.WithCancel(s.ctx)
 		se.delegated++
-		running := &task{n: se.delegated, title: t.Title, cancel: cancel, routed: se.routed}
+		running := &task{n: se.delegated, title: t.Title, since: s.now(), cancel: cancel, routed: se.routed}
 		ctx = workdir.With(ctx, se.directory)
 		ctx = openai.WithEffortOf(ctx, func() string { return s.effort(se) })
 		ctx = assistant.WithTaskSteering(ctx, func() []openai.Message { return s.told(running) })
@@ -68,6 +70,7 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 		go s.run(ctx, se, running, t.Run)
 	}
 	s.emit(se, Event{Kind: Tasks, Text: taskLines(se.tasks)})
+	s.keepTasks(se, nil)
 	return started, nil
 }
 
@@ -87,6 +90,13 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	defer p.mu.Unlock()
 	se.tasks = slices.DeleteFunc(se.tasks, func(other *task) bool { return other == t })
 	s.emit(se, Event{Kind: Tasks, Text: taskLines(se.tasks)})
+	// A task the node stopped ends with the image: the next one tells the
+	// session it was lost there, see GoOn. Every other task ended here.
+	if stopped && !t.stopped && (p.successor != "" || s.closed) {
+		s.keepTasks(se, t)
+	} else {
+		s.keepTasks(se, nil)
+	}
 	p.answering--
 	// A task that was stopped is not reported: the owner stopped it, or
 	// the node stops. One the agent stopped is, so that it knows.
@@ -110,11 +120,19 @@ func runningTask(se *session, n int) *task {
 }
 
 // errNotRunning is the error of Stop and Tell for the task n that does not
-// run.
+// run: whether it ended while the node ran, ended with a node that started
+// anew, or never started at all.
 func errNotRunning(se *session, n int) error {
+	if title, ok := se.lost[n]; ok {
+		return fmt.Errorf("task %d (%s) does not run: it ended when ouro started anew, before its report came. Its work is lost: "+
+			"what it was to do is in the call of %s in this chat: history_read with from -40 finds it; delegate it again if it is needed",
+			n, title, assistant.ToolDelegate)
+	}
 	if n > se.delegated {
-		return fmt.Errorf("task %d does not run: it was started before ouro started anew, which ended it without a report. "+
-			"What it was to do is in the call of %s in this chat: history_read with from -40 finds it; delegate it again", n, assistant.ToolDelegate)
+		if se.delegated == 0 {
+			return fmt.Errorf("task %d never started: no task was delegated in this chat", n)
+		}
+		return fmt.Errorf("task %d never started: the last task delegated in this chat is %d", n, se.delegated)
 	}
 	return fmt.Errorf("task %d does not run: it ended, and its report comes or came as a message", n)
 }
@@ -238,6 +256,25 @@ func (s *Service) deliver(se *session, p *process, t *task, answer string, err e
 		return
 	}
 	s.begin(se, p, ready(se)...)
+}
+
+// keepTasks keeps the tasks of se that run with the archive, and still, if it
+// is not among them, as running: a node that starts anew tells the session of
+// those it finds, see GoOn. s.mu is held.
+func (s *Service) keepTasks(se *session, still *task) {
+	if s.archive == nil {
+		return
+	}
+	tasks := make([]history.Task, 0, len(se.tasks)+1)
+	for _, t := range se.tasks {
+		tasks = append(tasks, history.Task{N: t.n, Title: t.title, Since: t.since})
+	}
+	if still != nil {
+		tasks = append(tasks, history.Task{N: still.n, Title: still.title, Since: still.since})
+	}
+	if err := s.archive.SetTasks(history.Owner(se.id), tasks, processInstance); err != nil {
+		s.archive.log("the tasks of the session %s cannot be kept: %v", se.id, err)
+	}
 }
 
 // taskLines are the tasks as a session tells them, see the Event Tasks.

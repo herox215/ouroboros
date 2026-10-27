@@ -733,6 +733,9 @@ func (a *Archive) Delete(id string) error {
 	if _, err = tx.Exec("DELETE FROM history_restarts WHERE session_id=?", id); err != nil {
 		return err
 	}
+	if _, err = tx.Exec("DELETE FROM history_tasks WHERE session_id=?", id); err != nil {
+		return err
+	}
 	if _, err = tx.Exec("DELETE FROM history_records WHERE session_id=?", id); err != nil {
 		return err
 	}
