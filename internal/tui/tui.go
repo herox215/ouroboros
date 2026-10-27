@@ -427,9 +427,6 @@ type Model struct {
 	// nameAnimation is how the name of the agent moves in an empty chat.
 	nameAnimation nameAnimation
 
-	// blockStarts are where the blocks of the history begin, and the
-	// entries they are of: which part of the thread is in view.
-	blockStarts []blockStart
 	// backgroundKnown is whether the terminal said what its background is:
 	// from then on the UI paints it in the colors of the GUI.
 	backgroundKnown bool

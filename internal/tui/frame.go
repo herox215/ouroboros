@@ -699,14 +699,14 @@ func (m *Model) railRows(inner int) (lines []string, owners []*conversation) {
 	add(boldStyle.Foreground(muted).Render(title), nil)
 	add(lineStyle().Render(strings.Repeat("─", inner)), nil)
 	if m.jobsShown {
-		for _, l := range m.jobLines(inner) {
+		for _, l := range m.jobLines(m.chat, inner) {
 			add(l, nil)
 		}
 		return lines, owners
 	}
 	if m.detailShown() {
 		for _, l := range m.sessionDetail(m.chat, inner) {
-			add(l, m.chat)
+			add(l, nil)
 		}
 		return lines, owners
 	}
@@ -750,7 +750,7 @@ func (m *Model) railAt(y int) *conversation {
 
 // jobLines lists the jobs of the session shown, the tasks it delegated and
 // the services that run past the answers, inner cells wide.
-func (m *Model) jobLines(inner int) []string {
+func (m *Model) jobLines(c *conversation, inner int) []string {
 	heading := func(s string) string { return boldStyle.Render(strings.ToUpper(s)) }
 	wrap := func(text string) []string {
 		wrapped := strings.Split(lipgloss.Wrap(text, max(1, inner-2), ""), "\n")
@@ -760,16 +760,16 @@ func (m *Model) jobLines(inner int) []string {
 		return wrapped
 	}
 	var lines []string
-	if len(m.chat.jobs) == 0 {
+	if len(c.jobs) == 0 {
 		lines = append(lines, mutedStyle.Render("No command runs in the background."))
 	}
-	for _, job := range m.chat.jobs {
+	for _, job := range c.jobs {
 		lines = append(lines, wrap(job)...)
 	}
-	if len(m.chat.tasks) > 0 {
+	if len(c.tasks) > 0 {
 		lines = append(lines, "", heading("Tasks"))
 	}
-	for _, task := range m.chat.tasks {
+	for _, task := range c.tasks {
 		lines = append(lines, wrap(task)...)
 	}
 	if len(m.services) > 0 {
@@ -902,9 +902,13 @@ func (m *Model) standHead(c *conversation, s stand, inner int) []string {
 	if s.what != "" {
 		state += " " + mutedStyle.Render(s.what)
 	}
+	when := ""
+	if !c.last.IsZero() {
+		when = clock(c.last, m.now())
+	}
 	return []string{
 		boldStyle.Render(ansi.Truncate(name, inner, "…")),
-		spread(state, mutedStyle.Render(clock(c.last, m.now())), inner),
+		spread(state, mutedStyle.Render(when), inner),
 	}
 }
 
@@ -983,13 +987,7 @@ func (m *Model) sessionDetail(c *conversation, inner int) []string {
 	}
 	if len(c.jobs) > 0 || len(c.tasks) > 0 || len(m.services) > 0 {
 		rule()
-		lines = append(lines, boldStyle.Render("WORK"))
-		for i, l := range m.jobLines(inner) {
-			if i == 0 && len(c.jobs) == 0 && strings.HasPrefix(ansi.Strip(l), "No command runs") {
-				continue // the work is the tasks or the services
-			}
-			lines = append(lines, l)
-		}
+		lines = append(lines, m.jobLines(c, inner)...)
 	}
 	if calls := m.callLines(c, s, 12, inner); len(calls) > 0 {
 		rule()
@@ -1008,7 +1006,12 @@ func (m *Model) callLines(c *conversation, s stand, n, inner int) []string {
 		all = append(slices.Clone(all), *s.pending)
 	}
 	var lines []string
-	for i := len(all) - 1; i >= 0 && len(lines) < n; i-- {
+	left := 0 // calls that do not fit in the column
+	for i := len(all) - 1; i >= 0; i-- {
+		if len(lines) == n {
+			left = i + 1
+			break
+		}
 		call := all[i]
 		if call.text == "" && call.tool == "" {
 			continue // nothing is shown of it
@@ -1030,6 +1033,13 @@ func (m *Model) callLines(c *conversation, s stand, n, inner int) []string {
 			at = clock(call.at, m.now())
 		}
 		lines = append(lines, spread(mark+style.Render(text), mutedStyle.Render(at), inner))
+	}
+	if left > 0 {
+		more := fmt.Sprintf("… %d earlier call", left)
+		if left > 1 {
+			more += "s"
+		}
+		lines = append(lines, mutedStyle.Render(more))
 	}
 	return lines
 }

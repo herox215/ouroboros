@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/plugin"
 )
 
@@ -116,7 +117,7 @@ func TestBesideAConversationOfItsOwn(t *testing.T) {
 	view := strip(m.View().Content)
 	for _, want := range []string{"To the thread", "SESSION", "FIX · WORKING", "State: working · own",
 		"● calls go test ./...", "next  the result of bash", "project /tmp/ouro", "2 of the loop",
-		"WORK", "CALLS", "read · scroll.go"} {
+		"job 1 · npm run dev", "CALLS", "read · scroll.go"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q beside the session:\n%s", want, view)
 		}
@@ -140,6 +141,99 @@ func TestBesideAConversationOfItsOwn(t *testing.T) {
 	}
 	if rows := m.sidebarRows(30); strings.Contains(strip(rows[len(rows)-1].text), "NEW CONVERSATION") {
 		t.Fatalf("a conversation that does not run is listed: %+v", rows)
+	}
+}
+
+// What the column on the right says of the session shown in detail: what it
+// works with and did, its work, and its calls newest first with the one on
+// its way above them, and how many earlier ones do not fit.
+func TestTheDetailOfTheSessionShown(t *testing.T) {
+	m, b := newModel(t)
+	b.status.Model, b.status.Provider = "brain", "iGate"
+	m.Update(m.refreshStatus())
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.Local)
+	m.now = func() time.Time { return at.Add(time.Hour) }
+	c := m.chat
+	c.title, c.directory = "Fix", "/tmp/ouro"
+	c.round, c.context, c.since = 3, 8000, at.Add(50*time.Minute)
+	c.cache = plugin.SessionCache{Tokens: 8000, Cached: 2000, AllTokens: 9000, AllCached: 2000,
+		Metrics: assistant.CallMetrics{Calls: 2, TPS: 42.5, CostKnown: true, CostUSD: 0.01}}
+	c.queued = []string{"first", "second"}
+	c.jobs = []string{"job 1 · npm run dev", "job 2 · go test -w"}
+	c.tasks = []string{"task 1 · read the tests"}
+	c.entries = []entry{{mine: true, text: "fix it", at: at}}
+	for i := 0; i < 15; i++ {
+		tool := "bash"
+		if i == 13 {
+			tool = "read"
+		}
+		c.entries[0].calls = append(c.entries[0].calls, call{tool: tool, text: tool + " · step", done: true, at: at.Add(time.Duration(i) * time.Minute)})
+	}
+	c.entries[0].calls[13].failed = true
+	c.entries[0].calls = append(c.entries[0].calls, call{tool: "bash", text: "bash · go test", at: at.Add(time.Minute)})
+	c.pending = true
+	m.services = []plugin.ServiceInfo{{Name: "web", Port: 5173, Command: "npm run dev"}}
+
+	text := strip(strings.Join(m.sessionDetail(c, 40), "\n"))
+	for _, want := range []string{
+		"FIX · WORKING", "● calls go test", "project /tmp/ouro", "model   iGate / brain",
+		"round   3 of the loop", "since   09:50 · 10m", "context 7.8 KiB", "cached  25%, session 22%",
+		"speed   42.5 TPS", "queued  2 messages", "job 2 · go test -w", "TASKS", "task 1 · read the tests",
+		"SERVICES", "web · :5173", "npm run dev", "CALLS", "→ bash · go test", "read · step", "… 4 earlier calls",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("no %q in the detail:\n%s", want, text)
+		}
+	}
+	// The newest call is the first of the list, the one on its way above it.
+	if strings.Index(text, "→ bash · go test") > strings.Index(text, "read · step") {
+		t.Fatalf("the calls are not newest first:\n%s", text)
+	}
+	// A session without a word has no clock of 1 Jan 0001, and one message
+	// is named so.
+	empty := m.newChat()
+	if text := strip(strings.Join(m.sessionDetail(empty, 40), "\n")); strings.Contains(text, "0001") || !strings.Contains(text, "NEW CONVERSATION") {
+		t.Fatalf("the detail of a new conversation:\n%s", text)
+	}
+	c.queued = []string{"one"}
+	if text := strip(strings.Join(m.sessionDetail(c, 40), "\n")); !strings.Contains(text, "queued  1 message") {
+		t.Fatalf("one message:\n%s", text)
+	}
+	// What is clicked in the detail does nothing: it shows the session shown.
+	m.Update(tea.WindowSizeMsg{Width: 170, Height: 46})
+	m.switchTo(c)
+	if clickOn(t, m, "project", 0); m.chat != c {
+		t.Fatal("a click in the detail changes the session")
+	}
+}
+
+// A call of a tool without text is named by its tool; one that says nothing
+// at all is not listed.
+func TestTheCallsOfASession(t *testing.T) {
+	m, _ := newModel(t)
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.Local)
+	m.now = func() time.Time { return at.Add(time.Hour) }
+	c := &conversation{}
+	lines := m.callLines(c, stand{calls: []call{{tool: "bash", done: true, at: at}, {done: true}}}, 12, 40)
+	if len(lines) != 1 || !strings.Contains(strip(lines[0]), "bash") {
+		t.Fatalf("the calls:\n%s", strip(strings.Join(lines, "\n")))
+	}
+}
+
+// since says how long ago a time was in seconds, minutes or hours.
+func TestSince(t *testing.T) {
+	for _, tt := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{5 * time.Second, "5s"},
+		{-time.Second, "0s"},
+		{90 * time.Second, "1m"},
+		{2*time.Hour + 5*time.Minute, "2h05m"},
+	} {
+		if got := since(tt.d); got != tt.want {
+			t.Errorf("since(%v) = %q, want %q", tt.d, got, tt.want)
+		}
 	}
 }
 

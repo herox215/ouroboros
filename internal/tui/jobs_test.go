@@ -177,7 +177,7 @@ func TestServicesListed(t *testing.T) {
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
 	loaded(m, cmd)
-	list := ansi.Strip(strings.Join(m.jobLines(40), "\n"))
+	list := ansi.Strip(strings.Join(m.jobLines(m.chat, 40), "\n"))
 	if !strings.Contains(list, "SERVICES") || !strings.Contains(list, "web · :5173") || !strings.Contains(list, "npm run dev") ||
 		!strings.Contains(list, "mock · ") {
 		t.Fatalf("the list:\n%s", list)
@@ -306,7 +306,7 @@ func TestJobsListParts(t *testing.T) {
 	}
 	m.chat.tasks = []string{"task 1 · read"}
 	m.services = []plugin.ServiceInfo{{Name: "web", Command: "npm run dev"}, {Name: "api", Command: "go run .", Port: 8080}}
-	list = ansi.Strip(strings.Join(m.jobLines(30), "\n"))
+	list = ansi.Strip(strings.Join(m.jobLines(m.chat, 30), "\n"))
 	if !strings.Contains(list, "TASKS") || !strings.Contains(list, "SERVICES") || strings.Contains(list, ":0") || !strings.Contains(list, "api · :8080") {
 		t.Fatalf("the list:\n%s", list)
 	}
