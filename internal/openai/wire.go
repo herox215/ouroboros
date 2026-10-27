@@ -1,8 +1,6 @@
 package openai
 
 import (
-	"encoding/base64"
-
 	"ouroboros/internal/chat"
 )
 
@@ -113,12 +111,7 @@ func (w *wireMessage) parts() {
 	}
 	parts := []wirePart{part}
 	for _, image := range w.images {
-		parts = append(parts, wirePart{Type: "image_url", ImageURL: &wireURL{imageURL(image)}})
+		parts = append(parts, wirePart{Type: "image_url", ImageURL: &wireURL{image.URL()}})
 	}
 	w.Content = parts
-}
-
-// imageURL is a picture as a data URL, which the APIs take in place of a link.
-func imageURL(i chat.Image) string {
-	return "data:" + i.Type + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
 }

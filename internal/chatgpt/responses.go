@@ -476,9 +476,9 @@ func (e *apiError) known() error {
 	case e.Code == "subscription_sharing_usage_limit_exceeded":
 		// When it is over is told only if the API says so.
 		if e.RetryAfter != "" {
-			return openai.Unavailable(fmt.Errorf("%w (the API says to try again after %s)", ErrLimit, e.RetryAfter))
+			return chat.Mark(fmt.Errorf("%w (the API says to try again after %s)", ErrLimit, e.RetryAfter), chat.Unavailable|chat.RateLimited)
 		}
-		return openai.Unavailable(ErrLimit)
+		return chat.Mark(ErrLimit, chat.Unavailable|chat.RateLimited)
 	case e.Code == "subscription_sharing_user_not_eligible":
 		return fmt.Errorf("chatgpt: using the ChatGPT plan is not available for this account or workspace: %s", orDefault(e.Message, "the API did not say why"))
 	case e.Code == "subscription_sharing_invalid_user", e.Status == http.StatusUnauthorized:

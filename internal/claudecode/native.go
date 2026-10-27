@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"ouroboros/internal/openai"
+	"ouroboros/internal/chat"
 )
 
 // overridden are the variables of the environment the CLI is not given: they
@@ -261,7 +261,7 @@ func failed(events []event, said string) error {
 			case "authentication_failed":
 				return ErrSignedOut
 			case "rate_limit":
-				return openai.Unavailable(fmt.Errorf("%w: %s", ErrLimit, e.text()))
+				return chat.Mark(fmt.Errorf("%w: %s", ErrLimit, e.text()), chat.Unavailable|chat.RateLimited)
 			}
 			return fmt.Errorf("claude-code: %s: %s", e.Error, orDefault(e.text(), "Claude Code did not say more"))
 		}

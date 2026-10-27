@@ -112,6 +112,3 @@ func CallingOf(ctx context.Context) func(bytes int) { return chat.CallingOf(ctx)
 
 // Deprecated: use chat.TraceOf from internal/chat.
 func TraceOf(ctx context.Context) func(format string, args ...any) { return chat.TraceOf(ctx) }
-
-// maxGatewayMetadata is the bound of a gateway metadata snapshot.
-const maxGatewayMetadata = 16 * 1024

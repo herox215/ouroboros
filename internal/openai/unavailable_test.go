@@ -112,6 +112,4 @@ func TestAPIErrorCategory(t *testing.T) {
 			t.Errorf("HTTP %d is %b, want %b", tc.status, got, tc.want)
 		}
 	}
-	if !errors.Is(fmt.Errorf("call: %w", &APIError{Status: 503}), &APIError{Status: 503}) {
-	}
 }

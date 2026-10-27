@@ -269,17 +269,16 @@ func (c *Client) Complete(ctx context.Context, model string, msgs []Message, too
 		PromptCacheKey  string        `json:"prompt_cache_key,omitempty"`
 		ReasoningEffort string        `json:"reasoning_effort,omitempty"`
 	}{Model: model, Tools: tools, Stream: true, ReasoningEffort: efforts[0]}
-	in.Messages, _ = wireMessages(msgs, false)
 	if !c.refused[streamOptions].Load() {
 		in.StreamOptions = &options{IncludeUsage: true}
 	}
 	if !c.refused[promptCacheKey].Load() {
 		in.PromptCacheKey = c.sessionOf(ctx)
 	}
+	// The breakpoints are set in the same pass that writes the messages: a
+	// second pass would encode the pictures again.
 	marked := 0
-	if claude(model) && !c.refused[cacheControl].Load() {
-		in.Messages, marked = wireMessages(msgs, true)
-	}
+	in.Messages, marked = wireMessages(msgs, claude(model) && !c.refused[cacheControl].Load())
 	t := traceOf(ctx)
 	if t != nil {
 		c.traceRequest(t, c.sessionOf(ctx), model, in.Messages, tools, in.StreamOptions != nil, in.PromptCacheKey != "", marked)

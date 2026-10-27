@@ -1936,8 +1936,9 @@ fallback (Unavailable), retry (Transient) and diagnosis decisions read:
 HTTP 401/403 -> Unauthorized; 429 -> Unavailable+RateLimited; 402 ->
 Unavailable+Rejected; 502/503/504/529 -> Unavailable+ServiceFailure+Transient;
 other 5xx -> Unavailable+ServiceFailure; other 4xx -> Rejected; canceled ->
-Canceled; deadline -> Timeout+Unavailable; network -> Unavailable; EOF ->
-Transient.
+Canceled; deadline -> Timeout+Unavailable (a stalled adapter is handed to the
+fallback, while a caller that gives up is told by its context); network ->
+Unavailable; EOF -> Transient.
 internal/openai      minimal OpenAI-compatible client (+ openaitest fake)
 internal/discovery   LAN discovery, plus sources of hosts to probe directly (Tailscale)
 internal/daemon      background process + PID file

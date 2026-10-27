@@ -11,7 +11,9 @@ import (
 // Use NewGatewayMetadata to validate and copy gateway-owned context.
 type GatewayMetadata string
 
-const maxGatewayMetadata = 16 * 1024
+// MaxGatewayMetadata is the bound of a gateway metadata snapshot in bytes,
+// its JSON object syntax included.
+const MaxGatewayMetadata = 16 * 1024
 
 // NewGatewayMetadata takes a bounded, independent snapshot of JSON context.
 // Metadata is descriptive, untrusted data; it grants no authority.
@@ -27,7 +29,7 @@ func NewGatewayMetadata(fields map[string]any) (GatewayMetadata, error) {
 }
 
 func parseGatewayMetadata(data []byte) (GatewayMetadata, error) {
-	if len(data) > maxGatewayMetadata {
+	if len(data) > MaxGatewayMetadata {
 		return "", errors.New("gateway metadata exceeds 16 KiB")
 	}
 	var fields map[string]json.RawMessage

@@ -36,9 +36,12 @@ const (
 	Unauthorized
 	// Canceled: the call was stopped by its caller.
 	Canceled
-	// Timeout: the call waited too long. It is not Transient, and a call
-	// that was given up by its caller is not one a fallback answers: see
-	// Unavailable.
+	// Timeout: the call waited too long, and it counts as Unavailable too:
+	// an adapter that watches its own stream for a stall gives up with
+	// context.DeadlineExceeded while the caller's context is still live,
+	// and that call goes on with a fallback. A caller that gives up is
+	// told by its context, which the fallback checks itself, not by this
+	// bit.
 	Timeout
 )
 
@@ -50,11 +53,12 @@ type Categorized interface {
 
 // Of returns what err means, 0 if it says nothing. A canceled call takes
 // precedence over everything, as it did before: an error marked Unavailable
-// that carries context.Canceled is Canceled only. A context deadline is
-// Timeout only: a fallback does not switch on a call that was given up.
-// Network errors are Unavailable, and a timeout among them is Timeout too.
-// EOF, an unexpected EOF, a reset, aborted or broken connection are
-// Transient; the reset ones are also Unavailable, being network errors.
+// that carries context.Canceled is Canceled only. A deadline is Timeout and
+// Unavailable. Network errors are Unavailable, and a timeout among them is
+// Timeout too. EOF, an unexpected EOF, a reset, aborted or broken connection
+// are Transient; the reset ones are also Unavailable, being network errors.
+// A marked error gets the bits of the connection it carries: a marked call
+// that ended in a reset is Transient as well.
 func Of(err error) Category {
 	if err == nil {
 		return 0
@@ -66,12 +70,13 @@ func Of(err error) Category {
 	if errors.As(err, &categorized) {
 		category := categorized.Category()
 		if errors.Is(err, context.DeadlineExceeded) {
+			category |= Timeout | Unavailable
 			category &^= Transient
 		}
-		return category
+		return category | endedOnItsWay(err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return Timeout
+		return Timeout | Unavailable
 	}
 	var network net.Error
 	if errors.As(err, &network) {
@@ -79,22 +84,22 @@ func Of(err error) Category {
 		if network.Timeout() {
 			category |= Timeout
 		}
-		if transientIO(err) {
-			category |= Transient
-		}
-		return category
+		return category | endedOnItsWay(err)
 	}
-	if transientIO(err) {
+	return endedOnItsWay(err)
+}
+
+// endedOnItsWay is what err says as a connection that ended before the answer
+// was in: Transient, and Unavailable too for a reset, aborted or broken one,
+// which is a network error.
+func endedOnItsWay(err error) Category {
+	switch {
+	case errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE):
+		return Unavailable | Transient
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
 		return Transient
 	}
 	return 0
-}
-
-// transientIO reports whether err is a connection that ended before the
-// answer was in.
-func transientIO(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE)
 }
 
 // IsUnavailable reports whether err says that the API cannot answer for now,
@@ -112,22 +117,30 @@ func IsUnavailable(err error) bool { return Of(err)&Unavailable != 0 }
 // too long, or that was refused for what it asked, is none.
 func IsTransient(err error) bool { return Of(err)&Transient != 0 }
 
-// UnavailableError marks err as the error of a call the API cannot answer for
-// now, whatever it is asked: for an adapter whose errors do not tell by
-// themselves. The cause stays reachable with errors.Unwrap.
-type UnavailableError struct{ Err error }
+// MarkedError marks err as meaning meaning, for an adapter whose errors do
+// not tell by themselves: a plan limit is Unavailable and RateLimited, for
+// instance. The cause stays reachable with errors.Unwrap, and the bits the
+// connection itself tells are added by Of.
+type MarkedError struct {
+	Err     error
+	Meaning Category
+}
 
-func (e *UnavailableError) Error() string      { return e.Err.Error() }
-func (e *UnavailableError) Unwrap() error      { return e.Err }
-func (e *UnavailableError) Category() Category { return Unavailable }
+func (e *MarkedError) Error() string      { return e.Err.Error() }
+func (e *MarkedError) Unwrap() error      { return e.Err }
+func (e *MarkedError) Category() Category { return e.Meaning }
 
-// NewUnavailable wraps err as an UnavailableError; nil stays nil.
-func NewUnavailable(err error) error {
+// Mark returns err marked as meaning meaning; nil stays nil.
+func Mark(err error, meaning Category) error {
 	if err == nil {
 		return nil
 	}
-	return &UnavailableError{Err: err}
+	return &MarkedError{Err: err, Meaning: meaning}
 }
+
+// NewUnavailable marks err as an error of a call the API cannot answer for
+// now, whatever it is asked; nil stays nil. It is Mark with Unavailable.
+func NewUnavailable(err error) error { return Mark(err, Unavailable) }
 
 // StatusCategory maps an HTTP status of a failed call to its category: 401
 // and 403 Unauthorized; 429 Unavailable and RateLimited; 402 Unavailable and

@@ -332,7 +332,7 @@ func (e *apiError) known() error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("%w (the API said: %s)", ErrSignedOut, orDefault(e.Message, "nothing more"))
 	case http.StatusTooManyRequests:
-		return openai.Unavailable(fmt.Errorf("%w: %s", ErrLimit, orDefault(e.Message, "the API did not say more")))
+		return chat.Mark(fmt.Errorf("%w: %s", ErrLimit, orDefault(e.Message, "the API did not say more")), chat.Unavailable|chat.RateLimited)
 	}
 	return e
 }
