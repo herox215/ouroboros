@@ -39,13 +39,14 @@ git --no-pager log -8 --oneline --decorate
 git --no-pager log -5 --format='%h %s' -- path/to/file
 git --no-pager show --stat COMMIT
 git --no-pager show COMMIT:path/to/file
-git --no-pager log main --oneline -- path/to/file
+git --no-pager log HEAD..origin/main --oneline -- path/to/file
+git --no-pager diff HEAD..origin/main -- path/to/file
 git --no-pager show COMMIT -- path/to/file
 git ls-files -- path/to/file
 git check-ignore -v -- path/to/file
 ```
 
-To learn what a branch such as `main` has of a file without reading the whole file in pages, look at its history for that path in one step: `git log main --oneline -- path/to/file` lists the commits that touched it, and `git show COMMIT -- path/to/file` shows what one commit changed there. Add a range such as `HEAD..main` to list only the commits your branch lacks. This is usually enough before an edit and avoids paging `git show main:path/to/file` through `grep` or `sed` over several calls.
+To learn what a branch such as `main` has of a file before an edit, fetch once and then look at that path, not at the whole file in pages: `git log HEAD..origin/main --oneline -- path/to/file` lists the commits your branch lacks, `git diff HEAD..origin/main -- path/to/file` shows what they changed there, and `git show COMMIT -- path/to/file` shows one of them. Without the range, `git log origin/main --oneline -- path/to/file` lists every commit that touched the file. Use `origin/main` rather than a local `main` that may be stale. These calls are usually enough and avoid paging `git show origin/main:path/to/file` through `grep` or `sed` over several calls.
 
 `git diff` excludes untracked files. Read those files separately when relevant. For machine processing, use NUL-delimited output such as `git status --porcelain=v1 -z` or `git ls-files -z`, not whitespace splitting. Do not hide command failures with `|| true` or an unchecked pipeline.
 
