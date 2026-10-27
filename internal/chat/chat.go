@@ -11,7 +11,6 @@ package chat
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"time"
 )
 
@@ -32,8 +31,8 @@ type Message struct {
 	// keeps it in. It is handed back to that provider only, in that form; a
 	// provider that does not know the form is not sent it. ReasoningField is
 	// empty for thoughts that are the text of a field every provider knows.
-	Reasoning      string `json:"-"`
-	ReasoningField string `json:"-"`
+	Reasoning      string `json:"reasoning,omitempty"`
+	ReasoningField string `json:"reasoning_field,omitempty"`
 	// ToolCalls are the tools an assistant message wants to have run.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolCallID names the call a "tool" message answers.
@@ -82,72 +81,6 @@ type Usage struct {
 	// CostUSD is the charge reported by the API; nil means unknown.
 	CostUSD *float64
 	InPlan  bool
-}
-
-// reasoning is the local form of what a model thought: the message keeps it
-// under the name of the field it came in, so a restart hands it back the
-// same way.
-type reasoning struct {
-	ReasoningContent string `json:"reasoning_content,omitempty"`
-	Reasoning        string `json:"reasoning,omitempty"`
-	ReasoningText    string `json:"reasoning_text,omitempty"`
-	ReasoningItems   string `json:"reasoning_items,omitempty"`
-}
-
-// first returns the first field that is not empty, with its name. A message
-// may carry the same text in two of them, and it counts once.
-func (r reasoning) first() (text, field string) {
-	if r.ReasoningContent != "" {
-		return r.ReasoningContent, "reasoning_content"
-	}
-	if r.Reasoning != "" {
-		return r.Reasoning, "reasoning"
-	}
-	if r.ReasoningText != "" {
-		return r.ReasoningText, "reasoning_text"
-	}
-	if r.ReasoningItems != "" {
-		return r.ReasoningItems, ReasoningItems
-	}
-	return "", ""
-}
-
-// MarshalJSON writes the reasoning of m under the name of the field it came
-// in. It is the local form of a message, which is also read back after a
-// restart; a provider converts a Message to its own wire form instead of
-// sending this JSON.
-func (m Message) MarshalJSON() ([]byte, error) {
-	type plain Message
-	out := struct {
-		plain
-		reasoning
-	}{plain: plain(m)}
-	switch m.ReasoningField {
-	case "reasoning_content":
-		out.ReasoningContent = m.Reasoning
-	case "reasoning_text":
-		out.ReasoningText = m.Reasoning
-	case ReasoningItems:
-		out.ReasoningItems = m.Reasoning
-	default:
-		out.reasoning.Reasoning = m.Reasoning
-	}
-	return json.Marshal(out)
-}
-
-// UnmarshalJSON reads a message with its reasoning from any of the fields.
-func (m *Message) UnmarshalJSON(b []byte) error {
-	type plain Message
-	var in struct {
-		plain
-		reasoning
-	}
-	if err := json.Unmarshal(b, &in); err != nil {
-		return err
-	}
-	*m = Message(in.plain)
-	m.Reasoning, m.ReasoningField = in.first()
-	return nil
 }
 
 // URL is the picture as a data URL, which the APIs take in place of a link.

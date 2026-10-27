@@ -36,8 +36,9 @@ const (
 	Unauthorized
 	// Canceled: the call was stopped by its caller.
 	Canceled
-	// Timeout: the call waited too long. It counts as Unavailable too, as it
-	// did before the categories were shared, but not as Transient.
+	// Timeout: the call waited too long. It is not Transient, and a call
+	// that was given up by its caller is not one a fallback answers: see
+	// Unavailable.
 	Timeout
 )
 
@@ -49,10 +50,11 @@ type Categorized interface {
 
 // Of returns what err means, 0 if it says nothing. A canceled call takes
 // precedence over everything, as it did before: an error marked Unavailable
-// that carries context.Canceled is Canceled only. A deadline is Timeout and
-// Unavailable. Network errors are Unavailable, and a timeout among them is
-// Timeout too. EOF, an unexpected EOF, a reset, aborted or broken connection
-// are Transient; the reset ones are also Unavailable, being network errors.
+// that carries context.Canceled is Canceled only. A context deadline is
+// Timeout only: a fallback does not switch on a call that was given up.
+// Network errors are Unavailable, and a timeout among them is Timeout too.
+// EOF, an unexpected EOF, a reset, aborted or broken connection are
+// Transient; the reset ones are also Unavailable, being network errors.
 func Of(err error) Category {
 	if err == nil {
 		return 0
@@ -69,7 +71,7 @@ func Of(err error) Category {
 		return category
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return Timeout | Unavailable
+		return Timeout
 	}
 	var network net.Error
 	if errors.As(err, &network) {

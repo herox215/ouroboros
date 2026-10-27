@@ -22,7 +22,7 @@ func TestCategory(t *testing.T) {
 		"canceled":          {context.Canceled, Canceled},
 		"canceled wins":     {fmt.Errorf("call: %w", context.Canceled), Canceled},
 		"canceled, marked":  {NewUnavailable(context.Canceled), Canceled},
-		"deadline":          {context.DeadlineExceeded, Timeout | Unavailable},
+		"deadline":          {context.DeadlineExceeded, Timeout},
 		"categorized":       {&UnavailableError{Err: errors.New("no")}, Unavailable},
 		"wrapped category":  {fmt.Errorf("call: %w", &UnavailableError{Err: errors.New("no")}), Unavailable},
 		"too many requests": {statusError(StatusCategory(http.StatusTooManyRequests)), Unavailable | RateLimited},
