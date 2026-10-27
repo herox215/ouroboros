@@ -43,6 +43,11 @@ type Tool struct {
 	// the list of the tools of that very peer names it, never with every
 	// tool and never in the list of all peers.
 	Trusted bool
+	// Verbatim says that the result of the tool is always shown as it is: it
+	// is instructions to read as they are now, not data to look something up
+	// in, so it is not left out as lines an earlier result of the same
+	// answer has. See unrepeated.
+	Verbatim bool
 }
 
 // RunFunc is what runs a tool.

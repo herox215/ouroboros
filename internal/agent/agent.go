@@ -632,7 +632,12 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			if err := emit(result); err != nil {
 				return abandon(err)
 			}
-			result.Content = unrepeated(result.Content, history[asked:])
+			// Instructions are read as they are now: eliding what an
+			// earlier result of the answer has could hide the section that
+			// changed, though the tool gives the current text.
+			if !a.tools[call.Function.Name].Verbatim {
+				result.Content = unrepeated(result.Content, history[asked:])
+			}
 			spent.Add(int64(len(result.Content)))
 			history = append(history, result)
 		}

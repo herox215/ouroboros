@@ -101,6 +101,9 @@ func (l library) tool() plugin.Tool {
 	return plugin.Tool{
 		Name:        Tool,
 		Description: describe(nil),
+		// What a skill says is instructions: always shown as it is now, never
+		// left out as lines an earlier result of the answer has.
+		Verbatim: true,
 		Schema: `{"type":"object","properties":{` +
 			`"name":{"type":"string","description":"the name of the skill"},` +
 			`"file":{"type":"string","description":"a further file of the skill, by its path within the skill as SKILL.md names it; left out: SKILL.md"}},` +
