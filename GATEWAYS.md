@@ -162,8 +162,8 @@ answer a pending agent question: answer it with text first, then resend the imag
 ### Gateway output tools
 
 Gateway plugins contribute output capabilities; the agent uses the neutral
-`gateway_list`, `gateway_send_image`, and `gateway_set_avatar` tools rather than
-protocol-specific tools. `gateway_list` describes registered capabilities and
+`gateway_list`, `gateway_send_image`, `gateway_send_file`, and `gateway_set_avatar`
+tools rather than protocol-specific tools. `gateway_list` describes registered capabilities and
 backend restrictions, not connection health. A capability can be registered while
 its account is disabled or disconnected; the backend then rejects the action.
 Specify `gateway` when more than one provider supports the operation. Message
@@ -171,7 +171,9 @@ source metadata does not select an account or recipient.
 
 For example, `gateway_send_image({gateway: "matrix", path: "/path/to/image.png"})`
 sends through the running Matrix connection. Alternatively use `attachment: 1`
-for a live chat image. If multiple known rooms exist, specify `destination` as
+for a live chat image. `gateway_send_file({path: "/path/to/sound.wav"})` sends a
+local audio file (WAV, OGG, MP3 or M4A, up to 10 MiB) as an encrypted audio
+message, so sounds can be heard away from the machine. If multiple known rooms exist, specify `destination` as
 the Matrix room ID. The backend binds that room to its allowed recipient and
 retains its encryption and membership checks. Unknown rooms are not accepted.
 

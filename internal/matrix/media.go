@@ -119,6 +119,40 @@ func (c *Client) SendImageTo(ctx context.Context, room, expectedPeer, name strin
 		}
 		info.Width, info.Height = cfg.Width, cfg.Height
 	}
+	if name == "" {
+		name = "image"
+	}
+	return c.sendMedia(ctx, room, expectedPeer, name, data, event.MsgImage, info)
+}
+
+// SendFileTo uploads an audio file of at most 10 MiB encrypted and sends it
+// as an audio message, only if the room still contains the expected
+// allowlisted peer. Like an image, the homeserver sees only its ciphertext;
+// name is the file name the peer's client shows.
+func (c *Client) SendFileTo(ctx context.Context, room, expectedPeer, name string, data []byte) error {
+	if expectedPeer == "" {
+		return errors.New("the expected Matrix peer is required")
+	}
+	if len(data) == 0 || len(data) > maxImageBytes {
+		return errors.New("the file must be nonempty and at most 10 MiB")
+	}
+	mime := http.DetectContentType(data)
+	switch mime {
+	case "audio/wave", "audio/x-wav", "audio/ogg", "audio/mpeg", "audio/mp4":
+	default:
+		return errors.New("supported files are audio: WAV, OGG, MP3 and M4A")
+	}
+	if name == "" {
+		name = "file"
+	}
+	info := &event.FileInfo{MimeType: mime, Size: len(data)}
+	return c.sendMedia(ctx, room, expectedPeer, name, data, event.MsgAudio, info)
+}
+
+// sendMedia seals data for the room's allowlisted peer and sends it as the
+// message type asked for. Every media kind shares the room, lock and upload
+// path, so what holds for one holds for all.
+func (c *Client) sendMedia(ctx context.Context, room, expectedPeer, name string, data []byte, msgType event.MessageType, info *event.FileInfo) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	c.mu.RLock()
@@ -142,12 +176,9 @@ func (c *Client) SendImageTo(ctx context.Context, room, expectedPeer, name strin
 	defer cancel()
 	uploaded, err := c.cli.UploadBytes(uploadCtx, sealed, "application/octet-stream")
 	if err != nil || uploaded == nil || uploaded.ContentURI.IsEmpty() {
-		return errors.New("the image upload failed")
+		return errors.New("the upload failed")
 	}
-	if name == "" {
-		name = "image"
-	}
-	content := &event.MessageEventContent{MsgType: event.MsgImage, Body: name, FileName: name, Info: info,
+	content := &event.MessageEventContent{MsgType: msgType, Body: name, FileName: name, Info: info,
 		File: &event.EncryptedFileInfo{EncryptedFile: *file, URL: uploaded.ContentURI.CUString()}}
 	return c.sendContent(ctx, room, id.UserID(expectedPeer), content)
 }
