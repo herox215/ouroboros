@@ -88,9 +88,14 @@ const (
 	// exploreHint is added for an agent that has the tools for files and bash
 	// at once: files are explored with their own tools, which return the part
 	// that was asked for, where a command prints pages that are read again.
+	// It also keeps a code search to one broad call rather than a row of
+	// narrow ones.
 	exploreHint = `Explore files with read, search and list, not with ` + ToolBash + ` and grep, sed or find: ` +
 		`the tools for files return the part you asked for and say where to continue, while a command prints pages that you then read again. ` +
-		`Use ` + ToolBash + ` for what the tools for files cannot do. `
+		`Use ` + ToolBash + ` for what the tools for files cannot do. ` +
+		`Search the code of a repository once, with a path, a pattern and a glob that span what you look for, ` +
+		`or with one ` + "`grep -rn`" + ` over the directory where ` + ToolBash + ` is what answers it: ` +
+		`several narrow searches in a row, each only telling you how to narrow the next, cost a round of the answer each. `
 	// improveHint is added for an owner whose agent may build ouro anew and
 	// improve it (config.SelfImproveBuild): what a task needs and ouro
 	// lacks, it may build.
