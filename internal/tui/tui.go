@@ -121,6 +121,10 @@ type Backend interface {
 	// UndoRemembered takes back the memory the review of an answer kept,
 	// as the Args of a plugin.SessionRemembered tell it.
 	UndoRemembered(args json.RawMessage) error
+	// Memories returns what the agent of the node has remembered: the
+	// global ones, core ones among them, and those of project, the latest
+	// updated first. Archived and expired ones only if all is true.
+	Memories(ctx context.Context, project string, all bool) (plugin.MemoryListing, error)
 	// Setup starts the setup of the node.
 	Setup() (Setup, error)
 	// Models lists the models of every access of the node, for the model
@@ -235,6 +239,7 @@ const (
 	screenEffort   // the slider of the effort, for /effort
 	screenKeys     // the keys of the chat, for /keys and ctrl+k
 	screenJobs     // the commands that run in the background, for /jobs
+	screenMemory   // what the agent has remembered, for /memory
 )
 
 // entry is one message in the conversation: from the user, from the agent, or
@@ -392,6 +397,8 @@ type Model struct {
 	picker modelScreen  // the models of the accesses, for /model
 	effort effortScreen // the slider of the effort, for /effort
 	jobs   jobsScreen   // the commands that run in the background, for /jobs
+
+	memories memoryScreen // what the agent has remembered, for /memory
 	// thoughtsHidden is whether what the model thought is hidden in the
 	// chat, which ctrl+r turns off and on; by default it is shown.
 	thoughtsHidden bool
@@ -708,6 +715,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.jobsLoaded(msg)
 	case jobsTick:
 		return m, m.jobsTicked(msg)
+	case memoriesMsg:
+		return m, m.memoriesLoaded(msg)
 	case peersMsg:
 		m.sessions.peersLoaded(m, msg)
 	case findMsg:
@@ -823,6 +832,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sessions.sel = m.sessions.pick(m)
 				return m, nil
 			}
+			if m.screen == screenMemory { // what is pasted filters the list too
+				m.memories.filter += strings.TrimSpace(strings.SplitN(pasted.Content, "\n", 2)[0])
+				m.memories.sel = 0
+				return m, nil
+			}
 			return m, m.paste(pasted.Content)
 		}
 		m.input, cmd = m.input.Update(msg)
@@ -859,6 +873,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.effort.handleKey(m, msg)
 	case screenJobs:
 		return m.jobs.handleKey(m, msg)
+	case screenMemory:
+		return m.memories.handleKey(m, msg)
 	case screenHelp, screenKeys:
 		if msg.String() == "esc" {
 			m.screen = screenChat

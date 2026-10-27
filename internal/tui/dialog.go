@@ -21,11 +21,15 @@ const (
 	sessionsRows  = 8  // how many conversations it lists at once
 )
 
+// memoryWidth is how wide the dialog of the memories is: a key, what it
+// holds and how old it is share a line.
+const memoryWidth = 84
+
 // inDialog reports whether a dialog lies over the chat: the chat behind it
 // stays as it is, also when the wheel turns.
 func (m *Model) inDialog() bool {
 	switch m.screen {
-	case screenSuggestions, screenEffort, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions:
+	case screenSuggestions, screenEffort, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions, screenMemory:
 		return true
 	}
 	return false
@@ -41,6 +45,8 @@ func (m *Model) dialogSize() (width, height int) {
 		width = m.width - 4
 	case screenSessions: // as high as the list it shows, not as high as the chat
 		width, height = sessionsWidth, sessionsRows+7
+	case screenMemory: // a key, what it holds and how old it is share a line
+		width = memoryWidth
 	}
 	return max(1, min(width, m.width-4)), max(1, min(height, room))
 }

@@ -32,6 +32,7 @@ var own = []command{
 	{"settings", "the configuration", (*Model).openSettings},
 	{"appearance", "light, dark, or as the terminal is: the next of them", (*Model).nextAppearance},
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
+	{"memory", "show what ouro has remembered, and read one", (*Model).openMemory},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
 	{"yolo", "turn the yolo mode on or off: then no permission is asked before a tool call", (*Model).toggleYolo},
 	{"suggestions", "review suggested changes of ouro", (*Model).openSuggestions},

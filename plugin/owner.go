@@ -234,6 +234,28 @@ func (o *Owner) UndoRemembered(args json.RawMessage) error {
 // is to be taken back of it.
 var ErrMemoryChanged = memory.ErrConflict
 
+// Memory is a memory the agent of the owner has collected, as the memory
+// dialog lists it.
+type Memory = memory.Entry
+
+// MemoryListing is what Owner.Memories returns: the memories a dialog lists,
+// the latest updated first, and the counts beyond them.
+type MemoryListing = memory.Listing
+
+// Memories returns the memories the agent of the owner has collected: the
+// global ones, core ones among them, and those of the project, the latest
+// updated first. Archived and expired memories are left out unless all is
+// true, and the listing says how many of them there are. It reads the store
+// of the profile and changes nothing.
+func (o *Owner) Memories(ctx context.Context, project string, all bool) (MemoryListing, error) {
+	store, err := memory.Open(o.home.History())
+	if err != nil {
+		return MemoryListing{}, err
+	}
+	defer store.Close()
+	return store.List(ctx, project, all, 0)
+}
+
 // Status reports how the node is configured and whether it is running.
 func (o *Owner) Status() (NodeStatus, error) { return o.local.Status() }
 
