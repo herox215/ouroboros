@@ -123,7 +123,6 @@ func (m *Model) layout() {
 func (m *Model) renderHistory(toBottom bool) {
 	c := m.chat
 	first := m.threadStart(c)
-	m.blockStarts = nil
 	if first == len(c.entries) && !c.pending && len(c.queued) == 0 {
 		c.shown = rendered{first: first}
 		if m.resuming == c {
@@ -147,9 +146,6 @@ func (m *Model) renderHistory(toBottom bool) {
 	render := func(s string) string { return renderMarkdown(s, width) }
 	wrap := func(s string) string { return lipgloss.Wrap(s, width, "") }
 	summaries := c.summaries()
-	// owners are the entries the blocks are of, a block each: which part of
-	// the thread a line is in, see sectionShown.
-	var owners []int
 	// one adds what the chat shows of the entry i to blocks and says whether
 	// the last block there is the words of a round of an answer that is in,
 	// below which the line of its calls goes.
@@ -161,7 +157,7 @@ func (m *Model) renderHistory(toBottom bool) {
 		if e.reveal != nil {
 			e.text = string(e.reveal.runes[:e.reveal.shown])
 		}
-		add := func(block string) { blocks, owners = append(blocks, block), append(owners, i) }
+		add := func(block string) { blocks = append(blocks, block) }
 		// The report of a task is a line of its own, as the GUI writes what
 		// the agent handed to a session: what the agent makes of it is its
 		// answer.
@@ -241,26 +237,24 @@ func (m *Model) renderHistory(toBottom bool) {
 	// change anymore are drawn once and kept, so that an answer on its way
 	// costs only its own words, however long the conversation is.
 	settled, kept := c.settled(), c.shown.n
-	blocks, owners := c.shown.blocks, c.shown.owners
+	blocks := c.shown.blocks
 	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || c.shown.light != m.light || kept > settled {
-		kept, blocks, owners = 0, nil, nil
+		kept, blocks = 0, nil
 	}
 	words := false // the last block is the words of a round of an answer that is in
 	for i := kept; i < settled; i++ {
 		blocks, words = one(i, blocks, words)
 	}
-	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks, owners: owners}
-	blocks, owners = slices.Clone(blocks), slices.Clone(owners)
+	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks}
+	blocks = slices.Clone(blocks)
 	for i := settled; i < len(c.entries); i++ {
 		blocks, words = one(i, blocks, words)
 	}
-	last := len(c.entries) - 1
 	// The answer the model is still writing, as far as the stream has brought
 	// it; the Answer of the end replaces it with the whole of it.
 	if c.pending && c.partial != "" {
 		head := boldStyle.Foreground(muted).Render(m.agentName() + " · writing …")
 		blocks = append(blocks, wrap(head+"\n"+render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
-		owners = append(owners, last)
 	}
 	// What waits for the answer on its way to take it comes last.
 	for i, text := range c.queued {
@@ -270,45 +264,12 @@ func (m *Model) renderHistory(toBottom bool) {
 		}
 		head := boldStyle.Foreground(muted).Render(cmp.Or(c.peer, "You") + state)
 		blocks = append(blocks, mineBlock(head, lipgloss.NewStyle().Faint(true).Render(c.showLabels(c.labelled(text))), width))
-		owners = append(owners, last)
-	}
-	line := 0
-	for k, b := range blocks {
-		m.blockStarts = append(m.blockStarts, blockStart{line, owners[k]})
-		line += strings.Count(b, "\n") + 2
 	}
 	m.history.SetContent(m.behind(strings.Join(blocks, "\n\n")))
 	if toBottom {
 		m.stopGlide(&m.history) // the bottom is where it goes now
 		m.history.GotoBottom()
 	}
-}
-
-// blockStart is where a block of the history begins, and the entry it is
-// of.
-type blockStart struct{ line, entry int }
-
-// sectionShown is the part of the thread in view, by the entry of the
-// message of the owner that opened it, -1 for what came before the first:
-// the part of the line in the middle of the history, or the newest one at
-// its end, as the GUI tells it.
-func (m *Model) sectionShown() int {
-	c := m.chat
-	if len(m.blockStarts) == 0 {
-		return -1
-	}
-	if m.followsEnd() {
-		return c.exchangeOf(m.blockStarts[len(m.blockStarts)-1].entry)
-	}
-	mid := m.history.YOffset() + m.history.Height()/2
-	entry := m.blockStarts[0].entry
-	for _, b := range m.blockStarts {
-		if b.line > mid {
-			break
-		}
-		entry = b.entry
-	}
-	return c.exchangeOf(entry)
 }
 
 // exchangeOf is the message of the owner the entry i answers, by its index:
@@ -331,7 +292,6 @@ type rendered struct {
 	thoughts bool     // whether what the model thought was shown then
 	light    bool     // the palette the cached blocks were drawn in
 	blocks   []string // what the chat shows of them, a block for every entry
-	owners   []int    // the entry each block is of
 }
 
 // settled is how many of the entries of c are shown as they will stay: all of
