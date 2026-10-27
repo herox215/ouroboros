@@ -226,8 +226,8 @@ func TestControllerReportsOnlySafeSessionErrors(t *testing.T) {
 	}{
 		{"busy", plugin.ErrBusy, "wait for the answer first"},
 		{"wrapped busy", fmt.Errorf("secret access token: %w", plugin.ErrBusy), "wait for the answer first"},
-		{"restarting", plugin.ErrRestarting, "ouro is starting anew with a new build, ask again in a moment"},
-		{"wrapped restarting", fmt.Errorf("secret access token: %w", plugin.ErrRestarting), "ouro is starting anew with a new build, ask again in a moment"},
+		{"restarting", plugin.ErrRestarting, "ouro is restarting with the new build; send again once it is back"},
+		{"wrapped restarting", fmt.Errorf("secret access token: %w", plugin.ErrRestarting), "ouro is restarting with the new build; send again once it is back"},
 		{"stopped", plugin.ErrSessionStopped, "the node is stopping"},
 		{"wrapped stopped", fmt.Errorf("secret access token: %w", plugin.ErrSessionStopped), "the node is stopping"},
 		{"unknown", errors.New("secret access token"), "Ouro could not accept this message. Check the local session and gateway settings."},

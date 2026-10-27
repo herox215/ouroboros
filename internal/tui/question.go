@@ -106,7 +106,7 @@ func (m *Model) choose(option string) tea.Cmd {
 	c.asking.sent = true
 	id := c.contextID
 	return func() tea.Msg {
-		return askedMsg{id, option, m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, option)}
+		return askedMsg{id: id, text: option, steer: true, err: m.backend.Steer(plugin.WithMessageSource(m.ctx, plugin.MessageSource{Interface: "tui"}), id, option)}
 	}
 }
 

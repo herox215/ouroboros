@@ -321,7 +321,7 @@ func TestRejectedAskPreservesObservedAnswer(t *testing.T) {
 							m.apply(c, e, true)
 						}
 					}
-					m.Update(askedMsg{c.contextID, "my draft", plugin.ErrBusy})
+					m.Update(askedMsg{id: c.contextID, text: "my draft", err: plugin.ErrBusy})
 					draft := m.input.Value()
 					if background {
 						draft = c.draft

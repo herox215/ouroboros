@@ -308,7 +308,7 @@ var (
 	// ErrRestarting means that the node starts anew with a new build once
 	// the answers on their way are given, and takes no new message until
 	// then.
-	ErrRestarting = errors.New("ouro is starting anew with a new build, ask again in a moment")
+	ErrRestarting = errors.New("ouro is restarting with the new build; send again once it is back")
 	// ErrStopped means that the node is stopping.
 	ErrStopped = errors.New("the node is stopping")
 	// ErrNoSession means that a session was named with an ID that is none,
