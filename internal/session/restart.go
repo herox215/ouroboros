@@ -75,6 +75,12 @@ func (p *process) scheduleRestart() {
 			p.mu.Unlock()
 			if pending && !s.closed {
 				for _, se := range s.sessions {
+					// A task keeps the node waiting as an answer does, and ends
+					// with this image anyway: stop it now, so a long task does
+					// not hold the new build back until it is done.
+					for _, t := range se.tasks {
+						stopTask(t)
+					}
 					if se.cancel == nil {
 						continue
 					}
