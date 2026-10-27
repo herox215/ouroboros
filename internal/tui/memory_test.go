@@ -39,15 +39,22 @@ func TestMemoryDialog(t *testing.T) {
 	}
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"Memories · 3 remembered · 1 core · 1 global · 1 here · 2 hidden",
-		"Core · 1, given with every answer", "Global · 1, remembered anywhere", "Here · 1, in ouroboros",
-		"›  workflow", "Changes go in a branch", "2h",
-		"drink", "oolong tea in the afternoon", "2d",
-		"make test runs the tests", "tab archived",
+		"Memories · 3 remembered · ✸ 1 core · ✦ 1 global · ✧ 1 here · 2 hidden",
+		"· core ·", "· global ·", "· here ·",
+		"workflow", "drink", "build",
+		"Changes go in a branch", "2h",
+		"tab archived",
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("%q is not in the dialog:\n%s", want, view)
+			t.Fatalf("%q is not in the chart:\n%s", want, view)
 		}
+	}
+	// The memory selected is the accent chip the rest of the UI marks a
+	// selection with, here on its name in the chart: a background before it.
+	raw := m.View().Content
+	mark := strings.Index(raw, "workflow")
+	if mark < 0 || !strings.Contains(raw[strings.LastIndex(raw[:mark], "\x1b["):mark], "48;2;") {
+		t.Fatalf("the memory selected is not marked:\n%s", raw)
 	}
 
 	// Up and down select; enter reads the one selected in full.
@@ -144,6 +151,61 @@ func TestMemoryDialogEmptyAndNarrow(t *testing.T) {
 	for i, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
 		if lipgloss.Width(l) > m.width {
 			t.Fatalf("the memory: line %d is wider than the window: %q", i, l)
+		}
+	}
+}
+
+// A click on a name of the chart selects that memory, and a click on the one
+// selected reads it, as enter does.
+func TestMemoryChartClicks(t *testing.T) {
+	m, b := newModel(t)
+	at := time.Unix(1000, 0)
+	m.now = func() time.Time { return at }
+	var list []plugin.Memory
+	for _, k := range []string{"workflow", "drink", "build", "minerva", "hooks", "tea"} {
+		list = append(list, plugin.Memory{Key: k, Content: "what " + k + " holds",
+			Updated: at.Format(time.RFC3339)})
+	}
+	b.memories = plugin.MemoryListing{Total: len(list), Memories: list}
+	m.Update(run(m, "/memory")())
+
+	if clickOn(t, m, "drink", 0); m.memories.sel != 1 || m.memories.detail != nil {
+		t.Fatalf("a click should select, not read: %d, %v", m.memories.sel, m.memories.detail)
+	}
+	clickOn(t, m, "drink", 0)
+	if m.memories.detail == nil || m.memories.detail.Key != "drink" {
+		t.Fatalf("a click on the one selected should read it: %v", m.memories.detail)
+	}
+}
+
+// The chart names every memory where it has room, and keeps the dialog in a
+// window wide enough for it, also with many memories.
+func TestMemoryChartNamesThem(t *testing.T) {
+	m, b := newModel(t)
+	at := time.Unix(1000, 0)
+	m.now = func() time.Time { return at }
+	m.chat.directory = "/home/lucas/Projects/ouroboros"
+	keys := []string{"workflow", "answers", "drink", "music", "names", "build",
+		"minerva", "hooks", "tea", "piano", "windows", "gofmt"}
+	var list []plugin.Memory
+	for i, k := range keys {
+		list = append(list, plugin.Memory{Key: k, Content: "what " + k + " holds",
+			Updated: at.Format(time.RFC3339), Project: m.chat.directory, Core: i < 2})
+	}
+	b.memories = plugin.MemoryListing{Total: len(list), Memories: list}
+	m.Update(run(m, "/memory")())
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "· core ·") || !strings.Contains(view, "· here ·") {
+		t.Fatalf("the chart should name the orbits:\n%s", view)
+	}
+	for _, k := range keys {
+		if !strings.Contains(view, k) {
+			t.Fatalf("the chart does not name %q:\n%s", k, view)
+		}
+	}
+	for i, l := range strings.Split(view, "\n") {
+		if lipgloss.Width(l) > m.width {
+			t.Fatalf("line %d is wider than the window: %q", i, l)
 		}
 	}
 }
