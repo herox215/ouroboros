@@ -15,12 +15,13 @@ import (
 )
 
 // The memory screen is what the command /memory opens: the memories the
-// agent of the owner has collected, grouped by where they hold - the core
-// ones, which go into every answer, the global ones, and those of the
-// project the conversation is in - each with what it holds on one line.
-// Enter reads the one selected in full, tab shows the archived and expired
-// ones too, and what is typed filters the list by key and content. Nothing
-// here changes a memory.
+// agent of the owner has collected, drawn as a star chart, grouped by where
+// they hold - the core ones, which go into every answer, on the innermost
+// orbit, the global ones, and those of the project the conversation is in on
+// the outermost. The one selected is named on the chart, with what it holds
+// below it; a narrow dialog falls back to a list. Enter reads the one
+// selected in full, tab shows the archived and expired ones too, and what is
+// typed filters the chart by key and content. Nothing here changes a memory.
 
 // The groups the memory screen lists, in the order it shows them.
 const (
@@ -149,8 +150,7 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		return m.loadMemories() // the archived and expired ones, or not
 	case "enter":
 		if len(rows) > 0 {
-			e := rows[max(0, min(s.sel, len(rows)-1))]
-			s.detail, s.detailAt = &e, 0
+			s.open(s.sel)
 		}
 	case "backspace":
 		if r := []rune(s.filter); len(r) > 0 {
@@ -190,8 +190,8 @@ func (s *memoryScreen) readingKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// view shows, in a dialog, the groups of the memories with the one selected
-// marked, or the memory that is read in full.
+// view shows, in a dialog, the memories as a star chart, or in a list where
+// the dialog is too small for one, or the memory that is read in full.
 func (s *memoryScreen) view(m *Model) (string, []hit) {
 	w, h := m.dialogSize()
 	inner := max(10, w-4)
@@ -201,6 +201,9 @@ func (s *memoryScreen) view(m *Model) (string, []hit) {
 	head := []string{boldStyle.Render("Memories") + mutedStyle.Render(" · "+s.summary()), ""}
 	if s.filter != "" {
 		head = append(head, mutedStyle.Render("find ")+ansi.Truncate(s.filter, max(1, inner-6), "…"), "")
+	}
+	if s.err == nil && s.loaded && len(s.rows()) > 0 && inner >= chartMinWidth && h-2-len(head) >= chartMinRows+chartFootRows {
+		return s.chartView(m, w, h, inner, head, s.rows())
 	}
 	var lines []string
 	var hits []hit
@@ -349,9 +352,9 @@ func (s *memoryScreen) summary() string {
 		counts[groupOf(e)]++
 	}
 	parts := []string{fmt.Sprintf("%d remembered", s.listing.Total),
-		fmt.Sprintf("%d core", counts[groupCore]),
-		fmt.Sprintf("%d global", counts[groupGlobal]),
-		fmt.Sprintf("%d here", counts[groupHere])}
+		fmt.Sprintf("%c %d core", starGlyph(groupCore), counts[groupCore]),
+		fmt.Sprintf("%c %d global", starGlyph(groupGlobal), counts[groupGlobal]),
+		fmt.Sprintf("%c %d here", starGlyph(groupHere), counts[groupHere])}
 	if s.listing.Hidden > 0 {
 		parts = append(parts, fmt.Sprintf("%d hidden", s.listing.Hidden))
 	}
