@@ -134,12 +134,38 @@ func (a *archive) lastOwner(id string) string {
 	return ""
 }
 
+// lostTasksText tells of the tasks that ran when the node went away and ended
+// with it, named, and that their work is lost. Alone says that nothing else is
+// told the session, so that it says that ouro started anew.
+func lostTasksText(tasks []history.Task, alone bool) string {
+	head := "The tasks this conversation had delegated ended with the node, too, before they could report; their work is lost:"
+	if alone {
+		head = "[Not from the owner: ouro started anew, and the tasks this conversation delegated ended with it before they could report. Their work is lost:"
+	}
+	text := head + "\n" + history.TaskLines(tasks)
+	text += "\n\nWhat they were to do is in the call of " + assistant.ToolDelegate + " in this chat: history_read with from -40 finds it; delegate them again if their work is needed."
+	if alone {
+		text += "]"
+	}
+	return text
+}
+
+// clearTasks tells whoever watches the session id that no task runs in it any
+// more, see GoOn.
+func (s *Service) clearTasks(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emit(s.get(id), Event{Kind: Tasks})
+}
+
 // GoOn lets the sessions of the owner go on that asked to once ouro started
 // anew from the build they asked for, see AskGoOn, and those whose answer the
 // previous image could not finish, see history.BeginAnswer: a session that
 // asked is told goOnText, an interrupted one interruptedText, and either which
-// chat it is and what it was asked first, see resumeNote, each once. A node
-// calls it when it starts.
+// chat it is and what it was asked first, see resumeNote, each once. The tasks
+// that ran when the node went away are told to their session, and named,
+// whether or not it goes on also: they are gone, and their work is lost. A
+// node calls it when it starts.
 func (s *Service) GoOn() {
 	s.mu.Lock()
 	a := s.archive
@@ -155,21 +181,54 @@ func (s *Service) GoOn() {
 	if err != nil {
 		a.log("which answers were interrupted cannot be read: %v", err)
 	}
-	told := make(map[string]string, len(ids)+len(interrupted))
-	for _, id := range ids {
-		told[id] = goOnText + a.resumeNote(id)
+	lost, err := a.RestartedTasks(processInstance)
+	if err != nil {
+		a.log("which tasks ended with the node cannot be read: %v", err)
 	}
-	order := slices.Clone(ids)
+	type note struct {
+		head  string
+		tasks []history.Task
+	}
+	notes := make(map[string]*note, len(ids)+len(interrupted)+len(lost))
+	var order []string
+	add := func(id, head string) {
+		if _, ok := notes[id]; ok {
+			return
+		}
+		notes[id] = &note{head: head}
+		order = append(order, id)
+	}
+	for _, id := range ids {
+		add(id, goOnText)
+	}
 	// An answer that asked to go on carries its own note of what was pending;
 	// one that was only interrupted is told that it stopped in the middle.
 	for _, id := range interrupted {
-		if _, ok := told[id]; !ok {
-			order = append(order, id)
-			told[id] = interruptedText + a.resumeNote(id)
+		add(id, interruptedText)
+	}
+	for id, tasks := range lost {
+		if n, ok := notes[id]; ok {
+			n.tasks = tasks
+			continue
 		}
+		notes[id] = &note{tasks: tasks}
+		order = append(order, id)
 	}
 	for _, id := range order {
-		if err := s.askInput(context.Background(), strings.TrimPrefix(id, "owner/"), told[id], true); err != nil {
+		n := notes[id]
+		text := n.head
+		if len(n.tasks) > 0 {
+			if text != "" {
+				text += "\n\n"
+			}
+			text += lostTasksText(n.tasks, text == "")
+		}
+		text += a.resumeNote(id)
+		name := strings.TrimPrefix(id, "owner/")
+		if len(n.tasks) > 0 {
+			s.clearTasks(name) // the tasks are gone: the owner sees them cleared before the note says so
+		}
+		if err := s.askInput(context.Background(), name, text, true); err != nil {
 			a.log("the session %s does not go on by itself: %v", id, err)
 		}
 	}
@@ -202,6 +261,7 @@ func (s *Service) load(id string) *session {
 		if err != nil && title == "" && !se.efforted && !se.directed {
 			return nil
 		}
+		s.loadTasks(se)
 		return se
 	}
 	events, msgs := replay(records)
@@ -242,7 +302,28 @@ func (s *Service) load(id string) *session {
 	s.effortOf(se)
 	s.modelOf(se)
 	s.directoryOf(se)
+	s.loadTasks(se)
 	return se
+}
+
+// loadTasks tells se what the archive knows of its tasks: the number of the
+// last one, so that a number is given once in a session, and those that ended
+// with a node that started anew, see errNotRunning. s.mu is held.
+func (s *Service) loadTasks(se *session) {
+	tasks, err := s.archive.Tasks(history.Owner(se.id))
+	if err != nil {
+		s.archive.log("the tasks of the session %s cannot be read: %v", se.id, err)
+		return
+	}
+	for _, t := range tasks {
+		se.delegated = max(se.delegated, t.N)
+		if t.Ended == history.TaskRestart {
+			if se.lost == nil {
+				se.lost = map[int]string{}
+			}
+			se.lost[t.N] = t.Title
+		}
+	}
 }
 
 // replay returns what happened in an archived conversation, as its events,
