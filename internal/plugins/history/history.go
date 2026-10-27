@@ -138,7 +138,7 @@ func (h *archive) tools() []plugin.Tool {
 				"A long record is returned in pieces: use from and offset from the note to read the rest. ", history.MaxRecords, history.MaxReadBytes>>10) + hint,
 			Schema: `{"type":"object","properties":{` +
 				`"session":{"type":"string","description":"the session, as ` + Search + ` and ` + Sessions + ` name it; this conversation if left out"},` +
-				`"from":{"type":"integer","description":"the first record, 1 if left out"},` +
+				`"from":{"type":"integer","description":"the first record, 1 if left out; negative counts from the end: -20 reads the last 20 records, what to read first after ouro started anew"},` +
 				`"count":{"type":"integer","description":"how many records at most, ` + strconv.Itoa(history.DefaultRecords) + ` if left out"},` +
 				`"offset":{"type":"integer","description":"bytes to skip in the first formatted record, from the continuation note; 0 if left out"}}}`,
 			Run: run(Read, func(ctx context.Context, args readArgs) (string, error) {

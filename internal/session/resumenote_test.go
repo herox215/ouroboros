@@ -16,6 +16,7 @@ import (
 func TestResumeNote(t *testing.T) {
 	s, arch, l := archived(t, &fakeAgent{}, filepath.Join(t.TempDir(), "history"), time.Now())
 	const name = "\n\nThis chat is \"s1\" in the history archive."
+	const tail = "\n\n" + readLast
 	if got := s.archive.resumeNote("owner/s1"); got != name {
 		t.Errorf("without an archived answer: %q, want %q", got, name)
 	}
@@ -36,7 +37,7 @@ func TestResumeNote(t *testing.T) {
 
 	whole := strings.Repeat("b", maxTaskNote)
 	appendTask("whole", whole)
-	if got := s.archive.resumeNote("owner/whole"); !strings.HasSuffix(got, whole) || strings.HasSuffix(got, "…") {
+	if got := s.archive.resumeNote("owner/whole"); !strings.HasSuffix(got, whole+tail) || strings.Contains(got, "…") {
 		t.Errorf("a task of %d bytes is cut: %q", maxTaskNote, got)
 	}
 
@@ -48,11 +49,20 @@ func TestResumeNote(t *testing.T) {
 		t.Errorf("a cut task is not whole UTF-8: %q", got)
 	}
 	const task = "\n\nThis chat is \"long\" in the history archive. Its first task, as the owner put it:\n"
-	if want := task + strings.Repeat("a", maxTaskNote-5) + "…"; got != want {
+	if want := task + strings.Repeat("a", maxTaskNote-5) + "…" + tail; got != want {
 		t.Errorf("long task = %q, want %q", got, want)
 	}
-	if len(got) > len(task)+maxTaskNote {
+	if len(got) > len(task)+maxTaskNote+len(tail) {
 		t.Errorf("long task is not bounded: %d bytes, %q", len(got), got)
+	}
+
+	// The last message of the owner follows the first, but not a note of
+	// ouro or the report of a task.
+	if err := arch.Append(history.Who{Session: "long"}, []openai.Message{{Role: "user", Content: "now fix the tests"}, {Role: "user", Content: "[Task 1, which you delegated, ended.]"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.archive.resumeNote("owner/long"); !strings.HasSuffix(got, "\n\nWhat the owner wrote last:\nnow fix the tests"+tail) {
+		t.Errorf("without the last message of the owner: %q", got)
 	}
 
 	// Both restart notes stay recognizable with what resumeNote adds.

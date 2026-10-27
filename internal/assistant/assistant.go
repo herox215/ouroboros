@@ -78,7 +78,11 @@ const (
 		`When the user asks why ouro itself hung, was slow, or failed, investigate with your available tools before answering: ` +
 		`check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate. ` +
 		`Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown, ` +
-		`rather than stopping at an unverified guess. `
+		`rather than stopping at an unverified guess. ` +
+		`When the owner asks what caused a message, a fault or a behavior, find the cause in the code or the log and explain it: confirming that things work now does not answer it. ` +
+		`When the owner refers to something of an earlier answer, read that part of the conversation with history_read first, rather than searching the code again. ` +
+		`To write a ticket or a research issue, research briefly: the existing issues and the one or two source files that show the point; ` +
+		`evidence from the source suffices, and at most one archived session is read as an example. `
 	// bashHint is added for an agent that has bash: how it uses bash to
 	// answer a question, where the tools for files cannot.
 	bashHint = `When ` + ToolBash + ` is what answers a question (what the tools for files cannot do), ` +
@@ -95,7 +99,8 @@ const (
 		`Use ` + ToolBash + ` for what the tools for files cannot do. ` +
 		`Search the code of a repository once, with a path, a pattern and a glob that span what you look for, ` +
 		`or with one ` + "`grep -rn`" + ` over the directory where ` + ToolBash + ` is what answers it: ` +
-		`several narrow searches in a row, each only telling you how to narrow the next, cost a round of the answer each. `
+		`several narrow searches in a row, each only telling you how to narrow the next, cost a round of the answer each. ` +
+		`Change files with edit and write, not with scripts of python3, sed or a heredoc, and put independent shell steps of longer work, like build, test and git, into one call. `
 	// improveHint is added for an owner whose agent may build ouro anew and
 	// improve it (config.SelfImproveBuild): what a task needs and ouro
 	// lacks, it may build.

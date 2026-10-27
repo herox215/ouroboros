@@ -111,8 +111,12 @@ func runningTask(se *session, n int) *task {
 
 // errNotRunning is the error of Stop and Tell for the task n that does not
 // run.
-func errNotRunning(n int) error {
-	return fmt.Errorf("task %d does not run: it ended, or never started", n)
+func errNotRunning(se *session, n int) error {
+	if n > se.delegated {
+		return fmt.Errorf("task %d does not run: it was started before ouro started anew, which ended it without a report. "+
+			"What it was to do is in the call of %s in this chat: history_read with from -40 finds it; delegate it again", n, assistant.ToolDelegate)
+	}
+	return fmt.Errorf("task %d does not run: it ended, and its report comes or came as a message", n)
 }
 
 // Stop stops the task n: its report says so.
@@ -121,7 +125,7 @@ func (d delegating) Stop(n int) error {
 	defer d.s.mu.Unlock()
 	t := runningTask(d.se, n)
 	if t == nil {
-		return errNotRunning(n)
+		return errNotRunning(d.se, n)
 	}
 	t.stopped = true
 	t.cancel()
@@ -135,7 +139,7 @@ func (d delegating) Tell(n int, text string) error {
 	defer d.s.mu.Unlock()
 	t := runningTask(d.se, n)
 	if t == nil {
-		return errNotRunning(n)
+		return errNotRunning(d.se, n)
 	}
 	t.told = append(t.told, openai.Message{Role: "user", Content: text})
 	return nil
@@ -220,6 +224,15 @@ func (s *Service) deliver(se *session, p *process, t *task, answer string, err e
 	// happens to be running when it finishes. Taking this report restores it
 	// for exactly that continuation, including any tasks it delegates in turn.
 	report := queued{text: assistant.TaskReport(t.n, t.title, answer, err), task: e, routed: t.routed}
+	if p.successor != "" && !s.closed {
+		// ouro starts anew before an answer could take the report: the
+		// agent keeps it, and so does the archive, so that it is not lost.
+		if noteErr := s.agent.Note(context.Background(), se.id, report.text); noteErr == nil {
+			return
+		} else if s.archive != nil {
+			s.archive.log("the report of task %d of the session %s cannot be kept: %v", t.n, se.id, noteErr)
+		}
+	}
 	se.queue = append(se.queue, report)
 	if se.cancel != nil || s.closed || p.successor != "" || len(se.tasks) > 0 {
 		return

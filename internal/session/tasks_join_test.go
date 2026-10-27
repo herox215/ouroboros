@@ -105,7 +105,7 @@ func TestAgentReachesItsTasks(t *testing.T) {
 			t.Fatalf("asked %q, without %q", text, report)
 		}
 	}
-	if err := tasks.Stop(1); err == nil || err.Error() != "task 1 does not run: it ended, or never started" {
+	if err := tasks.Stop(1); err == nil || err.Error() != "task 1 does not run: it ended, and its report comes or came as a message" {
 		t.Fatalf("stopped what ended: %v", err)
 	}
 	if err := tasks.Tell(3, "x"); err == nil {

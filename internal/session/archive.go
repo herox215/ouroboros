@@ -97,10 +97,41 @@ func (a *archive) resumeNote(id string) string {
 	if task == "" {
 		return "\n\nThis chat is \"" + chat + "\" in the history archive."
 	}
-	if len(task) > maxTaskNote {
-		task = strings.ToValidUTF8(task[:maxTaskNote-len("…")], "") + "…"
+	note := "\n\nThis chat is \"" + chat + "\" in the history archive. Its first task, as the owner put it:\n" + cut(task)
+	if last := a.lastOwner(id); last != "" && last != task {
+		note += "\n\nWhat the owner wrote last:\n" + cut(last)
 	}
-	return "\n\nThis chat is \"" + chat + "\" in the history archive. Its first task, as the owner put it:\n" + task
+	return note + "\n\n" + readLast
+}
+
+// readLast tells a session that goes on after ouro started anew where to
+// read what it did last, rather than searching the archive for it.
+const readLast = "To see what you did last, read the end of this chat first: history_read with from -20."
+
+// cut is text bounded to maxTaskNote bytes, the ellipsis that marks a cut
+// included.
+func cut(text string) string {
+	if len(text) > maxTaskNote {
+		return strings.ToValidUTF8(text[:maxTaskNote-len("…")], "") + "…"
+	}
+	return text
+}
+
+// lastOwner is the last message the owner wrote in the session id: not a
+// note of ouro or the report of a task, "" if there is none.
+func (a *archive) lastOwner(id string) string {
+	records, err := a.Records(id)
+	if err != nil {
+		return ""
+	}
+	for _, r := range slices.Backward(records) {
+		text := strings.TrimSpace(unnoted(r.Content))
+		if r.Role != "user" || text == "" || restartNote(text) || strings.HasPrefix(text, "[") {
+			continue
+		}
+		return text
+	}
+	return ""
 }
 
 // GoOn lets the sessions of the owner go on that asked to once ouro started

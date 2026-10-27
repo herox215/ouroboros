@@ -427,7 +427,8 @@ func oneLine(text string) string {
 }
 
 // Read returns the records of the conversation session of the party of who,
-// from the sequence number from on (1 for 0): count of them (DefaultRecords
+// from the sequence number from on (1 for 0, counted from the end when
+// negative, -1 being the last record): count of them (DefaultRecords
 // for 0, at most MaxRecords) and at most MaxReadBytes including the note where
 // to go on. Offset skips bytes of the first formatted record, on a UTF-8
 // boundary. Without session it is the current conversation; a peer may name
@@ -446,11 +447,19 @@ func (a *Archive) Read(who Who, session string, from, count, offset int) (string
 	if !named.MatchString(session) {
 		return "", fmt.Errorf("there is no session %q: history_sessions lists them", session)
 	}
-	from = max(from, 1)
 	if count < 1 {
 		count = DefaultRecords
 	}
 	count = min(count, MaxRecords)
+	if from < 0 {
+		// Counted from the end: -1 is the last record, -count the first of
+		// the last count.
+		last := 0
+		if err := a.records(a.file(who, session), func(r Record) bool { last = r.Seq; return true }); err == nil {
+			from = last + from + 1
+		}
+	}
+	from = max(from, 1)
 	var out strings.Builder
 	first, last, total, full := 0, 0, 0, false
 	nextOffset := 0
