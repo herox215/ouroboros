@@ -21,8 +21,9 @@ const (
 	sessionsRows  = 8  // how many conversations it lists at once
 )
 
-// memoryWidth is how wide the dialog of the memories is: a key, what it
-// holds and how old it is share a line.
+// memoryWidth is how wide the dialog of the memories is at most: the chart
+// reads as a square only where the dialog is one, so a window that is short
+// gives it fewer rows rather than a flat chart.
 const memoryWidth = 84
 
 // inDialog reports whether a dialog lies over the chat: the chat behind it
@@ -45,8 +46,9 @@ func (m *Model) dialogSize() (width, height int) {
 		width = m.width - 4
 	case screenSessions: // as high as the list it shows, not as high as the chat
 		width, height = sessionsWidth, sessionsRows+7
-	case screenMemory: // a key, what it holds and how old it is share a line
-		width = memoryWidth
+	case screenMemory: // a chart of the memories: as square as the room allows
+		width = min(memoryWidth, m.width-4)
+		height = min(room, (width+1)/2) // a cell of the terminal is twice as tall as it is wide
 	}
 	return max(1, min(width, m.width-4)), max(1, min(height, room))
 }
