@@ -383,7 +383,7 @@ func (m *Model) statusLine(w int) string {
 func (m *Model) activeSessions() int {
 	n := 0
 	for _, c := range m.chats {
-		if c.contextID != plugin.ThreadID && c.running {
+		if c.contextID != plugin.ThreadID && c.busy() {
 			n++
 		}
 	}
@@ -480,7 +480,7 @@ func (m *Model) runningSessions() []*conversation {
 	var fresh, list []*conversation
 	order := make(map[string]int, len(m.runOrder))
 	for _, s := range m.chats {
-		if s.contextID == plugin.ThreadID || s.peer != "" || !s.running {
+		if s.contextID == plugin.ThreadID || s.peer != "" || !s.busy() {
 			continue
 		}
 		n, ok := m.runOrder[s.contextID]
@@ -546,6 +546,10 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 	if !c.last.IsZero() {
 		when = " · " + c.last.Format("2 Jan 2006, 15:04")
 	}
+	state := "working"
+	if !c.pending && !c.running {
+		state = "waiting" // the tasks the agent delegated run, and it waits for their reports
+	}
 	bar := make([]rune, inner)
 	for x := range bar {
 		bar[x] = '▪'
@@ -559,7 +563,7 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 	}
 	return []sideRow{
 		{title.Render(pad(strings.ToUpper(cmp.Or(c.title, "new conversation")), inner)), c},
-		{on(mutedStyle).Render(pad("State: working · own"+when, inner)), c},
+		{on(mutedStyle).Render(pad("State: "+state+" · own"+when, inner)), c},
 		{on(lipgloss.NewStyle().Foreground(accent)).Render(string(bar)), c},
 		{border.Render(strings.Repeat("─", inner)), c},
 		{},
@@ -801,6 +805,8 @@ func standOf(c *conversation) stand {
 		s.phase = "answering"
 	case working:
 		s.phase = "thinking"
+	case len(c.tasks) > 0:
+		s.phase = "waits"
 	case len(c.entries) == 0:
 		s.phase = "empty"
 	default:
@@ -813,10 +819,10 @@ func standOf(c *conversation) stand {
 			}
 		}
 	}
-	s.live = working || s.phase == "asked"
+	s.live = working || s.phase == "asked" || s.phase == "waits"
 	s.bad = s.phase == "failed"
 	s.word = map[string]string{"asked": "asks you", "tool": "calls", "thinking": "thinks", "answering": "writes the answer",
-		"done": "done", "failed": "failed", "canceled": "canceled", "empty": "nothing yet"}[s.phase]
+		"waits": "waits", "done": "done", "failed": "failed", "canceled": "canceled", "empty": "nothing yet"}[s.phase]
 	s.next = "nothing"
 	switch s.phase {
 	case "asked":
@@ -832,6 +838,12 @@ func standOf(c *conversation) stand {
 		s.next = "the end of the answer"
 	case "thinking":
 		s.next = "a tool or the answer"
+	case "waits":
+		s.next = "their reports, then the answer"
+		s.what = fmt.Sprintf("for %d tasks", len(c.tasks))
+		if len(c.tasks) == 1 {
+			s.what = "for 1 task"
+		}
 	}
 	return s
 }
@@ -865,7 +877,12 @@ func (m *Model) artefact(c *conversation, inner int) []string {
 	if s.what != "" {
 		state += " " + mutedStyle.Render(s.what)
 	}
-	lines = append(lines, spread(state, mutedStyle.Render(clock(c.last, m.now())), inner))
+	at := mutedStyle.Render(clock(c.last, m.now()))
+	if since, ok := c.oldestTask(); ok && s.phase == "waits" {
+		at = lipgloss.NewStyle().Foreground(accent).Render(m.age(since))
+	}
+	lines = append(lines, spread(state, at, inner))
+	lines = append(lines, m.taskRows(c, inner)...)
 	fact := func(key, value, at string, bad bool) string {
 		v := lipgloss.NewStyle()
 		if bad {
@@ -890,6 +907,63 @@ func (m *Model) artefact(c *conversation, inner int) []string {
 		lines = append(lines, fact("running", " "+job, "", false))
 	}
 	return append(lines, m.toolChart(s, inner)...)
+}
+
+// age is how long a task has run since since, as the column on the right
+// says it.
+func (m *Model) age(since time.Time) string {
+	d := m.now().Sub(since)
+	if d < 0 {
+		d = 0
+	}
+	return d.Round(time.Second).String()
+}
+
+// taskRows are the tasks the session waits for, the one that runs longest
+// first and in the color of the work: its number, what it is, and how long
+// it runs.
+func (m *Model) taskRows(c *conversation, inner int) []string {
+	type task struct {
+		n     int
+		what  string
+		line  string
+		since time.Time
+	}
+	tasks := make([]task, len(c.tasks))
+	keys := 0
+	for i, line := range c.tasks {
+		n, what := taskParts(line)
+		tasks[i] = task{n: n, what: what, line: line, since: c.taskSince[n]}
+		if n > 0 {
+			keys = max(keys, len(fmt.Sprintf("task %d", n)))
+		}
+	}
+	slices.SortStableFunc(tasks, func(a, b task) int {
+		if a.since.IsZero() != b.since.IsZero() {
+			if a.since.IsZero() {
+				return 1
+			}
+			return -1
+		}
+		return a.since.Compare(b.since)
+	})
+	lines := make([]string, len(tasks))
+	for i, t := range tasks {
+		key, what := t.line, ""
+		if t.n > 0 {
+			key, what = fmt.Sprintf("%-*s", keys+1, fmt.Sprintf("task %d", t.n)), t.what
+		}
+		age := ""
+		if !t.since.IsZero() {
+			age = m.age(t.since)
+		}
+		if i == 0 && !t.since.IsZero() {
+			lines[i] = lipgloss.NewStyle().Foreground(accent).Render(spread(key+what, age, inner))
+			continue
+		}
+		lines[i] = spread(mutedStyle.Render(key)+what, mutedStyle.Render(age), inner)
+	}
+	return lines
 }
 
 // toolChart draws the tools of a session as one picture instead of their

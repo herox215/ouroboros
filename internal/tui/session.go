@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -179,6 +180,7 @@ func (m *Model) unwatched(id string) tea.Cmd {
 	c.watching = false
 	c.pending, c.running, c.doing, c.round, c.asking, c.jobs = false, false, "", 0, nil, nil
 	c.partial = ""
+	c.tasks, c.taskSince = nil, nil
 	if c == m.chat {
 		m.renderHistory(m.followsEnd())
 	}
@@ -258,10 +260,11 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 			c.pending, c.running = false, false
 		}
 	case plugin.SessionTasks:
-		c.tasks = nil
-		if e.Text != "" {
-			c.tasks = strings.Split(e.Text, "\n")
+		at := e.At
+		if at.IsZero() {
+			at = m.now()
 		}
+		c.setTasks(e.Text, at)
 	case plugin.SessionQueued:
 		c.queued = append(c.queued, e.Text)
 	case plugin.SessionUnqueued:
@@ -317,6 +320,66 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// busy is whether the session is at work: an answer is on its way in it, or
+// tasks the agent delegated run in it, whose reports it waits for.
+func (c *conversation) busy() bool { return c.pending || c.running || len(c.tasks) > 0 }
+
+// setTasks takes the tasks the session told it, one per line as "task 2 ·
+// find the callers", and keeps since when each runs that ran before: a task
+// number is given once in a session.
+func (c *conversation) setTasks(text string, at time.Time) {
+	var lines []string
+	if text != "" {
+		lines = strings.Split(text, "\n")
+	}
+	since := make(map[int]time.Time, len(lines))
+	for _, line := range lines {
+		n, _ := taskParts(line)
+		if began, ok := c.taskSince[n]; ok {
+			since[n] = began
+		} else {
+			since[n] = at
+		}
+	}
+	c.tasks, c.taskSince = lines, since
+}
+
+// oldestTask is since when the task that runs longest has run, and whether
+// the session waits for one at all.
+func (c *conversation) oldestTask() (time.Time, bool) {
+	var oldest time.Time
+	for _, line := range c.tasks {
+		n, _ := taskParts(line)
+		since := c.taskSince[n]
+		if since.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || since.Before(oldest) {
+			oldest = since
+		}
+	}
+	return oldest, !oldest.IsZero()
+}
+
+// taskParts splits a line of the tasks, "task 2 · find the callers", into the
+// number of the task and what it is; the number is 0 for a line that names
+// none.
+func taskParts(line string) (n int, what string) {
+	rest, ok := strings.CutPrefix(line, "task ")
+	if !ok {
+		return 0, line
+	}
+	number, what, ok := strings.Cut(rest, " · ")
+	if !ok {
+		return 0, line
+	}
+	n, err := strconv.Atoi(number)
+	if err != nil {
+		return 0, line
+	}
+	return n, what
 }
 
 // hand notes that the part of the thread on its way concerns the session
@@ -524,7 +587,7 @@ func (m *Model) read(msg readMsg) {
 		return
 	}
 	c := msg.c
-	c.entries, c.round, c.doing = nil, 0, ""
+	c.entries, c.round, c.doing, c.tasks, c.taskSince = nil, 0, "", nil, nil
 	for _, e := range msg.events {
 		m.apply(c, e, false)
 	}
@@ -828,7 +891,7 @@ func (l *sessionsScreen) view(m *Model) (string, []hit) {
 			title = c.peer + ": " + title
 		}
 		var after string
-		if c.pending {
+		if c.busy() {
 			after = " " + lipgloss.NewStyle().Foreground(accent).Render(m.runningFrame())
 		}
 		if !c.last.IsZero() {

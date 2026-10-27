@@ -291,26 +291,27 @@ type conversation struct {
 	partial string
 	// calling is how much of a call of a tool the model writes, like
 	// "3.2 KiB", as the events of Calling tell it; "" while it writes none.
-	calling  string
-	thread   thread              // how far its newest word is drawn in, see advance
-	pending  bool                // request submitted or answer on its way: what is sent meanwhile is queued
-	queued   []string            // the messages that wait for the answer on its way to take them
-	running  bool                // the node has said an answer is on its way
-	doing    string              // what the agent is waiting for, like "asking beta"
-	asking   *asking             // what the agent asks the owner and waits for; nil without a question
-	jobs     []string            // the commands that run in the background for the answer, like "job 1 · npm run dev"
-	tasks    []string            // the tasks the agent delegated that run, like "task 2 · find the callers"
-	since    time.Time           // when it began to wait for that
-	art      int                 // which of arts a wait is shown with: the next for every message
-	round    int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
-	context  int                 // how long its context is, see Event.Context
-	cache    plugin.SessionCache // what the provider had cached, see Event.Cache
-	title    string              // named for its topic, else the first message of the owner
-	effort   string              // how much the model thinks in it, once efforted says it has its own
-	efforted bool
-	last     time.Time
-	draft    string // what is typed in the input for it while another one is shown
-	watching bool   // its events come in, or are asked for
+	calling   string
+	thread    thread              // how far its newest word is drawn in, see advance
+	pending   bool                // request submitted or answer on its way: what is sent meanwhile is queued
+	queued    []string            // the messages that wait for the answer on its way to take them
+	running   bool                // the node has said an answer is on its way
+	doing     string              // what the agent is waiting for, like "asking beta"
+	asking    *asking             // what the agent asks the owner and waits for; nil without a question
+	jobs      []string            // the commands that run in the background for the answer, like "job 1 · npm run dev"
+	tasks     []string            // the tasks the agent delegated that run, like "task 2 · find the callers"
+	taskSince map[int]time.Time   // when each of the tasks began, by its number
+	since     time.Time           // when it began to wait for that
+	art       int                 // which of arts a wait is shown with: the next for every message
+	round     int                 // the entry of the round of the loop that is on, counted from 1; 0 for none yet
+	context   int                 // how long its context is, see Event.Context
+	cache     plugin.SessionCache // what the provider had cached, see Event.Cache
+	title     string              // named for its topic, else the first message of the owner
+	effort    string              // how much the model thinks in it, once efforted says it has its own
+	efforted  bool
+	last      time.Time
+	draft     string // what is typed in the input for it while another one is shown
+	watching  bool   // its events come in, or are asked for
 	// directory is the absolute project path; empty uses the session workspace.
 	directory string
 	fresh     bool // created by this UI; its initial directory has not been stored yet

@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -84,5 +85,56 @@ func TestTaskReportIsShown(t *testing.T) {
 	}
 	if !c.entries[2].asks() || !c.entries[5].failed {
 		t.Fatalf("entries %+v", c.entries)
+	}
+}
+
+// A session that waits for its tasks is at work, though no answer is on its
+// way: it stays in the columns beside the conversation and says that it
+// waits, and each task says since when it runs, kept while they come and go.
+func TestTheWaitForTasksCounts(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	start := time.Unix(1000, 0)
+	at := start
+	m.now = func() time.Time { return at }
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "look"}, true)
+	m.apply(c, Event{Kind: plugin.SessionTasks, Text: "task 1 · find the callers\ntask 2 · read the tests", At: at}, true)
+	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "started them", At: at}, true)
+	if !c.busy() || c.pending || c.running {
+		t.Fatalf("busy %v, pending %v, running %v", c.busy(), c.pending, c.running)
+	}
+	if list := m.runningSessions(); len(list) != 1 || list[0] != c {
+		t.Fatalf("a session that waits for its tasks is not beside the conversation: %v", list)
+	}
+	var state string
+	for _, r := range m.sidebarRows(34) {
+		if strings.Contains(strip(r.text), "State:") {
+			state = strip(r.text)
+		}
+	}
+	if !strings.Contains(state, "State: waiting · own") {
+		t.Fatalf("the sidebar: %q", state)
+	}
+	at = start.Add(90 * time.Second)
+	details := strings.Join(m.artefact(c, 40), "\n")
+	for _, want := range []string{"● waits for 2 tasks", "1m30s", "task 1 find the callers", "task 2 read the tests", "next  their reports, then the answer"} {
+		if !strings.Contains(strip(details), want) {
+			t.Fatalf("no %q beside the conversation:\n%s", want, strip(details))
+		}
+	}
+	// A task that ran before keeps the moment it began; one that comes now
+	// begins now.
+	at = start.Add(2 * time.Minute)
+	m.apply(c, Event{Kind: plugin.SessionTasks, Text: "task 2 · read the tests\ntask 3 · run the suite", At: at}, true)
+	if since, ok := c.oldestTask(); !ok || !since.Equal(start) {
+		t.Fatalf("the oldest task began at %v, from %v", since, start)
+	}
+	if began := c.taskSince[3]; !began.Equal(at) {
+		t.Fatalf("task 3 began at %v, not at %v", began, at)
+	}
+	// Once no task is left, the session is not at work anymore.
+	m.apply(c, Event{Kind: plugin.SessionTasks, At: at}, true)
+	if c.busy() || len(m.runningSessions()) != 0 {
+		t.Fatalf("busy %v with %d sessions beside", c.busy(), len(m.runningSessions()))
 	}
 }
