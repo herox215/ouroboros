@@ -209,3 +209,40 @@ func TestMemoryChartNamesThem(t *testing.T) {
 		}
 	}
 }
+
+// The dialog of the memories is as square as the room allows: a cell of the
+// terminal is about twice as tall as it is wide, so the dialog takes half as
+// many rows as it has columns, and all the room of a window that is short.
+func TestMemoryDialogIsSquare(t *testing.T) {
+	m, b := newModel(t)
+	b.memories = plugin.MemoryListing{Total: 1, Memories: []plugin.Memory{{
+		Key: "workflow", Content: "what it holds", Updated: m.now().Format(time.RFC3339),
+	}}}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 60})
+	m.Update(run(m, "/memory")())
+	if w, h := m.dialogSize(); w != memoryWidth || h != (w+1)/2 {
+		t.Fatalf("in a tall window the dialog is %d×%d, not square", w, h)
+	}
+	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	if len(lines) != 60 {
+		t.Fatalf("the view is %d lines high", len(lines))
+	}
+	top, bottom := -1, -1
+	for i, l := range lines {
+		switch r := []rune(l); {
+		case top < 0 && strings.ContainsRune(string(r), '╭'):
+			top = i
+		case top >= 0 && bottom < 0 && strings.ContainsRune(string(r), '╰'):
+			bottom = i
+		}
+	}
+	// The chat is faded around it, so the box sits in the middle of the
+	// window with as much room above as below.
+	if above, below := top, len(lines)-bottom-2; above-below < -1 || above-below > 1 {
+		t.Fatalf("the square should stand in the middle: %d lines above, %d below", above, below)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	if w, h := m.dialogSize(); w != memoryWidth || h != 26 {
+		t.Fatalf("in a short window the dialog is %d×%d, it should take the room it has", w, h)
+	}
+}
