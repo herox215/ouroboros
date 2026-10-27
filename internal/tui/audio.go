@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -130,6 +132,45 @@ func (m *Model) soundText(c *conversation, text string, width int) (string, []so
 	}
 	return "\n\n" + strings.Join(lines, "\n"), cards
 }
+
+// soundPaths is what an answer shows below its words: a card for every
+// sound file it names, in the order it names them. A path counts when it is
+// there and its extension is that of a sound, so that an answer that talks
+// about a file which is gone, or about what a sound file is, stays words.
+func (m *Model) soundPaths(text string, width int) (string, []soundCard) {
+	seen := map[string]bool{}
+	var cards []soundCard
+	var lines []string
+	for _, match := range namedPath.FindAllStringSubmatch(text, -1) {
+		path := strings.TrimPrefix(match[1], "~")
+		if strings.HasPrefix(match[1], "~") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				continue
+			}
+			path = home + path
+		}
+		if seen[path] || !audio.Supported(path) || len(cards) == 6 {
+			continue
+		}
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		seen[path] = true
+		cards = append(cards, soundCard{path})
+		lines = append(lines, m.soundCard(path, width))
+	}
+	if len(lines) == 0 {
+		return "", nil
+	}
+	return "\n\n" + strings.Join(lines, "\n"), cards
+}
+
+// namedPath is a path a message names: one that starts at the root or in the
+// home directory, after a blank or the opening of a word, in backticks too.
+// A path with a blank in it is none: the chat shows the file that is there,
+// it does not guess at where one is.
+var namedPath = regexp.MustCompile("(?:^|[\\s(\\[`\"'])((?:/|~/)[^\\s`\"'()\\[\\]<>]+)")
 
 // soundCard is the card of the sound at path: its button, name and
 // position, and the waveform below, the part that played in the accent.

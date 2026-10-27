@@ -201,7 +201,9 @@ func (m *Model) renderHistory(toBottom bool) {
 		// (/context), and the sessions it concerned are beside the chat.
 		if len(e.calls) > 0 {
 			if e.text != "" {
-				add(wrap(m.entryHead(e) + "\n" + render(e.text)))
+				more, sound := m.soundPaths(e.text, width)
+				cards = append(cards, sound...)
+				add(wrap(m.entryHead(e) + "\n" + render(e.text) + more))
 				words = true
 			}
 			if used := summaries[i]; used != "" {
@@ -236,7 +238,15 @@ func (m *Model) renderHistory(toBottom bool) {
 		if e.failed {
 			text = body.Foreground(bad).Render(e.text)
 		}
-		add(wrap(m.entryHead(e) + "\n" + text))
+		// A sound the answer names is a card below it, as one the owner
+		// attached: the chat plays it the same way.
+		more, sound := m.soundPaths(e.text, width)
+		if !e.failed {
+			cards = append(cards, sound...)
+		} else {
+			more = ""
+		}
+		add(wrap(m.entryHead(e) + "\n" + text + more))
 		return blocks, false
 	}
 	// What an answer has written stays as it is: the entries that cannot

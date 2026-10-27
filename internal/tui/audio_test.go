@@ -248,3 +248,30 @@ func TestTheSoundCardSaysWhyItCannotPlay(t *testing.T) {
 		t.Fatal("the card should say why it cannot be read")
 	}
 }
+
+// An answer that names a sound file shows it as a card, as an attachment
+// of the owner does, and plays it the same way. A path that is not there,
+// or no sound, stays words.
+func TestAnAnswerShowsTheSoundItNames(t *testing.T) {
+	m, _ := newModel(t)
+	fake := &fakePlayer{state: audio.State{Duration: 2 * time.Second}}
+	usePlayer(t, fake)
+	path := soundFile(t)
+	notes := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(notes, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.chat.add(entry{text: "Die Takes: `" + path + "`, " + notes + ", /nowhere/kick.wav"})
+	m.renderHistory(true)
+	readSound(m, path)
+	if len(m.soundCards) != 1 || m.soundCards[0].path != path {
+		t.Fatalf("the answer shows %d cards: %+v", len(m.soundCards), m.soundCards)
+	}
+	if !strings.Contains(ansi.Strip(m.history.View()), filepath.Base(path)) {
+		t.Fatal("the card should name the sound")
+	}
+	apply(t, m, clickOn(t, m, "▶", 0)())
+	if len(fake.played) != 1 || fake.played[0] != path {
+		t.Fatalf("the click played %v", fake.played)
+	}
+}
