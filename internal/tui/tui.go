@@ -1088,12 +1088,9 @@ func (m *Model) send() tea.Cmd {
 		m.input.Reset()
 		return m.choose(text)
 	}
-	if a := c.awaiting; a != nil {
-		if m.input.Value() == a.typed {
-			return nil // it waits already, and goes out by itself
-		}
-		c.awaiting = nil // what is typed now is another message
-	}
+	// A message that waits for the node to come back goes out now if the
+	// node takes it: one that does not is held again, with a fresh wait.
+	c.awaiting = nil
 	id := c.contextID
 	if c.pending {
 		// The answer on its way takes it as soon as it can: until then it is
