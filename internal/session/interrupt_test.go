@@ -58,6 +58,9 @@ func TestInterruptedAnswerGoesOnInTheNextImage(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the interrupted answer did not go on")
 	}
+	// The mark of the interruption is taken back when the answer ends: wait
+	// for that, or the second GoOn still finds the session interrupted.
+	next.answers.Wait()
 	next.GoOn()
 	select {
 	case got := <-told:
