@@ -86,3 +86,45 @@ func TestRestartingDoesNotSendChangedText(t *testing.T) {
 		t.Fatalf("the input changed: %q", m.input.Value())
 	}
 }
+
+// A message that waits for the node keeps waiting when the owner looks at
+// another session and comes back: the input is where it was, and it goes out
+// once the node takes it.
+func TestRestartingWaitsAcrossSessions(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	other := m.newChat()
+	m.input.SetValue("hello")
+	m.asked(askedMsg{id: m.chat.contextID, text: "hello", err: plugin.ErrRestarting})
+	if m.chat.awaiting == nil {
+		t.Fatal("no message waits")
+	}
+	held := m.chat
+	m.switchTo(other)
+	if m.input.Value() != "" {
+		t.Fatalf("another session shows %q", m.input.Value())
+	}
+	m.switchTo(held)
+	if m.input.Value() != "hello" || held.awaiting == nil {
+		t.Fatalf("coming back: input %q, awaiting %+v", m.input.Value(), held.awaiting)
+	}
+}
+
+// What waits and is sent by hand goes out at once: the node holds it again
+// only if it is not back yet.
+func TestRestartingSendByHandTriesNow(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	m.chat.awaiting = &awaitingSend{text: "hello", typed: "hello", since: m.now()}
+	m.input.SetValue("hello")
+	if cmd := m.send(); cmd == nil {
+		t.Fatal("enter must offer the message to the node")
+	}
+	if m.chat.awaiting != nil {
+		t.Fatal("the old wait stayed")
+	}
+	m.asked(askedMsg{id: m.chat.contextID, text: "hello", err: plugin.ErrRestarting})
+	if m.chat.awaiting == nil {
+		t.Fatal("a node that is not back must hold the message again")
+	}
+}
