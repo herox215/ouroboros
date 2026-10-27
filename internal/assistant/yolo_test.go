@@ -75,6 +75,9 @@ func TestYoloKeepsQuestions(t *testing.T) {
 	if !strings.Contains(prompt, yoloHint) || !strings.Contains(prompt, questionHint) {
 		t.Errorf("the prompt of the yolo mode:\n%s", prompt)
 	}
+	if !strings.Contains(prompt, "A merge still needs the user's explicit request or yes") {
+		t.Errorf("the yolo mode does not name a merge as what needs a yes:\n%s", prompt)
+	}
 	if prompt, _ := plain.Prompt(); strings.Contains(prompt, yoloHint) || !strings.Contains(prompt, questionHint) {
 		t.Errorf("the prompt without yolo:\n%s", prompt)
 	}
