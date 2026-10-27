@@ -86,6 +86,11 @@ type fakeBackend struct {
 	undone  []string // what UndoRemembered was given
 	status  Status
 	started int
+	// memories is what /memory lists, of the project and with the archived
+	// ones asked for or not, as it last was.
+	memories      plugin.MemoryListing
+	memoryProject string
+	memoryAll     bool
 	// efforts are what the model takes, once effortsKnown says it is listed.
 	efforts      []string
 	effortsKnown bool
@@ -301,6 +306,10 @@ func (f *fakeBackend) StopService(ctx context.Context, id string) error {
 }
 func (f *fakeBackend) StopJob(ctx context.Context, id string, n int) error {
 	return f.sessions.StopJob(ctx, id, n)
+}
+func (f *fakeBackend) Memories(_ context.Context, project string, all bool) (plugin.MemoryListing, error) {
+	f.memoryProject, f.memoryAll = project, all
+	return f.memories, f.fail["memories"]
 }
 func (f *fakeBackend) Read(ctx context.Context, id string) ([]Event, error) {
 	if err := f.fail["read"]; err != nil {

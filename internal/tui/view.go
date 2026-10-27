@@ -530,7 +530,7 @@ func (m *Model) View() tea.View {
 	}
 	var body string
 	switch m.screen {
-	case screenSuggestions, screenHelp, screenKeys, screenModel, screenSettings, screenSessions, screenEffort, screenJobs:
+	case screenSuggestions, screenHelp, screenKeys, screenModel, screenSettings, screenSessions, screenEffort, screenJobs, screenMemory:
 		dialog, _ := m.dialogView()
 		body = m.overlay(dialog)
 	case screenPlugin, screenContext:
@@ -845,6 +845,13 @@ func (m *Model) footerHint() string {
 		help = "←→ choose · enter set · esc back"
 	case screenJobs:
 		help = "↑↓ select · enter stop · esc back"
+	case screenMemory:
+		help = "↑↓ select · enter read · tab archived · esc back"
+		if m.memories.detail != nil {
+			help = "↑↓ pgup/pgdn scroll · esc back"
+		} else if m.memories.filter != "" {
+			help = "type to filter · ↑↓ select · enter read · esc clear"
+		}
 	case screenModel:
 		help = "↑↓ choose · enter set · p for peers · f fallback · esc back"
 	case screenSessions:
@@ -917,7 +924,7 @@ func (m *Model) footerView() string {
 	right = ansi.Truncate(right, m.width, "…")
 	left := ""
 	switch m.screen {
-	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings, screenSessions: // the dialogs lie over the chat
+	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings, screenSessions, screenMemory: // the dialogs lie over the chat
 		if room := m.width - lipgloss.Width(right) - 1; room > 0 && m.chatTitle() != "" {
 			left = ansi.Truncate(" "+m.chatTitle(), room, "…")
 		}
