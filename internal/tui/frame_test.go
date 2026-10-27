@@ -103,24 +103,40 @@ func TestColumnsShowTheSessionsThatRun(t *testing.T) {
 	}
 }
 
-// A conversation of its own has the sessions that run beside it too, and a
-// conversation that does not run is not listed.
+// A session of its own has the column on the right to itself: where it
+// stands, what it works with and what it did, in more detail than beside the
+// thread, and not the other sessions that run.
 func TestBesideAConversationOfItsOwn(t *testing.T) {
 	m, _, fix := threadWithSessions(t, 170, 46)
+	other := m.conversation("e5f6-other")
+	m.apply(other, Event{Kind: plugin.SessionMessage, Text: "do else", At: m.now()}, false)
+	m.apply(other, Event{Kind: plugin.SessionTitle, Text: "Other"}, false)
+	fix.directory, fix.jobs = "/tmp/ouro", []string{"job 1 · npm run dev"}
 	m.switchTo(fix)
 	view := strip(m.View().Content)
-	for _, want := range []string{"To the thread", "RUNNING", "FIX · WORKING", "State: working · own"} {
+	for _, want := range []string{"To the thread", "SESSION", "FIX · WORKING", "State: working · own",
+		"● calls go test ./...", "next  the result of bash", "project /tmp/ouro", "2 of the loop",
+		"WORK", "CALLS", "read · scroll.go"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("no %q beside a conversation of its own:\n%s", want, view)
+			t.Fatalf("no %q beside the session:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "CONTEXT") || strings.Contains(view, "T – ") {
-		t.Fatalf("the context of a part of the thread is beside a conversation of its own:\n%s", view)
+	if rail := strip(m.railView(m.railWidth(), m.height)); strings.Contains(rail, "OTHER") {
+		t.Fatalf("another session that runs is beside the one shown:\n%s", rail)
 	}
+	// The sidebar lists every session that runs, also the other one.
+	var list strings.Builder
+	for _, r := range m.sidebarRows(30) {
+		list.WriteString(strip(r.text) + "\n")
+	}
+	if !strings.Contains(list.String(), "OTHER") || !strings.Contains(list.String(), "FIX") {
+		t.Fatalf("the sidebar:\n%s", list.String())
+	}
+	// A conversation that does not run has the column to itself too.
 	empty := m.newChat()
 	m.switchTo(empty)
-	if view := strip(m.View().Content); !strings.Contains(view, "FIX · WORKING") {
-		t.Fatalf("the sessions that run are not beside a new conversation:\n%s", view)
+	if view := strip(m.View().Content); !strings.Contains(view, "SESSION") || !strings.Contains(view, "nothing yet") {
+		t.Fatalf("the column beside a new conversation:\n%s", view)
 	}
 	if rows := m.sidebarRows(30); strings.Contains(strip(rows[len(rows)-1].text), "NEW CONVERSATION") {
 		t.Fatalf("a conversation that does not run is listed: %+v", rows)
@@ -181,6 +197,7 @@ func TestStandOfASession(t *testing.T) {
 // and one that began anew stands last.
 func TestRunningSessionsKeepTheirPlace(t *testing.T) {
 	m, _ := newModel(t)
+	m.chat = m.thread() // the thread lists the sessions that run beside it
 	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.Local)
 	m.now = func() time.Time { return at }
 	m.Update(tea.WindowSizeMsg{Width: 170, Height: 40})

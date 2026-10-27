@@ -632,10 +632,22 @@ func clock(t, now time.Time) string {
 	return t.Format("2 Jan 2006, 15:04")
 }
 
-// railView is the column on the right, w cells wide and h rows high: where
-// the sessions of the part of the thread in view stand, or the session
-// shown, or the jobs once ctrl+j lists them there. As in the GUI, it stands
-// at the bottom of its column.
+// since says how long ago a time was, as the facts of a session show it:
+// seconds below a minute, minutes below an hour, hours and minutes above.
+func since(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", max(0, int(d.Seconds())))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+}
+
+// railView is the column on the right, w cells wide and h rows high: beside
+// the thread where the sessions that run stand, beside a session of its own
+// the session shown in more detail, or the jobs once ctrl+j lists them
+// there. As in the GUI, it stands at the bottom of its column.
 func (m *Model) railView(w, h int) string {
 	inner := max(1, w-2*columnPad)
 	content, _, top := m.railLayout(inner, h)
@@ -670,12 +682,16 @@ func (m *Model) railLayout(inner, h int) (content []string, owners []*conversati
 }
 
 // railRows are the lines of the column on the right and the session of each,
-// nil for a line that shows none: the sessions that run now, wherever the
-// conversation stands, or the jobs once ctrl+j lists them there.
+// nil for a line that shows none: the sessions that run now beside the
+// thread, the session shown in detail beside itself, or the jobs once ctrl+j
+// lists them there.
 func (m *Model) railRows(inner int) (lines []string, owners []*conversation) {
 	title := "RUNNING"
-	if m.jobsShown {
+	switch {
+	case m.jobsShown:
 		title = "JOBS"
+	case m.detailShown():
+		title = "SESSION"
 	}
 	add := func(text string, c *conversation) {
 		lines, owners = append(lines, text), append(owners, c)
@@ -685,6 +701,12 @@ func (m *Model) railRows(inner int) (lines []string, owners []*conversation) {
 	if m.jobsShown {
 		for _, l := range m.jobLines(inner) {
 			add(l, nil)
+		}
+		return lines, owners
+	}
+	if m.detailShown() {
+		for _, l := range m.sessionDetail(m.chat, inner) {
+			add(l, m.chat)
 		}
 		return lines, owners
 	}
@@ -702,6 +724,14 @@ func (m *Model) railRows(inner int) (lines []string, owners []*conversation) {
 		}
 	}
 	return lines, owners
+}
+
+// detailShown reports whether the column on the right shows the session shown
+// in detail: a session of the owner's own, not the thread, which lists the
+// sessions that run beside it. A conversation of a peer is only to read and
+// lists them too.
+func (m *Model) detailShown() bool {
+	return m.chat.contextID != plugin.ThreadID && m.chat.peer == ""
 }
 
 // railAt is the session the column on the right shows at the row y of the
@@ -845,11 +875,18 @@ var laneShades = []float64{1, 0.74, 0.55, 0.4, 0.28, 0.18}
 // and the chart of its tools under it.
 func (m *Model) artefact(c *conversation, inner int) []string {
 	s := standOf(c)
-	name := strings.ToUpper(cmp.Or(c.title, c.contextID))
+	lines := m.standHead(c, s, inner)
+	lines = append(lines, m.standFacts(c, s, inner)...)
+	return append(lines, m.toolChart(s, inner)...)
+}
+
+// standHead is the name of a session and where it stands, inner cells wide:
+// its name, whether it works, what it does and when it last did something.
+func (m *Model) standHead(c *conversation, s stand, inner int) []string {
+	name := strings.ToUpper(cmp.Or(c.title, "new conversation"))
 	if s.live {
 		name += " · WORKING"
 	}
-	lines := []string{boldStyle.Render(ansi.Truncate(name, inner, "…"))}
 	dot := lipgloss.NewStyle().Foreground(ui.lineStrong)
 	word := boldStyle
 	switch {
@@ -865,7 +902,16 @@ func (m *Model) artefact(c *conversation, inner int) []string {
 	if s.what != "" {
 		state += " " + mutedStyle.Render(s.what)
 	}
-	lines = append(lines, spread(state, mutedStyle.Render(clock(c.last, m.now())), inner))
+	return []string{
+		boldStyle.Render(ansi.Truncate(name, inner, "…")),
+		spread(state, mutedStyle.Render(clock(c.last, m.now())), inner),
+	}
+}
+
+// standFacts is what a session does in the round it is in, inner cells wide:
+// what it asks, what it did last, what comes next, and which of its commands
+// run.
+func (m *Model) standFacts(c *conversation, s stand, inner int) []string {
 	fact := func(key, value, at string, bad bool) string {
 		v := lipgloss.NewStyle()
 		if bad {
@@ -873,6 +919,7 @@ func (m *Model) artefact(c *conversation, inner int) []string {
 		}
 		return spread(mutedStyle.Render(fmt.Sprintf("%-6s", key))+v.Render(value), mutedStyle.Render(at), inner)
 	}
+	var lines []string
 	if s.question != "" {
 		lines = append(lines, fact("question", " "+short(s.question, inner), "", false))
 	}
@@ -889,7 +936,102 @@ func (m *Model) artefact(c *conversation, inner int) []string {
 		}
 		lines = append(lines, fact("running", " "+job, "", false))
 	}
-	return append(lines, m.toolChart(s, inner)...)
+	return lines
+}
+
+// sessionDetail is the session shown as the column on the right says of it
+// beside itself, inner cells wide: where it stands, what it works with, what
+// it did step by step and what runs for it. Beside the thread, where all the
+// sessions that run are listed, a session says only where it stands; here it
+// has the column to itself and says more.
+func (m *Model) sessionDetail(c *conversation, inner int) []string {
+	s := standOf(c)
+	lines := m.standHead(c, s, inner)
+	lines = append(lines, m.standFacts(c, s, inner)...)
+	rule := func() { lines = append(lines, lineStyle().Render(strings.Repeat("─", inner))) }
+	// A key and its value, the value hanging below its key where it does not
+	// fit beside it.
+	fact := func(key, value string) {
+		lines = append(lines, hang(mutedStyle.Render(fmt.Sprintf("%-8s", key)), strings.Repeat(" ", 8), value, inner)...)
+	}
+	rule()
+	fact("project", cmp.Or(c.directory, "Profile workspace"))
+	if m.status.Configured && m.status.Model != "" {
+		fact("model", m.modelText())
+	}
+	if c.round > 0 {
+		fact("round", fmt.Sprintf("%d of the loop", c.round))
+	}
+	if s.live && !c.since.IsZero() {
+		fact("since", fmt.Sprintf("%s · %s", clock(c.since, m.now()), since(m.now().Sub(c.since))))
+	}
+	if c.context > 0 {
+		fact("context", contextSize(c.context))
+	}
+	if c.cache.Tokens > 0 {
+		fact("cached", cacheRate(c.cache))
+	}
+	if metrics := callMetrics(c.cache); metrics != "" {
+		fact("speed", metrics)
+	}
+	if len(c.queued) > 0 {
+		queued := fmt.Sprintf("%d messages", len(c.queued))
+		if len(c.queued) == 1 {
+			queued = "1 message"
+		}
+		fact("queued", queued)
+	}
+	if len(c.jobs) > 0 || len(c.tasks) > 0 || len(m.services) > 0 {
+		rule()
+		lines = append(lines, boldStyle.Render("WORK"))
+		for i, l := range m.jobLines(inner) {
+			if i == 0 && len(c.jobs) == 0 && strings.HasPrefix(ansi.Strip(l), "No command runs") {
+				continue // the work is the tasks or the services
+			}
+			lines = append(lines, l)
+		}
+	}
+	if calls := m.callLines(c, s, 12, inner); len(calls) > 0 {
+		rule()
+		lines = append(lines, boldStyle.Render("CALLS"))
+		lines = append(lines, calls...)
+	}
+	return lines
+}
+
+// callLines are the calls of the session c, the newest first and the one on
+// its way above them all, at most n of them, inner cells wide: each with the
+// tool and what it did, and when, as the chart shows them all at once.
+func (m *Model) callLines(c *conversation, s stand, n, inner int) []string {
+	all := s.calls
+	if s.pending != nil {
+		all = append(slices.Clone(all), *s.pending)
+	}
+	var lines []string
+	for i := len(all) - 1; i >= 0 && len(lines) < n; i-- {
+		call := all[i]
+		if call.text == "" && call.tool == "" {
+			continue // nothing is shown of it
+		}
+		text := call.text
+		if text == "" {
+			text = call.tool
+		}
+		style := lipgloss.NewStyle()
+		if call.failed {
+			style = errStyle
+		}
+		mark := "  "
+		if s.pending != nil && i == len(all)-1 {
+			mark = mutedStyle.Render("→ ") // the one on its way
+		}
+		at := ""
+		if !call.at.IsZero() {
+			at = clock(call.at, m.now())
+		}
+		lines = append(lines, spread(mark+style.Render(text), mutedStyle.Render(at), inner))
+	}
+	return lines
 }
 
 // toolChart draws the tools of a session as one picture instead of their
