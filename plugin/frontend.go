@@ -186,6 +186,7 @@ const (
 	SessionRestart   = session.Restart   // ouro starts anew from a new build, the binary in Text
 	SessionRestarted = session.Restarted // durable completion in the triggering session; deduplicate by PresentationID
 	SessionTitle     = session.Title     // the session is named for its topic, in Text
+	SessionDirectory = session.Directory // the project directory of the session, or empty for the profile workspace
 	SessionEffort    = session.Effort    // how much the model thinks in the session, in Text
 	SessionJobs      = session.Jobs      // the commands that run in the background for the answer, a line each in Text
 	SessionTask      = session.Task      // the report of a task the agent delegated, taken like a message: N, Remark, Text, Err

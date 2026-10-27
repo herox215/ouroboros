@@ -27,6 +27,11 @@ const (
 	GatewayPoll   GatewayOperation = "poll"
 	GatewayCancel GatewayOperation = "cancel"
 	GatewayReply  GatewayOperation = "reply"
+	// GatewayDirectory changes where the session works: its project directory,
+	// the one its tools resolve relative paths against. Hosts may grant it
+	// apart from the others, as acting for the owner in the conversation does
+	// not have to mean moving it to another project.
+	GatewayDirectory GatewayOperation = "directory"
 )
 
 // GatewayPermission is an explicit grant from trusted host policy, not a field
@@ -56,6 +61,9 @@ type GatewaySessions interface {
 	Steer(context.Context, string, string) error
 	Watch(context.Context, string) ([]SessionEvent, <-chan SessionEvent, error)
 	Cancel(context.Context, string) error
+	// SetDirectory sets the project directory of the session id, or resets it
+	// to the profile workspace with "".
+	SetDirectory(context.Context, string, string) error
 }
 
 var (
@@ -314,6 +322,19 @@ func (g *GatewayAdapter) Cancel(ctx context.Context, who GatewayIdentity, id str
 		return err
 	}
 	return g.sessions.Cancel(ctx, id)
+}
+
+// SetDirectory sets the project directory of the session id, or resets it to
+// the profile workspace with "". The gateway acts for the owner in the
+// conversation, and what its agent does goes on in that project: relative
+// paths resolve there, and so do the memories of its scope. A path that is no
+// directory, and a session that answers or works on a delegated task, fail
+// with the backend's error, ErrBusy among them.
+func (g *GatewayAdapter) SetDirectory(ctx context.Context, who GatewayIdentity, id, path string) error {
+	if err := g.bound(ctx, who, GatewayDirectory, id); err != nil {
+		return err
+	}
+	return g.sessions.SetDirectory(ctx, id, path)
 }
 
 // SendAttachments delivers files under the same authorization and binding as

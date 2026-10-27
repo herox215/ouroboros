@@ -488,7 +488,9 @@ already streamed by the model keep their normal streaming effect.
 - **Gateways.** A gateway talks in the thread too: every Matrix room does, so there is no `/new` there, see
   [GATEWAYS.md](../GATEWAYS.md). What is written in a room and in the terminal UI is one conversation. The terminal
   UI shows what you wrote in a room as your messages; a room is sent the answers and questions of the thread, and
-  what you wrote elsewhere, as `You, in the terminal:` and your words, since the bot cannot write as you.
+  what you wrote elsewhere, as `You, in the terminal:` and your words, since the bot cannot write as you. Its
+  project is the one of the thread, which a room does not show by itself: `/project` (or `/cd`) there answers with
+  it, `/cd PATH` and `/cd --workspace` name another one or none, as `/cd` does in the terminal UI.
 - **It is a session of the node.** The thread has the ID `thread`, is kept in the archive and goes on after a
   restart like any conversation, shown as it was. `/session` does not list it, it is not named for a topic, and its
   agent has the two tools of the thread alone. The conversations it starts are listed there as any other.

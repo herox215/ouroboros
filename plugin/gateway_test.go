@@ -30,6 +30,7 @@ type gatewayBackend struct {
 	text                 string
 	source               openai.MessageSource
 	past                 []plugin.SessionEvent
+	directory            string
 	watch                context.Context
 	err                  error
 }
@@ -56,6 +57,12 @@ func (s *gatewayBackend) Watch(ctx context.Context, _ string) ([]plugin.SessionE
 }
 func (s *gatewayBackend) Cancel(context.Context, string) error {
 	s.canceled++
+	return s.err
+}
+func (s *gatewayBackend) SetDirectory(_ context.Context, _, path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.directory = path
 	return s.err
 }
 
@@ -114,6 +121,9 @@ func TestGatewayIsolationAndRevocation(t *testing.T) {
 		{plugin.GatewayPoll, func(w plugin.GatewayIdentity, id string) error { _, err := g.Poll(t.Context(), w, id); return err }},
 		{plugin.GatewayCancel, func(w plugin.GatewayIdentity, id string) error { return g.Cancel(t.Context(), w, id) }},
 		{plugin.GatewayReply, func(w plugin.GatewayIdentity, id string) error { return g.Reply(t.Context(), w, id, "yes") }},
+		{plugin.GatewayDirectory, func(w plugin.GatewayIdentity, id string) error {
+			return g.SetDirectory(t.Context(), w, id, "/tmp/project")
+		}},
 	}
 	for _, call := range calls {
 		for _, who := range []plugin.GatewayIdentity{
@@ -139,8 +149,13 @@ func TestGatewayIsolationAndRevocation(t *testing.T) {
 			t.Fatalf("wrong operation: %v", ops)
 		}
 	}
-	if backend.ask != 1 || backend.steer != 1 || backend.canceled != 1 {
+	if backend.ask != 1 || backend.steer != 1 || backend.canceled != 1 || backend.directory != "/tmp/project" {
 		t.Fatalf("unexpected backend calls: %+v", backend)
+	}
+	// The thread is shared by every identity with the grant, as it is for a
+	// message: one may move it without a binding of its own.
+	if err := g.SetDirectory(t.Context(), plugin.GatewayIdentity{Gateway: gatewayAlice.Gateway, Subject: "bob"}, plugin.ThreadID, ""); err != nil || backend.directory != "" {
+		t.Fatalf("the thread's project: %v, %q", err, backend.directory)
 	}
 	// A new adapter cannot attach old bindings, even with the same policy.
 	if err := plugin.NewGatewayAdapter(backend, gatewayOwner).Send(t.Context(), gatewayAlice, id, "go"); !errors.Is(err, plugin.ErrGatewaySession) {
