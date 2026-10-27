@@ -29,6 +29,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 
+	"ouroboros/internal/audio"
 	"ouroboros/plugin"
 )
 
@@ -439,6 +440,21 @@ type Model struct {
 	graphics      graphics   // what the terminal told of its pictures
 	spinner       spinner.Model
 
+	// soundClips are the sounds the chat read for their cards, by path;
+	// soundWanted are those a card waits for the reading of.
+	soundClips  map[string]audio.Clip
+	soundWanted map[string]bool
+	// soundCards are the cards the history shows, in its order, and
+	// soundLines the line of it that plays which sound.
+	soundCards []soundCard
+	soundLines map[int]string
+	// sound is the sound in the player, and soundSeq numbers the answers
+	// of the player that belong to it. soundRev changes when a card looks
+	// different, so that the history is drawn anew.
+	sound    *playback
+	soundSeq int
+	soundRev int
+
 	// nameAnimation is how the name of the agent moves in an empty chat.
 	nameAnimation nameAnimation
 
@@ -464,15 +480,18 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 
 	ctx, quit := context.WithCancel(context.Background())
 	m := &Model{
-		backend: backend,
-		ctx:     ctx,
-		quit:    quit,
-		now:     time.Now,
-		chats:   map[string]*conversation{},
-		splash:  splashScreen{show: true},
-		input:   input,
-		history: history,
-		spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		backend:     backend,
+		ctx:         ctx,
+		quit:        quit,
+		now:         time.Now,
+		chats:       map[string]*conversation{},
+		splash:      splashScreen{show: true},
+		input:       input,
+		history:     history,
+		spinner:     spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		soundClips:  map[string]audio.Clip{},
+		soundWanted: map[string]bool{},
+		soundLines:  map[int]string{},
 	}
 	m.input.Focus() // the input is where everything is typed, commands too
 	// The owner talks in the thread, unless they want a conversation of its own.
@@ -585,6 +604,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if watch := m.watchRunning(); watch != nil {
 			cmd = tea.Batch(cmd, watch)
 		}
+		cmd = tea.Batch(cmd, m.soundWork())
 	}
 	return model, cmd
 }
@@ -692,6 +712,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.context.loaded(m, msg)
 	case watchedMsg:
 		return m, m.watched(msg)
+	case audioClipMsg:
+		return m, m.soundRead(msg)
+	case audioStateMsg:
+		return m, m.soundState(msg)
+	case audioTickMsg:
+		return m, m.soundTicked(msg)
 	case eventMsg:
 		return m, m.event(msg)
 	case unwatchedMsg:
@@ -907,6 +933,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.openSessions() // what is typed stays with the session shown
 	case "ctrl+k":
 		return m.openKeys() // what is typed stays in the input
+	case "ctrl+p":
+		return m.toggleSound("")
 	case jobsKey:
 		return m.toggleJobs()
 	case thoughtKey:
@@ -984,6 +1012,7 @@ const (
 // leave quits the UI and stops its backend calls. Answers on their way
 // belong to the node: they go on.
 func (m *Model) leave() tea.Cmd {
+	m.closeSound()
 	m.quit()
 	return tea.Quit
 }

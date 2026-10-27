@@ -160,6 +160,11 @@ func (m *Model) click(x, y int) (tea.Cmd, bool) {
 	if y == m.headerHeight()/2 && m.chat.contextID != plugin.ThreadID && x < right && x >= right-lipgloss.Width(threadButton()) {
 		return m.openThread(), true
 	}
+	if m.onHistory(x, y) {
+		if path, ok := m.soundLines[m.historySpot(x, y).line]; ok {
+			return m.toggleSound(path), true
+		}
+	}
 	left := m.transcriptLeft()
 	row := m.historyTop() + m.chatHeight() + 2 // below the status and the line above the composer
 	if panel, hits := m.panel(); len(panel) > 0 {
