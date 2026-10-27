@@ -552,6 +552,56 @@ func TestRepeatedResultsAreLeftOut(t *testing.T) {
 	}
 }
 
+// Instructions are read as they are now: a verbatim result is shown whole
+// even when every line of it is in an earlier result of the answer, while
+// the result of another tool is still left out.
+func TestVerbatimResultIsShownWhole(t *testing.T) {
+	var lines []string
+	for i := range 100 {
+		lines = append(lines, fmt.Sprintf("line %03d of the skill, long enough to count", i))
+	}
+	first := strings.Join(lines[:50], "\n") + "\n" + strings.Join(lines[50:], "\n")
+	swapped := strings.Join(lines[50:], "\n") + "\n" + strings.Join(lines[:50], "\n")
+	for _, verbatim := range []bool{true, false} {
+		name := "verbatim"
+		if !verbatim {
+			name = "ordinary"
+		}
+		t.Run(name, func(t *testing.T) {
+			results := map[string]string{"print": first, "skill": swapped}
+			var calls []string
+			llm := llmFunc(func([]openai.Message) openai.Message {
+				if len(calls) == 2 {
+					return openai.Message{Content: "done"}
+				}
+				tool := "print"
+				if len(calls) == 1 {
+					tool = "skill"
+				}
+				calls = append(calls, tool)
+				return openai.Message{ToolCalls: []openai.ToolCall{{ID: fmt.Sprint("c", len(calls)), Function: openai.FunctionCall{Name: tool, Arguments: "{}"}}}}
+			})
+			run := func(context.Context, json.RawMessage) (string, error) {
+				return results[calls[len(calls)-1]], nil
+			}
+			a := New(llm, "gpt", "sys",
+				Tool{Name: "print", Run: run},
+				Tool{Name: "skill", Verbatim: verbatim, Run: run})
+			if _, err := a.Respond(context.Background(), "c1", "go"); err != nil {
+				t.Fatal(err)
+			}
+			got := a.memory.history("c1")[4].Content
+			if verbatim {
+				if got != swapped {
+					t.Errorf("the verbatim result was changed: %q", got)
+				}
+			} else if !strings.Contains(got, "left out: an earlier result") {
+				t.Errorf("the ordinary result was not left out: %q", got)
+			}
+		})
+	}
+}
+
 // Beyond Budget, the LLM is told with every call how much the results of the
 // answer have, and Spent says so to the tools; what the API said of a call
 // is reported.

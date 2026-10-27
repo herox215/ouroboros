@@ -69,6 +69,19 @@ func TestDescriptionOffersTheAllowedSkills(t *testing.T) {
 	}
 }
 
+// What a skill says is instructions: the skill tool gives its result whole,
+// also when the same text was in an earlier result of the answer, so that a
+// changed section is never left out as a repeat.
+func TestTheSkillToolIsVerbatim(t *testing.T) {
+	l := fixture(t)
+	if !l.tool().Verbatim {
+		t.Error("the skill tool is not verbatim")
+	}
+	if !configured(t, l, `{"allow": ["review"]}`).Verbatim {
+		t.Error("the configured skill tool is not verbatim")
+	}
+}
+
 // Settings the tool does not have, and skills that are not there, are errors.
 func TestConfigureRefuses(t *testing.T) {
 	l := fixture(t)
