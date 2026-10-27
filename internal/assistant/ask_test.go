@@ -18,6 +18,13 @@ import (
 	"ouroboros/internal/openai/openaitest"
 )
 
+// codeSearchRule is what exploreHint says of a search in the code of a
+// repository, written out so that removing it cannot silently change the
+// prompt and its expectation together.
+const codeSearchRule = `Search the code of a repository once, with a path, a pattern and a glob that span what you look for, ` +
+	`or with one ` + "`grep -rn`" + ` over the directory where bash is what answers it: ` +
+	`several narrow searches in a row, each only telling you how to narrow the next, cost a round of the answer each.`
+
 // accesses is what a test says of the accesses of a node.
 type accesses struct {
 	rev, label string
@@ -335,9 +342,17 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		wantBash := slices.ContainsFunc(tt.tools, func(e config.Entry) bool {
 			return e.Tool == ToolBash || e.Tool == "*"
 		})
+		// The search rule hangs on both kinds of tools: it is about choosing
+		// one broad search over a row of narrow ones.
+		wantExplore := wantBash && slices.ContainsFunc(tt.tools, func(e config.Entry) bool {
+			return e.Tool == "*" || slices.Contains(fileTools, e.Tool)
+		})
 		bashRule := "When bash is what answers a question (what the tools for files cannot do), put the commands it takes, such as grep, sed and git, into one call, joined with `;` as the shell takes them, rather than one call for each small search. The exit status is that of the last command, so read the output of each, not only the status of the call."
 		if strings.Contains(got, bashRule) != wantBash {
 			t.Errorf("with %s: bash rule present = %v, want %v", tt.tools, strings.Contains(got, bashRule), wantBash)
+		}
+		if strings.Contains(got, codeSearchRule) != wantExplore {
+			t.Errorf("with %s: code search rule present = %v, want %v", tt.tools, strings.Contains(got, codeSearchRule), wantExplore)
 		}
 		workflow := "Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, " +
 			"unless you still need information to make those changes safely."
@@ -411,6 +426,9 @@ func TestHelperPromptFollowsTheTools(t *testing.T) {
 		prompt, _ := helper.Prompt()
 		if got := strings.Contains(prompt, exploreHint); got != tt.wantExplore {
 			t.Errorf("with %s: explore rule present = %v, want %v", names(tt.tools), got, tt.wantExplore)
+		}
+		if got := strings.Contains(prompt, codeSearchRule); got != tt.wantExplore {
+			t.Errorf("with %s: code search rule present = %v, want %v", names(tt.tools), got, tt.wantExplore)
 		}
 		if got := strings.Contains(prompt, bashHint); got != tt.wantBash {
 			t.Errorf("with %s: bash rule present = %v, want %v", names(tt.tools), got, tt.wantBash)
