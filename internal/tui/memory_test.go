@@ -246,3 +246,116 @@ func TestMemoryDialogIsSquare(t *testing.T) {
 		t.Fatalf("in a short window the dialog is %d×%d, it should take the room it has", w, h)
 	}
 }
+
+// The memory dialog edits a memory where it shows it: ctrl+e puts its key and
+// what it holds into fields, what is typed goes to the field that has the
+// keys, ctrl+s saves it, and the store refuses an edit of a memory that
+// changed since it was read, so that nothing an agent wrote is overwritten
+// unseen.
+func TestMemoryDialogEdits(t *testing.T) {
+	m, b := newModel(t)
+	at := time.Unix(1000, 0)
+	m.now = func() time.Time { return at }
+	stamp := at.Format(time.RFC3339)
+	b.memories = plugin.MemoryListing{Total: 2, Memories: []plugin.Memory{
+		{ID: "a", Key: "drink", Content: "oolong tea in the afternoon", Version: 3, Updated: stamp},
+		{ID: "b", Key: "build", Content: "make test runs the tests", Version: 1, Updated: stamp},
+	}}
+	m.Update(run(m, "/memory")())
+
+	press(m, "ctrl+e")
+	if m.memories.edit == nil {
+		t.Fatal("ctrl+e should edit the memory selected")
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, want := range []string{"Edit memory · global · remembered anywhere", "drink", "oolong tea in the afternoon",
+		"tab key/content · ctrl+s save · esc cancel"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("%q is not in the edit:\n%s", want, view)
+		}
+	}
+	for i, l := range strings.Split(view, "\n") {
+		if lipgloss.Width(l) > m.width {
+			t.Fatalf("line %d is wider than the window: %q", i, l)
+		}
+	}
+
+	// What is typed goes into what it holds, after the text it has: the
+	// cursor opens at its end. Tab moves to the key and back.
+	press(m, " ", "a", "t", " ", "s", "i", "x")
+	if got := m.memories.edit.content.Value(); got != "oolong tea in the afternoon at six" {
+		t.Fatalf("what it holds is %q", got)
+	}
+	press(m, "tab")
+	if m.memories.edit.at != 0 {
+		t.Fatal("tab should go to the key")
+	}
+	press(m, "tab")
+	if m.memories.edit.at != 1 {
+		t.Fatal("tab should go back to what it holds")
+	}
+	m.memories.edit.key.SetValue("tea")
+	deliver(m, press(m, "ctrl+s"))
+
+	// The store has the edit, the newest first, and the dialog shows it
+	// where the memory went on the chart.
+	if e := b.memories.Memories[0]; e.Key != "tea" || e.Content != "oolong tea in the afternoon at six" || e.Version != 4 {
+		t.Fatalf("the store holds %+v", e)
+	}
+	if m.memories.edit != nil || m.memories.sel != 0 {
+		t.Fatalf("the edit should be done and its memory selected: %v, %d", m.memories.edit, m.memories.sel)
+	}
+	if view = ansi.Strip(m.View().Content); !strings.Contains(view, "tea") || !strings.Contains(view, "oolong tea in the afternoon at six") {
+		t.Fatalf("the chart should show what was saved:\n%s", view)
+	}
+
+	// A memory that an agent changed since it was read is not overwritten:
+	// the edit stays open with why under it, and esc gives it up.
+	press(m, "enter")
+	press(m, "esc")
+	press(m, "ctrl+e")
+	m.memories.edit.content.SetValue("tea at six, not in the afternoon")
+	b.memories.Memories[0].Version++
+	deliver(m, press(m, "ctrl+s"))
+	if m.memories.edit == nil {
+		t.Fatal("an edit the store refused should stay open")
+	}
+	if view = ansi.Strip(m.View().Content); !strings.Contains(view, "the memory changed since it was read") {
+		t.Fatalf("the refusal should be shown:\n%s", view)
+	}
+	if got := b.memories.Memories[0].Content; got != "oolong tea in the afternoon at six" {
+		t.Fatalf("the store was written anyway: %q", got)
+	}
+	press(m, "esc")
+	if m.memories.edit != nil || m.screen != screenMemory {
+		t.Fatal("esc should give the edit up, and stay in the memories")
+	}
+
+	// A memory that is read in full is edited from there too, where no
+	// letter filters the list; once saved, it is read as it is now.
+	press(m, "enter")
+	press(m, "e")
+	if m.memories.edit == nil || m.memories.edit.e.Key != "tea" {
+		t.Fatalf("e should edit the memory read: %+v", m.memories.edit)
+	}
+	m.memories.edit.content.SetValue("tea at six")
+	deliver(m, press(m, "ctrl+s"))
+	if m.memories.edit != nil || m.memories.detail == nil || m.memories.detail.Content != "tea at six" {
+		t.Fatalf("the memory read should be the one saved: %+v, %+v", m.memories.edit, m.memories.detail)
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "tea at six") {
+		t.Fatalf("what was saved should be read:\n%s", m.View().Content)
+	}
+
+	// The edit stays inside a narrow window too.
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	press(m, "esc", "ctrl+e")
+	for i, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if lipgloss.Width(l) > 40 {
+			t.Fatalf("the edit in a narrow window: line %d is wider: %q", i, l)
+		}
+	}
+	if lines := strings.Split(ansi.Strip(m.View().Content), "\n"); len(lines) != 12 {
+		t.Fatalf("the edit in a narrow window is %d lines high", len(lines))
+	}
+}

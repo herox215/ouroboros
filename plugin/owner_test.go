@@ -817,3 +817,42 @@ func TestOwnerUndoesWhatWasRemembered(t *testing.T) {
 		t.Fatal("took back without a store")
 	}
 }
+
+// A front end edits a memory in the memory dialog: what the owner typed
+// replaces it if it did not change since they read it, and an edit of a
+// memory that changed since fails as one taken back does. What was edited
+// is in the log.
+func TestOwnerEditsAMemory(t *testing.T) {
+	s := clitest.Settings(t)
+	o := owner(t, s)
+	store, err := memory.Open(home.Dir(s.Home).History())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	e, _, err := store.Remember(ctx, "", "style", "short answers", "c", false, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited, err := o.SetMemory(ctx, "", e.ID, e.Version, "style", "very short answers")
+	if err != nil {
+		t.Fatalf("the owner's edit: %v", err)
+	}
+	if edited.Content != "very short answers" || edited.Version != e.Version+1 {
+		t.Fatalf("the edit did not land: %+v", edited)
+	}
+	if _, err := o.SetMemory(ctx, "", e.ID, e.Version, "style", "terse"); !errors.Is(err, plugin.ErrMemoryChanged) {
+		t.Fatalf("an edit of what changed since should fail as a conflict: %v", err)
+	}
+	if _, err := o.SetMemory(ctx, "", "gone", 1, "style", "terse"); !errors.Is(err, memory.ErrNotFound) {
+		t.Fatalf("an edit of no memory: %v", err)
+	}
+	if _, err := o.SetMemory(ctx, "", e.ID, edited.Version, "", "terse"); err == nil {
+		t.Fatal("a memory without a key was taken")
+	}
+	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
+	if !strings.Contains(string(logged), `the owner edited a memory: "style"`) {
+		t.Fatalf("the log lacks the edit: %s", logged)
+	}
+}
