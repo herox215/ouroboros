@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -161,23 +162,76 @@ func (u *ui) model() *tui.Model {
 // resumeEnv says what the UI of a new process goes on from.
 const resumeEnv = "OURO_RESUME"
 
+// maxResumeEnv is how many bytes resumeEnv holds at most. Linux takes no more
+// than 128 KiB for one variable, and macOS 1 MiB for the arguments and the
+// whole environment together: a process that is to start with more does not
+// start, and ouro ends instead of starting anew. A longer draft goes in a
+// file, see saveDraft.
+const maxResumeEnv = 32 << 10
+
+// draftPattern names the files of the drafts that go over in a file, in the
+// directory for temporary files; draftPrefix is how such a name starts.
+const (
+	draftPrefix  = "ouro-draft-"
+	draftPattern = draftPrefix + "*.json"
+)
+
 // resume is what the UI of a new process goes on from.
 type resume struct {
 	Profile    string     `json:"profile,omitempty"` // the ID of the profile shown, of several
 	Session    string     `json:"session"`           // the session shown
 	WasRunning bool       `json:"was_running"`
-	Draft      *tui.Draft `json:"draft,omitempty"` // what was typed into the input, not sent
+	Draft      *tui.Draft `json:"draft,omitempty"`      // what was typed into the input, not sent
+	DraftFile  string     `json:"draft_file,omitempty"` // the file of a draft too long for the environment
 }
 
-// handOver returns the plugin.Restarting that starts exe with r.
+// handOver returns the plugin.Restarting that starts exe with r. A draft that
+// makes resumeEnv longer than maxResumeEnv goes in a file of its own, which
+// resumeEnv names; without the file the draft stays behind, as ouro starts
+// anew all the same.
 func handOver(exe string, r resume) error {
 	b, _ := json.Marshal(r) // plain data
+	if len(b) > maxResumeEnv && r.Draft != nil {
+		r.DraftFile = saveDraft(*r.Draft)
+		r.Draft = nil
+		b, _ = json.Marshal(r)
+	}
 	return &plugin.Restarting{Exe: exe, Env: append(os.Environ(), resumeEnv+"="+string(b))}
+}
+
+// saveDraft writes d into a new file that only the owner may read, and
+// returns its path: "" if there is none. A file that is not written in full
+// is not read back, see loadDraft.
+func saveDraft(d tui.Draft) string {
+	f, err := os.CreateTemp("", draftPattern)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	json.NewEncoder(f).Encode(d) // plain data
+	return f.Name()
+}
+
+// loadDraft reads the draft that saveDraft wrote into path, and removes the
+// file: nil if it cannot be read, as the UI goes on without it. A path that
+// names no such file is left alone.
+func loadDraft(path string) *tui.Draft {
+	if filepath.Dir(path) != filepath.Clean(os.TempDir()) || !strings.HasPrefix(filepath.Base(path), draftPrefix) {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	os.Remove(path)
+	var d tui.Draft
+	if err != nil || json.Unmarshal(b, &d) != nil {
+		return nil
+	}
+	return &d
 }
 
 // resumed reads what the process that started this one handed over, nil if
 // it was started otherwise. The variable is read once: the node started later
-// must not see it.
+// must not see it. A draft that went over in a file is read from it, see
+// loadDraft.
 func resumed() (*resume, error) {
 	v, ok := os.LookupEnv(resumeEnv)
 	if !ok {
@@ -187,6 +241,9 @@ func resumed() (*resume, error) {
 	var r resume
 	if err := json.Unmarshal([]byte(v), &r); err != nil || r.Session == "" {
 		return nil, fmt.Errorf("the conversation to go on with: %q is none", v)
+	}
+	if r.DraftFile != "" {
+		r.Draft = loadDraft(r.DraftFile)
 	}
 	return &r, nil
 }
