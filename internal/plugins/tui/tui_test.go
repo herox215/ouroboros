@@ -762,6 +762,7 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 		drive(t, m, typed(m, "/new"), func() bool { return m.Current() != plugin.ThreadID }) // the thread hands on, and starts nothing anew
 		drive(t, m, typed(m, "!again"), func() bool { _, ok := m.Restarts(); return ok })
 		shown = m.Current()
+		m.SetDraft(tui.Draft{Text: "half a thought", Images: []string{"/tmp/picture.png"}})
 		return nil
 	})
 	err := app.Run(context.Background(), nil)
@@ -769,7 +770,7 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 	if !ok || r.Exe != "/new/ouro" || err.Error() != "ouro is to be started anew from /new/ouro" {
 		t.Fatalf("got %v", err)
 	}
-	resume := `{"session":"` + shown + `","was_running":true}`
+	resume := `{"session":"` + shown + `","was_running":true,"draft":{"text":"half a thought","images":["/tmp/picture.png"]}}`
 	if !slices.Contains(r.Env, tuiplugin.ResumeEnv+"="+resume) {
 		t.Fatalf("the UI hands over %v", r.Env)
 	}
@@ -794,6 +795,9 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 		}
 		m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
 		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "starting anew") })
+		if d := m.Draft(); d.Text != "half a thought" || !slices.Equal(d.Images, []string{"/tmp/picture.png"}) {
+			t.Errorf("the draft is %+v", d)
+		}
 		return nil
 	})
 	if err := app.Run(context.Background(), nil); err != nil {

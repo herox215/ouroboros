@@ -1265,6 +1265,33 @@ func (m *Model) Resume(id string) {
 	m.setNotice("restarted with the new build", false)
 }
 
+// Draft is what is typed into the input and not sent yet: the text, and the
+// pictures and files that its labels stand for.
+type Draft struct {
+	Text   string   `json:"text"`
+	Images []string `json:"images,omitempty"`
+	Files  []string `json:"files,omitempty"`
+}
+
+// Draft returns what is typed into the input of the profile the UI shows.
+func (m *Model) Draft() Draft {
+	if m.profiles != nil {
+		return m.profiles.current().Draft()
+	}
+	return Draft{Text: m.input.Value(), Images: m.chat.images, Files: m.chat.files}
+}
+
+// SetDraft puts d back into the input of the profile the UI shows: what was
+// typed there before ouro started anew, to go on with.
+func (m *Model) SetDraft(d Draft) {
+	if m.profiles != nil {
+		m.profiles.current().SetDraft(d)
+		return
+	}
+	m.input.SetValue(d.Text)
+	m.chat.images, m.chat.files = d.Images, d.Files
+}
+
 // newConversation starts a new session and shows it. The session that was
 // shown goes on: an answer on its way there is given all the same, see
 // /session.
