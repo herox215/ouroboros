@@ -415,6 +415,15 @@ func TestRead(t *testing.T) {
 	if !strings.HasPrefix(out, "#2 ") || strings.Contains(out, "#4 ") || !strings.HasSuffix(out, "[records 2 to 3 of 7: continue with from 4]") {
 		t.Errorf("a part: %q", out)
 	}
+	// A negative from counts from the end: the last records first.
+	out, _ = a.Read(owner, "chat-1", -2, 5, 0)
+	if !strings.HasPrefix(out, "#6 ") || !strings.HasSuffix(out, "[records 6 to 7 of 7]") {
+		t.Errorf("from the end: %q", out)
+	}
+	out, _ = a.Read(owner, "chat-1", -100, 1, 0)
+	if !strings.HasPrefix(out, "#1 ") {
+		t.Errorf("from before the first: %q", out)
+	}
 
 	if out, _ := a.Read(owner, "", 0, 1, 0); !strings.HasSuffix(out, "[records 1 to 1 of 7: continue with from 2]") {
 		t.Errorf("one record: %q", out)

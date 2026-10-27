@@ -354,6 +354,9 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		if strings.Contains(got, codeSearchRule) != wantExplore {
 			t.Errorf("with %s: code search rule present = %v, want %v", tt.tools, strings.Contains(got, codeSearchRule), wantExplore)
 		}
+		if edits := "Change files with edit and write, not with scripts of python3, sed or a heredoc"; strings.Contains(got, edits) != wantExplore {
+			t.Errorf("with %s: edit rule present = %v, want %v", tt.tools, strings.Contains(got, edits), wantExplore)
+		}
 		workflow := "Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, " +
 			"unless you still need information to make those changes safely."
 		if strings.Contains(got, workflow) != wantWorkflow {
@@ -385,6 +388,9 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 			"check accessible logs and the affected tool code where available, without waiting for the user to ask you to investigate.",
 			"Distinguish what the evidence establishes from hypotheses; if access or missing evidence prevents a diagnosis, say what you checked and what remains unknown,",
 			"rather than stopping at an unverified guess.",
+			"find the cause in the code or the log and explain it: confirming that things work now does not answer it.",
+			"read that part of the conversation with history_read first, rather than searching the code again.",
+			"evidence from the source suffices, and at most one archived session is read as an example.",
 		} {
 			if strings.Contains(got, diagnosis) != wantWorkflow {
 				t.Errorf("with %s: diagnostic rule %q present = %v, want %v", tt.tools, diagnosis, strings.Contains(got, diagnosis), wantWorkflow)

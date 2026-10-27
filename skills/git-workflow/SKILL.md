@@ -77,10 +77,17 @@ For Ouroboros itself, follow the conversation's rebuild rules; a Git workflow do
 - Inspect `git branch --show-current`, `git branch -vv`, and `git remote -v` as needed. Remote URLs may contain credentials; redact secrets before reporting output.
 - Before an authorized push, verify the remote URL, destination branch, and commits to be published. Prefer an explicit refspec such as `git push REMOTE HEAD:refs/heads/BRANCH`. Do not rely on automatic upstream creation to choose the destination.
 - Prefer `git switch BRANCH` and `git switch -c NEW_BRANCH` over ambiguous checkout syntax. Do not create or switch branches unless the task calls for it.
+- Before the first branch switch in a shared checkout, check in one call whether somebody works there: `git status --short --branch`, uncommitted changes you did not make, and running processes that use it (such as `pgrep -af ouro`). If any of these holds, or the checkout is shared by convention, make the change in a worktree of your own instead: `git worktree add -b NEW_BRANCH /path/in/your/workspace origin/main`, and remove it with `git worktree remove` once the branch is pushed.
 - Do not stash automatically to make switching work. A stash changes the working tree and may conflict when reapplied. If a stash is authorized, identify it precisely and prefer applying then verifying before dropping it.
 - Fetch only when needed for the task. `git fetch REMOTE` updates remote-tracking state but does not integrate it into the working branch.
 - Do not use an unqualified `git pull`: this environment defaults to rebasing. Inspect divergence first, for example `git rev-list --left-right --count HEAD...REMOTE/BRANCH`, after an appropriate fetch. Use an explicitly chosen integration strategy; `git pull --ff-only REMOTE BRANCH` is suitable only when a fast-forward update is intended. If histories diverge, explain and obtain a decision instead of silently rebasing or merging.
 - Never force-push or rewrite shared history without explicit authorization. Even `--force-with-lease` is a history rewrite and needs permission.
+
+## Pull requests
+
+- After opening a pull request, fetch its state in one call, for example `gh pr view NUMBER --json url,state,mergeable,mergeStateStatus,statusCheckRollup,closingIssuesReferences`, and report the CI status, whether it can be merged, and the linked issue or ticket with its state.
+- When the owner asks about an open pull request, do not stop at its status and metadata: review its diff and make the fixes it needs on its branch, unless they asked only for the status.
+- When a review is asked for, split it with `delegate` from the start: 2 to 4 helpers, each with a clear part of the diff (files or concerns) and the instruction to report concrete findings with file and line. Do not walk the diff yourself in many small bash or sed steps first. Once the reports are in, check the findings that are uncertain, apply the fixes that hold up, run the relevant tests, and report findings and fixes together in one answer.
 
 ## Conflicts, destructive operations, and recovery
 
