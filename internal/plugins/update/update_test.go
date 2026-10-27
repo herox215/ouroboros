@@ -173,6 +173,9 @@ func source(t *testing.T, content, build string) string {
 // The agent of the owner builds the source the binary was built from.
 func TestRebuildToolInstallsTheSource(t *testing.T) {
 	src := source(t, "v2", "true")
+	// The skills of the checkout come with the build.
+	os.MkdirAll(filepath.Join(src, "skills", "demo"), 0o700)
+	os.WriteFile(filepath.Join(src, "skills", "demo", "SKILL.md"), []byte("git"), 0o644)
 	update.Source = src
 	t.Cleanup(func() { update.Source = "" })
 	s := clitest.Settings(t)
@@ -209,6 +212,10 @@ func TestRebuildToolInstallsTheSource(t *testing.T) {
 	got, err := tools[at].Run(context.Background(), json.RawMessage(`{}`))
 	if err != nil || !strings.HasPrefix(got, "built "+src+" and installed the build as "+exe+". ") {
 		t.Fatalf("got %q, %v", got, err)
+	}
+	// The skills of the source are installed into the node with the build.
+	if b, err := os.ReadFile(filepath.Join(s.Home, "skills", "demo", "SKILL.md")); err != nil || string(b) != "git" {
+		t.Fatalf("the skills of the source: %q, %v", b, err)
 	}
 	// With packages to test, their tests run first, and the tool says so.
 	os.WriteFile(filepath.Join(src, "go.mod"), []byte("module fake\n\ngo 1.21\n"), 0o644)

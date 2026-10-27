@@ -73,6 +73,18 @@ export GOTOOLCHAIN=auto
 cd "$REPO_ROOT"
 make install
 
+# The skills of the checkout are the skills of the node: the tool skill reads
+# them from the skills directory of the directory of the node.
+if [ -d "$REPO_ROOT/skills" ]; then
+	case "$(uname -s)" in
+		Darwin) config="${XDG_CONFIG_HOME:-$HOME/Library/Application Support}" ;;
+		*) config="${XDG_CONFIG_HOME:-$HOME/.config}" ;;
+	esac
+	skills="${OURO_HOME:-$config/ouroboros}/skills"
+	mkdir -p "$skills"
+	cp -R "$REPO_ROOT/skills/." "$skills/"
+fi
+
 # "ouro update" builds into a staging directory and installs the binary itself.
 [ -z "${OURO_UPDATE:-}" ] || exit 0
 

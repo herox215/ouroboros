@@ -42,7 +42,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		c := &updateCommand{
 			term:    n.Console,
 			local:   node.Local{Home: dir},
-			updater: &update.Updater{Repo: update.Repo, Source: update.Source, Dir: dir.UpdateDir(), Revision: update.Revision()},
+			updater: &update.Updater{Repo: update.Repo, Source: update.Source, Dir: dir.UpdateDir(), Revision: update.Revision(), Skills: dir.Skills()},
 		}
 		plugin.Add(ctx, plugin.Command{Name: "update", Help: "build and install the newest version", Run: c.run})
 		plugin.Add(ctx, plugin.Command{Name: "rollback", Help: "install the build before the last update or rebuild again", Run: c.rollback})
@@ -54,6 +54,8 @@ func Plugin(dir home.Dir) plugin.Plugin {
 				"never all of them, coverage or mutation tests. " +
 				"Only when the tests and the build pass is the binary replaced; " +
 				"otherwise nothing is installed, and the error ends with the output: fix the source and call it again. " +
+				"The skills in skills/ of the checkout are installed into the skills directory of the node with the build, " +
+				"so a copy of a skill there is never synced by hand. " +
 				"Once you have answered, the node starts anew with the new build and the conversation goes on there, " +
 				"and so does the front end that showed it. What you built is yours to use only in the new build: " +
 				"with continue: true you are told to go on there by yourself, so end this answer with what is left to do.",

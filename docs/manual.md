@@ -1200,6 +1200,10 @@ Read the whole diff before you comment. …
 - **When a skill is seen.** The skills are read when the agent is built: a new skill is offered once the
   configuration changed or the node started again. What a skill says is read at every call, so a change
   to `SKILL.md` holds at once.
+- **The skills of the checkout.** The skills in `skills/` of the checkout ouro was built from are copied
+  into the skills directory of the node when the source is rebuilt with the tool `rebuild`, and by
+  `install.sh`. A skill of the checkout is current after the build, a file and a skill that the checkout
+  has not stay as they are — also the skills you wrote yourself — and no copy is synced by hand.
 - **The agent cannot write a skill.** The tools for files never change the directory of the node, so no
   skill comes from the agent, nor from a peer that talked it into something. A command of `bash`, which runs
   [in no sandbox](#commands), is not held by that.
