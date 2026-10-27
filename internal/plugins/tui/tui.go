@@ -119,12 +119,21 @@ func (u *ui) run(ctx context.Context) error {
 	if r != nil {
 		m.SelectProfile(r.Profile)
 		m.Resume(r.Session)
+		if r.Draft != nil {
+			m.SetDraft(*r.Draft)
+		}
 		wasRunning = r.WasRunning
 	}
 	defer m.CloseProfiles()
 	err = show(ctx, m)
 	if exe, ok := m.Restarts(); ok {
-		return handOver(exe, resume{Session: m.Current(), WasRunning: wasRunning, Profile: m.Profile()})
+		goOn := resume{Session: m.Current(), WasRunning: wasRunning, Profile: m.Profile()}
+		if d := m.Draft(); d.Text != "" {
+			// Keys do not reach the input once the restart is announced: the
+			// draft is what was typed before, to go on with in the new build.
+			goOn.Draft = &d
+		}
+		return handOver(exe, goOn)
 	}
 	if !wasRunning {
 		err = errors.Join(err, u.sessions.Release(context.WithoutCancel(ctx)))
@@ -154,9 +163,10 @@ const resumeEnv = "OURO_RESUME"
 
 // resume is what the UI of a new process goes on from.
 type resume struct {
-	Profile    string `json:"profile,omitempty"` // the ID of the profile shown, of several
-	Session    string `json:"session"`           // the session shown
-	WasRunning bool   `json:"was_running"`
+	Profile    string     `json:"profile,omitempty"` // the ID of the profile shown, of several
+	Session    string     `json:"session"`           // the session shown
+	WasRunning bool       `json:"was_running"`
+	Draft      *tui.Draft `json:"draft,omitempty"` // what was typed into the input, not sent
 }
 
 // handOver returns the plugin.Restarting that starts exe with r.

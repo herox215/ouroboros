@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,25 @@ func TestHistoricalRestartDoesNotAnimate(t *testing.T) {
 	m.apply(m.chat, Event{Kind: plugin.SessionRestart, Text: "/old/ouro"}, false)
 	if m.restartFrame != 0 {
 		t.Fatal("archived restart animated")
+	}
+}
+
+// What was typed into the input before ouro started anew is put back into it,
+// in the profile the UI shows, with the files its labels stand for.
+func TestDraft(t *testing.T) {
+	m, _ := newModel(t)
+	d := Draft{Text: "half a thought\nand another", Images: []string{"/tmp/picture.png"}, Files: []string{"/tmp/notes.pdf"}}
+	m.SetDraft(d)
+	if got := m.Draft(); got.Text != d.Text || !slices.Equal(got.Images, d.Images) || !slices.Equal(got.Files, d.Files) {
+		t.Fatalf("the draft is %+v", got)
+	}
+	root, terra, luna, _ := profiles(t)
+	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	root.SetDraft(Draft{Text: "for terra"})
+	root.Update(shiftTab)
+	root.SetDraft(Draft{Text: "for luna"})
+	if terra.Draft().Text != "for terra" || luna.Draft().Text != "for luna" || root.Draft().Text != "for luna" {
+		t.Fatalf("terra %q, luna %q, shown %q", terra.Draft().Text, luna.Draft().Text, root.Draft().Text)
 	}
 }
 
