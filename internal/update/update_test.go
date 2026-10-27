@@ -396,3 +396,123 @@ func TestRebuildTestsFirst(t *testing.T) {
 		}
 	}
 }
+
+// The skills of the checkout are installed with the build: a skill it has is
+// current, a file of one that it has not stays, and so does a skill of the
+// owner that the checkout has not.
+func TestRebuildInstallsTheSkills(t *testing.T) {
+	src, _ := updatetest.NewRepo(t, "v1")
+	updatetest.Build(t, src, "true")
+	writeFile(t, filepath.Join(src, "skills", "git-workflow", "SKILL.md"), "new")
+	writeFile(t, filepath.Join(src, "skills", "git-workflow", "notes.md"), "notes")
+	writeFile(t, filepath.Join(src, "skills", "git-workflow", "check", "deep.md"), "deep")
+	writeFile(t, filepath.Join(src, "skills", "README"), "a file beside the skills is no skill")
+	if err := os.Symlink("/etc/passwd", filepath.Join(src, "skills", "git-workflow", "link")); err != nil {
+		t.Fatal(err)
+	}
+	skills := filepath.Join(t.TempDir(), "skills")
+	writeFile(t, filepath.Join(skills, "git-workflow", "SKILL.md"), "old")
+	writeFile(t, filepath.Join(skills, "git-workflow", "mine.md"), "mine")
+	writeFile(t, filepath.Join(skills, "own", "SKILL.md"), "own")
+	exe := filepath.Join(t.TempDir(), "ouro")
+
+	u := update.Updater{Source: src, Dir: t.TempDir(), Exe: exe, Skills: skills}
+	if err := u.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, filepath.Join(skills, "git-workflow", "SKILL.md"), "new")
+	expectFile(t, filepath.Join(skills, "git-workflow", "notes.md"), "notes")
+	expectFile(t, filepath.Join(skills, "git-workflow", "check", "deep.md"), "deep")
+	expectFile(t, filepath.Join(skills, "git-workflow", "mine.md"), "mine")
+	expectFile(t, filepath.Join(skills, "own", "SKILL.md"), "own")
+	for _, path := range []string{filepath.Join(skills, "git-workflow", "link"), filepath.Join(skills, "README")} {
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("%s was installed", path)
+		}
+	}
+
+	// A checkout without skills/ installs none, and the build is installed.
+	os.RemoveAll(filepath.Join(src, "skills"))
+	if err := u.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, filepath.Join(skills, "own", "SKILL.md"), "own")
+}
+
+// Skills that cannot be installed stop the rebuild before the binary is: a
+// rebuild that could not install them is no rebuild.
+func TestRebuildThatCannotInstallTheSkills(t *testing.T) {
+	src, _ := updatetest.NewRepo(t, "v1")
+	updatetest.Build(t, src, "true")
+	writeFile(t, filepath.Join(src, "skills", "a", "SKILL.md"), "a")
+
+	// The checkout's skills is a file, not a directory.
+	fileSrc, _ := updatetest.NewRepo(t, "v1")
+	updatetest.Build(t, fileSrc, "true")
+	writeFile(t, filepath.Join(fileSrc, "skills"), "skills are a directory")
+	exe := filepath.Join(t.TempDir(), "ouro")
+	err := (update.Updater{Source: fileSrc, Dir: t.TempDir(), Exe: exe, Skills: t.TempDir()}).Rebuild(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "skills: ") {
+		t.Fatalf("skills that is a file: %v", err)
+	}
+
+	// A file of the skill is where the node has a directory of that name.
+	skills := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(skills, "a", "SKILL.md"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err = (update.Updater{Source: src, Dir: t.TempDir(), Exe: exe, Skills: skills}).Rebuild(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "installing the skill a: ") {
+		t.Fatalf("a file that is a directory: %v", err)
+	}
+	if _, err := os.Stat(exe); err == nil {
+		t.Error("the binary was installed although its skills were not")
+	}
+}
+
+// A skill the build cannot read fails the rebuild, and says which skill.
+func TestRebuildWithASkillItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file")
+	}
+	src, _ := updatetest.NewRepo(t, "v1")
+	updatetest.Build(t, src, "true")
+	skills := t.TempDir()
+	exe := filepath.Join(t.TempDir(), "ouro")
+	u := update.Updater{Source: src, Dir: t.TempDir(), Exe: exe, Skills: skills}
+
+	file := filepath.Join(src, "skills", "a", "SKILL.md")
+	writeFile(t, file, "a")
+	if err := os.Chmod(file, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Rebuild(context.Background()); err == nil || !strings.Contains(err.Error(), "installing the skill a: ") {
+		t.Fatalf("a file that cannot be read: %v", err)
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(src, "skills", "a", "sub")
+	writeFile(t, filepath.Join(dir, "deep.md"), "deep")
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Rebuild(context.Background()); err == nil || !strings.Contains(err.Error(), "installing the skill a: ") {
+		t.Fatalf("a directory that cannot be read: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeFile makes the directories of path and writes content there.
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

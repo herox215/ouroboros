@@ -124,6 +124,10 @@ type Updater struct {
 	// Tests are the packages of Source whose tests Rebuild runs before it
 	// builds, like ./internal/tui/: if one fails, nothing is built.
 	Tests []string
+	// Skills is the skills directory of the node, home.Dir.Skills, which
+	// Rebuild installs the skills of Source into. Empty: no skill of the
+	// checkout is installed.
+	Skills string
 }
 
 // testPackage is what a package of Tests looks like: a path in the
@@ -219,7 +223,57 @@ func (u Updater) Rebuild(ctx context.Context) error {
 	if _, err := u.runIn(ctx, u.Source, goEnv(gobin), "make", "install", "BIN="+filepath.Join(stage, "ouro")); err != nil {
 		return err
 	}
+	// The skills of the checkout go with the build: the installed copy of a
+	// skill is current, and the agent copies nothing by hand.
+	if err := u.installSkills(); err != nil {
+		return err
+	}
 	return replace(filepath.Join(stage, "bin", "ouro"), u.Exe)
+}
+
+// installSkills installs the skills of the checkout at Source, its directory
+// skills/, into Skills: every file of every skill. A skill that the checkout
+// has not, and a file of one that it has not, stays as it is: the skills the
+// owner wrote are the owner's. A checkout without skills/ has none to
+// install.
+func (u Updater) installSkills() error {
+	if u.Skills == "" {
+		return nil
+	}
+	root := filepath.Join(u.Source, "skills")
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue // a skill is a directory, as the tool skill reads it
+		}
+		err := filepath.WalkDir(filepath.Join(root, e.Name()), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			dst := filepath.Join(u.Skills, strings.TrimPrefix(path, root))
+			if d.IsDir() {
+				return os.MkdirAll(dst, 0o755)
+			}
+			if !d.Type().IsRegular() {
+				return nil // a link or a device of the checkout is no file of a skill
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(dst, b, 0o644)
+		})
+		if err != nil {
+			return fmt.Errorf("installing the skill %s: %w", e.Name(), err)
+		}
+	}
+	return nil
 }
 
 // clearStage removes what an earlier build left in the stage: a build that
