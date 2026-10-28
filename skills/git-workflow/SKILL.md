@@ -74,6 +74,7 @@ For Ouroboros itself, follow the conversation's rebuild rules; a Git workflow do
 
 ## Branches and remotes
 
+- **Work a ticket you filed for yourself in a worktree, always.** An issue that you open for work you will do later is worked in a worktree of your own from `origin/main`, never in the shared checkout: `git worktree add -b fix/ISSUE-TOPIC "/path/in/your/workspace/issue-ISSUE" origin/main`. Name the directory after the issue, like `issue-64`, so its purpose stays visible. Edit, test and commit there, push the branch and open the pull request from it, and remove the worktree with `git worktree remove` once the branch is pushed. The standing checkout keeps the state the owner left in it.
 - Inspect `git branch --show-current`, `git branch -vv`, and `git remote -v` as needed. Remote URLs may contain credentials; redact secrets before reporting output.
 - Before an authorized push, verify the remote URL, destination branch, and commits to be published. Prefer an explicit refspec such as `git push REMOTE HEAD:refs/heads/BRANCH`. Do not rely on automatic upstream creation to choose the destination.
 - Prefer `git switch BRANCH` and `git switch -c NEW_BRANCH` over ambiguous checkout syntax. Do not create or switch branches unless the task calls for it.
