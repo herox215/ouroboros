@@ -310,11 +310,14 @@ type Assistant struct {
 	reviewing sync.Mutex
 	last      map[string]answered // the last answer by conversation, for a follow-up
 
-	learning  sync.Mutex
-	topics    map[string]*topicState // by conversation, see withTopic
-	idle      *time.Timer            // runs sweep once the owner left, see track
-	idleAfter time.Duration          // how long the owner is away until then
-	stopped   bool                   // by Stop: idle is not started again
+	learning   sync.Mutex
+	topics     map[string]*topicState // by conversation, see withTopic
+	idle       *time.Timer            // runs sweep once the owner left, see track
+	idleAfter  time.Duration          // how long the owner is away until then
+	stopped    bool                   // by Stop: idle is not started again
+	archiving  context.CancelFunc     // of the pass of the archivist, while one runs
+	archives   sync.WaitGroup         // of that pass, which StopArchive waits for
+	unarchived bool                   // by StopArchive: no pass starts again
 }
 
 // setup is the part of the configuration an agent is built from.
@@ -1031,6 +1034,7 @@ func (a *Assistant) Stop() {
 		a.idle.Stop()
 	}
 	a.learning.Unlock()
+	a.StopArchive()
 	a.answering.Lock()
 	for _, cancel := range a.answers {
 		cancel()

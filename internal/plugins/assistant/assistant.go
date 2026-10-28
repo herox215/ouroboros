@@ -63,7 +63,9 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		}
 		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug).WithYolo(dir.Yolo)
 		if dir == dir.Root() {
-			bot.StartArchive() // at start, if the interval passed
+			// The archivist opens the stores of every profile: only the
+			// process that serves runs it, at start if the interval passed.
+			plugin.Add(ctx, plugin.Serving{Start: bot.StartArchive, Stop: bot.StopArchive})
 		}
 		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolDelegate, Show: assistant.Delegating, Detail: assistant.HowItEnded})
 		return services{builder, bot}, nil

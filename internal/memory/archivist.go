@@ -1,12 +1,14 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,7 +40,7 @@ func (s *Store) Current(ctx context.Context, limit int) ([]Entry, error) {
 }
 
 // Candidates returns the memories a pass should look at, or none: those new
-// or changed since marker, those that expired, those written long ago and
+// or changed since marker, those written long ago and
 // never used, those whose project directory is gone, the core ones while the
 // core memories are nearly full, and those that say nearly the same as
 // another. What was examined in the version it has now is left out, see
@@ -60,7 +62,7 @@ func (s *Store) Candidates(ctx context.Context, marker time.Time, staleAfter tim
 			c = &Candidate{Entry: e}
 			out[e.ID] = c
 		}
-		if !containsString(c.Reasons, why) {
+		if !slices.Contains(c.Reasons, why) {
 			c.Reasons = append(c.Reasons, why)
 		}
 	}
@@ -68,11 +70,6 @@ func (s *Store) Candidates(ctx context.Context, marker time.Time, staleAfter tim
 		var why []string
 		if marker.IsZero() || updatedAfter(e.Updated, marker) {
 			why = append(why, "new or changed since the last pass")
-		}
-		if e.Expires != "" {
-			if t, err := time.Parse(time.RFC3339, e.Expires); err == nil && !t.After(at) {
-				why = append(why, "expired")
-			}
 		}
 		if staleAfter > 0 && e.Used == 0 {
 			if t, err := time.Parse(time.RFC3339Nano, e.Created); err == nil && at.Sub(t) >= staleAfter {
@@ -163,16 +160,6 @@ func PairVersions(p Pair) string {
 	return strconv.FormatInt(p.A.Version, 10) + ":" + strconv.FormatInt(p.B.Version, 10)
 }
 
-// Meta returns the value of name, "" if there is none.
-func (s *Store) Meta(ctx context.Context, name string) (string, error) {
-	var value string
-	err := s.db.QueryRowContext(ctx, "SELECT value FROM memory_meta WHERE name=?", name).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return value, err
-}
-
 // SetMeta keeps value under name.
 func (s *Store) SetMeta(ctx context.Context, name, value string) error {
 	return s.SetMetas(ctx, map[string]string{name: value})
@@ -211,6 +198,28 @@ func (s *Store) Metas(ctx context.Context, prefix string) (map[string]string, er
 	return out, rows.Err()
 }
 
+// Get returns the memory id of any scope, archived or not.
+func (s *Store) Get(ctx context.Context, id string) (Entry, error) {
+	return scan(s.db.QueryRowContext(ctx, "SELECT "+columns+" FROM memories WHERE id=?", id))
+}
+
+// Find returns at most limit current memories of every scope that have any
+// of the words of query, the best first. Each has only an excerpt, as with
+// Search; Get returns the whole memory.
+func (s *Store) Find(ctx context.Context, query string, limit int) ([]Entry, error) {
+	tokens := ftsTokens(query)
+	if len(tokens) == 0 {
+		return []Entry{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT "+excerpt+" FROM memories m JOIN memory_fts ON memory_fts.rowid=m.rowid"+
+		" WHERE m.archived=0 AND (m.expires='' OR m.expires>?) AND memory_fts MATCH ?"+
+		" ORDER BY bm25(memory_fts),m.updated DESC,m.id LIMIT ?", now(), strings.Join(tokens, " OR "), cmp.Or(min(max(limit, 0), MaxHits), 10))
+	if err != nil {
+		return nil, err
+	}
+	return entries(rows)
+}
+
 // Version returns the version a memory has now.
 func (s *Store) Version(ctx context.Context, id string) (int64, error) {
 	var version int64
@@ -247,6 +256,9 @@ type ChangeRecord struct {
 	Action string `json:"action"`
 	Reason string `json:"reason"`
 	Undone bool   `json:"undone,omitempty"`
+	// Created are the memories the change made, as a merge or a split does.
+	// The log does not list them.
+	Created []string `json:"-"`
 }
 
 // ErrNoChange is a change that is not one the archivist makes.
@@ -294,17 +306,14 @@ func (s *Store) Apply(ctx context.Context, c Change) (ChangeRecord, error) {
 		if err != nil {
 			return err
 		}
-		undo, err := json.Marshal(undoState{Before: before, Created: created})
-		if err != nil {
-			return err
-		}
+		undo, _ := json.Marshal(undoState{Before: before, Created: created}) // texts, numbers and flags: cannot fail
 		at := time.Now().UTC().Format(time.RFC3339Nano)
 		r, err := tx.ExecContext(ctx, "INSERT INTO memory_changes(at,action,reason,undo) VALUES(?,?,?,?)", at, c.Action, c.Reason, string(undo))
 		if err != nil {
 			return err
 		}
 		rec.ID, err = r.LastInsertId()
-		rec.At, rec.Action, rec.Reason = at, c.Action, c.Reason
+		rec.At, rec.Action, rec.Reason, rec.Created = at, c.Action, c.Reason, created
 		return err
 	})
 	return rec, err
@@ -316,7 +325,7 @@ func idsOf(c Change) []string {
 		ids = append(ids, c.ID)
 	}
 	for _, id := range c.IDs {
-		if !containsString(ids, id) {
+		if !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}
@@ -340,21 +349,10 @@ func load(ctx context.Context, tx *sql.Tx, ids []string) ([]Entry, error) {
 }
 
 func find(entries []Entry, id string) (Entry, bool) {
-	for _, e := range entries {
-		if e.ID == id {
-			return e, true
-		}
+	if i := slices.IndexFunc(entries, func(e Entry) bool { return e.ID == id }); i >= 0 {
+		return entries[i], true
 	}
 	return Entry{}, false
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // fits checks that a rewrite may not say more than its sources: it may merge,
@@ -505,7 +503,11 @@ func scope(ctx context.Context, tx *sql.Tx, c Change, before []Entry) error {
 	if !ok {
 		return ErrNotFound
 	}
-	core := c.Core != nil && *c.Core
+	// A move keeps a core memory core, unless it goes to a project.
+	core := e.Core
+	if c.Core != nil {
+		core = *c.Core
+	}
 	if c.Project != "" {
 		core = false
 	}
@@ -555,8 +557,7 @@ func archiveID(ctx context.Context, tx *sql.Tx, id string) error {
 }
 
 func containsID(entries []Entry, id string) bool {
-	_, ok := find(entries, id)
-	return ok
+	return slices.ContainsFunc(entries, func(e Entry) bool { return e.ID == id })
 }
 
 // UndoChange takes back the change id, see Apply, restoring every memory it

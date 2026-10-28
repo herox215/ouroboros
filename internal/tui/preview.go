@@ -105,7 +105,6 @@ type hover struct {
 	seq     int    // counts the moves, so that a late tick of an old one is dropped
 	view    string // the preview shown, boxed
 	picture string // the sequence that draws the picture into the box of view, if one
-	sixel   string // the sequence that draws the picture as a sixel, if that is how it is drawn
 	drawn   bool   // the picture is on the screen
 }
 
