@@ -349,10 +349,12 @@ func TestArchivistLeavesWhatItDidNotGetTo(t *testing.T) {
 		}
 		return dir, calls
 	}
-	// examined runs a pass over dir and is the store after it.
-	examined := func(t *testing.T, dir string, calls []archiveCall) *memory.Store {
+	// examined runs a pass over dir and is the store after it, with the model
+	// of the pass.
+	examined := func(t *testing.T, dir string, calls []archiveCall) (*memory.Store, *archiveLLM) {
 		t.Helper()
-		a, _ := recorded(t, archiveConfig("1ns"), &archiveLLM{calls: calls})
+		llm := &archiveLLM{calls: calls}
+		a, _ := recorded(t, archiveConfig("1ns"), llm)
 		a.builder = a.builder.WithMemoryProfiles(func() []MemoryProfile {
 			return []MemoryProfile{{Dir: dir, Store: func() (*memory.Store, error) { return memory.Open(dir) }}}
 		})
@@ -362,18 +364,25 @@ func TestArchivistLeavesWhatItDidNotGetTo(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { store.Close() })
-		return store
+		return store, llm
 	}
 	t.Run("at the limit", func(t *testing.T) {
 		dir, calls := seed(t, archivistOps+2, archivistOps)
-		store := examined(t, dir, calls)
+		store, _ := examined(t, dir, calls)
 		if metas, err := store.Metas(ctx, archivistSeen); err != nil || len(metas) != 0 {
 			t.Fatalf("a pass at its limit marked what it did not examine: %+v, %v", metas, err)
 		}
 	})
+	t.Run("the rest comes back next time", func(t *testing.T) {
+		dir, calls := seed(t, archivistOps+2, archivistOps)
+		examined(t, dir, calls)
+		if _, llm := examined(t, dir, nil); llm.count() == 0 {
+			t.Fatal("the next pass was shown none of what the first did not get to")
+		}
+	})
 	t.Run("below the limit", func(t *testing.T) {
 		dir, calls := seed(t, 3, 1)
-		store := examined(t, dir, calls)
+		store, _ := examined(t, dir, calls)
 		if metas, err := store.Metas(ctx, archivistSeen); err != nil || len(metas) != 3 {
 			t.Fatalf("a pass below its limit marked %d of 3 candidates: %+v, %v", len(metas), metas, err)
 		}
@@ -447,8 +456,23 @@ func TestArchivistFailures(t *testing.T) {
 		seeded(t, dir, "key", "a memory")
 		second := MemoryProfile{Dir: dir, Store: func() (*memory.Store, error) { return memory.Open(dir) }}
 		llm, lines := run(t, archiveConfig("1h"), of(first), failing, second)
-		if llm.count() != 1 || !slices.Contains(lines, "the memories of gone cannot be archived: no store") ||
-			!slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "the memories cannot be archived: ") }) {
+		if llm.count() != 1 || !slices.Contains(lines, "the memories of gone cannot be archived: no store") {
+			t.Fatalf("%d calls, log %q", llm.count(), lines)
+		}
+		if at, err := first.Marked(ctx, archivistMarker); err != nil || !at.IsZero() {
+			t.Fatalf("a pass that left a profile unexamined marked %v, %v", at, err)
+		}
+	})
+	t.Run("a mark that fails", func(t *testing.T) {
+		db, first := rawStore(t)
+		if _, err := db.Exec("CREATE TRIGGER keep BEFORE INSERT ON memory_meta BEGIN SELECT RAISE(ABORT,'kept'); END;"); err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		seeded(t, dir, "key", "a memory")
+		second := MemoryProfile{Dir: dir, Store: func() (*memory.Store, error) { return memory.Open(dir) }}
+		llm, lines := run(t, archiveConfig("1h"), of(first), second)
+		if llm.count() != 1 || !slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "the memories cannot be archived: ") }) {
 			t.Fatalf("%d calls, log %q", llm.count(), lines)
 		}
 	})
@@ -462,11 +486,11 @@ func TestArchiveStoreFailures(t *testing.T) {
 	a, _ := archivistAssistant(t, archiveConfig("1h"), llm, dir)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := a.archiveStore(ctx, dir, store, archiveConfig("1h"), time.Time{}); err == nil {
+	if _, _, err := a.archiveStore(ctx, dir, store, archiveConfig("1h"), time.Time{}); err == nil {
 		t.Fatal("a cancelled pass reported no error")
 	}
 	a.builder.LLM = func(string) (agent.LLM, error) { return nil, errors.New("no access") }
-	if _, err := a.archiveStore(context.Background(), dir, store, archiveConfig("1h"), time.Time{}); err == nil {
+	if _, _, err := a.archiveStore(context.Background(), dir, store, archiveConfig("1h"), time.Time{}); err == nil {
 		t.Fatal("a pass without its model reported no error")
 	}
 	if n := llm.count(); n != 0 {

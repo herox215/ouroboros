@@ -31,7 +31,7 @@ const (
 	archivistSeen   = "archivist/seen/"
 	archivistStale  = 30 * 24 * time.Hour
 	archivistLimit  = 200
-	archivistOps    = 8 // changes of one profile in one pass
+	archivistOps    = 32 // changes of one profile in one pass
 	archivistTime   = 10 * time.Minute
 )
 
@@ -271,22 +271,28 @@ func (a *Assistant) archive(now time.Time) {
 	if !last.IsZero() && now.Sub(last) < interval {
 		return
 	}
-	examined := 0
+	examined, complete := 0, true
 	for _, p := range all {
 		store, err := p.Store()
 		if err != nil {
 			a.logf("the memories of %s cannot be archived: %v", p.Dir, err)
+			complete = false
 			continue
 		}
-		n, err := a.archiveStore(ctx, p.Dir, store, cfg, last)
+		n, done, err := a.archiveStore(ctx, p.Dir, store, cfg, last)
 		store.Close()
 		if err != nil {
 			a.logf("the memories of %s cannot be archived: %v", p.Dir, err)
+			complete = false
 			continue
 		}
 		examined += n
+		complete = complete && done
 	}
-	if examined > 0 {
+	// The marker is the pass of a look, and a look that ended at its limit or
+	// in an error saw only part of what it was given: it stays where it was,
+	// so that the rest is a candidate again next time, see Candidates.
+	if examined > 0 && complete {
 		if err := coordinator.Mark(ctx, archivistMarker, time.Now()); err != nil {
 			a.logf("the memories cannot be archived: %v", err)
 		}
@@ -295,19 +301,20 @@ func (a *Assistant) archive(now time.Time) {
 
 // archiveStore has the archivist agent tidy the memories of one profile with
 // its tools, see desk.tools, starting from the candidates of the store.
-// It returns how many memories it examined. Every change is committed by
-// itself, so a cancelled pass leaves whole changes and no half-written state.
-func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.Store, cfg config.Config, last time.Time) (int, error) {
+// It returns how many memories it examined, and whether it got through all of
+// them. Every change is committed by itself, so a cancelled pass leaves whole
+// changes and no half-written state.
+func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.Store, cfg config.Config, last time.Time) (int, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	candidates, err := store.Candidates(ctx, last, archivistStale, archivistLimit)
 	if err != nil || len(candidates) == 0 {
-		return 0, err
+		return 0, err == nil, err
 	}
 	llm, err := a.builder.LLM(cfg.Access)
 	if err != nil {
-		return len(candidates), err
+		return len(candidates), false, err
 	}
 	desk := &desk{store: store, log: func(format string, args ...any) {
 		a.logf("memories of %s: "+format, append([]any{dir}, args...)...)
@@ -321,7 +328,7 @@ func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.
 	reply, err := bot.Respond(helping(chat.WithEffort(ctx, cmp.Or(cfg.Effort, archivistEffort))), "archivist",
 		"<memories>\n"+strings.Join(lines, "\n")+"\n</memories>")
 	if err != nil {
-		return len(candidates), err
+		return len(candidates), false, err
 	}
 	if reply = strings.TrimSpace(reply); reply != "" {
 		desk.log("%s", firstLine(reply))
@@ -331,7 +338,8 @@ func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.
 	// nothing next time. A pass that used up its changes has not examined
 	// what it did not get to: that stays a candidate for the next pass.
 	values := map[string]string{}
-	if !desk.limited() {
+	complete := !desk.limited()
+	if complete {
 		for _, c := range candidates {
 			if v, err := store.Version(ctx, c.ID); err == nil {
 				values[archivistSeen+c.ID] = strconv.FormatInt(v, 10)
@@ -343,7 +351,7 @@ func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.
 			values[memory.PairName(p.A, p.B)] = memory.PairVersions(p)
 		}
 	}
-	return len(candidates), store.SetMetas(ctx, values)
+	return len(candidates), complete, store.SetMetas(ctx, values)
 }
 
 // memoryLine is e as the archivist reads it, its content cut at limit bytes.
