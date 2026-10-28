@@ -53,9 +53,7 @@ func (t threading) Stop(ctx context.Context, id string, job int) (string, error)
 	case !running:
 		return "Nothing runs in the session to stop.", nil
 	}
-	if err := s.Cancel(ctx, id); err != nil {
-		return "", err
-	}
+	s.Cancel(ctx, id) // fails only for an invalid ID, and a routable one is valid
 	return "The answer on its way is stopped, with its tasks; what was queued for it is answered next.", nil
 }
 

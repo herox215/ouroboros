@@ -31,6 +31,9 @@ type scheduled interface {
 	RunScheduled(context.Context, string, string, string, bool) (string, <-chan session.ScheduledResult, error)
 }
 
+// machineZone finds the zone of new jobs. Tests replace it.
+var machineZone = store.MachineZone
+
 type needs struct{ Sessions plugin.Sessions }
 
 func Plugin(dir home.Dir) plugin.Plugin {
@@ -500,7 +503,7 @@ func (s *scheduler) update(ctx context.Context, raw json.RawMessage) (string, er
 	var err error
 	switch a.Action {
 	case "create":
-		zone, e := store.MachineZone()
+		zone, e := machineZone()
 		if e != nil {
 			return "", e
 		}
