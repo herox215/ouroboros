@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -116,13 +117,21 @@ func TestCommandLog(t *testing.T) {
 			got, err := os.ReadFile(p.capture.file.Name())
 			want := append([]byte("start\n"), make([]byte, 100000)...)
 			want = append(want, []byte("end\n")...)
-			if stopped && bytes.HasPrefix(got, want) && bytes.Contains(got[len(want):], []byte("Killed")) {
-				// bash may report the kill of its child before the signal of
-				// the group reaches bash itself.
+			// When the group is killed, bash may reap the sleep it started
+			// before the SIGKILL reaches bash itself, and then report that on
+			// stderr, after the command's own output: a line of the shell,
+			// not bytes that launch or capture invented. Whether the report
+			// names the signal differs: bash 3.2 on macOS writes "Killed: 9",
+			// bash 5 on Linux writes "Killed".
+			report := regexp.MustCompile(`^` + regexp.QuoteMeta(shell) + `: line 1: [0-9]+ Killed(: [0-9]+)?[ \t]+sleep 30\n$`)
+			after := got[min(len(got), len(want)):]
+			if stopped && bytes.HasPrefix(got, want) && report.Match(after) {
+				t.Logf("bash reported the killed child: %q", after)
 				got = got[:len(want)]
+				after = nil
 			}
 			if err != nil || !bytes.Equal(got, want) {
-				t.Fatalf("log: %d bytes, %v", len(got), err)
+				t.Fatalf("log: %d bytes, %v; want %d; bytes after the expected ones: %q", len(got), err, len(want), after)
 			}
 		})
 	}
