@@ -1,14 +1,17 @@
 package a2a
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/identity"
 )
@@ -194,5 +197,161 @@ func TestPinnedNamesTheNode(t *testing.T) {
 	}
 	if got := pinned("the key").ServerName; got != ServerName("the key") {
 		t.Errorf("for a node the connection names %q", got)
+	}
+}
+
+// upgraded is what a call of upgrade in the background returned.
+type upgraded struct {
+	conn   net.Conn
+	r      *bufio.Reader
+	answer []byte
+	err    error
+}
+
+// upgradeIn runs upgrade in the background: an answer whose read is not cut
+// would hold the caller for the whole test run.
+func upgradeIn(req *http.Request, p pin) <-chan upgraded {
+	done := make(chan upgraded, 1)
+	go func() {
+		conn, r, answer, err := upgrade(req, p)
+		done <- upgraded{conn, r, answer, err}
+	}()
+	return done
+}
+
+// waited returns what upgradeIn got, and fails where upgrade did not return
+// at all: the read of an answer that is not cut never ends.
+func waited(t *testing.T, done <-chan upgraded) upgraded {
+	t.Helper()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(10 * time.Second):
+		t.Fatal("upgrade did not return: the stalled answer was not cut off")
+		return upgraded{}
+	}
+}
+
+// out waits until the node has sent what a test needs it to have sent.
+func out(t *testing.T, sent <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-sent:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the node did not send the start of its answer")
+	}
+}
+
+// stalling serves the headers of a 200 answer and a piece of the body it
+// announces, then waits for the end of the test. sent is closed once the
+// headers are out, so that a test can time out or cancel after them.
+func stalling(t *testing.T, id *identity.Identity) (*httptest.Server, <-chan struct{}) {
+	t.Helper()
+	sent, done := make(chan struct{}), make(chan struct{})
+	srv := serve(t, id, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"result":`)
+		w.(http.Flusher).Flush()
+		close(sent)
+		// Until the test is over the node stalls: when it is, the handler
+		// returns and the server closes the connection an upgrade that was
+		// not cut off still reads.
+		<-done
+	}))
+	// Registered after the server, so that this runs before its Close waits
+	// for the handler.
+	t.Cleanup(func() { close(done) })
+	return srv, sent
+}
+
+// An answer is only whole with its body: a node that sends the headers of a
+// 200 and then stalls is cut off when openTimeout ends, not only one that
+// does not answer at all.
+func TestUpgradeCutsAStalledAnswerAtTheTimeout(t *testing.T) {
+	was := openTimeout
+	defer func() { openTimeout = was }()
+	openTimeout = 500 * time.Millisecond
+
+	id := identity.Generate()
+	srv, sent := stalling(t, id)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := upgradeIn(req, pin(id.Public()))
+	out(t, sent)
+	got := waited(t, done)
+	if !errors.Is(got.err, context.DeadlineExceeded) {
+		t.Fatalf("upgrade: %v; want the deadline of opening the channel", got.err)
+	}
+	if got.conn != nil || got.answer != nil {
+		t.Fatalf("upgrade returned a connection and the answer %q", got.answer)
+	}
+}
+
+// The same without the timeout: a caller that cancels while the body of a 200
+// answer is read ends the read too.
+func TestUpgradeCutsAStalledAnswerOnCancel(t *testing.T) {
+	id := identity.Generate()
+	srv, sent := stalling(t, id)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := upgradeIn(req, pin(id.Public()))
+	out(t, sent)
+	// The headers are out; the client reads them and then blocks in the body
+	// that does not come. That is where the cancellation has to end the read.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	if got := waited(t, done); !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("upgrade: %v; want the cancellation of the request", got.err)
+	}
+}
+
+// The connection of a channel that opened is handed over as it is, and the
+// timeout for opening it does not cut it afterwards.
+func TestUpgradeHandsOverTheConnectionOfAChannel(t *testing.T) {
+	was := openTimeout
+	defer func() { openTimeout = was }()
+	openTimeout = 100 * time.Millisecond
+
+	id := identity.Generate()
+	srv := serve(t, id, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body) // the request is read before the connection changes hands
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer conn.Close()
+		io.WriteString(buf, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: "+ChannelProtocol+"\r\n\r\n")
+		buf.Flush()
+		io.Copy(conn, buf) // what the client sends over the channel comes back
+	}))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, r, answer, err := upgrade(req, pin(id.Public()))
+	if err != nil || conn == nil {
+		t.Fatalf("upgrade: %v, connection %v", err, conn)
+	}
+	defer conn.Close()
+	if answer != nil {
+		t.Fatalf("a channel that opened answered with %q", answer)
+	}
+	// The timeout for opening the channel passes while it is in use.
+	time.Sleep(3 * openTimeout)
+	if _, err := io.WriteString(conn, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	echo := make([]byte, 2)
+	if _, err := io.ReadFull(r, echo); err != nil || string(echo) != "hi" {
+		t.Fatalf("over the channel: %q, %v", echo, err)
 	}
 }
