@@ -89,6 +89,9 @@ type fakeBackend struct {
 	// memories is what /memory lists, of the project and with the archived
 	// ones asked for or not, as it last was.
 	memories      plugin.MemoryListing
+	memoryChanges []plugin.MemoryChange
+	changeErr     error
+	undoneChanges []int64
 	memoryProject string
 	memoryAll     bool
 	// efforts are what the model takes, once effortsKnown says it is listed.
@@ -310,6 +313,20 @@ func (f *fakeBackend) StopJob(ctx context.Context, id string, n int) error {
 func (f *fakeBackend) Memories(_ context.Context, project string, all bool) (plugin.MemoryListing, error) {
 	f.memoryProject, f.memoryAll = project, all
 	return f.memories, f.fail["memories"]
+}
+
+// MemoryChanges is the log of the fake, and UndoMemoryChange records what was
+// taken back; fail["undoMemory"] refuses one.
+func (f *fakeBackend) MemoryChanges(_ context.Context, _ int) ([]plugin.MemoryChange, error) {
+	return f.memoryChanges, f.changeErr
+}
+
+func (f *fakeBackend) UndoMemoryChange(_ context.Context, id int64) error {
+	if err := f.fail["undoMemory"]; err != nil {
+		return err
+	}
+	f.undoneChanges = append(f.undoneChanges, id)
+	return nil
 }
 
 // SetMemory is the store of the fake, as the dialog writes to it: the memory

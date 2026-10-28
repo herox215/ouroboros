@@ -423,7 +423,7 @@ var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection
 var contents = map[string]string{
 	gatewaysSection:  "external messaging access for this profile",
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
-	agentsSection:    "the context provider, the debug mode",
+	agentsSection:    "the context provider, the debug mode, the memory archivist",
 	pluginsSection:   "which plugins are turned on",
 	ownerSection:     "what your agent may do when you ask it",
 	peersSection:     "what your agent may do when a peer asks it",
@@ -490,6 +490,11 @@ func rows(s Settings) []row {
 		toggle = set("propose", Setting{Kind: plugin.SetImproves})
 	}
 	add(agentsSection, "Changes of ouro", improves, note, toggle)
+	add(agentsSection, "Memory archivist", cmp.Or(s.MemoryInterval, "off"),
+		"how often the archivist may revisit the memories; off turns it off, a duration like 24h turns it on",
+		editing("the interval of the archivist, like 24h, or off", cmp.Or(s.MemoryInterval, "off"), func(v string) Setting {
+			return Setting{Kind: plugin.SetMemoryInterval, Value: v}
+		}))
 
 	if s.PluginsKept != "" {
 		out = append(out, row{section: pluginsSection, label: "Turned off", value: "none: all run",

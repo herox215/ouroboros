@@ -24,6 +24,10 @@ const (
 	Forget = "memory_forget"
 	Search = "memory_search"
 	Read   = "memory_read"
+	// Changes and Undo show the log of the archivist and take one of its
+	// changes back, see memory.Changes and memory.UndoChange.
+	Changes = "memory_changes"
+	Undo    = "memory_undo"
 )
 
 func Plugin(dir home.Dir) plugin.Plugin {
@@ -229,6 +233,19 @@ func tools(s *store.Store) []plugin.Tool {
 				s.Used(ctx, found)
 			}
 			return output(hits, err)
+		})},
+		{Name: Changes, Description: about + "List the changes the archivist made to the memories of this profile, the newest first: the action, the reason, and whether it was undone. Reading the log calls no model. Use memory_undo with the id of a change to take it back.", Schema: `{"type":"object","properties":{"limit":{"type":"integer","description":"how many changes, 20 by default, at most 100"}}}`, Run: run(Changes, func(ctx context.Context, a struct {
+			Limit int `json:"limit"`
+		}, _ string, _ string) (string, error) {
+			return output(s.Changes(ctx, a.Limit))
+		})},
+		{Name: Undo, Description: about + "Take back one change the archivist made, by the id memory_changes gives. A change is undone once; it is refused if a memory it touched changed since. Undoing a change to a core memory shows in the core memories of the next prompt.", Schema: `{"type":"object","properties":{"id":{"type":"integer","description":"the id of the change, from memory_changes"}},"required":["id"]}`, Run: run(Undo, func(ctx context.Context, a struct {
+			ID int64 `json:"id"`
+		}, _ string, _ string) (string, error) {
+			if err := s.UndoChange(ctx, a.ID); err != nil {
+				return "", err
+			}
+			return "Change undone.", nil
 		})},
 	}
 	for i := range out {
