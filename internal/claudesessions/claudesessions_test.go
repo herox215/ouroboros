@@ -108,12 +108,54 @@ func TestSearch(t *testing.T) {
 		t.Errorf("the calls of one tool: %d, %v:\n%s", hits, err, out)
 	}
 
+	// The text is only in what Bash returned, not in the call.
+	if out, hits, err = a.Search(claudesessions.Query{Text: "No rule to make target", Tool: "Bash"}); err != nil || hits != 1 || !strings.Contains(out, "user · Bash result · ") {
+		t.Errorf("what one tool returned: %d, %v:\n%s", hits, err, out)
+	}
+
 	if out, hits, err = a.Search(claudesessions.Query{Text: "deploy", Role: "assistant"}); err != nil || hits == 0 || strings.Contains(out, " · user · ") {
 		t.Errorf("what the assistant said: %d, %v:\n%s", hits, err, out)
 	}
 
 	if out, hits, err = a.Search(claudesessions.Query{Text: "suchtarget"}); err != nil || hits != 0 || !strings.Contains(out, "no record") {
 		t.Errorf("nothing found: %d, %v: %q", hits, err, out)
+	}
+}
+
+// A directory that cannot be read hides its own sessions, not all of them.
+func TestSessionsSkipAnUnreadableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every directory")
+	}
+	dir := fixture(t)
+	locked := filepath.Join(dir, "-home-user-beta")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	out, n, err := claudesessions.Open(dir).Sessions(claudesessions.Filter{})
+	if err != nil || n != 2 || strings.Contains(out, "33333333") {
+		t.Fatalf("%d, %v:\n%s", n, err, out)
+	}
+}
+
+// A session whose first question lies past what is read of its start ends
+// its line with where it ran, not with a separator.
+func TestSessionsWithoutAFirstQuestion(t *testing.T) {
+	dir := t.TempDir()
+	var lines []string
+	for range 50 {
+		lines = append(lines, `{"type":"mode","mode":"normal","sessionId":"44444444-dddd-4e5a-8b1c-000000000004","cwd":"/home/user/gamma","timestamp":"2026-03-04T09:00:00Z"}`)
+	}
+	lines = append(lines, `{"type":"user","sessionId":"44444444-dddd-4e5a-8b1c-000000000004","cwd":"/home/user/gamma","timestamp":"2026-03-04T09:00:01Z","message":{"role":"user","content":"Late question"}}`)
+	write(t, filepath.Join(dir, "-home-user-gamma"), "44444444-dddd-4e5a-8b1c-000000000004", lines, time.Date(2026, 3, 4, 9, 1, 0, 0, time.UTC))
+	out, n, err := claudesessions.Open(dir).Sessions(claudesessions.Filter{})
+	if err != nil || n != 1 {
+		t.Fatalf("%d, %v:\n%s", n, err, out)
+	}
+	first := strings.Split(out, "\n")[0]
+	if !strings.HasSuffix(first, "/home/user/gamma") {
+		t.Errorf("the line ends with where the session ran: %q", first)
 	}
 }
 
@@ -180,6 +222,33 @@ func TestToolCalls(t *testing.T) {
 
 	if out, n, err = a.ToolCalls(claudesessions.Calls{Tool: "Bash"}); err != nil || n != 1 {
 		t.Fatalf("the calls of one tool: %d, %v:\n%s", n, err, out)
+	}
+}
+
+// The records after those a read returns are counted all the same.
+func TestReadCountsTheRest(t *testing.T) {
+	out, err := claudesessions.Open(fixture(t)).Read(claudesessions.Read{Session: "11111111", From: 2, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "[records 2 to 2 of 6: continue with from 3]") {
+		t.Errorf("the note counts every record:\n%s", out)
+	}
+}
+
+// A call without a time is as old as its session: it sorts before the calls
+// of older sessions and is not cut by the limit behind them.
+func TestToolCallsWithoutATime(t *testing.T) {
+	dir := fixture(t)
+	write(t, filepath.Join(dir, "-home-user-gamma"), "55555555-eeee-4e5a-8b1c-000000000005", []string{
+		`{"type":"assistant","sessionId":"55555555-eeee-4e5a-8b1c-000000000005","cwd":"/home/user/gamma","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ls","name":"Bash","input":{"command":"ls -la"}}]}}`,
+	}, time.Date(2026, 3, 5, 9, 0, 0, 0, time.UTC))
+	out, n, err := claudesessions.Open(dir).ToolCalls(claudesessions.Calls{Limit: 1})
+	if err != nil || n != 1 {
+		t.Fatalf("%d, %v:\n%s", n, err, out)
+	}
+	if !strings.Contains(out, "ls -la") || strings.Contains(out, "no time") {
+		t.Errorf("the newest session's call comes first, at the time of its session:\n%s", out)
 	}
 }
 

@@ -116,14 +116,22 @@ func (a *Archive) sources() ([]source, error) {
 	var out []source
 	err := filepath.WalkDir(a.dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			if path == a.dir {
+				return err
+			}
+			// A directory that cannot be read hides only its own sessions, as a
+			// transcript that cannot be read is no session to list.
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
-			return err
+			return nil // the file went away while the directory was read
 		}
 		out = append(out, source{
 			path:    path,
@@ -237,7 +245,12 @@ func (a *Archive) Sessions(f Filter) (string, int, error) {
 		if where == "" {
 			where = s.project
 		}
-		fmt.Fprintf(&out, "%s%s · %s · %s · %s\n", names[i], agentOf(s.id), span(metas[i].started, s.ended), where, oneLine(metas[i].first, maxFirst))
+		fmt.Fprintf(&out, "%s%s · %s · %s", names[i], agentOf(s.id), span(metas[i].started, s.ended), where)
+		// What was asked first may lie past the lines head reads.
+		if first := oneLine(metas[i].first, maxFirst); first != "" {
+			fmt.Fprintf(&out, " · %s", first)
+		}
+		out.WriteString("\n")
 	}
 	if more {
 		fmt.Fprintf(&out, "[more sessions are not shown: narrow with project or since]")
@@ -365,7 +378,9 @@ func (a *Archive) Search(q Query) (string, int, error) {
 					return true
 				}
 			}
-			return false
+			// The tool of what a call returned is known only from the call, which
+			// need not hold the text: with a tool to filter by, every call is read.
+			return tool != "" && bytes.Contains(line, []byte(`"tool_use"`))
 		}, func(r Record) bool {
 			if role != "" && r.Role != role {
 				return true
@@ -458,8 +473,20 @@ func (a *Archive) Read(req Read) (string, error) {
 	first, last, total, shown, line, full := 0, 0, 0, 0, 0, false
 	nextOffset := 0
 	var offsetErr error
-	err = each(src.path, func(r Record) bool {
-		total = r.Seq // the records after those returned are counted on
+	n := 0 // the line want is asked of: it sees every line but an empty end
+	err = eachMatching(src.path, func(line []byte) bool {
+		n++
+		if !full {
+			return true
+		}
+		// The records after those returned are only counted: a line of what
+		// someone said is a record, and it is not decoded for that.
+		if isMessage(line) {
+			total = n
+		}
+		return false
+	}, func(r Record) bool {
+		total = r.Seq
 		if !keep(r) || r.Seq < from || full {
 			return true
 		}
@@ -519,6 +546,13 @@ func (a *Archive) Read(req Read) (string, error) {
 
 // readNote is how much room a note at the end of a read may need.
 const readNote = 96
+
+// isMessage says whether a line is what a user or the assistant said, without
+// decoding it. What a tool returned holds such a text only escaped, so it does
+// not count.
+func isMessage(line []byte) bool {
+	return bytes.Contains(line, []byte(`"type":"user"`)) || bytes.Contains(line, []byte(`"type":"assistant"`))
+}
 
 // Calls says which tool calls to list.
 type Calls struct {
@@ -580,6 +614,11 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 			switch r.Kind {
 			case KindTool:
 				c := &Call{Session: short(s.id), Time: r.Time, Tool: r.Tool, Path: r.Path, Args: r.Text, Sub: r.Sub}
+				if c.Time.IsZero() {
+					// A call without a time is as old as its session, so that it
+					// sorts among the others and the break above still holds.
+					c.Time = s.ended
+				}
 				if r.ID != "" {
 					open[r.ID] = c
 				}
@@ -625,8 +664,7 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 			what = c.Path
 		}
 		fmt.Fprintf(&out, "%s · %s · %s%s%s · %s\n", c.Session, when(c.Time), c.Tool,
-			map[bool]string{true: " failed", false: ""}[c.Failed],
-			map[bool]string{true: " (subagent)", false: ""}[c.Sub], oneLine(what, maxExcerpt))
+			marked(c.Failed, " failed"), marked(c.Sub, " (subagent)"), oneLine(what, maxExcerpt))
 	}
 	if more {
 		fmt.Fprintf(&out, "[more calls are not shown: narrow with session, tool, path or since]")
@@ -634,6 +672,14 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 		fmt.Fprintf(&out, "[%s]", count(len(calls), "call"))
 	}
 	return out.String(), len(calls), nil
+}
+
+// marked is text when cond holds, and else nothing.
+func marked(cond bool, text string) string {
+	if cond {
+		return text
+	}
+	return ""
 }
 
 // agentOf marks the transcript of a subagent Claude Code ran for a session.
