@@ -32,7 +32,7 @@ func fixture(t *testing.T, providers ...plugin.GatewayOutput) (map[string]plugin
 	for _, tool := range plugin.All[plugin.Tool](pctx) {
 		tools[tool.Name] = tool
 	}
-	if len(tools) != 4 {
+	if len(tools) != 5 {
 		t.Fatalf("got %d tools", len(tools))
 	}
 	for _, tool := range tools {
@@ -44,12 +44,13 @@ func fixture(t *testing.T, providers ...plugin.GatewayOutput) (map[string]plugin
 }
 
 func imageOK(context.Context, plugin.GatewayImageRequest) (string, error)   { return "image", nil }
+func audioOK(context.Context, plugin.GatewayAudioRequest) (string, error)   { return "audio", nil }
 func avatarOK(context.Context, plugin.GatewayAvatarRequest) (string, error) { return "avatar", nil }
 
 func TestDispatchAndForwarding(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	var images, avatars int
+	var images, audio, avatars int
 	tools, _ := fixture(t, plugin.GatewayOutput{
 		Name: "fake",
 		SendImage: func(got context.Context, req plugin.GatewayImageRequest) (string, error) {
@@ -65,6 +66,17 @@ func TestDispatchAndForwarding(t *testing.T) {
 				t.Fatalf("image request %+v, want %+v", req, want)
 			}
 			return "sent fixture", nil
+		},
+		SendAudio: func(got context.Context, req plugin.GatewayAudioRequest) (string, error) {
+			audio++
+			if got != ctx {
+				t.Fatal("original context was replaced")
+			}
+			want := plugin.GatewayAudioRequest{Path: "relative/click.wav", Destination: "opaque destination"}
+			if req != want {
+				t.Fatalf("audio request %+v, want %+v", req, want)
+			}
+			return "sent audio", nil
 		},
 		SetAvatar: func(got context.Context, req plugin.GatewayAvatarRequest) (string, error) {
 			avatars++
@@ -83,13 +95,30 @@ func TestDispatchAndForwarding(t *testing.T) {
 			t.Fatalf("image: %q %v", got, err)
 		}
 	}
+	if got, err := tools[plugin.GatewaySendAudioTool].Run(ctx, json.RawMessage(`{"gateway":"fake","path":"relative/click.wav","destination":"opaque destination"}`)); err != nil || got != "sent audio" {
+		t.Fatalf("audio: %q %v", got, err)
+	}
 	for _, raw := range []string{`{}`, `{"gateway":"fake","path":"avatar.png"}`, `{"attachment":2}`} {
 		if got, err := tools[plugin.GatewaySetAvatarTool].Run(ctx, json.RawMessage(raw)); err != nil || got != "set fixture" {
 			t.Fatalf("avatar: %q %v", got, err)
 		}
 	}
-	if images != 2 || avatars != 3 {
-		t.Fatalf("calls: %d images, %d avatars", images, avatars)
+	if images != 2 || audio != 1 || avatars != 3 {
+		t.Fatalf("calls: %d images, %d audio, %d avatars", images, audio, avatars)
+	}
+}
+
+func TestAudioRouting(t *testing.T) {
+	tools, _ := fixture(t, plugin.GatewayOutput{Name: "one", SendAudio: audioOK})
+	if got, err := tools[plugin.GatewaySendAudioTool].Run(t.Context(), json.RawMessage(`{"gateway":"one","path":"click.wav"}`)); err != nil || got != "audio" {
+		t.Fatalf("audio: %q %v", got, err)
+	}
+	if _, err := tools[plugin.GatewaySendAudioTool].Run(t.Context(), json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "path") {
+		t.Fatalf("without a path: %v", err)
+	}
+	tools, _ = fixture(t, plugin.GatewayOutput{Name: "one", SendImage: imageOK})
+	if _, err := tools[plugin.GatewaySendAudioTool].Run(t.Context(), json.RawMessage(`{"gateway":"one","path":"click.wav"}`)); err == nil || !strings.Contains(err.Error(), "does not support") {
+		t.Fatalf("unsupported: %v", err)
 	}
 }
 
@@ -164,7 +193,7 @@ func TestInputValidation(t *testing.T) {
 // level; validateInput alone enforces which arguments go together.
 func TestSchemaHasNoTopLevelCombinator(t *testing.T) {
 	tools, _ := fixture(t)
-	for _, name := range []string{plugin.GatewaySendImageTool, plugin.GatewaySetAvatarTool, plugin.GatewayVotePollTool} {
+	for _, name := range []string{plugin.GatewaySendImageTool, plugin.GatewaySendAudioTool, plugin.GatewaySetAvatarTool, plugin.GatewayVotePollTool} {
 		var schema map[string]any
 		if err := json.Unmarshal([]byte(tools[name].Schema), &schema); err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -184,7 +213,7 @@ func TestListingAndLateDiscovery(t *testing.T) {
 	}
 	plugin.Add(ctx, plugin.GatewayOutput{Name: "late", ImageDescription: "Image restrictions", AvatarDescription: "Public avatar restrictions", SendImage: imageOK})
 	got, err := tools["gateway_list"].Run(t.Context(), []byte(`{}`))
-	want := `[{"name":"late","send_image":true,"set_avatar":false,"image_description":"Image restrictions","avatar_description":"Public avatar restrictions","vote_poll":false,"poll_description":""}]`
+	want := `[{"name":"late","send_image":true,"send_audio":false,"set_avatar":false,"image_description":"Image restrictions","audio_description":"","avatar_description":"Public avatar restrictions","vote_poll":false,"poll_description":""}]`
 	if err != nil || got != want {
 		t.Fatalf("list: %s %v", got, err)
 	}
@@ -196,6 +225,9 @@ func TestListingAndLateDiscovery(t *testing.T) {
 		raw := `{"attachment":1}`
 		if name == plugin.GatewayVotePollTool {
 			raw = `{"poll_id":"poll","option_ids":[]}`
+		}
+		if name == plugin.GatewaySendAudioTool {
+			raw = `{"path":"click.wav"}`
 		}
 		if _, err := tool.Run(t.Context(), []byte(raw)); err == nil || !strings.Contains(err.Error(), "duplicate") {
 			t.Errorf("%s failed to reject duplicate: %v", name, err)
@@ -224,6 +256,9 @@ func TestPeerDenied(t *testing.T) {
 			raw := `{"attachment":1}`
 			if name == plugin.GatewayVotePollTool {
 				raw = `{"poll_id":"poll","option_ids":[]}`
+			}
+			if name == plugin.GatewaySendAudioTool {
+				raw = `{"path":"click.wav"}`
 			}
 			if _, err := tool.Run(ctx, []byte(raw)); err == nil || !strings.Contains(err.Error(), "owner-only") {
 				t.Errorf("%s allowed peer: %v", name, err)

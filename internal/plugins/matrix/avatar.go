@@ -94,12 +94,12 @@ func avatarData(ctx context.Context, args avatarArgs, files *guard.Guard) ([]byt
 		}
 		return images[index-1].Data, nil
 	}
-	return localImage(ctx, files, setAvatar, args.Path, maxAvatarBytes, "Matrix avatar", "5 MiB")
+	return localMedia(ctx, files, setAvatar, args.Path, maxAvatarBytes, "Matrix avatar", "5 MiB")
 }
 
-// localImage reads the image file path for tool as far as the rules of files
+// localMedia reads the media file path for tool as far as the rules of files
 // let it, a regular file of at most limit bytes; what names it in errors.
-func localImage(ctx context.Context, files *guard.Guard, tool, path string, limit int64, what, size string) ([]byte, error) {
+func localMedia(ctx context.Context, files *guard.Guard, tool, path string, limit int64, what, size string) ([]byte, error) {
 	if files == nil {
 		return nil, fmt.Errorf("the %s file access is unavailable", what)
 	}
@@ -121,7 +121,7 @@ func localImage(ctx context.Context, files *guard.Guard, tool, path string, limi
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("the %s must be a regular image file", what)
+		return nil, fmt.Errorf("the %s must be a regular file", what)
 	}
 	if info.Size() > limit {
 		return nil, fmt.Errorf("the %s exceeds %s", what, size)

@@ -19,7 +19,7 @@ func TestDownloadAttachment(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			plain := []byte("arbitrary file contents")
 			if mode == "limit" {
-				plain = bytes.Repeat([]byte("x"), maxImageBytes)
+				plain = bytes.Repeat([]byte("x"), MaxMediaBytes)
 			}
 			if mode == "empty" {
 				plain = nil
@@ -48,9 +48,9 @@ func TestDownloadAttachment(t *testing.T) {
 			case "empty URI":
 				msg.URL = ""
 			case "declared oversized":
-				msg.Info.Size = maxImageBytes + 1
+				msg.Info.Size = MaxMediaBytes + 1
 			case "stream oversized":
-				payload = bytes.Repeat([]byte("x"), maxImageBytes+1)
+				payload = bytes.Repeat([]byte("x"), MaxMediaBytes+1)
 			case "sniff":
 				msg.Info = nil
 				msg.FileName = ""

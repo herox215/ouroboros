@@ -55,7 +55,7 @@ func TestDownloadImage(t *testing.T) {
 				payload = []byte("not an image")
 			}
 			if mode == "oversized" {
-				payload = bytes.Repeat([]byte("x"), maxImageBytes+1)
+				payload = bytes.Repeat([]byte("x"), MaxMediaBytes+1)
 			}
 			if mode == "http URI" {
 				content.URL = "https://example.org/image"
@@ -147,7 +147,7 @@ func TestDownloadImageFails(t *testing.T) {
 	t.Run("declared size", func(t *testing.T) {
 		c := testClient(t, "https://matrix.test")
 		msg := content()
-		msg.Info = &event.FileInfo{Size: maxImageBytes + 1}
+		msg.Info = &event.FileInfo{Size: MaxMediaBytes + 1}
 		if _, err := c.downloadImage(context.Background(), msg); err == nil || !strings.Contains(err.Error(), "10 MiB") {
 			t.Fatalf("download: %v", err)
 		}
@@ -200,8 +200,8 @@ func TestDownloadImageAtTheSizeLimit(t *testing.T) {
 		size    int
 		wantErr bool
 	}{
-		{"at the limit", maxImageBytes, false},
-		{"beyond the limit", maxImageBytes + 1, true},
+		{"at the limit", MaxMediaBytes, false},
+		{"beyond the limit", MaxMediaBytes + 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := pad(tc.size)

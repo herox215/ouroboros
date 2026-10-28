@@ -10,11 +10,11 @@ import (
 	"sync"
 
 	"ouroboros/internal/guard"
+	transport "ouroboros/internal/matrix"
 	"ouroboros/plugin"
 )
 
 const sendImage = plugin.GatewaySendImageTool
-const maxSentImageBytes = 10 << 20
 
 // imageSender is a connection that sends images too, as the SDK's does.
 type imageSender interface {
@@ -95,30 +95,14 @@ func imageTool(l *live, files *guard.Guard) plugin.Tool {
 			if (args.Path == "") == (args.Attachment == 0) {
 				return "", errors.New("give either a path or an attachment")
 			}
-			conn, rooms, err := l.current()
+			conn, target, err := ownerRoom(l, args.Room)
 			if err != nil {
 				return "", err
-			}
-			var target *room
-			for i := range rooms {
-				if args.Room == "" && len(rooms) == 1 || rooms[i].ID == args.Room {
-					target = &rooms[i]
-				}
-			}
-			if target == nil {
-				if len(rooms) == 0 {
-					return "", errors.New("no Matrix room talks to Ouro yet: write to it from Matrix first")
-				}
-				ids := make([]string, len(rooms))
-				for i, r := range rooms {
-					ids[i] = r.ID
-				}
-				return "", errors.New("choose the room: one of " + strings.Join(ids, ", "))
 			}
 			var data []byte
 			name := "image"
 			if args.Path != "" {
-				data, err = localImage(ctx, files, sendImage, args.Path, maxSentImageBytes, "Matrix image", "10 MiB")
+				data, err = localMedia(ctx, files, sendImage, args.Path, transport.MaxMediaBytes, "Matrix image", "10 MiB")
 				name = filepath.Base(args.Path)
 			} else {
 				images := plugin.InputImages(ctx)
@@ -144,4 +128,27 @@ func imageTool(l *live, files *guard.Guard) plugin.Tool {
 	t.Schema = `{"type":"object","properties":{"path":{"type":"string","description":"Local image path; relative paths use the current project or workspace."},"attachment":{"type":"integer","minimum":1,"description":"Instead of path: 1-based image index in the most recent user message with images."},"room":{"type":"string","description":"Matrix room ID; needed only when more than one room talks to Ouro."}},"additionalProperties":false}`
 	t.OwnerOnly = true
 	return t
+}
+
+// ownerRoom is the running connection and the room the owner means: the only
+// room that talks to Ouro, or the one named when there are several. Sending
+// never guesses between rooms.
+func ownerRoom(l *live, wanted string) (guardedConnection, room, error) {
+	conn, rooms, err := l.current()
+	if err != nil {
+		return guardedConnection{}, room{}, err
+	}
+	for i := range rooms {
+		if wanted == "" && len(rooms) == 1 || rooms[i].ID == wanted {
+			return conn, rooms[i], nil
+		}
+	}
+	if len(rooms) == 0 {
+		return guardedConnection{}, room{}, errors.New("no Matrix room talks to Ouro yet: write to it from Matrix first")
+	}
+	ids := make([]string, len(rooms))
+	for i, r := range rooms {
+		ids[i] = r.ID
+	}
+	return guardedConnection{}, room{}, errors.New("choose the room: one of " + strings.Join(ids, ", "))
 }

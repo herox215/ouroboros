@@ -18,6 +18,12 @@ type imageArgs struct {
 	Destination string `json:"destination"`
 }
 
+type audioArgs struct {
+	Gateway     string `json:"gateway"`
+	Path        string `json:"path"`
+	Destination string `json:"destination"`
+}
+
 type avatarArgs struct {
 	Gateway    string `json:"gateway"`
 	Path       string `json:"path"`
@@ -47,15 +53,27 @@ func Plugin() plugin.Plugin {
 				type entry struct {
 					Name              string `json:"name"`
 					SendImage         bool   `json:"send_image"`
+					SendAudio         bool   `json:"send_audio"`
 					SetAvatar         bool   `json:"set_avatar"`
 					ImageDescription  string `json:"image_description"`
+					AudioDescription  string `json:"audio_description"`
 					AvatarDescription string `json:"avatar_description"`
 					VotePoll          bool   `json:"vote_poll"`
 					PollDescription   string `json:"poll_description"`
 				}
 				entries := make([]entry, 0, len(providers))
 				for _, p := range providers {
-					entries = append(entries, entry{p.Name, p.SendImage != nil, p.SetAvatar != nil, p.ImageDescription, p.AvatarDescription, p.VotePoll != nil, p.PollDescription})
+					entries = append(entries, entry{
+						Name:              p.Name,
+						SendImage:         p.SendImage != nil,
+						SendAudio:         p.SendAudio != nil,
+						SetAvatar:         p.SetAvatar != nil,
+						ImageDescription:  p.ImageDescription,
+						AudioDescription:  p.AudioDescription,
+						AvatarDescription: p.AvatarDescription,
+						VotePoll:          p.VotePoll != nil,
+						PollDescription:   p.PollDescription,
+					})
 				}
 				data, err := json.Marshal(entries)
 				return string(data), err
@@ -81,6 +99,25 @@ func Plugin() plugin.Plugin {
 		image.Schema = `{"type":"object","properties":{"gateway":{"type":"string","description":"Exact provider name; omit only when exactly one provider supports sending images."},"path":{"type":"string","minLength":1,"description":"Local image path; exclusive with attachment. Backend file permissions apply."},"attachment":{"type":"integer","minimum":1,"description":"1-based image index in the most recent user message with images; live conversation only, not after restart; exclusive with path."},"destination":{"type":"string","description":"Optional destination interpreted by the backend; omit only when its target is unambiguous."}},"additionalProperties":false}`
 		image.OwnerOnly = true
 		plugin.Add(pctx, image)
+
+		audio := plugin.NewTool(plugin.GatewaySendAudioTool, "Send an audio file through a gateway. Use gateway_list for provider capabilities and destination rules. Omit gateway only when exactly one provider supports sending audio.",
+			[]plugin.Param{{Name: "gateway", Description: "Exact provider name; optional only with one supporting provider", Optional: true}},
+			func(ctx context.Context, args audioArgs) (string, error) {
+				if err := owner(ctx); err != nil {
+					return "", err
+				}
+				if args.Path == "" {
+					return "", errors.New("give the path of the audio file")
+				}
+				p, err := selectOutput(pctx, args.Gateway, plugin.GatewaySendAudioTool)
+				if err != nil {
+					return "", err
+				}
+				return p.SendAudio(ctx, plugin.GatewayAudioRequest{Path: args.Path, Destination: args.Destination})
+			})
+		audio.Schema = `{"type":"object","properties":{"gateway":{"type":"string","description":"Exact provider name; omit only when exactly one provider supports sending audio."},"path":{"type":"string","minLength":1,"description":"Local audio path. Backend file permissions apply."},"destination":{"type":"string","description":"Optional destination interpreted by the backend; omit only when its target is unambiguous."}},"required":["path"],"additionalProperties":false}`
+		audio.OwnerOnly = true
+		plugin.Add(pctx, audio)
 
 		avatar := plugin.NewTool(plugin.GatewaySetAvatarTool, "Change a gateway account's public profile picture only when the owner requests it. This image may become publicly visible. Use gateway_list for provider restrictions. Omit gateway only when exactly one provider supports avatars. Supply a local path or an image attachment; without either, attachment 1 is used.",
 			[]plugin.Param{{Name: "gateway", Description: "Exact provider name; optional only with one supporting provider", Optional: true}},
@@ -200,6 +237,8 @@ func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.Gateway
 			return p.SetAvatar != nil
 		case plugin.GatewayVotePollTool:
 			return p.VotePoll != nil
+		case plugin.GatewaySendAudioTool:
+			return p.SendAudio != nil
 		}
 		return p.SendImage != nil
 	}
@@ -209,6 +248,8 @@ func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.Gateway
 		capability = "setting avatars"
 	case plugin.GatewayVotePollTool:
 		capability = "voting in polls"
+	case plugin.GatewaySendAudioTool:
+		capability = "sending audio"
 	}
 	var matches []plugin.GatewayOutput
 	for _, p := range providers {
