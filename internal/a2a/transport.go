@@ -25,8 +25,11 @@ const (
 	timeout          = 5 * time.Minute  // for a whole exchange: an agent may think for a while
 	dialTimeout      = 30 * time.Second // to reach the node
 	handshakeTimeout = 10 * time.Second // to learn who it is
-	openTimeout      = 30 * time.Second // to open a channel: reach the node and be let in
 )
+
+// openTimeout is how long a node has to open a channel: reach the node and be
+// let in. Tests shorten it.
+var openTimeout = 30 * time.Second
 
 // maxAnswerBytes is how much of an answer is read. A longer one is cut off
 // and cannot be parsed.
@@ -136,28 +139,43 @@ func upgrade(req *http.Request, p pin) (conn net.Conn, r *bufio.Reader, answer [
 	if conn, err = dialer.DialContext(ctx, "tcp", req.URL.Host); err != nil {
 		return nil, nil, nil, err
 	}
-	// Waiting for the answer ends with ctx: the connection is cut.
+	// Waiting for the answer ends with ctx: the connection is cut. An answer
+	// is only whole with its body, so the supervision lasts until that is
+	// read too: a node that stalls halfway through the body is cut off like
+	// one that does not answer at all.
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	r = bufio.NewReader(conn)
 	var resp *http.Response
 	if err = req.Write(conn); err == nil {
 		resp, err = http.ReadResponse(r, req)
 	}
-	if !stop() {
-		return nil, nil, nil, ctx.Err()
-	}
 	if err != nil {
+		if !stop() {
+			err = ctx.Err()
+		}
 		conn.Close()
 		return nil, nil, nil, err
 	}
 	if resp.StatusCode == http.StatusSwitchingProtocols {
+		// The connection is the channel now and outlives this request: it is
+		// no longer cut by the timeout for opening it.
+		if !stop() {
+			conn.Close()
+			return nil, nil, nil, ctx.Err()
+		}
 		return conn, r, nil, nil
 	}
 	defer conn.Close()
 	defer resp.Body.Close()
+	defer stop()
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, nil, fmt.Errorf("a2a: HTTP %d", resp.StatusCode)
 	}
 	answer, err = io.ReadAll(io.LimitReader(resp.Body, maxAnswerBytes))
+	if !stop() {
+		// ctx ended the read and the connection was cut under it: what came
+		// is no answer.
+		return nil, nil, nil, ctx.Err()
+	}
 	return nil, nil, answer, err
 }
