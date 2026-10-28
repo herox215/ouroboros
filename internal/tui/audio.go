@@ -11,8 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"ouroboros/internal/audio"
 )
 
 // A sound file attached to a message appears in the chat as a card below
@@ -32,16 +30,16 @@ const audioPeaks = 240
 // openPlayer opens the player of the chat, replaced in tests. It is
 // opened once: every card plays through the same one, since Play replaces
 // the sound it has.
-var openPlayer = func() (audio.Player, error) { return audio.NewPlayer() }
+var openPlayer = func() (soundPlayer, error) { return newSoundPlayer() }
 
 // playback is the sound the chat has in its player, or is about to, and
 // where it stands.
 type playback struct {
 	path    string
-	player  audio.Player
+	player  soundPlayer
 	started bool
 	busy    bool
-	state   audio.State
+	state   playerState
 	err     error
 	// seq is the number of this playback: what an answer of the player
 	// about another one brings is dropped, see soundState.
@@ -54,7 +52,7 @@ type soundCard struct{ path string }
 // audioClipMsg is a sound read for its card.
 type audioClipMsg struct {
 	path string
-	clip audio.Clip
+	clip soundClip
 }
 
 // audioAction is what a card asked the player to do.
@@ -72,7 +70,7 @@ const (
 type audioStateMsg struct {
 	seq    int
 	action audioAction
-	state  audio.State
+	state  playerState
 	err    error
 }
 
@@ -97,7 +95,7 @@ func (m *Model) soundWork() tea.Cmd {
 		delete(m.soundWanted, path)
 		path := path
 		cmds = append(cmds, func() tea.Msg {
-			return audioClipMsg{path: path, clip: audio.Analyze(path, audioPeaks)}
+			return audioClipMsg{path: path, clip: analyzeSound(path, audioPeaks)}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -122,7 +120,7 @@ func (m *Model) soundText(c *conversation, text string, width int) (string, []so
 	var lines []string
 	for _, label := range labels.FindAllString(text, -1) {
 		path, ok := c.attachment(label)
-		if !ok || !audio.Supported(path) || seen[path] {
+		if !ok || !isSound(path) || seen[path] {
 			continue
 		}
 		seen[path] = true
@@ -152,7 +150,7 @@ func (m *Model) soundPaths(text string, width int) (string, []soundCard) {
 			}
 			path = home + path
 		}
-		if seen[path] || !audio.Supported(path) || len(cards) == 6 {
+		if seen[path] || !isSound(path) || len(cards) == 6 {
 			continue
 		}
 		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
@@ -309,7 +307,7 @@ func (m *Model) toggleSound(path string) tea.Cmd {
 		// One player serves the chat: Play replaces the sound it has, so
 		// another card takes it over instead of a second mpv being started
 		// and the first left idle for the rest of the session.
-		var player audio.Player
+		var player soundPlayer
 		if m.sound != nil {
 			player = m.sound.player
 		}
