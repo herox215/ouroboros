@@ -402,7 +402,10 @@ func (a *Archive) Search(q Query) (string, int, error) {
 			return true
 		})
 		if err != nil {
-			return "", 0, err
+			// A transcript that cannot be read is no session searched, as it is
+			// no session to list.
+			searched--
+			continue
 		}
 		if more {
 			break
@@ -630,7 +633,7 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 			return true
 		})
 		if err != nil {
-			return "", 0, err
+			continue // a transcript that cannot be read is no session to list
 		}
 		for _, c := range found {
 			if tool != "" && !strings.EqualFold(c.Tool, tool) {

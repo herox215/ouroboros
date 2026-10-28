@@ -338,8 +338,8 @@ func TestUnreadableArchive(t *testing.T) {
 	}
 }
 
-// A transcript that cannot be read is left out of a listing, and a search,
-// a read or a listing of calls that would have to read it fails.
+// A transcript that cannot be read is left out of a listing, a search and a
+// listing of calls, and a read of it fails.
 func TestUnreadableTranscript(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads every file")
@@ -353,11 +353,11 @@ func TestUnreadableTranscript(t *testing.T) {
 	if out, n, err := a.Sessions(claudesessions.Filter{}); err != nil || n != 2 || strings.Contains(out, "11111111") {
 		t.Errorf("sessions: %d, %v:\n%s", n, err, out)
 	}
-	if _, _, err := a.Search(claudesessions.Query{Text: "deploy"}); err == nil {
-		t.Error("search")
+	if out, _, err := a.Search(claudesessions.Query{Text: "e"}); err != nil || strings.Contains(out, "11111111") || !strings.Contains(out, "in 2 sessions") {
+		t.Errorf("search: %v:\n%s", err, out)
 	}
-	if _, _, err := a.ToolCalls(claudesessions.Calls{}); err == nil {
-		t.Error("tool calls")
+	if out, _, err := a.ToolCalls(claudesessions.Calls{}); err != nil || strings.Contains(out, "11111111") {
+		t.Errorf("tool calls: %v:\n%s", err, out)
 	}
 	for _, from := range []int{1, -1} {
 		if _, err := a.Read(claudesessions.Read{Session: "11111111", From: from}); err == nil {
@@ -385,7 +385,7 @@ func TestSessionsOfADirectoryThatCannotBeSearched(t *testing.T) {
 }
 
 // A transcript that is a directory under the name of one is listed, as
-// nothing can be read of it, and a search that has to read it fails.
+// nothing can be read of it, and a search leaves it out.
 func TestTranscriptThatIsADirectory(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "elsewhere")
@@ -402,8 +402,8 @@ func TestTranscriptThatIsADirectory(t *testing.T) {
 	if out, n, err := a.Sessions(claudesessions.Filter{}); err != nil || n != 1 || !strings.Contains(out, "66666666") {
 		t.Fatalf("sessions: %d, %v:\n%s", n, err, out)
 	}
-	if _, _, err := a.Search(claudesessions.Query{Text: "deploy"}); err == nil {
-		t.Fatal("a search of a directory")
+	if out, n, err := a.Search(claudesessions.Query{Text: "deploy"}); err != nil || n != 0 || !strings.Contains(out, "of 0 sessions") {
+		t.Fatalf("a search of a directory: %d, %v:\n%s", n, err, out)
 	}
 }
 
