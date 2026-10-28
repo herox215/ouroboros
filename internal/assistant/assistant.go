@@ -237,6 +237,9 @@ type Builder struct {
 	// memories that go into the prompt of the agent of the owner, see
 	// WithMemories. May be nil.
 	memories func() (*memory.Store, error)
+	// memoriesOf lists the stores of all profiles of the node, the first
+	// profile's first, see WithMemoryProfiles. May be nil.
+	memoriesOf func() []MemoryProfile
 	// node is set by WithConfig.
 	node *node
 	// allow keeps a call the owner allowed for good, see WithAllowing. May

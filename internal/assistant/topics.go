@@ -315,16 +315,23 @@ func (a *Assistant) tidy(now time.Time) {
 	if err == nil {
 		archived, err = store.Tidy(ctx)
 	}
-	var last time.Time
-	if err == nil {
-		last, err = store.Marked(ctx, consolidated)
-	}
 	if err != nil {
 		a.logf("the memories cannot be tidied: %v", err)
 		return
 	}
 	if archived > 0 {
 		a.logf("memories: %d archived, as they expired or were never used", archived)
+	}
+	if a.builder.memoriesOf != nil {
+		a.archive(now)
+		return
+	}
+	// An assistant that is not wired to the profiles of a node keeps the
+	// weekly consolidation of its one store.
+	var last time.Time
+	if last, err = store.Marked(ctx, consolidated); err != nil {
+		a.logf("the memories cannot be tidied: %v", err)
+		return
 	}
 	if now.Sub(last) >= consolidateEvery {
 		a.consolidate(ctx, store, now)

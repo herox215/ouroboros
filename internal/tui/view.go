@@ -661,14 +661,6 @@ func (r *requestsScreen) view(m *Model) (string, []hit) {
 	return m.dialog(lines), hits
 }
 
-// shortKey abbreviates a base64 public key for display.
-func shortKey(publicKey string) string {
-	if len(publicKey) <= 10 {
-		return publicKey
-	}
-	return publicKey[:10] + "…"
-}
-
 // view shows the title of the splash in the middle of the screen.
 func (s *splashScreen) view(m *Model) string {
 	return drawSplash(m.width, m.height, s.elapsed, m.light)

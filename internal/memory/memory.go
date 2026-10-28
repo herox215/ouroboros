@@ -136,6 +136,11 @@ func New(db *sql.DB) (*Store, error) {
 	if err == nil {
 		_, err = tx.Exec("CREATE TABLE IF NOT EXISTS memory_meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
 	}
+	if err == nil {
+		_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS memory_changes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, action TEXT NOT NULL,
+ reason TEXT NOT NULL, undo TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0)`)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("memory schema: %w", err)
 	}
