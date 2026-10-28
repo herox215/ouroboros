@@ -129,7 +129,7 @@ func (a *Archive) sources() ([]source, error) {
 			path:    path,
 			project: top(a.dir, path),
 			id:      strings.TrimSuffix(filepath.Base(path), ".jsonl"),
-			ended:   info.ModTime(),
+			ended:   last(path, info.ModTime()),
 			size:    info.Size(),
 		})
 		return nil
@@ -179,11 +179,7 @@ func (a *Archive) resolve(name string) (source, error) {
 	case 0:
 		return source{}, fmt.Errorf("there is no session %q: claude_sessions lists them", name)
 	}
-	names := make([]string, 0, len(found))
-	for _, s := range found {
-		names = append(names, short(s.id))
-	}
-	return source{}, fmt.Errorf("%q names %d sessions: %s", name, len(found), strings.Join(names, ", "))
+	return source{}, fmt.Errorf("%q names %d sessions: %s", name, len(found), strings.Join(distinct(found), ", "))
 }
 
 // Filter narrows a listing of sessions.
@@ -206,8 +202,9 @@ func (a *Archive) Sessions(f Filter) (string, int, error) {
 		limit = DefaultSessions
 	}
 	limit = min(limit, MaxSessions)
-	var out strings.Builder
-	listed, more := 0, false
+	var found []source
+	var metas []meta
+	more := false
 	for _, s := range in {
 		if !hasProject(s.project, f.Project) {
 			continue
@@ -218,7 +215,7 @@ func (a *Archive) Sessions(f Filter) (string, int, error) {
 		if !f.Until.IsZero() && s.ended.After(f.Until) {
 			continue
 		}
-		if listed == limit {
+		if len(found) == limit {
 			more = true
 			break
 		}
@@ -226,15 +223,21 @@ func (a *Archive) Sessions(f Filter) (string, int, error) {
 		if err != nil {
 			continue // a transcript that cannot be read is no session to list
 		}
-		where := m.project
+		found = append(found, s)
+		metas = append(metas, m)
+	}
+	listed := len(found)
+	if listed == 0 {
+		return "no Claude Code session matches", 0, nil
+	}
+	names := distinct(found)
+	var out strings.Builder
+	for i, s := range found {
+		where := metas[i].project
 		if where == "" {
 			where = s.project
 		}
-		fmt.Fprintf(&out, "%s · %s · %s · %s\n", short(s.id), span(m.started, s.ended), where, oneLine(m.first, maxFirst))
-		listed++
-	}
-	if listed == 0 {
-		return "no Claude Code session matches", 0, nil
+		fmt.Fprintf(&out, "%s%s · %s · %s · %s\n", names[i], agentOf(s.id), span(metas[i].started, s.ended), where, oneLine(metas[i].first, maxFirst))
 	}
 	if more {
 		fmt.Fprintf(&out, "[more sessions are not shown: narrow with project or since]")
@@ -560,13 +563,20 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 	limit = min(limit, MaxCalls)
 	tool := strings.TrimSpace(q.Tool)
 	var calls []Call
+	oldest := time.Time{} // of the calls found so far
 	for _, s := range in {
 		if !hasProject(s.project, q.Project) || !within(q.Since, q.Until, s.ended) {
 			continue
 		}
+		// The transcripts are the most recently written first: when a call
+		// is there for every place a listing has, what is older cannot
+		// change it.
+		if len(calls) >= limit && !oldest.IsZero() && s.ended.Before(oldest) {
+			break
+		}
 		open := make(map[string]*Call)
 		var found []*Call
-		err := each(s.path, func(r Record) bool {
+		err := eachMatching(s.path, callsOf, func(r Record) bool {
 			switch r.Kind {
 			case KindTool:
 				c := &Call{Session: short(s.id), Time: r.Time, Tool: r.Tool, Path: r.Path, Args: r.Text, Sub: r.Sub}
@@ -595,6 +605,9 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 				continue
 			}
 			calls = append(calls, *c)
+			if oldest.IsZero() || c.Time.Before(oldest) {
+				oldest = c.Time
+			}
 		}
 	}
 	if len(calls) == 0 {
@@ -621,6 +634,85 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 		fmt.Fprintf(&out, "[%s]", count(len(calls), "call"))
 	}
 	return out.String(), len(calls), nil
+}
+
+// agentOf marks the transcript of a subagent Claude Code ran for a session.
+func agentOf(id string) string {
+	if strings.HasPrefix(id, "agent-") {
+		return " (subagent)"
+	}
+	return ""
+}
+
+// last is when a transcript last said something: the time of its last record,
+// or when it was written when it holds none. Claude Code touches the file
+// without writing to it, so the time of the file says nothing.
+func last(path string, written time.Time) time.Time {
+	f, err := os.Open(path)
+	if err != nil {
+		return written
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return written
+	}
+	const window = 64 << 10
+	size := min(info.Size(), window)
+	buf := make([]byte, size)
+	if _, err := f.ReadAt(buf, info.Size()-size); err != nil && !errors.Is(err, io.EOF) {
+		return written
+	}
+	const mark = `"timestamp":"`
+	i := bytes.LastIndex(buf, []byte(mark))
+	if i < 0 {
+		return written
+	}
+	rest := buf[i+len(mark):]
+	j := bytes.IndexByte(rest, '"')
+	if j <= 0 {
+		return written
+	}
+	t, err := time.Parse(time.RFC3339Nano, string(rest[:j]))
+	if err != nil {
+		return written
+	}
+	return t
+}
+
+// distinct names the sessions so that each name tells one from the others: a
+// session by the beginning of its ID, longer where that is not enough.
+func distinct(in []source) []string {
+	for width := 8; width < 36; width += 4 {
+		names := make([]string, 0, len(in))
+		seen := make(map[string]bool, len(in))
+		clash := false
+		for _, s := range in {
+			name := s.id
+			if len(name) > width {
+				name = name[:width]
+			}
+			if seen[name] {
+				clash = true
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+		if !clash {
+			return names
+		}
+	}
+	names := make([]string, 0, len(in))
+	for _, s := range in {
+		names = append(names, s.id)
+	}
+	return names
+}
+
+// callsOf says whether a line can hold a call of a tool or what one
+// returned: only these are read when the calls are listed.
+func callsOf(line []byte) bool {
+	return bytes.Contains(line, []byte(`"tool_use"`)) || bytes.Contains(line, []byte(`"tool_result"`))
 }
 
 // entry is a line of a transcript as Claude Code writes it.

@@ -198,3 +198,27 @@ func TestResolve(t *testing.T) {
 		t.Fatal("there is no such session")
 	}
 }
+
+// A session is named so that its name tells it from the others, and the
+// transcript Claude Code writes for a subagent says so.
+func TestSessionsNameEachOneDistinctly(t *testing.T) {
+	dir := t.TempDir()
+	written := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	write(t, filepath.Join(dir, "-home-user-alpha"), "agent-aaaa-1111", session1, written)
+	write(t, filepath.Join(dir, "-home-user-beta"), "agent-aaaa-2222", session3, written)
+	out, n, err := claudesessions.Open(dir).Sessions(claudesessions.Filter{})
+	if err != nil || n != 2 {
+		t.Fatalf("%d, %v:\n%s", n, err, out)
+	}
+	if !strings.Contains(out, "(subagent)") {
+		t.Errorf("a subagent's transcript says so:\n%s", out)
+	}
+	names := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		name := strings.SplitN(line, " ", 2)[0]
+		if names[name] {
+			t.Errorf("two sessions are named %q:\n%s", name, out)
+		}
+		names[name] = true
+	}
+}
