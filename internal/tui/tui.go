@@ -29,7 +29,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 
-	"ouroboros/internal/audio"
 	"ouroboros/plugin"
 )
 
@@ -442,7 +441,7 @@ type Model struct {
 
 	// soundClips are the sounds the chat read for their cards, by path;
 	// soundWanted are those a card waits for the reading of.
-	soundClips  map[string]audio.Clip
+	soundClips  map[string]soundClip
 	soundWanted map[string]bool
 	// soundCards are the cards the history shows, in its order, and
 	// soundLines the line of it that plays which sound.
@@ -489,7 +488,7 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		input:       input,
 		history:     history,
 		spinner:     spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		soundClips:  map[string]audio.Clip{},
+		soundClips:  map[string]soundClip{},
 		soundWanted: map[string]bool{},
 		soundLines:  map[int]string{},
 	}

@@ -1,4 +1,4 @@
-package audio
+package tui
 
 import (
 	"bufio"
@@ -50,14 +50,14 @@ func tone(t *testing.T, seconds float64, rate int, sample func(int) int16) strin
 	return path
 }
 
-func TestSupportedKnowsSoundFiles(t *testing.T) {
+func TestIsSoundKnowsSoundFiles(t *testing.T) {
 	for _, name := range []string{"a.wav", "B.MP3", "x.ogg", "y.flac", "z.m4a", "q.opus"} {
-		if !Supported(name) {
+		if !isSound(name) {
 			t.Fatalf("%s is no sound", name)
 		}
 	}
 	for _, name := range []string{"notes.txt", "cat.png", "sound", "a.wav.txt"} {
-		if Supported(name) {
+		if isSound(name) {
 			t.Fatalf("%s is a sound", name)
 		}
 	}
@@ -73,7 +73,7 @@ func TestAnalyzeWAVReadsLengthAndPeaks(t *testing.T) {
 		}
 		return int16(30000 * math.Sin(2*math.Pi*440*float64(i)/rate))
 	})
-	clip := Analyze(path, 20)
+	clip := analyzeSound(path, 20)
 	if clip.Err != nil {
 		t.Fatal(clip.Err)
 	}
@@ -98,14 +98,14 @@ func TestAnalyzeWAVReportsWhatItCannotRead(t *testing.T) {
 	if err := os.WriteFile(path, []byte("this is no sound"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if clip := Analyze(path, 10); clip.Err == nil {
+	if clip := analyzeSound(path, 10); clip.Err == nil {
 		t.Fatal("a text file reads as a sound")
 	}
-	if clip := Analyze(filepath.Join(t.TempDir(), "gone.wav"), 10); clip.Err == nil {
+	if clip := analyzeSound(filepath.Join(t.TempDir(), "gone.wav"), 10); clip.Err == nil {
 		t.Fatal("a missing file reads as a sound")
 	}
 	silent := tone(t, 0.1, 8000, func(int) int16 { return 0 })
-	clip := Analyze(silent, 8)
+	clip := analyzeSound(silent, 8)
 	if clip.Err != nil {
 		t.Fatal(clip.Err)
 	}
@@ -185,7 +185,7 @@ func TestCallDropsAnMpvThatIsGone(t *testing.T) {
 	if _, err := p.call("get_property", "pause"); err == nil {
 		t.Fatal("a call without mpv answered")
 	}
-	if state, err := p.State(); err != nil || state != (State{}) {
+	if state, err := p.State(); err != nil || state != (playerState{}) {
 		t.Fatalf("the state without mpv is %+v, %v", state, err)
 	}
 }
@@ -209,7 +209,7 @@ func TestAnalyzeWAVStreamsALongFileCutShort(t *testing.T) {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	clip := Analyze(path, 4)
+	clip := analyzeSound(path, 4)
 	if clip.Err != nil {
 		t.Fatal(clip.Err)
 	}

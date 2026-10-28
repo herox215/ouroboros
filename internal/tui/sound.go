@@ -1,11 +1,12 @@
-// Package audio reads sound files for the audio cards of the chat and
-// plays them on the output of the machine the node runs on.
+// The sound files of the audio cards of the chat are read here and played
+// on the output of the machine the node runs on.
 //
 // WAV is read without help; every other supported format needs ffmpeg
 // and ffprobe, and playback needs mpv, which can be paused and asked
-// where it is (see Player). A file that cannot be read comes back with
+// where it is (see soundPlayer). A file that cannot be read comes back with
 // why, so the card can say it instead of leaving the chat mute about it.
-package audio
+
+package tui
 
 import (
 	"bufio"
@@ -26,10 +27,10 @@ import (
 	"time"
 )
 
-// Supported reports whether path names a sound file the chat shows a card
+// isSound reports whether path names a sound file the chat shows a card
 // for: by its extension, so that a file is tried before anything of it is
 // read.
-func Supported(path string) bool {
+func isSound(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".wav", ".mp3", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", ".aiff", ".aif", ".wma":
 		return true
@@ -37,23 +38,23 @@ func Supported(path string) bool {
 	return false
 }
 
-// Clip is what a sound file holds, as its card shows it: how long it
+// soundClip is what a sound file holds, as its card shows it: how long it
 // plays, and the shape of it in Columns peaks between 0 and 1. Err says
 // why the file could not be read; Duration and Peaks are zero then.
 // Partial says that the shape covers only the start of a long sound: the
 // peaks keep their place in the whole of it, and those past the part
 // that was read stay at zero.
-type Clip struct {
+type soundClip struct {
 	Duration time.Duration
 	Peaks    []float32
 	Partial  bool
 	Err      error
 }
 
-// Analyze reads the sound file at path into a Clip with the given number
+// analyzeSound reads the sound file at path into a soundClip with the given number
 // of peaks. It decodes WAV itself. Other formats go through ffmpeg, whose
 // absence in Err comes back like that of a decoder for a broken file.
-func Analyze(path string, columns int) Clip {
+func analyzeSound(path string, columns int) soundClip {
 	if columns < 1 {
 		columns = 1
 	}
@@ -72,20 +73,20 @@ func Analyze(path string, columns int) Clip {
 // The file is walked chunk by chunk and its samples streamed, never read
 // whole: a long recording in high resolution is hundreds of megabytes,
 // and the card only needs a few hundred peaks of it.
-func readWAV(path string, columns int) (Clip, bool) {
+func readWAV(path string, columns int) (soundClip, bool) {
 	file, err := os.Open(path)
 	if err != nil {
-		return Clip{Err: err}, true
+		return soundClip{Err: err}, true
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return Clip{Err: err}, true
+		return soundClip{Err: err}, true
 	}
 	length := info.Size()
 	head := make([]byte, 12)
 	if _, err := io.ReadFull(file, head); err != nil || string(head[:4]) != "RIFF" || string(head[8:12]) != "WAVE" {
-		return Clip{}, false
+		return soundClip{}, false
 	}
 	var (
 		format                      uint16
@@ -126,21 +127,21 @@ func readWAV(path string, columns int) (Clip, bool) {
 		at = body + size + size%2
 	}
 	if !seenFmt || pcmSize < 0 {
-		return Clip{Err: errors.New("no WAV format or sample data")}, true
+		return soundClip{Err: errors.New("no WAV format or sample data")}, true
 	}
 	floating := format == 3
 	if format != 1 && !floating {
-		return Clip{Err: fmt.Errorf("unsupported WAV encoding %d", format)}, true
+		return soundClip{Err: fmt.Errorf("unsupported WAV encoding %d", format)}, true
 	}
 	if channels < 1 || rate < 1 || align < 1 || bits < 1 {
-		return Clip{Err: errors.New("invalid WAV format")}, true
+		return soundClip{Err: errors.New("invalid WAV format")}, true
 	}
 	frames := int(pcmSize / int64(align))
 	if frames == 0 {
-		return Clip{Err: errors.New("WAV holds no samples")}, true
+		return soundClip{Err: errors.New("WAV holds no samples")}, true
 	}
 	pcm := bufio.NewReader(io.NewSectionReader(file, pcmAt, int64(frames)*int64(align)))
-	return Clip{
+	return soundClip{
 		Duration: time.Duration(float64(frames) / float64(rate) * float64(time.Second)),
 		Peaks:    peaks(pcm, frames, align, bits, floating, channels, columns),
 	}, true
@@ -206,15 +207,15 @@ func absSample(b []byte, bits int, floating bool) float32 {
 
 // readWithTools reads a format that is no WAV through ffmpeg: ffprobe
 // for the length, ffmpeg for the samples the peaks are made of. It is the
-// path for MP3, OGG, FLAC, M4A and the rest of Supported.
-func readWithTools(path string, columns int) Clip {
+// path for MP3, OGG, FLAC, M4A and the rest of isSound.
+func readWithTools(path string, columns int) soundClip {
 	probe, err := exec.LookPath("ffprobe")
 	if err != nil {
-		return Clip{Err: errors.New("reading this format needs ffmpeg and ffprobe")}
+		return soundClip{Err: errors.New("reading this format needs ffmpeg and ffprobe")}
 	}
 	decode, err := exec.LookPath("ffmpeg")
 	if err != nil {
-		return Clip{Err: errors.New("reading this format needs ffmpeg and ffprobe")}
+		return soundClip{Err: errors.New("reading this format needs ffmpeg and ffprobe")}
 	}
 	out, err := exec.Command(probe, "-v", "error", "-show_entries", "format=duration",
 		"-of", "default=nw=1:nk=1", path).Output()
@@ -235,11 +236,11 @@ func readWithTools(path string, columns int) Clip {
 		"-f", "s16le", "-ac", "1", "-ar", strconv.Itoa(toolRate), "-")
 	cmd.Stdout, cmd.Stderr = &raw, &stderr
 	if err := cmd.Run(); err != nil {
-		return Clip{Err: fmt.Errorf("%s", reason(err, stderr.String()))}
+		return soundClip{Err: fmt.Errorf("%s", reason(err, stderr.String()))}
 	}
 	samples := len(raw.data) / 2
 	if samples == 0 {
-		return Clip{Err: errors.New("the file holds no sound")}
+		return soundClip{Err: errors.New("the file holds no sound")}
 	}
 	// The peaks are spread over the whole length of the sound, not over
 	// the part that was read: a column then stands for the same moment as
@@ -272,7 +273,7 @@ func readWithTools(path string, columns int) Clip {
 	// A second of the length left out of the shape is rounding; more is
 	// a sound longer than what was read.
 	partial := span-samples > toolRate
-	return Clip{Duration: duration, Peaks: peaks, Partial: partial}
+	return soundClip{Duration: duration, Peaks: peaks, Partial: partial}
 }
 
 // toolRate and toolBytes are what the shape of a sound read through
@@ -307,22 +308,22 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// State is where the playback of a sound stands.
-type State struct {
+// playerState is where the playback of a sound stands.
+type playerState struct {
 	Position time.Duration
 	Duration time.Duration
 	Playing  bool
 	Done     bool // it played to its end
 }
 
-// Player plays one sound at a time on the output of this machine. Play
+// soundPlayer plays one sound at a time on the output of this machine. Play
 // starts a sound from its beginning; Pause and Resume hold it where it is;
 // State can be asked while it plays. Close ends the output.
-type Player interface {
+type soundPlayer interface {
 	Play(path string) error
 	Pause() error
 	Resume() error
-	State() (State, error)
+	State() (playerState, error)
 	Stop() error
 	Close() error
 }
@@ -342,10 +343,10 @@ type mpv struct {
 	mu      sync.Mutex
 }
 
-// NewPlayer returns the player of the node: mpv in the background, see
+// newSoundPlayer returns the player of the node: mpv in the background, see
 // mpv. It fails with why if mpv is not installed; the chat shows that in
 // the card instead of failing when the owner wants to listen.
-func NewPlayer() (Player, error) {
+func newSoundPlayer() (soundPlayer, error) {
 	if _, err := exec.LookPath("mpv"); err != nil {
 		return nil, errors.New("mpv is not installed")
 	}
@@ -385,13 +386,13 @@ func (p *mpv) setPaused(paused bool) error {
 	return err
 }
 
-// State is where the playback stands, as mpv tells it: the position, how
+// playerState is where the playback stands, as mpv tells it: the position, how
 // long the sound is, whether it plays, and whether it reached its end and
 // mpv went back to waiting.
-func (p *mpv) State() (State, error) {
+func (p *mpv) State() (playerState, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var state State
+	var state playerState
 	if p.conn == nil {
 		return state, nil
 	}

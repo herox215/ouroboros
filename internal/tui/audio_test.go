@@ -12,8 +12,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"ouroboros/internal/audio"
 )
 
 // soundFile writes a WAV of two seconds with a tone to it, as a message of
@@ -56,7 +54,7 @@ func attached(m *Model, path string) {
 
 // readSound reads the sound at path as the card would, in the test.
 func readSound(m *Model, path string) {
-	m.Update(audioClipMsg{path: path, clip: audio.Analyze(path, audioPeaks)})
+	m.Update(audioClipMsg{path: path, clip: analyzeSound(path, audioPeaks)})
 }
 
 type fakePlayer struct {
@@ -65,28 +63,28 @@ type fakePlayer struct {
 	resumed int
 	stopped bool
 	closed  bool
-	state   audio.State
+	state   playerState
 	err     error
 }
 
 func (f *fakePlayer) Play(path string) error {
 	f.played = append(f.played, path)
-	f.state = audio.State{Playing: true, Duration: f.state.Duration}
+	f.state = playerState{Playing: true, Duration: f.state.Duration}
 	return f.err
 }
 func (f *fakePlayer) Pause() error  { f.paused++; f.state.Playing = false; return f.err }
 func (f *fakePlayer) Resume() error { f.resumed++; f.state.Playing = true; return f.err }
-func (f *fakePlayer) State() (audio.State, error) {
+func (f *fakePlayer) State() (playerState, error) {
 	return f.state, f.err
 }
 func (f *fakePlayer) Stop() error  { f.stopped = true; return nil }
 func (f *fakePlayer) Close() error { f.closed = true; return nil }
 
 // usePlayer makes the chat play through p, for the test.
-func usePlayer(t *testing.T, p audio.Player) {
+func usePlayer(t *testing.T, p soundPlayer) {
 	was := openPlayer
 	t.Cleanup(func() { openPlayer = was })
-	openPlayer = func() (audio.Player, error) { return p, nil }
+	openPlayer = func() (soundPlayer, error) { return p, nil }
 }
 
 // ctrlP is ctrl+p, which plays or pauses the sound of the chat: the key,
@@ -142,7 +140,7 @@ func TestSoundCardShowsNameLengthAndWaveform(t *testing.T) {
 // Nothing plays by itself: only the key or the click starts the sound.
 func TestTheSoundCardWaitsForTheOwner(t *testing.T) {
 	m, _ := newModel(t)
-	fake := &fakePlayer{state: audio.State{Duration: 2 * time.Second}}
+	fake := &fakePlayer{state: playerState{Duration: 2 * time.Second}}
 	usePlayer(t, fake)
 	path := soundFile(t)
 	attached(m, path)
@@ -177,7 +175,7 @@ func TestTheSoundCardWaitsForTheOwner(t *testing.T) {
 // through.
 func TestTheSoundCardShowsThePosition(t *testing.T) {
 	m, _ := newModel(t)
-	fake := &fakePlayer{state: audio.State{Duration: 2 * time.Second}}
+	fake := &fakePlayer{state: playerState{Duration: 2 * time.Second}}
 	usePlayer(t, fake)
 	path := soundFile(t)
 	attached(m, path)
@@ -191,7 +189,7 @@ func TestTheSoundCardShowsThePosition(t *testing.T) {
 		t.Fatal("the card should show the position")
 	}
 
-	fake.state = audio.State{Position: 2 * time.Second, Duration: 2 * time.Second, Done: true}
+	fake.state = playerState{Position: 2 * time.Second, Duration: 2 * time.Second, Done: true}
 	cmd = m.soundTicked(audioTickMsg{seq: m.sound.seq})
 	m.Update(cmd())
 	if m.sound.state.Playing || !strings.Contains(ansi.Strip(m.history.View()), "0:02 / 0:02") {
@@ -202,7 +200,7 @@ func TestTheSoundCardShowsThePosition(t *testing.T) {
 // A click on the line of the card does what ctrl+p does.
 func TestTheCardPlaysOnAClick(t *testing.T) {
 	m, _ := newModel(t)
-	fake := &fakePlayer{state: audio.State{Duration: 2 * time.Second}}
+	fake := &fakePlayer{state: playerState{Duration: 2 * time.Second}}
 	usePlayer(t, fake)
 	path := soundFile(t)
 	attached(m, path)
@@ -222,7 +220,7 @@ func TestTheSoundCardSaysWhyItCannotPlay(t *testing.T) {
 	m, _ := newModel(t)
 	was := openPlayer
 	t.Cleanup(func() { openPlayer = was })
-	openPlayer = func() (audio.Player, error) { return nil, errors.New("mpv is not installed") }
+	openPlayer = func() (soundPlayer, error) { return nil, errors.New("mpv is not installed") }
 	path := soundFile(t)
 	attached(m, path)
 	readSound(m, path)
@@ -254,7 +252,7 @@ func TestTheSoundCardSaysWhyItCannotPlay(t *testing.T) {
 // or no sound, stays words.
 func TestAnAnswerShowsTheSoundItNames(t *testing.T) {
 	m, _ := newModel(t)
-	fake := &fakePlayer{state: audio.State{Duration: 2 * time.Second}}
+	fake := &fakePlayer{state: playerState{Duration: 2 * time.Second}}
 	usePlayer(t, fake)
 	path := soundFile(t)
 	notes := filepath.Join(t.TempDir(), "notes.txt")
@@ -284,8 +282,8 @@ func TestAnotherCardTakesOverThePlayer(t *testing.T) {
 	var opened []*fakePlayer
 	was := openPlayer
 	t.Cleanup(func() { openPlayer = was })
-	openPlayer = func() (audio.Player, error) {
-		p := &fakePlayer{state: audio.State{Duration: 2 * time.Second}}
+	openPlayer = func() (soundPlayer, error) {
+		p := &fakePlayer{state: playerState{Duration: 2 * time.Second}}
 		opened = append(opened, p)
 		return p, nil
 	}
