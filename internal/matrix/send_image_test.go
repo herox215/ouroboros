@@ -21,7 +21,7 @@ func TestSendImageToEncryptsTheFile(t *testing.T) {
 	crypt := &fakeCrypto{}
 	c.crypto, c.running = crypt, true
 	defer func() { c.running = false }()
-	for name, data := range map[string][]byte{"empty": nil, "text": []byte("not an image"), "oversized": make([]byte, maxImageBytes+1)} {
+	for name, data := range map[string][]byte{"empty": nil, "text": []byte("not an image"), "oversized": make([]byte, MaxMediaBytes+1)} {
 		if err := c.SendImageTo(context.Background(), "!dm:test", "@alice:test", name, data); err == nil {
 			t.Fatalf("sent %s", name)
 		}

@@ -54,11 +54,11 @@ func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 // gatewayOutput keeps the backend tools private; the shared gateway tools own
 // the model-facing schema and dispatch to these callbacks with the same context.
 func gatewayOutput(s store, running *live, files *guard.Guard) plugin.GatewayOutput {
-	image, file, avatar := imageTool(running, files), fileTool(running, files), avatarTool(s, files)
+	image, audio, avatar := imageTool(running, files), audioTool(running, files), avatarTool(s, files)
 	return plugin.GatewayOutput{
 		Name:              "matrix",
 		ImageDescription:  image.Description + " Destination is a Matrix room ID; omit it only when exactly one allowed room talks to Ouro. With multiple rooms, choose a destination explicitly; the gateway never guesses.",
-		FileDescription:   file.Description + " Destination is a Matrix room ID; omit it only when exactly one allowed room talks to Ouro. With multiple rooms, choose a destination explicitly; the gateway never guesses.",
+		AudioDescription:  audio.Description + " Destination is a Matrix room ID; omit it only when exactly one allowed room talks to Ouro. With multiple rooms, choose a destination explicitly; the gateway never guesses.",
 		AvatarDescription: avatar.Description,
 		PollDescription:   pollDescription,
 		VotePoll:          votePoll(running),
@@ -69,12 +69,12 @@ func gatewayOutput(s store, running *live, files *guard.Guard) plugin.GatewayOut
 			}
 			return image.Run(ctx, args)
 		},
-		SendFile: func(ctx context.Context, request plugin.GatewayFileRequest) (string, error) {
-			args, err := json.Marshal(fileArgs{Path: request.Path, Room: request.Destination})
+		SendAudio: func(ctx context.Context, request plugin.GatewayAudioRequest) (string, error) {
+			args, err := json.Marshal(audioArgs{Path: request.Path, Room: request.Destination})
 			if err != nil {
 				return "", err
 			}
-			return file.Run(ctx, args)
+			return audio.Run(ctx, args)
 		},
 		SetAvatar: func(ctx context.Context, request plugin.GatewayAvatarRequest) (string, error) {
 			args, err := json.Marshal(avatarArgs{Path: request.Path, Attachment: request.Attachment})

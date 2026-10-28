@@ -53,8 +53,8 @@ func (c *sdkConnection) SendTo(ctx context.Context, room, peer, text string) err
 func (c *sdkConnection) SendImageTo(ctx context.Context, room, peer, name string, data []byte) error {
 	return c.client.SendImageTo(ctx, room, peer, name, data)
 }
-func (c *sdkConnection) SendFileTo(ctx context.Context, room, peer, name string, data []byte) error {
-	return c.client.SendFileTo(ctx, room, peer, name, data)
+func (c *sdkConnection) SendAudioTo(ctx context.Context, room, peer, name string, data []byte) error {
+	return c.client.SendAudioTo(ctx, room, peer, name, data)
 }
 func (c *sdkConnection) VotePollTo(ctx context.Context, room, peer, pollID string, optionIDs []string) error {
 	return c.client.VotePollTo(ctx, room, peer, pollID, optionIDs)

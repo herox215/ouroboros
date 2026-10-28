@@ -10,11 +10,11 @@ import (
 	"sync"
 
 	"ouroboros/internal/guard"
+	transport "ouroboros/internal/matrix"
 	"ouroboros/plugin"
 )
 
 const sendImage = plugin.GatewaySendImageTool
-const maxSentImageBytes = 10 << 20
 
 // imageSender is a connection that sends images too, as the SDK's does.
 type imageSender interface {
@@ -102,7 +102,7 @@ func imageTool(l *live, files *guard.Guard) plugin.Tool {
 			var data []byte
 			name := "image"
 			if args.Path != "" {
-				data, err = localImage(ctx, files, sendImage, args.Path, maxSentImageBytes, "Matrix image", "10 MiB")
+				data, err = localMedia(ctx, files, sendImage, args.Path, transport.MaxMediaBytes, "Matrix image", "10 MiB")
 				name = filepath.Base(args.Path)
 			} else {
 				images := plugin.InputImages(ctx)

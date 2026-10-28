@@ -14,18 +14,18 @@ import (
 	"ouroboros/plugin"
 )
 
-type fileConnection struct {
+type audioConnection struct {
 	fakeConnection
 	rooms, peers, names []string
 	data                [][]byte
 }
 
-func (c *fileConnection) SendFileTo(_ context.Context, room, peer, name string, data []byte) error {
+func (c *audioConnection) SendAudioTo(_ context.Context, room, peer, name string, data []byte) error {
 	c.rooms, c.peers, c.names, c.data = append(c.rooms, room), append(c.peers, peer), append(c.names, name), append(c.data, data)
 	return nil
 }
 
-func TestFileToolSendsToTheRoomOfTheOwner(t *testing.T) {
+func TestAudioToolSendsToTheRoomOfTheOwner(t *testing.T) {
 	root := t.TempDir()
 	s := store{filepath.Join(root, "matrix")}
 	if err := s.create(); err != nil {
@@ -40,7 +40,7 @@ func TestFileToolSendsToTheRoomOfTheOwner(t *testing.T) {
 	}
 	g := &guard.Guard{Home: filepath.Join(root, "node"), Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
 	l := &live{}
-	tool := fileTool(l, g)
+	tool := audioTool(l, g)
 	if !tool.OwnerOnly {
 		t.Fatal("tool must be owner-only")
 	}
@@ -54,7 +54,7 @@ func TestFileToolSendsToTheRoomOfTheOwner(t *testing.T) {
 	run(a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"}), args, "owner-only")
 	run(context.Background(), json.RawMessage(`{}`), "path of the audio file")
 	run(context.Background(), args, "not connected")
-	conn := &fileConnection{}
+	conn := &audioConnection{}
 	c := &conversations{store: s, entries: map[string]*conversation{}}
 	l.set(guardedConnection{connection: conn, store: s, revision: "1"}, c)
 	run(context.Background(), args, "write to it from Matrix first")

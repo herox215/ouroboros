@@ -7,6 +7,8 @@ import (
 	"image"
 	"io"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"maunium.net/go/mautrix/crypto/attachment"
@@ -14,8 +16,10 @@ import (
 	"maunium.net/go/mautrix/id"
 )
 
-// Leave room for base64 encoding within the session socket's 16 MiB JSON limit.
-const maxImageBytes = 10 * 1024 * 1024
+// MaxMediaBytes bounds every image and audio file sent or received. It
+// leaves room for base64 encoding within the session socket's 16 MiB JSON
+// limit.
+const MaxMediaBytes = 10 * 1024 * 1024
 
 // downloadImage uses the authenticated homeserver media endpoint, never an
 // arbitrary sender-provided HTTP URL. Authorization is checked by Run first.
@@ -55,7 +59,7 @@ func (c *Client) downloadMedia(ctx context.Context, content *event.MessageEventC
 	if err != nil || mxc.IsEmpty() {
 		return Attachment{}, errors.New("invalid Matrix media URI")
 	}
-	if content.Info != nil && content.Info.Size > maxImageBytes {
+	if content.Info != nil && content.Info.Size > MaxMediaBytes {
 		return Attachment{}, errors.New(kind + " exceeds 10 MiB")
 	}
 	resp, err := c.cli.Download(ctx, mxc)
@@ -68,11 +72,11 @@ func (c *Client) downloadMedia(ctx context.Context, content *event.MessageEventC
 	if resp.StatusCode != http.StatusOK {
 		return Attachment{}, errors.New("media download failed")
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxMediaBytes+1))
 	if err != nil {
 		return Attachment{}, errors.New("media download failed")
 	}
-	if len(data) > maxImageBytes {
+	if len(data) > MaxMediaBytes {
 		return Attachment{}, errors.New(kind + " exceeds 10 MiB")
 	}
 	if content.File != nil {
@@ -102,7 +106,7 @@ func (c *Client) SendImageTo(ctx context.Context, room, expectedPeer, name strin
 	if expectedPeer == "" {
 		return errors.New("the expected Matrix peer is required")
 	}
-	if len(data) == 0 || len(data) > maxImageBytes {
+	if len(data) == 0 || len(data) > MaxMediaBytes {
 		return errors.New("the image must be nonempty and at most 10 MiB")
 	}
 	mime := http.DetectContentType(data)
@@ -125,28 +129,41 @@ func (c *Client) SendImageTo(ctx context.Context, room, expectedPeer, name strin
 	return c.sendMedia(ctx, room, expectedPeer, name, data, event.MsgImage, info)
 }
 
-// SendFileTo uploads an audio file of at most 10 MiB encrypted and sends it
-// as an audio message, only if the room still contains the expected
+// SendAudioTo uploads a WAV, OGG, MP3 or M4A of at most 10 MiB encrypted and
+// sends it as an audio message, only if the room still contains the expected
 // allowlisted peer. Like an image, the homeserver sees only its ciphertext;
 // name is the file name the peer's client shows.
-func (c *Client) SendFileTo(ctx context.Context, room, expectedPeer, name string, data []byte) error {
+func (c *Client) SendAudioTo(ctx context.Context, room, expectedPeer, name string, data []byte) error {
 	if expectedPeer == "" {
 		return errors.New("the expected Matrix peer is required")
 	}
-	if len(data) == 0 || len(data) > maxImageBytes {
-		return errors.New("the file must be nonempty and at most 10 MiB")
+	if len(data) == 0 || len(data) > MaxMediaBytes {
+		return errors.New("the audio file must be nonempty and at most 10 MiB")
 	}
-	mime := http.DetectContentType(data)
-	switch mime {
-	case "audio/wave", "audio/x-wav", "audio/ogg", "audio/mpeg", "audio/mp4":
-	default:
-		return errors.New("supported files are audio: WAV, OGG, MP3 and M4A")
-	}
-	if name == "" {
-		name = "file"
+	mime, ok := audioType(name, data)
+	if !ok {
+		return errors.New("supported audio files are .wav, .ogg, .mp3 and .m4a whose content matches the extension")
 	}
 	info := &event.FileInfo{MimeType: mime, Size: len(data)}
 	return c.sendMedia(ctx, room, expectedPeer, name, data, event.MsgAudio, info)
+}
+
+// audioType names the MIME type of an audio file by its extension, and only
+// if its first bytes fit that format. Sniffing alone cannot tell: it calls
+// OGG application/ogg, M4A video/mp4 and an MP3 without ID3 tag nothing.
+func audioType(name string, data []byte) (string, bool) {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".wav":
+		return "audio/wav", len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WAVE"
+	case ".ogg":
+		return "audio/ogg", bytes.HasPrefix(data, []byte("OggS"))
+	case ".mp3":
+		frame := len(data) >= 2 && data[0] == 0xff && data[1]&0xe0 == 0xe0
+		return "audio/mpeg", frame || bytes.HasPrefix(data, []byte("ID3"))
+	case ".m4a":
+		return "audio/mp4", len(data) >= 8 && string(data[4:8]) == "ftyp"
+	}
+	return "", false
 }
 
 // sendMedia seals data for the room's allowlisted peer and sends it as the

@@ -5,7 +5,7 @@ import "context"
 // Neutral tool names shared by gateway output providers.
 const (
 	GatewaySendImageTool = "gateway_send_image"
-	GatewaySendFileTool  = "gateway_send_file"
+	GatewaySendAudioTool = "gateway_send_audio"
 	GatewaySetAvatarTool = "gateway_set_avatar"
 	GatewayVotePollTool  = "gateway_vote_poll"
 )
@@ -18,9 +18,9 @@ type GatewayImageRequest struct {
 	Destination string `json:"destination"`
 }
 
-// GatewayFileRequest selects one local file. Destination is interpreted by the
+// GatewayAudioRequest selects one local audio file. Destination is interpreted by the
 // provider; an empty value uses its default.
-type GatewayFileRequest struct {
+type GatewayAudioRequest struct {
 	Path        string `json:"path"`
 	Destination string `json:"destination"`
 }
@@ -48,11 +48,11 @@ type GatewayPollVoteRequest struct {
 type GatewayOutput struct {
 	Name              string
 	ImageDescription  string
-	FileDescription   string
+	AudioDescription  string
 	AvatarDescription string
 	PollDescription   string
 	SendImage         func(context.Context, GatewayImageRequest) (string, error)
-	SendFile          func(context.Context, GatewayFileRequest) (string, error)
+	SendAudio         func(context.Context, GatewayAudioRequest) (string, error)
 	SetAvatar         func(context.Context, GatewayAvatarRequest) (string, error)
 	VotePoll          func(context.Context, GatewayPollVoteRequest) (string, error)
 }
