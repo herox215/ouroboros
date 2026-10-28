@@ -122,8 +122,9 @@ func TestCommandLog(t *testing.T) {
 			// stderr, after the command's own output: a line of the shell,
 			// not bytes that launch or capture invented. Whether the report
 			// names the signal differs: bash 3.2 on macOS writes "Killed: 9",
-			// bash 5 on Linux writes "Killed".
-			report := regexp.MustCompile(`^` + regexp.QuoteMeta(shell) + `: line 1: [0-9]+ Killed(: [0-9]+)?[ \t]+sleep 30\n$`)
+			// bash 5 on Linux writes "Killed". bash pads the pid to a fixed
+			// column, so a short pid follows more than one space.
+			report := regexp.MustCompile(`^` + regexp.QuoteMeta(shell) + `: line 1:[ \t]+[0-9]+ Killed(: [0-9]+)?[ \t]+sleep 30\n$`)
 			after := got[min(len(got), len(want)):]
 			if stopped && bytes.HasPrefix(got, want) && report.Match(after) {
 				t.Logf("bash reported the killed child: %q", after)
