@@ -138,9 +138,9 @@ func Tool(g *guard.Guard) plugin.Tool {
 			"What has to keep running while you go on, like a server you test against, runs with \"background\": true, as a job of this answer: " +
 			"the call returns its number at once. Completion is reported automatically between tool rounds, with its exit status and output. " +
 			"Go on with other work; if you need its result next, {\"job\": n} waits for completion without polling. " +
-			"A build, a race test or a git hook can take many minutes: give a git commit a generous \"timeout\", like 600, rather than skipping its hooks with --no-verify. " +
 			"With a timeout it waits at most that many seconds; do not poll in short intervals. {\"job\": n, \"stop\": true} stops it. " +
-			"It ends with the answer at the latest.",
+			"It ends with the answer at the latest. " +
+			"A build, a race test or a git hook can take many minutes: give a git commit a generous \"timeout\", like 600, rather than skipping its hooks with --no-verify.",
 		Schema: `{"type":"object","properties":{` +
 			`"command":{"type":"string","description":"the command, as bash -c takes it; needed but with \"job\""},` +
 			`"dir":{"type":"string","description":"the directory it runs in: absolute, starting with \"~\", the home directory, or relative to the directory commands start in, where it runs if missing"},` +
