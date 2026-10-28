@@ -5,50 +5,37 @@ package tray
 
 /*
 #cgo LDFLAGS: -framework Cocoa
-#include <stdlib.h>
-void ouroTrayRun(void);
-void ouroTrayUpdate(const char *json);
-void ouroTrayStop(void);
+#include "tray_darwin.h"
 */
 import "C"
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"time"
-	"unsafe"
 
 	"ouroboros/internal/desktop"
 )
 
-const helperArgument = "--ouro-internal-macos-tray"
-
-// AppKit must own the initial OS thread. A private child keeps its event loop
+// The helper itself lives in tray_darwin.m: AppKit must own the initial OS
+// thread, so it starts before Go does. A private child keeps its event loop
 // separate from the serving node and from the GUI's own AppKit application.
-func init() {
-	if len(os.Args) != 2 || os.Args[1] != helperArgument {
-		return
-	}
-	runtime.LockOSThread()
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
-		for scanner.Scan() {
-			text := C.CString(scanner.Text())
-			C.ouroTrayUpdate(text)
-			C.free(unsafe.Pointer(text))
-		}
-		C.ouroTrayStop()
-	}()
-	C.ouroTrayRun()
-	os.Exit(0)
+const helperArgument = C.OURO_TRAY_HELPER_ARGUMENT
+
+// helperCommand starts this binary again as the helper; tests replace it.
+var helperCommand = func(ctx context.Context) (*exec.Cmd, error) {
+	exe, err := os.Executable()
+	return exec.CommandContext(ctx, exe, helperArgument), err
 }
+
+// interval is how often the helper gets a fresh status; tests shorten it.
+var interval = 2 * time.Second
 
 type nativeStatus struct {
 	Label     string
@@ -70,13 +57,12 @@ func Run(ctx context.Context, sample func(context.Context) desktop.Status, open 
 	if ctx.Err() != nil {
 		return nil
 	}
-	exe, err := os.Executable()
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd, err := helperCommand(childCtx)
 	if err != nil {
 		return err
 	}
-	childCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	cmd := exec.CommandContext(childCtx, exe, helperArgument)
 	cmd.Stderr = os.Stderr
 	input, err := cmd.StdinPipe()
 	if err != nil {
@@ -90,7 +76,8 @@ func Run(ctx context.Context, sample func(context.Context) desktop.Status, open 
 	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("tray: start macOS helper: %w", err)
 	}
-	done := make(chan error, 1)
+	var exited error
+	done := make(chan struct{})
 	go func() {
 		scanner := bufio.NewScanner(output)
 		for scanner.Scan() {
@@ -98,34 +85,30 @@ func Run(ctx context.Context, sample func(context.Context) desktop.Status, open 
 				open()
 			}
 		}
-		done <- cmd.Wait()
+		exited = cmd.Wait()
+		close(done)
 	}()
 	encoder := json.NewEncoder(input)
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		if err = encoder.Encode(nativeModel(sample(ctx))); err != nil {
-			cancel()
-			<-done
-			if ctx.Err() != nil {
-				return nil
-			}
-			return fmt.Errorf("tray: update macOS helper: %w", err)
+			err = fmt.Errorf("tray: update macOS helper: %w", err)
+			break
 		}
 		select {
 		case <-ctx.Done():
-			cancel()
-			<-done
-			return nil
-		case err = <-done:
-			if ctx.Err() != nil {
-				return nil
-			}
-			if err == nil {
-				err = errors.New("helper exited")
-			}
-			return fmt.Errorf("tray: macOS helper: %w", err)
+		case <-done:
+			err = fmt.Errorf("tray: macOS helper: %w", cmp.Or(exited, errors.New("helper exited")))
 		case <-ticker.C:
+			continue
 		}
+		break
 	}
+	cancel()
+	<-done
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
 }

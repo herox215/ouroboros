@@ -129,7 +129,39 @@ func TestTrayAlone(t *testing.T) {
 		t.Fatal("the failure was not logged")
 	}
 	p.stop()
-	// Nothing to stop: never started, and in no tray.
+}
+
+// A profile that serves alone gets a tray of its own, with only its sessions.
+func TestTrayAloneOwnsOne(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Linux or macOS node adapter")
+	}
+	old := runTray
+	t.Cleanup(func() { runTray = old })
+	sampled := make(chan model.Status, 1)
+	runTray = func(ctx context.Context, sample func(context.Context) model.Status, _ func()) error {
+		sampled <- sample(ctx)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	p := &Profile{source: &testSessions{activity: plugin.Activity{Running: 1}}, log: func(err error) { t.Errorf("tray error: %v", err) }}
+	p.start()
+	select {
+	case got := <-sampled:
+		if got.State != "working" || got.Running != 1 {
+			t.Fatal(got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("not started")
+	}
+	if p.controller == nil || len(p.controller.profiles) != 1 || p.controller.profiles[0] != p {
+		t.Fatalf("controller: %+v", p.controller)
+	}
+	p.stop()
+}
+
+// Nothing to stop: never started, and in no tray. No profiles share no tray.
+func TestTrayNothing(t *testing.T) {
 	(&Profile{}).stop()
 	Together(nil)
 }

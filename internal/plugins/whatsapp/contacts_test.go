@@ -133,3 +133,50 @@ func TestContactsUnpairedNoConnect(t *testing.T) {
 		t.Fatal(st)
 	}
 }
+
+// Aliases that cannot be looked up, or that are no exact JID, fail the
+// search: it never answers with less than it knows.
+func TestContactsAliasFailures(t *testing.T) {
+	for name, sql := range map[string]string{
+		"no mappings":    `DROP TABLE whatsmeow_lid_map`,
+		"no exact alias": `INSERT INTO whatsmeow_lid_map(lid, pn) VALUES('4a6', '123')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "fixture")
+			if err := privateDir(path); err != nil {
+				t.Fatal(err)
+			}
+			b, err := newClient(ctx, path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dev := b.(*client).cli.Store
+			self := types.NewJID("999", types.DefaultUserServer)
+			dev.ID = &self
+			dev.Account = &waAdv.ADVSignedDeviceIdentity{Details: []byte{}, AccountSignature: make([]byte, 64), AccountSignatureKey: make([]byte, 32), DeviceSignature: make([]byte, 64)}
+			if err = dev.Save(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err = dev.Contacts.PutContactName(ctx, types.NewJID("123", types.DefaultUserServer), "Kim", "Kim One"); err != nil {
+				t.Fatal(err)
+			}
+			b.Close()
+			db, err := privateDB(filepath.Join(path, "session.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(sql); err != nil {
+				t.Fatal(err)
+			}
+			_ = db.Close()
+			if b, err = newClient(ctx, path, nil); err != nil {
+				t.Fatal(err)
+			}
+			defer b.Close()
+			if got, err := b.Contacts(ctx, "kim", 10); err == nil {
+				t.Fatalf("found %+v", got)
+			}
+		})
+	}
+}

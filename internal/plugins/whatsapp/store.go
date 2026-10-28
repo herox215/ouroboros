@@ -30,18 +30,21 @@ type textStore struct {
 	db *sql.DB
 }
 
+// chmod and fchmod set permissions; tests make them fail.
+var (
+	chmod  = os.Chmod
+	fchmod = (*os.File).Chmod
+)
+
 func privateDir(path string) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		return err
 	}
 	fi, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+	if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
 		return errors.New("private directory required")
 	}
-	if err = os.Chmod(path, 0700); err != nil {
+	if err = chmod(path, 0700); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(path)
@@ -49,14 +52,10 @@ func privateDir(path string) error {
 		return err
 	}
 	for _, e := range entries {
-		fi, err = e.Info()
-		if err != nil {
-			return err
-		}
-		if !fi.Mode().IsRegular() {
+		if !e.Type().IsRegular() {
 			return errors.New("unexpected private state entry")
 		}
-		if err = os.Chmod(filepath.Join(path, e.Name()), 0600); err != nil {
+		if err = chmod(filepath.Join(path, e.Name()), 0600); err != nil {
 			return err
 		}
 	}
@@ -77,16 +76,15 @@ func privateDB(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = f.Chmod(0600)
+	err = fchmod(f, 0600)
 	_ = f.Close()
 	if err != nil {
 		return nil, err
 	}
 	u := url.URL{Scheme: "file", Path: path}
-	db, err := sql.Open("sqlite", u.String()+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
-	if err != nil {
-		return nil, err
-	}
+	// The driver is registered above, and it checks the name only when it
+	// connects: Open cannot fail.
+	db, _ := sql.Open("sqlite", u.String()+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	db.SetMaxOpenConns(1)
 	if err = db.Ping(); err != nil {
 		_ = db.Close()
