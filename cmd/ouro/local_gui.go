@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"ouroboros/plugin"
@@ -31,12 +30,7 @@ func localGUI(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	running := exe
-	if runtime.GOOS == "linux" {
-		// This stays the running image even after another launch replaces exe.
-		running = "/proc/self/exe"
-	}
-	return localGUIBuild(ctx, exe, running, os.Stderr)
+	return localGUIBuild(ctx, exe, runningImage(exe), os.Stderr)
 }
 
 // executable finds the running binary; tests replace it.
