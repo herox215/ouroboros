@@ -125,6 +125,7 @@ func (m *Model) renderHistory(toBottom bool) {
 	first := m.threadStart(c)
 	if first == len(c.entries) && !c.pending && len(c.queued) == 0 {
 		c.shown = rendered{first: first}
+		m.soundCards, m.soundLines = nil, map[int]string{}
 		if m.resuming == c {
 			m.history.SetContent("")
 			return
@@ -146,6 +147,7 @@ func (m *Model) renderHistory(toBottom bool) {
 	render := func(s string) string { return renderMarkdown(s, width) }
 	wrap := func(s string) string { return lipgloss.Wrap(s, width, "") }
 	summaries := c.summaries()
+	var cards []soundCard // the sound cards the blocks show, in their order
 	// one adds what the chat shows of the entry i to blocks and says whether
 	// the last block there is the words of a round of an answer that is in,
 	// below which the line of its calls goes.
@@ -199,7 +201,9 @@ func (m *Model) renderHistory(toBottom bool) {
 		// (/context), and the sessions it concerned are beside the chat.
 		if len(e.calls) > 0 {
 			if e.text != "" {
-				add(wrap(m.entryHead(e) + "\n" + render(e.text)))
+				more, sound := m.soundPaths(e.text, width)
+				cards = append(cards, sound...)
+				add(wrap(m.entryHead(e) + "\n" + render(e.text) + more))
 				words = true
 			}
 			if used := summaries[i]; used != "" {
@@ -221,16 +225,28 @@ func (m *Model) renderHistory(toBottom bool) {
 			return blocks, words
 		}
 		// What the owner wrote stands to the right, as the GUI shows a
-		// message of the owner, apart from what the agent answers.
+		// message of the owner, apart from what the agent answers. A sound
+		// among its attachments gets a card below it.
 		if e.mine {
-			add(mineBlock(m.entryHead(e), c.showLabels(c.labelled(e.text)), width))
+			labelled := c.labelled(e.text)
+			more, sound := m.soundText(c, labelled, width)
+			cards = append(cards, sound...)
+			add(mineBlock(m.entryHead(e), c.showLabels(labelled)+more, width))
 			return blocks, false
 		}
 		text := render(e.text)
 		if e.failed {
 			text = body.Foreground(bad).Render(e.text)
 		}
-		add(wrap(m.entryHead(e) + "\n" + text))
+		// A sound the answer names is a card below it, as one the owner
+		// attached: the chat plays it the same way.
+		more, sound := m.soundPaths(e.text, width)
+		if !e.failed {
+			cards = append(cards, sound...)
+		} else {
+			more = ""
+		}
+		add(wrap(m.entryHead(e) + "\n" + text + more))
 		return blocks, false
 	}
 	// What an answer has written stays as it is: the entries that cannot
@@ -238,14 +254,15 @@ func (m *Model) renderHistory(toBottom bool) {
 	// costs only its own words, however long the conversation is.
 	settled, kept := c.settled(), c.shown.n
 	blocks := c.shown.blocks
-	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || c.shown.light != m.light || kept > settled {
-		kept, blocks = 0, nil
+	cards = slices.Clone(c.shown.cards)
+	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || c.shown.light != m.light || c.shown.sound != m.soundRev || kept > settled {
+		kept, blocks, cards = 0, nil, nil
 	}
 	words := false // the last block is the words of a round of an answer that is in
 	for i := kept; i < settled; i++ {
 		blocks, words = one(i, blocks, words)
 	}
-	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks}
+	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks, sound: m.soundRev, cards: slices.Clone(cards)}
 	blocks = slices.Clone(blocks)
 	for i := settled; i < len(c.entries); i++ {
 		blocks, words = one(i, blocks, words)
@@ -265,7 +282,10 @@ func (m *Model) renderHistory(toBottom bool) {
 		head := boldStyle.Foreground(muted).Render(cmp.Or(c.peer, "You") + state)
 		blocks = append(blocks, mineBlock(head, lipgloss.NewStyle().Faint(true).Render(c.showLabels(c.labelled(text))), width))
 	}
-	m.history.SetContent(m.behind(strings.Join(blocks, "\n\n")))
+	m.soundCards = cards
+	content := m.behind(strings.Join(blocks, "\n\n"))
+	m.history.SetContent(content)
+	m.placeSoundCards(content)
 	if toBottom {
 		m.stopGlide(&m.history) // the bottom is where it goes now
 		m.history.GotoBottom()
@@ -286,12 +306,14 @@ func (c *conversation) exchangeOf(i int) int {
 // rendered are the entries of a conversation as the chat shows them, the
 // first n of them, wrapped for the width they were drawn at.
 type rendered struct {
-	first    int      // first entry inside the visible thread window
-	n        int      // of the entries, how many are in blocks
-	width    int      // the width of the chat they are wrapped for
-	thoughts bool     // whether what the model thought was shown then
-	light    bool     // the palette the cached blocks were drawn in
-	blocks   []string // what the chat shows of them, a block for every entry
+	first    int         // first entry inside the visible thread window
+	n        int         // of the entries, how many are in blocks
+	width    int         // the width of the chat they are wrapped for
+	thoughts bool        // whether what the model thought was shown then
+	light    bool        // the palette the cached blocks were drawn in
+	blocks   []string    // what the chat shows of them, a block for every entry
+	sound    int         // the revision of the cards' look they were drawn with
+	cards    []soundCard // the sound cards of the blocks, in their order
 }
 
 // settled is how many of the entries of c are shown as they will stay: all of

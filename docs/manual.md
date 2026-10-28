@@ -291,6 +291,7 @@ Keys only move around:
 | `↑` `↓` | bring back what you entered while the UI is open, messages and commands, the latest first. Below the latest is what you had typed, and below that an empty input, from which `↑` brings it back again. A line you change is what you type from then on. In an input of several lines they move between its lines first |
 | `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions); with nothing queued, bring back what you entered |
 | `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |
+| `ctrl+p` | play or pause the sound in the chat: the one that plays or is held, or else the newest sound card, see [Sounds](#sounds) |
 | `ctrl+s` | the conversations, like `/session`, but what is typed stays with the conversation shown |
 | `ctrl+k` | the keys of the chat in a dialog, like `/keys`, but what is typed stays in the input |
 | `ctrl+t` | back to the thread, like `/thread`; what is typed stays with its conversation |
@@ -341,6 +342,21 @@ What works depends on the desktop, as a program in a terminal is handed text alo
 | over SSH, in tmux or a container | if the terminal pastes the path, and the file is on the host of ouro | no: the clipboard is on another host |
 
 Without the tool, `ctrl+v` pastes the text of the clipboard as before.
+
+### Sounds
+
+A sound file dropped or pasted into the chat appears, once the message is sent, as a card below it: its name,
+a play button, the position and the length, and a waveform of the samples themselves, drawn in block
+characters so that it needs no graphics support of the terminal. The part that played is highlighted. A
+click on the line of a card, or `ctrl+p`, starts and pauses it; nothing plays by itself. An answer that
+names the path of a sound file gets a card the same way, so the agent can hand you a sound to listen to in the
+chat: the card is there only while the file is, and only for the formats above. One sound plays at a
+time, on the machine the node runs on: over SSH that is the host of ouro, not the terminal's.
+
+WAV is read by the node itself. MP3, OGG, Opus, FLAC, M4A, AAC, AIFF and WMA need `ffmpeg` and `ffprobe` to
+read their waveform, and playback needs `mpv`, which runs in the background and is driven over its IPC
+socket. Of a sound in these formats longer than about 70 minutes the waveform shows the start, and the
+card says so. Without them the card says why it cannot play, and the file is still sent as the attachment it is.
 
 ### Sessions
 

@@ -22,6 +22,7 @@ func (m *Model) keybindings() []keybinding {
 		{"↑ in an empty input", "take back the last message that is queued"},
 		{"tab", "complete the command that is typed"},
 		{"ctrl+v", "paste the clipboard, a picture too"},
+		{"ctrl+p", "play or pause the sound of the chat"},
 		{"ctrl+s", "the conversations, like /session; what is typed stays"},
 		{"ctrl+t", "back to the thread, like /thread; what is typed stays"},
 		{"ctrl+k", "these keys, like /keys"},
