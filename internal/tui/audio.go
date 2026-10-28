@@ -29,7 +29,9 @@ import (
 // of them as its width holds.
 const audioPeaks = 240
 
-// openPlayer is the player of the chat, one at a time, replaced in tests.
+// openPlayer opens the player of the chat, replaced in tests. It is
+// opened once: every card plays through the same one, since Play replaces
+// the sound it has.
 var openPlayer = func() (audio.Player, error) { return audio.NewPlayer() }
 
 // playback is the sound the chat has in its player, or is about to, and
@@ -198,6 +200,11 @@ func (m *Model) soundCard(path string, width int) string {
 	}
 	head := lipgloss.NewStyle().Foreground(accent).Render(button) + " " +
 		boldStyle.Render(name) + mutedStyle.Render(" · "+stamp(position)+" / "+stamp(duration))
+	if clip.Partial {
+		// A sound too long to be read whole shows the shape of its start;
+		// the rest of the waveform is flat, which is not silence.
+		head += mutedStyle.Render(" · shape of the start")
+	}
 	// The waveform is drawn as wide as the card allows, but not wider
 	// than a few dozen columns: it is a shape beside the name, not a chart.
 	columns := max(8, min(bubbleWidth(width)-2, 60))
@@ -220,6 +227,11 @@ func (m *Model) soundCard(path string, width int) string {
 // placeSoundCards maps the lines of the history that play a sound to its
 // file. The cards are drawn in the order of the history, and a card whose
 // sound could not be read draws no button, so its line is none.
+//
+// A line counts only if the button is followed by the name of the card
+// that comes next: a message that merely begins with ▶ would otherwise
+// take the place of a card, and every card after it would play the sound
+// of the one before.
 func (m *Model) placeSoundCards(content string) {
 	m.soundLines = map[int]string{}
 	var playable []string
@@ -230,15 +242,31 @@ func (m *Model) placeSoundCards(content string) {
 	}
 	next := 0
 	for line, text := range strings.Split(content, "\n") {
+		if next == len(playable) {
+			break
+		}
 		plain := strings.TrimLeft(ansi.Strip(text), " ")
-		if !strings.HasPrefix(plain, "▶ ") && !strings.HasPrefix(plain, "⏸ ") {
+		rest, ok := strings.CutPrefix(plain, "▶ ")
+		if !ok {
+			rest, ok = strings.CutPrefix(plain, "⏸ ")
+		}
+		if !ok || !namesCard(rest, filepath.Base(playable[next])) {
 			continue
 		}
-		if next < len(playable) {
-			m.soundLines[line] = playable[next]
-			next++
-		}
+		m.soundLines[line] = playable[next]
+		next++
 	}
+}
+
+// namesCard reports whether the rest of a line after the button is the
+// card of the sound named name: the name follows the button, or as much
+// of it as the line holds when a long name wraps at the edge of the chat.
+func namesCard(rest, name string) bool {
+	if strings.HasPrefix(rest, name) {
+		return true
+	}
+	rest = strings.TrimRight(rest, " ")
+	return len(rest) >= min(len(name), 8) && strings.HasPrefix(name, rest)
 }
 
 // toggleSound plays, pauses or resumes the sound at path: the one that
@@ -278,13 +306,19 @@ func (m *Model) toggleSound(path string) tea.Cmd {
 			action = audioResume
 		}
 	default:
-		if m.sound != nil && m.sound.player != nil {
-			m.sound.player.Stop() // one plays at a time
+		// One player serves the chat: Play replaces the sound it has, so
+		// another card takes it over instead of a second mpv being started
+		// and the first left idle for the rest of the session.
+		var player audio.Player
+		if m.sound != nil {
+			player = m.sound.player
 		}
-		player, err := openPlayer()
-		if err != nil {
-			m.setNotice("the sound: "+err.Error(), true)
-			return nil
+		if player == nil {
+			var err error
+			if player, err = openPlayer(); err != nil {
+				m.setNotice("the sound: "+err.Error(), true)
+				return nil
+			}
 		}
 		m.soundSeq++
 		m.sound = &playback{path: path, player: player, seq: m.soundSeq}

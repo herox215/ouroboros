@@ -40,9 +40,13 @@ func Supported(path string) bool {
 // Clip is what a sound file holds, as its card shows it: how long it
 // plays, and the shape of it in Columns peaks between 0 and 1. Err says
 // why the file could not be read; Duration and Peaks are zero then.
+// Partial says that the shape covers only the start of a long sound: the
+// peaks keep their place in the whole of it, and those past the part
+// that was read stay at zero.
 type Clip struct {
 	Duration time.Duration
 	Peaks    []float32
+	Partial  bool
 	Err      error
 }
 
@@ -64,45 +68,64 @@ func Analyze(path string, columns int) Clip {
 // readWAV decodes a RIFF/WAVE file: its length from the data chunk and
 // peaks over the samples of the first channel. It reports false if the
 // file is no WAV that it understands, so that another decoder can try.
+//
+// The file is walked chunk by chunk and its samples streamed, never read
+// whole: a long recording in high resolution is hundreds of megabytes,
+// and the card only needs a few hundred peaks of it.
 func readWAV(path string, columns int) (Clip, bool) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return Clip{Err: err}, true
 	}
-	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return Clip{Err: err}, true
+	}
+	length := info.Size()
+	head := make([]byte, 12)
+	if _, err := io.ReadFull(file, head); err != nil || string(head[:4]) != "RIFF" || string(head[8:12]) != "WAVE" {
 		return Clip{}, false
 	}
 	var (
 		format                      uint16
 		channels, rate, bits, align int
 		seenFmt                     bool
-		pcm                         []byte
+		pcmAt, pcmSize              int64 = 0, -1
 	)
-	for at := 12; at+8 <= len(data); {
-		id, size := string(data[at:at+4]), int(binary.LittleEndian.Uint32(data[at+4:at+8]))
+	chunk := make([]byte, 8)
+	for at := int64(12); at+8 <= length; {
+		if _, err := file.ReadAt(chunk, at); err != nil {
+			break
+		}
+		id, size := string(chunk[:4]), int64(binary.LittleEndian.Uint32(chunk[4:]))
 		body := at + 8
-		if size < 0 || body+size > len(data) {
-			size = len(data) - body // a file cut short keeps what is there
+		if body+size > length {
+			size = length - body // a file cut short keeps what is there
 		}
 		switch id {
 		case "fmt ":
 			if size >= 16 {
-				format = binary.LittleEndian.Uint16(data[body:])
-				channels = int(binary.LittleEndian.Uint16(data[body+2:]))
-				rate = int(binary.LittleEndian.Uint32(data[body+4:]))
-				align = int(binary.LittleEndian.Uint16(data[body+12:]))
-				bits = int(binary.LittleEndian.Uint16(data[body+14:]))
+				fmtBody := make([]byte, min(size, 40))
+				if _, err := file.ReadAt(fmtBody, body); err != nil {
+					break
+				}
+				format = binary.LittleEndian.Uint16(fmtBody)
+				channels = int(binary.LittleEndian.Uint16(fmtBody[2:]))
+				rate = int(binary.LittleEndian.Uint32(fmtBody[4:]))
+				align = int(binary.LittleEndian.Uint16(fmtBody[12:]))
+				bits = int(binary.LittleEndian.Uint16(fmtBody[14:]))
 				if format == 0xFFFE && size >= 26 { // extensible: the subformat leads
-					format = binary.LittleEndian.Uint16(data[body+24:])
+					format = binary.LittleEndian.Uint16(fmtBody[24:])
 				}
 				seenFmt = true
 			}
 		case "data":
-			pcm = data[body : body+size]
+			pcmAt, pcmSize = body, size
 		}
 		at = body + size + size%2
 	}
-	if !seenFmt || pcm == nil {
+	if !seenFmt || pcmSize < 0 {
 		return Clip{Err: errors.New("no WAV format or sample data")}, true
 	}
 	floating := format == 3
@@ -112,10 +135,11 @@ func readWAV(path string, columns int) (Clip, bool) {
 	if channels < 1 || rate < 1 || align < 1 || bits < 1 {
 		return Clip{Err: errors.New("invalid WAV format")}, true
 	}
-	frames := len(pcm) / align
+	frames := int(pcmSize / int64(align))
 	if frames == 0 {
 		return Clip{Err: errors.New("WAV holds no samples")}, true
 	}
+	pcm := bufio.NewReader(io.NewSectionReader(file, pcmAt, int64(frames)*int64(align)))
 	return Clip{
 		Duration: time.Duration(float64(frames) / float64(rate) * float64(time.Second)),
 		Peaks:    peaks(pcm, frames, align, bits, floating, channels, columns),
@@ -124,21 +148,29 @@ func readWAV(path string, columns int) (Clip, bool) {
 
 // peaks is the loudest sample of every column of the sound: the frames
 // between two columns go into the one of them, and each channel of a
-// frame counts. The peaks are scaled so that the loudest is 1.
-func peaks(pcm []byte, frames, align, bits int, floating bool, channels, columns int) []float32 {
+// frame counts. The peaks are scaled so that the loudest is 1. A sound
+// that ends before its frames, a file changed while it is read, keeps
+// the peaks up to there.
+func peaks(pcm io.Reader, frames, align, bits int, floating bool, channels, columns int) []float32 {
 	out := make([]float32, columns)
 	top := float32(0)
-	for frame := 0; frame < frames; frame++ {
-		column := frame * columns / frames
-		base := frame * align
-		for c := 0; c < channels; c++ {
-			v := absSample(pcm[base+c*align/channels:], bits, floating)
-			if v > out[column] {
-				out[column] = v
+	block := make([]byte, align*4096)
+	for frame := 0; frame < frames; {
+		n, err := io.ReadFull(pcm, block[:min(len(block), (frames-frame)*align)])
+		for base := 0; base+align <= n; base, frame = base+align, frame+1 {
+			column := frame * columns / frames
+			for c := 0; c < channels; c++ {
+				v := absSample(block[base+c*align/channels:base+align], bits, floating)
+				if v > out[column] {
+					out[column] = v
+				}
+				if v > top {
+					top = v
+				}
 			}
-			if v > top {
-				top = v
-			}
+		}
+		if err != nil {
+			break
 		}
 	}
 	if top > 0 {
@@ -192,11 +224,15 @@ func readWithTools(path string, columns int) Clip {
 			duration = time.Duration(seconds * float64(time.Second))
 		}
 	}
+	// The shape is read at 4000 samples a second into at most 32 MiB,
+	// which is about 70 minutes. ffmpeg is told to stop there, so that a
+	// longer file is not decoded to its end only for the rest to be let go.
 	var raw limitedBuffer
-	raw.limit = 32 << 20
+	raw.limit = toolBytes
 	var stderr bytes.Buffer
 	cmd := exec.Command(decode, "-v", "error", "-i", path, "-map", "0:a:0",
-		"-f", "s16le", "-ac", "1", "-ar", "4000", "-")
+		"-t", strconv.Itoa(toolBytes/2/toolRate),
+		"-f", "s16le", "-ac", "1", "-ar", strconv.Itoa(toolRate), "-")
 	cmd.Stdout, cmd.Stderr = &raw, &stderr
 	if err := cmd.Run(); err != nil {
 		return Clip{Err: fmt.Errorf("%s", reason(err, stderr.String()))}
@@ -205,11 +241,19 @@ func readWithTools(path string, columns int) Clip {
 	if samples == 0 {
 		return Clip{Err: errors.New("the file holds no sound")}
 	}
+	// The peaks are spread over the whole length of the sound, not over
+	// the part that was read: a column then stands for the same moment as
+	// the position of the playback over it, and a sound longer than what
+	// was read shows a shape that ends early, said so by Partial.
+	span := samples
+	if whole := int(duration.Seconds() * toolRate); whole > span {
+		span = whole
+	}
 	peaks := make([]float32, columns)
 	top := float32(0)
 	for i := 0; i < samples; i++ {
 		v := float32(math.Abs(float64(int16(binary.LittleEndian.Uint16(raw.data[i*2:]))) / 32768))
-		column := i * columns / samples
+		column := i * columns / span
 		if v > peaks[column] {
 			peaks[column] = v
 		}
@@ -223,10 +267,20 @@ func readWithTools(path string, columns int) Clip {
 		}
 	}
 	if duration == 0 {
-		duration = time.Duration(float64(samples) / 4000 * float64(time.Second))
+		duration = time.Duration(float64(samples) / toolRate * float64(time.Second))
 	}
-	return Clip{Duration: duration, Peaks: peaks}
+	// A second of the length left out of the shape is rounding; more is
+	// a sound longer than what was read.
+	partial := span-samples > toolRate
+	return Clip{Duration: duration, Peaks: peaks, Partial: partial}
 }
+
+// toolRate and toolBytes are what the shape of a sound read through
+// ffmpeg is made of: samples a second, and the most bytes of them.
+const (
+	toolRate  = 4000
+	toolBytes = 32 << 20
+)
 
 // reason is why a tool failed, from its first line of error, or the error
 // itself if it said nothing.
@@ -278,6 +332,7 @@ type Player interface {
 // decoding the sound a second time, and it plays every format mpv knows.
 type mpv struct {
 	command *exec.Cmd
+	exited  chan struct{} // closed once mpv has ended and been reaped
 	conn    net.Conn
 	reader  *bufio.Reader
 	dir     string
@@ -378,29 +433,50 @@ func (p *mpv) Stop() error {
 	return err
 }
 
-// Close ends mpv and removes its socket.
+// Close ends mpv and removes its socket. mpv is asked to quit and given
+// two seconds for it; then it is killed.
 func (p *mpv) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.conn == nil {
 		return nil
 	}
+	command, exited, dir := p.command, p.exited, p.dir
 	p.call("quit")
-	p.conn.Close()
-	p.conn = nil
-	if p.command != nil && p.command.Process != nil {
-		done := make(chan struct{})
-		go func() { p.command.Wait(); close(done) }()
+	if p.conn != nil {
+		p.conn.Close()
+	}
+	p.command, p.exited, p.conn, p.reader, p.dir = nil, nil, nil, nil, ""
+	p.loaded, p.path = false, ""
+	if exited != nil {
 		select {
-		case <-done:
+		case <-exited:
 		case <-time.After(2 * time.Second):
-			p.command.Process.Kill()
+			command.Process.Kill()
 		}
+	}
+	if dir != "" {
+		os.RemoveAll(dir)
+	}
+	return nil
+}
+
+// drop lets go of an mpv that stopped answering, or died: the next Play
+// starts a fresh one instead of every call failing on the same broken
+// socket for the rest of the chat. One that still runs is killed, so
+// that it does not linger without anyone to talk to it.
+func (p *mpv) drop() {
+	if p.conn != nil {
+		p.conn.Close()
+	}
+	if p.command != nil && p.command.Process != nil {
+		p.command.Process.Kill()
 	}
 	if p.dir != "" {
 		os.RemoveAll(p.dir)
 	}
-	return nil
+	p.command, p.exited, p.conn, p.reader, p.dir = nil, nil, nil, nil, ""
+	p.loaded, p.path = false, ""
 }
 
 // start brings mpv up and connects to its socket, once.
@@ -421,11 +497,15 @@ func (p *mpv) start() error {
 		os.RemoveAll(dir)
 		return err
 	}
+	// mpv is reaped as soon as it ends, by itself too, so that one which
+	// died does not stay a zombie until the node exits.
+	exited := make(chan struct{})
+	go func() { command.Wait(); close(exited) }()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		conn, err := net.Dial("unix", socket)
 		if err == nil {
-			p.command, p.conn, p.reader, p.dir = command, conn, bufio.NewReader(conn), dir
+			p.command, p.exited, p.conn, p.reader, p.dir = command, exited, conn, bufio.NewReader(conn), dir
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -437,8 +517,13 @@ func (p *mpv) start() error {
 	}
 }
 
-// call runs one JSON IPC command and returns what it answered.
+// call runs one JSON IPC command and returns what it answered. A socket
+// that fails to take the command or to answer it means mpv is gone or
+// stuck, and it is dropped, see drop.
 func (p *mpv) call(args ...any) (json.RawMessage, error) {
+	if p.conn == nil {
+		return nil, errors.New("nothing is playing")
+	}
 	p.nextID++
 	id := p.nextID
 	payload, err := json.Marshal(map[string]any{"command": args, "request_id": id})
@@ -448,11 +533,13 @@ func (p *mpv) call(args ...any) (json.RawMessage, error) {
 	p.conn.SetDeadline(time.Now().Add(3 * time.Second))
 	defer p.conn.SetDeadline(time.Time{})
 	if _, err := p.conn.Write(append(payload, '\n')); err != nil {
+		p.drop()
 		return nil, err
 	}
 	for {
 		line, err := p.reader.ReadBytes('\n')
 		if err != nil {
+			p.drop()
 			return nil, err
 		}
 		var reply struct {

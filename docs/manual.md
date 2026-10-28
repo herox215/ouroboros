@@ -355,7 +355,8 @@ time, on the machine the node runs on: over SSH that is the host of ouro, not th
 
 WAV is read by the node itself. MP3, OGG, Opus, FLAC, M4A, AAC, AIFF and WMA need `ffmpeg` and `ffprobe` to
 read their waveform, and playback needs `mpv`, which runs in the background and is driven over its IPC
-socket. Without them the card says why it cannot play, and the file is still sent as the attachment it is.
+socket. Of a sound in these formats longer than about 70 minutes the waveform shows the start, and the
+card says so. Without them the card says why it cannot play, and the file is still sent as the attachment it is.
 
 ### Sessions
 

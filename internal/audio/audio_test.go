@@ -1,8 +1,12 @@
 package audio
 
 import (
+	"bufio"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,5 +113,110 @@ func TestAnalyzeWAVReportsWhatItCannotRead(t *testing.T) {
 		if peak != 0 {
 			t.Fatalf("silence %d is %f", i, peak)
 		}
+	}
+}
+
+// piped is an mpv whose socket is one end of a pipe: answer gets every
+// command the player sends, with its request_id, and writes back what mpv
+// would. No mpv needs to be installed for it.
+func piped(t *testing.T, answer func(w net.Conn, id int)) *mpv {
+	t.Helper()
+	ours, theirs := net.Pipe()
+	t.Cleanup(func() { ours.Close(); theirs.Close() })
+	go func() {
+		lines := bufio.NewReader(theirs)
+		for {
+			line, err := lines.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var request struct {
+				ID int `json:"request_id"`
+			}
+			if json.Unmarshal(line, &request) != nil {
+				return
+			}
+			answer(theirs, request.ID)
+		}
+	}()
+	return &mpv{conn: ours, reader: bufio.NewReader(ours)}
+}
+
+// mpv writes events and answers to other calls on the same socket: call
+// takes only the answer to its own request, whatever comes before it.
+func TestCallTakesTheAnswerToItsOwnRequest(t *testing.T) {
+	p := piped(t, func(w net.Conn, id int) {
+		fmt.Fprintf(w, "{\"event\":\"playback-restart\"}\n")
+		fmt.Fprintf(w, "{\"request_id\":%d,\"error\":\"success\",\"data\":1.5}\n", id+100)
+		fmt.Fprintf(w, "{\"request_id\":%d,\"error\":\"success\",\"data\":42.25}\n", id)
+	})
+	position, ok := p.number("time-pos")
+	if !ok || position != 42.25 {
+		t.Fatalf("the call took %v, %v", position, ok)
+	}
+	// The next call is matched by its own id, not by the one before.
+	if position, ok := p.number("time-pos"); !ok || position != 42.25 {
+		t.Fatalf("the second call took %v, %v", position, ok)
+	}
+}
+
+func TestCallReportsTheErrorOfMpv(t *testing.T) {
+	p := piped(t, func(w net.Conn, id int) {
+		fmt.Fprintf(w, "{\"request_id\":%d,\"error\":\"property unavailable\"}\n", id)
+	})
+	if _, err := p.call("get_property", "duration"); err == nil || err.Error() != "mpv: property unavailable" {
+		t.Fatalf("the call failed with %v", err)
+	}
+	if p.conn == nil {
+		t.Fatal("an error of mpv is no reason to let it go")
+	}
+}
+
+// An mpv that died leaves the player ready to start a fresh one, instead
+// of every later call failing on the broken socket.
+func TestCallDropsAnMpvThatIsGone(t *testing.T) {
+	p := piped(t, func(w net.Conn, _ int) { w.Close() })
+	if _, err := p.call("get_property", "pause"); err == nil {
+		t.Fatal("a closed socket answered")
+	}
+	if p.conn != nil || p.reader != nil {
+		t.Fatal("the dead socket is kept")
+	}
+	if _, err := p.call("get_property", "pause"); err == nil {
+		t.Fatal("a call without mpv answered")
+	}
+	if state, err := p.State(); err != nil || state != (State{}) {
+		t.Fatalf("the state without mpv is %+v, %v", state, err)
+	}
+}
+
+// The samples are streamed in blocks: a sound longer than one block keeps
+// its shape across them, and a file cut short reads as long as what is
+// there, not as long as its header claims.
+func TestAnalyzeWAVStreamsALongFileCutShort(t *testing.T) {
+	const rate = 8000
+	path := tone(t, 2, rate, func(i int) int16 {
+		if i < rate { // the first second is silence
+			return 0
+		}
+		return 20000
+	})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint32(data[40:], uint32(len(data)*4)) // claims more than it holds
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	clip := Analyze(path, 4)
+	if clip.Err != nil {
+		t.Fatal(clip.Err)
+	}
+	if want := 2 * time.Second; clip.Duration < want-10*time.Millisecond || clip.Duration > want+10*time.Millisecond {
+		t.Fatalf("duration %s, want %s", clip.Duration, want)
+	}
+	if clip.Peaks[0] != 0 || clip.Peaks[1] != 0 || clip.Peaks[2] != 1 || clip.Peaks[3] != 1 {
+		t.Fatalf("peaks %v", clip.Peaks)
 	}
 }

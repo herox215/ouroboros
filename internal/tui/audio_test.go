@@ -275,3 +275,74 @@ func TestAnAnswerShowsTheSoundItNames(t *testing.T) {
 		t.Fatalf("the click played %v", fake.played)
 	}
 }
+
+// Another card takes over the player of the chat: playing one sound and
+// then another leaves no player behind, neither one that is still open
+// nor a second one started beside it.
+func TestAnotherCardTakesOverThePlayer(t *testing.T) {
+	m, _ := newModel(t)
+	var opened []*fakePlayer
+	was := openPlayer
+	t.Cleanup(func() { openPlayer = was })
+	openPlayer = func() (audio.Player, error) {
+		p := &fakePlayer{state: audio.State{Duration: 2 * time.Second}}
+		opened = append(opened, p)
+		return p, nil
+	}
+	first, second := soundFile(t), soundFile(t)
+	attached(m, first)
+	attached(m, second)
+	readSound(m, first)
+	readSound(m, second)
+	for _, path := range []string{first, second, first} {
+		apply(t, m, m.toggleSound(path)())
+	}
+	for i, p := range opened[:len(opened)-1] {
+		if !p.closed {
+			t.Fatalf("player %d of %d is left open", i+1, len(opened))
+		}
+	}
+	last := opened[len(opened)-1]
+	if len(last.played) == 0 || last.played[len(last.played)-1] != first {
+		t.Fatalf("the player played %v, last %s", last.played, first)
+	}
+	if m.sound.player != last || m.sound.path != first {
+		t.Fatal("the chat should hold the player that plays the first sound")
+	}
+}
+
+// namedSound is a sound file like soundFile, under the given name.
+func namedSound(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.Rename(soundFile(t), path); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A line of a message that begins with the button is no card: the lines
+// of the cards still play their own sounds, in their order.
+func TestALineThatLooksLikeACardTakesNoSound(t *testing.T) {
+	m, _ := newModel(t)
+	first, second := namedSound(t, "kick.wav"), namedSound(t, "snare.wav")
+	m.chat.add(entry{text: "▶ press play on the takes below"})
+	attached(m, first)
+	attached(m, second)
+	readSound(m, first)
+	readSound(m, second)
+	var played []string
+	for line, text := range strings.Split(ansi.Strip(m.history.GetContent()), "\n") {
+		path, ok := m.soundLines[line]
+		if !ok {
+			continue
+		}
+		if !strings.Contains(text, filepath.Base(path)) {
+			t.Fatalf("line %d plays %s but reads %q", line, path, text)
+		}
+		played = append(played, path)
+	}
+	if len(played) != 2 || played[0] != first || played[1] != second {
+		t.Fatalf("the lines play %v, want %s then %s", played, first, second)
+	}
+}
