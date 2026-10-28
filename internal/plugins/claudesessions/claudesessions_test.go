@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"ouroboros/internal/a2a"
 	"ouroboros/internal/cli"
 	claudesessionsplugin "ouroboros/internal/plugins/claudesessions"
 	"ouroboros/plugin"
@@ -109,5 +110,114 @@ func TestToolsRefuseWhatTheyCannotRead(t *testing.T) {
 	}
 	if _, err := tool(t, ctx, claudesessionsplugin.Search).Run(bg, []byte(`{"query":"  "}`)); err == nil {
 		t.Error("a search without a text")
+	}
+}
+
+// Without a home there is no place where Claude Code keeps its transcripts.
+func TestDefaultWithoutAHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if dir := claudesessionsplugin.Default(); dir != "" {
+		t.Errorf("without a home: %q", dir)
+	}
+	t.Setenv("HOME", "/home/user")
+	if dir := claudesessionsplugin.Default(); dir != filepath.Join("/home/user", ".claude", "projects") {
+		t.Errorf("with a home: %q", dir)
+	}
+}
+
+// Every tool says what it is doing while it runs.
+func TestToolsSayWhatTheyDo(t *testing.T) {
+	ctx := setup(t)
+	views := plugin.All[plugin.ToolView](ctx)
+	if len(views) != 4 {
+		t.Fatalf("%d views", len(views))
+	}
+	for _, v := range views {
+		if doing := v.Show(nil); !strings.Contains(doing, "Claude Code") {
+			t.Errorf("%s shows %q", v.Tool, doing)
+		}
+	}
+}
+
+// The transcripts are the owner's own work: a peer reads none of them, and
+// what it was refused is logged.
+func TestToolsRefuseAPeer(t *testing.T) {
+	var logged []string
+	dir := t.TempDir()
+	var ctx *plugin.Context
+	spy := plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
+		ctx = c
+		return nil
+	})
+	log := func(format string, args ...any) { logged = append(logged, format) }
+	if _, err := cli.NewWith(claudesessionsplugin.Plugin(claudesessionsplugin.Options{Dir: dir, Log: log}), spy); err != nil {
+		t.Fatal(err)
+	}
+	peer := a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "k"})
+	for _, name := range []string{claudesessionsplugin.Sessions, claudesessionsplugin.Search, claudesessionsplugin.Read, claudesessionsplugin.Calls} {
+		if _, err := tool(t, ctx, name).Run(peer, []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "owner") {
+			t.Errorf("%s answers a peer: %v", name, err)
+		}
+	}
+	if len(logged) != 0 {
+		t.Errorf("a refusal reads nothing to log: %v", logged)
+	}
+	if _, err := tool(t, ctx, claudesessionsplugin.Read).Run(context.Background(), []byte(`{"session":"x"}`)); err == nil || len(logged) != 1 {
+		t.Errorf("a read that failed is logged: %v, %v", err, logged)
+	}
+}
+
+// The times are a day, a day with a time or RFC 3339; until a day is the end
+// of that day. Anything else, and arguments that are no JSON, are refused.
+func TestToolsTakeTimes(t *testing.T) {
+	ctx := setup(t)
+	bg := context.Background()
+	for _, args := range []string{
+		`{"since":"2026-03-01","until":"2026-03-01"}`,
+		`{"since":"2026-03-01 00:00","until":"2026-03-01T23:59:59Z"}`,
+	} {
+		out, err := tool(t, ctx, claudesessionsplugin.Sessions).Run(bg, []byte(args))
+		if err != nil || !strings.Contains(out, "abcd1234") {
+			t.Errorf("%s: %v:\n%s", args, err, out)
+		}
+	}
+	if out, err := tool(t, ctx, claudesessionsplugin.Calls).Run(bg, []byte(`{"since":"2026-03-02"}`)); err != nil || out != "no tool call matches" {
+		t.Errorf("calls since a later day: %v: %q", err, out)
+	}
+	for _, name := range []string{claudesessionsplugin.Sessions, claudesessionsplugin.Search, claudesessionsplugin.Calls} {
+		for _, args := range []string{`{"since":"soon"}`, `{"until":"later"}`} {
+			if _, err := tool(t, ctx, name).Run(bg, []byte(args)); err == nil || !strings.Contains(err.Error(), "is no date") {
+				t.Errorf("%s %s: %v", name, args, err)
+			}
+		}
+	}
+	if _, err := tool(t, ctx, claudesessionsplugin.Sessions).Run(bg, []byte(`{"limit":"many"}`)); err == nil {
+		t.Error("arguments that do not fit")
+	}
+}
+
+// Without a directory the plugin reads where Claude Code keeps the
+// transcripts, below the home.
+func TestPluginReadsBelowTheHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".claude", "projects", "-home-user-proj", "abcd1234-0000-4e5a-8b1c-000000000001.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var ctx *plugin.Context
+	spy := plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
+		ctx = c
+		return nil
+	})
+	if _, err := cli.NewWith(claudesessionsplugin.Plugin(claudesessionsplugin.Options{}), spy); err != nil {
+		t.Fatal(err)
+	}
+	out, err := tool(t, ctx, claudesessionsplugin.Sessions).Run(context.Background(), []byte(`{}`))
+	if err != nil || !strings.Contains(out, "Run the tests, please") {
+		t.Fatalf("%v:\n%s", err, out)
 	}
 }

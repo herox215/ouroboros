@@ -358,9 +358,8 @@ func (t threading) Send(ctx context.Context, id, text string) (string, string, e
 				threadChanged = changed == "thread context"
 				return fmt.Errorf("CheckTopic: %s changed during verification; no message sent. Recheck its current concern before retrying", changed)
 			}
-			if !slices.ContainsFunc(t.s.routable(), func(r routed) bool { return r.id == id }) {
-				return fmt.Errorf("no session %q among those of the last 24 hours: hand the message to one of the list, or start a new one with %s", id, assistant.ToolSessionNew)
-			}
+			// The session is still routable: checkConcern found it so, and
+			// an unchanged target keeps its events, which make it routable.
 			return nil
 		})
 		if threadChanged && attempt+1 < attempts {

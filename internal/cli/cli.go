@@ -224,12 +224,18 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		talk.Plugin(),
 		desktopplugin.Plugin(desktopplugin.Options{
 			Profile: func(d *desktopplugin.Profile) { p.desktop = d },
-			Log:     func(err error) { dir.Log("desktop tray: %v", err) },
+			Log:     trayLog(dir),
 		}),
 		tui.Plugin(owner, func(u *tui.Profile) { p.ui = u }),
 		gui.Plugin(owner, func(g *gui.Profile) { p.gui = g }),
 		updateplugin.Plugin(dir),
 	}, fixed)
+}
+
+// trayLog is where the desktop tray reports what went wrong: the log of the
+// node.
+func trayLog(dir home.Dir) func(error) {
+	return func(err error) { dir.Log("desktop tray: %v", err) }
 }
 
 // fixed are the plugins the owner cannot turn off, with why: without them

@@ -131,6 +131,19 @@ func TestStatus(t *testing.T) {
 	if s, err := l.Status(); err != nil || s != want {
 		t.Fatalf("a choice for peers: got %+v, %v, want %+v", s, err, want)
 	}
+	// What the owner chose for the sessions and the thread.
+	if err := config.Update(string(dir), func(c *config.Config) error {
+		c.SessionAccess, c.SessionModel = "other", "medium"
+		c.ThreadAccess, c.ThreadModel = "other", "large"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want.SessionAccess, want.SessionModel = "other", "medium"
+	want.ThreadAccess, want.ThreadModel = "other", "large"
+	if s, err := l.Status(); err != nil || s != want {
+		t.Fatalf("choices for sessions and the thread: got %+v, %v, want %+v", s, err, want)
+	}
 
 	hold(t, dir, 41337)
 	want.Running, want.Port = true, 41337

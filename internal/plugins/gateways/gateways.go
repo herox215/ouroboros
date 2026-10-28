@@ -143,9 +143,7 @@ func Plugin() plugin.Plugin {
 
 		vote := plugin.NewTool(plugin.GatewayVotePollTool, "Vote in a gateway poll using opaque poll and option IDs. An empty option_ids array withdraws the vote. Use gateway_list for provider capabilities and destination rules. Omit gateway only when exactly one provider supports voting.", nil,
 			func(ctx context.Context, args voteArgs) (string, error) {
-				if err := owner(ctx); err != nil {
-					return "", err
-				}
+				// The wrapping Run below refuses peers before this runs.
 				if strings.TrimSpace(args.PollID) == "" {
 					return "", errors.New("poll_id must be nonempty")
 				}

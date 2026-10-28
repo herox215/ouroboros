@@ -163,3 +163,35 @@ func TestStartDirectoryThatCannotBeTold(t *testing.T) {
 		t.Errorf("opened %d times", opened)
 	}
 }
+
+// A current directory that cannot be searched cannot be told either: neither
+// it nor a directory relative to it opens a front end.
+func TestStartDirectoryInADirectoryThatCannotBeSearched(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root searches every directory")
+	}
+	locked := t.TempDir()
+	t.Chdir(locked)
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	opened := 0
+	p := plugin.New("test-front", func(ctx *plugin.Context, _ struct{}) error {
+		plugin.Add(ctx, plugin.FrontEnd{Name: "test-front", Run: func(context.Context) error { opened++; return nil }})
+		return nil
+	})
+	app, err := NewWith(base.Plugin(home.Dir(t.TempDir()), plugin.Terminal{Out: &bytes.Buffer{}, Interactive: true}), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "initial project directory") {
+		t.Errorf("the current directory: %v", err)
+	}
+	if err := app.Run(context.Background(), []string{"./project"}); err == nil || !strings.Contains(err.Error(), `project directory "./project"`) {
+		t.Errorf("relative to it: %v", err)
+	}
+	if opened != 0 {
+		t.Errorf("opened %d times", opened)
+	}
+}

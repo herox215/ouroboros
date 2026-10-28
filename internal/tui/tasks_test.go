@@ -158,3 +158,35 @@ func TestTasksEndedWithTheNodeAreShown(t *testing.T) {
 		t.Fatalf("the conversation does not end with the note: %+v", c.entries)
 	}
 }
+
+// A session that waits for one task says so in the singular; a task whose
+// line names no number, so that its start is not known, is listed after
+// those that run, and a start the clock of the UI has not reached yet reads
+// as no time at all.
+func TestTheWaitForOneTask(t *testing.T) {
+	m, _ := newModel(t)
+	c := m.chat
+	start := time.Unix(1000, 0)
+	at := start
+	m.now = func() time.Time { return at }
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "look"}, true)
+	m.apply(c, Event{Kind: plugin.SessionTasks, Text: "task 1 · find the callers", At: at}, true)
+	m.apply(c, Event{Kind: plugin.SessionAnswer, Text: "started it", At: at}, true)
+	if details := strip(strings.Join(m.artefact(c, 40), "\n")); !strings.Contains(details, "waits for 1 task") {
+		t.Fatalf("one task:\n%s", details)
+	}
+	at = start.Add(-time.Minute)
+	for _, tasks := range [][]string{
+		{"an odd line", "task 1 · find the callers"},
+		{"task 1 · find the callers", "an odd line"},
+	} {
+		c.tasks = tasks
+		details := strip(strings.Join(m.artefact(c, 40), "\n"))
+		if first, odd := strings.Index(details, "find the callers"), strings.Index(details, "an odd line"); first < 0 || odd < first {
+			t.Fatalf("the task that runs is not first:\n%s", details)
+		}
+		if !strings.Contains(details, "0s") {
+			t.Fatalf("a start ahead of the clock:\n%s", details)
+		}
+	}
+}

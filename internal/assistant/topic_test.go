@@ -223,6 +223,8 @@ func TestCheckTopicStrictParsing(t *testing.T) {
 		`{"disposition":"continue","reason":"same"} {}`,
 		`{"disposition":"continue","reason":"same"} trailing`,
 		`{"disposition":"continue","reason":"same",}`,
+		`{"disposition":"continue","reason":"same"`,
+		`{"disposition":"continue","reason":"same"]`,
 		`{"disposition":"continue","reason":"` + strings.Repeat("x", 4096) + `"}`,
 	} {
 		t.Run(fmt.Sprintf("%q", topicBound(reply, 90)), func(t *testing.T) {
@@ -326,5 +328,34 @@ func TestCheckTopicPending(t *testing.T) {
 	}
 	if !strings.Contains(llm.sent[0].Content, "pending") {
 		t.Fatal("the prompt does not tell what pending is")
+	}
+}
+
+// Without a complete configuration there is no LLM to ask: the check fails
+// and routes nothing.
+func TestCheckTopicWithoutConfiguration(t *testing.T) {
+	llm := &topicLLM{titleLLM: titleLLM{reply: `{"disposition":"continue","reason":"same"}`}}
+	if got, err := titled(config.Config{}, llm).CheckTopic(context.Background(), TopicCheck{}); !errors.Is(err, config.ErrIncomplete) || got != (TopicDecision{}) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// An access that cannot be reached any more when the check asks it fails
+// the check, and routes nothing.
+func TestCheckTopicWithoutItsAccess(t *testing.T) {
+	llm := &topicLLM{titleLLM: titleLLM{reply: `{"disposition":"continue","reason":"same"}`}}
+	gone := errors.New("the access is gone")
+	calls := 0
+	a := New(func() (config.Config, error) { return topicTestConfig, nil }, Builder{
+		LLM: func(string) (agent.LLM, error) {
+			if calls++; calls > 1 {
+				return nil, gone
+			}
+			return llm, nil
+		},
+		Tools: func() []agent.Tool { return nil },
+	}, discard)
+	if got, err := a.CheckTopic(context.Background(), TopicCheck{}); !errors.Is(err, gone) || got != (TopicDecision{}) {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }

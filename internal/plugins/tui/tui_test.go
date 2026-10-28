@@ -373,6 +373,12 @@ func TestTUIBackendModels(t *testing.T) {
 	if err := u.SetPeerModel(stray.ID, "gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
 		t.Fatalf("a node that is not set up: %v", err)
 	}
+	if err := u.SetSessionModel(stray.ID, "gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
+	if err := u.SetThreadModel(stray.ID, "gpt-4o-mini"); !errors.Is(err, config.ErrIncomplete) || !strings.Contains(err.Error(), "type /setup") {
+		t.Fatalf("a node that is not set up: %v", err)
+	}
 	home.Dir(s.Home).Credentials().Remove(stray.ID)
 	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
 		t.Fatal(err)
@@ -392,6 +398,16 @@ func TestTUIBackendModels(t *testing.T) {
 	}
 	if status, _ := u.Status(); status.PeerAccess != models[0].Access.ID || status.PeerModel != "gpt-4o" || status.Model != "gpt-4o-mini" {
 		t.Fatalf("the status after choosing for peers: %+v", status)
+	}
+	// The sessions and the thread get their own model the same way.
+	if err := u.SetSessionModel(models[0].Access.ID, "gpt-4o"); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.SetThreadModel(models[0].Access.ID, "gpt-4o"); err != nil {
+		t.Fatal(err)
+	}
+	if saved := clitest.MustLoad(t, s); saved.SessionModel != "gpt-4o" || saved.ThreadModel != "gpt-4o" || saved.Model != "gpt-4o-mini" {
+		t.Fatalf("the configuration after choosing for sessions and the thread: %+v", saved)
 	}
 }
 

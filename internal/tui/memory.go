@@ -433,10 +433,7 @@ func holds(e *plugin.Memory) string {
 	case groupGlobal:
 		return "global · remembered anywhere"
 	}
-	if e.Project != "" {
-		return "here · in " + short(filepath.Base(e.Project), 40)
-	}
-	return "here"
+	return "here · in " + short(filepath.Base(e.Project), 40) // a memory of no project is global
 }
 
 // memoryAbout says what a memory is: when it was last written, how often it

@@ -87,3 +87,15 @@ func TestPermissionTopicChangeReturnsToAgent(t *testing.T) {
 		t.Fatalf("runs=%d asked=%d err=%v", runs, len(asked), err)
 	}
 }
+
+// Attachments are no leave for a call either, whatever comes with them.
+func TestAttachmentReplyCannotApprovePermission(t *testing.T) {
+	var kept []config.Call
+	tool, runs := gated(t, ToolRebuild, config.Config{}, &kept)
+	ctx := agent.WithOwnerReply(t.Context(), func(context.Context, json.RawMessage) (agent.OwnerReply, error) {
+		return agent.OwnerReply{Text: AllowOnce, HasAttachments: true}, nil
+	})
+	if _, err := tool.Run(ctx, json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "sent attachments") || *runs != 0 || len(kept) != 0 {
+		t.Fatalf("runs=%d kept=%v err=%v", *runs, kept, err)
+	}
+}

@@ -856,3 +856,120 @@ func TestOwnerEditsAMemory(t *testing.T) {
 		t.Fatalf("the log lacks the edit: %s", logged)
 	}
 }
+
+// The memory dialog lists the memories the agent of the owner collected, the
+// latest updated first. Without a store that can be opened there is nothing
+// to list and nothing to edit.
+func TestOwnerListsTheMemories(t *testing.T) {
+	s := clitest.Settings(t)
+	o := owner(t, s)
+	store, err := memory.Open(home.Dir(s.Home).History())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, _, err := store.Remember(ctx, "", "style", "short answers", "c", false, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Remember(ctx, "", "name", "Lu", "c", false, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	listed, err := o.Memories(ctx, "", false)
+	if err != nil || len(listed.Memories) != 2 || listed.Total != 2 || listed.Memories[0].Key == listed.Memories[1].Key {
+		t.Fatalf("the memories: %+v, %v", listed, err)
+	}
+
+	bad := clitest.Settings(t)
+	if err := os.WriteFile(home.Dir(bad.Home).History(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner(t, bad).Memories(ctx, "", false); err == nil {
+		t.Fatal("listed without a store")
+	}
+	if _, err := owner(t, bad).SetMemory(ctx, "", "id", 1, "style", "terse"); err == nil {
+		t.Fatal("edited without a store")
+	}
+}
+
+// The owner turns the yolo mode of the node on and off, and the log says so.
+// A mode that cannot be turned off fails.
+func TestOwnerSetsYolo(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.Env(t, s)
+	o := owner(t, s)
+	dir := home.Dir(s.Home)
+	for _, on := range []bool{true, false} {
+		if err := o.SetYolo(on); err != nil || dir.Yolo() != on {
+			t.Fatalf("set %v: %v, yolo %v", on, err, dir.Yolo())
+		}
+	}
+	log, _ := os.ReadFile(dir.Service().LogFile)
+	if !strings.Contains(string(log), "yolo mode on") || !strings.Contains(string(log), "yolo mode off") {
+		t.Fatalf("the log:\n%s", log)
+	}
+	if err := os.MkdirAll(filepath.Join(s.Home, "yolo", "in"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SetYolo(false); err == nil {
+		t.Fatal("a yolo mode that cannot be removed")
+	}
+}
+
+// The owner picks a model for the sessions and one for the thread, and
+// gives each back to what the owner is answered with. The log says so, and
+// a configuration that cannot be read takes no pick.
+func TestOwnerPicksModelsForSessionsAndTheThread(t *testing.T) {
+	s := clitest.Settings(t)
+	clitest.Env(t, s)
+	if err := config.Save(s.Home, clitest.NodeConfig(s)); err != nil {
+		t.Fatal(err)
+	}
+	o := owner(t, s)
+	listed, err := o.Models(context.Background(), llms(s))
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("models %+v, %v", listed, err)
+	}
+	access := listed[0].Access.ID
+	if err := o.SetSessionModel(access, "gpt-4o-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SetThreadModel(access, "o3-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := clitest.MustLoad(t, s); cfg.SessionAccess != access || cfg.SessionModel != "gpt-4o-mini" || cfg.ThreadAccess != access || cfg.ThreadModel != "o3-mini" {
+		t.Fatalf("the configuration: %+v", cfg)
+	}
+	if err := o.SetSessionModel(access, " "); err == nil {
+		t.Fatal("no model for the sessions: want error")
+	}
+	if err := o.SetThreadModel(access, " "); err == nil {
+		t.Fatal("no model for the thread: want error")
+	}
+	if err := o.SetSessionModel("", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SetThreadModel("", ""); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := clitest.MustLoad(t, s); cfg.SessionAccess != "" || cfg.SessionModel != "" || cfg.ThreadAccess != "" || cfg.ThreadModel != "" {
+		t.Fatalf("the configuration: %+v", cfg)
+	}
+	log, _ := os.ReadFile(filepath.Join(s.Home, "ouro.log"))
+	if !strings.Contains(string(log), `the owner picked the model "gpt-4o-mini" of the access "`+access+`" for sessions`) ||
+		!strings.Contains(string(log), `the owner picked the model "o3-mini" of the access "`+access+`" for the thread`) ||
+		strings.Count(string(log), "for sessions") != 2 || strings.Count(string(log), "for the thread") != 2 {
+		t.Fatalf("log: %s", log)
+	}
+
+	broken := clitest.Settings(t)
+	if err := os.WriteFile(filepath.Join(broken.Home, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner(t, broken).SetSessionModel("a", "m"); err == nil {
+		t.Fatal("a model for the sessions for a configuration that cannot be read: want error")
+	}
+	if err := owner(t, broken).SetThreadModel("a", "m"); err == nil {
+		t.Fatal("a model for the thread for a configuration that cannot be read: want error")
+	}
+}

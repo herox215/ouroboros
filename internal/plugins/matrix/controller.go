@@ -24,6 +24,10 @@ type incoming struct {
 	Metadata             map[string]any
 }
 
+// reconnectDelay is how long a failed connection waits before it is tried
+// again.
+var reconnectDelay = 5 * time.Second
+
 type controller struct {
 	store   store
 	connect func(context.Context, configuration) (connection, error)
@@ -141,7 +145,7 @@ func (c *controller) run(ctx context.Context) {
 							select {
 							case <-runCtx.Done():
 								return
-							case <-time.After(5 * time.Second):
+							case <-time.After(reconnectDelay):
 							}
 						}
 					}(cfg, done)

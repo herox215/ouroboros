@@ -49,7 +49,8 @@ import (
 // nothing; a PDF page is drawn with pdftoppm, where the system has it.
 
 // hoverDelay is how long the mouse rests on a label before its picture shows.
-const hoverDelay = time.Second
+// Tests shorten it.
+var hoverDelay = time.Second
 
 // sixelDelay is how long the box for a sixel is on the screen before the
 // picture is drawn into it: the frame with the box must be written first, or
@@ -405,13 +406,16 @@ var pdfTimeout = 10 * time.Second
 // pdfRenderer is the program that draws a PDF page. It is looked up once, so a
 // poppler installed while ouro runs is found after a restart, not on the next
 // hover. A test puts its own renderer in its place.
-var pdfRenderer = sync.OnceValue(func() string {
+var pdfRenderer = sync.OnceValue(lookPDFRenderer)
+
+// lookPDFRenderer is the path of pdftoppm, "" where it is not installed.
+func lookPDFRenderer() string {
 	path, err := exec.LookPath("pdftoppm")
 	if err != nil {
 		return ""
 	}
 	return path
-})
+}
 
 // pdfPreview draws the first page of the PDF at path with pdftoppm, which only
 // some systems have: without it the preview stays away, and the PDF is still

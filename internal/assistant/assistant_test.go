@@ -189,3 +189,20 @@ func TestForget(t *testing.T) {
 	}
 	ask("[gpt-4o] turns=1 last=hello")
 }
+
+// A catalog of tools that cannot be expanded is offered as it is: building
+// the agent reports it.
+func TestAvailableWithAnInvalidCatalog(t *testing.T) {
+	plain := agent.NewTool("plain", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	loader := agent.NewTool("loader", "", nil, func(context.Context, struct{}) (string, error) { return "", nil })
+	loader.AbilityCatalog = func() []agent.Ability { return nil }
+	b := Builder{Tools: func() []agent.Tool { return []agent.Tool{plain, plain, loader} }}
+	want := "plain,plain,loader," + ToolUserQuestion + "," + ToolDelegate
+	if got := names(b.Available()); got != want {
+		t.Errorf("an invalid catalog: %s, want %s", got, want)
+	}
+	cfg := config.Config{Access: "http://x", Model: "m", Name: "n", Tools: &config.Tools{A2A: config.Named("plain")}}
+	if _, err := b.ForPeers(cfg); err == nil || !strings.Contains(err.Error(), "duplicate tool") {
+		t.Fatalf("ForPeers: %v", err)
+	}
+}

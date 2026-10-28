@@ -432,8 +432,14 @@ func TestTaskTools(t *testing.T) {
 	}
 	for name, call := range map[string]func() error{
 		"empty text": func() error { _, err := tell.Run(ctx, json.RawMessage(`{"task":3,"text":" "}`)); return err },
-		"unknown":    func() error { _, err := stop.Run(ctx, json.RawMessage(`{"task":3,"why":"x"}`)); return err },
-		"no tasks":   func() error { _, err := stop.Run(context.Background(), json.RawMessage(`{"task":1}`)); return err },
+		"bad tell":   func() error { _, err := tell.Run(ctx, json.RawMessage(`{"task":3,"text":"x","why":"x"}`)); return err },
+		"tell not running": func() error {
+			background.err = errTest
+			_, err := tell.Run(ctx, json.RawMessage(`{"task":9,"text":"x"}`))
+			return err
+		},
+		"unknown":  func() error { _, err := stop.Run(ctx, json.RawMessage(`{"task":3,"why":"x"}`)); return err },
+		"no tasks": func() error { _, err := stop.Run(context.Background(), json.RawMessage(`{"task":1}`)); return err },
 		"for a peer": func() error {
 			_, err := tell.Run(a2a.WithOrigin(ctx, a2a.Origin{PublicKey: "k"}), json.RawMessage(`{"task":1,"text":"x"}`))
 			return err

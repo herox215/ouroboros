@@ -111,7 +111,7 @@ func (o Options) login(ctx context.Context, d llm.Dialog, have *llm.Credentials)
 	// Whichever comes first: the browser, or the address pasted.
 	asking, done := context.WithCancel(ctx)
 	defer done()
-	pasted := make(chan error, 1)
+	pasted, typed := make(chan error, 1), make(chan url.Values, 1)
 	asked := make(chan struct{})
 	// Nothing is asked any more once this returns: the dialog is the
 	// owner's again.
@@ -130,10 +130,7 @@ func (o Options) login(ctx context.Context, d llm.Dialog, have *llm.Credentials)
 				return
 			}
 			if values, ok := parsePasted(answer); ok {
-				select {
-				case back <- values:
-				default: // the browser was first
-				}
+				typed <- values
 				return
 			}
 			d.Reject("that is not the address the browser ended up at")
@@ -142,6 +139,7 @@ func (o Options) login(ctx context.Context, d llm.Dialog, have *llm.Credentials)
 	var result url.Values
 	select {
 	case result = <-back:
+	case result = <-typed:
 	case err := <-pasted:
 		return llm.Credentials{}, err
 	}

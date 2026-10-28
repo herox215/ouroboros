@@ -314,3 +314,30 @@ func TestControllerReportsWhatKeepsItFromConnecting(t *testing.T) {
 		t.Fatalf("connected %d times", connects.Load())
 	}
 }
+
+// A connection that cannot be made is tried again after a while, until it
+// is made.
+func TestControllerTriesAFailedConnectionAgain(t *testing.T) {
+	delay := reconnectDelay
+	reconnectDelay = 10 * time.Millisecond
+	t.Cleanup(func() { reconnectDelay = delay })
+	s := store{t.TempDir()}
+	if err := s.save(configuration{Enabled: true, Token: "token", Revision: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	conn := healthyConnection{newLiveConnection()}
+	var connects atomic.Int32
+	c := &controller{store: s, connect: func(context.Context, configuration) (connection, error) {
+		if connects.Add(1) == 1 {
+			return nil, errors.New("homeserver unreachable")
+		}
+		return conn, nil
+	}}
+	c.start()
+	defer c.stop()
+	conn.running(t)
+	waitStatus(t, s, "1", "Synced")
+	if connects.Load() != 2 {
+		t.Fatalf("connected %d times", connects.Load())
+	}
+}

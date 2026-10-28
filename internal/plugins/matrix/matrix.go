@@ -63,24 +63,15 @@ func gatewayOutput(s store, running *live, files *guard.Guard) plugin.GatewayOut
 		PollDescription:   pollDescription,
 		VotePoll:          votePoll(running),
 		SendImage: func(ctx context.Context, request plugin.GatewayImageRequest) (string, error) {
-			args, err := json.Marshal(imageArgs{Path: request.Path, Attachment: request.Attachment, Room: request.Destination})
-			if err != nil {
-				return "", err
-			}
+			args, _ := json.Marshal(imageArgs{Path: request.Path, Attachment: request.Attachment, Room: request.Destination}) // strings and ints always marshal
 			return image.Run(ctx, args)
 		},
 		SendAudio: func(ctx context.Context, request plugin.GatewayAudioRequest) (string, error) {
-			args, err := json.Marshal(audioArgs{Path: request.Path, Room: request.Destination})
-			if err != nil {
-				return "", err
-			}
+			args, _ := json.Marshal(audioArgs{Path: request.Path, Room: request.Destination}) // strings and ints always marshal
 			return audio.Run(ctx, args)
 		},
 		SetAvatar: func(ctx context.Context, request plugin.GatewayAvatarRequest) (string, error) {
-			args, err := json.Marshal(avatarArgs{Path: request.Path, Attachment: request.Attachment})
-			if err != nil {
-				return "", err
-			}
+			args, _ := json.Marshal(avatarArgs{Path: request.Path, Attachment: request.Attachment}) // strings and ints always marshal
 			return avatar.Run(ctx, args)
 		},
 	}

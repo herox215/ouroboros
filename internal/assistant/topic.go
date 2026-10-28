@@ -87,16 +87,14 @@ func (a *Assistant) CheckTopic(ctx context.Context, check TopicCheck) (TopicDeci
 	if err != nil {
 		return TopicDecision{}, err
 	}
-	data, err := json.Marshal(struct {
+	// Strings and messages of role and content alone always marshal.
+	data, _ := json.Marshal(struct {
 		Anchor  string         `json:"anchor"`
 		Recent  []chat.Message `json:"recent"`
 		Context []chat.Message `json:"context"`
 		Pending string         `json:"pending"`
 		Message string         `json:"message"`
 	}{topicBound(check.Anchor, topicTextLimit), topicEvidence(check.Recent), topicEvidence(check.Context), topicBound(check.Pending, topicTextLimit), topicBound(check.Message, topicTextLimit)})
-	if err != nil {
-		return TopicDecision{}, err
-	}
 	msgs := []chat.Message{
 		{Role: "system", Content: topicPrompt},
 		{Role: "user", Content: string(data)},

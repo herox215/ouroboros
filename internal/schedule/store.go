@@ -163,9 +163,7 @@ func (s *Store) Create(j Job, now time.Time) (Job, error) {
 			return err
 		}
 		b := make([]byte, 8)
-		if _, err := rand.Read(b); err != nil {
-			return err
-		}
+		rand.Read(b) // never fails: since Go 1.24 it crashes instead
 		j.ID = hex.EncodeToString(b)
 		j.Created = now
 		j.Runs = nil
@@ -374,18 +372,24 @@ func (s *Store) Finish(id string, r Run) error {
 	})
 }
 
+// The files MachineZone consults. Tests point them elsewhere.
+var (
+	localtimeFile = "/etc/localtime"
+	timezoneFile  = "/etc/timezone"
+)
+
 // MachineZone returns the IANA name of the machine's time zone. Persist a name
 // rather than Local or today's offset: Local would silently follow a machine
 // zone change on restart, and an offset would break cron across daylight
 // saving. If no IANA name is discoverable, require an explicit zone.
 func MachineZone() (string, error) {
 	candidates := []string{strings.TrimPrefix(os.Getenv("TZ"), ":"), time.Local.String()}
-	if path, err := filepath.EvalSymlinks("/etc/localtime"); err == nil {
+	if path, err := filepath.EvalSymlinks(localtimeFile); err == nil {
 		if _, name, ok := strings.Cut(path, "/zoneinfo/"); ok {
 			candidates = append(candidates, name)
 		}
 	}
-	if b, err := os.ReadFile("/etc/timezone"); err == nil {
+	if b, err := os.ReadFile(timezoneFile); err == nil {
 		candidates = append(candidates, strings.TrimSpace(string(b)))
 	}
 	for _, name := range candidates {

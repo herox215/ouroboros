@@ -511,3 +511,20 @@ func TestTheHeadOfAWholeScreen(t *testing.T) {
 		t.Fatalf("the context:\n%s", view)
 	}
 }
+
+// The column on the right has no session at a row without it, nor in a
+// window too narrow for the column.
+func TestRailAtOffItsRows(t *testing.T) {
+	m, _ := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	if m.railWidth() == 0 {
+		t.Fatal("a wide window shows no column on the right")
+	}
+	if c := m.railAt(-1); c != nil {
+		t.Fatalf("a row above the column shows %v", c)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	if c := m.railAt(5); c != nil {
+		t.Fatalf("a window without the column shows %v", c)
+	}
+}

@@ -39,11 +39,14 @@ func Together(profiles []*Profile) {
 	if len(profiles) == 0 {
 		return
 	}
-	c := &controller{profiles: profiles, run: tray.Run, launch: launchGUI}
+	c := &controller{profiles: profiles, run: runTray, launch: launchGUI}
 	for _, p := range profiles {
 		p.controller = c
 	}
 }
+
+// runTray shows the tray of the system; tests replace it.
+var runTray = tray.Run
 
 // executable finds the running binary; tests replace it.
 var executable = os.Executable

@@ -3,6 +3,7 @@ package matrix
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,5 +99,40 @@ func TestPollIgnoresResponseBeforeStart(t *testing.T) {
 	tracker.update(pollUpdateFixture("response", "$v", "@a:x", "!r:x", "$p", 9, false, []string{"a"}))
 	if pollCount(tracker.snapshot("!r:x", "@a:x")[0], 0) != 0 {
 		t.Fatal("counted vote before poll start")
+	}
+}
+
+// Location context is kept when the polls would exceed the shared metadata
+// budget once escaped: the polls give way, the location stays.
+func TestRunPollsGiveWayToLocationOverBudget(t *testing.T) {
+	live := time.Now().Add(time.Hour).UnixMilli()
+	start := pollStartFixture(false)
+	answers := make([]any, 20)
+	for j := range answers {
+		answers[j] = map[string]any{"m.id": fmt.Sprintf("%02d%s", j, strings.Repeat("<", 70)), "m.text": []any{map[string]any{"body": strings.Repeat("界", 40)}}}
+	}
+	start["m.poll"].(map[string]any)["answers"] = answers
+	crypt := &fakeCrypto{change: map[id.EventID]func(*event.Event){
+		"$location": func(e *event.Event) {
+			e.Content = event.Content{Parsed: &event.MessageEventContent{MsgType: event.MsgLocation, GeoURI: "geo:1,2", Body: strings.Repeat("<", 2000)}}
+		},
+		"$start": func(e *event.Event) {
+			e.Type = event.NewEventType("m.poll.start")
+			e.Content = event.Content{Raw: start}
+		},
+	}}
+	useCrypto(t, crypt, nil)
+	h := newHomeserver(t, joined(nil), joined(map[string][]map[string]any{
+		"!dm:test": {encryptedEvent("$location", "@alice:test", live), encryptedEvent("$start", "@alice:test", live+1)},
+	}))
+	got, _ := runUntilIdle(t, h, testClient(t, h.server.URL), nil)
+	if len(got) != 1 || !strings.HasPrefix(got[0].Text, "Poll: Lunch?") {
+		t.Fatalf("deliveries: %+v", got)
+	}
+	if _, ok := got[0].Metadata["polls"]; ok {
+		t.Fatal("polls kept over the budget")
+	}
+	if got[0].Metadata["location"].(map[string]any)["uri"] != "geo:1,2" {
+		t.Fatal("lost location context")
 	}
 }

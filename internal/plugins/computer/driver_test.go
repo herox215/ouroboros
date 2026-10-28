@@ -67,6 +67,20 @@ exec sleep 60
 		t.Fatalf("ended after %v", took)
 	}
 
+	// One that stops answering but goes on is not waited for to say why:
+	// what it wrote until then has to do.
+	began = time.Now()
+	_, err = launch(ctx, script(t, `exec >&-
+trap '' TERM HUP
+exec sleep 60
+`))
+	if err == nil || !strings.HasPrefix(err.Error(), "cua-driver does not start: cua-driver ended") {
+		t.Fatalf("silent: %v", err)
+	}
+	if took := time.Since(began); took > 5*time.Second {
+		t.Fatalf("gave up after %v", took)
+	}
+
 	// One that fails says why, with the last of what it wrote.
 	_, err = launch(ctx, script(t, `head -c 3000 /dev/zero | tr '\0' x >&2
 echo " no display" >&2

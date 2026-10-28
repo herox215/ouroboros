@@ -2,6 +2,7 @@ package matrix
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -194,5 +195,37 @@ func TestLocationBeaconAliases(t *testing.T) {
 				t.Fatal("stable alias failed")
 			}
 		})
+	}
+}
+
+// The tracker ignores what it cannot trust: an edited or invalid location
+// message, content it cannot read, a beacon of another user or of no self
+// asset, and a session whose times do not hold.
+func TestLocationIgnoresWhatItCannotTrust(t *testing.T) {
+	now := time.Now()
+	ts := now.UnixMilli()
+	other := "@bob:test"
+	beacon := func(change func(map[string]any)) map[string]any {
+		raw := map[string]any{"live": true, "timeout": int64(10000), "org.matrix.msc3488.ts": ts}
+		change(raw)
+		return raw
+	}
+	cases := map[string]*event.Event{
+		"edited message": {Type: event.EventMessage, RoomID: "!dm:test", Sender: "@alice:test", Timestamp: ts, Content: event.Content{Parsed: &event.MessageEventContent{
+			MsgType: event.MsgLocation, GeoURI: "geo:1,2", RelatesTo: &event.RelatesTo{Type: event.RelReplace, EventID: "$old"}}}},
+		"invalid message": {Type: event.EventMessage, RoomID: "!dm:test", Sender: "@alice:test", Timestamp: ts, Content: event.Content{Parsed: &event.MessageEventContent{MsgType: event.MsgLocation, GeoURI: "geo:91,0"}}},
+		"no object":       {Type: event.NewEventType("org.matrix.msc3672.beacon_info"), RoomID: "!dm:test", Sender: "@alice:test", Timestamp: ts, Content: event.Content{VeryRaw: json.RawMessage(`[1]`)}},
+		"wrong field":     locationFixture("org.matrix.msc3672.beacon_info", "$wrong", ts, beacon(func(raw map[string]any) { raw["live"] = "yes" })),
+		"other self":      locationFixture("org.matrix.msc3672.beacon_info", "$other", ts, beacon(func(map[string]any) {})),
+		"not self":        locationFixture("org.matrix.msc3672.beacon_info", "$pet", ts, beacon(func(raw map[string]any) { raw["org.matrix.msc3488.asset"] = map[string]any{"type": "m.pin"} })),
+		"no start":        locationFixture("org.matrix.msc3672.beacon_info", "$zero", ts, beacon(func(raw map[string]any) { raw["org.matrix.msc3488.ts"] = 0 })),
+	}
+	cases["other self"].StateKey = &other
+	for name, e := range cases {
+		tracker := &locationTracker{}
+		tracker.update(e, now)
+		if s := tracker.states[locationKey{e.RoomID, e.Sender}]; s != (locationState{}) {
+			t.Errorf("%s: tracked %+v", name, s)
+		}
 	}
 }

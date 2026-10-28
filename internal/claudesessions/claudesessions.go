@@ -120,11 +120,9 @@ func (a *Archive) sources() ([]source, error) {
 				return err
 			}
 			// A directory that cannot be read hides only its own sessions, as a
-			// transcript that cannot be read is no session to list.
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+			// transcript that cannot be read is no session to list. WalkDir
+			// reports no error of a file, only of reading a directory.
+			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return nil
@@ -137,7 +135,7 @@ func (a *Archive) sources() ([]source, error) {
 			path:    path,
 			project: top(a.dir, path),
 			id:      strings.TrimSuffix(filepath.Base(path), ".jsonl"),
-			ended:   last(path, info.ModTime()),
+			ended:   last(path, info.Size(), info.ModTime()),
 			size:    info.Size(),
 		})
 		return nil
@@ -151,10 +149,8 @@ func (a *Archive) sources() ([]source, error) {
 
 // top is the directory below root that holds the transcript.
 func top(root, path string) string {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return filepath.Base(filepath.Dir(path))
-	}
+	// WalkDir found path below root, so the two are related.
+	rel, _ := filepath.Rel(root, path)
 	if i := strings.IndexRune(rel, filepath.Separator); i > 0 {
 		return rel[:i]
 	}
@@ -314,11 +310,10 @@ func asked(content json.RawMessage) string {
 		return ""
 	}
 	if content[0] == '"' {
+		// A JSON string, as the line it is part of was decoded.
 		var s string
-		if json.Unmarshal(content, &s) == nil {
-			return strings.TrimSpace(s)
-		}
-		return ""
+		json.Unmarshal(content, &s)
+		return strings.TrimSpace(s)
 	}
 	var blocks []block
 	if json.Unmarshal(content, &blocks) != nil {
@@ -368,7 +363,9 @@ func (a *Archive) Search(q Query) (string, int, error) {
 	var out strings.Builder
 	hits, more, searched := 0, false, 0
 	for _, s := range in {
-		if !hasProject(s.project, q.Project) || !within(q.Since, q.Until, s.ended) {
+		// A session that ended before since holds nothing after it; one that
+		// ended after until may still hold records before it.
+		if !hasProject(s.project, q.Project) || !within(q.Since, time.Time{}, s.ended) {
 			continue
 		}
 		searched++
@@ -405,7 +402,10 @@ func (a *Archive) Search(q Query) (string, int, error) {
 			return true
 		})
 		if err != nil {
-			return "", 0, err
+			// A transcript that cannot be read is no session searched, as it is
+			// no session to list.
+			searched--
+			continue
 		}
 		if more {
 			break
@@ -599,7 +599,9 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 	var calls []Call
 	oldest := time.Time{} // of the calls found so far
 	for _, s := range in {
-		if !hasProject(s.project, q.Project) || !within(q.Since, q.Until, s.ended) {
+		// A session that ended before since holds nothing after it; one that
+		// ended after until may still hold records before it.
+		if !hasProject(s.project, q.Project) || !within(q.Since, time.Time{}, s.ended) {
 			continue
 		}
 		// The transcripts are the most recently written first: when a call
@@ -631,7 +633,7 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 			return true
 		})
 		if err != nil {
-			return "", 0, err
+			continue // a transcript that cannot be read is no session to list
 		}
 		for _, c := range found {
 			if tool != "" && !strings.EqualFold(c.Tool, tool) {
@@ -690,23 +692,20 @@ func agentOf(id string) string {
 	return ""
 }
 
-// last is when a transcript last said something: the time of its last record,
-// or when it was written when it holds none. Claude Code touches the file
-// without writing to it, so the time of the file says nothing.
-func last(path string, written time.Time) time.Time {
+// last is when a transcript of length bytes last said something: the time of
+// its last record, or when it was written when it holds none. Claude Code
+// touches the file without writing to it, so the time of the file says
+// nothing.
+func last(path string, length int64, written time.Time) time.Time {
 	f, err := os.Open(path)
 	if err != nil {
 		return written
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return written
-	}
 	const window = 64 << 10
-	size := min(info.Size(), window)
+	size := min(length, window)
 	buf := make([]byte, size)
-	if _, err := f.ReadAt(buf, info.Size()-size); err != nil && !errors.Is(err, io.EOF) {
+	if _, err := f.ReadAt(buf, length-size); err != nil && !errors.Is(err, io.EOF) {
 		return written
 	}
 	const mark = `"timestamp":"`
@@ -916,10 +915,9 @@ func args(input json.RawMessage) string {
 			return clip(s, maxArgs)
 		}
 	}
+	// The input decoded as an object, so it is JSON that compacts.
 	var b bytes.Buffer
-	if json.Compact(&b, input) != nil {
-		return clip(string(input), maxArgs)
-	}
+	json.Compact(&b, input)
 	return clip(b.String(), maxArgs)
 }
 
@@ -930,11 +928,10 @@ func flatten(raw json.RawMessage) string {
 		return ""
 	}
 	if raw[0] == '"' {
+		// A JSON string, as the line it is part of was decoded.
 		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			return clip(s, maxOutput)
-		}
-		return ""
+		json.Unmarshal(raw, &s)
+		return clip(s, maxOutput)
 	}
 	var blocks []block
 	if json.Unmarshal(raw, &blocks) != nil {
@@ -1060,11 +1057,8 @@ func fold(b byte) byte {
 }
 
 // containsFold says whether hay holds needle, ignoring case, where needle is
-// already folded.
+// already folded and not empty: a search has a text.
 func containsFold(hay, needle []byte) bool {
-	if len(needle) == 0 {
-		return true
-	}
 	if len(needle) > len(hay) {
 		return false
 	}
@@ -1086,12 +1080,10 @@ func containsFold(hay, needle []byte) bool {
 	return false
 }
 
-// indexFold is where sub appears in s, ignoring case, or -1.
+// indexFold is where sub, which is not empty, appears in s, ignoring case, or
+// -1.
 func indexFold(s, sub string) int {
 	needle := []byte(strings.ToLower(sub))
-	if len(needle) == 0 {
-		return 0
-	}
 	if len(needle) > len(s) {
 		return -1
 	}

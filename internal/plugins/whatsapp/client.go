@@ -17,7 +17,20 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
+	"ouroboros/internal/safefile"
 )
+
+// The network side of whatsmeow, which tests replace: dial opens the socket
+// and sendMessage sends on it.
+var (
+	dial        = (*whatsmeow.Client).ConnectContext
+	isConnected = (*whatsmeow.Client).IsConnected
+	isLoggedIn  = (*whatsmeow.Client).IsLoggedIn
+	sendMessage = (*whatsmeow.Client).SendMessage
+)
+
+// qrWait is how long Connect waits for the first QR code; tests shorten it.
+var qrWait = 20 * time.Second
 
 type client struct {
 	connectMu     sync.Mutex         // serializes Connect, which may wait for a QR
@@ -84,7 +97,7 @@ func (c *client) current() *whatsmeow.Client {
 func (c *client) Status() status {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
-	st := status{Connected: c.cli.IsConnected() && c.cli.IsLoggedIn(), Paired: c.paired.Load(), Note: c.note}
+	st := status{Connected: isConnected(c.cli) && isLoggedIn(c.cli), Paired: c.paired.Load(), Note: c.note}
 	if time.Now().Before(c.qrExpires) {
 		st.QRPath = c.qrPath
 	}
@@ -153,7 +166,7 @@ func (c *client) Connect(ctx context.Context) (status, error) {
 			c.wg.Wait()
 			return status{}, err
 		}
-		timer := time.NewTimer(20 * time.Second)
+		timer := time.NewTimer(qrWait)
 		defer timer.Stop()
 		select {
 		case <-ready:
@@ -167,7 +180,7 @@ func (c *client) Connect(ctx context.Context) (status, error) {
 		}
 		return c.Status(), nil
 	}
-	if cli.IsConnected() {
+	if isConnected(cli) {
 		// Right after pairing, or while whatsmeow reconnects, the socket is
 		// open but not logged in yet.
 		c.stateMu.Lock()
@@ -188,7 +201,7 @@ func (c *client) Connect(ctx context.Context) (status, error) {
 // ends the session of the last connect, whose socket is gone. A socket that
 // opened meanwhile counts as connected. connectMu is held.
 func (c *client) connect(ctx context.Context, cli *whatsmeow.Client) error {
-	stop, err := connectSession(ctx, c.ctx, cli.ConnectContext)
+	stop, err := connectSession(ctx, c.ctx, func(session context.Context) error { return dial(cli, session) })
 	if errors.Is(err, whatsmeow.ErrAlreadyConnected) {
 		return nil
 	}
@@ -250,7 +263,7 @@ func (c *client) consumeQR(ctx context.Context, ch <-chan whatsmeow.QRChannelIte
 				c.clearQR()
 				png, err := qrcode.Encode(item.Code, qrcode.Medium, 512)
 				if err == nil {
-					err = c.writeQR(png)
+					err = safefile.Write(filepath.Join(c.path, "pairing.png"), png, 0600)
 				}
 				c.stateMu.Lock()
 				if err == nil {
@@ -287,21 +300,6 @@ func (c *client) consumeQR(ctx context.Context, ch <-chan whatsmeow.QRChannelIte
 			}
 		}
 	}
-}
-func (c *client) writeQR(png []byte) error {
-	f, err := os.CreateTemp(c.path, ".pairing-*.png")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(png); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), filepath.Join(c.path, "pairing.png"))
 }
 func (c *client) event(raw any) { c.eventOf(c.current(), raw) }
 
@@ -384,7 +382,7 @@ func (c *client) Send(ctx context.Context, jid, text string) (message, error) {
 	if err != nil {
 		return message{}, errors.New("invalid JID")
 	}
-	resp, err := c.current().SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
+	resp, err := sendMessage(c.current(), ctx, to, &waE2E.Message{Conversation: proto.String(text)})
 	if err != nil {
 		return message{}, err
 	}

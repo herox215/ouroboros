@@ -132,6 +132,13 @@ func TestPermittedWithoutOwner(t *testing.T) {
 	if _, err := tool.Run(asking, json.RawMessage(`{"path": "~/x"}`)); !errors.Is(err, context.DeadlineExceeded) || *runs != 0 {
 		t.Errorf("unanswered: %v, %d runs", err, *runs)
 	}
+	// An owner who turns out not to be there runs nothing either.
+	gone := agent.WithOwner(context.Background(), func(context.Context, json.RawMessage) (string, error) {
+		return "", agent.ErrNoOwner
+	})
+	if _, err := tool.Run(gone, json.RawMessage(`{"path": "~/x"}`)); err == nil || !strings.Contains(err.Error(), "who cannot be asked here") || *runs != 0 {
+		t.Errorf("no owner after all: %v, %d runs", err, *runs)
+	}
 }
 
 // A rule that is no regular expression stops every call it may be meant
@@ -329,5 +336,84 @@ func TestPermittedPhrasedPlainly(t *testing.T) {
 		if got != plainPermission(ToolBash, "rm -rf build") {
 			t.Errorf("%q: %+v", phrased, got)
 		}
+	}
+}
+
+// failingLLM fails every call.
+type failingLLM struct{}
+
+func (failingLLM) Complete(context.Context, string, []openai.Message, []openai.Tool) (openai.Message, error) {
+	return openai.Message{}, errors.New("down")
+}
+
+// Where the LLM cannot be reached, the owner is asked about the call as it
+// is, an answer is unclear, and nothing is said back; without an access
+// there is no LLM to ask at all.
+func TestAskingWithoutItsLLM(t *testing.T) {
+	b := Builder{LLM: func(string) (agent.LLM, error) { return nil, errors.New("no access") }}
+	if got := b.askingOf(config.Config{}); got != (asking{}) {
+		t.Fatalf("asking without an access: %+v", got)
+	}
+	down := asking{failingLLM{}, "m"}
+	long := strings.Repeat("x", askingCall+1)
+	if got := down.phrase(context.Background(), ToolBash, long); got != plainPermission(ToolBash, long) {
+		t.Errorf("phrased %+v", got)
+	}
+	if word, back := down.decide(context.Background(), plainPermission(ToolBash, "ls"), ToolBash, "ls", "yes"); word != decidedUnclear || back != "" {
+		t.Errorf("decided %q, %q", word, back)
+	}
+	var said []string
+	ctx := agent.WithSaying(context.Background(), func(_, text string) { said = append(said, text) })
+	down.acknowledge(ctx, Question{Question: "Which?"}, "SQLite")
+	if len(said) != 0 {
+		t.Errorf("said %q", said)
+	}
+}
+
+// The LLM that asks the owner is shown the end of the conversation: what the
+// owner and the agent said, not the system prompt or the calls of tools, and
+// of a long message as much as the bound leaves.
+func TestAskingSeesTheConversation(t *testing.T) {
+	var talk string
+	probe := agent.Tool{Name: "probe", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		talk = talkOf(ctx)
+		return "seen", nil
+	}}
+	llm := &steps{step: func(n int, _ string) (string, any) {
+		if n%2 == 0 {
+			return "probe", struct{}{}
+		}
+		return "", nil
+	}}
+	bot := agent.New(llm, "m", "the system prompt", probe)
+	long := strings.Repeat("ä", askingTalk)
+	for _, text := range []string{long, "again"} {
+		if _, err := bot.Respond(context.Background(), "c", text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The calls of tools and what they returned are not shown.
+	if !strings.HasPrefix(talk, "<conversation>\nuser: ää") || !strings.Contains(talk, "…\n\nassistant: done: seen\n\nuser: again\n</conversation>") ||
+		strings.Contains(talk, "system prompt") || strings.Contains(talk, "tool") {
+		t.Fatalf("talk %q", talk)
+	}
+	if talkOf(context.Background()) != "" {
+		t.Fatal("a conversation outside of an answer")
+	}
+}
+
+// What the owner was asked and said in their own words follows the error of
+// a call that ran with their leave outside of an answer.
+func TestPermittedCallThatFailsKeepsTheExchange(t *testing.T) {
+	llm := &askingLLM{phrased: `{"question":"Darf ich?","once":"Ja","always":"Immer","not":"Nein"}`, decided: "ONCE"}
+	b := Builder{LLM: func(string) (agent.LLM, error) { return llm, nil }}
+	broken := errors.New("broken")
+	tool := b.permitted(config.Config{}, []agent.Tool{{Name: ToolBash, Run: func(context.Context, json.RawMessage) (string, error) {
+		return "partial", broken
+	}}}, false)[0]
+	var asked []Question
+	got, err := tool.Run(answering("klar, mach", &asked), json.RawMessage(`{"command": "rm -rf build"}`))
+	if got != "partial" || !errors.Is(err, broken) || !strings.Contains(err.Error(), "owner: klar, mach\n]") {
+		t.Fatalf("got %q, %v", got, err)
 	}
 }

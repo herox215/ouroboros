@@ -2,6 +2,10 @@
 
 #import <Cocoa/Cocoa.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "tray_darwin.h"
 
 static NSStatusItem *ouroItem;
 static id ouroTarget;
@@ -66,4 +70,26 @@ void ouroTrayUpdate(const char *json) {
 
 void ouroTrayStop(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+}
+
+// The helper is a private child. It runs before Go starts, so AppKit owns the
+// initial thread and the child never becomes a node. A thread of its own reads
+// one status per line from stdin; the end of stdin closes the helper, also when
+// the parent exits unexpectedly.
+__attribute__((constructor))
+static void ouroTrayHelper(int argc, const char **argv) {
+    if (argc != 2 || strcmp(argv[1], OURO_TRAY_HELPER_ARGUMENT) != 0) return;
+    [NSThread detachNewThreadWithBlock:^{
+        char *line = NULL;
+        size_t size = 0;
+        ssize_t n;
+        while ((n = getline(&line, &size, stdin)) > 0) {
+            if (line[n - 1] == '\n') line[n - 1] = 0;
+            ouroTrayUpdate(line);
+        }
+        free(line);
+        ouroTrayStop();
+    }];
+    ouroTrayRun();
+    exit(0);
 }
