@@ -599,8 +599,7 @@ func containsID(entries []Entry, id string) bool {
 // out.
 func versionsOf(ctx context.Context, tx *sql.Tx, before []Entry, created []string) (map[string]int64, error) {
 	out := map[string]int64{}
-	var read func(id string) error
-	read = func(id string) error {
+	read := func(id string) error {
 		if _, ok := out[id]; ok {
 			return nil
 		}
