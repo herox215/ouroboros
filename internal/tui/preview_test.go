@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/color"
@@ -44,8 +46,8 @@ func TestRestingOnALabelPreviewsItsPicture(t *testing.T) {
 	if !strings.Contains(screen, "▀") || !strings.Contains(screen, "38;2;255;0;0") {
 		t.Fatal("the picture must show")
 	}
-	// 64×32 pixels fit 32 cells wide and 16 pixels, 8 cells, high.
-	if w, h := ansi.StringWidth(strings.Split(m.hover.view, "\n")[1]), len(strings.Split(m.hover.view, "\n")); w != 34 || h != 10 {
+	// 64×32 pixels fit 64 cells wide and 32 pixels, 16 cells, high.
+	if w, h := ansi.StringWidth(strings.Split(m.hover.view, "\n")[1]), len(strings.Split(m.hover.view, "\n")); w != 66 || h != 18 {
 		t.Fatalf("preview of %d×%d cells", w, h)
 	}
 	if above := strings.Split(screen, "\n")[y-2]; !strings.Contains(above, "▀") { // over the border below it
@@ -104,6 +106,76 @@ func TestSixelPreview(t *testing.T) {
 	if msgs, ok := cmd().(tea.BatchMsg); !ok || len(msgs) == 0 || fmt.Sprintf("%T", msgs[0]()) != fmt.Sprintf("%T", tea.ClearScreen()) {
 		t.Fatal("the sixel must go with the screen drawn anew")
 	}
+}
+
+// An iTerm2 answers the probe for the size of its cells and gets the picture
+// as a PNG of its own, drawn into a blank box once that is on the screen.
+func TestInlinePreview(t *testing.T) {
+	for _, tc := range []struct {
+		name, answer string
+		inline       bool
+		w, h         int
+	}{
+		{"retina", "\x1b]1337;ReportCellSize=20.0;10.0;2.0\x1b\\", true, 20, 40},
+		{"without a scale", "\x1b]1337;ReportCellSize=20;10\a", true, 10, 20},
+		{"another answer", "\x1b]11;rgb:0000/0000/0000\x1b\\", false, 0, 0},
+		{"half an answer", "\x1b]1337;ReportCellSize=20\x1b\\", false, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newModel(t)
+			m.Update(uv.UnknownOscEvent(tc.answer))
+			if m.graphics.inline != tc.inline || m.graphics.cellW != tc.w || m.graphics.cellH != tc.h {
+				t.Fatalf("graphics %+v", m.graphics)
+			}
+		})
+	}
+	t.Run("picture", func(t *testing.T) {
+		m, _ := newModel(t)
+		if !strings.Contains(terminalQuery, "\x1b]1337;ReportCellSize") {
+			t.Fatal("the size of a cell is not asked of iTerm2")
+		}
+		m.Update(uv.UnknownOscEvent("\x1b]1337;ReportCellSize=20.0;10.0;2.0\x1b\\"))
+		path := filepath.Join(t.TempDir(), "red.png")
+		writePNG(t, path, 400, 200, color.NRGBA{255, 0, 0, 255})
+		m.Update(tea.PasteMsg{Content: path})
+		x, y := labelCell(t, m, "[Image_1]")
+		m.Update(tea.MouseMotionMsg{X: x, Y: y})
+		_, cmd := m.Update(hoverMsg{m.hover.seq})
+		_, cmd = m.Update(cmd())
+		if cmd == nil || strings.Contains(m.View().Content, "▀") {
+			t.Fatal("the box must be blank, and the picture come")
+		}
+		// 400×200 pixels fit 240×120: cells of 20×40 pixels, 12 wide and 3 high.
+		lines := strings.Split(m.hover.view, "\n")
+		if w := ansi.StringWidth(lines[1]); w != 14 || len(lines) != 5 {
+			t.Fatalf("box of %d×%d cells", w, len(lines))
+		}
+		_, cmd = m.Update(cmd())
+		raw, ok := cmd().(tea.RawMsg)
+		file := fmt.Sprint(raw.Msg)
+		head := "\x1b]1337;File=inline=1;width=12;height=3;preserveAspectRatio=1:"
+		at := strings.Index(file, head)
+		if !ok || at < 0 {
+			t.Fatalf("iTerm2 picture %q", file)
+		}
+		at += len(head)
+		end := strings.Index(file[at:], "\a")
+		if end < 0 {
+			t.Fatalf("no end of the iTerm2 picture in %q", file)
+		}
+		data, err := base64.StdEncoding.DecodeString(file[at : at+end])
+		if err != nil {
+			t.Fatal(err)
+		}
+		config, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil || config.Width != 240 || config.Height != 120 {
+			t.Fatalf("the picture is %d×%d, %v; want 240×120", config.Width, config.Height, err)
+		}
+		_, cmd = m.Update(tea.MouseMotionMsg{X: x + 1, Y: y})
+		if msgs, ok := cmd().(tea.BatchMsg); !ok || len(msgs) == 0 || fmt.Sprintf("%T", msgs[0]()) != fmt.Sprintf("%T", tea.ClearScreen()) {
+			t.Fatal("the picture must go with the screen drawn anew")
+		}
+	})
 }
 
 // labelCell is the cell of the chat where label begins.
@@ -202,13 +274,13 @@ func TestProfileSwitchInvalidatesPreview(t *testing.T) {
 				m.Update(result)
 			}
 			if stage == "drawn" {
-				_, draw := m.Update(sixelMsg{seq})
+				_, draw := m.Update(pictureMsg{seq})
 				if draw == nil {
 					t.Fatal("no sixel draw")
 				}
 			}
 			_, switched := root.Update(shiftTab)
-			if m.hover.seq == seq || m.hover.view != "" || m.hover.sixel != "" || m.hover.drawn {
+			if m.hover.seq == seq || m.hover.view != "" || m.hover.picture != "" || m.hover.drawn {
 				t.Fatal("leaving a profile must invalidate its preview")
 			}
 			if stage == "drawn" {
@@ -217,13 +289,13 @@ func TestProfileSwitchInvalidatesPreview(t *testing.T) {
 					t.Fatal("leaving a drawn sixel must clear the screen")
 				}
 			}
-			for _, msg := range []tea.Msg{hoverMsg{seq}, result, sixelMsg{seq}} {
+			for _, msg := range []tea.Msg{hoverMsg{seq}, result, pictureMsg{seq}} {
 				if _, cmd := root.Update(profileMsg{0, msg}); cmd != nil {
 					t.Fatalf("hidden callback %T returned a command", msg)
 				}
 			}
 			root.Update(shiftTab)
-			for _, msg := range []tea.Msg{result, sixelMsg{seq}} {
+			for _, msg := range []tea.Msg{result, pictureMsg{seq}} {
 				if _, cmd := root.Update(profileMsg{0, msg}); cmd != nil {
 					t.Fatalf("old callback %T survived switching back", msg)
 				}
@@ -242,13 +314,13 @@ func TestHiddenProfileGuardsPreviewCallbacks(t *testing.T) {
 	m.Update(tea.PasteMsg{Content: path})
 	x, y := labelCell(t, m, "[Image_1]")
 	root.profiles.shown = 1 // exercise visibility independently of invalidation
-	m.hover = hover{x: x, y: y, seq: 7, view: "box", sixel: "picture"}
-	for _, msg := range []tea.Msg{hoverMsg{7}, previewMsg{7, "new box", "new picture"}, sixelMsg{7}} {
+	m.hover = hover{x: x, y: y, seq: 7, view: "box", picture: "picture"}
+	for _, msg := range []tea.Msg{hoverMsg{7}, previewMsg{7, "new box", "new picture"}, pictureMsg{7}} {
 		if _, cmd := root.Update(profileMsg{0, msg}); cmd != nil {
 			t.Fatalf("hidden callback %T returned a command", msg)
 		}
 	}
-	if m.hover.view != "box" || m.hover.sixel != "picture" || m.hover.drawn {
+	if m.hover.view != "box" || m.hover.picture != "picture" || m.hover.drawn {
 		t.Fatal("hidden callbacks changed the preview")
 	}
 }

@@ -3,13 +3,14 @@ package tui
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/gif" // the pictures a preview can show
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 	"math"
 	"os"
@@ -41,25 +42,27 @@ import (
 // mouse that rests on such a label for a moment shows the picture above it,
 // small. A terminal that draws sixels, as foot does, gets the picture as it
 // is: the UI keeps a box of blank cells free for it, and once the box is on
-// the screen the picture is drawn into it. Any other terminal gets it in
-// cells of two pixels each: the upper half of ▀ in the color of its
+// the screen the picture is drawn into it. iTerm2 draws no sixel, but pictures
+// of its own, which go into such a box just the same. Any other terminal gets
+// it in cells of two pixels each: the upper half of ▀ in the color of its
 // foreground, the lower in that of its background. Once the mouse moves, or a
-// key or the wheel is used, it is gone; a sixel is not part of what the UI
-// draws, so the screen is drawn anew. A picture that cannot be read shows
-// nothing; a PDF page is drawn with pdftoppm, where the system has it.
+// key or the wheel is used, it is gone; a picture of a protocol is not part
+// of what the UI draws, so the screen is drawn anew. A picture that cannot be
+// read shows nothing; a PDF page is drawn with pdftoppm, where the system has
+// it.
 
 // hoverDelay is how long the mouse rests on a label before its picture shows.
 // Tests shorten it.
 var hoverDelay = time.Second
 
-// sixelDelay is how long the box for a sixel is on the screen before the
-// picture is drawn into it: the frame with the box must be written first, or
-// it would write its blanks over the picture.
-const sixelDelay = 50 * time.Millisecond
+// pictureDelay is how long the box for a picture of a protocol is on the
+// screen before the picture is drawn into it: the frame with the box must be
+// written first, or it would write its blanks over the picture.
+const pictureDelay = 50 * time.Millisecond
 
-// The preview of cells is at most so many cells wide and pixels high, and
-// that of a sixel at most so many pixels wide and high.
-const previewCols, previewPixels, sixelPixels = 32, 32, 240
+// The preview of cells is at most so many cells wide and high, and that of a
+// picture of a protocol at most so many pixels wide and high.
+const previewCols, previewRows, sixelPixels = 64, 40, 240
 
 // Bound the source, not just the thumbnail: decoding allocates the original
 // pixels. Only one preview may decode/render at a time across all profiles;
@@ -70,16 +73,22 @@ const previewMaxDimension = 16384
 
 var previewWork = make(chan struct{}, 1)
 
-// terminalQuery asks the terminal whether it draws sixels, and how large its
-// cells are in pixels: see graphics.
+// terminalQuery asks the terminal whether it draws sixels, how large its cells
+// are in pixels, and whether it draws pictures of its own, as iTerm2 does: see
+// graphics.
 // 16 reports the cell size in pixels; ansi deprecated its name for it.
-var terminalQuery = ansi.RequestPrimaryDeviceAttributes + ansi.WindowOp(16)
+var terminalQuery = ansi.RequestPrimaryDeviceAttributes + ansi.WindowOp(16) +
+	ansi.ITerm2("ReportCellSize")
 
-// graphics is what the terminal told of its pictures.
+// graphics is what the terminal told of its pictures, and the room a preview
+// has in the window.
 type graphics struct {
-	sixel bool
-	cellW int // the size of a cell in pixels, 0 while not known
-	cellH int
+	sixel  bool
+	inline bool // it draws pictures of its own, as iTerm2 does
+	cellW  int  // the size of a cell in pixels, 0 while not known
+	cellH  int
+	roomW  int // the cells the window is wide and high, 0 while not known
+	roomH  int
 }
 
 // cell is the size of a cell in pixels, as the terminal told it or as most are.
@@ -92,26 +101,27 @@ func (g graphics) cell() (int, int) {
 
 // hover is where the mouse rests and the preview it shows there, if any.
 type hover struct {
-	x, y  int
-	seq   int    // counts the moves, so that a late tick of an old one is dropped
-	view  string // the preview shown, boxed
-	sixel string // the picture to draw into the box of view, if a sixel
-	drawn bool   // the sixel is on the screen
+	x, y    int
+	seq     int    // counts the moves, so that a late tick of an old one is dropped
+	view    string // the preview shown, boxed
+	picture string // the sequence that draws the picture into the box of view, if one
+	drawn   bool   // the picture is on the screen
 }
 
 // hoverMsg is the tick of a mouse that rested since the move seq.
 type hoverMsg struct{ seq int }
 
 // previewMsg is the picture of the label the mouse rests on since the move
-// seq: the box to show, "" if it could not be read, and the sixel to draw
-// into it, if any.
+// seq: the box to show, "" if it could not be read, and the sequence that
+// draws into it, if any.
 type previewMsg struct {
-	seq         int
-	view, sixel string
+	seq           int
+	view, picture string
 }
 
-// sixelMsg is the tick of the box of the sixel of the move seq on the screen.
-type sixelMsg struct{ seq int }
+// pictureMsg is the tick of the box of a picture of a protocol of the move seq
+// on the screen.
+type pictureMsg struct{ seq int }
 
 // told takes what the terminal told of its pictures, for every profile.
 func (m *Model) told(msg tea.Msg) {
@@ -121,8 +131,46 @@ func (m *Model) told(msg tea.Msg) {
 			o.graphics.sixel = slices.Contains(msg, 4)
 		case uv.CellSizeEvent:
 			o.graphics.cellW, o.graphics.cellH = msg.Width, msg.Height
+		case uv.UnknownOscEvent:
+			if w, h, ok := reportCellSize(string(msg)); ok {
+				o.graphics.inline = true
+				o.graphics.cellW, o.graphics.cellH = w, h
+			}
 		}
 	}
+}
+
+// reportCellSize reads iTerm2's answer to the ReportCellSize probe: the height
+// and width of a cell in points and the pixels a point has, as the pixels of a
+// cell. A terminal that does not answer, as one behind tmux does not, gives
+// false, and its preview stays what it was.
+func reportCellSize(osc string) (w, h int, ok bool) {
+	body := strings.TrimPrefix(strings.TrimPrefix(osc, "\x1b]"), "\x9d")
+	body, found := strings.CutPrefix(body, "1337;ReportCellSize=")
+	if !found {
+		return 0, 0, false
+	}
+	if i := strings.IndexAny(body, "\a\x1b"); i >= 0 {
+		body = body[:i]
+	}
+	fields := strings.Split(body, ";")
+	if len(fields) < 2 {
+		return 0, 0, false
+	}
+	height, errH := strconv.ParseFloat(fields[0], 64)
+	width, errW := strconv.ParseFloat(fields[1], 64)
+	if errH != nil || errW != nil || height <= 0 || width <= 0 {
+		return 0, 0, false
+	}
+	scale := 1.0
+	if len(fields) > 2 {
+		if s, err := strconv.ParseFloat(fields[2], 64); err == nil && s > 0 {
+			scale = s
+		}
+	}
+	w = max(1, int(math.Round(width*scale)))
+	h = max(1, int(math.Round(height*scale)))
+	return w, h, true
 }
 
 // rest notes the mouse at x and y, without a button down: what it showed is
@@ -138,7 +186,7 @@ func (m *Model) rest(x, y int) tea.Cmd {
 }
 
 // unhover takes the preview away, and the tick of where the mouse was. A
-// sixel drawn goes with the screen drawn anew.
+// picture of a protocol that was drawn goes with the screen drawn anew.
 func (m *Model) unhover() tea.Cmd {
 	drawn := m.hover.drawn
 	m.hover = hover{x: m.hover.x, y: m.hover.y, seq: m.hover.seq + 1}
@@ -158,34 +206,35 @@ func (m *Model) hovered(msg hoverMsg) tea.Cmd {
 		return nil
 	}
 	seq, g := m.hover.seq, m.graphics
+	g.roomW, g.roomH = m.width, m.height // a preview larger than that would be cut
 	return func() tea.Msg {
-		view, sixel := preview(path, g)
-		return previewMsg{seq, view, sixel}
+		view, picture := preview(path, g)
+		return previewMsg{seq, view, picture}
 	}
 }
 
-// previewed shows the picture read for where the mouse still rests: a sixel
-// once its box is on the screen.
+// previewed shows the picture read for where the mouse still rests: one of a
+// protocol once its box is on the screen.
 func (m *Model) previewed(msg previewMsg) tea.Cmd {
 	if msg.seq != m.hover.seq || !m.shown() || m.screen != screenChat {
 		return nil
 	}
-	m.hover.view, m.hover.sixel = msg.view, msg.sixel
-	if msg.sixel == "" {
+	m.hover.view, m.hover.picture = msg.view, msg.picture
+	if msg.picture == "" {
 		return nil
 	}
-	return tea.Tick(sixelDelay, func(time.Time) tea.Msg { return sixelMsg{msg.seq} })
+	return tea.Tick(pictureDelay, func(time.Time) tea.Msg { return pictureMsg{msg.seq} })
 }
 
-// drawSixel draws the sixel into its box, where the box still is: at the
+// drawPicture draws the picture into its box, where the box still is: at the
 // first cell inside its border, the cursor kept where the UI has it.
-func (m *Model) drawSixel(msg sixelMsg) tea.Cmd {
-	if msg.seq != m.hover.seq || !m.shown() || m.hover.sixel == "" || m.screen != screenChat {
+func (m *Model) drawPicture(msg pictureMsg) tea.Cmd {
+	if msg.seq != m.hover.seq || !m.shown() || m.hover.picture == "" || m.screen != screenChat {
 		return nil
 	}
 	x, y := m.previewAt()
 	m.hover.drawn = true
-	return tea.Raw(ansi.SaveCursor + ansi.CursorPosition(x+2, y+2) + m.hover.sixel + ansi.RestoreCursor)
+	return tea.Raw(ansi.SaveCursor + ansi.CursorPosition(x+2, y+2) + m.hover.picture + ansi.RestoreCursor)
 }
 
 // pictureAt is the file of the picture whose label or path is at x and y on
@@ -278,9 +327,9 @@ func (m *Model) withPreview(screen string) string {
 }
 
 // preview reads the picture at path and draws it boxed for a terminal of g,
-// and if it draws sixels, the box blank and the sixel for it. "" if the
-// picture cannot be read.
-func preview(path string, g graphics) (view, sixel string) {
+// and if it draws pictures of its own, the box blank and the sequence that
+// draws the picture into it. "" if the picture cannot be read.
+func preview(path string, g graphics) (view, picture string) {
 	select {
 	case previewWork <- struct{}{}:
 		defer func() { <-previewWork }()
@@ -301,16 +350,54 @@ func preview(path string, g graphics) (view, sixel string) {
 		return "", ""
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ui.line)
-	if !g.sixel {
-		return box.Render(halfBlocks(img, previewCols, previewPixels)), ""
+	if !g.sixel && !g.inline {
+		cols, rows := previewCols, previewRows
+		if g.roomW > 0 && g.roomH > 0 { // a larger box would be cut by the window
+			cols, rows = min(cols, g.roomW-2), min(rows, g.roomH-2)
+		}
+		return box.Render(halfBlocks(img, max(1, cols), 2*max(1, rows))), ""
 	}
 	w, h := fit(img.Bounds(), sixelPixels, sixelPixels, false)
 	cw, ch := g.cell()
-	// The cells that the picture covers, also the last band of six pixels
-	// of it, whole.
-	cols, rows := (w+cw-1)/cw, ((h+5)/6*6+ch-1)/ch
+	if g.sixel {
+		// The cells that the picture covers, also the last band of six
+		// pixels of it, whole.
+		cols, rows := (w+cw-1)/cw, ((h+5)/6*6+ch-1)/ch
+		return blankBox(box, cols, rows), encodeSixel(scaled(img, w, h))
+	}
+	// iTerm2 draws a PNG of its own, of as many pixels as the cells of the
+	// box have: on a screen of two pixels a point, that is what sharp means.
+	cols, rows := (w+cw-1)/cw, (h+ch-1)/ch
+	pw, ph := fit(img.Bounds(), cols*cw, rows*ch, false)
+	data, err := encodePNG(scaled(img, pw, ph))
+	if err != nil {
+		return "", ""
+	}
+	return blankBox(box, cols, rows), inlineImage(data, cols, rows)
+}
+
+// blankBox is a box of cols×rows blank cells, for a picture of a protocol to
+// be drawn into.
+func blankBox(box lipgloss.Style, cols, rows int) string {
 	blank := strings.Repeat(strings.Repeat(" ", cols)+"\n", rows)
-	return box.Render(strings.TrimSuffix(blank, "\n")), encodeSixel(scaled(img, w, h))
+	return box.Render(strings.TrimSuffix(blank, "\n"))
+}
+
+// inlineImage is iTerm2's sequence for a PNG drawn into a box of cols×rows
+// cells, as sharp as the box is.
+func inlineImage(data []byte, cols, rows int) string {
+	return fmt.Sprintf("\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1:%s\a",
+		cols, rows, base64.StdEncoding.EncodeToString(data))
+}
+
+// encodePNG is img as a PNG, which iTerm2 draws where a sixel terminal takes a
+// sixel.
+func encodePNG(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // readPreview reads the picture at path from f. The kinds Go reads are bounded
