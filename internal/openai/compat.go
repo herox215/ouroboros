@@ -5,36 +5,58 @@ import (
 	"ouroboros/internal/chat"
 )
 
+// Message is an alias kept for old callers.
+//
 // Deprecated: use chat.Message from internal/chat.
 type Message = chat.Message
 
+// Image is an alias kept for old callers.
+//
 // Deprecated: use chat.Image from internal/chat.
 type Image = chat.Image
 
+// Usage is an alias kept for old callers.
+//
 // Deprecated: use chat.Usage from internal/chat.
 type Usage = chat.Usage
 
+// ToolCall is an alias kept for old callers.
+//
 // Deprecated: use chat.ToolCall from internal/chat.
 type ToolCall = chat.ToolCall
 
+// FunctionCall is an alias kept for old callers.
+//
 // Deprecated: use chat.FunctionCall from internal/chat.
 type FunctionCall = chat.FunctionCall
 
+// Tool is an alias kept for old callers.
+//
 // Deprecated: use chat.Tool from internal/chat.
 type Tool = chat.Tool
 
+// Function is an alias kept for old callers.
+//
 // Deprecated: use chat.Function from internal/chat.
 type Function = chat.Function
 
+// MessageSource is an alias kept for old callers.
+//
 // Deprecated: use chat.MessageSource from internal/chat.
 type MessageSource = chat.MessageSource
 
+// GatewayMetadata is an alias kept for old callers.
+//
 // Deprecated: use chat.GatewayMetadata from internal/chat.
 type GatewayMetadata = chat.GatewayMetadata
 
+// Took is an alias kept for old callers.
+//
 // Deprecated: use chat.Took from internal/chat.
 type Took = chat.Took
 
+// ReasoningItems is an alias kept for old callers.
+//
 // Deprecated: use chat.ReasoningItems from internal/chat.
 const ReasoningItems = chat.ReasoningItems
 

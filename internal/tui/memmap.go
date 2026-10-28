@@ -70,14 +70,6 @@ func (c *chart) put(x, y int, r rune, style chartStyle) bool {
 	return true
 }
 
-// dot draws a point of an orbit: a star or a name may be drawn over it.
-func (c *chart) dot(x, y int) {
-	if x < 0 || x >= c.w || y < 0 || y >= c.h {
-		return
-	}
-	c.cells[y][x] = chartCell{r: '·', style: chartOrbit}
-}
-
 // free says whether a name of w cells fits at x and y, over no star, no
 // name and no centre: an orbit gives way to a name.
 func (c *chart) free(x, y, w int) bool {
