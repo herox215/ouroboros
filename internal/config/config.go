@@ -73,7 +73,7 @@ type Config struct {
 	// for the default, see About.
 	Description string `json:"description,omitempty"`
 	// MemoryInterval is how long after the last pass the archivist may run
-	// again, as a Go duration like "168h"; "off" or "" turns it off. A
+	// again, as a Go duration like "24h"; "off" or "" turns it off. A
 	// configuration that says nothing of it leaves the archivist off, see
 	// MemoryArchive.
 	MemoryInterval *string `json:"memory_interval,omitempty"`
@@ -419,7 +419,7 @@ func ValidMemoryInterval(value string) error {
 		return nil
 	}
 	if d, err := time.ParseDuration(v); err != nil || d <= 0 {
-		return fmt.Errorf("memory_interval is a duration like %q, or off", "168h")
+		return fmt.Errorf("memory_interval is a duration like %q, or off", "24h")
 	}
 	return nil
 }
