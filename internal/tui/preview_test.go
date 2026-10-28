@@ -120,6 +120,8 @@ func TestInlinePreview(t *testing.T) {
 		{"without a scale", "\x1b]1337;ReportCellSize=20;10\a", true, 10, 20},
 		{"another answer", "\x1b]11;rgb:0000/0000/0000\x1b\\", false, 0, 0},
 		{"half an answer", "\x1b]1337;ReportCellSize=20\x1b\\", false, 0, 0},
+		{"no numbers", "\x1b]1337;ReportCellSize=tall;wide\a", false, 0, 0},
+		{"no size", "\x1b]1337;ReportCellSize=0;10\a", false, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newModel(t)
