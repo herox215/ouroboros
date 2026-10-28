@@ -149,21 +149,20 @@ func upgrade(req *http.Request, p pin) (conn net.Conn, r *bufio.Reader, answer [
 	if err = req.Write(conn); err == nil {
 		resp, err = http.ReadResponse(r, req)
 	}
-	if err != nil {
+	// A channel that opened is the connection now and outlives this request:
+	// it is no longer cut by the timeout for opening it.
+	opened := err == nil && resp.StatusCode == http.StatusSwitchingProtocols
+	if opened && stop() {
+		return conn, r, nil, nil
+	}
+	if err != nil || opened {
+		// ctx ended first and cut the connection, also under a channel that
+		// opened just then: what came is no answer.
 		if !stop() {
 			err = ctx.Err()
 		}
 		conn.Close()
 		return nil, nil, nil, err
-	}
-	if resp.StatusCode == http.StatusSwitchingProtocols {
-		// The connection is the channel now and outlives this request: it is
-		// no longer cut by the timeout for opening it.
-		if !stop() {
-			conn.Close()
-			return nil, nil, nil, ctx.Err()
-		}
-		return conn, r, nil, nil
 	}
 	defer conn.Close()
 	defer resp.Body.Close()

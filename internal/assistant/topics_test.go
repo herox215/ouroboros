@@ -21,16 +21,12 @@ import (
 // learnLLM answers the calls of the learning loop as its fields say, and
 // every other call "done", keeping the system prompt it was sent.
 type learnLLM struct {
-	mu        sync.Mutex
-	words     string
-	wordsErr  error
-	merge     string
-	mergeErr  error
-	merged    int // calls for a consolidation
-	review    string
-	reviewed  [][]openai.Message
-	prompts   []string
-	listCalls []string // what a consolidation was sent
+	mu       sync.Mutex
+	words    string
+	wordsErr error
+	review   string
+	reviewed [][]openai.Message
+	prompts  []string
 }
 
 func (l *learnLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
@@ -39,10 +35,6 @@ func (l *learnLLM) Complete(_ context.Context, _ string, msgs []openai.Message, 
 	switch msgs[0].Content {
 	case keywordPrompt:
 		return openai.Message{Content: l.words}, l.wordsErr
-	case consolidatePrompt:
-		l.merged++
-		l.listCalls = append(l.listCalls, msgs[1].Content)
-		return openai.Message{Content: l.merge}, l.mergeErr
 	case reviewPrompt:
 		l.reviewed = append(l.reviewed, msgs)
 		return openai.Message{Content: l.review}, nil
@@ -198,14 +190,11 @@ func TestTopicMemoriesThatFail(t *testing.T) {
 }
 
 // The words of a topic cannot be asked for without a configuration or an
-// access, and neither can a consolidation.
+// access.
 func TestLearningWithoutTheLLM(t *testing.T) {
 	broken := New(func() (config.Config, error) { return config.Config{}, errors.New("no config") }, Builder{}, discard)
 	if _, err := broken.searchWords(context.Background(), "x"); err == nil {
 		t.Error("words without a configuration")
-	}
-	if _, err := broken.merges(context.Background(), nil); err == nil {
-		t.Error("merges without a configuration")
 	}
 	opened := 0 // the agent opens the access first, the call again
 	closed := New(func() (config.Config, error) { return ownerConfig(), nil }, Builder{
@@ -219,9 +208,6 @@ func TestLearningWithoutTheLLM(t *testing.T) {
 	}, discard)
 	if _, err := closed.searchWords(context.Background(), "x"); err == nil {
 		t.Error("words without an access")
-	}
-	if _, err := closed.merges(context.Background(), nil); err == nil {
-		t.Error("merges without an access")
 	}
 }
 
@@ -277,6 +263,7 @@ func TestFinishedTopicIsReviewed(t *testing.T) {
 // on and the memories tidied; after Stop no wait for it starts.
 func TestSweepWhenTheOwnerLeft(t *testing.T) {
 	_, store := rawStore(t)
+	expired := keepMemory(t, store, "", "issue", "working on issue 77", time.Now().Add(-time.Minute))
 	a, _ := recorded(t, ownerConfig(), &learnLLM{})
 	a.builder = a.builder.WithMemories(opened(store))
 	a.idleAfter = 10 * time.Millisecond
@@ -287,8 +274,8 @@ func TestSweepWhenTheOwnerLeft(t *testing.T) {
 		}
 	}
 	eventually(t, "tidied", func() bool {
-		at, _ := store.Marked(context.Background(), consolidated)
-		return !at.IsZero()
+		e, _ := store.Get(context.Background(), expired.ID)
+		return e.Archived
 	})
 	a.learning.Lock()
 	left := len(a.topics)
@@ -304,83 +291,34 @@ func TestSweepWhenTheOwnerLeft(t *testing.T) {
 	}
 }
 
-// The memories are tidied whenever the owner left, and once a week those
-// that say the same are merged into one: the others are archived. What
-// cannot be merged is left alone, and what fails is in the log.
-func TestTidyAndConsolidate(t *testing.T) {
+// The memories are tidied whenever the owner left: what expired is
+// archived, and what fails is in the log.
+func TestTidy(t *testing.T) {
 	db, store := rawStore(t)
 	ctx := context.Background()
 	vim := keepMemory(t, store, "", "vim", "the owner uses vim", time.Time{})
-	editor := keepMemory(t, store, "", "editor", "vim is the editor of the owner", time.Time{})
-	build := keepMemory(t, store, "/p", "build", "make build", time.Time{})
 	keepMemory(t, store, "", "issue", "working on issue 77", time.Now().Add(-time.Minute))
-	llm := &learnLLM{merge: "MERGE: " + vim.ID + " " + editor.ID + ": editor: the owner edits with vim.\n" +
-		"MERGE: " + vim.ID + " " + build.ID + ": mixed: of two scopes\n" +
-		"MERGE: missing " + vim.ID + ": unknown: not known\n" +
-		"- MERGE: " + vim.ID + ": single: one alone\n" +
-		"NONE"}
-	a, log := recorded(t, ownerConfig(), llm)
+	a, log := recorded(t, ownerConfig(), &learnLLM{})
 	a.tidy(time.Now()) // without memories nothing is
 	a.builder = a.builder.WithMemories(opened(store))
-	now := time.Now()
-	a.tidy(now)
-	lines := log.take()
-	for _, want := range []string{
-		"memories: 1 archived, as they expired or were never used",
-		`memories: 2 merged into "editor"`,
-		"memories: a merge of " + vim.ID + " " + build.ID + " is left alone, as they are not of one scope",
-		"memories: a merge of missing " + vim.ID + " is left alone, as they are not of one scope",
-	} {
-		if !slices.Contains(lines, want) {
-			t.Errorf("the log lacks %q:\n%s", want, strings.Join(lines, "\n"))
-		}
+	a.tidy(time.Now())
+	if lines := log.take(); !slices.Contains(lines, "memories: 1 archived, as they expired or were never used") {
+		t.Errorf("log:\n%s", strings.Join(lines, "\n"))
 	}
 	active, err := store.Active(ctx, 10)
-	if err != nil || len(active) != 2 || active[0].Key != "editor" || active[0].Content != "the owner edits with vim." || active[0].ID != editor.ID || active[1].ID != build.ID {
+	if err != nil || len(active) != 1 || active[0].ID != vim.ID {
 		t.Fatalf("active: %+v, %v", active, err)
 	}
-	if !strings.Contains(llm.listCalls[0], vim.ID+" | global | ") || !strings.Contains(llm.listCalls[0], build.ID+" | /p | ") {
-		t.Errorf("sent:\n%s", llm.listCalls[0])
-	}
-	a.tidy(now.Add(consolidateEvery - time.Minute))
-	if llm.merged != 1 {
-		t.Fatalf("consolidated %d times within a week", llm.merged)
-	}
-
-	// A merge into a key that cannot be, an archive or an LLM that fails
-	// leave the time of the last consolidation as it was.
-	nano := keepMemory(t, store, "", "nano", "nano too", time.Time{})
-	llm.merge = "MERGE: " + editor.ID + " " + nano.ID + ": " + strings.Repeat("k", memory.MaxKey+1) + ": too long a key\n" +
-		"MERGE: " + editor.ID + " " + nano.ID + ": editors: not after a merge that failed"
-	later := now.Add(consolidateEvery)
-	a.tidy(later)
-	llm.merge = "MERGE: " + editor.ID + " " + nano.ID + ": editors: vim and nano"
-	if _, err := db.Exec("CREATE TRIGGER keep BEFORE UPDATE OF archived ON memories BEGIN SELECT RAISE(ABORT,'kept'); END;"); err != nil {
+	if _, err := db.Exec("DROP TABLE memories"); err != nil {
 		t.Fatal(err)
 	}
-	a.tidy(later)
-	llm.mergeErr = errors.New("down")
-	a.tidy(later)
-	if _, err := db.Exec("DROP TRIGGER keep; DROP TABLE memory_meta"); err != nil {
-		t.Fatal(err)
+	a.tidy(time.Now())
+	if lines := log.take(); len(lines) != 1 || !strings.HasPrefix(lines[0], "the memories cannot be tidied: ") {
+		t.Errorf("log:\n%s", strings.Join(lines, "\n"))
 	}
-	a.tidy(later)
-	failed := 0
-	lines = log.take()
-	for _, l := range lines {
-		if strings.HasPrefix(l, "the memories cannot be consolidated: ") || strings.HasPrefix(l, "the memories cannot be tidied: ") {
-			failed++
-		}
-	}
-	if failed != 4 {
-		t.Errorf("%d failures in the log:\n%s", failed, strings.Join(lines, "\n"))
-	}
-	if at, err := store.Marked(ctx, consolidated); err == nil && at.After(now) {
-		t.Errorf("marked at %v after failing", at)
-	}
-	b, blog := recorded(t, ownerConfig(), llm)
+	b, blog := recorded(t, ownerConfig(), &learnLLM{})
 	b.builder = b.builder.WithMemories(func() (*memory.Store, error) { return nil, errors.New("no store") })
-	b.tidy(now)
+	b.tidy(time.Now())
 	if lines := blog.take(); !slices.Contains(lines, "the memories cannot be tidied: no store") {
 		t.Fatalf("log:\n%s", strings.Join(lines, "\n"))
 	}

@@ -136,6 +136,11 @@ func New(db *sql.DB) (*Store, error) {
 	if err == nil {
 		_, err = tx.Exec("CREATE TABLE IF NOT EXISTS memory_meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
 	}
+	if err == nil {
+		_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS memory_changes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, action TEXT NOT NULL,
+ reason TEXT NOT NULL, undo TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0)`)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("memory schema: %w", err)
 	}
@@ -427,13 +432,10 @@ func (s *Store) Search(ctx context.Context, project, scope, query string, limit 
 	default:
 		return nil, errors.New("scope must be global, project or all")
 	}
-	tokens := strings.FieldsFunc(query, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
+	tokens := ftsTokens(query)
 	from := "memories m"
 	order := "m.updated DESC,m.id"
 	if len(tokens) > 0 {
-		for i, t := range tokens {
-			tokens[i] = "\"" + strings.ReplaceAll(t, "\"", "\"\"") + "\""
-		}
 		from += " JOIN memory_fts ON memory_fts.rowid=m.rowid"
 		where += " AND memory_fts MATCH ?"
 		args = append(args, strings.Join(tokens, " AND "))
@@ -447,6 +449,16 @@ func (s *Store) Search(ctx context.Context, project, scope, query string, limit 
 		return nil, err
 	}
 	return entries(rows)
+}
+
+// ftsTokens are the words of query, each quoted for an FTS match: the input
+// is never FTS syntax.
+func ftsTokens(query string) []string {
+	tokens := strings.FieldsFunc(query, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
+	for i, t := range tokens {
+		tokens[i] = "\"" + strings.ReplaceAll(t, "\"", "\"\"") + "\""
+	}
+	return tokens
 }
 
 // entries are the memories rows has, which it closes.
