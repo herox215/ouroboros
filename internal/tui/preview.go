@@ -369,11 +369,7 @@ func preview(path string, g graphics) (view, picture string) {
 	// box have: on a screen of two pixels a point, that is what sharp means.
 	cols, rows := (w+cw-1)/cw, (h+ch-1)/ch
 	pw, ph := fit(img.Bounds(), cols*cw, rows*ch, false)
-	data, err := encodePNG(scaled(img, pw, ph))
-	if err != nil {
-		return "", ""
-	}
-	return blankBox(box, cols, rows), inlineImage(data, cols, rows)
+	return blankBox(box, cols, rows), inlineImage(encodePNG(scaled(img, pw, ph)), cols, rows)
 }
 
 // blankBox is a box of cols×rows blank cells, for a picture of a protocol to
@@ -392,12 +388,10 @@ func inlineImage(data []byte, cols, rows int) string {
 
 // encodePNG is img as a PNG, which iTerm2 draws where a sixel terminal takes a
 // sixel.
-func encodePNG(img image.Image) ([]byte, error) {
+func encodePNG(img image.Image) []byte {
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	_ = png.Encode(&buf, img) // a picture of pixels, into memory: cannot fail
+	return buf.Bytes()
 }
 
 // readPreview reads the picture at path from f. The kinds Go reads are bounded
