@@ -69,6 +69,7 @@ import (
 	browserplugin "ouroboros/internal/plugins/browser"
 	chatgptplugin "ouroboros/internal/plugins/chatgpt"
 	claudecodeplugin "ouroboros/internal/plugins/claudecode"
+	claudesessionsplugin "ouroboros/internal/plugins/claudesessions"
 	computerplugin "ouroboros/internal/plugins/computer"
 	deepseekplugin "ouroboros/internal/plugins/deepseek"
 	desktopplugin "ouroboros/internal/plugins/desktop"
@@ -210,6 +211,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		chatgptplugin.Plugin(chatgpt.Options{Auth: s.ChatGPTAuth, API: s.ChatGPTAPI, HostID: dir.HostID}),
 		opencodeplugin.Plugin(opencodeplugin.Options{BaseURL: s.OpenCodeGo}),
 		claudecodeplugin.Plugin(claudecode.Options{Dir: filepath.Join(string(dir), "claude-code")}),
+		claudesessionsplugin.Plugin(claudesessionsplugin.Options{Log: dir.Log}),
 		assistant.Plugin(dir),
 		sessionplugin.Plugin(dir),
 		gateways.Plugin(),
