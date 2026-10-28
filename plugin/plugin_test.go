@@ -164,6 +164,10 @@ func TestContributions(t *testing.T) {
 	if plugin.ShowImage(ctx, plugin.Image{Type: "image/png", Data: []byte("png")}) || plugin.Remark(ctx, "shown") {
 		t.Fatal("shown outside of a call of a tool")
 	}
+	// Outside of a call of a tool there are no pictures of the user either.
+	if images := plugin.InputImages(ctx); images != nil {
+		t.Fatalf("pictures outside of a call of a tool: %v", images)
+	}
 	showing := plugin.NewTool("conversation", "", nil, func(ctx context.Context, _ struct{}) (string, error) {
 		return fmt.Sprint(plugin.ShowImage(ctx, plugin.Image{Type: "image/png", Data: []byte("png")}), plugin.Remark(ctx, "640×480")), nil
 	})

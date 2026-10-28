@@ -116,6 +116,7 @@ func TestGatewayPollVoteValidationAndOwner(t *testing.T) {
 		{PollID: "$poll", OptionIDs: []string{""}},
 		{PollID: "$poll", OptionIDs: []string{" \t"}},
 		{PollID: "$poll", OptionIDs: []string{"one", "one"}},
+		{PollID: "$poll", OptionIDs: strings.Split("a b c d e f g h i j k l m n o p q r s t u", " ")},
 	} {
 		if result, err := output.VotePoll(context.Background(), request); err == nil || result != "" {
 			t.Fatalf("accepted invalid vote: %+v, %q %v", request, result, err)

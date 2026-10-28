@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -60,5 +62,48 @@ func TestSendImageToEncryptsTheFile(t *testing.T) {
 	}
 	if err := c.SendImageTo(context.Background(), "!dm:test", "", "dot.png", plain); err == nil || !strings.Contains(err.Error(), "peer") {
 		t.Fatalf("no peer: %v", err)
+	}
+}
+
+// An image whose header claims a format it does not hold is not sent, an
+// image without a name is called image, and nothing is sent for a room whose
+// state cannot be read or when the upload brings back no address.
+func TestSendImageToRefusesWhatCannotBeSent(t *testing.T) {
+	h := newHomeserver(t)
+	empty := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if empty && r.URL.Path == "/_matrix/media/v3/upload" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		h.serve(w, r)
+	}))
+	defer server.Close()
+	c := testClient(t, server.URL)
+	crypt := &fakeCrypto{}
+	c.crypto, c.running = crypt, true
+	defer func() { c.running = false }()
+	broken := []byte("\x89PNG\r\n\x1a\nnot really")
+	if err := c.SendImageTo(context.Background(), "!dm:test", "@alice:test", "dot.png", broken); err == nil || !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("a broken image: %v", err)
+	}
+	if err := c.SendImageTo(context.Background(), "!dm:test", "@alice:test", "", imageFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(crypt.contents) != 1 || crypt.contents[0].Body != "image" {
+		t.Fatalf("contents %+v", crypt.contents)
+	}
+	h.breakRoom("!dm:test", true)
+	if err := c.SendImageTo(context.Background(), "!dm:test", "@alice:test", "dot.png", imageFixture(t)); err == nil {
+		t.Fatal("sent to a room whose state cannot be read")
+	}
+	h.breakRoom("!dm:test", false)
+	empty = true
+	if err := c.SendImageTo(context.Background(), "!dm:test", "@alice:test", "dot.png", imageFixture(t)); err == nil || !strings.Contains(err.Error(), "upload failed") {
+		t.Fatalf("an upload without an address: %v", err)
+	}
+	if len(crypt.contents) != 1 {
+		t.Fatal("sent without an upload")
 	}
 }

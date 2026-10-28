@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	transport "ouroboros/internal/matrix"
 	"ouroboros/plugin"
 )
 
@@ -405,5 +406,44 @@ func TestReceiveExplainsAnUnsupportedImageBackend(t *testing.T) {
 	sent := conn.messages()
 	if len(sent) != 1 || !strings.HasSuffix(sent[0], "This session backend does not support images.") {
 		t.Fatalf("sent %q", sent)
+	}
+}
+
+// Metadata over the budget of a gateway is refused with the message: nothing
+// of it reaches the agent.
+func TestReceiveRefusesMetadataOverTheBudget(t *testing.T) {
+	s, _ := conversationStore(t)
+	sessions := &testSessions{}
+	c, err := openConversations(s, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := incoming{RoomID: "!room:example.org", Sender: "@owner:example.org", Text: "hello", Metadata: map[string]any{"note": strings.Repeat("x", 17*1024)}}
+	if err := c.receive(context.Background(), &recordingConnection{}, msg); err == nil {
+		t.Fatal("took metadata over the budget")
+	}
+	if sessions.asks != 0 {
+		t.Fatalf("asked %d times", sessions.asks)
+	}
+}
+
+// The poll loop forgets a room that refuses what Ouro sends, and keeps
+// polling the others.
+func TestPollForgetsARoomThatRefuses(t *testing.T) {
+	c, _, sessions := deliveryConversation(t)
+	sessions.set(plugin.SessionEvent{Kind: plugin.SessionAnswer, PresentationID: "refused", Text: "hello"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn := &recordingConnection{fail: []error{fmt.Errorf("%w: room has no allowed peer", transport.ErrRoomRefused)}}
+	conn.sending = cancel
+	done := make(chan struct{})
+	go func() { defer close(done); c.poll(ctx, conn) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the poll did not try to deliver")
+	}
+	if len(c.entries) != 0 || len(conn.messages()) != 0 {
+		t.Fatalf("kept %d conversations, sent %q", len(c.entries), conn.messages())
 	}
 }

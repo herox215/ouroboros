@@ -37,6 +37,9 @@ func TestSendAudioToSendsEncryptedAudio(t *testing.T) {
 	if err := c.SendAudioTo(context.Background(), "!dm:test", "@bob:test", "click.wav", wav); err == nil {
 		t.Fatal("sent the file of Bob to Alice")
 	}
+	if err := c.SendAudioTo(context.Background(), "!dm:test", "", "click.wav", wav); err == nil {
+		t.Fatal("sent without an expected peer")
+	}
 	if len(h.uploads) != 0 || crypt.encrypted != 0 {
 		t.Fatal("uploaded before the room was checked")
 	}

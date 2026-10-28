@@ -183,11 +183,10 @@ func mustJSON(v any) []byte {
 }
 
 // Stopping the node closes the archive the answers went to: no file of it
-// stays open.
+// stays open. The open files are counted in /proc, so only on Linux; elsewhere
+// the node is still started, answered through and stopped.
 func TestStopClosesTheArchive(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("the open files are counted in /proc")
-	}
+	counted := runtime.GOOS == "linux"
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -206,10 +205,13 @@ func TestStopClosesTheArchive(t *testing.T) {
 	if err := builder.AnswerHooks()[0].After(context.Background(), owner); err != nil {
 		t.Fatal(err)
 	}
-	if openBelow(t, dir.History()) == 0 {
+	if counted && openBelow(t, dir.History()) == 0 {
 		t.Fatal("the archive was never opened")
 	}
 	k.Stop()
+	if !counted {
+		return
+	}
 	if n := openBelow(t, dir.History()); n != 0 {
 		t.Fatalf("%d files of the archive open after the node stopped", n)
 	}

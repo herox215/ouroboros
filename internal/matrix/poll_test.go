@@ -175,6 +175,7 @@ func TestPollMalformedStartsAndRelations(t *testing.T) {
 		func(c map[string]any) { a := c["answers"].([]any); a[1].(map[string]any)["m.id"] = "a" },
 		func(c map[string]any) { c["max_selections"] = 0 },
 		func(c map[string]any) { c["max_selections"] = 1.5 },
+		func(c map[string]any) { c["answers"] = []any{1, 2} },
 	}
 	for i, change := range cases {
 		var tracker pollTracker
@@ -279,5 +280,48 @@ func TestPollSelectionLimitAndConcurrentSnapshots(t *testing.T) {
 	wg.Wait()
 	if tracker.snapshot("!r:x", "@a:x")[0]["question"] != "Lunch?" {
 		t.Fatal("snapshot mutation")
+	}
+}
+
+// Events the tracker cannot read are ignored: one without a time, content
+// over the size bound, content that is no object, and a vote delivered twice.
+func TestPollIgnoresUnreadableEventsAndReplays(t *testing.T) {
+	var tracker pollTracker
+	if tracker.update(pollFixture("m.poll.start", "$p", "@a:x", "!r:x", 0, pollStartFixture(false))) != "" {
+		t.Fatal("start without a time accepted")
+	}
+	huge := pollStartFixture(false)
+	huge["padding"] = strings.Repeat("x", 64*1024)
+	if tracker.update(pollFixture("m.poll.start", "$p", "@a:x", "!r:x", 10, huge)) != "" {
+		t.Fatal("oversized start accepted")
+	}
+	list := &event.Event{Type: event.NewEventType("m.poll.start"), ID: "$p", Sender: "@a:x", RoomID: "!r:x", Timestamp: 10, Content: event.Content{VeryRaw: json.RawMessage(`[1]`)}}
+	if tracker.update(list) != "" || len(tracker.snapshot("!r:x", "@a:x")) != 0 {
+		t.Fatal("content that is no object accepted")
+	}
+	tracker.update(pollFixture("m.poll.start", "$p", "@a:x", "!r:x", 10, pollStartFixture(false)))
+	vote := pollUpdateFixture("response", "$v", "@v:x", "!r:x", "$p", 20, false, []string{"a"})
+	tracker.update(vote)
+	tracker.update(vote)
+	if len(tracker.polls[0].votes["@v:x"]) != 1 {
+		t.Fatal("a replayed vote was recorded twice")
+	}
+}
+
+// Polls of the same time are ordered by their event ID, and evicting the
+// oldest polls of one creator keeps those of another.
+func TestPollOrderAndEvictionAcrossCreators(t *testing.T) {
+	var tracker pollTracker
+	tracker.update(pollFixture("m.poll.start", "$other", "@b:x", "!r:x", 1, pollStartFixture(false)))
+	tracker.update(pollFixture("m.poll.start", "$b", "@a:x", "!r:x", 10, pollStartFixture(false)))
+	tracker.update(pollFixture("m.poll.start", "$a", "@a:x", "!r:x", 10, pollStartFixture(false)))
+	if s := tracker.snapshot("!r:x", "@a:x"); len(s) != 2 || s[0]["id"] != "$a" || s[1]["id"] != "$b" {
+		t.Fatalf("order of polls of the same time: %v", s)
+	}
+	for i := 0; i < pollPerOwner; i++ {
+		tracker.update(pollFixture("m.poll.start", fmt.Sprintf("$%d", i), "@a:x", "!r:x", int64(20+i), pollStartFixture(false)))
+	}
+	if len(tracker.snapshot("!r:x", "@a:x")) != pollPerOwner || len(tracker.snapshot("!r:x", "@b:x")) != 1 {
+		t.Fatal("eviction crossed creators")
 	}
 }

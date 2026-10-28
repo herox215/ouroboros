@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -223,5 +225,29 @@ func TestVotePollToConcurrentConfigurations(t *testing.T) {
 	}
 	if err := fresh.VotePollTo(context.Background(), "!dm:test", "@alice:test", "$p", nil); err == nil || !strings.Contains(err.Error(), "unknown Matrix poll") {
 		t.Fatal("new client inherited tracker", err)
+	}
+}
+
+// A poll that closes while the room is checked is not voted in: the vote is
+// checked again before it is encrypted, so no key is shared for it.
+func TestVotePollToRechecksBeforeEncryption(t *testing.T) {
+	h := newHomeserver(t)
+	var c *Client
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/state") {
+			c.polls.update(pollUpdateFixture("end", "$end", "@alice:test", "!dm:test", "$p", time.Now().UnixMilli(), false, nil))
+		}
+		h.serve(w, r)
+	}))
+	defer server.Close()
+	c = testClient(t, server.URL)
+	crypt := &fakeCrypto{}
+	c.crypto, c.running = crypt, true
+	seedVotePoll(c, false)
+	if err := c.VotePollTo(context.Background(), "!dm:test", "@alice:test", "$p", []string{"a"}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("voted in a closed poll: %v", err)
+	}
+	if sent, _, _ := h.requests(); len(sent) != 0 || crypt.encrypted != 0 {
+		t.Fatal("encrypted or published a vote for a closed poll")
 	}
 }

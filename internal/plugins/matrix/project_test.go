@@ -80,3 +80,42 @@ func TestRoomShowsAndChangesTheProject(t *testing.T) {
 		t.Fatalf("the agent was asked: %+v", sessions)
 	}
 }
+
+// movingSessions are sessions whose snapshot cannot be read once the
+// directory changed.
+type movingSessions struct{ *testSessions }
+
+func (s movingSessions) SetDirectory(ctx context.Context, id, path string) error {
+	err := s.testSessions.SetDirectory(ctx, id, path)
+	s.mu.Lock()
+	s.watchErr = errors.New("session unavailable")
+	s.mu.Unlock()
+	return err
+}
+
+// Where the conversation works cannot be told without its session: /project
+// and a /cd that moved it fail with the session.
+func TestRoomCannotTellTheProjectWithoutTheSession(t *testing.T) {
+	s, _ := conversationStore(t)
+	sessions := &testSessions{}
+	c, err := openConversations(s, movingSessions{sessions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &recordingConnection{}
+	msg := incoming{RoomID: "!room:example.org", Sender: "@owner:example.org", Text: "hello"}
+	if err := c.receive(context.Background(), conn, msg); err != nil {
+		t.Fatal(err)
+	}
+	msg.Text = "/cd /tmp/next"
+	if err := c.receive(context.Background(), conn, msg); err == nil || !strings.Contains(err.Error(), "session unavailable") {
+		t.Fatalf("a /cd without the session: %v", err)
+	}
+	msg.Text = "/project"
+	if err := c.receive(context.Background(), conn, msg); err == nil || !strings.Contains(err.Error(), "session unavailable") {
+		t.Fatalf("a /project without the session: %v", err)
+	}
+	if len(conn.messages()) != 0 {
+		t.Fatalf("sent %q", conn.messages())
+	}
+}

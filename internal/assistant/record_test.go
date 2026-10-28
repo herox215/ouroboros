@@ -616,3 +616,38 @@ func TestTrail(t *testing.T) {
 		t.Fatalf("trail: %q", trail)
 	}
 }
+
+// An answer the LLM wrote while the owner said more is a draft: say is told
+// that nothing of it is said, and the answer takes in what came meanwhile.
+func TestRunSaysNothingOfADraft(t *testing.T) {
+	a, _ := recorded(t, ownerConfig(), &toolLLM{})
+	steered := false
+	ctx := agent.WithMessageSteering(context.Background(), func() []openai.Message {
+		if steered {
+			return nil
+		}
+		steered = true
+		return []openai.Message{{Role: "user", Content: "and more"}}
+	})
+	var said []string
+	got, err := a.Run(ctx, "c1", "hi", nil, func(s string) { said = append(said, s) })
+	if err != nil || got != "said: and more" || len(said) != 1 || said[0] != "" {
+		t.Fatalf("got %q, %v, said %q", got, err, said)
+	}
+}
+
+// The owner hears at once that their answer to a question of the own agent
+// arrived, in the words the LLM finds for it.
+func TestOwnerAgentAcknowledgesAnAnswer(t *testing.T) {
+	a, _ := recorded(t, ownerConfig(), &toolLLM{})
+	var said []string
+	ctx := agent.WithOwner(context.Background(), func(context.Context, json.RawMessage) (string, error) { return "SQLite", nil })
+	ctx = agent.WithSaying(ctx, func(_, text string) { said = append(said, text) })
+	got, err := a.Run(ctx, "c1", `!user_question {"question":"Which database?"}`, nil, nil)
+	if err != nil || !strings.HasPrefix(got, "said: ") {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if len(said) != 1 || !strings.HasPrefix(said[0], "said: ") || !strings.Contains(said[0], "Which database?") {
+		t.Fatalf("said %q", said)
+	}
+}

@@ -260,3 +260,21 @@ func TestSuggestionNotKept(t *testing.T) {
 		t.Fatalf("suggested %q, log %q", got, lines)
 	}
 }
+
+// With as many suggestions waiting as are kept, a new one drops the oldest,
+// and the log says which.
+func TestSuggestionDropsTheOldest(t *testing.T) {
+	store := suggestion.Open(filepath.Join(t.TempDir(), "suggestions.json"))
+	for i := range suggestion.Max {
+		if _, _, err := store.Add(fmt.Sprint("waiting ", i), nil, "c"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, log := recorded(t, ownerConfig(), &titleLLM{reply: "CHANGE: add grep."})
+	a.builder = a.builder.WithSuggestions(store)
+	a.reviewed("c", nil, nil, toolsOf{}, review{suggest: func(string) {}})
+	lines := log.take()
+	if len(lines) != 2 || lines[1] != `chat c: the oldest suggestion is dropped: "waiting 0"` {
+		t.Fatalf("log %q", lines)
+	}
+}

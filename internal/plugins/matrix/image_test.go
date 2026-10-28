@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"ouroboros/internal/a2a"
+	"ouroboros/internal/agent"
 	"ouroboros/internal/guard"
+	"ouroboros/internal/openai"
 	"ouroboros/plugin"
 )
 
@@ -83,5 +85,59 @@ func TestImageToolSendsToTheRoomOfTheOwner(t *testing.T) {
 	run(context.Background(), args, "not connected")
 	if len(conn.rooms) != 2 {
 		t.Fatalf("sent %d images", len(conn.rooms))
+	}
+}
+
+// callingModel calls the tool once with args and then ends with the result
+// of the call.
+type callingModel struct {
+	tool, args string
+	called     bool
+}
+
+func (m *callingModel) Complete(_ context.Context, _ string, messages []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if !m.called {
+		m.called = true
+		return openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "call", Type: "function", Function: openai.FunctionCall{Name: m.tool, Arguments: m.args}}}}, nil
+	}
+	return openai.Message{Role: "assistant", Content: messages[len(messages)-1].Content}, nil
+}
+
+// A picture the owner sent along is sent by its number, as image. A file the
+// tool cannot read and a connection that sends no images are refused.
+func TestImageToolSendsAnAttachment(t *testing.T) {
+	root := t.TempDir()
+	s := store{filepath.Join(root, "matrix")}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.save(configuration{Enabled: true, Token: "token", Revision: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	g := &guard.Guard{Home: filepath.Join(root, "node"), Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
+	l := &live{}
+	c := &conversations{store: s, entries: map[string]*conversation{"a": {Room: "!a:test", Identity: plugin.GatewayIdentity{Subject: "@owner:test\n!a:test"}}}}
+	picture := []byte("\x89PNG\r\n\x1a\nattached")
+	if err := os.WriteFile(filepath.Join(root, "chart.png"), picture, 0600); err != nil {
+		t.Fatal(err)
+	}
+	tool := imageTool(l, g)
+	l.set(guardedConnection{connection: &fakeConnection{}, store: s, revision: "1"}, c)
+	if _, err := tool.Run(context.Background(), json.RawMessage(`{"path":"chart.png"}`)); err == nil || !strings.Contains(err.Error(), "does not send images") {
+		t.Fatalf("a connection without images: %v", err)
+	}
+	conn := &imageConnection{}
+	l.set(guardedConnection{connection: conn, store: s, revision: "1"}, c)
+	if _, err := tool.Run(context.Background(), json.RawMessage(`{"path":"missing.png"}`)); err == nil || !strings.Contains(err.Error(), "missing.png") {
+		t.Fatalf("a missing file: %v", err)
+	}
+	bot := agent.New(&callingModel{tool: sendImage, args: `{"attachment":1}`}, "test", "", tool)
+	input := agent.WithInputMessages(context.Background(), []openai.Message{{Role: "user", Content: "send this", Images: []openai.Image{{Type: "image/png", Data: picture}}}})
+	result, err := bot.Respond(input, "attachment-chat", "")
+	if err != nil || !strings.Contains(result, `"sent":true`) {
+		t.Fatalf("result %q, %v", result, err)
+	}
+	if len(conn.names) != 1 || conn.names[0] != "image" || !bytes.Equal(conn.data[0], picture) {
+		t.Fatalf("sent %+v", conn)
 	}
 }
