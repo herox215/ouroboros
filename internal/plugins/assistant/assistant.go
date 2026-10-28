@@ -58,10 +58,37 @@ func Plugin(dir home.Dir) plugin.Plugin {
 			Workspace: dir.WorkingDir(),
 			Source:    update.Source,
 		}.WithConfig(dir.Config, dir.Proposals()).WithSuggestions(dir.Suggestions()).WithMemories(memories.Store).WithAllowing(dir.Allow)
+		if dir == dir.Root() {
+			builder = builder.WithMemoryProfiles(memoryProfiles(dir))
+		}
 		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug).WithYolo(dir.Yolo)
+		if dir == dir.Root() {
+			// The archivist opens the stores of every profile: only the
+			// process that serves runs it, at start if the interval passed.
+			plugin.Add(ctx, plugin.Serving{Start: bot.StartArchive, Stop: bot.StopArchive})
+		}
 		plugin.Add(ctx, plugin.ToolView{Tool: assistant.ToolDelegate, Show: assistant.Delegating, Detail: assistant.HowItEnded})
 		return services{builder, bot}, nil
 	})
+}
+
+// memoryProfiles lists the memory stores of every profile of the node, for
+// the archivist that walks them in one pass.
+func memoryProfiles(dir home.Dir) func() []assistant.MemoryProfile {
+	return func() []assistant.MemoryProfile {
+		dirs, err := dir.Profiles()
+		if err != nil {
+			return nil
+		}
+		out := make([]assistant.MemoryProfile, len(dirs))
+		for i, d := range dirs {
+			d := d
+			out[i] = assistant.MemoryProfile{Dir: string(d), Store: func() (*memory.Store, error) {
+				return memory.Open(d.History())
+			}}
+		}
+		return out
+	}
 }
 
 // Archived is the hook that keeps every answer that ended in archive, of the

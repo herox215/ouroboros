@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -71,6 +72,11 @@ type Config struct {
 	// Description is what the node says about itself in its agent card, ""
 	// for the default, see About.
 	Description string `json:"description,omitempty"`
+	// MemoryInterval is how long after the last pass the archivist may run
+	// again, as a Go duration like "168h"; "off" or "" turns it off. A
+	// configuration that says nothing of it leaves the archivist off, see
+	// MemoryArchive.
+	MemoryInterval *string `json:"memory_interval,omitempty"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	// The ID of the node follows from it, see ID. Older configs also stored
@@ -386,6 +392,38 @@ func (c Config) ID() string {
 	return id.ID()
 }
 
+// MemoryArchive is how long the archivist waits after a pass, and whether it
+// runs at all: "" or off turns it off, see MemoryInterval, and so does a
+// configuration that says nothing of it: the archivist waits until an
+// interval is set.
+func (c Config) MemoryArchive() (time.Duration, bool) {
+	if c.MemoryInterval == nil {
+		return 0, false
+	}
+	v := strings.TrimSpace(*c.MemoryInterval)
+	if v == "" || v == "off" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, false
+	}
+	return d, true
+}
+
+// ValidMemoryInterval reports whether value can be memory_interval: off, ""
+// or a positive duration.
+func ValidMemoryInterval(value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" || v == "off" {
+		return nil
+	}
+	if d, err := time.ParseDuration(v); err != nil || d <= 0 {
+		return fmt.Errorf("memory_interval is a duration like %q, or off", "168h")
+	}
+	return nil
+}
+
 // Efforts are the efforts the owner chooses from where the model is not
 // known, from the least to the most: "" leaves it to the model, "none" has
 // it not think at all.
@@ -465,6 +503,11 @@ func Load(dir string) (Config, error) {
 	}
 	if !slices.Contains(AllEfforts, c.Effort) {
 		return c, fmt.Errorf("%s: effort %q is none of %s", path, c.Effort, strings.Join(AllEfforts[1:], ", "))
+	}
+	if c.MemoryInterval != nil {
+		if err := ValidMemoryInterval(*c.MemoryInterval); err != nil {
+			return c, fmt.Errorf("%s: %w", path, err)
+		}
 	}
 	return c, nil
 }
