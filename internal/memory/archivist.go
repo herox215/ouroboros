@@ -654,6 +654,51 @@ func undoVersion(ctx context.Context, tx *sql.Tx, id string, versions map[string
 	return fmt.Errorf("memory %s %q changed since the change: it is now version %d, the change recorded %d", id, key, version, want)
 }
 
+// carryVersion moves the version an earlier change left of e to the one the
+// undo of change wrote: e is as that earlier change left it again, so it may
+// still be undone after the later one was.
+func carryVersion(ctx context.Context, tx *sql.Tx, change int64, e Entry) error {
+	var now int64
+	if err := tx.QueryRowContext(ctx, "SELECT version FROM memories WHERE id=?", e.ID).Scan(&now); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id,undo FROM memory_changes WHERE undone=0 AND id<?", change)
+	if err != nil {
+		return err
+	}
+	type record struct {
+		id   int64
+		undo undoState
+	}
+	var carried []record
+	for rows.Next() {
+		var r record
+		var undoJSON string
+		if err := rows.Scan(&r.id, &undoJSON); err != nil {
+			rows.Close()
+			return err
+		}
+		if json.Unmarshal([]byte(undoJSON), &r.undo) != nil {
+			continue // not one this undo can carry a version into
+		}
+		if v, ok := r.undo.Versions[e.ID]; ok && v == e.Version {
+			r.undo.Versions[e.ID] = now
+			carried = append(carried, r)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range carried {
+		undo, _ := json.Marshal(r.undo) // texts, numbers and flags: cannot fail
+		if _, err := tx.ExecContext(ctx, "UPDATE memory_changes SET undo=? WHERE id=?", string(undo), r.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UndoChange takes back the change id, see Apply, restoring every memory it
 // changed and archiving those it made. A change is undone once.
 func (s *Store) UndoChange(ctx context.Context, id int64) error {
@@ -696,6 +741,9 @@ func (s *Store) UndoChange(ctx context.Context, id int64) error {
 			_, err := tx.ExecContext(ctx, "UPDATE memories SET key=?,content=?,project=?,core=?,expires=?,archived=?,source=?,updated=?,version=version+1 WHERE id=?",
 				e.Key, e.Content, e.Project, e.Core, e.Expires, e.Archived, e.Source, time.Now().UTC().Format(time.RFC3339Nano), e.ID)
 			if err != nil {
+				return err
+			}
+			if err := carryVersion(ctx, tx, id, e); err != nil {
 				return err
 			}
 		}

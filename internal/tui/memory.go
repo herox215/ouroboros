@@ -245,7 +245,8 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 // question back and then the log.
 func (s *memoryScreen) changesKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	rows := s.changeLog
-	move := func(to int) { s.changeAt = max(0, min(to, len(rows)-1)) }
+	// A move takes the question back: it asked about the change left.
+	move := func(to int) { s.changeAt, s.undoAsk = max(0, min(to, len(rows)-1)), 0 }
 	switch msg.String() {
 	case "esc":
 		if s.undoAsk != 0 {

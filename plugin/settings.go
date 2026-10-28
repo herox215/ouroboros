@@ -480,7 +480,7 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 		} else {
 			c.MemoryInterval = &value
 		}
-		return "saved: it holds from the next pass of the archivist", nil
+		return "saved: the archivist reads it when the node starts or once you were away for a while", nil
 	}
 	return "", fmt.Errorf("no such setting: %d", s.Kind)
 }

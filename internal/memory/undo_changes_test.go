@@ -103,3 +103,38 @@ func TestArchivistUndoRefusesNewerVersion(t *testing.T) {
 		t.Fatalf("a refused undo marked the change: %+v, %v", changes, err)
 	}
 }
+
+// After the later of two changes to one memory is undone, the earlier one
+// can still be undone: the memory is as the earlier change left it.
+func TestArchivistUndoInTurn(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	e, _, err := s.Remember(ctx, "", "tea", "oolong", "session", false, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Apply(ctx, Change{Action: "rewrite", ID: e.ID, Content: "sencha", Reason: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Apply(ctx, Change{Action: "rewrite", ID: e.ID, Content: "matcha", Reason: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UndoChange(ctx, first.ID); err == nil {
+		t.Fatal("the earlier change was undone over the later one")
+	}
+	if err := s.UndoChange(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UndoChange(ctx, first.ID); err != nil {
+		t.Fatalf("the earlier change after the later one: %v", err)
+	}
+	if got, err := s.Get(ctx, e.ID); err != nil || got.Content != "oolong" {
+		t.Fatalf("after both undos: %+v, %v", got, err)
+	}
+}
