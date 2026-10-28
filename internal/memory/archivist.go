@@ -463,12 +463,9 @@ func merge(ctx context.Context, tx *sql.Tx, c *Change, before []Entry) ([]string
 	} else if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, before, err
 	}
-	e, was, fresh_, err := upsert(ctx, tx, project, c.Key, c.Content, core)
+	e, _, fresh_, err := upsert(ctx, tx, project, c.Key, c.Content, core)
 	if err != nil {
 		return nil, before, err
-	}
-	if !fresh_ && !containsID(before, was.ID) {
-		before = append(before, was)
 	}
 	created := []string{}
 	if fresh_ {
