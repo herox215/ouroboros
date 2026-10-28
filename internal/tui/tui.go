@@ -831,9 +831,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.hovered(msg)
 	case previewMsg:
 		return m, m.previewed(msg)
-	case sixelMsg:
-		return m, m.drawSixel(msg)
-	case uv.PrimaryDeviceAttributesEvent, uv.CellSizeEvent:
+	case pictureMsg:
+		return m, m.drawPicture(msg)
+	case uv.PrimaryDeviceAttributesEvent, uv.CellSizeEvent, uv.UnknownOscEvent:
 		m.told(msg)
 		return m, nil
 	case tea.KeyPressMsg:
