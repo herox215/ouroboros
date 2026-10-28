@@ -5,7 +5,9 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // Without sandbox-exec there is no sandbox.
@@ -37,5 +39,29 @@ func TestProfile(t *testing.T) {
 	if !strings.HasSuffix(p, want) || strings.Contains(p, "(deny network*)") ||
 		!strings.Contains(p, "(deny network-outbound (remote unix-socket))\n(allow network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n") {
 		t.Errorf("profile with network:\n%s", p)
+	}
+}
+
+// What a command in the sandbox starts in the background outlives it on
+// macOS: Stop ends it, and then finds nothing left.
+func TestStopEndsWhatIsLeft(t *testing.T) {
+	if Nested() {
+		t.Skip("in a sandbox already, where no other one starts")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd, err := Command(ctx, Policy{}, "sh", "-c", "sleep 60 >/dev/null 2>&1 & echo started")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if out, err := cmd.Output(); err != nil || string(out) != "started\n" {
+		t.Fatalf("output %q, %v", out, err)
+	}
+	if !Stop(cmd.Process.Pid) {
+		t.Error("Stop found nothing left")
+	}
+	if Stop(cmd.Process.Pid) {
+		t.Error("Stop found something left after it stopped it")
 	}
 }

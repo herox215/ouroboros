@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -256,14 +257,9 @@ func TestOpenFailure(t *testing.T) {
 
 // Each step of Open that fails says which one it was, and nothing is opened.
 func TestOpenFailureSteps(t *testing.T) {
-	if _, err := os.Stat("/proc/self/comm"); err != nil {
-		t.Skip("the kernel has no /proc:", err)
-	}
-	// Linux lets nobody, not even root, change the mode of what /proc has
-	// of a process: its directory and its files.
-	directory := "/proc/self"
+	directory, target := lockedPaths(t)
 	database := t.TempDir()
-	if err := os.Symlink("/proc/self/comm", filepath.Join(database, FileName)); err != nil {
+	if err := os.Symlink(target, filepath.Join(database, FileName)); err != nil {
 		t.Fatal(err)
 	}
 	// A directory where the file of the database would be.
@@ -282,19 +278,48 @@ func TestOpenFailureSteps(t *testing.T) {
 	}
 }
 
+// lockedPaths answers a directory that exists but whose mode cannot be
+// changed, and a file that opens for writing but whose mode cannot be changed
+// either. Neither is changed when the test goes wrong.
+func lockedPaths(t *testing.T) (directory, file string) {
+	t.Helper()
+	switch {
+	case runtime.GOOS == "darwin" && os.Geteuid() != 0:
+		// System Integrity Protection keeps even root from changing /System;
+		// /dev/null opens for anyone but only root may change its mode.
+		return "/System/Library", "/dev/null"
+	case runtime.GOOS == "linux":
+		// Linux lets nobody, not even root, change the mode of what /proc has
+		// of a process: its directory and its files.
+		if _, err := os.Stat("/proc/self/comm"); err == nil {
+			return "/proc/self", "/proc/self/comm"
+		}
+	}
+	t.Skip("no paths whose mode cannot be changed")
+	return "", ""
+}
+
 // A relative directory is taken from the working directory, and fails once
-// that is gone.
+// that is gone or cannot be read.
 func TestOpenWithoutWorkingDirectory(t *testing.T) {
-	gone := t.TempDir()
-	t.Chdir(gone)
-	if err := os.Remove(gone); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Getwd(); err == nil {
-		t.Skip("the system still reports the removed working directory")
-	}
-	if db, err := Open("relative"); err == nil || db != nil || !strings.HasPrefix(err.Error(), "storage directory: ") {
-		t.Fatalf("Open(relative) = %v, %v", db, err)
+	for name, lose := range map[string]func(string) error{
+		"removed":    os.Remove,
+		"unreadable": func(dir string) error { return os.Chmod(dir, 0) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			gone := t.TempDir()
+			t.Chdir(gone)
+			if err := lose(gone); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(gone, 0o700) })
+			if _, err := os.Getwd(); err == nil {
+				t.Skip("the system still reports the working directory")
+			}
+			if db, err := Open("relative"); err == nil || db != nil || !strings.HasPrefix(err.Error(), "storage directory: ") {
+				t.Fatalf("Open(relative) = %v, %v", db, err)
+			}
+		})
 	}
 }
 

@@ -455,3 +455,52 @@ func TestObserveFailsOnResults(t *testing.T) {
 		}
 	}
 }
+
+// A provider that cannot observe a message ends the answer with why, also
+// when the message is a draft told back with what the user said meanwhile,
+// or what a tool kept.
+func TestObserverFailsOnDraftAndKept(t *testing.T) {
+	refused := errors.New("refused")
+	for _, tc := range []struct {
+		name, refuse string
+		steer        []string // what the user says while the model answers
+	}{
+		{"draft", DraftHead + "answer", []string{"one more thing"}},
+		{"kept", "asked and answered", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := Tool{Name: "work", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				Keep(ctx, "asked and answered")
+				return "done", nil
+			}}
+			calls := 0
+			llm := llmFunc(func([]openai.Message) openai.Message {
+				calls++
+				if tc.name == "kept" && calls == 1 {
+					return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "work", Arguments: "{}"}}}}
+				}
+				return openai.Message{Content: "answer"}
+			})
+			p := ContextProvider{Name: "p", Prepare: func(_ context.Context, p Preparation) ([]openai.Message, error) { return p.Messages, nil },
+				Observe: func(_ context.Context, _ Processing, m openai.Message) error {
+					if m.Content == tc.refuse {
+						return refused
+					}
+					return nil
+				}}
+			a, err := New(llm, "m", "s", tool).WithExtensions("p", []ContextProvider{p}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			queue := tc.steer
+			ctx := WithSteering(context.Background(), func() []string {
+				said := queue
+				queue = nil
+				return said
+			})
+			if got, err := a.Run(ctx, "c1", "hi", Observer{}); !errors.Is(err, refused) {
+				t.Fatalf("got %q, %v", got, err)
+			}
+		})
+	}
+}

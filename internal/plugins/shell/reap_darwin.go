@@ -7,8 +7,12 @@ import (
 )
 
 // procs are the processes of this user.
-func procs() []proc {
-	list, err := unix.SysctlKinfoProcSlice("kern.proc.uid", os.Getuid())
+func procs() []proc { return procsOf(unix.SysctlKinfoProcSlice) }
+
+// procsOf are the processes of this user as read reads them: the kernel's
+// table of the processes, or what a test makes up.
+func procsOf(read func(name string, args ...int) ([]unix.KinfoProc, error)) []proc {
+	list, err := read("kern.proc.uid", os.Getuid())
 	if err != nil {
 		return nil
 	}

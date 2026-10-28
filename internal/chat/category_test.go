@@ -70,6 +70,13 @@ func TestUnavailableKeepsCause(t *testing.T) {
 	}
 }
 
+// No error marked is still no error.
+func TestMarkNothing(t *testing.T) {
+	if err := Mark(nil, Unavailable); err != nil {
+		t.Fatalf("marked nothing: %v", err)
+	}
+}
+
 // statusError is an adapter error with an HTTP status.
 type statusError Category
 

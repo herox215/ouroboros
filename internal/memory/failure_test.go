@@ -396,3 +396,37 @@ func TestWriteStopsWaitingWhenStopped(t *testing.T) {
 		t.Fatalf("a stopped write was written: %+v, %v", hits, err)
 	}
 }
+
+// A listing whose count, count of the hidden or rows cannot be read fails
+// with why instead of giving part of an answer.
+func TestListFails(t *testing.T) {
+	f := &faults{}
+	s, err := New(faultDB(t, t.TempDir(), f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := s.Create(ctx, "", "drink", "oolong", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	unread := errors.New("not read")
+	for step, fails := range map[string]func(query string) bool{
+		"count": func(q string) bool {
+			return strings.HasPrefix(q, "SELECT count(*)") && !strings.Contains(q, "archived=1")
+		},
+		"hidden": func(q string) bool {
+			return strings.HasPrefix(q, "SELECT count(*)") && strings.Contains(q, "archived=1")
+		},
+		"rows": func(q string) bool { return !strings.HasPrefix(q, "SELECT count(*)") },
+	} {
+		f.query = func(query string) error {
+			if fails(query) {
+				return unread
+			}
+			return nil
+		}
+		if l, err := s.List(ctx, "", false, 0); !errors.Is(err, unread) || len(l.Memories) != 0 || l.Total != 0 {
+			t.Errorf("%s: %+v, %v", step, l, err)
+		}
+	}
+}

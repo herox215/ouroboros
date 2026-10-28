@@ -348,6 +348,37 @@ func TestTimeoutAfterShellExit(t *testing.T) {
 	}
 }
 
+// A command stopped while what left its group still holds its output is not
+// waited for longer than grace: what it printed until then comes back.
+func TestStoppedWhileDetachedOutputStaysOpen(t *testing.T) {
+	w := newWorld(t)
+	old := grace
+	grace = time.Second
+	t.Cleanup(func() { grace = old })
+	pid := filepath.Join(t.TempDir(), "pid")
+	t.Cleanup(func() {
+		b, _ := os.ReadFile(pid)
+		if n, _ := strconv.Atoi(strings.TrimSpace(string(b))); n > 1 {
+			syscall.Kill(n, syscall.SIGKILL)
+		}
+	})
+	// The command has 800ms: the calling context ends after 1.8s, less
+	// grace. The shell ends long before, so the deadline comes while the
+	// output drains, and the one that left the group holds it open past grace.
+	ctx, cancel := context.WithTimeout(context.Background(), 1800*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := w.bash(ctx, "{}", map[string]any{
+		"command": `perl -MPOSIX -e 'exit if fork; POSIX::setsid(); open my $f, ">", "` + pid + `"; print $f $$; close $f; sleep 5'; echo started`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "started\n") {
+		t.Errorf("stopped while draining: %v", err)
+	}
+	if took := time.Since(start); took > 4*time.Second {
+		t.Errorf("stopped after %s", took)
+	}
+}
+
 // processAlive reports whether the process with the ID pid runs.
 func processAlive(pid string) bool {
 	n, err := strconv.Atoi(pid)

@@ -309,6 +309,10 @@ func TestCompleteStreamsReasoning(t *testing.T) {
 			`{"choices":[{"delta":{"reasoning_text":"I will "}}]}`,
 			`{"choices":[{"delta":{"reasoning_text":"read it."}}]}`,
 			`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`)},
+		{"reasoning_items", ReasoningItems, sse(
+			`{"choices":[{"delta":{"reasoning_items":"I will "}}]}`,
+			`{"choices":[{"delta":{"reasoning_items":"read it."}}]}`,
+			`{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`)},
 	} {
 		got, err := newServer(t, tt.h).Complete(context.Background(), "gpt", nil, nil)
 		if err != nil || got.Content != "ok" || got.Reasoning != "I will read it." || got.ReasoningField != tt.field {
@@ -317,14 +321,31 @@ func TestCompleteStreamsReasoning(t *testing.T) {
 	}
 }
 
-// An answer in one piece has its reasoning too.
+// An answer in one piece has its reasoning too, in the field it came in;
+// of two fields, the first one counts.
 func TestCompleteReasoningInOnePiece(t *testing.T) {
-	c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi","reasoning_text":"greet"}}]}`))
-	})
-	got, err := c.Complete(context.Background(), "gpt", nil, nil)
-	if err != nil || got.Content != "hi" || got.Reasoning != "greet" || got.ReasoningField != "reasoning_text" {
-		t.Fatalf("got %+v, %v", got, err)
+	for _, tt := range []struct{ reasoning, field string }{
+		{`"reasoning_content":"greet","reasoning":"wave"`, "reasoning_content"},
+		{`"reasoning":"greet"`, "reasoning"},
+		{`"reasoning_text":"greet"`, "reasoning_text"},
+		{`"reasoning_items":"greet"`, ReasoningItems},
+	} {
+		c := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi",` + tt.reasoning + `}}]}`))
+		})
+		got, err := c.Complete(context.Background(), "gpt", nil, nil)
+		if err != nil || got.Content != "hi" || got.Reasoning != "greet" || got.ReasoningField != tt.field {
+			t.Errorf("%s: got %+v, %v", tt.field, got, err)
+		}
+	}
+}
+
+// What another kind of provider kept of the thoughts of its model would go
+// in a field of its own, though Complete leaves it out before: see own.
+func TestWireKeepsReasoningItemsApart(t *testing.T) {
+	w := wireOf([]Message{{Role: "assistant", Reasoning: "r", ReasoningField: ReasoningItems}})
+	if len(w) != 1 || w[0].ReasoningItems != "r" || w[0].Reasoning != "" {
+		t.Fatalf("got %+v", w)
 	}
 }
 
