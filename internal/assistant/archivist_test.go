@@ -286,16 +286,18 @@ func TestStopCancelsTheArchivist(t *testing.T) {
 	if n := llm.count(); n != 1 {
 		t.Fatalf("a pass started after Stop (%d calls)", n)
 	}
-	// Serving again starts it again.
+	// Serving again starts it again, once the owner is away.
 	llm.mu.Lock()
 	llm.block = false
 	llm.mu.Unlock()
+	a.idleAfter = 10 * time.Millisecond
 	a.StartArchive()
 	eventually(t, "a pass after the start", func() bool { return llm.count() == 2 })
 	a.StopArchive()
 }
 
-// StartArchive runs a pass in the background, and nothing without profiles.
+// StartArchive runs a pass in the background once the owner is away, and
+// nothing without profiles.
 func TestStartArchive(t *testing.T) {
 	llm := &archiveLLM{}
 	plain, _ := recorded(t, archiveConfig("1h"), llm)
@@ -303,8 +305,79 @@ func TestStartArchive(t *testing.T) {
 	dir := t.TempDir()
 	seeded(t, dir, "key", "a memory")
 	a, _ := archivistAssistant(t, archiveConfig("1h"), llm, dir)
+	a.idleAfter = 10 * time.Millisecond
 	a.StartArchive()
 	eventually(t, "a pass", func() bool { return llm.count() == 1 })
+	a.StopArchive()
+}
+
+// The archivist waits for the owner to leave: a pass is due at the end of
+// the interval, but no sooner than the idle time after the owner was last
+// heard of.
+func TestArchivistWaitsForTheOwnerToLeave(t *testing.T) {
+	dir := t.TempDir()
+	seeded(t, dir, "key", "a memory")
+	a, _ := archivistAssistant(t, archiveConfig("1ns"), &archiveLLM{}, dir)
+	now := time.Now()
+	a.active = now
+	at, on := a.nextArchive(now)
+	if want := now.Add(a.idleAfter); !on || !at.Equal(want) {
+		t.Fatalf("the archivist may run at %v (%v), want once the owner left at %v", at, on, want)
+	}
+	a.active = now.Add(-3 * time.Hour)
+	if at, on = a.nextArchive(now); !on || at.After(now) {
+		t.Fatalf("the archivist waits for an owner long gone: %v, %v", at, on)
+	}
+}
+
+// A pass that used up its changes leaves what it did not get to as a
+// candidate: nothing of it counts as examined. A pass that did not use them
+// up marks every candidate.
+func TestArchivistLeavesWhatItDidNotGetTo(t *testing.T) {
+	ctx := context.Background()
+	seed := func(t *testing.T, n int, archiving int) (string, []archiveCall) {
+		t.Helper()
+		dir := t.TempDir()
+		var kv []string
+		for i := 0; i < n; i++ {
+			kv = append(kv, fmt.Sprintf("key-%d", i), fmt.Sprintf("memory %d", i))
+		}
+		_, m := seeded(t, dir, kv...)
+		calls := make([]archiveCall, archiving)
+		for i := range calls {
+			calls[i] = archiveCall{toolMemoryArchive, map[string]any{"id": m[i].ID, "reason": "gone"}}
+		}
+		return dir, calls
+	}
+	// examined runs a pass over dir and is the store after it.
+	examined := func(t *testing.T, dir string, calls []archiveCall) *memory.Store {
+		t.Helper()
+		a, _ := recorded(t, archiveConfig("1ns"), &archiveLLM{calls: calls})
+		a.builder = a.builder.WithMemoryProfiles(func() []MemoryProfile {
+			return []MemoryProfile{{Dir: dir, Store: func() (*memory.Store, error) { return memory.Open(dir) }}}
+		})
+		a.archive(time.Now())
+		store, err := memory.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
+		return store
+	}
+	t.Run("at the limit", func(t *testing.T) {
+		dir, calls := seed(t, archivistOps+2, archivistOps)
+		store := examined(t, dir, calls)
+		if metas, err := store.Metas(ctx, archivistSeen); err != nil || len(metas) != 0 {
+			t.Fatalf("a pass at its limit marked what it did not examine: %+v, %v", metas, err)
+		}
+	})
+	t.Run("below the limit", func(t *testing.T) {
+		dir, calls := seed(t, 3, 1)
+		store := examined(t, dir, calls)
+		if metas, err := store.Metas(ctx, archivistSeen); err != nil || len(metas) != 3 {
+			t.Fatalf("a pass below its limit marked %d of 3 candidates: %+v, %v", len(metas), metas, err)
+		}
+	})
 }
 
 // A pass that cannot open, read or mark a store says so in the log and goes

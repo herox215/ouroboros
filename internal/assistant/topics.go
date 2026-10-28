@@ -239,6 +239,7 @@ func (a *Assistant) track(chat, message string, signals []Signal, to review) {
 	t.messages = append(t.messages, message)
 	t.messages = t.messages[max(0, len(t.messages)-topicMessages):]
 	t.last, t.to = time.Now(), to
+	a.active = time.Now()
 	if a.stopped {
 		return
 	}
@@ -314,7 +315,7 @@ func (a *Assistant) tidy(now time.Time) {
 	if archived > 0 {
 		a.logf("memories: %d archived, as they expired or were never used", archived)
 	}
-	a.archive(now)
+	a.wake(now)
 }
 
 // logf writes to the log, if there is one.
