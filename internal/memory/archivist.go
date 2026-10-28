@@ -277,6 +277,10 @@ const archivistSource = "archivist"
 type undoState struct {
 	Before  []Entry  `json:"before"`
 	Created []string `json:"created,omitempty"`
+	// Versions are the versions of the memories the change touched, as the
+	// change left them. UndoChange refuses to restore a memory that changed
+	// since. Records from before it was kept have none, and are not checked.
+	Versions map[string]int64 `json:"versions,omitempty"`
 }
 
 // Apply makes one change of the archivist and keeps what it was, so that it
@@ -317,7 +321,11 @@ func (s *Store) Apply(ctx context.Context, c Change) (ChangeRecord, error) {
 		if err != nil {
 			return err
 		}
-		undo, _ := json.Marshal(undoState{Before: before, Created: created}) // texts, numbers and flags: cannot fail
+		versions, err := versionsOf(ctx, tx, before, created)
+		if err != nil {
+			return err
+		}
+		undo, _ := json.Marshal(undoState{Before: before, Created: created, Versions: versions}) // texts, numbers and flags: cannot fail
 		at := time.Now().UTC().Format(time.RFC3339Nano)
 		r, err := tx.ExecContext(ctx, "INSERT INTO memory_changes(at,action,reason,undo) VALUES(?,?,?,?)", at, c.Action, c.Reason, string(undo))
 		if err != nil {
@@ -589,6 +597,63 @@ func containsID(entries []Entry, id string) bool {
 	return slices.ContainsFunc(entries, func(e Entry) bool { return e.ID == id })
 }
 
+// versionsOf are the versions the memories have after the change, by ID, for
+// UndoChange to refuse one that changed since. A memory that is gone is left
+// out.
+func versionsOf(ctx context.Context, tx *sql.Tx, before []Entry, created []string) (map[string]int64, error) {
+	out := map[string]int64{}
+	var read func(id string) error
+	read = func(id string) error {
+		if _, ok := out[id]; ok {
+			return nil
+		}
+		var version int64
+		err := tx.QueryRowContext(ctx, "SELECT version FROM memories WHERE id=?", id).Scan(&version)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		out[id] = version
+		return nil
+	}
+	for _, e := range before {
+		if err := read(e.ID); err != nil {
+			return nil, err
+		}
+	}
+	for _, id := range created {
+		if err := read(id); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// undoVersion refuses to write over a memory whose version is not the one the
+// change left, and names it.
+func undoVersion(ctx context.Context, tx *sql.Tx, id string, versions map[string]int64) error {
+	want, ok := versions[id]
+	if !ok {
+		return nil // a record from before versions were kept
+	}
+	var version int64
+	err := tx.QueryRowContext(ctx, "SELECT version FROM memories WHERE id=?", id).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("memory %s is no longer there: it changed since the change", id)
+	}
+	if err != nil {
+		return err
+	}
+	if version == want {
+		return nil
+	}
+	var key string
+	_ = tx.QueryRowContext(ctx, "SELECT key FROM memories WHERE id=?", id).Scan(&key)
+	return fmt.Errorf("memory %s %q changed since the change: it is now version %d, the change recorded %d", id, key, version, want)
+}
+
 // UndoChange takes back the change id, see Apply, restoring every memory it
 // changed and archiving those it made. A change is undone once.
 func (s *Store) UndoChange(ctx context.Context, id int64) error {
@@ -608,6 +673,24 @@ func (s *Store) UndoChange(ctx context.Context, id int64) error {
 		var u undoState
 		if err := json.Unmarshal([]byte(undoJSON), &u); err != nil {
 			return err
+		}
+		for _, e := range u.Before {
+			if err := undoVersion(ctx, tx, e.ID, u.Versions); err != nil {
+				return err
+			}
+		}
+		for _, id := range u.Created {
+			var there int
+			err := tx.QueryRowContext(ctx, "SELECT 1 FROM memories WHERE id=?", id).Scan(&there)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // it was forgotten since: there is nothing to archive
+			}
+			if err != nil {
+				return err
+			}
+			if err := undoVersion(ctx, tx, id, u.Versions); err != nil {
+				return err
+			}
 		}
 		for _, e := range u.Before {
 			_, err := tx.ExecContext(ctx, "UPDATE memories SET key=?,content=?,project=?,core=?,expires=?,archived=?,source=?,updated=?,version=version+1 WHERE id=?",

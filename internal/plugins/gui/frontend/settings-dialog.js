@@ -44,6 +44,7 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     page(t('settings.title') + ' · ' + name);
     dialog.append(button(t('settings.model'), () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
     dialog.append(button(t('settings.gateways'), gateways));
+    dialog.append(button(t('settings.memory'), memories));
     const label = el('label', t('settings.appearance'));
     const select = el('select');
     for (const [value, text] of [['system', t('settings.system')], ['light', t('settings.light')], ['dark', t('settings.dark')]]) {
@@ -56,6 +57,59 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
   const failure = () => {
     // Never reflect backend error strings: they may contain credentials.
     dialog.append(el('p', t('settings.gatewayFailed')));
+  };
+  // The archivist revisits the memories: its interval, and the changes it
+  // made, each of which can be taken back here.
+  const memories = async () => {
+    page(t('settings.title') + ' › ' + t('settings.memory'), home);
+    const current = ++version;
+    const form = el('form');
+    const interval = el('label', t('settings.memoryInterval'));
+    const input = el('input');
+    input.type = 'text'; input.placeholder = '24h';
+    interval.append(input); form.append(interval);
+    form.append(el('p', t('settings.memoryHint')));
+    const save = el('button', t('settings.save')); save.type = 'submit'; form.append(save);
+    const status = el('p', ''); status.setAttribute('role', 'status'); form.append(status);
+    const list = el('div'); form.append(list);
+    const load = async () => {
+      try {
+        const value = await bridge.MemoryInterval(profile);
+        if (current !== version || !dialog.open) return;
+        input.value = value === 'off' ? '' : value;
+        const changes = await bridge.MemoryChanges(profile, 20) || [];
+        if (current !== version || !dialog.open) return;
+        list.replaceChildren();
+        if (!changes.length) { list.append(el('p', t('settings.noChanges'))); return; }
+        for (const change of changes) {
+          const line = el('div');
+          line.append(el('span', `#${change.id} ${change.action} · ${change.reason}` +
+            (change.undone ? ' · ' + t('settings.undone') : '')));
+          if (!change.undone) {
+            line.append(button(t('settings.undo'), async () => {
+              if (busy) return;
+              busy = true;
+              try { await bridge.UndoMemoryChange(profile, change.id); await load(); }
+              catch { if (current === version && dialog.open) status.textContent = t('settings.undoFailed'); }
+              finally { busy = false; }
+            }));
+          }
+          list.append(line);
+        }
+      } catch { if (current === version && dialog.open) status.textContent = t('settings.memoryFailed'); }
+    };
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy) return;
+      busy = true; save.disabled = true;
+      try {
+        await bridge.SetMemoryInterval(profile, input.value.trim());
+        if (current === version && dialog.open) { status.textContent = t('settings.saved'); await load(); }
+      } catch { if (current === version && dialog.open) status.textContent = t('settings.memoryFailed'); }
+      finally { busy = false; save.disabled = false; }
+    });
+    dialog.append(form);
+    await load();
   };
   const gateways = async () => {
     page(t('settings.title') + ' › ' + t('settings.gateways'), home);
