@@ -725,6 +725,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.watch(m.chats[msg.id])
 	case restartRetryMsg:
 		return m, m.retryRestarting()
+	case restartSentMsg:
+		return m, m.restartSent(msg)
 	case askedMsg:
 		return m, m.asked(msg)
 	case takenMsg:

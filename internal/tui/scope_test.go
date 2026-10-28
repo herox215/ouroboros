@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"ouroboros/plugin"
@@ -84,5 +85,57 @@ func TestLoadedPreselectsTheScope(t *testing.T) {
 	}
 	if got := (&modelScreen{scope: scopeThreads, lists: models}).text(m); !strings.Contains(got, "t · B") {
 		t.Fatalf("the head says %q", got)
+	}
+}
+
+// The settings show the model of the sessions and of the thread, and open the
+// model screen of each: its title says which, and only enter sets a model
+// there, since peers and fallbacks are those of the node.
+func TestSettingsOpenTheModelsOfAScope(t *testing.T) {
+	m, b := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	b.settings = someSettings()
+	b.offers = []Models{local("gpt-4o", "gpt-4o-mini")}
+	m.status.SessionAccess, m.status.SessionModel = "a1", "gpt-4o-mini"
+	m.status.ThreadAccess, m.status.ThreadModel = "gone", "old"
+	deliver(m, run(m, "/settings"))
+	for label, want := range map[string]string{"Model for sessions": "gpt-4o-mini · a1", "Model for the thread": "old · gone"} {
+		pick(t, m, nodeSection, label, "")
+		if r := m.config.selectedRow(m); r.value != want {
+			t.Errorf("%s: %q", label, r.value)
+		}
+	}
+
+	for _, c := range []struct{ label, title, head string }{
+		{"Model for sessions", "Model for sessions", "gpt-4o-mini · Ollama local"},
+		// An access that is gone has no label: the head names the model.
+		{"Model for the thread", "Model for the thread", "old"},
+	} {
+		m.screen = screenSettings
+		pick(t, m, nodeSection, c.label, "open the models")
+		do(m)
+		if m.screen != screenModel {
+			t.Fatalf("%s opened %v", c.label, m.screen)
+		}
+		view := ansi.Strip(m.View().Content)
+		if !strings.Contains(view, c.title+"  "+c.head) {
+			t.Fatalf("the screen of %s:\n%s", c.label, view)
+		}
+		if press(m, "p") != nil || press(m, "f") != nil {
+			t.Fatalf("p or f did something on the screen of %s", c.label)
+		}
+	}
+	// Enter there sets the model of the thread; a thread without a model of
+	// its own is answered like the owner, as its head says.
+	deliver(m, press(m, "enter"))
+	if b.status.ThreadAccess != "a1" || b.status.ThreadModel != "gpt-4o" {
+		t.Fatalf("enter set %q of %q", b.status.ThreadModel, b.status.ThreadAccess)
+	}
+	m.status.ThreadModel = ""
+	if got := (&modelScreen{scope: scopeThreads}).text(m); !strings.HasPrefix(got, "the same as yours: ") {
+		t.Fatalf("the head says %q", got)
+	}
+	if got := scopeNode.name(); got != "the node" {
+		t.Fatalf("the node is called %q", got)
 	}
 }

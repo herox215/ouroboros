@@ -74,18 +74,22 @@ func analyzeSound(path string, columns int) soundClip {
 // whole: a long recording in high resolution is hundreds of megabytes,
 // and the card only needs a few hundred peaks of it.
 func readWAV(path string, columns int) (soundClip, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return soundClip{Err: err}, true
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return soundClip{Err: err}, true
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return soundClip{Err: err}, true
-	}
-	length := info.Size()
+	return decodeWAV(file, info.Size(), columns)
+}
+
+// decodeWAV is readWAV over the length bytes of file.
+func decodeWAV(file io.ReaderAt, length int64, columns int) (soundClip, bool) {
 	head := make([]byte, 12)
-	if _, err := io.ReadFull(file, head); err != nil || string(head[:4]) != "RIFF" || string(head[8:12]) != "WAVE" {
+	if _, err := file.ReadAt(head, 0); err != nil || string(head[:4]) != "RIFF" || string(head[8:12]) != "WAVE" {
 		return soundClip{}, false
 	}
 	var (
@@ -343,6 +347,13 @@ type mpv struct {
 	mu      sync.Mutex
 }
 
+// mpvStartWait is how long mpv is given to open its socket, and
+// mpvQuitWait how long to quit before it is killed. Tests shorten them.
+var (
+	mpvStartWait = 3 * time.Second
+	mpvQuitWait  = 2 * time.Second
+)
+
 // newSoundPlayer returns the player of the node: mpv in the background, see
 // mpv. It fails with why if mpv is not installed; the chat shows that in
 // the card instead of failing when the owner wants to listen.
@@ -435,7 +446,7 @@ func (p *mpv) Stop() error {
 }
 
 // Close ends mpv and removes its socket. mpv is asked to quit and given
-// two seconds for it; then it is killed.
+// mpvQuitWait for it; then it is killed.
 func (p *mpv) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -452,7 +463,7 @@ func (p *mpv) Close() error {
 	if exited != nil {
 		select {
 		case <-exited:
-		case <-time.After(2 * time.Second):
+		case <-time.After(mpvQuitWait):
 			command.Process.Kill()
 		}
 	}
@@ -502,7 +513,7 @@ func (p *mpv) start() error {
 	// died does not stay a zombie until the node exits.
 	exited := make(chan struct{})
 	go func() { command.Wait(); close(exited) }()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(mpvStartWait)
 	for {
 		conn, err := net.Dial("unix", socket)
 		if err == nil {
