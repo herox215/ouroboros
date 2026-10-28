@@ -240,7 +240,7 @@ func TestWaitingMessageKeepsTheKeys(t *testing.T) {
 // drawn anew, and does what the click does too.
 func TestClickTakesTheSixelAway(t *testing.T) {
 	m, _ := newModel(t)
-	m.hover = hover{x: 1, y: 1, view: "a picture", sixel: "sixel", drawn: true}
+	m.hover = hover{x: 1, y: 1, view: "a picture", picture: "sixel", drawn: true}
 	cmd := m.mouse(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
 	if cmd == nil || m.hover.drawn {
 		t.Fatal("the sixel stays")
