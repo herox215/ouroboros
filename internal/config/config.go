@@ -74,8 +74,8 @@ type Config struct {
 	Description string `json:"description,omitempty"`
 	// MemoryInterval is how long after the last pass the archivist may run
 	// again, as a Go duration like "168h"; "off" or "" turns it off. A
-	// configuration from before the archivist has none, which keeps the
-	// default, see MemoryArchive.
+	// configuration that says nothing of it leaves the archivist off, see
+	// MemoryArchive.
 	MemoryInterval *string `json:"memory_interval,omitempty"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
@@ -392,16 +392,13 @@ func (c Config) ID() string {
 	return id.ID()
 }
 
-// DefaultMemoryInterval is how long the archivist waits after a pass that
-// changed something before it may run again.
-const DefaultMemoryInterval = 7 * 24 * time.Hour
-
 // MemoryArchive is how long the archivist waits after a pass, and whether it
-// runs at all: "" or off turns it off, see MemoryInterval. A configuration
-// that says nothing of it keeps DefaultMemoryInterval.
+// runs at all: "" or off turns it off, see MemoryInterval, and so does a
+// configuration that says nothing of it: the archivist waits until an
+// interval is set.
 func (c Config) MemoryArchive() (time.Duration, bool) {
 	if c.MemoryInterval == nil {
-		return DefaultMemoryInterval, true
+		return 0, false
 	}
 	v := strings.TrimSpace(*c.MemoryInterval)
 	if v == "" || v == "off" {

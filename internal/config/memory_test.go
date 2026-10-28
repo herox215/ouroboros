@@ -34,16 +34,16 @@ func TestMemoryIntervalSurvivesSave(t *testing.T) {
 	}
 }
 
-// A bad interval that got past Load, and one of no time, turn it off; none
-// keeps the default.
+// A bad interval that got past Load, and one of no time, turn it off; a
+// configuration that says nothing of it leaves it off too.
 func TestMemoryArchive(t *testing.T) {
 	for _, v := range []string{"sometimes", "0s", "-1h", ""} {
 		if _, on := (Config{MemoryInterval: &v}).MemoryArchive(); on {
 			t.Errorf("%q is on", v)
 		}
 	}
-	if d, on := (Config{}).MemoryArchive(); !on || d != DefaultMemoryInterval {
-		t.Errorf("the default is %v, %v", d, on)
+	if _, on := (Config{}).MemoryArchive(); on {
+		t.Error("a configuration without memory_interval runs the archivist")
 	}
 }
 

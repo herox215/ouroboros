@@ -99,10 +99,7 @@ func (s *Store) Candidates(ctx context.Context, marker time.Time, staleAfter tim
 			}
 		}
 	}
-	pairs, err := s.Pairs(ctx, limit)
-	if err != nil {
-		return nil, err
-	}
+	pairs := pairsOf(all)
 	notes, err := s.Metas(ctx, "archivist/pair/")
 	if err != nil {
 		return nil, err
@@ -125,13 +122,20 @@ func (s *Store) Candidates(ctx context.Context, marker time.Time, staleAfter tim
 	return list, nil
 }
 
-// Pairs returns the current memories of one scope that say nearly the same:
-// their words overlap by at least half of the shorter one.
+// Pairs returns the current memories of one scope that say nearly the same,
+// see pairsOf.
 func (s *Store) Pairs(ctx context.Context, limit int) ([]Pair, error) {
 	all, err := s.Current(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
+	return pairsOf(all), nil
+}
+
+// pairsOf are the pairs among all that say nearly the same: their words
+// overlap by at least three fifths of the shorter one, with at least three
+// words in common.
+func pairsOf(all []Entry) []Pair {
 	words := make([]map[string]bool, len(all))
 	for i, e := range all {
 		words[i] = wordsOf(e.Key + " " + e.Content)
@@ -145,7 +149,7 @@ func (s *Store) Pairs(ctx context.Context, limit int) ([]Pair, error) {
 			out = append(out, Pair{all[i], all[j]})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // PairName is the name under which the note of a pair is kept.
@@ -247,6 +251,10 @@ type Change struct {
 	Core    *bool    `json:"core,omitempty"`
 	Parts   []Part   `json:"parts,omitempty"`
 	Reason  string   `json:"reason"`
+	// Versions are the versions of the memories the change touches, by ID, as
+	// the archivist saw them: Apply refuses a change whose memory changed
+	// since. The desk of a pass sets them; the model does not.
+	Versions map[string]int64 `json:"-"`
 }
 
 // ChangeRecord is a change the archivist made, as it is in the log.
@@ -284,6 +292,9 @@ func (s *Store) Apply(ctx context.Context, c Change) (ChangeRecord, error) {
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		before, err := load(ctx, tx, idsOf(c))
 		if err != nil {
+			return err
+		}
+		if err := seenVersions(before, c.Versions); err != nil {
 			return err
 		}
 		created := []string{}
@@ -346,6 +357,18 @@ func load(ctx context.Context, tx *sql.Tx, ids []string) ([]Entry, error) {
 		return nil, err
 	}
 	return entries(rows)
+}
+
+// seenVersions refuses a change whose memory is no longer in the version the
+// archivist saw: its text would otherwise be replaced by one derived from an
+// older text.
+func seenVersions(entries []Entry, versions map[string]int64) error {
+	for _, e := range entries {
+		if v, ok := versions[e.ID]; ok && v != e.Version {
+			return fmt.Errorf("memory %s changed since you read it", e.ID)
+		}
+	}
+	return nil
 }
 
 func find(entries []Entry, id string) (Entry, bool) {
@@ -424,10 +447,13 @@ func merge(ctx context.Context, tx *sql.Tx, c *Change, before []Entry) ([]string
 	if err := fits(c.Key, c.Content, sources); err != nil {
 		return nil, before, err
 	}
-	// A memory of the target key that is not one of the sources is replaced
-	// too, and has to be in the undo.
+	// A memory of the target key that is not one of the sources would be
+	// replaced although the archivist never saw it: it has to name it among
+	// the ids, whose texts it was shown.
 	if e, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM memories WHERE project=? AND key=?", project, c.Key)); err == nil && !containsID(before, e.ID) {
-		before = append(before, e)
+		return nil, before, fmt.Errorf("a memory with the key %q is already there: name it among the ids", c.Key)
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, before, err
 	}
 	e, was, fresh_, err := upsert(ctx, tx, project, c.Key, c.Content, core)
 	if err != nil {
@@ -463,7 +489,10 @@ func rewrite(ctx context.Context, tx *sql.Tx, c Change, before []Entry) error {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, "UPDATE memories SET key=?,content=?,source=?,updated=?,version=version+1 WHERE id=?", key, c.Content, archivistSource, time.Now().UTC().Format(time.RFC3339Nano), e.ID)
-	return err
+	if err != nil || !e.Core {
+		return err
+	}
+	return full(ctx, tx)
 }
 
 func split(ctx context.Context, tx *sql.Tx, c Change, before []Entry) ([]string, error) {

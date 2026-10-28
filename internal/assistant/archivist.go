@@ -35,8 +35,9 @@ const (
 	archivistTime   = 10 * time.Minute
 )
 
-// archivistEffort is how much the model thinks for a pass: it changes what
-// every prompt of a profile may get, but no answer waits for it.
+// archivistEffort is how much the model thinks for a pass when the profile
+// names no effort of its own: it changes what every prompt of a profile may
+// get, but no answer waits for it.
 const archivistEffort = "medium"
 
 // archival keeps two profiles of one process from tidying at the same time.
@@ -196,14 +197,14 @@ func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.
 	}
 	desk := &desk{store: store, log: func(format string, args ...any) {
 		a.logf("memories of %s: "+format, append([]any{dir}, args...)...)
-	}, shown: map[string]bool{}}
+	}, seen: map[string]int64{}, full: map[string]bool{}}
 	lines := make([]string, len(candidates))
 	for i, c := range candidates {
-		desk.shown[c.ID] = true
+		desk.show(c.Entry, 512)
 		lines[i] = memoryLine(c.Entry, 512) + "\n  why: " + strings.Join(c.Reasons, "; ")
 	}
 	bot := agent.New(a.builder.withFallbacks(llm, cfg), cfg.Model, fmt.Sprintf(archivistPrompt, archivistOps), desk.tools()...)
-	reply, err := bot.Respond(helping(chat.WithEffort(ctx, archivistEffort)), "archivist",
+	reply, err := bot.Respond(helping(chat.WithEffort(ctx, cmp.Or(cfg.Effort, archivistEffort))), "archivist",
 		"<memories>\n"+strings.Join(lines, "\n")+"\n</memories>")
 	if err != nil {
 		return len(candidates), err
@@ -242,26 +243,32 @@ func memoryLine(e memory.Entry, limit int) string {
 	if e.Archived {
 		archived = " | archived"
 	}
-	return e.ID + " | " + cmp.Or(e.Project, "global") + " | " + e.Updated + core + archived + " | " + e.Key + ": " + content
+	return e.ID + " | " + cmp.Or(e.Project, "global") + " | v" + strconv.FormatInt(e.Version, 10) + " | " + e.Updated + core + archived + " | " + e.Key + ": " + content
 }
 
 // desk is the store of one profile as the archivist works on it in a pass:
 // the memories it was shown, which are the only ones it may change, and how
 // many changes it made.
 type desk struct {
-	store   *memory.Store
-	log     func(format string, args ...any)
-	mu      sync.Mutex
-	shown   map[string]bool
+	store *memory.Store
+	log   func(format string, args ...any)
+	mu    sync.Mutex
+	// seen is the version of every memory the archivist was shown, and full
+	// the ones whose whole text it saw: a change of a text needs the whole
+	// text, not the line cut for the prompt.
+	seen    map[string]int64
+	full    map[string]bool
 	changes int
 }
 
-// show notes that the archivist saw the memories ids.
-func (d *desk) show(ids ...string) {
+// show notes that the archivist saw e, whose line is cut at limit bytes: its
+// whole text when it fits, and the version it had.
+func (d *desk) show(e memory.Entry, limit int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, id := range ids {
-		d.shown[id] = true
+	d.seen[e.ID] = e.Version
+	if len(e.Content) <= limit {
+		d.full[e.ID] = true
 	}
 }
 
@@ -329,7 +336,7 @@ func (d *desk) find(ctx context.Context, raw json.RawMessage) (string, error) {
 	}
 	lines := make([]string, len(found))
 	for i, e := range found {
-		d.show(e.ID)
+		d.show(e, 256)
 		lines[i] = memoryLine(e, 256)
 	}
 	return strings.Join(lines, "\n"), nil
@@ -347,8 +354,20 @@ func (d *desk) read(ctx context.Context, raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	d.show(e.ID)
+	d.show(e, memory.MaxContent)
 	return memoryLine(e, memory.MaxContent), nil
+}
+
+// writtenOver are the memories whose whole text a change writes over: a
+// merge takes its sources, a rewrite and a split theirs.
+func writtenOver(c memory.Change) []string {
+	switch c.Action {
+	case "merge":
+		return c.IDs
+	case "rewrite", "split":
+		return []string{c.ID}
+	}
+	return nil
 }
 
 // change is the tool name that makes the change action of the store, see
@@ -372,18 +391,35 @@ func (d *desk) change(name, action, description, properties, required string) ag
 			if d.changes >= archivistOps {
 				return "", fmt.Errorf("this pass made its %d changes; end it", archivistOps)
 			}
+			versions := make(map[string]int64, len(ids))
 			for _, id := range ids {
-				if id != "" && !d.shown[id] {
+				if id == "" {
+					continue
+				}
+				v, ok := d.seen[id]
+				if !ok {
 					return "", fmt.Errorf("memory %s was not shown to you: find or read it first", id)
 				}
+				versions[id] = v
 			}
+			for _, id := range writtenOver(c) {
+				if !d.full[id] {
+					return "", fmt.Errorf("memory %s was shown cut: read it in full before you change its text", id)
+				}
+			}
+			c.Versions = versions
 			rec, err := d.store.Apply(ctx, c)
 			if err != nil {
 				return "", err
 			}
 			d.changes++
+			for _, id := range append(slices.Clone(ids), rec.Created...) {
+				if v, err := d.store.Version(ctx, id); err == nil {
+					d.seen[id] = v
+				}
+			}
 			for _, id := range rec.Created {
-				d.shown[id] = true
+				d.full[id] = true
 			}
 			d.log("%s %s: %s", action, strings.TrimSpace(strings.Join(ids, " ")), c.Reason)
 			if len(rec.Created) > 0 {

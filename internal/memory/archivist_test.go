@@ -292,7 +292,6 @@ func TestArchivistCandidatesFail(t *testing.T) {
 		"seen":  failQuery("memory_meta", 1),
 		"notes": failQuery("memory_meta", 2),
 		"core":  failQuery("core=1 AND archived=0"),
-		"pairs": failQuery("ORDER BY project,key", 2),
 	} {
 		s, f := archivistFaults(t)
 		keep(t, s, "", "tea", "oolong", false)
@@ -386,26 +385,26 @@ func TestArchivistMergeRefuses(t *testing.T) {
 	}
 }
 
-// A merge into the key of a third memory replaces it, and the undo gives it
-// back; one without a key keeps the key of the first memory.
+// A merge into the key of a third memory is refused: the archivist never saw
+// it. One into a new key or without a key, which keeps the first key, goes
+// through.
 func TestArchivistMergeIntoAThird(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	a := keep(t, s, "", "a", "alpha", false)
 	b := keep(t, s, "", "b", "beta", false)
 	c := keep(t, s, "", "c", "gamma", false)
-	rec, err := s.Apply(ctx, Change{Action: "merge", IDs: []string{a.ID, b.ID}, Key: "c", Content: "alpha beta", Reason: "same"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.Get(ctx, c.ID); err != nil || got.Content != "alpha beta" {
-		t.Fatalf("third after the merge: %+v, %v", got, err)
-	}
-	if err := s.UndoChange(ctx, rec.ID); err != nil {
-		t.Fatal(err)
+	if _, err := s.Apply(ctx, Change{Action: "merge", IDs: []string{a.ID, b.ID}, Key: "c", Content: "alpha beta", Reason: "same"}); err == nil || !strings.Contains(err.Error(), "already there") {
+		t.Fatalf("merge into a third: %v", err)
 	}
 	if got, err := s.Get(ctx, c.ID); err != nil || got.Content != "gamma" || got.Archived {
-		t.Fatalf("third after the undo: %+v, %v", got, err)
+		t.Fatalf("third after the refused merge: %+v, %v", got, err)
+	}
+	if _, err := s.Apply(ctx, Change{Action: "merge", IDs: []string{a.ID, b.ID}, Key: "ab", Content: "alpha beta", Reason: "same"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(ctx, c.ID); err != nil || got.Content != "gamma" {
+		t.Fatalf("third after a merge into a new key: %+v, %v", got, err)
 	}
 	if _, err := s.Apply(ctx, Change{Action: "merge", IDs: []string{a.ID, b.ID}, Content: "alpha beta", Reason: "same"}); err != nil {
 		t.Fatal(err)
@@ -440,14 +439,13 @@ func TestArchivistMergeCore(t *testing.T) {
 }
 
 // A merge whose target cannot be read, or whose sources cannot be archived,
-// fails; one whose target is found only when it is written still keeps that
-// target in its undo.
+// fails.
 func TestArchivistMergeFails(t *testing.T) {
 	s, f := archivistFaults(t)
 	ctx := context.Background()
 	a := keep(t, s, "", "a", "alpha", false)
 	b := keep(t, s, "", "b", "beta", false)
-	c := keep(t, s, "", "c", "gamma", false)
+	keep(t, s, "", "c", "gamma", false)
 	merge := Change{Action: "merge", IDs: []string{a.ID, b.ID}, Key: "c", Content: "alpha beta", Reason: "same"}
 	f.query = failQuery("WHERE project=? AND key=?")
 	if _, err := s.Apply(ctx, merge); !errors.Is(err, errQuery) {
@@ -461,17 +459,55 @@ func TestArchivistMergeFails(t *testing.T) {
 		t.Fatalf("unarchived sources: %v", err)
 	}
 	untrigger(t, s)
-	f.query = failQuery("WHERE project=? AND key=?", 1)
-	rec, err := s.Apply(ctx, merge)
-	f.query = nil
+}
+
+// A change does not land on a text the archivist did not see: a memory that
+// changed since is refused, and keeps the text it has.
+func TestArchivistChangeRefusesNewerText(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	a := keep(t, s, "", "a", "first", false)
+	seen, err := s.Get(ctx, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UndoChange(ctx, rec.ID); err != nil {
+	if _, _, err := s.Remember(ctx, "", "a", "second", "session", false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Get(ctx, c.ID); err != nil || got.Content != "gamma" {
-		t.Fatalf("target after the undo: %+v, %v", got, err)
+	_, err = s.Apply(ctx, Change{Action: "rewrite", ID: a.ID, Content: "third", Reason: "shorter", Versions: map[string]int64{a.ID: seen.Version}})
+	if err == nil || !strings.Contains(err.Error(), "changed since you read it") {
+		t.Fatalf("rewrite over a newer text: %v", err)
+	}
+	if got, err := s.Get(ctx, a.ID); err != nil || got.Content != "second" {
+		t.Fatalf("memory after the refused rewrite: %+v, %v", got, err)
+	}
+}
+
+// A rewrite may not push the core memories over MaxCore, as no other write
+// may.
+func TestArchivistRewriteKeepsCoreBudget(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	a := keep(t, s, "", "a", strings.Repeat("a", MaxCore), true)
+	_, err := s.Apply(ctx, Change{Action: "rewrite", ID: a.ID, Content: strings.Repeat("x", MaxCore+60), Reason: "shorter"})
+	if !errors.Is(err, ErrCoreFull) {
+		t.Fatalf("rewrite past MaxCore: %v", err)
+	}
+	if got, err := s.Get(ctx, a.ID); err != nil || got.Content != strings.Repeat("a", MaxCore) {
+		t.Fatalf("memory after the refused rewrite: %+v, %v", got, err)
+	}
+}
+
+// A merge of core memories past MaxCore fails through the write that keeps
+// them, though merge itself does not check the budget.
+func TestArchivistMergeKeepsCoreBudget(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	a := keep(t, s, "", "a", strings.Repeat("a", 900), true)
+	b := keep(t, s, "", "b", strings.Repeat("b", 900), true)
+	_, err := s.Apply(ctx, Change{Action: "merge", IDs: []string{a.ID, b.ID}, Key: "ab", Content: strings.Repeat("x", 1800), Reason: "same"})
+	if !errors.Is(err, ErrCoreFull) {
+		t.Fatalf("merge past MaxCore: %v", err)
 	}
 }
 

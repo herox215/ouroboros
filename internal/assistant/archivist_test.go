@@ -441,6 +441,7 @@ func TestArchivistTools(t *testing.T) {
 		{toolMemoryRead, map[string]any{}},
 		{toolMemoryRead, map[string]any{"id": "nothing"}},
 		{toolMemoryRead, map[string]any{"id": gone.ID}},
+		{toolMemoryRead, map[string]any{"id": long.ID}},
 		{toolMemoryMerge, map[string]any{"ids": "not a list"}},
 		{toolMemoryRewrite, map[string]any{"id": long.ID, "content": strings.Repeat("y", 2000), "reason": "longer"}},
 		{toolMemorySplit, map[string]any{"id": long.ID, "reason": "two facts", "parts": []map[string]string{
@@ -455,7 +456,7 @@ func TestArchivistTools(t *testing.T) {
 	told := llm.told()
 	for i, want := range []string{
 		`needs "query"`, "No memory has these words.", `needs "id"`, "not found",
-		gone.ID + " | global | ", toolMemoryMerge + ": ", "may not say more", "New: ", "Done, change",
+		gone.ID + " | global | ", long.ID + " | ", toolMemoryMerge + ": ", "may not say more", "New: ", "Done, change",
 	} {
 		if i >= len(told) || !strings.Contains(told[i], want) {
 			t.Fatalf("call %d: want %q in:\n%s", i, want, strings.Join(told, "\n"))
@@ -470,7 +471,7 @@ func TestArchivistTools(t *testing.T) {
 func TestMemoryLine(t *testing.T) {
 	e := memory.Entry{ID: "i", Key: "k", Content: strings.Repeat("ä", 300), Core: true, Updated: "now"}
 	line := memoryLine(e, 5)
-	if line != "i | global | now | core | k: ää…" {
+	if line != "i | global | v0 | now | core | k: ää…" {
 		t.Fatalf("line %q", line)
 	}
 }
@@ -490,5 +491,26 @@ func TestArchivistFindFails(t *testing.T) {
 	a.archive(time.Now())
 	if told := llm.told(); len(told) != 1 || !strings.Contains(told[0], "memory_fts") {
 		t.Fatalf("told %q", told)
+	}
+}
+
+// A memory the archivist saw only as a cut line is not rewritten: it has to
+// read the whole text first.
+func TestArchivistRewritesOnlyWhatItReadInFull(t *testing.T) {
+	_, store := rawStore(t)
+	long := keepMemory(t, store, "", "long", "one fact. "+strings.Repeat("x", 600), time.Time{})
+	llm := &archiveLLM{calls: []archiveCall{
+		{toolMemoryRewrite, map[string]any{"id": long.ID, "content": "short", "reason": "shorter"}},
+	}}
+	a, _ := recorded(t, archiveConfig("1h"), llm)
+	a.builder = a.builder.WithMemoryProfiles(func() []MemoryProfile {
+		return []MemoryProfile{{Dir: "raw", Store: func() (*memory.Store, error) { return store, nil }}}
+	})
+	a.archive(time.Now())
+	if told := llm.told(); len(told) != 1 || !strings.Contains(told[0], "was shown cut") {
+		t.Fatalf("told %q", told)
+	}
+	if got, err := store.Get(context.Background(), long.ID); err != nil || got.Content == "short" {
+		t.Fatalf("memory after the refused rewrite: %+v, %v", got, err)
 	}
 }
