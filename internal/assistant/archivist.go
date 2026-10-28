@@ -31,7 +31,7 @@ const (
 	archivistSeen   = "archivist/seen/"
 	archivistStale  = 30 * 24 * time.Hour
 	archivistLimit  = 200
-	archivistOps    = 8 // changes of one profile in one pass
+	archivistOps    = 32 // changes of one profile in one pass
 	archivistTime   = 10 * time.Minute
 )
 
@@ -78,30 +78,144 @@ func (b Builder) WithMemoryProfiles(profiles func() []MemoryProfile) Builder {
 	return b
 }
 
-// StartArchive runs the archivist once in the background if it is due, as
-// when the node starts to serve, and lets it run after idle periods again
-// after StopArchive. It matters on the first profile of the node only.
+// StartArchive lets the archivist look whether it may run, as when the node
+// starts to serve: a pass that is due and waits for the owner to be away
+// runs now, and the next moment one may run is planned, see wake. The owner
+// counts as there while the node starts. It matters on the first profile of
+// the node only.
 func (a *Assistant) StartArchive() {
 	if a.builder.memoriesOf == nil {
 		return
 	}
+	now := time.Now()
 	a.learning.Lock()
 	a.unarchived = false
+	a.active = now
 	a.learning.Unlock()
-	go a.archive(time.Now())
+	go a.wake(now)
 }
 
 // StopArchive cancels the pass of the archivist on its way and waits for it
-// to let go of the stores; until StartArchive no pass starts. A pass ends at
+// to let go of the stores; until StartArchive no pass starts, neither now nor
+// at the moment planned for the next one, see waitUntil. A pass ends at
 // once: what it changed is whole.
 func (a *Assistant) StopArchive() {
 	a.learning.Lock()
 	a.unarchived = true
+	if a.due != nil {
+		a.due.Stop()
+	}
 	if a.archiving != nil {
 		a.archiving()
 	}
 	a.learning.Unlock()
 	a.archives.Wait()
+}
+
+// wake looks whether the archivist may run now, runs its pass if so, and
+// plans the next moment it may look, see nextArchive. It runs when the node
+// starts to serve, when the owner left, and when a planned moment came.
+func (a *Assistant) wake(now time.Time) {
+	if a.builder.memoriesOf == nil {
+		return
+	}
+	at, on := a.nextArchive(now)
+	if !on {
+		return
+	}
+	if !at.After(now) {
+		a.learning.Lock()
+		stop := a.unarchived
+		a.learning.Unlock()
+		if stop {
+			return
+		}
+		a.archive(now)
+		now = time.Now()
+		a.learning.Lock()
+		a.looked = now
+		a.learning.Unlock()
+		if at, on = a.nextArchive(now); !on {
+			return
+		}
+	}
+	a.waitUntil(at)
+}
+
+// nextArchive is the moment the archivist may look again, and false when it
+// may never: the end of the interval since the last pass that examined
+// something, and no sooner than the idle time after the owner was last heard
+// of. A time that is not after now means that it may run now.
+func (a *Assistant) nextArchive(now time.Time) (time.Time, bool) {
+	all := a.builder.memoriesOf()
+	if len(all) == 0 {
+		return time.Time{}, false
+	}
+	store, err := all[0].Store()
+	if err != nil {
+		a.logf("the memories cannot be archived: %v", err)
+		return time.Time{}, false
+	}
+	last, err := store.Marked(context.Background(), archivistMarker)
+	store.Close()
+	if err != nil {
+		a.logf("the memories cannot be archived: %v", err)
+		return time.Time{}, false
+	}
+	_, cfg, err := a.current(false, "")
+	if err != nil {
+		a.logf("the memories cannot be archived: %v", err)
+		return time.Time{}, false
+	}
+	interval, on := cfg.MemoryArchive()
+	if !on {
+		return time.Time{}, false
+	}
+	at := now
+	if !last.IsZero() {
+		at = last.Add(interval)
+	}
+	a.learning.Lock()
+	looked, active, idleAfter := a.looked, a.active, a.idleAfter
+	a.learning.Unlock()
+	if !looked.IsZero() && looked.Add(interval).After(at) {
+		// A pass that examined nothing moves no marker: the next one is a
+		// whole interval after it looked, and not at once again.
+		at = looked.Add(interval)
+	}
+	if !active.IsZero() && active.Add(idleAfter).After(at) {
+		at = active.Add(idleAfter)
+	}
+	return at, true
+}
+
+// waitUntil plans the look at t, when the archivist may run, see wake. It
+// plans nothing once the archivist is stopped.
+func (a *Assistant) waitUntil(t time.Time) {
+	d := time.Until(t)
+	if d < time.Second {
+		d = time.Second // not to spin on a moment that has just come
+	}
+	a.learning.Lock()
+	defer a.learning.Unlock()
+	if a.unarchived {
+		return
+	}
+	if a.due == nil {
+		a.due = time.AfterFunc(d, a.woken)
+	} else {
+		a.due.Reset(d)
+	}
+}
+
+// woken is the planned look of waitUntil: the archivist may run now.
+func (a *Assistant) woken() {
+	a.learning.Lock()
+	stop := a.unarchived
+	a.learning.Unlock()
+	if !stop {
+		a.wake(time.Now())
+	}
 }
 
 // archive is one pass of the archivist across all profiles of the node, if
@@ -157,22 +271,28 @@ func (a *Assistant) archive(now time.Time) {
 	if !last.IsZero() && now.Sub(last) < interval {
 		return
 	}
-	examined := 0
+	examined, complete := 0, true
 	for _, p := range all {
 		store, err := p.Store()
 		if err != nil {
 			a.logf("the memories of %s cannot be archived: %v", p.Dir, err)
+			complete = false
 			continue
 		}
-		n, err := a.archiveStore(ctx, p.Dir, store, cfg, last)
+		n, done, err := a.archiveStore(ctx, p.Dir, store, cfg, last)
 		store.Close()
 		if err != nil {
 			a.logf("the memories of %s cannot be archived: %v", p.Dir, err)
+			complete = false
 			continue
 		}
 		examined += n
+		complete = complete && done
 	}
-	if examined > 0 {
+	// The marker is the pass of a look, and a look that ended at its limit or
+	// in an error saw only part of what it was given: it stays where it was,
+	// so that the rest is a candidate again next time, see Candidates.
+	if examined > 0 && complete {
 		if err := coordinator.Mark(ctx, archivistMarker, time.Now()); err != nil {
 			a.logf("the memories cannot be archived: %v", err)
 		}
@@ -181,19 +301,20 @@ func (a *Assistant) archive(now time.Time) {
 
 // archiveStore has the archivist agent tidy the memories of one profile with
 // its tools, see desk.tools, starting from the candidates of the store.
-// It returns how many memories it examined. Every change is committed by
-// itself, so a cancelled pass leaves whole changes and no half-written state.
-func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.Store, cfg config.Config, last time.Time) (int, error) {
+// It returns how many memories it examined, and whether it got through all of
+// them. Every change is committed by itself, so a cancelled pass leaves whole
+// changes and no half-written state.
+func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.Store, cfg config.Config, last time.Time) (int, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	candidates, err := store.Candidates(ctx, last, archivistStale, archivistLimit)
 	if err != nil || len(candidates) == 0 {
-		return 0, err
+		return 0, err == nil, err
 	}
 	llm, err := a.builder.LLM(cfg.Access)
 	if err != nil {
-		return len(candidates), err
+		return len(candidates), false, err
 	}
 	desk := &desk{store: store, log: func(format string, args ...any) {
 		a.logf("memories of %s: "+format, append([]any{dir}, args...)...)
@@ -207,18 +328,22 @@ func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.
 	reply, err := bot.Respond(helping(chat.WithEffort(ctx, cmp.Or(cfg.Effort, archivistEffort))), "archivist",
 		"<memories>\n"+strings.Join(lines, "\n")+"\n</memories>")
 	if err != nil {
-		return len(candidates), err
+		return len(candidates), false, err
 	}
 	if reply = strings.TrimSpace(reply); reply != "" {
 		desk.log("%s", firstLine(reply))
 	}
 	// What was examined is kept with its version, and a pair that was judged
 	// different with both versions, so that a pass with nothing new costs
-	// nothing next time.
+	// nothing next time. A pass that used up its changes has not examined
+	// what it did not get to: that stays a candidate for the next pass.
 	values := map[string]string{}
-	for _, c := range candidates {
-		if v, err := store.Version(ctx, c.ID); err == nil {
-			values[archivistSeen+c.ID] = strconv.FormatInt(v, 10)
+	complete := !desk.limited()
+	if complete {
+		for _, c := range candidates {
+			if v, err := store.Version(ctx, c.ID); err == nil {
+				values[archivistSeen+c.ID] = strconv.FormatInt(v, 10)
+			}
 		}
 	}
 	if pairs, err := store.Pairs(ctx, archivistLimit); err == nil {
@@ -226,7 +351,7 @@ func (a *Assistant) archiveStore(ctx context.Context, dir string, store *memory.
 			values[memory.PairName(p.A, p.B)] = memory.PairVersions(p)
 		}
 	}
-	return len(candidates), store.SetMetas(ctx, values)
+	return len(candidates), complete, store.SetMetas(ctx, values)
 }
 
 // memoryLine is e as the archivist reads it, its content cut at limit bytes.
@@ -259,6 +384,13 @@ type desk struct {
 	seen    map[string]int64
 	full    map[string]bool
 	changes int
+}
+
+// limited reports whether the archivist used up the changes of this pass.
+func (d *desk) limited() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.changes >= archivistOps
 }
 
 // show notes that the archivist saw e, whose line is cut at limit bytes: its

@@ -318,6 +318,9 @@ type Assistant struct {
 	archiving  context.CancelFunc     // of the pass of the archivist, while one runs
 	archives   sync.WaitGroup         // of that pass, which StopArchive waits for
 	unarchived bool                   // by StopArchive: no pass starts again
+	active     time.Time              // when the owner was last heard of, see track
+	looked     time.Time              // when the archivist last looked at its time, see wake
+	due        *time.Timer            // runs wake once the archivist may look again, see waitUntil
 }
 
 // setup is the part of the configuration an agent is built from.
@@ -1032,6 +1035,9 @@ func (a *Assistant) Stop() {
 	a.stopped = true
 	if a.idle != nil {
 		a.idle.Stop()
+	}
+	if a.due != nil {
+		a.due.Stop()
 	}
 	a.learning.Unlock()
 	a.StopArchive()
