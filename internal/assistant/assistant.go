@@ -317,6 +317,7 @@ type Assistant struct {
 	stopped    bool                   // by Stop: idle is not started again
 	archiving  context.CancelFunc     // of the pass of the archivist, while one runs
 	archives   sync.WaitGroup         // of that pass, which StopArchive waits for
+	wakes      sync.WaitGroup         // of every wake, which StopArchive waits for after the pass
 	unarchived bool                   // by StopArchive: no pass starts again
 	active     time.Time              // when the owner was last heard of, see track
 	looked     time.Time              // when the archivist last looked at its time, see wake

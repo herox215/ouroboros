@@ -153,6 +153,14 @@ func TestArchivistMergesAndThenSleeps(t *testing.T) {
 		!strings.Contains(lines, "memories of "+dir+": Nothing more to do.") {
 		t.Fatalf("log:\n%s", lines)
 	}
+	// The next look is an interval after the pass that examined something.
+	last, err := store.Marked(ctx, archivistMarker)
+	if err != nil || last.IsZero() {
+		t.Fatalf("the pass left no marker: %v, %v", last, err)
+	}
+	if at, on := a.nextArchive(now); !on || !at.Equal(last.Add(time.Nanosecond)) {
+		t.Fatalf("next look %v, %v; want %v", at, on, last.Add(time.Nanosecond))
+	}
 	a.archive(now.Add(time.Hour))
 	if n := llm.count(); n != 2 {
 		t.Fatalf("a second pass asked the model again (%d calls)", n)

@@ -108,3 +108,30 @@ func TestWaitUntilAfterStop(t *testing.T) {
 		t.Fatal("planned a look although the archivist is stopped")
 	}
 }
+
+// nextArchive reports a store that cannot be opened, and says so in the
+// log.
+func TestNextArchiveLogsAStoreFailure(t *testing.T) {
+	a, log := recorded(t, archiveConfig("1h"), &archiveLLM{})
+	a.builder = a.builder.WithMemoryProfiles(func() []MemoryProfile {
+		return []MemoryProfile{{Dir: "gone", Store: func() (*memory.Store, error) { return nil, errTest }}}
+	})
+	if at, on := a.nextArchive(time.Now()); on || !at.IsZero() {
+		t.Fatalf("next pass %v, %v", at, on)
+	}
+	if lines := log.take(); len(lines) != 1 || lines[0] != "the memories cannot be archived: "+errTest.Error() {
+		t.Fatalf("log %q", lines)
+	}
+}
+
+// A look planned again moves the one planned before rather than adding one.
+func TestWaitUntilMovesThePlannedLook(t *testing.T) {
+	a, _ := recorded(t, archiveConfig("1h"), &archiveLLM{})
+	a.waitUntil(time.Now().Add(time.Hour))
+	first := a.due
+	a.waitUntil(time.Now().Add(2 * time.Hour))
+	if a.due != first {
+		t.Fatal("a second look was planned beside the first")
+	}
+	a.StopArchive()
+}

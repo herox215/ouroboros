@@ -110,27 +110,32 @@ func (a *Assistant) StopArchive() {
 	}
 	a.learning.Unlock()
 	a.archives.Wait()
+	a.wakes.Wait()
 }
 
 // wake looks whether the archivist may run now, runs its pass if so, and
 // plans the next moment it may look, see nextArchive. It runs when the node
-// starts to serve, when the owner left, and when a planned moment came.
+// starts to serve, when the owner left, and when a planned moment came. It
+// opens the store of the profile before and after the pass: StopArchive waits
+// for all of it, and none starts once the archivist is stopped.
 func (a *Assistant) wake(now time.Time) {
 	if a.builder.memoriesOf == nil {
 		return
 	}
+	a.learning.Lock()
+	if a.unarchived {
+		a.learning.Unlock()
+		return
+	}
+	a.wakes.Add(1)
+	a.learning.Unlock()
+	defer a.wakes.Done()
 	at, on := a.nextArchive(now)
 	if !on {
 		return
 	}
 	if !at.After(now) {
-		a.learning.Lock()
-		stop := a.unarchived
-		a.learning.Unlock()
-		if stop {
-			return
-		}
-		a.archive(now)
+		a.archive(now) // nothing once the archivist is stopped
 		now = time.Now()
 		a.learning.Lock()
 		a.looked = now
@@ -210,12 +215,7 @@ func (a *Assistant) waitUntil(t time.Time) {
 
 // woken is the planned look of waitUntil: the archivist may run now.
 func (a *Assistant) woken() {
-	a.learning.Lock()
-	stop := a.unarchived
-	a.learning.Unlock()
-	if !stop {
-		a.wake(time.Now())
-	}
+	a.wake(time.Now())
 }
 
 // archive is one pass of the archivist across all profiles of the node, if
