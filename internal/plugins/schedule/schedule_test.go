@@ -221,6 +221,25 @@ func TestClaimDispatchResultAndNoOverlap(t *testing.T) {
 		t.Fatalf("bad history: %+v", current.Runs)
 	}
 }
+
+// A run a minute late is on time, and one a day late is late but runs: only
+// what is later than that is missed.
+func TestRunsAtTheBoundsOfLate(t *testing.T) {
+	for _, c := range []struct {
+		late time.Duration
+		want string
+	}{{time.Minute, "completed"}, {24 * time.Hour, "late"}} {
+		s, f, clock := fixture(t)
+		job := create(t, s, "", time.Minute)
+		clock.Store(job.Next.Add(c.late).UnixNano())
+		s.tick(context.Background())
+		receive(t, f).result <- session.ScheduledResult{Text: "done"}
+		s.wg.Wait()
+		if current, _ := s.store.Get(job.ID); len(current.Runs) != 1 || current.Runs[0].Status != c.want {
+			t.Fatalf("%s late: %+v", c.late, current.Runs)
+		}
+	}
+}
 func TestMissedNotExecutedOrDuplicated(t *testing.T) {
 	s, f, clock := fixture(t)
 	job := create(t, s, "", time.Minute)

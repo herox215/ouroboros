@@ -65,6 +65,10 @@ func TestHelperCommandIsThisBinary(t *testing.T) {
 	if cmd.Path != exe || len(cmd.Args) != 2 || cmd.Args[1] != "--ouro-internal-macos-tray" {
 		t.Fatalf("helper: %s %q", cmd.Path, cmd.Args)
 	}
+	// It gets a fresh status every two seconds.
+	if interval != 2*time.Second {
+		t.Fatalf("interval %s", interval)
+	}
 }
 
 // Without a helper to start, Run fails and says why.

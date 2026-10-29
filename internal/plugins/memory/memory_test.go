@@ -177,10 +177,18 @@ func TestReadAndSearchCountAsUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call(t, s, ctx, "owner", Read, `{"id":"`+e.ID+`"}`)
-	call(t, s, ctx, "owner", Search, `{"query":"oolong"}`)
-	call(t, s, ctx, "owner", Search, `{}`)
-	if got, err := s.Read(ctx, "", e.ID); err != nil || got.Used != 2 || got.Version != 1 {
-		t.Fatalf("used: %+v, %v", got, err)
+	// A list of the latest is no use of them.
+	for _, step := range []struct {
+		name, args string
+		used       int64
+	}{
+		{Read, `{"id":"` + e.ID + `"}`, 1},
+		{Search, `{"query":"oolong"}`, 2},
+		{Search, `{}`, 2},
+	} {
+		call(t, s, ctx, "owner", step.name, step.args)
+		if got, err := s.Read(ctx, "", e.ID); err != nil || got.Used != step.used || got.Version != 1 {
+			t.Fatalf("used after %s %s: %+v, %v", step.name, step.args, got, err)
+		}
 	}
 }

@@ -207,4 +207,20 @@ func TestMachineZoneCandidates(t *testing.T) {
 	if got, e := MachineZone(); e != nil || got != "Asia/Tokyo" {
 		t.Fatalf("%q %v", got, e)
 	}
+	// Without /etc/timezone, the link names the zone.
+	target = filepath.Join(dir, "zoneinfo", "Europe", "Berlin")
+	if e := os.MkdirAll(filepath.Dir(target), 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(target, nil, 0600); e != nil {
+		t.Fatal(e)
+	}
+	os.Remove(timezoneFile)
+	os.Remove(localtimeFile)
+	if e := os.Symlink(target, localtimeFile); e != nil {
+		t.Fatal(e)
+	}
+	if got, e := MachineZone(); e != nil || got != "Europe/Berlin" {
+		t.Fatalf("%q %v", got, e)
+	}
 }
