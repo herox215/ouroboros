@@ -14,7 +14,8 @@ import (
 
 // A store whose WAL went from under it writes nothing more and says why:
 // what it committed would be lost with the process. It still reads. A store
-// opened meanwhile reads without the WAL, and writes nothing either.
+// opened meanwhile that finds the WAL gone reads without it, and writes
+// nothing either.
 func TestWriteFailsWhenTheWALIsGone(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -29,6 +30,12 @@ func TestWriteFailsWhenTheWALIsGone(t *testing.T) {
 	}
 	e, err := s.Create(ctx, "", "first", "a fact", "test")
 	if err != nil {
+		t.Fatal(err)
+	}
+	// A table puts the first page, which every connection reads, into the
+	// WAL, as it was in the node whose WAL went: a store opened anew finds
+	// the WAL gone at once.
+	if _, err := s.db.Exec("CREATE TABLE other(x)"); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, storage.FileName)

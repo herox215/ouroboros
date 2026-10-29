@@ -4,9 +4,7 @@ package storage
 
 import (
 	"cmp"
-	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"log"
@@ -28,8 +26,7 @@ const FileName = "ouroboros.sqlite"
 // needed. Existing directory and database permissions are tightened as well.
 // Each call returns an independent pool which the caller must Close (usually
 // once when its owning store closes, not once per operation). No handles are
-// cached globally; the process only counts its connections to each database,
-// see files. Independently opened stores and processes share WAL safely.
+// cached globally. Independently opened stores and processes share WAL safely.
 //
 // Each pool uses one connection to serialize its writes. Busy timeout (5s) and
 // foreign key enforcement are configured on every connection, including any
@@ -38,12 +35,12 @@ const FileName = "ouroboros.sqlite"
 // Write transactions should be short; a deferred read transaction upgraded to
 // a writer may still fail with SQLITE_BUSY and need retrying by its owner.
 //
-// A WAL that was removed or replaced while connections of this process still
-// use the one they opened is no longer the WAL at the path: a pool on it would
-// read frames that are not there, or write where the others do not read, see
-// walIntact. The pool then reads the file as it is, without the WAL, and
-// refuses writes, and the log says so once. Where not even that reads, the
-// error says why.
+// Where SQLite reads less than it expects, as from a WAL that was removed
+// while connections of this process still use the one they opened, the pool
+// reads the file as it is, without the WAL, and refuses writes, and the log
+// says so once. Where not even that reads, the error says why. A WAL that is
+// gone is found so only where a read needs one of its frames; see Watch for
+// the pools that keep writing.
 func Open(dir string) (*sql.DB, error) {
 	path, err := filepath.Abs(dir)
 	if err != nil {
@@ -67,17 +64,14 @@ func Open(dir string) (*sql.DB, error) {
 	if err := errors.Join(f.Chmod(0o600), f.Close()); err != nil {
 		return nil, fmt.Errorf("secure storage database: %w", err)
 	}
-	path = resolved(path)
-	db := pool(path, "", true)
+	db := pool(path, "")
+	// WAL is persistent database state; the other pragmas of pool are
+	// per-connection. The schema is read once, as every store does first: it
+	// may need a frame of the WAL.
 	var journal string
-	err = walIntact(path)
-	if err == nil {
-		// WAL is persistent database state; the other pragmas of pool are
-		// per-connection.
-		err = enableWAL(db, &journal)
-	}
+	err = enableWAL(db, &journal)
 	if err == nil && journal == "wal" {
-		err = walFound(db, path)
+		err = readable(db)
 	}
 	if err != nil {
 		db.Close()
@@ -113,9 +107,8 @@ func resolved(path string) string {
 }
 
 // pool is the pool of the database at path, with the URI parameters params
-// besides the pragmas every connection gets. The connections of a counted
-// pool are counted in files while they are open.
-func pool(path, params string, counted bool) *sql.DB {
+// besides the pragmas every connection gets.
+func pool(path, params string) *sql.DB {
 	u := url.URL{Scheme: "file", Path: path}
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(5000)")
@@ -124,148 +117,12 @@ func pool(path, params string, counted bool) *sql.DB {
 	if params != "" {
 		u.RawQuery += "&" + params
 	}
-	// It connects at the first query.
-	db := sql.OpenDB(connector{u.String(), path, counted})
+	// sql.Open only looks up the driver, which the import of modernc.org/sqlite
+	// registers; it connects at the first query.
+	db, _ := sql.Open("sqlite", u.String())
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	return db
-}
-
-// sqliteDriver is the driver that the import of modernc.org/sqlite registers,
-// with the hooks registered on it.
-var sqliteDriver = func() driver.Driver {
-	db, _ := sql.Open("sqlite", "")
-	defer db.Close()
-	return db.Driver()
-}()
-
-// connector connects to the database at path by dsn, see pool.
-type connector struct {
-	dsn, path string
-	counted   bool
-}
-
-func (c connector) Connect(context.Context) (driver.Conn, error) {
-	conn, err := sqliteDriver.Open(c.dsn)
-	if err != nil || !c.counted {
-		return conn, err
-	}
-	files.opened(c.path)
-	return &countedConn{conn.(sqliteConn), c.path}, nil
-}
-
-func (c connector) Driver() driver.Driver { return sqliteDriver }
-
-// sqliteConn is what a connection of modernc.org/sqlite does that
-// database/sql asks of a connection.
-type sqliteConn interface {
-	driver.Conn
-	driver.ConnBeginTx
-	driver.ConnPrepareContext
-	driver.ExecerContext
-	driver.QueryerContext
-	driver.SessionResetter
-	driver.Validator
-	driver.Pinger
-}
-
-// countedConn is a connection to the database at path that files counts
-// while it is open.
-type countedConn struct {
-	sqliteConn
-	path string
-}
-
-func (c *countedConn) Close() error {
-	err := c.sqliteConn.Close()
-	files.closed(c.path)
-	return err
-}
-
-// files are the databases the process has connections to that may use the
-// WAL, by the path of the database: how many, and the WAL at the path when
-// the first of them used it, see walIntact. SQLite shares the index of the
-// WAL between all connections of a process to a file, but each connection
-// keeps the WAL it opened: one that is removed lives on in them. Only once
-// they are all closed may the WAL at the path be another one.
-var files = fileCount{open: map[string]*file{}}
-
-type fileCount struct {
-	sync.Mutex
-	open map[string]*file
-}
-
-type file struct {
-	conns int
-	wal   os.FileInfo // nil until found
-}
-
-// opened counts a connection to the database at path.
-func (fc *fileCount) opened(path string) {
-	fc.Lock()
-	defer fc.Unlock()
-	f := fc.open[path]
-	if f == nil {
-		f = &file{}
-		fc.open[path] = f
-	}
-	f.conns++
-}
-
-// closed counts a connection to the database at path less, and forgets its
-// WAL with the last one.
-func (fc *fileCount) closed(path string) {
-	fc.Lock()
-	defer fc.Unlock()
-	f := fc.open[path]
-	if f.conns--; f.conns == 0 {
-		delete(fc.open, path)
-	}
-}
-
-// walIntact checks that the WAL at the path of the database at path is the
-// one the connections of the process to it use, see files, where the process
-// knows that one: before a new connection reads anything through the index
-// of the WAL. A WAL at the path that is not that one may hold the frames of
-// another process, which the index of this process does not describe.
-func walIntact(path string) error {
-	if !files.gone(path) {
-		return nil
-	}
-	text := "the WAL of " + path + " was removed or replaced while this process had the database open"
-	return walGone{errors.New(text), text}
-}
-
-// walFound reads db once, which opens the WAL at the path of the database at
-// path, also for a database that holds nothing yet, and takes it for the one
-// the connections of the process use where it knows none yet, see files.
-func walFound(db *sql.DB, path string) error {
-	err := readable(db)
-	if err == nil {
-		files.found(path)
-	}
-	return err
-}
-
-// gone reports whether the WAL at the path of the database at path is not
-// the one its connections use, as far as that is known.
-func (fc *fileCount) gone(path string) bool {
-	info, err := os.Stat(path + "-wal")
-	fc.Lock()
-	defer fc.Unlock()
-	f := fc.open[path]
-	return f != nil && f.wal != nil && (err != nil || !os.SameFile(info, f.wal))
-}
-
-// found takes the WAL at the path of the database at path for the one its
-// connections use, unless one is known already.
-func (fc *fileCount) found(path string) {
-	info, err := os.Stat(path + "-wal")
-	fc.Lock()
-	defer fc.Unlock()
-	if f := fc.open[path]; f != nil && f.wal == nil && err == nil {
-		f.wal = info
-	}
 }
 
 // shortRead is err, and where it is a short read of SQLite one that says so
@@ -292,7 +149,7 @@ var readOnlyMode = "mode=ro&immutable=1&_pragma=query_only%281%29"
 // readOnly is a pool that reads the database at path without WAL, nil if it
 // does not.
 func readOnly(path string) *sql.DB {
-	db := pool(path, readOnlyMode, false)
+	db := pool(path, readOnlyMode)
 	if readable(db) != nil {
 		db.Close()
 		return nil
@@ -308,7 +165,6 @@ func readable(db *sql.DB) error {
 
 // WAL is the WAL that a pool of Open writes to, as Watch found it.
 type WAL struct {
-	db   *sql.DB
 	path string      // where the WAL is
 	info os.FileInfo // of the WAL at path then, nil if the pool reads without one
 }
@@ -317,7 +173,7 @@ type WAL struct {
 // to: the one at its path now. A pool that Open opened read-only writes to
 // none.
 func Watch(db *sql.DB, dir string) WAL {
-	w := WAL{db: db, path: resolved(filepath.Join(dir, FileName)) + "-wal"}
+	w := WAL{path: resolved(filepath.Join(dir, FileName)) + "-wal"}
 	var readOnly bool
 	if db.QueryRow("PRAGMA query_only").Scan(&readOnly) == nil && !readOnly {
 		w.info, _ = os.Stat(w.path) // nil without a WAL
@@ -329,9 +185,12 @@ func Watch(db *sql.DB, dir string) WAL {
 // reads without WAL, and where the WAL it writes to is not the one at its
 // path any more. A WAL that was removed while a pool had it open takes every
 // commit, but the next process to open the database finds no WAL at the path
-// and never reads them. Nothing mends that but closing every pool of the
-// process on the database: a pool opened anew would write to a WAL of its own
-// at the path, apart from the pools that use the WAL that is gone.
+// and never reads them. While the pool is open, SQLite does not remove its
+// WAL itself. Nothing mends it but closing every pool of the process on the
+// database: a pool opened anew would write to a WAL of its own at the path,
+// apart from the pools that use the WAL that is gone. Kept copies nothing
+// into the database file either: a WAL that another process began at the
+// path starts from the file as it was.
 func (w WAL) Kept() error {
 	if w.info == nil {
 		return errors.New("the database is read-only, as it could not be opened with its WAL (see the log)")
@@ -340,23 +199,11 @@ func (w WAL) Kept() error {
 	if err == nil && os.SameFile(info, w.info) {
 		return nil
 	}
-	// What the WAL that is gone holds is copied into the database file, as
-	// far as that goes without waiting: no process that opens the database
-	// anew reads it, and nothing writes to it now that would copy it later.
-	// Not where another process has begun a WAL of its own at the path: that
-	// one starts from the file as it was.
-	if err != nil || info.Size() <= walHeader {
-		w.db.Exec("PRAGMA wal_checkpoint(PASSIVE)") // what it could not copy, it could not
-	}
 	return fmt.Errorf("the WAL %s was removed or replaced while the database was open: what is written now would be lost when the process ends", w.path)
 }
 
-// walHeader is how long the header of a WAL is: a WAL no longer than that
-// holds no frame.
-const walHeader = 32
-
 // walGone is the error of a WAL that is not the one the connections of the
-// process use any more, see walIntact: err is how it showed, text what it
+// process use any more, see shortRead: err is how it showed, text what it
 // means.
 type walGone struct {
 	err  error

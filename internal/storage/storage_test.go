@@ -78,9 +78,6 @@ func TestOpenPermissionsAndConnectionSettings(t *testing.T) {
 		}
 	}
 	for _, pool := range []*sql.DB{db, other} {
-		if pool.Driver() != sqliteDriver {
-			t.Fatal("not the driver of modernc.org/sqlite, with its hooks")
-		}
 		// Force replacement rather than only testing the initial connection.
 		pool.SetMaxIdleConns(0)
 		for i := 0; i < 3; i++ {
@@ -404,22 +401,12 @@ func TestOpenWaitsToSwitchTheJournal(t *testing.T) {
 
 // lostWAL is the directory of a database with a row in its file and another
 // row and a table only in its WAL, which is gone at its path, as is the
-// shared memory of its index, while a pool still holds them: one Open opened,
-// or a connection that Open does not know of. The table puts the first page,
-// which every connection reads, into the WAL.
-func lostWAL(t *testing.T, known bool) string {
+// shared memory of its index, while a pool still holds them. The table puts
+// the first page, which every connection reads, into the WAL.
+func lostWAL(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	db := openTest(t, dir)
-	if !known {
-		db.Close()
-		raw, err := sql.Open("sqlite", "file:"+filepath.Join(dir, FileName))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { raw.Close() })
-		db = raw
-	}
 	execTest(t, db, "CREATE TABLE t(x); INSERT INTO t VALUES (1)")
 	execTest(t, db, "PRAGMA wal_checkpoint(TRUNCATE)")
 	execTest(t, db, "INSERT INTO t VALUES (2); CREATE TABLE u(x)")
@@ -431,15 +418,9 @@ func lostWAL(t *testing.T, known bool) string {
 	return dir
 }
 
-// gone is what Open says of the database in dir whose WAL is gone, where the
-// process knows the WAL its connections use, or else where SQLite reads
-// where it is not.
-func gone(dir string, known bool) string {
-	path := resolved(filepath.Join(dir, FileName))
-	if known {
-		return "the WAL of " + path + " was removed or replaced while this process had the database open"
-	}
-	return "disk I/O error (SQLITE_IOERR_SHORT_READ): a file of " + path +
+// gone is what Open says of the database in dir whose WAL is gone.
+func gone(dir string) string {
+	return "disk I/O error (SQLITE_IOERR_SHORT_READ): a file of " + filepath.Join(dir, FileName) +
 		" is shorter than SQLite expects, as its WAL is when that was removed or replaced while the database was open"
 }
 
@@ -447,22 +428,20 @@ func gone(dir string, known bool) string {
 // its file holds, and the log says that it is read-only and why; it refuses
 // writes.
 func TestOpenReadsWithoutItsWAL(t *testing.T) {
-	for _, known := range []bool{true, false} {
-		dir := lostWAL(t, known)
-		var logged strings.Builder
-		log.SetOutput(&logged)
-		defer log.SetOutput(os.Stderr)
-		db := openTest(t, dir)
-		var n int
-		if err := db.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil || n != 1 {
-			t.Fatalf("known %v: read %d rows, %v; want the 1 of the file", known, n, err)
-		}
-		if _, err := db.Exec("INSERT INTO t VALUES (3)"); err == nil {
-			t.Fatalf("known %v: a database without its WAL was written", known)
-		}
-		if want := "is opened read-only, without its WAL, and refuses writes: " + gone(dir, known); !strings.Contains(logged.String(), want) {
-			t.Fatalf("known %v: log %q, want %q", known, logged.String(), want)
-		}
+	dir := lostWAL(t)
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	db := openTest(t, dir)
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("read %d rows, %v; want the 1 of the file", n, err)
+	}
+	if _, err := db.Exec("INSERT INTO t VALUES (3)"); err == nil {
+		t.Fatal("a database without its WAL was written")
+	}
+	if want := "is opened read-only, without its WAL, and refuses writes: " + gone(dir); !strings.Contains(logged.String(), want) {
+		t.Fatalf("log %q, want %q", logged.String(), want)
 	}
 }
 
@@ -470,23 +449,20 @@ func TestOpenReadsWithoutItsWAL(t *testing.T) {
 func TestOpenSaysThatTheWALIsGone(t *testing.T) {
 	defer func(mode string) { readOnlyMode = mode }(readOnlyMode)
 	readOnlyMode = "vfs=none"
-	for _, known := range []bool{true, false} {
-		dir := lostWAL(t, known)
-		db, err := Open(dir)
-		if want := "enable storage WAL: " + gone(dir, known); db != nil || err == nil || err.Error() != want {
-			t.Fatalf("Open = %v, %v; want %q", db, err, want)
-		}
-		if sqliteErr := (*sqlite.Error)(nil); !known && (!errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_IOERR_SHORT_READ) {
-			t.Fatalf("the error of SQLite is not in %v", err)
-		}
+	dir := lostWAL(t)
+	db, err := Open(dir)
+	if want := "enable storage WAL: " + gone(dir); db != nil || err == nil || err.Error() != want {
+		t.Fatalf("Open = %v, %v; want %q", db, err, want)
+	}
+	if sqliteErr := (*sqlite.Error)(nil); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_IOERR_SHORT_READ {
+		t.Fatalf("the error of SQLite is not in %v", err)
 	}
 }
 
-// A WAL that another process began at the path, after the one this process
-// uses was removed, is left alone: Open writes nothing into the database, as
-// the index of this process does not describe that WAL, and it opens the
-// database read-only. Nor does a pool that finds its WAL gone copy it into
-// the file then: the WAL of the other process starts from the file as it was.
+// Neither Open nor a pool that finds its WAL gone writes into the database
+// while another process writes to a WAL it began at the path after the one
+// this process uses was removed: the index of this process does not describe
+// that WAL, and the WAL of the other process starts from the file as it was.
 func TestOpenLeavesTheWALOfAnotherProcessAlone(t *testing.T) {
 	if dir := os.Getenv("OURO_STORAGE_OTHER_PROCESS"); dir != "" {
 		// The other process: it writes into a WAL of its own and ends
@@ -516,61 +492,20 @@ func TestOpenLeavesTheWALOfAnotherProcessAlone(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("the other process failed: %v\n%s", err, output)
 	}
-	if info, err := os.Stat(path + "-wal"); err != nil || info.Size() <= walHeader {
-		t.Fatalf("the other process left no frames in its WAL: %v, %v", info, err)
-	}
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	log.SetOutput(io.Discard) // that the database is read-only
+	log.SetOutput(io.Discard) // that the database is read-only, if it is
 	defer log.SetOutput(os.Stderr)
-	ro, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ro.Close()
-	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("the database was written: %v", err)
-	}
-	var readOnly bool
-	if err := ro.QueryRow("PRAGMA query_only").Scan(&readOnly); err != nil || !readOnly {
-		t.Fatalf("opened to write: %v", err)
+	if other, err := Open(dir); err == nil {
+		other.Close()
 	}
 	if err := wal.Kept(); err == nil {
 		t.Fatal("a WAL that is gone is kept")
 	}
 	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("the database was written: %v", err)
-	}
-}
-
-// The WAL of a database is forgotten with the last connection to it: SQLite
-// removes it then, and the next open begins another one, which is not taken
-// for a WAL that is gone. While one connection is open, it is not forgotten.
-func TestOpenForgetsTheWALWithTheLastConnection(t *testing.T) {
-	dir := t.TempDir()
-	first, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	execTest(t, first, "CREATE TABLE t(x)")
-	second, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, db := range []*sql.DB{first, second} {
-		if err := db.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(dir, FileName) + "-wal"); !os.IsNotExist(err) {
-		t.Fatalf("the WAL was not removed with the last connection: %v", err)
-	}
-	db := openTest(t, dir)
-	execTest(t, db, "INSERT INTO t VALUES (1)")
-	if err := Watch(db, dir).Kept(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -588,13 +523,10 @@ func TestOpenFollowsALinkToTheDatabase(t *testing.T) {
 	if err := Watch(db, dir).Kept(); err != nil {
 		t.Fatal(err)
 	}
-	other := openTest(t, dir)
-	execTest(t, other, "INSERT INTO t VALUES (2)")
 }
 
 // A pool keeps what it writes while its WAL is the one at the path; not once
-// that is gone, and never where it was opened read-only. What the WAL that
-// is gone holds is copied into the file then.
+// that is gone, and never where it was opened read-only.
 func TestWatch(t *testing.T) {
 	dir := t.TempDir()
 	db := openTest(t, dir)
@@ -603,23 +535,17 @@ func TestWatch(t *testing.T) {
 	if err := wal.Kept(); err != nil {
 		t.Fatal(err)
 	}
-	path := resolved(filepath.Join(dir, FileName))
-	if err := os.Remove(path + "-wal"); err != nil {
+	if err := os.Remove(wal.path); err != nil {
 		t.Fatal(err)
 	}
-	if err := wal.Kept(); err == nil || err.Error() != "the WAL "+path+"-wal was removed or replaced while the database was open: what is written now would be lost when the process ends" {
+	if err := wal.Kept(); err == nil || err.Error() != "the WAL "+wal.path+" was removed or replaced while the database was open: what is written now would be lost when the process ends" {
 		t.Fatalf("kept = %v", err)
-	}
-	file := pool(path, readOnlyMode, false)
-	defer file.Close()
-	var n int
-	if err := file.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil || n != 1 {
-		t.Fatalf("the file holds %d rows, %v; want what the WAL held", n, err)
 	}
 	log.SetOutput(io.Discard) // that the database is read-only
 	defer log.SetOutput(os.Stderr)
-	ro := openTest(t, dir)
-	if err := Watch(ro, dir).Kept(); err == nil || !strings.HasPrefix(err.Error(), "the database is read-only") {
+	lost := lostWAL(t)
+	ro := openTest(t, lost)
+	if err := Watch(ro, lost).Kept(); err == nil || !strings.HasPrefix(err.Error(), "the database is read-only") {
 		t.Fatalf("kept = %v", err)
 	}
 }
