@@ -192,7 +192,7 @@ func (a *Archive) resolve(name string) (source, error) {
 type Filter struct {
 	Project string    // part of the working directory or of the directory of the project
 	Since   time.Time // sessions written at or after it
-	Until   time.Time // sessions written at or before it
+	Until   time.Time // sessions begun at or before it
 	Limit   int
 }
 
@@ -378,6 +378,7 @@ func (a *Archive) Search(q Query) (string, int, error) {
 			continue
 		}
 		searched++
+		var names map[string]string // the tools of the calls, by id
 		err := eachMatching(s.path, func(line []byte) bool {
 			for _, needle := range needles {
 				if containsFold(line, needle) {
@@ -385,13 +386,10 @@ func (a *Archive) Search(q Query) (string, int, error) {
 				}
 			}
 			// The tool of what a call returned is known only from the call, which
-			// need not hold the text: every call is read, whatever the filter.
-			return bytes.Contains(line, []byte(`"tool_use"`))
+			// need not hold the text: with a tool to filter by, every call is read.
+			return tool != "" && bytes.Contains(line, []byte(`"tool_use"`))
 		}, func(r Record) bool {
 			if role != "" && r.Role != role {
-				return true
-			}
-			if tool != "" && !strings.EqualFold(r.Tool, tool) {
 				return true
 			}
 			if !within(q.Since, q.Until, r.Time) {
@@ -399,6 +397,17 @@ func (a *Archive) Search(q Query) (string, int, error) {
 			}
 			found := excerpt(r.Text, text)
 			if found == "" {
+				return true
+			}
+			if r.Kind == KindResult && r.Tool == "" && r.ID != "" {
+				// Without the filter the calls are read only for a hit that needs
+				// one, and then once for the session.
+				if names == nil {
+					names = callNames(s.path)
+				}
+				r.Tool = names[r.ID]
+			}
+			if tool != "" && !strings.EqualFold(r.Tool, tool) {
 				return true
 			}
 			line := fmt.Sprintf("%s · %s · #%d %s%s · %s\n", short(s.id), when(r.Time), r.Seq, r.Role, suffix(r), found)
@@ -454,6 +463,9 @@ func (a *Archive) Read(req Read) (string, error) {
 	}
 	windowed := !req.Since.IsZero() || !req.Until.IsZero()
 	keep := func(r Record) bool { return kind(r) && within(req.Since, req.Until, r.Time) }
+	// A transcript is written in order: after a record past until, nothing of
+	// the range follows, and the rest of the file is not read.
+	past := func(r Record) bool { return !req.Until.IsZero() && r.Time.After(req.Until) }
 	src, err := a.resolve(req.Session)
 	if err != nil {
 		return "", err
@@ -468,6 +480,9 @@ func (a *Archive) Read(req Read) (string, error) {
 		// Counted from the end, over the records that Only keeps.
 		seqs := make([]int, 0, 64)
 		if err := each(src.path, func(r Record) bool {
+			if past(r) {
+				return false
+			}
 			if keep(r) {
 				seqs = append(seqs, r.Seq)
 			}
@@ -484,6 +499,7 @@ func (a *Archive) Read(req Read) (string, error) {
 	from = max(from, 1)
 	var out strings.Builder
 	first, last, total, shown, line, full := 0, 0, 0, 0, 0, false
+	next := 0 // in a range: the record of it that the next read begins with
 	nextOffset := 0
 	var offsetErr error
 	n := 0 // the line want is asked of: it sees every line but an empty end
@@ -493,7 +509,7 @@ func (a *Archive) Read(req Read) (string, error) {
 			return true
 		}
 		if windowed {
-			// Whether a record of the range follows is known only when it is read.
+			// The record of this line ends the read, and need not be counted.
 			return true
 		}
 		// The records after those returned are only counted: a line of what
@@ -503,16 +519,10 @@ func (a *Archive) Read(req Read) (string, error) {
 		}
 		return false
 	}, func(r Record) bool {
+		if windowed && (full || past(r)) {
+			return false
+		}
 		if full {
-			if windowed {
-				// The first record of the range after those returned says where
-				// the next read goes on.
-				if keep(r) {
-					total = r.Seq
-					return false
-				}
-				return true
-			}
 			total = r.Seq
 			return true
 		}
@@ -524,6 +534,7 @@ func (a *Archive) Read(req Read) (string, error) {
 			// Only whole records are given: those of one line stay together.
 			if shown == count {
 				full = true
+				next = r.Seq
 				return true
 			}
 			shown++
@@ -541,6 +552,7 @@ func (a *Archive) Read(req Read) (string, error) {
 		if len(text) > MaxReadBytes-readNote-out.Len() {
 			if out.Len() > 0 {
 				full = true // for the next read
+				next = r.Seq
 				return true
 			}
 			room := MaxReadBytes - readNote
@@ -566,6 +578,17 @@ func (a *Archive) Read(req Read) (string, error) {
 			return fmt.Sprintf("no record of the session is in the range: there is none from %d on", from), nil
 		}
 		return fmt.Sprintf("the session has %d records: there is none from %d on", total, from), nil
+	}
+	if windowed {
+		// The records of a range are not counted: its end is not read.
+		if nextOffset > 0 {
+			fmt.Fprintf(&out, "\n[records %d to %d of the range: continue with from %d, offset %d]", first, last, last, nextOffset)
+		} else if next > 0 {
+			fmt.Fprintf(&out, "\n[records %d to %d of the range: continue with from %d]", first, last, next)
+		} else {
+			fmt.Fprintf(&out, "\n[records %d to %d: the range ends here]", first, last)
+		}
+		return out.String(), nil
 	}
 	if nextOffset > 0 {
 		fmt.Fprintf(&out, "\n[records %d to %d of %d: continue with from %d, offset %d]", first, last, total, last, nextOffset)
@@ -801,6 +824,21 @@ func distinct(in []source) []string {
 // returned: only these are read when the calls are listed.
 func callsOf(line []byte) bool {
 	return bytes.Contains(line, []byte(`"tool_use"`)) || bytes.Contains(line, []byte(`"tool_result"`))
+}
+
+// callNames is the tool of every call in a transcript, by the id of the call.
+// A transcript that cannot be read names none.
+func callNames(path string) map[string]string {
+	names := make(map[string]string)
+	_ = eachMatching(path, func(line []byte) bool {
+		return bytes.Contains(line, []byte(`"tool_use"`))
+	}, func(r Record) bool {
+		if r.Kind == KindTool && r.ID != "" {
+			names[r.ID] = r.Tool
+		}
+		return true
+	})
+	return names
 }
 
 // entry is a line of a transcript as Claude Code writes it.

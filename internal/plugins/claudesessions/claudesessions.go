@@ -139,7 +139,7 @@ func (s *sessions) tools() []plugin.Tool {
 			Schema: `{"type":"object","properties":{` +
 				`"project":{"type":"string","description":"only sessions of a project: a part of its path, like the name of the directory"},` +
 				`"since":{"type":"string","description":"only sessions written at or after this day, 2006-01-02"},` +
-				`"until":{"type":"string","description":"only sessions written at or before this day, 2006-01-02"},` +
+				`"until":{"type":"string","description":"only sessions begun at or before this day, 2006-01-02"},` +
 				`"limit":{"type":"integer","description":"how many sessions at most, ` + strconv.Itoa(claudesessions.DefaultSessions) + ` if left out"}}}`,
 			Run: run(Sessions, func(ctx context.Context, args sessionArgs) (string, error) {
 				if err := owned(ctx); err != nil {

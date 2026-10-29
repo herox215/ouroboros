@@ -219,6 +219,10 @@ func TestReadWithinATime(t *testing.T) {
 	if !strings.Contains(out, "make: *** No rule to make target") || strings.Contains(out, "Please deploy the app") {
 		t.Fatalf("only what was in the range:\n%s", out)
 	}
+	// Nothing of the range follows, though the session goes on.
+	if strings.Contains(out, "continue with") || !strings.Contains(out, "the range ends here") {
+		t.Errorf("a range that ends before the session:\n%s", out)
+	}
 
 	out, err = a.Read(claudesessions.Read{Session: "11111111", Count: 1,
 		Since: time.Date(2026, 3, 1, 10, 0, 12, 0, time.UTC),
