@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"ouroboros/internal/kernel"
 	"ouroboros/internal/openai"
 	assistantplugin "ouroboros/internal/plugins/assistant"
+	"ouroboros/plugin"
 )
 
 // A conversation of a peer is archived by its key: one without is not.
@@ -214,6 +216,34 @@ func TestStopClosesTheArchive(t *testing.T) {
 	}
 	if n := openBelow(t, dir.History()); n != 0 {
 		t.Fatalf("%d files of the archive open after the node stopped", n)
+	}
+}
+
+// Only the first profile of a node, the one in its root, runs the archivist:
+// it alone gets the memories of every profile, and starts and stops the
+// archivist as the node serves.
+func TestOnlyTheFirstProfileArchives(t *testing.T) {
+	root := t.TempDir()
+	for _, tt := range []struct {
+		dir   home.Dir
+		first bool
+	}{
+		{home.Dir(root), true},
+		{home.Dir(filepath.Join(root, "profiles", "0123456789ab")), false},
+	} {
+		k := kernel.New()
+		if err := k.Start(assistantplugin.Plugin(tt.dir)); err != nil {
+			t.Fatal(err)
+		}
+		builder, _ := kernel.Service[assistant.Builder](k)
+		// The blueprint keeps the profiles to itself: only whether it has
+		// them is looked at.
+		profiles := !reflect.ValueOf(builder).FieldByName("memoriesOf").IsNil()
+		servings := len(plugin.All[plugin.Serving](k.Context()))
+		k.Stop()
+		if profiles != tt.first || (servings == 1) != tt.first {
+			t.Errorf("%s: memory profiles %v, servings %d", tt.dir, profiles, servings)
+		}
 	}
 }
 

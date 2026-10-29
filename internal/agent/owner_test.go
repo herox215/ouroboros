@@ -35,6 +35,9 @@ func TestAskOwner(t *testing.T) {
 	if _, err := AskOwner(WithoutOwner(ctx), nil); !errors.Is(err, ErrNoOwner) {
 		t.Fatalf("without owner: %v", err)
 	}
+	if !CanAskOwner(ctx) || CanAskOwner(context.Background()) || CanAskOwner(WithoutOwner(ctx)) || CanAskOwner(WithOwnerReply(ctx, nil)) {
+		t.Fatal("CanAskOwner does not tell where a question reaches someone")
+	}
 }
 
 // An answer of the owner keeps where it came from apart from what it says.
