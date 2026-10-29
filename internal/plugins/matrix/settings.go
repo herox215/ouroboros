@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"time"
 
 	"ouroboros/internal/safefile"
@@ -20,16 +19,16 @@ func (s store) change(ctx context.Context, change plugin.GatewayChange, login lo
 		return err
 	}
 	if err = s.create(); err != nil {
-		return err
+		return plugin.GatewayRefusal{Reason: "the Matrix settings cannot be written on this node"}
 	}
 	unlock, err := safefile.Lock(s.path("settings.lock"))
 	if err != nil {
-		return err
+		return plugin.GatewayRefusal{Reason: "another change of the Matrix settings is running; try again"}
 	}
 	defer unlock()
 	old, err := s.load()
 	if err != nil {
-		return err
+		return plugin.GatewayRefusal{Reason: "the saved Matrix settings cannot be read; repair them before saving"}
 	}
 	cfg := configuration{Enabled: change.Enabled, Homeserver: change.Homeserver, UserID: change.UserID, AllowedUsers: change.AllowedUsers}
 	if old.Homeserver == cfg.Homeserver && old.UserID == cfg.UserID {
@@ -47,19 +46,22 @@ func (s store) change(ctx context.Context, change plugin.GatewayChange, login lo
 		change.Password = ""
 		// Neither SDK error bodies nor the submitted password leave this boundary.
 		if err != nil {
-			return errors.New("the Matrix login failed; check the homeserver, account and password (SSO-only accounts require another login method)")
+			return plugin.GatewayRefusal{Reason: "the Matrix login failed; check the homeserver, account and password (SSO-only accounts require another login method)"}
 		}
 		if result.UserID != cfg.UserID || result.Token == "" || result.DeviceID == "" {
-			return errors.New("the Matrix login returned an unexpected account or incomplete device credentials")
+			return plugin.GatewayRefusal{Reason: "the Matrix login returned an unexpected account or incomplete device credentials"}
 		}
 		cfg.Token = result.Token
 		cfg.DeviceID = result.DeviceID
 	}
 	if cfg.Enabled && cfg.Token == "" {
-		return errors.New("log in before enabling Matrix")
+		return plugin.GatewayRefusal{Reason: "log in before enabling Matrix"}
 	}
 	var revision [16]byte
 	rand.Read(revision[:]) // never fails
 	cfg.Revision = hex.EncodeToString(revision[:])
-	return s.save(cfg)
+	if err := s.save(cfg); err != nil {
+		return plugin.GatewayRefusal{Reason: "the Matrix settings cannot be written on this node"}
+	}
+	return nil
 }
