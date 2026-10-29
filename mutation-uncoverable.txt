@@ -163,8 +163,8 @@ internal/assistant/assistant.go:188:120 ARITHMETIC_BASE  # strings joined in a c
 internal/assistant/assistant.go:189:22 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:189:41 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:189:91 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/assistant.go:434:100 CONDITIONALS_BOUNDARY  # a condition after a function literal in the same statement, which go cover leaves out of every block; killed by TestOwnerDelegates, whose agent has delegate as its first and only tool
-internal/assistant/assistant.go:434:100 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which go cover leaves out of every block; the tests of the package kill it when applied by hand
+internal/assistant/assistant.go:435:100 CONDITIONALS_BOUNDARY  # a condition after a function literal in the same statement, which go cover leaves out of every block; killed by TestOwnerDelegates, whose agent has delegate as its first and only tool
+internal/assistant/assistant.go:435:100 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which go cover leaves out of every block; the tests of the package kill it when applied by hand
 internal/assistant/assistant.go:35:122 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:35:80 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:35:96 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -187,7 +187,7 @@ internal/assistant/assistant.go:60:175 ARITHMETIC_BASE  # strings joined in a co
 internal/assistant/assistant.go:61:124 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:62:114 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:63:57 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/assistant.go:812:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
+internal/assistant/assistant.go:827:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/assistant/assistant.go:64:148 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:65:127 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:66:190 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -255,10 +255,10 @@ internal/assistant/assistant.go:145:157 ARITHMETIC_BASE  # strings joined in a c
 internal/assistant/assistant.go:151:113 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:152:75 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:153:115 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/assistant.go:421:104 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which go cover leaves out of every block; killed by TestAskRemembersAlsoWhenConfiguredAnew
-internal/assistant/assistant.go:715:122 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/assistant.go:814:16 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSuggestionNotKept and TestSuggestionDropsTheOldest
-internal/assistant/assistant.go:814:22 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSuggestionNotKept and TestSuggestionDropsTheOldest
+internal/assistant/assistant.go:422:104 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which go cover leaves out of every block; killed by TestAskRemembersAlsoWhenConfiguredAnew
+internal/assistant/assistant.go:730:122 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:829:16 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSuggestionNotKept and TestSuggestionDropsTheOldest
+internal/assistant/assistant.go:829:22 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSuggestionNotKept and TestSuggestionDropsTheOldest
 internal/assistant/delegate.go:45:130 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:47:104 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:51:111 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -536,14 +536,14 @@ internal/diagnosis/diagnosis.go:101:29 CONDITIONALS_NEGATION  # a case expressio
 internal/diagnosis/diagnosis.go:103:33 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
 internal/discovery/tailscale.go:16:26 ARITHMETIC_BASE  # a multiplication in a variable declaration, which no coverage block holds
 internal/guard/guard.go:222:15 CONDITIONALS_NEGATION  # a case expression, which gremlins never counts as covered; negated, TestBox panics on the allow of the owner that is nil
-internal/history/history.go:237:11 CONDITIONALS_NEGATION  # a case expression; killed by TestRead
-internal/history/history.go:332:86 CONDITIONALS_BOUNDARY  # after a function literal; equivalent as well: moving the session at index 0 to the front leaves the order as it is
-internal/history/history.go:332:86 CONDITIONALS_NEGATION  # after a function literal; killed by TestSearchScope
-internal/history/history.go:458:101 CONDITIONALS_NEGATION  # after a function literal; killed by TestRead
-internal/history/history.go:690:37 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
-internal/history/history.go:690:48 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
-internal/history/history.go:690:54 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
-internal/history/history.go:690:67 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
+internal/history/history.go:239:11 CONDITIONALS_NEGATION  # a case expression; killed by TestRead
+internal/history/history.go:334:86 CONDITIONALS_BOUNDARY  # after a function literal; equivalent as well: moving the session at index 0 to the front leaves the order as it is
+internal/history/history.go:334:86 CONDITIONALS_NEGATION  # after a function literal; killed by TestSearchScope
+internal/history/history.go:460:101 CONDITIONALS_NEGATION  # after a function literal; killed by TestRead
+internal/history/history.go:692:37 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
+internal/history/history.go:692:48 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
+internal/history/history.go:692:54 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
+internal/history/history.go:692:67 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
 internal/home/home.go:150:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestWorkspacesAndSecrets
 internal/home/home.go:155:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestWorkspacesAndSecrets
 internal/kernel/kernel.go:213:14 CONDITIONALS_NEGATION  # a case expression; killed by TestPluginErrors
@@ -710,13 +710,13 @@ internal/sandbox/sandbox_linux.go:60:9 CONDITIONALS_NEGATION  # built on Linux o
 internal/sandbox/sandbox_linux.go:63:43 CONDITIONALS_NEGATION  # built on Linux only, so a run on macOS never measures it; TestWithoutBubblewrap asserts a bubblewrap that exits with 1
 internal/sandbox/sandbox_linux.go:80:9 CONDITIONALS_NEGATION  # built on Linux only, so a run on macOS never measures it; with a filter, wrap returns no command and Available panics
 internal/sandbox/sandbox_linux.go:89:9 CONDITIONALS_NEGATION  # built on Linux only, so a run on macOS never measures it; TestFilterFails asserts the error of a pipe that cannot be made
-internal/session/archive.go:491:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
-internal/session/archive.go:491:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
-internal/session/archive.go:493:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
-internal/session/archive.go:493:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
-internal/session/archive.go:495:13 ARITHMETIC_BASE  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours, which 48/time.Hour would make days
-internal/session/archive.go:495:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
-internal/session/archive.go:495:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
+internal/session/archive.go:509:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
+internal/session/archive.go:509:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
+internal/session/archive.go:511:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
+internal/session/archive.go:511:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
+internal/session/archive.go:513:13 ARITHMETIC_BASE  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours, which 48/time.Hour would make days
+internal/session/archive.go:513:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
+internal/session/archive.go:513:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
 internal/session/diagnose.go:48:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestThreadStopsJob, TestThreadDiagnoses and others
 internal/session/diagnose.go:123:16 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestStateTellsEverything and TestThreadDiagnoses
 internal/session/restart.go:61:92 ARITHMETIC_BASE  # strings joined in a constant declaration: gremlins never counts it as covered, and minus does not compile for strings

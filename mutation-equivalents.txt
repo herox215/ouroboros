@@ -41,8 +41,8 @@ internal/plugins/files/files.go:817:11 CONDITIONALS_BOUNDARY  # notes first mean
 internal/plugins/files/files.go:937:10 CONDITIONALS_BOUNDARY  # end is never 0 at a later match: the first place reaches context lines, at least one, past its match, or the file has no line after it
 internal/plugins/files/files.go:939:5 INVERT_LOOPCTRL  # a place beyond the limit leaves end where it was, so every later match starts a place beyond the limit too and adds nothing
 internal/proposal/proposal.go:127:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
-internal/memory/memory.go:128:4 INVERT_LOOPCTRL  # once err is set the loop does nothing but this check: going on checks it again for each column left and ends with the same error
-internal/memory/memory.go:414:11 CONDITIONALS_BOUNDARY  # a limit of exactly MaxHits set to MaxHits is the same limit
+internal/memory/memory.go:130:4 INVERT_LOOPCTRL  # once err is set the loop does nothing but this check: going on checks it again for each column left and ends with the same error
+internal/memory/memory.go:422:11 CONDITIONALS_BOUNDARY  # a limit of exactly MaxHits set to MaxHits is the same limit
 internal/agent/agent.go:885:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
 internal/agent/agent.go:1136:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
 internal/agent/agent.go:1141:12 CONDITIONALS_BOUNDARY  # first is -1 or at least 1: the conversation starts with a user message, which has no reasoning
@@ -69,18 +69,18 @@ internal/plugins/computer/computer.go:543:24 CONDITIONALS_BOUNDARY  # an element
 internal/plugins/computer/mcp.go:230:33 CONDITIONALS_BOUNDARY  # an empty line is no JSON, which handle passes over as well
 internal/plugins/computer/mcp.go:300:16 CONDITIONALS_BOUNDARY  # 2048 bytes cut to their last 2048 bytes are the same
 internal/guard/guard.go:513:16 INVERT_LOGICAL  # where the directory cannot be looked at (err) or was not listed before (!ok), one of the infos is nil and !os.SameFile is true anyway
-internal/history/history.go:251:21 CONDITIONALS_BOUNDARY  # the read at the end of a file that ends with a line break is empty, and an empty line is no record, which records skips like any other
-internal/history/sql.go:42:6 INVERT_LOOPCTRL  # the parents of a directory that exists exist too: going on up finds every one and ends with the same empty archive
-internal/history/sql.go:329:4 INVERT_LOOPCTRL  # nothing sets ascii back once it is false: going on only looks at more characters
+internal/history/history.go:253:21 CONDITIONALS_BOUNDARY  # the read at the end of a file that ends with a line break is empty, and an empty line is no record, which records skips like any other
+internal/history/sql.go:65:6 INVERT_LOOPCTRL  # the parents of a directory that exists exist too: going on up finds every one and ends with the same empty archive
+internal/history/sql.go:360:4 INVERT_LOOPCTRL  # nothing sets ascii back once it is false: going on only looks at more characters
 internal/plugins/files/files.go:779:87 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:779:87 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:930:5 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
-internal/session/archive.go:192:59 ARITHMETIC_BASE  # only the size hint of the map: a hint too small, even a negative one, gives the same map, which grows as needed
-internal/session/archive.go:369:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/session/archive.go:378:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/session/archive.go:382:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/session/archive.go:386:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
-internal/session/archive.go:393:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:210:59 ARITHMETIC_BASE  # only the size hint of the map: a hint too small, even a negative one, gives the same map, which grows as needed
+internal/session/archive.go:387:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:396:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:400:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:404:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:411:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
 internal/tui/commands.go:150:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
 internal/tui/logo.go:133:19 CONDITIONALS_BOUNDARY  # a pixel exactly reach from the ring line is outside the body (at most 4) and the head (at most 7.4) either way
 internal/tui/logo.go:136:14 CONDITIONALS_BOUNDARY  # with nothing grown, the pixels at u == 0 get a thickness of NaN and stay not solid, as they were
@@ -109,8 +109,8 @@ internal/tui/view.go:746:13 CONDITIONALS_BOUNDARY  # at the width of the mark th
 internal/tui/view.go:331:33 CONDITIONALS_BOUNDARY  # where the first entry asks, the loop returns 0 for it; where it does not, the loop ends and returns 0: the same either way
 internal/tui/view.go:352:11 CONDITIONALS_BOUNDARY  # at the last frame every letter is settled anyway: a seed modulo settleFrames is never below settleFrames less settleFrames, so the word stands as it is
 internal/session/session.go:685:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
-internal/storage/storage.go:95:17 ARITHMETIC_BASE  # 10/time.Millisecond is 0: the retries spin instead of sleeping, and the open still waits until the lock is free or the deadline passed
-internal/history/history.go:798:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
+internal/storage/storage.go:233:17 ARITHMETIC_BASE  # 10/time.Millisecond is 0: the retries spin instead of sleeping, and the open still waits until the lock is free or the deadline passed
+internal/history/history.go:800:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
 internal/tui/tui.go:1107:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
 internal/tui/tui.go:1049:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way
