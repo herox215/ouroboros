@@ -115,6 +115,11 @@ func TestSearch(t *testing.T) {
 		t.Errorf("what one tool returned: %d, %v:\n%s", hits, err, out)
 	}
 
+	// A hit in what a tool returned names the tool even without the filter.
+	if out, hits, err = a.Search(claudesessions.Query{Text: "No rule to make target"}); err != nil || hits != 1 || !strings.Contains(out, "user · Bash result · ") {
+		t.Errorf("what a tool returned without a filter: %d, %v:\n%s", hits, err, out)
+	}
+
 	if out, hits, err = a.Search(claudesessions.Query{Text: "deploy", Role: "assistant"}); err != nil || hits == 0 || strings.Contains(out, " · user · ") {
 		t.Errorf("what the assistant said: %d, %v:\n%s", hits, err, out)
 	}
@@ -201,6 +206,42 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// A read can be narrowed to a time and says where to go on when more of it
+// follows.
+func TestReadWithinATime(t *testing.T) {
+	a := claudesessions.Open(fixture(t))
+	out, err := a.Read(claudesessions.Read{Session: "11111111",
+		Since: time.Date(2026, 3, 1, 10, 0, 12, 0, time.UTC),
+		Until: time.Date(2026, 3, 1, 10, 0, 12, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "make: *** No rule to make target") || strings.Contains(out, "Please deploy the app") {
+		t.Fatalf("only what was in the range:\n%s", out)
+	}
+	// Nothing of the range follows, though the session goes on.
+	if strings.Contains(out, "continue with") || !strings.Contains(out, "the range ends here") {
+		t.Errorf("a range that ends before the session:\n%s", out)
+	}
+
+	out, err = a.Read(claudesessions.Read{Session: "11111111", Count: 1,
+		Since: time.Date(2026, 3, 1, 10, 0, 12, 0, time.UTC),
+		Until: time.Date(2026, 3, 1, 10, 0, 24, 0, time.UTC)})
+	if err != nil || !strings.Contains(out, "continue with from 5") {
+		t.Errorf("more of the range follows: %v:\n%s", err, out)
+	}
+
+	if out, err = a.Read(claudesessions.Read{Session: "11111111",
+		Since: time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)}); err != nil || !strings.Contains(out, "no record of the session is in the range") {
+		t.Errorf("a range the session does not reach: %v:\n%s", err, out)
+	}
+
+	if out, err = a.Read(claudesessions.Read{Session: "11111111", From: -1,
+		Since: time.Date(2026, 3, 1, 10, 0, 20, 0, time.UTC)}); err != nil || !strings.Contains(out, "has been updated") {
+		t.Errorf("the last record of the range: %v:\n%s", err, out)
+	}
+}
+
 func TestToolCalls(t *testing.T) {
 	a := claudesessions.Open(fixture(t))
 	out, n, err := a.ToolCalls(claudesessions.Calls{})
@@ -210,8 +251,8 @@ func TestToolCalls(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("listed %d calls:\n%s", n, out)
 	}
-	if !strings.Contains(out, "Bash failed · make deploy") {
-		t.Errorf("a call that failed says so:\n%s", out)
+	if !strings.Contains(out, "Bash failed · make deploy → make: *** No rule to make target 'deploy'") {
+		t.Errorf("a call that failed says so, with what it returned:\n%s", out)
 	}
 	if !strings.Contains(out, "Edit · /home/user/alpha/main.go") {
 		t.Errorf("a call names the file it touched:\n%s", out)
@@ -309,6 +350,21 @@ func TestSessionsWithinTimesAndALimit(t *testing.T) {
 	out, n, err = a.Sessions(claudesessions.Filter{Limit: 1})
 	if err != nil || n != 1 || !strings.Contains(out, "[more sessions are not shown") {
 		t.Errorf("a limit: %d, %v:\n%s", n, err, out)
+	}
+}
+
+// A session that ran into the next day still ran on the day before.
+func TestSessionsAcrossADay(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "aaaaaaaa", []string{
+		`{"type":"user","sessionId":"aaaaaaaa","cwd":"/w","timestamp":"2026-03-01T22:00:00Z","message":{"content":"Start"}}`,
+		`{"type":"user","sessionId":"aaaaaaaa","cwd":"/w","timestamp":"2026-03-03T02:00:00Z","message":{"content":"End"}}`,
+	}, time.Date(2026, 3, 3, 2, 0, 0, 0, time.UTC))
+	out, n, err := claudesessions.Open(dir).Sessions(claudesessions.Filter{
+		Since: time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC),
+		Until: time.Date(2026, 3, 2, 23, 0, 0, 0, time.UTC)})
+	if err != nil || n != 1 || !strings.Contains(out, "aaaaaaaa") {
+		t.Fatalf("a session over the day: %d, %v:\n%s", n, err, out)
 	}
 }
 

@@ -181,10 +181,13 @@ func TestToolsTakeTimes(t *testing.T) {
 			t.Errorf("%s: %v:\n%s", args, err, out)
 		}
 	}
+	if out, err := tool(t, ctx, claudesessionsplugin.Read).Run(bg, []byte(`{"session":"abcd1234","since":"2026-03-01","until":"2026-03-01"}`)); err != nil || !strings.Contains(out, "Run the tests, please") {
+		t.Errorf("a read of a day: %v:\n%s", err, out)
+	}
 	if out, err := tool(t, ctx, claudesessionsplugin.Calls).Run(bg, []byte(`{"since":"2026-03-02"}`)); err != nil || out != "no tool call matches" {
 		t.Errorf("calls since a later day: %v: %q", err, out)
 	}
-	for _, name := range []string{claudesessionsplugin.Sessions, claudesessionsplugin.Search, claudesessionsplugin.Calls} {
+	for _, name := range []string{claudesessionsplugin.Sessions, claudesessionsplugin.Search, claudesessionsplugin.Calls, claudesessionsplugin.Read} {
 		for _, args := range []string{`{"since":"soon"}`, `{"until":"later"}`} {
 			if _, err := tool(t, ctx, name).Run(bg, []byte(args)); err == nil || !strings.Contains(err.Error(), "is no date") {
 				t.Errorf("%s %s: %v", name, args, err)
