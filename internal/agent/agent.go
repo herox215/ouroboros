@@ -198,11 +198,12 @@ func Show(ctx context.Context, images ...chat.Image) bool {
 // keep from one call to the next, like the task its messages to peers
 // belong to, and a context that ends with the answer, however it ends.
 type Answer struct {
-	reports reports
-	values  sync.Map
-	ctx     context.Context
-	ended   atomic.Bool // by End
-	handed  atomic.Bool // by Handed
+	reports  reports
+	values   sync.Map
+	ctx      context.Context
+	ended    atomic.Bool  // by End
+	handoffs atomic.Int64 // by Handed, see handed
+	mixed    atomic.Bool  // a tool did more than hand on, see Handed
 	// kept is what the tools of the round keep, see Keep.
 	keptMu sync.Mutex
 	kept   []chat.Message
@@ -238,22 +239,32 @@ func acknowledgement(text string) bool {
 // to something that answers it, as a session does. What the answer says
 // itself after that is an acknowledgement of receipt at most: a complete
 // answer is not said, and the answer ends, since the thing the question was
-// handed to would give it a second time. It reports whether ctx is of an
-// answer.
+// handed to would give it a second time. A tool that did something besides
+// hand on, like searching this conversation for another part of the message,
+// gives the answer something of its own to say, which is said. It reports
+// whether ctx is of an answer.
 func Handed(ctx context.Context) bool {
 	a := AnswerOf(ctx)
 	if a == nil {
 		return false
 	}
-	a.handed.Store(true)
+	a.handoffs.Add(1)
 	return true
 }
+
+// handed reports whether a tool of this answer handed its question on and
+// nothing took that back, see Handed and clearHanded.
+func (a *Answer) handed() bool { return a.handoffs.Load() > 0 }
+
+// onlyHanded reports whether the answer did nothing but hand its question
+// on: only such an answer is held to an acknowledgement, see Handed.
+func (a *Answer) onlyHanded() bool { return a.handed() && !a.mixed.Load() }
 
 // clearHanded makes the answer speak for itself again: what it took in
 // meanwhile, a result of a job or a word of the owner, is what it answers
 // now, and what it says is no early answer to the question its tools handed
 // on, see Handed.
-func (a *Answer) clearHanded() { a.handed.Store(false) }
+func (a *Answer) clearHanded() { a.handoffs.Store(0) }
 
 // AnswerOf returns the answer a tool is run for under ctx, nil outside of
 // one.
@@ -642,7 +653,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		// acknowledgement of receipt at most: what it would answer itself
 		// would be given a second time by what the question was handed to,
 		// see Handed. What the owner said meanwhile is taken all the same.
-		if len(msg.ToolCalls) == 0 && answer.handed.Load() && !acknowledgement(msg.Content) {
+		if len(msg.ToolCalls) == 0 && answer.onlyHanded() && !acknowledgement(msg.Content) {
 			if delivered, err := report(); err != nil {
 				return abandon(err)
 			} else if delivered {
@@ -657,7 +668,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		// A model that says nothing at all, as small ones do after a long
 		// result, is asked once to go on: nothing is no answer.
-		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged && !answer.handed.Load() {
+		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged && !answer.handed() {
 			nudged = true
 			history = append(history, chat.Message{Role: "user", Content: emptyNote})
 			continue
@@ -683,7 +694,13 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 				result = repeated(call, before)
 			}
 			if result.Content == "" {
+				handoffs := answer.handoffs.Load()
 				result = once(a.call(toolCtx, call), history)
+				// A tool that did not hand the question on did something
+				// of the answer's own, see Handed.
+				if answer.handoffs.Load() == handoffs {
+					answer.mixed.Store(true)
+				}
 			}
 			if err := emit(result); err != nil {
 				return abandon(err)

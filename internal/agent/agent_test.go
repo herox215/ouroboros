@@ -1060,6 +1060,35 @@ func TestHandedAllowsAnAcknowledgementOnly(t *testing.T) {
 	}
 }
 
+// A tool that did something besides hand the question on gives the answer
+// something of its own to say, which is kept: a message of two parts, one
+// answered from this conversation and one handed on, loses neither.
+func TestHandedSaysWhatAnotherToolFound(t *testing.T) {
+	look := Tool{Name: "look", Schema: `{"type":"object"}`, Run: func(context.Context, json.RawMessage) (string, error) {
+		return "yesterday you said: the release train leaves at noon", nil
+	}}
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Handed(ctx)
+		return "handed", nil
+	}}
+	own := strings.Repeat("You said the release train leaves at noon. ", 10)
+	calls := 0
+	llm := llmFunc(func([]openai.Message) openai.Message {
+		calls++
+		switch calls {
+		case 1:
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "look", Arguments: "{}"}}}}
+		case 2:
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "2", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}
+		}
+		return openai.Message{Content: own}
+	})
+	got, err := New(llm, "m", "sys", look, hand).Respond(context.Background(), "c", "what did I say about the deploy, and fix the login")
+	if err != nil || got != own {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
 // What the owner says while the answer of a handed question is on its way is
 // answered: the answer speaks for itself again, since what it says is about
 // their words, not an early answer to what the tool handed on, see Handed.
