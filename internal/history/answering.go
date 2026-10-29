@@ -27,7 +27,7 @@ func (a *Archive) BeginAnswer(id string) error {
 // EndAnswer takes the mark of BeginAnswer back: the answer ended, or the
 // owner stopped it, in the image that made it.
 func (a *Archive) EndAnswer(id string) error {
-	db, err := a.readDatabase()
+	db, err := a.changeDatabase()
 	if err != nil || db == nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (a *Archive) EndAnswer(id string) error {
 // way when an image of ouro ended, and returns them: those sessions go on
 // with their answers. Peer marks are not consumed here.
 func (a *Archive) Interrupted() ([]string, error) {
-	db, err := a.readDatabase()
+	db, err := a.changeDatabase()
 	if err != nil || db == nil {
 		return nil, err
 	}

@@ -73,6 +73,9 @@ func TestGoOnWithUnreadableRecords(t *testing.T) {
 			t.Fatalf("told only %v", got)
 		}
 	}
+	if !l.has("where the archive of the session owner/s1 ends cannot be read") {
+		t.Errorf("log %q", l.lines)
+	}
 	if !l.has("the first task of the session owner/s2 cannot be read") {
 		t.Errorf("log %q", l.lines)
 	}

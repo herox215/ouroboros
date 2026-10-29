@@ -124,7 +124,7 @@ func cannotBegin(t *testing.T) *Archive {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.db = db
+	adopt(a, db)
 	return a
 }
 

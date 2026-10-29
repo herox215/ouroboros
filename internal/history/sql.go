@@ -9,24 +9,47 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ouroboros/internal/storage"
 )
 
 // database opens lazily because Open historically cannot return an error. A
 // failed import is rolled back and may be retried; a committed import is never
 // replayed, even after deletion or a restart. Legacy files are read-only inputs.
-func (a *Archive) database() (*sql.DB, error) { return a.openDatabase(true) }
+// It is the database for a change of the archive, and fails where what is
+// written would not be kept, see kept.
+func (a *Archive) database() (*sql.DB, error) { return a.openDatabase(true, true) }
 
 // readDatabase does not create a missing archive (or its profile parents).
 // Existing legacy directories still need the ordinary transactional import.
 // A nil database with no error means the archive does not exist yet.
-func (a *Archive) readDatabase() (*sql.DB, error) { return a.openDatabase(false) }
+func (a *Archive) readDatabase() (*sql.DB, error) { return a.openDatabase(false, false) }
 
-func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
+// changeDatabase is readDatabase for a change of the archive: it fails where
+// what is written would not be kept, see kept.
+func (a *Archive) changeDatabase() (*sql.DB, error) { return a.openDatabase(false, true) }
+
+func (a *Archive) openDatabase(create, write bool) (*sql.DB, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.db != nil {
-		return a.db, nil
+	if a.db == nil {
+		db, err := a.openArchive(create)
+		if err != nil || db == nil {
+			return nil, err
+		}
+		a.db, a.wal = db, storage.Watch(db, a.dir)
 	}
+	if write {
+		if err := a.kept(); err != nil {
+			return nil, err
+		}
+	}
+	return a.db, nil
+}
+
+// openArchive opens the database of the archive and brings its schema up to
+// date, see readDatabase for create.
+func (a *Archive) openArchive(create bool) (*sql.DB, error) {
 	if !create {
 		info, err := os.Stat(a.dir)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -122,9 +145,17 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	a.db = db
 	ok = true
 	return db, nil
+}
+
+// kept fails where what the archive writes would not be kept, see
+// storage.WAL.Kept. Its pool is not opened anew: only a new process mends it.
+func (a *Archive) kept() error {
+	if err := a.wal.Kept(); err != nil {
+		return fmt.Errorf("the archive in %s keeps nothing until ouro starts anew: %w", a.dir, err)
+	}
+	return nil
 }
 
 // Close releases this handle. The archive may be used again and reopens lazily.

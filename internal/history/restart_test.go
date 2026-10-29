@@ -129,11 +129,7 @@ func TestPendingRestartFailsAtEveryWrite(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			a := at(t)
 			if c.closed {
-				db, err := a.database()
-				if err != nil {
-					t.Fatal(err)
-				}
-				db.Close()
+				closeBehind(t, a)
 			} else {
 				exec(t, a, c.sql)
 			}
@@ -162,13 +158,7 @@ func TestCompleteRestartsRequiresProcess(t *testing.T) {
 // whichever of its steps fails.
 func TestCompleteRestartsFailsAtEveryStep(t *testing.T) {
 	for name, prepare := range map[string]func(t *testing.T, a *Archive){
-		"transaction": func(t *testing.T, a *Archive) {
-			db, err := a.database()
-			if err != nil {
-				t.Fatal(err)
-			}
-			db.Close()
-		},
+		"transaction": closeBehind,
 		"schema": func(t *testing.T, a *Archive) {
 			exec(t, a, "DROP TABLE history_restarts")
 		},

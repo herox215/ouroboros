@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -649,5 +650,32 @@ func TestOwnerAgentAcknowledgesAnAnswer(t *testing.T) {
 	}
 	if len(said) != 1 || !strings.HasPrefix(said[0], "said: ") || !strings.Contains(said[0], "Which database?") {
 		t.Fatalf("said %q", said)
+	}
+}
+
+// An answer the archive failed to keep says so to the owner, and the log
+// names why; an answer of a hook of another name that failed does not.
+func TestAnswerSaysItIsNotArchived(t *testing.T) {
+	for _, c := range []struct {
+		hook string
+		want string
+	}{
+		{ArchiveHook, "said: hello\n\n" + notArchived},
+		{"other", "said: hello"},
+	} {
+		log := &logged{}
+		a := New(func() (config.Config, error) { return ownerConfig(), nil }, Builder{
+			LLM:   func(string) (agent.LLM, error) { return &toolLLM{}, nil },
+			Tools: func() []agent.Tool { return nil },
+			AnswerHooks: func() []agent.AnswerHook {
+				return []agent.AnswerHook{{Name: c.hook, After: func(context.Context, agent.AnswerOutcome) error { return errTest }}}
+			},
+		}, log.log)
+		if got, err := a.Ask(context.Background(), "c", "hello", nil); err != nil || got != c.want {
+			t.Errorf("%s: got %q, %v; want %q", c.hook, got, err, c.want)
+		}
+		if want := "conversation c plugin " + c.hook + " after failed: " + errTest.Error(); !slices.Contains(log.lines, want) {
+			t.Errorf("%s: log %q, want %q", c.hook, log.lines, want)
+		}
 	}
 }

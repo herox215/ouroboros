@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,6 +90,33 @@ func broken(when string) string {
 	return "CREATE TRIGGER broken " + when + " BEGIN SELECT RAISE(ABORT,'broken'); END"
 }
 
+// adopt makes db the open pool of a, as if a had opened it, with the WAL it
+// writes to, see Archive.kept.
+func adopt(a *Archive, db *sql.DB) {
+	a.db, a.wal = db, storage.Watch(db, a.dir)
+}
+
+// closeBehind closes the pool of a behind its back. Another connection keeps
+// the WAL at its path: SQLite removes the WAL with the last connection, and
+// a change would then fail already where kept finds its WAL gone, not where
+// the operation uses the closed pool.
+func closeBehind(t *testing.T, a *Archive) {
+	t.Helper()
+	db, err := a.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := sql.Open("sqlite", "file:"+filepath.Join(a.dir, storage.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { other.Close() })
+	if _, err := other.Exec("SELECT 1 FROM history_sessions"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+}
+
 // Once the database cannot be reached, every operation fails instead of
 // telling of an empty archive.
 func TestClosedDatabase(t *testing.T) {
@@ -96,11 +124,7 @@ func TestClosedDatabase(t *testing.T) {
 	if err := a.Append(owner, question, nil); err != nil {
 		t.Fatal(err)
 	}
-	db, err := a.database()
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
+	closeBehind(t, a)
 	if err := a.Append(owner, question, nil); err == nil {
 		t.Error("append")
 	}
@@ -487,7 +511,7 @@ func TestNoteModelCannotBegin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.db = db
+	adopt(a, db)
 	if err := a.NoteModel("owner/noted", "m2"); err == nil {
 		t.Fatal("the model was noted")
 	}

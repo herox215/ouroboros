@@ -104,6 +104,24 @@ func (a *archive) resumeNote(id string) string {
 	return note + "\n\n" + readLast
 }
 
+// archiveEnd tells a session whose answer stopped in the middle where its
+// archive ends, and so how much of it is missing: the archive keeps an answer
+// once it ended, so what the answer was asked and did is not in it, nor is
+// anything that was lost besides. It says nothing when that cannot be read.
+func (a *archive) archiveEnd(id string, now time.Time) string {
+	records, err := a.Records(id)
+	if err != nil && !errors.Is(err, history.ErrNotArchived) {
+		a.log("where the archive of the session %s ends cannot be read: %v", id, err)
+		return ""
+	}
+	if len(records) == 0 {
+		return "\n\nNothing of this chat is archived: what the answer was asked and did is not in history_read."
+	}
+	last := records[len(records)-1].Time
+	return fmt.Sprintf("\n\nThe archive of this chat ends at %s, %s before ouro started anew: what the answer was asked and did, and whatever came after that, is not in history_read.",
+		last.Local().Format("2006-01-02 15:04"), ago(now.Sub(last)))
+}
+
 // readLast tells a session that goes on after ouro started anew where to
 // read what it did last, rather than searching the archive for it.
 const readLast = "To see what you did last, read the end of this chat first: history_read with from -20."
@@ -204,7 +222,7 @@ func (s *Service) GoOn() {
 	// An answer that asked to go on carries its own note of what was pending;
 	// one that was only interrupted is told that it stopped in the middle.
 	for _, id := range interrupted {
-		add(id, interruptedText)
+		add(id, interruptedText+a.archiveEnd(id, s.now()))
 	}
 	for id, tasks := range lost {
 		if n, ok := notes[id]; ok {

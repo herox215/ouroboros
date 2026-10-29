@@ -121,7 +121,7 @@ func (a *Archive) RestartedTasks(processID string) (map[string][]Task, error) {
 	if processID == "" {
 		return nil, errors.New("tasks need a process identity")
 	}
-	db, err := a.readDatabase()
+	db, err := a.changeDatabase()
 	if err != nil || db == nil {
 		return nil, err
 	}
