@@ -1059,3 +1059,22 @@ func TestContentsShapesOnlyTheThread(t *testing.T) {
 		t.Fatalf("of the thread %+v, %v", lines, err)
 	}
 }
+
+// The context of the thread is what the next call of the LLM is sent: what
+// happened in its window, as the answer of the thread is sent it.
+func TestContentsKeepsTheWindowOfTheThread(t *testing.T) {
+	now := time.Unix(1_000_000_000, 0)
+	old := openai.Message{Role: "user", Content: "long ago", At: now.Add(-assistant.ThreadWindow - time.Minute)}
+	recent := openai.Message{Role: "user", Content: "just now", At: now.Add(-time.Minute)}
+	s := service(t, &fakeAgent{contents: assistant.Contents{Messages: []openai.Message{old, recent}}})
+	s.now = func() time.Time { return now }
+	ctx := context.Background()
+	lines, err := s.Contents(ctx, ThreadID)
+	if err != nil || len(lines) != 1 || lines[0].Text != "just now" {
+		t.Fatalf("of the thread %+v, %v", lines, err)
+	}
+	lines, err = s.Contents(ctx, "s1")
+	if err != nil || len(lines) != 2 || lines[0].Text != "long ago" {
+		t.Fatalf("of a session %+v, %v", lines, err)
+	}
+}

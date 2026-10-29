@@ -1614,7 +1614,7 @@ func (s *Service) Contents(ctx context.Context, id string) ([]Line, error) {
 		c, err = s.agent.Contents(id)
 	}
 	if id == ThreadID {
-		c.Messages = shaped(c.Messages) // what it is sent
+		c.Messages = shaped(recentOf(c.Messages, s.now())) // what it is sent
 	}
 	var lines []Line
 	if c.System != "" {
