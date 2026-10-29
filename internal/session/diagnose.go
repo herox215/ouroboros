@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"ouroboros/internal/config"
 )
 
 // The thread can tell the owner why a topic does not finish, without a new
@@ -22,7 +24,7 @@ func (t threading) State(_ context.Context, id string) (string, error) {
 	defer s.mu.Unlock()
 	id = s.resolve(id)
 	if id == ThreadID || !s.routableID(id) {
-		return "", fmt.Errorf("no session %q among those of the last 24 hours", id)
+		return "", fmt.Errorf("no session %q among those of the last %s", id, config.Span(s.window()))
 	}
 	s.handed(id)
 	return s.state(s.get(id)), nil
@@ -44,7 +46,7 @@ func (t threading) Stop(ctx context.Context, id string, job int) (string, error)
 	s.mu.Unlock()
 	switch {
 	case !ok:
-		return "", fmt.Errorf("no session %q among those of the last 24 hours", id)
+		return "", fmt.Errorf("no session %q among those of the last %s", id, config.Span(s.window()))
 	case job != 0:
 		if err := s.StopJob(ctx, id, job); err != nil {
 			return "", err

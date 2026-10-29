@@ -464,9 +464,11 @@ your agent is thinking.
   already, like what was said before. Its words along the way and the calls with which it hands on are not shown;
   `/context` shows them.
 - **Which conversations.** The agent of the thread is told which conversations there are to hand your messages
-  to: those in which something happened in the last 24 hours, at most 30, the latest first, each with a handle of
+  to: those in which something happened in the last 3 hours, at most 30, the latest first, each with a handle of
   8 characters of its ID, its title, its project where it is not that of the thread, and whether it is working or
-  asks you something. Older ones are left out, and the thread refuses to hand anything to them.
+  asks you something. Older ones are left out, and the thread refuses to hand anything to them; one that asks you
+  something or still works stays, so that you see it and can answer it. The window is set in Settings → The node,
+  "Sessions the thread continues", as `thread_window` in the configuration of the node: a duration like `3h`.
 - **Little to read, and cached.** The agent of the thread only hands on, so it is sent little, and thinks little
   (`low`) unless you set its `/effort`. What it was sent stays as it was, and every call begins with all the call
   before sent, as the caches of providers want it: the list of the conversations comes before your message only

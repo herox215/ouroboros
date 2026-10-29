@@ -364,8 +364,14 @@ type Service struct {
 	// Workspace is the profile's private directory, used to resolve relative
 	// project changes when no project is selected. Set before serving clients.
 	Workspace string
-	agent     Assistant
-	now       func() time.Time
+	// ThreadWindow tells how long ago something must have happened in a
+	// session for the thread to hand messages to it, see routable. It is
+	// read with every message of the owner, so that a change of the setting
+	// holds from the next one on; nil uses config.DefaultThreadWindow. Set
+	// before serving clients.
+	ThreadWindow func() time.Duration
+	agent        Assistant
+	now          func() time.Time
 
 	ctx     context.Context // of every answer: ends with Close
 	stop    context.CancelFunc

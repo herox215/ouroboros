@@ -495,6 +495,11 @@ func rows(s Settings) []row {
 		editing("the interval of the archivist, like 24h, or off", cmp.Or(s.MemoryInterval, "off"), func(v string) Setting {
 			return Setting{Kind: plugin.SetMemoryInterval, Value: v}
 		}))
+	add(agentsSection, "Sessions the thread continues", s.ThreadWindow,
+		"how long after its last message the thread hands a message to a session; a duration like 3h",
+		editing("how long the thread continues a session, like 3h", s.ThreadWindow, func(v string) Setting {
+			return Setting{Kind: plugin.SetThreadWindow, Value: v}
+		}))
 
 	if s.PluginsKept != "" {
 		out = append(out, row{section: pluginsSection, label: "Turned off", value: "none: all run",

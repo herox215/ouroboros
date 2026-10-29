@@ -45,6 +45,7 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     dialog.append(button(t('settings.model'), () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
     dialog.append(button(t('settings.gateways'), gateways));
     dialog.append(button(t('settings.memory'), memories));
+    dialog.append(button(t('settings.thread'), threadWindow));
     const label = el('label', t('settings.appearance'));
     const select = el('select');
     for (const [value, text] of [['system', t('settings.system')], ['light', t('settings.light')], ['dark', t('settings.dark')]]) {
@@ -106,6 +107,39 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
         await bridge.SetMemoryInterval(profile, input.value.trim());
         if (current === version && dialog.open) { status.textContent = t('settings.saved'); await load(); }
       } catch { if (current === version && dialog.open) status.textContent = t('settings.memoryFailed'); }
+      finally { busy = false; save.disabled = false; }
+    });
+    dialog.append(form);
+    await load();
+  };
+  // The thread hands messages to the sessions of the last few hours: how long
+  // that is, the owner sets here.
+  const threadWindow = async () => {
+    page(t('settings.title') + ' › ' + t('settings.thread'), home);
+    const current = ++version;
+    const form = el('form');
+    const label = el('label', t('settings.threadWindow'));
+    const input = el('input');
+    input.type = 'text'; input.placeholder = '3h';
+    label.append(input); form.append(label);
+    form.append(el('p', t('settings.threadHint')));
+    const save = el('button', t('settings.save')); save.type = 'submit'; form.append(save);
+    const status = el('p', ''); status.setAttribute('role', 'status'); form.append(status);
+    const load = async () => {
+      try {
+        const value = await bridge.ThreadWindow(profile);
+        if (current !== version || !dialog.open) return;
+        input.value = value;
+      } catch { if (current === version && dialog.open) status.textContent = t('settings.threadFailed'); }
+    };
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy) return;
+      busy = true; save.disabled = true;
+      try {
+        await bridge.SetThreadWindow(profile, input.value.trim());
+        if (current === version && dialog.open) { status.textContent = t('settings.saved'); await load(); }
+      } catch { if (current === version && dialog.open) status.textContent = t('settings.threadFailed'); }
       finally { busy = false; save.disabled = false; }
     });
     dialog.append(form);

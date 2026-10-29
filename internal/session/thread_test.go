@@ -14,6 +14,7 @@ import (
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/config"
 	"ouroboros/internal/history"
 	"ouroboros/internal/memory"
 	"ouroboros/internal/openai"
@@ -227,8 +228,8 @@ func TestThreadSendsToASession(t *testing.T) {
 	for _, id := range []string{"nope", ThreadID} {
 		ask(t, s, "send "+id+" more")
 		<-told
-		want := fmt.Sprintf("answer refused: no session %q among those of the last 24 hours: "+
-			"hand the message to one of the list, or start a new one with session_new", id)
+		want := fmt.Sprintf("answer refused: no session %q among those of the last %s: "+
+			"hand the message to one of the list, or start a new one with session_new", id, "3 hours")
 		if lines := shown(working(t, thread)); !slices.Equal(lines, []string{"message send " + id + " more", want}) {
 			t.Fatalf("%s: %q", id, lines)
 		}
@@ -239,7 +240,7 @@ func TestThreadSendsToASession(t *testing.T) {
 	if lines := shown(working(t, thread)); !slices.Equal(lines, []string{"message pass s1", "answer pong:pass s1"}) {
 		t.Fatalf("the words of the owner: %q", lines)
 	}
-	at.move(recent + time.Minute)
+	at.move(config.DefaultThreadWindow + time.Minute)
 	asked(t, s, "s2", "fresh")
 	ask(t, s, "send s1 more")
 	<-told
@@ -591,7 +592,7 @@ func TestRoutable(t *testing.T) {
 	if len(got) != 2 || got[0].id != "here" || got[0].title != "hi" || got[1].id != "kept" || got[1].title != "from before" || got[1].directory != "/project" {
 		t.Fatalf("routable %+v", got)
 	}
-	at.move(recent)
+	at.move(config.DefaultThreadWindow)
 	s.mu.Lock()
 	got = s.routable()
 	s.mu.Unlock()
@@ -622,15 +623,15 @@ func TestRoutable(t *testing.T) {
 // changes by itself, as the time does.
 func TestRoster(t *testing.T) {
 	now := time.Now()
-	if got := roster(nil, ""); got != "[Sessions of the owner in the last 24 hours: none. ouro tells them whenever they change; the owner did not write this.]" {
+	if got := roster(config.DefaultThreadWindow, nil, ""); got != "[Sessions of the owner in the last 3 hours: none. ouro tells them whenever they change; the owner did not write this.]" {
 		t.Fatalf("no session: %q", got)
 	}
-	got := roster([]routed{
+	got := roster(config.DefaultThreadWindow, []routed{
 		{id: "7f3a9c12-0000-4000-8000-000000000000", title: "Fix\nthe login", directory: "/app", last: now.Add(-2 * time.Minute), running: true},
 		{id: "b", title: `Sort "photos"`, last: now.Add(-3 * time.Hour), running: true, question: "Which\nfolder?"},
 		{id: "c", title: "Done", directory: "/other", last: now},
 	}, "/app")
-	want := "[Sessions of the owner in the last 24 hours, the latest first, as ouro tells them whenever they change; the owner did not write it:\n" +
+	want := "[Sessions of the owner in the last 3 hours, the latest first, as ouro tells them whenever they change; the owner did not write it:\n" +
 		"- 7f3a9c12: \"Fix the login\" · working\n" +
 		"- b: \"Sort \\\"photos\\\"\" · in your workspace · asks the owner and waits: \"Which folder?\"\n" +
 		"- c: \"Done\" · in /other\n]"
@@ -682,7 +683,7 @@ func TestShaped(t *testing.T) {
 	call := openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionSend, `{}`)}}
 	tui := MessageSource{Interface: "tui"}
 	msgs := []openai.Message{
-		{Role: "user", Content: roster(nil, "")},
+		{Role: "user", Content: roster(config.DefaultThreadWindow, nil, "")},
 		{Role: "user", Content: "fix it", Source: tui},
 		call,
 		{Role: "tool", ToolCallID: "c1", Content: "Handed on."},
@@ -709,7 +710,7 @@ func TestShaped(t *testing.T) {
 func TestRecentOf(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	old, recent := now.Add(-assistant.ThreadWindow-time.Minute), now.Add(-assistant.ThreadWindow+time.Minute)
-	sessions := roster(nil, "")
+	sessions := roster(config.DefaultThreadWindow, nil, "")
 	msgs := []openai.Message{
 		{Role: "user", Content: sessions, At: old},
 		{Role: "user", Content: "fix it", At: old},
@@ -737,7 +738,7 @@ func TestRecentOf(t *testing.T) {
 	if got := contents(recentOf(msgs[1:], now)); !slices.Equal(got, []string{"and this", "now"}) {
 		t.Fatalf("without a list %q", got)
 	}
-	told := append(slices.Clone(msgs), openai.Message{Role: "user", Content: roster([]routed{{id: "s1", title: "Fix"}}, "")})
+	told := append(slices.Clone(msgs), openai.Message{Role: "user", Content: roster(config.DefaultThreadWindow, []routed{{id: "s1", title: "Fix"}}, "")})
 	if got := recentOf(told, now); len(got) != 3 || got[0].Content != "and this" {
 		t.Fatalf("told anew %q", contents(got))
 	}
@@ -801,7 +802,7 @@ func TestThreadArchived(t *testing.T) {
 	arch := history.Open(dir)
 	se := &session{id: "s1", title: "Fix"}
 	arch.Append(history.Who{Session: ThreadID}, []openai.Message{
-		{Role: "user", Content: resumed(time.Now(), time.Now()) + roster(nil, "")},
+		{Role: "user", Content: resumed(time.Now(), time.Now()) + roster(config.DefaultThreadWindow, nil, "")},
 		{Role: "user", Content: "fix it"},
 		{Role: "assistant", Content: "handing on", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionSend, `{}`)}},
 		{Role: "tool", ToolCallID: "c1", Content: "Handed to the session s1"},
@@ -956,7 +957,7 @@ func TestRoutableKeepsASessionExactlyRecentAgo(t *testing.T) {
 		t.Fatalf("entries %+v, %v", entries, err)
 	}
 	arch.Close()
-	at := entries[0].Modified.Add(recent)
+	at := entries[0].Modified.Add(config.DefaultThreadWindow)
 	s, _, l := archived(t, &fakeAgent{}, dir, at)
 	s.now = func() time.Time { return at }
 	s.mu.Lock()

@@ -83,7 +83,7 @@ func TestThreadHandsOn(t *testing.T) {
 			t.Fatalf("%s: %s", call, got)
 		}
 	}
-	for _, tool := range threadTools() {
+	for _, tool := range threadTools("3 hours") {
 		if _, err := tool.Run(context.Background(), json.RawMessage(`{}`)); err == nil {
 			t.Fatalf("%s ran outside the thread", tool.Name)
 		}
@@ -146,7 +146,7 @@ func TestThreadToolsRefuseMalformedArguments(t *testing.T) {
 		ToolSearchThread: `{"query":1}`,
 	} {
 		found := false
-		for _, candidate := range threadTools() {
+		for _, candidate := range threadTools("3 hours") {
 			if candidate.Name != tool {
 				continue
 			}

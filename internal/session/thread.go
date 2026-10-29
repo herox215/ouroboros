@@ -13,6 +13,7 @@ import (
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/chat"
+	"ouroboros/internal/config"
 	"ouroboros/internal/history"
 	"ouroboros/internal/presentation"
 )
@@ -24,8 +25,8 @@ import (
 // its topic, or starts one for it, see assistant.WithThread, and says
 // nothing of it: what it does on its way is not shown. With every message it
 // is told which sessions there are to hand it to: those of the owner in which
-// something happened within the last recent, see routable; older ones are
-// left out. Of an answer that took a message the thread handed on, the
+// something happened within the window of the thread, see routable; older
+// ones are left out. Of an answer that took a message the thread handed on, the
 // thread shows the answer as its own, or why it failed, and the questions it
 // asks the owner as its questions, which the owner answers in the thread,
 // see relay. Working tells how much works for it meanwhile. So the owner
@@ -37,9 +38,17 @@ const ThreadID = "thread"
 // backgroundHead marks internal results that the thread must contextualize.
 const backgroundHead = "[Background result for "
 
-// recent is how long ago something must have happened in a session for the
-// thread to hand messages to it.
-const recent = 24 * time.Hour
+// window is how long ago something must have happened in a session for the
+// thread to hand messages to it: the configured window, or
+// config.DefaultThreadWindow where none is set.
+func (s *Service) window() time.Duration {
+	if s.ThreadWindow != nil {
+		if d := s.ThreadWindow(); d > 0 {
+			return d
+		}
+	}
+	return config.DefaultThreadWindow
+}
 
 // maxRouted is how many sessions the thread is told of at most, the latest
 // first: the list comes with every message of the owner.
@@ -66,10 +75,12 @@ type routed struct {
 }
 
 // routable are the sessions of the owner the thread may hand messages to:
-// those in which something happened within the last recent, without the
-// thread, the latest first, at most maxRouted of them. s.mu is held.
+// those in which something happened within the window of the thread, without
+// the thread, and those that ask the owner something or still work though
+// they are older, so that the owner sees them and can answer; the latest
+// first, at most maxRouted of them. s.mu is held.
 func (s *Service) routable() []routed {
-	now := s.now()
+	now, win := s.now(), s.window()
 	var list []routed
 	seen := map[string]bool{ThreadID: true}
 	for _, se := range s.sessions {
@@ -87,7 +98,7 @@ func (s *Service) routable() []routed {
 		}
 		for _, e := range entries {
 			id, ok := strings.CutPrefix(e.ID, "owner/")
-			if !ok || seen[id] || e.Title == "" || now.Sub(e.Modified) > recent {
+			if !ok || seen[id] || e.Title == "" || now.Sub(e.Modified) > win {
 				continue
 			}
 			kept := &session{id: id}
@@ -95,7 +106,12 @@ func (s *Service) routable() []routed {
 			list = append(list, routed{id: id, title: e.Title, directory: kept.directory, last: e.Modified})
 		}
 	}
-	list = slices.DeleteFunc(list, func(r routed) bool { return now.Sub(r.last) > recent })
+	// One that asks the owner something stays, so that they see it and can
+	// answer it, and one that still works stays too: the window tells which
+	// session new work may be handed to, not what the owner loses sight of.
+	list = slices.DeleteFunc(list, func(r routed) bool {
+		return now.Sub(r.last) > win && r.question == "" && !r.running
+	})
 	slices.SortFunc(list, func(a, b routed) int {
 		if c := b.last.Compare(a.last); c != 0 {
 			return c
@@ -123,8 +139,11 @@ func awaited(events []Event) string {
 }
 
 // rosterHead begins what the thread is told of the sessions with every
-// message of the owner, see roster.
-const rosterHead = "[Sessions of the owner in the last 24 hours"
+// message of the owner, see roster: %s is how long the window of the thread is.
+const rosterHead = "[Sessions of the owner in the last %s"
+
+// rosterPrefix is how every roster begins, whatever its window.
+const rosterPrefix = "[Sessions of the owner in the last "
 
 // roster is what the thread is told of the sessions it may hand messages
 // to, the latest first: a line each, with its handle, title, its project,
@@ -132,12 +151,13 @@ const rosterHead = "[Sessions of the owner in the last 24 hours"
 // it changes but what the sessions do, so that it is told anew only then, see
 // inThread. It is no message of the owner, and is not shown as one, see
 // isRoster.
-func roster(sessions []routed, here string) string {
+func roster(window time.Duration, sessions []routed, here string) string {
+	within := fmt.Sprintf(rosterHead, config.Span(window))
 	if len(sessions) == 0 {
-		return rosterHead + ": none. ouro tells them whenever they change; the owner did not write this.]"
+		return within + ": none. ouro tells them whenever they change; the owner did not write this.]"
 	}
 	var b strings.Builder
-	b.WriteString(rosterHead + ", the latest first, as ouro tells them whenever they change; the owner did not write it:")
+	b.WriteString(within + ", the latest first, as ouro tells them whenever they change; the owner did not write it:")
 	for _, r := range sessions {
 		fmt.Fprintf(&b, "\n- %s: %s", handle(r.id), strconv.Quote(oneLine(r.title)))
 		if r.anchor != "" {
@@ -162,7 +182,7 @@ func roster(sessions []routed, here string) string {
 }
 
 // isRoster reports whether text is what roster wrote.
-func isRoster(text string) bool { return strings.HasPrefix(text, rosterHead) }
+func isRoster(text string) bool { return strings.HasPrefix(text, rosterPrefix) }
 
 // oneLine is text on one line, so that it cannot end a line of the roster.
 func oneLine(text string) string { return strings.Join(strings.Fields(text), " ") }
@@ -266,7 +286,7 @@ func (s *Service) inThread(se *session, messages []chat.Message) []chat.Message 
 	if se.id != ThreadID {
 		return messages
 	}
-	sessions := roster(s.routable(), se.directory)
+	sessions := roster(s.window(), s.routable(), se.directory)
 	se.told++
 	if sessions == se.roster && se.told < rosterEvery {
 		return messages
