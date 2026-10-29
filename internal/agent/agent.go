@@ -198,10 +198,12 @@ func Show(ctx context.Context, images ...chat.Image) bool {
 // keep from one call to the next, like the task its messages to peers
 // belong to, and a context that ends with the answer, however it ends.
 type Answer struct {
-	reports reports
-	values  sync.Map
-	ctx     context.Context
-	ended   atomic.Bool // by End
+	reports  reports
+	values   sync.Map
+	ctx      context.Context
+	ended    atomic.Bool  // by End
+	handoffs atomic.Int64 // by Handed, see handed
+	mixed    atomic.Bool  // a tool did more than hand on, see Handed
 	// kept is what the tools of the round keep, see Keep.
 	keptMu sync.Mutex
 	kept   []chat.Message
@@ -219,6 +221,50 @@ func End(ctx context.Context) bool {
 	a.ended.Store(true)
 	return true
 }
+
+// ackBytes is how much text passes as an acknowledgement of receipt of work
+// a tool handed on, see Handed.
+const ackBytes = 200
+
+// acknowledgement reports whether text passes as an acknowledgement of
+// receipt: nothing, or a line or two of at most ackBytes bytes. A complete
+// answer, which what the tool handed the work to would give a second time,
+// does not.
+func acknowledgement(text string) bool {
+	text = strings.TrimSpace(text)
+	return len(text) <= ackBytes && strings.Count(text, "\n") < 2
+}
+
+// Handed marks the answer of ctx as one whose question its tools handed on
+// to something that answers it, as a session does. What the answer says
+// itself after that is an acknowledgement of receipt at most: a complete
+// answer is not said, and the answer ends, since the thing the question was
+// handed to would give it a second time. A tool that did something besides
+// hand on, like searching this conversation for another part of the message,
+// gives the answer something of its own to say, which is said. It reports
+// whether ctx is of an answer.
+func Handed(ctx context.Context) bool {
+	a := AnswerOf(ctx)
+	if a == nil {
+		return false
+	}
+	a.handoffs.Add(1)
+	return true
+}
+
+// handed reports whether a tool of this answer handed its question on and
+// nothing took that back, see Handed and clearHanded.
+func (a *Answer) handed() bool { return a.handoffs.Load() > 0 }
+
+// onlyHanded reports whether the answer did nothing but hand its question
+// on: only such an answer is held to an acknowledgement, see Handed.
+func (a *Answer) onlyHanded() bool { return a.handed() && !a.mixed.Load() }
+
+// clearHanded makes the answer speak for itself again: what it took in
+// meanwhile, a result of a job or a word of the owner, is what it answers
+// now, and what it says is no early answer to the question its tools handed
+// on, see Handed.
+func (a *Answer) clearHanded() { a.handoffs.Store(0) }
 
 // AnswerOf returns the answer a tool is run for under ctx, nil outside of
 // one.
@@ -440,7 +486,8 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	a, ctx, abilities := a.abilityAnswer(ctx, contextID)
 	ctx, end := context.WithCancel(ctx)
 	defer end() // after the hooks that are told how the answer ended
-	ctx = context.WithValue(ctx, answerKey{}, &Answer{ctx: ctx})
+	answer := &Answer{ctx: ctx}
+	ctx = context.WithValue(ctx, answerKey{}, answer)
 	ctx = chat.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
 	spent := &atomic.Int64{}
@@ -526,6 +573,10 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			spent.Add(int64(len(text)))
 			history = append(history, said)
 		}
+		if len(texts) > 0 {
+			// The answer is about what was delivered now: see clearHanded.
+			answer.clearHanded()
+		}
 		return len(texts) > 0, nil
 	}
 	nudged := false // an empty message was answered with emptyNote
@@ -592,8 +643,24 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 					}
 					history = append(history, m)
 				}
+				// The next answer is about what the owner said meanwhile:
+				// see clearHanded.
+				answer.clearHanded()
 				continue
 			}
+		}
+		// An answer whose tools handed its question on says an
+		// acknowledgement of receipt at most: what it would answer itself
+		// would be given a second time by what the question was handed to,
+		// see Handed. What the owner said meanwhile is taken all the same.
+		if len(msg.ToolCalls) == 0 && answer.onlyHanded() && !acknowledgement(msg.Content) {
+			if delivered, err := report(); err != nil {
+				return abandon(err)
+			} else if delivered {
+				continue
+			}
+			a.memory.remember(contextID, history)
+			return "", nil
 		}
 		history = append(history, msg)
 		if err := emit(msg); err != nil {
@@ -601,7 +668,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		// A model that says nothing at all, as small ones do after a long
 		// result, is asked once to go on: nothing is no answer.
-		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged {
+		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged && !answer.handed() {
 			nudged = true
 			history = append(history, chat.Message{Role: "user", Content: emptyNote})
 			continue
@@ -627,7 +694,13 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 				result = repeated(call, before)
 			}
 			if result.Content == "" {
+				handoffs := answer.handoffs.Load()
 				result = once(a.call(toolCtx, call), history)
+				// A tool that did not hand the question on did something
+				// of the answer's own, see Handed.
+				if answer.handoffs.Load() == handoffs {
+					answer.mixed.Store(true)
+				}
 			}
 			if err := emit(result); err != nil {
 				return abandon(err)
@@ -661,9 +734,14 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			}
 			history = append(history, said)
 		}
+		if len(steered) > 0 {
+			// The answer is about what the owner said meanwhile: see
+			// clearHanded.
+			answer.clearHanded()
+		}
 		// A tool that ended the answer ends it here, unless something came
 		// meanwhile for the LLM to take.
-		if AnswerOf(ctx).ended.Swap(false) && !delivered && len(steered) == 0 {
+		if answer.ended.Swap(false) && !delivered && len(steered) == 0 {
 			a.memory.remember(contextID, history)
 			return "", nil
 		}

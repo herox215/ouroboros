@@ -457,10 +457,12 @@ your agent is thinking.
 
 - **Handing on.** The agent of the thread does none of the work itself. For each of your messages it decides which
   topic it continues, or whether it is a new one. It hands the message to the conversation of that topic with
-  `session_send`, or starts one for it with `session_new`. Then its answer ends without a word, as that
-  conversation answers. A message about several topics hands each its part. When it cannot tell which topic you
-  mean, it asks you, about the topic. It answers itself only what the thread answers already, like what was said
-  before. Its words along the way and the calls with which it hands on are not shown; `/context` shows them.
+  `session_send`, or starts one for it with `session_new`. Then it acknowledges the handoff in a word or two at
+  most, and its answer ends: that conversation answers, and only its result is the substantive answer. A complete
+  answer to what was handed on, written before the result, is not shown. A message about several topics hands each its part. When it
+  cannot tell which topic you mean, it asks you, about the topic. It answers itself only what the thread answers
+  already, like what was said before. Its words along the way and the calls with which it hands on are not shown;
+  `/context` shows them.
 - **Which conversations.** The agent of the thread is told which conversations there are to hand your messages
   to: those in which something happened in the last 24 hours, at most 30, the latest first, each with a handle of
   8 characters of its ID, its title, its project where it is not that of the thread, and whether it is working or

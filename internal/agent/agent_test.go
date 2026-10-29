@@ -1002,6 +1002,198 @@ func TestEndEndsAfterTheTools(t *testing.T) {
 	}
 }
 
+// handLLM hands the question to the tool "hand" when it is asked to, and
+// answers its text otherwise, one after the other.
+type handLLM struct {
+	said  []string
+	calls int
+}
+
+func (l *handLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if last := msgs[len(msgs)-1]; last.Role == "user" && strings.HasPrefix(last.Content, "hand me") {
+		return openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "c1", Type: "function", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}, nil
+	}
+	text := l.said[min(l.calls, len(l.said)-1)]
+	l.calls++
+	return openai.Message{Role: "assistant", Content: text}, nil
+}
+
+// An answer whose tool handed its question on says an acknowledgement of
+// receipt at most: a complete answer of its own is not said, since what the
+// tool handed the question to would answer it again. What the owner is not
+// shown is not kept as said. The next answer is a new one and says all it
+// has to.
+func TestHandedAllowsAnAcknowledgementOnly(t *testing.T) {
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		if !Handed(ctx) {
+			t.Error("Handed outside of an answer")
+		}
+		return "handed", nil
+	}}
+	full := strings.Repeat("The login problem comes from an expired token. ", 10)
+	for _, tt := range []struct{ name, text, want string }{
+		{"acknowledgement", "I'll look into it.", "I'll look into it."},
+		{"nothing", "", ""},
+		{"complete answer", full, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			llm := &handLLM{said: []string{tt.text, "A fresh answer."}}
+			a := New(llm, "gpt", "alpha", hand)
+			got, err := a.Respond(context.Background(), "c1", "hand me the login")
+			if err != nil || got != tt.want {
+				t.Fatalf("got %q, %v", got, err)
+			}
+			if tt.want == "" && tt.text != "" {
+				for _, m := range a.memory.Conversation("c1") {
+					if strings.Contains(m.Content, tt.text) {
+						t.Fatal("what the owner was not shown is kept as said")
+					}
+				}
+			}
+			if got, err := a.Respond(context.Background(), "c1", "hi"); err != nil || got != "A fresh answer." {
+				t.Fatalf("the answer after: %q, %v", got, err)
+			}
+		})
+	}
+	if Handed(context.Background()) {
+		t.Fatal("Handed outside of an answer")
+	}
+}
+
+// A tool that did something besides hand the question on gives the answer
+// something of its own to say, which is kept: a message of two parts, one
+// answered from this conversation and one handed on, loses neither.
+func TestHandedSaysWhatAnotherToolFound(t *testing.T) {
+	look := Tool{Name: "look", Schema: `{"type":"object"}`, Run: func(context.Context, json.RawMessage) (string, error) {
+		return "yesterday you said: the release train leaves at noon", nil
+	}}
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Handed(ctx)
+		return "handed", nil
+	}}
+	own := strings.Repeat("You said the release train leaves at noon. ", 10)
+	calls := 0
+	llm := llmFunc(func([]openai.Message) openai.Message {
+		calls++
+		switch calls {
+		case 1:
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "look", Arguments: "{}"}}}}
+		case 2:
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "2", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}
+		}
+		return openai.Message{Content: own}
+	})
+	got, err := New(llm, "m", "sys", look, hand).Respond(context.Background(), "c", "what did I say about the deploy, and fix the login")
+	if err != nil || got != own {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// What the owner says while the answer of a handed question is on its way is
+// answered: the answer speaks for itself again, since what it says is about
+// their words, not an early answer to what the tool handed on, see Handed.
+func TestHandedAnswersWhatCameMeanwhile(t *testing.T) {
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Handed(ctx)
+		return "handed", nil
+	}}
+	after := strings.Repeat("The cache is warm again, so the next request is fast. ", 10)
+	calls := 0
+	llm := llmFunc(func(msgs []openai.Message) openai.Message {
+		calls++
+		if calls == 1 {
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}
+		}
+		if last := msgs[len(msgs)-1]; last.Role != "user" || last.Content != "and the cache?" {
+			t.Fatalf("asked without what the owner said meanwhile: %+v", last)
+		}
+		return openai.Message{Content: after}
+	})
+	said := []openai.Message{{Role: "user", Content: "and the cache?"}}
+	ctx := WithMessageSteering(context.Background(), func() []openai.Message {
+		meanwhile := said
+		said = nil
+		return meanwhile
+	})
+	got, err := New(llm, "m", "sys", hand).Respond(ctx, "c", "hand me the login")
+	if err != nil || got != after {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// A result of a job that arrives while the answer of a handed question is on
+// its way is answered too: what the answer says of it is no early answer to
+// what the tool handed on, see Handed.
+func TestHandedAnswersADeliveredResult(t *testing.T) {
+	done := make(chan struct{})
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Handed(ctx)
+		AnswerOf(ctx).Watch(done, func() string { return "the job found the expired token" })
+		return "handed", nil
+	}}
+	early := strings.Repeat("The login problem comes from an expired token. ", 10)
+	after := strings.Repeat("The log shows the token expired at noon, and the refresh fixes it. ", 10)
+	calls := 0
+	llm := llmFunc(func(msgs []openai.Message) openai.Message {
+		calls++
+		switch calls {
+		case 1:
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}
+		case 2:
+			close(done)
+			return openai.Message{Content: early}
+		default:
+			if last := msgs[len(msgs)-1]; last.Role != "user" || last.Content != "the job found the expired token" {
+				t.Fatalf("asked without the result delivered: %+v", last)
+			}
+			return openai.Message{Content: after}
+		}
+	})
+	got, err := New(llm, "m", "sys", hand).Respond(context.Background(), "c", "hand me the login")
+	if err != nil || got != after || calls != 3 {
+		t.Fatalf("got %q, %v, %d calls", got, err, calls)
+	}
+}
+
+// What the owner says while the answer of a handed question is written is
+// answered in one answer of its own: the draft goes, and what the answer says
+// of their words is no early answer to what the tool handed on, see Handed.
+func TestHandedAnswersWhatCameWhileWriting(t *testing.T) {
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Handed(ctx)
+		return "handed", nil
+	}}
+	early := strings.Repeat("The login problem comes from an expired token. ", 10)
+	after := strings.Repeat("The cache is warm again, so the next request is fast. ", 10)
+	calls := 0
+	llm := llmFunc(func(msgs []openai.Message) openai.Message {
+		calls++
+		if calls == 1 {
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}
+		}
+		if calls == 2 {
+			return openai.Message{Content: early}
+		}
+		if last := msgs[len(msgs)-1]; last.Role != "user" || last.Content != "and the cache?" {
+			t.Fatalf("asked without what the owner said meanwhile: %+v", last)
+		}
+		return openai.Message{Content: after}
+	})
+	asked := 0
+	ctx := WithSteering(context.Background(), func() []string {
+		asked++
+		if asked == 2 { // after the tool round, while the answer is written
+			return []string{"and the cache?"}
+		}
+		return nil
+	})
+	var drafts []string
+	got, err := New(llm, "m", "sys", hand).Run(ctx, "c", "hand me the login", Observer{Draft: func(text string) { drafts = append(drafts, text) }})
+	if err != nil || got != after || !slices.Equal(drafts, []string{early}) {
+		t.Fatalf("got %q, %v, drafts %q", got, err, drafts)
+	}
+}
+
 // What WithSent makes of the conversation is what the LLM is sent, after the
 // system prompt; what is kept of the conversation stays as it was.
 func TestWithSent(t *testing.T) {

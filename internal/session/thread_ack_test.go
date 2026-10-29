@@ -18,6 +18,9 @@ import (
 
 const handoffAck = "I'll look into the login problem."
 const handoffFinding = "The login problem was caused by an expired token."
+const handoffEarly = "The login problem is caused by an expired token. " +
+	"The server rejects every request whose token has expired, and the client shows the login page again. " +
+	"To fix it, the client must refresh the token before it expires, and the server must answer with a new one."
 
 // Script only the model: routing, the post-tool turn, background execution,
 // result delivery and owner-visible events all use the real assistant/service.
@@ -26,6 +29,7 @@ type handoffAckLLM struct {
 	started  chan struct{}
 	postTool atomic.Int32
 	results  atomic.Int32
+	upfront  string // what it says after the handoff, handoffAck for none
 }
 
 func (l *handoffAckLLM) Complete(ctx context.Context, _ string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
@@ -43,6 +47,9 @@ func (l *handoffAckLLM) Complete(ctx context.Context, _ string, msgs []openai.Me
 				return openai.Message{}, fmt.Errorf("unexpected handoff result: %+v", last)
 			}
 			l.postTool.Add(1)
+			if l.upfront != "" {
+				return reply(l.upfront)
+			}
 			return reply(handoffAck)
 		case strings.HasPrefix(last.Content, backgroundHead):
 			if !strings.Contains(last.Content, "expired token") {
@@ -116,6 +123,40 @@ func TestThreadAcknowledgesBeforeDelayedResult(t *testing.T) {
 		}
 	}
 	if !slices.Equal(answers, []string{handoffAck, handoffFinding}) {
+		t.Fatalf("owner-visible answers: %q", answers)
+	}
+	if llm.postTool.Load() != 1 || llm.results.Load() != 1 {
+		t.Fatalf("final turns: post-tool=%d, results=%d", llm.postTool.Load(), llm.results.Load())
+	}
+}
+
+// A complete answer written up front, after the handoff and before the result
+// of the work, is not shown: the thread acknowledges at most, so the result
+// is the one substantive answer, never a duplicate of an answer given before.
+func TestThreadDropsACompleteAnswerBeforeTheResult(t *testing.T) {
+	release := make(chan struct{})
+	llm := &handoffAckLLM{release: release, started: make(chan struct{}, 1), upfront: handoffEarly}
+	cfg := config.Config{Access: "scripted", Model: "test", Name: "me"}
+	a := assistant.New(func() (config.Config, error) { return cfg, nil }, assistant.Builder{
+		LLM:   func(string) (agent.LLM, error) { return llm, nil },
+		Tools: func() []agent.Tool { return nil },
+	}, func(string, ...any) {})
+	t.Cleanup(a.Stop)
+	s := New(a)
+	t.Cleanup(s.Close)
+	_, live, err := s.Watch(context.Background(), ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask(t, s, "Please investigate the login problem.")
+	close(release)
+	var answers []string
+	for _, e := range working(t, live) {
+		if e.Kind == Answer {
+			answers = append(answers, e.Text)
+		}
+	}
+	if !slices.Equal(answers, []string{handoffFinding}) {
 		t.Fatalf("owner-visible answers: %q", answers)
 	}
 	if llm.postTool.Load() != 1 || llm.results.Load() != 1 {
