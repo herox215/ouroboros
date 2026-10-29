@@ -90,17 +90,16 @@ func broken(when string) string {
 	return "CREATE TRIGGER broken " + when + " BEGIN SELECT RAISE(ABORT,'broken'); END"
 }
 
-// Once the database cannot be reached, every operation fails instead of
-// telling of an empty archive.
 // adopt makes db the open pool of a, as if a had opened it, with the WAL it
-// holds, see held.
+// writes to, see Archive.kept.
 func adopt(a *Archive, db *sql.DB) {
 	a.db, a.wal = db, storage.Watch(db, a.dir)
 }
 
-// closeBehind closes the pool of a behind its back. Another connection
-// keeps the WAL at its path, so that a takes its pool for its own still and
-// every operation fails on it, rather than opening anew, see held.
+// closeBehind closes the pool of a behind its back. Another connection keeps
+// the WAL at its path: SQLite removes the WAL with the last connection, and
+// a change would then fail already where kept finds its WAL gone, not where
+// the operation uses the closed pool.
 func closeBehind(t *testing.T, a *Archive) {
 	t.Helper()
 	db, err := a.database()
@@ -118,6 +117,8 @@ func closeBehind(t *testing.T, a *Archive) {
 	db.Close()
 }
 
+// Once the database cannot be reached, every operation fails instead of
+// telling of an empty archive.
 func TestClosedDatabase(t *testing.T) {
 	a := at(t)
 	if err := a.Append(owner, question, nil); err != nil {
