@@ -210,7 +210,7 @@ func TestSessionNewNamesItsSession(t *testing.T) {
 	defer a.Stop()
 	ctx := WithThread(context.Background(), &fakeThread{})
 	got, err := a.Ask(ctx, "thread", `!session_new {"text":"go"}`, nil)
-	if got := result(t, got, err); !strings.HasPrefix(got, "Work started in the background in session s2. ") {
+	if got := result(t, got, err); got != "Work started in the background in session s2." {
 		t.Fatalf("session_new: %s", got)
 	}
 }

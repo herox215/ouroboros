@@ -153,6 +153,10 @@ func threadTools() []agent.Tool {
 			if err != nil {
 				return "", err
 			}
+			// The session answers the question: what the thread says itself
+			// is an acknowledgement of receipt at most, never a second answer
+			// that the session result then repeats, see agent.Handed.
+			agent.Handed(ctx)
 			return fmt.Sprintf("Handed to %q: %s.", title, outcome), nil
 		},
 	}, {
@@ -179,10 +183,13 @@ func threadTools() []agent.Tool {
 			if err != nil {
 				return "", err
 			}
+			// The new session answers the concern, see ToolSessionSend: the
+			// thread adds an acknowledgement at most.
+			agent.Handed(ctx)
 			// The ID, as its description promises: as the thread is told it
 			// (session.handle), so that its agent and the front ends can tell
 			// which session a part of the thread started.
-			return "Work started in the background in session " + id[:min(len(id), 8)] + ". Briefly acknowledge ordinary work, then finish this turn without waiting. Omit the acknowledgement for quick visible actions when the owner wants no extra text.", nil
+			return "Work started in the background in session " + id[:min(len(id), 8)] + ".", nil
 		},
 	}, {
 		Name: ToolSearchThread,

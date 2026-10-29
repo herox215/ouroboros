@@ -202,6 +202,7 @@ type Answer struct {
 	values  sync.Map
 	ctx     context.Context
 	ended   atomic.Bool // by End
+	handed  atomic.Bool // by Handed
 	// kept is what the tools of the round keep, see Keep.
 	keptMu sync.Mutex
 	kept   []chat.Message
@@ -217,6 +218,34 @@ func End(ctx context.Context) bool {
 		return false
 	}
 	a.ended.Store(true)
+	return true
+}
+
+// ackBytes is how much text passes as an acknowledgement of receipt of work
+// a tool handed on, see Handed.
+const ackBytes = 200
+
+// acknowledgement reports whether text passes as an acknowledgement of
+// receipt: nothing, or a line or two of at most ackBytes bytes. A complete
+// answer, which what the tool handed the work to would give a second time,
+// does not.
+func acknowledgement(text string) bool {
+	text = strings.TrimSpace(text)
+	return len(text) <= ackBytes && strings.Count(text, "\n") < 2
+}
+
+// Handed marks the answer of ctx as one whose question its tools handed on
+// to something that answers it, as a session does. What the answer says
+// itself after that is an acknowledgement of receipt at most: a complete
+// answer is not said, and the answer ends, since the thing the question was
+// handed to would give it a second time. It reports whether ctx is of an
+// answer.
+func Handed(ctx context.Context) bool {
+	a := AnswerOf(ctx)
+	if a == nil {
+		return false
+	}
+	a.handed.Store(true)
 	return true
 }
 
@@ -440,7 +469,8 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 	a, ctx, abilities := a.abilityAnswer(ctx, contextID)
 	ctx, end := context.WithCancel(ctx)
 	defer end() // after the hooks that are told how the answer ended
-	ctx = context.WithValue(ctx, answerKey{}, &Answer{ctx: ctx})
+	answer := &Answer{ctx: ctx}
+	ctx = context.WithValue(ctx, answerKey{}, answer)
 	ctx = chat.WithSession(context.WithValue(ctx, contextKey{}, contextID), contextID)
 	ctx = context.WithValue(ctx, observerKey{}, observe)
 	spent := &atomic.Int64{}
@@ -595,13 +625,26 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 				continue
 			}
 		}
+		// An answer whose tools handed its question on says an
+		// acknowledgement of receipt at most: what it would answer itself
+		// would be given a second time by what the question was handed to,
+		// see Handed. What the owner said meanwhile is taken all the same.
+		if len(msg.ToolCalls) == 0 && answer.handed.Load() && !acknowledgement(msg.Content) {
+			if delivered, err := report(); err != nil {
+				return abandon(err)
+			} else if delivered {
+				continue
+			}
+			a.memory.remember(contextID, history)
+			return "", nil
+		}
 		history = append(history, msg)
 		if err := emit(msg); err != nil {
 			return abandon(err)
 		}
 		// A model that says nothing at all, as small ones do after a long
 		// result, is asked once to go on: nothing is no answer.
-		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged {
+		if len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && !nudged && !answer.handed.Load() {
 			nudged = true
 			history = append(history, chat.Message{Role: "user", Content: emptyNote})
 			continue
@@ -663,7 +706,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		// A tool that ended the answer ends it here, unless something came
 		// meanwhile for the LLM to take.
-		if AnswerOf(ctx).ended.Swap(false) && !delivered && len(steered) == 0 {
+		if answer.ended.Swap(false) && !delivered && len(steered) == 0 {
 			a.memory.remember(contextID, history)
 			return "", nil
 		}

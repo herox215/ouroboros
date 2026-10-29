@@ -1002,6 +1002,64 @@ func TestEndEndsAfterTheTools(t *testing.T) {
 	}
 }
 
+// handLLM hands the question to the tool "hand" when it is asked to, and
+// answers its text otherwise, one after the other.
+type handLLM struct {
+	said  []string
+	calls int
+}
+
+func (l *handLLM) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if last := msgs[len(msgs)-1]; last.Role == "user" && strings.HasPrefix(last.Content, "hand me") {
+		return openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "c1", Type: "function", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}, nil
+	}
+	text := l.said[min(l.calls, len(l.said)-1)]
+	l.calls++
+	return openai.Message{Role: "assistant", Content: text}, nil
+}
+
+// An answer whose tool handed its question on says an acknowledgement of
+// receipt at most: a complete answer of its own is not said, since what the
+// tool handed the question to would answer it again. What the owner is not
+// shown is not kept as said. The next answer is a new one and says all it
+// has to.
+func TestHandedAllowsAnAcknowledgementOnly(t *testing.T) {
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		if !Handed(ctx) {
+			t.Error("Handed outside of an answer")
+		}
+		return "handed", nil
+	}}
+	full := strings.Repeat("The login problem comes from an expired token. ", 10)
+	for _, tt := range []struct{ name, text, want string }{
+		{"acknowledgement", "I'll look into it.", "I'll look into it."},
+		{"nothing", "", ""},
+		{"complete answer", full, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			llm := &handLLM{said: []string{tt.text, "A fresh answer."}}
+			a := New(llm, "gpt", "alpha", hand)
+			got, err := a.Respond(context.Background(), "c1", "hand me the login")
+			if err != nil || got != tt.want {
+				t.Fatalf("got %q, %v", got, err)
+			}
+			if tt.want == "" && tt.text != "" {
+				for _, m := range a.memory.Conversation("c1") {
+					if strings.Contains(m.Content, tt.text) {
+						t.Fatal("what the owner was not shown is kept as said")
+					}
+				}
+			}
+			if got, err := a.Respond(context.Background(), "c1", "hi"); err != nil || got != "A fresh answer." {
+				t.Fatalf("the answer after: %q, %v", got, err)
+			}
+		})
+	}
+	if Handed(context.Background()) {
+		t.Fatal("Handed outside of an answer")
+	}
+}
+
 // What WithSent makes of the conversation is what the LLM is sent, after the
 // system prompt; what is kept of the conversation stays as it was.
 func TestWithSent(t *testing.T) {
