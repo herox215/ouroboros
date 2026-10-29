@@ -328,16 +328,17 @@ func (o Options) models(ctx context.Context, a llm.Access) (llm.Models, error) {
 
 // usage reads the limits of the plan of the access a, as the CLI fetches
 // them with its login.
-func (o Options) usage(ctx context.Context, a llm.Access) ([]llm.UsageWindow, error) {
+func (o Options) usage(ctx context.Context, a llm.Access) (llm.Usage, error) {
 	acct, err := o.saved(a)
 	if err != nil {
-		return nil, err
+		return llm.Usage{}, err
 	}
 	raw, err := o.control(ctx, acct, "get_usage", map[string]any{"skip_behaviors": true})
 	if err != nil {
-		return nil, err
+		return llm.Usage{}, err
 	}
-	return parseUsage(raw)
+	windows, err := parseUsage(raw)
+	return llm.Usage{Windows: windows}, err
 }
 
 // parseUsage reads the windows of what get_usage answers: those of "limits",

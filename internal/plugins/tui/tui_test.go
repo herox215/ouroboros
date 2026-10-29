@@ -503,7 +503,7 @@ func TestUsageScreen(t *testing.T) {
 	if usage == nil || usage.Title != "Remaining usage" {
 		t.Fatalf("the screen: %+v", usage)
 	}
-	if body, err := usage.Body(context.Background()); err != nil || body != "No configured provider exposes remaining quota through its API." {
+	if body, err := usage.Body(context.Background()); err != nil || body != "No access is set up." {
 		t.Fatalf("body %q, %v", body, err)
 	}
 	if err := os.WriteFile(filepath.Join(s.Home, "config.json"), []byte("{"), 0o600); err != nil {

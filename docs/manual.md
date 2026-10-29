@@ -1372,8 +1372,15 @@ names:
 **DeepSeek** asks only for an API key, not an endpoint. The key is kept with the other credentials.
 `DEEPSEEK_API_KEY` optionally offers it during setup; it does not change an existing access.
 Models are fetched from `GET /models`, with `deepseek-flash` preferred when available. API usage
-is billed separately from the DeepSeek chat app and needs API credit. Existing custom-provider
+is billed separately from the DeepSeek chat app and needs API credit. `/usage` shows that credit as
+`GET /user/balance` tells it: the total balance in each currency the account holds, like
+`balance: 12.34 USD`, and a line when it no longer allows calls. Existing custom-provider
 accesses pointing at DeepSeek are left unchanged.
+
+`/usage` lists every access of the node with what the API of its provider tells of it, without a request
+to a model: the limits of the plan for Claude Code and OpenCode Go, the balance for DeepSeek. Of an access
+whose provider tells ouro nothing, like ChatGPT or a custom provider, it says so instead of leaving it
+out, and an access that cannot be asked says why, without keeping the others from being shown.
 
 **OpenCode Go** needs no endpoint from you: where it is reached is part of ouro. The key is kept with the
 other credentials and sent as `Authorization: Bearer …`, with the ID of the conversation in

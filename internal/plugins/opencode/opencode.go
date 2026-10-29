@@ -68,10 +68,10 @@ func Provider(o Options) plugin.Provider {
 			}
 			return models(ctx, baseURL, key)
 		},
-		Usage: func(ctx context.Context, a plugin.Access) ([]llm.UsageWindow, error) {
+		Usage: func(ctx context.Context, a plugin.Access) (llm.Usage, error) {
 			baseURL, key, err := saved(a)
 			if err != nil {
-				return nil, errors.New("cannot read OpenCode Go usage credentials")
+				return llm.Usage{}, errors.New("cannot read OpenCode Go usage credentials")
 			}
 			return usage(ctx, baseURL, key)
 		},

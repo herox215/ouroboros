@@ -2,23 +2,35 @@ package plugin
 
 import (
 	"context"
+	"errors"
 
 	"ouroboros/internal/llm"
 )
 
-// UsageWindow is a quota window reported by a provider, not local token counts.
-type UsageWindow = llm.UsageWindow
+type (
+	// Usage is what the API of a provider tells an access may still spend:
+	// quota windows, a prepaid balance, or both. Not the tokens of a call,
+	// which ChatMessage.Usage tells.
+	Usage = llm.Usage
+	// UsageWindow is a quota window reported by a provider, not local token counts.
+	UsageWindow = llm.UsageWindow
+	// UsageBalance is the prepaid credit of an account in one currency.
+	UsageBalance = llm.UsageBalance
+)
 
-// AccessUsage is the remaining-quota report of one access. An error belongs
-// to that access alone; other providers can still report their quotas.
+// AccessUsage is the report of one access: what its provider told of it. An
+// error belongs to that access alone; other providers can still report.
 type AccessUsage struct {
-	Access  SetupAccess
-	Windows []UsageWindow
-	Err     string
+	Access SetupAccess
+	Usage
+	// Unreported says that the provider of the access tells ouro no usage.
+	Unreported bool
+	Err        string
 }
 
-// Usage asks only providers that expose account quota. It makes no model
-// request and does not estimate quotas for providers without such an API.
+// Usage reports every access of the node: what the API of its provider tells
+// it may still spend, or that it tells nothing. It makes no model request and
+// does not estimate quotas for providers without such an API.
 func (o *Owner) Usage(ctx context.Context, providers []Provider) ([]AccessUsage, error) {
 	s, err := o.Setup(providers)
 	if err != nil {
@@ -34,14 +46,13 @@ func (o *Owner) Usage(ctx context.Context, providers []Provider) ([]AccessUsage,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		p, err := book.Provider(a.Provider)
-		if err != nil || p.Usage == nil {
-			continue
-		}
-		windows, err := book.Usage(ctx, a.ID)
-		report := AccessUsage{Access: a, Windows: windows}
-		if err != nil {
-			report.Windows, report.Err = nil, err.Error()
+		usage, err := book.Usage(ctx, a.ID)
+		report := AccessUsage{Access: a, Usage: usage}
+		switch {
+		case errors.Is(err, llm.ErrUsageUnavailable):
+			report.Unreported = true
+		case err != nil:
+			report.Usage, report.Err = Usage{}, err.Error()
 		}
 		reports = append(reports, report)
 	}

@@ -17,8 +17,8 @@ import (
 func TestOwnerUsage(t *testing.T) {
 	dir := home.Dir(t.TempDir())
 	store := dir.Credentials()
-	// An access of a provider that is gone, or that tells no quota, is
-	// left out, and the others are asked all the same.
+	// Every access is reported, also one of a provider that is gone or that
+	// tells no usage, and one that fails keeps no other from being asked.
 	for _, a := range []credentials.Access{
 		{Provider: "gone"},
 		{Provider: "quota", Name: "good"},
@@ -30,16 +30,17 @@ func TestOwnerUsage(t *testing.T) {
 		}
 	}
 	calls := 0
-	p := plugin.Provider{Name: "quota", Usage: func(ctx context.Context, a llm.Access) ([]llm.UsageWindow, error) {
+	p := plugin.Provider{Name: "quota", Usage: func(ctx context.Context, a llm.Access) (llm.Usage, error) {
 		calls++
 		c, err := a.Credentials()
 		if err != nil {
-			return nil, err
+			return llm.Usage{}, err
 		}
 		if c.Title == "bad" {
-			return nil, errors.New("unavailable")
+			return llm.Usage{Windows: []llm.UsageWindow{{Name: "partial"}}}, errors.New("unavailable")
 		}
-		return []llm.UsageWindow{{Name: "monthly", UsedPercent: 42}}, nil
+		return llm.Usage{Windows: []llm.UsageWindow{{Name: "monthly", UsedPercent: 42}},
+			Balances: []llm.UsageBalance{{Currency: "USD", Amount: "1.00"}}}, nil
 	}}
 	// The provider sees only credentials, not the access name.
 	list, _ := store.List()
@@ -51,14 +52,22 @@ func TestOwnerUsage(t *testing.T) {
 	}
 	o := plugin.OwnerOf(dir, nil)
 	reports, err := o.Usage(context.Background(), []plugin.Provider{p, {Name: "no-quota"}})
-	if err != nil || len(reports) != 2 || calls != 2 {
+	if err != nil || len(reports) != 4 || calls != 2 {
 		t.Fatalf("reports %+v, calls %d, err %v", reports, calls, err)
 	}
-	if reports[0].Access.Label != "good" || len(reports[0].Windows) != 1 || reports[0].Windows[0].UsedPercent != 42 {
-		t.Fatalf("good: %+v", reports[0])
+	if gone := reports[0]; !strings.Contains(gone.Err, "not part of this ouro") || gone.Unreported {
+		t.Fatalf("gone: %+v", gone)
 	}
-	if reports[1].Err != "unavailable" || len(reports[1].Windows) != 0 {
-		t.Fatalf("bad: %+v", reports[1])
+	if good := reports[1]; good.Access.Label != "good" || good.Err != "" || good.Unreported || len(good.Windows) != 1 ||
+		good.Windows[0].UsedPercent != 42 || len(good.Balances) != 1 || good.Balances[0].Amount != "1.00" {
+		t.Fatalf("good: %+v", good)
+	}
+	// What a provider told along with its error is not shown.
+	if bad := reports[2]; bad.Err != "unavailable" || bad.Windows != nil || bad.Unreported {
+		t.Fatalf("bad: %+v", bad)
+	}
+	if none := reports[3]; !none.Unreported || none.Err != "" || none.Windows != nil {
+		t.Fatalf("no quota: %+v", none)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -71,9 +80,9 @@ func TestOwnerUsage(t *testing.T) {
 // provider is asked.
 func TestOwnerUsageThatCannotBeRead(t *testing.T) {
 	asked := 0
-	p := plugin.Provider{Name: "quota", Usage: func(context.Context, llm.Access) ([]llm.UsageWindow, error) {
+	p := plugin.Provider{Name: "quota", Usage: func(context.Context, llm.Access) (llm.Usage, error) {
 		asked++
-		return nil, nil
+		return llm.Usage{}, nil
 	}}
 	dir := home.Dir(t.TempDir())
 	if _, err := dir.Credentials().Put(credentials.Access{Provider: "quota"}); err != nil {

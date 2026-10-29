@@ -79,7 +79,23 @@ func Provider(o Options) plugin.Provider {
 		}
 	}
 	p.Catalog = func(plugin.Access) string { return Name }
+	p.Usage = func(ctx context.Context, a plugin.Access) (plugin.Usage, error) {
+		endpoint, key, err := saved(a)
+		if err != nil {
+			return plugin.Usage{}, errors.New("cannot read DeepSeek balance credentials")
+		}
+		return balance(ctx, endpoint, key)
+	}
 	return p
+}
+
+// saved reads the endpoint and the key of the access a.
+func saved(a plugin.Access) (endpoint, key string, err error) {
+	c, err := a.Credentials()
+	if err != nil {
+		return "", "", err
+	}
+	return openai.Saved(c)
 }
 
 // access lets the login validate credentials before they are saved.
