@@ -3,7 +3,6 @@
 package storage
 
 import (
-	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -35,10 +34,11 @@ const FileName = "ouroboros.sqlite"
 // Write transactions should be short; a deferred read transaction upgraded to
 // a writer may still fail with SQLITE_BUSY and need retrying by its owner.
 //
-// Where WAL cannot be enabled for an I/O error, as when the WAL went away
-// while another process still has it open, the pool reads without WAL, from
-// the file as it is, and refuses every write; the log says so once. Where not
-// even that reads, the error names its code.
+// A WAL that was removed or replaced while connections of this process still
+// use the one they opened is no longer the WAL at the path: a pool on it would
+// read frames that are not there, or write where the others do not read. The
+// pool then reads the file as it is, without the WAL, and refuses writes, and
+// the log says so once. Where not even that reads, the error says why.
 func Open(dir string) (*sql.DB, error) {
 	path, err := filepath.Abs(dir)
 	if err != nil {
@@ -68,19 +68,17 @@ func Open(dir string) (*sql.DB, error) {
 	var journal string
 	err = enableWAL(db, &journal)
 	if err == nil && journal == "wal" {
-		err = walIntact(db)
+		err = walIntact(db, path)
 	}
 	if err != nil {
 		db.Close()
-		var sqliteErr *sqlite.Error
-		if !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_IOERR {
+		err = shortRead(err, path)
+		if !errors.As(err, new(walGone)) {
 			return nil, fmt.Errorf("enable storage WAL: %w", err)
 		}
-		// An I/O error, which a pool that only reads the file may get around.
-		err = walFailure(err, sqliteErr.Code(), path)
 		if ro := readOnly(path); ro != nil {
 			if _, told := readingOnly.LoadOrStore(path, true); !told {
-				log.Printf("storage %s runs read-only without WAL, from what its file holds, and refuses writes: %v", path, err)
+				log.Printf("storage %s is opened read-only, without its WAL, and refuses writes: %v", path, err)
 			}
 			return ro, nil
 		}
@@ -117,26 +115,55 @@ func pool(path, params string) *sql.DB {
 	return db
 }
 
-// walIntact reads every frame of the WAL of db that is not in its file yet,
-// as a passive checkpoint does, which neither waits nor blocks anyone. A WAL
-// that is gone at its path while another pool still has it open fails only
-// where a frame of it is read, which may otherwise be long after Open.
-func walIntact(db *sql.DB) error {
-	var busy, frames, copied int
-	return db.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &frames, &copied)
+// walIntact checks that the WAL at path is the WAL that the index of db
+// describes. The index is shared by every connection of the process to the
+// database, the WAL is not: each connection keeps the one it opened. A
+// passive checkpoint copies into the database file what it can without
+// waiting for anyone, reading those frames from the WAL at path, and says
+// how many frames the index holds, for which the WAL at path must be long
+// enough. Nothing ouro does shortens a WAL that still has frames.
+func walIntact(db *sql.DB, path string) error {
+	var busy, frames, copied, pageSize int
+	err := db.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &frames, &copied)
+	if err == nil {
+		err = db.QueryRow("PRAGMA page_size").Scan(&pageSize)
+	}
+	if err != nil {
+		return err
+	}
+	var have int64
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		have = info.Size()
+	}
+	// A header of 32 bytes, then each frame: a header of 24 bytes and a page.
+	if need := 32 + int64(frames)*int64(pageSize+24); frames > 0 && have < need {
+		text := fmt.Sprintf("the WAL of %s has %d bytes, but its index holds frames up to byte %d: it was removed or replaced while the database was open",
+			path, have, need)
+		return walGone{errors.New(text), text}
+	}
+	return nil
 }
 
-// readable reads the schema of db, as every store does first.
-func readable(db *sql.DB) error {
-	var n int
-	return db.QueryRow("SELECT count(*) FROM sqlite_master").Scan(&n)
+// shortRead is err, and where it is a short read of SQLite one that says so
+// by name and what it means: a file of the database at path is shorter than
+// SQLite expects, as the WAL is when it was removed or replaced while
+// connections of this process still use the one they opened.
+func shortRead(err error, path string) error {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_IOERR_SHORT_READ {
+		return err
+	}
+	text := strings.Replace(err.Error(), fmt.Sprintf("(%d)", sqlite3.SQLITE_IOERR_SHORT_READ), "(SQLITE_IOERR_SHORT_READ)", 1) +
+		": a file of " + path + " is shorter than SQLite expects, as its WAL is when that was removed or replaced while the database was open"
+	return walGone{err, text}
 }
 
 // readOnlyMode are the URI parameters of readOnly: a pool that takes the
 // file as it is, without the frames of the WAL that are not in it yet. A
-// read-only pool that reads the WAL would fail where the pool that writes
-// did, as the index of the WAL it reads is the same.
-var readOnlyMode = "mode=ro&immutable=1"
+// read-only pool that reads the WAL would read the WAL at the path through
+// the same index, as the pool that failed did. query_only marks the pool as
+// read-only for Watch.
+var readOnlyMode = "mode=ro&immutable=1&_pragma=query_only%281%29"
 
 // readOnly is a pool that reads the database at path without WAL, nil if it
 // does not.
@@ -149,28 +176,58 @@ func readOnly(path string) *sql.DB {
 	return db
 }
 
-// walFailure is err of the code with its code named rather than numbered,
-// and where it is a short read what that means for a database in WAL: its
-// WAL went away while another process still has it open.
-func walFailure(err error, code int, path string) error {
-	number := fmt.Sprintf("(%d)", code)
-	name := cmp.Or(sqlite.ErrorCodeString[code], number)
-	name = name[strings.LastIndex(name, "("):] // "(SQLITE_IOERR_SHORT_READ)", without what precedes it
-	text := strings.Replace(err.Error(), number, name, 1)
-	if code == sqlite3.SQLITE_IOERR_SHORT_READ {
-		text += ": the WAL of " + path + " is gone while another process has it open"
-	}
-	return explained{err, text}
+// readable reads the schema of db, as every store does first.
+func readable(db *sql.DB) error {
+	var n int
+	return db.QueryRow("SELECT count(*) FROM sqlite_master").Scan(&n)
 }
 
-// explained is an error that says more than the error it wraps.
-type explained struct {
+// WAL is the WAL that a pool of Open writes to, as Watch found it.
+type WAL struct {
+	path string      // where the WAL is
+	info os.FileInfo // of the WAL at path then, nil if the pool reads without one
+}
+
+// Watch is the WAL that db, a pool Open opened on the database in dir, writes
+// to: the one at its path now. A pool that Open opened read-only writes to
+// none.
+func Watch(db *sql.DB, dir string) WAL {
+	w := WAL{path: filepath.Join(dir, FileName) + "-wal"}
+	var readOnly bool
+	if db.QueryRow("PRAGMA query_only").Scan(&readOnly) == nil && !readOnly {
+		w.info, _ = os.Stat(w.path) // nil without a WAL
+	}
+	return w
+}
+
+// Kept fails where what the pool of w writes would not be kept: where it
+// reads without WAL, and where the WAL it writes to is not the one at its
+// path any more. A WAL that was removed while a pool had it open takes every
+// commit, but the next process to open the database finds no WAL at the path
+// and never reads them. Nothing mends that but closing every pool of the
+// process on the database: a pool opened anew would write to a WAL of its own
+// at the path, apart from the pools that use the WAL that is gone.
+func (w WAL) Kept() error {
+	if w.info == nil {
+		return errors.New("the database is read-only, as it could not be opened with its WAL (see the log)")
+	}
+	info, err := os.Stat(w.path)
+	if err != nil || !os.SameFile(info, w.info) {
+		return fmt.Errorf("the WAL %s was removed or replaced while the database was open: what is written now would be lost when the process ends", w.path)
+	}
+	return nil
+}
+
+// walGone is the error of a WAL that is not the one the connections of the
+// process use any more, see walIntact: err is how it showed, text what it
+// means.
+type walGone struct {
 	err  error
 	text string
 }
 
-func (e explained) Error() string { return e.text }
-func (e explained) Unwrap() error { return e.err }
+func (e walGone) Error() string { return e.text }
+func (e walGone) Unwrap() error { return e.err }
 
 // walPragma turns WAL on and answers with the journal mode the database is in
 // then. SQLite keeps the old mode where its VFS cannot share memory between

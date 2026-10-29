@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -413,7 +414,7 @@ func lostWAL(t *testing.T) (dir string, db *sql.DB) {
 }
 
 // A database whose WAL is gone under another pool is still read, from what
-// its file holds, and the log says that it runs without WAL; it refuses
+// its file holds, and the log says that it is read-only and why; it refuses
 // writes.
 func TestOpenReadsWithoutItsWAL(t *testing.T) {
 	dir, _ := lostWAL(t)
@@ -428,22 +429,100 @@ func TestOpenReadsWithoutItsWAL(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO t VALUES (3)"); err == nil {
 		t.Fatal("a database without its WAL was written")
 	}
-	if want := "runs read-only without WAL"; !strings.Contains(logged.String(), want) || !strings.Contains(logged.String(), "SQLITE_IOERR_SHORT_READ") {
-		t.Fatalf("log %q, want %q and the cause", logged.String(), want)
+	if want := "is opened read-only, without its WAL, and refuses writes: disk I/O error (SQLITE_IOERR_SHORT_READ)"; !strings.Contains(logged.String(), want) {
+		t.Fatalf("log %q, want %q", logged.String(), want)
 	}
 }
 
-// Where nothing reads a database whose WAL is gone, the error says so.
+// A WAL that is gone is found also where none of its frames is read: when
+// all of them were copied into the file, or a reader keeps them from being
+// copied. The index still holds them, and the WAL at the path is too short.
+func TestOpenFindsAWALThatIsGoneUnread(t *testing.T) {
+	for name, c := range map[string]struct {
+		hold func(t *testing.T, db *sql.DB) // the pool that holds the WAL, after the WAL is gone
+		rows int
+	}{
+		"copied":          {func(t *testing.T, db *sql.DB) { execTest(t, db, "PRAGMA wal_checkpoint(FULL)") }, 2},
+		"behind a reader": {func(*testing.T, *sql.DB) {}, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			db := openTest(t, dir)
+			execTest(t, db, "CREATE TABLE t(x); INSERT INTO t VALUES (1)")
+			execTest(t, db, "PRAGMA wal_checkpoint(TRUNCATE)")
+			reader := openTest(t, dir)
+			tx, err := reader.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			var n int
+			if err := tx.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			execTest(t, db, "INSERT INTO t VALUES (2)")
+			if name == "copied" {
+				tx.Rollback()
+			}
+			if err := os.Remove(filepath.Join(dir, FileName) + "-wal"); err != nil {
+				t.Fatal(err)
+			}
+			c.hold(t, db)
+			var logged strings.Builder
+			log.SetOutput(&logged)
+			defer log.SetOutput(os.Stderr)
+			ro := openTest(t, dir)
+			if err := ro.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil || n != c.rows {
+				t.Fatalf("read %d rows, %v; want %d", n, err, c.rows)
+			}
+			if _, err := ro.Exec("INSERT INTO t VALUES (3)"); err == nil {
+				t.Fatal("a database without its WAL was written")
+			}
+			if want := " has 0 bytes, but its index holds frames up to byte "; !strings.Contains(logged.String(), want) || !strings.Contains(logged.String(), "it was removed or replaced while the database was open") {
+				t.Fatalf("log %q, want %q", logged.String(), want)
+			}
+		})
+	}
+}
+
+// Where nothing reads a database whose WAL is gone, the error says so, and
+// the log says nothing of a read-only database.
 func TestOpenSaysThatTheWALIsGone(t *testing.T) {
 	dir, _ := lostWAL(t)
 	defer func(mode string) { readOnlyMode = mode }(readOnlyMode)
 	readOnlyMode = "vfs=none"
 	db, err := Open(dir)
-	want := "enable storage WAL: disk I/O error (SQLITE_IOERR_SHORT_READ): the WAL of " + filepath.Join(dir, FileName) + " is gone while another process has it open"
+	want := "enable storage WAL: disk I/O error (SQLITE_IOERR_SHORT_READ): a file of " + filepath.Join(dir, FileName) +
+		" is shorter than SQLite expects, as its WAL is when that was removed or replaced while the database was open"
 	if db != nil || err == nil || err.Error() != want {
 		t.Fatalf("Open = %v, %v; want %q", db, err, want)
 	}
 	if sqliteErr := (*sqlite.Error)(nil); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_IOERR_SHORT_READ {
 		t.Fatalf("the error of SQLite is not in %v", err)
+	}
+}
+
+// A pool keeps what it writes while its WAL is the one at the path; not once
+// that is gone, and never where it was opened read-only.
+func TestWatch(t *testing.T) {
+	dir := t.TempDir()
+	db := openTest(t, dir)
+	execTest(t, db, "CREATE TABLE t(x); INSERT INTO t VALUES (1)")
+	wal := Watch(db, dir)
+	if err := wal.Kept(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, FileName) + "-wal"
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Kept(); err == nil || err.Error() != "the WAL "+path+" was removed or replaced while the database was open: what is written now would be lost when the process ends" {
+		t.Fatalf("kept = %v", err)
+	}
+	log.SetOutput(io.Discard) // that the database is read-only
+	defer log.SetOutput(os.Stderr)
+	ro := openTest(t, dir)
+	if err := Watch(ro, dir).Kept(); err == nil || !strings.HasPrefix(err.Error(), "the database is read-only") {
+		t.Fatalf("kept = %v", err)
 	}
 }
