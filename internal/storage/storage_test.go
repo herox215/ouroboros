@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +13,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func openTest(t *testing.T, dir string) *sql.DB {
@@ -388,5 +393,57 @@ func TestOpenWaitsToSwitchTheJournal(t *testing.T) {
 	var journal string
 	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil || journal != "wal" {
 		t.Fatalf("journal mode %q, %v", journal, err)
+	}
+}
+
+// lostWAL is the directory of a database with a row in its file and another
+// only in its WAL, which is gone at its path while db, still open, holds it.
+func lostWAL(t *testing.T) (dir string, db *sql.DB) {
+	t.Helper()
+	dir = t.TempDir()
+	db = openTest(t, dir)
+	execTest(t, db, "CREATE TABLE t(x)")
+	execTest(t, db, "INSERT INTO t VALUES (1)")
+	execTest(t, db, "PRAGMA wal_checkpoint(TRUNCATE)")
+	execTest(t, db, "INSERT INTO t VALUES (2)")
+	if err := os.Remove(filepath.Join(dir, FileName) + "-wal"); err != nil {
+		t.Fatal(err)
+	}
+	return dir, db
+}
+
+// A database whose WAL is gone under another pool is still read, from what
+// its file holds, and the log says that it runs without WAL; it refuses
+// writes.
+func TestOpenReadsWithoutItsWAL(t *testing.T) {
+	dir, _ := lostWAL(t)
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	db := openTest(t, dir)
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("read %d rows, %v; want the 1 of the file", n, err)
+	}
+	if _, err := db.Exec("INSERT INTO t VALUES (3)"); err == nil {
+		t.Fatal("a database without its WAL was written")
+	}
+	if want := "runs read-only without WAL"; !strings.Contains(logged.String(), want) || !strings.Contains(logged.String(), "SQLITE_IOERR_SHORT_READ") {
+		t.Fatalf("log %q, want %q and the cause", logged.String(), want)
+	}
+}
+
+// Where nothing reads a database whose WAL is gone, the error says so.
+func TestOpenSaysThatTheWALIsGone(t *testing.T) {
+	dir, _ := lostWAL(t)
+	defer func(mode string) { readOnlyMode = mode }(readOnlyMode)
+	readOnlyMode = "vfs=none"
+	db, err := Open(dir)
+	want := "enable storage WAL: disk I/O error (SQLITE_IOERR_SHORT_READ): the WAL of " + filepath.Join(dir, FileName) + " is gone while another process has it open"
+	if db != nil || err == nil || err.Error() != want {
+		t.Fatalf("Open = %v, %v; want %q", db, err, want)
+	}
+	if sqliteErr := (*sqlite.Error)(nil); !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_IOERR_SHORT_READ {
+		t.Fatalf("the error of SQLite is not in %v", err)
 	}
 }
