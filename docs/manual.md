@@ -2440,12 +2440,14 @@ Scope and limits:
   So is code of one system alone, like `sandbox_linux.go`, on the others, where it is not built: it is listed
   for the runs there, and a run on its own system tries these mutants and does not call their lines stale.
 - **Packages that send signals to process IDs are not mutated**, today `cmd/ouro` (its test kills the node),
-  `internal/daemon`, `internal/plugins/shell`, `internal/procgroup` and `internal/sandbox`. A mutant there lets
-  a PID of 0 or -1 through, and the code under test then signals its own process group (that happened when the
-  checks were set up: the run terminated itself) or every process you own. `scripts/mutation.sh` finds these
-  packages by the calls (`syscall.Kill`, `unix.Kill`, `os.FindProcess`), in code and tests, and names them in
-  the report. Such code needs its assertions reviewed by hand. Code that starts a command in a process group of
-  its own leaves the signal to `internal/procgroup`, which refuses a PID of 1 or less, and is mutated.
+  `internal/daemon`, `internal/plugins/shell`, `internal/procgroup`, `internal/sandbox` and `internal/tui`. A
+  mutant there lets a PID of 0 or -1 through, and the code under test then signals its own process group (that
+  happened when the checks were set up: the run terminated itself) or every process you own.
+  `scripts/mutation.sh` finds these packages by the calls (`syscall.Kill`, `unix.Kill`, `os.FindProcess`), in
+  code and tests, and names them in the report. Such code needs its assertions reviewed by hand. Code that
+  starts a command in a process group of its own leaves the signal to `internal/procgroup`, which refuses a PID
+  of 1 or less, and is mutated. The terminal UI signals by itself: it may know nothing of ouro but package
+  `plugin`.
 - The mutants of other packages reach that code unchanged, through `daemon.Stop`. Whatever they hand it, one
   function sends the signal, and it refuses a PID of 1 or less (`terminate` in `internal/daemon`, with a test).
 

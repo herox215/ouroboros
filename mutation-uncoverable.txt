@@ -463,7 +463,7 @@ internal/chatgpt/signin.go:156:14 CONDITIONALS_NEGATION  # the expression of a c
 internal/chatgpt/signin.go:163:21 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestLoginAgain and TestLoginFails
 internal/chatgpt/signin.go:163:27 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestComplete and TestCompleteAtTheLimit
 internal/chatgpt/signin.go:161:38 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestLogin and TestLoginByPastingTheAddress
-internal/chatgpt/signin.go:161:44 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; it does not compile
+internal/chatgpt/signin.go:161:44 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; go vet refuses it (suspect and), so the tests do not build
 internal/chatgpt/signin.go:161:54 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestLogin and TestLoginByPastingTheAddress
 internal/chatgpt/signin.go:165:21 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestLogin and TestLoginByPastingTheAddress
 internal/chatgpt/signin.go:163:37 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestLoginAgain
@@ -483,7 +483,7 @@ internal/cli/profiles.go:107:25 INVERT_LOGICAL  # the expression of a case claus
 internal/cli/profiles.go:107:35 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with it the tests do not end
 internal/cli/profiles.go:109:18 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestOuroWithoutTheTerminalUI and TestPluginCallReachesOnlyTheHolderOfTheKey
 internal/cli/profiles.go:109:33 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestOneProfile and TestProfiles
-internal/cli/profiles.go:109:39 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; with it the tests do not end
+internal/cli/profiles.go:109:39 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestProfiles and TestGUIProfileRouting
 internal/cli/profiles.go:109:59 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with it the tests do not end
 internal/cli/profiles.go:109:64 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestOneProfile and TestProfiles
 internal/cli/profiles.go:109:82 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestProfiles, with ouro run without a command
