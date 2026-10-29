@@ -2,6 +2,7 @@ package tui
 
 import (
 	"cmp"
+	"errors"
 	"maps"
 	"strconv"
 	"strings"
@@ -76,16 +77,32 @@ func (c *settingsScreen) saveGateway(m *Model, password string, logout bool) tea
 		}
 		// Contributions may return arbitrary errors: never display credential-bearing errors.
 		if err != nil {
-			return changedMsg{done: "Gateway could not be saved", err: gatewaySaveError{}}
+			return changedMsg{done: "Gateway could not be saved", err: gatewaySaveError{err}}
 		}
 		return changedMsg{done: "Gateway saved"}
 	}
 }
 
-type gatewaySaveError struct{}
+// gatewaySaveError is a failed save of a gateway. Only a reason the gateway
+// declares safe to show is repeated; any other error of a contribution may
+// carry a credential and stays behind the generic text.
+type gatewaySaveError struct{ err error }
 
-func (gatewaySaveError) Error() string {
-	return "Gateway could not be saved; check the settings and try again"
+func (e gatewaySaveError) Error() string {
+	const generic = "Gateway could not be saved; check the settings and try again"
+	var refusal plugin.GatewayRefusal
+	if !errors.As(e.err, &refusal) {
+		return generic
+	}
+	// The notice is one line: no breaks, and short enough to be read.
+	reason := strings.Join(strings.Fields(refusal.Reason), " ")
+	if r := []rune(reason); len(r) > 160 {
+		reason = string(r[:160]) + "…"
+	}
+	if reason == "" {
+		return generic
+	}
+	return "Gateway not saved: " + reason
 }
 
 func (c *settingsScreen) gatewayPage(m *Model) []row {
@@ -121,9 +138,15 @@ func (c *settingsScreen) gatewayPage(m *Model) []row {
 			case "bool":
 				out = append(out, row{label: label, value: value, actions: []action{{"Toggle", func(m *Model) tea.Cmd { d.Values[f.Key] = strconv.FormatBool(d.Values[f.Key] != "true"); return nil }}}})
 			case "secret":
-				out = append(out, row{label: label, value: "Hidden (write-only)", actions: []action{{"Edit", func(m *Model) tea.Cmd {
-					return c.gatewayEdit(m, label, "", true, func(v string) tea.Cmd { d.Values[f.Key] = v; return nil })
-				}}}})
+				shown := "Not set"
+				if d.Values[f.Key] != "" {
+					shown = "Set (hidden)"
+				}
+				out = append(out, row{label: label, value: shown,
+					note: "The value is write-only: it goes out once and is never stored or shown, and a save that fails clears it, so type it again.",
+					actions: []action{{"Edit", func(m *Model) tea.Cmd {
+						return c.gatewayEdit(m, label, "", true, func(v string) tea.Cmd { d.Values[f.Key] = v; return nil })
+					}}}})
 			case "list":
 				out = append(out, editRow(label, strings.Join(d.Lists[f.Key], ", "), func(v string) { d.Lists[f.Key] = gatewayList(v) }))
 			default:

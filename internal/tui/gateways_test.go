@@ -18,6 +18,7 @@ type gatewayBackend struct {
 	saved   plugin.GatewayChange
 	name    string
 	fail    bool
+	err     error
 	capture func(plugin.GatewayChange)
 }
 
@@ -28,6 +29,9 @@ func (b *gatewayBackend) SaveGateway(_ context.Context, name string, c plugin.Ga
 	b.name, b.saved = name, c
 	if b.capture != nil {
 		b.capture(c)
+	}
+	if b.err != nil {
+		return b.err
 	}
 	if b.fail {
 		return errors.New("secret password")
@@ -75,6 +79,14 @@ func TestGatewaySettingsNavigationAndCredentials(t *testing.T) {
 	if strings.Contains(m.notice, "secret") {
 		t.Fatal("credential-bearing error exposed")
 	}
+	// A reason the contribution declares safe to show is shown, on one line.
+	b.fail, b.err = false, plugin.GatewayRefusal{Reason: "use a complete Matrix user ID, such as @luna:example.org\n"}
+	msg = c.saveGateway(m, "secret", false)()
+	c.changed(m, msg.(changedMsg))
+	if want := "Gateway not saved: use a complete Matrix user ID, such as @luna:example.org"; m.notice != want {
+		t.Fatalf("notice: %q", m.notice)
+	}
+	b.err = nil
 	b.fail = false
 	deliver(m, c.saveGateway(m, "", true))
 	if !b.saved.Logout {
@@ -284,9 +296,18 @@ func TestGatewaySchemaSaveAndLogout(t *testing.T) {
 	if do(m); shownValue(t, m, "Enabled") != "On" || shownValue(t, m, "region") != "west" {
 		t.Errorf("toggled: %q", shownValue(t, m, "Enabled"))
 	}
+	if got := shownValue(t, m, "Bot token"); got != "Not set" {
+		t.Errorf("secret before typing: %q", got)
+	}
 	typeInto(t, m, "Bot token", "t0ken")
+	if got := shownValue(t, m, "Bot token"); got != "Set (hidden)" {
+		t.Errorf("secret while typed: %q", got)
+	}
 	choose(t, m, "Save", "Save")
 	do(m)
+	if got := shownValue(t, m, "Bot token"); got != "Not set" {
+		t.Errorf("secret after saving: %q", got)
+	}
 	typeInto(t, m, "Bot token", "t0ken")
 	choose(t, m, "Logout", "Logout")
 	do(m)
@@ -301,6 +322,17 @@ func TestGatewaySchemaSaveAndLogout(t *testing.T) {
 	}
 	if c.gatewayDraft.Values["token"] != "" {
 		t.Error("the draft keeps the secret")
+	}
+	// A refused save names the reason and shows that the typed secret is gone.
+	b.err = plugin.GatewayRefusal{Reason: "log in before enabling Matrix"}
+	typeInto(t, m, "Bot token", "t0ken")
+	choose(t, m, "Save", "Save")
+	do(m)
+	if m.notice != "Gateway not saved: log in before enabling Matrix" {
+		t.Errorf("notice: %q", m.notice)
+	}
+	if got := shownValue(t, m, "Bot token"); got != "Not set" {
+		t.Errorf("secret after a refused save: %q", got)
 	}
 }
 

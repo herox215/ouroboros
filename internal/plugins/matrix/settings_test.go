@@ -46,6 +46,21 @@ func TestLoginPersistsTokenNotPasswordAndKeepsOnEdit(t *testing.T) {
 	}
 }
 
+func TestTheOwnerIsToldWhyAChangeWasRefused(t *testing.T) {
+	s := store{t.TempDir()}
+	for _, c := range []plugin.GatewayChange{
+		{Homeserver: "ftp://example.org", Enabled: true, UserID: "@bot:example.org"},
+		{Enabled: true, Homeserver: "https://example.org", UserID: "bot:example.org"},
+		{Enabled: true, Homeserver: "https://example.org", UserID: "@bot:example.org"},
+	} {
+		err := s.change(context.Background(), c, nil)
+		var refusal plugin.GatewayRefusal
+		if !errors.As(err, &refusal) || strings.TrimSpace(refusal.Reason) == "" {
+			t.Fatalf("not a refusal the owner can read: %v", err)
+		}
+	}
+}
+
 func TestFailedLoginIsSanitizedAndDoesNotReplaceSettings(t *testing.T) {
 	s := store{t.TempDir()}
 	old := configuration{UserID: "@old:example.org", Token: "old-token"}

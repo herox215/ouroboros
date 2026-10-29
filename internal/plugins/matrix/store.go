@@ -103,12 +103,12 @@ func normalize(change plugin.GatewayChange) (plugin.GatewayChange, error) {
 		case "password":
 			change.Password = value
 		default:
-			return change, errors.New("unknown Matrix setting")
+			return change, plugin.GatewayRefusal{Reason: "unknown Matrix setting"}
 		}
 	}
 	for key, list := range change.Lists {
 		if key != "allowed_users" {
-			return change, errors.New("unknown Matrix list setting")
+			return change, plugin.GatewayRefusal{Reason: "unknown Matrix list setting"}
 		}
 		change.AllowedUsers = list
 	}
@@ -116,11 +116,11 @@ func normalize(change plugin.GatewayChange) (plugin.GatewayChange, error) {
 	change.UserID = strings.TrimSpace(change.UserID)
 	if change.Homeserver != "" {
 		if err := transport.ValidateServer(change.Homeserver); err != nil {
-			return change, err
+			return change, plugin.GatewayRefusal{Reason: err.Error()}
 		}
 	}
 	if change.UserID != "" && !userID(change.UserID) {
-		return change, errors.New("use a complete Matrix user ID, such as @luna:example.org")
+		return change, plugin.GatewayRefusal{Reason: "use a complete Matrix user ID, such as @luna:example.org"}
 	}
 	seen := map[string]bool{}
 	var allowed []string
@@ -130,10 +130,10 @@ func normalize(change plugin.GatewayChange) (plugin.GatewayChange, error) {
 			continue
 		}
 		if !userID(u) {
-			return change, fmt.Errorf("invalid Matrix user ID %q; use @user:server", u)
+			return change, plugin.GatewayRefusal{Reason: fmt.Sprintf("invalid Matrix user ID %q; use @user:server", u)}
 		}
 		if u == change.UserID {
-			return change, errors.New("the gateway account cannot be an allowed user")
+			return change, plugin.GatewayRefusal{Reason: "the gateway account cannot be an allowed user"}
 		}
 		if !seen[u] {
 			allowed = append(allowed, u)
@@ -143,7 +143,7 @@ func normalize(change plugin.GatewayChange) (plugin.GatewayChange, error) {
 	sort.Strings(allowed)
 	change.AllowedUsers = allowed
 	if (change.Enabled || change.Password != "") && (change.Homeserver == "" || change.UserID == "") {
-		return change, errors.New("homeserver and Matrix user ID are required")
+		return change, plugin.GatewayRefusal{Reason: "homeserver and Matrix user ID are required"}
 	}
 	return change, nil
 }

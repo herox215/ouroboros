@@ -48,3 +48,11 @@ type GatewayChange struct {
 	Values map[string]string
 	Lists  map[string][]string
 }
+
+// GatewayRefusal is an error a gateway's Save returns for a change it cannot
+// use. Reason is shown to the owner, so it must never contain a submitted
+// secret or a credential a server returned; a frontend shows any other error
+// of a contribution only as a generic message.
+type GatewayRefusal struct{ Reason string }
+
+func (e GatewayRefusal) Error() string { return e.Reason }
