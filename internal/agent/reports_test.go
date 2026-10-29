@@ -93,6 +93,9 @@ func TestKept(t *testing.T) {
 	if Keep(context.Background(), "x") {
 		t.Fatal("kept outside of an answer")
 	}
+	if Say(context.Background(), "x") || Say(WithSaying(context.Background(), nil), "x") {
+		t.Fatal("said where nobody hears it")
+	}
 	var shown []string
 	tool := Tool{Name: "work", Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
 		Keep(ctx, "asked and answered")
@@ -109,6 +112,9 @@ func TestKept(t *testing.T) {
 	})
 	bot := New(llm, "m", "sys", tool)
 	ctx := WithSaying(context.Background(), func(id, text string) { shown = append(shown, id+" "+text) })
+	if Say(ctx, "") {
+		t.Fatal("said nothing")
+	}
 	if got, err := bot.Respond(ctx, "c", "go"); err != nil || got != "fine" {
 		t.Fatalf("%q, %v", got, err)
 	}

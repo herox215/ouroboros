@@ -10,8 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
+
+	"ouroboros/internal/procgroup"
 )
 
 // Options controls the expensive, explicit whole-project diagnostic.
@@ -97,9 +98,8 @@ func runCheck(ctx context.Context, source, exe string, args []string, log string
 	if filepath.IsAbs(exe) && filepath.Base(exe) == "go" {
 		cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(exe)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Tests may spawn real nodes; cancel the group, not only the go parent.
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	procgroup.Detach(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	output := &summaryWriter{file: f, jsonLog: jsonLog}
 	cmd.Stdout, cmd.Stderr = output, output

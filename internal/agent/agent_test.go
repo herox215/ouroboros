@@ -1033,8 +1033,10 @@ func TestHandedAllowsAnAcknowledgementOnly(t *testing.T) {
 	full := strings.Repeat("The login problem comes from an expired token. ", 10)
 	for _, tt := range []struct{ name, text, want string }{
 		{"acknowledgement", "I'll look into it.", "I'll look into it."},
+		{"acknowledgement of ackBytes", strings.Repeat("a", ackBytes), strings.Repeat("a", ackBytes)},
 		{"nothing", "", ""},
 		{"complete answer", full, ""},
+		{"three lines", "On it.\nI'll look.\nBack soon.", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			llm := &handLLM{said: []string{tt.text, "A fresh answer."}}

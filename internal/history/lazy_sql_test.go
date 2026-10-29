@@ -52,6 +52,12 @@ func TestSQLMissingArchiveReads(t *testing.T) {
 	if ids, err := a.GoingOn(); err != nil || len(ids) != 0 {
 		t.Fatalf("going on: %v %v", ids, err)
 	}
+	if err := a.EndAnswer("owner/missing"); err != nil {
+		t.Fatalf("end answer: %v", err)
+	}
+	if ids, err := a.Interrupted(); err != nil || len(ids) != 0 {
+		t.Fatalf("interrupted: %v %v", ids, err)
+	}
 	if _, err := os.Stat(filepath.Join(root, "profile")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reads created profile: %v", err)
 	}

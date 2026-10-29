@@ -41,6 +41,10 @@ func TestOwnerListsAndUndoesMemoryChanges(t *testing.T) {
 	if got, err := store.Read(ctx, "", e.ID); err != nil || got.Content != "oolong" {
 		t.Fatalf("not as it was: %+v, %v", got, err)
 	}
+	logFile := home.Dir(dir).Service().LogFile
+	if logged, _ := os.ReadFile(logFile); !strings.Contains(string(logged), "the owner took back a change of the archivist:") {
+		t.Fatalf("the log lacks the undo: %s", logged)
+	}
 	if err := o.UndoMemoryChange(ctx, rec.ID); err == nil {
 		t.Fatal("took back a change twice")
 	}
@@ -48,9 +52,10 @@ func TestOwnerListsAndUndoesMemoryChanges(t *testing.T) {
 	if err != nil || len(changes) != 1 || !changes[0].Undone {
 		t.Fatalf("the changes after undo: %+v, %v", changes, err)
 	}
-	logged, _ := os.ReadFile(home.Dir(dir).Service().LogFile)
-	if !strings.Contains(string(logged), "the owner took back a change of the archivist:") {
-		t.Fatalf("the log lacks the undo: %s", logged)
+	// The undo that failed is not logged as one.
+	logged, _ := os.ReadFile(logFile)
+	if n := strings.Count(string(logged), "the owner took back a change of the archivist:"); n != 1 {
+		t.Fatalf("%d undos in the log: %s", n, logged)
 	}
 
 	bad, badDir, _ := built(t, config.Config{Name: "beta", Model: "m", BaseURL: "http://x/v1"})

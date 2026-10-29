@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"ouroboros/internal/chat"
+	"ouroboros/internal/procgroup"
 )
 
 // overridden are the variables of the environment the CLI is not given: they
@@ -120,8 +121,8 @@ func (o Options) start(ctx context.Context, acct account, baseURL string, args [
 		cmd.Env = append(cmd.Env, "ANTHROPIC_BASE_URL="+baseURL)
 	}
 	cmd.Dir = o.dir()
-	cmd.WaitDelay = time.Second // for what it started, that holds its output
-	group(cmd)
+	cmd.WaitDelay = time.Second   // for what it started, that holds its output
+	procgroup.Detach(cmd)         // the CLI may be a script that runs node
 	stdin, _ := cmd.StdinPipe()   // before Start: cannot fail
 	stdout, _ := cmd.StdoutPipe() // the same
 	stderr, _ := cmd.StderrPipe() // the same
@@ -201,7 +202,7 @@ func (n *native) next(ctx context.Context) (event, bool, error) {
 // end ends the CLI and all it started, and waits for it.
 func (n *native) end() {
 	n.stdin.Close()
-	kill(n.cmd)
+	procgroup.Kill(n.cmd)
 	n.cmd.Wait()
 	for range n.events { // what is left, for the reader to end
 	}

@@ -311,7 +311,7 @@ func TestRemoveKeepsTheAccessOfAnotherProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signedIn(t, s, "two", "good-2", "two-large")
+	two := signedIn(t, s, "two", "good-2", "two-large")
 	if _, err := s.Remove(ctx, first.ID); err == nil || err.Error() != "Test one is in use by the profile Luna: give it another access first" {
 		t.Fatalf("Remove = %v", err)
 	}
@@ -324,6 +324,10 @@ func TestRemoveKeepsTheAccessOfAnotherProfile(t *testing.T) {
 	}
 	if _, err := s.Remove(ctx, other.ID); err == nil || err.Error() != "Test one is in use by the profile Luna: give it another access first" {
 		t.Fatalf("Remove = %v", err)
+	}
+	// One that the profile does not use goes.
+	if note, err := s.Remove(ctx, two.ID); err != nil || note != "" {
+		t.Fatalf("Remove = %q, %v", note, err)
 	}
 	os.WriteFile(filepath.Join(string(luna), "config.json"), []byte("{"), 0o600)
 	if _, err := s.Remove(ctx, first.ID); err == nil || strings.Contains(err.Error(), "in use") {
@@ -768,6 +772,9 @@ func TestRemoveTakesBackTheChoicesForScopes(t *testing.T) {
 	}
 	if s.cfg.PeerAccess != "" || s.cfg.SessionAccess != "" || s.cfg.ThreadAccess != "" {
 		t.Fatalf("the choices stay in the setup: %+v", s.cfg)
+	}
+	if cfg, _ = s.home.Config(); cfg.PeerAccess != "" || cfg.SessionAccess != "" || cfg.ThreadAccess != "" {
+		t.Fatalf("the choices stay in the configuration: %+v", cfg)
 	}
 	// What the wizard saves after the removal does not write them back.
 	if err := s.Save("two-large", "alpha"); err != nil {

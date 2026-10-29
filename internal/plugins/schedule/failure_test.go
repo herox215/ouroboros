@@ -94,6 +94,20 @@ func TestTickWaitsAtLeastOneMillisecond(t *testing.T) {
 	}
 }
 
+// The timer waits for the next job that is not paused, whatever comes
+// before it.
+func TestTickWaitsForTheNextJobNotPaused(t *testing.T) {
+	s, _, _ := fixture(t)
+	paused := create(t, s, "", 10*time.Minute)
+	if _, err := s.store.Update(paused.ID, func(j *store.Job) error { j.Paused = true; return nil }, s.now()); err != nil {
+		t.Fatal(err)
+	}
+	create(t, s, "", 30*time.Minute)
+	if d := s.tick(context.Background()); d != 30*time.Minute {
+		t.Fatalf("delay %s", d)
+	}
+}
+
 // A job removed while it runs cannot take its result. The scheduler reports
 // that.
 func TestRunOfRemovedJobIsReported(t *testing.T) {
@@ -164,6 +178,28 @@ func TestUpdateRefusals(t *testing.T) {
 	}
 }
 
+// Each field alone is a change, and a name may have 128 bytes; an update of
+// nothing, and a removal that names a field, are refused.
+func TestUpdateFieldsAndTheirBounds(t *testing.T) {
+	s, _, _ := fixture(t)
+	job := create(t, s, "0 9 * * *", 0)
+	ctx := context.Background()
+	for _, args := range []string{`"name":"` + strings.Repeat("n", 128) + `"`, `"ask":"thread"`} {
+		if out := call(t, s, ctx, Update, `{"action":"update","id":"`+job.ID+`",`+args+`}`); strings.HasPrefix(out, "error:") {
+			t.Fatalf("%.40s: %s", args, out)
+		}
+	}
+	if out := call(t, s, ctx, Update, `{"action":"update","id":"`+job.ID+`"}`); !strings.Contains(out, "at least one changed field") {
+		t.Fatal(out)
+	}
+	if out := call(t, s, ctx, Update, `{"action":"remove","id":"`+job.ID+`","name":"n"}`); !strings.Contains(out, "remove requires only action and id") {
+		t.Fatal(out)
+	}
+	if _, err := s.store.Get(job.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Arguments must be one small, well formed object, and each field keeps its
 // limits.
 func TestMalformedArguments(t *testing.T) {
@@ -187,6 +223,14 @@ func TestStrictObjectRefusesBrokenJSON(t *testing.T) {
 			t.Errorf("accepted %s", raw)
 		}
 	}
+	var a updateArgs
+	if err := strictObject(json.RawMessage(`[]`), &a); err == nil || err.Error() != "schedule arguments must be an object" {
+		t.Errorf("an array: %v", err)
+	}
+	// An object of 16 KiB is read.
+	if err := strictObject(json.RawMessage(`{"name":"`+strings.Repeat("x", 16*1024-11)+`"}`), &a); err != nil {
+		t.Errorf("16 KiB: %v", err)
+	}
 }
 
 // A shortened result never ends inside a character.
@@ -194,6 +238,10 @@ func TestFirstLineCutsAtCharacter(t *testing.T) {
 	got := firstLine("a" + strings.Repeat("ü", 300))
 	if len(got) != 511 || !utf8.ValidString(got) {
 		t.Fatalf("%d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+	// A line of 512 bytes is kept as it is.
+	if line := strings.Repeat("a", 511) + "\xff"; firstLine(line) != line {
+		t.Fatal("a line of 512 bytes was cut")
 	}
 }
 

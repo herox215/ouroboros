@@ -80,6 +80,30 @@ func TestArchivistRefusesToSayMore(t *testing.T) {
 	if err != nil || len(changes) != 0 {
 		t.Fatalf("log after a refused change: %+v, %v", changes, err)
 	}
+	// Exactly a sentence more is still a rewrite, and a split of it too.
+	if _, err := s.Apply(ctx, Change{Action: "rewrite", ID: e.ID, Content: strings.Repeat("r", len("short")+64), Reason: "longer"}); err != nil {
+		t.Fatalf("rewrite of 64 bytes more: %v", err)
+	}
+	parts := []Part{{Key: "p1", Content: strings.Repeat("a", 66)}, {Key: "p2", Content: strings.Repeat("b", 67)}}
+	rec, err := s.Apply(ctx, Change{Action: "split", ID: e.ID, Parts: parts, Reason: "two things"})
+	if err != nil {
+		t.Fatalf("split of 64 bytes more: %v", err)
+	}
+	// Taking the split back passes over a part forgotten since, and still
+	// refuses one that changed since.
+	current, err := s.Current(ctx, 10)
+	if err != nil || len(current) != 2 {
+		t.Fatalf("after the split: %+v, %v", current, err)
+	}
+	if _, err := s.db.Exec("DELETE FROM memories WHERE id=?", current[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(ctx, "", current[1].ID, current[1].Version, "p2", "changed by the owner", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UndoChange(ctx, rec.ID); err == nil || !strings.Contains(err.Error(), "changed since") {
+		t.Fatalf("undo of a split whose part changed: %v", err)
+	}
 }
 
 // What was examined in its version is no candidate again; a changed one is.
@@ -108,6 +132,16 @@ func TestArchivistExaminesOncePerVersion(t *testing.T) {
 	candidates, err = s.Candidates(ctx, marker, 0, 10)
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("changed memory is no candidate: %+v, %v", candidates, err)
+	}
+	// Examined in its version, it is passed over even when new, and the
+	// memories after it are looked at.
+	if err := s.SetMeta(ctx, "archivist/seen/"+e.ID, "2"); err != nil {
+		t.Fatal(err)
+	}
+	later := keep(t, s, "", "l", "something else entirely", false)
+	candidates, err = s.Candidates(ctx, time.Time{}, 0, 10)
+	if err != nil || len(candidates) != 1 || candidates[0].ID != later.ID {
+		t.Fatalf("candidates: %+v, %v", candidates, err)
 	}
 }
 
@@ -195,6 +229,15 @@ func TestArchivistCandidateReasons(t *testing.T) {
 			t.Errorf("reasons of %s: %q, want %q", id, got, want)
 		}
 	}
+	if len(candidates) != 2 || candidates[0].ID > candidates[1].ID {
+		t.Errorf("candidates not in the order of their IDs: %+v", candidates)
+	}
+	// A small core, and a memory written just now, are no reason.
+	small := testStore(t)
+	keep(t, small, "", "core", "a core memory of thirty bytes or so", true)
+	if candidates, err := small.Candidates(ctx, time.Now().Add(time.Hour), time.Hour, 10); err != nil || candidates != nil {
+		t.Errorf("candidates of a small core: %+v, %v", candidates, err)
+	}
 }
 
 // A pair whose note says it was judged in the versions it has now is no
@@ -215,6 +258,13 @@ func TestArchivistPairNote(t *testing.T) {
 	if candidates, err := s.Candidates(ctx, time.Now().Add(time.Hour), 0, 10); err != nil || candidates != nil {
 		t.Fatalf("candidates of a judged pair: %+v, %v", candidates, err)
 	}
+	// A pair not judged yet is one, after the judged one.
+	a := keep(t, s, "", "s-hermes-backup", "Backups laufen nachts um drei Uhr auf hermes.", false)
+	b := keep(t, s, "", "s-hermes-nightly", "Backups laufen jede Nacht um drei Uhr auf hermes.", false)
+	candidates, err := s.Candidates(ctx, time.Now().Add(time.Hour), 0, 10)
+	if err != nil || len(candidates) != 2 || reasons(candidates, a.ID) == nil || reasons(candidates, b.ID) == nil {
+		t.Fatalf("candidates of a new pair: %+v, %v", candidates, err)
+	}
 }
 
 // The overlap of the words of two memories is the share of the shorter one,
@@ -233,6 +283,19 @@ func TestArchivistOverlap(t *testing.T) {
 		if got := overlap(wordsOf(c.a), wordsOf(c.b)); got != c.want {
 			t.Errorf("overlap(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+	// Three fifths of the shorter one make a pair, whatever lies between.
+	all := []Entry{
+		{ID: "a", Content: "alpha beta gamma delta epsilon"},
+		{ID: "b", Content: "zeta eta theta"},
+		{ID: "c", Content: "alpha beta gamma iota kappa"},
+	}
+	if pairs := pairsOf(all); len(pairs) != 1 || pairs[0].A.ID != "a" || pairs[0].B.ID != "c" {
+		t.Errorf("pairs: %+v", pairs)
+	}
+	// Words of fewer than three letters, and the common ones, do not count.
+	if w := wordsOf("The SSH key of an ox"); len(w) != 2 || !w["ssh"] || !w["key"] {
+		t.Errorf("words: %v", w)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -564,5 +565,25 @@ func TestSessionTraceEndsWriting(t *testing.T) {
 	trace, err = w.SessionTrace(0, "owner/a")
 	if err != nil || len(trace) != 2 || trace[1].Kind != plugin.SessionAnswer {
 		t.Fatalf("answered %+v %v", trace, err)
+	}
+	// An answer written first and alone is told, without what it says;
+	// nothing at all is no trace.
+	for _, c := range []struct {
+		events []plugin.SessionEvent
+		want   []plugin.SessionKind
+	}{
+		{nil, nil},
+		{[]plugin.SessionEvent{{Kind: plugin.SessionAnswering, Text: "a piece"}}, []plugin.SessionKind{plugin.SessionAnswering}},
+		{[]plugin.SessionEvent{{Kind: plugin.SessionMessage, Text: "go"}}, []plugin.SessionKind{plugin.SessionMessage}},
+	} {
+		events = c.events
+		trace, err = w.SessionTrace(0, "owner/a")
+		var kinds []plugin.SessionKind
+		for _, e := range trace {
+			kinds = append(kinds, e.Kind)
+		}
+		if err != nil || !slices.Equal(kinds, c.want) || len(trace) == 1 && trace[0].Kind == plugin.SessionAnswering && trace[0].Text != "" {
+			t.Fatalf("trace of %+v: %+v %v", c.events, trace, err)
+		}
 	}
 }

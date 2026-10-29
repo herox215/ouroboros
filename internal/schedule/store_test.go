@@ -94,6 +94,10 @@ func TestValidationAndLimit(t *testing.T) {
 	if _, e := s.Create(j, epoch); e == nil {
 		t.Fatal("accepted long text")
 	}
+	j.Text = strings.Repeat("x", MaxText)
+	if _, e := openTest(t).Create(j, epoch); e != nil {
+		t.Fatalf("refused a text of %d bytes: %v", MaxText, e)
+	}
 	j = once(epoch.Add(time.Hour))
 	j.Zone = "Not/A_Zone"
 	if _, e := s.Create(j, epoch); e == nil {
@@ -132,9 +136,11 @@ func TestUpdateRollbackAndHistoryIsolation(t *testing.T) {
 	if e != nil || got.ID != j.ID || got.Next != j.Next {
 		t.Fatalf("update: %+v %v", got, e)
 	}
+	// A paused job is passed over, and one due after it is claimed.
+	other := mustCreate(t, s, once(epoch.Add(time.Hour)))
 	due, e := s.Claim(epoch.Add(3 * time.Hour))
-	if e != nil || len(due) != 0 {
-		t.Fatal("paused job claimed")
+	if e != nil || len(due) != 1 || due[0].ID != other.ID {
+		t.Fatalf("claimed %+v %v", due, e)
 	}
 }
 
@@ -209,8 +215,16 @@ func TestOverlapHistoryAndConcurrentClaims(t *testing.T) {
 	if len(got.Runs) != 2 || got.Runs[0].Status != "running" || got.Runs[1].Status != "skipped" {
 		t.Fatal(got.Runs)
 	}
+	// Of two runs on their way, the first one ends first.
+	if _, e := s.Claim(j.Next.Add(2 * time.Hour)); e != nil {
+		t.Fatal(e)
+	}
 	if e := s.Finish(j.ID, Run{Status: "completed"}); e != nil {
 		t.Fatal(e)
+	}
+	got, _ = s.Get(j.ID)
+	if len(got.Runs) != 3 || got.Runs[0].Status != "completed" || got.Runs[2].Status != "running" {
+		t.Fatal(got.Runs)
 	}
 	for i := 0; i < 15; i++ {
 		if e := s.Finish(j.ID, Run{Status: "completed"}); e != nil {

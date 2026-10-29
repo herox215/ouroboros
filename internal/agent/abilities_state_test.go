@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -49,6 +50,26 @@ func TestAbilityRememberedButGoneGrantsNothing(t *testing.T) {
 	copy, _, runtime := a.abilityAnswer(t.Context(), "one")
 	runtime.activate()
 	if len(copy.specs) != 2 || len(runtime.loaded) != 0 || copy.system.Content != "system" {
+		t.Fatalf("granted: %d tools, loaded %v, system %q", len(copy.specs), runtime.loaded, copy.system.Content)
+	}
+
+	// The abilities remembered after those are granted all the same, and a
+	// tool of an ability that comes first leaves the tools after it offered.
+	run := func(context.Context, struct{}) (string, error) { return "", nil }
+	tools, err := ExpandAbilities([]Tool{{Name: "loader", AbilityCatalog: func() []Ability {
+		return []Ability{
+			{Name: "withheld", Tools: []Tool{NewTool("other", "withheld fixture", nil, run)}},
+			{Name: "fixture", Instructions: "FIXTURE INSTRUCTIONS", Tools: []Tool{NewTool("secret", "hidden fixture", nil, run)}},
+		}
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = New(nil, "model", "system", tools[2], tools[0]) // secret before the loader; other is withheld
+	a.memory.conversations["one"] = &conversation{abilities: []string{"removed", "withheld", "fixture"}}
+	copy, _, runtime = a.abilityAnswer(t.Context(), "one")
+	runtime.activate()
+	if len(copy.specs) != 2 || !slices.Equal(runtime.loaded, []string{"fixture"}) || !strings.Contains(copy.system.Content, "FIXTURE INSTRUCTIONS") {
 		t.Fatalf("granted: %d tools, loaded %v, system %q", len(copy.specs), runtime.loaded, copy.system.Content)
 	}
 }

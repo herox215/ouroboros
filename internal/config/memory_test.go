@@ -47,13 +47,16 @@ func TestMemoryArchive(t *testing.T) {
 	}
 }
 
+// An interval that is no duration, or one of no time, is not read.
 func TestMemoryIntervalIsChecked(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, fileName)
-	if err := os.WriteFile(path, []byte(`{"name":"n","model":"m","access":"a","memory_interval":"sometimes"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(dir); err == nil {
-		t.Fatal("a bad interval was read")
+	for _, v := range []string{"sometimes", "0s", "-1h"} {
+		if err := os.WriteFile(path, []byte(`{"name":"n","model":"m","access":"a","memory_interval":"`+v+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(dir); err == nil {
+			t.Errorf("the interval %q was read", v)
+		}
 	}
 }

@@ -89,4 +89,13 @@ func TestLongDraftGoesInAFile(t *testing.T) {
 	if r := resumedFrom(t, value); len(value) > maxResumeEnv || r.Draft != nil || r.DraftFile != "" {
 		t.Fatalf("%d bytes in the environment, the file %q", len(value), r.DraftFile)
 	}
+
+	// A draft that makes it exactly as long as the environment takes stays in it.
+	fits := tui.Draft{}
+	b, _ := json.Marshal(resume{Session: "c1", Draft: &fits})
+	fits.Text = strings.Repeat("a", maxResumeEnv-len(b))
+	value = handedOver(t, resume{Session: "c1", Draft: &fits})
+	if r := resumedFrom(t, value); len(value) != maxResumeEnv || r.Draft == nil || r.Draft.Text != fits.Text || r.DraftFile != "" {
+		t.Fatalf("%d bytes in the environment, the file %q", len(value), r.DraftFile)
+	}
 }

@@ -2351,7 +2351,7 @@ make hooks   # once per clone: the checks before every commit, the mutation test
 | `make lint` | `staticcheck` with every check on ([staticcheck.conf](../staticcheck.conf)) | it reports anything |
 | `make test` | `go vet`, then the tests with the race detector | vet reports anything, a test fails, a race is seen |
 | `make cover-check` | statement coverage of the production code | one statement is not covered |
-| `make mutation` | mutation tests with `gremlins` ([.gremlins.yaml](../.gremlins.yaml)) | never because of survivors; they are reported |
+| `make mutation` | mutation tests with `gremlins` ([.gremlins.yaml](../.gremlins.yaml)) | a survivor is left that `mutation-equivalents.txt` does not accept, or the mutation tests cannot run |
 | `make check` | all of the above, in this order | any of them fails |
 
 `make cover` only measures and prints the percentages; `make tools` builds the two tools ahead of time.
@@ -2439,12 +2439,15 @@ Scope and limits:
   `mutation-uncoverable.txt` as `file:line:column MUTATION  # reason`: it is then reported as accepted.
   So is code of one system alone, like `sandbox_linux.go`, on the others, where it is not built: it is listed
   for the runs there, and a run on its own system tries these mutants and does not call their lines stale.
-- **Packages that send signals to process IDs are not mutated**, today `internal/daemon`,
-  `internal/plugins/shell` and `cmd/ouro` (its test kills the node). A mutant there lets a PID of 0 or -1 through, and the code under test then signals its
-  own process group (that happened when the checks were set up: the run terminated itself) or every process
-  you own. `scripts/mutation.sh` finds these packages by the calls (`syscall.Kill`, `unix.Kill`,
-  `os.FindProcess`), in code and tests, and names them in the report. Such code needs its assertions reviewed
-  by hand.
+- **Packages that send signals to process IDs are not mutated**, today `cmd/ouro` (its test kills the node),
+  `internal/daemon`, `internal/plugins/shell`, `internal/procgroup`, `internal/sandbox` and `internal/tui`. A
+  mutant there lets a PID of 0 or -1 through, and the code under test then signals its own process group (that
+  happened when the checks were set up: the run terminated itself) or every process you own.
+  `scripts/mutation.sh` finds these packages by the calls (`syscall.Kill`, `unix.Kill`, `os.FindProcess`), in
+  code and tests, and names them in the report. Such code needs its assertions reviewed by hand. Code that
+  starts a command in a process group of its own leaves the signal to `internal/procgroup`, which refuses a PID
+  of 1 or less, and is mutated. The terminal UI signals by itself: it may know nothing of ouro but package
+  `plugin`.
 - The mutants of other packages reach that code unchanged, through `daemon.Stop`. Whatever they hand it, one
   function sends the signal, and it refuses a PID of 1 or less (`terminate` in `internal/daemon`, with a test).
 
@@ -2523,18 +2526,18 @@ the second. With every core busy, `make test` takes 75 to 105 s instead of 34 s.
 | `make lint` | 2 s |
 | `make test` | 34 s (1 s when nothing changed since the last run: Go keeps the results) |
 | `make cover-check` | 20 s |
-| `make mutation`, whole module | 24 min |
-| `make mutation PKGS=…`, one package | under 1 min for the small ones; `internal/config` 75 s, `internal/discovery` 90 s, `internal/a2a` 3.5 min; `internal/tui` more than 3 min |
-| `make check` | 25 min |
+| `make mutation`, whole module | 76 min for some 10 000 mutants, on 20 cores |
+| `make mutation PKGS=…`, one package | under 1 min for the small ones; `internal/config` 75 s, `internal/discovery` 90 s, `internal/a2a` 3.5 min; `internal/session` 10 min |
+| `make check` | `make mutation` and about 1 min more |
 | the pre-commit hook | 1.5 min |
-| the pre-push hook, to main | 5 s for a small package, never more than 5 min |
+| the pre-push hook, to main | 5 s for a small package; as long as `make mutation` of the changed packages, with no limit unless `OURO_HOOK_MUTATION_TIME` sets one |
 
 The hook takes longer than `make test` and `make cover-check` together because it runs them on a copy of the
 staged files, where no earlier test result can be reused.
 
-Mutation tests are slow by nature: every mutant is compiled and tested on its own, about 1000 of them. That
-is why they run only before a push to main, why they then only mutate the packages the push changes and
-stop after 5 minutes, and why the whole module is left to `make mutation` and `make check`. A
+Mutation tests are slow by nature: every mutant is compiled and tested on its own, some 10 000 of them.
+That is why they run only before a push to main, why they then only mutate the packages the push changes,
+and why the whole module is left to `make mutation` and `make check`. A
 mutant that makes its tests hang costs up to 90 s.
 
 ### Troubleshooting
