@@ -249,6 +249,12 @@ func Handed(ctx context.Context) bool {
 	return true
 }
 
+// clearHanded makes the answer speak for itself again: what it took in
+// meanwhile, a result of a job or a word of the owner, is what it answers
+// now, and what it says is no early answer to the question its tools handed
+// on, see Handed.
+func (a *Answer) clearHanded() { a.handed.Store(false) }
+
 // AnswerOf returns the answer a tool is run for under ctx, nil outside of
 // one.
 func AnswerOf(ctx context.Context) *Answer {
@@ -556,6 +562,10 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			spent.Add(int64(len(text)))
 			history = append(history, said)
 		}
+		if len(texts) > 0 {
+			// The answer is about what was delivered now: see clearHanded.
+			answer.clearHanded()
+		}
 		return len(texts) > 0, nil
 	}
 	nudged := false // an empty message was answered with emptyNote
@@ -622,6 +632,9 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 					}
 					history = append(history, m)
 				}
+				// The next answer is about what the owner said meanwhile:
+				// see clearHanded.
+				answer.clearHanded()
 				continue
 			}
 		}
@@ -703,6 +716,11 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 				return abandon(err)
 			}
 			history = append(history, said)
+		}
+		if len(steered) > 0 {
+			// The answer is about what the owner said meanwhile: see
+			// clearHanded.
+			answer.clearHanded()
 		}
 		// A tool that ended the answer ends it here, unless something came
 		// meanwhile for the LLM to take.
