@@ -731,10 +731,11 @@ func TestUsage(t *testing.T) {
 	f := newFake(t, `FAKE_CONTROL={"subtype":"success","request_id":"ID","response":{"rate_limits":{"limits":[`+
 		`{"kind":"session","percent":2,"resets_at":"2026-10-19T22:50:00Z"},{"kind":"weekly_all","percent":8,"resets_at":"2026-10-21T08:00:00Z"},`+
 		`{"kind":"weekly_scoped","percent":1,"scope":{"model":{"display_name":"Fable"}}},{"kind":"odd","percent":3},{"kind":"no percent"}]}}}`)
-	windows, err := f.o.usage(context.Background(), f.access())
+	u, err := f.o.usage(context.Background(), f.access())
 	if err != nil {
 		t.Fatal(err)
 	}
+	windows := u.Windows
 	var names []string
 	for _, w := range windows {
 		names = append(names, fmt.Sprintf("%s %g", w.Name, w.UsedPercent))

@@ -35,9 +35,10 @@ type Provider struct {
 	Login func(ctx context.Context, d Dialog, have *Credentials) (Credentials, error)
 	// Models lists the models the access a reaches.
 	Models func(ctx context.Context, a Access) (Models, error)
-	// Usage lists the quota windows of the access a. May be nil for a
-	// provider that does not report usage.
-	Usage func(ctx context.Context, a Access) ([]UsageWindow, error)
+	// Usage tells what the access a may still spend, as the API of the
+	// provider tells it: the quota windows of a plan, the prepaid balance,
+	// or both. May be nil for a provider that does not report usage.
+	Usage func(ctx context.Context, a Access) (Usage, error)
 	// Model returns the model the agents answer with through the access a.
 	// It reads the credentials when it needs them, and renews them through a
 	// when they ran out: the agents are not built anew for that.
