@@ -128,9 +128,10 @@ In its footer, the chat shows how long the context of the conversation is:
 `context 45.2 KiB ≈ 11.6k tokens`. That is what the last call of the LLM sent, the prompt, the
 tools and the conversation so far as JSON; the tokens are an estimate at 4 bytes a token. It grows with
 every step of an answer, since each sends the whole conversation again, and is updated whenever the loop
-shows something new. A new conversation (`/new`) has none until its first call, and neither has one that
-goes on after a restart. Once the API tells how many of the tokens it was sent it had cached, the chat shows
-that too: `· cached 92%, session 84%`, of the last call and of all calls in the session since the node started.
+shows something new. A new conversation (`/new`) has none until its first call. One that goes on after a
+restart shows what its last call before the restart sent, and its totals: they are kept with its archive and
+restored. Once the API tells how many of the tokens it was sent it had cached, the chat shows
+that too: `· cached 92%, session 84%`, of the last call and of all calls in the session since it began.
 A call that goes on from the one before should find most of its tokens cached; a low rate costs time and money.
 The footer of the chat and `/context` also show TPS for the last model call: API-reported output tokens divided by
 the full request duration, including request latency but excluding tool execution. Missing output usage
