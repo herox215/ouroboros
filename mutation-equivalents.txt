@@ -31,7 +31,7 @@ internal/agent/agent.go:1209:4 INVERT_LOOPCTRL  # every user message before the 
 internal/agent/agent.go:604:32 CONDITIONALS_BOUNDARY  # without contributions the system prompt followed by the rest of the messages is the messages as they are
 internal/cli/profiles.go:79:15 CONDITIONALS_BOUNDARY  # gui.Together of no profiles joins nothing: calling it with none changes no profile
 internal/openai/client.go:301:4 INVERT_LOOPCTRL  # nothing changes between the rounds of this loop once no parameter is refused: going on finds the same and ends with the loop
-internal/tui/wait.go:43:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
+internal/tui/wait.go:40:11 CONDITIONALS_BOUNDARY  # the noise of a cell is a fraction with many digits, never exactly 0.8
 internal/discovery/discovery.go:254:11 INVERT_LOGICAL  # the system gives every address of an interface as an *net.IPNet, so ok is always true and the mask decides alone
 internal/discovery/discovery.go:254:36 INVERT_LOGICAL  # the system gives an IPv4 address a mask of 4 bytes and an IPv6 address one of 16: both tests always agree
 internal/printable/printable.go:35:31 CONDITIONALS_BOUNDARY  # a line of exactly max characters cut to max characters is the same line
@@ -68,31 +68,31 @@ internal/tui/logo.go:155:26 CONDITIONALS_BOUNDARY  # the distance of a pixel cen
 internal/tui/logo.go:154:9 CONDITIONALS_BOUNDARY  # at the tip of the snout (f == 1) the eye is more than 10 pixels away, so nothing changes
 internal/tui/logo.go:180:37 CONDITIONALS_BOUNDARY  # f comes from atan2 at pixel centers and is never exactly 1, the snout
 internal/tui/logo.go:186:9 CONDITIONALS_BOUNDARY  # a cell without dots gets an along of NaN instead of 0, and the along of a cell without dots is never read
-internal/tui/markdown.go:164:32 CONDITIONALS_BOUNDARY  # a table given the width it has anyway is drawn the same
-internal/tui/markdown.go:44:44 INVERT_LOGICAL  # only a list item has a list as its parent, and a list item always has one
-internal/tui/selection.go:127:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1 or a column of the selection plus one
-internal/tui/selection.go:153:19 CONDITIONALS_BOUNDARY  # a line that ends where the selection does is marked to the same column either way
-internal/tui/selection.go:153:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1 or a column of the selection plus one
-internal/tui/selection.go:41:67 CONDITIONALS_BOUNDARY  # two spots of the same line and column are the same, swapped or not
-internal/tui/settings.go:948:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
-internal/tui/settings.go:970:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
+internal/tui/markdown.go:166:32 CONDITIONALS_BOUNDARY  # a table given the width it has anyway is drawn the same
+internal/tui/markdown.go:47:44 INVERT_LOGICAL  # only a list item has a list as its parent, and a list item always has one
+internal/tui/selection.go:206:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1 or a column of the selection plus one
+internal/tui/selection.go:232:19 CONDITIONALS_BOUNDARY  # a line that ends where the selection does is marked to the same column either way
+internal/tui/selection.go:232:9 CONDITIONALS_BOUNDARY  # to is never 0: it is -1 or a column of the selection plus one
+internal/tui/selection.go:38:67 CONDITIONALS_BOUNDARY  # two spots of the same line and column are the same, swapped or not
+internal/tui/settings.go:995:19 CONDITIONALS_BOUNDARY  # the choices of no actions are no text: the line of what can be done stays empty either way
+internal/tui/settings.go:1018:9 CONDITIONALS_BOUNDARY  # where the window starts at what is selected, starting it there leaves it where it is
 internal/tui/settings.go:290:25 CONDITIONALS_BOUNDARY  # a level below a category is opened only by enter or by opening a gateway, which both put the selection on back: leaving one never finds back empty
 internal/tui/settings.go:349:43 CONDITIONALS_NEGATION  # only the input of a gateway hides what is typed, so without a gateway it shows it; and the text of an edit that is over is never shown, the next edit starts a new input
-internal/tui/settings.go:926:44 ARITHMETIC_BASE  # the width of an entry of a list is not used: its label is drawn anew below, cut to the inside of the dialog
-internal/tui/settings.go:926:44 INVERT_NEGATIVES  # the width of an entry of a list is not used: its label is drawn anew below, cut to the inside of the dialog
-internal/tui/settings.go:935:58 ARITHMETIC_BASE  # the whole line is cut to the inside of the dialog after: the label of an entry cut there ends where the cut of the line ends, with the same ellipsis
-internal/tui/settings.go:935:58 INVERT_NEGATIVES  # the whole line is cut to the inside of the dialog after: the label of an entry cut there ends where the cut of the line ends, with the same ellipsis
-internal/tui/view.go:684:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
-internal/tui/view.go:305:33 CONDITIONALS_BOUNDARY  # where the first entry asks, the loop returns 0 for it; where it does not, the loop ends and returns 0: the same either way
-internal/tui/view.go:326:11 CONDITIONALS_BOUNDARY  # at the last frame every letter is settled anyway: a seed modulo settleFrames is never below settleFrames less settleFrames, so the word stands as it is
+internal/tui/settings.go:969:44 ARITHMETIC_BASE  # the width of an entry of a list is not used: its label is drawn anew below, cut to the inside of the dialog
+internal/tui/settings.go:969:44 INVERT_NEGATIVES  # the width of an entry of a list is not used: its label is drawn anew below, cut to the inside of the dialog
+internal/tui/settings.go:978:58 ARITHMETIC_BASE  # the whole line is cut to the inside of the dialog after: the label of an entry cut there ends where the cut of the line ends, with the same ellipsis
+internal/tui/settings.go:978:58 INVERT_NEGATIVES  # the whole line is cut to the inside of the dialog after: the label of an entry cut there ends where the cut of the line ends, with the same ellipsis
+internal/tui/view.go:746:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
+internal/tui/view.go:331:33 CONDITIONALS_BOUNDARY  # where the first entry asks, the loop returns 0 for it; where it does not, the loop ends and returns 0: the same either way
+internal/tui/view.go:352:11 CONDITIONALS_BOUNDARY  # at the last frame every letter is settled anyway: a seed modulo settleFrames is never below settleFrames less settleFrames, so the word stands as it is
 internal/session/session.go:685:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
 internal/storage/storage.go:95:17 ARITHMETIC_BASE  # 10/time.Millisecond is 0: the retries spin instead of sleeping, and the open still waits until the lock is free or the deadline passed
 internal/history/history.go:798:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
-internal/tui/tui.go:1022:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
-internal/tui/tui.go:964:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way
-internal/tui/session.go:643:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
-internal/tui/session.go:648:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
+internal/tui/tui.go:1107:21 CONDITIONALS_BOUNDARY  # with as many requests waiting as were seen, adding the difference adds nothing
+internal/tui/tui.go:1049:23 CONDITIONALS_BOUNDARY  # with nothing waiting acceptAll does nothing, as the check after it does: no decision either way
+internal/tui/session.go:725:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
+internal/tui/session.go:730:16 CONDITIONALS_BOUNDARY  # without rows the selection is 0, as every change of the list sets it so, and a step in a list of none is 0 too
 internal/tui/nav.go:11:7 CONDITIONALS_BOUNDARY  # with one entry, (at + by%1 + 1) % 1 is 0 as well
 internal/tui/nav.go:14:8 CONDITIONALS_BOUNDARY  # at 0 set to 0 stays where it was
 internal/assistant/metrics.go:40:17 CONDITIONALS_BOUNDARY  # no tokens written in a time above zero are 0 tokens a second, which the TPS is set to before
@@ -109,11 +109,11 @@ internal/tui/logo.go:239:26 CONDITIONALS_BOUNDARY  # the distance of a pixel cen
 internal/tui/logo.go:239:64 CONDITIONALS_BOUNDARY  # the center of a pixel is never exactly on the edge of a fang
 internal/tui/dialog.go:37:45 ARITHMETIC_BASE  # a dialog is as high as the body less its margin allows: higher than that it is cut to the same height by the minimum below
 internal/tui/dialog.go:37:45 INVERT_NEGATIVES  # a dialog is as high as the body less its margin allows: higher than that it is cut to the same height by the minimum below
-internal/tui/dialog.go:40:19 ARITHMETIC_BASE  # the help is as wide as the body allows: wider than that it is cut to the same width by the minimum below
-internal/tui/dialog.go:40:19 INVERT_NEGATIVES  # the help is as wide as the body allows: wider than that it is cut to the same width by the minimum below
+internal/tui/dialog.go:46:19 ARITHMETIC_BASE  # the help is as wide as the body allows: wider than that it is cut to the same width by the minimum below
+internal/tui/dialog.go:46:19 INVERT_NEGATIVES  # the help is as wide as the body allows: wider than that it is cut to the same width by the minimum below
 internal/tui/effort.go:88:59 CONDITIONALS_BOUNDARY  # a choice at the place of the effort in the order is the effort itself, which is found before the loop
 internal/tui/header_morph.go:41:14 INCREMENT_DECREMENT  # the generation only tells the switches apart: counted down it is as unique as counted up
-internal/tui/jobs.go:52:10 INCREMENT_DECREMENT  # the count of openings only tells a list asked for before the screen was opened again apart: counted down it is as unique as counted up
+internal/tui/jobs.go:48:10 INCREMENT_DECREMENT  # the count of openings only tells a list asked for before the screen was opened again apart: counted down it is as unique as counted up
 internal/tui/jobs.go:254:18 INCREMENT_DECREMENT  # the count of showings only tells services asked for before the list was shown again apart: counted down it is as unique as counted up
 internal/tui/header_morph.go:86:13 CONDITIONALS_BOUNDARY  # with no time elapsed every letter is still the old one and the width that of the old name: the name it returns at once
 internal/tui/header_morph.go:89:13 CONDITIONALS_BOUNDARY  # at the end every letter is the new one and the width that of the new name: the name it returns at once
@@ -125,9 +125,9 @@ internal/plugins/files/picture.go:126:8 CONDITIONALS_BOUNDARY  # a square is mad
 internal/plugins/files/picture.go:170:46 ARITHMETIC_BASE  # a picture is never made larger, so the next row begins at least one further: the lower bound of one row never decides, and less of it neither
 internal/plugins/files/picture.go:170:55 ARITHMETIC_BASE  # a picture is never made larger, so the next row begins at least one further: the lower bound of one row never decides, and less of it neither
 internal/plugins/files/picture.go:172:47 ARITHMETIC_BASE  # a picture is never made larger, so the next column begins at least one further: the lower bound of one column never decides, and less of it neither
-internal/tui/dialog.go:57:45 ARITHMETIC_BASE  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
-internal/tui/dialog.go:57:45 INVERT_NEGATIVES  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
-internal/tui/tui.go:883:50 CONDITIONALS_BOUNDARY  # up in an empty input with nothing queued brings back what was entered and never comes here
+internal/tui/dialog.go:66:45 ARITHMETIC_BASE  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
+internal/tui/dialog.go:66:45 INVERT_NEGATIVES  # the lines are cut to the inside of the dialog before, and its box wraps them at its own width again: the spaces a wider block adds at their ends are dropped
+internal/tui/tui.go:967:50 CONDITIONALS_BOUNDARY  # up in an empty input with nothing queued brings back what was entered and never comes here
 internal/tui/view.go:977:56 CONDITIONALS_BOUNDARY  # with no room the conversation is cut to nothing: the footer is the hint alone either way
 internal/tui/mesh.go:122:12 CONDITIONALS_BOUNDARY  # of two free cells as far from the nerve cells before, either is as good: which of them is taken is left to chance either way
 internal/tui/mesh.go:186:11 CONDITIONALS_BOUNDARY  # a connection that did not begin to grow has its tip on the nerve cell it grows from, which is drawn over it
@@ -175,7 +175,6 @@ internal/matrix/client.go:466:42 CONDITIONALS_BOUNDARY  # only events not older 
 internal/plugins/matrix/store.go:84:152 CONDITIONALS_BOUNDARY  # time.Since counts nanoseconds of a clock tests cannot set: no status can be read at exactly 15 s of age, the only age the two forms treat differently
 internal/session/session.go:700:18 CONDITIONALS_BOUNDARY  # the inputs always hold the message that began the answer, so the guard holds either way
 internal/session/thread.go:208:99 CONDITIONALS_BOUNDARY  # the content begins with the footer, which begins with a space: the head cannot match either way
-internal/tui/view.go:136:74 CONDITIONALS_NEGATION  # a glide aimed at the last line sits on the line the layout aims it at again, and a history at the bottom is where rendering it to the bottom puts it
-internal/tui/view.go:575:17 CONDITIONALS_BOUNDARY  # at exactly rows+2 the scroll puts back the title and the blank line it cut, so the lines are those they were
-internal/tui/view.go:575:23 ARITHMETIC_BASE  # where the smaller limit decides first, top is 2, the title and the blank line again, so the lines stay as they were until rows+2, where both forms cut alike
+internal/tui/view.go:656:17 CONDITIONALS_BOUNDARY  # at exactly rows+2 the scroll puts back the title and the blank line it cut, so the lines are those they were
+internal/tui/view.go:656:23 ARITHMETIC_BASE  # where the smaller limit decides first, top is 2, the title and the blank line again, so the lines stay as they were until rows+2, where both forms cut alike
 internal/plugins/desktop/tray.go:130:65 CONDITIONALS_NEGATION  # on linux the first test of the system is false, so both forms start the tray; on macOS the mutant keeps it from starting, which TestTrayLifetime notices

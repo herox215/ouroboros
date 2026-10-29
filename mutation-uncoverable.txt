@@ -553,7 +553,7 @@ internal/setup/setup.go:199:18 CONDITIONALS_NEGATION  # the expression of a case
 internal/setup/setup.go:353:19 ARITHMETIC_BASE  # a package variable (listTime): set before any test runs, gremlins never sees it covered; killed by TestModels and TestRemove
 internal/suggestion/suggestion.go:108:89 CONDITIONALS_BOUNDARY  # a condition after a function literal in the same statement; killed by TestAddListRemove, whose text is added again while it is the first
 internal/suggestion/suggestion.go:108:89 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement; killed by TestAddListRemove, which panics on the index -1 of a text that is not there
-internal/tui/effort.go:164:22 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestEffortsTheModelTakes
+internal/tui/effort.go:180:22 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestEffortsTheModelTakes
 internal/tui/empty_animation.go:32:20 ARITHMETIC_BASE  # a package variable (nameFade): set before any test runs, and the tests set it themselves: to 0, and to 450ms in TestNameFadesOutBehindTheFirstMessage
 internal/tui/extend.go:144:18 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestPluginScreen
 internal/tui/extend.go:45:25 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestCommandConflicts
@@ -565,8 +565,8 @@ internal/tui/header_morph.go:109:14 CONDITIONALS_BOUNDARY  # the expression of a
 internal/tui/header_morph.go:109:14 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestMorphNameIsAWaveAndKeepsSharedLetters
 internal/tui/header_morph.go:15:28 ARITHMETIC_BASE  # a constant declaration (headerMorphDuration): evaluated at compile time, gremlins never sees it covered; killed by TestHeaderMorphTicksStopAndIgnoreOldFrames and TestMorphNameIsAWaveAndKeepsSharedLetters
 internal/tui/header_morph.go:16:27 ARITHMETIC_BASE  # a constant declaration (headerMorphFrame): evaluated at compile time, gremlins never sees it covered; it does not compile
-internal/tui/jobs.go:124:13 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; with it the tests do not end
-internal/tui/jobs.go:128:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestJobsScreen and TestServicesListed
+internal/tui/jobs.go:127:13 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; with it the tests do not end
+internal/tui/jobs.go:131:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestJobsScreen and TestServicesListed
 internal/tui/logo.go:18:19 ARITHMETIC_BASE  # package var initialiser (neckAngle): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:18:29 ARITHMETIC_BASE  # package var initialiser (neckAngle): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:19:18 ARITHMETIC_BASE  # package var initialiser (snoutAngle): runs before any test, gremlins never sees it covered
@@ -578,8 +578,8 @@ internal/tui/logo.go:20:33 ARITHMETIC_BASE  # package var initialiser (bodyArc):
 internal/tui/logo.go:20:43 ARITHMETIC_BASE  # package var initialiser (bodyArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:89:25 ARITHMETIC_BASE  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
 internal/tui/logo.go:89:25 INVERT_NEGATIVES  # package var initialiser (headArc): runs before any test, gremlins never sees it covered
-internal/tui/model.go:198:14 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDialogLiesOverTheChat
-internal/tui/model.go:200:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDialogLiesOverTheChat
+internal/tui/model.go:309:14 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDialogLiesOverTheChat
+internal/tui/model.go:311:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDialogLiesOverTheChat
 internal/tui/onboard.go:353:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSetupAccessThatCannotBeUsed and TestSetupGoesBack
 internal/tui/onboard.go:360:18 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSetupOpensThePageOfTheProvider and TestSetupWalksThroughThePages
 internal/tui/onboard.go:362:16 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSetupOpensThePageOfTheProvider
@@ -596,61 +596,61 @@ internal/tui/onboard.go:826:18 CONDITIONALS_NEGATION  # case expression: coverag
 internal/tui/onboard.go:837:10 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; killed by TestSetupDialog
 internal/tui/onboard.go:837:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSetupDialog
 internal/tui/onboard.go:839:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSetupDialog
-internal/tui/paste.go:197:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestCtrlVPastesAPicture
-internal/tui/paste.go:199:19 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestCtrlVPastesAPicture and TestEmptyPasteAsksTheClipboard
-internal/tui/paste.go:201:35 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestCtrlVPastesAPicture
-internal/tui/paste.go:253:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:253:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:253:27 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:255:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:255:19 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:255:24 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:257:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:259:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:259:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:259:23 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:261:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:261:17 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:261:22 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:261:30 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:261:35 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:261:43 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
-internal/tui/paste.go:261:48 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:211:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestCtrlVPastesAPicture
+internal/tui/paste.go:213:19 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestCtrlVPastesAPicture and TestEmptyPasteAsksTheClipboard
+internal/tui/paste.go:215:35 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestCtrlVPastesAPicture
+internal/tui/paste.go:266:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:266:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:266:27 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:268:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:268:19 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:268:24 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:270:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:272:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:272:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:272:23 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:274:10 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:274:17 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:274:22 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:274:30 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:274:35 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:274:43 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
+internal/tui/paste.go:274:48 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestWords, which splits at each of them
 internal/tui/question.go:140:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestQuestion
 internal/tui/question.go:142:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestQuestion
 internal/tui/scroll.go:23:28 ARITHMETIC_BASE  # a constant declaration (scrollFrame): evaluated at compile time, gremlins never sees it covered; killed by TestGlideGoesOnWithoutAJump and TestOneChainOfFrames
 internal/tui/scroll.go:25:19 ARITHMETIC_BASE  # a constant declaration (glideBase): evaluated at compile time, gremlins never sees it covered; killed by TestGlideTakesLongerForALongerWay
 internal/tui/scroll.go:26:18 ARITHMETIC_BASE  # a constant declaration (glidePerRow): evaluated at compile time, gremlins never sees it covered; killed by TestGlideTakesLongerForALongerWay
 internal/tui/scroll.go:27:20 ARITHMETIC_BASE  # a constant declaration (glideMost): evaluated at compile time, gremlins never sees it covered; killed by TestGlideEasesOut and TestGlideGoesOnWithoutAJump
-internal/tui/session.go:124:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
-internal/tui/session.go:124:20 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
-internal/tui/session.go:124:26 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
-internal/tui/session.go:126:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
-internal/tui/session.go:390:33 ARITHMETIC_BASE  # a constant declaration (answerFrame): evaluated at compile time, gremlins never sees it covered; killed by TestAnswerFramesFollowTheEnd
-internal/tui/session.go:601:24 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
-internal/tui/session.go:706:15 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
-internal/tui/session.go:712:21 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
-internal/tui/session.go:712:31 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
-internal/tui/session.go:712:9 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
-internal/tui/session.go:716:9 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
-internal/tui/session.go:733:109 CONDITIONALS_BOUNDARY  # case expression: coverage gives it no block; killed by TestEscapeStopsTheAnswer and TestCancelStopsTheAnswer
-internal/tui/session.go:733:109 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestTasksAreShown and TestEscapeStopsTheAnswer
-internal/tui/session.go:764:25 CONDITIONALS_BOUNDARY  # case expression: coverage gives it no block; killed by TestEscapeStopsTheAnswer and TestCancelStopsTheAnswer
-internal/tui/session.go:764:25 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestTasksAreShown and TestEscapeStopsTheAnswer
+internal/tui/session.go:125:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
+internal/tui/session.go:125:20 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
+internal/tui/session.go:125:26 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
+internal/tui/session.go:127:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
+internal/tui/session.go:472:33 ARITHMETIC_BASE  # a constant declaration (answerFrame): evaluated at compile time, gremlins never sees it covered; killed by TestAnswerFramesFollowTheEnd
+internal/tui/session.go:683:24 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
+internal/tui/session.go:788:15 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
+internal/tui/session.go:794:21 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestDeleteSession and TestPeerConversations
+internal/tui/session.go:794:31 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
+internal/tui/session.go:794:9 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
+internal/tui/session.go:798:9 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestDeleteSession
+internal/tui/session.go:815:109 CONDITIONALS_BOUNDARY  # case expression: coverage gives it no block; killed by TestEscapeStopsTheAnswer and TestCancelStopsTheAnswer
+internal/tui/session.go:815:109 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestTasksAreShown and TestEscapeStopsTheAnswer
+internal/tui/session.go:846:25 CONDITIONALS_BOUNDARY  # case expression: coverage gives it no block; killed by TestEscapeStopsTheAnswer and TestCancelStopsTheAnswer
+internal/tui/session.go:846:25 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestTasksAreShown and TestEscapeStopsTheAnswer
 internal/tui/settings.go:192:17 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestGatewayMatrixPage and TestGatewaySchemaSaveAndLogout
 internal/tui/settings.go:194:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestGatewayMatrixPage and TestSettingsOfATool
 internal/tui/settings.go:199:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestGatewayMatrixPage and TestSettingsSinglePeers
 internal/tui/settings.go:277:17 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestGatewaySettingsNavigationAndCredentials and TestSettingsKeys
 internal/tui/settings.go:281:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsOfATool and TestSettingsSinglePeers
 internal/tui/settings.go:283:14 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsKeys and TestSettingsSinglePeers
-internal/tui/settings.go:564:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:647:12 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:647:31 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:649:12 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShowATrustedTool
-internal/tui/settings.go:649:31 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:651:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:888:13 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
-internal/tui/settings.go:890:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:592:15 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:675:12 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:675:31 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:677:12 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShowATrustedTool
+internal/tui/settings.go:677:31 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:679:18 INVERT_LOGICAL  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:926:13 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
+internal/tui/settings.go:928:19 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; killed by TestSettingsShow
 internal/tui/splash.go:62:24 ARITHMETIC_BASE  # a constant declaration (splashDuration): evaluated at compile time, gremlins never sees it covered; killed by TestGoldenSplashFrames and TestSplashClosesAfterTimeout
 internal/tui/splash.go:63:22 ARITHMETIC_BASE  # constant declaration (splashFrame): evaluated at compile time, gremlins never sees it covered
 internal/tui/splash.go:64:23 ARITHMETIC_BASE  # a constant declaration (fadeIn): evaluated at compile time, gremlins never sees it covered; killed by TestGoldenSplashFrames
@@ -663,20 +663,20 @@ internal/tui/splash.go:70:24 ARITHMETIC_BASE  # a constant declaration (shineAt)
 internal/tui/splash.go:71:23 ARITHMETIC_BASE  # constant declaration (shineDuration): evaluated at compile time, gremlins never sees it covered
 internal/tui/splash.go:72:24 ARITHMETIC_BASE  # constant declaration (taglineAt): evaluated at compile time, gremlins never sees it covered
 internal/tui/splash.go:73:22 ARITHMETIC_BASE  # constant declaration (typeSpeed): evaluated at compile time, gremlins never sees it covered
-internal/tui/tui.go:35:26 ARITHMETIC_BASE  # the var refreshInterval, set at package level
+internal/tui/tui.go:37:26 ARITHMETIC_BASE  # the var refreshInterval, set at package level
 internal/tui/tui.go:441:25 ARITHMETIC_BASE  # a constant declaration (inputIdleTime): evaluated at compile time, gremlins never sees it covered; killed by TestInputHidden
 internal/tui/tui.go:479:19 ARITHMETIC_BASE  # a constant declaration (inputFrame): evaluated at compile time, gremlins never sees it covered; killed by TestInputFramesTakeTheirTime
 internal/tui/view.go:103:34 ARITHMETIC_BASE  # a constant declaration (inputBoxRows): evaluated at compile time, gremlins never sees it covered; killed by TestInputHidden and TestCommandSuggestions
-internal/tui/wait.go:111:16 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with it the tests do not end
-internal/tui/wait.go:113:17 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; with it the tests do not end
-internal/tui/wait.go:117:17 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; with it the tests do not end
-internal/tui/wait.go:119:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSessionsScreen and TestChat
-internal/tui/wait.go:119:21 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestChat and TestWaitIsShownOnAPicture
-internal/tui/wait.go:119:45 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; killed by TestWaitIsShownOnAPicture
-internal/tui/wait.go:119:45 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSessionsScreen
-internal/tui/wait.go:121:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestQuestion and TestWaitIsShownOnAPicture
-internal/tui/wait.go:121:21 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestChat and TestWaitIsShownOnAPicture
-internal/tui/wait.go:128:23 ARITHMETIC_BASE  # a constant declaration (toolShown): evaluated at compile time, gremlins never sees it covered; killed by TestToolIsNamedAfterAWhile
+internal/tui/wait.go:108:16 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with it the tests do not end
+internal/tui/wait.go:110:17 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; with it the tests do not end
+internal/tui/wait.go:114:17 CONDITIONALS_NEGATION  # case expression: coverage gives it no block; with it the tests do not end
+internal/tui/wait.go:116:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSessionsScreen and TestChat
+internal/tui/wait.go:116:21 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestChat and TestWaitIsShownOnAPicture
+internal/tui/wait.go:116:45 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; killed by TestWaitIsShownOnAPicture
+internal/tui/wait.go:116:45 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestSessionsScreen
+internal/tui/wait.go:118:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestQuestion and TestWaitIsShownOnAPicture
+internal/tui/wait.go:118:21 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestChat and TestWaitIsShownOnAPicture
+internal/tui/wait.go:125:23 ARITHMETIC_BASE  # a constant declaration (toolShown): evaluated at compile time, gremlins never sees it covered; killed by TestToolIsNamedAfterAWhile
 plugin/settings.go:338:42 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSettingsOptions and TestSettingsOptionValues
 plugin/settings.go:338:49 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSettingsOptionValues
 plugin/settings.go:338:59 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSettingsOptionValues
