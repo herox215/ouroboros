@@ -47,7 +47,7 @@ func (a *Archive) CompleteRestarts(processID string) (map[string]Record, error) 
 	if processID == "" {
 		return nil, errors.New("restart needs a process identity")
 	}
-	db, err := a.readDatabase()
+	db, err := a.changeDatabase()
 	if err != nil || db == nil {
 		return nil, err
 	}

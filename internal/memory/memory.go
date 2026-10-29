@@ -68,6 +68,7 @@ type Entry struct {
 type Store struct {
 	db    *sql.DB
 	owned bool
+	wal   *storage.WAL // that db writes to, if Open opened it; see write
 }
 
 // Close releases a pool opened by Open; New leaves its caller-owned pool alone.
@@ -89,7 +90,8 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s.owned = true
+	wal := storage.Watch(db, dir)
+	s.owned, s.wal = true, &wal
 	return s, nil
 }
 
@@ -340,8 +342,14 @@ func (s *Store) Update(ctx context.Context, project, id string, version int64, k
 // write retries the whole transaction on SQLite busy errors. FTS triggers may
 // read before acquiring the write lock, so concurrent pools can hit a snapshot
 // upgrade failure even with the connection's busy timeout. Never retry just the
-// statement: roll back both the row and its index before trying again.
+// statement: roll back both the row and its index before trying again. It
+// writes nothing where it would not be kept, see storage.WAL.Kept.
 func (s *Store) write(ctx context.Context, f func(*sql.Tx) error) error {
+	if s.wal != nil {
+		if err := s.wal.Kept(); err != nil {
+			return fmt.Errorf("the memories keep nothing until ouro starts anew: %w", err)
+		}
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		tx, err := s.db.BeginTx(ctx, nil)

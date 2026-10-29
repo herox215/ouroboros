@@ -2,7 +2,6 @@ package history
 
 import (
 	"database/sql"
-	"errors"
 	"io"
 	"log"
 	"os"
@@ -16,19 +15,19 @@ import (
 
 // unlinkWAL removes the WAL of the database in dir and its shared memory
 // behind every pool that has them open, as happened to a running node, and
-// keeps a pool open on them, as another process that neither checkpoints nor
-// closes: closing the archive is then not the last close, which would
-// checkpoint them.
-func unlinkWAL(t *testing.T, dir string) {
+// returns another pool of the process on the database, as the store of the
+// memories is: it still uses the WAL that is gone, and the archive must not
+// part from it.
+func unlinkWAL(t *testing.T, dir string) *sql.DB {
 	t.Helper()
 	path := filepath.Join(dir, storage.FileName)
 	other, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	other.SetMaxOpenConns(1)
 	t.Cleanup(func() { other.Close() })
-	var n int
-	if err := other.QueryRow("SELECT count(*) FROM history_records").Scan(&n); err != nil {
+	if _, err := other.Exec("CREATE TABLE IF NOT EXISTS other(x)"); err != nil {
 		t.Fatal(err)
 	}
 	for _, sidecar := range []string{"-wal", "-shm"} {
@@ -36,28 +35,16 @@ func unlinkWAL(t *testing.T, dir string) {
 			t.Fatal(err)
 		}
 	}
+	return other
 }
 
-// An answer appended after the WAL went from under the open archive is kept:
-// what the WAL holds is checkpointed and the archive is opened anew, so that
-// the answer is still there once the archive is opened again.
-func TestAppendAfterTheWALWentAway(t *testing.T) {
-	dir := t.TempDir()
+// said is what the owner said in the session of who, as the archive in dir
+// has it once it is opened again.
+func said(t *testing.T, dir string, who Who) string {
+	t.Helper()
 	a := Open(dir)
-	who := Who{Session: "chat"}
-	if err := a.Append(who, []chat.Message{{Role: "user", Content: "first"}}, nil); err != nil {
-		t.Fatal(err)
-	}
-	unlinkWAL(t, dir)
-	if err := a.Append(who, []chat.Message{{Role: "user", Content: "second"}}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Close(); err != nil {
-		t.Fatal(err)
-	}
-	again := Open(dir)
-	defer again.Close()
-	records, err := again.Records(Owner(who.Session))
+	defer a.Close()
+	records, err := a.Records(Owner(who.Session))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,26 +54,55 @@ func TestAppendAfterTheWALWentAway(t *testing.T) {
 			said = append(said, r.Content)
 		}
 	}
-	if strings.Join(said, " ") != "first second" {
-		t.Fatalf("archived %q, want first and second", said)
-	}
+	return strings.Join(said, " ")
 }
 
-// An archive that cannot be opened anew once its WAL went away fails the
-// append rather than lose it.
-func TestAppendFailsWithoutItsWAL(t *testing.T) {
+// An archive whose WAL went from under it archives nothing more and says
+// why: what it committed would be lost with the process. It still reads, it
+// does not open a WAL of its own beside the one the other pools of the
+// process use, and the database stays whole.
+func TestAppendFailsWhenTheWALIsGone(t *testing.T) {
 	dir := t.TempDir()
 	a := Open(dir)
-	defer a.Close()
 	who := Who{Session: "chat"}
 	if err := a.Append(who, []chat.Message{{Role: "user", Content: "first"}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	unlinkWAL(t, dir)
-	refused := errors.New("refused")
-	a.open = func(string) (*sql.DB, error) { return nil, refused }
-	if err := a.Append(who, []chat.Message{{Role: "user", Content: "second"}}, nil); !errors.Is(err, refused) {
-		t.Fatalf("append = %v, want %v", err, refused)
+	other := unlinkWAL(t, dir)
+	const gone = "keeps nothing until ouro starts anew: the WAL "
+	if err := a.Append(who, []chat.Message{{Role: "user", Content: "second"}}, nil); err == nil || !strings.Contains(err.Error(), gone) {
+		t.Fatalf("append = %v, want %q", err, gone)
+	}
+	if err := a.EndAnswer(Owner(who.Session)); err == nil || !strings.Contains(err.Error(), gone) {
+		t.Fatalf("end answer = %v, want %q", err, gone)
+	}
+	if records, err := a.Records(Owner(who.Session)); err != nil || len(records) != 2 {
+		t.Fatalf("records %+v, %v", records, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, storage.FileName) + "-wal"); !os.IsNotExist(err) {
+		t.Fatalf("a WAL was opened at the path: %v", err)
+	}
+	// The other pool goes on with the WAL that is gone, as before.
+	if _, err := other.Exec("INSERT INTO other VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := said(t, dir, who); got != "first" {
+		t.Fatalf("archived %q, want first", got)
+	}
+	db, err := storage.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var check string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&check); err != nil || check != "ok" {
+		t.Fatalf("integrity %q, %v", check, err)
 	}
 }
 
@@ -112,47 +128,8 @@ func TestSearchWithoutTheWAL(t *testing.T) {
 	if _, n, err := b.Search(who, "first", true, 10); err != nil || n != 1 {
 		t.Fatalf("search found %d, %v", n, err)
 	}
-	if err := b.Append(who, []chat.Message{{Role: "user", Content: "third"}}, nil); err == nil {
-		t.Fatal("appended to an archive that reads without WAL")
-	}
-}
-
-// An archive whose WAL went away keeps its pool and fails the append while
-// a reader keeps the checkpoint from copying all of the WAL.
-func TestAppendFailsWhileTheWALCannotBeKept(t *testing.T) {
-	dir := t.TempDir()
-	a := Open(dir)
-	defer a.Close()
-	who := Who{Session: "chat"}
-	if err := a.Append(who, []chat.Message{{Role: "user", Content: "first"}}, nil); err != nil {
-		t.Fatal(err)
-	}
-	reader, err := sql.Open("sqlite", "file:"+filepath.Join(dir, storage.FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reader.Close()
-	tx, err := reader.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	var n int
-	if err := tx.QueryRow("SELECT count(*) FROM history_records").Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Append(who, []chat.Message{{Role: "user", Content: "second"}}, nil); err != nil {
-		t.Fatal(err)
-	}
-	exec(t, a, "PRAGMA busy_timeout=0") // not to wait for the reader
-	if err := os.Remove(filepath.Join(dir, storage.FileName) + "-wal"); err != nil {
-		t.Fatal(err)
-	}
-	db := a.db
-	if err := a.Append(who, []chat.Message{{Role: "user", Content: "third"}}, nil); err == nil || !strings.Contains(err.Error(), "cannot be kept") {
-		t.Fatalf("append = %v", err)
-	}
-	if a.db != db {
-		t.Fatal("the pool that holds the WAL was let go")
+	const readOnly = "keeps nothing until ouro starts anew: the database is read-only"
+	if err := b.Append(who, []chat.Message{{Role: "user", Content: "third"}}, nil); err == nil || !strings.Contains(err.Error(), readOnly) {
+		t.Fatalf("append = %v, want %q", err, readOnly)
 	}
 }

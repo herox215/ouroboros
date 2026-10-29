@@ -117,9 +117,8 @@ type Archive struct {
 	now func() time.Time
 	mu  sync.Mutex
 	db  *sql.DB
-	// wal is the WAL that db holds, as it was at its path when db was
-	// opened; nil when db holds none it may write to, see held.
-	wal os.FileInfo
+	// wal is the WAL db writes to, see kept.
+	wal storage.WAL
 	// open opens the database file. Tests replace it with a file that fails
 	// where they need it to; Open sets it to storage.Open.
 	open func(string) (*sql.DB, error)
@@ -710,7 +709,7 @@ func (a *Archive) Delete(id string) error {
 	if _, err := a.path(id); err != nil {
 		return err
 	}
-	db, err := a.readDatabase()
+	db, err := a.changeDatabase()
 	if err != nil {
 		return err
 	}
@@ -758,7 +757,7 @@ func (a *Archive) GoOn(id string) error { return a.setBeside(id, goOnSuffix, "")
 // GoingOn atomically consumes the owner's restart marks, including marks set
 // before the first archived answer. Peer marks are not consumed here.
 func (a *Archive) GoingOn() ([]string, error) {
-	db, err := a.readDatabase()
+	db, err := a.changeDatabase()
 	if err != nil || db == nil {
 		return nil, err
 	}

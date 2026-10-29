@@ -95,7 +95,7 @@ func broken(when string) string {
 // adopt makes db the open pool of a, as if a had opened it, with the WAL it
 // holds, see held.
 func adopt(a *Archive, db *sql.DB) {
-	a.db, a.wal = db, a.walOf(db)
+	a.db, a.wal = db, storage.Watch(db, a.dir)
 }
 
 // closeBehind closes the pool of a behind its back. Another connection
