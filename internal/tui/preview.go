@@ -35,6 +35,7 @@ import (
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
 
+	"ouroboros/internal/procgroup"
 	"ouroboros/plugin"
 )
 
@@ -517,7 +518,8 @@ func pdfPreview(path string) (image.Image, error) {
 	cmd := exec.CommandContext(ctx, bin, "-png", "-f", "1", "-l", "1", "-singlefile",
 		"-scale-to", strconv.Itoa(pdfRaster), path, out)
 	// A timeout takes the renderer's children along with it.
-	detached(cmd)
+	procgroup.Detach(cmd)
+	cmd.WaitDelay = time.Second
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}

@@ -3,13 +3,9 @@
 package tui
 
 import (
-	"context"
-	"errors"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -19,45 +15,36 @@ import (
 // renderer started along with it, not only the renderer itself.
 func TestPDFTimeoutKillsTheProcessGroup(t *testing.T) {
 	dir := t.TempDir()
-	pidFile := filepath.Join(dir, "child.pid")
-	renderer := fakePDFRenderer(t, dir, "sleep 30 &\necho $! > \""+pidFile+"\"\nwait")
+	// The child holds a FIFO open while it runs: reading the FIFO ends once
+	// it is gone.
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan string, 1)
+	go func() {
+		var data []byte
+		if f, err := os.Open(fifo); err == nil {
+			data, _ = io.ReadAll(f)
+			f.Close()
+		}
+		read <- string(data)
+	}()
+	renderer := fakePDFRenderer(t, dir, "sh -c 'echo started >&3; exec sleep 30' 3>\""+fifo+"\" &\nwait")
 	withPDFRenderer(t, renderer)
-	// Long enough for the shell to start its child and write its pid while
-	// the whole module is tested at once, as the pre-commit hook does.
+	// Long enough for the shell to start its child while the whole module is
+	// tested at once, as the pre-commit hook does.
 	withPDFTimeout(t, 3*time.Second)
 
 	if _, err := pdfPreview(filepath.Join(dir, "slow.pdf")); err == nil {
 		t.Fatal("a renderer that does not finish was not ended")
 	}
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("the renderer started no child: %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		t.Fatalf("child pid %q: %v", data, err)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
-			return
+	select {
+	case data := <-read:
+		if data != "started\n" {
+			t.Fatalf("the renderer started no child: %q", data)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("child %d of the renderer still runs", pid)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// A renderer that ended by itself is not killed when its time is up: its
-// group is gone, which is no error.
-func TestDetachedRendererThatEnded(t *testing.T) {
-	cmd := exec.CommandContext(context.Background(), fakePDFRenderer(t, t.TempDir(), "exit 0"))
-	detached(cmd)
-	if err := cmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Cancel(); !errors.Is(err, os.ErrProcessDone) {
-		t.Fatalf("cancel after the end: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the child of the renderer still runs, or never started")
 	}
 }
