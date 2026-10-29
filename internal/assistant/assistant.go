@@ -661,11 +661,13 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	bot, given := a.withTopic(ctx, contextID, text, bot)
 	to.memories = append(core, given...)
 	bot = inThread(ctx, bot, cfg)
+	var unarchived bool
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {
 			if a.log != nil {
 				a.log("conversation %s plugin %s %s failed: %v", contextID, d.Plugin, d.Phase, d.Err)
 			}
+			unarchived = unarchived || d.Plugin == ArchiveHook && d.Phase == "after"
 		},
 		Call: func(c agent.Call) {
 			r.call(c)
@@ -692,6 +694,9 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			}
 		},
 	})
+	if unarchived && reply != "" {
+		reply += "\n\n" + notArchived
+	}
 	logged := reply
 	if ThreadOf(ctx) != nil && logged == "" {
 		logged = handedOn // no answer that went wrong
@@ -710,6 +715,15 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	}
 	return reply, err
 }
+
+// ArchiveHook is the name of the agent.AnswerHook that archives every answer:
+// an answer it fails to archive says so to the owner, see notArchived.
+const ArchiveHook = "archive"
+
+// notArchived ends an answer that the hook ArchiveHook failed to archive: the
+// chat that ouro rebuilds from the archive when it starts anew lacks it. The
+// log says why.
+const notArchived = "[This answer is not archived: once ouro starts anew, it is missing from this chat and its history. The log of the node says why.]"
 
 // coreIntro starts what the prompt of the agent of the owner says of the
 // core memories.

@@ -96,7 +96,7 @@ func memoryProfiles(dir home.Dir) func() []assistant.MemoryProfile {
 // of the plugins. A failure is its diagnostic, and leaves the answer as it
 // is.
 func Archived(archive *history.Archive, statistics ...func(string) history.Statistics) agent.AnswerHook {
-	return agent.AnswerHook{Name: "archive", After: func(ctx context.Context, o agent.AnswerOutcome) error {
+	return agent.AnswerHook{Name: assistant.ArchiveHook, After: func(ctx context.Context, o agent.AnswerOutcome) error {
 		who := history.Who{Session: o.Conversation.ID}
 		if o.Conversation.Peer {
 			if o.Conversation.Origin.PublicKey == "" {

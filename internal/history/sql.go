@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ouroboros/internal/storage"
 )
 
 // database opens lazily because Open historically cannot return an error. A
@@ -25,7 +27,12 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.db != nil {
-		return a.db, nil
+		if a.held() {
+			return a.db, nil
+		}
+		if err := a.release(); err != nil {
+			return nil, err
+		}
 	}
 	if !create {
 		info, err := os.Stat(a.dir)
@@ -123,8 +130,58 @@ func (a *Archive) openDatabase(create bool) (*sql.DB, error) {
 		return nil, err
 	}
 	a.db = db
+	a.wal = a.walOf(db)
 	ok = true
 	return db, nil
+}
+
+// walPath is where the WAL of the database of the archive is.
+func (a *Archive) walPath() string {
+	return filepath.Join(a.dir, storage.FileName) + "-wal"
+}
+
+// walOf is the WAL at its path, if db writes to it, and nil if db cannot
+// write: a pool that storage.Open had to open read-only is opened anew by the
+// next operation, which may write again.
+func (a *Archive) walOf(db *sql.DB) os.FileInfo {
+	// An update of no row takes the lock of the writer all the same.
+	if _, err := db.Exec("UPDATE history_migrations SET name=name WHERE 0"); err != nil {
+		return nil
+	}
+	info, _ := os.Stat(a.walPath()) // nil without a WAL
+	return info
+}
+
+// held reports whether the WAL that the open pool holds is still the one at
+// its path. A WAL that was unlinked while the pool held it takes every commit
+// the pool makes and loses it with the process: the next one to open the
+// database finds no WAL at the path and never reads those frames.
+func (a *Archive) held() bool {
+	if a.wal == nil {
+		return false
+	}
+	info, err := os.Stat(a.walPath())
+	return err == nil && os.SameFile(info, a.wal)
+}
+
+// release closes the open pool, which does not hold the WAL at its path any
+// more, see held. What the WAL it holds has is checkpointed into the database
+// file first: a pool that cannot do that is kept, and the operation fails, so
+// that nothing is committed where it would be lost.
+func (a *Archive) release() error {
+	if a.wal != nil {
+		var busy, frames, copied int
+		err := a.db.QueryRow("PRAGMA wal_checkpoint(FULL)").Scan(&busy, &frames, &copied)
+		if err == nil && (busy != 0 || copied < frames) {
+			err = fmt.Errorf("%d of %d frames copied", copied, frames)
+		}
+		if err != nil {
+			return fmt.Errorf("the WAL of the archive in %s is gone from its path, and what it holds cannot be kept: %w", a.dir, err)
+		}
+	}
+	err := a.db.Close()
+	a.db, a.wal = nil, nil
+	return err
 }
 
 // Close releases this handle. The archive may be used again and reopens lazily.
@@ -136,7 +193,7 @@ func (a *Archive) Close() error {
 		return nil
 	}
 	err := a.db.Close()
-	a.db = nil
+	a.db, a.wal = nil, nil
 	return err
 }
 

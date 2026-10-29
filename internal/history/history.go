@@ -117,6 +117,9 @@ type Archive struct {
 	now func() time.Time
 	mu  sync.Mutex
 	db  *sql.DB
+	// wal is the WAL that db holds, as it was at its path when db was
+	// opened; nil when db holds none it may write to, see held.
+	wal os.FileInfo
 	// open opens the database file. Tests replace it with a file that fails
 	// where they need it to; Open sets it to storage.Open.
 	open func(string) (*sql.DB, error)

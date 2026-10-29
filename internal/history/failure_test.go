@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,16 +92,38 @@ func broken(when string) string {
 
 // Once the database cannot be reached, every operation fails instead of
 // telling of an empty archive.
+// adopt makes db the open pool of a, as if a had opened it, with the WAL it
+// holds, see held.
+func adopt(a *Archive, db *sql.DB) {
+	a.db, a.wal = db, a.walOf(db)
+}
+
+// closeBehind closes the pool of a behind its back. Another connection
+// keeps the WAL at its path, so that a takes its pool for its own still and
+// every operation fails on it, rather than opening anew, see held.
+func closeBehind(t *testing.T, a *Archive) {
+	t.Helper()
+	db, err := a.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := sql.Open("sqlite", "file:"+filepath.Join(a.dir, storage.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { other.Close() })
+	if _, err := other.Exec("SELECT 1 FROM history_sessions"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+}
+
 func TestClosedDatabase(t *testing.T) {
 	a := at(t)
 	if err := a.Append(owner, question, nil); err != nil {
 		t.Fatal(err)
 	}
-	db, err := a.database()
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
+	closeBehind(t, a)
 	if err := a.Append(owner, question, nil); err == nil {
 		t.Error("append")
 	}
@@ -487,7 +510,7 @@ func TestNoteModelCannotBegin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.db = db
+	adopt(a, db)
 	if err := a.NoteModel("owner/noted", "m2"); err == nil {
 		t.Fatal("the model was noted")
 	}

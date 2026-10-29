@@ -76,3 +76,24 @@ func TestResumeNote(t *testing.T) {
 		t.Error("a message of the owner is a restart note")
 	}
 }
+
+// An answer that stopped in the middle is told where the archive of its chat
+// ends and how long before now, or that nothing of it is archived.
+func TestArchiveEnd(t *testing.T) {
+	s, arch, _ := archived(t, &fakeAgent{}, filepath.Join(t.TempDir(), "history"), time.Now())
+	if got, want := s.archive.archiveEnd("owner/none", time.Now()), "\n\nNothing of this chat is archived: what the answer was asked and did is not in history_read."; got != want {
+		t.Errorf("without an archived answer: %q, want %q", got, want)
+	}
+	if err := arch.Append(history.Who{Session: "s"}, []openai.Message{{Role: "user", Content: "the task"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	records, err := arch.Records("owner/s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := records[len(records)-1].Time
+	want := "\n\nThe archive of this chat ends at " + last.Local().Format("2006-01-02 15:04") + ", 22 minutes before ouro started anew: what the answer was asked and did, and whatever came after that, is not in history_read."
+	if got := s.archive.archiveEnd("owner/s", last.Add(22*time.Minute+time.Second)); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
