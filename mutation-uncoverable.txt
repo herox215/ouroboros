@@ -58,7 +58,7 @@ internal/a2a/task.go:27:128 ARITHMETIC_BASE  # strings joined in the declaration
 internal/a2a/transport.go:25:23 ARITHMETIC_BASE  # a timeout in a constant declaration, which gremlins never counts as covered
 internal/a2a/transport.go:26:24 ARITHMETIC_BASE  # a timeout in a constant declaration, which gremlins never counts as covered
 internal/a2a/transport.go:27:24 ARITHMETIC_BASE  # a timeout in a constant declaration, which gremlins never counts as covered
-internal/a2a/transport.go:28:24 ARITHMETIC_BASE  # a timeout in a constant declaration, which gremlins never counts as covered
+internal/a2a/transport.go:32:22 ARITHMETIC_BASE  # a multiplication in the declaration of a package variable, which no coverage block holds; killed by TestChannelBetweenNodes, TestChannelClosedByTheHandler and others
 internal/agent/agent.go:34:26 ARITHMETIC_BASE  # the arithmetic of warnRounds in a constant declaration, which gremlins never counts as covered
 internal/agent/agent.go:34:30 ARITHMETIC_BASE  # the arithmetic of warnRounds in a constant declaration, which gremlins never counts as covered
 internal/agent/agent.go:70:67 ARITHMETIC_BASE  # strings joined in a constant declaration: gremlins never counts it as covered, and minus does not compile for strings
@@ -69,6 +69,70 @@ internal/agent/tool.go:134:49 CONDITIONALS_NEGATION  # an expression of a case c
 internal/agent/tool.go:134:67 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/agent/tool.go:134:87 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/agent/tool.go:136:18 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
+internal/assistant/archivist.go:35:23 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; killed by TestArchivistMergesAndThenSleeps, TestArchivistChangesOnlyWhatItSaw and others
+internal/assistant/archivist.go:60:159 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:61:199 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:62:49 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:63:27 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:63:44 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:63:112 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:63:129 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:63:154 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:64:89 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:65:143 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:66:177 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:67:104 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:68:148 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:69:68 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/archivist.go:70:92 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:40:119 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:41:106 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:42:111 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:43:92 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:44:123 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:45:127 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:46:137 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:50:129 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:51:61 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:52:14 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:52:45 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:52:61 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:52:99 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:53:13 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:53:39 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:53:56 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:53:119 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:54:8 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:54:25 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:54:92 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:55:50 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:55:67 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:55:135 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:56:27 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:56:44 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:56:87 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:57:11 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:57:28 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:57:129 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:58:48 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:58:65 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:58:111 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:59:11 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:59:25 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:59:32 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:59:48 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:59:57 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:59:70 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:59:145 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:60:65 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:60:78 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:60:109 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:61:109 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:62:15 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:62:114 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:176:86 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:177:111 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/asking.go:178:128 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:130:104 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:130:83 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:133:109 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -116,7 +180,7 @@ internal/assistant/assistant.go:46:139 ARITHMETIC_BASE  # strings joined in a co
 internal/assistant/assistant.go:51:200 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:55:96 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:56:380 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/assistant.go:55:157 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:57:146 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:58:187 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:59:101 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:60:175 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -124,7 +188,6 @@ internal/assistant/assistant.go:61:124 ARITHMETIC_BASE  # strings joined in a co
 internal/assistant/assistant.go:62:114 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:63:57 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:812:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
-internal/assistant/assistant.go:625:12 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/assistant/assistant.go:64:148 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:65:127 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:66:190 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -135,9 +198,38 @@ internal/assistant/assistant.go:70:70 ARITHMETIC_BASE  # strings joined in a con
 internal/assistant/assistant.go:71:104 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:72:156 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:73:101 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:74:100 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:75:101 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:76:104 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:77:56 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:78:124 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:79:128 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:80:164 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:81:51 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:82:178 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:83:161 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:84:136 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:88:21 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:88:32 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:88:103 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:89:87 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:89:95 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:89:126 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:90:50 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:97:70 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:97:81 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:97:110 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:98:138 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:99:10 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:99:21 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:99:67 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:100:107 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:101:18 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:101:33 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:101:64 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:101:75 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:101:101 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:102:119 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:107:100 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:107:107 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:107:86 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -153,6 +245,20 @@ internal/assistant/assistant.go:121:80 ARITHMETIC_BASE  # strings joined in a co
 internal/assistant/assistant.go:125:126 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:125:33 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/assistant.go:126:97 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:135:129 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:136:151 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:137:123 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:142:147 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:143:93 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:144:163 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:145:157 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:151:113 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:152:75 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:153:115 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:421:104 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which go cover leaves out of every block; killed by TestAskRemembersAlsoWhenConfiguredAnew
+internal/assistant/assistant.go:715:122 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/assistant.go:814:16 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSuggestionNotKept and TestSuggestionDropsTheOldest
+internal/assistant/assistant.go:814:22 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSuggestionNotKept and TestSuggestionDropsTheOldest
 internal/assistant/delegate.go:45:130 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:47:104 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:51:111 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
@@ -163,10 +269,18 @@ internal/assistant/delegate.go:51:82 ARITHMETIC_BASE  # strings joined in a pack
 internal/assistant/delegate.go:52:95 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:53:122 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:46:127 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:54:127 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:55:132 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:56:233 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/delegate.go:49:183 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:57:262 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:58:107 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:58:122 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:58:208 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:58:223 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:58:268 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/delegate.go:59:153 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/delegate.go:181:176 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/delegate.go:183:135 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
 internal/assistant/fallback.go:151:49 ARITHMETIC_BASE  # a multiplication in the declaration of a package variable, which no coverage block holds; TestRetryingWaits asserts the waits
 internal/assistant/fallback.go:28:22 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; TestFallbacksAnswerInTheirOrder asserts how long retryFirst is by the calls around it
 internal/assistant/followup.go:15:21 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; TestFollowUpIsReviewed asserts a follow-up within followUpTime
@@ -176,7 +290,7 @@ internal/assistant/metrics.go:49:44 CONDITIONALS_BOUNDARY  # the expression of a
 internal/assistant/metrics.go:49:44 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestCallMetrics asserts the cost that is known and the negative one that is not
 internal/assistant/metrics.go:49:49 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; TestAsk panics on the cost of a call that reports none
 internal/assistant/metrics.go:49:79 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; TestAsk panics on the cost of a call that reports none
-internal/assistant/permission.go:88:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
+internal/assistant/permission.go:150:12 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestOwnerReplySourceIsNotAnswer, TestImageReplyCannotApprovePermission and others
 internal/assistant/record.go:200:13 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/assistant/record.go:202:19 CONDITIONALS_BOUNDARY  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/assistant/record.go:202:19 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
@@ -194,12 +308,38 @@ internal/assistant/review.go:152:103 ARITHMETIC_BASE  # strings joined in a cons
 internal/assistant/review.go:153:96 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/review.go:154:68 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/review.go:155:107 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/review.go:86:103 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/review.go:86:67 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/review.go:86:79 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/review.go:87:117 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/review.go:87:22 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/review.go:87:31 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:156:74 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:157:28 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:157:37 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:157:123 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:158:60 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:159:116 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:160:89 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:161:83 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:162:113 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:163:95 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:164:96 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:165:42 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:166:39 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:166:50 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:166:108 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:167:119 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:168:72 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:169:99 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:170:80 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:171:11 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:171:77 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:172:113 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:173:134 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:174:118 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:175:26 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:175:34 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:175:122 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:176:137 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:177:69 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:177:81 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/review.go:270:17 CONDITIONALS_BOUNDARY  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestLessons
+internal/assistant/review.go:270:17 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestLessons
 internal/assistant/settings.go:172:13 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/assistant/signal.go:48:21 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the tests of the package kill it when applied by hand
 internal/assistant/signal.go:49:20 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the tests of the package kill it when applied by hand
@@ -219,23 +359,45 @@ internal/assistant/thread.go:32:166 ARITHMETIC_BASE  # strings joined in a const
 internal/assistant/thread.go:32:183 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:32:190 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:33:222 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/thread.go:32:290 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:34:812 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:35:504 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:36:312 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/thread.go:35:136 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:37:260 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:38:262 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:39:470 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:40:8 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:40:26 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:40:123 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:40:140 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:40:306 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:41:189 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:42:130 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:43:250 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/thread.go:39:159 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:44:363 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:45:143 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:46:170 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/thread.go:42:93 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
-internal/assistant/thread.go:43:203 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:47:110 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:47:129 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:47:314 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:47:332 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:47:371 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:48:143 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:49:277 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:50:130 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:50:149 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:54:24 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the tests of the package kill it when applied by hand
 internal/assistant/thread.go:62:65 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/thread.go:62:82 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/thread.go:166:151 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:167:155 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:214:109 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:215:131 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:217:45 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:218:98 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:233:158 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:235:45 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:236:99 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
+internal/assistant/thread.go:237:160 ARITHMETIC_BASE  # strings joined in the description of a tool after a function literal in the same statement, which go cover leaves out of every block; minus does not compile for strings
 internal/assistant/title.go:34:117 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
 internal/assistant/title.go:35:96 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
 internal/assistant/title.go:36:68 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
@@ -247,6 +409,29 @@ internal/assistant/tools.go:85:103 ARITHMETIC_BASE  # strings joined in a packag
 internal/assistant/tools.go:85:116 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of what ask_peer says: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/tools.go:86:78 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of what ask_peer says: gremlins never counts it as covered, and minus does not compile for strings
 internal/assistant/tools.go:86:93 ARITHMETIC_BASE  # strings joined in a package-level variable declaration of what ask_peer says: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:48:25 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; killed by TestCheckTopicErrorsAndFallback
+internal/assistant/topic.go:53:108 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:54:163 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:55:161 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:56:108 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:57:141 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:58:169 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:59:177 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:60:91 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:61:132 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:62:130 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:63:135 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:64:64 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:65:169 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:68:132 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:69:135 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topic.go:70:125 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topics.go:32:22 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; killed by TestStartArchive and TestTopicIsGivenItsMemories
+internal/assistant/topics.go:39:18 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; divided, idleTime is 0; with it the tests do not end
+internal/assistant/topics.go:58:130 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topics.go:63:120 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topics.go:64:86 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
+internal/assistant/topics.go:65:126 ARITHMETIC_BASE  # strings joined in a constant declaration of a prompt: gremlins never counts it as covered, and minus does not compile for strings
 internal/chatgpt/chatgpt.go:43:69 ARITHMETIC_BASE  # a constant declaration (scopes): evaluated at compile time, gremlins never sees it covered; it does not compile
 internal/chatgpt/chatgpt.go:58:12 ARITHMETIC_BASE  # a package variable (early): set before any test runs, gremlins never sees it covered; killed by TestTokenIsRenewedOnce
 internal/chatgpt/chatgpt.go:60:16 ARITHMETIC_BASE  # a package variable (authTime): set before any test runs, gremlins never sees it covered; killed by TestComplete and TestCompleteAtTheLimit
@@ -291,6 +476,8 @@ internal/chatgpt/signin.go:293:15 CONDITIONALS_NEGATION  # the expression of a c
 internal/chatgpt/signin.go:295:17 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestComplete and TestCompleteAtTheLimit
 internal/cli/directory.go:39:17 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestStartDirectory
 internal/cli/directory.go:40:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestStartDirectory and TestStartDirectoryThatCannotBeTold
+internal/cli/directory.go:40:24 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; with && go vet refuses comparing args[0] with two values, so the tests do not build
+internal/cli/directory.go:40:35 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestStartDirectory, TestStartDirectoryThatCannotBeTold and others
 internal/cli/profiles.go:107:18 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestOneProfile and TestProfiles
 internal/cli/profiles.go:107:25 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; with it the tests do not end
 internal/cli/profiles.go:107:35 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; with it the tests do not end
@@ -323,16 +510,8 @@ internal/config/config.go:373:26 INVERT_LOGICAL  # the expression of a case clau
 internal/config/config.go:373:55 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; killed by TestFields (the longest name)
 internal/config/config.go:373:55 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestFields
 internal/credentials/credentials.go:30:22 ARITHMETIC_BASE  # a constant declaration (LockName): evaluated at compile time, gremlins never sees it covered; it does not compile
-internal/desktop/tray/tray_darwin.go:104:29 ARITHMETIC_BASE  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
+internal/desktop/tray/tray_darwin.go:38:18 ARITHMETIC_BASE  # built on macOS only, so a run on Linux never measures it and one on macOS tries it; killed by TestHelperCommandIsThisBinary (the interval, added)
 internal/desktop/tray/tray_darwin.go:95:58 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:110:17 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:121:17 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:124:11 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:35:18 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:35:23 INVERT_LOGICAL  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:35:37 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:41:39 ARITHMETIC_BASE  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/desktop/tray/tray_darwin.go:41:44 ARITHMETIC_BASE  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
 internal/desktop/tray/tray_darwin.go:48:64 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
 internal/desktop/tray/tray_darwin.go:48:77 INVERT_LOGICAL  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
 internal/desktop/tray/tray_darwin.go:48:88 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
@@ -345,19 +524,28 @@ internal/desktop/tray/tray_darwin.go:68:9 CONDITIONALS_NEGATION  # built on macO
 internal/desktop/tray/tray_darwin.go:73:9 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
 internal/desktop/tray/tray_darwin.go:76:28 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
 internal/desktop/tray/tray_darwin.go:84:22 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it
-internal/diagnosis/diagnosis.go:101:19 CONDITIONALS_BOUNDARY  # a case expression; killed by TestClassify (status 500, added)
-internal/diagnosis/diagnosis.go:101:19 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
-internal/diagnosis/diagnosis.go:99:19 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
+internal/desktop/tray/tray_darwin.go:97:4 INVERT_LOOPCTRL  # built on macOS only, so a run on Linux never measures it and one on macOS tries it; killed by TestRunHelperStopsReading, which never ends with it
+internal/desktop/tray/tray_darwin.go:104:4 INVERT_LOOPCTRL  # built on macOS only, so a run on Linux never measures it and one on macOS tries it; killed by TestRunFeedsHelperUntilItExits
+internal/desktop/tray/tray_darwin.go:106:3 INVERT_LOOPCTRL  # built on macOS only, so a run on Linux never measures it and one on macOS tries it; killed by TestRunFeedsHelperUntilItExits
+internal/desktop/tray/tray_darwin.go:110:15 CONDITIONALS_NEGATION  # built on macOS only, so a run on Linux never measures it and one on macOS tries it; killed by TestRunFeedsHelperUntilItExits and TestRunHelperStopsReading
+internal/diagnosis/diagnosis.go:93:34 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
+internal/diagnosis/diagnosis.go:95:33 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
+internal/diagnosis/diagnosis.go:97:36 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
+internal/diagnosis/diagnosis.go:99:30 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
+internal/diagnosis/diagnosis.go:101:29 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
+internal/diagnosis/diagnosis.go:103:33 CONDITIONALS_NEGATION  # a case expression; killed by TestClassify
 internal/discovery/tailscale.go:16:26 ARITHMETIC_BASE  # a multiplication in a variable declaration, which no coverage block holds
 internal/guard/guard.go:222:15 CONDITIONALS_NEGATION  # a case expression, which gremlins never counts as covered; negated, TestBox panics on the allow of the owner that is nil
 internal/history/history.go:237:11 CONDITIONALS_NEGATION  # a case expression; killed by TestRead
 internal/history/history.go:332:86 CONDITIONALS_BOUNDARY  # after a function literal; equivalent as well: moving the session at index 0 to the front leaves the order as it is
 internal/history/history.go:332:86 CONDITIONALS_NEGATION  # after a function literal; killed by TestSearchScope
+internal/history/history.go:458:101 CONDITIONALS_NEGATION  # after a function literal; killed by TestRead
 internal/history/history.go:690:37 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
 internal/history/history.go:690:48 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
 internal/history/history.go:690:54 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
 internal/history/history.go:690:67 ARITHMETIC_BASE  # a string concatenation in the declaration of a variable
 internal/home/home.go:150:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestWorkspacesAndSecrets
+internal/home/home.go:155:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestWorkspacesAndSecrets
 internal/kernel/kernel.go:213:14 CONDITIONALS_NEGATION  # a case expression; killed by TestPluginErrors
 internal/kernel/kernel.go:215:15 CONDITIONALS_NEGATION  # a case expression; killed by TestPluginErrors
 internal/kernel/kernel.go:215:21 INVERT_LOGICAL  # a case expression; killed by TestPluginErrors
@@ -368,6 +556,8 @@ internal/matrix/avatar.go:17:25 ARITHMETIC_BASE  # a multiplication in a constan
 internal/matrix/avatar.go:17:32 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the tests of the package kill it when applied by hand
 internal/matrix/media.go:14:26 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the tests of the package kill it when applied by hand
 internal/matrix/media.go:14:33 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the tests of the package kill it when applied by hand
+internal/memory/archivist.go:383:81 CONDITIONALS_BOUNDARY  # a condition after a function literal in the same statement, which go cover leaves out of every block; killed by TestArchivistRewrite, TestArchivistMergeCore and the other tests of changes
+internal/memory/archivist.go:383:81 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which go cover leaves out of every block; killed by TestArchivistRewrite, TestArchivistMergeCore and the other tests of changes
 internal/modelsdev/modelsdev.go:133:13 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestEnv asserts that "off" fetches nothing, and every other test that it does
 internal/modelsdev/modelsdev.go:134:10 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestEfforts asserts that a new catalog is read without a fetch
 internal/modelsdev/modelsdev.go:134:17 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; TestFetchFails asserts that a file without providers is fetched anew
@@ -453,21 +643,23 @@ internal/plugins/history/history.go:140:66 ARITHMETIC_BASE  # a string concatena
 internal/plugins/history/history.go:140:75 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:140:85 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:140:96 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
-internal/plugins/history/history.go:141:82 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:142:114 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:142:134 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:142:75 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:160:118 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:160:23 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/history/history.go:94:103 ARITHMETIC_BASE  # a string concatenation in a constant declaration, which no coverage block holds
+internal/plugins/history/history.go:141:187 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/matrix/controller.go:133:28 ARITHMETIC_BASE  # the expression of a case clause lies outside every coverage block; killed by TestControllerReportsAndRetriesAFailedConnection, which connects again at once instead of after 5 s
 internal/plugins/matrix/store.go:79:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestPluginLogsInOverTheHomeserver and TestSnapshotStatus
-internal/plugins/memory/memory.go:179:37 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
-internal/plugins/memory/memory.go:186:37 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
-internal/plugins/memory/memory.go:200:129 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
-internal/plugins/memory/memory.go:200:148 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
-internal/plugins/memory/memory.go:200:35 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
-internal/plugins/memory/memory.go:207:37 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:194:37 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:201:37 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:215:35 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:215:129 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:215:148 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:226:37 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:237:38 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
+internal/plugins/memory/memory.go:242:35 ARITHMETIC_BASE  # a string concatenation after a function literal in the same statement, which go cover leaves out of every block; "-" of strings would not compile
 internal/plugins/node/profiles.go:19:17 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestProfileCommand and TestProfileCommandReportsErrors
 internal/plugins/node/profiles.go:36:15 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestProfileCommand
 internal/plugins/node/profiles.go:36:24 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; killed by TestProfileCommand
@@ -487,11 +679,15 @@ internal/plugins/openai/openai.go:147:11 CONDITIONALS_NEGATION  # the expression
 internal/plugins/openai/openai.go:149:16 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; killed by TestLogin and TestLoginFails
 internal/plugins/openai/openai.go:170:100 CONDITIONALS_BOUNDARY  # an if condition after a function literal in its header, which no coverage block holds; killed by TestModelsToChooseFrom, with the model preferred as the first
 internal/plugins/openai/openai.go:170:100 CONDITIONALS_NEGATION  # an if condition after a function literal in its header, which no coverage block holds; killed by TestLogin
+internal/plugins/schedule/schedule.go:170:26 CONDITIONALS_BOUNDARY  # a case expression; killed by TestRunsAtTheBoundsOfLate (a day late, added)
+internal/plugins/schedule/schedule.go:170:26 CONDITIONALS_NEGATION  # a case expression; killed by TestMissedNotificationFailureIsReported and TestRunOfRemovedJobIsReported
+internal/plugins/schedule/schedule.go:170:30 ARITHMETIC_BASE  # a case expression; the tests of the package kill it when applied by hand
 internal/plugins/skills/skills.go:207:13 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/plugins/skills/skills.go:207:20 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/plugins/skills/skills.go:209:13 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/plugins/skills/skills.go:209:20 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/plugins/skills/skills.go:349:21 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
+internal/plugins/tui/tui.go:176:29 ARITHMETIC_BASE  # a string concatenation in a declaration, which no coverage block holds; "-" of strings would not compile
 internal/printable/printable.go:28:10 CONDITIONALS_NEGATION  # a case expression; killed by TestLine
 internal/printable/printable.go:28:18 INVERT_LOGICAL  # a case expression; killed by TestLine
 internal/printable/printable.go:28:23 CONDITIONALS_NEGATION  # a case expression; killed by TestLine
@@ -521,6 +717,12 @@ internal/session/archive.go:493:9 CONDITIONALS_NEGATION  # the expression of a c
 internal/session/archive.go:495:13 ARITHMETIC_BASE  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours, which 48/time.Hour would make days
 internal/session/archive.go:495:9 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
 internal/session/archive.go:495:9 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; TestAgo asserts 47 hours against exactly 48
+internal/session/diagnose.go:48:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestThreadStopsJob, TestThreadDiagnoses and others
+internal/session/diagnose.go:123:16 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestStateTellsEverything and TestThreadDiagnoses
+internal/session/restart.go:61:92 ARITHMETIC_BASE  # strings joined in a constant declaration: gremlins never counts it as covered, and minus does not compile for strings
+internal/session/scheduled_socket.go:71:18 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestScheduledSocketFailure and TestScheduledClientReadsTheNode
+internal/session/scheduled_socket.go:73:12 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestScheduledSocketFailure and TestScheduledClientReadsTheNode
+internal/session/scheduled_socket.go:78:19 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestScheduledSocketFailure and TestRunScheduledSocketResult
 internal/session/session.go:1296:19 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement; killed by TestArchivedSession
 internal/session/session.go:1305:17 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; the test of the release asserts that a message after it keeps the node running
 internal/session/session.go:1111:31 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement; killed by TestArchivedSession
@@ -536,15 +738,25 @@ internal/session/session.go:654:17 CONDITIONALS_NEGATION  # the expression of a 
 internal/session/session.go:1111:11 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; the tests of restarts assert the successor, and every other answer that the node is not replaced
 internal/session/session.go:1111:18 INVERT_LOGICAL  # the expression of a case clause lies outside every coverage block; the test of the release asserts that a message after it keeps the node running
 internal/session/session.go:1113:11 CONDITIONALS_NEGATION  # the expression of a case clause lies outside every coverage block; the tests of restarts assert the successor, and every other answer that the node is not replaced
-internal/session/socket.go:325:25 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds
+internal/session/session.go:1202:17 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestThreadTaskReportWaitsForItsOwnAnswer and TestCancelHoldsTaskReports
+internal/session/session.go:1202:29 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestThreadTaskReportWaitsForItsOwnAnswer and TestThreadDiagnoses
+internal/session/session.go:1206:22 CONDITIONALS_BOUNDARY  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; with it the tests do not end
+internal/session/session.go:1206:22 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; with it the tests do not end
+internal/session/session.go:1305:31 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestGoOn, TestShare and others
+internal/session/socket.go:325:25 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the mutant makes the interval 0, so the client looks again without a pause: it finds the same, only more often, which no test tells apart without measuring time
+internal/session/tasks.go:32:59 ARITHMETIC_BASE  # strings joined in the declaration of a package variable, which no coverage block holds; minus does not compile for strings
 internal/session/thread.go:147:20 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/session/thread.go:148:20 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/session/thread.go:154:19 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/session/thread.go:324:87 CONDITIONALS_BOUNDARY  # a condition after a function literal in the same statement, which no coverage block holds; the tests of the package kill it when applied by hand
 internal/session/thread.go:324:87 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which no coverage block holds; the tests of the package kill it when applied by hand
 internal/session/thread.go:413:84 CONDITIONALS_NEGATION  # a condition after a function literal in the same statement, which no coverage block holds; the tests of the package kill it when applied by hand
-internal/session/thread.go:421:19 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/session/thread.go:42:19 ARITHMETIC_BASE  # a multiplication in a constant declaration, which no coverage block holds; the tests of the package kill it when applied by hand
+internal/session/thread.go:524:19 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; with it the tests do not end
+internal/session/thread.go:524:25 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; with it the tests do not end
+internal/session/thread.go:524:44 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestRestartAcceptsPendingQuestionReplies
+internal/session/thread.go:524:51 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestHandRefuses
+internal/session/thread.go:524:75 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestRestartAcceptsPendingQuestionReplies and TestHandRefuses
 internal/session/thread.go:534:16 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/session/thread.go:539:17 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 internal/setup/setup.go:197:10 CONDITIONALS_BOUNDARY  # the expression of a case clause lies outside every coverage block; killed by TestRemove and TestRemoveKeepsTheAccessOfAnotherProfile
@@ -696,6 +908,8 @@ plugin/settings.go:393:39 CONDITIONALS_BOUNDARY  # an expression of a case claus
 plugin/settings.go:393:39 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestSettingString
 plugin/settings.go:538:12 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 plugin/settings.go:541:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
+plugin/settings.go:555:12 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestChange
+plugin/settings.go:558:11 CONDITIONALS_NEGATION  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; killed by TestChange and TestPeerLists
 plugin/settings.go:571:13 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 plugin/settings.go:580:14 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand
 plugin/settings.go:598:13 INVERT_LOGICAL  # an expression of a case clause, which belongs to no block of the coverage profile and is never counted as covered; the tests of the package kill it when applied by hand

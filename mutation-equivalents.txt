@@ -15,6 +15,24 @@
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
 internal/agent/agent.go:1219:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
 internal/kernel/kernel.go:429:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
+internal/memory/archivist.go:75:82 CONDITIONALS_BOUNDARY  # only a memory written exactly staleAfter before the pass, to the nanosecond, tells >= from >: the clock goes on between writing it and the pass
+internal/memory/archivist.go:121:59 CONDITIONALS_BOUNDARY  # the candidates come from a map by ID: no two have the same ID, and of two different IDs < and <= say the same
+internal/memory/archivist.go:804:17 INVERT_LOGICAL  # with one of the sets empty no word is shared, and fewer than three shared words give 0 below all the same
+internal/memory/archivist.go:814:12 CONDITIONALS_BOUNDARY  # of two sets of the same size either is the smaller: least is the same
+internal/memory/list.go:28:25 CONDITIONALS_BOUNDARY  # a limit of exactly MaxList set to MaxList is the same limit
+internal/plugins/schedule/schedule.go:192:8 CONDITIONALS_BOUNDARY  # a delay equal to the one found is the same delay
+internal/plugins/schedule/schedule.go:196:11 CONDITIONALS_BOUNDARY  # a delay of exactly a millisecond raised to a millisecond stays the same
+internal/plugins/schedule/schedule.go:438:4 INVERT_LOOPCTRL  # Next fails only for a cron with no possible date, which has none from any other time either: going on fails again and adds no run
+internal/schedule/cron.go:71:17 ARITHMETIC_BASE  # the break only spares the last n += step: a step past what is left takes n past hi, and the loop ends there all the same, with the same values set
+internal/schedule/cron.go:71:17 INVERT_NEGATIVES  # the break only spares the last n += step: a step past what is left takes n past hi, and the loop ends there all the same, with the same values set
+internal/schedule/cron.go:94:16 CONDITIONALS_BOUNDARY  # no hour field holds 24: going on to it finds it not set and adds nothing
+internal/schedule/cron.go:98:17 CONDITIONALS_BOUNDARY  # no minute field holds 60: going on to it finds it not set and adds nothing
+internal/schedule/cron.go:112:18 CONDITIONALS_BOUNDARY  # an offset that holds at a time of the day holds at one of the samples six hours apart around it too, unless a zone held it for less than six hours, which none did: the one 48 hours on adds none
+internal/schedule/cron.go:122:28 INVERT_LOGICAL  # v lies within a day of d, and the dates next to d never have its day of the month: when the days agree so do year and month, and either is enough
+internal/schedule/cron.go:168:16 CONDITIONALS_BOUNDARY  # the day left out, Saturday 1 January 2400 after a Friday 31 December, is like 1 January 2005, which is looked at with the day before it
+internal/schedule/cron.go:187:16 CONDITIONALS_BOUNDARY  # the one more day is 1 January 400 years on, where the zones follow their current rules: none changes its offset within a day of 1 January
+internal/schedule/cron.go:188:21 ARITHMETIC_BASE  # the offset at d instead of a day before still finds every change, on the day it falls in: only the day two after it is no longer looked at with the one before, and their runs are hours apart or both after the change, with the gaps on the clock that validateInterval checks
+internal/schedule/store.go:287:17 CONDITIONALS_BOUNDARY  # ten runs cut to their last ten are the same ten runs
 internal/update/update.go:109:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
 internal/plugins/files/files.go:263:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
 internal/plugins/files/files.go:296:5 INVERT_LOOPCTRL  # at the end of the file reading on finds the end again, and the loop stops there
@@ -23,6 +41,7 @@ internal/plugins/files/files.go:817:11 CONDITIONALS_BOUNDARY  # notes first mean
 internal/plugins/files/files.go:937:10 CONDITIONALS_BOUNDARY  # end is never 0 at a later match: the first place reaches context lines, at least one, past its match, or the file has no line after it
 internal/plugins/files/files.go:939:5 INVERT_LOOPCTRL  # a place beyond the limit leaves end where it was, so every later match starts a place beyond the limit too and adds nothing
 internal/proposal/proposal.go:127:17 CONDITIONALS_BOUNDARY  # a reason of exactly MaxReason bytes cut to MaxReason bytes is the same reason
+internal/memory/memory.go:128:4 INVERT_LOOPCTRL  # once err is set the loop does nothing but this check: going on checks it again for each column left and ends with the same error
 internal/memory/memory.go:414:11 CONDITIONALS_BOUNDARY  # a limit of exactly MaxHits set to MaxHits is the same limit
 internal/agent/agent.go:885:28 INVERT_LOGICAL  # of an answer, only the messages of the user have no calls of tools, and they are no assistant messages either
 internal/agent/agent.go:1136:34 CONDITIONALS_BOUNDARY  # first is never 0: the conversation starts with a user message, which has no reasoning
@@ -56,8 +75,12 @@ internal/history/sql.go:329:4 INVERT_LOOPCTRL  # nothing sets ascii back once it
 internal/plugins/files/files.go:779:87 ARITHMETIC_BASE  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:779:87 INVERT_NEGATIVES  # the lines past maxMatches are cut off right after, however many the limit let through
 internal/plugins/files/files.go:930:5 INVERT_LOOPCTRL  # once found holds limit lines it does not grow any more: going on only looks at more lines
-internal/session/archive.go:196:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:192:59 ARITHMETIC_BASE  # only the size hint of the map: a hint too small, even a negative one, gives the same map, which grows as needed
+internal/session/archive.go:369:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:378:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:382:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
 internal/session/archive.go:386:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
+internal/session/archive.go:393:5 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next record is read either way
 internal/tui/commands.go:150:10 CONDITIONALS_BOUNDARY  # with no rows the list is empty either way: no lines or a slice of none, of which only the length and the lines are used
 internal/tui/logo.go:133:19 CONDITIONALS_BOUNDARY  # a pixel exactly reach from the ring line is outside the body (at most 4) and the head (at most 7.4) either way
 internal/tui/logo.go:136:14 CONDITIONALS_BOUNDARY  # with nothing grown, the pixels at u == 0 get a thickness of NaN and stay not solid, as they were
