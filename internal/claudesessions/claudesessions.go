@@ -54,6 +54,8 @@ const (
 	maxOutput = 8 << 10
 	// maxFirst is how much of the first question a listing shows.
 	maxFirst = 160
+	// maxResult is how much of what a call returned a listing of calls shows.
+	maxResult = 160
 	// maxExcerpt is how much around a hit a search shows.
 	maxExcerpt = 160
 	// maxHeadLines is how many lines of a file are read for what a session
@@ -216,16 +218,23 @@ func (a *Archive) Sessions(f Filter) (string, int, error) {
 		if !f.Since.IsZero() && s.ended.Before(f.Since) {
 			continue
 		}
-		if !f.Until.IsZero() && s.ended.After(f.Until) {
+		m, err := head(s.path)
+		if err != nil {
+			continue // a transcript that cannot be read is no session to list
+		}
+		// A session ran over a range when it began before the range ended and
+		// ended after it began: one that ran into the next day is still a
+		// session of the day before.
+		start := m.started
+		if start.IsZero() {
+			start = s.ended
+		}
+		if !f.Until.IsZero() && start.After(f.Until) {
 			continue
 		}
 		if len(found) == limit {
 			more = true
 			break
-		}
-		m, err := head(s.path)
-		if err != nil {
-			continue // a transcript that cannot be read is no session to list
 		}
 		found = append(found, s)
 		metas = append(metas, m)
@@ -376,8 +385,8 @@ func (a *Archive) Search(q Query) (string, int, error) {
 				}
 			}
 			// The tool of what a call returned is known only from the call, which
-			// need not hold the text: with a tool to filter by, every call is read.
-			return tool != "" && bytes.Contains(line, []byte(`"tool_use"`))
+			// need not hold the text: every call is read, whatever the filter.
+			return bytes.Contains(line, []byte(`"tool_use"`))
 		}, func(r Record) bool {
 			if role != "" && r.Role != role {
 				return true
@@ -425,10 +434,12 @@ func (a *Archive) Search(q Query) (string, int, error) {
 // Read says which records of a session to give.
 type Read struct {
 	Session string
-	From    int    // the record to begin with; negative counts from the end
-	Count   int    // how many records at most
-	Offset  int    // bytes to skip in the first record
-	Only    string // user, assistant, tool or result; empty for all
+	From    int       // the record to begin with; negative counts from the end
+	Count   int       // how many records at most
+	Offset  int       // bytes to skip in the first record
+	Only    string    // user, assistant, tool or result; empty for all
+	Since   time.Time // records at or after it
+	Until   time.Time // records at or before it
 }
 
 // Read gives the records of a session in order, with a note at the end that
@@ -437,10 +448,12 @@ func (a *Archive) Read(req Read) (string, error) {
 	if req.Offset < 0 {
 		return "", errors.New("offset must not be negative")
 	}
-	keep, err := only(req.Only)
+	kind, err := only(req.Only)
 	if err != nil {
 		return "", err
 	}
+	windowed := !req.Since.IsZero() || !req.Until.IsZero()
+	keep := func(r Record) bool { return kind(r) && within(req.Since, req.Until, r.Time) }
 	src, err := a.resolve(req.Session)
 	if err != nil {
 		return "", err
@@ -479,6 +492,10 @@ func (a *Archive) Read(req Read) (string, error) {
 		if !full {
 			return true
 		}
+		if windowed {
+			// Whether a record of the range follows is known only when it is read.
+			return true
+		}
 		// The records after those returned are only counted: a line of what
 		// someone said is a record, and it is not decoded for that.
 		if isMessage(line) {
@@ -486,8 +503,21 @@ func (a *Archive) Read(req Read) (string, error) {
 		}
 		return false
 	}, func(r Record) bool {
+		if full {
+			if windowed {
+				// The first record of the range after those returned says where
+				// the next read goes on.
+				if keep(r) {
+					total = r.Seq
+					return false
+				}
+				return true
+			}
+			total = r.Seq
+			return true
+		}
 		total = r.Seq
-		if !keep(r) || r.Seq < from || full {
+		if !keep(r) || r.Seq < from {
 			return true
 		}
 		if r.Seq != line {
@@ -532,6 +562,9 @@ func (a *Archive) Read(req Read) (string, error) {
 		return "", offsetErr
 	}
 	if first == 0 {
+		if windowed {
+			return fmt.Sprintf("no record of the session is in the range: there is none from %d on", from), nil
+		}
 		return fmt.Sprintf("the session has %d records: there is none from %d on", total, from), nil
 	}
 	if nextOffset > 0 {
@@ -572,6 +605,7 @@ type Call struct {
 	Tool    string
 	Path    string
 	Args    string
+	Result  string
 	Failed  bool
 	Sub     bool
 }
@@ -628,6 +662,7 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 			case KindResult:
 				if c, ok := open[r.ID]; ok {
 					c.Failed = c.Failed || r.Failed
+					c.Result = oneLine(r.Text, maxResult)
 				}
 			}
 			return true
@@ -665,8 +700,8 @@ func (a *Archive) ToolCalls(q Calls) (string, int, error) {
 		if c.Path != "" && (what == "" || what == c.Path) {
 			what = c.Path
 		}
-		fmt.Fprintf(&out, "%s · %s · %s%s%s · %s\n", c.Session, when(c.Time), c.Tool,
-			marked(c.Failed, " failed"), marked(c.Sub, " (subagent)"), oneLine(what, maxExcerpt))
+		fmt.Fprintf(&out, "%s · %s · %s%s%s · %s%s\n", c.Session, when(c.Time), c.Tool,
+			marked(c.Failed, " failed"), marked(c.Sub, " (subagent)"), oneLine(what, maxExcerpt), returned(c.Result))
 	}
 	if more {
 		fmt.Fprintf(&out, "[more calls are not shown: narrow with session, tool, path or since]")
@@ -682,6 +717,14 @@ func marked(cond bool, text string) string {
 		return text
 	}
 	return ""
+}
+
+// returned is what a call gave back, after the call.
+func returned(s string) string {
+	if s == "" {
+		return ""
+	}
+	return " → " + s
 }
 
 // agentOf marks the transcript of a subagent Claude Code ran for a session.

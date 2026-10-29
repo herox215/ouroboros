@@ -112,6 +112,8 @@ type readArgs struct {
 	Count   int    `json:"count"`
 	Offset  int    `json:"offset"`
 	Only    string `json:"only"`
+	Since   string `json:"since"`
+	Until   string `json:"until"`
 }
 
 type callArgs struct {
@@ -184,20 +186,29 @@ func (s *sessions) tools() []plugin.Tool {
 			Name: Read,
 			Description: fmt.Sprintf("Read the records of a Claude Code session in order, from a record number on, as one record per line "+
 				"of the transcript: at most %d records and %d KiB per call, with a note at the end that says where to continue. "+
-				"A long record comes in pieces: continue with from and offset from the note. ", claudesessions.MaxRecords, claudesessions.MaxReadBytes>>10) + hint,
+				"Each record comes with its time; a call of a tool and what it returned are records of their own. "+
+				"A long record comes in pieces: continue with from and offset from the note. "+
+				"Narrow with since and until to the records of a day, which answers what was done on that day. ",
+				claudesessions.MaxRecords, claudesessions.MaxReadBytes>>10) + hint,
 			Schema: `{"type":"object","properties":{` +
 				`"session":{"type":"string","description":"the session, as ` + Sessions + ` names it: its ID or as much of it as names one session"},` +
 				`"from":{"type":"integer","description":"the record to begin with, 1 if left out; negative counts from the end: -20 reads the last 20 records"},` +
 				`"count":{"type":"integer","description":"how many records at most, ` + strconv.Itoa(claudesessions.DefaultRecords) + ` if left out"},` +
 				`"offset":{"type":"integer","description":"bytes to skip in the first record, from the continuation note; 0 if left out"},` +
+				`"since":{"type":"string","description":"only records from this day on, 2006-01-02"},` +
+				`"until":{"type":"string","description":"only records up to this day, 2006-01-02"},` +
 				`"only":{"type":"string","enum":[` + only + `],"description":"which records: all (the default), what the user asked, what the assistant answered and thought, the calls of tools, or what the tools returned"}},` +
 				`"required":["session"]}`,
 			Run: run(Read, func(ctx context.Context, args readArgs) (string, error) {
 				if err := owned(ctx); err != nil {
 					return "", err
 				}
+				since, until, err := moment(args.Since, args.Until)
+				if err != nil {
+					return "", err
+				}
 				out, err := s.archive.Read(claudesessions.Read{Session: args.Session, From: args.From, Count: args.Count,
-					Offset: args.Offset, Only: args.Only})
+					Offset: args.Offset, Only: args.Only, Since: since, Until: until})
 				s.log("%s%s", Read, failed(err))
 				return out, err
 			}),
@@ -205,7 +216,7 @@ func (s *sessions) tools() []plugin.Tool {
 		{
 			Name: Calls,
 			Description: about + fmt.Sprintf("List the calls of tools in the transcripts, the most recent first: the tool, when, "+
-				"its command or file, and whether it failed. Filter by path to find the sessions that touched a file, by tool for one tool, "+
+				"its command or file, what it returned and whether it failed. Filter by path to find the sessions that touched a file, by tool for one tool, "+
 				"and by session for one session. At most %d calls.", claudesessions.MaxCalls),
 			Schema: `{"type":"object","properties":{` +
 				`"session":{"type":"string","description":"only the calls of one session, as ` + Sessions + ` names it"},` +
