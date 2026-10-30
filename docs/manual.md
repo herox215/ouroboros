@@ -467,8 +467,8 @@ your agent is thinking.
   to: those in which something happened in the last 3 hours, at most 30, the latest first, each with a handle of
   8 characters of its ID, its title, its project where it is not that of the thread, and whether it is working or
   asks you something. Older ones are left out, and the thread refuses to hand anything to them; one that asks you
-  something or still works stays, so that you see it and can answer it. The window is set in Settings → The node,
-  "Sessions the thread continues", as `thread_window` in the configuration of the node: a duration like `3h`.
+  something or still works stays, so that you see it and can answer it. The window is set in `/settings` → The agents,
+  "Sessions the thread continues" (in the GUI: Settings → Thread), as `thread_window` in the configuration of the node: a duration like `3h`.
 - **Little to read, and cached.** The agent of the thread only hands on, so it is sent little, and thinks little
   (`low`) unless you set its `/effort`. What it was sent stays as it was, and every call begins with all the call
   before sent, as the caches of providers want it: the list of the conversations comes before your message only
@@ -1241,7 +1241,7 @@ and no peer reaches it.
 | Category | Shows | Changes |
 |---|---|---|
 | The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode, the yolo mode | the name and the description (empty is the default); the debug mode and the yolo mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
-| The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it | both |
+| The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it; how long the thread continues sessions (`thread_window`) | all of them |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |
 | Tools for peers | `a2a`, the same; a tool for your agent alone, and one for a peer with a list of its own alone, is shown as such and cannot be allowed | the same |

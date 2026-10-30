@@ -89,7 +89,7 @@ func (s *Service) routable() []routed {
 			continue
 		}
 		list = append(list, routed{id: se.id, title: cmp.Or(se.title, se.events[0].Text), directory: se.directory,
-			last: se.events[len(se.events)-1].At, running: se.cancel != nil, question: awaited(se.events)})
+			last: se.events[len(se.events)-1].At, running: se.cancel != nil || len(se.tasks) > 0, question: awaited(se.events)})
 	}
 	if s.archive != nil {
 		entries, err := s.archive.List()

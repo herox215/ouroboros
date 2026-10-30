@@ -98,7 +98,8 @@ func TestThreadPrompt(t *testing.T) {
 	ctx := WithThread(context.Background(), &fakeThread{})
 	got, err := a.Ask(ctx, "thread", "?system", nil)
 	if err != nil || !strings.HasPrefix(got, `You are "me", the personal agent of the owner of this Ouroboros node, and this is the one conversation`) ||
-		!strings.Contains(got, "The owner is never to notice the sessions") || !strings.Contains(got, "goes to it word for word") ||
+		!strings.Contains(got, "The owner is never to notice the sessions") || strings.Contains(got, "%!") ||
+		!strings.Contains(got, "Before the messages of the owner comes the list of the sessions of the last 3 hours whenever it changed") || !strings.Contains(got, "goes to it word for word") ||
 		!strings.Contains(got, "You are shown only the last 6 hours of this conversation: when the owner refers to something said before that, find it with search_thread. ") ||
 		!strings.Contains(got, "where session_new starts a session that names no directory, is your workspace. ") ||
 		!strings.Contains(got, "briefly acknowledge ordinary work") || !strings.Contains(got, "only if you do not also hand that request on") ||

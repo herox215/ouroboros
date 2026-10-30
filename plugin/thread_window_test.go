@@ -1,6 +1,9 @@
 package plugin_test
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,5 +49,35 @@ func TestThreadWindowSettingsRoundTrip(t *testing.T) {
 	}
 	if cfg, err := config.Load(dir); err != nil || cfg.ThreadWindow == nil || *cfg.ThreadWindow != "90m" {
 		t.Fatalf("the old window stays: %+v, %v", cfg.ThreadWindow, err)
+	}
+}
+
+// The window is read and set through the owner's methods too: one that is
+// no duration is refused, and a configuration that cannot be read fails both.
+func TestThreadWindowOfTheOwner(t *testing.T) {
+	o, dir, _ := built(t, config.Config{Name: "alpha", Model: "m"})
+	if got, err := o.ThreadWindow(); err != nil || got != "3h" {
+		t.Fatalf("absent: %q, %v", got, err)
+	}
+	if holds, err := o.SetThreadWindow(" 2h "); err != nil || holds == "" {
+		t.Fatalf("set 2h: %q, %v", holds, err)
+	}
+	if got, err := o.ThreadWindow(); err != nil || got != "2h" {
+		t.Fatalf("after set: %q, %v", got, err)
+	}
+	if _, err := o.SetThreadWindow("-1h"); err == nil || !strings.Contains(err.Error(), "duration") {
+		t.Fatalf("a negative window: %v", err)
+	}
+	if got, _ := o.ThreadWindow(); got != "2h" {
+		t.Fatalf("a refused window changed it: %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.ThreadWindow(); err == nil {
+		t.Fatal("read the window of a broken configuration")
+	}
+	if _, err := o.SetThreadWindow("1h"); err == nil {
+		t.Fatal("set the window of a broken configuration")
 	}
 }

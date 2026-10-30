@@ -57,7 +57,7 @@ type Settings struct {
 	// ThreadWindow is how long the thread hands messages to a session, as
 	// the configuration has it, or the default where it says nothing of it.
 	ThreadWindow string
-	Plugins        []PluginState
+	Plugins      []PluginState
 	// PluginsKept says why the plugins the configuration turns off run all
 	// the same, "" if they do not.
 	PluginsKept string

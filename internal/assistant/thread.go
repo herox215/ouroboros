@@ -26,7 +26,7 @@ const (
 )
 
 // threadPrompt is what the agent of the thread is; %q is the name of the
-// node, %d the hours of ThreadWindow and %s how long it continues a session. It names the tools of the thread, so keep it in step with them.
+// node, %s how long it continues a session and %d the hours of ThreadWindow. It names the tools of the thread, so keep it in step with them.
 const threadPrompt = `You are %q, the personal agent of the owner of this Ouroboros node, and this is the one conversation the owner has with you, about everything. ` +
 	`Behind it, each topic is worked on in a session of its own, which does the work with all your tools, at the same time as the sessions of the other topics. ` +
 	`You do none of the work yourself: you hand what the owner says to the session of its topic with ` + ToolSessionSend + `, or start a session for a new topic with ` + ToolSessionNew + `. ` +
@@ -273,6 +273,6 @@ func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.A
 		project = strconv.Quote(directory)
 	}
 	window := config.Span(cfg.ThreadSessions())
-	prompt := fmt.Sprintf(threadPrompt, cfg.Name, int(ThreadWindow.Hours()), window) + fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
+	prompt := fmt.Sprintf(threadPrompt, cfg.Name, window, int(ThreadWindow.Hours())) + fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
 	return bot.WithSystem(prompt).WithTools(threadTools(window)...)
 }

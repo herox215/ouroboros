@@ -30,6 +30,21 @@ func TestThreadWindowIsConfigured(t *testing.T) {
 	if got := routableOf(t, s); slices.Contains(got, "old") {
 		t.Fatalf("outside the window of an hour: %q", got)
 	}
+	// One whose background jobs still run stays beyond the window, as one
+	// whose answer is on its way does.
+	s.mu.Lock()
+	s.sessions["busy"] = &session{id: "busy", title: "Busy", tasks: []*task{{}},
+		events: []Event{{Kind: Message, At: at.now().Add(-2 * time.Hour), Text: "work"}}}
+	s.mu.Unlock()
+	if got := routableOf(t, s); !slices.Contains(got, "busy") {
+		t.Fatalf("with jobs running: %q", got)
+	}
+	s.mu.Lock()
+	s.sessions["busy"].tasks = nil
+	s.mu.Unlock()
+	if got := routableOf(t, s); slices.Contains(got, "busy") {
+		t.Fatalf("idle outside the window: %q", got)
+	}
 	// The texts name the window as it is configured.
 	for d, want := range map[time.Duration]string{
 		time.Hour: "1 hour", 3 * time.Hour: "3 hours", 90 * time.Minute: "90 minutes", 90 * time.Second: "1m30s",

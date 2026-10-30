@@ -423,7 +423,7 @@ var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection
 var contents = map[string]string{
 	gatewaysSection:  "external messaging access for this profile",
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
-	agentsSection:    "the context provider, the debug mode, the memory archivist",
+	agentsSection:    "the context provider, the debug mode, the memory archivist, the thread window",
 	pluginsSection:   "which plugins are turned on",
 	ownerSection:     "what your agent may do when you ask it",
 	peersSection:     "what your agent may do when a peer asks it",
