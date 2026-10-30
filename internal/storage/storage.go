@@ -39,9 +39,9 @@ const FileName = "ouroboros.sqlite"
 // Where SQLite reads less than it expects, as from a WAL that was removed
 // while connections of this process still use the one they opened, the pool
 // reads the file as it is, without the WAL, and refuses writes, and the log
-// says so once. Where not even that reads, the error says why. A WAL that is
-// gone is found so only where a read needs one of its frames; see Watch for
-// the pools that keep writing.
+// says so once. Where not even that reads, the error says why. Open reads
+// every page once to find it, also where the schema is not in the WAL that is
+// gone; see Watch for the pools that keep writing.
 func Open(dir string) (*sql.DB, error) {
 	path, err := filepath.Abs(dir)
 	if err != nil {
@@ -64,7 +64,7 @@ func Open(dir string) (*sql.DB, error) {
 	var journal string
 	err = enableWAL(db, &journal)
 	if err == nil && journal == "wal" {
-		err = readable(db)
+		err = whole(db)
 	}
 	if err != nil {
 		db.Close()
@@ -188,6 +188,16 @@ func readOnly(path string) *sql.DB {
 func readable(db *sql.DB) error {
 	var n int
 	return db.QueryRow("SELECT count(*) FROM sqlite_master").Scan(&n)
+}
+
+// whole reads every page of db once, as SQLite finds it: in the file or in
+// a frame of the WAL. Where the WAL that the index of this process describes
+// was removed, the read of a page in one of its frames is short, also where
+// the schema is not in it. Only SQLite reads it so: no checkpoint, nothing
+// written, and no knowledge of the WAL from outside.
+func whole(db *sql.DB) error {
+	var n sql.NullInt64
+	return db.QueryRow("SELECT sum(length(data)) FROM sqlite_dbpage").Scan(&n)
 }
 
 // WAL is the WAL that a pool of Open writes to, as Watch found it.
