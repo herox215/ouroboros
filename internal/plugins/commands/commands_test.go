@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/credentials"
 	"ouroboros/internal/home"
 	"ouroboros/internal/llm"
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
@@ -57,7 +59,7 @@ func answer(ctx context.Context, text string, asked *int) context.Context {
 // on Apply change.
 func TestChangeModel(t *testing.T) {
 	dir, owner, a := node(t)
-	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} })
+	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil)
 	cfg, err := tl.Configure(json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(cfg.Schema, "change_model") || !strings.Contains(cfg.Schema, "usage") {
 		t.Fatalf("defaults: %+v, %v", cfg, err)
@@ -85,7 +87,7 @@ func TestChangeModel(t *testing.T) {
 // A rejected change leaves the model as it was.
 func TestChangeModelRejected(t *testing.T) {
 	dir, owner, _ := node(t)
-	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} })
+	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil)
 	cfg, _ := tl.Configure(json.RawMessage(`{}`))
 	var asked int
 	out, err := cfg.Run(answer(context.Background(), "Reject change", &asked),
@@ -102,7 +104,7 @@ func TestChangeModelRejected(t *testing.T) {
 // and nothing is changed.
 func TestChangeModelUnknown(t *testing.T) {
 	dir, owner, _ := node(t)
-	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} })
+	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil)
 	cfg, _ := tl.Configure(json.RawMessage(`{}`))
 	var asked int
 	_, err := cfg.Run(answer(context.Background(), "Apply change", &asked),
@@ -119,7 +121,7 @@ func TestChangeModelUnknown(t *testing.T) {
 // keeps the node from starting.
 func TestSettings(t *testing.T) {
 	_, owner, _ := node(t)
-	tl := tool(owner, func() []plugin.Provider { return nil })
+	tl := tool(owner, func() []plugin.Provider { return nil }, nil)
 	cfg, err := tl.Configure(json.RawMessage(`{"commands":["usage"]}`))
 	if err != nil || !strings.Contains(cfg.Schema, `"enum":["usage"]`) || !cfg.OwnerOnly || !cfg.ThreadOnly {
 		t.Fatalf("restricted: %+v, %v", cfg, err)
@@ -136,7 +138,7 @@ func TestSettings(t *testing.T) {
 // are answered through now, with both models when they differ.
 func TestUsage(t *testing.T) {
 	_, owner, _ := node(t)
-	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} })
+	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil)
 	cfg, err := tl.Configure(json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
@@ -144,5 +146,60 @@ func TestUsage(t *testing.T) {
 	out, err := cfg.Run(context.Background(), json.RawMessage(`{"command":"usage"}`))
 	if err != nil || !strings.Contains(out, "Work · sessions: old · thread: old") || !strings.Contains(out, "balance: 1.00 USD") {
 		t.Fatalf("out %q, %v", out, err)
+	}
+}
+
+// held is what usage reads of the sessions: the conversations to name, and
+// what one of them holds of its context.
+type held struct {
+	info  []session.Info
+	usage map[string]session.ContextUsage
+}
+
+func (h held) List(context.Context) ([]session.Info, error) { return h.info, nil }
+
+func (h held) ContextOf(_ context.Context, id string) (session.ContextUsage, error) {
+	u, ok := h.usage[id]
+	if !ok {
+		return session.ContextUsage{}, session.ErrNoSession
+	}
+	return u, nil
+}
+
+// TestUsageOfASession is usage with a session named: the context of that
+// one, by its ID, the start of it or its title.
+func TestUsageOfASession(t *testing.T) {
+	_, owner, _ := node(t)
+	h := held{
+		info: []session.Info{
+			{ID: "abc123", Title: "Merge the fixes"},
+			{ID: "abc456", Title: "Another one"},
+		},
+		usage: map[string]session.ContextUsage{
+			"abc123": {ID: "abc123", Title: "Merge the fixes", Model: "old", Bytes: 6 * 1024,
+				Cache: assistant.Cache{Tokens: 12345, Cached: 10000}},
+		},
+	}
+	cfg, err := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, h).Configure(json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `session abc123 "Merge the fixes" · old · 12.3k tokens sent with the last call, 10.0k cached (81%) · context 6.0 KiB`
+	for _, query := range []string{"abc123", "abc1", "merge the fixes"} {
+		in, _ := json.Marshal(map[string]string{"command": "usage", "session": query})
+		out, err := cfg.Run(context.Background(), in)
+		if err != nil || !strings.Contains(out, "balance: 1.00 USD") || !strings.Contains(out, want) {
+			t.Fatalf("%q: out %q, %v", query, out, err)
+		}
+	}
+	out, err := contextText(context.Background(), h, "abc123", "")
+	if err != nil || !strings.Contains(out, `this conversation "Merge the fixes" · old · 12.3k tokens`) {
+		t.Fatalf("current: out %q, %v", out, err)
+	}
+	if _, err := cfg.Run(context.Background(), json.RawMessage(`{"command":"usage","session":"abc"}`)); err == nil || !strings.Contains(err.Error(), "names 2 sessions") {
+		t.Fatalf("ambiguous: %v", err)
+	}
+	if _, err := cfg.Run(context.Background(), json.RawMessage(`{"command":"usage","session":"nope"}`)); err == nil || !strings.Contains(err.Error(), "no session matches") {
+		t.Fatalf("unknown: %v", err)
 	}
 }

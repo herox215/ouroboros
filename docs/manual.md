@@ -1083,13 +1083,15 @@ itself out of the tool settings, which are visible in configuration views.
 
 ### Commands of the node
 
-`command(command, model?, access?, scope?)` runs one of the commands of the node by name. Which commands
+`command(command, model?, access?, scope?, session?)` runs one of the commands of the node by name. Which commands
 it runs is the owner's setting `commands`, by name; without it the tool offers `change_model` and `usage`:
 
 | Command | Does |
 |---|---|
-| `usage` | what `/usage` shows: the quota or balance of the accesses the sessions and the thread are answered through now, and of no other |
+| `usage` | what `/usage` shows: the quota or balance of the accesses the sessions and the thread are answered through now, and of no other; and how many tokens the last call of the LLM sent with the context of a conversation, how many of those it had cached and how long the context is, of this conversation or the one `session` names |
 | `change_model(model, access?, scope?)` | changes the model the agent answers with from the next message on, after you approved it in the conversation; `scope` is `owner` (the default), `sessions`, `thread` or `peers`, and `access` defaults to the one the scope is answered through now. It asks only for a model the access offers, and applies only on **Apply change** |
+
+A `session` names the conversation whose context `usage` adds, by its ID, the start of it or its title; without it, that is the conversation the command runs in. A name that matches several or no conversation is an error that names the sessions.
 
 The tool is for the owner alone, and only the thread has it: no peer gets it, listing it for peers is an error,
 and the sessions neither change the model they run with nor read the usage. The thread runs it itself, rather
@@ -1401,7 +1403,7 @@ the API of its provider tells of it, without a request to a model: the limits of
 and OpenCode Go, the balance for DeepSeek. Where the sessions and the thread use different models, it shows
 both and names the scopes; of an access whose provider tells ouro nothing, like ChatGPT or a custom
 provider, it says so instead of leaving it out, and an access that cannot be asked says why. The agent
-reads the same report with the tool `command({command: "usage"})`, if `command` is in `tools.h2a`.
+reads the same report with the tool `command({command: "usage"})`, if `command` is in `tools.h2a`; a `session` adds the context of that conversation instead of the one the command runs in.
 
 **OpenCode Go** needs no endpoint from you: where it is reached is part of ouro. The key is kept with the
 other credentials and sent as `Authorization: Bearer …`, with the ID of the conversation in
