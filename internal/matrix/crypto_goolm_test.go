@@ -693,3 +693,35 @@ func TestNewCryptoRemovesAKeyItCouldNotWrite(t *testing.T) {
 	}
 	setupCrypto(t, c)
 }
+
+// TestEncryptedTextAtTheBudgetFitsOneEvent encrypts the largest message that
+// SendFormattedTo lets through, escaped as expensively as JSON and HTML allow,
+// and checks that the event keeps the size the specification allows. A control
+// character is one byte of text and six bytes of JSON, in the plain body as in
+// the HTML rendered from it; the two share textBudget, so each takes half of it.
+func TestEncryptedTextAtTheBudgetFitsOneEvent(t *testing.T) {
+	m := newMock(t)
+	bot := m.client(t, "@bot:test", "BOT")
+	m.client(t, "@alice:test", "ALICE")
+	setupCrypto(t, bot)
+	bot.running = true
+
+	text := strings.Repeat("\x01", textBudget/12)
+	if err := bot.SendFormattedTo(context.Background(), "!dm:test", "@alice:test", text, text); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	sent := m.sent[0]
+	m.mu.Unlock()
+	if got := sent.Content.AsEncrypted(); got.Algorithm != id.AlgorithmMegolmV1 {
+		t.Fatalf("sent %q, not Megolm", got.Algorithm)
+	}
+	wire, err := json.Marshal(sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire) >= maxEventBytes {
+		t.Fatalf("the encrypted event takes %d bytes, the limit is %d", len(wire), maxEventBytes)
+	}
+	t.Logf("the encrypted event of a full-budget message takes %d of %d bytes", len(wire), maxEventBytes)
+}

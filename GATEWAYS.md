@@ -126,12 +126,21 @@ conversation that answers or works on a delegated task is not moved. Pictures go
 to the session the thread hands the message to. The bot types while anything works for
 the thread, and not while it waits for an answer.
 
-The Matrix plugin contributes a plain-text output instruction through an answer
-hook when the latest user input is attributed to Matrix. It appears once in each
-model request throughout that answer, is not stored in conversation history, and
-does not apply to other interfaces or peer conversations. Outgoing text is not
-rewritten or stripped of Markdown after generation. Other gateways may contribute
-their own answer hooks without adding transport-specific rules to the core.
+The Matrix plugin contributes an output instruction through an answer hook when
+the latest user input is attributed to Matrix. It asks for short replies and says
+that Markdown is rendered, so that answers may use emphasis, lists, tables, links
+and code fences. It appears once in each model request throughout that answer, is
+not stored in conversation history, and does not apply to other interfaces or peer
+conversations. Outgoing Markdown is rendered into the HTML subset that the Matrix
+specification permits and sent next to the plain body, which clients that render
+no HTML show instead; raw HTML in an answer is shown as text, a line break stays
+a line break, and a fenced code block is closed and reopened when a message is
+split. A part is split at the size one encrypted event may carry as the
+canonical JSON that Megolm encrypts, and HTML that no longer fits next to its
+plain body is left out, so that the body alone is sent; other gateways may
+contribute
+their own answer hooks and formatting without adding transport-specific rules to
+the core.
 
 Outgoing answers and commentary use opaque presentation IDs, persisted with the
 archive and reused when session events are reconstructed after a restart. The

@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto/canonicaljson"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -201,7 +204,7 @@ func (c *Client) safeRoom(ctx context.Context, room id.RoomID) (id.UserID, error
 // Send sends to the room's current allowlisted peer. Use SendTo for replies
 // bound to the sender of an earlier message.
 func (c *Client) Send(ctx context.Context, room, text string) error {
-	return c.send(ctx, room, "", text)
+	return c.sendText(ctx, room, "", text)
 }
 
 // SendTo sends only if the room still contains the expected allowlisted peer.
@@ -209,7 +212,68 @@ func (c *Client) SendTo(ctx context.Context, room, expectedPeer, text string) er
 	if expectedPeer == "" {
 		return errors.New("the expected Matrix peer is required")
 	}
-	return c.send(ctx, room, id.UserID(expectedPeer), text)
+	return c.sendText(ctx, room, id.UserID(expectedPeer), text)
+}
+
+// maxEventBytes is the JSON size the specification allows for one event,
+// ciphertext included.
+const maxEventBytes = 65536
+
+// textBudget is how much of it the body and the formatted body of a message
+// may take together in the canonical JSON that Megolm encrypts. Encryption,
+// its base64 and the envelope add about a third on top;
+// TestEncryptedTextAtTheBudgetFitsOneEvent holds the sum below maxEventBytes.
+const textBudget = 40000
+
+// SendFormattedTo sends only if the room still contains the expected peer,
+// with an HTML version of body for clients that render formatted messages.
+// An empty formatted body, or one that would make the encrypted event exceed
+// the size the specification allows, sends the plain text alone: a client that
+// renders no HTML shows the body, so nothing readable is lost.
+func (c *Client) SendFormattedTo(ctx context.Context, room, expectedPeer, body, formatted string) error {
+	if expectedPeer == "" {
+		return errors.New("the expected Matrix peer is required")
+	}
+	body, formatted = validUTF8(body), validUTF8(formatted)
+	if formatted == "" || !fitsOneEvent(body, formatted) {
+		return c.sendText(ctx, room, id.UserID(expectedPeer), body)
+	}
+	return c.send(ctx, room, id.UserID(expectedPeer), &event.MessageEventContent{
+		MsgType: event.MsgText, Body: body, Format: event.FormatHTML, FormattedBody: formatted,
+	})
+}
+
+// fitsOneEvent reports whether body and formatted stay within textBudget as
+// the canonical JSON of the event carries them: the escapes, not the text,
+// are what makes an event big.
+func fitsOneEvent(body, formatted string) bool {
+	return EncodedLen(body)+EncodedLen(formatted) <= textBudget
+}
+
+// EncodedLen is how many bytes text takes in the canonical JSON that Megolm
+// encrypts, escapes included: a control character takes six bytes, a quote, a
+// backslash or a line break two, and markup characters stay the one byte they
+// are. Encoding the text with encoding/json would count <, > and & as six
+// bytes each, which canonicaljson, the encoder before encryption, undoes.
+func EncodedLen(text string) int {
+	b, err := canonicaljson.Marshal(validUTF8(text))
+	if err != nil || len(b) < 2 {
+		return len(text)
+	}
+	return len(b) - 2
+}
+
+// validUTF8 is text as the UTF-8 Megolm encrypts: an invalid byte reaches the
+// receiver as U+FFFD instead of failing the whole message.
+func validUTF8(text string) string {
+	if utf8.ValidString(text) {
+		return text
+	}
+	return strings.ToValidUTF8(text, "\uFFFD")
+}
+
+func (c *Client) sendText(ctx context.Context, room string, expectedPeer id.UserID, text string) error {
+	return c.send(ctx, room, expectedPeer, &event.MessageEventContent{MsgType: event.MsgText, Body: validUTF8(text)})
 }
 
 // TypingTo publishes a short-lived typing notification only to the expected
@@ -229,10 +293,12 @@ func (c *Client) TypingTo(ctx context.Context, room, expectedPeer string, typing
 	return err
 }
 
-func (c *Client) send(ctx context.Context, room string, expectedPeer id.UserID, text string) error {
+// send locks the send path and hands content to the room; expectedPeer is
+// checked when it is not empty.
+func (c *Client) send(ctx context.Context, room string, expectedPeer id.UserID, content *event.MessageEventContent) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	return c.sendContent(ctx, room, expectedPeer, &event.MessageEventContent{MsgType: event.MsgText, Body: text})
+	return c.sendContent(ctx, room, expectedPeer, content)
 }
 
 // sendContent is send for any message content; c.sendMu is held.
