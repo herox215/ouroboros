@@ -15,8 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
@@ -37,6 +39,22 @@ type args struct {
 	Model   string `json:"model,omitempty"`
 	Access  string `json:"access,omitempty"`
 	Scope   string `json:"scope,omitempty"`
+	Session string `json:"session,omitempty"`
+}
+
+// needs are the services the plugin uses.
+type needs struct {
+	// Sessions are the sessions of the node, which tell which conversations
+	// there are and what one holds of its context.
+	Sessions *session.Service
+}
+
+// usageSource is what the usage command reads of the sessions of the node:
+// the conversations to name, and what one of them holds of its context. The
+// sessions of the node provide it.
+type usageSource interface {
+	List(context.Context) ([]session.Info, error)
+	ContextOf(context.Context, string) (session.ContextUsage, error)
 }
 
 // command is one command the tool can run.
@@ -50,17 +68,21 @@ type command struct {
 // to a front end: this plugin decides on nothing but the model to answer with
 // and the usage of an access.
 func Plugin(owner *plugin.Owner) plugin.Plugin {
-	return plugin.New(name, func(ctx *plugin.Context, _ struct{}) error {
+	return plugin.New(name, func(ctx *plugin.Context, n needs) error {
 		providers := func() []plugin.Provider { return plugin.All[plugin.Provider](ctx) }
-		plugin.Add(ctx, tool(owner, providers))
+		var source usageSource
+		if n.Sessions != nil {
+			source = n.Sessions
+		}
+		plugin.Add(ctx, tool(owner, providers, source))
 		return nil
 	})
 }
 
 // tool is the tool with the commands of the node, restricted to the ones the
 // settings name.
-func tool(owner *plugin.Owner, providers func() []plugin.Provider) plugin.Tool {
-	all := registry(owner, providers)
+func tool(owner *plugin.Owner, providers func() []plugin.Provider, source usageSource) plugin.Tool {
+	all := registry(owner, providers, source)
 	t := plugin.Tool{
 		Name:        Tool,
 		Description: description(all),
@@ -111,7 +133,7 @@ func chosenNames(s settings) ([]string, error) {
 }
 
 // registry are the commands of this build, in the order they are listed.
-func registry(owner *plugin.Owner, providers func() []plugin.Provider) []command {
+func registry(owner *plugin.Owner, providers func() []plugin.Provider, source usageSource) []command {
 	return []command{
 		{
 			name:  "change_model",
@@ -122,13 +144,21 @@ func registry(owner *plugin.Owner, providers func() []plugin.Provider) []command
 		},
 		{
 			name:  "usage",
-			about: "the remaining quota or balance of the access the sessions and the thread are answered through now, or why the provider tells nothing",
-			run: func(ctx context.Context, _ args) (string, error) {
+			about: "the remaining quota or balance of the access the sessions and the thread are answered through now, or why the provider tells nothing, and how many tokens the context of a conversation holds: this one by default, or the session named",
+			run: func(ctx context.Context, a args) (string, error) {
 				reports, err := owner.CurrentUsage(ctx, providers())
 				if err != nil {
 					return "", err
 				}
-				return plugin.UsageText(reports), nil
+				text := plugin.UsageText(reports)
+				held, err := contextText(ctx, source, plugin.ContextID(ctx), a.Session)
+				if err != nil {
+					return "", err
+				}
+				if held != "" {
+					text += "\n\n" + held
+				}
+				return text, nil
 			},
 		},
 	}
@@ -150,6 +180,116 @@ func runFor(all []command, names []string) plugin.RunFunc {
 		}
 		return all[i].run(ctx, a)
 	}
+}
+
+// contextText tells what the conversation the command runs in, or the
+// session that query names, holds of its context: the tokens the provider
+// was sent with the last call, how many of them it had cached, and how long
+// the context is. It is empty when there is no conversation to tell of, so
+// that the usage of the accesses is reported alone.
+func contextText(ctx context.Context, source usageSource, current, query string) (string, error) {
+	if source == nil {
+		return "", nil
+	}
+	name, id := "this conversation", current
+	if query = strings.TrimSpace(query); query != "" {
+		found, err := sessionNamed(ctx, source, query)
+		if err != nil {
+			return "", err
+		}
+		name, id = "session "+found, found
+	}
+	if id == "" {
+		return "", nil
+	}
+	u, err := source.ContextOf(ctx, id)
+	if err != nil {
+		if query != "" {
+			return "", err
+		}
+		return "", nil // a conversation the node does not hold: the accesses alone are reported
+	}
+	if u.Title != "" {
+		name += " " + strconv.Quote(u.Title)
+	}
+	line := name
+	if u.Model != "" {
+		line += " · " + u.Model
+	}
+	switch {
+	case u.Cache.Tokens > 0:
+		line += fmt.Sprintf(" · %s tokens sent with the last call, %s cached (%d%%)",
+			kilo(u.Cache.Tokens), kilo(u.Cache.Cached), u.Cache.Cached*100/u.Cache.Tokens)
+	case u.Bytes > 0:
+		line += " · no tokens reported of the last call"
+	default:
+		line += " · no call of the LLM yet"
+	}
+	if u.Bytes > 0 {
+		line += fmt.Sprintf(" · context %.1f KiB", float64(u.Bytes)/1024)
+	}
+	if u.Running {
+		line += " · an answer is on its way"
+	}
+	return "Context\n  " + line, nil
+}
+
+// sessionNamed returns the ID of the session that query names: its ID, the
+// start of it, or its title, in that order of exactness, ignoring case. A
+// query that names several of them fails, naming them, as does one that
+// names none.
+func sessionNamed(ctx context.Context, source usageSource, query string) (string, error) {
+	list, err := source.List(ctx)
+	if err != nil {
+		return "", fmt.Errorf("cannot list the sessions: %w", err)
+	}
+	lower := strings.ToLower(query)
+	var exact, prefix, title, part []session.Info
+	for _, s := range list {
+		switch {
+		case s.ID == query:
+			exact = append(exact, s)
+		case strings.HasPrefix(s.ID, query):
+			prefix = append(prefix, s)
+		case strings.EqualFold(s.Title, query):
+			title = append(title, s)
+		case lower != "" && strings.Contains(strings.ToLower(s.Title), lower):
+			part = append(part, s)
+		}
+	}
+	for _, found := range [][]session.Info{exact, prefix, title, part} {
+		if len(found) == 1 {
+			return found[0].ID, nil
+		}
+		if len(found) > 1 {
+			return "", fmt.Errorf("%q names %d sessions: %s", query, len(found), listed(found))
+		}
+	}
+	return "", fmt.Errorf("no session matches %q: name it by its ID, the start of it, or its title", query)
+}
+
+// listed names the sessions of a message, at most five of them.
+func listed(sessions []session.Info) string {
+	names := make([]string, 0, min(len(sessions), 5))
+	for _, s := range sessions[:min(len(sessions), 5)] {
+		if s.Title == "" {
+			names = append(names, s.ID)
+		} else {
+			names = append(names, fmt.Sprintf("%s %q", s.ID, s.Title))
+		}
+	}
+	if len(sessions) > 5 {
+		names = append(names, fmt.Sprintf("and %d more", len(sessions)-5))
+	}
+	return strings.Join(names, ", ")
+}
+
+// kilo is n in thousands, like 12.3k, and below 1000 as it is.
+func kilo(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
 
 // changeModel changes the model of the scope the arguments name, after the
@@ -259,6 +399,7 @@ func schema(chosen []command) string {
 			"model":   map[string]any{"type": "string", "description": "change_model: the model to answer with from the next message on"},
 			"access":  map[string]any{"type": "string", "description": "change_model: the ID of the access that offers the model; the one the scope is answered through now by default"},
 			"scope":   map[string]any{"type": "string", "enum": []string{"owner", "sessions", "thread", "peers"}, "description": "change_model: whose model changes, the owner's by default"},
+			"session": map[string]any{"type": "string", "description": "usage: the conversation to report the context of, by its ID, the start of it, or its title; the one the command runs in by default"},
 		},
 		"required":             []string{"command"},
 		"additionalProperties": false,
