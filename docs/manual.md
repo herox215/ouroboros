@@ -1080,6 +1080,20 @@ For bearer authentication, set `token_env` to the name of an environment variabl
 to the running Ouro node, for example `"token_env": "MY_BROWSER_TOKEN"`. Keep the token
 itself out of the tool settings, which are visible in configuration views.
 
+### Commands of the node
+
+`command(command, model?, access?, scope?)` runs one of the commands of the node by name. Which commands
+it runs is the owner's setting `commands`, by name; without it the tool offers `change_model` and `usage`:
+
+| Command | Does |
+|---|---|
+| `usage` | what `/usage` shows: the quota or balance of the accesses the sessions and the thread are answered through now, and of no other |
+| `change_model(model, access?, scope?)` | changes the model the agent answers with from the next message on; `scope` is `owner` (the default), `sessions`, `thread` or `peers`, and `access` defaults to the one the scope is answered through now |
+
+The tool is for the owner alone: no peer gets it, and listing it for peers is an error. The settings of
+the tool name the commands it may run, `{"tool": "command", "commands": ["usage"]}`, and a name it does
+not know keeps the node from starting.
+
 ### Computer
 
 `computer` uses the apps of your computer as a person does, for what no other tool reaches: it looks at
@@ -1379,10 +1393,12 @@ is billed separately from the DeepSeek chat app and needs API credit. `/usage` s
 `balance: 12.34 USD`, and a line when it no longer allows calls. Existing custom-provider
 accesses pointing at DeepSeek are left unchanged.
 
-`/usage` lists every access of the node with what the API of its provider tells of it, without a request
-to a model: the limits of the plan for Claude Code and OpenCode Go, the balance for DeepSeek. Of an access
-whose provider tells ouro nothing, like ChatGPT or a custom provider, it says so instead of leaving it
-out, and an access that cannot be asked says why, without keeping the others from being shown.
+`/usage` lists the accesses the sessions and the thread are answered through now, and no other, with what
+the API of its provider tells of it, without a request to a model: the limits of the plan for Claude Code
+and OpenCode Go, the balance for DeepSeek. Where the sessions and the thread use different models, it shows
+both and names the scopes; of an access whose provider tells ouro nothing, like ChatGPT or a custom
+provider, it says so instead of leaving it out, and an access that cannot be asked says why. The agent
+reads the same report with the tool `command({command: "usage"})`, if `command` is in `tools.h2a`.
 
 **OpenCode Go** needs no endpoint from you: where it is reached is part of ouro. The key is kept with the
 other credentials and sent as `Authorization: Bearer …`, with the ID of the conversation in
