@@ -410,8 +410,8 @@ func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	return b.build(cfg, prompt, allowed...)
 }
 
-func (b Builder) forOwner(cfg config.Config, thread, yolo bool) (*agent.Agent, error) {
-	allowed, err := b.ownerTools(cfg, thread)
+func (b Builder) forOwner(cfg config.Config, yolo bool) (*agent.Agent, error) {
+	allowed, err := b.ownerTools(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -536,16 +536,12 @@ func (b Builder) checkPeers(cfg config.Config) error {
 	return nil
 }
 
-// ownerTools are the tools the owner allows the own agent, which answers the
-// thread with them, or the sessions, which get none that is for the thread
-// alone.
-func (b Builder) ownerTools(cfg config.Config, thread bool) ([]agent.Tool, error) {
+// ownerTools are the tools the owner allows the own agent, in the thread and
+// in the sessions.
+func (b Builder) ownerTools(cfg config.Config) ([]agent.Tool, error) {
 	allowed, err := pick(b.all(), cfg.OwnerTools(), forOwner)
 	if err != nil {
 		return nil, fmt.Errorf("tools.h2a: %w", err)
-	}
-	if !thread {
-		allowed = slices.DeleteFunc(allowed, func(t agent.Tool) bool { return t.ThreadOnly })
 	}
 	return named(allowed), nil
 }
@@ -795,7 +791,7 @@ const (
 // agent of that answer was built with them: they are none that fail.
 func (a *Assistant) reviewTools(cfg config.Config) toolsOf {
 	var tools toolsOf
-	allowed, _ := a.builder.ownerTools(cfg, true)
+	allowed, _ := a.builder.ownerTools(cfg)
 	for _, t := range allowed {
 		tools.allowed = append(tools.allowed, t.Name+": "+firstSentence(t.Description))
 		if t.Name == ToolSkill {
@@ -1148,7 +1144,7 @@ func (a *Assistant) current(thread bool, contextID string) (*agent.Agent, config
 		bot, built = &a.thread, &a.tbuilt
 	}
 	if *bot == nil || *built != want {
-		next, err := a.builder.forOwner(cfg, thread, yolo)
+		next, err := a.builder.forOwner(cfg, yolo)
 		if err != nil {
 			return nil, cfg, err
 		}

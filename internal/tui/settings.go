@@ -681,8 +681,6 @@ func toolRows(section string, who plugin.Audience, peer string, l plugin.ToolLis
 			r.value = "for your agent alone"
 		case who == plugin.ForPeers && t.Trusted:
 			r.value = "for a peer with a list of its own alone"
-		case t.Allowed && t.ThreadOnly:
-			r.value = "allowed, in the thread alone"
 		case t.Allowed && !t.Listed:
 			r.value = "allowed, as all tools are"
 		case t.Allowed:

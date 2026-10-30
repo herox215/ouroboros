@@ -399,7 +399,7 @@ func TestConfigToolsAreForTheOwner(t *testing.T) {
 	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read" {
 		t.Fatalf("every tool for peers: %q, %v", names(tools), err)
 	}
-	tools, err = c.builder.ownerTools(cfg, true)
+	tools, err = c.builder.ownerTools(cfg)
 	if err != nil || names(tools) != "list_peers,ask_peer,answer_peer,tell_peer,ask_back,read,user_question,delegate,get_config,propose_config,withdraw_proposal" {
 		t.Fatalf("every tool for the owner: %q, %v", names(tools), err)
 	}

@@ -219,11 +219,10 @@ type delegated struct {
 }
 
 // forHelpers are those of tools a helper may have: a helper is not the
-// owner's conversation, so neither the owner's own tools nor those of the
-// thread are among them.
+// owner's conversation, so the owner's own tools are not among them.
 func forHelpers(tools []agent.Tool) []agent.Tool {
 	return slices.DeleteFunc(slices.Clone(tools), func(t agent.Tool) bool {
-		return t.OwnerOnly || t.ThreadOnly || slices.Contains(notForHelpers, t.Name)
+		return t.OwnerOnly || slices.Contains(notForHelpers, t.Name)
 	})
 }
 

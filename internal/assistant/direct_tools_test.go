@@ -91,7 +91,7 @@ func TestDirectToolInventories(t *testing.T) {
 	cfg, b := directNode(t)
 	b.LLM = func(string) (agent.LLM, error) { return promptLLM{}, nil }
 	cfg.Tools = &config.Tools{H2A: config.Named("who", "note"), A2A: config.Named("note")}
-	owner, err := b.forOwner(cfg, false, false)
+	owner, err := b.forOwner(cfg, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestDirectToolInventories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools, err := b.ownerTools(cfg, true)
+	tools, err := b.ownerTools(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

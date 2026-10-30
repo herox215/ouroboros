@@ -227,7 +227,7 @@ func (b Builder) propose(args proposeArgs) (proposal.Proposal, error) {
 // unknown tool, a tool that is listed twice, a setting a tool does not take,
 // a protected path that is none and a description that is no line are errors.
 func (b Builder) Check(cfg config.Config) error {
-	if _, err := b.ownerTools(cfg, true); err != nil {
+	if _, err := b.ownerTools(cfg); err != nil {
 		return err
 	}
 	if _, err := b.peerTools(cfg, ""); err != nil {

@@ -514,7 +514,7 @@ already streamed by the model keep their normal streaming effect.
   it, `/cd PATH` and `/cd --workspace` name another one or none, as `/cd` does in the terminal UI.
 - **It is a session of the node.** The thread has the ID `thread`, is kept in the archive and goes on after a
   restart like any conversation, shown as it was. `/session` does not list it, it is not named for a topic, and its
-  agent has the tools of the thread alone, like the one that runs the commands of the node. The conversations it
+  agent has the tools of the thread, like the ones that hand a message on to a session. The conversations it
   starts are listed there as any other.
 
 ### Profiles

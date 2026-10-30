@@ -38,10 +38,6 @@ type Tool struct {
 	// agent that answers peers never gets it, and listing it for peers is an
 	// error.
 	OwnerOnly bool
-	// ThreadOnly says that the tool is for the thread alone, the one
-	// conversation of the owner: the agent that answers the sessions never
-	// gets it, and neither does a peer.
-	ThreadOnly bool
 	// Trusted says that the tool reaches beyond what a tool for files keeps
 	// to, like running commands or building ouro: a peer gets it only when
 	// the list of the tools of that very peer names it, never with every

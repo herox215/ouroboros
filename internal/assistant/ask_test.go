@@ -528,7 +528,7 @@ func TestAskPeerNamesOnlyTheToolsThereAre(t *testing.T) {
 		{config.Named("*"), base + answer + tell},
 	} {
 		cfg := config.Config{Tools: &config.Tools{H2A: tt.tools, A2A: tt.tools}}
-		owner, err := b.ownerTools(cfg, true)
+		owner, err := b.ownerTools(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -542,7 +542,7 @@ func TestAskPeerNamesOnlyTheToolsThereAre(t *testing.T) {
 			}
 		}
 	}
-	if tools, err := b.ownerTools(config.Config{Tools: &config.Tools{H2A: config.Named(toolAnswer)}}, true); err != nil || len(tools) != 1 ||
+	if tools, err := b.ownerTools(config.Config{Tools: &config.Tools{H2A: config.Named(toolAnswer)}}); err != nil || len(tools) != 1 ||
 		tools[0].Description != answerPeer(nil).Description {
 		t.Fatalf("without ask_peer: %v, %v", tools, err)
 	}
