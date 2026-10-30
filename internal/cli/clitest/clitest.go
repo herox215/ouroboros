@@ -350,6 +350,19 @@ func Serve(t *testing.T, s cli.Settings, extra ...plugin.Plugin) *Node {
 		if !ok {
 			t.Fatal("node did not start")
 		}
+		// The PID file is the node's before it answers anything: the tests find
+		// their nodes with discovery, so wait until it answers a probe. A scan
+		// that starts before that would miss it, and would have no second try.
+		want := MustLoad(t, s).ID()
+		for deadline := time.Now().Add(Patience); ; {
+			nodes, _ := discovery.Discover(context.Background(), s.DiscoPort, 100*time.Millisecond)
+			if slices.ContainsFunc(nodes, func(n discovery.Node) bool { return n.ID == want }) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the node does not answer discovery on port %d", s.DiscoPort)
+			}
+		}
 	case <-n.done:
 		// The sandbox of the tool bash allows no socket of the file system,
 		// and a node does not run without its own.
