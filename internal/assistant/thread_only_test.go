@@ -45,6 +45,13 @@ func TestThreadOnlyTool(t *testing.T) {
 	if names := toolNames(thread); !slices.Contains(names, "command") || !slices.Contains(names, "read") {
 		t.Errorf("the thread gets %v", names)
 	}
+	// In its answer the agent of the thread has its own tools and those the
+	// owner allows it alone: the rest of the owner's tools it hands on.
+	answering := inThread(WithThread(context.Background(), &fakeThread{}), thread, cfg)
+	names := toolNames(answering)
+	if !slices.Contains(names, "command") || !slices.Contains(names, ToolSessionSend) || slices.Contains(names, "read") {
+		t.Errorf("the thread answers with %v", names)
+	}
 	tools, err := b.ownerTools(cfg, true)
 	if err != nil {
 		t.Fatal(err)

@@ -384,6 +384,7 @@ type Agent struct {
 	model      string
 	system     chat.Message
 	tools      map[string]Tool
+	list       []Tool // the tools as they were given, in their order
 	specs      []chat.Tool
 	sizeOf     int // of specs, as JSON
 	memory     *Memory
@@ -423,6 +424,7 @@ func New(llm LLM, model, system string, tools ...Tool) *Agent {
 		model:  model,
 		system: chat.Message{Role: "system", Content: system},
 		tools:  map[string]Tool{},
+		list:   slices.Clone(tools),
 		memory: NewMemory(),
 	}
 	for _, t := range tools {
@@ -460,6 +462,10 @@ func (a *Agent) WithTools(tools ...Tool) *Agent {
 	copy.memory, copy.extensions = a.memory, a.extensions
 	return &copy
 }
+
+// Tools returns the tools the agent may use, as they were given, without
+// their settings applied any further: an agent built from these gets them.
+func (a *Agent) Tools() []Tool { return slices.Clone(a.list) }
 
 // Prompt returns what the agent sends with every call of the LLM before the
 // conversation: its system prompt and its tools.
