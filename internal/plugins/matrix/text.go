@@ -7,10 +7,11 @@ import (
 	transport "ouroboros/internal/matrix"
 )
 
-// messageLimit is the JSON size of the text one encrypted event may carry: the
-// event limit is 65536 bytes, and Megolm encryption, its base64 and the
-// envelope add about a third. Escapes count, not the text, so a part of
-// ampersands holds fewer of them than the same run of plain letters.
+// messageLimit is how much of the canonical JSON one encrypted event may carry
+// as text: the event limit is 65536 bytes, and Megolm encryption, its base64
+// and the envelope add about a third. The escapes of that JSON count, not the
+// text, so control characters split sooner than plain letters, while markup
+// keeps the one byte it is.
 const messageLimit = 12000
 
 // messageParts splits text into parts that fit an encrypted Matrix event. A
@@ -77,13 +78,14 @@ func messageParts(text string) []string {
 	return parts
 }
 
-// cutEncoded is how many bytes of line fit into room as the JSON an event
-// carries, ending at a rune boundary, or its first rune when not even that fits.
+// cutEncoded is how many bytes of line fit into room as the canonical JSON an
+// event carries, ending at a rune boundary, or its first rune when not even
+// that fits.
 func cutEncoded(line string, room int) int {
 	used, n := 0, 0
 	for n < len(line) {
-		_, size := utf8.DecodeRuneInString(line[n:])
-		cost := transport.EncodedLen(line[n : n+size])
+		r, size := utf8.DecodeRuneInString(line[n:])
+		cost := encodedRune(r, size)
 		if used+cost > room && n > 0 {
 			break
 		}
@@ -94,6 +96,23 @@ func cutEncoded(line string, room int) int {
 		}
 	}
 	return n
+}
+
+// encodedRune is how many bytes r takes in the canonical JSON of an event, as
+// EncodedLen measures a longer text: the five short escapes take two bytes,
+// other control characters six, and an invalid byte, sent as U+FFFD, three.
+func encodedRune(r rune, size int) int {
+	if size == 1 && r == utf8.RuneError {
+		return 3
+	}
+	switch r {
+	case '\b', '\t', '\n', '\f', '\r', '"', '\\':
+		return 2
+	}
+	if r < 0x20 {
+		return 6
+	}
+	return utf8.RuneLen(r)
 }
 
 // cutLine takes the first line of text with its line break, and the rest.

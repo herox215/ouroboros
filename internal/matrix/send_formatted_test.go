@@ -2,6 +2,7 @@ package matrix
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -56,16 +57,21 @@ func TestSendFormattedToDropsHTMLBeyondTheEventLimit(t *testing.T) {
 	}
 }
 
-// The budget counts the JSON escapes an event carries, not the text.
-func TestTheBudgetCountsTheJSONEscapes(t *testing.T) {
-	if got := EncodedLen("&"); got != 6 {
-		t.Fatalf("an ampersand takes %d bytes", got)
-	}
-	if got := EncodedLen("\x01"); got != 6 {
-		t.Fatalf("a control character takes %d bytes", got)
-	}
-	if got := EncodedLen("ab"); got != 2 {
-		t.Fatalf("plain text takes %d bytes", got)
+// The budget counts what the canonical JSON of the event carries, not the
+// text: the escapes canonicaljson keeps, and no escape for markup.
+func TestTheBudgetCountsTheCanonicalJSON(t *testing.T) {
+	for text, want := range map[string]int{
+		"&":        1, // encoding/json would say 6
+		"<p>x</p>": 8,
+		"\x01":     6, // a control character stays escaped
+		"\n":       2, // the five short escapes take two bytes
+		`"`:        2,
+		"ü":        2,
+		"ab":       2,
+	} {
+		if got := EncodedLen(text); got != want {
+			t.Errorf("%q takes %d bytes, want %d", text, got, want)
+		}
 	}
 	if !fitsOneEvent(strings.Repeat("x", textBudget), "") {
 		t.Fatal("text at the budget does not fit")
@@ -78,5 +84,65 @@ func TestTheBudgetCountsTheJSONEscapes(t *testing.T) {
 	}
 	if fitsOneEvent(strings.Repeat("\x01", textBudget/6+1), "") {
 		t.Fatal("escaped text beyond the budget fits")
+	}
+}
+
+// A full part of prose keeps its HTML: 11960 bytes of body and 18727 of the
+// markup rendered from it fit the budget once <, > and & count as the bytes
+// they are. Counted with the escapes of encoding/json the pair takes 41107
+// bytes, so such a part used to lose its formatting.
+func TestFormattedProsePartKeepsItsHTML(t *testing.T) {
+	h := newHomeserver(t)
+	c := testClient(t, h.server.URL)
+	crypt := &fakeCrypto{}
+	c.running, c.crypto = true, crypt
+	defer func() { c.running, c.crypto = false, nil }()
+
+	body := strings.Repeat("Die Antwort ist **rot** und `klein`, sagt er.\n", 260)
+	formatted := "<p>" + strings.Repeat("Die Antwort ist <strong>rot</strong> und <code>klein</code>, sagt er.\n", 260) + "</p>"
+	if got := EncodedLen(body) + EncodedLen(formatted); got > textBudget {
+		t.Fatalf("the sample takes %d bytes, more than the budget of %d", got, textBudget)
+	}
+	if got := htmlEscapedLen(t, body) + htmlEscapedLen(t, formatted); got <= textBudget {
+		t.Fatalf("the sample takes %d bytes even with the HTML escapes, so it shows nothing", got)
+	}
+	if err := c.SendFormattedTo(context.Background(), "!dm:test", "@alice:test", body, formatted); err != nil {
+		t.Fatal(err)
+	}
+	if got := crypt.contents[0]; got.Format != event.FormatHTML {
+		t.Fatalf("sent the part without its HTML: %+v", got)
+	}
+}
+
+// htmlEscapedLen is EncodedLen as encoding/json measures it, which escapes <,
+// > and & as six bytes each although the encrypted event carries one.
+func htmlEscapedLen(t *testing.T, text string) int {
+	b, err := json.Marshal(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(b) - 2
+}
+
+// A byte that is no UTF-8 would fail the encryption of the whole message; it
+// reaches the receiver as U+FFFD instead, in the body and in the HTML.
+func TestSendTextReplacesInvalidUTF8(t *testing.T) {
+	h := newHomeserver(t)
+	c := testClient(t, h.server.URL)
+	crypt := &fakeCrypto{}
+	c.running, c.crypto = true, crypt
+	defer func() { c.running, c.crypto = false, nil }()
+
+	if err := c.Send(context.Background(), "!dm:test", "a\x80b"); err != nil {
+		t.Fatal(err)
+	}
+	if got := crypt.contents[0].Body; got != "a\uFFFDb" {
+		t.Fatalf("body %q", got)
+	}
+	if err := c.SendFormattedTo(context.Background(), "!dm:test", "@alice:test", "a\x80b", "<p>a\x80b</p>"); err != nil {
+		t.Fatal(err)
+	}
+	if got := crypt.contents[1]; got.Body != "a\uFFFDb" || got.FormattedBody != "<p>a\uFFFDb</p>" {
+		t.Fatalf("content %+v", got)
 	}
 }

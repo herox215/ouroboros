@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	transport "ouroboros/internal/matrix"
 )
 
 func TestMessagePartsPreserveUnicodeAndEventSize(t *testing.T) {
@@ -14,7 +16,7 @@ func TestMessagePartsPreserveUnicodeAndEventSize(t *testing.T) {
 		t.Fatal("split lost text")
 	}
 	for _, part := range parts {
-		if len(part) > 12000 || !utf8.ValidString(part) {
+		if transport.EncodedLen(part) > messageLimit || !utf8.ValidString(part) {
 			t.Fatal("invalid encrypted message part")
 		}
 	}
@@ -42,20 +44,49 @@ func TestMessagePartsEndBeforeASplitRune(t *testing.T) {
 }
 
 func TestMessagePartsCountInvalidBytesAsTheReplacementTheyBecome(t *testing.T) {
-	// An invalid byte reaches the event as U+FFFD, three bytes of JSON, so a
-	// part holds a third of the bytes it would hold of ASCII.
-	text := strings.Repeat("\x80", 12001)
+	// An invalid byte reaches the receiver as U+FFFD, three bytes of JSON,
+	// where the text holds one: the splitter counts it that way and so cuts
+	// sooner than it must for a run that becomes one U+FFFD.
+	text := strings.Repeat("a\x80", 9000)
 	parts := messageParts(text)
-	if len(parts) != 4 || len(parts[0]) != 4000 || strings.Join(parts, "") != text {
+	if len(parts) != 3 || len(parts[0]) != 6000 || strings.Join(parts, "") != text {
 		t.Fatalf("split into %d parts", len(parts))
+	}
+	for _, part := range parts {
+		if got := transport.EncodedLen(part); got > messageLimit {
+			t.Fatalf("a part takes %d bytes of the event", got)
+		}
 	}
 }
 
-func TestMessagePartsCountTheEscapesOfAmpersands(t *testing.T) {
-	// An ampersand is one byte of text and six of JSON: a part holds 2000.
-	text := strings.Repeat("&", 4001)
-	parts := messageParts(text)
-	if len(parts) != 3 || len(parts[0]) != 2000 || strings.Join(parts, "") != text {
-		t.Fatalf("split into %d parts", len(parts))
+func TestMessagePartsCountMarkupAsTheByteItIs(t *testing.T) {
+	// The canonical JSON that Megolm encrypts keeps &, < and > as the one
+	// byte they are, so a part holds 12000 of them where counting the escapes
+	// of encoding/json would let 2000 through.
+	for _, text := range []string{strings.Repeat("&", 12001), strings.Repeat("<", 12001)} {
+		parts := messageParts(text)
+		if len(parts) != 2 || len(parts[0]) != 12000 || strings.Join(parts, "") != text {
+			t.Fatalf("%q split into %d parts", text[:1], len(parts))
+		}
+	}
+}
+
+// The splitter counts the bytes of a rune itself; it must agree with what the
+// canonical JSON of an event makes of it, which EncodedLen measures.
+func TestEncodedRuneAgreesWithTheEventJSON(t *testing.T) {
+	check := func(r rune) {
+		decoded, size := utf8.DecodeRuneInString(string(r))
+		if got, want := encodedRune(decoded, size), transport.EncodedLen(string(r)); got != want {
+			t.Fatalf("U+%04X takes %d bytes, the event carries %d", r, got, want)
+		}
+	}
+	for r := rune(0); r <= 0x2FFF; r++ {
+		check(r)
+	}
+	for r := rune(0x3000); r <= 0x10FFFF; r += 127 {
+		check(r)
+	}
+	for _, r := range []rune{0xD800, 0xDFFF, 0x2028, 0x2029, 0xFFFD, 0xFFFE, 0xFFFF, 0x10000, 0x10FFFF} {
+		check(r)
 	}
 }
