@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
@@ -53,16 +54,8 @@ func Open(dir string) (*sql.DB, error) {
 		return nil, fmt.Errorf("secure storage directory: %w", err)
 	}
 	path = filepath.Join(path, FileName)
-	// Create before SQLite opens it so it and its WAL sidecars are private even
-	// with a permissive umask. SQLite derives sidecar permissions from the DB.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("create storage database: %w", err)
-	}
-	// Nothing was written, so a failed close loses nothing either: it fails
-	// the open like a failed chmod.
-	if err := errors.Join(f.Chmod(0o600), f.Close()); err != nil {
-		return nil, fmt.Errorf("secure storage database: %w", err)
+	if err := secure(path); err != nil {
+		return nil, err
 	}
 	db := pool(path, "")
 	// WAL is persistent database state; the other pragmas of pool are
@@ -93,6 +86,40 @@ func Open(dir string) (*sql.DB, error) {
 	}
 	readingOnly.Delete(path)
 	return db, nil
+}
+
+// secure creates the database at path before SQLite opens it, so that it and
+// its WAL sidecars are private even with a permissive umask: SQLite derives
+// the permissions of the sidecars from the database. A database that is there
+// already is changed by its path and never opened: its POSIX locks belong to
+// the process, and closing any descriptor of the file drops all of them, also
+// those of the pools of this process that hold it. Without the shared lock of
+// those pools, another process that closes its last connection takes itself
+// for the last one, checkpoints and removes the WAL and its index under them
+// (#153).
+func secure(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err == nil {
+		// A new file nobody holds yet: closing it drops no lock. The umask
+		// takes permissions away, never adds them, so it is private. Nothing
+		// was written, so a failed close loses nothing: SQLite opens the file
+		// next and says what is wrong with it.
+		f.Close()
+		return nil
+	}
+	if errors.Is(err, fs.ErrExist) {
+		var info fs.FileInfo
+		if info, err = os.Stat(path); err == nil && info.IsDir() {
+			err = fmt.Errorf("%s is a directory", path)
+		}
+		if err == nil {
+			if err := os.Chmod(path, 0o600); err != nil {
+				return fmt.Errorf("secure storage database: %w", err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("create storage database: %w", err)
 }
 
 // readingOnly holds the paths of the databases Open last opened read-only,
