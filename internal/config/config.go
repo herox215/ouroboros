@@ -77,6 +77,10 @@ type Config struct {
 	// configuration that says nothing of it leaves the archivist off, see
 	// MemoryArchive.
 	MemoryInterval *string `json:"memory_interval,omitempty"`
+	// ThreadWindow is how long ago something must have happened in a session
+	// for the thread to hand messages to it, as a Go duration like "3h". A
+	// configuration that says nothing of it uses DefaultThreadWindow.
+	ThreadWindow *string `json:"thread_window,omitempty"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	// The ID of the node follows from it, see ID. Older configs also stored
@@ -424,6 +428,58 @@ func ValidMemoryInterval(value string) error {
 	return nil
 }
 
+// DefaultThreadWindow is how long ago something must have happened in a
+// session for the thread to hand messages to it, where the configuration says
+// nothing of it.
+const DefaultThreadWindow = 3 * time.Hour
+
+// DefaultThreadWindowText is DefaultThreadWindow as a configuration writes it.
+const DefaultThreadWindowText = "3h"
+
+// ThreadSessions is how long ago something must have happened in a session
+// for the thread to hand messages to it: ThreadWindow, or
+// DefaultThreadWindow where the configuration has none that holds.
+func (c Config) ThreadSessions() time.Duration {
+	if c.ThreadWindow == nil {
+		return DefaultThreadWindow
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(*c.ThreadWindow))
+	if err != nil || d <= 0 {
+		return DefaultThreadWindow
+	}
+	return d
+}
+
+// ValidThreadWindow reports whether value can be thread_window: a positive
+// duration.
+func ValidThreadWindow(value string) error {
+	if d, err := time.ParseDuration(strings.TrimSpace(value)); err != nil || d <= 0 {
+		return fmt.Errorf("thread_window is a duration like %q", "3h")
+	}
+	return nil
+}
+
+// Span names how long d is, for what the node tells the owner and its agents:
+// in whole hours or minutes where it is such, else as Go writes the duration,
+// like "3 hours", "90 minutes" or "1h30m".
+func Span(d time.Duration) string {
+	switch {
+	case d%time.Hour == 0:
+		return things(int(d/time.Hour), "hour")
+	case d%time.Minute == 0:
+		return things(int(d/time.Minute), "minute")
+	}
+	return d.String()
+}
+
+// things is n of what.
+func things(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
+}
+
 // Efforts are the efforts the owner chooses from where the model is not
 // known, from the least to the most: "" leaves it to the model, "none" has
 // it not think at all.
@@ -506,6 +562,11 @@ func Load(dir string) (Config, error) {
 	}
 	if c.MemoryInterval != nil {
 		if err := ValidMemoryInterval(*c.MemoryInterval); err != nil {
+			return c, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if c.ThreadWindow != nil {
+		if err := ValidThreadWindow(*c.ThreadWindow); err != nil {
 			return c, fmt.Errorf("%s: %w", path, err)
 		}
 	}

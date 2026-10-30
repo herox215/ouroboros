@@ -8,6 +8,7 @@ import (
 
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/chat"
+	"ouroboros/internal/config"
 	"ouroboros/internal/history"
 )
 
@@ -110,7 +111,7 @@ func (t threading) checkConcern(ctx context.Context, id, text string, pictures [
 	}
 	if !allowed {
 		s.mu.Unlock()
-		return checkedConcern{}, assistant.TopicDecision{}, fmt.Errorf("no session %q among those of the last 24 hours: hand the message to one of the list, or start a new one with %s", id, assistant.ToolSessionNew)
+		return checkedConcern{}, assistant.TopicDecision{}, fmt.Errorf("no session %q among those of the last %s: hand the message to one of the list, or start a new one with %s", id, config.Span(s.window()), assistant.ToolSessionNew)
 	}
 	se := s.get(id)
 	snapshot := checkedConcern{target: se, events: concernRevision(se.events), queued: len(se.queue), asked: se.asked}

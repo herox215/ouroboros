@@ -281,7 +281,7 @@ func TestTopicRosterUsesArchivedOriginalConcern(t *testing.T) {
 	a := &fakeAgent{}
 	s, _, _ := archived(t, a, dir, time.Now())
 	s.mu.Lock()
-	got := roster(s.routable(), "")
+	got := roster(3*time.Hour, s.routable(), "")
 	s.mu.Unlock()
 	if !strings.Contains(got, " · concern: "+strconv.Quote(anchor)) {
 		t.Fatalf("archive roster lost original concern: %s", got)
@@ -324,7 +324,7 @@ func TestTopicRosterQuotesAndBoundsOriginalConcern(t *testing.T) {
 	s.mu.Lock()
 	se.events[0].Text = anchor
 	se.title = "An unrelated later title"
-	got := roster(s.routable(), "")
+	got := roster(3*time.Hour, s.routable(), "")
 	s.mu.Unlock()
 	if !strings.Contains(got, " · concern: "+strconv.Quote(oneLine(anchor))) {
 		t.Fatalf("roster did not quote the original concern: %s", got)
@@ -332,7 +332,7 @@ func TestTopicRosterQuotesAndBoundsOriginalConcern(t *testing.T) {
 
 	s.mu.Lock()
 	se.events[0].Text = strings.Repeat("x", 800)
-	got = roster(s.routable(), "")
+	got = roster(3*time.Hour, s.routable(), "")
 	s.mu.Unlock()
 	_, tail, ok := strings.Cut(got, " · concern: ")
 	if !ok {

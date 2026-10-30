@@ -54,7 +54,10 @@ type Settings struct {
 	// the profile, as the configuration has it, or "off" when it is off or
 	// the configuration says nothing of it.
 	MemoryInterval string
-	Plugins        []PluginState
+	// ThreadWindow is how long the thread hands messages to a session, as
+	// the configuration has it, or the default where it says nothing of it.
+	ThreadWindow string
+	Plugins      []PluginState
 	// PluginsKept says why the plugins the configuration turns off run all
 	// the same, "" if they do not.
 	PluginsKept string
@@ -136,6 +139,7 @@ const (
 	SetImproves                           // On: build, off: propose
 	SetPeerList                           // Peer, On: a list of its own, as the one for peers; off: none
 	SetMemoryInterval                     // Value: a duration like "24h", or "off"
+	SetThreadWindow                       // Value: a duration like "3h"
 )
 
 // Setting is one change the owner makes in the settings.
@@ -216,6 +220,7 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 		ContextProvider: cfg.ContextProvider,
 		Improves:        cfg.Improves(),
 		MemoryInterval:  memoryInterval(cfg),
+		ThreadWindow:    threadWindow(cfg),
 		PluginsKept:     o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
 	}
@@ -381,7 +386,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the interval of the memory archivist"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the interval of the memory archivist", "the window of the thread"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -481,6 +486,13 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 			c.MemoryInterval = &value
 		}
 		return "saved: the archivist reads it when the node starts or once you were away for a while", nil
+	case SetThreadWindow:
+		value := strings.TrimSpace(s.Value)
+		if err := config.ValidThreadWindow(value); err != nil {
+			return "", err
+		}
+		c.ThreadWindow = &value
+		return "saved: the thread reads it from its next message on", nil
 	}
 	return "", fmt.Errorf("no such setting: %d", s.Kind)
 }
@@ -687,4 +699,38 @@ func memoryInterval(cfg config.Config) string {
 		return strings.TrimSpace(*cfg.MemoryInterval)
 	}
 	return "off"
+}
+
+// ThreadWindow is how long the thread hands messages to a session, as the
+// configuration has it, or the default where it says nothing of it.
+func (o *Owner) ThreadWindow() (string, error) {
+	cfg, err := o.home.Config()
+	if err != nil {
+		return "", err
+	}
+	return threadWindow(cfg), nil
+}
+
+// SetThreadWindow sets how long the thread hands messages to a session: a
+// duration like "3h". It returns from when it holds.
+func (o *Owner) SetThreadWindow(value string) (string, error) {
+	var holds string
+	err := config.Update(string(o.home), func(c *config.Config) error {
+		var err error
+		holds, err = o.change(c, Setting{Kind: SetThreadWindow, Value: value}, nil, nil)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	o.home.Log("the owner changed the settings: %s", Setting{Kind: SetThreadWindow})
+	return holds, nil
+}
+
+// threadWindow is how long the thread hands messages to a session.
+func threadWindow(cfg config.Config) string {
+	if cfg.ThreadWindow == nil {
+		return config.DefaultThreadWindowText
+	}
+	return strings.TrimSpace(*cfg.ThreadWindow)
 }

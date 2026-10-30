@@ -20,6 +20,7 @@ func someSettings() Settings {
 	return Settings{
 		Name: "alpha", Access: "Example", About: "https://api.example/v1", Model: "gpt-4o", ID: "abc123def456",
 		Description: "Ouroboros instance named alpha", DescriptionDefault: true,
+		ThreadWindow:     "3h",
 		ContextProviders: []string{"compact"},
 		Plugins: []plugin.PluginState{
 			{Name: "base", On: true, Running: true, Fixed: "it runs the commands of ouro"},
@@ -141,6 +142,7 @@ func TestSettingsShow(t *testing.T) {
 	for _, tt := range []struct{ section, label, value, note string }{
 		{nodeSection, "Description", "Ouroboros instance named alpha", "the default; public: anyone reads it in the agent card"},
 		{nodeSection, "Node ID", "abc123def456", "the fingerprint of the key of the node, which nothing here changes"},
+		{agentsSection, "Sessions the thread continues", "3h", "how long after its last message the thread hands a message to a session; a duration like 3h"},
 		{agentsSection, "Context provider", "none", "what prepares the context of every call of the LLM; none sends the conversation as the memory keeps it"},
 		{pluginsSection, "base", "on", "it runs the commands of ouro"},
 		{pluginsSection, "history", "on", ""},

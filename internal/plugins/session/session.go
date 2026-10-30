@@ -6,8 +6,10 @@ package session
 
 import (
 	"strings"
+	"time"
 
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/config"
 	"ouroboros/internal/history"
 	"ouroboros/internal/home"
 	"ouroboros/internal/session"
@@ -45,6 +47,13 @@ func Plugin(dir home.Dir) plugin.Plugin {
 func In(dir home.Dir, a *assistant.Assistant) *session.Service {
 	s := session.New(a)
 	s.Workspace = dir.WorkingDir()
+	s.ThreadWindow = func() time.Duration {
+		cfg, err := dir.Config()
+		if err != nil {
+			return config.DefaultThreadWindow
+		}
+		return cfg.ThreadSessions()
+	}
 	s.Archive(history.Open(dir.History()), dir.Log, func(party string) string {
 		data, _ := dir.Contacts().Snapshot() // a peer that is not known is named by its party
 		for _, c := range data.Trusted {

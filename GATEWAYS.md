@@ -111,7 +111,8 @@ to the rooms. A room kept with an earlier delivery state takes all of the thread
 so far as sent, once, and is sent what comes from then on. A room
 that had a session of its own before talks in the thread from the next start of
 the gateway on, without being sent the thread so far; its session stays in Ouro,
-and the thread hands messages on to it while it is of the last 24 hours. Replies
+and the thread hands messages on to it while it is of the last few hours the
+settings name, 3 hours by default. Replies
 contain agent output and questions, not raw tool arguments, raw tool output or
 hidden reasoning. Ordinary messages go to the thread, or answer the pending
 question when there is one. Just send your answer; for numbered options, sending
