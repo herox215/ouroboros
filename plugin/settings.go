@@ -107,6 +107,7 @@ type ToolState struct {
 	Settings          string // its settings as a JSON object, "" for none
 	Configurable      bool   // it takes settings
 	OwnerOnly         bool   // never for peers
+	ThreadOnly        bool   // only in the thread, not in the sessions
 	Trusted           bool   // for a peer only in a list of its own, tools.peers
 	// Options are the settings it takes one by one, with what they are set
 	// to in Settings.
@@ -317,7 +318,7 @@ func toolList(all []agent.Tool, entries []config.Entry, unset, peers bool) ToolL
 	}
 	for _, t := range all {
 		e, named := listed[t.Name]
-		state := ToolState{Name: t.Name, Description: t.Description, Listed: named, Configurable: t.Configure != nil, OwnerOnly: t.OwnerOnly, Trusted: t.Trusted}
+		state := ToolState{Name: t.Name, Description: t.Description, Listed: named, Configurable: t.Configure != nil, OwnerOnly: t.OwnerOnly, ThreadOnly: t.ThreadOnly, Trusted: t.Trusted}
 		state.Allowed = (named || l.All) && !(peers && (t.OwnerOnly || t.Trusted))
 		if settings := string(e.Settings); settings != "{}" { // none at all is ""
 			state.Settings = settings
