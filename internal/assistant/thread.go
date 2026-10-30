@@ -281,11 +281,19 @@ func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.A
 	// A tool the owner allowed for the thread alone is no work to hand on:
 	// the thread runs it itself, like the commands of the node.
 	tools := threadTools(window)
+	own := false
 	for _, t := range bot.Tools() {
 		if t.ThreadOnly {
 			tools = append(tools, t)
+			own = true
 		}
 	}
-	prompt := fmt.Sprintf(threadPrompt, cfg.Name, window, int(ThreadWindow.Hours())) + threadCommandsHint + fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
+	prompt := fmt.Sprintf(threadPrompt, cfg.Name, window, int(ThreadWindow.Hours()))
+	if own {
+		// The hint speaks of the thread's own tools: without one it would
+		// name tools that are not there.
+		prompt += threadCommandsHint
+	}
+	prompt += fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
 	return bot.WithSystem(prompt).WithTools(tools...)
 }

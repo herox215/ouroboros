@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/agent"
@@ -51,6 +52,14 @@ func TestThreadOnlyTool(t *testing.T) {
 	names := toolNames(answering)
 	if !slices.Contains(names, "command") || !slices.Contains(names, ToolSessionSend) || slices.Contains(names, "read") {
 		t.Errorf("the thread answers with %v", names)
+	}
+	// The prompt tells of the thread's own tools only where there are some.
+	if system, _ := answering.Prompt(); !strings.Contains(system, threadCommandsHint) {
+		t.Errorf("the thread is not told of its own tools: %q", system)
+	}
+	quietAgent := agent.New(nil, "m", "prompt", everywhere)
+	if system, _ := inThread(WithThread(context.Background(), &fakeThread{}), quietAgent, cfg).Prompt(); strings.Contains(system, threadCommandsHint) {
+		t.Errorf("the thread is told of tools it has not: %q", system)
 	}
 	tools, err := b.ownerTools(cfg, true)
 	if err != nil {

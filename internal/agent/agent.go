@@ -463,8 +463,7 @@ func (a *Agent) WithTools(tools ...Tool) *Agent {
 	return &copy
 }
 
-// Tools returns the tools the agent may use, as they were given, without
-// their settings applied any further: an agent built from these gets them.
+// Tools returns the tools the agent was built with, in their order.
 func (a *Agent) Tools() []Tool { return slices.Clone(a.list) }
 
 // Prompt returns what the agent sends with every call of the LLM before the
