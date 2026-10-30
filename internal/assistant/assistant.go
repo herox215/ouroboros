@@ -152,6 +152,22 @@ const (
 		`and every call runs without asking. Questions to them work as usual. ` +
 		`Take care with what cannot be undone, a merge above all, and say in your answer what you did without asking. ` +
 		`A merge still needs the user's explicit request or yes; yolo mode does not stand in for it. `
+	// cyberpsychoHint is added while the cyberpsycho mode of the node is on,
+	// see Assistant.WithCyberpsycho: yolo's leave is taken for granted, and
+	// what the review proposes is made at once, all the way into a build,
+	// while the tests are a health reading instead of a gate. It keeps the
+	// sentence that a merge needs the owner's yes, and says that nothing is
+	// committed or pushed.
+	cyberpsychoHint = `Cyberpsycho mode is on: the rules of the owner that would ask them whether a tool call may run are off, ` +
+		`and every call runs without asking. Questions to them work as usual. ` +
+		`What the review of an answer proposes is made at once, as your own work in this conversation, instead of waiting as a suggestion: ` +
+		`check it against the source first, and make it when it holds up. ` +
+		`You may go all the way in the same turn: change the source, and call rebuild with the packages you touched and continue: true when the work goes on in the new build; ` +
+		`the node restarts with the new build at the end of your answer. ` +
+		`The tests of a rebuild are a health reading in this mode, not a gate: a failing test does not stop the build, and your answer says which packages failed. ` +
+		`Commit nothing, push nothing, open no branch and merge nothing of your own: what you change stays in the working tree for the user to see, and /changes shows it. ` +
+		`Take care with what cannot be undone, and say in your answer what you did without asking. ` +
+		`A merge still needs the user's explicit request or yes; this mode does not stand in for it. `
 	// approvalHint also applies without user_question: tools can ask for permission themselves.
 	approvalHint = `If a tool reports that an approval request timed out or the owner did not answer, report that authorization is still pending and the operation did not run. ` +
 		`Do not repeat the tool call or launch an additional question for that authorization; wait for the user's explicit decision before trying again. `
@@ -290,6 +306,9 @@ type Assistant struct {
 	log     func(format string, args ...any)
 	debug   func() bool // whether the log is to tell much more, see WithDebug
 	yolo    func() bool // whether the rules that ask the owner before a call are off, see WithYolo
+	// cyberpsycho says whether the node is in cyberpsycho mode: then the
+	// rules are off as in yolo, and more, see WithCyberpsycho.
+	cyberpsycho func() bool
 
 	mu       sync.Mutex
 	agent    *agent.Agent
@@ -327,7 +346,7 @@ type Assistant struct {
 // setup is the part of the configuration an agent is built from.
 type setup struct {
 	access, revision, model, name, id, tools, provider, fallbacks, day string
-	yolo                                                               bool
+	yolo, cyberpsycho                                                  bool
 }
 
 // New returns the assistant of the node with the given configuration, which
@@ -355,6 +374,21 @@ func (a *Assistant) WithYolo(yolo func() bool) *Assistant {
 	a.yolo = yolo
 	return a
 }
+
+// WithCyberpsycho makes the agent of the owner run in the cyberpsycho mode
+// while cyberpsycho says so: the rules of tools.ask are not enforced, as in
+// yolo mode, and what the review of an answer proposes is made at once
+// instead of waiting in the suggestions. cyberpsycho is asked anew each time
+// an agent is built, so that the mode holds from the next message on.
+func (a *Assistant) WithCyberpsycho(cyberpsycho func() bool) *Assistant {
+	a.cyberpsycho = cyberpsycho
+	return a
+}
+
+// Cyberpsycho reports whether the node is in cyberpsycho mode: the review of
+// an answer hands what it proposes to the conversation itself then, instead
+// of a suggestion that waits for the owner.
+func (a *Assistant) Cyberpsycho() bool { return a.cyberpsycho != nil && a.cyberpsycho() }
 
 // ForPeers returns the agent that answers the peers of the node configured by
 // cfg, with the tools its owner allows for them, and with the access and the
@@ -410,7 +444,7 @@ func (b Builder) forPeers(cfg config.Config, id string) (*agent.Agent, error) {
 	return b.build(cfg, prompt, allowed...)
 }
 
-func (b Builder) forOwner(cfg config.Config, thread, yolo bool) (*agent.Agent, error) {
+func (b Builder) forOwner(cfg config.Config, thread, yolo, cyberpsycho bool) (*agent.Agent, error) {
 	allowed, err := b.ownerTools(cfg, thread)
 	if err != nil {
 		return nil, err
@@ -425,9 +459,9 @@ func (b Builder) forOwner(cfg config.Config, thread, yolo bool) (*agent.Agent, e
 		})
 	}
 	// What the owner wants to be asked about first runs once they allowed
-	// it, for helpers too, which get these tools; in yolo mode the rules
-	// are off.
-	allowed = b.permitted(cfg, allowed, yolo)
+	// it, for helpers too, which get these tools; in yolo mode and in
+	// cyberpsycho mode the rules are off.
+	allowed = b.permitted(cfg, allowed, yolo || cyberpsycho)
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(allowed, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
 	}
@@ -477,7 +511,9 @@ func (b Builder) forOwner(cfg config.Config, thread, yolo bool) (*agent.Agent, e
 	if has(ToolUserQuestion) {
 		prompt += questionHint
 	}
-	if yolo {
+	if cyberpsycho {
+		prompt += cyberpsychoHint
+	} else if yolo {
 		prompt += yoloHint
 	}
 	if has(ToolDelegate) {
@@ -843,7 +879,10 @@ func (a *Assistant) reviewed(chat string, signals []Signal, trail []string, tool
 			continue
 		}
 		log("review: %s", strconv.Quote(text))
-		if store := a.builder.suggestions; store != nil {
+		// In cyberpsycho mode the change is not kept as a suggestion: the
+		// conversation makes it at once, see Service.answer, which starts the
+		// follow-up as soon as this review hands it over.
+		if store := a.builder.suggestions; store != nil && !a.Cyberpsycho() {
 			_, dropped, err := store.Add(text, measured, chat)
 			if err != nil {
 				log("the suggestion is not kept: %v", err)
@@ -1136,8 +1175,9 @@ func (a *Assistant) current(thread bool, contextID string) (*agent.Agent, config
 	}
 	tools, _ := json.Marshal(cfg.OwnerTools()) // an entry that cannot be written is reported by forOwner
 	yolo := a.yolo != nil && a.yolo()
+	cyberpsycho := a.cyberpsycho != nil && a.cyberpsycho()
 	want := setup{access: cfg.Access, revision: a.builder.revision(cfg.Access), model: cfg.Model, name: cfg.Name, id: cfg.ID(),
-		tools: string(tools), provider: cfg.ContextProvider, fallbacks: a.builder.fallbacksOf(cfg), day: today(), yolo: yolo}
+		tools: string(tools), provider: cfg.ContextProvider, fallbacks: a.builder.fallbacksOf(cfg), day: today(), yolo: yolo, cyberpsycho: cyberpsycho}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if thread && contextID != "" {
@@ -1148,7 +1188,7 @@ func (a *Assistant) current(thread bool, contextID string) (*agent.Agent, config
 		bot, built = &a.thread, &a.tbuilt
 	}
 	if *bot == nil || *built != want {
-		next, err := a.builder.forOwner(cfg, thread, yolo)
+		next, err := a.builder.forOwner(cfg, thread, yolo, cyberpsycho)
 		if err != nil {
 			return nil, cfg, err
 		}

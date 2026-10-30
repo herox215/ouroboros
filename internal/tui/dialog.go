@@ -42,8 +42,9 @@ func (m *Model) dialogSize() (width, height int) {
 	room := m.height - 4 - m.pendingRows() // a margin, and the line of the keys below the dialog
 	width, height = dialogWidth, room
 	switch m.screen {
-	case screenHelp: // the commands, each with what it does
-		width = m.width - 4
+	case screenHelp: // the commands, each with what it does: it takes one row of the margin, so that all of them fit
+		room++
+		width, height = m.width-4, room
 	case screenSessions: // as high as the list it shows, not as high as the chat
 		width, height = sessionsWidth, sessionsRows+7
 	case screenMemory: // a chart of the memories: as square as the room allows

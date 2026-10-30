@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/health"
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	"ouroboros/internal/sanity"
@@ -173,6 +174,21 @@ func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, 
 	u := *c.updater
 	u.Out = &out
 	u.Tests = args.Test
+	// In cyberpsycho mode the tests of a rebuild are a health reading, not a
+	// gate: a failing test does not keep the build out, and the record says
+	// what failed.
+	u.Measure = c.local.Home.Cyberpsycho()
+	var record health.Record
+	u.Health = &record
+	saveHealth := func() {
+		if record.Ran {
+			// A record that cannot be kept is no reason to fail the build: the
+			// log says it, the build stays.
+			if err := health.Write(c.local.Home.HealthFile(), record); err != nil {
+				c.local.Home.Log("the health of the node is not kept: %v", err)
+			}
+		}
+	}
 	if u.Exe == "" {
 		exe, err := c.local.Executable()
 		if err != nil {
@@ -181,14 +197,25 @@ func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, 
 		u.Exe = exe
 	}
 	if err := u.Rebuild(ctx); err != nil {
+		saveHealth()
 		if out.Len() == 0 {
 			return "", err
 		}
 		return "", fmt.Errorf("%w; nothing was installed. The end of the output:\n%s", err, tail(out.Bytes()))
 	}
+	saveHealth()
 	done := "built " + u.Source + " and installed the build as " + u.Exe + ". "
 	if len(u.Tests) > 0 {
-		done = "the tests of " + strings.Join(u.Tests, ", ") + " passed; " + done
+		if u.Measure && !record.OK {
+			done = "health: the tests failed in " + record.Fail + "; the build was installed anyway. " + done
+		} else {
+			done = "the tests of " + strings.Join(u.Tests, ", ") + " passed; " + done
+		}
+	}
+	// What the build left in the working tree is named, so that the answer can
+	// say what was changed and that it is in no commit.
+	if changed, err := u.Changes(ctx); err == nil && len(changed) > 0 {
+		done += "Not committed — the working tree has them:\n" + changeLines(changed) + "\n"
 	}
 	// The node this runs in cannot stop itself while the answer is on its
 	// way: it takes its own place once the answer is given.
@@ -203,6 +230,21 @@ func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, 
 		return "", fmt.Errorf("the build is installed, but the node did not restart: %w", err)
 	}
 	return done + "A running node was restarted with it; this conversation uses the old build until ouro is started again.", nil
+}
+
+// changeLines names the changed files, at most 8 of them, and how many more
+// there are.
+func changeLines(lines []string) string {
+	const most = 8
+	shown := lines
+	if len(shown) > most {
+		shown = shown[:most]
+	}
+	out := strings.Join(shown, "\n")
+	if n := len(lines) - len(shown); n > 0 {
+		out += fmt.Sprintf("\n+%d more", n)
+	}
+	return out
 }
 
 // tail is the end of output, from the start of a line.

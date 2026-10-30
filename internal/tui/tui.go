@@ -168,6 +168,7 @@ type Backend interface {
 	// that a rule of the owner would ask them about just runs. Status says
 	// whether it is on.
 	SetYolo(on bool) error
+
 	// SetEffort makes effort, one of plugin.Efforts, how much the model
 	// thinks before it answers the owner in a session that has none of its
 	// own. Status says what it is.

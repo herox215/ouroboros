@@ -39,7 +39,13 @@ func footer(m *Model) string {
 			return hint
 		}
 	}
-	return strings.TrimRight(lines[len(lines)-1], " ")
+	// The health mark begins the line, also when there is nothing else to
+	// say: what the caller looks for starts after it.
+	last := strings.TrimSpace(lines[len(lines)-1])
+	for _, mark := range []string{ansi.Strip(m.healthMark()), ansi.Strip(m.healthHeart())} {
+		last = strings.TrimPrefix(strings.TrimPrefix(last, mark), " ")
+	}
+	return last
 }
 
 // shortRefresh makes the UI refresh at once instead of every ten seconds.

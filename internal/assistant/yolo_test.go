@@ -57,11 +57,11 @@ func TestYoloKeepsQuestions(t *testing.T) {
 		return out
 	}
 
-	plain, err := b.forOwner(cfg, false, false)
+	plain, err := b.forOwner(cfg, false, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	yolo, err := b.forOwner(cfg, false, true)
+	yolo, err := b.forOwner(cfg, false, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

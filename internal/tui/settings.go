@@ -557,6 +557,7 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 		fallback = strings.Join(names, " → ")
 	}
 	debug, turnDebug := onOff(m.status.Debug)
+	cyber, turnCyber := onOff(m.status.Cyberpsycho)
 	yolo, turnYolo := onOff(m.status.Yolo)
 	model := action{"open /model", (*Model).openModel}
 	var looks []action
@@ -579,6 +580,8 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 		{section: nodeSection, label: "Appearance", value: m.appearanceText(), note: "how this terminal UI looks, in the colors of the GUI: light, dark, or system, as the background of the terminal is; for all profiles, also the next time; /appearance changes it too", actions: looks},
 		{section: nodeSection, label: "Model for sessions", value: sessions, note: "what your agent answers your sessions with; enter opens the models, enter there sets the one chosen, and on the chosen one makes it the model of the node again", actions: []action{{"open the models", (*Model).openSessionModel}}},
 		{section: nodeSection, label: "Model for the thread", value: threads, note: "what your agent answers the thread with; enter opens the models, enter there sets the one chosen, and on the chosen one makes it the model of the node again", actions: []action{{"open the models", (*Model).openThreadModel}}},
+		{section: nodeSection, label: "Cyberpsycho mode", value: cyber, note: "no rule of tools.ask asks you; what the review of an answer proposes is made at once; changes are made and built in, not committed or pushed; /changes shows them", actions: []action{{turnCyber, (*Model).toggleCyberpsycho}}},
+		{section: nodeSection, label: "Tests", value: m.status.Health.Line(), note: "the last run of the tests of a rebuild: green, failing with the package, or not measured before the first one", actions: nil},
 	}
 }
 
