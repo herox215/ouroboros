@@ -226,6 +226,24 @@ func (d Dir) Yolo() bool {
 // message on, without a restart.
 func (d Dir) SetYolo(on bool) error { return d.setFlag("yolo", on) }
 
+// Cyberpsycho reports whether the node is in cyberpsycho mode: then its agent
+// runs every call without asking, takes what the review of an answer proposes
+// as its own work, and may build a change in with a rebuild, see
+// SetCyberpsycho. The mode is a file, so that the node and the front ends,
+// which are other processes, see it alike.
+func (d Dir) Cyberpsycho() bool {
+	_, err := os.Stat(d.path("cyberpsycho"))
+	return err == nil
+}
+
+// SetCyberpsycho turns the cyberpsycho mode of the node on or off. It holds
+// from the next message on, without a restart.
+func (d Dir) SetCyberpsycho(on bool) error { return d.setFlag("cyberpsycho", on) }
+
+// HealthFile is where the last run of the tests of a rebuild is kept, see
+// package health.
+func (d Dir) HealthFile() string { return d.path("health.json") }
+
 // setFlag turns on the mode that the file name of the directory stands for,
 // or off again: the file is there while the mode is.
 func (d Dir) setFlag(name string, on bool) error {

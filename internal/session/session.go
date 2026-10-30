@@ -334,6 +334,11 @@ const (
 	titleTime  = 20 * time.Second
 )
 
+// cyberpsychoTaken starts the message that makes what the review of an
+// answer proposed, in cyberpsycho mode: the owner sees that the change is
+// taken, instead of finding the answer unexplained.
+const cyberpsychoTaken = "cyberpsycho: the review's change is taken.\n\n"
+
 // watchBuffer is how many Events a watcher may fall behind before it is let
 // go.
 const watchBuffer = 1024
@@ -1153,7 +1158,17 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		close(scheduled.result)
 	}
 	if suggested != "" {
-		s.emit(se, Event{Kind: Suggestion, Text: suggested})
+		// *assistant.Assistant knows the mode; an agent that does not answer
+		// this is not in it.
+		psycho, _ := s.agent.(interface{ Cyberpsycho() bool })
+		if psycho != nil && psycho.Cyberpsycho() {
+			// In cyberpsycho mode nothing waits as a suggestion: the review's
+			// change is made at once, by the next answer of this session,
+			// which the queue below starts.
+			se.queue = append(se.queue, queued{text: cyberpsychoTaken + assistant.SuggestedTask(suggested, nil)})
+		} else {
+			s.emit(se, Event{Kind: Suggestion, Text: suggested})
+		}
 	}
 	for _, e := range remembered {
 		s.remembered(se, e, forThread)

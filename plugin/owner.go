@@ -26,6 +26,7 @@ import (
 	"ouroboros/internal/safefile"
 	"ouroboros/internal/setup"
 	"ouroboros/internal/suggestion"
+	"ouroboros/internal/update"
 )
 
 // Owner is what the owner of the node does at a front end and nowhere else:
@@ -358,6 +359,29 @@ func (o *Owner) SetYolo(on bool) error {
 		o.home.Log("yolo mode off")
 	}
 	return nil
+}
+
+// SetCyberpsycho turns the cyberpsycho mode of the node on or off: in it, no
+// rule of tools.ask asks the owner before a tool call, what the review of an
+// answer proposes is made at once instead of suggested, and a rebuild treats
+// the tests as a health reading instead of a gate. Nothing is committed or
+// pushed by it. It holds from the next message on.
+func (o *Owner) SetCyberpsycho(on bool) error {
+	if err := o.home.SetCyberpsycho(on); err != nil {
+		return err
+	}
+	if on {
+		o.home.Log("cyberpsycho mode on")
+	} else {
+		o.home.Log("cyberpsycho mode off")
+	}
+	return nil
+}
+
+// Changes names the uncommitted changes of the source of ouro, as git status
+// --short does: what a build left in the working tree, in no commit.
+func (o *Owner) Changes() ([]string, error) {
+	return update.Updater{Source: update.Source}.Changes(context.Background())
 }
 
 // Running reports whether the node is running.

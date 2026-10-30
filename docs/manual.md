@@ -140,6 +140,9 @@ shows `cost included in plan`. Missing costs are unknown, never assumed to be ze
 is accumulated since the node started and marked `(partial)` if any calls have unknown costs. No
 model-price estimate is currently applied. On narrow terminals the footer cuts them off; `/context`
 provides the detailed metrics.
+At the left of that line stands the health of the last [`rebuild`](#updates) that ran tests: `♥ green` when they
+passed, `♥ fail <package>` when one failed, and `♥ not measured` before the first run. The keys on the right stay
+whole; where the whole mark would not fit beside them, its heart stands alone, in the color of the reading.
 `/context` shows what the context is: the system prompt, every tool with its schema
 and the conversation so far, message by message with its size. It is laid out to be read, not as a chat: every
 message has a head with its role and size and hangs on a bar of the color of its role, the functions a tool
@@ -277,6 +280,8 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/effort` | how much the model thinks before it answers in the conversation shown, see [Sessions](#sessions) |
 | `/debug` | turn the debug mode on or off: the log of the node then tells much more |
 | `/yolo` | turn the yolo mode on or off: in it, a tool call that a rule of `tools.ask` would ask you about just runs, while a question of the agent still waits for you; also in `/settings` |
+| `/cyberpsycho` | turn the cyberpsycho mode on or off: in it, no rule of `tools.ask` asks you, what the review of an answer proposes is made at once, and the tests of a rebuild are a health reading instead of a gate; changes stay in the working tree, nothing is committed or pushed; also in `/settings`; see [Cyberpsycho mode](#cyberpsycho-mode) |
+| `/changes` | show the uncommitted changes of the source of ouro, as `git status --short` names them |
 | `/help` | list the commands, those of the plugins too |
 | `/keys` | list the keys of the chat in a dialog, `esc` back |
 | `/quit` | quit |
@@ -597,6 +602,26 @@ the checkout of the one it replaced.
 **Back to the build before.** `ouro update` and `rebuild` keep the binary they replace next to it, as
 `ouro.previous`. `ouro rollback` installs it again and restarts a running node; the one it replaces is kept in
 its place, so a second `ouro rollback` goes forward again.
+
+### Cyberpsycho mode
+
+`/cyberpsycho` turns the **cyberpsycho mode** of the node on or off; the same switch is in `/settings` under
+The node. In it:
+
+- **Nothing is asked before a tool call.** The rules of `tools.ask` are off, as in yolo mode (`/yolo`); a
+  question of the agent still waits for you.
+- **What the review of an answer proposes is made at once**, as the agent's own work in the conversation,
+  instead of waiting in `/suggestions`. It checks the change against the source and may go all the way into a
+  build with [`rebuild`](#updates).
+- **The tests of a rebuild are a health reading, not a gate.** A failing test does not keep the build out: the
+  build is installed, and the line below the chat says `♥ fail <package>` or `♥ green`. The reading is kept in
+  `health.json` in the directory of the node and is shown in `/settings` under The node as `Tests`; before the
+  first run it says `♥ not measured`.
+- **Nothing is committed or pushed.** What the mode changes stays in the working tree of the source of ouro, and
+  `/changes` lists it as `git status --short` does. No branch is opened and nothing is merged; a merge still
+  needs your explicit request.
+- **The mode holds from the next message on**, without a restart. It is a file next to `config.json` in the
+  directory of the node, so the node and its front ends see it alike.
 
 **`rebuild` builds as you**, with `make install`: with network, and without a sandbox. The binary is built
 in `update/stage`, not in the checkout. It runs the Go that it finds first in `PATH`, in `OURO_GO_DIR` or
@@ -1259,7 +1284,7 @@ and no peer reaches it.
 
 | Category | Shows | Changes |
 |---|---|---|
-| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode, the yolo mode | the name and the description (empty is the default); the debug mode and the yolo mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
+| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode, the yolo mode, the cyberpsycho mode, the last run of the tests of a rebuild | the name and the description (empty is the default); the debug mode, the yolo mode and the cyberpsycho mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
 | The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it; how long the thread continues sessions (`thread_window`) | all of them |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |

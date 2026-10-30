@@ -35,6 +35,8 @@ var own = []command{
 	{"memory", "show what ouro has remembered, and read one", (*Model).openMemory},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
 	{"yolo", "turn the yolo mode on or off: then no permission is asked before a tool call", (*Model).toggleYolo},
+	{"cyberpsycho", "no rule asks, review changes are made at once, nothing is committed", (*Model).toggleCyberpsycho},
+	{"changes", "show the uncommitted changes of the source of ouro", (*Model).showChanges},
 	{"suggestions", "review suggested changes of ouro", (*Model).openSuggestions},
 	{"undo", "take back the last memory ouro kept by itself here", (*Model).undo},
 	{"keys", "list the keys (ctrl+k does too)", (*Model).openKeys},
@@ -189,13 +191,53 @@ func (m *Model) toggleYolo() tea.Cmd {
 	return func() tea.Msg { return actionMsg{done, m.backend.SetYolo(on)} }
 }
 
+// toggleCyberpsycho turns the cyberpsycho mode of the node on or off: in it
+// no rule of tools.ask asks, what the review of an answer proposes is made at
+// once, and the tests of a rebuild are a health reading. Nothing is committed
+// or pushed by it: the changes stay in the working tree.
+func (m *Model) toggleCyberpsycho() tea.Cmd {
+	on, done := !m.status.Cyberpsycho, "cyberpsycho mode off"
+	if on {
+		done = "cyberpsycho mode on: no permission is asked, and what the review proposes is made at once; changes stay in the working tree, nothing is committed or pushed"
+	}
+	return func() tea.Msg {
+		backend, ok := m.backend.(interface{ SetCyberpsycho(bool) error })
+		if !ok {
+			return actionMsg{"this front end cannot turn the cyberpsycho mode", nil}
+		}
+		return actionMsg{done, backend.SetCyberpsycho(on)}
+	}
+}
+
+// showChanges says what the mode left in the working tree of the source of
+// ouro: those changes are in no commit.
+func (m *Model) showChanges() tea.Cmd {
+	return func() tea.Msg {
+		backend, ok := m.backend.(interface{ Changes() ([]string, error) })
+		if !ok {
+			return actionMsg{"this front end cannot read the changes of the source", nil}
+		}
+		changes, err := backend.Changes()
+		if err != nil {
+			return actionMsg{"", err}
+		}
+		switch {
+		case len(changes) == 0:
+			return actionMsg{"the working tree is clean", nil}
+		case len(changes) > 3:
+			return actionMsg{"not committed, " + changes[0] + " · " + changes[1] + " · " + changes[2] + " · and more, see the settings", nil}
+		}
+		return actionMsg{"not committed: " + strings.Join(changes, " · "), nil}
+	}
+}
+
 // helpView lists the commands: a click on one runs it.
 func (m *Model) helpView() (string, []hit) {
 	width := 0
 	for _, c := range m.commands {
 		width = max(width, len(c.name))
 	}
-	lines := []string{boldStyle.Render("Commands"), ""}
+	lines := []string{boldStyle.Render("Commands")}
 	var hits []hit
 	for _, c := range m.commands {
 		hits = append(hits, onLine(len(lines), func() tea.Cmd {
@@ -204,7 +246,12 @@ func (m *Model) helpView() (string, []hit) {
 		}))
 		lines = append(lines, lipgloss.NewStyle().Foreground(accent).Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help))
 	}
-	lines = append(lines, "", mutedStyle.Render("Type them into the message input. A message that starts with a slash takes two: //etc"))
+	// What there is to say about typing them comes below them, where the
+	// dialog holds it beside the list: with many commands it gives way, so
+	// that the last of them stays in the list.
+	if _, h := m.dialogSize(); len(lines)+2 <= h-2 {
+		lines = append(lines, "", mutedStyle.Render("Type them into the message input. A message that starts with a slash takes two: //etc"))
+	}
 	return m.dialog(lines), hits
 }
 

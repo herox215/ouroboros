@@ -191,6 +191,12 @@ func (m *Model) headerLines(w int) []string {
 	if m.status.Yolo {
 		marks = append(marks, boldStyle.Foreground(ui.background).Background(accent).Render(" YOLO MODE "))
 	}
+	if m.status.Cyberpsycho {
+		marks = append(marks, boldStyle.Foreground(ui.background).Background(bad).Render(" CYBERPSYCHO MODE "))
+		if m.width >= 96 {
+			marks = append(marks, mutedStyle.Render("changes stay local, not committed"))
+		}
+	}
 	head := spread(boldStyle.Foreground(muted).Render(eyebrow), strings.Join(marks, "  "), w)
 	back := ""
 	if c.contextID != plugin.ThreadID {
@@ -337,7 +343,16 @@ func (m *Model) bottomLines(w int) []string {
 	if m.inDialog() {
 		hint = "" // a dialog says its keys below itself
 	}
-	lines = append(lines, spread(m.chatTitle(), hint, w))
+	left := m.healthMark()
+	if title := m.chatTitle(); title != "" {
+		// The conversation keeps what it says of the call: where the whole
+		// mark would cut that, its heart stands instead.
+		if lipgloss.Width(left)+2+lipgloss.Width(title) > max(0, w-lipgloss.Width(hint)-1) {
+			left = m.healthHeart()
+		}
+		left += "  " + title
+	}
+	lines = append(lines, spread(left, hint, w))
 	if m.pendingRows() > 0 {
 		lines = append(lines, m.suggestionRequests.pendingView(m, w))
 	}

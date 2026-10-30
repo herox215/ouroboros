@@ -737,6 +737,9 @@ func (m *Model) headerView() string {
 	if n := m.suggestionRequests.unread; n > 0 {
 		line += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✦ %d SUGGESTIONS", n))
 	}
+	if m.status.Cyberpsycho {
+		line += "  " + m.cyberMark()
+	}
 	if !m.status.Debug {
 		return ansi.Truncate(line, m.width, "…")
 	}
@@ -946,12 +949,77 @@ func (m *Model) footerView() string {
 		right += " "
 	}
 	right = ansi.Truncate(right, m.width, "…")
-	left := ""
-	switch m.screen {
-	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings, screenSessions, screenMemory: // the dialogs lie over the chat
-		if room := m.width - lipgloss.Width(right) - 1; room > 0 && m.chatTitle() != "" {
-			left = ansi.Truncate(" "+m.chatTitle(), room, "…")
+	// The health mark begins the line and gives way as far as it must: the
+	// hint stays whole. Where the whole mark does not fit beside it, its
+	// heart stands alone, a cell apart; where not even that, the line is the
+	// hint's alone.
+	left := m.healthMark()
+	room := m.width - lipgloss.Width(right)
+	switch {
+	case room < 2:
+		left = ""
+	case lipgloss.Width(left)+1 > room:
+		left = m.healthHeart()
+	default:
+		room -= lipgloss.Width(left) + 1
+		if room <= 0 {
+			break
+		}
+		switch m.screen {
+		case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings, screenSessions, screenMemory: // the dialogs lie over the chat
+			if m.chatTitle() != "" {
+				left += ansi.Truncate(" "+m.chatTitle(), room, "…")
+			}
 		}
 	}
 	return left + strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))) + right
+}
+
+// healthMark is what the last run of the tests of a rebuild found, at the
+// left of the line below the body: green, not measured, or the package whose
+// tests failed. It is the first thing of that line and gives way last.
+func (m *Model) healthMark() string {
+	style := lipgloss.NewStyle().Foreground(m.healthColor())
+	r := m.status.Health
+	switch {
+	case r == nil || !r.Ran:
+		return style.Render("♥ not measured")
+	case r.OK:
+		return style.Render("♥ green")
+	}
+	fail := r.Fail
+	if i := strings.Index(fail, ":"); i > 0 {
+		fail = fail[:i] // the package, not the test, on a line that is short
+	}
+	return style.Render("♥ fail " + fail)
+}
+
+// healthHeart is the health mark at its briefest: the heart alone, in the
+// color of what the last run found. It is what stands where the whole mark
+// would push the conversation out of the line.
+func (m *Model) healthHeart() string {
+	return lipgloss.NewStyle().Foreground(m.healthColor()).Render("♥")
+}
+
+// healthColor is the color of the health mark: muted before a run, good when
+// the tests passed, and bad when one failed.
+func (m *Model) healthColor() color.Color {
+	r := m.status.Health
+	switch {
+	case r == nil || !r.Ran:
+		return muted
+	case r.OK:
+		return good
+	}
+	return bad
+}
+
+// cyberMark is the mark of the cyberpsycho mode in the head, with what it
+// does to the work: what it changes stays in the working tree.
+func (m *Model) cyberMark() string {
+	mark := boldStyle.Foreground(ui.background).Background(bad).Render(" CYBERPSYCHO MODE ")
+	if m.width < 96 {
+		return mark
+	}
+	return mark + " " + mutedStyle.Render("changes stay local, not committed")
 }

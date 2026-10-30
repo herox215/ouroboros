@@ -370,7 +370,7 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.config.shown(m)) - 1 {
 		press(m, "down")
 	}
-	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 13 {
+	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 15 {
 		t.Errorf("below the last: %d of %d", m.config.sel, len(m.config.shown(m)))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
