@@ -445,6 +445,31 @@ func TestOpenReadsWithoutItsWAL(t *testing.T) {
 	}
 }
 
+// A WAL that is gone is found also where only pages other than the schema
+// are in it: Open does not take the database for writable then.
+func TestOpenFindsAWALThatIsGoneBeyondTheSchema(t *testing.T) {
+	dir := t.TempDir()
+	db := openTest(t, dir)
+	execTest(t, db, "CREATE TABLE t(x); INSERT INTO t VALUES (1)")
+	execTest(t, db, "PRAGMA wal_checkpoint(TRUNCATE)")
+	execTest(t, db, "INSERT INTO t VALUES (2)")
+	for _, sidecar := range []string{"-wal", "-shm"} {
+		if err := os.Remove(filepath.Join(dir, FileName) + sidecar); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	other := openTest(t, dir)
+	if _, err := other.Exec("INSERT INTO t VALUES (3)"); err == nil {
+		t.Fatal("a database whose WAL is gone was opened writable")
+	}
+	if want := "is opened read-only, without its WAL, and refuses writes: " + gone(dir); !strings.Contains(logged.String(), want) {
+		t.Fatalf("log %q, want %q", logged.String(), want)
+	}
+}
+
 // Where nothing reads a database whose WAL is gone, the error says so.
 func TestOpenSaysThatTheWALIsGone(t *testing.T) {
 	defer func(mode string) { readOnlyMode = mode }(readOnlyMode)
