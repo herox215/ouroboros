@@ -4,7 +4,8 @@
 // The commands are the ones this build has: change_model and usage. Which of
 // them the tool offers is the owner's setting, {"tool": "command", "commands":
 // ["usage"]}; without the setting it offers both. The tool is the owner's
-// alone: a peer changes neither the model nor reads the owner's quota.
+// alone, and for the thread alone: a peer changes neither the model nor reads
+// the owner's quota, and the sessions do not change what they run with.
 package commands
 
 import (
@@ -65,6 +66,7 @@ func tool(owner *plugin.Owner, providers func() []plugin.Provider) plugin.Tool {
 		Description: description(all),
 		Run:         runFor(all, defaults()),
 		OwnerOnly:   true,
+		ThreadOnly:  true,
 	}
 	t.Options = plugin.OptionsOf[settings]()
 	t.Configure = func(raw json.RawMessage) (plugin.Tool, error) {

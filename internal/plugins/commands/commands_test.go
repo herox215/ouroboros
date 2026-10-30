@@ -121,7 +121,7 @@ func TestSettings(t *testing.T) {
 	_, owner, _ := node(t)
 	tl := tool(owner, func() []plugin.Provider { return nil })
 	cfg, err := tl.Configure(json.RawMessage(`{"commands":["usage"]}`))
-	if err != nil || !strings.Contains(cfg.Schema, `"enum":["usage"]`) || !cfg.OwnerOnly {
+	if err != nil || !strings.Contains(cfg.Schema, `"enum":["usage"]`) || !cfg.OwnerOnly || !cfg.ThreadOnly {
 		t.Fatalf("restricted: %+v, %v", cfg, err)
 	}
 	if _, err := cfg.Run(context.Background(), json.RawMessage(`{"command":"change_model","model":"new"}`)); err == nil || !strings.Contains(err.Error(), "no such command") {

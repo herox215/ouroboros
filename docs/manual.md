@@ -514,7 +514,8 @@ already streamed by the model keep their normal streaming effect.
   it, `/cd PATH` and `/cd --workspace` name another one or none, as `/cd` does in the terminal UI.
 - **It is a session of the node.** The thread has the ID `thread`, is kept in the archive and goes on after a
   restart like any conversation, shown as it was. `/session` does not list it, it is not named for a topic, and its
-  agent has the two tools of the thread alone. The conversations it starts are listed there as any other.
+  agent has the tools of the thread alone, like the one that runs the commands of the node. The conversations it
+  starts are listed there as any other.
 
 ### Profiles
 
@@ -1090,8 +1091,9 @@ it runs is the owner's setting `commands`, by name; without it the tool offers `
 | `usage` | what `/usage` shows: the quota or balance of the accesses the sessions and the thread are answered through now, and of no other |
 | `change_model(model, access?, scope?)` | changes the model the agent answers with from the next message on, after you approved it in the conversation; `scope` is `owner` (the default), `sessions`, `thread` or `peers`, and `access` defaults to the one the scope is answered through now. It asks only for a model the access offers, and applies only on **Apply change** |
 
-The tool is for the owner alone: no peer gets it, and listing it for peers is an error. The settings of
-the tool name the commands it may run, `{"tool": "command", "commands": ["usage"]}`, and a name it does
+The tool is for the owner alone, and only the thread has it: no peer gets it, listing it for peers is an error,
+and the sessions neither change the model they run with nor read the usage. The settings of the tool name the
+commands it may run, `{"tool": "command", "commands": ["usage"]}`, and a name it does
 not know keeps the node from starting.
 
 ### Computer
