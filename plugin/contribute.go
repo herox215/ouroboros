@@ -79,6 +79,13 @@ type Serving struct {
 	Stop  func()
 }
 
+// AskOwner asks the owner of the conversation of ctx question and waits for
+// the answer, as propose_config does. A tool that changes the configuration
+// asks here before it changes anything.
+func AskOwner(ctx context.Context, question json.RawMessage) (string, error) {
+	return agent.AskOwner(ctx, question)
+}
+
 // RunFunc is what runs a Tool: it gets the arguments of a call as JSON.
 type RunFunc = agent.RunFunc
 

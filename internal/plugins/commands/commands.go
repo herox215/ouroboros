@@ -114,8 +114,8 @@ func registry(owner *plugin.Owner, providers func() []plugin.Provider) []command
 		{
 			name:  "change_model",
 			about: "change the model the agent answers with from the next message on: model, and access and scope (owner, sessions, thread or peers) where they differ",
-			run: func(_ context.Context, a args) (string, error) {
-				return changeModel(owner, a)
+			run: func(ctx context.Context, a args) (string, error) {
+				return changeModel(ctx, owner, providers, a)
 			},
 		},
 		{
@@ -150,10 +150,11 @@ func runFor(all []command, names []string) plugin.RunFunc {
 	}
 }
 
-// changeModel changes the model of the scope the arguments name, the owner's
-// by default, of the access they name or of the one the scope is answered
-// through now.
-func changeModel(owner *plugin.Owner, a args) (string, error) {
+// changeModel changes the model of the scope the arguments name, after the
+// owner approved it in this conversation: the model of the owner's scopes by
+// default, of the access they name or of the one the scope is answered
+// through now. Nothing changes without an explicit "Apply change".
+func changeModel(ctx context.Context, owner *plugin.Owner, providers func() []plugin.Provider, a args) (string, error) {
 	model := strings.TrimSpace(a.Model)
 	if model == "" {
 		return "", errors.New("change_model needs a model")
@@ -162,34 +163,23 @@ func changeModel(owner *plugin.Owner, a args) (string, error) {
 	if scope == "" {
 		scope = "owner"
 	}
+	llms, err := owner.CurrentLLMs()
+	if err != nil {
+		return "", err
+	}
+	i := slices.IndexFunc(llms, func(l plugin.LLM) bool { return l.Scope == scope })
+	if i < 0 {
+		return "", fmt.Errorf("no such scope %q: it is owner, sessions, thread or peers", scope)
+	}
+	now := llms[i]
 	access := strings.TrimSpace(a.Access)
 	if access == "" {
-		llms, err := owner.CurrentLLMs()
-		if err != nil {
-			return "", err
-		}
-		i := slices.IndexFunc(llms, func(l plugin.LLM) bool { return l.Scope == scope })
-		if i < 0 {
-			return "", fmt.Errorf("no such scope %q: it is owner, sessions, thread or peers", scope)
-		}
-		access = llms[i].Access
+		access = now.Access
 		if access == "" {
 			return "", fmt.Errorf("no access is set up for the scope %s yet", scope)
 		}
 	}
-	var err error
-	switch scope {
-	case "owner":
-		_, err = owner.SetModel(access, model)
-	case "sessions":
-		err = owner.SetSessionModel(access, model)
-	case "thread":
-		err = owner.SetThreadModel(access, model)
-	case "peers":
-		err = owner.SetPeerModel(access, model)
-	default:
-		return "", fmt.Errorf("no such scope %q: it is owner, sessions, thread or peers", scope)
-	}
+	label, err := checkModel(ctx, owner, providers(), access, model)
 	if err != nil {
 		return "", err
 	}
@@ -199,7 +189,59 @@ func changeModel(owner *plugin.Owner, a args) (string, error) {
 		"thread":   "the thread",
 		"peers":    "peers",
 	}[scope]
-	return fmt.Sprintf("The agent answers %s with the model %q of the access %s from the next message on.", what, model, access), nil
+	question, _ := json.Marshal(map[string]any{
+		"question":    fmt.Sprintf("Change the model of %s from %q to %q?\nThe access: %s. Nothing changes unless you apply it.", what, now.Model, model, label),
+		"options":     []string{"Apply change", "Reject change"},
+		"recommended": "Reject change",
+	})
+	answer, err := plugin.AskOwner(ctx, question)
+	if err != nil {
+		return "", fmt.Errorf("the model was not changed: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("the model was not changed: %w", err)
+	}
+	if answer != "Apply change" {
+		return "The model was not changed: the owner did not approve the change. The owner said: " + answer, nil
+	}
+	switch scope {
+	case "owner":
+		_, err = owner.SetModel(access, model)
+	case "sessions":
+		err = owner.SetSessionModel(access, model)
+	case "thread":
+		err = owner.SetThreadModel(access, model)
+	default:
+		err = owner.SetPeerModel(access, model)
+	}
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("The agent answers %s with the model %q of the access %s from the next message on.", what, model, label), nil
+}
+
+// checkModel fails if the access does not offer model, and names the ones it
+// does. It returns how the access is labeled.
+func checkModel(ctx context.Context, owner *plugin.Owner, providers []plugin.Provider, access, model string) (string, error) {
+	listed, err := owner.Models(ctx, providers)
+	if err != nil {
+		return "", fmt.Errorf("cannot list the models of the access %s: %w", access, err)
+	}
+	i := slices.IndexFunc(listed, func(l plugin.AccessModels) bool { return l.Access.ID == access })
+	if i < 0 {
+		return "", fmt.Errorf("no access %s", access)
+	}
+	l := listed[i]
+	if !slices.Contains(l.Models, model) {
+		if len(l.Models) == 0 {
+			if l.Err != "" {
+				return "", fmt.Errorf("cannot list the models of the access %s: %s", access, l.Err)
+			}
+			return "", fmt.Errorf("the access %s lists no models", access)
+		}
+		return "", fmt.Errorf("the access %s does not offer the model %q; it offers: %s", access, model, strings.Join(l.Models, ", "))
+	}
+	return l.Access.Label, nil
 }
 
 // schema is the JSON schema of the arguments of the chosen commands.

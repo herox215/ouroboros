@@ -1088,7 +1088,7 @@ it runs is the owner's setting `commands`, by name; without it the tool offers `
 | Command | Does |
 |---|---|
 | `usage` | what `/usage` shows: the quota or balance of the accesses the sessions and the thread are answered through now, and of no other |
-| `change_model(model, access?, scope?)` | changes the model the agent answers with from the next message on; `scope` is `owner` (the default), `sessions`, `thread` or `peers`, and `access` defaults to the one the scope is answered through now |
+| `change_model(model, access?, scope?)` | changes the model the agent answers with from the next message on, after you approved it in the conversation; `scope` is `owner` (the default), `sessions`, `thread` or `peers`, and `access` defaults to the one the scope is answered through now. It asks only for a model the access offers, and applies only on **Apply change** |
 
 The tool is for the owner alone: no peer gets it, and listing it for peers is an error. The settings of
 the tool name the commands it may run, `{"tool": "command", "commands": ["usage"]}`, and a name it does
