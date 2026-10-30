@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -425,7 +426,7 @@ func (d *desk) tools() []agent.Tool {
 			"Merge memories of one scope into one that takes their place; the others are archived. Of two that disagree the newer holds.",
 			`"ids":{"type":"array","items":{"type":"string"},"description":"the IDs of two or more memories"},`+
 				`"key":{"type":"string","description":"the key of the memory that takes their place, one of theirs or a new one"},`+
-				`"content":{"type":"string","description":"the memory that takes their place, in their language, saying no more than they do"},`+
+				`"content":{"type":"string","description":"the memory that takes their place, in their language, saying no more than they do and keeping every fact of theirs that still holds"},`+
 				`"core":{"type":"boolean","description":"whether it is core; if missing, it is core when all of them are"},`+reason,
 			`"ids","key","content","reason"`),
 		d.change(toolMemoryRewrite, "rewrite",
@@ -433,7 +434,7 @@ func (d *desk) tools() []agent.Tool {
 			`"id":{"type":"string"},"key":{"type":"string","description":"a new key, if it needs one"},"content":{"type":"string","description":"the new memory"},`+reason,
 			`"id","content","reason"`),
 		d.change(toolMemorySplit, "split",
-			"Split one memory that holds several facts into parts of one fact each; it is archived.",
+			"Split one memory that holds several facts into parts of one fact each; it is archived. The parts together keep all of its text.",
 			`"id":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"string"}},"required":["key","content"]},"description":"two or more parts"},`+reason,
 			`"id","parts","reason"`),
 		d.change(toolMemoryScope, "scope",
@@ -502,6 +503,105 @@ func writtenOver(c memory.Change) []string {
 	return nil
 }
 
+// factPatterns find the pieces of a memory that carry facts and that a merge
+// or a split has to keep literally: quoted text, code, URLs, paths and
+// numbers. The first group of each is the piece.
+var factPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`"([^"\n]+)"`),
+	regexp.MustCompile(`„([^“”"\n]+)[“”"]`),
+	regexp.MustCompile("`([^`\n]+)`"),
+	regexp.MustCompile(`(https?://[^\s"'<>()]+)`),
+	regexp.MustCompile(`(?:^|[\s(])((?:~|\.{1,2})?/[^\s,;:()"'„“”]+)`),
+}
+
+// numberPattern finds the numbers of a text, with their decimal, time or
+// range separators, like 0,25, 09:00 or 3.1.
+var numberPattern = regexp.MustCompile(`\d+(?:[.,:]\d+)*`)
+
+// facts are the pieces of text that carry facts, in order and each once; a
+// number in a piece found before is not one of its own.
+func facts(text string) []string {
+	var out []string
+	var spans [][2]int
+	add := func(s string) {
+		s = strings.TrimRight(strings.TrimSpace(s), ".")
+		if s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	for _, p := range factPatterns {
+		for _, m := range p.FindAllStringSubmatchIndex(text, -1) {
+			spans = append(spans, [2]int{m[2], m[3]})
+			add(text[m[2]:m[3]])
+		}
+	}
+	for _, n := range numberPattern.FindAllStringIndex(text, -1) {
+		if !slices.ContainsFunc(spans, func(s [2]int) bool { return s[0] <= n[0] && n[1] <= s[1] }) {
+			add(text[n[0]:n[1]])
+		}
+	}
+	return out
+}
+
+// keeps refuses a merge or a split whose new text loses a fact of its
+// sources or ends cut off: the model is to call the tool again. A fact that
+// no longer holds is dropped by naming it in the reason.
+func (d *desk) keeps(ctx context.Context, c memory.Change) error {
+	var texts []string
+	switch c.Action {
+	case "merge":
+		texts = []string{c.Content}
+	case "split":
+		for _, p := range c.Parts {
+			texts = append(texts, p.Content)
+		}
+	default:
+		return nil
+	}
+	for _, t := range texts {
+		if strings.HasSuffix(strings.TrimSpace(t), ":") {
+			return fmt.Errorf("a text ends in %q, cut off: write it out in full", lastWords(t))
+		}
+	}
+	kept := strings.Join(append(texts, c.Reason), "\n")
+	numbers := numberPattern.FindAllString(kept, -1)
+	var lost []string
+	for _, id := range writtenOver(c) {
+		e, err := d.store.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		for _, f := range facts(e.Content) {
+			if numberPattern.FindString(f) == f {
+				if !slices.Contains(numbers, f) {
+					lost = append(lost, f)
+				}
+			} else if !strings.Contains(kept, f) {
+				lost = append(lost, f)
+			}
+		}
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	quoted := make([]string, 0, len(lost))
+	for _, f := range lost {
+		if !slices.Contains(quoted, strconv.Quote(f)) {
+			quoted = append(quoted, strconv.Quote(f))
+		}
+	}
+	return fmt.Errorf("the new text loses %s of the sources; nothing changed: keep them, or name in the reason those that no longer hold", strings.Join(quoted, ", "))
+}
+
+// lastWords is the end of t, for an error to show where it stops.
+func lastWords(t string) string {
+	t = strings.TrimSpace(t)
+	if len(t) > 40 {
+		t = "…" + strings.ToValidUTF8(t[len(t)-40:], "")
+	}
+	return t
+}
+
 // change is the tool name that makes the change action of the store, see
 // memory.Store.Apply, with the properties and required of its schema. It
 // changes only memories the archivist was shown, and no more than
@@ -538,6 +638,9 @@ func (d *desk) change(name, action, description, properties, required string) ag
 				if !d.full[id] {
 					return "", fmt.Errorf("memory %s was shown cut: read it in full before you change its text", id)
 				}
+			}
+			if err := d.keeps(ctx, c); err != nil {
+				return "", fmt.Errorf("%s: %w", name, err)
 			}
 			c.Versions = versions
 			rec, err := d.store.Apply(ctx, c)
