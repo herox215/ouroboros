@@ -1092,7 +1092,8 @@ it runs is the owner's setting `commands`, by name; without it the tool offers `
 | `change_model(model, access?, scope?)` | changes the model the agent answers with from the next message on, after you approved it in the conversation; `scope` is `owner` (the default), `sessions`, `thread` or `peers`, and `access` defaults to the one the scope is answered through now. It asks only for a model the access offers, and applies only on **Apply change** |
 
 The tool is for the owner alone, and only the thread has it: no peer gets it, listing it for peers is an error,
-and the sessions neither change the model they run with nor read the usage. The settings of the tool name the
+and the sessions neither change the model they run with nor read the usage. The thread runs it itself, rather
+than handing it on like the work of a topic. The settings of the tool name the
 commands it may run, `{"tool": "command", "commands": ["usage"]}`, and a name it does
 not know keeps the node from starting.
 

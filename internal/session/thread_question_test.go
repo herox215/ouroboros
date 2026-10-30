@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/assistant"
 )
 
 // questionFixture starts an answer in s1 that asks asks once the returned
@@ -164,5 +166,104 @@ func TestThreadWithdrawsQuestionWithoutHandoff(t *testing.T) {
 			}
 			until(t, local, Answer)
 		})
+	}
+}
+
+// The thread itself asks the owner too: a command it runs on its own, like a
+// change of the model, needs their consent, and what they answer in the
+// thread is its answer, not a handoff to a session.
+func TestThreadAsksItsOwnQuestion(t *testing.T) {
+	asks := json.RawMessage(`{"question":"Change the model to new?","options":["Apply change","Reject change"],"recommended":"Apply change"}`)
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if assistant.ThreadOf(ctx) == nil {
+			return "pong:" + text, nil
+		}
+		answer, err := agent.AskOwner(ctx, asks)
+		return "model: " + answer, err
+	}}
+	s := service(t, a)
+	ctx := context.Background()
+	_, thread, _ := s.Watch(ctx, ThreadID)
+	if err := s.Ask(ctx, ThreadID, "take the new model"); err != nil {
+		t.Fatal(err)
+	}
+	if got := told(until(t, thread, Asked)); !slices.Contains(got, "asked Change the model to new?") {
+		t.Fatalf("got %q", got)
+	}
+	if err := s.Steer(WithMessageSource(ctx, MessageSource{Interface: "tui"}), ThreadID, "Apply change"); err != nil {
+		t.Fatal(err)
+	}
+	if got := told(until(t, thread, Answer)); !same(got, "answered Apply change", "answer model: Apply change") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A command of the thread can wait for the owner while the thread relays a
+// session's question. What the owner answers then is the thread's own
+// question, which nothing else would end; the relayed one waits on.
+func TestThreadAnswersItsOwnQuestionBeforeRelayed(t *testing.T) {
+	asks := json.RawMessage(`{"question":"Change the model to new?","options":["Apply change","Reject change"]}`)
+	gate := make(chan struct{})
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		thread := assistant.ThreadOf(ctx)
+		if thread == nil {
+			if text == "original" {
+				select {
+				case <-gate:
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+				answer, err := agent.AskOwner(ctx, json.RawMessage(`{"question":"Allow rebuild?","options":["Allow once","No"]}`))
+				return "permission: " + answer, err
+			}
+			return "pong:" + text, nil
+		}
+		if rest, ok := strings.CutPrefix(text, "send "); ok {
+			id, message, _ := strings.Cut(rest, " ")
+			_, _, err := thread.Send(ctx, id, message)
+			return "handed on", err
+		}
+		answer, err := agent.AskOwner(ctx, asks)
+		return "model: " + answer, err
+	}}
+	s := service(t, a)
+	ctx := context.Background()
+	_, local, _ := s.Watch(ctx, "s1")
+	_, thread, _ := s.Watch(ctx, ThreadID)
+	if err := s.Ask(ctx, "s1", "original"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, local, Message)
+	ask(t, s, "send s1 other")
+	until(t, local, Queued)
+	close(gate)
+	question(t, local)
+	if q, ok := openQuestion(t, s); !ok || !strings.Contains(string(q.Args), "Allow rebuild?") {
+		t.Fatalf("the question was not relayed: %+v, %v", q, ok)
+	}
+	ask(t, s, "change the model")
+	for {
+		events := until(t, thread, Asked)
+		if q := events[len(events)-1].AsQuestion(); q.Question == "Change the model to new?" {
+			break
+		}
+	}
+	if err := s.Steer(ctx, ThreadID, "Apply change"); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		events := until(t, thread, Answer)
+		if e := events[len(events)-1]; e.Text == "model: Apply change" {
+			break
+		}
+	}
+	s.mu.Lock()
+	waits := s.sessions["s1"].asked != nil
+	s.mu.Unlock()
+	if !waits {
+		t.Fatal("the relayed question was consumed by the thread's own answer")
+	}
+	if _, ok := openQuestion(t, s); !ok {
+		t.Fatal("the relayed question no longer waits")
 	}
 }

@@ -57,6 +57,10 @@ const ThreadWindow = 6 * time.Hour
 // nothing, as it does when it hands on.
 const handedOn = "[nothing: the thread hands on, and the session answers]"
 
+// threadCommandsHint tells the agent of the thread that the tools the owner
+// allows it alone it runs itself, rather than handing them on.
+const threadCommandsHint = `A tool that is yours alone, which the sessions do not have, you run yourself and answer with what it reports: that is no work to hand on. `
+
 // threadDirectoryHint tells the agent of the thread where a session it
 // starts works; %s is the project of the thread, quoted.
 const threadDirectoryHint = `The project of the thread, where ` + ToolSessionNew + ` starts a session that names no directory, is %s. `
@@ -262,8 +266,9 @@ func threadFor(ctx context.Context, tool string) (Thread, error) {
 }
 
 // inThread returns the agent of the thread for the owner's agent bot of
-// cfg, where ctx is of the thread: its prompt and its tools are those of the
-// thread alone. Elsewhere it returns bot.
+// cfg, where ctx is of the thread: its prompt is that of the thread, and its
+// tools are the thread's, and those the owner allows it alone, which the
+// sessions do not get. Elsewhere it returns bot.
 func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.Agent {
 	if ThreadOf(ctx) == nil {
 		return bot
@@ -273,6 +278,22 @@ func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.A
 		project = strconv.Quote(directory)
 	}
 	window := config.Span(cfg.ThreadSessions())
-	prompt := fmt.Sprintf(threadPrompt, cfg.Name, window, int(ThreadWindow.Hours())) + fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
-	return bot.WithSystem(prompt).WithTools(threadTools(window)...)
+	// A tool the owner allowed for the thread alone is no work to hand on:
+	// the thread runs it itself, like the commands of the node.
+	tools := threadTools(window)
+	own := false
+	for _, t := range bot.Tools() {
+		if t.ThreadOnly {
+			tools = append(tools, t)
+			own = true
+		}
+	}
+	prompt := fmt.Sprintf(threadPrompt, cfg.Name, window, int(ThreadWindow.Hours()))
+	if own {
+		// The hint speaks of the thread's own tools: without one it would
+		// name tools that are not there.
+		prompt += threadCommandsHint
+	}
+	prompt += fmt.Sprintf(threadDirectoryHint, project) + ownerStyle + machineHint(today())
+	return bot.WithSystem(prompt).WithTools(tools...)
 }

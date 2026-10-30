@@ -163,6 +163,13 @@ func (s *Service) replyToConcern(ctx context.Context, message queued) (bool, err
 		s.mu.Unlock()
 		return false, nil
 	}
+	if thread.asked != nil {
+		// The thread itself waits for an answer, as one a tool it runs asks
+		// for, like a change of the model. It is what the owner answers:
+		// nothing else would end that wait, and it was asked last.
+		s.mu.Unlock()
+		return false, nil
+	}
 	question := thread.questions[0]
 	if question.se.backendQuestion {
 		// Backend approvals have no topical agent context to contaminate. Their
