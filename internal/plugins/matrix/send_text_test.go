@@ -2,7 +2,6 @@ package matrix
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -35,17 +34,13 @@ func TestSendTextRendersMarkdown(t *testing.T) {
 	}
 }
 
-func TestSendTextWithoutMarkupOrBeyondTheBudgetIsPlain(t *testing.T) {
+func TestSendTextWithoutTextIsPlain(t *testing.T) {
 	s := &recordingSender{}
-	if err := sendText(t.Context(), s, "!room:test", "@alice:test", ""); err != nil {
+	if err := sendText(t.Context(), s, "!room:test", "@alice:test", "   "); err != nil {
 		t.Fatal(err)
 	}
-	// Escaping every character expands the HTML far beyond the body budget.
-	tooBig := strings.Repeat("&", messageLimit)
-	if err := sendText(t.Context(), s, "!room:test", "@alice:test", tooBig); err != nil {
-		t.Fatal(err)
-	}
-	if len(s.plain) != 2 || s.plain[1] != tooBig || len(s.html) != 0 {
-		t.Fatalf("plain %d, formatted %d", len(s.plain), len(s.html))
+	// Only the text that renders to nothing is sent as it came.
+	if len(s.plain) != 1 || s.plain[0] != "   " || len(s.html) != 0 {
+		t.Fatalf("plain %q, formatted %q", s.plain, s.html)
 	}
 }

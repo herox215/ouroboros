@@ -3,9 +3,14 @@ package matrix
 import (
 	"strings"
 	"unicode/utf8"
+
+	transport "ouroboros/internal/matrix"
 )
 
-// Leave room for encrypted event overhead below Matrix's event-size limit.
+// messageLimit is the JSON size of the text one encrypted event may carry: the
+// event limit is 65536 bytes, and Megolm encryption, its base64 and the
+// envelope add about a third. Escapes count, not the text, so a part of
+// ampersands holds fewer of them than the same run of plain letters.
 const messageLimit = 12000
 
 // messageParts splits text into parts that fit an encrypted Matrix event. A
@@ -16,6 +21,8 @@ func messageParts(text string) []string {
 	var parts []string
 	var b strings.Builder
 	fence := "" // the opening fence line of the code block the part is in
+	used := 0   // how many bytes of the event's JSON the text in b takes
+	room := func() int { return messageLimit - used - fenceRoom(fence) }
 
 	flush := func() {
 		if b.Len() == 0 {
@@ -30,35 +37,30 @@ func messageParts(text string) []string {
 		}
 		parts = append(parts, part)
 		b.Reset()
+		used = 0
 		if fence != "" {
 			b.WriteString(fence + "\n")
+			used = transport.EncodedLen(fence + "\n")
 		}
 	}
 	for text != "" {
 		line, rest := cutLine(text)
 		text = rest
-		room := messageLimit - b.Len() - fenceRoom(fence)
-		if room < 1 {
+		if transport.EncodedLen(line) > room() {
 			flush()
-			room = messageLimit - b.Len() - fenceRoom(fence)
 		}
 		// A line longer than a part is cut, as no event can hold it.
 		split := false
-		for len(line) > room {
-			n := room
-			for n > 0 && !utf8.RuneStart(line[n]) {
-				n--
-			}
-			if n == 0 { // no rune starts before the limit: no UTF-8, split at it
-				n = room
-			}
+		for transport.EncodedLen(line) > room() {
+			n := cutEncoded(line, room())
 			b.WriteString(line[:n])
+			used += transport.EncodedLen(line[:n])
 			line = line[n:]
 			split = true
 			flush()
-			room = max(1, messageLimit-b.Len()-fenceRoom(fence))
 		}
 		b.WriteString(line)
+		used += transport.EncodedLen(line)
 		if split {
 			// A cut line is no fence line, whatever its end looks like.
 			continue
@@ -73,6 +75,25 @@ func messageParts(text string) []string {
 		parts = append(parts, b.String())
 	}
 	return parts
+}
+
+// cutEncoded is how many bytes of line fit into room as the JSON an event
+// carries, ending at a rune boundary, or its first rune when not even that fits.
+func cutEncoded(line string, room int) int {
+	used, n := 0, 0
+	for n < len(line) {
+		_, size := utf8.DecodeRuneInString(line[n:])
+		cost := transport.EncodedLen(line[n : n+size])
+		if used+cost > room && n > 0 {
+			break
+		}
+		used += cost
+		n += size
+		if used > room {
+			break
+		}
+	}
+	return n
 }
 
 // cutLine takes the first line of text with its line break, and the rest.

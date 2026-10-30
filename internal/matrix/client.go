@@ -212,19 +212,49 @@ func (c *Client) SendTo(ctx context.Context, room, expectedPeer, text string) er
 	return c.sendText(ctx, room, id.UserID(expectedPeer), text)
 }
 
+// maxEventBytes is the JSON size the specification allows for one event,
+// ciphertext included.
+const maxEventBytes = 65536
+
+// textBudget is how much of it the body and the formatted body of a message
+// may take together, JSON-encoded. Megolm encryption, its base64 and the
+// envelope add about a third on top; TestEncryptedTextAtTheBudgetFitsOneEvent
+// holds the sum below maxEventBytes in the worst case of escaping.
+const textBudget = 40000
+
 // SendFormattedTo sends only if the room still contains the expected peer,
 // with an HTML version of body for clients that render formatted messages.
-// An empty formatted body sends the plain text alone.
+// An empty formatted body, or one that would make the encrypted event exceed
+// the size the specification allows, sends the plain text alone: a client that
+// renders no HTML shows the body, so nothing readable is lost.
 func (c *Client) SendFormattedTo(ctx context.Context, room, expectedPeer, body, formatted string) error {
 	if expectedPeer == "" {
 		return errors.New("the expected Matrix peer is required")
 	}
-	if formatted == "" {
+	if formatted == "" || !fitsOneEvent(body, formatted) {
 		return c.sendText(ctx, room, id.UserID(expectedPeer), body)
 	}
 	return c.send(ctx, room, id.UserID(expectedPeer), &event.MessageEventContent{
 		MsgType: event.MsgText, Body: body, Format: event.FormatHTML, FormattedBody: formatted,
 	})
+}
+
+// fitsOneEvent reports whether body and formatted stay within textBudget once
+// JSON-encoded, which is what the event carries: escapes, not the text, are
+// what makes an event big.
+func fitsOneEvent(body, formatted string) bool {
+	return EncodedLen(body)+EncodedLen(formatted) <= textBudget
+}
+
+// EncodedLen is how many bytes text takes in the JSON of a Matrix event,
+// escapes included: a control character or an ampersand takes six bytes, a
+// quote or a backslash two.
+func EncodedLen(text string) int {
+	b, err := json.Marshal(text)
+	if err != nil {
+		return len(text)
+	}
+	return len(b) - 2
 }
 
 func (c *Client) sendText(ctx context.Context, room string, expectedPeer id.UserID, text string) error {

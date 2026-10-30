@@ -41,11 +41,21 @@ func TestMessagePartsEndBeforeASplitRune(t *testing.T) {
 	}
 }
 
-func TestMessagePartsOfTextThatIsNoUTF8(t *testing.T) {
-	// Without a rune start before the limit there is nowhere better to split.
+func TestMessagePartsCountInvalidBytesAsTheReplacementTheyBecome(t *testing.T) {
+	// An invalid byte reaches the event as U+FFFD, three bytes of JSON, so a
+	// part holds a third of the bytes it would hold of ASCII.
 	text := strings.Repeat("\x80", 12001)
 	parts := messageParts(text)
-	if len(parts) != 2 || len(parts[0]) != 12000 || parts[0]+parts[1] != text {
+	if len(parts) != 4 || len(parts[0]) != 4000 || strings.Join(parts, "") != text {
+		t.Fatalf("split into %d parts", len(parts))
+	}
+}
+
+func TestMessagePartsCountTheEscapesOfAmpersands(t *testing.T) {
+	// An ampersand is one byte of text and six of JSON: a part holds 2000.
+	text := strings.Repeat("&", 4001)
+	parts := messageParts(text)
+	if len(parts) != 3 || len(parts[0]) != 2000 || strings.Join(parts, "") != text {
 		t.Fatalf("split into %d parts", len(parts))
 	}
 }

@@ -184,10 +184,11 @@ func (r *htmlRenderer) inline(n ast.Node) {
 			value = util.ResolveNumericReferences(util.ResolveEntityNames(util.UnescapePunctuations(value)))
 		}
 		r.write(escape(value))
-		if n.HardLineBreak() {
+		if n.HardLineBreak() || n.SoftLineBreak() {
+			// A line of the answer stays a line: clients would show a soft
+			// break as the space that HTML wraps a newline to, while the body
+			// keeps the line the model wrote.
 			r.write("<br>")
-		} else if n.SoftLineBreak() {
-			r.write("\n") // HTML wraps it as a space
 		}
 	case *ast.String:
 		r.write(escape(n.Value))

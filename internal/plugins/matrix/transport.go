@@ -51,10 +51,6 @@ func (c *sdkConnection) SendTo(ctx context.Context, room, peer, text string) err
 	return sendText(ctx, c.client, room, peer, text)
 }
 
-// maxFormattedBody leaves room for the plain body and the encryption overhead
-// under Matrix's event-size limit; beyond it the text is sent unformatted.
-const maxFormattedBody = 24000
-
 // sender carries a message to a room of the Matrix client.
 type sender interface {
 	SendTo(ctx context.Context, room, peer, text string) error
@@ -62,9 +58,11 @@ type sender interface {
 }
 
 // sendText sends text as the Markdown it is, with its HTML rendering next to
-// the plain text, which clients that render no HTML show instead.
+// the plain text, which clients that render no HTML show instead. The client
+// keeps the formatted body out of an event that would exceed Matrix's size
+// limit, so there is no budget to keep here.
 func sendText(ctx context.Context, s sender, room, peer, text string) error {
-	if formatted := formatHTML(text); formatted != "" && len(formatted) <= maxFormattedBody {
+	if formatted := formatHTML(text); formatted != "" {
 		return s.SendFormattedTo(ctx, room, peer, text, formatted)
 	}
 	return s.SendTo(ctx, room, peer, text)

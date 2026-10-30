@@ -133,8 +133,11 @@ and code fences. It appears once in each model request throughout that answer, i
 not stored in conversation history, and does not apply to other interfaces or peer
 conversations. Outgoing Markdown is rendered into the HTML subset that the Matrix
 specification permits and sent next to the plain body, which clients that render
-no HTML show instead; raw HTML in an answer is shown as text, and a fenced code
-block is closed and reopened when a message is split. Other gateways may contribute
+no HTML show instead; raw HTML in an answer is shown as text, a line break stays
+a line break, and a fenced code block is closed and reopened when a message is
+split. A part is split at the JSON size one encrypted event may carry, escapes
+included, and HTML that no longer fits next to its plain body is left out, so
+that the body alone is sent; other gateways may contribute
 their own answer hooks and formatting without adding transport-specific rules to
 the core.
 

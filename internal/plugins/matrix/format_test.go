@@ -27,7 +27,7 @@ func TestFormatHTML(t *testing.T) {
 		{"escaped text", "a & b < c\n", "<p>a &amp; b &lt; c</p>"},
 		{"raw html", "<b>roh</b>\n", "<p>&lt;b&gt;roh&lt;/b&gt;</p>"},
 		{"table", "| a | b |\n|---|---|\n| 1 | 2 |\n", "<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>"},
-		{"soft break", "a\nb\n", "<p>a\nb</p>"},
+		{"soft break", "a\nb\n", "<p>a<br>b</p>"},
 		{"hard break", "a  \nb\n", "<p>a<br>b</p>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
