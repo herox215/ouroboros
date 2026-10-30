@@ -619,3 +619,98 @@ func TestArchivistRewritesOnlyWhatItReadInFull(t *testing.T) {
 		t.Fatalf("memory after the refused rewrite: %+v, %v", got, err)
 	}
 }
+
+// archiveOnce runs one pass of the archivist over store with the calls of
+// the model, and returns what the tools told it.
+func archiveOnce(t *testing.T, store *memory.Store, calls ...archiveCall) []string {
+	t.Helper()
+	llm := &archiveLLM{calls: calls}
+	a, _ := recorded(t, archiveConfig("1h"), llm)
+	a.builder = a.builder.WithMemoryProfiles(func() []MemoryProfile {
+		return []MemoryProfile{{Dir: "raw", Store: func() (*memory.Store, error) { return store, nil }}}
+	})
+	a.archive(time.Now())
+	return llm.told()
+}
+
+// A split or merge that loses a quoted text, a number or a path of its
+// sources, or ends cut off, is refused with what it lost, and nothing
+// changes; one that names what it drops in its reason goes through.
+func TestArchivistKeepsTheFactsOfItsSources(t *testing.T) {
+	source := `Steps of a quarter: 0,25 = 15 min, 1 = 60 min. Other formats are possible in the same column: "1h", "30m" and ranges like "09:00-10:00". Local database: ~/Library/app/data.sqlite (WAL).`
+	whole := `Steps of a quarter: 0,25 = 15 min, 1 = 60 min. Other formats are possible in the same column: "1h", "30m" and ranges like "09:00-10:00".`
+	for _, tc := range []struct {
+		name  string
+		calls func(m []memory.Entry) []archiveCall
+		want  string // in the answer to the change
+		after int    // current memories after it
+	}{
+		{"a lossy split", func(m []memory.Entry) []archiveCall {
+			return []archiveCall{{toolMemoryRead, map[string]any{"id": m[0].ID}}, {toolMemorySplit, map[string]any{"id": m[0].ID, "reason": "two facts", "parts": []map[string]string{
+				{"key": "format", "content": "Steps of a quarter: 0,25 = 15 min, 1 = 60 min. Other formats are possible in the same column."},
+				{"key": "db", "content": "Local database: ~/Library/app/data.sqlite (WAL)."}}}}}
+		}, `loses "1h", "30m", "09:00-10:00" of the sources`, 2},
+		{"a split cut off", func(m []memory.Entry) []archiveCall {
+			return []archiveCall{{toolMemoryRead, map[string]any{"id": m[0].ID}}, {toolMemorySplit, map[string]any{"id": m[0].ID, "reason": "two facts", "parts": []map[string]string{
+				{"key": "format", "content": whole + ` Other formats are possible in the same column:`},
+				{"key": "db", "content": "Local database: ~/Library/app/data.sqlite (WAL)."}}}}}
+		}, "cut off", 2},
+		{"a whole split", func(m []memory.Entry) []archiveCall {
+			return []archiveCall{{toolMemoryRead, map[string]any{"id": m[0].ID}}, {toolMemorySplit, map[string]any{"id": m[0].ID, "reason": "two facts", "parts": []map[string]string{
+				{"key": "format", "content": whole},
+				{"key": "db", "content": "Local database: ~/Library/app/data.sqlite (WAL)."}}}}}
+		}, "Done, change", 3},
+		{"a lossy merge", func(m []memory.Entry) []archiveCall {
+			return []archiveCall{{toolMemoryRead, map[string]any{"id": m[0].ID}}, {toolMemoryMerge, map[string]any{"ids": []string{m[0].ID, m[1].ID}, "key": "db",
+				"content": whole + " The database is backed up at night.", "reason": "same subject"}}}
+		}, `loses "~/Library/app/data.sqlite" of the sources`, 2},
+		{"a deliberate drop", func(m []memory.Entry) []archiveCall {
+			return []archiveCall{{toolMemoryRead, map[string]any{"id": m[0].ID}}, {toolMemoryMerge, map[string]any{"ids": []string{m[0].ID, m[1].ID}, "key": "db",
+				"content": whole + " The database is backed up at night.", "reason": "same subject; ~/Library/app/data.sqlite no longer holds, the app moved"}}}
+		}, "Done, change", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store := rawStore(t)
+			m := []memory.Entry{
+				keepMemory(t, store, "", "notes", source, time.Time{}),
+				keepMemory(t, store, "", "backup", "The database is backed up at night.", time.Time{}),
+			}
+			told := archiveOnce(t, store, tc.calls(m)...)
+			if len(told) != 2 || !strings.Contains(told[1], tc.want) {
+				t.Fatalf("want %q, told %q", tc.want, told)
+			}
+			if current, err := store.Current(context.Background(), 10); err != nil || len(current) != tc.after {
+				t.Fatalf("current memories after it: %+v, %v", current, err)
+			}
+		})
+	}
+}
+
+// The facts of a text are its quoted texts, code, URLs, paths and numbers.
+func TestFacts(t *testing.T) {
+	got := facts("Use „Zeit“ and `time` at https://example.org/a or /tmp/x.db, 1,5 h and 2.")
+	want := []string{"Zeit", "time", "https://example.org/a", "/tmp/x.db", "1,5", "2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("facts %q, want %q", got, want)
+	}
+	if lastWords(strings.Repeat("a", 50)+":") != "…"+strings.Repeat("a", 39)+":" {
+		t.Errorf("lastWords %q", lastWords(strings.Repeat("a", 50)+":"))
+	}
+}
+
+// A merge that loses a number is refused with it, and a source that is gone fails
+// the check.
+func TestKeeps(t *testing.T) {
+	_, store := rawStore(t)
+	e := keepMemory(t, store, "", "price", "It costs 15 euros, 1,5 with tax.", time.Time{})
+	d := &desk{store: store}
+	ctx := context.Background()
+	c := memory.Change{Action: "merge", IDs: []string{e.ID}, Content: "It costs 15 euros, 1 with tax."}
+	if err := d.keeps(ctx, c); err == nil || !strings.Contains(err.Error(), `loses "1,5" of`) {
+		t.Fatalf("lost number: %v", err)
+	}
+	c.IDs = []string{"nothing"}
+	if err := d.keeps(ctx, c); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("a missing source: %v", err)
+	}
+}
