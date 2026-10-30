@@ -776,6 +776,13 @@ func TestRestartGoesOnWithTheConversation(t *testing.T) {
 		m.Update(key(' ')) // skips the splash
 		drive(t, m, m.Init(), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "gpt-") })
 		drive(t, m, typed(m, "/new"), func() bool { return m.Current() != plugin.ThreadID }) // the thread hands on, and starts nothing anew
+		// A new conversation has no session at the node yet, so its watch fails
+		// until the first message made one, and the watch is started anew. Wait
+		// for that answer to show: then the conversation is watched, and the
+		// restart of the next answer comes as it happens. Asking it before the
+		// watch stands lets the answer pass, and a restart that is replayed with
+		// the rest is not acted on.
+		drive(t, m, typed(m, "hello"), func() bool { return strings.Contains(ansi.Strip(m.View().Content), "last=hello") })
 		drive(t, m, typed(m, "!again"), func() bool { _, ok := m.Restarts(); return ok })
 		shown = m.Current()
 		m.SetDraft(tui.Draft{Text: "half a thought", Images: []string{"/tmp/picture.png"}})
