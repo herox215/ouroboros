@@ -7,7 +7,7 @@ import (
 	"ouroboros/plugin"
 )
 
-const outputInstructions = "Output for Matrix: Keep replies short and to the point. Write answers and commentary as plain text. Do not use Markdown formatting for emphasis, headings, tables, links or code fences. Use paragraphs and simple lists when helpful. Write URLs directly. Preserve literal code, commands, paths and other exact text; do not remove characters that belong to their content. These instructions concern presentation only, not the language of the reply."
+const outputInstructions = "Output for Matrix: Keep replies short and to the point. Markdown is rendered in Matrix: emphasis, headings, lists, tables, links and code fences are welcome where they help. Preserve literal code, commands, paths and other exact text; do not remove characters that belong to their content. These instructions concern presentation only, not the language of the reply."
 
 // outputHook contributes once per answer, not once per message or tool round.
 // The context is ephemeral: it never becomes conversation history. Inspect the

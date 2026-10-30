@@ -201,7 +201,7 @@ func (c *Client) safeRoom(ctx context.Context, room id.RoomID) (id.UserID, error
 // Send sends to the room's current allowlisted peer. Use SendTo for replies
 // bound to the sender of an earlier message.
 func (c *Client) Send(ctx context.Context, room, text string) error {
-	return c.send(ctx, room, "", text)
+	return c.sendText(ctx, room, "", text)
 }
 
 // SendTo sends only if the room still contains the expected allowlisted peer.
@@ -209,7 +209,26 @@ func (c *Client) SendTo(ctx context.Context, room, expectedPeer, text string) er
 	if expectedPeer == "" {
 		return errors.New("the expected Matrix peer is required")
 	}
-	return c.send(ctx, room, id.UserID(expectedPeer), text)
+	return c.sendText(ctx, room, id.UserID(expectedPeer), text)
+}
+
+// SendFormattedTo sends only if the room still contains the expected peer,
+// with an HTML version of body for clients that render formatted messages.
+// An empty formatted body sends the plain text alone.
+func (c *Client) SendFormattedTo(ctx context.Context, room, expectedPeer, body, formatted string) error {
+	if expectedPeer == "" {
+		return errors.New("the expected Matrix peer is required")
+	}
+	if formatted == "" {
+		return c.sendText(ctx, room, id.UserID(expectedPeer), body)
+	}
+	return c.send(ctx, room, id.UserID(expectedPeer), &event.MessageEventContent{
+		MsgType: event.MsgText, Body: body, Format: event.FormatHTML, FormattedBody: formatted,
+	})
+}
+
+func (c *Client) sendText(ctx context.Context, room string, expectedPeer id.UserID, text string) error {
+	return c.send(ctx, room, expectedPeer, &event.MessageEventContent{MsgType: event.MsgText, Body: text})
 }
 
 // TypingTo publishes a short-lived typing notification only to the expected
@@ -229,10 +248,12 @@ func (c *Client) TypingTo(ctx context.Context, room, expectedPeer string, typing
 	return err
 }
 
-func (c *Client) send(ctx context.Context, room string, expectedPeer id.UserID, text string) error {
+// send locks the send path and hands content to the room; expectedPeer is
+// checked when it is not empty.
+func (c *Client) send(ctx context.Context, room string, expectedPeer id.UserID, content *event.MessageEventContent) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	return c.sendContent(ctx, room, expectedPeer, &event.MessageEventContent{MsgType: event.MsgText, Body: text})
+	return c.sendContent(ctx, room, expectedPeer, content)
 }
 
 // sendContent is send for any message content; c.sendMu is held.

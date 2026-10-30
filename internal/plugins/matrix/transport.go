@@ -48,7 +48,26 @@ func attachmentsOf(msg transport.Message) []plugin.Attachment {
 }
 
 func (c *sdkConnection) SendTo(ctx context.Context, room, peer, text string) error {
-	return c.client.SendTo(ctx, room, peer, text)
+	return sendText(ctx, c.client, room, peer, text)
+}
+
+// maxFormattedBody leaves room for the plain body and the encryption overhead
+// under Matrix's event-size limit; beyond it the text is sent unformatted.
+const maxFormattedBody = 24000
+
+// sender carries a message to a room of the Matrix client.
+type sender interface {
+	SendTo(ctx context.Context, room, peer, text string) error
+	SendFormattedTo(ctx context.Context, room, peer, body, formatted string) error
+}
+
+// sendText sends text as the Markdown it is, with its HTML rendering next to
+// the plain text, which clients that render no HTML show instead.
+func sendText(ctx context.Context, s sender, room, peer, text string) error {
+	if formatted := formatHTML(text); formatted != "" && len(formatted) <= maxFormattedBody {
+		return s.SendFormattedTo(ctx, room, peer, text, formatted)
+	}
+	return s.SendTo(ctx, room, peer, text)
 }
 func (c *sdkConnection) SendImageTo(ctx context.Context, room, peer, name string, data []byte) error {
 	return c.client.SendImageTo(ctx, room, peer, name, data)
