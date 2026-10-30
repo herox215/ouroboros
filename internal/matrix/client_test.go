@@ -368,3 +368,32 @@ func TestServerValidation(t *testing.T) {
 		}
 	}
 }
+
+// validContent leaves content the canonical JSON accepts untouched, and covers
+// every string field of an event that carries a byte which is no UTF-8, not
+// only the ones the senders fill today (#163).
+func TestValidContentSanitizesEveryStringField(t *testing.T) {
+	plain := &event.MessageEventContent{MsgType: event.MsgText, Body: "ok"}
+	if got := validContent(plain); got != plain {
+		t.Fatalf("accepted content became %T", got)
+	}
+	content := &event.MessageEventContent{
+		MsgType: event.MsgImage, Body: "bild\xff.png",
+		Info: &event.FileInfo{MimeType: "image\xfe/png", Size: MaxMediaBytes},
+	}
+	got, ok := validContent(content).(map[string]any)
+	if !ok {
+		t.Fatalf("sanitized content is %T, not an event object", validContent(content))
+	}
+	if got["body"] != "bild\uFFFD.png" {
+		t.Fatalf("body %q", got["body"])
+	}
+	info, _ := got["info"].(map[string]any)
+	if info["mimetype"] != "image\uFFFD/png" {
+		t.Fatalf("mimetype %q", info["mimetype"])
+	}
+	// The size is an integer in the event, not a float that could round it.
+	if size, ok := info["size"].(json.Number); !ok || size.String() != "10485760" {
+		t.Fatalf("size %#v", info["size"])
+	}
+}

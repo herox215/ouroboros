@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +34,8 @@ type mockMatrix struct {
 	inbox  map[id.UserID][]*event.Event
 	sent   []*event.Event
 	extra  bool
+	// mediaUploads counts the files the homeserver accepted for a media send.
+	mediaUploads int
 	// failQuery makes the homeserver fail to tell the devices of users.
 	failQuery bool
 	sync      func(http.ResponseWriter, *http.Request)
@@ -183,6 +186,12 @@ func (m *mockMatrix) serve(w http.ResponseWriter, r *http.Request) {
 			state = append(state, stateEvent(event.StateMember, "@eve:test", &event.MemberEventContent{Membership: event.MembershipInvite}))
 		}
 		encode(state)
+	case strings.HasSuffix(r.URL.Path, "/media/v3/upload"):
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			m.t.Error(err)
+		}
+		m.mediaUploads++
+		encode(map[string]string{"content_uri": "mxc://test/upload"})
 	case strings.Contains(r.URL.Path, "/send/"):
 		if !strings.Contains(r.URL.Path, "/m.room.encrypted/") {
 			m.t.Error("plaintext send attempted")
@@ -724,4 +733,37 @@ func TestEncryptedTextAtTheBudgetFitsOneEvent(t *testing.T) {
 		t.Fatalf("the encrypted event takes %d bytes, the limit is %d", len(wire), maxEventBytes)
 	}
 	t.Logf("the encrypted event of a full-budget message takes %d of %d bytes", len(wire), maxEventBytes)
+}
+
+// TestEncryptedMediaWithAFileNameThatIsNoUTF8 sends an image whose name holds
+// a byte that is no UTF-8, as a file name on Linux may. The canonical JSON
+// before the cipher refused such a name and failed the whole send, after the
+// file had already been uploaded. The name reaches the receiver with U+FFFD
+// in its place, as the text paths do (#163).
+func TestEncryptedMediaWithAFileNameThatIsNoUTF8(t *testing.T) {
+	m := newMock(t)
+	bot := m.client(t, "@bot:test", "BOT")
+	alice := m.client(t, "@alice:test", "ALICE")
+	setupCrypto(t, bot)
+	aliceCrypto := setupCrypto(t, alice)
+	bot.running = true
+
+	if err := bot.SendImageTo(context.Background(), "!dm:test", "@alice:test", "kaputt\xff.png", imageFixture(t)); err != nil {
+		t.Fatalf("a name that is no UTF-8 failed the send: %v", err)
+	}
+	m.deliver(alice)
+	m.mu.Lock()
+	if len(m.sent) != 1 || m.mediaUploads != 1 {
+		t.Fatalf("%d encrypted sends, %d uploads", len(m.sent), m.mediaUploads)
+	}
+	encrypted := m.sent[0]
+	m.mu.Unlock()
+	plain, err := aliceCrypto.decrypt(context.Background(), encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := plain.Content.AsMessage()
+	if want := "kaputt\uFFFD.png"; content.Body != want || content.FileName != want {
+		t.Fatalf("the receiver reads body %q of file %q", content.Body, content.FileName)
+	}
 }

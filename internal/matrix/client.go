@@ -2,6 +2,7 @@
 package matrix
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -272,6 +273,30 @@ func validUTF8(text string) string {
 	return strings.ToValidUTF8(text, "\uFFFD")
 }
 
+// validContent is event content as Megolm can encrypt it, at the one boundary
+// every event crosses. canonicaljson, the encoder before the cipher, refuses
+// invalid UTF-8 in any string field and fails the whole send; encoding/json
+// replaces such a byte with U+FFFD instead, which is what the receiver reads.
+// A field added to an event later therefore cannot fail a send the way a file
+// name did (#163). Content the encoder accepts is encrypted as it is.
+func validContent(content any) any {
+	if _, err := canonicaljson.Marshal(content); err == nil {
+		return content
+	}
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return content // the sender reports the reason it knows
+	}
+	// Numbers stay as written, so an integer field keeps its exact value.
+	var decoded any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		return content
+	}
+	return decoded
+}
+
 func (c *Client) sendText(ctx context.Context, room string, expectedPeer id.UserID, text string) error {
 	return c.send(ctx, room, expectedPeer, &event.MessageEventContent{MsgType: event.MsgText, Body: validUTF8(text)})
 }
@@ -331,7 +356,7 @@ func (c *Client) sendEvent(ctx context.Context, room string, expectedPeer id.Use
 			return nil, err
 		}
 	}
-	encrypted, err := crypt.encrypt(ctx, id.RoomID(room), peer, kind, content)
+	encrypted, err := crypt.encrypt(ctx, id.RoomID(room), peer, kind, validContent(content))
 	if err != nil {
 		return nil, errors.New("the Matrix encryption failed")
 	}
