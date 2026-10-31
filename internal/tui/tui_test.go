@@ -118,10 +118,10 @@ type fakeBackend struct {
 
 	// fail is what fails, by the name of the request.
 	fail map[string]error
-	// debug is what SetDebug was called with, in order, and yolo what
-	// SetYolo was.
+	// debug is what SetDebug was called with, in order, and modes what
+	// SetMode was.
 	debug []bool
-	yolo  []bool
+	modes []string
 
 	// settings are what /settings shows; changes what the owner changed
 	// there, and done what a change answers with.
@@ -428,9 +428,9 @@ func (f *fakeBackend) SetDebug(on bool) error {
 	return f.fail["setdebug"]
 }
 
-func (f *fakeBackend) SetYolo(on bool) error {
-	f.yolo = append(f.yolo, on)
-	return f.fail["setyolo"]
+func (f *fakeBackend) SetMode(mode string) error {
+	f.modes = append(f.modes, mode)
+	return f.fail["setmode"]
 }
 
 // SetEffort saves effort in the status, as the node does.

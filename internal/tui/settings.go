@@ -540,8 +540,8 @@ func onOff(on bool) (value, action string) {
 }
 
 // modelRows are the lines of the node that its status says: the model for
-// peers, the fallbacks, the effort, the debug mode and the yolo mode. /model,
-// /effort, /debug and /yolo change them, and the status says them as it is
+// peers, the fallbacks, the effort, the debug mode and the mode. /model,
+// /effort, /debug and /mode change them, and the status says them as it is
 // read anew.
 func modelRows(m *Model, fallbacks []Fallback) []row {
 	peers := "the same as yours"
@@ -557,8 +557,6 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 		fallback = strings.Join(names, " → ")
 	}
 	debug, turnDebug := onOff(m.status.Debug)
-	cyber, turnCyber := onOff(m.status.Cyberpsycho)
-	yolo, turnYolo := onOff(m.status.Yolo)
 	model := action{"open /model", (*Model).openModel}
 	var looks []action
 	for _, a := range appearances {
@@ -576,11 +574,10 @@ func modelRows(m *Model, fallbacks []Fallback) []row {
 		{section: nodeSection, label: "Fallbacks", value: fallback, note: "what your agent goes on with when the model cannot answer for now; f on /model adds or removes one", actions: []action{model}},
 		{section: nodeSection, label: "Effort", value: effortName(m.status.Effort), note: "how much the model thinks before it answers you", actions: []action{{"open /effort", (*Model).openEffort}}},
 		{section: nodeSection, label: "Debug mode", value: debug, note: "the log of the node (ouro.log) tells much more of every call of the LLM", actions: []action{{turnDebug, (*Model).toggleDebug}}},
-		{section: nodeSection, label: "Yolo mode", value: yolo, note: "no rule of tools.ask asks you before a tool call; questions to you still wait for you", actions: []action{{turnYolo, (*Model).toggleYolo}}},
+		{section: nodeSection, label: "Mode", value: modeOf(m.status), note: "what your agent may do without asking you: off, yolo or cyberpsycho; yolo and cyberpsycho exclude each other; enter opens /mode", actions: []action{{"open /mode", (*Model).openMode}}},
 		{section: nodeSection, label: "Appearance", value: m.appearanceText(), note: "how this terminal UI looks, in the colors of the GUI: light, dark, or system, as the background of the terminal is; for all profiles, also the next time; /appearance changes it too", actions: looks},
 		{section: nodeSection, label: "Model for sessions", value: sessions, note: "what your agent answers your sessions with; enter opens the models, enter there sets the one chosen, and on the chosen one makes it the model of the node again", actions: []action{{"open the models", (*Model).openSessionModel}}},
 		{section: nodeSection, label: "Model for the thread", value: threads, note: "what your agent answers the thread with; enter opens the models, enter there sets the one chosen, and on the chosen one makes it the model of the node again", actions: []action{{"open the models", (*Model).openThreadModel}}},
-		{section: nodeSection, label: "Cyberpsycho mode", value: cyber, note: "no rule of tools.ask asks you; what the review of an answer proposes is made at once; changes are made and built in, not committed or pushed; /changes shows them", actions: []action{{turnCyber, (*Model).toggleCyberpsycho}}},
 		{section: nodeSection, label: "Tests", value: m.status.Health.Line(), note: "the last run of the tests of a rebuild: green, failing with the package, or not measured before the first one", actions: nil},
 	}
 }

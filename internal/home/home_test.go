@@ -392,6 +392,16 @@ func TestYolo(t *testing.T) {
 	if d.Debug() {
 		t.Fatal("the yolo mode turned the debug mode on")
 	}
+	// The modes exclude each other: setting one leaves the other.
+	if err := d.SetCyberpsycho(true); err != nil || !d.Cyberpsycho() || d.Yolo() {
+		t.Fatalf("cyberpsycho over yolo: %v, cyber %v, yolo %v", err, d.Cyberpsycho(), d.Yolo())
+	}
+	if err := d.SetYolo(true); err != nil || !d.Yolo() || d.Cyberpsycho() {
+		t.Fatalf("yolo over cyberpsycho: %v, yolo %v, cyber %v", err, d.Yolo(), d.Cyberpsycho())
+	}
+	if err := d.SetYolo(false); err != nil || d.Yolo() || d.Cyberpsycho() {
+		t.Fatalf("yolo off: %v, yolo %v, cyber %v", err, d.Yolo(), d.Cyberpsycho())
+	}
 }
 
 // A configuration from before there were accesses names an endpoint and a

@@ -279,8 +279,9 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/suggestions` | changes of ouro the reviews suggest, in the existing dialog over the chat. `↑` `↓` select, `←` `→` accept or reject, `enter` decides, `a` accepts all in one new conversation, `esc` closes without deciding. Accepting starts an agent task; it does not apply a change immediately |
 | `/effort` | how much the model thinks before it answers in the conversation shown, see [Sessions](#sessions) |
 | `/debug` | turn the debug mode on or off: the log of the node then tells much more |
-| `/yolo` | turn the yolo mode on or off: in it, a tool call that a rule of `tools.ask` would ask you about just runs, while a question of the agent still waits for you; also in `/settings` |
-| `/cyberpsycho` | turn the cyberpsycho mode on or off: in it, no rule of `tools.ask` asks you, what the review of an answer proposes is made at once, and the tests of a rebuild are a health reading instead of a gate; changes stay in the working tree, nothing is committed or pushed; also in `/settings`; see [Cyberpsycho mode](#cyberpsycho-mode) |
+| `/mode` | choose the mode of the node in a small dialog: `off`, `yolo` or `cyberpsycho`, with `←` `→` and `enter`. `/mode yolo` or `/mode cyberpsycho` sets one directly; yolo and cyberpsycho exclude each other. The mode is also in `/settings` |
+| `/yolo` | shortcut for `/mode yolo`, or for `/mode off` while yolo is on: in yolo, a tool call that a rule of `tools.ask` would ask you about just runs, while a question of the agent still waits for you |
+| `/cyberpsycho` | shortcut for `/mode cyberpsycho`, or for `/mode off` while cyberpsycho is on: see [Cyberpsycho mode](#cyberpsycho-mode) |
 | `/changes` | show the uncommitted changes of the source of ouro, as `git status --short` names them |
 | `/help` | list the commands, those of the plugins too |
 | `/keys` | list the keys of the chat in a dialog, `esc` back |
@@ -605,8 +606,10 @@ its place, so a second `ouro rollback` goes forward again.
 
 ### Cyberpsycho mode
 
-`/cyberpsycho` turns the **cyberpsycho mode** of the node on or off; the same switch is in `/settings` under
-The node. In it:
+`/mode` opens the **modes** of the node: `off`, `yolo` or `cyberpsycho`, as a small dialog over the chat.
+`/mode cyberpsycho` sets one directly, `/cyberpsycho` is its shortcut, and the same is in `/settings` under The
+node. Yolo and cyberpsycho **exclude each other**: the node is in one of them at a time, and choosing one
+leaves the other. In cyberpsycho mode:
 
 - **Nothing is asked before a tool call.** The rules of `tools.ask` are off, as in yolo mode (`/yolo`); a
   question of the agent still waits for you.
@@ -1284,7 +1287,7 @@ and no peer reaches it.
 
 | Category | Shows | Changes |
 |---|---|---|
-| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode, the yolo mode, the cyberpsycho mode, the last run of the tests of a rebuild | the name and the description (empty is the default); the debug mode, the yolo mode and the cyberpsycho mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
+| The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode, the mode, the last run of the tests of a rebuild | the name and the description (empty is the default); the debug mode and the mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
 | The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it; how long the thread continues sessions (`thread_window`) | all of them |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |

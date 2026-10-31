@@ -370,7 +370,7 @@ func TestSettingsKeys(t *testing.T) {
 	for range len(m.config.shown(m)) - 1 {
 		press(m, "down")
 	}
-	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 15 {
+	if m.config.sel != len(m.config.shown(m))-1 || len(m.config.shown(m)) != 14 {
 		t.Errorf("below the last: %d of %d", m.config.sel, len(m.config.shown(m)))
 	}
 	pick(t, m, agentsSection, "Context provider", "none")
@@ -817,7 +817,7 @@ func TestSettingsModelRows(t *testing.T) {
 	m.status.PeerModel, m.status.Effort = "small", "high" // as the status says
 	b.fallbacks = []Fallback{{Access: "a", Model: "one"}, {Access: "b", Model: "two"}}
 	deliver(m, run(m, "/settings"))
-	for label, want := range map[string]string{"Model for peers": "small", "Fallbacks": "one → two", "Effort": "high", "Debug mode": "off", "Yolo mode": "off"} {
+	for label, want := range map[string]string{"Model for peers": "small", "Fallbacks": "one → two", "Effort": "high", "Debug mode": "off", "Mode": "off"} {
 		pick(t, m, nodeSection, label, "")
 		if r := m.config.selectedRow(m); r.value != want {
 			t.Errorf("%s: %q", label, r.value)
@@ -836,17 +836,10 @@ func TestSettingsModelRows(t *testing.T) {
 		t.Errorf("debug: %v", b.debug)
 	}
 
-	pick(t, m, nodeSection, "Yolo mode", "turn on")
-	if do(m); !slices.Equal(b.yolo, []bool{true}) {
-		t.Errorf("yolo: %v", b.yolo)
-	}
-	m.status.Yolo = true // as the status says once it is read anew
-	pick(t, m, nodeSection, "Yolo mode", "turn off")
-	if r := m.config.selectedRow(m); r.value != "on" {
-		t.Errorf("yolo on: %q", r.value)
-	}
-	if do(m); !slices.Equal(b.yolo, []bool{true, false}) {
-		t.Errorf("yolo: %v", b.yolo)
+	pick(t, m, nodeSection, "Mode", "open /mode")
+	do(m)
+	if m.screen != screenMode {
+		t.Errorf("the mode dialog: %v", m.screen)
 	}
 }
 

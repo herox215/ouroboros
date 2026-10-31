@@ -21,6 +21,10 @@ const (
 	sessionsRows  = 8  // how many conversations it lists at once
 )
 
+// modeWidth is how wide the dialog of the modes is: a row of three names,
+// and what the one chosen does.
+const modeWidth = 64
+
 // memoryWidth is how wide the dialog of the memories is at most: the chart
 // reads as a square only where the dialog is one, so a window that is short
 // gives it fewer rows rather than a flat chart.
@@ -30,7 +34,7 @@ const memoryWidth = 84
 // stays as it is, also when the wheel turns.
 func (m *Model) inDialog() bool {
 	switch m.screen {
-	case screenSuggestions, screenEffort, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions, screenMemory:
+	case screenSuggestions, screenEffort, screenMode, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions, screenMemory:
 		return true
 	}
 	return false
@@ -47,6 +51,8 @@ func (m *Model) dialogSize() (width, height int) {
 		width, height = m.width-4, room
 	case screenSessions: // as high as the list it shows, not as high as the chat
 		width, height = sessionsWidth, sessionsRows+7
+	case screenMode: // a small dialog: the modes on one row
+		width = modeWidth
 	case screenMemory: // a chart of the memories: as square as the room allows
 		width = min(memoryWidth, m.width-4)
 		height = min(room, (width+1)/2) // a cell of the terminal is twice as tall as it is wide
