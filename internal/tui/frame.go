@@ -572,8 +572,8 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 
 // sidebarLayout is where the rows of the sidebar go in a column h rows high:
 // the rows that fit, from the first of them shown, and the row of the screen
-// they begin at. As in the GUI, the list sits between the top and the button
-// of the settings at the bottom, and it scrolls to the session shown.
+// they begin at. As in the GUI, the list sits between the top and the bottom,
+// and it scrolls to the session shown.
 func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
 	rows = m.sidebarRows(inner)
 	most := max(4, h*48/100+2)
@@ -585,7 +585,7 @@ func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
 		}
 		rows = append(rows[:2:2], rows[first:first+most-2]...)
 	}
-	free := max(0, h-3-len(rows)) // the margins and the button below
+	free := max(0, h-2-len(rows)) // the margins
 	return rows, 1 + free/2
 }
 
@@ -599,19 +599,12 @@ func (m *Model) sidebarView(w, h int) string {
 		lines[i] = strings.Repeat(" ", w)
 	}
 	for i, r := range rows {
-		if y := top + i; y < h-2 {
+		if y := top + i; y < h-1 {
 			lines[y] = pad(margin+r.text, w)
 		}
 	}
-	if h >= 2 {
-		lines[h-2] = pad(margin+mutedStyle.Render(gear), w)
-	}
 	return strings.Join(lines, "\n")
 }
-
-// gear is the button of the settings at the bottom of the sidebar, as the
-// GUI has it: drawn as text, not as a picture twice as wide.
-const gear = "⚙\ufe0e"
 
 // sidebarAt is the session the sidebar shows at the row y of the screen,
 // nil for none.
@@ -621,7 +614,7 @@ func (m *Model) sidebarAt(y int) *conversation {
 		return nil
 	}
 	rows, top := m.sidebarLayout(max(1, w-2*columnPad), m.height)
-	if i := y - top; i >= 0 && i < len(rows) && y < m.height-2 {
+	if i := y - top; i >= 0 && i < len(rows) && y < m.height-1 {
 		return rows[i].c
 	}
 	return nil

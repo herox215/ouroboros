@@ -138,19 +138,16 @@ func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 }
 
 // click does what is clicked beside the history, as in the GUI: a session
-// of the sidebar or of the column on the right shows it, the button of the
-// settings opens them, and those of the head and the composer take the owner
-// to the thread, stop the answer and send. What is asked or offered above
-// the composer is answered or run, and a click into the composer puts its
-// cursor there. It reports whether something was there.
+// of the sidebar or of the column on the right shows it, and those of the
+// head and the composer take the owner to the thread, stop the answer and
+// send. What is asked or offered above the composer is answered or run, and
+// a click into the composer puts its cursor there. It reports whether
+// something was there.
 func (m *Model) click(x, y int) (tea.Cmd, bool) {
 	side := m.sideWidth()
 	if x < side {
 		if c := m.sidebarAt(y); c != nil {
 			return m.switchTo(c), true
-		}
-		if y == m.height-2 && x >= columnPad && x < columnPad+2 {
-			return m.openSettings(), true
 		}
 		return nil, false
 	}
