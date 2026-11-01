@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -105,27 +106,116 @@ func (s *modeScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // view shows the modes in a small dialog: a row to choose from, and what the
-// mode at is does.
+// mode at is does. While it is at the cyberpsycho mode, the dialog comes
+// apart a little: its heading flickers, the name is drawn in the colors of a
+// signal that cannot settle, and a broken line runs under the row.
 func (s *modeScreen) view(m *Model) (string, []hit) {
+	cyber := modeNames[s.at] == "cyberpsycho"
+	heading := boldStyle.Render("Mode")
+	if cyber {
+		heading = glitchTitle(m.ticks)
+	}
 	lines := []string{
-		boldStyle.Render("Mode"), "",
+		heading, "",
 		mutedStyle.Render("What your agent may do without asking you."), "",
 	}
-	row := choices(modeNames, s.at)
+	row := s.row(m.ticks)
 	w, _ := m.dialogSize()
 	rowLine := len(lines)
 	lines = append(lines, m.centered(row)...)
 	lines = append(lines, "")
-	for _, line := range modeAbout[modeNames[s.at]] {
-		lines = append(lines, m.centered(mutedStyle.Render(line))...)
+	if cyber {
+		lines = append(lines, m.centered(glitchStrip(min(w-4, 48), m.ticks))...)
+		lines = append(lines, "")
 	}
-	lines = append(lines, "",
-		mutedStyle.Render("Yolo and cyberpsycho exclude each other:"),
-		mutedStyle.Render("choosing one leaves the other."),
-	)
+	var about []string
+	for _, line := range modeAbout[modeNames[s.at]] {
+		if cyber {
+			line = lipgloss.NewStyle().Foreground(bad).Render("▌ ") + mutedStyle.Render(line)
+		} else {
+			line = mutedStyle.Render(line)
+		}
+		about = append(about, line)
+	}
+	lines = append(lines, m.centered(about...)...)
+	lines = append(lines, "")
+	lines = append(lines, m.centered(mutedStyle.Render("Yolo and cyberpsycho exclude each other:"),
+		mutedStyle.Render("choosing one leaves the other."))...)
 	hits := choiceHits(rowLine, max(0, (w-4-lipgloss.Width(row))/2), modeNames, func(at int) tea.Cmd {
 		s.at = at
 		return s.choose(m)
 	})
 	return m.dialog(lines), hits
+}
+
+// row is the row of the modes: the one at marked, and the cyberpsycho mode
+// in the colors of the warning and of the UI, one letter after the other.
+func (s *modeScreen) row(tick int) string {
+	parts := make([]string, len(modeNames))
+	for i, n := range modeNames {
+		switch {
+		case i != s.at:
+			parts[i] = mutedStyle.Render(" " + n + " ")
+		case n == "cyberpsycho":
+			parts[i] = glitchName(n, tick)
+		default:
+			parts[i] = boldStyle.Foreground(accent).Render("[" + n + "]")
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// glitchRunes are what the glitch of the cyberpsycho mode is made of: blocks
+// and marks that stand where a letter or a cell of signal came apart.
+var glitchRunes = []rune{'▓', '▒', '░', '▚', '▞', '▙', '▟', '#', '¬'}
+
+// glitchCell is one cell of the glitch at a place of a run, chosen by the
+// tick of the UI: one frame keeps what it drew until the next tick.
+func glitchCell(tick, at int) string {
+	return string(glitchRunes[(tick*7+at*11)%len(glitchRunes)])
+}
+
+// glitchTitle is the heading while the cyberpsycho mode is chosen: the o of
+// Mode comes apart for a frame or two, as a signal does.
+func glitchTitle(tick int) string {
+	switch tick % 6 {
+	case 1:
+		return boldStyle.Render("M") + lipgloss.NewStyle().Foreground(bad).Render("0") + boldStyle.Render("DE")
+	case 3:
+		return boldStyle.Render("M") + lipgloss.NewStyle().Foreground(bad).Render(glitchCell(tick, 0)) + boldStyle.Render("DE")
+	}
+	return boldStyle.Render("Mode")
+}
+
+// glitchName is the name of the mode that does not leave the mind as it was:
+// its letters in the two colors, so that it reads as a signal that cannot
+// settle.
+func glitchName(name string, tick int) string {
+	var b strings.Builder
+	for i, r := range name {
+		style := lipgloss.NewStyle().Foreground(bad)
+		if (i+tick)%3 == 0 {
+			style = lipgloss.NewStyle().Foreground(accent)
+		}
+		b.WriteString(style.Render(string(r)))
+	}
+	return boldStyle.Render("[") + b.String() + boldStyle.Render("]")
+}
+
+// glitchStrip is a line of broken signal under the row while the
+// cyberpsycho mode is chosen: sparse blocks that move with the tick.
+func glitchStrip(w, tick int) string {
+	var b strings.Builder
+	for i := 0; i < w; i++ {
+		if (i*5+tick*3)%7 >= 2 {
+			b.WriteString(" ")
+			continue
+		}
+		style := mutedStyle
+		if i%2 == 0 {
+			style = lipgloss.NewStyle().Foreground(bad)
+		}
+		b.WriteString(style.Render(glitchCell(tick, i)))
+	}
+	return b.String()
 }

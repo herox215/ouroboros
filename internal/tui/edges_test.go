@@ -39,13 +39,11 @@ func footer(m *Model) string {
 			return hint
 		}
 	}
-	// The health mark begins the line, also when there is nothing else to
-	// say: what the caller looks for starts after it.
-	last := strings.TrimSpace(lines[len(lines)-1])
-	for _, mark := range []string{ansi.Strip(m.healthMark()), ansi.Strip(m.healthHeart())} {
-		last = strings.TrimPrefix(strings.TrimPrefix(last, mark), " ")
-	}
-	return last
+	// The gear stands at the left of the last line, and in cyberpsycho mode
+	// the integrity of the node below it: what the caller looks for begins
+	// after both.
+	line := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), ansi.Strip(m.healthMark())))
+	return strings.TrimSpace(strings.TrimPrefix(line, gear))
 }
 
 // shortRefresh makes the UI refresh at once instead of every ten seconds.

@@ -343,16 +343,7 @@ func (m *Model) bottomLines(w int) []string {
 	if m.inDialog() {
 		hint = "" // a dialog says its keys below itself
 	}
-	left := m.healthMark()
-	if title := m.chatTitle(); title != "" {
-		// The conversation keeps what it says of the call: where the whole
-		// mark would cut that, its heart stands instead.
-		if lipgloss.Width(left)+2+lipgloss.Width(title) > max(0, w-lipgloss.Width(hint)-1) {
-			left = m.healthHeart()
-		}
-		left += "  " + title
-	}
-	lines = append(lines, spread(left, hint, w))
+	lines = append(lines, spread(m.chatTitle(), hint, w))
 	if m.pendingRows() > 0 {
 		lines = append(lines, m.suggestionRequests.pendingView(m, w))
 	}
@@ -618,8 +609,18 @@ func (m *Model) sidebarView(w, h int) string {
 			lines[y] = pad(margin+r.text, w)
 		}
 	}
-	if h >= 2 {
-		lines[h-2] = pad(margin+mutedStyle.Render(gear), w)
+	// The gear stands at the bottom of the sidebar, and in cyberpsycho mode
+	// the integrity of the node below it: the reading of the last run of the
+	// tests, not beside the speed of the last call. Outside that mode the
+	// gear takes the last row for itself.
+	bottom := []string{mutedStyle.Render(gear)}
+	if mark := m.healthMark(); mark != "" {
+		bottom = append(bottom, mark)
+	}
+	for i, line := range bottom {
+		if y := h - len(bottom) + i; y >= 0 && y < h {
+			lines[y] = pad(margin+line, w)
+		}
 	}
 	return strings.Join(lines, "\n")
 }

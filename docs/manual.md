@@ -140,9 +140,10 @@ shows `cost included in plan`. Missing costs are unknown, never assumed to be ze
 is accumulated since the node started and marked `(partial)` if any calls have unknown costs. No
 model-price estimate is currently applied. On narrow terminals the footer cuts them off; `/context`
 provides the detailed metrics.
-At the left of that line stands the health of the last [`rebuild`](#updates) that ran tests: `♥ green` when they
-passed, `♥ fail <package>` when one failed, and `♥ not measured` before the first run. The keys on the right stay
-whole; where the whole mark would not fit beside them, its heart stands alone, in the color of the reading.
+In cyberpsycho mode, under the gear at the bottom left stands the integrity of the last [`rebuild`](#updates) that
+ran tests: `100% Integrity` when they passed, and a lower percentage when a package failed, the record keeping
+one failure at least. Before the first run it says `??% Integrity`. Outside that mode the tests gate the build,
+and the sidebar says nothing of them.
 `/context` shows what the context is: the system prompt, every tool with its schema
 and the conversation so far, message by message with its size. It is laid out to be read, not as a chat: every
 message has a head with its role and size and hangs on a bar of the color of its role, the functions a tool
@@ -617,9 +618,9 @@ leaves the other. In cyberpsycho mode:
   instead of waiting in `/suggestions`. It checks the change against the source and may go all the way into a
   build with [`rebuild`](#updates).
 - **The tests of a rebuild are a health reading, not a gate.** A failing test does not keep the build out: the
-  build is installed, and the line below the chat says `♥ fail <package>` or `♥ green`. The reading is kept in
-  `health.json` in the directory of the node and is shown in `/settings` under The node as `Tests`; before the
-  first run it says `♥ not measured`.
+  build is installed, and the integrity under the gear at the bottom left falls to the share of the packages
+  that passed; it is only there while the mode is on. The reading is kept in `health.json` in the directory of
+  the node and is shown in `/settings` under The node as `Tests`; before the first run it says `??% Integrity`.
 - **Nothing is committed or pushed.** What the mode changes stays in the working tree of the source of ouro, and
   `/changes` lists it as `git status --short` does. No branch is opened and nothing is merged; a merge still
   needs your explicit request.

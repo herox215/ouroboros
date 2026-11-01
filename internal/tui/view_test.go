@@ -161,52 +161,32 @@ func TestChatTitleNeedsAConversation(t *testing.T) {
 }
 
 // The footer is one line as wide as the window: the hint whole on the
-// right, a cell before the edge, the health mark at the left and the
-// conversation in what the two leave.
+// right, a cell before the edge, the conversation in what it leaves.
 func TestFooterFitsTheWindow(t *testing.T) {
 	m, _ := newModel(t)
 	fill(m, 1)
 	m.chat.context, m.chat.pending = 1200, true
-	title, hint := " "+ansi.Strip(m.chatTitle()), "esc stop "
-	mark := ansi.Strip(m.healthMark())
-	wide, markWide := lipgloss.Width(title), lipgloss.Width(mark)
-	for _, width := range []int{100, len(hint) + markWide + wide + 1, len(hint) + markWide + wide, len(hint) + markWide + 1, len(hint) + markWide, 12, 11, 10, len(hint)} {
+	title, hint := ansi.Strip(m.chatTitle()), "esc stop "
+	wide := lipgloss.Width(title)
+	for _, width := range []int{100, len(hint) + wide + 1, len(hint) + wide, len(hint) + 1, len(hint), 12, 11, 10} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
 		got := ansi.Strip(m.footerView())
 		if lipgloss.Width(got) != width || !strings.HasSuffix(got, hint) {
 			t.Fatalf("at %d cells: %q", width, got)
 		}
 		left := strings.TrimRight(strings.TrimSuffix(got, hint), " ")
-		room := width - len(hint)
-		switch {
+		switch room := width - len(hint); {
 		case room < 2:
 			if left != "" {
-				t.Errorf("at %d cells there is no room for the mark or the conversation: %q", width, left)
+				t.Errorf("at %d cells there is no room for the conversation: %q", width, left)
 			}
-		case room < markWide+1:
-			// The hint stays whole: the mark falls back to its heart, a cell
-			// apart from the hint, and the conversation has no room left.
-			if heart := ansi.Strip(m.healthHeart()); left != heart {
-				t.Errorf("at %d cells the mark is %q, want its heart %q", width, left, heart)
+		case room < wide+1:
+			if lipgloss.Width(left) != room-1 || !strings.HasSuffix(left, "…") {
+				t.Errorf("at %d cells the conversation is cut to %q", width, left)
 			}
 		default:
-			if !strings.HasPrefix(left, mark) {
-				t.Fatalf("at %d cells the mark is not whole: %q", width, left)
-			}
-			left = strings.TrimPrefix(left, mark)
-			switch room -= markWide + 1; {
-			case room >= wide:
-				if left != title {
-					t.Errorf("at %d cells the conversation is %q", width, left)
-				}
-			case room > 0:
-				if lipgloss.Width(left) != room || !strings.HasSuffix(left, "…") {
-					t.Errorf("at %d cells the conversation is cut to %q", width, left)
-				}
-			default:
-				if left != "" {
-					t.Errorf("at %d cells there is no room for %q", width, left)
-				}
+			if left != title {
+				t.Errorf("at %d cells the conversation is %q", width, left)
 			}
 		}
 	}

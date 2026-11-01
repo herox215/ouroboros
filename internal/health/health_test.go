@@ -73,3 +73,28 @@ func TestReadWithoutARecord(t *testing.T) {
 		t.Error("a record that says no run was taken was read")
 	}
 }
+
+// The reading as a percentage: all of the packages a run named when they
+// passed, and all but the first failure when not.
+func TestIntegrity(t *testing.T) {
+	three := []string{"./internal/home/", "./internal/tui/", "./plugin/"}
+	for _, tt := range []struct {
+		name string
+		r    *Record
+		pct  int
+		ok   bool
+	}{
+		{"never taken", nil, 0, false},
+		{"not run", &Record{}, 0, false},
+		{"green", &Record{Ran: true, OK: true, Tests: three}, 100, true},
+		{"one of three failed", &Record{Ran: true, Tests: three, Fail: "./internal/tui/: TestFooterFitsTheWindow"}, 66, true},
+		{"the only package failed", &Record{Ran: true, Tests: three[:1]}, 0, true},
+		{"failing without a package", &Record{Ran: true}, 0, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if pct, ok := tt.r.Integrity(); pct != tt.pct || ok != tt.ok {
+				t.Errorf("Integrity() = %d, %v, want %d, %v", pct, ok, tt.pct, tt.ok)
+			}
+		})
+	}
+}

@@ -53,6 +53,23 @@ func Write(path string, r Record) error {
 	return safefile.Write(path, append(data, '\n'), 0o600)
 }
 
+// Integrity is the reading as a percentage of the packages the run named:
+// all of them when they passed, and all but the one whose failure the record
+// keeps when not. The second result is false before the first run, where
+// there is no reading to give.
+func (r *Record) Integrity() (int, bool) {
+	if r == nil || !r.Ran {
+		return 0, false
+	}
+	if r.OK {
+		return 100, true
+	}
+	// Only the first failure is kept: one of the packages a run named is
+	// gone, the rest of them stand.
+	n := max(1, len(r.Tests))
+	return (n - 1) * 100 / n, true
+}
+
 // Line is the record in one short line for the owner: "green", "failing:
 // ./internal/tui/: TestFrameHeader", or "not measured". A nil record is one
 // that was never taken.
