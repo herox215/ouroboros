@@ -97,6 +97,8 @@ func (m *Model) dialogView() (string, []hit) {
 		return m.sessions.view(m)
 	case screenEffort:
 		return m.effort.view(m)
+	case screenMode:
+		return m.mode.view(m)
 	case screenMemory:
 		return m.memories.view(m)
 	}

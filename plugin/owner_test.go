@@ -892,27 +892,39 @@ func TestOwnerListsTheMemories(t *testing.T) {
 	}
 }
 
-// The owner turns the yolo mode of the node on and off, and the log says so.
-// A mode that cannot be turned off fails.
-func TestOwnerSetsYolo(t *testing.T) {
+// The owner sets the mode of the node, and one mode leaves the other: the
+// log says which one is on. A mode that cannot be written fails.
+func TestOwnerSetsMode(t *testing.T) {
 	s := clitest.Settings(t)
 	clitest.Env(t, s)
 	o := owner(t, s)
 	dir := home.Dir(s.Home)
-	for _, on := range []bool{true, false} {
-		if err := o.SetYolo(on); err != nil || dir.Yolo() != on {
-			t.Fatalf("set %v: %v, yolo %v", on, err, dir.Yolo())
+	for _, tc := range []struct {
+		name string
+		want home.Mode
+	}{{"yolo", home.ModeYolo}, {"cyberpsycho", home.ModeCyberpsycho}, {"off", home.ModeOff}} {
+		if err := o.SetMode(tc.name); err != nil || dir.Mode() != tc.want {
+			t.Fatalf("set %q: %v, mode %q", tc.name, err, dir.Mode())
 		}
 	}
-	log, _ := os.ReadFile(dir.Service().LogFile)
-	if !strings.Contains(string(log), "yolo mode on") || !strings.Contains(string(log), "yolo mode off") {
-		t.Fatalf("the log:\n%s", log)
-	}
-	if err := os.MkdirAll(filepath.Join(s.Home, "yolo", "in"), 0o700); err != nil {
+	if err := o.SetMode("yolo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := o.SetYolo(false); err == nil {
-		t.Fatal("a yolo mode that cannot be removed")
+	if err := o.SetMode("cyberpsycho"); err != nil || !dir.Cyberpsycho() || dir.Yolo() {
+		t.Fatalf("cyberpsycho after yolo: %v, mode %q", err, dir.Mode())
+	}
+	log, _ := os.ReadFile(dir.Service().LogFile)
+	if !strings.Contains(string(log), "mode yolo") || !strings.Contains(string(log), "mode cyberpsycho") {
+		t.Fatalf("the log:\n%s", log)
+	}
+	if err := o.SetMode("off"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(s.Home, "mode", "in"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SetMode("yolo"); err == nil {
+		t.Fatal("a mode that cannot be written")
 	}
 }
 

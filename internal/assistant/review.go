@@ -96,6 +96,12 @@ func tasked(text string) bool {
 	return strings.HasPrefix(text, suggestedIntro) || strings.HasPrefix(text, skillIntro)
 }
 
+// Taken reports whether what the review of an answer hands to suggest, see
+// WithReview, is the change taken already, as in cyberpsycho mode: the task
+// to make it, see SuggestedTask, for the conversation to answer at once,
+// instead of a suggestion that waits for the owner.
+func Taken(text string) bool { return tasked(text) }
+
 // SuggestedTask is what the agent is asked to make the suggestion text the
 // owner took, which the review of an answer with signals made: it checks it
 // against the source first, as the review knew only the log, or for a skill

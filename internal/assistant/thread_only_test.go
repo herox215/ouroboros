@@ -32,11 +32,11 @@ func TestThreadOnlyTool(t *testing.T) {
 	everywhere := agent.NewTool("read", "", nil, quiet)
 	b.Tools = func() []agent.Tool { return []agent.Tool{threadOnly, everywhere} }
 
-	session, err := b.forOwner(cfg, false, false)
+	session, err := b.forOwner(cfg, false, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	thread, err := b.forOwner(cfg, true, false)
+	thread, err := b.forOwner(cfg, true, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

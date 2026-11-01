@@ -213,18 +213,122 @@ func (d Dir) Debug() bool {
 // call of the LLM on, without a restart.
 func (d Dir) SetDebug(on bool) error { return d.setFlag("debug", on) }
 
-// Yolo reports whether the node is in yolo mode: then its agent runs the
-// calls that the rules of tools.ask would put to the owner without asking,
-// see SetYolo. The mode is a file, so that the node and the front ends, which
-// are other processes, see it alike.
-func (d Dir) Yolo() bool {
-	_, err := os.Stat(d.path("yolo"))
-	return err == nil
+// Mode is how the node runs what its agent does: the ordinary way, where the
+// rules of tools.ask put a call to the owner, or one of the modes that take
+// that asking away. The modes exclude each other: the node has one at a time.
+type Mode string
+
+const (
+	// ModeOff is the ordinary way: a rule of tools.ask asks the owner before
+	// a tool call that needs it.
+	ModeOff Mode = ""
+	// ModeYolo runs every tool call without asking, while a question of the
+	// agent still waits for the owner.
+	ModeYolo Mode = "yolo"
+	// ModeCyberpsycho runs every call without asking, takes what the review
+	// of an answer proposes as its own work, and measures a rebuild instead
+	// of gating it. Nothing is committed or pushed.
+	ModeCyberpsycho Mode = "cyberpsycho"
+)
+
+// ParseMode is the mode name says: "off" or "" for the ordinary one, "yolo"
+// or "cyberpsycho" for a mode that takes the asking away.
+func ParseMode(name string) (Mode, error) {
+	switch mode := Mode(name); mode {
+	case ModeOff, "off":
+		return ModeOff, nil
+	case ModeYolo, ModeCyberpsycho:
+		return mode, nil
+	}
+	return ModeOff, fmt.Errorf("no mode %q: off, yolo or cyberpsycho", name)
 }
 
-// SetYolo turns the yolo mode of the node on or off. It holds from the next
-// message on, without a restart.
-func (d Dir) SetYolo(on bool) error { return d.setFlag("yolo", on) }
+// Mode reports how the node runs the tools of its agent. It is a file, so
+// that the node and the front ends, which are other processes, see it alike.
+func (d Dir) Mode() Mode {
+	data, err := os.ReadFile(d.path("mode"))
+	if err != nil {
+		// Before yolo and cyberpsycho excluded each other, each had a file
+		// of its own: a node that had one keeps it, the stricter one when it
+		// had both.
+		if _, err := os.Stat(d.path("cyberpsycho")); err == nil {
+			return ModeCyberpsycho
+		}
+		if _, err := os.Stat(d.path("yolo")); err == nil {
+			return ModeYolo
+		}
+		return ModeOff
+	}
+	mode, err := ParseMode(string(bytes.TrimSpace(data)))
+	if err != nil {
+		return ModeOff
+	}
+	return mode
+}
+
+// SetMode makes mode the mode of the node: one mode at a time, so that
+// setting one leaves the other. It holds from the next message on, without a
+// restart.
+func (d Dir) SetMode(mode Mode) error {
+	switch mode {
+	case ModeOff:
+		// A file of the modes from before would be read as a mode of its own
+		// again once the mode file is gone.
+		for _, old := range []string{"yolo", "cyberpsycho"} {
+			if err := d.setFlag(old, false); err != nil {
+				return err
+			}
+		}
+		return d.setFlag("mode", false)
+	case ModeYolo, ModeCyberpsycho:
+		if err := safefile.Write(d.path("mode"), []byte(mode+"\n"), 0o600); err != nil {
+			return err
+		}
+		old := "cyberpsycho"
+		if mode == ModeCyberpsycho {
+			old = "yolo"
+		}
+		return d.setFlag(old, false)
+	}
+	return fmt.Errorf("no mode %q: off, yolo or cyberpsycho", mode)
+}
+
+// Yolo reports whether the node is in yolo mode, see SetYolo.
+func (d Dir) Yolo() bool { return d.Mode() == ModeYolo }
+
+// SetYolo turns the yolo mode of the node on or off. Turning it on leaves
+// the cyberpsycho mode, and turning it off leaves another mode as it is. It
+// holds from the next message on, without a restart.
+func (d Dir) SetYolo(on bool) error {
+	if on {
+		return d.SetMode(ModeYolo)
+	}
+	if d.Mode() != ModeYolo {
+		return nil
+	}
+	return d.SetMode(ModeOff)
+}
+
+// Cyberpsycho reports whether the node is in cyberpsycho mode, see
+// SetCyberpsycho.
+func (d Dir) Cyberpsycho() bool { return d.Mode() == ModeCyberpsycho }
+
+// SetCyberpsycho turns the cyberpsycho mode of the node on or off. Turning it
+// on leaves the yolo mode, and turning it off leaves another mode as it is.
+// It holds from the next message on, without a restart.
+func (d Dir) SetCyberpsycho(on bool) error {
+	if on {
+		return d.SetMode(ModeCyberpsycho)
+	}
+	if d.Mode() != ModeCyberpsycho {
+		return nil
+	}
+	return d.SetMode(ModeOff)
+}
+
+// HealthFile is where the last run of the tests of a rebuild is kept, see
+// package health.
+func (d Dir) HealthFile() string { return d.path("health.json") }
 
 // setFlag turns on the mode that the file name of the directory stands for,
 // or off again: the file is there while the mode is.

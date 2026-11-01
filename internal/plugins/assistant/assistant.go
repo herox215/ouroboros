@@ -61,7 +61,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		if dir == dir.Root() {
 			builder = builder.WithMemoryProfiles(memoryProfiles(dir))
 		}
-		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug).WithYolo(dir.Yolo)
+		bot = assistant.New(dir.Config, builder, dir.Log).WithDebug(dir.Debug).WithYolo(dir.Yolo).WithCyberpsycho(dir.Cyberpsycho)
 		if dir == dir.Root() {
 			// The archivist opens the stores of every profile: only the
 			// process that serves runs it, at start if the interval passed.

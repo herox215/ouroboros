@@ -552,7 +552,7 @@ func (m *Model) View() tea.View {
 	}
 	var body string
 	switch m.screen {
-	case screenSuggestions, screenHelp, screenKeys, screenModel, screenSettings, screenSessions, screenEffort, screenJobs, screenMemory:
+	case screenSuggestions, screenHelp, screenKeys, screenModel, screenSettings, screenSessions, screenEffort, screenMode, screenJobs, screenMemory:
 		dialog, _ := m.dialogView()
 		body = m.overlay(dialog)
 	case screenPlugin, screenContext:
@@ -737,6 +737,9 @@ func (m *Model) headerView() string {
 	if n := m.suggestionRequests.unread; n > 0 {
 		line += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✦ %d SUGGESTIONS", n))
 	}
+	if m.status.Cyberpsycho {
+		line += "  " + m.cyberMark()
+	}
 	if !m.status.Debug {
 		return ansi.Truncate(line, m.width, "…")
 	}
@@ -865,6 +868,8 @@ func (m *Model) footerHint() string {
 		help = "esc back"
 	case screenEffort:
 		help = "←→ choose · enter set · esc back"
+	case screenMode:
+		help = "←→ choose · enter set · esc back"
 	case screenJobs:
 		help = "↑↓ select · enter stop · esc back"
 	case screenMemory:
@@ -948,10 +953,50 @@ func (m *Model) footerView() string {
 	right = ansi.Truncate(right, m.width, "…")
 	left := ""
 	switch m.screen {
-	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenSettings, screenSessions, screenMemory: // the dialogs lie over the chat
+	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenMode, screenSettings, screenSessions, screenMemory: // the dialogs lie over the chat
 		if room := m.width - lipgloss.Width(right) - 1; room > 0 && m.chatTitle() != "" {
 			left = ansi.Truncate(" "+m.chatTitle(), room, "…")
 		}
 	}
 	return left + strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))) + right
+}
+
+// healthMark is the integrity of the node, on the last row of the sidebar in
+// cyberpsycho mode: the share of the packages
+// that the last run of the tests of a rebuild found whole, with what it is.
+// Before the first run there is no percentage, only the question it would
+// answer. Outside that mode the tests of a build are the gate of the build,
+// and no reading: the sidebar says nothing of them, and the mark is empty.
+func (m *Model) healthMark() string {
+	if !m.status.Cyberpsycho {
+		return ""
+	}
+	pct, ok := m.status.Health.Integrity()
+	if !ok {
+		return mutedStyle.Render("??% Integrity")
+	}
+	return boldStyle.Foreground(m.healthColor()).Render(fmt.Sprintf("%d%%", pct)) + mutedStyle.Render(" Integrity")
+}
+
+// healthColor is the color of the integrity: muted before a run, good when
+// the tests passed, and bad when one failed.
+func (m *Model) healthColor() color.Color {
+	r := m.status.Health
+	switch {
+	case r == nil || !r.Ran:
+		return muted
+	case r.OK:
+		return good
+	}
+	return bad
+}
+
+// cyberMark is the mark of the cyberpsycho mode in the head, with what it
+// does to the work: what it changes stays in the working tree.
+func (m *Model) cyberMark() string {
+	mark := boldStyle.Foreground(ui.background).Background(bad).Render(" CYBERPSYCHO MODE ")
+	if m.width < 96 {
+		return mark
+	}
+	return mark + " " + mutedStyle.Render("changes stay local, not committed")
 }

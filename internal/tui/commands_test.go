@@ -199,8 +199,8 @@ func TestYolo(t *testing.T) {
 		t.Fatalf("header %q", header())
 	}
 	settle(m, run(m, "/yolo"))
-	if !slices.Equal(b.yolo, []bool{true}) || !strings.HasPrefix(m.notice, "yolo mode on") {
-		t.Fatalf("yolo %v, notice %q", b.yolo, m.notice)
+	if !slices.Equal(b.modes, []string{"yolo"}) || !strings.HasPrefix(m.notice, "yolo mode on") {
+		t.Fatalf("modes %v, notice %q", b.modes, m.notice)
 	}
 
 	b.status.Yolo = true
@@ -209,8 +209,36 @@ func TestYolo(t *testing.T) {
 		t.Fatalf("header %q", h)
 	}
 	settle(m, run(m, "/yolo"))
-	if !slices.Equal(b.yolo, []bool{true, false}) || m.notice != "yolo mode off" {
-		t.Fatalf("yolo %v, notice %q", b.yolo, m.notice)
+	if !slices.Equal(b.modes, []string{"yolo", "off"}) || m.notice != "yolo mode off" {
+		t.Fatalf("modes %v, notice %q", b.modes, m.notice)
+	}
+}
+
+// /mode sets the mode of the node directly, or opens the dialog at the mode
+// it is in when nothing follows.
+func TestMode(t *testing.T) {
+	m, b := newModel(t)
+	settle(m, run(m, "/mode cyberpsycho"))
+	if !slices.Equal(b.modes, []string{"cyberpsycho"}) || !strings.HasPrefix(m.notice, "cyberpsycho mode on") {
+		t.Fatalf("modes %v, notice %q", b.modes, m.notice)
+	}
+	settle(m, run(m, "/mode yolo"))
+	if !slices.Equal(b.modes, []string{"cyberpsycho", "yolo"}) {
+		t.Fatalf("modes %v", b.modes)
+	}
+	m.status.Yolo = true // as the status says once it is read anew
+	run(m, "/mode")
+	if m.screen != screenMode || m.mode.at != 1 {
+		t.Fatalf("dialog at %d, screen %v", m.mode.at, m.screen)
+	}
+	m.mode.at = 2
+	settle(m, m.mode.handleKey(m, enterKey))
+	if !slices.Equal(b.modes, []string{"cyberpsycho", "yolo", "cyberpsycho"}) || m.screen != screenChat {
+		t.Fatalf("modes %v, screen %v", b.modes, m.screen)
+	}
+	run(m, "/mode nope")
+	if !m.noticeErr || !strings.Contains(m.notice, "no mode nope") {
+		t.Fatalf("notice %q, error %v", m.notice, m.noticeErr)
 	}
 }
 

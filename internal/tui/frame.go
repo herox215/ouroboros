@@ -191,6 +191,9 @@ func (m *Model) headerLines(w int) []string {
 	if m.status.Yolo {
 		marks = append(marks, boldStyle.Foreground(ui.background).Background(accent).Render(" YOLO MODE "))
 	}
+	if m.status.Cyberpsycho {
+		marks = append(marks, m.cyberMark())
+	}
 	head := spread(boldStyle.Foreground(muted).Render(eyebrow), strings.Join(marks, "  "), w)
 	back := ""
 	if c.contextID != plugin.ThreadID {
@@ -602,6 +605,11 @@ func (m *Model) sidebarView(w, h int) string {
 		if y := top + i; y < h-1 {
 			lines[y] = pad(margin+r.text, w)
 		}
+	}
+	// In cyberpsycho mode the last row, below the sessions, holds the
+	// integrity of the node: the reading of the last run of the tests.
+	if mark := m.healthMark(); mark != "" && h >= 1 {
+		lines[h-1] = pad(margin+mark, w)
 	}
 	return strings.Join(lines, "\n")
 }

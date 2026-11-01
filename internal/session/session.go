@@ -334,6 +334,22 @@ const (
 	titleTime  = 20 * time.Second
 )
 
+// take makes the change the review of an answer of se took, in cyberpsycho
+// mode, see assistant.Taken, once that answer is over: it is the next
+// message of se, the agent's own work, which starts at once when se is idle,
+// as the report of a task does. routed says the answer worked for the
+// thread. s.mu and the mu of p, the process of s, are held.
+func (s *Service) take(se *session, p *process, text string, routed bool) {
+	se.queue = append(se.queue, queued{text: text, generated: true, routed: routed})
+	if se.cancel != nil || s.closed || p.successor != "" {
+		// The answer on its way takes it once it ends; a node that stops or
+		// starts anew takes no new answer, and it is lost with the process.
+		return
+	}
+	s.begin(se, p, ready(se)...)
+	s.busy()
+}
+
 // watchBuffer is how many Events a watcher may fall behind before it is let
 // go.
 const watchBuffer = 1024
@@ -1038,8 +1054,10 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			s.emit(se, Event{Kind: Jobs, Text: text})
 		}
 	})
-	// What the review of the answer proposes comes after its end.
+	// What the review of the answer proposes comes after its end. forThread
+	// says, once it is over, that the answer worked for the thread.
 	var suggested string
+	forThread := false
 	ctx = assistant.WithReview(ctx, func(text string) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -1047,12 +1065,18 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 			suggested = text
 			return
 		}
+		if assistant.Taken(text) {
+			p := s.node
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			s.take(se, p, text, forThread)
+			return
+		}
 		s.emit(se, Event{Kind: Suggestion, Text: text})
 	})
 	// What the review of an answer that worked for the thread kept is shown
 	// in the thread too, where the owner wrote it.
 	var remembered []Event
-	forThread := false
 	ctx = assistant.WithRemembered(ctx, func(r assistant.Remembered) {
 		args, _ := json.Marshal(r) // of strings, numbers and bools only
 		e := Event{Kind: Remembered, Text: r.Memory.Key + ": " + r.Memory.Content, Args: args}
@@ -1153,7 +1177,14 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		close(scheduled.result)
 	}
 	if suggested != "" {
-		s.emit(se, Event{Kind: Suggestion, Text: suggested})
+		if assistant.Taken(suggested) {
+			// In cyberpsycho mode nothing waits as a suggestion: the review's
+			// change is made at once, by the next answer of this session,
+			// which the queue below starts.
+			se.queue = append(se.queue, queued{text: suggested, generated: true, routed: forThread}) // see take
+		} else {
+			s.emit(se, Event{Kind: Suggestion, Text: suggested})
+		}
 	}
 	for _, e := range remembered {
 		s.remembered(se, e, forThread)

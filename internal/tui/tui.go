@@ -164,10 +164,11 @@ type Backend interface {
 	// of the node tells much more of every call of the LLM. Status says
 	// whether it is on.
 	SetDebug(on bool) error
-	// SetYolo turns the yolo mode of the node on or off: in it, a tool call
-	// that a rule of the owner would ask them about just runs. Status says
-	// whether it is on.
-	SetYolo(on bool) error
+	// SetMode makes mode the mode of the node, one of "off", "yolo" or
+	// "cyberpsycho": yolo and cyberpsycho exclude each other. Status says
+	// which one is on.
+	SetMode(mode string) error
+
 	// SetEffort makes effort, one of plugin.Efforts, how much the model
 	// thinks before it answers the owner in a session that has none of its
 	// own. Status says what it is.
@@ -244,6 +245,7 @@ const (
 	screenSettings // the configuration, for /settings
 	screenSessions // the sessions, for /session
 	screenEffort   // the slider of the effort, for /effort
+	screenMode     // the modes of the node, for /mode
 	screenKeys     // the keys of the chat, for /keys and ctrl+k
 	screenJobs     // the commands that run in the background, for /jobs
 	screenMemory   // what the agent has remembered, for /memory
@@ -403,6 +405,7 @@ type Model struct {
 
 	picker modelScreen  // the models of the accesses, for /model
 	effort effortScreen // the slider of the effort, for /effort
+	mode   modeScreen   // the modes of the node, for /mode
 	jobs   jobsScreen   // the commands that run in the background, for /jobs
 
 	memories memoryScreen // what the agent has remembered, for /memory
@@ -914,6 +917,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.sessions.handleKey(m, msg)
 	case screenEffort:
 		return m.effort.handleKey(m, msg)
+	case screenMode:
+		return m.mode.handleKey(m, msg)
 	case screenJobs:
 		return m.jobs.handleKey(m, msg)
 	case screenMemory:

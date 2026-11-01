@@ -261,6 +261,27 @@ func TestSuggestionNotKept(t *testing.T) {
 	}
 }
 
+// In cyberpsycho mode the change is not kept as a suggestion: what is handed
+// on is the task to make it, which is taken, and whose answer is not
+// reviewed again.
+func TestCyberpsychoHandsOnTheTask(t *testing.T) {
+	store := suggestion.Open(filepath.Join(t.TempDir(), "suggestions.json"))
+	a, _ := recorded(t, ownerConfig(), &titleLLM{reply: "CHANGE: add grep."})
+	a.builder = a.builder.WithSuggestions(store)
+	a.WithCyberpsycho(func() bool { return true })
+	got := ""
+	a.reviewed("c", []Signal{{SignalSlowTool, "bash took 42s"}}, []string{"x"}, toolsOf{}, review{suggest: func(text string) { got = text }})
+	if !Taken(got) || !tasked(got) || !strings.Contains(got, "add grep.") || !strings.Contains(got, "bash took 42s") {
+		t.Fatalf("handed on %q", got)
+	}
+	if kept, _ := store.List(); len(kept) != 0 {
+		t.Fatalf("kept as a suggestion: %+v", kept)
+	}
+	if Taken("add grep.") {
+		t.Error("a suggestion counts as taken")
+	}
+}
+
 // With as many suggestions waiting as are kept, a new one drops the oldest,
 // and the log says which.
 func TestSuggestionDropsTheOldest(t *testing.T) {

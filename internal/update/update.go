@@ -16,6 +16,9 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"time"
+
+	"ouroboros/internal/health"
 )
 
 // Repo is the git repository updates come from. The Makefile sets it to the
@@ -122,8 +125,15 @@ type Updater struct {
 	Revision string    // commit Exe was built from
 	Out      io.Writer // git and build output
 	// Tests are the packages of Source whose tests Rebuild runs before it
-	// builds, like ./internal/tui/: if one fails, nothing is built.
+	// builds, like ./internal/tui/: if one fails, nothing is built, unless
+	// Measure says the tests are a reading instead of a gate.
 	Tests []string
+	// Measure makes the tests a health reading instead of a gate: they run,
+	// and a failure does not keep the build out, see Health.
+	Measure bool
+	// Health, if not nil, is filled with what the run of the tests found:
+	// which packages ran, whether they passed, and the first failure.
+	Health *health.Record
 	// Skills is the skills directory of the node, home.Dir.Skills, which
 	// Rebuild installs the skills of Source into. Empty: no skill of the
 	// checkout is installed.
@@ -216,7 +226,14 @@ func (u Updater) Rebuild(ctx context.Context) error {
 		}
 		// The tests run as the build does, not for the node that runs them.
 		env := slices.DeleteFunc(goEnv(gobin), func(kv string) bool { return strings.HasPrefix(kv, "OURO_") })
-		if _, err := u.runIn(ctx, u.Source, env, gobin, append([]string{"test", "-count=1"}, u.Tests...)...); err != nil {
+		out, err := u.runIn(ctx, u.Source, env, gobin, append([]string{"test", "-count=1"}, u.Tests...)...)
+		if u.Health != nil {
+			*u.Health = health.Record{Ran: true, OK: err == nil, Tests: slices.Clone(u.Tests), At: time.Now()}
+			if err != nil {
+				u.Health.Fail = failure(out)
+			}
+		}
+		if err != nil && !u.Measure {
 			return fmt.Errorf("the tests failed, so nothing was built: %w", err)
 		}
 	}
@@ -229,6 +246,55 @@ func (u Updater) Rebuild(ctx context.Context) error {
 		return err
 	}
 	return replace(filepath.Join(stage, "bin", "ouro"), u.Exe)
+}
+
+// failure names the first failing package and test in the output of a run of
+// go test, like "./internal/tui/: TestFrameHeader", for the health record.
+func failure(output string) string {
+	var pkg, test string
+	for line := range strings.Lines(output) {
+		f := strings.Fields(line)
+		switch {
+		case len(f) >= 3 && f[0] == "---" && f[1] == "FAIL:" && test == "":
+			test = f[2]
+		case len(f) >= 2 && f[0] == "FAIL" && pkg == "":
+			// go test names the package by its import path, like
+			// ouroboros/internal/tui: the record names it as it was asked for.
+			pkg = f[1]
+			if _, rest, ok := strings.Cut(pkg, "/"); ok && !strings.HasPrefix(pkg, "./") {
+				pkg = "./" + rest + "/"
+			}
+		}
+	}
+	switch {
+	case pkg != "" && test != "":
+		return pkg + ": " + test
+	case pkg != "":
+		return pkg
+	case test != "":
+		return test
+	}
+	return "the tests"
+}
+
+// Changes are the uncommitted changes of the checkout at Source, as git
+// status --short names them, one per line: what is in the working tree and
+// in no commit.
+func (u Updater) Changes(ctx context.Context) ([]string, error) {
+	if u.Source == "" {
+		return nil, ErrNoSource
+	}
+	out, err := u.run(ctx, u.Source, "git", "status", "--short")
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	for line := range strings.Lines(out) {
+		if line = strings.TrimRight(line, "\n"); strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines, nil
 }
 
 // installSkills installs the skills of the checkout at Source, its directory
@@ -329,7 +395,9 @@ func (u Updater) runIn(ctx context.Context, dir string, env []string, name strin
 		} else {
 			err = fmt.Errorf("%s: %w", filepath.Base(name), err)
 		}
-		return "", err
+		// What it said stays with the error: a failed run of the tests
+		// names the package that failed in it.
+		return buf.String(), err
 	}
 	return buf.String(), nil
 }

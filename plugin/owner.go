@@ -26,6 +26,7 @@ import (
 	"ouroboros/internal/safefile"
 	"ouroboros/internal/setup"
 	"ouroboros/internal/suggestion"
+	"ouroboros/internal/update"
 )
 
 // Owner is what the owner of the node does at a front end and nowhere else:
@@ -345,19 +346,34 @@ func (o *Owner) SetDebug(on bool) error {
 	return nil
 }
 
-// SetYolo turns the yolo mode of the node on or off: in it, the agent of the
-// owner runs a call that a rule of tools.ask would put to it without asking,
-// and asks its questions as usual. It holds from the next message on.
-func (o *Owner) SetYolo(on bool) error {
-	if err := o.home.SetYolo(on); err != nil {
+// SetMode makes mode the mode of the node, one of "off", "yolo" or
+// "cyberpsycho": yolo and cyberpsycho exclude each other, so one leaves the
+// other. In yolo the agent of the owner runs a call that a rule of tools.ask
+// would put to it without asking, and asks its questions as usual. In
+// cyberpsycho no rule asks, what the review of an answer proposes is made at
+// once instead of suggested, and a rebuild treats the tests as a health
+// reading instead of a gate; nothing is committed or pushed. It holds from
+// the next message on.
+func (o *Owner) SetMode(name string) error {
+	mode, err := home.ParseMode(name)
+	if err != nil {
 		return err
 	}
-	if on {
-		o.home.Log("yolo mode on")
+	if err := o.home.SetMode(mode); err != nil {
+		return err
+	}
+	if mode == home.ModeOff {
+		o.home.Log("mode off")
 	} else {
-		o.home.Log("yolo mode off")
+		o.home.Log("mode %s", mode)
 	}
 	return nil
+}
+
+// Changes names the uncommitted changes of the source of ouro, as git status
+// --short does: what a build left in the working tree, in no commit.
+func (o *Owner) Changes() ([]string, error) {
+	return update.Updater{Source: update.Source}.Changes(context.Background())
 }
 
 // Running reports whether the node is running.

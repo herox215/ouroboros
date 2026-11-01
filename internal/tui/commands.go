@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,7 +35,8 @@ var own = []command{
 	{"context", "show what the LLM is sent in this conversation", (*Model).openContext},
 	{"memory", "show what ouro has remembered, and read one", (*Model).openMemory},
 	{"debug", "turn the debug mode on or off: the log of the node then tells much more", (*Model).toggleDebug},
-	{"yolo", "turn the yolo mode on or off: then no permission is asked before a tool call", (*Model).toggleYolo},
+	{"mode", "choose off, yolo or cyberpsycho; /mode yolo sets one at once", (*Model).openMode},
+	{"changes", "show the uncommitted changes of the source of ouro", (*Model).showChanges},
 	{"suggestions", "review suggested changes of ouro", (*Model).openSuggestions},
 	{"undo", "take back the last memory ouro kept by itself here", (*Model).undo},
 	{"keys", "list the keys (ctrl+k does too)", (*Model).openKeys},
@@ -66,12 +68,30 @@ func (m *Model) runCommand(line string) tea.Cmd {
 		m.setNotice("type a command after the slash: /help lists them", true)
 		return nil
 	}
+	// /yolo and /cyberpsycho are the shortcuts of /mode that stay: they need
+	// no line of their own in the help, which has room for every command.
+	switch fields[0] {
+	case "yolo", "cyberpsycho":
+		if len(fields) > 1 {
+			m.setNotice("/"+fields[0]+" takes no arguments", true)
+			return nil
+		}
+		m.input.Reset()
+		if fields[0] == "yolo" {
+			return m.toggleYolo()
+		}
+		return m.toggleCyberpsycho()
+	}
 	for _, c := range m.commands {
 		if c.name != fields[0] {
 			continue
 		}
 		if c.name == "cd" {
 			return m.changeDirectory(strings.TrimSpace(strings.TrimPrefix(text, c.name)))
+		}
+		if c.name == "mode" {
+			m.input.Reset()
+			return m.modeArg(strings.TrimSpace(strings.TrimPrefix(text, c.name)))
 		}
 		if len(fields) > 1 {
 			m.setNotice("/"+c.name+" takes no arguments", true)
@@ -90,6 +110,13 @@ func (m *Model) matching(text string) []command {
 	typed := strings.TrimPrefix(text, "/")
 	if !isCommandLine(text) || strings.ContainsAny(typed, " \n") {
 		return nil
+	}
+	// A command typed in full is the one: /mode is not to be taken for
+	// /model, which begins the same.
+	for _, c := range m.commands {
+		if c.name == typed {
+			return []command{c}
+		}
 	}
 	var found []command
 	for _, c := range m.commands {
@@ -180,13 +207,46 @@ func (m *Model) toggleDebug() tea.Cmd {
 
 // toggleYolo turns the yolo mode of the node on or off: in it, no rule of
 // the owner asks them before a tool call, so the call just runs. The head
-// shows it while it is on.
+// shows it while it is on. It is one of the modes, so it leaves cyberpsycho.
 func (m *Model) toggleYolo() tea.Cmd {
-	on, done := !m.status.Yolo, "yolo mode off"
-	if on {
-		done = "yolo mode on: no permission is asked before a tool call"
+	if m.status.Yolo {
+		return m.setMode("off")
 	}
-	return func() tea.Msg { return actionMsg{done, m.backend.SetYolo(on)} }
+	return m.setMode("yolo")
+}
+
+// toggleCyberpsycho turns the cyberpsycho mode of the node on or off: in it
+// no rule of tools.ask asks, what the review of an answer proposes is made at
+// once, and the tests of a rebuild are a health reading. Nothing is committed
+// or pushed by it: the changes stay in the working tree. It is one of the
+// modes, so it leaves yolo.
+func (m *Model) toggleCyberpsycho() tea.Cmd {
+	if m.status.Cyberpsycho {
+		return m.setMode("off")
+	}
+	return m.setMode("cyberpsycho")
+}
+
+// showChanges says what the mode left in the working tree of the source of
+// ouro: those changes are in no commit.
+func (m *Model) showChanges() tea.Cmd {
+	return func() tea.Msg {
+		backend, ok := m.backend.(interface{ Changes() ([]string, error) })
+		if !ok {
+			return actionMsg{"this front end cannot read the changes of the source", nil}
+		}
+		changes, err := backend.Changes()
+		if err != nil {
+			return actionMsg{"", err}
+		}
+		switch {
+		case len(changes) == 0:
+			return actionMsg{"the working tree is clean", nil}
+		case len(changes) > 3:
+			return actionMsg{fmt.Sprintf("not committed: %s · and %d more", strings.Join(changes[:3], " · "), len(changes)-3), nil}
+		}
+		return actionMsg{"not committed: " + strings.Join(changes, " · "), nil}
+	}
 }
 
 // helpView lists the commands: a click on one runs it.
@@ -195,7 +255,7 @@ func (m *Model) helpView() (string, []hit) {
 	for _, c := range m.commands {
 		width = max(width, len(c.name))
 	}
-	lines := []string{boldStyle.Render("Commands"), ""}
+	lines := []string{boldStyle.Render("Commands")}
 	var hits []hit
 	for _, c := range m.commands {
 		hits = append(hits, onLine(len(lines), func() tea.Cmd {
@@ -204,7 +264,12 @@ func (m *Model) helpView() (string, []hit) {
 		}))
 		lines = append(lines, lipgloss.NewStyle().Foreground(accent).Width(width+3).Render("/"+c.name)+mutedStyle.Render(c.help))
 	}
-	lines = append(lines, "", mutedStyle.Render("Type them into the message input. A message that starts with a slash takes two: //etc"))
+	// What there is to say about typing them comes below them, where the
+	// dialog holds it beside the list: with many commands it gives way, so
+	// that the last of them stays in the list.
+	if _, h := m.dialogSize(); len(lines)+2 <= h-2 {
+		lines = append(lines, "", mutedStyle.Render("Type them into the message input. A message that starts with a slash takes two: //etc"))
+	}
 	return m.dialog(lines), hits
 }
 

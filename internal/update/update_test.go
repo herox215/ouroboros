@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"ouroboros/internal/health"
 	"ouroboros/internal/update"
 	"ouroboros/internal/update/updatetest"
 )
@@ -389,6 +390,16 @@ func TestRebuildTestsFirst(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err == nil {
 		t.Error("built although a test failed")
+	}
+	// With Measure the tests are a reading: the build goes on, and the
+	// record names the package and the test that failed, as asked for.
+	var record health.Record
+	if err := (update.Updater{Source: src, Dir: dir, Exe: other, Tests: []string{"./good/", "./bad/"}, Measure: true, Health: &record}).Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expectFile(t, other, "v1")
+	if !record.Ran || record.OK || record.Fail != "./bad/: TestFails" {
+		t.Errorf("record %+v", record)
 	}
 	for _, pkg := range []string{"../elsewhere", "./a/../../b", "-exec=sh", "internal/tui", "./a b"} {
 		if err := (update.Updater{Source: src, Dir: dir, Exe: other, Tests: []string{pkg}}).Rebuild(context.Background()); !errors.Is(err, update.ErrTestPackage) {

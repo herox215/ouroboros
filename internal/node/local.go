@@ -13,8 +13,19 @@ import (
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/config"
 	"ouroboros/internal/daemon"
+	"ouroboros/internal/health"
 	"ouroboros/internal/home"
 )
+
+// healthOf is what the last run of the tests of a rebuild found at home: nil
+// if there was none.
+func healthOf(h home.Dir) *health.Record {
+	r, ok := health.Read(h.HealthFile())
+	if !ok {
+		return nil
+	}
+	return &r
+}
 
 // ServeCommand is the argument that makes the binary run a Server.
 const ServeCommand = "serve"
@@ -54,6 +65,13 @@ type Status struct {
 	// runs a call that a rule of tools.ask would put to the owner without
 	// asking.
 	Yolo bool
+	// Cyberpsycho says that the node is in cyberpsycho mode, see
+	// home.Dir.Cyberpsycho: no rule of tools.ask asks the owner, and what the
+	// review of an answer proposes is made at once.
+	Cyberpsycho bool
+	// Health is what the last run of the tests of a rebuild found, see
+	// package health; nil before the first run.
+	Health *health.Record
 	// Effort is how much the model thinks before it answers the owner, see
 	// config.Config.Effort.
 	Effort string
@@ -65,7 +83,7 @@ func (l Local) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model, Debug: l.Home.Debug(), Yolo: l.Home.Yolo(), Effort: cfg.Effort}
+	s := Status{Configured: cfg.Complete(), ID: cfg.ID(), Name: cfg.Name, Model: cfg.Model, Debug: l.Home.Debug(), Yolo: l.Home.Yolo(), Cyberpsycho: l.Home.Cyberpsycho(), Health: healthOf(l.Home), Effort: cfg.Effort}
 	if access, err := l.Home.Credentials().Get(cfg.Access); err == nil {
 		s.Provider = access.Label()
 	}
