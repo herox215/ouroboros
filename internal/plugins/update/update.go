@@ -178,8 +178,11 @@ func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, 
 	// gate: a failing test does not keep the build out, and the record says
 	// what failed.
 	u.Measure = c.local.Home.Cyberpsycho()
+	// Outside that mode the tests are the gate, and nothing is recorded.
 	var record health.Record
-	u.Health = &record
+	if u.Measure {
+		u.Health = &record
+	}
 	saveHealth := func() {
 		if record.Ran {
 			// A record that cannot be kept is no reason to fail the build: the
@@ -198,6 +201,10 @@ func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, 
 	}
 	if err := u.Rebuild(ctx); err != nil {
 		saveHealth()
+		if u.Measure && record.Ran && !record.OK {
+			// The tests did not keep the build out, but they failed too.
+			err = fmt.Errorf("%w (the tests: %s)", err, record.Line())
+		}
 		if out.Len() == 0 {
 			return "", err
 		}
@@ -212,10 +219,13 @@ func (c *updateCommand) rebuild(ctx context.Context, args rebuildArgs) (string, 
 			done = "the tests of " + strings.Join(u.Tests, ", ") + " passed; " + done
 		}
 	}
-	// What the build left in the working tree is named, so that the answer can
-	// say what was changed and that it is in no commit.
-	if changed, err := u.Changes(ctx); err == nil && len(changed) > 0 {
-		done += "Not committed — the working tree has them:\n" + changeLines(changed) + "\n"
+	// In cyberpsycho mode what the build left in the working tree is named, so
+	// that the answer can say what was changed and that it is in no commit.
+	// Outside it the answer is as it was.
+	if u.Measure {
+		if changed, err := u.Changes(ctx); err == nil && len(changed) > 0 {
+			done += "Not committed — the working tree has them:\n" + changeLines(changed) + "\n"
+		}
 	}
 	// The node this runs in cannot stop itself while the answer is on its
 	// way: it takes its own place once the answer is given.

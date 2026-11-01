@@ -123,11 +123,6 @@ const (
 // believes to have allowed it. A trusted tool is one of them only in the list
 // of one peer, and there only by its name.
 func pick(all []agent.Tool, allowed []config.Entry, of audience) ([]agent.Tool, error) {
-	var err error
-	all, err = agent.ExpandAbilities(all)
-	if err != nil {
-		return nil, err
-	}
 	peer := of != forOwner
 	every := false
 	entries := map[string]config.Entry{}

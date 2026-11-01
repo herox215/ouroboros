@@ -37,20 +37,16 @@ func TestHealthMark(t *testing.T) {
 	}
 }
 
-// The reading stands under the gear at the bottom of the sidebar, in the
-// cyberpsycho mode, and not on the line of the chat below the composer.
-func TestHealthUnderTheGear(t *testing.T) {
+// The reading stands on the last row of the sidebar, in the cyberpsycho
+// mode, and not on the line of the chat below the composer.
+func TestHealthAtTheBottomOfTheSidebar(t *testing.T) {
 	m, _ := newModel(t)
 	m.status.Cyberpsycho = true
 	m.status.Health = &health.Record{Ran: true, OK: true, Tests: []string{"./internal/tui/"}}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-	last, above := lines[len(lines)-1], lines[len(lines)-2]
-	if !strings.HasPrefix(strings.TrimLeft(last, " "), "100% Integrity") {
+	if last := lines[len(lines)-1]; !strings.HasPrefix(strings.TrimLeft(last, " "), "100% Integrity") {
 		t.Errorf("the integrity does not begin the last line: %q", last)
-	}
-	if !strings.Contains(above, gear) {
-		t.Errorf("the gear does not stand above the integrity: %q", above)
 	}
 	if footer := ansi.Strip(m.footerView()); strings.Contains(footer, "Integrity") {
 		t.Errorf("the footer still carries the integrity: %q", footer)
@@ -58,17 +54,12 @@ func TestHealthUnderTheGear(t *testing.T) {
 }
 
 // Outside the cyberpsycho mode the tests are the gate of the build and no
-// reading: the sidebar says nothing of them, and the gear takes the last row.
+// reading: the sidebar says nothing of them.
 func TestNoIntegrityOutsideCyberpsycho(t *testing.T) {
 	m, _ := newModel(t)
 	m.status.Health = &health.Record{Ran: true, OK: true, Tests: []string{"./internal/tui/"}}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	view := ansi.Strip(m.View().Content)
-	if strings.Contains(view, "Integrity") {
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Integrity") {
 		t.Errorf("the sidebar carries the integrity outside the cyberpsycho mode:\n%s", view)
-	}
-	lines := strings.Split(view, "\n")
-	if last := strings.TrimLeft(lines[len(lines)-1], " "); !strings.HasPrefix(last, gear) {
-		t.Errorf("the gear does not stand on the last line: %q", last)
 	}
 }

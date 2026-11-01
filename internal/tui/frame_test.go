@@ -409,10 +409,9 @@ func TestClicksBesideTheHistory(t *testing.T) {
 	if m.chat != fix || m.screen != screenChat {
 		t.Fatal("a click beside the sessions does something")
 	}
-	if click(columnPad, m.height-2); m.screen != screenSettings {
-		t.Fatalf("the button of the settings opens %v", m.screen)
+	if click(columnPad, m.height-2) != nil || m.screen != screenChat {
+		t.Fatal("a click below the sessions does something")
 	}
-	press(m, "esc")
 	right := m.sideWidth() + m.chatWidth() - columnPad
 	click(right-2, 2)
 	if m.chat != thread {

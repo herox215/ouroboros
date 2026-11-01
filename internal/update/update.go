@@ -257,8 +257,13 @@ func failure(output string) string {
 		switch {
 		case len(f) >= 3 && f[0] == "---" && f[1] == "FAIL:" && test == "":
 			test = f[2]
-		case len(f) >= 2 && f[0] == "FAIL" && strings.HasPrefix(f[1], "./") && pkg == "":
+		case len(f) >= 2 && f[0] == "FAIL" && pkg == "":
+			// go test names the package by its import path, like
+			// ouroboros/internal/tui: the record names it as it was asked for.
 			pkg = f[1]
+			if _, rest, ok := strings.Cut(pkg, "/"); ok && !strings.HasPrefix(pkg, "./") {
+				pkg = "./" + rest + "/"
+			}
 		}
 	}
 	switch {
@@ -279,7 +284,7 @@ func (u Updater) Changes(ctx context.Context) ([]string, error) {
 	if u.Source == "" {
 		return nil, ErrNoSource
 	}
-	out, err := u.runIn(ctx, u.Source, nil, "git", "status", "--short")
+	out, err := u.run(ctx, u.Source, "git", "status", "--short")
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +395,9 @@ func (u Updater) runIn(ctx context.Context, dir string, env []string, name strin
 		} else {
 			err = fmt.Errorf("%s: %w", filepath.Base(name), err)
 		}
-		return "", err
+		// What it said stays with the error: a failed run of the tests
+		// names the package that failed in it.
+		return buf.String(), err
 	}
 	return buf.String(), nil
 }

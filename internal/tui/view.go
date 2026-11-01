@@ -853,7 +853,7 @@ func (m *Model) footerHint() string {
 		help = "esc stop"
 	}
 	if m.chat.asking != nil {
-		help = "↑↓ choose · enter answer"
+		help = "←→↑↓ choose · enter answer"
 		if m.chat.pending {
 			help += " · esc stop"
 		}
@@ -952,19 +952,17 @@ func (m *Model) footerView() string {
 	}
 	right = ansi.Truncate(right, m.width, "…")
 	left := ""
-	if room := m.width - lipgloss.Width(right) - 1; room > 0 {
-		switch m.screen {
-		case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenMode, screenSettings, screenSessions, screenMemory: // the dialogs lie over the chat
-			if m.chatTitle() != "" {
-				left = ansi.Truncate(m.chatTitle(), room, "…")
-			}
+	switch m.screen {
+	case screenChat, screenHelp, screenKeys, screenModel, screenEffort, screenMode, screenSettings, screenSessions, screenMemory: // the dialogs lie over the chat
+		if room := m.width - lipgloss.Width(right) - 1; room > 0 && m.chatTitle() != "" {
+			left = ansi.Truncate(" "+m.chatTitle(), room, "…")
 		}
 	}
 	return left + strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))) + right
 }
 
-// healthMark is the integrity of the node, under the button of the settings
-// at the bottom of the sidebar in cyberpsycho mode: the share of the packages
+// healthMark is the integrity of the node, on the last row of the sidebar in
+// cyberpsycho mode: the share of the packages
 // that the last run of the tests of a rebuild found whole, with what it is.
 // Before the first run there is no percentage, only the question it would
 // answer. Outside that mode the tests of a build are the gate of the build,

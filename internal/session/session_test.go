@@ -841,6 +841,45 @@ func TestSuggestionAfterTheAnswer(t *testing.T) {
 	}
 }
 
+// In cyberpsycho mode the review hands on the change taken: no suggestion
+// waits, the session makes it with the next answer, also when the review
+// is in only after the answer ended, and that answer is not the owner's.
+func TestTakenChangeIsTheNextAnswer(t *testing.T) {
+	later := make(chan struct{})
+	task := assistant.SuggestedTask("add grep.", nil)
+	var mu sync.Mutex
+	var asked []string
+	s := New(&fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		mu.Lock()
+		asked = append(asked, text)
+		first := len(asked) == 1
+		mu.Unlock()
+		if first {
+			suggest := assistant.Reviewer(ctx)
+			go func() {
+				<-later
+				suggest(task)
+			}()
+		}
+		return "pong", nil
+	}})
+	defer s.Close()
+	ctx := context.Background()
+	_, live, _ := s.Watch(ctx, "s1")
+	s.Ask(ctx, "s1", "hi")
+	until(t, live, Answer)
+	close(later)
+	got := until(t, live, Answer)
+	if kinds(got) != "message answer" || got[0].Text != task {
+		t.Fatalf("events %+v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 2 || asked[1] != task {
+		t.Fatalf("asked %q", asked)
+	}
+}
+
 // What the review of an answer remembers comes after the end of the
 // answer, also when it is in before, with the memory in Args.
 func TestRememberedAfterTheAnswer(t *testing.T) {

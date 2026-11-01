@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -242,7 +243,7 @@ func (m *Model) showChanges() tea.Cmd {
 		case len(changes) == 0:
 			return actionMsg{"the working tree is clean", nil}
 		case len(changes) > 3:
-			return actionMsg{"not committed, " + changes[0] + " · " + changes[1] + " · " + changes[2] + " · and more, see the settings", nil}
+			return actionMsg{fmt.Sprintf("not committed: %s · and %d more", strings.Join(changes[:3], " · "), len(changes)-3), nil}
 		}
 		return actionMsg{"not committed: " + strings.Join(changes, " · "), nil}
 	}

@@ -39,11 +39,9 @@ func footer(m *Model) string {
 			return hint
 		}
 	}
-	// The gear stands at the left of the last line, and in cyberpsycho mode
-	// the integrity of the node below it: what the caller looks for begins
-	// after both.
-	line := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), ansi.Strip(m.healthMark())))
-	return strings.TrimSpace(strings.TrimPrefix(line, gear))
+	// In cyberpsycho mode the integrity of the node stands at the left of the
+	// last line: what the caller looks for begins after it.
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), ansi.Strip(m.healthMark())))
 }
 
 // shortRefresh makes the UI refresh at once instead of every ten seconds.

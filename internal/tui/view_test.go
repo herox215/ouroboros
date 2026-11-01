@@ -161,32 +161,32 @@ func TestChatTitleNeedsAConversation(t *testing.T) {
 }
 
 // The footer is one line as wide as the window: the hint whole on the
-// right, a cell before the edge, the conversation in what it leaves.
+// right, a cell before the edge, and the conversation in what it leaves.
 func TestFooterFitsTheWindow(t *testing.T) {
 	m, _ := newModel(t)
 	fill(m, 1)
 	m.chat.context, m.chat.pending = 1200, true
-	title, hint := ansi.Strip(m.chatTitle()), "esc stop "
+	title, hint := " "+ansi.Strip(m.chatTitle()), "esc stop "
 	wide := lipgloss.Width(title)
-	for _, width := range []int{100, len(hint) + wide + 1, len(hint) + wide, len(hint) + 1, len(hint), 12, 11, 10} {
+	for _, width := range []int{100, len(hint) + wide + 1, len(hint) + wide, len(hint) + 3, len(hint) + 1, len(hint)} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
 		got := ansi.Strip(m.footerView())
 		if lipgloss.Width(got) != width || !strings.HasSuffix(got, hint) {
 			t.Fatalf("at %d cells: %q", width, got)
 		}
 		left := strings.TrimRight(strings.TrimSuffix(got, hint), " ")
-		switch room := width - len(hint); {
-		case room < 2:
-			if left != "" {
-				t.Errorf("at %d cells there is no room for the conversation: %q", width, left)
+		switch room := width - len(hint) - 1; {
+		case room >= wide:
+			if left != title {
+				t.Errorf("at %d cells the conversation is %q", width, left)
 			}
-		case room < wide+1:
-			if lipgloss.Width(left) != room-1 || !strings.HasSuffix(left, "…") {
+		case room > 0:
+			if lipgloss.Width(left) != room || !strings.HasSuffix(left, "…") {
 				t.Errorf("at %d cells the conversation is cut to %q", width, left)
 			}
 		default:
-			if left != title {
-				t.Errorf("at %d cells the conversation is %q", width, left)
+			if left != "" {
+				t.Errorf("at %d cells there is no room for %q", width, left)
 			}
 		}
 	}

@@ -589,13 +589,7 @@ func (b Builder) ownerTools(cfg config.Config, thread bool) ([]agent.Tool, error
 // Available are the tools the owner picks from for the lists of the
 // configuration: what the plugins contributed, the tool that asks the owner,
 // the one that hands tasks to helpers, and the tools for the configuration of the node if the blueprint has one.
-func (b Builder) Available() []agent.Tool {
-	tools, err := agent.ExpandAbilities(b.all())
-	if err != nil {
-		return b.all()
-	} // building reports the invalid catalog
-	return tools
-}
+func (b Builder) Available() []agent.Tool { return b.all() }
 
 // all are the tools the owner picks from: what the plugins contributed, the
 // tool that asks the owner, the one that hands tasks to helpers, and the
@@ -874,15 +868,21 @@ func (a *Assistant) reviewed(chat string, signals []Signal, trail []string, tool
 	for i, s := range signals {
 		measured[i] = s.Text
 	}
+	// The mode is read once: what is handed on and what is kept agree.
+	cyberpsycho := a.Cyberpsycho()
 	for _, text := range []string{v.change, v.skill} {
 		if text == "" {
 			continue
 		}
 		log("review: %s", strconv.Quote(text))
-		// In cyberpsycho mode the change is not kept as a suggestion: the
-		// conversation makes it at once, see Service.answer, which starts the
-		// follow-up as soon as this review hands it over.
-		if store := a.builder.suggestions; store != nil && !a.Cyberpsycho() {
+		if cyberpsycho {
+			// In cyberpsycho mode the change is not kept as a suggestion: what
+			// is handed on is the task to make it, see Taken, which the
+			// conversation takes at once, and whose answer is not reviewed.
+			to.suggest(SuggestedTask(text, measured))
+			continue
+		}
+		if store := a.builder.suggestions; store != nil {
 			_, dropped, err := store.Add(text, measured, chat)
 			if err != nil {
 				log("the suggestion is not kept: %v", err)
