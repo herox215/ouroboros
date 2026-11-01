@@ -408,7 +408,6 @@ func NewMemory() *Memory {
 type conversation struct {
 	// notes are what the user told since the last answer without asking,
 	// see Agent.Note: the next answer starts with them.
-	abilities  []string // live grants only; deliberately absent from exported history
 	notes      []chat.Message
 	lastUsed   uint64
 	inspected  bool
@@ -429,9 +428,6 @@ func New(llm LLM, model, system string, tools ...Tool) *Agent {
 	}
 	for _, t := range tools {
 		a.tools[t.Name] = t
-		if t.ability != nil {
-			continue
-		}
 		a.specs = append(a.specs, chat.NewTool(t.Name, t.Description, t.Schema))
 	}
 	specs, _ := json.Marshal(a.specs) // texts and JSON: cannot fail
@@ -486,9 +482,6 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		return "", err
 	}
 	defer release()
-	// Each answer owns its mutable tool set; only live grant names are shared
-	// through this conversation's memory, never through the Agent template.
-	a, ctx, abilities := a.abilityAnswer(ctx, contextID)
 	ctx, end := context.WithCancel(ctx)
 	defer end() // after the hooks that are told how the answer ended
 	answer := &Answer{ctx: ctx}
@@ -590,7 +583,6 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		if err := ctx.Err(); err != nil {
 			return abandon(err)
 		}
-		abilities.activate()
 		msgs := sent(ctx, append([]chat.Message{a.system}, history...))
 		if note := notes(round, int(spent.Load())); note != "" && msgs[len(msgs)-1].Role == "tool" {
 			msgs = append(msgs, chat.Message{Role: "user", Content: note})
@@ -692,12 +684,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		before := history[asked : len(history)-1]
 		toolCtx := withInputImages(ctx, history)
 		for _, call := range msg.ToolCalls {
-			var result chat.Message
-			// A formerly hidden call failed before activation. It is not a
-			// repetition of an executable call now that the tool is exposed.
-			if !abilities.fresh[call.Function.Name] {
-				result = repeated(call, before)
-			}
+			result := repeated(call, before)
 			if result.Content == "" {
 				handoffs := answer.handoffs.Load()
 				result = once(a.call(toolCtx, call), history)
@@ -1036,11 +1023,6 @@ func (m *Memory) Conversation(contextID string) []chat.Message { return m.histor
 // Restore makes m remember msgs as the conversation contextID, as far as it
 // keeps of one.
 func (m *Memory) Restore(contextID string, msgs []chat.Message) {
-	m.mu.Lock()
-	if c := m.conversations[contextID]; c != nil {
-		c.abilities = nil
-	}
-	m.mu.Unlock()
 	if len(msgs) > 0 {
 		m.remember(contextID, slices.Clone(msgs))
 	}
