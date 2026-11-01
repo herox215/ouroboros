@@ -83,7 +83,7 @@ func TestQuestion(t *testing.T) {
 	if m.notice != "" {
 		t.Fatalf("asked in the conversation shown, there is nothing to notice: %q", m.notice)
 	}
-	if got := ansi.Strip(m.footerHint()); !strings.Contains(got, "↑↓ choose · enter answer · esc stop") {
+	if got := ansi.Strip(m.footerHint()); !strings.Contains(got, "←→↑↓ choose · enter answer · esc stop") {
 		t.Fatalf("keys: %q", got)
 	}
 	if got := texts(m); got != ">go|Which database?" {
@@ -130,6 +130,70 @@ func TestQuestion(t *testing.T) {
 	}
 	if view := ansi.Strip(m.chatScreen()); strings.Contains(view, "YOUR DECISION") || !fits(m) || m.waiting() != "" || m.notice != "" {
 		t.Fatalf("after the answer (notice %q):\n%s", m.notice, view)
+	}
+}
+
+// The answers are a row of buttons: left and right select the one before
+// and after, around the row, and enter gives the one selected.
+func TestQuestionLeftAndRight(t *testing.T) {
+	m, _ := asked(t)
+	c := m.chat
+	if c.asking.sel != 1 { // Postgres is recommended
+		t.Fatalf("the recommended answer is not selected: %d", c.asking.sel)
+	}
+	press(m, "right")
+	if c.asking.sel != 0 {
+		t.Fatalf("right from the last answer: %d", c.asking.sel)
+	}
+	press(m, "left")
+	if c.asking.sel != 1 {
+		t.Fatalf("left from the first answer: %d", c.asking.sel)
+	}
+	// The answer the buttons show selected is the one enter gives.
+	press(m, "left")
+	drive(t, m, press(m, "enter"), func() bool { return !c.pending })
+	if got := texts(m); got != ">go|Which database?|>SQLite|using SQLite" {
+		t.Fatalf("answered: %s", got)
+	}
+}
+
+// In the row for own words the arrows are the input's: they move in what is
+// written instead of the selection.
+func TestQuestionOwnWordsLeftAndRight(t *testing.T) {
+	m, _ := asked(t)
+	c := m.chat
+	press(m, "n", "o")
+	if !c.asking.own() {
+		t.Fatalf("typing selected row %d", c.asking.sel)
+	}
+	press(m, "left", "x")
+	if !c.asking.own() || m.input.Value() != "nxo" {
+		t.Fatalf("left in own words: row %d, %q", c.asking.sel, m.input.Value())
+	}
+	press(m, "right", "y")
+	if !c.asking.own() || m.input.Value() != "nxoy" {
+		t.Fatalf("right in own words: row %d, %q", c.asking.sel, m.input.Value())
+	}
+}
+
+// Left and right go through answers that need more rows than fit, and the
+// panel scrolls to keep the one selected visible.
+func TestQuestionLeftAndRightScrollLongAnswers(t *testing.T) {
+	var options []string
+	for _, c := range "abcdef" {
+		options = append(options, `"`+strings.Repeat(string(c), 60)+`"`)
+	}
+	m := asksThis(t, `{"question":"Which?","options":[`+strings.Join(options, ",")+`]}`)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	for range 4 {
+		press(m, "right")
+	}
+	if m.chat.asking.sel != 4 {
+		t.Fatalf("selected %d", m.chat.asking.sel)
+	}
+	view := ansi.Strip(strings.Join(m.panelLines(), "\n"))
+	if !fits(m) || !strings.Contains(view, strings.Repeat("e", 10)) {
+		t.Fatalf("the answer selected is not on the panel:\n%s", view)
 	}
 }
 

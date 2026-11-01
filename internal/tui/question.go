@@ -67,10 +67,11 @@ func (c *conversation) ask(e Event) {
 }
 
 // handleQuestionKey handles the keys of a question the agent asks in the
-// conversation shown: up and down select an answer, enter gives the one
-// selected. With the row for own words selected the keys are the input's,
-// but for up in an empty input, which goes back to the answers. It reports
-// whether the key was one of them.
+// conversation shown: left and right select the answer before and after,
+// up and down go through the answers and the row for own words, and enter
+// gives the one selected. With the row for own words selected the keys are
+// the input's, but for up in an empty input, which goes back to the
+// answers. It reports whether the key was one of them.
 func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	a := m.chat.asking
 	if a == nil || a.sent {
@@ -87,6 +88,16 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 		a.sel = cycle(a.sel, 1, len(a.options)+1)
+	case "left":
+		if a.own() {
+			return nil, false // the input's, to move in what is written
+		}
+		a.sel = cycle(a.sel, -1, len(a.options))
+	case "right":
+		if a.own() {
+			return nil, false
+		}
+		a.sel = cycle(a.sel, 1, len(a.options))
 	case "enter":
 		if a.own() {
 			return nil, false // what is written is sent, and answers
