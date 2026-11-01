@@ -850,7 +850,7 @@ func (m *Model) footerHint() string {
 		help = "esc stop"
 	}
 	if m.chat.asking != nil {
-		help = "↑↓ choose · enter answer"
+		help = "←→↑↓ choose · enter answer"
 		if m.chat.pending {
 			help += " · esc stop"
 		}
