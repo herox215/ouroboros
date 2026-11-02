@@ -239,7 +239,6 @@ func (a *Assistant) track(chat, message string, signals []Signal, to review) {
 	t.messages = append(t.messages, message)
 	t.messages = t.messages[max(0, len(t.messages)-topicMessages):]
 	t.last, t.to = time.Now(), to
-	a.active = time.Now()
 	if a.stopped {
 		return
 	}
@@ -251,7 +250,7 @@ func (a *Assistant) track(chat, message string, signals []Signal, to review) {
 }
 
 // sweep is what happens once the owner left: the topics they left are looked
-// back on, and the memories tidied.
+// back on.
 func (a *Assistant) sweep() {
 	now := time.Now()
 	a.finish(now)
@@ -295,8 +294,7 @@ func (a *Assistant) finish(now time.Time) {
 }
 
 // tidy archives the memories that expired or are never used, see
-// memory.Store.Tidy, and has the archivist look at the memories of every
-// profile once it is due, see archive.
+// memory.Store.Tidy.
 func (a *Assistant) tidy(now time.Time) {
 	if a.builder.memories == nil {
 		return
@@ -315,7 +313,6 @@ func (a *Assistant) tidy(now time.Time) {
 	if archived > 0 {
 		a.logf("memories: %d archived, as they expired or were never used", archived)
 	}
-	a.wake(now)
 }
 
 // logf writes to the log, if there is one.

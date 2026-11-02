@@ -464,7 +464,7 @@ var sections = []string{nodeSection, agentsSection, pluginsSection, mcpSection, 
 var contents = map[string]string{
 	gatewaysSection:  "external messaging access for this profile",
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
-	agentsSection:    "the context provider, the debug mode, the memory archivist, the thread window",
+	agentsSection:    "the context provider, the debug mode, the thread window",
 	pluginsSection:   "which plugins are turned on",
 	mcpSection:       "the MCP servers the agent reaches, and their tools",
 	ownerSection:     "what your agent may do when you ask it",
@@ -533,11 +533,6 @@ func rows(s Settings) []row {
 		toggle = set("propose", Setting{Kind: plugin.SetImproves})
 	}
 	add(agentsSection, "Changes of ouro", improves, note, toggle)
-	add(agentsSection, "Memory archivist", cmp.Or(s.MemoryInterval, "off"),
-		"how often the archivist may revisit the memories; off turns it off, a duration like 24h turns it on",
-		editing("the interval of the archivist, like 24h, or off", cmp.Or(s.MemoryInterval, "off"), func(v string) Setting {
-			return Setting{Kind: plugin.SetMemoryInterval, Value: v}
-		}))
 	add(agentsSection, "Sessions the thread continues", s.ThreadWindow,
 		"how long after its last message the thread hands a message to a session; a duration like 3h",
 		editing("how long the thread continues a session, like 3h", s.ThreadWindow, func(v string) Setting {

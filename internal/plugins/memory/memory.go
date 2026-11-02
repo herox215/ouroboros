@@ -248,6 +248,7 @@ func tools(s *store.Store) []plugin.Tool {
 			return "Change undone.", nil
 		})},
 	}
+	out = append(out, tidyTools(s)...)
 	for i := range out {
 		out[i].OwnerOnly = true
 	}

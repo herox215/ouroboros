@@ -72,11 +72,6 @@ type Config struct {
 	// Description is what the node says about itself in its agent card, ""
 	// for the default, see About.
 	Description string `json:"description,omitempty"`
-	// MemoryInterval is how long after the last pass the archivist may run
-	// again, as a Go duration like "24h"; "off" or "" turns it off. A
-	// configuration that says nothing of it leaves the archivist off, see
-	// MemoryArchive.
-	MemoryInterval *string `json:"memory_interval,omitempty"`
 	// ThreadWindow is how long ago something must have happened in a session
 	// for the thread to hand messages to it, as a Go duration like "3h". A
 	// configuration that says nothing of it uses DefaultThreadWindow.
@@ -399,38 +394,6 @@ func (c Config) ID() string {
 	return id.ID()
 }
 
-// MemoryArchive is how long the archivist waits after a pass, and whether it
-// runs at all: "" or off turns it off, see MemoryInterval, and so does a
-// configuration that says nothing of it: the archivist waits until an
-// interval is set.
-func (c Config) MemoryArchive() (time.Duration, bool) {
-	if c.MemoryInterval == nil {
-		return 0, false
-	}
-	v := strings.TrimSpace(*c.MemoryInterval)
-	if v == "" || v == "off" {
-		return 0, false
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return 0, false
-	}
-	return d, true
-}
-
-// ValidMemoryInterval reports whether value can be memory_interval: off, ""
-// or a positive duration.
-func ValidMemoryInterval(value string) error {
-	v := strings.TrimSpace(value)
-	if v == "" || v == "off" {
-		return nil
-	}
-	if d, err := time.ParseDuration(v); err != nil || d <= 0 {
-		return fmt.Errorf("memory_interval is a duration like %q, or off", "24h")
-	}
-	return nil
-}
-
 // DefaultThreadWindow is how long ago something must have happened in a
 // session for the thread to hand messages to it, where the configuration says
 // nothing of it.
@@ -562,11 +525,6 @@ func Load(dir string) (Config, error) {
 	}
 	if !slices.Contains(AllEfforts, c.Effort) {
 		return c, fmt.Errorf("%s: effort %q is none of %s", path, c.Effort, strings.Join(AllEfforts[1:], ", "))
-	}
-	if c.MemoryInterval != nil {
-		if err := ValidMemoryInterval(*c.MemoryInterval); err != nil {
-			return c, fmt.Errorf("%s: %w", path, err)
-		}
 	}
 	if c.ThreadWindow != nil {
 		if err := ValidThreadWindow(*c.ThreadWindow); err != nil {
