@@ -1637,6 +1637,7 @@ test('MCP page lists the servers with their status and switches servers, tools a
         { Name: 'search', Description: 'Search tickets', On: true }, { Name: 'write', On: false }] },
       { Name: 'authy', How: 'node authy.js', Status: 'needs authentication', Tools: [] },
       { Name: 'off', How: 'node off.js', Disabled: true, Status: 'disabled', Tools: [] },
+      { Name: 'broken', How: 'node broken.js', Status: 'failed: token=secret' },
     ]; },
     MCPSetServer: async (...args) => { calls.push(['server', ...args]); },
     MCPSetTool: async (...args) => { calls.push(['tool', ...args]); },
@@ -1650,7 +1651,7 @@ test('MCP page lists the servers with their status and switches servers, tools a
   const actions = block => block.children.find(e => e.className === 'mcp-actions').children;
   const press = (block, text) => actions(block).find(e => e.textContent === text).dispatchEvent(new Event('click'));
   assert.deepEqual(calls, [['list', 1]], 'the page reads the profile it was opened for');
-  assert.equal(blocks().length, 3);
+  assert.equal(blocks().length, 4);
   assert.equal(blocks()[0].children[0].textContent, 'fixture');
   assert.equal(blocks()[0].children[1].textContent, 'https://example.invalid/mcp · connected');
   assert.equal(blocks()[1].children[1].textContent, 'node authy.js · needs authentication');
@@ -1660,7 +1661,18 @@ test('MCP page lists the servers with their status and switches servers, tools a
   assert.deepEqual(tools().children.map(e => e.children[1].textContent), ['Turn off', 'Turn on']);
   assert.deepEqual(actions(blocks()[0]).map(e => e.textContent), ['Turn off', 'Sign out']);
   assert.deepEqual(actions(blocks()[1]).map(e => e.textContent), ['Turn off', 'Sign in', 'Sign out']);
-  assert.deepEqual(actions(blocks()[2]).map(e => e.textContent), ['Turn on'], 'a server that is off signs nothing');
+  assert.deepEqual(actions(blocks()[2]).map(e => e.textContent), ['Turn on', 'Sign out'],
+    'a server that is off can still drop what it signed in with');
+  assert.equal(blocks()[3].children[1].textContent, 'node broken.js · failed',
+    'a backend error is said as failed, not shown');
+  const texts = node => [node.textContent, ...node.children.flatMap(texts)];
+  assert.ok(!texts(dialog).some(text => /token=/.test(text)), 'no backend string reaches the page');
+  // Each switch names its server, and a tool its tool, for a screen reader.
+  const labels = block => actions(block).map(e => e.getAttribute('aria-label'));
+  assert.deepEqual(labels(blocks()[0]), ['Turn off fixture', 'Sign out from fixture']);
+  assert.deepEqual(labels(blocks()[1]), ['Turn off authy', 'Sign in to authy', 'Sign out from authy']);
+  assert.deepEqual(tools().children.map(e => e.children[1].getAttribute('aria-label')),
+    ['Turn off search on fixture', 'Turn on write on fixture']);
   assert.ok(!blocks()[0].children.some(e => /ouro mcp login/.test(e.textContent)), 'a bridge that signs in needs no command');
   press(blocks()[0], 'Turn off'); await settle();
   const last = kind => calls.filter(c => c[0] === kind).at(-1);
@@ -1674,6 +1686,81 @@ test('MCP page lists the servers with their status and switches servers, tools a
   assert.deepEqual(last('logout'), ['logout', 1, 'authy']);
   press(blocks()[2], 'Turn on'); await settle();
   assert.deepEqual(last('server'), ['server', 1, 'off', true]);
+});
+
+test('MCP page rereads a server until its background connection shows the tools', async () => {
+  const doc = documentFixture(), reads = [];
+  // The stub moves on between the reads, as the node does once the server is
+  // connected: a single read after the switch would show it not connected.
+  const states = [
+    { Status: 'disabled', Disabled: true, Tools: [] },
+    { Status: 'not connected', Tools: [] },
+    { Status: 'connected', Tools: [{ Name: 'search', Description: 'Search tickets', On: true }] },
+  ];
+  let step = 0;
+  const picker = createSettingsDialog({
+    MCPServers: async () => {
+      reads.push(step);
+      const state = states[step];
+      if (step > 0) step = Math.min(step + 1, states.length - 1);
+      return [{ Name: 'fixture', How: 'node fixture.js', ...state }];
+    },
+    MCPSetServer: async () => { step = 1; },
+  }, {}, doc, undefined, [20, 20, 20]);
+  picker.open(0, 'node');
+  const dialog = doc.body.children.at(-1);
+  dialog.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click')); await settle();
+  const list = () => dialog.children.find(e => e.className === 'mcp-list').children;
+  const status = () => dialog.children.find(e => e.tagName === 'p');
+  const tools = () => list()[0].children.find(e => e.className === 'mcp-tools');
+  list()[0].children.find(e => e.className === 'mcp-actions').children[0].dispatchEvent(new Event('click'));
+  await settle();
+  assert.equal(reads.length, 2, 'the switch rereads the list once at once');
+  assert.equal(list()[0].children[1].textContent, 'node fixture.js · not connected');
+  assert.equal(status().textContent, 'Connecting to the server …', 'the page says that it connects meanwhile');
+  for (let i = 0; i < 200 && list()[0].children[1].textContent !== 'node fixture.js · connected'; i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(list()[0].children[1].textContent, 'node fixture.js · connected',
+    'a later read shows the connection the owner did not ask for');
+  assert.deepEqual(tools().children.map(e => e.children[0].textContent), ['search · Search tickets']);
+  assert.equal(status().textContent, '', 'the hint is gone once the server answered');
+  assert.equal(reads.length, 3, 'the reads stop with the connection, not on a timer');
+});
+
+test('the dialog closes while a sign-in waits for the browser, and the page works after', async () => {
+  const doc = documentFixture(), calls = [], answer = deferred();
+  const picker = createSettingsDialog({
+    MCPServers: async () => [{ Name: 'authy', How: 'node authy.js', Status: 'needs authentication' }],
+    MCPLogin: () => { calls.push(1); return calls.length === 1 ? answer.promise : Promise.resolve(); },
+    MCPLogout: async () => {},
+  }, {}, doc);
+  picker.open(0, 'node');
+  const dialog = doc.body.children.at(-1);
+  const status = () => dialog.children.find(e => e.tagName === 'p');
+  const page = async () => {
+    dialog.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click'));
+    await settle();
+    const actions = dialog.children.find(e => e.className === 'mcp-list').children[0]
+      .children.find(e => e.className === 'mcp-actions');
+    return actions.children.find(e => e.textContent === 'Sign in');
+  };
+  const signIn = await page();
+  signIn.dispatchEvent(new Event('click')); await settle();
+  assert.equal(status().textContent, 'Waiting for the browser to answer the sign-in …');
+  assert.equal(signIn.disabled, true, 'the buttons of the server are off while the browser is open');
+  const escape = new Event('cancel', { cancelable: true });
+  dialog.dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, false, 'Escape is not held back by the open browser');
+  dialog.children[0].children.find(e => e.getAttribute('aria-label') === 'Close').dispatchEvent(new Event('click'));
+  assert.equal(dialog.open, false, 'the X closes the dialog while the sign-in waits');
+  answer.resolve(); await settle();
+  // The sign-in outliving its page leaves no lock on the page opened after it.
+  picker.open(0, 'node');
+  const again = await page();
+  again.dispatchEvent(new Event('click')); await settle();
+  assert.equal(calls.length, 2, 'the second page signs in again');
+  assert.equal(status().textContent, '', 'an answered sign-in shows the server state, not a failure');
 });
 
 test('MCP page names the terminal command where the bridge cannot sign in', async () => {
@@ -1709,8 +1796,12 @@ test('MCP page says so without servers and keeps backend errors out of the dialo
   }, {}, failing).open(0, 'node');
   const switched = failing.body.children.at(-1);
   switched.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click')); await settle();
-  switched.children.find(e => e.className === 'mcp-list').children[0]
-    .children.find(e => e.className === 'mcp-actions').children[0].dispatchEvent(new Event('click')); await settle();
+  const off = switched.children.find(e => e.className === 'mcp-list').children[0]
+    .children.find(e => e.className === 'mcp-actions').children[0];
+  off.dispatchEvent(new Event('click'));
+  assert.equal(off.disabled, true, 'a running call takes its button out of use');
+  await settle();
+  assert.equal(off.disabled, false, 'and gives it back after the call failed');
   const line = switched.children.find(e => e.tagName === 'p');
   assert.equal(line.hidden, false, 'a failed switch shows where the list is quiet');
   assert.equal(line.textContent, 'The MCP operation failed. Check the configuration and try again.');

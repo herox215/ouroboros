@@ -90,7 +90,7 @@ exec sleep 60
 		}
 		closed <- err
 	}()
-	d, err = launch(ctx, script(t, "sh -c 'exec 3>"+fifo+"; sleep 60' &\n"+server()+"\n"))
+	d, err = launch(ctx, script(t, "sh -c 'exec 3>"+fifo+"; sleep 60' >&- &\n"+server()+"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestCallAndEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.end()
-	if _, err := d.call(context.Background(), "list_windows", nil); err == nil || err.Error() != "bad params" {
+	if _, err := d.call(context.Background(), "list_windows", nil); err == nil || err.Error() != "cua-driver: bad params" {
 		t.Fatalf("an error: %v", err)
 	}
 	ss.Close() // the driver ends
@@ -193,5 +193,37 @@ func TestResultText(t *testing.T) {
 	}}}
 	if got := r.text(); got != "a\nb" {
 		t.Errorf("text %q", got)
+	}
+}
+
+// A driver that never greets ends with what it started, as one that ouro
+// ends does: the group goes, not only the program.
+func TestFailedHandshakeKillsTheGroup(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gone := make(chan error, 1)
+	go func() {
+		f, err := os.Open(fifo)
+		if err == nil {
+			_, err = f.Read(make([]byte, 1))
+			f.Close()
+		}
+		gone <- err
+	}()
+	// The program starts a child that holds the FIFO open, closes the output
+	// the SDK greets it on, and stays without answering.
+	_, err := launch(context.Background(), script(t, "sh -c 'exec 3>"+fifo+"; sleep 60' >&- &\nexec >&-\nexec sleep 60\n"))
+	if err == nil || !strings.HasPrefix(err.Error(), "cua-driver does not start") {
+		t.Fatalf("a driver that does not greet: %v", err)
+	}
+	select {
+	case err := <-gone:
+		if err == nil {
+			t.Fatal("what it started said something")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("what the driver started is still running")
 	}
 }

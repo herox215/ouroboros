@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -18,8 +19,11 @@ import (
 	"ouroboros/internal/procgroup"
 )
 
-// closeTimeout is how long cua-driver may take to end once its input is
-// closed, before it is killed; tests shorten it.
+// closeTimeout is about how long ending cua-driver may take, all in all;
+// tests shorten it. Once its input is closed the SDK waits a third of it for
+// it to end by itself, then a third more after SIGTERM, and SIGKILLs it after
+// another third; the group it leads is killed then, which takes what it
+// started along with it.
 var closeTimeout = 3 * time.Second
 
 // driver is cua-driver that runs, spoken to over MCP by the SDK of the
@@ -60,7 +64,11 @@ func (r *result) structured(v any) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(b, v)
+	// Numbers are read as they are written: window ids are uint64, which a
+	// float64 of JSON rounds above 2^53.
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	return dec.Decode(v)
 }
 
 // launch starts the program path as the MCP server of cua-driver and greets
@@ -81,13 +89,15 @@ func launch(ctx context.Context, path string) (*driver, error) {
 	var stderr tail
 	cmd.Stderr = &stderr
 	procgroup.Detach(cmd)
-	// Why it ended is the last of what it wrote, which is all there once it
-	// was waited for: its output closes before.
+	// Why it ended is the last of what it wrote, which is all there once the
+	// command was waited for: reading its error output ends before that. The
+	// SDK waits for the command when it closes the connection, so the session
+	// of a driver ends, and launch returns, once all of its output was kept.
 	why := func() string { return stderr.String() }
 	ctx, deadline := context.WithTimeout(ctx, 20*time.Second)
 	defer deadline()
 	var d *driver
-	d, err = connect(ctx, path, &mcpsdk.CommandTransport{Command: cmd, TerminateDuration: closeTimeout}, func() {
+	d, err = connect(ctx, path, &mcpsdk.CommandTransport{Command: cmd, TerminateDuration: closeTimeout / 3}, func() {
 		// Its input closes, so that it ends; what it started goes with the
 		// group, which closing its input alone leaves behind.
 		d.session.Close()
@@ -95,10 +105,16 @@ func launch(ctx context.Context, path string) (*driver, error) {
 		cancel()
 	}, why)
 	if err != nil {
-		// What was started for it ends with it, and what it wrote says why it
-		// did not start.
+		// What was started for it ends with it, group and all, and what it
+		// wrote says why it did not start. It did start when the SDK got as
+		// far as greeting it, which is the case where its own words are worth
+		// more than the error of the SDK: the SDK closed the connection it
+		// could not greet, and waited for the command there, so what it wrote
+		// is complete. Start sets Process, and only Start, which has returned
+		// by now, so no goroutine writes what this reads.
+		_ = procgroup.Kill(cmd)
 		cancel()
-		if cmd.ProcessState != nil {
+		if cmd.Process != nil {
 			return nil, fmt.Errorf("cua-driver does not start: %s", ended(why))
 		}
 		return nil, fmt.Errorf("cua-driver does not start: %w", err)
@@ -154,11 +170,13 @@ func (d *driver) call(ctx context.Context, name string, args map[string]any) (*r
 	}
 	answer, err := d.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
-		return nil, err
+		// What the driver answered, or failed to answer, is the driver
+		// speaking, and its texts stay recognisable wherever they are embedded.
+		return nil, fmt.Errorf("cua-driver: %w", err)
 	}
 	r := &result{answer}
 	if answer.IsError {
-		return nil, errors.New(cmp.Or(r.text(), name+" failed"))
+		return nil, fmt.Errorf("cua-driver: %s", cmp.Or(r.text(), name+" failed"))
 	}
 	return r, nil
 }

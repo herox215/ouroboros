@@ -45,7 +45,8 @@ func (w *Window) MCPSetServer(profile int, server string, on bool) error {
 
 // MCPLogin signs the selected profile's node in to the server: the page of
 // its authorization server opens in the browser, and the window says that it
-// waits for the answer.
+// waits for the answer. It returns only with the answer, which can take
+// minutes: a front end keeps the window usable meanwhile.
 func (w *Window) MCPLogin(profile int, server string) error {
 	p, err := w.modelProfile(profile)
 	if err != nil {

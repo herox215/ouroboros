@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -146,8 +147,17 @@ func (s *search) exa(ctx context.Context, a args) (string, error) {
 	answer := &status{base: s.client.Transport}
 	client := *s.client
 	client.Transport = answer
-	transport := &mcpsdk.StreamableClientTransport{Endpoint: s.endpoint, HTTPClient: &client}
-	clientMCP := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ouro", Version: "1"}, nil)
+	transport := &mcpsdk.StreamableClientTransport{
+		Endpoint:   s.endpoint,
+		HTTPClient: &client,
+		// A search is a request and its answer: nothing of the service comes
+		// unasked, and a stream of its own would be a connection to hold open
+		// for no search, which the client otherwise opens while it connects.
+		DisableStandaloneSSE: true,
+	}
+	clientMCP := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ouro", Version: "1"}, &mcpsdk.ClientOptions{
+		Capabilities: &mcpsdk.ClientCapabilities{}, // nothing is asked of ouro: no roots, no sampling, no elicitation
+	})
 	session, err := clientMCP.Connect(ctx, transport, nil)
 	if err != nil {
 		return "", answer.failed(err)
@@ -197,7 +207,39 @@ func (s *status) RoundTrip(r *http.Request) (*http.Response, error) {
 	s.mu.Lock()
 	s.code, s.after = resp.StatusCode, resp.Header.Get("Retry-After")
 	s.mu.Unlock()
+	// The SDK holds a whole response of the service in memory before it reads
+	// it, so a service that answers with more than a search needs ends the
+	// search here, where what it was can still be said.
+	resp.Body = &limited{ReadCloser: resp.Body}
 	return resp, nil
+}
+
+// limited keeps the answer of the service to maxResponse bytes, and fails the
+// read that would take more: the SDK reports that error as the failure of the
+// call, so it reaches the caller as the reason the search failed.
+type limited struct {
+	io.ReadCloser
+	read int
+}
+
+func (b *limited) Read(p []byte) (int, error) {
+	if b.read >= maxResponse {
+		// An answer of exactly the limit is no more than that: only what
+		// comes after it makes the search fail.
+		var one [1]byte
+		if n, err := b.ReadCloser.Read(one[:]); n > 0 {
+			return 0, fmt.Errorf("the search of Exa returned more than %d MiB", maxResponse>>20)
+		} else if err != nil {
+			return 0, err
+		}
+		return 0, io.ErrNoProgress
+	}
+	if len(p) > maxResponse-b.read {
+		p = p[:maxResponse-b.read]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.read += n
+	return n, err
 }
 
 // failed is why the search of Exa failed: its answer, when it was no answer
@@ -215,7 +257,9 @@ func (s *status) failed(err error) error {
 		}
 		return fmt.Errorf("the free search rate limit of Exa was reached%s; try again later", hint)
 	}
-	if code != 0 && code != http.StatusOK {
+	// What is not 4xx or 5xx is no failure: the SDK sends its greetings as
+	// POSTs of their own, which a server answers with 202 and no body.
+	if code >= 400 {
 		return fmt.Errorf("the search of Exa returned HTTP %d", code)
 	}
 	return fmt.Errorf("the search of Exa: %w", err)

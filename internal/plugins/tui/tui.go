@@ -459,30 +459,49 @@ func (u *ui) ChangeSetting(s tui.Setting) (string, error) {
 	return u.Owner.Change(s, plugin.All[plugin.Tool](u.ctx), plugin.All[plugin.ContextProvider](u.ctx))
 }
 
+// mcps is the MCP servers of this profile's plugins, and whether this build
+// has them at all.
+func (u *ui) mcps() (plugin.MCP, bool) {
+	if all := plugin.All[plugin.MCP](u.ctx); len(all) > 0 {
+		return all[0], true
+	}
+	return plugin.MCP{}, false
+}
+
 // MCP lists the MCP servers of the node with their tools, as the MCP plugin
 // contributes them.
 func (u *ui) MCP(ctx context.Context) ([]plugin.MCPServer, error) {
-	for _, m := range plugin.All[plugin.MCP](u.ctx) {
+	if m, ok := u.mcps(); ok {
 		return m.Servers(ctx), nil
 	}
 	return nil, nil
 }
 
 // ChangeMCP turns a server on or off, or one tool of it.
-func (u *ui) ChangeMCP(change plugin.MCPChange) (string, error) {
-	for _, m := range plugin.All[plugin.MCP](u.ctx) {
-		var err error
-		if change.Tool == "" {
-			err = m.SetServer(context.Background(), change.Server, change.On)
-		} else {
-			err = m.SetTool(context.Background(), change.Server, change.Tool, change.On)
-		}
-		if err != nil {
-			return "", err
-		}
-		return "saved: " + change.Server, nil
+func (u *ui) ChangeMCP(ctx context.Context, change plugin.MCPChange) (string, error) {
+	m, ok := u.mcps()
+	if !ok {
+		return "", errors.New("this build has no MCP servers")
 	}
-	return "", errors.New("this build has no MCP servers")
+	var err error
+	if change.Tool == "" {
+		err = m.SetServer(ctx, change.Server, change.On)
+	} else {
+		err = m.SetTool(ctx, change.Server, change.Tool, change.On)
+	}
+	if err != nil {
+		return "", err
+	}
+	// What was saved is said as it is now: a whole server, or one tool of it,
+	// and whether it is on or off.
+	what := "server " + change.Server
+	if change.Tool != "" {
+		what = "tool " + change.Tool + " of " + change.Server
+	}
+	if change.On {
+		return "saved: " + what + " on", nil
+	}
+	return "saved: " + what + " off", nil
 }
 
 // Start starts the node; one that was not set up is told how to get there in

@@ -136,8 +136,25 @@ func (m *manager) server(name string, cfg config.Server) *server {
 		st = &server{name: name}
 		m.servers[name] = st
 	}
-	st.cfg = cfg
+	st.configure(cfg)
 	return st
+}
+
+// configuration is the configuration of the server as it is now. It is read
+// anew for every connection and every call, because ouro mcp in another
+// process, the settings screen and the front ends change it under a running
+// connection; the copy it returns is the caller's to keep.
+func (st *server) configuration() config.Server {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.cfg
+}
+
+// configure replaces the configuration of the server.
+func (st *server) configure(cfg config.Server) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.cfg = cfg
 }
 
 // close ends every connection, and the programs of the local servers with it.
@@ -172,12 +189,13 @@ func (m *manager) state(name string) *server {
 // connect connects the server st, lists its tools and hands them to the
 // agents.
 func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]*mcpsdk.Tool, error) {
-	if st.cfg.Disabled {
+	cfg := st.configuration()
+	if cfg.Disabled {
 		st.set(statusDisabled, nil)
 		m.unregister(st)
 		return nil, errors.New("the server " + st.name + " is disabled")
 	}
-	if err := st.cfg.Validate(st.name); err != nil {
+	if err := cfg.Validate(st.name); err != nil {
 		st.set("failed: "+err.Error(), err)
 		return nil, err
 	}
@@ -221,19 +239,18 @@ func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]
 	return tools, nil
 }
 
-// transport is how the server is reached: a program that is started for it,
-// or its URL.
 // transport is how the server is reached, and the program that was started
 // for it, if any.
 func (m *manager) transport(ctx context.Context, st *server, interactive bool) (mcpsdk.Transport, *program, error) {
-	env, headers := m.secrets(st.name), st.cfg.Headers
-	merged := make(map[string]string, len(st.cfg.Headers))
+	cfg := st.configuration()
+	env, headers := m.secrets(st.name), cfg.Headers
+	merged := make(map[string]string, len(cfg.Headers))
 	for k, v := range headers {
 		merged[k] = expand(v, env)
 	}
-	if st.cfg.URL != "" {
+	if cfg.URL != "" {
 		transport := &mcpsdk.StreamableClientTransport{
-			Endpoint:   st.cfg.URL,
+			Endpoint:   cfg.URL,
 			HTTPClient: &http.Client{Transport: &headerRoundTrip{base: http.DefaultTransport, headers: merged}},
 		}
 		if handler, err := m.oauth(st, interactive); err != nil {
@@ -246,9 +263,9 @@ func (m *manager) transport(ctx context.Context, st *server, interactive bool) (
 	// The program lives as long as its connection: the context is the one that
 	// ends it, and Detach makes its group go with it.
 	life, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(life, st.cfg.Command, st.cfg.Args...)
+	cmd := exec.CommandContext(life, cfg.Command, cfg.Args...)
 	cmd.Env = os.Environ()
-	for k, v := range st.cfg.Env {
+	for k, v := range cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+expand(v, env))
 	}
 	// The program gets a group of its own, so that the group can be killed as
@@ -337,10 +354,11 @@ func (m *manager) registerTools(st *server, tools []*mcpsdk.Tool) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	list := st.configuration().Tools // what the owner wants of this server, as it is now
 	keep := make(map[string]bool, len(tools))
 	wanted := make([]*mcpsdk.Tool, 0, len(tools))
 	for _, t := range tools {
-		if len(st.cfg.Tools) > 0 && !slices.Contains(st.cfg.Tools, t.Name) {
+		if len(list) > 0 && !slices.Contains(list, t.Name) {
 			continue
 		}
 		keep[st.name+"/"+t.Name] = true
@@ -471,8 +489,8 @@ func (m *manager) session(ctx context.Context, st *server) (*mcpsdk.ClientSessio
 	st.mu.Lock()
 	session, tools := st.session, st.tools
 	changed := !slices.Equal(cfg.Tools, st.cfg.Tools)
-	st.mu.Unlock()
 	st.cfg = cfg
+	st.mu.Unlock()
 	if session != nil {
 		if changed {
 			// The list of tools the owner wants changed under a running

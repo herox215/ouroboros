@@ -108,7 +108,11 @@ func (m *manager) setTool(ctx context.Context, server, tool string, on bool) err
 		return err
 	}
 	if st != nil {
+		// The connection reads the configuration it hands tools out by: it
+		// sees the new list before the tools are registered for it.
+		st.mu.Lock()
 		st.cfg.Tools = next
+		st.mu.Unlock()
 		m.registerTools(st, listed)
 	}
 	return nil
@@ -125,7 +129,9 @@ func (m *manager) setEnabled(ctx context.Context, server string, on bool) error 
 	if st == nil { // a process that did not connect the servers, a front end without a node
 		return nil
 	}
+	st.mu.Lock()
 	st.cfg.Disabled = !on
+	st.mu.Unlock()
 	if !on {
 		st.drop()
 		m.unregister(st)

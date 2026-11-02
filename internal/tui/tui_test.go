@@ -160,7 +160,7 @@ func (f *fakeBackend) ChangeSetting(s Setting) (string, error) {
 func (f *fakeBackend) MCP(ctx context.Context) ([]plugin.MCPServer, error) {
 	return f.mcp, f.fail["mcp"]
 }
-func (f *fakeBackend) ChangeMCP(change plugin.MCPChange) (string, error) {
+func (f *fakeBackend) ChangeMCP(_ context.Context, change plugin.MCPChange) (string, error) {
 	f.mcpChanges = append(f.mcpChanges, change)
 	return f.done, f.fail["change"]
 }

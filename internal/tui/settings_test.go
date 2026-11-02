@@ -1259,3 +1259,78 @@ func TestSettingsToolDetailsAndActions(t *testing.T) {
 		t.Errorf("no fallbacks: %q", r.value)
 	}
 }
+
+// The MCP servers are shown with how they are and their tools below them, a
+// tool is changed for the server it belongs to alone, and what is read again
+// leaves the selection on a row that is there when a server takes its tools
+// with it.
+func TestSettingsMCPServers(t *testing.T) {
+	m, b := openSettings(t, someSettings())
+	b.mcp = []plugin.MCPServer{
+		{Name: "alpha", How: "https://mcp.example/sse", Status: "connected", Tools: []plugin.MCPTool{
+			{Name: "weather", Description: "Tell the weather. Of a place, and of a day.", On: true},
+			{Name: "time", Description: "Tell the time.", On: false},
+		}},
+		{Name: "beta", How: "npx -y beta", Disabled: true, Status: "disabled"},
+	}
+	deliver(m, m.config.reload(m))
+	for _, tt := range []struct{ label, value, note string }{
+		{"alpha", "on · connected", "https://mcp.example/sse"},
+		{"weather", "on", "Tell the weather."},
+		{"time", "off", "Tell the time."},
+		{"beta", "off · disabled", "npx -y beta"},
+	} {
+		if r := value(t, m, mcpSection, tt.label); r.value != tt.value || r.note != tt.note {
+			t.Errorf("%s: %q, %q", tt.label, r.value, r.note)
+		}
+	}
+	pick(t, m, mcpSection, "time", "turn on")
+	view := dialogView(m)
+	for _, want := range []string{"│ Settings › MCP servers", "alpha  on · connected", "weather  on", "· time  off", "off · disabled"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the servers lack %q:\n%s", want, view)
+		}
+	}
+
+	// A tool is turned on for its server alone.
+	msg := press(m, "enter")() // the change, before the UI hears of it
+	_, follow := m.Update(msg)
+	if len(b.mcpChanges) != 1 || b.mcpChanges[0] != (plugin.MCPChange{Server: "alpha", Tool: "time", On: true}) {
+		t.Fatalf("changes %+v", b.mcpChanges)
+	}
+	// It connects in the background, so the screen reads the servers again.
+	batch, ok := follow().(tea.BatchMsg)
+	if !ok || len(batch) < 2+len(mcpRereads) {
+		t.Fatalf("a change of a server is read again %d times: %v", len(batch), ok)
+	}
+
+	// Turned off again, a server has no tools: the selection stays in range
+	// and what is shown renders all the same.
+	b.mcp[0] = plugin.MCPServer{Name: "alpha", How: "https://mcp.example/sse", Disabled: true, Status: "disabled"}
+	deliver(m, m.config.reread(m, 0))
+	stays := m.config.shown(m)
+	if m.config.sel < 0 || m.config.sel >= len(stays) {
+		t.Fatalf("selected %d of %d rows", m.config.sel, len(stays))
+	}
+	if view := dialogView(m); !strings.Contains(view, "Settings › MCP servers") ||
+		strings.Contains(view, "weather") || !strings.Contains(view, "beta") {
+		t.Errorf("a server that was turned off:\n%s", view)
+	}
+
+	// Connected again, its tools come with it, without another key.
+	b.mcp[0] = plugin.MCPServer{Name: "alpha", How: "https://mcp.example/sse", Status: "connected",
+		Tools: []plugin.MCPTool{{Name: "weather", Description: "Tell the weather. Of a place.", On: true}}}
+	deliver(m, m.config.reread(m, 0))
+	if r := value(t, m, mcpSection, "weather"); r.value != "on" || r.note != "Tell the weather." {
+		t.Errorf("after connecting: %q, %q", r.value, r.note)
+	}
+
+	// A configuration that cannot be read says why, rather than that there is
+	// no server to add.
+	b.fail = map[string]error{"mcp": errors.New("the configuration cannot be read")}
+	deliver(m, m.config.reload(m))
+	if view := dialogView(m); !strings.Contains(view, "✗ the configuration cannot be read") ||
+		strings.Contains(view, "No server") {
+		t.Errorf("a broken configuration:\n%s", view)
+	}
+}

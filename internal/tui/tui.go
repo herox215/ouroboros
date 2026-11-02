@@ -194,7 +194,7 @@ type Backend interface {
 	// MCP lists the MCP servers of the node with their tools.
 	MCP(ctx context.Context) ([]plugin.MCPServer, error)
 	// ChangeMCP turns a server on or off, or one tool of it.
-	ChangeMCP(change plugin.MCPChange) (string, error)
+	ChangeMCP(ctx context.Context, change plugin.MCPChange) (string, error)
 }
 
 // Event is what happened in a session, as the UI shows it: see

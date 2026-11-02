@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -54,10 +55,13 @@ type settingsMsg struct {
 	err       error
 }
 
-// changedMsg is how a change on the settings screen went.
+// changedMsg is how a change on the settings screen went. mcp says that it was
+// one of the MCP servers, which connect in the background: what became of it
+// is read again after a while, see changed.
 type changedMsg struct {
 	done string
 	err  error
+	mcp  bool
 }
 
 // row is a line of the settings screen.
@@ -149,8 +153,13 @@ func (c *settingsScreen) load(m *Model) tea.Msg {
 	if err == nil {
 		err = gatewayErr
 	}
-	// A build without the MCP plugin has no servers: the category says so.
-	mcp, _ := m.backend.MCP(m.ctx)
+	// A build without the MCP plugin has no servers: the category says so. A
+	// configuration that cannot be read is a reason like one of the gateways:
+	// the screen says why, rather than that there is no server.
+	mcp, mcpErr := m.backend.MCP(m.ctx)
+	if err == nil {
+		err = mcpErr
+	}
 	return settingsMsg{settings: s, fallbacks: fallbacks, gateways: gateways, mcp: mcp, err: err}
 }
 
@@ -160,7 +169,10 @@ func (c *settingsScreen) loaded(m *Model, msg settingsMsg) {
 	c.values, c.fallbacks, c.err, c.rows = msg.settings, msg.fallbacks, msg.err, nil
 	c.mcp = msg.mcp
 	if msg.err == nil {
-		c.rows = append(rows(msg.settings), mcpRows(msg.mcp)...)
+		// The servers are read again while the screen is open: their rows are
+		// built anew from what was read, and the clamp below keeps the
+		// selection on a row that is still there when they shrink.
+		c.rows = append(rows(msg.settings), mcpRows(c.mcp)...)
 	}
 	// A peer or a tool that is no more closes what showed it.
 	if c.peer != "" && c.peerList() == nil {
@@ -303,7 +315,7 @@ func (c *settingsScreen) leave(m *Model) {
 func (c *settingsScreen) change(m *Model, s Setting) tea.Cmd {
 	return func() tea.Msg {
 		done, err := m.backend.ChangeSetting(s)
-		return changedMsg{done, err}
+		return changedMsg{done: done, err: err}
 	}
 }
 
@@ -314,7 +326,28 @@ func (c *settingsScreen) changed(m *Model, msg changedMsg) tea.Cmd {
 	} else {
 		m.setNotice(msg.done, false)
 	}
-	return tea.Batch(c.reload(m), m.refresh())
+	cmds := []tea.Cmd{c.reload(m), m.refresh()}
+	if msg.mcp && msg.err == nil {
+		// A server that was turned on connects in the background, and one that
+		// stays away says why only once it gave up: the servers are read again
+		// a few times, so that their tools, and the reason they are not there,
+		// show without another key.
+		for _, wait := range mcpRereads {
+			cmds = append(cmds, c.reread(m, wait))
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// mcpRereads are how long after a change of the MCP servers the settings
+// screen reads them again: the last is past the time a server is given to
+// connect, see connectTimeout of the MCP plugin.
+var mcpRereads = []time.Duration{250 * time.Millisecond, time.Second, 3 * time.Second, 10 * time.Second, 31 * time.Second}
+
+// reread reads the configuration again after wait: what a change of the MCP
+// servers became shows only then.
+func (c *settingsScreen) reread(m *Model, wait time.Duration) tea.Cmd {
+	return tea.Tick(wait, func(time.Time) tea.Msg { return c.load(m) })
 }
 
 // startEdit lets the owner type the text of label, starting from value.
@@ -559,7 +592,7 @@ func mcpRows(servers []plugin.MCPServer) []row {
 				section: mcpSection,
 				label:   t.Name,
 				value:   value,
-				note:    t.Description,
+				note:    firstSentence(t.Description),
 				sub:     true,
 				actions: []action{{name: toggle, run: mcpChange(plugin.MCPChange{Server: s.Name, Tool: t.Name, On: !t.On})}},
 			})
@@ -581,8 +614,8 @@ func mcpChange(change plugin.MCPChange) func(m *Model) tea.Cmd {
 // the tools of a server come and go at once, without a start of the node.
 func (c *settingsScreen) changeMCP(m *Model, change plugin.MCPChange) tea.Cmd {
 	return func() tea.Msg {
-		done, err := m.backend.ChangeMCP(change)
-		return changedMsg{done, err}
+		done, err := m.backend.ChangeMCP(m.ctx, change)
+		return changedMsg{done: done, err: err, mcp: true}
 	}
 }
 
@@ -1038,7 +1071,12 @@ func (c *settingsScreen) view(m *Model) (string, []hit) {
 			}
 			label := style.Width(width + 2).Render(ansi.Truncate(r.label, width, "…"))
 			if r.sub {
+				// A line of a list, below the one it belongs to: what it is
+				// set to, if anything, stands apart from its name.
 				label = style.Render(ansi.Truncate(r.label, max(inner-6, 1), "…"))
+				if r.value != "" {
+					label += "  "
+				}
 			}
 			from := len(lines)
 			lines = append(lines, ansi.Truncate(marker+mutedStyle.Render(indent)+label+r.value, inner, "…"))

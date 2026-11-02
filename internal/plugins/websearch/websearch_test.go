@@ -1,6 +1,7 @@
 package websearch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -126,11 +127,14 @@ func TestSearchFailures(t *testing.T) {
 	}{
 		{"quota", 429, "", "", "Retry-After: 60"},
 		{"unavailable", 503, "", "", "HTTP 503"},
-		{"invalid", 200, "not json", "application/json", "the search of Exa"},
-		{"rpc error", 200, `{"error":{"code":-32000,"message":"quota reached"}}`, "application/json", "the search of Exa"},
-		{"tool error", 200, `{"result":{"isError":true,"content":[{"type":"text","text":"failed"}]}}`, "application/json", "the search of Exa"},
-		{"missing", 200, `{}`, "application/json", "the search of Exa"},
-		{"empty stream", 200, ": ping\n\n", "text/event-stream", "the search of Exa"},
+		{"invalid", 200, "not json", "application/json", "failed to decode response"},
+		{"rpc error", 200, `{"error":{"code":-32000,"message":"quota reached"}}`, "application/json", "failed to decode response"},
+		{"tool error", 200, `{"result":{"isError":true,"content":[{"type":"text","text":"failed"}]}}`, "application/json", "failed to decode response"},
+		{"missing", 200, `{}`, "application/json", "failed to decode response"},
+		// What a server accepts, as it does the greeting of the session, is
+		// no failure of the search: the answer that is none is.
+		{"accepted", 202, "", "application/json", "failed to decode response"},
+		{"empty stream", 200, ": ping\n\n", "text/event-stream", "terminated without response"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			withoutEngines(t)
@@ -147,6 +151,23 @@ func TestSearchFailures(t *testing.T) {
 				t.Fatalf("want %s, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+// An answer of Exa over 1 MiB fails the search with what it was: the SDK
+// holds a whole response in memory, so the bound is kept as it is read.
+func TestSearchResponseBound(t *testing.T) {
+	forbidFallback(t)
+	server := mcp(t, func(w http.ResponseWriter, id, _ json.RawMessage) {
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"`, id)
+		w.Write(bytes.Repeat([]byte("x"), maxResponse))
+		w.Write([]byte(`"}]}}`))
+	})
+	defer server.Close()
+	s := &search{client: server.Client(), endpoint: server.URL, private: true}
+	_, err := s.run(context.Background(), args{Query: "ouro"})
+	if err == nil || !strings.Contains(err.Error(), "the search of Exa returned more than 1 MiB") {
+		t.Fatalf("an answer over the bound: %v", err)
 	}
 }
 

@@ -195,6 +195,23 @@ const en = {
   'settings.mcpSignIn': 'Sign in',
   'settings.mcpSignOut': 'Sign out',
   'settings.mcpSignInHint': 'The window cannot sign in to this server yet: sign in with ouro mcp login {name} in the terminal.',
+  // The states of a server, in the words of this language only: the plugin
+  // says 'failed: …' with the backend's error, which stays out of the window.
+  'settings.mcpConnected': 'connected',
+  'settings.mcpDisabled': 'disabled',
+  'settings.mcpNotConnected': 'not connected',
+  'settings.mcpNeedsAuthentication': 'needs authentication',
+  'settings.mcpStatusFailed': 'failed',
+  'settings.mcpConnecting': 'Connecting to the server …',
+  'settings.mcpWaiting': 'Waiting for the browser to answer the sign-in …',
+  // The names of the buttons for a screen reader, which needs the server and
+  // the tool: 'Turn off' alone does not tell two switches apart.
+  'settings.mcpTurnOnServer': 'Turn on {name}',
+  'settings.mcpTurnOffServer': 'Turn off {name}',
+  'settings.mcpTurnOnTool': 'Turn on {tool} on {name}',
+  'settings.mcpTurnOffTool': 'Turn off {tool} on {name}',
+  'settings.mcpSignInServer': 'Sign in to {name}',
+  'settings.mcpSignOutServer': 'Sign out from {name}',
 };
 
 const de = {
@@ -380,6 +397,19 @@ const de = {
   'settings.mcpSignIn': 'Anmelden',
   'settings.mcpSignOut': 'Abmelden',
   'settings.mcpSignInHint': 'Das Fenster kann sich noch nicht bei diesem Server anmelden: Melde dich im Terminal mit ouro mcp login {name} an.',
+  'settings.mcpConnected': 'verbunden',
+  'settings.mcpDisabled': 'ausgeschaltet',
+  'settings.mcpNotConnected': 'nicht verbunden',
+  'settings.mcpNeedsAuthentication': 'Anmeldung erforderlich',
+  'settings.mcpStatusFailed': 'fehlgeschlagen',
+  'settings.mcpConnecting': 'Verbindung zum Server wird hergestellt …',
+  'settings.mcpWaiting': 'Warte auf die Antwort des Browsers zur Anmeldung …',
+  'settings.mcpTurnOnServer': 'Schalte {name} ein',
+  'settings.mcpTurnOffServer': 'Schalte {name} aus',
+  'settings.mcpTurnOnTool': 'Schalte {tool} auf {name} ein',
+  'settings.mcpTurnOffTool': 'Schalte {tool} auf {name} aus',
+  'settings.mcpSignInServer': 'Bei {name} anmelden',
+  'settings.mcpSignOutServer': 'Von {name} abmelden',
 };
 
 // The language the window shows, English unless another is picked.

@@ -1,8 +1,12 @@
 import { createThemePreference } from './theme.js';
 import { t } from './i18n.js';
 
+// A server that was switched on or signed in to connects in the background, so
+// the MCP page reads the list again ever later, and shows that it connects.
+const mcpConnectDelays = [1000, 2000, 3000];
+
 // Profile is captured on open; changing the main profile picker cannot redirect a save.
-export function createSettingsDialog(bridge, modelDialog, doc = document, theme = createThemePreference(doc)) {
+export function createSettingsDialog(bridge, modelDialog, doc = document, theme = createThemePreference(doc), retry = mcpConnectDelays) {
   const dialog = doc.createElement('dialog');
   dialog.className = 'model-dialog settings-dialog';
   dialog.setAttribute('aria-label', t('settings.title'));
@@ -239,23 +243,72 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     // answer; the bridge carries it once the MCP plugin offers it, and until
     // then the page names the command that signs in.
     const login = typeof bridge.MCPLogin === 'function', logout = typeof bridge.MCPLogout === 'function';
-    const change = async run => {
-      if (busy) return;
-      busy = true;
-      try { await run(); await load(); }
-      catch { if (current === version && dialog.open) { status.textContent = t('settings.mcpFailed'); status.hidden = false; } }
-      finally { busy = false; }
+    // A sign-in takes minutes, so it is told apart from the other calls: the
+    // dialog stays closable while it runs, and only its own buttons are off.
+    let signing = false;
+    // The state of a server in the words of this language only: the plugin's
+    // 'failed: …' carries the backend's error, which stays out of the page.
+    const states = { connected: 'settings.mcpConnected', disabled: 'settings.mcpDisabled',
+      'not connected': 'settings.mcpNotConnected', 'needs authentication': 'settings.mcpNeedsAuthentication' };
+    const state = item => !item.Status ? '' : t(states[item.Status] || 'settings.mcpStatusFailed');
+    const failed = () => {
+      if (current !== version || !dialog.open) return;
+      status.textContent = t('settings.mcpFailed'); status.hidden = false;
     };
-    const toggle = (on, run) => button(on ? t('settings.mcpTurnOff') : t('settings.mcpTurnOn'), () => change(() => run(!on)));
+    // A call holds the page back while it runs, keeps a second press from
+    // running it again, and rereads the list after it, so the page shows what
+    // the call did.
+    const call = async (buttons, name, run, connecting) => {
+      if (busy || signing) return;
+      busy = true;
+      for (const b of buttons) b.disabled = true;
+      let done = false;
+      try { await run(); done = true; }
+      catch { failed(); }
+      finally { busy = false; for (const b of buttons) b.disabled = false; }
+      if (done) await refresh(name, connecting);
+    };
+    // The sign-in says that it waits for the browser, and does not set busy:
+    // the X and Escape still close the dialog while the browser is open.
+    const signIn = async (buttons, name) => {
+      if (busy || signing) return;
+      signing = true;
+      for (const b of buttons) b.disabled = true;
+      status.textContent = t('settings.mcpWaiting'); status.hidden = false;
+      let done = false;
+      try { await bridge.MCPLogin(profile, name); done = true; }
+      catch { failed(); }
+      finally { signing = false; for (const b of buttons) b.disabled = false; }
+      if (done) await refresh(name, true);
+    };
     const server = item => {
       const block = el('div'); block.className = 'mcp-server';
       block.append(el('strong', item.Name));
-      block.append(el('p', [item.How, item.Status].filter(Boolean).join(' · ')));
+      block.append(el('p', [item.How, state(item)].filter(Boolean).join(' · ')));
       const actions = el('div'); actions.className = 'mcp-actions';
       const on = !item.Disabled, auth = item.Status === 'needs authentication';
-      actions.append(toggle(on, next => bridge.MCPSetServer(profile, item.Name, next)));
-      if (auth && login) actions.append(button(t('settings.mcpSignIn'), () => change(() => bridge.MCPLogin(profile, item.Name))));
-      if (logout && (on || auth)) actions.append(button(t('settings.mcpSignOut'), () => change(() => bridge.MCPLogout(profile, item.Name))));
+      // The buttons of this server, off together while one of its calls runs.
+      // Each is named after its server and tool: 'Turn off' alone tells a
+      // screen reader nothing on a page of servers.
+      const mine = [];
+      const named = (text, label, run, connecting) => {
+        const b = button(text, () => call(mine, item.Name, run, connecting));
+        b.setAttribute('aria-label', label);
+        mine.push(b); return b;
+      };
+      actions.append(named(on ? t('settings.mcpTurnOff') : t('settings.mcpTurnOn'),
+        t(on ? 'settings.mcpTurnOffServer' : 'settings.mcpTurnOnServer', { name: item.Name }),
+        () => bridge.MCPSetServer(profile, item.Name, !on), !on));
+      if (auth && login) {
+        const b = button(t('settings.mcpSignIn'), () => signIn(mine, item.Name));
+        b.setAttribute('aria-label', t('settings.mcpSignInServer', { name: item.Name }));
+        mine.push(b); actions.append(b);
+      }
+      // What the server signs in with can be dropped while it is switched off
+      // too, so the sign-out is there whenever the bridge offers it.
+      if (logout) actions.append(named(t('settings.mcpSignOut'),
+        t('settings.mcpSignOutServer', { name: item.Name }),
+        () => bridge.MCPLogout(profile, item.Name), false));
       block.append(actions);
       if (auth && !login) block.append(el('p', t('settings.mcpSignInHint', { name: item.Name })));
       if (item.Tools?.length) {
@@ -263,7 +316,9 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
         for (const tool of item.Tools) {
           const line = el('div');
           line.append(el('span', tool.Description ? `${tool.Name} · ${tool.Description}` : tool.Name));
-          line.append(toggle(tool.On, next => bridge.MCPSetTool(profile, item.Name, tool.Name, next)));
+          line.append(named(tool.On ? t('settings.mcpTurnOff') : t('settings.mcpTurnOn'),
+            t(tool.On ? 'settings.mcpTurnOffTool' : 'settings.mcpTurnOnTool', { name: item.Name, tool: tool.Name }),
+            () => bridge.MCPSetTool(profile, item.Name, tool.Name, !tool.On), false));
           tools.append(line);
         }
         block.append(tools);
@@ -273,11 +328,27 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     const load = async () => {
       let found;
       try { found = await bridge.MCPServers(profile) || []; }
-      catch { if (current === version && dialog.open) { status.textContent = t('settings.mcpFailed'); status.hidden = false; list.replaceChildren(); } return; }
-      if (current !== version || !dialog.open) return;
+      catch { failed(); list.replaceChildren(); return null; }
+      if (current !== version || !dialog.open) return null;
       status.textContent = found.length ? '' : t('settings.noMCP');
       status.hidden = !status.textContent;
       list.replaceChildren(...found.map(server));
+      return found;
+    };
+    // A server that was switched on or signed in to connects in the
+    // background, so a read right after it shows it not connected and without
+    // tools. The page reads again, ever later, and says that it connects
+    // meanwhile, so the tools and the real state appear without another click.
+    const refresh = async (name, connecting) => {
+      for (let attempt = 0; ; attempt++) {
+        const found = await load();
+        if (!found || current !== version || !dialog.open) return;
+        const item = found.find(s => s.Name === name);
+        if (!connecting || attempt === retry.length || !item || item.Status !== 'not connected') return;
+        status.textContent = t('settings.mcpConnecting'); status.hidden = false;
+        await new Promise(resolve => setTimeout(resolve, retry[attempt]));
+        if (current !== version || !dialog.open) return;
+      }
     };
     await load();
   };

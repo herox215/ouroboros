@@ -669,7 +669,7 @@ func TestFailures(t *testing.T) {
 	// Enter that fails after the text.
 	f.on("press_key", func(map[string]any) any { return errors.New("no keyboard") })
 	_, err = call(ctx, c, firefox, `{"action": "type", "window": 7, "text": "boa", "enter": true}`)
-	fails(t, "enter", err, "type_text done\nbut Enter failed: no keyboard")
+	fails(t, "enter", err, "type_text done\nbut Enter failed: cua-driver: no keyboard")
 }
 
 // Where cua-driver lists no elements but writes them as Markdown, look
