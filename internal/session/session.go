@@ -467,6 +467,7 @@ type session struct {
 	// tasks are the tasks the agent delegated that run, the last of which
 	// had the number delegated.
 	tasks     []*task
+	waited    int // tasks a call of delegate with wait does itself, see Reserve
 	delegated int
 	// lost are the tasks that were delegated before the node started anew,
 	// by number and what they were to do, see errNotRunning.

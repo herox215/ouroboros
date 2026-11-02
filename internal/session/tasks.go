@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"ouroboros/internal/assistant"
@@ -51,9 +52,8 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 	if s.closed {
 		return nil, ErrStopped
 	}
-	if running := len(se.tasks); running+len(tasks) > assistant.MaxDelegates {
-		return nil, fmt.Errorf("%d tasks run in this conversation already, and at most %d run at once: start more once one ended",
-			running, assistant.MaxDelegates)
+	if err := tooMany(se, len(tasks)); err != nil {
+		return nil, err
 	}
 	started := make([]int, len(tasks))
 	for i, t := range tasks {
@@ -72,6 +72,41 @@ func (d delegating) Start(tasks []assistant.Task) ([]int, error) {
 	s.emit(se, Event{Kind: Tasks, Text: taskLines(se.tasks)})
 	s.keepTasks(se, nil)
 	return started, nil
+}
+
+// tooMany says why n more tasks do not run in se, nil if they do: those in
+// the background and those a call of delegate waits for count, see
+// assistant.MaxDelegates. s.mu is held.
+func tooMany(se *session, n int) error {
+	if running := len(se.tasks) + se.waited; running+n > assistant.MaxDelegates {
+		return fmt.Errorf("%d tasks run in this conversation already, and at most %d run at once: start more once one ended",
+			running, assistant.MaxDelegates)
+	}
+	return nil
+}
+
+// Reserve counts n tasks that a call of delegate with wait does itself
+// against the limit of the conversation until release, see
+// assistant.Reserving.
+func (d delegating) Reserve(n int) (func(), error) {
+	s, se := d.s, d.se
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, ErrStopped
+	}
+	if err := tooMany(se, n); err != nil {
+		return nil, err
+	}
+	se.waited += n
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			se.waited -= n
+			s.mu.Unlock()
+		})
+	}, nil
 }
 
 // run does the task t of se with do, and tells the agent how it ended.
