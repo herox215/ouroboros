@@ -92,9 +92,15 @@ func NewService[N, P any](name string, start func(ctx *Context, needs N) (P, err
 }
 
 // Add contributes value to the items of type T: a Command, a Tool, a Method,
-// a PeerSource, or a type of the plugin's own that others read with All.
-// It is taken back when the plugin stops.
-func Add[T any](ctx *Context, value T) { kernel.Add(ctx, value) }
+// a PeerSource, or a type of the plugin's own that others read with All. What
+// it returns takes the contribution back before the plugin stops, which a
+// plugin that contributes from a changing source needs: the tools of an MCP
+// server go when the server no longer offers them.
+func Add[T any](ctx *Context, value T) *Item { return kernel.Add(ctx, value) }
+
+// Item is one contribution, as Add returns it. Remove takes it back: All no
+// longer returns it.
+type Item = kernel.Item
 
 // All returns what the plugins contributed of type T, in the order they did.
 // Read it when it is used, not in the start function: only then every plugin

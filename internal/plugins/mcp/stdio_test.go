@@ -59,6 +59,7 @@ func TestStdioAndGroup(t *testing.T) {
 		Args:    []string{"-test.run=^TestStdioServer$", "-test.timeout=60s"},
 		Env:     map[string]string{"OURO_MCP_HELPER": "1"},
 	}}
+	configured(t, m.dir, st.name, st.cfg)
 	tools, err := m.connect(context.Background(), st, false)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
