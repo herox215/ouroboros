@@ -168,6 +168,22 @@ func lostTasksText(tasks []history.Task, alone bool) string {
 	return text
 }
 
+// reportsText tells of the reports of tasks that ended before ouro started
+// anew, which the agent never took: they follow as the reports they were,
+// named. Alone says that nothing else is told the session, so that it says
+// that ouro started anew.
+func reportsText(tasks []history.Task, alone bool) string {
+	head := "The reports of the tasks this conversation delegated, which ended before the agent took them, come from before the restart and follow as they were then:"
+	if alone {
+		head = "[Not from the owner: ouro started anew before the agent took the reports of the tasks this conversation delegated. They come from before the restart, and their reports follow as they were then:"
+	}
+	text := head + "\n" + history.TaskLines(tasks)
+	if alone {
+		text += "]"
+	}
+	return text
+}
+
 // clearTasks tells whoever watches the session id that no task runs in it any
 // more, see GoOn.
 func (s *Service) clearTasks(id string) {
@@ -182,7 +198,9 @@ func (s *Service) clearTasks(id string) {
 // asked is told goOnText, an interrupted one interruptedText, and either which
 // chat it is and what it was asked first, see resumeNote, each once. The tasks
 // that ran when the node went away are told to their session, and named,
-// whether or not it goes on also: they are gone, and their work is lost. A
+// whether or not it goes on also: they are gone, and their work is lost. The
+// reports of tasks that ended before the agent took them are told as the
+// reports they are, each once, whether or not the session goes on also. A
 // node calls it when it starts.
 func (s *Service) GoOn() {
 	s.mu.Lock()
@@ -203,11 +221,16 @@ func (s *Service) GoOn() {
 	if err != nil {
 		a.log("which tasks ended with the node cannot be read: %v", err)
 	}
-	type note struct {
-		head  string
-		tasks []history.Task
+	reports, err := a.PendingTaskReports(processInstance)
+	if err != nil {
+		a.log("which reports of tasks wait for the agent cannot be read: %v", err)
 	}
-	notes := make(map[string]*note, len(ids)+len(interrupted)+len(lost))
+	type note struct {
+		head    string
+		tasks   []history.Task
+		reports []history.Task
+	}
+	notes := make(map[string]*note, len(ids)+len(interrupted)+len(lost)+len(reports))
 	var order []string
 	add := func(id, head string) {
 		if _, ok := notes[id]; ok {
@@ -232,6 +255,14 @@ func (s *Service) GoOn() {
 		notes[id] = &note{tasks: tasks}
 		order = append(order, id)
 	}
+	for id, tasks := range reports {
+		if n, ok := notes[id]; ok {
+			n.reports = tasks
+			continue
+		}
+		notes[id] = &note{reports: tasks}
+		order = append(order, id)
+	}
 	for _, id := range order {
 		n := notes[id]
 		text := n.head
@@ -241,12 +272,26 @@ func (s *Service) GoOn() {
 			}
 			text += lostTasksText(n.tasks, text == "")
 		}
+		if len(n.reports) > 0 {
+			if text != "" {
+				text += "\n\n"
+			}
+			text += reportsText(n.reports, text == "")
+		}
 		text += a.resumeNote(id)
 		name := strings.TrimPrefix(id, "owner/")
 		if len(n.tasks) > 0 {
 			s.clearTasks(name) // the tasks are gone: the owner sees them cleared before the note says so
 		}
-		if err := s.askInput(context.Background(), name, text, true); err != nil {
+		messages := []queued{{text: text, generated: true}}
+		for _, t := range n.reports {
+			e := &Event{Kind: Task, N: t.N, Remark: t.Title, Took: t.Took}
+			if ended, ok := assistant.AsTaskReport(t.Report); ok {
+				e.N, e.Remark, e.Text, e.Err = ended.N, ended.Title, ended.Answer, ended.Err
+			}
+			messages = append(messages, queued{text: t.Report, task: e, generated: true, routed: t.Routed})
+		}
+		if err := s.askQueued(context.Background(), name, messages); err != nil {
 			a.log("the session %s does not go on by itself: %v", id, err)
 		}
 	}

@@ -125,11 +125,21 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	defer p.mu.Unlock()
 	se.tasks = slices.DeleteFunc(se.tasks, func(other *task) bool { return other == t })
 	s.emit(se, Event{Kind: Tasks, Text: taskLines(se.tasks)})
-	// A task the node stopped ends with the image: the next one tells the
-	// session it was lost there, see GoOn. Every other task ended here.
+	took := s.now().Sub(start)
+	// The report is kept before the task is archived as ended, so that a node
+	// that starts anew in between tells it, see GoOn. The task the node
+	// stopped has no report: it ends with the image, and the next one tells
+	// the session it was lost there.
 	if stopped && !t.stopped && (p.successor != "" || s.closed) {
 		s.keepTasks(se, t)
 	} else {
+		reportAnswer, reportErr := answer, err
+		if t.stopped {
+			reportAnswer, reportErr = "", errStoppedByAgent
+		}
+		if !stopped || t.stopped {
+			s.keepTaskReport(se, t, assistant.TaskReport(t.n, t.title, reportAnswer, reportErr), took)
+		}
 		s.keepTasks(se, nil)
 	}
 	p.answering--
@@ -137,9 +147,9 @@ func (s *Service) run(ctx context.Context, se *session, t *task, do func(context
 	// the node stops. One the agent stopped is, so that it knows.
 	switch {
 	case t.stopped:
-		s.deliver(se, p, t, "", errStoppedByAgent, s.now().Sub(start))
+		s.deliver(se, p, t, "", errStoppedByAgent, took)
 	case !stopped:
-		s.deliver(se, p, t, answer, err, s.now().Sub(start))
+		s.deliver(se, p, t, answer, err, took)
 	}
 	s.busy()
 	p.settle()
@@ -281,6 +291,7 @@ func (s *Service) deliver(se *session, p *process, t *task, answer string, err e
 		// ouro starts anew before an answer could take the report: the
 		// agent keeps it, and so does the archive, so that it is not lost.
 		if noteErr := s.agent.Note(context.Background(), se.id, report.text); noteErr == nil {
+			s.reportTaken(se, t.n)
 			return
 		} else if s.archive != nil {
 			s.archive.log("the report of task %d of the session %s cannot be kept: %v", t.n, se.id, noteErr)
@@ -291,6 +302,30 @@ func (s *Service) deliver(se *session, p *process, t *task, answer string, err e
 		return
 	}
 	s.begin(se, p, ready(se)...)
+}
+
+// keepTaskReport keeps text, the report of the task t of se, as waiting for
+// the agent to take it, with how long it ran: a node that starts anew before
+// it does tells it, see GoOn. s.mu is held.
+func (s *Service) keepTaskReport(se *session, t *task, text string, took time.Duration) {
+	if s.archive == nil {
+		return
+	}
+	report := history.Task{N: t.n, Title: t.title, Since: t.since, Report: text, Took: took, Routed: t.routed}
+	if err := s.archive.SetTaskReport(history.Owner(se.id), report, processInstance); err != nil {
+		s.archive.log("the report of task %d of the session %s cannot be kept: %v", t.n, se.id, err)
+	}
+}
+
+// reportTaken marks the report of the task n of se as taken by the agent, so
+// that a node that starts anew does not tell it again. s.mu is held.
+func (s *Service) reportTaken(se *session, n int) {
+	if s.archive == nil {
+		return
+	}
+	if err := s.archive.TaskReportTaken(history.Owner(se.id), n); err != nil {
+		s.archive.log("the report of task %d of the session %s cannot be marked as told: %v", n, se.id, err)
+	}
 }
 
 // keepTasks keeps the tasks of se that run with the archive, and still, if it

@@ -96,11 +96,15 @@ func TestArchiveCannotKeep(t *testing.T) {
 	s.deliver(se, p, &task{n: 2, title: "review"}, "two findings", nil, 0)
 	p.successor = ""
 	p.mu.Unlock()
+	s.keepTaskReport(se, &task{n: 3, title: "review", since: time.Now()}, "found it", time.Second)
+	s.reportTaken(se, 3)
 	s.mu.Unlock()
 	for _, want := range []string{
 		"the model of the session s1 cannot be kept",
 		"the tasks of the session s1 cannot be kept",
 		"the report of task 2 of the session s1 cannot be kept: no note",
+		"the report of task 3 of the session s1 cannot be kept",
+		"the report of task 3 of the session s1 cannot be marked as told",
 	} {
 		if !l.has(want) {
 			t.Errorf("not logged: %q in %q", want, l.lines)
