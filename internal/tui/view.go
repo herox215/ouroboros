@@ -755,8 +755,10 @@ func (m *Model) headerView() string {
 // chatTitle is what the line below the composer, or the footer of a screen
 // that takes the window, says of the conversation on its left: whose it is,
 // if a peer's, how fast and at what cost the last call was, and how much of
-// the context it took. Who answers is in the head. A chat without a word yet
-// has none, nor has a node that is not set up.
+// the context it took. A session says these figures; the thread, which is the
+// room of the node and no session of the owner's, says none of them, they are
+// in its /context. Who answers is in the head. A chat without a word yet has
+// none, nor has a node that is not set up.
 func (m *Model) chatTitle() string {
 	c := m.chat
 	if !m.status.Configured || len(c.entries) == 0 && c.peer == "" {
@@ -773,14 +775,19 @@ func (m *Model) chatTitle() string {
 		}
 		parts = append(parts, boldStyle.Foreground(accent).Render(running)+mutedStyle.Render(" · esc stops"))
 	}
-	if metrics := callMetrics(c.cache); metrics != "" {
-		parts = append(parts, mutedStyle.Render(metrics))
-	}
-	if c.context > 0 {
-		parts = append(parts, mutedStyle.Render("context "+contextSize(c.context)))
-	}
-	if c.cache.Tokens > 0 {
-		parts = append(parts, mutedStyle.Render("cached "+cacheRate(c.cache)))
+	// The thread is the room of the node itself and not a session of the
+	// owner's: how fast its last call was, what it cost, how much of it was
+	// cached and how long its context is stays in its /context.
+	if c.contextID != plugin.ThreadID {
+		if metrics := callMetrics(c.cache); metrics != "" {
+			parts = append(parts, mutedStyle.Render(metrics))
+		}
+		if c.context > 0 {
+			parts = append(parts, mutedStyle.Render("context "+contextSize(c.context)))
+		}
+		if c.cache.Tokens > 0 {
+			parts = append(parts, mutedStyle.Render("cached "+cacheRate(c.cache)))
+		}
 	}
 	if len(parts) == 0 {
 		return ""

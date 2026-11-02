@@ -30,6 +30,7 @@ func TestCallMetricsDisplay(t *testing.T) {
 	}
 	m := New(&fakeBackend{status: Status{Configured: true, Running: true, Name: "alpha"}}, nil, nil)
 	m.status = Status{Configured: true, Running: true, Name: "alpha"}
+	m.chat = m.newChat() // a session, not the thread, whose footer has none of these
 	m.chat.entries = []entry{{text: "hello"}}
 	m.chat.cache.Metrics = assistant.CallMetrics{Calls: 1, TPS: 42, InPlan: true}
 	m.width, m.height = 160, 40
@@ -38,6 +39,28 @@ func TestCallMetricsDisplay(t *testing.T) {
 	}
 	if got := m.context.view(m); !strings.Contains(got, "42.0 TPS · cost included in plan") {
 		t.Fatalf("%s", got)
+	}
+}
+
+// The thread is the room of the node itself: its footer says none of the
+// figures of a call, no speed, cost, cache or context, while a session does.
+func TestThreadFooterHasNoCallFigures(t *testing.T) {
+	figures := func(m *Model) string {
+		fill(m, 1)
+		m.chat.context = 45_000
+		m.chat.cache = plugin.SessionCache{Tokens: 1000, Cached: 500, AllTokens: 2000, AllCached: 1200,
+			Metrics: assistant.CallMetrics{Calls: 1, TPS: 42.5, CostKnown: true, CostUSD: 0.01, ChargedCalls: 1, AllCostUSD: 0.02}}
+		return ansi.Strip(m.chatTitle())
+	}
+	m, _ := newModel(t)
+	if got := figures(m); !strings.Contains(got, "42.5 TPS · cost $0.0100 · session $0.0200") ||
+		!strings.Contains(got, "context 43.9 KiB") || !strings.Contains(got, "cached 50%, session 60%") {
+		t.Fatalf("a session says them: %q", got)
+	}
+	thread, _ := newModel(t)
+	thread.chat = thread.thread()
+	if got := figures(thread); got != "" {
+		t.Errorf("the thread says nothing of a call: %q", got)
 	}
 }
 
