@@ -8,14 +8,13 @@ import (
 	"ouroboros/plugin"
 )
 
-func TestThreadStartsInGUIDirectoryPerProfile(t *testing.T) {
+// The thread has no project: showing it gives it no directory, in any
+// profile.
+func TestThreadTakesNoDirectoryPerProfile(t *testing.T) {
 	var paths []string
 	service := func() *testSessions {
 		return &testSessions{
 			directory: func(_ context.Context, id, path string) error {
-				if id != plugin.ThreadID {
-					t.Fatalf("directory ID: %q", id)
-				}
 				paths = append(paths, path)
 				return nil
 			},
@@ -28,7 +27,6 @@ func TestThreadStartsInGUIDirectoryPerProfile(t *testing.T) {
 		}
 	}
 	w := sessionWindow(t, service(), service())
-	w.directory = t.TempDir()
 	id := w.InitialState().Thread
 	if id != "owner/"+plugin.ThreadID {
 		t.Fatal(id)
@@ -39,15 +37,14 @@ func TestThreadStartsInGUIDirectoryPerProfile(t *testing.T) {
 			t.Fatalf("snapshot: %+v, %v", snapshot, err)
 		}
 	}
-	if len(paths) != 2 || paths[0] != w.directory || paths[1] != w.directory {
+	if len(paths) != 0 {
 		t.Fatal(paths)
 	}
 }
 
-func TestBusyThreadKeepsProjectAndRemainsUsable(t *testing.T) {
+func TestBusyThreadRemainsUsable(t *testing.T) {
 	var asks, steers int
 	s := &testSessions{
-		directory: func(context.Context, string, string) error { return plugin.ErrBusy },
 		watch: func(context.Context, string) ([]plugin.SessionEvent, <-chan plugin.SessionEvent, error) {
 			return nil, nil, nil
 		},
@@ -67,10 +64,9 @@ func TestBusyThreadKeepsProjectAndRemainsUsable(t *testing.T) {
 		},
 	}
 	w := sessionWindow(t, s)
-	w.directory = t.TempDir()
 	id := w.InitialState().Thread
 	snapshot, err := w.OpenSession(0, id)
-	if err != nil || snapshot.Notice == "" {
+	if err != nil || snapshot.Notice != "" {
 		t.Fatalf("snapshot: %+v, %v", snapshot, err)
 	}
 	if err := w.SendMessage(0, id, "keep going"); err != nil {

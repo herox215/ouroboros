@@ -173,7 +173,7 @@ The status shows work in progress, questions and the number of active sessions t
 handed work to. **Stoppen** calls the same session cancellation as the TUI, including
 stopping the thread's delegated answers. Messages can still be sent while work runs.
 `ouro gui [DIRECTORY]` uses the same initial-project handling as `ouro tui [DIRECTORY]`:
-the current directory by default. A busy thread keeps its project and shows a notice.
+the current directory by default, for the sessions it opens; the thread itself has no project.
 Beside the thread, the sidebar follows the part of it in view, as in the demo: the part
 whose messages cross the middle of the history, or the newest one at its end. Each message
 of the owner opens a part; the sessions the thread started (`session_new`), handed a message
@@ -509,16 +509,15 @@ already streamed by the model keep their normal streaming effect.
   conversation yourself does not come back to the thread, and neither does an answer that was stopped. While another conversation is shown, the footer says that the thread answered
   (`answered in the thread · /thread`).
 - **Stopping.** `esc` and `/cancel` in the thread stop its answer and what the conversations work on for it.
-- **Where new ones work.** A conversation the thread starts works in the directory the agent names, or else in the
-  project of the thread. The first time a UI shows the thread, the thread takes the directory the UI started in as
-  its project, unless it answers just then and keeps the one it has, which the footer says; `/cd` there changes
-  it, and the header shows it after `· thread`.
+- **Where new ones work.** The thread has no project: it works in the workspace of ouro alone and does not take the
+  directory a UI started in, and `/cd PATH` there is refused. A conversation the thread starts works in the
+  directory the agent names, or else in that workspace; a conversation you start with `/new` takes the directory
+  the UI started in.
 - **Gateways.** A gateway talks in the thread too: every Matrix room does, so there is no `/new` there, see
   [GATEWAYS.md](../GATEWAYS.md). What is written in a room and in the terminal UI is one conversation. The terminal
   UI shows what you wrote in a room as your messages; a room is sent the answers and questions of the thread, and
-  what you wrote elsewhere, as `You, in the terminal:` and your words, since the bot cannot write as you. Its
-  project is the one of the thread, which a room does not show by itself: `/project` (or `/cd`) there answers with
-  it, `/cd PATH` and `/cd --workspace` name another one or none, as `/cd` does in the terminal UI.
+  what you wrote elsewhere, as `You, in the terminal:` and your words, since the bot cannot write as you. Like the
+  thread it has no project: `/cd PATH` there is refused, as in the terminal UI.
 - **It is a session of the node.** The thread has the ID `thread`, is kept in the archive and goes on after a
   restart like any conversation, shown as it was. `/session` does not list it, it is not named for a topic, and its
   agent has the tools of the thread alone, like the one that runs the commands of the node. The conversations it
