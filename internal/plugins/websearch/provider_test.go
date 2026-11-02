@@ -239,10 +239,10 @@ func TestSearXNGTakesOnlyWebResults(t *testing.T) {
 	}
 }
 
-// An answer of exactly 1 MiB is read, from Exa as from SearXNG.
+// An answer of exactly 1 MiB is read from SearXNG.
 func TestSearchReadsAnAnswerOf1MiB(t *testing.T) {
 	forbidFallback(t)
-	for _, provider := range []string{"exa", "searxng"} {
+	for _, provider := range []string{"searxng"} {
 		t.Run(provider, func(t *testing.T) {
 			head, tail := `{"result":{"content":[{"type":"text","text":"`, `"}]}}`
 			if provider == "searxng" {

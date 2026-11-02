@@ -15,7 +15,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +26,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ouroboros/internal/assistant"
 	"ouroboros/plugin"
@@ -366,7 +367,7 @@ func list(ctx context.Context, d *driver) ([]window, error) {
 	var listed struct {
 		Windows []window `json:"windows"`
 	}
-	if err := json.Unmarshal(r.Structured, &listed); err != nil {
+	if err := r.structured(&listed); err != nil {
 		return nil, fmt.Errorf("cua-driver lists no windows: %s", cmp.Or(r.text(), err.Error()))
 	}
 	return slices.DeleteFunc(listed.Windows, func(w window) bool { return w.PID == nil }), nil
@@ -482,7 +483,7 @@ func (c *conversation) look(ctx context.Context, d *driver, w window, query stri
 			Code string `json:"code"`
 		} `json:"screenshot_error"`
 	}
-	if err := json.Unmarshal(r.Structured, &state); err != nil {
+	if err := r.structured(&state); err != nil {
 		return "", fmt.Errorf("cua-driver says nothing of window %d: %s", w.ID, cmp.Or(r.text(), err.Error()))
 	}
 	var lines []string
@@ -510,13 +511,9 @@ func (c *conversation) look(ctx context.Context, d *driver, w window, query stri
 		b.WriteString("(the window has more elements than cua-driver went through in time: look with query for what is missing)\n")
 	}
 	var images []plugin.Image
-	for _, part := range r.Content {
-		if part.Type != "image" {
-			continue
-		}
-		data, err := base64.StdEncoding.DecodeString(part.Data)
-		if err == nil {
-			images = append(images, plugin.Image{Type: cmp.Or(part.MimeType, "image/png"), Data: data})
+	for _, content := range r.Content {
+		if part, ok := content.(*mcpsdk.ImageContent); ok {
+			images = append(images, plugin.Image{Type: cmp.Or(part.MIMEType, "image/png"), Data: part.Data})
 		}
 	}
 	switch {

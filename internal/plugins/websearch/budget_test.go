@@ -52,34 +52,34 @@ func TestSearchOutputBudget(t *testing.T) {
 			}
 			t.Cleanup(func() { engines = old })
 			providerBudgets := make(chan int, 4)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if mode == "DuckDuckGo" || mode == "Brave" {
-					w.WriteHeader(http.StatusServiceUnavailable)
-					return
-				}
-				if mode == "searxng" {
+			var server *httptest.Server
+			switch mode {
+			case "DuckDuckGo", "Brave", "searxng":
+				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if mode != "searxng" {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
 					json.NewEncoder(w).Encode(map[string]any{"results": []hitJSON{{"fixture", "https://example.com", text}}})
-					return
-				}
-				var request struct {
-					Params struct {
-						Arguments struct {
-							ContextLimit int `json:"contextMaxCharacters"`
-						} `json:"arguments"`
-					} `json:"params"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-					t.Error(err)
-				}
-				providerBudgets <- request.Params.Arguments.ContextLimit
-				payload, _ := json.Marshal(map[string]any{"result": map[string]any{"content": []map[string]string{{"type": "text", "text": text}}}})
-				if mode == "sse" {
-					w.Header().Set("Content-Type", "text/event-stream")
-					fmt.Fprintf(w, "data: %s\n\n", payload)
-				} else {
-					w.Write(payload)
-				}
-			}))
+				}))
+			default: // the MCP endpoint of Exa
+				server = mcp(t, func(w http.ResponseWriter, id, args json.RawMessage) {
+					var request struct {
+						ContextLimit int `json:"contextMaxCharacters"`
+					}
+					if err := json.Unmarshal(args, &request); err != nil {
+						t.Error(err)
+					}
+					providerBudgets <- request.ContextLimit
+					payload, _ := json.Marshal(map[string]any{"content": []map[string]string{{"type": "text", "text": text}}})
+					if mode == "sse" {
+						w.Header().Set("Content-Type", "text/event-stream")
+						fmt.Fprintf(w, "data: "+`{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n\n", id, payload)
+						return
+					}
+					reply(w, id, string(payload))
+				})
+			}
 			defer server.Close()
 			s := &search{client: server.Client(), endpoint: server.URL}
 			tool := s.tool()
