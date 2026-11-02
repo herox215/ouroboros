@@ -105,7 +105,7 @@ func TestConnectAndCall(t *testing.T) {
 	m := &manager{dir: dir, servers: map[string]*server{}, added: map[string]string{}}
 	defer st.drop()
 
-	tools, err := m.connect(context.Background(), st, false)
+	tools, err := m.connect(context.Background(), st, signIn{})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestCallTwiceAfterALostSession(t *testing.T) {
 	m := &manager{dir: dir, servers: map[string]*server{}, added: map[string]string{}}
 	st := &server{name: "fake", cfg: config.Server{URL: httpServer.URL}}
 	defer st.drop()
-	if _, err := m.connect(context.Background(), st, false); err != nil {
+	if _, err := m.connect(context.Background(), st, signIn{}); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	st.mu.Lock()

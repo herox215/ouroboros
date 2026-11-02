@@ -36,6 +36,13 @@ type Server struct {
 	// without one there, the variable NAME of the environment ouro runs in.
 	Env     map[string]string `json:"env,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+	// ClientID and ClientSecret are the OAuth client of a remote server that
+	// is registered with its authorization server already, instead of
+	// registering itself: a server that does not offer dynamic client
+	// registration. The secret may be ${NAME}, read like a value of Env and
+	// Headers; without one the client is a public client.
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
 	// Disabled says that the server is not connected: its tools are not
 	// there, and nothing starts for it.
 	Disabled bool `json:"disabled,omitempty"`
@@ -81,6 +88,9 @@ func (s Server) Validate(name string) error {
 	if !serverName.MatchString(name) {
 		return fmt.Errorf("mcp: %q is no name of a server: start with a letter, then letters, digits, _ or -, at most 32", name)
 	}
+	if s.ClientSecret != "" && s.ClientID == "" {
+		return fmt.Errorf("mcp: the server %s has a client secret without a client id", name)
+	}
 	switch {
 	case s.URL != "" && s.Command != "":
 		return fmt.Errorf("mcp: the server %s has both a url and a command: it is one or the other", name)
@@ -89,6 +99,9 @@ func (s Server) Validate(name string) error {
 	case s.Command != "":
 		if len(s.Headers) > 0 {
 			return fmt.Errorf("mcp: the server %s is a program, which takes no headers: set env instead", name)
+		}
+		if s.ClientID != "" || s.ClientSecret != "" {
+			return fmt.Errorf("mcp: the server %s is a program, which has no OAuth client: the fields are for a remote server", name)
 		}
 		return nil
 	}

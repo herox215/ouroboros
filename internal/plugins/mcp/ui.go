@@ -88,7 +88,7 @@ func (m *manager) connectAll(ctx context.Context, interactive bool) (string, err
 		st := m.server(name, s)
 		st.drop()
 		attempt, cancel := context.WithTimeout(ctx, wait)
-		tools, err := m.connect(attempt, st, interactive)
+		tools, err := m.connect(attempt, st, signIn{interactive: interactive})
 		cancel()
 		if err != nil {
 			fmt.Fprintf(&b, "%s: %v\n", name, err)
@@ -107,12 +107,13 @@ func (m *manager) logOutAll(ctx context.Context) (string, error) {
 	}
 	var b strings.Builder
 	for _, name := range names {
-		if err := m.forget(name); err != nil {
-			fmt.Fprintf(&b, "%s: %v\n", name, err)
-			continue
-		}
+		err := m.forget(ctx, name)
 		if st := m.state(name); st != nil {
 			st.drop()
+		}
+		if err != nil {
+			fmt.Fprintf(&b, "%s: %v\n", name, err)
+			continue
 		}
 		fmt.Fprintf(&b, "%s: logged out\n", name)
 	}
@@ -155,7 +156,7 @@ func (m *manager) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		defer st.drop()
-		tools, err := m.connect(ctx, st, false)
+		tools, err := m.connect(ctx, st, signIn{})
 		if err != nil {
 			return err
 		}
@@ -173,7 +174,9 @@ func (m *manager) runCommand(ctx context.Context, args []string) error {
 		// it takes.
 		attempt, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectTimeout+signInTimeout)
 		defer cancel()
-		if _, err := m.connect(attempt, st, true); err != nil {
+		// A node without a browser prints the address and takes the address
+		// the browser ended up at; one with a browser opens it as usual.
+		if _, err := m.connect(attempt, st, signIn{interactive: true, paste: m.paste}); err != nil {
 			return err
 		}
 		fmt.Println(rest[0], statusConnected)
@@ -182,7 +185,7 @@ func (m *manager) runCommand(ctx context.Context, args []string) error {
 		if len(rest) == 0 {
 			return errors.New("usage: ouro mcp logout NAME")
 		}
-		return m.forget(rest[0])
+		return m.forget(ctx, rest[0])
 	case "add":
 		return m.add(rest)
 	case "remove":

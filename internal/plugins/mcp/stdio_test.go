@@ -60,7 +60,7 @@ func TestStdioAndGroup(t *testing.T) {
 		Env:     map[string]string{"OURO_MCP_HELPER": "1"},
 	}}
 	configured(t, m.dir, st.name, st.cfg)
-	tools, err := m.connect(context.Background(), st, false)
+	tools, err := m.connect(context.Background(), st, signIn{})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
