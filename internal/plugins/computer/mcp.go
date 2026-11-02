@@ -1,72 +1,74 @@
 package computer
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"ouroboros/internal/procgroup"
 )
 
-// closeTimeout is how long cua-driver may take to end once its input is
-// closed, before it is killed; tests shorten it.
+// closeTimeout is about how long ending cua-driver may take, all in all;
+// tests shorten it. Once its input is closed the SDK waits a third of it for
+// it to end by itself, then a third more after SIGTERM, and SIGKILLs it after
+// another third; the group it leads is killed then, which takes what it
+// started along with it.
 var closeTimeout = 3 * time.Second
 
-// driver is cua-driver that runs, spoken to over MCP: JSON-RPC, one message
-// per line, on its standard input and output.
+// driver is cua-driver that runs, spoken to over MCP by the SDK of the
+// protocol (github.com/modelcontextprotocol/go-sdk).
 type driver struct {
-	path string // the program, to tell whether the settings name another
-	out  io.WriteCloser
-	stop func()        // ends the program and waits for it
-	gone chan struct{} // closed once read has ended
+	path    string // the program, to tell whether the settings name another
+	session *mcpsdk.ClientSession
+	stop    func()        // ends the program and waits for it
+	gone    chan struct{} // closed once the driver ended
 
-	write sync.Mutex // guards out
-
-	mu      sync.Mutex // guards what follows
-	next    int64
-	waiting map[int64]chan reply
-	err     error // why the driver ended, once it did
+	mu  sync.Mutex // guards what follows
+	err error      // why the driver ended, once it did
 }
 
-// reply is the answer of the driver to a request.
-type reply struct {
-	Result json.RawMessage `json:"result"`
-	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
+// result is what a tool of the driver returned.
+type result struct{ *mcpsdk.CallToolResult }
 
-// result is what a tool of the driver returns.
-type result struct {
-	Content []struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		Data     string `json:"data"`
-		MimeType string `json:"mimeType"`
-	} `json:"content"`
-	Structured json.RawMessage `json:"structuredContent"`
-	IsError    bool            `json:"isError"`
-}
-
-// text is the text of what the tool returned.
+// text is the text of what the tool returned: those of its contents that are
+// text and say something, joined by a newline.
 func (r *result) text() string {
 	var parts []string
-	for _, c := range r.Content {
-		if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
-			parts = append(parts, strings.TrimSpace(c.Text))
+	for _, content := range r.Content {
+		if c, ok := content.(*mcpsdk.TextContent); ok {
+			if text := strings.TrimSpace(c.Text); text != "" {
+				parts = append(parts, text)
+			}
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// structured reads what the tool says besides its contents into v.
+func (r *result) structured(v any) error {
+	if r.StructuredContent == nil {
+		return errors.New("nothing beyond its contents")
+	}
+	b, err := json.Marshal(r.StructuredContent) // values of JSON: cannot fail
+	if err != nil {
+		return err
+	}
+	// Numbers are read as they are written: window ids are uint64, which a
+	// float64 of JSON rounds above 2^53.
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	return dec.Decode(v)
 }
 
 // launch starts the program path as the MCP server of cua-driver and greets
@@ -77,47 +79,45 @@ func launch(ctx context.Context, path string) (*driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cua-driver is not installed (%v): install it, on Omarchy with pacman -S cua-driver-bin, or see https://github.com/trycua/cua", err)
 	}
-	cmd := exec.Command(program, arguments(runtime.GOOS)...)
+	// The driver gets a group of its own, so that everything it starts ends
+	// with it, also what it launches as the agent uses it.
+	life, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(life, program, arguments(runtime.GOOS)...)
 	// Its backend for Wayland is still to be switched on: without it the
 	// driver sees no window of a desktop like Hyprland.
 	cmd.Env = append(os.Environ(), "CUA_DRIVER_RS_TELEMETRY_ENABLED=false", "CUA_TELEMETRY_ENABLED=false", "CUA_DRIVER_RS_ENABLE_WAYLAND=1")
-	requests, in, _ := os.Pipe() // fails only without file descriptors, as the start would
-	out, answers, _ := os.Pipe()
 	var stderr tail
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = requests, answers, &stderr
-	err = cmd.Start()
-	// The driver has its ends now, which close when it ends.
-	requests.Close()
-	answers.Close()
-	if err != nil {
-		in.Close()
-		out.Close()
-		return nil, err
-	}
-	done := make(chan struct{})
-	go func() { cmd.Wait(); close(done) }()
-	// Why it ended is the last of what it wrote, which is all there once it
-	// was waited for: its output closes before.
-	why := func() string {
-		select {
-		case <-done:
-		case <-time.After(closeTimeout):
-		}
-		return stderr.String()
-	}
-	d := connect(path, out, in, func() {
-		in.Close()
-		select {
-		case <-done:
-		case <-time.After(closeTimeout):
-			cmd.Process.Kill()
-			<-done
-		}
-		out.Close() // also where what it started holds its output open
+	cmd.Stderr = &stderr
+	procgroup.Detach(cmd)
+	// Why it ended is the last of what it wrote, which is all there once the
+	// command was waited for: reading its error output ends before that. The
+	// SDK waits for the command when it closes the connection, so the session
+	// of a driver ends, and launch returns, once all of its output was kept.
+	why := func() string { return stderr.String() }
+	ctx, deadline := context.WithTimeout(ctx, 20*time.Second)
+	defer deadline()
+	var d *driver
+	d, err = connect(ctx, path, &mcpsdk.CommandTransport{Command: cmd, TerminateDuration: closeTimeout / 3}, func() {
+		// Its input closes, so that it ends; what it started goes with the
+		// group, which closing its input alone leaves behind.
+		d.session.Close()
+		_ = procgroup.Kill(cmd) // the group, which closing its input leaves
+		cancel()
 	}, why)
-	if err := d.greet(ctx); err != nil {
-		d.end()
-		return nil, err
+	if err != nil {
+		// What was started for it ends with it, group and all, and what it
+		// wrote says why it did not start. It did start when the SDK got as
+		// far as greeting it, which is the case where its own words are worth
+		// more than the error of the SDK: the SDK closed the connection it
+		// could not greet, and waited for the command there, so what it wrote
+		// is complete. Start sets Process, and only Start, which has returned
+		// by now, so no goroutine writes what this reads.
+		_ = procgroup.Kill(cmd)
+		cancel()
+		if cmd.Process != nil {
+			return nil, fmt.Errorf("cua-driver does not start: %s", ended(why))
+		}
+		return nil, fmt.Errorf("cua-driver does not start: %w", err)
 	}
 	return d, nil
 }
@@ -135,143 +135,59 @@ func arguments(goos string) []string {
 	return []string{"mcp"}
 }
 
-// connect returns the driver that answers on in and is asked on out, which
-// stop ends. what tells why it ended, once it did.
-func connect(path string, in io.Reader, out io.WriteCloser, stop func(), what func() string) *driver {
-	d := &driver{path: path, out: out, stop: stop, gone: make(chan struct{}), waiting: map[int64]chan reply{}}
-	go d.read(in, what)
-	return d
+// connect connects the driver at path over transport, which stop ends, and
+// returns it once it greeted. why tells why it ended, once it did.
+func connect(ctx context.Context, path string, transport mcpsdk.Transport, stop func(), why func() string) (*driver, error) {
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ouro", Version: "1"}, &mcpsdk.ClientOptions{
+		Capabilities: &mcpsdk.ClientCapabilities{}, // neither sampling nor elicitation nor roots
+	})
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, err
+	}
+	d := &driver{path: path, session: session, stop: stop, gone: make(chan struct{})}
+	go d.watch(why)
+	return d, nil
 }
 
-// greet starts the MCP session.
-func (d *driver) greet(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	var hello struct {
-		ServerInfo struct {
-			Name string `json:"name"`
-		} `json:"serverInfo"`
-	}
-	err := d.request(ctx, "initialize", map[string]any{
-		"protocolVersion": "2025-06-18",
-		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "ouro", "version": "1"},
-	}, &hello)
-	if err != nil {
-		return fmt.Errorf("cua-driver does not start: %w", err)
-	}
-	return d.send(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
+// watch waits for the driver to end, and notes why, for the calls that
+// follow.
+func (d *driver) watch(why func() string) {
+	defer close(d.gone)
+	d.session.Wait()
+	d.mu.Lock()
+	d.err = errors.New(ended(why))
+	d.mu.Unlock()
 }
 
 // call runs the tool name of the driver with args.
 func (d *driver) call(ctx context.Context, name string, args map[string]any) (*result, error) {
-	var r result
-	if err := d.request(ctx, "tools/call", map[string]any{"name": name, "arguments": args}, &r); err != nil {
-		return nil, err
-	}
-	if r.IsError {
-		return nil, errors.New(cmp.Or(r.text(), name+" failed"))
-	}
-	return &r, nil
-}
-
-// request sends method with params and decodes the result into v.
-func (d *driver) request(ctx context.Context, method string, params, v any) error {
 	d.mu.Lock()
-	if d.err != nil {
-		d.mu.Unlock()
-		return d.err
-	}
-	d.next++
-	id := d.next
-	ch := make(chan reply, 1)
-	d.waiting[id] = ch
+	ended := d.err
 	d.mu.Unlock()
-	defer func() {
-		d.mu.Lock()
-		delete(d.waiting, id)
-		d.mu.Unlock()
-	}()
-	if err := d.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
-		return err
+	if ended != nil {
+		return nil, ended
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case r, ok := <-ch:
-		if !ok {
-			d.mu.Lock()
-			defer d.mu.Unlock()
-			return d.err
-		}
-		if r.Error != nil {
-			return fmt.Errorf("cua-driver: %s", r.Error.Message)
-		}
-		return json.Unmarshal(r.Result, v)
+	answer, err := d.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		// What the driver answered, or failed to answer, is the driver
+		// speaking, and its texts stay recognisable wherever they are embedded.
+		return nil, fmt.Errorf("cua-driver: %w", err)
 	}
+	r := &result{answer}
+	if answer.IsError {
+		return nil, fmt.Errorf("cua-driver: %s", cmp.Or(r.text(), name+" failed"))
+	}
+	return r, nil
 }
 
-// send writes one message to the driver.
-func (d *driver) send(message any) error {
-	b, _ := json.Marshal(message) // maps of plain values: cannot fail
-	d.write.Lock()
-	defer d.write.Unlock()
-	_, err := d.out.Write(append(b, '\n'))
-	return err
-}
-
-// read hands the answers of the driver to the requests that wait for them,
-// until it ends.
-func (d *driver) read(in io.Reader, what func() string) {
-	defer close(d.gone)
-	r := bufio.NewReader(in)
-	for {
-		line, err := r.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
-			d.handle(line)
-		}
-		if err != nil {
-			break
-		}
+// ended is why the driver ended, as a call reads it: that it did, and the
+// last of what it wrote.
+func ended(why func() string) string {
+	if s := strings.TrimSpace(why()); s != "" {
+		return "cua-driver ended: " + s
 	}
-	why := "cua-driver ended"
-	if s := strings.TrimSpace(what()); s != "" {
-		why += ": " + s
-	}
-	d.mu.Lock()
-	d.err = errors.New(why)
-	for id, ch := range d.waiting {
-		close(ch)
-		delete(d.waiting, id)
-	}
-	d.mu.Unlock()
-}
-
-// handle takes one message of the driver.
-func (d *driver) handle(line []byte) {
-	var m struct {
-		ID     *json.RawMessage `json:"id"`
-		Method string           `json:"method"`
-		reply
-	}
-	if json.Unmarshal(line, &m) != nil || m.ID == nil {
-		return // a notification, or no message
-	}
-	if m.Method != "" {
-		// A request of the driver: ouro offers it nothing.
-		d.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32601, "message": "not supported"}})
-		return
-	}
-	var id int64
-	if json.Unmarshal(*m.ID, &id) != nil {
-		return
-	}
-	d.mu.Lock()
-	ch := d.waiting[id]
-	d.mu.Unlock()
-	if ch != nil {
-		ch <- m.reply
-	}
+	return "cua-driver ended"
 }
 
 // closed reports whether the driver ended.

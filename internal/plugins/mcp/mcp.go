@@ -59,13 +59,14 @@ const (
 // and the command ouro mcp.
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.New(pluginName, func(ctx *plugin.Context, _ struct{}) error {
-		m := &manager{ctx: ctx, dir: dir, servers: map[string]*server{}, added: map[string]string{}}
+		m := &manager{ctx: ctx, dir: dir, servers: map[string]*server{}, added: map[string]string{}, items: map[string]*plugin.Item{}}
 		// The connections are started by the node that serves, and ended with
 		// it: a front end starts the same plugins without serving, and would
 		// start every program of a server a second time.
 		plugin.Add(ctx, plugin.Serving{Start: m.start, Stop: m.close})
 		ctx.OnStop(m.close)
 		plugin.Add(ctx, m.screen())
+		plugin.Add(ctx, m.service())
 		plugin.Add(ctx, m.command())
 		return nil
 	})
@@ -78,7 +79,8 @@ type manager struct {
 
 	mu      sync.Mutex // guards what follows
 	servers map[string]*server
-	added   map[string]string // tool name of the agents -> server/tool it calls
+	added   map[string]string       // tool name of the agents -> server/tool it calls
+	items   map[string]*plugin.Item // tool name of the agents -> the contribution to take back
 }
 
 // server is one configured MCP server.
@@ -108,6 +110,7 @@ func (m *manager) start() {
 		st := m.server(name, servers[name])
 		if servers[name].Disabled {
 			st.set(statusDisabled, nil)
+			m.unregister(st)
 			continue
 		}
 		wg.Add(1)
@@ -133,8 +136,25 @@ func (m *manager) server(name string, cfg config.Server) *server {
 		st = &server{name: name}
 		m.servers[name] = st
 	}
-	st.cfg = cfg
+	st.configure(cfg)
 	return st
+}
+
+// configuration is the configuration of the server as it is now. It is read
+// anew for every connection and every call, because ouro mcp in another
+// process, the settings screen and the front ends change it under a running
+// connection; the copy it returns is the caller's to keep.
+func (st *server) configuration() config.Server {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.cfg
+}
+
+// configure replaces the configuration of the server.
+func (st *server) configure(cfg config.Server) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.cfg = cfg
 }
 
 // close ends every connection, and the programs of the local servers with it.
@@ -169,11 +189,13 @@ func (m *manager) state(name string) *server {
 // connect connects the server st, lists its tools and hands them to the
 // agents.
 func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]*mcpsdk.Tool, error) {
-	if st.cfg.Disabled {
+	cfg := st.configuration()
+	if cfg.Disabled {
 		st.set(statusDisabled, nil)
+		m.unregister(st)
 		return nil, errors.New("the server " + st.name + " is disabled")
 	}
-	if err := st.cfg.Validate(st.name); err != nil {
+	if err := cfg.Validate(st.name); err != nil {
 		st.set("failed: "+err.Error(), err)
 		return nil, err
 	}
@@ -217,19 +239,18 @@ func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]
 	return tools, nil
 }
 
-// transport is how the server is reached: a program that is started for it,
-// or its URL.
 // transport is how the server is reached, and the program that was started
 // for it, if any.
 func (m *manager) transport(ctx context.Context, st *server, interactive bool) (mcpsdk.Transport, *program, error) {
-	env, headers := m.secrets(st.name), st.cfg.Headers
-	merged := make(map[string]string, len(st.cfg.Headers))
+	cfg := st.configuration()
+	env, headers := m.secrets(st.name), cfg.Headers
+	merged := make(map[string]string, len(cfg.Headers))
 	for k, v := range headers {
 		merged[k] = expand(v, env)
 	}
-	if st.cfg.URL != "" {
+	if cfg.URL != "" {
 		transport := &mcpsdk.StreamableClientTransport{
-			Endpoint:   st.cfg.URL,
+			Endpoint:   cfg.URL,
 			HTTPClient: &http.Client{Transport: &headerRoundTrip{base: http.DefaultTransport, headers: merged}},
 		}
 		if handler, err := m.oauth(st, interactive); err != nil {
@@ -242,9 +263,9 @@ func (m *manager) transport(ctx context.Context, st *server, interactive bool) (
 	// The program lives as long as its connection: the context is the one that
 	// ends it, and Detach makes its group go with it.
 	life, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(life, st.cfg.Command, st.cfg.Args...)
+	cmd := exec.CommandContext(life, cfg.Command, cfg.Args...)
 	cmd.Env = os.Environ()
-	for k, v := range st.cfg.Env {
+	for k, v := range cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+expand(v, env))
 	}
 	// The program gets a group of its own, so that the group can be killed as
@@ -320,36 +341,68 @@ func (m *manager) refresh(ctx context.Context, st *server) {
 	m.registerTools(st, tools)
 }
 
-// registerTools contributes the tools of the server that the agents do not
-// have yet.
+// registerTools hands the agents exactly the tools of the server that the
+// configuration lets them have: the ones it had and still has stay, the ones
+// it lost are taken back, and new ones are added.
+//
+// A tool the server no longer lists must not stay in the list of the agent:
+// the call of it would reach the server and fail there, after the model had
+// chosen it.
 func (m *manager) registerTools(st *server, tools []*mcpsdk.Tool) {
 	if m.ctx == nil { // a manager that only asks for tools, in a test: it hands out none
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	list := st.configuration().Tools // what the owner wants of this server, as it is now
+	keep := make(map[string]bool, len(tools))
+	wanted := make([]*mcpsdk.Tool, 0, len(tools))
 	for _, t := range tools {
-		if len(st.cfg.Tools) > 0 && !slices.Contains(st.cfg.Tools, t.Name) {
+		if len(list) > 0 && !slices.Contains(list, t.Name) {
 			continue
 		}
+		keep[st.name+"/"+t.Name] = true
+		wanted = append(wanted, t)
+	}
+	if m.items == nil { // a manager a test built by hand
+		m.items = map[string]*plugin.Item{}
+	}
+	for name, owner := range m.added {
+		if !strings.HasPrefix(owner, st.name+"/") || keep[owner] {
+			continue
+		}
+		m.items[name].Remove()
+		delete(m.items, name)
+		delete(m.added, name)
+	}
+	names := make(map[string]string, len(m.added))
+	present := make(map[string]bool, len(m.added))
+	for name, owner := range m.added {
+		names[name] = owner
+		present[owner] = true
+	}
+	for _, t := range wanted {
 		owner := st.name + "/" + t.Name
+		if present[owner] {
+			continue // this tool, handed out before
+		}
 		name := toolName(st.name, t.Name)
-		if had, ok := m.added[name]; ok {
-			if had == owner {
-				continue // this tool, handed out before
-			}
+		if _, taken := names[name]; taken {
 			// Two tools whose names come out the same, like read.file and
 			// read_file: the second gets a hash of its own name, rather than
 			// being dropped silently under the name of the first.
-			name = uniqToolName(st.name, t.Name, m.added)
+			name = uniqToolName(st.name, t.Name, names)
 		}
-		if had, ok := m.added[name]; ok && had != owner {
-			continue
-		}
+		names[name] = owner
+		present[owner] = true
 		m.added[name] = owner
-		plugin.Add(m.ctx, m.tool(st, name, t))
+		m.items[name] = plugin.Add(m.ctx, m.tool(st, name, t))
 	}
 }
+
+// forget takes the tools of the server back from the agents: it is disabled,
+// or no longer configured.
+func (m *manager) unregister(st *server) { m.registerTools(st, nil) }
 
 // tool turns a tool of a server into a tool of the agents.
 func (m *manager) tool(st *server, name string, t *mcpsdk.Tool) plugin.Tool {
@@ -413,12 +466,10 @@ func (m *manager) call(ctx context.Context, st *server, name string, raw json.Ra
 // ouro mcp disable or remove changes the file in another process, and a
 // server that is gone must not be started again by a tool call.
 func (m *manager) session(ctx context.Context, st *server) (*mcpsdk.ClientSession, error) {
-	st.mu.Lock()
-	session := st.session
-	st.mu.Unlock()
-	if session != nil {
-		return session, nil
-	}
+	// The configuration is read for every call, not only for one that has to
+	// connect: ouro mcp disable, remove or a list of tools changed in the
+	// file of another process takes tools away, and the agents must not keep
+	// them until the next connection.
 	servers, err := m.configured()
 	if err != nil {
 		return nil, err
@@ -427,13 +478,27 @@ func (m *manager) session(ctx context.Context, st *server) (*mcpsdk.ClientSessio
 	switch {
 	case !ok:
 		st.drop()
+		m.unregister(st)
 		return nil, fmt.Errorf("the MCP server %s is no longer configured", st.name)
 	case cfg.Disabled:
 		st.drop()
 		st.set(statusDisabled, nil)
+		m.unregister(st)
 		return nil, fmt.Errorf("the MCP server %s is disabled", st.name)
 	}
+	st.mu.Lock()
+	session, tools := st.session, st.tools
+	changed := !slices.Equal(cfg.Tools, st.cfg.Tools)
 	st.cfg = cfg
+	st.mu.Unlock()
+	if session != nil {
+		if changed {
+			// The list of tools the owner wants changed under a running
+			// connection: what it dropped goes, what it added comes.
+			m.registerTools(st, tools)
+		}
+		return session, nil
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectTimeout)
 	defer cancel()
 	if _, err := m.connect(ctx, st, false); err != nil {

@@ -464,3 +464,33 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("started %v", s.order)
 	}
 }
+
+// A plugin that contributes from a source that changes takes the contribution
+// back with the item that Add returned, and the agents see it no more: this is
+// how the tools of an MCP server go when the server no longer offers them.
+func TestRemoveTakesAContributionBack(t *testing.T) {
+	var held *Item
+	k := New()
+	if err := k.Start(NewPlugin("changing", func(ctx *Context, _ none) (none, error) {
+		held = Add(ctx, word("a"))
+		return none{}, nil
+	})); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if got := All[word](k.Context()); !slices.Equal(got, []word{"a"}) {
+		t.Fatalf("after the start %v", got)
+	}
+	held.Remove()
+	if got := All[word](k.Context()); len(got) != 0 {
+		t.Fatalf("after taking it back %v", got)
+	}
+	held.Remove() // taking it back twice is no error
+	if got := All[word](k.Context()); len(got) != 0 {
+		t.Fatalf("after taking it back twice %v", got)
+	}
+	k.Stop()
+	held.Remove() // and neither is taking back one whose plugin has stopped
+	if got := All[word](k.Context()); len(got) != 0 {
+		t.Fatalf("after the stop %v", got)
+	}
+}

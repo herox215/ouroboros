@@ -4,7 +4,6 @@
 package websearch
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +11,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"unicode/utf8"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ouroboros/internal/assistant"
 	"ouroboros/plugin"
@@ -140,97 +142,127 @@ func (s *search) exa(ctx context.Context, a args) (string, error) {
 	if a.MaxBytes != nil {
 		contextLimit = min(contextLimit, *a.MaxBytes)
 	}
-	body, _ := json.Marshal(map[string]any{ // texts and numbers: cannot fail
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{"name": "web_search_exa", "arguments": map[string]any{
-			"query": a.Query, "numResults": a.Limit, "type": "auto", "contextMaxCharacters": contextLimit,
-		}},
+	// What the endpoint answered is kept, so that its status, and not only the
+	// error of the SDK, says why a search failed.
+	answer := &status{base: s.client.Transport}
+	client := *s.client
+	client.Transport = answer
+	transport := &mcpsdk.StreamableClientTransport{
+		Endpoint:   s.endpoint,
+		HTTPClient: &client,
+		// A search is a request and its answer: nothing of the service comes
+		// unasked, and a stream of its own would be a connection to hold open
+		// for no search, which the client otherwise opens while it connects.
+		DisableStandaloneSSE: true,
+	}
+	clientMCP := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ouro", Version: "1"}, &mcpsdk.ClientOptions{
+		Capabilities: &mcpsdk.ClientCapabilities{}, // nothing is asked of ouro: no roots, no sampling, no elicitation
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
+	session, err := clientMCP.Connect(ctx, transport, nil)
 	if err != nil {
-		return "", err
+		return "", answer.failed(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	resp, err := s.client.Do(req)
+	defer session.Close()
+	r, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "web_search_exa", Arguments: map[string]any{
+		"query": a.Query, "numResults": a.Limit, "type": "auto", "contextMaxCharacters": contextLimit,
+	}})
 	if err != nil {
-		return "", fmt.Errorf("the search of Exa: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		hint := ""
-		if after := resp.Header.Get("Retry-After"); after != "" {
-			hint = "; Retry-After: " + after
-		}
-		return "", fmt.Errorf("the free search rate limit of Exa was reached%s; try again later", hint)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("the search of Exa returned HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
-	if err != nil {
-		return "", fmt.Errorf("reading Exa search: %w", err)
-	}
-	if len(data) > maxResponse {
-		return "", errors.New("the search response of Exa exceeds 1 MiB")
-	}
-	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		// Join the data lines of each event, including multi-line SSE data.
-		normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
-		for _, event := range strings.Split(normalized, "\n\n") {
-			var lines []string
-			for _, line := range strings.Split(event, "\n") {
-				if text, ok := strings.CutPrefix(line, "data:"); ok {
-					lines = append(lines, strings.TrimPrefix(text, " "))
-				}
-			}
-			if len(lines) == 0 {
-				continue
-			}
-			return result([]byte(strings.Join(lines, "\n")))
-		}
-		return "", errors.New("the search of Exa returned no response")
-	}
-	return result(data)
-}
-
-func result(data []byte) (string, error) {
-	var r struct {
-		Result *struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-			IsError bool `json:"isError"`
-		} `json:"result"`
-		Error *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(data, &r); err != nil {
-		return "", fmt.Errorf("invalid Exa search response: %w", err)
-	}
-	if r.Error != nil {
-		return "", fmt.Errorf("the search of Exa failed (%d): %s", r.Error.Code, bounded(r.Error.Message))
-	}
-	if r.Result == nil {
-		return "", errors.New("the search of Exa returned no result")
+		return "", answer.failed(err)
 	}
 	var texts []string
-	for _, c := range r.Result.Content {
-		if c.Type == "text" && c.Text != "" {
+	for _, content := range r.Content {
+		if c, ok := content.(*mcpsdk.TextContent); ok && c.Text != "" {
 			texts = append(texts, c.Text)
 		}
 	}
 	out := bounded(strings.Join(texts, "\n\n"))
-	if r.Result.IsError {
+	if r.IsError {
 		return "", fmt.Errorf("the search of Exa failed: %s", out)
 	}
 	if strings.TrimSpace(out) == "" {
 		return "no search results found", nil
 	}
 	return out, nil
+}
+
+// status is the transport of the client of Exa: it takes the answer of the
+// service and keeps its status, to say why a search failed.
+type status struct {
+	base http.RoundTripper
+
+	mu    sync.Mutex // guards what follows
+	code  int
+	after string
+}
+
+func (s *status) RoundTrip(r *http.Request) (*http.Response, error) {
+	base := s.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(r)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.code, s.after = resp.StatusCode, resp.Header.Get("Retry-After")
+	s.mu.Unlock()
+	// The SDK holds a whole response of the service in memory before it reads
+	// it, so a service that answers with more than a search needs ends the
+	// search here, where what it was can still be said.
+	resp.Body = &limited{ReadCloser: resp.Body}
+	return resp, nil
+}
+
+// limited keeps the answer of the service to maxResponse bytes, and fails the
+// read that would take more: the SDK reports that error as the failure of the
+// call, so it reaches the caller as the reason the search failed.
+type limited struct {
+	io.ReadCloser
+	read int
+}
+
+func (b *limited) Read(p []byte) (int, error) {
+	if b.read >= maxResponse {
+		// An answer of exactly the limit is no more than that: only what
+		// comes after it makes the search fail.
+		var one [1]byte
+		if n, err := b.ReadCloser.Read(one[:]); n > 0 {
+			return 0, fmt.Errorf("the search of Exa returned more than %d MiB", maxResponse>>20)
+		} else if err != nil {
+			return 0, err
+		}
+		return 0, io.ErrNoProgress
+	}
+	if len(p) > maxResponse-b.read {
+		p = p[:maxResponse-b.read]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.read += n
+	return n, err
+}
+
+// failed is why the search of Exa failed: its answer, when it was no answer
+// of a search, or the error of the session.
+func (s *status) failed(err error) error {
+	s.mu.Lock()
+	code, after := s.code, s.after
+	s.mu.Unlock()
+	// The endpoint of Exa is free and rate-limited: it says when a search may
+	// be tried again.
+	if code == http.StatusTooManyRequests {
+		hint := ""
+		if after != "" {
+			hint = "; Retry-After: " + after
+		}
+		return fmt.Errorf("the free search rate limit of Exa was reached%s; try again later", hint)
+	}
+	// What is not 4xx or 5xx is no failure: the SDK sends its greetings as
+	// POSTs of their own, which a server answers with 202 and no body.
+	if code >= 400 {
+		return fmt.Errorf("the search of Exa returned HTTP %d", code)
+	}
+	return fmt.Errorf("the search of Exa: %w", err)
 }
 
 func bounded(s string) string {

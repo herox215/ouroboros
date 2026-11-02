@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,7 +15,76 @@ import (
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
+	"ouroboros/internal/kernel"
+	"ouroboros/plugin"
 )
+
+// configured writes the server into the configuration of dir, as a node has
+// it: a manager reads it again for every call of a tool.
+func configured(t *testing.T, dir home.Dir, name string, cfg config.Server) {
+	t.Helper()
+	if err := config.Update(string(dir), func(c *config.Config) error {
+		if c.MCP == nil {
+			c.MCP = &config.MCP{Servers: map[string]config.Server{}}
+		}
+		if c.MCP.Servers == nil {
+			c.MCP.Servers = map[string]config.Server{}
+		}
+		c.MCP.Servers[name] = cfg
+		return nil
+	}); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+}
+
+// TestToolsGoWhenTheServerDropsThem: a tool that the server no longer lists,
+// or that the configuration no longer wants, is taken back from the agents at
+// once, instead of staying in their list until the node starts anew.
+func TestToolsGoWhenTheServerDropsThem(t *testing.T) {
+	ctx := kernel.New().Context()
+	m := &manager{dir: home.Dir(t.TempDir()), ctx: ctx, servers: map[string]*server{}, added: map[string]string{}}
+	st := &server{name: "fake"}
+	tools := func(names ...string) []*mcpsdk.Tool {
+		out := make([]*mcpsdk.Tool, len(names))
+		for i, name := range names {
+			out[i] = &mcpsdk.Tool{Name: name}
+		}
+		return out
+	}
+	handed := func() []string {
+		out := make([]string, 0)
+		for _, tool := range plugin.All[plugin.Tool](ctx) {
+			out = append(out, tool.Name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, tt := range []struct {
+		tools []*mcpsdk.Tool
+		want  []string
+	}{
+		{tools("a", "b"), []string{"fake__a", "fake__b"}},
+		{tools("a"), []string{"fake__a"}}, // the server dropped b
+		{tools("a", "c"), []string{"fake__a", "fake__c"}},
+		{tools("a", "b", "c"), []string{"fake__a", "fake__b", "fake__c"}}, // b is back, under its own name
+	} {
+		m.registerTools(st, tt.tools)
+		if got := handed(); !slices.Equal(got, tt.want) {
+			t.Fatalf("tools = %v, want %v", got, tt.want)
+		}
+	}
+	// What the configuration no longer lists goes as well.
+	st.cfg.Tools = []string{"a"}
+	m.registerTools(st, tools("a", "c"))
+	if got := handed(); !slices.Equal(got, []string{"fake__a"}) {
+		t.Fatalf("tools with a list of the configuration = %v", got)
+	}
+	// A server that is gone keeps none.
+	m.unregister(st)
+	if got := handed(); len(got) != 0 {
+		t.Fatalf("tools of a server that is gone = %v", got)
+	}
+}
 
 // TestConnectAndCall talks to a server of the SDK: it starts the connection,
 // reads its tools, calls one, and calls it again on the same connection.
@@ -29,8 +99,10 @@ func TestConnectAndCall(t *testing.T) {
 	httpServer := httptest.NewServer(mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return fake }, nil))
 	defer httpServer.Close()
 
-	m := &manager{dir: home.Dir(t.TempDir()), servers: map[string]*server{}, added: map[string]string{}}
+	dir := home.Dir(t.TempDir())
 	st := &server{name: "fake", cfg: config.Server{URL: httpServer.URL}}
+	configured(t, dir, st.name, st.cfg)
+	m := &manager{dir: dir, servers: map[string]*server{}, added: map[string]string{}}
 	defer st.drop()
 
 	tools, err := m.connect(context.Background(), st, false)

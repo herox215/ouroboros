@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -50,13 +51,17 @@ type settingsMsg struct {
 	settings  Settings
 	fallbacks []Fallback
 	gateways  []plugin.GatewaySettings
+	mcp       []plugin.MCPServer
 	err       error
 }
 
-// changedMsg is how a change on the settings screen went.
+// changedMsg is how a change on the settings screen went. mcp says that it was
+// one of the MCP servers, which connect in the background: what became of it
+// is read again after a while, see changed.
 type changedMsg struct {
 	done string
 	err  error
+	mcp  bool
 }
 
 // row is a line of the settings screen.
@@ -113,6 +118,9 @@ type settingsScreen struct {
 	info         *row            // the explanation opened with Info
 	editing      *edit           // the text that is typed, if one is
 	input        textinput.Model // where it is typed
+	// mcp are the MCP servers of the node with their tools, as the MCP plugin
+	// contributes them: the category of the servers and of their tools.
+	mcp []plugin.MCPServer
 	// refused are the settings of the tools that were refused while the
 	// UI is open, by who, peer and name: a tool that is allowed again gets
 	// them back, rather than going everywhere its settings kept it from.
@@ -145,15 +153,26 @@ func (c *settingsScreen) load(m *Model) tea.Msg {
 	if err == nil {
 		err = gatewayErr
 	}
-	return settingsMsg{settings: s, fallbacks: fallbacks, gateways: gateways, err: err}
+	// A build without the MCP plugin has no servers: the category says so. A
+	// configuration that cannot be read is a reason like one of the gateways:
+	// the screen says why, rather than that there is no server.
+	mcp, mcpErr := m.backend.MCP(m.ctx)
+	if err == nil {
+		err = mcpErr
+	}
+	return settingsMsg{settings: s, fallbacks: fallbacks, gateways: gateways, mcp: mcp, err: err}
 }
 
 // loaded takes the configuration that was read.
 func (c *settingsScreen) loaded(m *Model, msg settingsMsg) {
 	c.gateways = msg.gateways
 	c.values, c.fallbacks, c.err, c.rows = msg.settings, msg.fallbacks, msg.err, nil
+	c.mcp = msg.mcp
 	if msg.err == nil {
-		c.rows = rows(msg.settings)
+		// The servers are read again while the screen is open: their rows are
+		// built anew from what was read, and the clamp below keeps the
+		// selection on a row that is still there when they shrink.
+		c.rows = append(rows(msg.settings), mcpRows(c.mcp)...)
 	}
 	// A peer or a tool that is no more closes what showed it.
 	if c.peer != "" && c.peerList() == nil {
@@ -296,7 +315,7 @@ func (c *settingsScreen) leave(m *Model) {
 func (c *settingsScreen) change(m *Model, s Setting) tea.Cmd {
 	return func() tea.Msg {
 		done, err := m.backend.ChangeSetting(s)
-		return changedMsg{done, err}
+		return changedMsg{done: done, err: err}
 	}
 }
 
@@ -307,7 +326,28 @@ func (c *settingsScreen) changed(m *Model, msg changedMsg) tea.Cmd {
 	} else {
 		m.setNotice(msg.done, false)
 	}
-	return tea.Batch(c.reload(m), m.refresh())
+	cmds := []tea.Cmd{c.reload(m), m.refresh()}
+	if msg.mcp && msg.err == nil {
+		// A server that was turned on connects in the background, and one that
+		// stays away says why only once it gave up: the servers are read again
+		// a few times, so that their tools, and the reason they are not there,
+		// show without another key.
+		for _, wait := range mcpRereads {
+			cmds = append(cmds, c.reread(m, wait))
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// mcpRereads are how long after a change of the MCP servers the settings
+// screen reads them again: the last is past the time a server is given to
+// connect, see connectTimeout of the MCP plugin.
+var mcpRereads = []time.Duration{250 * time.Millisecond, time.Second, 3 * time.Second, 10 * time.Second, 31 * time.Second}
+
+// reread reads the configuration again after wait: what a change of the MCP
+// servers became shows only then.
+func (c *settingsScreen) reread(m *Model, wait time.Duration) tea.Cmd {
+	return tea.Tick(wait, func(time.Time) tea.Msg { return c.load(m) })
 }
 
 // startEdit lets the owner type the text of label, starting from value.
@@ -409,6 +449,7 @@ const (
 	nodeSection      = "The node"
 	agentsSection    = "The agents"
 	pluginsSection   = "Plugins"
+	mcpSection       = "MCP servers"
 	ownerSection     = "Tools of your agent"
 	peersSection     = "Tools for peers"
 	singleSection    = "Tools of single peers"
@@ -417,7 +458,7 @@ const (
 )
 
 // sections are the categories in the order the settings screen lists them.
-var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
+var sections = []string{nodeSection, agentsSection, pluginsSection, mcpSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
 
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
@@ -425,6 +466,7 @@ var contents = map[string]string{
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
 	agentsSection:    "the context provider, the debug mode, the thread window",
 	pluginsSection:   "which plugins are turned on",
+	mcpSection:       "the MCP servers the agent reaches, and their tools",
 	ownerSection:     "what your agent may do when you ask it",
 	peersSection:     "what your agent may do when a peer asks it",
 	singleSection:    "what it may do for one peer: also bash and more",
@@ -437,6 +479,7 @@ var about = map[string]string{
 	nodeSection:      "The access and the models are changed with the setup and /model, the effort with /effort.",
 	agentsSection:    "A change holds from the next message, for you and for peers.",
 	pluginsSection:   "Plugins are part of the build. Turning one on or off holds once ouro starts anew: quit and start ouro, /stop and /start the node.",
+	mcpSection:       "The servers are added and their sign-in is done with /mcp. A tool turned off here is no longer offered to your agent from the next message on, and a server that is off starts nothing.",
 	ownerSection:     "What your agent may do when you ask it. A change holds from the next message.",
 	peersSection:     "What your agent may do when a connected peer asks it. A change holds from the next message.",
 	singleSection:    "A peer with a list of its own gets the tools of that list instead of those for peers: also trusted ones like bash, by their name.",
@@ -523,6 +566,52 @@ func rows(s Settings) []row {
 			set("use it", Setting{Kind: plugin.SetProtected, On: true}))
 	}
 	return out
+}
+
+// mcpRows are the MCP servers and their tools: a server with how it is, and
+// each tool it offers below it, to give it to the agents or not.
+func mcpRows(servers []plugin.MCPServer) []row {
+	var out []row
+	for _, s := range servers {
+		value, toggle := onOff(!s.Disabled)
+		out = append(out, row{
+			section: mcpSection,
+			label:   s.Name,
+			value:   value + " · " + s.Status,
+			note:    s.How,
+			actions: []action{{name: toggle, run: mcpChange(plugin.MCPChange{Server: s.Name, On: !s.Disabled})}},
+		})
+		for _, t := range s.Tools {
+			value, toggle := onOff(t.On)
+			out = append(out, row{
+				section: mcpSection,
+				label:   t.Name,
+				value:   value,
+				note:    firstSentence(t.Description),
+				sub:     true,
+				actions: []action{{name: toggle, run: mcpChange(plugin.MCPChange{Server: s.Name, Tool: t.Name, On: !t.On})}},
+			})
+		}
+	}
+	if len(servers) == 0 {
+		out = append(out, row{section: mcpSection, label: "No server", value: "none",
+			note: "add one with ouro mcp add NAME URL, or in the configuration"})
+	}
+	return out
+}
+
+// mcpChange changes one thing about the MCP servers.
+func mcpChange(change plugin.MCPChange) func(m *Model) tea.Cmd {
+	return func(m *Model) tea.Cmd { return m.config.changeMCP(m, change) }
+}
+
+// changeMCP makes a change of the MCP servers and reads the settings anew:
+// the tools of a server come and go at once, without a start of the node.
+func (c *settingsScreen) changeMCP(m *Model, change plugin.MCPChange) tea.Cmd {
+	return func() tea.Msg {
+		done, err := m.backend.ChangeMCP(m.ctx, change)
+		return changedMsg{done: done, err: err, mcp: true}
+	}
 }
 
 // onOff says whether a mode of the node is on, and what the action that
@@ -977,7 +1066,12 @@ func (c *settingsScreen) view(m *Model) (string, []hit) {
 			}
 			label := style.Width(width + 2).Render(ansi.Truncate(r.label, width, "…"))
 			if r.sub {
+				// A line of a list, below the one it belongs to: what it is
+				// set to, if anything, stands apart from its name.
 				label = style.Render(ansi.Truncate(r.label, max(inner-6, 1), "…"))
+				if r.value != "" {
+					label += "  "
+				}
 			}
 			from := len(lines)
 			lines = append(lines, ansi.Truncate(marker+mutedStyle.Render(indent)+label+r.value, inner, "…"))

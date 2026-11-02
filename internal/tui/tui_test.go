@@ -83,9 +83,11 @@ type fakeBackend struct {
 	*fakeAgent
 	sessions *session.Service
 
-	undone  []string // what UndoRemembered was given
-	status  Status
-	started int
+	undone     []string // what UndoRemembered was given
+	mcp        []plugin.MCPServer
+	mcpChanges []plugin.MCPChange
+	status     Status
+	started    int
 	// memories is what /memory lists, of the project and with the archived
 	// ones asked for or not, as it last was.
 	memories      plugin.MemoryListing
@@ -153,6 +155,13 @@ func (f *fakeBackend) SaveGateway(context.Context, string, plugin.GatewayChange)
 func (f *fakeBackend) Settings() (Settings, error) { return f.settings, f.fail["settings"] }
 func (f *fakeBackend) ChangeSetting(s Setting) (string, error) {
 	f.changes = append(f.changes, s)
+	return f.done, f.fail["change"]
+}
+func (f *fakeBackend) MCP(ctx context.Context) ([]plugin.MCPServer, error) {
+	return f.mcp, f.fail["mcp"]
+}
+func (f *fakeBackend) ChangeMCP(_ context.Context, change plugin.MCPChange) (string, error) {
+	f.mcpChanges = append(f.mcpChanges, change)
 	return f.done, f.fail["change"]
 }
 

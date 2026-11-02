@@ -114,6 +114,27 @@ type item struct {
 	value any
 }
 
+// Item is one contribution of a plugin, as Add returns it: it can be taken
+// back before the plugin stops, which is how a plugin that contributes
+// something from a changing source keeps the contributions true, like the
+// tools of a server that took one away.
+type Item struct {
+	k  *Kernel
+	t  reflect.Type
+	id int
+}
+
+// Remove takes the contribution back: All no longer returns it. Removing one
+// twice does nothing, and so does removing one whose plugin has stopped.
+func (i *Item) Remove() {
+	if i == nil {
+		return
+	}
+	i.k.mu.Lock()
+	defer i.k.mu.Unlock()
+	i.k.items[i.t] = slices.DeleteFunc(i.k.items[i.t], func(it item) bool { return it.id == i.id })
+}
+
 // scope is what one plugin registered.
 type scope struct {
 	name string
@@ -421,19 +442,20 @@ func (ctx *Context) OnStop(f func()) {
 	ctx.scope.undo = append(ctx.scope.undo, f)
 }
 
-// Add contributes value to the items of type T, which All returns.
-func Add[T any](ctx *Context, value T) {
+// Add contributes value to the items of type T, which All returns. What it
+// returns takes the contribution back before the plugin stops: a plugin that
+// contributes something from a source that changes, like the tools of a
+// server, keeps the contributions true with it.
+func Add[T any](ctx *Context, value T) *Item {
 	k, t := ctx.k, reflect.TypeFor[T]()
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.nextID++
 	id := k.nextID
 	k.items[t] = append(k.items[t], item{id, value})
-	ctx.scope.undo = append(ctx.scope.undo, func() {
-		k.mu.Lock()
-		k.items[t] = slices.DeleteFunc(k.items[t], func(i item) bool { return i.id == id })
-		k.mu.Unlock()
-	})
+	it := &Item{k: k, t: t, id: id}
+	ctx.scope.undo = append(ctx.scope.undo, it.Remove)
+	return it
 }
 
 // All returns what the started plugins contributed of type T, in the order

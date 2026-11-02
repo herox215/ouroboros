@@ -1,18 +1,17 @@
 package computer
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // script is a program for launch to start as cua-driver: a shell script
@@ -26,23 +25,33 @@ func script(t *testing.T, body string) string {
 	return path
 }
 
+// greeting is what cua-driver answers the initialize of the SDK with, as
+// far as the SDK needs it.
+const greeting = `{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"cua-driver","version":"1"}}`
+
+// server is a script body that answers the greeting of the SDK on standard
+// input, and ends with it.
+func server() string {
+	return `while read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+  *'"id":'*) printf '{"jsonrpc":"2.0","id":%s,"result":` + greeting + `}\n' "$id" ;;
+  esac
+done`
+}
+
 // launch starts the program, greets it and tells it to send no telemetry;
 // it ends with its input closed, or is killed.
 func TestLaunch(t *testing.T) {
 	ctx := context.Background()
-	d, err := launch(ctx, script(t, `read -r line
-echo '{"jsonrpc":"2.0","id":1,"result":{}}'
-read -r line
-read -r line
-printf '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"%s %s %s"}]}}\n' "$CUA_DRIVER_RS_TELEMETRY_ENABLED" "$CUA_TELEMETRY_ENABLED" "$CUA_DRIVER_RS_ENABLE_WAYLAND"
-cat >/dev/null
-`))
+	env := filepath.Join(t.TempDir(), "env")
+	d, err := launch(ctx, script(t, `printf '%s %s %s' "$CUA_DRIVER_RS_TELEMETRY_ENABLED" "$CUA_TELEMETRY_ENABLED" "$CUA_DRIVER_RS_ENABLE_WAYLAND" > '`+env+`'
+`+server()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := d.call(ctx, "list_windows", nil)
-	if err != nil || r.text() != "false false 1" {
-		t.Fatalf("telemetry: %v, %v", r, err)
+	if b, err := os.ReadFile(env); err != nil || string(b) != "false false 1" {
+		t.Fatalf("telemetry: %q, %v", b, err)
 	}
 	d.end()
 	if !d.closed() {
@@ -53,8 +62,7 @@ cat >/dev/null
 	old := closeTimeout
 	closeTimeout = 50 * time.Millisecond
 	defer func() { closeTimeout = old }()
-	d, err = launch(ctx, script(t, `read -r line
-echo '{"jsonrpc":"2.0","id":1,"result":{}}'
+	d, err = launch(ctx, script(t, server()+`
 trap '' TERM HUP
 exec sleep 60
 `))
@@ -65,6 +73,35 @@ exec sleep 60
 	d.end()
 	if took := time.Since(began); took > 5*time.Second {
 		t.Fatalf("ended after %v", took)
+	}
+
+	// What it started ends with it, not only the program itself: the child
+	// holds a FIFO open, which ends only once the group is gone.
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() {
+		f, err := os.Open(fifo)
+		if err == nil {
+			_, err = f.Read(make([]byte, 1))
+			f.Close()
+		}
+		closed <- err
+	}()
+	d, err = launch(ctx, script(t, "sh -c 'exec 3>"+fifo+"; sleep 60' >&- &\n"+server()+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.end()
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Fatal("what it started said something")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("what the driver started is still running")
 	}
 
 	// One that stops answering but goes on is not waited for to say why:
@@ -105,48 +142,30 @@ exit 1
 	}
 }
 
-// What the driver sends that is no answer to a request is passed over, an
-// error it answers with is the error of the request, and a driver that ends
-// fails the requests that wait.
-func TestProtocolEdges(t *testing.T) {
-	toDriver, fromServer := io.Pipe()
-	fromDriver, toServer := io.Pipe()
-	d := connect("x", toDriver, toServer, func() { toServer.Close(); fromServer.Close() }, func() string { return "" })
+// An error of a tool of the driver is the error of the call, and a driver
+// that ends fails the calls that follow it.
+func TestCallAndEnd(t *testing.T) {
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "cua-driver", Version: "1"}, nil)
+	server.AddTool(&mcpsdk.Tool{Name: "list_windows", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		return &mcpsdk.CallToolResult{IsError: true, Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "bad params"}}}, nil
+	})
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	ss, err := server.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := connect(context.Background(), "x", clientTransport, func() { ss.Close() }, func() string { return "it broke" })
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer d.end()
-	second := make(chan string, 1)
-	go func() {
-		r := bufio.NewReader(fromDriver)
-		r.ReadBytes('\n')
-		io.WriteString(fromServer, "not JSON\n\n"+
-			`{"jsonrpc":"2.0","method":"notifications/message","params":{}}`+"\n"+
-			`{"jsonrpc":"2.0","id":"x","result":{}}`+"\n"+
-			`{"jsonrpc":"2.0","id":99,"result":{}}`+"\n"+
-			`{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad params"}}`+"\n")
-		line, _ := r.ReadBytes('\n')
-		second <- string(line)
-		fromServer.Close() // ends while the second request waits
-		io.Copy(io.Discard, r)
-	}()
-	ctx := context.Background()
-	if err := d.request(ctx, "a", nil, nil); err == nil || err.Error() != "cua-driver: bad params" {
+	if _, err := d.call(context.Background(), "list_windows", nil); err == nil || err.Error() != "cua-driver: bad params" {
 		t.Fatalf("an error: %v", err)
 	}
-	if err := d.request(ctx, "b", nil, nil); err == nil || err.Error() != "cua-driver ended" {
-		t.Fatalf("ended while waiting: %v", err)
-	}
-	// What is passed over gets no answer: next comes the second request.
-	if line := <-second; !strings.Contains(line, `"method":"b"`) {
-		t.Fatalf("after the first request came %s", line)
-	}
-
-	// A driver that takes no more input fails the request.
-	in, _ := io.Pipe()
-	_, out := io.Pipe()
-	out.Close()
-	d2 := connect("x", in, out, func() { in.Close() }, func() string { return "" })
-	defer d2.end()
-	if err := d2.request(ctx, "a", nil, nil); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("closed input: %v", err)
+	ss.Close() // the driver ends
+	waitFor(t, d.closed)
+	if _, err := d.call(context.Background(), "list_windows", nil); err == nil {
+		t.Fatal("a call after the end was answered")
 	}
 }
 
@@ -163,13 +182,48 @@ func TestArguments(t *testing.T) {
 	}
 }
 
-// The text of a result is that of its parts of text that say something.
+// The text of a result is that of its contents that are text and say
+// something.
 func TestResultText(t *testing.T) {
-	var r result
-	if err := json.Unmarshal([]byte(`{"content":[{"type":"text","text":"  "},{"type":"image","text":"alt"},{"type":"text","text":" a "},{"type":"text","text":"b"}]}`), &r); err != nil {
-		t.Fatal(err)
-	}
+	r := &result{&mcpsdk.CallToolResult{Content: []mcpsdk.Content{
+		&mcpsdk.TextContent{Text: "  "},
+		&mcpsdk.ImageContent{Data: []byte("png")},
+		&mcpsdk.TextContent{Text: " a "},
+		&mcpsdk.TextContent{Text: "b"},
+	}}}
 	if got := r.text(); got != "a\nb" {
 		t.Errorf("text %q", got)
+	}
+}
+
+// A driver that never greets ends with what it started, as one that ouro
+// ends does: the group goes, not only the program.
+func TestFailedHandshakeKillsTheGroup(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gone := make(chan error, 1)
+	go func() {
+		f, err := os.Open(fifo)
+		if err == nil {
+			_, err = f.Read(make([]byte, 1))
+			f.Close()
+		}
+		gone <- err
+	}()
+	// The program starts a child that holds the FIFO open, closes the output
+	// the SDK greets it on, and stays without answering.
+	_, err := launch(context.Background(), script(t, "sh -c 'exec 3>"+fifo+"; sleep 60' >&- &\nexec >&-\nexec sleep 60\n"))
+	if err == nil || !strings.HasPrefix(err.Error(), "cua-driver does not start") {
+		t.Fatalf("a driver that does not greet: %v", err)
+	}
+	select {
+	case err := <-gone:
+		if err == nil {
+			t.Fatal("what it started said something")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("what the driver started is still running")
 	}
 }

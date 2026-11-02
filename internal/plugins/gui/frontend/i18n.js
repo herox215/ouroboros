@@ -179,6 +179,31 @@ const en = {
   'settings.password': 'Password (empty keeps the current login)',
   'settings.allowedUsers': 'Allowed user IDs (comma separated)',
   'settings.allowlistWarning': 'Allowlisted users are delegated this profile’s agent tools, INCLUDING permission answers, not just chat. An empty allowlist denies all users.',
+  'settings.mcp': 'MCP servers',
+  'settings.noMCP': 'No MCP server is configured for this profile.',
+  'settings.mcpFailed': 'The MCP operation failed. Check the configuration and try again.',
+  'settings.mcpTurnOn': 'Turn on',
+  'settings.mcpTurnOff': 'Turn off',
+  'settings.mcpSignIn': 'Sign in',
+  'settings.mcpSignOut': 'Sign out',
+  'settings.mcpSignInHint': 'The window cannot sign in to this server yet: sign in with ouro mcp login {name} in the terminal.',
+  // The states of a server, in the words of this language only: the plugin
+  // says 'failed: …' with the backend's error, which stays out of the window.
+  'settings.mcpConnected': 'connected',
+  'settings.mcpDisabled': 'disabled',
+  'settings.mcpNotConnected': 'not connected',
+  'settings.mcpNeedsAuthentication': 'needs authentication',
+  'settings.mcpStatusFailed': 'failed',
+  'settings.mcpConnecting': 'Connecting to the server …',
+  'settings.mcpWaiting': 'Waiting for the browser to answer the sign-in …',
+  // The names of the buttons for a screen reader, which needs the server and
+  // the tool: 'Turn off' alone does not tell two switches apart.
+  'settings.mcpTurnOnServer': 'Turn on {name}',
+  'settings.mcpTurnOffServer': 'Turn off {name}',
+  'settings.mcpTurnOnTool': 'Turn on {tool} on {name}',
+  'settings.mcpTurnOffTool': 'Turn off {tool} on {name}',
+  'settings.mcpSignInServer': 'Sign in to {name}',
+  'settings.mcpSignOutServer': 'Sign out from {name}',
 };
 
 const de = {
@@ -348,6 +373,27 @@ const de = {
   'settings.password': 'Passwort (leer behält die aktuelle Anmeldung)',
   'settings.allowedUsers': 'Erlaubte Benutzer-IDs (durch Komma getrennt)',
   'settings.allowlistWarning': 'Erlaubte Benutzer bekommen die Agent-Werkzeuge dieses Profils, EINSCHLIESSLICH der Antworten auf Berechtigungsfragen, nicht nur den Chat. Eine leere Liste verweigert allen Benutzern den Zugang.',
+  'settings.mcp': 'MCP-Server',
+  'settings.noMCP': 'Für dieses Profil ist kein MCP-Server eingerichtet.',
+  'settings.mcpFailed': 'Der MCP-Vorgang ist fehlgeschlagen. Prüfe die Konfiguration und versuche es erneut.',
+  'settings.mcpTurnOn': 'Einschalten',
+  'settings.mcpTurnOff': 'Ausschalten',
+  'settings.mcpSignIn': 'Anmelden',
+  'settings.mcpSignOut': 'Abmelden',
+  'settings.mcpSignInHint': 'Das Fenster kann sich noch nicht bei diesem Server anmelden: Melde dich im Terminal mit ouro mcp login {name} an.',
+  'settings.mcpConnected': 'verbunden',
+  'settings.mcpDisabled': 'ausgeschaltet',
+  'settings.mcpNotConnected': 'nicht verbunden',
+  'settings.mcpNeedsAuthentication': 'Anmeldung erforderlich',
+  'settings.mcpStatusFailed': 'fehlgeschlagen',
+  'settings.mcpConnecting': 'Verbindung zum Server wird hergestellt …',
+  'settings.mcpWaiting': 'Warte auf die Antwort des Browsers zur Anmeldung …',
+  'settings.mcpTurnOnServer': 'Schalte {name} ein',
+  'settings.mcpTurnOffServer': 'Schalte {name} aus',
+  'settings.mcpTurnOnTool': 'Schalte {tool} auf {name} ein',
+  'settings.mcpTurnOffTool': 'Schalte {tool} auf {name} aus',
+  'settings.mcpSignInServer': 'Bei {name} anmelden',
+  'settings.mcpSignOutServer': 'Von {name} abmelden',
 };
 
 // The language the window shows, English unless another is picked.

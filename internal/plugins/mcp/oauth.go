@@ -86,13 +86,14 @@ func (m *manager) oauth(st *server, interactive bool) (auth.OAuthHandler, error)
 		AcceptUnadvertisedIss: true,
 		Client:                &http.Client{Timeout: time.Minute},
 	}
+	cfg := st.configuration()
 	if about.TokenEndpoint != "" && (secret.Refresh != "" || secret.AccessToken != "") {
-		handler.InitialTokenSource = m.tokenSource(st.name, st.cfg, about, secret)
+		handler.InitialTokenSource = m.tokenSource(st.name, cfg, about, secret)
 	}
 	handler.NewTokenSource = func(ctx context.Context, conf *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
-		m.saveToken(st.name, st.cfg, conf, token)
+		m.saveToken(st.name, cfg, conf, token)
 		return &persisted{source: conf.TokenSource(ctx, token), save: func(t *oauth2.Token) {
-			m.saveToken(st.name, st.cfg, conf, t)
+			m.saveToken(st.name, cfg, conf, t)
 		}}, nil
 	}
 	return auth.NewAuthorizationCodeHandler(handler)

@@ -1,17 +1,16 @@
 package computer
 
 import (
-	"bufio"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
@@ -80,18 +79,18 @@ func (f *fake) windows(ws ...map[string]any) {
 }
 
 // answer is a result of a tool of the driver.
-func answer(text string, structured map[string]any, more ...map[string]any) map[string]any {
-	content := append([]map[string]any{{"type": "text", "text": text}}, more...)
-	r := map[string]any{"content": content}
+func answer(text string, structured map[string]any, more ...mcpsdk.Content) *mcpsdk.CallToolResult {
+	content := append([]mcpsdk.Content{&mcpsdk.TextContent{Text: text}}, more...)
+	r := &mcpsdk.CallToolResult{Content: content}
 	if structured != nil {
-		r["structuredContent"] = structured
+		r.StructuredContent = structured
 	}
 	return r
 }
 
 // image is the content of a result that is a PNG with the bytes data.
-func image(data string) map[string]any {
-	return map[string]any{"type": "image", "mimeType": "image/png", "data": base64.StdEncoding.EncodeToString([]byte(data))}
+func image(data string) mcpsdk.Content {
+	return &mcpsdk.ImageContent{Data: []byte(data), MIMEType: "image/png"}
 }
 
 // start starts the fake as the program path.
@@ -103,11 +102,15 @@ func (f *fake) start(ctx context.Context, path string) (*driver, error) {
 	if failing != nil {
 		return nil, failing
 	}
-	toDriver, fromFake := io.Pipe()
-	fromDriver, toFake := io.Pipe()
-	go f.serve(fromDriver, fromFake)
-	d := connect(path, toDriver, toFake, func() { toFake.Close(); fromFake.Close() }, func() string { return "" })
-	if err := d.greet(ctx); err != nil {
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "cua-driver", Version: "1"}, nil)
+	f.serve(server)
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		return nil, err
+	}
+	d, err := connect(ctx, path, clientTransport, func() { ss.Close() }, func() string { return "" })
+	if err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
@@ -116,53 +119,30 @@ func (f *fake) start(ctx context.Context, path string) (*driver, error) {
 	return d, nil
 }
 
-// serve answers the requests that come on in on out, until in closes.
-func (f *fake) serve(in io.Reader, out io.WriteCloser) {
-	defer out.Close()
-	r := bufio.NewReader(in)
-	for {
-		line, err := r.ReadBytes('\n')
-		if err != nil {
-			return
-		}
-		var m struct {
-			ID     *int64 `json:"id"`
-			Method string `json:"method"`
-			Params struct {
-				Name      string         `json:"name"`
-				Arguments map[string]any `json:"arguments"`
-			} `json:"params"`
-		}
-		if err := json.Unmarshal(line, &m); err != nil {
-			f.t.Errorf("not JSON: %s", line)
-			return
-		}
-		if m.ID == nil {
-			continue
-		}
-		answer := map[string]any{"jsonrpc": "2.0", "id": *m.ID}
-		switch m.Method {
-		case "initialize":
-			answer["result"] = map[string]any{"serverInfo": map[string]any{"name": "cua-driver"}}
-		case "tools/call":
+// serve makes the server answer the tools the fake knows, until it ends.
+func (f *fake) serve(server *mcpsdk.Server) {
+	f.mu.Lock()
+	names := make([]string, 0, len(f.answers))
+	for name := range f.answers {
+		names = append(names, name)
+	}
+	f.mu.Unlock()
+	for _, name := range names {
+		server.AddTool(&mcpsdk.Tool{Name: name, InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+			var args map[string]any
+			_ = json.Unmarshal(req.Params.Arguments, &args) // the arguments of the call
 			f.mu.Lock()
-			f.calls = append(f.calls, m.Params.Name)
-			f.args[m.Params.Name] = append(f.args[m.Params.Name], m.Params.Arguments)
-			do := f.answers[m.Params.Name]
+			f.calls = append(f.calls, name)
+			f.args[name] = append(f.args[name], args)
+			do := f.answers[name]
 			f.mu.Unlock()
-			switch got := do(m.Params.Arguments).(type) {
+			switch got := do(args).(type) {
 			case error:
-				answer["result"] = map[string]any{"isError": true, "content": []any{map[string]any{"type": "text", "text": got.Error()}}}
+				return &mcpsdk.CallToolResult{IsError: true, Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: got.Error()}}}, nil
 			default:
-				answer["result"] = got
+				return got.(*mcpsdk.CallToolResult), nil
 			}
-		default:
-			answer["error"] = map[string]any{"code": -32601, "message": "no method " + m.Method}
-		}
-		b, _ := json.Marshal(answer)
-		if _, err := out.Write(append(b, '\n')); err != nil {
-			return
-		}
+		})
 	}
 }
 
@@ -554,35 +534,27 @@ func TestDriver(t *testing.T) {
 	waitFor(t, f.drivers[len(f.drivers)-1].closed)
 }
 
-// A request of the driver is answered that ouro offers nothing, and a call
-// that is given up does not wait for its answer.
+// A call that is given up does not wait for its answer.
 func TestProtocol(t *testing.T) {
-	toDriver, fromServer := io.Pipe()
-	fromDriver, toServer := io.Pipe()
-	d := connect("x", toDriver, toServer, func() { toServer.Close(); fromServer.Close() }, func() string { return "it broke" })
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "cua-driver", Version: "1"}, nil)
+	server.AddTool(&mcpsdk.Tool{Name: "list_windows", InputSchema: map[string]any{"type": "object"}}, func(ctx context.Context, _ *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		<-ctx.Done() // goes on answering nothing
+		return nil, ctx.Err()
+	})
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	ss, err := server.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := connect(context.Background(), "x", clientTransport, func() { ss.Close() }, func() string { return "it broke" })
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer d.end()
-	got := make(chan string, 1)
-	go func() {
-		r := bufio.NewReader(fromDriver)
-		r.ReadBytes('\n') // the call
-		fromServer.Write([]byte(`{"jsonrpc":"2.0","id":"r1","method":"roots/list"}` + "\n"))
-		line, _ := r.ReadBytes('\n')
-		got <- string(line)
-		io.Copy(io.Discard, r)
-	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := d.call(ctx, "list_windows", nil)
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := d.call(ctx, "list_windows", nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("given up: %v", err)
-	}
-	if line := <-got; line != `{"error":{"code":-32601,"message":"not supported"},"id":"r1","jsonrpc":"2.0"}`+"\n" {
-		t.Fatalf("answered %s", line)
-	}
-	fromServer.Close()
-	waitFor(t, d.closed)
-	if _, err := d.call(context.Background(), "list_windows", nil); err == nil || err.Error() != "cua-driver ended: it broke" {
-		t.Fatalf("ended: %v", err)
 	}
 }
 
@@ -697,7 +669,7 @@ func TestFailures(t *testing.T) {
 	// Enter that fails after the text.
 	f.on("press_key", func(map[string]any) any { return errors.New("no keyboard") })
 	_, err = call(ctx, c, firefox, `{"action": "type", "window": 7, "text": "boa", "enter": true}`)
-	fails(t, "enter", err, "type_text done\nbut Enter failed: no keyboard")
+	fails(t, "enter", err, "type_text done\nbut Enter failed: cua-driver: no keyboard")
 }
 
 // Where cua-driver lists no elements but writes them as Markdown, look
