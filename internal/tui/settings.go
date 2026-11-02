@@ -490,11 +490,6 @@ func rows(s Settings) []row {
 		toggle = set("propose", Setting{Kind: plugin.SetImproves})
 	}
 	add(agentsSection, "Changes of ouro", improves, note, toggle)
-	add(agentsSection, "Memory archivist", cmp.Or(s.MemoryInterval, "off"),
-		"how often the archivist may revisit the memories; off turns it off, a duration like 24h turns it on",
-		editing("the interval of the archivist, like 24h, or off", cmp.Or(s.MemoryInterval, "off"), func(v string) Setting {
-			return Setting{Kind: plugin.SetMemoryInterval, Value: v}
-		}))
 	add(agentsSection, "Sessions the thread continues", s.ThreadWindow,
 		"how long after its last message the thread hands a message to a session; a duration like 3h",
 		editing("how long the thread continues a session, like 3h", s.ThreadWindow, func(v string) Setting {

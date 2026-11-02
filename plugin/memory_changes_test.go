@@ -3,7 +3,6 @@ package plugin_test
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,40 +72,3 @@ func TestOwnerListsAndUndoesMemoryChanges(t *testing.T) {
 // The interval of the archivist is read and set through the settings: an
 // invalid interval is refused and changes nothing, and a configuration that
 // cannot be read fails both.
-func TestMemoryInterval(t *testing.T) {
-	o, dir, _ := built(t, config.Config{Name: "alpha", Model: "m"})
-	if got, err := o.MemoryInterval(); err != nil || got != "off" {
-		t.Fatalf("absent: %q, %v", got, err)
-	}
-	holds, err := o.SetMemoryInterval("24h")
-	if err != nil || holds == "" {
-		t.Fatalf("set 24h: %q, %v", holds, err)
-	}
-	if got, err := o.MemoryInterval(); err != nil || got != "24h" {
-		t.Fatalf("after set: %q, %v", got, err)
-	}
-	cfg, err := config.Load(dir)
-	if err != nil || cfg.MemoryInterval == nil || *cfg.MemoryInterval != "24h" {
-		t.Fatalf("saved: %+v, %v", cfg.MemoryInterval, err)
-	}
-	if _, err := o.SetMemoryInterval("soon"); err == nil || !strings.Contains(err.Error(), "duration") {
-		t.Fatalf("an invalid interval: %v", err)
-	}
-	if cfg, err = config.Load(dir); err != nil || cfg.MemoryInterval == nil || *cfg.MemoryInterval != "24h" {
-		t.Fatalf("a refused interval changed the configuration: %+v, %v", cfg.MemoryInterval, err)
-	}
-	logged, _ := os.ReadFile(home.Dir(dir).Service().LogFile)
-	if !strings.Contains(string(logged), "the owner changed the settings: the interval of the memory archivist") {
-		t.Fatalf("the log lacks the setting: %s", logged)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := o.MemoryInterval(); err == nil {
-		t.Fatal("read the interval of a broken configuration")
-	}
-	if _, err := o.SetMemoryInterval("48h"); err == nil {
-		t.Fatal("set the interval of a broken configuration")
-	}
-}

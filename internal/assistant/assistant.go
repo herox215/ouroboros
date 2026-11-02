@@ -253,9 +253,6 @@ type Builder struct {
 	// memories that go into the prompt of the agent of the owner, see
 	// WithMemories. May be nil.
 	memories func() (*memory.Store, error)
-	// memoriesOf lists the stores of all profiles of the node, the first
-	// profile's first, see WithMemoryProfiles. May be nil.
-	memoriesOf func() []MemoryProfile
 	// node is set by WithConfig.
 	node *node
 	// allow keeps a call the owner allowed for good, see WithAllowing. May
@@ -329,18 +326,11 @@ type Assistant struct {
 	reviewing sync.Mutex
 	last      map[string]answered // the last answer by conversation, for a follow-up
 
-	learning   sync.Mutex
-	topics     map[string]*topicState // by conversation, see withTopic
-	idle       *time.Timer            // runs sweep once the owner left, see track
-	idleAfter  time.Duration          // how long the owner is away until then
-	stopped    bool                   // by Stop: idle is not started again
-	archiving  context.CancelFunc     // of the pass of the archivist, while one runs
-	archives   sync.WaitGroup         // of that pass, which StopArchive waits for
-	wakes      sync.WaitGroup         // of every wake, which StopArchive waits for after the pass
-	unarchived bool                   // by StopArchive: no pass starts again
-	active     time.Time              // when the owner was last heard of, see track
-	looked     time.Time              // when the archivist last looked at its time, see wake
-	due        *time.Timer            // runs wake once the archivist may look again, see waitUntil
+	learning  sync.Mutex
+	topics    map[string]*topicState // by conversation, see withTopic
+	idle      *time.Timer            // runs sweep once the owner left, see track
+	idleAfter time.Duration          // how long the owner is away until then
+	stopped   bool                   // by Stop: idle is not started again
 }
 
 // setup is the part of the configuration an agent is built from.
@@ -1095,11 +1085,7 @@ func (a *Assistant) Stop() {
 	if a.idle != nil {
 		a.idle.Stop()
 	}
-	if a.due != nil {
-		a.due.Stop()
-	}
 	a.learning.Unlock()
-	a.StopArchive()
 	a.answering.Lock()
 	for _, cancel := range a.answers {
 		cancel()
