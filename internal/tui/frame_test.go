@@ -66,14 +66,14 @@ func TestColumnsShowTheSessionsThatRun(t *testing.T) {
 		t.Fatalf("running: %v", list)
 	}
 	view := strip(m.View().Content)
-	for _, want := range []string{"RUNNING", "FIX", "State: working · own",
+	for _, want := range []string{"FIX", "State: working · own",
 		"● calls go test ./...", "next  the result of bash", "4 tools · 3 kinds", "THREAD · READY · 1 ACTIVE SESSION"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q beside the thread:\n%s", want, view)
 		}
 	}
 	// The sidebar lists them alone: the thread has no column on the right.
-	if m.railWidth() != 0 || strings.Count(view, "RUNNING") != 1 || strings.Count(view, "4 tools · 3 kinds") != 1 {
+	if m.railWidth() != 0 || strings.Count(view, "4 tools · 3 kinds") != 1 {
 		t.Fatalf("a column on the right beside the thread:\n%s", view)
 	}
 	if strings.Contains(view, "TESTS") || strings.Contains(view, "TODAY") {
@@ -93,7 +93,7 @@ func TestColumnsShowTheSessionsThatRun(t *testing.T) {
 		t.Fatalf("still running: %v", list)
 	}
 	view = strip(m.View().Content)
-	for _, want := range []string{"RUNNING", "Nothing runs."} {
+	for _, want := range []string{"Nothing runs."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q when nothing runs:\n%s", want, view)
 		}
@@ -468,7 +468,7 @@ func TestManyRunningSessionsBeside(t *testing.T) {
 	for _, r := range rows {
 		shown = shown || r.c == m.chat
 	}
-	if !shown || strip(rows[0].text) != "RUNNING" {
+	if !shown {
 		t.Fatalf("the sidebar does not scroll to the one shown: %+v", rows)
 	}
 }

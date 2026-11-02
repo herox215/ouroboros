@@ -145,6 +145,8 @@ In cyberpsycho mode, at the bottom left of the sidebar stands the integrity of t
 ran tests: `100% Integrity` when they passed, and a lower percentage when a package failed, the record keeping
 one failure at least. Before the first run it says `??% Integrity`. Outside that mode the tests gate the build,
 and the sidebar says nothing of them.
+While the thread is shown, its name stands at the top left of the sidebar as ASCII art, where the sidebar is wide
+enough for it; the list of the sessions that run starts below it and takes the room down to the bottom.
 `/context` shows what the context is: the system prompt, every tool with its schema
 and the conversation so far, message by message with its size. It is laid out to be read, not as a chat: every
 message has a head with its role and size and hangs on a bar of the color of its role, the functions a tool
