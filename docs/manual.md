@@ -395,7 +395,7 @@ So an answer does not depend on the UI:
   animation. The one shown is marked. What you type filters the list as you type it, by title and by the
   name of the peer; `backspace` takes a letter back, `esc` the whole filter and only then closes the dialog.
   `enter` shows the one selected, with an answer on its way as usual. When an answer
-  comes in in a conversation that is not shown, the footer says so (`answered in “…” · /session`). What you
+  comes in a conversation that is not shown, the footer says so (`answered in “…” · /session`). What you
   typed stays with the conversation you typed it in; `ctrl+s` takes you to the list without clearing it.
 - **Titles.** A conversation is named for its topic. With each of your first three messages, while the
   answer runs, the model of the node is asked for a title of a few words from what you and the agent said
