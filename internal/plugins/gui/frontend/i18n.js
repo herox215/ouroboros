@@ -187,6 +187,14 @@ const en = {
   'settings.password': 'Password (empty keeps the current login)',
   'settings.allowedUsers': 'Allowed user IDs (comma separated)',
   'settings.allowlistWarning': 'Allowlisted users are delegated this profile’s agent tools, INCLUDING permission answers, not just chat. An empty allowlist denies all users.',
+  'settings.mcp': 'MCP servers',
+  'settings.noMCP': 'No MCP server is configured for this profile.',
+  'settings.mcpFailed': 'The MCP operation failed. Check the configuration and try again.',
+  'settings.mcpTurnOn': 'Turn on',
+  'settings.mcpTurnOff': 'Turn off',
+  'settings.mcpSignIn': 'Sign in',
+  'settings.mcpSignOut': 'Sign out',
+  'settings.mcpSignInHint': 'The window cannot sign in to this server yet: sign in with ouro mcp login {name} in the terminal.',
 };
 
 const de = {
@@ -364,6 +372,14 @@ const de = {
   'settings.password': 'Passwort (leer behält die aktuelle Anmeldung)',
   'settings.allowedUsers': 'Erlaubte Benutzer-IDs (durch Komma getrennt)',
   'settings.allowlistWarning': 'Erlaubte Benutzer bekommen die Agent-Werkzeuge dieses Profils, EINSCHLIESSLICH der Antworten auf Berechtigungsfragen, nicht nur den Chat. Eine leere Liste verweigert allen Benutzern den Zugang.',
+  'settings.mcp': 'MCP-Server',
+  'settings.noMCP': 'Für dieses Profil ist kein MCP-Server eingerichtet.',
+  'settings.mcpFailed': 'Der MCP-Vorgang ist fehlgeschlagen. Prüfe die Konfiguration und versuche es erneut.',
+  'settings.mcpTurnOn': 'Einschalten',
+  'settings.mcpTurnOff': 'Ausschalten',
+  'settings.mcpSignIn': 'Anmelden',
+  'settings.mcpSignOut': 'Abmelden',
+  'settings.mcpSignInHint': 'Das Fenster kann sich noch nicht bei diesem Server anmelden: Melde dich im Terminal mit ouro mcp login {name} an.',
 };
 
 // The language the window shows, English unless another is picked.

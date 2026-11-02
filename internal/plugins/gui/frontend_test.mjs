@@ -1629,6 +1629,93 @@ test('gateway schema renders arbitrary fields without Matrix and clears all secr
   assert.equal(inputs[1].value, ''); assert.equal(inputs[5].value, '');
 });
 
+test('MCP page lists the servers with their status and switches servers, tools and sign-ins', async () => {
+  const doc = documentFixture(), calls = [];
+  const picker = createSettingsDialog({
+    MCPServers: async index => { calls.push(['list', index]); return [
+      { Name: 'fixture', How: 'https://example.invalid/mcp', Status: 'connected', Tools: [
+        { Name: 'search', Description: 'Search tickets', On: true }, { Name: 'write', On: false }] },
+      { Name: 'authy', How: 'node authy.js', Status: 'needs authentication', Tools: [] },
+      { Name: 'off', How: 'node off.js', Disabled: true, Status: 'disabled', Tools: [] },
+    ]; },
+    MCPSetServer: async (...args) => { calls.push(['server', ...args]); },
+    MCPSetTool: async (...args) => { calls.push(['tool', ...args]); },
+    MCPLogin: async (...args) => { calls.push(['login', ...args]); },
+    MCPLogout: async (...args) => { calls.push(['logout', ...args]); },
+  }, {}, doc);
+  picker.open(1, 'Work');
+  const dialog = doc.body.children.at(-1);
+  dialog.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click')); await settle();
+  const blocks = () => dialog.children.find(e => e.className === 'mcp-list').children;
+  const actions = block => block.children.find(e => e.className === 'mcp-actions').children;
+  const press = (block, text) => actions(block).find(e => e.textContent === text).dispatchEvent(new Event('click'));
+  assert.deepEqual(calls, [['list', 1]], 'the page reads the profile it was opened for');
+  assert.equal(blocks().length, 3);
+  assert.equal(blocks()[0].children[0].textContent, 'fixture');
+  assert.equal(blocks()[0].children[1].textContent, 'https://example.invalid/mcp · connected');
+  assert.equal(blocks()[1].children[1].textContent, 'node authy.js · needs authentication');
+  assert.equal(blocks()[2].children[1].textContent, 'node off.js · disabled');
+  const tools = () => blocks()[0].children.find(e => e.className === 'mcp-tools');
+  assert.deepEqual(tools().children.map(e => e.children[0].textContent), ['search · Search tickets', 'write']);
+  assert.deepEqual(tools().children.map(e => e.children[1].textContent), ['Turn off', 'Turn on']);
+  assert.deepEqual(actions(blocks()[0]).map(e => e.textContent), ['Turn off', 'Sign out']);
+  assert.deepEqual(actions(blocks()[1]).map(e => e.textContent), ['Turn off', 'Sign in', 'Sign out']);
+  assert.deepEqual(actions(blocks()[2]).map(e => e.textContent), ['Turn on'], 'a server that is off signs nothing');
+  assert.ok(!blocks()[0].children.some(e => /ouro mcp login/.test(e.textContent)), 'a bridge that signs in needs no command');
+  press(blocks()[0], 'Turn off'); await settle();
+  const last = kind => calls.filter(c => c[0] === kind).at(-1);
+  assert.deepEqual(last('server'), ['server', 1, 'fixture', false]);
+  assert.equal(calls.filter(c => c[0] === 'list').length, 2, 'a switch rereads the servers');
+  tools().children[1].children[1].dispatchEvent(new Event('click')); await settle();
+  assert.deepEqual(last('tool'), ['tool', 1, 'fixture', 'write', true]);
+  press(blocks()[1], 'Sign in'); await settle();
+  assert.deepEqual(last('login'), ['login', 1, 'authy']);
+  press(blocks()[1], 'Sign out'); await settle();
+  assert.deepEqual(last('logout'), ['logout', 1, 'authy']);
+  press(blocks()[2], 'Turn on'); await settle();
+  assert.deepEqual(last('server'), ['server', 1, 'off', true]);
+});
+
+test('MCP page names the terminal command where the bridge cannot sign in', async () => {
+  const doc = documentFixture();
+  createSettingsDialog({ MCPServers: async () => [{ Name: 'authy', How: 'node authy.js', Status: 'needs authentication' }] }, {}, doc).open(0, 'node');
+  const dialog = doc.body.children.at(-1);
+  dialog.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click')); await settle();
+  const block = dialog.children.find(e => e.className === 'mcp-list').children[0];
+  const actions = block.children.find(e => e.className === 'mcp-actions');
+  assert.ok(!actions.children.some(e => e.textContent === 'Sign in'));
+  assert.equal(block.children.find(e => e.tagName === 'p' && /ouro mcp login/.test(e.textContent)).textContent,
+    'The window cannot sign in to this server yet: sign in with ouro mcp login authy in the terminal.');
+});
+
+test('MCP page says so without servers and keeps backend errors out of the dialog', async () => {
+  const empty = documentFixture();
+  createSettingsDialog({ MCPServers: async () => [] }, {}, empty).open(0, 'node');
+  const emptyDialog = empty.body.children.at(-1);
+  emptyDialog.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click')); await settle();
+  assert.equal(emptyDialog.children.find(e => e.tagName === 'p').textContent, 'No MCP server is configured for this profile.');
+  assert.ok(!emptyDialog.children.some(e => e.className === 'mcp-server'));
+  const doc = documentFixture();
+  createSettingsDialog({ MCPServers: async () => { throw Error('token=secret'); } }, {}, doc).open(0, 'node');
+  const dialog = doc.body.children.at(-1);
+  dialog.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click')); await settle();
+  const status = dialog.children.find(e => e.tagName === 'p');
+  assert.equal(status.textContent, 'The MCP operation failed. Check the configuration and try again.');
+  assert.ok(!status.textContent.includes('secret'));
+  const failing = documentFixture();
+  createSettingsDialog({
+    MCPServers: async () => [{ Name: 'fixture', How: 'node fixture.js', Status: 'connected' }],
+    MCPSetServer: async () => { throw Error('no'); },
+  }, {}, failing).open(0, 'node');
+  const switched = failing.body.children.at(-1);
+  switched.children.find(e => e.textContent === 'MCP servers').dispatchEvent(new Event('click')); await settle();
+  switched.children.find(e => e.className === 'mcp-list').children[0]
+    .children.find(e => e.className === 'mcp-actions').children[0].dispatchEvent(new Event('click')); await settle();
+  const line = switched.children.find(e => e.tagName === 'p');
+  assert.equal(line.hidden, false, 'a failed switch shows where the list is quiet');
+  assert.equal(line.textContent, 'The MCP operation failed. Check the configuration and try again.');
+});
+
 test('settings pages close with the X in the corner and go back with the arrow', async () => {
   const doc = documentFixture();
   createSettingsDialog({ Gateways: async () => [{ Name: 'matrix', Title: 'Matrix' }] }, {}, doc).open(0, 'node');

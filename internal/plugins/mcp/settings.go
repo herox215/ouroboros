@@ -144,5 +144,44 @@ func (m *manager) setEnabled(ctx context.Context, server string, on bool) error 
 
 // service is what a front end reads of the servers, see plugin.MCP.
 func (m *manager) service() plugin.MCP {
-	return plugin.MCP{Servers: m.settings, SetTool: m.setTool, SetServer: m.setEnabled}
+	return plugin.MCP{
+		Servers:   m.settings,
+		SetTool:   m.setTool,
+		SetServer: m.setEnabled,
+		SignIn:    m.signIn,
+		Logout:    m.logout,
+	}
+}
+
+// signIn signs the server in: the page of its authorization server opens in
+// the browser of the owner, and the flow waits for it to come back. It is the
+// one call of this plugin that opens a browser, and a front end calls it only
+// where the owner asked for a sign-in.
+func (m *manager) signIn(ctx context.Context, server string) error {
+	servers, err := m.configured()
+	if err != nil {
+		return err
+	}
+	cfg, ok := servers[server]
+	if !ok {
+		return fmt.Errorf("there is no MCP server called %q", server)
+	}
+	st := m.server(server, cfg)
+	st.drop()
+	attempt, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectTimeout+signInTimeout)
+	defer cancel()
+	_, err = m.connect(attempt, st, true)
+	return err
+}
+
+// logout drops what the server signs in with, and ends its connection: the
+// next call needs a sign-in again.
+func (m *manager) logout(ctx context.Context, server string) error {
+	if err := m.forget(server); err != nil {
+		return err
+	}
+	if st := m.state(server); st != nil {
+		st.drop()
+	}
+	return nil
 }

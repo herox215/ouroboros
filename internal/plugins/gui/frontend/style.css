@@ -132,11 +132,20 @@ a { color: var(--accent); }
 /* The settings pages put their buttons straight into the dialog and its form:
    styled like the actions above, with room around them, and rounded, so that
    the focus ring follows their corners. */
-.settings-dialog > button, .settings-dialog form > button { margin: 12px 10px 0 0; padding: 8px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-.settings-dialog > button:hover:not(:disabled), .settings-dialog form > button:hover:not(:disabled) { background: var(--hover); }
+.settings-dialog > button, .settings-dialog form > button, .settings-dialog .mcp-server button { margin: 12px 10px 0 0; padding: 8px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.settings-dialog > button:hover:not(:disabled), .settings-dialog form > button:hover:not(:disabled), .settings-dialog .mcp-server button:hover:not(:disabled) { background: var(--hover); }
 .settings-dialog form > button[type="submit"] { background: var(--hover); border-color: var(--line-strong); }
 .settings-dialog > p, .settings-dialog form > p { margin-top: 16px; font-size: 13px; color: var(--muted); }
 .settings-dialog :focus-visible { outline-offset: 2px; }
+/* An MCP server in the settings: its name, how it is and the switches for it,
+   and its tools below, each a line of its own that keeps its text and puts the
+   switch at its end. */
+.mcp-server { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.mcp-server > p { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.mcp-tools { margin: 10px 0 0 16px; }
+.mcp-tools > div { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; font-size: 13px; }
+.mcp-tools > div > span { flex: 1; min-width: 0; }
+.settings-dialog .mcp-tools button { margin: 0; padding: 4px 12px; }
 main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 24px 0 10px; border-bottom: 0; transition: padding-left var(--sidebar-motion); }
 .session-heading { min-width: 0; flex: 1; }

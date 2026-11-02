@@ -44,6 +44,7 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     page(t('settings.title') + ' · ' + name);
     dialog.append(button(t('settings.model'), () => { dialog.close(); modelDialog.open(profile, name, () => show(profile, name)); }));
     dialog.append(button(t('settings.gateways'), gateways));
+    dialog.append(button(t('settings.mcp'), mcpServers));
     dialog.append(button(t('settings.memory'), memories));
     dialog.append(button(t('settings.thread'), threadWindow));
     const label = el('label', t('settings.appearance'));
@@ -222,6 +223,63 @@ export function createSettingsDialog(bridge, modelDialog, doc = document, theme 
     };
     form.addEventListener('submit', event => { event.preventDefault(); submit(false); });
     dialog.append(form);
+  };
+  // The MCP servers of the profile: how each is reached and how it is, a
+  // switch for the server, the sign-in it may ask for, and below a connected
+  // server its tools, each with a switch. A switch holds at once, so there is
+  // no save.
+  const mcpServers = async () => {
+    page(t('settings.title') + ' › ' + t('settings.mcp'), home);
+    const current = ++version;
+    const status = el('p', t('dialog.loading'));
+    status.setAttribute('role', 'status');
+    const list = el('div'); list.className = 'mcp-list';
+    dialog.append(status, list);
+    // A sign-in opens the browser of the owner and waits for the server to
+    // answer; the bridge carries it once the MCP plugin offers it, and until
+    // then the page names the command that signs in.
+    const login = typeof bridge.MCPLogin === 'function', logout = typeof bridge.MCPLogout === 'function';
+    const change = async run => {
+      if (busy) return;
+      busy = true;
+      try { await run(); await load(); }
+      catch { if (current === version && dialog.open) { status.textContent = t('settings.mcpFailed'); status.hidden = false; } }
+      finally { busy = false; }
+    };
+    const toggle = (on, run) => button(on ? t('settings.mcpTurnOff') : t('settings.mcpTurnOn'), () => change(() => run(!on)));
+    const server = item => {
+      const block = el('div'); block.className = 'mcp-server';
+      block.append(el('strong', item.Name));
+      block.append(el('p', [item.How, item.Status].filter(Boolean).join(' · ')));
+      const actions = el('div'); actions.className = 'mcp-actions';
+      const on = !item.Disabled, auth = item.Status === 'needs authentication';
+      actions.append(toggle(on, next => bridge.MCPSetServer(profile, item.Name, next)));
+      if (auth && login) actions.append(button(t('settings.mcpSignIn'), () => change(() => bridge.MCPLogin(profile, item.Name))));
+      if (logout && (on || auth)) actions.append(button(t('settings.mcpSignOut'), () => change(() => bridge.MCPLogout(profile, item.Name))));
+      block.append(actions);
+      if (auth && !login) block.append(el('p', t('settings.mcpSignInHint', { name: item.Name })));
+      if (item.Tools?.length) {
+        const tools = el('div'); tools.className = 'mcp-tools';
+        for (const tool of item.Tools) {
+          const line = el('div');
+          line.append(el('span', tool.Description ? `${tool.Name} · ${tool.Description}` : tool.Name));
+          line.append(toggle(tool.On, next => bridge.MCPSetTool(profile, item.Name, tool.Name, next)));
+          tools.append(line);
+        }
+        block.append(tools);
+      }
+      return block;
+    };
+    const load = async () => {
+      let found;
+      try { found = await bridge.MCPServers(profile) || []; }
+      catch { if (current === version && dialog.open) { status.textContent = t('settings.mcpFailed'); status.hidden = false; list.replaceChildren(); } return; }
+      if (current !== version || !dialog.open) return;
+      status.textContent = found.length ? '' : t('settings.noMCP');
+      status.hidden = !status.textContent;
+      list.replaceChildren(...found.map(server));
+    };
+    await load();
   };
   const show = (index, label = '') => {
     if (dialog.open) return;

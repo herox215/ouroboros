@@ -18,6 +18,12 @@ type MCP struct {
 	// SetServer turns a whole server on or off: its tools are gone while it
 	// is off, and nothing starts for it.
 	SetServer func(ctx context.Context, server string, on bool) error
+	// SignIn signs the node in to the server. It opens the browser of the
+	// owner and waits for the answer, so only an owner who asked for it
+	// calls it, and the front end says that it waits.
+	SignIn func(ctx context.Context, server string) error
+	// Logout drops what the server signs in with, and ends its connection.
+	Logout func(ctx context.Context, server string) error
 }
 
 // MCPServer is one MCP server as a front end shows it.
