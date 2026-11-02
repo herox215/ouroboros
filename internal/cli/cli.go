@@ -79,6 +79,7 @@ import (
 	"ouroboros/internal/plugins/gui"
 	historyplugin "ouroboros/internal/plugins/history"
 	matrixplugin "ouroboros/internal/plugins/matrix"
+	mcpplugin "ouroboros/internal/plugins/mcp"
 	memoryplugin "ouroboros/internal/plugins/memory"
 	nodeplugin "ouroboros/internal/plugins/node"
 	openaiplugin "ouroboros/internal/plugins/openai"
@@ -199,6 +200,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		browserplugin.Plugin(dir.Browser()),
 		websearch.Plugin(),
 		computerplugin.Plugin(),
+		mcpplugin.Plugin(dir),
 		historyplugin.Plugin(dir),
 		memoryplugin.Plugin(dir),
 		scheduleplugin.Plugin(dir),
