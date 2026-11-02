@@ -651,11 +651,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// What is below the conversation grows and shrinks with what is
 	// written, asked, offered and pending, and with it the room for the
 	// conversation.
-	defer func(rows int) {
-		if m.bottomRows() != rows || m.input.Height() != m.composerRows() {
+	defer func(rows, left int) {
+		// The column on the right comes and goes with the conversation
+		// shown: what it leaves goes to the middle, so the width of the
+		// conversation changes with it, and where it begins.
+		if m.bottomRows() != rows || m.input.Height() != m.composerRows() || m.history.Width() != m.transcriptWidth() || m.transcriptLeft() != left {
 			m.layout()
 		}
-	}(m.bottomRows())
+	}(m.bottomRows(), m.transcriptLeft())
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
