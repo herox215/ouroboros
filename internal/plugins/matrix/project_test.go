@@ -42,7 +42,7 @@ func TestRoomShowsAndChangesTheProject(t *testing.T) {
 		}
 	}
 
-	if got := reply("/project"); !strings.HasPrefix(got, "No project:") {
+	if got := reply("/project"); !strings.HasPrefix(got, "No project:") || strings.Contains(got, "/cd") {
 		t.Fatalf("a conversation without a project: %q", got)
 	}
 	sessions.set(plugin.SessionEvent{Kind: plugin.SessionDirectory, Text: "/home/owner/project"})

@@ -233,10 +233,12 @@ func (c *conversations) project(ctx context.Context, who plugin.GatewayIdentity,
 
 // projectLine says where the conversation works, as a room is told it: the
 // one conversation of the owner is shared by every room and by the terminal,
-// so its project is no property of a room.
+// so its project is no property of a room. A room talks in the thread, which
+// has no project: work on one is asked for, and the thread starts a session
+// there, so the line names no /cd PATH.
 func projectLine(project string) string {
 	if project == "" {
-		return "No project: this conversation runs in the profile workspace. /cd PATH names a project."
+		return "No project: the thread works in the workspace of ouro alone. For work on a project, just ask: the thread starts a session there."
 	}
 	return "Project: " + project
 }

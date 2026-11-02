@@ -117,12 +117,10 @@ contain agent output and questions, not raw tool arguments, raw tool output or
 hidden reasoning. Ordinary messages go to the thread, or answer the pending
 question when there is one. Just send your answer; for numbered options, sending
 the number selects that option. /answer YOUR ANSWER remains available. Use
-/cancel to stop what the thread and its sessions work on. A room says where the
-shared conversation works and moves it: /project (or /cd) answers with its
-project directory, /cd PATH changes it, /cd --workspace returns to the profile
-workspace. The project is the thread's, so it is the same one the terminal shows;
-relative paths of tools and the project scope of memories resolve there, and a
-conversation that answers or works on a delegated task is not moved. Pictures go
+/cancel to stop what the thread and its sessions work on. A room talks in the
+thread, which has no project: /project (or /cd) says so, and /cd PATH is
+refused. The thread works in the workspace of ouro alone; for work on a project,
+ask for it, and the thread starts a session there. Pictures go
 to the session the thread hands the message to. The bot types while anything works for
 the thread, and not while it waits for an answer.
 
