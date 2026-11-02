@@ -139,7 +139,7 @@ is shown as `TPS unknown`. Costs use the API-reported USD `usage.cost`, when ava
 shows `cost included in plan`. Missing costs are unknown, never assumed to be zero. The session total
 is accumulated since the node started and marked `(partial)` if any calls have unknown costs. No
 model-price estimate is currently applied. On narrow terminals the footer cuts them off; `/context`
-provides the detailed metrics. The footer of the thread shows none of these figures, as the thread is the
+provides the detailed metrics. The footer of the thread shows none of these figures (neither the context nor the cache rate, TPS or cost), as the thread is the
 room of the node and no session of the owner's; `/context` there tells them.
 In cyberpsycho mode, at the bottom left of the sidebar stands the integrity of the last [`rebuild`](#updates) that
 ran tests: `100% Integrity` when they passed, and a lower percentage when a package failed, the record keeping
