@@ -18,6 +18,7 @@ func (m *Model) keybindings() []keybinding {
 	keys := []keybinding{
 		{"enter", "send"},
 		{"shift+enter", "a new line"},
+		{"alt+enter", "a new line too, as esc then enter"},
 		{"↑ ↓", "bring back what you entered, the latest first"},
 		{"↑ in an empty input", "take back the last message that is queued"},
 		{"tab", "complete the command that is typed"},

@@ -29,9 +29,8 @@ const (
 	sideFrom         = 80     // a narrower window has no sidebar
 	railFrom         = 120    // and no column on the right, unless the jobs are listed there
 	transcriptMax    = 140    // how wide the conversation is at most
-	sendWidth        = 3      // the button that sends, " ↑ "
 	stopWidth        = 6      // the button that stops the answer, " Stop "
-	buttonsWidth     = 2 + stopWidth + sendWidth
+	buttonsWidth     = 2 + stopWidth
 	promptWidth      = 2  // "› " before the composer
 	columnPad        = 2  // the margin inside the columns beside the conversation
 	composerShare    = 30 // percent of the window the composer grows to at most
@@ -95,20 +94,24 @@ func (m *Model) headerHeight() int {
 // historyTop is the row of the screen the conversation begins at.
 func (m *Model) historyTop() int { return m.headerHeight() }
 
+// composerTop is the row of the screen the composer begins at: below the
+// status, the line above it, and what is asked or offered there.
+func (m *Model) composerTop() int {
+	row := m.historyTop() + m.chatHeight() + 2
+	if panel := m.panelLines(); len(panel) > 0 {
+		row += len(panel) + 1
+	}
+	return row
+}
+
 // composerInner is how wide the field of the composer is: what the prompt
 // and the buttons leave of it.
 func (m *Model) composerInner() int { return max(1, m.transcriptWidth()-promptWidth-buttonsWidth) }
 
-// composerRows is how many rows the composer takes: as many as what is
-// written needs, from one to a share of the window.
-func (m *Model) composerRows() int {
-	w := m.composerInner()
-	rows := 0
-	for _, line := range strings.Split(m.chat.showLabels(m.input.Value()), "\n") {
-		rows += max(1, (ansi.StringWidth(line)+w)/w)
-	}
-	return min(max(1, rows), max(1, m.height*composerShare/100))
-}
+// composerRows is how many rows the composer takes: as many as the field
+// shows of what is written, from one to a share of the window, see layout.
+// The field wraps its own lines, so it is what knows how many there are.
+func (m *Model) composerRows() int { return max(1, m.input.Height()) }
 
 // bottomRows is how many rows are below the conversation: the line of the
 // status, the line above the composer, what is asked or offered above it,
@@ -400,17 +403,13 @@ func (m *Model) activeSessions() int {
 }
 
 // composerLines is the composer, w cells wide: the prompt, the field and on
-// its last row the buttons that stop and send.
+// its last row the button that stops the answer.
 func (m *Model) composerLines(w int) []string {
 	inner := m.composerInner()
-	field := strings.Split(m.chat.showLabels(m.input.View()), "\n")
+	field := markLines(strings.Split(m.chat.showLabels(m.input.View()), "\n"), m.inputSel, 0)
 	stop := strings.Repeat(" ", stopWidth)
 	if m.chat.pending && m.chat.peer == "" {
 		stop = lipgloss.NewStyle().Foreground(bad).Background(ui.errBackground).Render(" Stop ")
-	}
-	send := lipgloss.NewStyle().Foreground(muted).Background(ui.field).Render(" ↑ ")
-	if m.canSend() {
-		send = boldStyle.Foreground(accent).Background(ui.hover).Render(" ↑ ")
 	}
 	lines := make([]string, len(field))
 	for i, f := range field {
@@ -420,16 +419,11 @@ func (m *Model) composerLines(w int) []string {
 		}
 		buttons := strings.Repeat(" ", buttonsWidth)
 		if i == len(field)-1 {
-			buttons = " " + stop + " " + send
+			buttons = " " + stop + " "
 		}
 		lines[i] = pad(prompt+pad(f, inner)+buttons, w)
 	}
 	return lines
-}
-
-// canSend reports whether what is written can be sent.
-func (m *Model) canSend() bool {
-	return m.status.Configured && m.chat.peer == "" && strings.TrimSpace(m.input.Value()) != ""
 }
 
 // panelHeight reserves the composer, controls and one history row before

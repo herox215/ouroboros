@@ -444,6 +444,8 @@ type Model struct {
 	glide         *glide     // the viewport on its way to a line, if one is
 	selected      *selection // what the mouse selected of the history
 	pressed       *spot      // where the mouse went down, before the drag began
+	inputSel      *selection // what the mouse selected of the composer
+	inputPress    *spot      // where it went down there, before the drag began
 	hover         hover      // where the mouse rests, and the picture it shows there
 	graphics      graphics   // what the terminal told of its pictures
 	spinner       spinner.Model
@@ -481,7 +483,15 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 	input.Prompt = ""
 	input.SetHeight(1)
 	input.SetStyles(inputStyles(false))
-	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	// alt+enter is how esc then enter arrives, which is the way to a new line
+	// in a terminal that sends enter for shift+enter, like macOS Terminal.
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter"))
+	// The field grows with what is written, up to the share of the window
+	// layout() gives it, and scrolls within it beyond that. It sizes itself,
+	// so that it never shows a line scrolled out while it still has room.
+	input.DynamicHeight = true
+	input.MinHeight = 1
+	input.MaxContentHeight = 1 << 20 // the height below caps the room, not what is written
 
 	history := viewport.New()
 	history.KeyMap = viewport.KeyMap{} // keys go to the input; scrolling is handled explicitly
@@ -892,7 +902,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.paste(pasted.Content)
 		}
+		value := m.input.Value()
 		m.input, cmd = m.input.Update(msg)
+		if m.input.Value() != value {
+			m.inputSel, m.inputPress = nil, nil // the text under the selection moved
+		}
 		return m, cmd
 	}
 	return m, nil
@@ -984,7 +998,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	typed := m.input.Value()
 	m.input, cmd = m.input.Update(msg)
 	if m.input.Value() != typed {
-		m.suggest = 0 // other commands fit now
+		m.inputSel, m.inputPress = nil, nil // the text under the selection moved
+		m.suggest = 0                       // other commands fit now
 		m.chat.asking.write()
 	}
 	return cmd

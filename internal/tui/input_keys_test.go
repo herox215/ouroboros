@@ -12,7 +12,7 @@ func TestChatNewlineKeys(t *testing.T) {
 		key  tea.KeyPressMsg
 		want string
 	}{
-		{"alt+enter", tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}, "hello"},
+		{"alt+enter", tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}, "hello\n"},
 		{"shift+enter", tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}, "hello\n"},
 		{"ctrl+j", tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl}, "hello"}, // it shows the jobs
 	} {

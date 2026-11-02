@@ -86,8 +86,8 @@ func TestComposerClickWordWrappedCells(t *testing.T) {
 
 func TestComposerClickScrolledWrap(t *testing.T) {
 	m, _ := newModel(t)
+	m.input.MaxHeight = 3 // the field scrolls within this fixture
 	m.input.SetWidth(12)
-	m.input.SetHeight(3)
 	m.input.SetValue("one two three four five six seven eight nine ten")
 	m.input, _ = m.input.Update(nil)
 	m.input.MoveToEnd()
