@@ -589,6 +589,9 @@ type relayed struct {
 	se       *session
 	question json.RawMessage
 	id       string // of the Asked of the thread
+	context  string // what the answer said before it asked, shown in the thread too
+	// contextID is the occurrence of the Say context is of, "" for none.
+	contextID string
 }
 
 // relay queues the complete result of a routed answer for the thread agent
@@ -647,10 +650,57 @@ func (s *Service) asking(se *session, question json.RawMessage) {
 		return
 	}
 	thread := s.get(ThreadID)
-	thread.questions = append(thread.questions, &relayed{se: se, question: question})
+	contextID, context := saidBefore(thread, se)
+	thread.questions = append(thread.questions, &relayed{se: se, question: question, context: context, contextID: contextID})
 	if len(thread.questions) == 1 {
 		s.ask1(thread)
 	}
+}
+
+// saidKept is how much of what a session said before its question the thread
+// shows with it: enough for the owner to know what the question refers to.
+const saidKept = 1200
+
+// saidBefore is what the answer on its way in se said last before it asked
+// the owner, "" if it said nothing since the owner's message: the thread
+// shows it with the question, which alone would refer to what the owner
+// cannot see there.
+func saidBefore(thread, se *session) (id, text string) {
+	for _, e := range slices.Backward(se.events) {
+		switch e.Kind {
+		case Say:
+			text := strings.TrimSpace(e.Text)
+			if text == "" {
+				continue
+			}
+			if saidThere(thread, e) {
+				// The thread shows it already, right before the question:
+				// what a tool said, see saying, or what an earlier question
+				// of this answer came with. An older Say would come after it.
+				return "", ""
+			}
+			if len(text) > saidKept {
+				// What leads to the question is at the end.
+				text = "…" + strings.ToValidUTF8(text[len(text)-saidKept:], "")
+			}
+			return e.PresentationID, text
+		case Message, Task, Answer, Failed, Canceled:
+			return "", "" // the question's answer began here: what came before is another answer
+		}
+	}
+	return "", ""
+}
+
+// saidThere reports whether thread shows the Say e of se already: what a
+// tool said to the owner on the way goes there as it is said, see saying,
+// so that it does not come again with the question. s.mu is held.
+func saidThere(thread *session, e Event) bool {
+	if e.PresentationID == "" {
+		return false
+	}
+	return slices.ContainsFunc(thread.events, func(t Event) bool {
+		return t.Kind == Say && t.PresentationID == e.PresentationID
+	})
 }
 
 // forThread reports whether se works for the thread: the answer on its way
@@ -692,6 +742,15 @@ func (s *Service) withdraw(se *session) {
 func (s *Service) ask1(thread *session) {
 	q := thread.questions[0]
 	q.id = presentation.NewID()
+	if q.context != "" {
+		// As the Say of the session it is, so that a second question of the
+		// same answer does not bring it again, see saidThere.
+		id := q.contextID
+		if id == "" {
+			id = presentation.NewID()
+		}
+		s.emit(thread, Event{Kind: Say, PresentationID: id, Text: q.context})
+	}
 	s.emit(thread, Event{Kind: Asked, PresentationID: q.id, Args: q.question})
 }
 
