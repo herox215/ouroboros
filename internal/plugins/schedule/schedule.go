@@ -49,7 +49,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 }
 
 // life serializes complete Start/Stop transitions. mu protects the store,
-// timer wakeups and active IDs; Stop never waits with mu held.
+// timer wakeups, the run parent and active IDs; Stop never waits with mu held.
 type scheduler struct {
 	life     sync.Mutex
 	mu       sync.Mutex
@@ -60,6 +60,7 @@ type scheduler struct {
 	now      func() time.Time
 	limit    time.Duration
 	cancel   context.CancelFunc
+	root     context.Context
 	wake     chan struct{}
 	done     chan struct{}
 	active   map[string]bool
@@ -103,6 +104,7 @@ func (s *scheduler) start() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
+	s.root = ctx
 	s.wake = make(chan struct{}, 1)
 	s.done = make(chan struct{})
 	s.active = make(map[string]bool)
@@ -181,7 +183,7 @@ func (s *scheduler) tick(ctx context.Context) time.Duration {
 		default:
 			s.active[job.ID] = true
 			s.wg.Add(1)
-			go s.run(ctx, job, now)
+			go s.run(ctx, job, now, false)
 		}
 	}
 	delay := time.Hour
@@ -204,15 +206,20 @@ func (s *scheduler) finish(id string, run store.Run) {
 		s.report("finish %s: %v", id, err)
 	}
 }
-func (s *scheduler) run(parent context.Context, job store.Job, now time.Time) {
+func (s *scheduler) run(parent context.Context, job store.Job, now time.Time, manual bool) {
 	defer s.wg.Done()
 	ctx, cancel := context.WithTimeout(parent, s.limit)
 	defer cancel()
 	run := store.Run{At: now, Status: "completed"}
-	if now.Sub(job.Next) > time.Minute {
+	if !manual && now.Sub(job.Next) > time.Minute {
 		run.Status = "late"
 	}
-	text := fmt.Sprintf("[Scheduled job %q (%s), planned for %s; running at %s. The owner created it on %s. This is a generated scheduled request, not a message from the owner now.]\n\n%s", job.Name, job.ID, readable(job.Next, job.Zone), readable(now, job.Zone), job.Created.Format(time.RFC3339), job.Text)
+	var text string
+	if manual {
+		text = fmt.Sprintf("[Scheduled job %q (%s), run now at %s at the owner's request. The owner created it on %s. This is a generated scheduled request, not a message from the owner now.]\n\n%s", job.Name, job.ID, readable(now, job.Zone), job.Created.Format(time.RFC3339), job.Text)
+	} else {
+		text = fmt.Sprintf("[Scheduled job %q (%s), planned for %s; running at %s. The owner created it on %s. This is a generated scheduled request, not a message from the owner now.]\n\n%s", job.Name, job.ID, readable(job.Next, job.Zone), readable(now, job.Zone), job.Created.Format(time.RFC3339), job.Text)
+	}
 	id, result, err := s.sessions.RunScheduled(ctx, job.Name, text, job.Directory, job.Ask != "never")
 	run.Session = id
 	if err == nil {
@@ -239,6 +246,40 @@ func (s *scheduler) run(parent context.Context, job store.Job, now time.Time) {
 	defer s.mu.Unlock()
 	delete(s.active, job.ID)
 	s.finish(job.ID, run)
+}
+
+// runNow executes a job at once, without a claim and without changing its
+// schedule. It is recorded in the job's history like a scheduled run, whose
+// request names the owner's request instead of a planned time. A job that is
+// still running is not started a second time.
+func (s *scheduler) runNow(id string) (string, error) {
+	s.mu.Lock()
+	if err := s.open(); err != nil {
+		s.mu.Unlock()
+		return "", err
+	}
+	job, err := s.store.Get(id)
+	if err != nil {
+		s.mu.Unlock()
+		return "", err
+	}
+	if s.active == nil {
+		s.active = make(map[string]bool)
+	}
+	if s.active[id] {
+		s.mu.Unlock()
+		return "", fmt.Errorf("scheduled job %q is already running", job.Name)
+	}
+	s.active[id] = true
+	parent := s.root
+	if parent == nil {
+		parent = context.Background()
+	}
+	now := s.now()
+	s.wg.Add(1)
+	s.mu.Unlock()
+	go s.run(parent, job, now, true)
+	return fmt.Sprintf("Scheduled job %q (%s) is running now. The run appears in its history and its result goes to the owner's thread.", job.Name, job.ID), nil
 }
 func firstLine(text string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
@@ -334,12 +375,16 @@ func (a updateArgs) validate() error {
 		if strings.TrimSpace(a.ID) == "" || !a.fields() {
 			return errors.New("update requires id and at least one changed field")
 		}
+	case "run":
+		if strings.TrimSpace(a.ID) == "" || a.fields() {
+			return errors.New("run requires only action and id")
+		}
 	case "remove":
 		if strings.TrimSpace(a.ID) == "" || a.fields() {
 			return errors.New("remove requires only action and id")
 		}
 	default:
-		return errors.New("action must be create, update or remove")
+		return errors.New("action must be create, update, run or remove")
 	}
 	if a.At != nil && a.Cron != nil {
 		return errors.New("supply at or cron, not both")
@@ -446,7 +491,7 @@ func (s *scheduler) tools() []plugin.Tool {
 	const about = "Owner-only scheduled model answers: every run uses the model and costs money. Results and, by default, questions go to the owner's thread. Times without an offset use the node's time zone. "
 	return []plugin.Tool{
 		{Name: Read, OwnerOnly: true, Description: about + "List jobs and their next run, or read one job with its last ten runs by id.", Schema: `{"type":"object","properties":{"id":{"type":"string"}},"additionalProperties":false}`, Run: s.read},
-		{Name: Update, OwnerOnly: true, Description: about + "Manage jobs with action create, update or remove. Create requires name, text and exactly one of at (RFC3339 or local YYYY-MM-DDTHH:MM) or cron (five fields); ask defaults to thread, or never for unattended runs. The current conversation's project is saved automatically. Update requires id and changed fields; at and cron replace each other. Remove takes only action and id. At most 32 jobs; recurring runs must be at least 15 minutes apart. Returns the saved job and next run.", Schema: `{"type":"object","properties":{"action":{"type":"string","enum":["create","update","remove"]},"id":{"type":"string"},"name":{"type":"string"},"text":{"type":"string"},"at":{"type":"string"},"cron":{"type":"string"},"ask":{"type":"string","enum":["thread","never"]},"paused":{"type":"boolean"}},"required":["action"],"additionalProperties":false}`, Run: s.update},
+		{Name: Update, OwnerOnly: true, Description: about + "Manage jobs with action create, update, run or remove. Create requires name, text and exactly one of at (RFC3339 or local YYYY-MM-DDTHH:MM) or cron (five fields); ask defaults to thread, or never for unattended runs. The current conversation's project is saved automatically. Update requires id and changed fields; at and cron replace each other. Run takes only id and starts the job now: its schedule stays as it is and the run is recorded in its history. Remove takes only action and id. At most 32 jobs; recurring runs must be at least 15 minutes apart. Returns the saved job and next run.", Schema: `{"type":"object","properties":{"action":{"type":"string","enum":["create","update","run","remove"]},"id":{"type":"string"},"name":{"type":"string"},"text":{"type":"string"},"at":{"type":"string"},"cron":{"type":"string"},"ask":{"type":"string","enum":["thread","never"]},"paused":{"type":"boolean"}},"required":["action"],"additionalProperties":false}`, Run: s.update},
 	}
 }
 func (s *scheduler) read(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -493,6 +538,9 @@ func (s *scheduler) update(ctx context.Context, raw json.RawMessage) (string, er
 	}
 	if err := a.validate(); err != nil {
 		return "", err
+	}
+	if a.Action == "run" {
+		return s.runNow(a.ID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

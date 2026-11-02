@@ -171,6 +171,7 @@ func TestStrictInputsAndOwnerOnly(t *testing.T) {
 		`{"action":"create","name":"n","text":"t","cron":"0 9 * * *","ask":"sometimes"}`,
 		`{"action":"update","id":"x"}`, `{"action":"update","id":"x","text":""}`,
 		`{"action":"remove","id":"x","paused":false}`, `{"action":"remove"}`,
+		`{"action":"run"}`, `{"action":"run","id":"x","paused":false}`, `{"action":"run","id":"missing"}`,
 		`{"action":"create","name":"n","text":"t","at":"yesterday"}`,
 		`{"action":"create","name":"n","text":"t","at":"2020-01-01T00:00:00Z"}`,
 	} {
@@ -240,6 +241,53 @@ func TestRunsAtTheBoundsOfLate(t *testing.T) {
 		}
 	}
 }
+
+// The run action starts a job at once: no claim, the schedule untouched, and the
+// run in the job's history like a scheduled one, without a planned time.
+func TestRunActionStartsNow(t *testing.T) {
+	s, f, _ := fixture(t)
+	job := create(t, s, "*/15 * * * *", 0)
+	out := call(t, s, context.Background(), Update, `{"action":"run","id":"`+job.ID+`"}`)
+	if !strings.Contains(out, job.ID) {
+		t.Fatalf("run not confirmed: %s", out)
+	}
+	c := receive(t, f)
+	if strings.Contains(c.text, "planned for") || !strings.Contains(c.text, "run now at") || !strings.Contains(c.text, job.Text) || c.name != job.Name || c.directory != job.Directory || !c.ask {
+		t.Fatalf("wrong manual request: %+v", c)
+	}
+	current, err := s.store.Get(job.ID)
+	if err != nil || !current.Next.Equal(job.Next) || len(current.Runs) != 0 {
+		t.Fatalf("manual run claimed the job: %+v %v", current, err)
+	}
+	if out := call(t, s, context.Background(), Update, `{"action":"run","id":"`+job.ID+`"}`); !strings.Contains(out, "already running") {
+		t.Fatalf("overlap allowed: %s", out)
+	}
+	c.result <- session.ScheduledResult{Text: "Manual result\nmore"}
+	s.wg.Wait()
+	current, _ = s.store.Get(job.ID)
+	if len(current.Runs) != 1 || current.Runs[0].Status != "completed" || current.Runs[0].Result != "Manual result" || current.Runs[0].Session != "scheduled-session" {
+		t.Fatalf("run not recorded: %+v", current.Runs)
+	}
+}
+
+// A used-up one-shot job still runs on request, and that run is not late:
+// nothing was planned for it.
+func TestRunExhaustedOneShot(t *testing.T) {
+	s, f, clock := fixture(t)
+	job := create(t, s, "", time.Minute)
+	clock.Store(job.Next.UnixNano())
+	s.tick(context.Background())
+	receive(t, f).result <- session.ScheduledResult{Text: "scheduled"}
+	s.wg.Wait()
+	call(t, s, context.Background(), Update, `{"action":"run","id":"`+job.ID+`"}`)
+	receive(t, f).result <- session.ScheduledResult{Text: "again"}
+	s.wg.Wait()
+	current, _ := s.store.Get(job.ID)
+	if len(current.Runs) != 2 || current.Runs[1].Status != "completed" || current.Runs[1].Result != "again" {
+		t.Fatalf("bad history: %+v", current.Runs)
+	}
+}
+
 func TestMissedNotExecutedOrDuplicated(t *testing.T) {
 	s, f, clock := fixture(t)
 	job := create(t, s, "", time.Minute)
