@@ -187,6 +187,17 @@ func TestArchiveFails(t *testing.T) {
 			t.Errorf("not logged: %q in %q", want, l.lines)
 		}
 	}
+	s.GoOn() // what cannot be read of a start anew is logged, not fatal
+	for _, want := range []string{
+		"which sessions go on by themselves cannot be read",
+		"which answers were interrupted cannot be read",
+		"which tasks ended with the node cannot be read",
+		"which reports of tasks wait for the agent cannot be read",
+	} {
+		if !l.has(want) {
+			t.Errorf("not logged: %q in %q", want, l.lines)
+		}
+	}
 
 	// A memory that cannot be resumed leaves what happened.
 	dir = t.TempDir()

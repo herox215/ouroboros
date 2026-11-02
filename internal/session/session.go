@@ -642,6 +642,20 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []chat.I
 	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return ErrEmpty
 	}
+	return s.askQueued(ctx, id, []queued{{text: text, images: images, hasAttachments: hasAttachments, source: chat.MessageSourceFrom(ctx), generated: generated}})
+}
+
+// askQueued answers the session id with messages that the owner wrote or the
+// node generated, as askMedia does with one: what does not start an answer
+// waits for the one on its way. A generated restart note restores where its
+// question is offered, as it did when it was kept.
+func (s *Service) askQueued(ctx context.Context, id string, messages []queued) error {
+	if err := valid(id); err != nil {
+		return err
+	}
+	if len(messages) == 0 {
+		return nil
+	}
 	if err := s.agent.Ready(); err != nil {
 		return err
 	}
@@ -657,8 +671,11 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []chat.I
 		return ErrRestarting
 	}
 	se := s.get(id)
-	message := queued{text: text, images: images, hasAttachments: hasAttachments, source: chat.MessageSourceFrom(ctx), generated: generated}
-	if generated && restartNote(text) {
+	for i := range messages {
+		message := &messages[i]
+		if !message.generated || !restartNote(message.text) {
+			continue
+		}
 		// The durable restart note, not transient Routed flags, restores where
 		// the unanswered question must be offered after loading the archive.
 		// Only the last message counts: an older note was answered already.
@@ -674,14 +691,16 @@ func (s *Service) askMedia(ctx context.Context, id, text string, images []chat.I
 		// The thread takes what the owner says at any time: the answer on its
 		// way takes it, as it hands on and is quick. It answers no question
 		// of the thread, which only Steer does.
-		message.source = message.source.Normalized()
-		se.queue = append(se.queue, message)
-		s.emit(se, Event{Kind: Queued, Text: text, Source: message.source})
+		for _, message := range messages {
+			message.source = message.source.Normalized()
+			se.queue = append(se.queue, message)
+			s.emit(se, Event{Kind: Queued, Text: message.text, Source: message.source})
+		}
 		return nil
 	case se.cancel != nil:
 		return ErrBusy
 	}
-	s.begin(se, p, append(direct(se), message)...)
+	s.begin(se, p, append(direct(se), messages...)...)
 	return nil
 }
 
@@ -905,6 +924,7 @@ func (s *Service) taken(se *session, messages []queued) []chat.Message {
 			continue
 		}
 		if m.task != nil {
+			s.reportTaken(se, m.task.N)
 			s.emit(se, *m.task)
 			continue
 		}
