@@ -471,6 +471,47 @@ func TestManyRunningSessionsBeside(t *testing.T) {
 	}
 }
 
+// The block of the session shown stays whole where the list has room for it,
+// though its facts and its chart make it taller than the blocks above it.
+func TestTheSessionShownStaysWhole(t *testing.T) {
+	m, _, _ := threadWithSessions(t, 170, 24)
+	for _, id := range []string{"c3d4-a", "c3d4-b"} {
+		s := m.conversation(id)
+		m.apply(s, Event{Kind: plugin.SessionMessage, Text: id, At: m.now()}, false)
+	}
+	// A session whose chart has two lanes: its block fills the list, and one
+	// more row would not fit.
+	c := m.conversation("c3d4-c")
+	m.apply(c, Event{Kind: plugin.SessionMessage, Text: "chart it", At: m.now()}, false)
+	m.apply(c, Event{Kind: plugin.SessionTitle, Text: "Chart"}, false)
+	for _, tool := range []string{"read", "bash"} {
+		m.apply(c, Event{Kind: plugin.SessionStep, Tool: tool, Text: tool + " · scroll.go", At: m.now()}, false)
+		m.apply(c, Event{Kind: plugin.SessionStep, Tool: tool, Text: tool + " · scroll.go", Done: true, At: m.now()}, false)
+	}
+	m.switchTo(c)
+	const inner = 30
+	all := m.sidebarRows(inner)
+	at := slices.IndexFunc(all, func(r sideRow) bool { return r.c == c })
+	block := 0
+	for at+block < len(all) && all[at+block].c == c {
+		block++
+	}
+	most := max(4, m.height*48/100+2)
+	if block+1 != most-2 {
+		t.Fatalf("the entry of the session shown is %d rows, the list %d", block+1, most-2)
+	}
+	rows, _ := m.sidebarLayout(inner, m.height)
+	shown, last := 0, ""
+	for _, r := range rows {
+		if r.c == c {
+			shown, last = shown+1, strip(r.text)
+		}
+	}
+	if shown != block || last != strip(all[at+block-1].text) {
+		t.Fatalf("%d of the %d rows of the session shown are in the list:\n%s", shown, block, strip(m.sidebarView(inner, m.height)))
+	}
+}
+
 // A line faded towards the top keeps its colors, each nearer the
 // background, and what has none gets the color of the text.
 func TestFadeLineKeepsItsColors(t *testing.T) {

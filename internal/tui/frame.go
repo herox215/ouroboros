@@ -17,9 +17,10 @@ import (
 
 // The chat is laid out as the window of the GUI is: the sessions that run now
 // on the left, the conversation in the middle, below its head and above the
-// composer, and on the right where those sessions stand. Nothing is framed: a
-// line above the composer parts it from the conversation, and the
-// conversation is as wide as it reads well, in the middle of its column.
+// composer, and a session shown on its own, or the jobs, on the right.
+// Nothing is framed: a line above the composer parts it from the
+// conversation, and the conversation is as wide as it reads well, in the
+// middle of its column.
 // A narrow window leaves out the column on the right first, then the one on
 // the left, as the GUI does.
 
@@ -49,8 +50,9 @@ func (m *Model) sideWidth() int {
 	return columnWidth(m.width)
 }
 
-// railWidth is how wide the column on the right is, 0 without it. The jobs
-// get it in any window, a third of it at most; the thread has none, as the
+// railWidth is how wide the column on the right is, 0 without it. A session
+// shown on its own has it from a window railFrom wide, the jobs in any
+// window, a third of it at most in a narrow one; the thread has none, as the
 // sidebar lists the sessions that run, and gives its room to the
 // conversation.
 func (m *Model) railWidth() int {
@@ -67,7 +69,9 @@ func (m *Model) railWidth() int {
 // columns beside it leave of the window.
 func (m *Model) chatWidth() int { return max(1, m.width-m.sideWidth()-m.railWidth()) }
 
-// transcriptWidth is how wide the conversation and the composer are.
+// transcriptWidth is how wide the conversation and the composer are: as wide
+// as it read beside the column on the right, and as wide as that column was,
+// which the sidebar now lists the sessions in.
 func (m *Model) transcriptWidth() int { return max(1, min(transcriptMax, m.chatWidth()-2*columnPad)) }
 
 // transcriptLeft is the column of the screen the conversation begins at.
@@ -602,7 +606,11 @@ func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
 		}
 		first := 2 // the heading stays
 		if end >= first+most-2 {
+			// As many rows above the session shown as the window has, but
+			// so that the end of its block stays in view: a block is not of
+			// one height, as its facts and its chart come and go.
 			first = min(at-2, len(rows)-(most-2))
+			first = max(first, min(at, end-(most-2)+1))
 		}
 		rows = append(rows[:2:2], rows[first:first+most-2]...)
 	}
