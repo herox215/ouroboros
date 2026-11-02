@@ -14,6 +14,7 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/openai/openaitest"
@@ -330,10 +331,11 @@ func TestDelegationScopeGuidance(t *testing.T) {
 			for _, rule := range []string{
 				"For delegated code analysis, give each helper a clear scope with minimal overlap, and say what findings it should report.",
 				"Before delegating, briefly tell the owner how you are splitting the work.",
-				"The helpers run in the background, past your answer: end it once you started them and did what is left outside their scopes, and the conversation takes what the owner says meanwhile.",
+				"Without wait, the helpers run in the background, past your answer: end it once you started them and did what is left outside their scopes, and the conversation takes what the owner says meanwhile.",
 				"With task_tell you tell a helper what changed, like what the owner asked of the work, and with task_stop you stop one that is no longer needed.",
 				"Combine all results into one final answer; do not present a partial result as the conclusion or send separate final answers for individual helpers.",
 				"First investigate the remaining areas outside the delegated scopes; do not repeat a helper's search or reading while it works.",
+				"Where you need what the helpers find in this same answer, to work it in, test it and finish yourself, give the call wait: true: it returns their answers then, and nothing runs past your answer.",
 				"Then use the helper reports to bring the analysis together, and check delegated code yourself only where a report leaves a specific uncertainty or finding to verify; do not broadly reread delegated paths or repeat the analysis.",
 			} {
 				if strings.Contains(got, rule) != want {
@@ -408,6 +410,76 @@ func TestDelegateStartsTheTasks(t *testing.T) {
 	background.err = errTest
 	if _, err := delegating(llm).Run(ctx, tasks("c")); !errors.Is(err, errTest) {
 		t.Fatalf("none started: %v", err)
+	}
+}
+
+// A call that waits does not start its tasks in the background, even where
+// they could run there: it does them at once and returns what each ended
+// with, in the same round.
+func TestDelegateWaitsWhenAsked(t *testing.T) {
+	llm := newHelpers(2)
+	background := &started{first: 2}
+	got, err := delegating(llm).Run(WithTasks(context.Background(), background), json.RawMessage(`{"wait":true,"tasks":[{"task":"a"},{"task":"b"}]}`))
+	if err != nil || got != `[{"answer":"done: a"},{"answer":"done: b"}]` {
+		t.Fatalf("got %s, %v", got, err)
+	}
+	if len(background.tasks) != 0 {
+		t.Fatalf("started %+v", background.tasks)
+	}
+}
+
+// reserving are tasks in the background that count tasks waited for too.
+type reserving struct {
+	started
+	held int
+	err  error
+}
+
+func (r *reserving) Reserve(n int) (func(), error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	r.held += n
+	return func() { r.held -= n }, nil
+}
+
+// Tasks waited for count against the limit of the conversation while they
+// run, and a call over it starts none.
+func TestDelegateWaitingReserves(t *testing.T) {
+	background := &reserving{}
+	tool := delegating(newHelpers(1))
+	got, err := tool.Run(WithTasks(context.Background(), background), json.RawMessage(`{"wait":true,"tasks":[{"task":"a"}]}`))
+	if err != nil || got != `[{"answer":"done: a"}]` || background.held != 0 {
+		t.Fatalf("got %s, %v, held %d", got, err, background.held)
+	}
+	background.err = errTest
+	if _, err := tool.Run(WithTasks(context.Background(), background), json.RawMessage(`{"wait":true,"tasks":[{"task":"a"}]}`)); !errors.Is(err, errTest) {
+		t.Fatalf("over the limit: %v", err)
+	}
+}
+
+// sinks is an LLM that answers with whether the sinks of the answer that
+// called delegate reach it, and with nothing.
+type sinks struct{}
+
+func (sinks) Complete(ctx context.Context, _ string, _ []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if chat.CallingOf(ctx) != nil || ThreadOf(ctx) != nil || RememberedOf(ctx) != nil || agent.Say(ctx, "x") {
+		return openai.Message{}, errors.New("the helper has the sinks of the answer")
+	}
+	return openai.Message{}, nil
+}
+
+// A helper a call waits for runs under the context of the answer, but
+// streams, says and is shaped nothing of it; one that answers nothing
+// gives an empty answer, not nothing.
+func TestDelegateWaitingHelpersHaveNoSinks(t *testing.T) {
+	ctx := chat.WithCalling(context.Background(), func(int) { t.Error("the helper streamed into the answer") })
+	ctx = agent.WithSaying(ctx, func(string, string) { t.Error("the helper said something to the owner") })
+	ctx = WithRemembered(ctx, func(Remembered) {})
+	ctx = WithThread(ctx, &fakeThread{})
+	got, err := delegating(sinks{}).Run(ctx, json.RawMessage(`{"wait":true,"tasks":[{"task":"a"}]}`))
+	if err != nil || got != `[{"answer":""}]` {
+		t.Fatalf("got %s, %v", got, err)
 	}
 }
 

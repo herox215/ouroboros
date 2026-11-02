@@ -357,6 +357,11 @@ func TestOwnerPromptFollowsTheTools(t *testing.T) {
 		if edits := "Change files with edit and write, not with scripts of python3, sed or a heredoc"; strings.Contains(got, edits) != wantExplore {
 			t.Errorf("with %s: edit rule present = %v, want %v", tt.tools, strings.Contains(got, edits), wantExplore)
 		}
+		// Independent calls belong in one round, which is the workflow's own
+		// way of not waiting for one round after another.
+		if parallel := "Independent tool calls go in one round, not only for research:"; strings.Contains(got, parallel) != wantWorkflow {
+			t.Errorf("with %s: parallel tool call rule present = %v, want %v", tt.tools, strings.Contains(got, parallel), wantWorkflow)
+		}
 		workflow := "Apply the changes you have already identified together before reading or searching unchanged files again, or starting tests or a build, " +
 			"unless you still need information to make those changes safely."
 		if strings.Contains(got, workflow) != wantWorkflow {
