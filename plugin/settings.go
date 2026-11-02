@@ -50,10 +50,6 @@ type Settings struct {
 	// Improves says that the agent builds into ouro what a task needs and
 	// ouro lacks, instead of proposing it, see config.SelfImprove.
 	Improves bool
-	// MemoryInterval is how often the archivist may revisit the memories of
-	// the profile, as the configuration has it, or "off" when it is off or
-	// the configuration says nothing of it.
-	MemoryInterval string
 	// ThreadWindow is how long the thread hands messages to a session, as
 	// the configuration has it, or the default where it says nothing of it.
 	ThreadWindow string
@@ -139,7 +135,6 @@ const (
 	SetDescription                        // Value, "" for the default
 	SetImproves                           // On: build, off: propose
 	SetPeerList                           // Peer, On: a list of its own, as the one for peers; off: none
-	SetMemoryInterval                     // Value: a duration like "24h", or "off"
 	SetThreadWindow                       // Value: a duration like "3h"
 )
 
@@ -220,7 +215,6 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 		Description: cfg.About(), DescriptionDefault: cfg.Description == "",
 		ContextProvider: cfg.ContextProvider,
 		Improves:        cfg.Improves(),
-		MemoryInterval:  memoryInterval(cfg),
 		ThreadWindow:    threadWindow(cfg),
 		PluginsKept:     o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
@@ -387,7 +381,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the interval of the memory archivist", "the window of the thread"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the window of the thread"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -476,17 +470,6 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 		}
 		value, _ := json.Marshal(append([]string{}, paths...)) // texts: cannot fail
 		return holdsNow, c.SetField(config.FieldProtected, value)
-	case SetMemoryInterval:
-		value := strings.TrimSpace(s.Value)
-		if err := config.ValidMemoryInterval(value); err != nil {
-			return "", err
-		}
-		if value == "" || value == "off" {
-			c.MemoryInterval = nil
-		} else {
-			c.MemoryInterval = &value
-		}
-		return "saved: the archivist reads it when the node starts or once you were away for a while", nil
 	case SetThreadWindow:
 		value := strings.TrimSpace(s.Value)
 		if err := config.ValidThreadWindow(value); err != nil {
@@ -666,40 +649,6 @@ func settingsOf(value string) (json.RawMessage, error) {
 func needs(err error) string {
 	why, _, _ := strings.Cut(err.Error(), ": add a plugin that provides it")
 	return why
-}
-
-// MemoryInterval is how often the archivist may revisit the memories of the
-// profile, "off" when it is off or the configuration says nothing of it.
-func (o *Owner) MemoryInterval() (string, error) {
-	cfg, err := o.home.Config()
-	if err != nil {
-		return "", err
-	}
-	return memoryInterval(cfg), nil
-}
-
-// SetMemoryInterval sets how often the archivist may revisit the memories: a
-// duration like "24h", or "off". It returns from when it holds.
-func (o *Owner) SetMemoryInterval(value string) (string, error) {
-	var holds string
-	err := config.Update(string(o.home), func(c *config.Config) error {
-		var err error
-		holds, err = o.change(c, Setting{Kind: SetMemoryInterval, Value: value}, nil, nil)
-		return err
-	})
-	if err != nil {
-		return "", err
-	}
-	o.home.Log("the owner changed the settings: %s", Setting{Kind: SetMemoryInterval})
-	return holds, nil
-}
-
-// memoryInterval is how often the archivist may run, "off" when it is off.
-func memoryInterval(cfg config.Config) string {
-	if _, on := cfg.MemoryArchive(); on {
-		return strings.TrimSpace(*cfg.MemoryInterval)
-	}
-	return "off"
 }
 
 // ThreadWindow is how long the thread hands messages to a session, as the
