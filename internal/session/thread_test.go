@@ -461,11 +461,12 @@ func TestThreadShowsTheEnd(t *testing.T) {
 	}
 }
 
-// A session the thread starts works in the project of the thread, or in the
-// directory it names; one it cannot start is not kept. The sessions here
-// answer until the node stops.
+// The thread has no project: it is given none, also not the initial
+// directory. A session it starts works in the workspace, or in the directory
+// it names; one it cannot start is not kept. The sessions here answer until
+// the node stops.
 func TestThreadStartsInItsProject(t *testing.T) {
-	project, other := canonicalTempDir(t), canonicalTempDir(t)
+	initial, other := canonicalTempDir(t), canonicalTempDir(t)
 	a := &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
@@ -473,10 +474,19 @@ func TestThreadStartsInItsProject(t *testing.T) {
 	s := service(t, a)
 	ctx := context.Background()
 	start := threading{s}.Start
-	if err := s.SetDirectory(ctx, ThreadID, project); err != nil {
+	if err := s.SetInitialDirectory(initial); err != nil {
 		t.Fatal(err)
 	}
-	for directory, want := range map[string]string{"": project, other: other} {
+	if err := s.SetDirectory(ctx, ThreadID, other); !errors.Is(err, ErrThreadProject) {
+		t.Fatalf("a project for the thread: %v", err)
+	}
+	if err := s.SetDirectory(ctx, ThreadID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if past, _, _ := s.Watch(ctx, ThreadID); slices.ContainsFunc(past, func(e Event) bool { return e.Kind == Directory }) {
+		t.Fatalf("the thread has a directory: %+v", past)
+	}
+	for directory, want := range map[string]string{"": "", other: other} {
 		id, err := start(ctx, "go", directory)
 		if err != nil || directoryAt(t, s, id) != want {
 			t.Fatalf("%q: %s, %v", directory, id, err)
@@ -499,6 +509,20 @@ func TestThreadStartsInItsProject(t *testing.T) {
 	s.Close()
 	if _, err := start(ctx, "go", ""); !errors.Is(err, ErrStopped) {
 		t.Fatalf("a node that stops: %v", err)
+	}
+}
+
+// With an archive too the thread tells no directory, also where an older
+// build kept one for it.
+func TestArchivedThreadTellsNoDirectory(t *testing.T) {
+	dir, project := t.TempDir(), canonicalTempDir(t)
+	if err := history.Open(dir).SetDirectory(history.Owner(ThreadID), project); err != nil {
+		t.Fatal(err)
+	}
+	s, _, _ := archived(t, &fakeAgent{}, dir, time.Now())
+	past, _, err := s.Watch(context.Background(), ThreadID)
+	if err != nil || slices.ContainsFunc(past, func(e Event) bool { return e.Kind == Directory }) {
+		t.Fatalf("the thread tells a directory: %+v, %v", past, err)
 	}
 }
 

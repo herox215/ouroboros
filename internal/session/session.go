@@ -316,6 +316,10 @@ var (
 	ErrNoSession = errors.New("no such session")
 	// ErrNoEffort means an effort that is none of config.AllEfforts.
 	ErrNoEffort = errors.New("no such effort")
+	// ErrThreadProject means a project directory for the thread, which has
+	// none: it works in the workspace of ouro alone, and a session it starts
+	// is given the project it is about.
+	ErrThreadProject = errors.New("the thread has no project: it works in the workspace of ouro; start a session for a project")
 	// ErrEmpty means a message without text.
 	ErrEmpty = errors.New("the message is empty")
 	// errAsked means that the agent asked the owner while a question of it
@@ -555,7 +559,7 @@ func (s *Service) get(id string) *session {
 		se = &session{id: id, watchers: map[chan Event]struct{}{}}
 		s.effortOf(se) // set before anything was said in it
 		s.directoryOf(se)
-		if !se.directed && s.initialDirectory != "" {
+		if !se.directed && s.initialDirectory != "" && id != ThreadID {
 			se.directory, se.directed = s.initialDirectory, true
 			s.keepDirectory(se)
 		}

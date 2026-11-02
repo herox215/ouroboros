@@ -6,14 +6,17 @@ import (
 	"strings"
 	"testing"
 
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
-// A room says where the conversation works and moves it: /project and /cd
-// answer with the project of the thread, /cd PATH changes it, /cd --workspace
-// returns to the profile workspace, and a path that is no directory, a
-// conversation that is busy and an unclosed quote change nothing. None of it
-// is a message to the agent.
+// A room says where the conversation works: /project and /cd answer with its
+// project. A room talks in the thread, which has none, and the node refuses
+// /cd PATH for it with ErrThreadProject, which the room is told; for a
+// conversation that has a project, as the fake backend below lets one have,
+// /cd PATH changes it, /cd --workspace returns to the profile workspace, and
+// a path that is no directory, a conversation that is busy and an unclosed
+// quote change nothing. None of it is a message to the agent.
 func TestRoomShowsAndChangesTheProject(t *testing.T) {
 	s := store{t.TempDir()}
 	cfg := configuration{Enabled: true, Token: "token", Homeserver: "https://example.org", UserID: "@bot:example.org", AllowedUsers: []string{"@owner:example.org"}, Revision: "1"}
@@ -42,9 +45,14 @@ func TestRoomShowsAndChangesTheProject(t *testing.T) {
 		}
 	}
 
-	if got := reply("/project"); !strings.HasPrefix(got, "No project:") {
+	if got := reply("/project"); !strings.HasPrefix(got, "No project:") || strings.Contains(got, "/cd") {
 		t.Fatalf("a conversation without a project: %q", got)
 	}
+	sessions.dirErr = session.ErrThreadProject
+	if got := reply("/cd /tmp/project"); !strings.HasPrefix(got, "The project did not change: the thread has no project") {
+		t.Fatalf("a project for the thread: %q", got)
+	}
+	sessions.dirErr = nil
 	sessions.set(plugin.SessionEvent{Kind: plugin.SessionDirectory, Text: "/home/owner/project"})
 	for _, command := range []string{"/project", "/cd"} {
 		if got := reply(command); got != "Project: /home/owner/project" {

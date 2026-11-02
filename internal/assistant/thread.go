@@ -62,8 +62,8 @@ const handedOn = "[nothing: the thread hands on, and the session answers]"
 const threadCommandsHint = `A tool that is yours alone, which the sessions do not have, you run yourself and answer with what it reports: that is no work to hand on. `
 
 // threadDirectoryHint tells the agent of the thread where a session it
-// starts works; %s is the project of the thread, quoted.
-const threadDirectoryHint = `The project of the thread, where ` + ToolSessionNew + ` starts a session that names no directory, is %s. `
+// starts works; %s is where the thread works, quoted, or "your workspace".
+const threadDirectoryHint = `The thread has no project: ` + ToolSessionNew + ` starts a session that names no directory in %s. `
 
 // Thread is what the agent of the thread hands messages on with: the
 // sessions of the owner.
@@ -173,7 +173,7 @@ func threadTools(window string) []agent.Tool {
 			"Leave out text only when all the owner's words since your last answer belong to this new concern, word for word.",
 		Schema: `{"type":"object","properties":{` +
 			`"text":{"type":"string","description":"only for the part of the owner's message about the new topic, or for what their words mean where only this conversation explains them: in their voice and language"},` +
-			`"directory":{"type":"string","description":"the absolute project directory of the session; leave it out for the project of the thread"}` +
+			`"directory":{"type":"string","description":"the absolute project directory of the session; leave it out for your workspace"}` +
 			`},"required":[]}`,
 		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			thread, err := threadFor(ctx, ToolSessionNew)

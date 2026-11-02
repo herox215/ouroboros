@@ -39,6 +39,7 @@ var codes = map[string]error{
 	"image":      ErrImage,
 	"attachment": ErrAttachment,
 	"no_effort":  ErrNoEffort,
+	"no_project": ErrThreadProject,
 	"no_job":     ErrNoJob,
 	"no_service": ErrNoService,
 	"not_set_up": config.ErrIncomplete,

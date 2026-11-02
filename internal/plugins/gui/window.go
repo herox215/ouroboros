@@ -83,9 +83,6 @@ type Window struct {
 	restarts  string         // the build a tool asked ouro to start anew from, see PollSession
 	leave     func()         // closes the window for it, see OnRestart
 	instances map[int]string // the image of the node of each profile, as the window last saw it, see noticeRestart
-	directory string
-	threadMu  sync.Mutex
-	threads   map[int]bool // profiles whose thread took this UI's start directory
 }
 
 func newWindow(p page) *Window { return newWindowContext(context.Background(), p) }
@@ -101,7 +98,7 @@ func newWindowContext(ctx context.Context, p page) *Window {
 	archives := make([]archiveAccess, len(p.choices))
 	copy(archives, p.archives)
 	ctx, cancel := context.WithCancel(ctx)
-	return &Window{state: state, profiles: profiles, archives: archives, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool), instances: make(map[int]string), directory: p.directory, threads: make(map[int]bool)}
+	return &Window{state: state, profiles: profiles, archives: archives, ctx: ctx, cancel: cancel, selected: p.selected, opened: make(map[int]bool), instances: make(map[int]string)}
 }
 func (w *Window) InitialState() State {
 	state := w.state
@@ -439,12 +436,8 @@ func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
 	w.mu.Unlock()
 	var past []plugin.SessionEvent
 	var live <-chan plugin.SessionEvent
-	var notice string
 	w.noticeRestart(ctx, p, profile)
 	if owner {
-		if serviceID == plugin.ThreadID {
-			notice = w.placeThread(ctx, p, profile)
-		}
 		past, live, err = p.sessions.Watch(ctx, serviceID)
 	} else {
 		past, err = p.sessions.Read(ctx, serviceID)
@@ -463,7 +456,7 @@ func (w *Window) OpenSession(profile int, id string) (ChatSnapshot, error) {
 	if !owner {
 		token = 0 // peer snapshots have no live stream
 	}
-	return ChatSnapshot{Token: token, Events: p.events(past), Notice: notice}, nil
+	return ChatSnapshot{Token: token, Events: p.events(past)}, nil
 }
 
 // PollSession waits at most 150ms, returning no more than 100 events. It reads

@@ -38,6 +38,12 @@ func (s *Service) SetDirectory(_ context.Context, id, path string) error {
 	if s.closed {
 		return ErrStopped
 	}
+	if id == ThreadID {
+		if path != "" {
+			return ErrThreadProject
+		}
+		return nil // it is in the workspace already
+	}
 	se := s.get(id)
 	if se.cancel != nil || len(se.tasks) != 0 {
 		return ErrBusy
@@ -113,6 +119,12 @@ func (s *Service) keepDirectory(se *session) {
 
 func (s *Service) directoryOf(se *session) {
 	if s.archive == nil {
+		return
+	}
+	if se.id == ThreadID {
+		// What an older build kept for it is not taken, and nothing is
+		// marked as directed, so that it tells no directory: see
+		// ErrThreadProject.
 		return
 	}
 	directory, ok, err := s.archive.Directory(history.Owner(se.id))

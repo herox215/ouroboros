@@ -101,7 +101,7 @@ func TestThreadPrompt(t *testing.T) {
 		!strings.Contains(got, "The owner is never to notice the sessions") || strings.Contains(got, "%!") ||
 		!strings.Contains(got, "Before the messages of the owner comes the list of the sessions of the last 3 hours whenever it changed") || !strings.Contains(got, "goes to it word for word") ||
 		!strings.Contains(got, "You are shown only the last 6 hours of this conversation: when the owner refers to something said before that, find it with search_thread. ") ||
-		!strings.Contains(got, "where session_new starts a session that names no directory, is your workspace. ") ||
+		!strings.Contains(got, "The thread has no project: session_new starts a session that names no directory in your workspace. ") ||
 		!strings.Contains(got, "briefly acknowledge ordinary work") || !strings.Contains(got, "only if you do not also hand that request on") ||
 		!strings.Contains(got, "omit this acknowledgement") || !strings.Contains(got, "A failed handoff leaves the original request unresolved") ||
 		!strings.Contains(got, "finish silently instead of announcing or confirming it in text") ||
@@ -111,7 +111,7 @@ func TestThreadPrompt(t *testing.T) {
 		t.Fatalf("the prompt of the thread: %q, %v", got, err)
 	}
 	got, err = a.Ask(workdir.With(ctx, "/home/me/app"), "thread", "?system", nil)
-	if err != nil || !strings.Contains(got, `starts a session that names no directory, is "/home/me/app". `) {
+	if err != nil || !strings.Contains(got, `starts a session that names no directory in "/home/me/app". `) {
 		t.Fatalf("with a project: %q, %v", got, err)
 	}
 	if got, err := a.Ask(context.Background(), "c", "?system", nil); err != nil || strings.Contains(got, "the one conversation the owner has with you") {

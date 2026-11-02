@@ -410,17 +410,13 @@ func (t threading) Search(_ context.Context, query string) (string, error) {
 }
 
 // Start starts a session with text as its first message, "" for the words
-// of the owner, see words, in directory, "" for the project of the thread.
+// of the owner, see words, in directory, "" for the workspace: the thread
+// has no project to pass on.
 func (t threading) Start(ctx context.Context, text, directory string) (string, error) {
 	s := t.s
 	text, pictures := s.words(text)
 	if strings.TrimSpace(text) == "" && len(pictures) == 0 {
 		return "", ErrEmpty
-	}
-	if directory == "" {
-		s.mu.Lock()
-		directory = s.get(ThreadID).directory
-		s.mu.Unlock()
 	}
 	id, err := s.New(ctx)
 	if err != nil {

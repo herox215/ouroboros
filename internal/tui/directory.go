@@ -32,16 +32,14 @@ func (m *Model) newChat() *conversation {
 	return c
 }
 
-// thread is the conversation of the thread, which takes the start path as
-// its project the first time this UI shows it, as a new conversation does:
-// where what is new in it starts, see openThread.
+// thread is the conversation of the thread. Unlike a new conversation it
+// does not take the start path: it has no project and works in the
+// workspace of ouro alone, see openThread.
 func (m *Model) thread() *conversation {
 	if c, ok := m.chats[plugin.ThreadID]; ok {
 		return c
 	}
-	c := m.conversation(plugin.ThreadID)
-	c.directory, c.fresh = m.initialDirectory, true
-	return c
+	return m.conversation(plugin.ThreadID)
 }
 
 // directoryBackend is optional so backends without project directories keep
