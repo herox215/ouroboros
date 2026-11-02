@@ -1117,3 +1117,18 @@ func TestContentsKeepsTheWindowOfTheThread(t *testing.T) {
 		t.Fatalf("of a session %+v, %v", lines, err)
 	}
 }
+
+// A node with nothing to say to a session starts no answer.
+func TestAskQueuedWithNothing(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	ctx := context.Background()
+	if err := s.askQueued(ctx, "s1", nil); err != nil {
+		t.Fatalf("nothing to say: %v", err)
+	}
+	if err := s.askQueued(ctx, "", []queued{{text: "hi"}}); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("no such session: %v", err)
+	}
+	if list, _ := s.List(ctx); len(list) != 0 {
+		t.Fatalf("a session was made for nothing: %+v", list)
+	}
+}

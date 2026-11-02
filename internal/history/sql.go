@@ -98,36 +98,20 @@ func (a *Archive) openArchive(create bool) (*sql.DB, error) {
 	}
 	// A database from before the model of a session was kept, or before an
 	// answer on its way was marked, gets its column here: the schema above
-	// creates a new one with it.
-	present := map[string]bool{}
-	columns, err := tx.Query("PRAGMA table_info(history_sessions)")
-	if err != nil {
-		return nil, err
-	}
-	for columns.Next() {
-		var cid, notNull, pk int
-		var name, kind string
-		var dflt any
-		if err = columns.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
-			columns.Close()
-			return nil, err
-		}
-		present[name] = true
-	}
-	columns.Close()
-	if err = columns.Err(); err != nil {
-		return nil, err
-	}
-	for _, column := range []struct{ name, kind string }{
+	// creates a new one with it. The same holds for the columns of the
+	// report of a task that ended before the agent took it.
+	if err = addColumns(tx, "history_sessions", []column{
 		{"model", "TEXT"},
 		{"answering", "INTEGER NOT NULL DEFAULT 0"},
-	} {
-		if present[column.name] {
-			continue
-		}
-		if _, err = tx.Exec("ALTER TABLE history_sessions ADD COLUMN " + column.name + " " + column.kind); err != nil {
-			return nil, err
-		}
+	}); err != nil {
+		return nil, err
+	}
+	if err = addColumns(tx, "history_tasks", []column{
+		{"report", "TEXT NOT NULL DEFAULT ''"},
+		{"took", "INTEGER NOT NULL DEFAULT 0"},
+		{"routed", "INTEGER NOT NULL DEFAULT 0"},
+	}); err != nil {
+		return nil, err
 	}
 	var done int
 	err = tx.QueryRow("SELECT count(*) FROM history_migrations WHERE name='legacy-v1'").Scan(&done)
@@ -147,6 +131,43 @@ func (a *Archive) openArchive(create bool) (*sql.DB, error) {
 	}
 	ok = true
 	return db, nil
+}
+
+// column is a column the schema of a table has, with its kind and default.
+type column struct{ name, kind string }
+
+// addColumns adds to the table the columns a database from before them lacks:
+// the schema creates a new table with them.
+func addColumns(tx *sql.Tx, table string, columns []column) error {
+	present := map[string]bool{}
+	rows, err := tx.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var dflt any
+		if err = rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		present[name] = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, c := range columns {
+		if present[c.name] {
+			continue
+		}
+		if _, err = tx.Exec("ALTER TABLE " + table + " ADD COLUMN " + c.name + " " + c.kind); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // kept fails where what the archive writes would not be kept, see
@@ -187,6 +208,8 @@ CREATE TABLE IF NOT EXISTS history_tasks(
  session_id TEXT NOT NULL REFERENCES history_sessions(id),
  n INTEGER NOT NULL, title TEXT NOT NULL, since INTEGER NOT NULL,
  ended TEXT NOT NULL DEFAULT '', process_id TEXT NOT NULL DEFAULT '',
+ report TEXT NOT NULL DEFAULT '', took INTEGER NOT NULL DEFAULT 0,
+ routed INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(session_id,n)
 );
 CREATE TABLE IF NOT EXISTS history_records(

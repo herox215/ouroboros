@@ -1442,11 +1442,12 @@ starts in the same workspace. It gets neither the tools to ask you, to reach pee
 the configuration, nor `delegate`, so it hands nothing on. It sees only its task, nothing of the conversation,
 and forgets it once it answered; what it said along the way is neither shown nor archived, only its report.
 A task keeps the node running as an answer does, and a new build waits for it; `esc` and `/cancel` stop the
-tasks of the conversation along with its answer, and a stopped task is not reported. A conversation in which a
-task runs is not deleted. Where nothing runs past the answer, `delegate` waits for its tasks and returns what
-each ended with. A call with `wait: true` waits for them even where they could run in the background: the agent
-uses it when it needs what its helpers find in the same answer, to work it in, test it and finish the work
-itself. Take `delegate` out of `tools.h2a` if your agent is not to use helpers.
+tasks of the conversation along with its answer, and a stopped task is not reported. A report the agent did
+not take yet survives a restart: the next start tells it, once, as coming from before the restart. A
+conversation in which a task runs is not deleted. Where nothing runs past the answer, `delegate` waits for
+its tasks and returns what each ended with. A call with `wait: true` waits for them even where they could run
+in the background: the agent uses it when it needs what its helpers find in the same answer, to work it in,
+test it and finish the work itself. Take `delegate` out of `tools.h2a` if your agent is not to use helpers.
 
 **Trust comes only from your decision.** Configuration changes proposed by your agent ask directly in
 its conversation through the same question interface as `user_question`. The question shows the field,

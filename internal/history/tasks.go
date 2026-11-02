@@ -12,17 +12,27 @@ const (
 	TaskRunning = ""        // it ran when the archive was written last
 	TaskEnded   = "done"    // it ended, and its report came, or it was stopped
 	TaskRestart = "restart" // the node went away before it could report
+	// TaskReport means that it ended and its report waits for the agent: a
+	// node that starts anew before the agent takes it tells it again, see
+	// PendingTaskReports.
+	TaskReport = "report"
 )
 
 // Task is a task an agent delegated in a conversation that runs in the
 // background of its answer, as the archive keeps it: its number, what it was
 // to do, and since when it ran. Ended tells how it ended, see the states
-// above.
+// above. Report is what the agent is told of one that ended before it took
+// the report, Took how long it ran, and Routed whether it continues work the
+// thread handed on: the archive keeps all three until the agent takes the
+// report, see SetTaskReport.
 type Task struct {
-	N     int       `json:"n"`
-	Title string    `json:"title"`
-	Since time.Time `json:"since"`
-	Ended string    `json:"ended,omitempty"`
+	N      int           `json:"n"`
+	Title  string        `json:"title"`
+	Since  time.Time     `json:"since"`
+	Ended  string        `json:"ended,omitempty"`
+	Report string        `json:"report,omitempty"`
+	Took   time.Duration `json:"took,omitempty"`
+	Routed bool          `json:"routed,omitempty"`
 }
 
 // SetTasks keeps the tasks of the conversation id that run, as running for
@@ -85,6 +95,89 @@ func (a *Archive) SetTasks(id string, running []Task, processID string) error {
 	return tx.Commit()
 }
 
+// SetTaskReport keeps the report of the task t of the conversation id as
+// waiting for the agent to take it, with the process processID that produced
+// it: a node that starts anew tells the report then, see PendingTaskReports,
+// instead of losing it with the process.
+func (a *Archive) SetTaskReport(id string, t Task, processID string) error {
+	if _, err := a.path(id); err != nil {
+		return err
+	}
+	if processID == "" {
+		return errors.New("tasks need a process identity")
+	}
+	db, err := a.database()
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("INSERT INTO history_sessions(id) VALUES(?) ON CONFLICT(id) DO UPDATE SET deleted=0", id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("INSERT INTO history_tasks(session_id,n,title,since,ended,process_id,report,took,routed) VALUES(?,?,?,?,?,?,?,?,?) "+
+		"ON CONFLICT(session_id,n) DO UPDATE SET title=excluded.title,ended=excluded.ended,process_id=excluded.process_id,"+
+		"report=excluded.report,took=excluded.took,routed=excluded.routed",
+		id, t.N, t.Title, t.Since.UnixNano(), TaskReport, processID, t.Report, t.Took.Nanoseconds(), t.Routed); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// TaskReportTaken marks the report of the task n of the conversation id as
+// taken by the agent: it is not told again at the next start. A task whose
+// report does not wait there is left as it is.
+func (a *Archive) TaskReportTaken(id string, n int) error {
+	if _, err := a.path(id); err != nil {
+		return err
+	}
+	db, err := a.changeDatabase()
+	if err != nil || db == nil {
+		return err
+	}
+	_, err = db.Exec("UPDATE history_tasks SET ended=?,report='' WHERE session_id=? AND n=? AND ended=?",
+		TaskEnded, id, n, TaskReport)
+	return err
+}
+
+// PendingTaskReports returns the reports of the tasks that ended before the
+// agent took them and that another executable instance produced, by archive
+// session ID, in the order of their numbers: a node that starts anew tells
+// them to their sessions, see GoOn. Tasks of the process processID still run
+// there, or their reports still wait there.
+func (a *Archive) PendingTaskReports(processID string) (map[string][]Task, error) {
+	if processID == "" {
+		return nil, errors.New("tasks need a process identity")
+	}
+	db, err := a.readDatabase()
+	if err != nil || db == nil {
+		return nil, err
+	}
+	rows, err := db.Query("SELECT t.session_id,t.n,t.title,t.since,t.report,t.took,t.routed FROM history_tasks t "+
+		"JOIN history_sessions s ON s.id=t.session_id "+
+		"WHERE t.ended=? AND t.process_id<>? AND s.deleted=0 AND t.session_id LIKE 'owner/%' ORDER BY t.session_id,t.n",
+		TaskReport, processID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	reports := map[string][]Task{}
+	for rows.Next() {
+		var id string
+		var t Task
+		var since, took int64
+		if err = rows.Scan(&id, &t.N, &t.Title, &since, &t.Report, &took, &t.Routed); err != nil {
+			return nil, err
+		}
+		t.Since, t.Took, t.Ended = time.Unix(0, since).UTC(), time.Duration(took), TaskReport
+		reports[id] = append(reports[id], t)
+	}
+	return reports, rows.Err()
+}
+
 // Tasks returns the tasks the conversation id, as List names it, delegated,
 // in the order of their numbers.
 func (a *Archive) Tasks(id string) ([]Task, error) {
@@ -95,7 +188,7 @@ func (a *Archive) Tasks(id string) ([]Task, error) {
 	if err != nil || db == nil {
 		return nil, err
 	}
-	rows, err := db.Query("SELECT n,title,since,ended FROM history_tasks WHERE session_id=? ORDER BY n", id)
+	rows, err := db.Query("SELECT n,title,since,ended,report,took,routed FROM history_tasks WHERE session_id=? ORDER BY n", id)
 	if err != nil {
 		return nil, err
 	}
@@ -103,11 +196,11 @@ func (a *Archive) Tasks(id string) ([]Task, error) {
 	var tasks []Task
 	for rows.Next() {
 		var t Task
-		var since int64
-		if err = rows.Scan(&t.N, &t.Title, &since, &t.Ended); err != nil {
+		var since, took int64
+		if err = rows.Scan(&t.N, &t.Title, &since, &t.Ended, &t.Report, &took, &t.Routed); err != nil {
 			return nil, err
 		}
-		t.Since = time.Unix(0, since).UTC()
+		t.Since, t.Took = time.Unix(0, since).UTC(), time.Duration(took)
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()

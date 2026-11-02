@@ -183,3 +183,125 @@ func TestGoOnTellsOfTasksTheNodeEnded(t *testing.T) {
 		t.Errorf("stopping a task that ended with the node: %v", err)
 	}
 }
+
+// A report that ended before the agent took it is kept, and a node that
+// starts anew tells it once, as the report of that task and not as a message
+// of the owner, marked as coming from before the restart.
+func TestTaskReportWaitsForTheNextImage(t *testing.T) {
+	dir := t.TempDir()
+	done, running := make(chan struct{}), make(chan struct{})
+	asked := make(texts, 4)
+	first := service(t, delegator(asked, waiting("first work", done, "first finding", nil), waiting("second work", running, "second finding", nil)))
+	first.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
+	ctx := context.Background()
+	_, live, _ := first.Watch(ctx, "s1")
+	if err := first.Ask(ctx, "s1", "start"); err != nil {
+		t.Fatal(err)
+	}
+	<-asked
+	until(t, live, Answer) // the answer that delegated both tasks
+	close(done)            // the first ends while the second runs: its report waits
+	until(t, live, Tasks)
+	var kept []history.Task
+	var err error
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		kept, err = history.Open(dir).Tasks("owner/s1")
+		if err == nil && len(kept) == 2 && kept[0].Ended == history.TaskReport && strings.Contains(kept[0].Report, "first finding") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("kept over the restart: %+v, %v", kept, err)
+		}
+	}
+	first.Close() // the node goes away before the agent took the report
+
+	old := processInstance
+	processInstance = presentation.NewID() // the image that starts anew
+	defer func() { processInstance = old }()
+
+	told := make(chan string, 4)
+	next := service(t, &fakeAgent{run: func(_ context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		told <- text
+		return "went on", nil
+	}})
+	next.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
+	_, nextLive, _ := next.Watch(ctx, "s1")
+	next.GoOn()
+	got := until(t, nextLive, Task)
+	var report *Event
+	for i := range got {
+		if got[i].Kind == Task {
+			report = &got[i]
+		}
+	}
+	if report == nil || report.N != 1 || report.Remark != "first work" || report.Text != "first finding" {
+		t.Fatalf("told as the report of the task: %+v in %+v", report, got)
+	}
+	select {
+	case text := <-told:
+		for _, want := range []string{"first finding", "before the restart", "second work", "work is lost"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("told %q, want %q", text, want)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session was not told the report that waited")
+	}
+	next.answers.Wait()
+	kept, err = history.Open(dir).Tasks("owner/s1")
+	if err != nil || len(kept) != 2 || kept[0].Ended != history.TaskEnded || kept[0].Report != "" || kept[1].Ended != history.TaskRestart {
+		t.Fatalf("kept after it was told: %+v, %v", kept, err)
+	}
+	if pending, err := history.Open(dir).PendingTaskReports(processInstance); err != nil || len(pending) != 0 {
+		t.Fatalf("told again at the next start: %+v, %v", pending, err)
+	}
+	next.GoOn()
+	select {
+	case text := <-told:
+		t.Fatalf("it was told twice: %q", text)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A session whose only news from before the restart is the report of a task
+// is told that ouro started anew, and the report follows.
+func TestGoOnTellsAReportAlone(t *testing.T) {
+	dir := t.TempDir()
+	report := history.Task{N: 1, Title: "look", Since: time.Now(), Report: assistant.TaskReport(1, "look", "found it", nil)}
+	if err := history.Open(dir).SetTaskReport("owner/s1", report, "old"); err != nil {
+		t.Fatal(err)
+	}
+	old := processInstance
+	processInstance = presentation.NewID()
+	defer func() { processInstance = old }()
+
+	ctx := context.Background()
+	told := make(chan string, 4)
+	next := service(t, &fakeAgent{run: func(_ context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		told <- text
+		return "went on", nil
+	}})
+	next.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
+	_, live, _ := next.Watch(ctx, "s1")
+	next.GoOn()
+	got := until(t, live, Task)
+	for _, e := range got {
+		if e.Kind == Message && (!strings.Contains(e.Text, "[Not from the owner:") || !strings.Contains(e.Text, "before the restart")) {
+			t.Fatalf("not marked as coming from before the restart: %+v", e)
+		}
+	}
+	select {
+	case text := <-told:
+		for _, want := range []string{"[Not from the owner:", "before the restart", "task 1 · look", "found it"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("told %q, want %q", text, want)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session was not told the report alone")
+	}
+	next.answers.Wait()
+	if tasks, err := history.Open(dir).Tasks("owner/s1"); err != nil || len(tasks) != 1 || tasks[0].Ended != history.TaskEnded {
+		t.Fatalf("kept after it was told: %+v, %v", tasks, err)
+	}
+}
