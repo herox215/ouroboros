@@ -995,8 +995,6 @@ type requestsScreen struct {
 	acceptingAll bool     // a bulk decision is on its way
 	trust        Contacts // what waits
 	sel          int      // the entry selected
-	unread       int      // what came since the screen was last open
-	seen         int      // how much waited when it was last looked at
 }
 
 // handleKey handles keys in the suggestions dialog: up and
@@ -1039,7 +1037,6 @@ func (m *Model) leave() tea.Cmd {
 func (m *Model) openSuggestions() tea.Cmd {
 	m.screen = screenSuggestions
 	m.suggestionRequests.sel, m.choice = 0, accept
-	m.suggestionRequests.unread = 0
 	return m.loadContacts
 }
 
@@ -1116,13 +1113,6 @@ func (r *requestsScreen) apply(m *Model, trust Contacts) {
 		r.sel = 0
 	}
 	r.trust = trust
-	if trust.waiting() > r.seen {
-		r.unread += trust.waiting() - r.seen
-	}
-	if m.screen == screenSuggestions {
-		r.unread = 0
-	}
-	r.seen = trust.waiting()
 	r.selectAt(m, r.sel)
 }
 

@@ -98,7 +98,7 @@ func TestSuggestionsArePending(t *testing.T) {
 	b.trust.Suggestions = []plugin.Suggestion{{ID: "s3", Text: "one more"}}
 	b.mu.Unlock()
 	m.Update(m.loadContacts())
-	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "1 suggestions") {
+	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "1 suggestion ") {
 		t.Fatalf("one suggestion: %q", line)
 	}
 	m.suggestionRequests.selectAt(m, 0)

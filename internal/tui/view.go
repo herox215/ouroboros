@@ -82,7 +82,11 @@ func (m *Model) pendingRows() int {
 // for a decision, and where to decide.
 func (r *requestsScreen) pendingView(m *Model, w int) string {
 	n := len(r.trust.Suggestions)
-	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d suggestions", n)) +
+	noun := "suggestions"
+	if n == 1 {
+		noun = "suggestion"
+	}
+	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d %s", n, noun)) +
 		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/suggestions") +
 		mutedStyle.Render(" to decide")
 	return ansi.Truncate(line, w, "…")

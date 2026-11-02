@@ -554,7 +554,7 @@ func TestTheHeadOfAWholeScreen(t *testing.T) {
 	view := strip(m.View().Content)
 	lines := strings.Split(view, "\n")
 	if !strings.HasPrefix(lines[0], " OUROBOROS · NEW CONVERSATION · ") || strings.Contains(lines[0], "SUGGESTIONS") ||
-		!strings.Contains(lines[len(lines)-1], "● 1 suggestions") {
+		!strings.Contains(lines[len(lines)-1], "● 1 suggestion ") {
 		t.Fatalf("the context:\n%s", view)
 	}
 }
