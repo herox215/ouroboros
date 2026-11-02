@@ -777,6 +777,11 @@ The response includes the ID and up to three upcoming runs, with weekday and zon
 `schedule_read` lists jobs; with `id`, it reads one job and its last ten run records.
 `schedule_update` with `action: "update"`, `id` and changed fields edits a job; `at`
 and `cron` replace each other. Set `paused: true` to pause, or `false` to resume.
+`action: "run"` takes only `id` and starts the job at once: it skips the claim, leaves
+`next` and the rest of the schedule untouched, and records the run in the job's history
+like a scheduled one, except that its generated request says it runs now at your request
+rather than for a planned time. A job whose previous run is still active is not started
+a second time.
 `action: "remove"` takes only `id` and removes the job; it does not cancel an already
 running answer. The saved directory and zone cannot be supplied through these tools.
 
