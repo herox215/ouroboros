@@ -294,8 +294,7 @@ func (a *Assistant) finish(now time.Time) {
 }
 
 // tidy archives the memories that expired or are never used, see
-// memory.Store.Tidy, and has the archivist look at the memories of every
-// profile once it is due, see archive.
+// memory.Store.Tidy.
 func (a *Assistant) tidy(now time.Time) {
 	if a.builder.memories == nil {
 		return

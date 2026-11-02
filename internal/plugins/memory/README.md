@@ -10,11 +10,24 @@ root (import `ouroboros/internal/plugins/memory`). This plugin contributes:
 | `memory_forget` | Delete the current version and its search rows |
 | `memory_read` | Read by ID within global or current-project scope |
 | `memory_search` | Search literal tokens or list recent memories |
+| `memory_undo` | Take back one change of the archivist, by its ID |
+| `memory_merge` | Merge memories of one scope into one that takes their place |
+| `memory_rewrite` | Make one memory shorter or more general |
+| `memory_split` | Split one memory that holds several facts |
+| `memory_scope` | Move one memory to global, or to the project of this conversation |
+| `memory_core` | Make one memory core, or no longer core |
+| `memory_archive` | Archive one memory that no longer holds |
 
-All five tools are owner-only, including direct-handler peer rejection. They
+The archivist runs as an ordinary scheduled job that the schedule plugin seeds
+once per profile ("Archive memories", daily at 04:00, no questions): its session
+tidies the memories with the six tools above, every change carries its reason,
+and every change can be undone with `memory_undo`. The cadence is edited with
+`schedule_update` like that of any other job.
+
+These tools are owner-only, including direct-handler peer rejection. They
 require an authenticated conversation context. Mutations should only follow
-explicit user requests; there is no background extraction, injection of memories
-into prompts, inference, or transcript ingestion. Search when in doubt rather
+explicit user requests, except the archivist's scheduled job, which tidies the
+memories there are; there is no extraction from transcripts, no inference. Search when in doubt rather
 than guessing. Retrieved memories are hints which can become outdated.
 
 Writes/read/forget default to `global`. Their `project` scope is derived exclusively

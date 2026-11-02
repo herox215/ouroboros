@@ -37,11 +37,29 @@ func (s *scheduler) seedDefault(now time.Time) {
 	if _, err := os.Stat(marker); err == nil {
 		return
 	}
+	for _, job := range s.store.List() {
+		if job.Name == archivistName {
+			// The job is there and only the marker is missing: write it, and
+			// do not seed a second one.
+			s.markSeeded(marker)
+			return
+		}
+	}
 	job := store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never"}
-	if _, err := s.store.Create(job, now); err != nil && !errors.Is(err, store.ErrFull) {
-		s.report("seed %q: %v", archivistName, err)
+	if _, err := s.store.Create(job, now); err != nil {
+		// A full store is not a decision of the owner: without a marker the
+		// next tick tries again, once a job has gone.
+		if !errors.Is(err, store.ErrFull) {
+			s.report("seed %q: %v", archivistName, err)
+		}
 		return
 	}
+	s.markSeeded(marker)
+}
+
+// markSeeded records that the default jobs were seeded, so that a job the
+// owner removes stays removed.
+func (s *scheduler) markSeeded(marker string) {
 	if err := os.WriteFile(marker, []byte("archivist\n"), 0600); err != nil {
 		s.report("seed %q: %v", archivistName, err)
 	}

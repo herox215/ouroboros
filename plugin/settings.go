@@ -381,7 +381,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the interval of the memory archivist", "the window of the thread"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the window of the thread"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}

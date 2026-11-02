@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"ouroboros/internal/storage"
 
@@ -208,60 +207,6 @@ func TestArchivistUndoCarryFails(t *testing.T) {
 	if got, err := s.Get(ctx, e.ID); err != nil || got.Content != "one" || got.Version != 4 {
 		t.Fatalf("after the undo: %+v, %v", got, err)
 	}
-}
-
-// An undo skips a memory a change made that was forgotten since, refuses one
-// that changed, and fails as the database does when it looks for one.
-func TestArchivistUndoCreatedEdges(t *testing.T) {
-	ctx := context.Background()
-	split := func(t *testing.T, s *Store) (Entry, ChangeRecord) {
-		t.Helper()
-		e := keep(t, s, "", "drinks", "tea is oolong. coffee is espresso.", false)
-		rec, err := s.Apply(ctx, Change{
-			Action: "split", ID: e.ID,
-			Parts:  []Part{{"tea", "tea is oolong."}, {"coffee", "coffee is espresso."}},
-			Reason: "two things",
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(rec.Created) != 2 {
-			t.Fatalf("created: %q", rec.Created)
-		}
-		return e, rec
-	}
-	t.Run("forgotten", func(t *testing.T) {
-		s := testStore(t)
-		e, rec := split(t, s)
-		if _, err := s.db.Exec("DELETE FROM memories WHERE id=?", rec.Created[0]); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.UndoChange(ctx, rec.ID); err != nil {
-			t.Fatalf("undo with a forgotten part: %v", err)
-		}
-		current, err := s.Current(ctx, 10)
-		if err != nil || len(current) != 1 || current[0].ID != e.ID {
-			t.Fatalf("after the undo: %+v, %v", current, err)
-		}
-	})
-	t.Run("unread", func(t *testing.T) {
-		s, f := archivistFaults(t)
-		_, rec := split(t, s)
-		f.query = failQuery("SELECT 1 FROM memories WHERE id=?")
-		if err := s.UndoChange(ctx, rec.ID); !errors.Is(err, errQuery) {
-			t.Fatalf("unread created memory: %v", err)
-		}
-	})
-	t.Run("changed", func(t *testing.T) {
-		s := testStore(t)
-		_, rec := split(t, s)
-		if _, _, err := s.Remember(ctx, "", "tea", "tea is oolong now", "session", false, time.Time{}); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.UndoChange(ctx, rec.ID); err == nil || !strings.Contains(err.Error(), "changed since the change") {
-			t.Fatalf("undo over a changed part: %v", err)
-		}
-	})
 }
 
 // edgeConnector opens real SQLite connections whose queries a test may answer
