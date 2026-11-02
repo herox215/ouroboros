@@ -334,6 +334,7 @@ func TestDelegationScopeGuidance(t *testing.T) {
 				"With task_tell you tell a helper what changed, like what the owner asked of the work, and with task_stop you stop one that is no longer needed.",
 				"Combine all results into one final answer; do not present a partial result as the conclusion or send separate final answers for individual helpers.",
 				"First investigate the remaining areas outside the delegated scopes; do not repeat a helper's search or reading while it works.",
+				"Where you need what the helpers find in this same answer, to work it in, test it and finish yourself, give the call wait: true: it returns their answers then, and nothing runs past your answer.",
 				"Then use the helper reports to bring the analysis together, and check delegated code yourself only where a report leaves a specific uncertainty or finding to verify; do not broadly reread delegated paths or repeat the analysis.",
 			} {
 				if strings.Contains(got, rule) != want {
@@ -408,6 +409,21 @@ func TestDelegateStartsTheTasks(t *testing.T) {
 	background.err = errTest
 	if _, err := delegating(llm).Run(ctx, tasks("c")); !errors.Is(err, errTest) {
 		t.Fatalf("none started: %v", err)
+	}
+}
+
+// A call that waits does not start its tasks in the background, even where
+// they could run there: it does them at once and returns what each ended
+// with, in the same round.
+func TestDelegateWaitsWhenAsked(t *testing.T) {
+	llm := newHelpers(2)
+	background := &started{first: 2}
+	got, err := delegating(llm).Run(WithTasks(context.Background(), background), json.RawMessage(`{"wait":true,"tasks":[{"task":"a"},{"task":"b"}]}`))
+	if err != nil || got != `[{"answer":"done: a"},{"answer":"done: b"}]` {
+		t.Fatalf("got %s, %v", got, err)
+	}
+	if len(background.tasks) != 0 {
+		t.Fatalf("started %+v", background.tasks)
 	}
 }
 

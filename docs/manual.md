@@ -1366,7 +1366,7 @@ it is a model of another provider, see [Providers and accesses](#providers-and-a
 | `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The tool asks directly through the user-question interface, shows old and new values, and waits; only “Apply change” applies it |
 | `withdraw_proposal(id?)` | lists or removes legacy stored proposals only; new changes ask directly and are not queued |
 | `user_question(question, options?, recommended?)` | asks you `question` and waits for your answer, which it returns: with 2 to 6 `options` to choose from, one of them `recommended` if the agent has a preference, or without any, for you to write it |
-| `delegate(tasks)` | starts 1 to 4 tasks in the background, each done by a helper, and returns at once with their numbers; the report of each comes as a message once it ended. A task is `{task, tools?}`: `tools` narrows what the helper may use |
+| `delegate(tasks, wait?)` | starts 1 to 4 tasks in the background, each done by a helper, and returns at once with their numbers; the report of each comes as a message once it ended. With `wait: true` it waits for them instead and returns what each ended with, as `{"answer": "…"}` or `{"error": "…"}` per task, in their order. A task is `{task, tools?}`: `tools` narrows what the helper may use |
 
 **The agent can ask you on the way.** When it cannot go on without a decision of yours, it asks with
 `user_question` instead of guessing or ending its answer with the question, as its prompt tells it: the
@@ -1394,7 +1394,9 @@ and forgets it once it answered; what it said along the way is neither shown nor
 A task keeps the node running as an answer does, and a new build waits for it; `esc` and `/cancel` stop the
 tasks of the conversation along with its answer, and a stopped task is not reported. A conversation in which a
 task runs is not deleted. Where nothing runs past the answer, `delegate` waits for its tasks and returns what
-each ended with. Take `delegate` out of `tools.h2a` if your agent is not to use helpers.
+each ended with. A call with `wait: true` waits for them even where they could run in the background: the agent
+uses it when it needs what its helpers find in the same answer, to work it in, test it and finish the work
+itself. Take `delegate` out of `tools.h2a` if your agent is not to use helpers.
 
 **Trust comes only from your decision.** Configuration changes proposed by your agent ask directly in
 its conversation through the same question interface as `user_question`. The question shows the field,

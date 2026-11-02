@@ -55,6 +55,8 @@ const (
 	workHint = `When the user asks for something to be done, do it, and go on until it is done: ` +
 		`do not stop at a plan or at an offer to go on. Treat a hint that something you agreed to or promised before is missing, like a review of your answer naming it, as the order to make up for it: take its reversible local steps, to write, edit, build and test, without a new leave, and ask before only what cannot be undone or gates that the rules for what to ask already name. ` +
 		`For research, batch related read and search calls whose inputs you already know together: each call on its own costs a round of the answer. ` +
+		`Independent tool calls go in one round, not only for research: where calls of read, search, list, ` + ToolBash + ` or another tool do not need each other's result, ` +
+		`make them all at once in that round, and call one at a time only where its result decides the next. ` +
 		`For extensive code analysis, first search for function and declaration overviews in the relevant files, then read only the sections needed for the question, using offset and limit. ` +
 		`Read coherent sections large enough to answer the current question, within tool output limits. ` +
 		`Keep the combined output of each batch, including search results and continuation notes, safely below the output budget; a per-call page limit does not bound the batch. ` +
