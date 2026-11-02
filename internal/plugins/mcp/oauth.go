@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -59,7 +60,7 @@ type data struct {
 // discovery of the resource and authorization server metadata, a client that
 // registers itself, the authorization code with PKCE, and refresh tokens. What
 // it gets is kept in the credentials of the node, as the access of the server.
-func (m *manager) oauth(st *server) (auth.OAuthHandler, error) {
+func (m *manager) oauth(st *server, interactive bool) (auth.OAuthHandler, error) {
 	a, err := m.access(st.name)
 	if err != nil && !errors.Is(err, credentials.ErrGone) {
 		return nil, err
@@ -78,7 +79,7 @@ func (m *manager) oauth(st *server) (auth.OAuthHandler, error) {
 			TokenEndpointAuthMethod: "none",
 		}},
 		RedirectURL:              redirectURL,
-		AuthorizationCodeFetcher: m.fetcher(st.name),
+		AuthorizationCodeFetcher: m.fetcher(st.name, interactive),
 		// A token to renew what the owner agreed to use: this node is on a
 		// work machine, and the tokens sit in a file only the owner reads.
 		RequestRefreshToken:   true,
@@ -102,7 +103,9 @@ func (m *manager) oauth(st *server) (auth.OAuthHandler, error) {
 type persisted struct {
 	source oauth2.TokenSource
 	save   func(*oauth2.Token)
-	last   *oauth2.Token
+
+	mu   sync.Mutex // guards last: the token source is asked from many requests at once
+	last *oauth2.Token
 }
 
 func (p *persisted) Token() (*oauth2.Token, error) {
@@ -110,11 +113,14 @@ func (p *persisted) Token() (*oauth2.Token, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.last != token {
+	p.mu.Lock()
+	fresh := p.last != token
+	if fresh {
 		p.last = token
-		if token.AccessToken != "" {
-			p.save(token)
-		}
+	}
+	p.mu.Unlock()
+	if fresh && token.AccessToken != "" {
+		p.save(token)
 	}
 	return token, nil
 }
@@ -196,10 +202,21 @@ func (m *manager) forget(name string) error {
 	return credentials.Open(string(m.dir)).Remove(access.ID)
 }
 
+// errNeedsSignIn says that the server asks for a sign-in, which only the
+// owner starts, from /mcp or with ouro mcp login.
+var errNeedsSignIn = errors.New("the server needs a sign-in: sign in to it with /mcp or ouro mcp login")
+
 // fetcher opens the page of the authorization server in the browser of the
 // owner and waits for it to come back to this machine.
-func (m *manager) fetcher(name string) auth.AuthorizationCodeFetcher {
+//
+// Unless the owner asked for the sign-in, it does not open anything: a 401
+// during the start of the node or in the middle of a tool call is no reason
+// to take the browser of a work machine.
+func (m *manager) fetcher(name string, interactive bool) auth.AuthorizationCodeFetcher {
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+		if !interactive {
+			return nil, fmt.Errorf("%s: %w", name, errNeedsSignIn)
+		}
 		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", callbackPort))
 		if err != nil {
 			return nil, fmt.Errorf("the sign-in of %s waits for the browser on port %d, which is taken: %w", name, callbackPort, err)

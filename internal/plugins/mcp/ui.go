@@ -3,7 +3,6 @@ package mcp
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,8 +26,10 @@ func (m *manager) screen() plugin.Screen {
 			return m.status(servers), nil
 		},
 		Actions: []plugin.Action{
-			{Name: "reconnect", Run: m.reconnectAll},
-			{Name: "sign in", Run: m.signInAll},
+			{Name: "reconnect", Run: func(ctx context.Context) (string, error) { return m.connectAll(ctx, false) }},
+			// A sign-in is the one place where the browser of the owner opens,
+			// and it waits for the owner, not for a server to answer.
+			{Name: "sign in", Run: func(ctx context.Context) (string, error) { return m.connectAll(ctx, true) }},
 			{Name: "log out", Run: m.logOutAll},
 		},
 	}
@@ -43,7 +44,7 @@ func (m *manager) status(servers map[string]config.Server) string {
 	var b strings.Builder
 	for _, name := range sortedNames(servers) {
 		s := servers[name]
-		how := cmp.Or(s.URL, s.Command+" "+strings.Join(s.Args, " "))
+		how := cmp.Or(s.URL, strings.TrimSpace(s.Command+" "+strings.Join(s.Args, " ")))
 		status, tools := statusDisabled, 0
 		if !s.Disabled {
 			status = "not connected"
@@ -57,20 +58,26 @@ func (m *manager) status(servers map[string]config.Server) string {
 		}
 		b.WriteString("\n")
 		if st := m.state(name); st != nil {
-			if err, _ := st.failure(); err != nil && !strings.HasPrefix(st.currentStatus(), statusNeedsAuth) {
+			if err, _ := st.failure(); err != nil && st.currentStatus() != statusNeedsAuth {
 				fmt.Fprintf(&b, "  %v\n", err)
 			}
 		}
 	}
-	b.WriteString("\nEsc leaves. The agent uses a server only when it is connected.")
+	b.WriteString("\nEsc leaves. \"sign in\" opens the page of the server's authorization server.")
 	return b.String()
 }
 
-// reconnectAll connects every enabled server again, with its tools.
-func (m *manager) reconnectAll(ctx context.Context) (string, error) {
+// connectAll connects every enabled server, each with the time to answer on
+// its own, and says what became of them. With interactive, a server that asks
+// for a sign-in may open the browser of the owner.
+func (m *manager) connectAll(ctx context.Context, interactive bool) (string, error) {
 	servers, err := m.configured()
 	if err != nil {
 		return "", err
+	}
+	wait := connectTimeout
+	if interactive {
+		wait += signInTimeout
 	}
 	var b strings.Builder
 	for _, name := range sortedNames(servers) {
@@ -78,16 +85,11 @@ func (m *manager) reconnectAll(ctx context.Context) (string, error) {
 		if s.Disabled {
 			continue
 		}
-		st := &server{name: name, cfg: s}
-		m.mu.Lock()
-		if old, ok := m.servers[name]; ok {
-			st = old
-			st.cfg = s
-		}
-		m.servers[name] = st
-		m.mu.Unlock()
+		st := m.server(name, s)
 		st.drop()
-		tools, err := m.connect(ctx, st)
+		attempt, cancel := context.WithTimeout(ctx, wait)
+		tools, err := m.connect(attempt, st, interactive)
+		cancel()
 		if err != nil {
 			fmt.Fprintf(&b, "%s: %v\n", name, err)
 			continue
@@ -95,12 +97,6 @@ func (m *manager) reconnectAll(ctx context.Context) (string, error) {
 		fmt.Fprintf(&b, "%s: %d tools\n", name, len(tools))
 	}
 	return strings.TrimSpace(b.String()), nil
-}
-
-// signInAll connects the servers that asked for a sign-in, which opens the
-// page of the authorization server.
-func (m *manager) signInAll(ctx context.Context) (string, error) {
-	return m.reconnectAll(ctx)
 }
 
 // logOutAll drops what the servers sign in with.
@@ -142,7 +138,7 @@ func (m *manager) command() plugin.Command {
 
 func (m *manager) runCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ouro mcp " + "add|remove|list|tools|login|logout|enable|disable")
+		return errors.New("usage: ouro mcp add|remove|list|tools|login|logout|enable|disable")
 	}
 	action, rest := args[0], args[1:]
 	switch action {
@@ -154,19 +150,12 @@ func (m *manager) runCommand(ctx context.Context, args []string) error {
 		fmt.Println(m.status(servers))
 		return nil
 	case "tools":
-		if len(rest) == 0 {
-			return errors.New("usage: ouro mcp tools NAME")
-		}
-		servers, err := m.configured()
+		st, err := m.one(rest, "tools")
 		if err != nil {
 			return err
 		}
-		s, ok := servers[rest[0]]
-		if !ok {
-			return fmt.Errorf("there is no MCP server called %q", rest[0])
-		}
-		st := &server{name: rest[0], cfg: s}
-		tools, err := m.connect(ctx, st)
+		defer st.drop()
+		tools, err := m.connect(ctx, st, false)
 		if err != nil {
 			return err
 		}
@@ -175,19 +164,16 @@ func (m *manager) runCommand(ctx context.Context, args []string) error {
 		}
 		return nil
 	case "login":
-		if len(rest) == 0 {
-			return errors.New("usage: ouro mcp login NAME")
-		}
-		servers, err := m.configured()
+		st, err := m.one(rest, "login")
 		if err != nil {
 			return err
 		}
-		s, ok := servers[rest[0]]
-		if !ok {
-			return fmt.Errorf("there is no MCP server called %q", rest[0])
-		}
-		st := &server{name: rest[0], cfg: s}
-		if _, err := m.connect(ctx, st); err != nil {
+		defer st.drop()
+		// The owner is at the browser page now: the server may take as long as
+		// it takes.
+		attempt, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectTimeout+signInTimeout)
+		defer cancel()
+		if _, err := m.connect(attempt, st, true); err != nil {
 			return err
 		}
 		fmt.Println(rest[0], statusConnected)
@@ -213,57 +199,104 @@ func (m *manager) runCommand(ctx context.Context, args []string) error {
 	return fmt.Errorf("unknown command %q: ouro mcp add|remove|list|tools|login|logout|enable|disable", action)
 }
 
+// one is the server the command names, as it is configured.
+func (m *manager) one(rest []string, action string) (*server, error) {
+	if len(rest) == 0 {
+		return nil, fmt.Errorf("usage: ouro mcp %s NAME", action)
+	}
+	servers, err := m.configured()
+	if err != nil {
+		return nil, err
+	}
+	s, ok := servers[rest[0]]
+	if !ok {
+		return nil, fmt.Errorf("there is no MCP server called %q", rest[0])
+	}
+	return &server{name: rest[0], cfg: s}, nil
+}
+
+// addUsage is how a server is added.
+const addUsage = "usage: ouro mcp add NAME URL [Header: Value ...]\n" +
+	"       ouro mcp add NAME [-e KEY=VALUE ...] --command PROGRAM [ARG ...]"
+
 // add is ouro mcp add NAME URL [Header: Value ...] or ouro mcp add NAME
-// --command PROGRAM [ARG ...] [-e KEY=VALUE ...]. What it is given to sign in
-// with, a header or an env value, is kept in the credentials of the node, not
-// in the configuration.
+// [-e KEY=VALUE ...] --command PROGRAM [ARG ...]. What the server is given to
+// sign in with, an env value or a header, is kept in the credentials of the
+// node, not in the configuration, and the configuration names it ${KEY}.
 func (m *manager) add(args []string) error {
-	if len(args) < 2 {
-		return errors.New("usage: ouro mcp add NAME URL [Header: Value ...] | ouro mcp add NAME --command PROGRAM [ARG ...] [-e KEY=VALUE ...]")
+	if len(args) < 1 {
+		return errors.New(addUsage)
 	}
 	name := args[0]
-	s := config.Server{}
-	env, headers := map[string]string{}, map[string]string{}
-	var configEnv, configHeaders = map[string]string{}, map[string]string{}
-	rest := args[1:]
-	if len(rest) > 0 && (rest[0] == "--command" || rest[0] == "-c") {
-		if len(rest) < 2 {
-			return errors.New("ouro mcp add: --command needs a program")
-		}
-		s.Command = rest[1]
-		s.Args = rest[2:]
-		for i := 0; i < len(s.Args); i++ {
-			if key, value, ok := strings.Cut(s.Args[i], "="); ok && key == "-e" {
-				env[value] = ""
-				configEnv[value] = "${" + value + "}"
-				s.Args = append(s.Args[:i], s.Args[i+1:]...)
-				i--
-			}
-		}
-	} else {
-		s.URL = rest[0]
-		for _, header := range rest[1:] {
-			key, value, ok := strings.Cut(header, ":")
-			if !ok {
-				return fmt.Errorf("%q is no header: write it as Name: Value", header)
-			}
-			key = strings.TrimSpace(key)
-			headers[key] = strings.TrimSpace(value)
-			configHeaders[key] = "${" + key + "}"
-		}
+	s, secret, err := parseAdd(args[1:])
+	if err != nil {
+		return err
 	}
 	if err := s.Validate(name); err != nil {
 		return err
 	}
-	s.Env, s.Headers = configEnv, configHeaders
 	if err := m.setServer(name, &s); err != nil {
 		return err
 	}
-	if len(env) > 0 || len(headers) > 0 {
-		m.put(name, s, data{}, stored{Env: env, Headers: headers})
+	if len(secret.Env) > 0 || len(secret.Headers) > 0 {
+		m.put(name, s, data{}, secret)
 	}
 	fmt.Printf("%s added. Its tools are there after the next start of the node, or with: ouro mcp login %s\n", name, name)
 	return nil
+}
+
+// parseAdd reads what follows the name of a server in ouro mcp add: the
+// options of the server, then either its URL with headers or its program.
+func parseAdd(args []string) (config.Server, stored, error) {
+	s := config.Server{}
+	secret := stored{Env: map[string]string{}, Headers: map[string]string{}}
+	for len(args) > 0 {
+		if args[0] != "-e" && args[0] != "--env" {
+			break
+		}
+		if len(args) < 2 {
+			return s, secret, errors.New(args[0] + " needs a value: write -e KEY=VALUE")
+		}
+		key, value, ok := strings.Cut(args[1], "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return s, secret, fmt.Errorf("%q is no env value: write it as KEY=VALUE", args[1])
+		}
+		secret.Env[key] = value
+		args = args[2:]
+	}
+	if len(args) == 0 {
+		return s, secret, errors.New(addUsage)
+	}
+	for key := range secret.Env {
+		if s.Env == nil {
+			s.Env = map[string]string{}
+		}
+		s.Env[key] = "${" + key + "}"
+	}
+	if args[0] == "--command" || args[0] == "-c" {
+		if len(args) < 2 {
+			return s, secret, errors.New("ouro mcp add: --command needs a program")
+		}
+		// Everything after the program belongs to the program: an argument of
+		// the server that begins with -e is no option of ouro.
+		s.Command, s.Args = args[1], args[2:]
+		return s, secret, nil
+	}
+	s.URL = args[0]
+	for _, header := range args[1:] {
+		key, value, ok := strings.Cut(header, ":")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return s, secret, fmt.Errorf("%q is no header: write it as Name: Value", header)
+		}
+		if s.Headers == nil {
+			s.Headers = map[string]string{}
+		}
+		secret.Headers[key] = strings.TrimSpace(value)
+		s.Headers[key] = "${" + key + "}"
+	}
+	return s, secret, nil
 }
 
 // setServer writes the server name, or removes it with none.
@@ -291,8 +324,7 @@ func (m *manager) setServer(name string, s *config.Server) error {
 		return err
 	}
 	if s == nil {
-		access, err := m.access(name)
-		if err == nil {
+		if access, err := m.access(name); err == nil {
 			_ = credentials.Open(string(m.dir)).Remove(access.ID)
 		}
 	}
@@ -337,7 +369,3 @@ func firstLine(s string) string {
 	}
 	return s
 }
-
-// unusedJSON keeps the import of encoding/json for the data of a server, in
-// one place.
-var _ = json.Marshal

@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +59,7 @@ const (
 // and the command ouro mcp.
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.New(pluginName, func(ctx *plugin.Context, _ struct{}) error {
-		m := &manager{ctx: ctx, dir: dir, servers: map[string]*server{}, added: map[string]bool{}}
+		m := &manager{ctx: ctx, dir: dir, servers: map[string]*server{}, added: map[string]string{}}
 		// The connections are started by the node that serves, and ended with
 		// it: a front end starts the same plugins without serving, and would
 		// start every program of a server a second time.
@@ -76,7 +78,7 @@ type manager struct {
 
 	mu      sync.Mutex // guards what follows
 	servers map[string]*server
-	added   map[string]bool // tool names the agents already have
+	added   map[string]string // tool name of the agents -> server/tool it calls
 }
 
 // server is one configured MCP server.
@@ -86,37 +88,53 @@ type server struct {
 
 	mu        sync.Mutex // guards what follows
 	session   *mcpsdk.ClientSession
+	program   *program // the program of a local server, whose group ends with the connection
 	tools     []*mcpsdk.Tool
 	status    string
 	err       error
 	connected bool
 }
 
-// start connects every enabled server and hands its tools to the agents.
+// start connects every enabled server and hands its tools to the agents. The
+// servers are independent: each gets the time to answer on its own, and they
+// are connected at the same time.
 func (m *manager) start() {
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	defer cancel()
 	servers, err := m.configured()
 	if err != nil {
 		return
 	}
+	var wg sync.WaitGroup
 	for _, name := range sortedNames(servers) {
-		m.mu.Lock()
-		st := &server{name: name, cfg: servers[name]}
-		if old, ok := m.servers[name]; ok {
-			st = old
-			st.cfg = servers[name]
-		}
-		m.servers[name] = st
-		m.mu.Unlock()
+		st := m.server(name, servers[name])
 		if servers[name].Disabled {
 			st.set(statusDisabled, nil)
 			continue
 		}
-		if _, err := m.connect(ctx, st); err != nil {
-			continue // the status says why, and /mcp connects again
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+			defer cancel()
+			// No sign-in here: a node that starts opens no browser. A server
+			// that asks for one says so, and the owner signs in from /mcp.
+			_, _ = m.connect(ctx, st, false)
+		}()
 	}
+	wg.Wait()
+}
+
+// server is the state of the configured server name, which keeps its
+// connection when it has one.
+func (m *manager) server(name string, cfg config.Server) *server {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, ok := m.servers[name]
+	if !ok {
+		st = &server{name: name}
+		m.servers[name] = st
+	}
+	st.cfg = cfg
+	return st
 }
 
 // close ends every connection, and the programs of the local servers with it.
@@ -150,7 +168,7 @@ func (m *manager) state(name string) *server {
 
 // connect connects the server st, lists its tools and hands them to the
 // agents.
-func (m *manager) connect(ctx context.Context, st *server) ([]*mcpsdk.Tool, error) {
+func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]*mcpsdk.Tool, error) {
 	if st.cfg.Disabled {
 		st.set(statusDisabled, nil)
 		return nil, errors.New("the server " + st.name + " is disabled")
@@ -159,7 +177,7 @@ func (m *manager) connect(ctx context.Context, st *server) ([]*mcpsdk.Tool, erro
 		st.set("failed: "+err.Error(), err)
 		return nil, err
 	}
-	transport, err := m.transport(ctx, st)
+	transport, prog, err := m.transport(ctx, st, interactive)
 	if err != nil {
 		st.set("failed: "+err.Error(), err)
 		return nil, err
@@ -172,28 +190,38 @@ func (m *manager) connect(ctx context.Context, st *server) ([]*mcpsdk.Tool, erro
 	})
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
+		// A program that was started for the connection ends here, with the
+		// group it started.
+		st.discard(session, prog)
 		st.set(authStatus(err), err)
 		return nil, err
 	}
 	tools, err := listTools(ctx, session)
 	if err != nil {
-		session.Close()
+		st.discard(session, prog)
 		st.set("failed: "+err.Error(), err)
 		return nil, err
 	}
 	st.mu.Lock()
-	if st.session != nil {
-		st.session.Close() // a connection this one replaces
-	}
-	st.session, st.tools, st.status, st.err = session, tools, statusConnected, nil
+	oldSession, oldProgram := st.session, st.program
+	st.session, st.program, st.tools, st.status, st.err = session, prog, tools, statusConnected, nil
 	st.mu.Unlock()
+	// What this connection replaces ends with it.
+	if oldSession != nil {
+		oldSession.Close()
+	}
+	if oldProgram != nil {
+		oldProgram.end()
+	}
 	m.registerTools(st, tools)
 	return tools, nil
 }
 
 // transport is how the server is reached: a program that is started for it,
 // or its URL.
-func (m *manager) transport(ctx context.Context, st *server) (mcpsdk.Transport, error) {
+// transport is how the server is reached, and the program that was started
+// for it, if any.
+func (m *manager) transport(ctx context.Context, st *server, interactive bool) (mcpsdk.Transport, *program, error) {
 	env, headers := m.secrets(st.name), st.cfg.Headers
 	merged := make(map[string]string, len(st.cfg.Headers))
 	for k, v := range headers {
@@ -204,20 +232,26 @@ func (m *manager) transport(ctx context.Context, st *server) (mcpsdk.Transport, 
 			Endpoint:   st.cfg.URL,
 			HTTPClient: &http.Client{Transport: &headerRoundTrip{base: http.DefaultTransport, headers: merged}},
 		}
-		if handler, err := m.oauth(st); err != nil {
-			return nil, err
+		if handler, err := m.oauth(st, interactive); err != nil {
+			return nil, nil, err
 		} else if handler != nil {
 			transport.OAuthHandler = handler
 		}
-		return transport, nil
+		return transport, nil, nil
 	}
-	cmd := exec.Command(st.cfg.Command, st.cfg.Args...)
+	// The program lives as long as its connection: the context is the one that
+	// ends it, and Detach makes its group go with it.
+	life, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(life, st.cfg.Command, st.cfg.Args...)
 	cmd.Env = os.Environ()
 	for k, v := range st.cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+expand(v, env))
 	}
-	procgroup.Detach(cmd) // the program ends with the group ouro starts it in
-	return &mcpsdk.CommandTransport{Command: cmd}, nil
+	// The program gets a group of its own, so that the group can be killed as
+	// a whole: the program of a server is often a wrapper, npx or uvx, and
+	// the server it starts is no child that ends with it.
+	procgroup.Detach(cmd)
+	return &mcpsdk.CommandTransport{Command: cmd}, &program{cmd: cmd, cancel: cancel}, nil
 }
 
 // expand reads a value of the configuration: ${NAME} is the secret NAME of
@@ -295,14 +329,24 @@ func (m *manager) registerTools(st *server, tools []*mcpsdk.Tool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, t := range tools {
-		if !slices.ContainsFunc(st.cfg.Tools, func(name string) bool { return name == t.Name }) && len(st.cfg.Tools) > 0 {
+		if len(st.cfg.Tools) > 0 && !slices.Contains(st.cfg.Tools, t.Name) {
 			continue
 		}
+		owner := st.name + "/" + t.Name
 		name := toolName(st.name, t.Name)
-		if m.added[name] {
+		if had, ok := m.added[name]; ok {
+			if had == owner {
+				continue // this tool, handed out before
+			}
+			// Two tools whose names come out the same, like read.file and
+			// read_file: the second gets a hash of its own name, rather than
+			// being dropped silently under the name of the first.
+			name = uniqToolName(st.name, t.Name, m.added)
+		}
+		if had, ok := m.added[name]; ok && had != owner {
 			continue
 		}
-		m.added[name] = true
+		m.added[name] = owner
 		plugin.Add(m.ctx, m.tool(st, name, t))
 	}
 }
@@ -345,15 +389,15 @@ func (m *manager) call(ctx context.Context, st *server, name string, raw json.Ra
 	defer cancel()
 	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
-		// The server may have ended or lost the session: one more try, on a
-		// connection of its own.
+		// No second call: the server may have run the tool and lost only the
+		// answer, and a tool that writes would write twice. The connection is
+		// dropped instead, so that the next call connects again, and the agent
+		// hears that it does not know what became of this one.
 		st.drop()
-		if again, reconnectErr := m.session(ctx, st); reconnectErr == nil {
-			result, err = again.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: args})
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("the MCP server %s: %w", st.name, ctx.Err())
 		}
-		if err != nil {
-			return "", fmt.Errorf("the MCP server %s: %w", st.name, err)
-		}
+		return "", fmt.Errorf("the MCP server %s: %w. It is not known whether the tool ran; the next call connects again", st.name, err)
 	}
 	text := format(result)
 	if result.IsError {
@@ -363,6 +407,11 @@ func (m *manager) call(ctx context.Context, st *server, name string, raw json.Ra
 }
 
 // session is the connection of the server, started when it is missing.
+//
+// The connection of a tool call is a connection the agent needs silently: it
+// never opens a browser, and it reads the configuration again, because
+// ouro mcp disable or remove changes the file in another process, and a
+// server that is gone must not be started again by a tool call.
 func (m *manager) session(ctx context.Context, st *server) (*mcpsdk.ClientSession, error) {
 	st.mu.Lock()
 	session := st.session
@@ -370,9 +419,24 @@ func (m *manager) session(ctx context.Context, st *server) (*mcpsdk.ClientSessio
 	if session != nil {
 		return session, nil
 	}
+	servers, err := m.configured()
+	if err != nil {
+		return nil, err
+	}
+	cfg, ok := servers[st.name]
+	switch {
+	case !ok:
+		st.drop()
+		return nil, fmt.Errorf("the MCP server %s is no longer configured", st.name)
+	case cfg.Disabled:
+		st.drop()
+		st.set(statusDisabled, nil)
+		return nil, fmt.Errorf("the MCP server %s is disabled", st.name)
+	}
+	st.cfg = cfg
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectTimeout)
 	defer cancel()
-	if _, err := m.connect(ctx, st); err != nil {
+	if _, err := m.connect(ctx, st, false); err != nil {
 		return nil, err
 	}
 	st.mu.Lock()
@@ -438,6 +502,51 @@ func toolName(server, tool string) string {
 	return name
 }
 
+// uniqToolName is a name for the tool that no other tool of the agents has:
+// the plain name, shortened if need be, and then a hash of the server and the
+// tool it belongs to.
+func uniqToolName(server, tool string, taken map[string]string) string {
+	digest := sha256.Sum256([]byte(server + "/" + tool))
+	base := toolName(server, tool)
+	if len(base)+9 > 64 {
+		base = base[:64-9]
+	}
+	for i := 0; i < 8; i++ {
+		name := fmt.Sprintf("%s_%x", base, binary.BigEndian.Uint32(digest[:4]))
+		if _, ok := taken[name]; !ok {
+			return name
+		}
+		digest = sha256.Sum256(digest[:])
+	}
+	return base
+}
+
+// program is the process of a local server.
+type program struct {
+	cmd    *exec.Cmd
+	cancel context.CancelFunc
+}
+
+// end kills the group of the program, the wrapper and every process it
+// started, which closing the session alone leaves behind.
+func (p *program) end() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	_ = procgroup.Kill(p.cmd)
+}
+
+// discard ends a connection that was not taken on, and the program of a local
+// server together with its group.
+func (st *server) discard(session *mcpsdk.ClientSession, prog *program) {
+	if session != nil {
+		session.Close()
+	}
+	if prog != nil {
+		prog.end()
+	}
+}
+
 // set tells what became of the server.
 func (st *server) set(status string, err error) {
 	st.mu.Lock()
@@ -452,8 +561,8 @@ func (st *server) set(status string, err error) {
 // there.
 func (st *server) drop() {
 	st.mu.Lock()
-	session := st.session
-	st.session = nil
+	session, prog := st.session, st.program
+	st.session, st.program = nil, nil
 	st.tools = nil
 	st.connected = false
 	if st.status == statusConnected {
@@ -463,11 +572,19 @@ func (st *server) drop() {
 	if session != nil {
 		session.Close()
 	}
+	if prog != nil {
+		// Closing the session ends the program ouro started, which is often a
+		// wrapper that leaves the server it started behind: the group goes.
+		prog.end()
+	}
 }
 
 // authStatus is what a failure to connect means: a server that asks to sign
 // in, or one that failed.
 func authStatus(err error) string {
+	if errors.Is(err, errNeedsSignIn) {
+		return statusNeedsAuth
+	}
 	text := strings.ToLower(err.Error())
 	if strings.Contains(text, "unauthorized") || strings.Contains(text, "401") || strings.Contains(text, "authorization") || strings.Contains(text, "oauth") {
 		return statusNeedsAuth
