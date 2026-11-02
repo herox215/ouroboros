@@ -521,15 +521,26 @@ type sideRow struct {
 	c    *conversation
 }
 
-// sidebarRows are the rows of the list of the sidebar, inner cells wide: the
-// sessions that run now, oldest change last. Nothing else is listed, and
+// sidebarBanner is what stands at the top left of the sidebar while the
+// thread is shown, inner cells wide: its name as ASCII art and a row below
+// it. It does not move with the list, which sits in the room below it.
+func (m *Model) sidebarBanner(inner int) []string {
+	art, ok := m.threadArt(inner)
+	if !ok {
+		return nil
+	}
+	return append(m.styledBanner(art), "")
+}
+
+// sidebarRows are the rows of the list of the sidebar, inner cells wide:
+// the sessions that run now, oldest change last. Nothing else is listed, and
 // where the thread is scrolled changes nothing.
 func (m *Model) sidebarRows(inner int) []sideRow {
-	rows := []sideRow{{text: boldStyle.Foreground(muted).Render("RUNNING")}, {}}
+	var rows []sideRow
 	for _, c := range m.runningSessions() {
 		rows = append(rows, m.sessionItem(c, inner)...)
 	}
-	if len(rows) == 2 {
+	if len(rows) == 0 {
 		rows = append(rows, sideRow{text: mutedStyle.Render("Nothing runs.")})
 	}
 	return rows
@@ -593,29 +604,28 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 
 // sidebarLayout is where the rows of the sidebar go in a column h rows high:
 // the rows that fit, from the first of them shown, and the row of the screen
-// they begin at. As in the GUI, the list sits between the top and the bottom,
-// and it scrolls to the session shown.
+// they begin at. The list starts at the top, below the banner of the thread
+// while it is shown, and it scrolls to the session shown.
 func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
 	rows = m.sidebarRows(inner)
-	most := max(4, h*48/100+2)
+	most := max(2, h*48/100)
 	if len(rows) > most {
 		at := slices.IndexFunc(rows, func(r sideRow) bool { return r.c == m.chat })
 		end := at // the last row of the session shown
 		for end+1 < len(rows) && rows[end+1].c == m.chat {
 			end++
 		}
-		first := 2 // the heading stays
-		if end >= first+most-2 {
+		first := 0
+		if end >= most {
 			// As many rows above the session shown as the window has, but
 			// so that the end of its block stays in view: a block is not of
 			// one height, as its facts and its chart come and go.
-			first = min(at-2, len(rows)-(most-2))
-			first = max(first, min(at, end-(most-2)+1))
+			first = min(at-2, len(rows)-most)
+			first = max(0, first, min(at, end-most+1))
 		}
-		rows = append(rows[:2:2], rows[first:first+most-2]...)
+		rows = rows[first : first+most]
 	}
-	free := max(0, h-2-len(rows)) // the margins
-	return rows, 1 + free/2
+	return rows, 1 + len(m.sidebarBanner(inner))
 }
 
 // sidebarView is the sidebar, w cells wide and h rows high.
@@ -626,6 +636,11 @@ func (m *Model) sidebarView(w, h int) string {
 	lines := make([]string, h)
 	for i := range lines {
 		lines[i] = strings.Repeat(" ", w)
+	}
+	for i, l := range m.sidebarBanner(inner) {
+		if y := 1 + i; y < h-1 {
+			lines[y] = pad(margin+l, w)
+		}
 	}
 	for i, r := range rows {
 		if y := top + i; y < h-1 {
