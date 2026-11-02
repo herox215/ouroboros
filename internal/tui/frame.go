@@ -191,9 +191,6 @@ func (m *Model) headerLines(w int) []string {
 		eyebrow += fmt.Sprintf(" · %s %d/%d", strings.ToUpper(m.headerName()), m.profileAt, m.profileOf)
 	}
 	var marks []string
-	if n := m.suggestionRequests.unread; n > 0 {
-		marks = append(marks, lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("✦ %d SUGGESTIONS", n)))
-	}
 	if m.status.Debug {
 		marks = append(marks, boldStyle.Foreground(ui.background).Background(warn).Render(" DEBUG MODE "))
 	}

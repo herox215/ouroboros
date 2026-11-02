@@ -79,17 +79,16 @@ func (m *Model) pendingRows() int {
 }
 
 // pendingView is the line below the composer, w cells wide: how much waits
-// for a decision, where to decide, and what it is. The command comes before
-// what waits, so that a narrow window cuts off the latter.
+// for a decision, and where to decide.
 func (r *requestsScreen) pendingView(m *Model, w int) string {
 	n := len(r.trust.Suggestions)
-	what := "a review suggests a change of ouro"
-	if n > 1 {
-		what = fmt.Sprintf("reviews suggest %d changes of ouro", n)
+	noun := "suggestions"
+	if n == 1 {
+		noun = "suggestion"
 	}
-	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d suggestions", n)) +
+	line := lipgloss.NewStyle().Foreground(warn).Bold(true).Render(fmt.Sprintf("● %d %s", n, noun)) +
 		mutedStyle.Render(" · type ") + lipgloss.NewStyle().Foreground(accent).Render("/suggestions") +
-		mutedStyle.Render(" to decide · "+what)
+		mutedStyle.Render(" to decide")
 	return ansi.Truncate(line, w, "…")
 }
 
@@ -739,9 +738,6 @@ func (m *Model) headerView() string {
 	}
 	line := " " + boldStyle.Foreground(muted).Render(eyebrow) + mutedStyle.Render(" · ") +
 		strings.ToUpper(m.chatName()) + mutedStyle.Render(" · ") + m.metaText()
-	if n := m.suggestionRequests.unread; n > 0 {
-		line += lipgloss.NewStyle().Foreground(warn).Render(fmt.Sprintf("  ✦ %d SUGGESTIONS", n))
-	}
 	if m.status.Cyberpsycho {
 		line += "  " + m.cyberMark()
 	}

@@ -1250,19 +1250,3 @@ func TestChoiceStaysWhenTheSameEntryIsSelected(t *testing.T) {
 		t.Fatalf("selected %d, chosen %v", m.suggestionRequests.sel, m.choice)
 	}
 }
-
-// What came since the list was last open is unread, and only that: a list
-// looked at before adds nothing again.
-func TestUnreadCountsOnlyWhatCameSinceTheListWasSeen(t *testing.T) {
-	m, b := newModel(t)
-	b.trust = Contacts{Suggestions: []plugin.Suggestion{{ID: "s1", Text: "first"}}}
-	m.Update(m.loadContacts())
-	if m.suggestionRequests.unread != 1 {
-		t.Fatalf("%d unread of one", m.suggestionRequests.unread)
-	}
-	b.trust.Suggestions = append(b.trust.Suggestions, plugin.Suggestion{ID: "s2", Text: "second"}, plugin.Suggestion{ID: "s3", Text: "third"})
-	m.Update(m.loadContacts())
-	if got := m.suggestionRequests.unread; got != 3 {
-		t.Fatalf("%d unread of one seen and three waiting", got)
-	}
-}

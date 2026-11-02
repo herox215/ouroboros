@@ -45,7 +45,7 @@ func TestLegacyContactsDoNotCreatePendingUI(t *testing.T) {
 		Proposals: []plugin.Proposal{{ID: "p1", Field: "legacy field"}},
 	}
 	m.Update(m.loadContacts())
-	if m.pendingRows() != 0 || m.suggestionRequests.unread != 0 || m.history.Height() != height || view(m) != before {
+	if m.pendingRows() != 0 || m.history.Height() != height || view(m) != before {
 		t.Fatalf("legacy contacts changed the chat UI:\n%s", view(m))
 	}
 	run(m, "/suggestions")

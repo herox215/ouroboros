@@ -46,11 +46,13 @@ func TestSuggestionsArePending(t *testing.T) {
 		},
 	}
 	m.Update(m.loadContacts())
-	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "2 suggestions") || !strings.Contains(line, "reviews suggest 2") {
+	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "2 suggestions") || !strings.Contains(line, "/suggestions to decide") {
 		t.Fatalf("the line of what is pending: %q", line)
 	}
-	if v := view(m); !strings.Contains(v, "✦ 2 SUGGESTIONS") || strings.Contains(v, "pending") || strings.Contains(v, "/pending") {
-		t.Fatalf("suggestions-only indicator: %s", v)
+	// The head does not mark them: the line below the composer says what
+	// waits for a decision, as checked above.
+	if v := view(m); strings.Contains(v, "SUGGESTIONS") || strings.Contains(v, "/pending") {
+		t.Fatalf("suggestions are marked in the head: %s", v)
 	}
 	first := m.chat
 	run(m, "/suggestions")
@@ -96,7 +98,7 @@ func TestSuggestionsArePending(t *testing.T) {
 	b.trust.Suggestions = []plugin.Suggestion{{ID: "s3", Text: "one more"}}
 	b.mu.Unlock()
 	m.Update(m.loadContacts())
-	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "a review suggests") {
+	if line := ansi.Strip(m.suggestionRequests.pendingView(m, m.width)); !strings.Contains(line, "1 suggestion ") {
 		t.Fatalf("one suggestion: %q", line)
 	}
 	m.suggestionRequests.selectAt(m, 0)
