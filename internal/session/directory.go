@@ -122,8 +122,9 @@ func (s *Service) directoryOf(se *session) {
 		return
 	}
 	if se.id == ThreadID {
-		// What an older build kept for it is not taken: see ErrThreadProject.
-		se.directed = true
+		// What an older build kept for it is not taken, and nothing is
+		// marked as directed, so that it tells no directory: see
+		// ErrThreadProject.
 		return
 	}
 	directory, ok, err := s.archive.Directory(history.Owner(se.id))

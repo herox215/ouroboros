@@ -172,8 +172,9 @@ start (`ouro --profile NAME gui`). **Zum Thread** returns from an individual ses
 The status shows work in progress, questions and the number of active sessions the thread
 handed work to. **Stoppen** calls the same session cancellation as the TUI, including
 stopping the thread's delegated answers. Messages can still be sent while work runs.
-`ouro gui [DIRECTORY]` uses the same initial-project handling as `ouro tui [DIRECTORY]`:
-the current directory by default, for the sessions it opens; the thread itself has no project.
+`ouro gui [DIRECTORY]` takes a directory as `ouro tui [DIRECTORY]` does, but the window
+opens no session of its own: it shows the thread, which has no project, so the directory
+changes nothing there. For work on a project, ask the thread: it starts a session there.
 Beside the thread, the sidebar follows the part of it in view, as in the demo: the part
 whose messages cross the middle of the history, or the newest one at its end. Each message
 of the owner opens a part; the sessions the thread started (`session_new`), handed a message

@@ -512,6 +512,20 @@ func TestThreadStartsInItsProject(t *testing.T) {
 	}
 }
 
+// With an archive too the thread tells no directory, also where an older
+// build kept one for it.
+func TestArchivedThreadTellsNoDirectory(t *testing.T) {
+	dir, project := t.TempDir(), canonicalTempDir(t)
+	if err := history.Open(dir).SetDirectory(history.Owner(ThreadID), project); err != nil {
+		t.Fatal(err)
+	}
+	s, _, _ := archived(t, &fakeAgent{}, dir, time.Now())
+	past, _, err := s.Watch(context.Background(), ThreadID)
+	if err != nil || slices.ContainsFunc(past, func(e Event) bool { return e.Kind == Directory }) {
+		t.Fatalf("the thread tells a directory: %+v, %v", past, err)
+	}
+}
+
 // nothing has nothing against a message the thread hands on.
 func nothing() error { return nil }
 
