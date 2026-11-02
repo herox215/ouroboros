@@ -46,7 +46,7 @@ func TestTheSidebarLeadsWithTheThreadBanner(t *testing.T) {
 }
 
 // A narrower sidebar takes the smaller banner.
-func TestANarrowSidebarTakesTheSmallBanner(t *testing.T) {
+func TestANarrowSidebarTakesTheMiniBanner(t *testing.T) {
 	m, _ := threadModel(t, "", nil)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	art, ok := m.threadArt(m.sideWidth() - 2*columnPad)

@@ -608,7 +608,13 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 // while it is shown, and it scrolls to the session shown.
 func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
 	rows = m.sidebarRows(inner)
-	most := max(2, h*48/100)
+	top = 1
+	if art, ok := m.threadArt(inner); ok { // its rows and the one below it, unstyled: only their number counts
+		top += len(art) + 1
+	}
+	// The list starts at the top now: it takes the room down to the row
+	// above the last, which the integrity of cyberpsycho mode may hold.
+	most := max(2, h-1-top)
 	if len(rows) > most {
 		at := slices.IndexFunc(rows, func(r sideRow) bool { return r.c == m.chat })
 		end := at // the last row of the session shown
@@ -625,7 +631,7 @@ func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
 		}
 		rows = rows[first : first+most]
 	}
-	return rows, 1 + len(m.sidebarBanner(inner))
+	return rows, top
 }
 
 // sidebarView is the sidebar, w cells wide and h rows high.
