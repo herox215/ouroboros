@@ -58,8 +58,8 @@ const (
 // Plugin contributes the tools of the configured MCP servers, the screen /mcp
 // and the command ouro mcp.
 func Plugin(dir home.Dir) plugin.Plugin {
-	return plugin.New(pluginName, func(ctx *plugin.Context, _ struct{}) error {
-		m := &manager{ctx: ctx, dir: dir, servers: map[string]*server{}, added: map[string]string{}, items: map[string]*plugin.Item{}}
+	return plugin.New(pluginName, func(ctx *plugin.Context, n struct{ Console *plugin.Console }) error {
+		m := &manager{ctx: ctx, dir: dir, console: n.Console, servers: map[string]*server{}, added: map[string]string{}, items: map[string]*plugin.Item{}}
 		// The connections are started by the node that serves, and ended with
 		// it: a front end starts the same plugins without serving, and would
 		// start every program of a server a second time.
@@ -74,13 +74,23 @@ func Plugin(dir home.Dir) plugin.Plugin {
 
 // manager keeps the connections of the servers of one node.
 type manager struct {
-	ctx *plugin.Context
-	dir home.Dir
+	ctx     *plugin.Context
+	dir     home.Dir
+	console *plugin.Console // where a sign-in without a browser is pasted
 
 	mu      sync.Mutex // guards what follows
 	servers map[string]*server
 	added   map[string]string       // tool name of the agents -> server/tool it calls
 	items   map[string]*plugin.Item // tool name of the agents -> the contribution to take back
+}
+
+// signIn is how a connection may sign in. interactive says that the owner
+// asked for it, so the browser may be opened; paste, if not nil, shows the
+// address and takes the address the browser ended up at, for a node without
+// a browser of its own.
+type signIn struct {
+	interactive bool
+	paste       func(url string) (string, error)
 }
 
 // server is one configured MCP server.
@@ -120,7 +130,7 @@ func (m *manager) start() {
 			defer cancel()
 			// No sign-in here: a node that starts opens no browser. A server
 			// that asks for one says so, and the owner signs in from /mcp.
-			_, _ = m.connect(ctx, st, false)
+			_, _ = m.connect(ctx, st, signIn{})
 		}()
 	}
 	wg.Wait()
@@ -188,7 +198,7 @@ func (m *manager) state(name string) *server {
 
 // connect connects the server st, lists its tools and hands them to the
 // agents.
-func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]*mcpsdk.Tool, error) {
+func (m *manager) connect(ctx context.Context, st *server, si signIn) ([]*mcpsdk.Tool, error) {
 	cfg := st.configuration()
 	if cfg.Disabled {
 		st.set(statusDisabled, nil)
@@ -199,7 +209,7 @@ func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]
 		st.set("failed: "+err.Error(), err)
 		return nil, err
 	}
-	transport, prog, err := m.transport(ctx, st, interactive)
+	transport, prog, err := m.transport(ctx, st, si)
 	if err != nil {
 		st.set("failed: "+err.Error(), err)
 		return nil, err
@@ -241,7 +251,7 @@ func (m *manager) connect(ctx context.Context, st *server, interactive bool) ([]
 
 // transport is how the server is reached, and the program that was started
 // for it, if any.
-func (m *manager) transport(ctx context.Context, st *server, interactive bool) (mcpsdk.Transport, *program, error) {
+func (m *manager) transport(ctx context.Context, st *server, si signIn) (mcpsdk.Transport, *program, error) {
 	cfg := st.configuration()
 	env, headers := m.secrets(st.name), cfg.Headers
 	merged := make(map[string]string, len(cfg.Headers))
@@ -253,7 +263,7 @@ func (m *manager) transport(ctx context.Context, st *server, interactive bool) (
 			Endpoint:   cfg.URL,
 			HTTPClient: &http.Client{Transport: &headerRoundTrip{base: http.DefaultTransport, headers: merged}},
 		}
-		if handler, err := m.oauth(st, interactive); err != nil {
+		if handler, err := m.oauth(st, si); err != nil {
 			return nil, nil, err
 		} else if handler != nil {
 			transport.OAuthHandler = handler
@@ -501,7 +511,7 @@ func (m *manager) session(ctx context.Context, st *server) (*mcpsdk.ClientSessio
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectTimeout)
 	defer cancel()
-	if _, err := m.connect(ctx, st, false); err != nil {
+	if _, err := m.connect(ctx, st, signIn{}); err != nil {
 		return nil, err
 	}
 	st.mu.Lock()

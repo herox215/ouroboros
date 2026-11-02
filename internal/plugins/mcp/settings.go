@@ -143,7 +143,7 @@ func (m *manager) setEnabled(ctx context.Context, server string, on bool) error 
 	go func() {
 		attempt, cancel := context.WithTimeout(context.Background(), connectTimeout)
 		defer cancel()
-		_, _ = m.connect(attempt, st, false)
+		_, _ = m.connect(attempt, st, signIn{})
 	}()
 	return nil
 }
@@ -176,18 +176,18 @@ func (m *manager) signIn(ctx context.Context, server string) error {
 	st.drop()
 	attempt, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectTimeout+signInTimeout)
 	defer cancel()
-	_, err = m.connect(attempt, st, true)
+	_, err = m.connect(attempt, st, signIn{interactive: true})
 	return err
 }
 
 // logout drops what the server signs in with, and ends its connection: the
 // next call needs a sign-in again.
 func (m *manager) logout(ctx context.Context, server string) error {
-	if err := m.forget(server); err != nil {
-		return err
-	}
+	err := m.forget(ctx, server)
+	// The connection goes even when the token could not be revoked: the
+	// credentials it used are no longer there.
 	if st := m.state(server); st != nil {
 		st.drop()
 	}
-	return nil
+	return err
 }

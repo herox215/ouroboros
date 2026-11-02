@@ -674,7 +674,7 @@ The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `wr
 `history_sessions`), for [memories](#memories) (`memory_add`, `memory_update`,
 `memory_forget`, `memory_search`, `memory_read`), for owner-only [scheduled answers](#schedule)
 (`schedule_read`, `schedule_update`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
-`withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that builds and installs its own
+`withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that reaches servers of the Model Context Protocol ([MCP servers](#mcp-servers)), one that builds and installs its own
 source ([`rebuild`](#updates)), one that asks you a question (`user_question`, see below) and one that hands tasks to
 helpers (`delegate`, see below). It calls them directly with structured arguments, see [Structured tool calls](#structured-tool-calls).
 Which of them it may use depends on who it is talking to, and is set in `config.json`. This is what the
@@ -1191,6 +1191,51 @@ to see what it did: `computer({action: "click", window: 7, element: 4}); compute
   window: a click may end with an outcome that is unknown, and bringing a window to the front needs a plugin
   of cua-driver for Hyprland that its installer does not install.
 
+### MCP servers
+
+The [Model Context Protocol](https://modelcontextprotocol.io) lets ouro use the tools of another program or of
+a remote service as its own. The servers are in the configuration under `mcp.servers`, by the name they are
+called with: a local server is a command, a remote one a URL.
+
+```json
+"mcp": {
+  "servers": {
+    "atlassian": {"url": "https://mcp.atlassian.com/v1/mcp"},
+    "fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "~/x"]},
+    "api": {"url": "https://example.com/mcp", "headers": {"Authorization": "${API_TOKEN}"}}
+  }
+}
+```
+
+- **What a server is.** `url` is a remote server over Streamable HTTP; `command` with `args` is a program
+  ouro starts, and `env` what it is given. A value of `${NAME}` in `env` or `headers` is the secret of the
+  node's credentials for the server, or the variable `NAME` of the environment ouro runs in: the secret
+  itself is not written in the configuration. `disabled: true` keeps a server from being connected.
+- **The client of a remote server.** A server that does not register clients itself takes a `client_id`
+  and, for a confidential client, a `client_secret` (which may be a `${NAME}` as well); a server that does
+  is registered with it on the first sign-in, and that registration is kept for the next one.
+- **Tools.** Every tool of a server becomes a tool of your agent, named `<server>__<tool>`, with the
+  description and the input schema the server gives it. What such a tool returns is data from outside, not
+  instructions: the description tells the agent not to follow instructions in it, as it does for a web page.
+  The tools are for you alone: no peer gets one, even by its name.
+- **On and off.** A server's `tools` lists the tools of it the agent gets; without the list, all of them.
+  `/settings` shows the servers and their tools and turns one on or off; a server that is off is not
+  connected, and nothing starts for it. The same is `disabled` in the configuration.
+- **Sign in.** A remote server that asks for OAuth opens its page in your browser when you choose `sign in`
+  in `/mcp`, run `ouro mcp login NAME`, or choose Sign in in the window. On a node without a browser,
+  `ouro mcp login NAME` prints the address: open it on a machine that has a browser, and paste the address
+  the browser ends up at. The tokens are kept in `credentials.json` as the access of the server. Logging out
+  removes them and revokes them at the authorization server when it says where.
+- **Commands.** `ouro mcp add NAME URL [Header: Value ...]` and `ouro mcp add NAME [-e KEY=VALUE ...] --command PROGRAM [ARG ...]`
+  add a server; `ouro mcp list`, `tools NAME`, `login NAME`, `logout NAME`, `enable NAME`, `disable NAME` and
+  `remove NAME` do the rest. `/mcp` in the terminal lists the servers with how each is reached, how it is and
+  how many tools it has, and offers reconnect, sign in and log out.
+- **Where it runs.** The servers connect in the node, not in a front end: they start with the node and end
+  with it, and a program of a local server is started for the node, never a second time by a window or the
+  terminal UI.
+- **What it does not do.** Servers are not imported from Claude Code; add them here or with `ouro mcp add`.
+  The refresh token is in `credentials.json` (0600), as the other accesses of the node.
+
 ### History
 
 The node archives every conversation in full: the messages of the user, what the model answers along with
@@ -1304,6 +1349,7 @@ and no peer reaches it.
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |
 | Tools for peers | `a2a`, the same; a tool for your agent alone, and one for a peer with a list of its own alone, is shown as such and cannot be allowed | the same |
 | Tools of single peers | `tools.peers`: every peer you trust, and every list there, with whether it has a list of its own | give a peer a list of its own (it starts as the one for peers) or take it away, add one by the ID of its node; its list opens like the tools for peers, where a trusted tool like `bash` is allowed by its name |
+| MCP servers | every server in `mcp.servers`: how it is reached, whether it is on, how it is, and the tools it offers with whether each is on | turn a server or one of its tools on or off |
 | Protected paths | `protected`, the paths no tool for files touches, or that the default holds | remove a path, add one, go back to the default |
 
 It opens with the list of the categories: `↑` `↓` select one, `enter` opens it, `esc` goes back to the chat.
