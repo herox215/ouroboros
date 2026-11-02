@@ -105,8 +105,13 @@ func (m *Model) layout() {
 	if m.history.Width() != width {
 		m.selected, m.pressed = nil, nil // its lines are wrapped anew
 	}
+	if m.input.Width() != m.composerInner() {
+		m.inputSel, m.inputPress = nil, nil // its lines are wrapped anew
+	}
+	// The field wraps its own lines and grows to a share of the window; it
+	// takes what is written beyond that in its own scroll.
+	m.input.MaxHeight = max(1, m.height*composerShare/100)
 	m.input.SetWidth(m.composerInner())
-	m.input.SetHeight(m.composerRows())
 	m.history.SetWidth(width)
 	m.history.SetHeight(m.chatHeight())
 	m.renderHistory(atBottom && !toEnd)

@@ -122,8 +122,8 @@ scrolled up, it stays where it is.
 The UI takes the mouse for the wheel, so the terminal does not select text itself. The chat does: press on the
 history and drag, and once you release, the text selected is on the clipboard, without its colors. A press
 alone marks nothing, so a click leaves no mark. It is put
-there through the terminal (OSC 52, which also works over SSH) and on the clipboard of the system. A key drops
-the selection.
+there through the terminal (OSC 52, which also works over SSH) and on the clipboard of the system. The input
+field is selected the same way, as far as it shows its rows. A key drops the selection.
 In its footer, the chat shows how long the context of the conversation is:
 `context 45.2 KiB ≈ 11.6k tokens`. That is what the last call of the LLM sent, the prompt, the
 tools and the conversation so far as JSON; the tokens are an estimate at 4 bytes a token. It grows with
@@ -297,6 +297,7 @@ Keys only move around:
 | any key | skip the ouroboros splash (except `ctrl+c`) |
 | `enter` | send |
 | `shift+enter` | a new line |
+| `alt+enter` | a new line too, as esc then enter: for terminals that do not tell `shift+enter`, like the Terminal of macOS |
 | `↑` `↓` | bring back what you entered while the UI is open, messages and commands, the latest first. Below the latest is what you had typed, and below that an empty input, from which `↑` brings it back again. A line you change is what you type from then on. In an input of several lines they move between its lines first |
 | `↑` in an empty input | take back the last message that is queued, see [Sessions](#sessions); with nothing queued, bring back what you entered |
 | `ctrl+v` | paste the clipboard: a picture as the path of its file, see [Pictures](#pictures) |

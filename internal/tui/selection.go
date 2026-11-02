@@ -64,15 +64,29 @@ func (m *Model) historySpot(x, y int) spot {
 	return spot{m.history.YOffset() + row, max(0, x-m.transcriptLeft())}
 }
 
+// composerSpot is the cell of the composer at x and y on the screen, the
+// rows above and below it taken as its first and its last.
+func (m *Model) composerSpot(x, y int) spot {
+	row := min(max(0, y-m.composerTop()), max(0, m.composerRows()-1))
+	col := min(max(0, x-m.transcriptLeft()-promptWidth), max(0, m.composerInner()-1))
+	return spot{row, col}
+}
+
+// onComposer tells if x and y are on the field of the composer.
+func (m *Model) onComposer(x, y int) bool {
+	left, top := m.transcriptLeft()+promptWidth, m.composerTop()
+	return x >= left && x < left+m.composerInner() && y >= top && y < top+m.composerRows()
+}
+
 // onHistory tells if x and y are on the history of the chat.
 func (m *Model) onHistory(x, y int) bool {
 	left, top := m.transcriptLeft(), m.historyTop()
 	return x >= left && x < left+m.history.Width() && y >= top && y < top+m.history.Height()
 }
 
-// mouse selects text of the history with the mouse and copies it. A press
-// only remembers where it went down: the selection begins with the drag, so
-// a click marks nothing.
+// mouse selects text with the mouse and copies it, of the history and of
+// the composer. A press only remembers where it went down: the selection
+// begins with the drag, so a click marks nothing.
 func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
 	if m.onboard != nil || m.splash.show {
 		return nil
@@ -102,8 +116,12 @@ func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 	at := msg.Mouse()
 	switch msg.(type) {
 	case tea.MouseClickMsg:
-		m.selected, m.pressed = nil, nil
+		m.selected, m.pressed, m.inputSel, m.inputPress = nil, nil, nil, nil
 		if at.Button == tea.MouseLeft {
+			if m.onComposer(at.X, at.Y) && m.input.Value() != "" { // an empty one shows only its placeholder
+				s := m.composerSpot(at.X, at.Y)
+				m.inputPress = &s // the drag has not begun, so nothing is marked yet
+			}
 			if cmd, ok := m.click(at.X, at.Y); ok {
 				return cmd
 			}
@@ -113,6 +131,15 @@ func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 			m.pressed = &s // the drag has not begun, so nothing is marked yet
 		}
 	case tea.MouseMotionMsg:
+		if m.inputPress != nil {
+			to := m.composerSpot(at.X, at.Y)
+			if m.inputSel == nil {
+				m.inputSel = &selection{from: *m.inputPress, to: to, dragging: true}
+				return nil
+			}
+			m.inputSel.to = to
+			return nil
+		}
 		if m.pressed == nil {
 			return m.rest(at.X, at.Y)
 		}
@@ -123,6 +150,18 @@ func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 		}
 		m.selected.to = to
 	case tea.MouseReleaseMsg:
+		if m.inputPress != nil {
+			m.inputPress = nil
+			if m.inputSel == nil || !m.inputSel.dragging {
+				return nil
+			}
+			m.inputSel.to, m.inputSel.dragging = m.composerSpot(at.X, at.Y), false
+			if m.inputSel.from == m.inputSel.to {
+				m.inputSel = nil // a click
+				return nil
+			}
+			return m.copyInput()
+		}
 		m.pressed = nil
 		if m.selected == nil || !m.selected.dragging {
 			return nil
@@ -139,8 +178,8 @@ func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 
 // click does what is clicked beside the history, as in the GUI: a session
 // of the sidebar or of the column on the right shows it, and those of the
-// head and the composer take the owner to the thread, stop the answer and
-// send. What is asked or offered above the composer is answered or run, and
+// head and the composer take the owner to the thread and stop the answer.
+// What is asked or offered above the composer is answered or run, and
 // a click into the composer puts its cursor there. It reports whether
 // something was there.
 func (m *Model) click(x, y int) (tea.Cmd, bool) {
@@ -163,12 +202,11 @@ func (m *Model) click(x, y int) (tea.Cmd, bool) {
 		}
 	}
 	left := m.transcriptLeft()
-	row := m.historyTop() + m.chatHeight() + 2 // below the status and the line above the composer
+	row := m.composerTop() // what is asked or offered lies above the composer
 	if panel, hits := m.panel(); len(panel) > 0 {
-		if do := hitAt(hits, y-row, x-left); do != nil {
+		if do := hitAt(hits, y-(row-len(panel)-1), x-left); do != nil {
 			return do(), true
 		}
-		row += len(panel) + 1
 	}
 	if r, col := y-row, x-left-promptWidth; r >= 0 && r < m.composerRows() && col >= 0 && col < m.composerInner() {
 		m.clickComposer(r, col)
@@ -181,31 +219,27 @@ func (m *Model) click(x, y int) (tea.Cmd, bool) {
 	}
 	if y == m.height-2-m.pendingRows() {
 		stop := left + promptWidth + m.composerInner() + 1
-		switch {
-		case x >= stop && x < stop+stopWidth && m.chat.pending && m.chat.peer == "":
+		if x >= stop && x < stop+stopWidth && m.chat.pending && m.chat.peer == "" {
 			return m.cancel(), true
-		case x >= stop+stopWidth+1 && x < stop+stopWidth+1+sendWidth:
-			return m.send(), true
 		}
 	}
 	return nil, false
 }
 
-// copySelection puts the text selected on the clipboard, without its styles
-// and without the spaces at the ends of its lines.
-func (m *Model) copySelection() tea.Cmd {
-	content := strings.Split(m.history.GetContent(), "\n")
-	first, last := m.selected.span()
-	var lines []string
-	for i := first.line; i <= min(last.line, len(content)-1); i++ {
-		from, to, _ := m.selected.cols(i)
-		line := ansi.Strip(content[i])
+// copyLines puts the text selected of lines on the clipboard, without its
+// styles and without the spaces at the ends of its lines.
+func (m *Model) copyLines(lines []string, sel *selection) tea.Cmd {
+	first, last := sel.span()
+	var picked []string
+	for i := first.line; i <= min(last.line, len(lines)-1); i++ {
+		from, to, _ := sel.cols(i)
+		line := ansi.Strip(lines[i])
 		if to < 0 {
 			to = ansi.StringWidth(line)
 		}
-		lines = append(lines, strings.TrimRight(ansi.Cut(line, from, to), " "))
+		picked = append(picked, strings.TrimRight(ansi.Cut(line, from, to), " "))
 	}
-	text := strings.Join(lines, "\n")
+	text := strings.Join(picked, "\n")
 	m.setNotice("copied to the clipboard", false)
 	return tea.Batch(tea.SetClipboard(text), func() tea.Msg {
 		_ = writeClipboard(text) // the terminal may have it anyway
@@ -213,14 +247,25 @@ func (m *Model) copySelection() tea.Cmd {
 	})
 }
 
-// highlight marks what is selected of the lines the history shows.
-func (m *Model) highlight(lines []string) []string {
-	if m.selected == nil {
+// copySelection puts the text selected of the history on the clipboard.
+func (m *Model) copySelection() tea.Cmd {
+	return m.copyLines(strings.Split(m.history.GetContent(), "\n"), m.selected)
+}
+
+// copyInput puts the text selected of the composer on the clipboard.
+func (m *Model) copyInput() tea.Cmd {
+	return m.copyLines(strings.Split(m.chat.showLabels(m.input.View()), "\n"), m.inputSel)
+}
+
+// markLines marks what sel selects of lines, the first of them being line
+// base of the content the selection was made on.
+func markLines(lines []string, sel *selection, base int) []string {
+	if sel == nil {
 		return lines
 	}
 	marked := lipgloss.NewStyle().Reverse(true)
 	for i, l := range lines {
-		from, to, ok := m.selected.cols(m.history.YOffset() + i)
+		from, to, ok := sel.cols(base + i)
 		if !ok {
 			continue
 		}
@@ -235,4 +280,9 @@ func (m *Model) highlight(lines []string) []string {
 		lines[i] = ansi.Cut(l, 0, from) + marked.Render(ansi.Strip(ansi.Cut(l, from, to))) + ansi.Cut(l, to, ansi.StringWidth(l))
 	}
 	return lines
+}
+
+// highlight marks what is selected of the lines the history shows.
+func (m *Model) highlight(lines []string) []string {
+	return markLines(lines, m.selected, m.history.YOffset())
 }

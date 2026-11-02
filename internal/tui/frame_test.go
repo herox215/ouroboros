@@ -435,10 +435,12 @@ func TestClicksBesideTheHistory(t *testing.T) {
 		t.Fatal("Stop does not stop the answer")
 	}
 	m.chat.pending = false
+	// Beside the field is nothing that sends: enter does.
 	m.input.SetValue("hello")
-	if click(stop+stopWidth+1, row) == nil || m.input.Value() != "" {
-		t.Fatal("the button sends what is written")
+	if click(stop+stopWidth+1, row) != nil || m.input.Value() != "hello" {
+		t.Fatal("a click beside the field sent what is written")
 	}
+	m.input.SetValue("")
 	// A window without a sidebar has nothing in it.
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
 	if m.sidebarAt(5) != nil {
