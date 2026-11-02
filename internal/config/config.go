@@ -95,6 +95,9 @@ type Config struct {
 	SelfImprove string `json:"self_improve,omitempty"`
 	// Plugins says which plugins of the build are turned off.
 	Plugins *Plugins `json:"plugins,omitempty"`
+	// MCP are the MCP servers the agents may use, and their tools with them:
+	// see package config, mcp.go.
+	MCP *MCP `json:"mcp,omitempty"`
 }
 
 // What SelfImprove says.
