@@ -459,6 +459,32 @@ func (u *ui) ChangeSetting(s tui.Setting) (string, error) {
 	return u.Owner.Change(s, plugin.All[plugin.Tool](u.ctx), plugin.All[plugin.ContextProvider](u.ctx))
 }
 
+// MCP lists the MCP servers of the node with their tools, as the MCP plugin
+// contributes them.
+func (u *ui) MCP(ctx context.Context) ([]plugin.MCPServer, error) {
+	for _, m := range plugin.All[plugin.MCP](u.ctx) {
+		return m.Servers(ctx), nil
+	}
+	return nil, nil
+}
+
+// ChangeMCP turns a server on or off, or one tool of it.
+func (u *ui) ChangeMCP(change plugin.MCPChange) (string, error) {
+	for _, m := range plugin.All[plugin.MCP](u.ctx) {
+		var err error
+		if change.Tool == "" {
+			err = m.SetServer(context.Background(), change.Server, change.On)
+		} else {
+			err = m.SetTool(context.Background(), change.Server, change.Tool, change.On)
+		}
+		if err != nil {
+			return "", err
+		}
+		return "saved: " + change.Server, nil
+	}
+	return "", errors.New("this build has no MCP servers")
+}
+
 // Start starts the node; one that was not set up is told how to get there in
 // the UI.
 func (u *ui) Start() error {

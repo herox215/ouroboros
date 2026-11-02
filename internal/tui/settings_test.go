@@ -1178,7 +1178,7 @@ func TestSettingsCategoriesWhole(t *testing.T) {
 // high as the body leaves it, also when it is very low.
 func TestSettingsWindowMarks(t *testing.T) {
 	m, _ := openSettings(t, someSettings())
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
 	if view := dialogView(m); strings.Contains(view, "more") || !strings.Contains(view, protectedSection) || !strings.Contains(view, nodeSection) {
 		t.Fatalf("all categories fit:\n%s", view)
 	}

@@ -66,6 +66,7 @@ func Plugin(dir home.Dir) plugin.Plugin {
 		plugin.Add(ctx, plugin.Serving{Start: m.start, Stop: m.close})
 		ctx.OnStop(m.close)
 		plugin.Add(ctx, m.screen())
+		plugin.Add(ctx, m.service())
 		plugin.Add(ctx, m.command())
 		return nil
 	})

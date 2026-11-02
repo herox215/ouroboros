@@ -50,6 +50,7 @@ type settingsMsg struct {
 	settings  Settings
 	fallbacks []Fallback
 	gateways  []plugin.GatewaySettings
+	mcp       []plugin.MCPServer
 	err       error
 }
 
@@ -113,6 +114,9 @@ type settingsScreen struct {
 	info         *row            // the explanation opened with Info
 	editing      *edit           // the text that is typed, if one is
 	input        textinput.Model // where it is typed
+	// mcp are the MCP servers of the node with their tools, as the MCP plugin
+	// contributes them: the category of the servers and of their tools.
+	mcp []plugin.MCPServer
 	// refused are the settings of the tools that were refused while the
 	// UI is open, by who, peer and name: a tool that is allowed again gets
 	// them back, rather than going everywhere its settings kept it from.
@@ -145,15 +149,18 @@ func (c *settingsScreen) load(m *Model) tea.Msg {
 	if err == nil {
 		err = gatewayErr
 	}
-	return settingsMsg{settings: s, fallbacks: fallbacks, gateways: gateways, err: err}
+	// A build without the MCP plugin has no servers: the category says so.
+	mcp, _ := m.backend.MCP(m.ctx)
+	return settingsMsg{settings: s, fallbacks: fallbacks, gateways: gateways, mcp: mcp, err: err}
 }
 
 // loaded takes the configuration that was read.
 func (c *settingsScreen) loaded(m *Model, msg settingsMsg) {
 	c.gateways = msg.gateways
 	c.values, c.fallbacks, c.err, c.rows = msg.settings, msg.fallbacks, msg.err, nil
+	c.mcp = msg.mcp
 	if msg.err == nil {
-		c.rows = rows(msg.settings)
+		c.rows = append(rows(msg.settings), mcpRows(msg.mcp)...)
 	}
 	// A peer or a tool that is no more closes what showed it.
 	if c.peer != "" && c.peerList() == nil {
@@ -409,6 +416,7 @@ const (
 	nodeSection      = "The node"
 	agentsSection    = "The agents"
 	pluginsSection   = "Plugins"
+	mcpSection       = "MCP servers"
 	ownerSection     = "Tools of your agent"
 	peersSection     = "Tools for peers"
 	singleSection    = "Tools of single peers"
@@ -417,7 +425,7 @@ const (
 )
 
 // sections are the categories in the order the settings screen lists them.
-var sections = []string{nodeSection, agentsSection, pluginsSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
+var sections = []string{nodeSection, agentsSection, pluginsSection, mcpSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
 
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
@@ -425,6 +433,7 @@ var contents = map[string]string{
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
 	agentsSection:    "the context provider, the debug mode, the memory archivist, the thread window",
 	pluginsSection:   "which plugins are turned on",
+	mcpSection:       "the MCP servers the agent reaches, and their tools",
 	ownerSection:     "what your agent may do when you ask it",
 	peersSection:     "what your agent may do when a peer asks it",
 	singleSection:    "what it may do for one peer: also bash and more",
@@ -437,6 +446,7 @@ var about = map[string]string{
 	nodeSection:      "The access and the models are changed with the setup and /model, the effort with /effort.",
 	agentsSection:    "A change holds from the next message, for you and for peers.",
 	pluginsSection:   "Plugins are part of the build. Turning one on or off holds once ouro starts anew: quit and start ouro, /stop and /start the node.",
+	mcpSection:       "The servers are added and their sign-in is done with /mcp. A tool turned off here is no longer offered to your agent from the next message on, and a server that is off starts nothing.",
 	ownerSection:     "What your agent may do when you ask it. A change holds from the next message.",
 	peersSection:     "What your agent may do when a connected peer asks it. A change holds from the next message.",
 	singleSection:    "A peer with a list of its own gets the tools of that list instead of those for peers: also trusted ones like bash, by their name.",
@@ -528,6 +538,52 @@ func rows(s Settings) []row {
 			set("use it", Setting{Kind: plugin.SetProtected, On: true}))
 	}
 	return out
+}
+
+// mcpRows are the MCP servers and their tools: a server with how it is, and
+// each tool it offers below it, to give it to the agents or not.
+func mcpRows(servers []plugin.MCPServer) []row {
+	var out []row
+	for _, s := range servers {
+		value, toggle := onOff(!s.Disabled)
+		out = append(out, row{
+			section: mcpSection,
+			label:   s.Name,
+			value:   value + " · " + s.Status,
+			note:    s.How,
+			actions: []action{{name: toggle, run: mcpChange(plugin.MCPChange{Server: s.Name, On: !s.Disabled})}},
+		})
+		for _, t := range s.Tools {
+			value, toggle := onOff(t.On)
+			out = append(out, row{
+				section: mcpSection,
+				label:   t.Name,
+				value:   value,
+				note:    t.Description,
+				sub:     true,
+				actions: []action{{name: toggle, run: mcpChange(plugin.MCPChange{Server: s.Name, Tool: t.Name, On: !t.On})}},
+			})
+		}
+	}
+	if len(servers) == 0 {
+		out = append(out, row{section: mcpSection, label: "No server", value: "none",
+			note: "add one with ouro mcp add NAME URL, or in the configuration"})
+	}
+	return out
+}
+
+// mcpChange changes one thing about the MCP servers.
+func mcpChange(change plugin.MCPChange) func(m *Model) tea.Cmd {
+	return func(m *Model) tea.Cmd { return m.config.changeMCP(m, change) }
+}
+
+// changeMCP makes a change of the MCP servers and reads the settings anew:
+// the tools of a server come and go at once, without a start of the node.
+func (c *settingsScreen) changeMCP(m *Model, change plugin.MCPChange) tea.Cmd {
+	return func() tea.Msg {
+		done, err := m.backend.ChangeMCP(change)
+		return changedMsg{done, err}
+	}
 }
 
 // onOff says whether a mode of the node is on, and what the action that
