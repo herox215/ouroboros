@@ -118,7 +118,7 @@ func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 	case tea.MouseClickMsg:
 		m.selected, m.pressed, m.inputSel, m.inputPress = nil, nil, nil, nil
 		if at.Button == tea.MouseLeft {
-			if m.onComposer(at.X, at.Y) {
+			if m.onComposer(at.X, at.Y) && m.input.Value() != "" { // an empty one shows only its placeholder
 				s := m.composerSpot(at.X, at.Y)
 				m.inputPress = &s // the drag has not begun, so nothing is marked yet
 			}
@@ -178,8 +178,8 @@ func (m *Model) mouseOnChat(msg tea.MouseMsg) tea.Cmd {
 
 // click does what is clicked beside the history, as in the GUI: a session
 // of the sidebar or of the column on the right shows it, and those of the
-// head and the composer take the owner to the thread, stop the answer and
-// send. What is asked or offered above the composer is answered or run, and
+// head and the composer take the owner to the thread and stop the answer.
+// What is asked or offered above the composer is answered or run, and
 // a click into the composer puts its cursor there. It reports whether
 // something was there.
 func (m *Model) click(x, y int) (tea.Cmd, bool) {

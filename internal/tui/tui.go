@@ -669,7 +669,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The column on the right comes and goes with the conversation
 		// shown: what it leaves goes to the middle, so the width of the
 		// conversation changes with it, and where it begins.
-		if m.bottomRows() != rows || m.input.Height() != m.composerRows() || m.history.Width() != m.transcriptWidth() || m.transcriptLeft() != left {
+		if m.bottomRows() != rows || m.history.Width() != m.transcriptWidth() || m.transcriptLeft() != left {
 			m.layout()
 		}
 	}(m.bottomRows(), m.transcriptLeft())
@@ -914,7 +914,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.notice = ""
-	m.selected, m.pressed = nil, nil
+	// The mark of the composer is of its rows on the screen: a key that
+	// moves or scrolls the field would leave it on other text.
+	m.selected, m.pressed, m.inputSel, m.inputPress = nil, nil, nil, nil
 	if msg.String() == "ctrl+c" {
 		if m.screen == screenSettings {
 			m.config.input.SetValue("")
