@@ -652,7 +652,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// written, asked, offered and pending, and with it the room for the
 	// conversation.
 	defer func(rows int) {
-		if m.bottomRows() != rows || m.input.Height() != m.composerRows() {
+		// The column on the right comes and goes with the conversation shown.
+		if m.bottomRows() != rows || m.input.Height() != m.composerRows() || m.history.Width() != m.transcriptWidth() {
 			m.layout()
 		}
 	}(m.bottomRows())

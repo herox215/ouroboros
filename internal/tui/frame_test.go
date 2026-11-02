@@ -66,11 +66,15 @@ func TestColumnsShowTheSessionsThatRun(t *testing.T) {
 		t.Fatalf("running: %v", list)
 	}
 	view := strip(m.View().Content)
-	for _, want := range []string{"RUNNING", "FIX", "State: working · own", "FIX · WORKING",
+	for _, want := range []string{"RUNNING", "FIX", "State: working · own",
 		"● calls go test ./...", "next  the result of bash", "4 tools · 3 kinds", "THREAD · READY · 1 ACTIVE SESSION"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("no %q beside the thread:\n%s", want, view)
 		}
+	}
+	// The sidebar lists them alone: the thread has no column on the right.
+	if m.railWidth() != 0 || strings.Count(view, "RUNNING") != 1 || strings.Count(view, "4 tools · 3 kinds") != 1 {
+		t.Fatalf("a column on the right beside the thread:\n%s", view)
 	}
 	if strings.Contains(view, "TESTS") || strings.Contains(view, "TODAY") {
 		t.Fatalf("a session that does not run is beside the thread:\n%s", view)
@@ -80,7 +84,7 @@ func TestColumnsShowTheSessionsThatRun(t *testing.T) {
 	if list := m.runningSessions(); len(list) != 1 || list[0] != fix {
 		t.Fatalf("scrolled up, %v runs", list)
 	}
-	if view := strip(m.View().Content); !strings.Contains(view, "FIX · WORKING") || strings.Contains(view, "TESTS") {
+	if view := strip(m.View().Content); !strings.Contains(view, "● calls go test") || strings.Contains(view, "TESTS") {
 		t.Fatalf("scrolled up:\n%s", view)
 	}
 	// A session that ends leaves both columns.
@@ -324,11 +328,15 @@ func TestRunningSessionsKeepTheirPlace(t *testing.T) {
 	if got := order(); !slices.Equal(got, []string{"s2", "s3", "s1"}) {
 		t.Fatalf("after one began anew: %v", got)
 	}
-	// The column on the right shows them in the same order.
-	rail := strip(m.railView(m.railWidth(), m.height))
-	s2, s3, s1 := strings.Index(rail, "S2 · WORKING"), strings.Index(rail, "S3 · WORKING"), strings.Index(rail, "S1 · WORKING")
+	// The sidebar shows them in the same order.
+	var side strings.Builder
+	for _, r := range m.sidebarRows(30) {
+		side.WriteString(strings.TrimSpace(strip(r.text)) + "\n")
+	}
+	list := side.String()
+	s2, s3, s1 := strings.Index(list, "S2\n"), strings.Index(list, "S3\n"), strings.Index(list, "S1\n")
 	if s2 < 0 || s3 < 0 || s1 < 0 || !(s2 < s3 && s3 < s1) {
-		t.Fatalf("the column on the right is in another order (%d, %d, %d):\n%s", s2, s3, s1, rail)
+		t.Fatalf("the sidebar is in another order (%d, %d, %d):\n%s", s2, s3, s1, list)
 	}
 }
 
@@ -449,9 +457,8 @@ func TestManyRunningSessionsBeside(t *testing.T) {
 	if n := len(m.runningSessions()); n != 5 {
 		t.Fatalf("%d sessions run", n)
 	}
-	rail := strip(m.railView(m.railWidth(), m.height))
-	if !strings.Contains(rail, "…") {
-		t.Fatalf("the column on the right:\n%s", rail)
+	if m.railWidth() != 0 {
+		t.Fatal("the thread has a column on the right")
 	}
 	m.switchTo(m.chats["c3d4-d"])
 	rows, _ := m.sidebarLayout(30, m.height)

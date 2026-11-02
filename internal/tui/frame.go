@@ -27,7 +27,7 @@ const (
 	sideMin, sideMax = 24, 40 // how wide the columns beside the conversation are, with their margins
 	sideFrom         = 80     // a narrower window has no sidebar
 	railFrom         = 120    // and no column on the right, unless the jobs are listed there
-	transcriptMax    = 100    // how wide the conversation is at most
+	transcriptMax    = 140    // how wide the conversation is at most
 	sendWidth        = 3      // the button that sends, " ↑ "
 	stopWidth        = 6      // the button that stops the answer, " Stop "
 	buttonsWidth     = 2 + stopWidth + sendWidth
@@ -50,10 +50,12 @@ func (m *Model) sideWidth() int {
 }
 
 // railWidth is how wide the column on the right is, 0 without it. The jobs
-// get it in any window, a third of it at most.
+// get it in any window, a third of it at most; the thread has none, as the
+// sidebar lists the sessions that run, and gives its room to the
+// conversation.
 func (m *Model) railWidth() int {
 	switch {
-	case m.width >= railFrom:
+	case m.width >= railFrom && (m.detailShown() || m.jobsShown):
 		return columnWidth(m.width)
 	case m.jobsShown:
 		return min(columnWidth(m.width), m.width/3)
@@ -564,13 +566,25 @@ func (m *Model) sessionItem(c *conversation, inner int) []sideRow {
 	if selected {
 		border = lipgloss.NewStyle().Foreground(accent)
 	}
-	return []sideRow{
+	rows := []sideRow{
 		{title.Render(pad(strings.ToUpper(cmp.Or(c.title, "new conversation")), inner)), c},
 		{on(mutedStyle).Render(pad("State: "+state+" · own"+when, inner)), c},
-		{on(lipgloss.NewStyle().Foreground(accent)).Render(string(bar)), c},
-		{border.Render(strings.Repeat("─", inner)), c},
-		{},
 	}
+	// Where it stands, what it did last and does next, as the column on the
+	// right said of it beside the thread.
+	s := standOf(c)
+	rows = append(rows, sideRow{m.standHead(c, s, inner)[1], c})
+	for _, l := range m.standFacts(c, s, inner) {
+		rows = append(rows, sideRow{l, c})
+	}
+	for _, l := range m.toolChart(s, inner) {
+		rows = append(rows, sideRow{l, c})
+	}
+	return append(rows,
+		sideRow{on(lipgloss.NewStyle().Foreground(accent)).Render(string(bar)), c},
+		sideRow{border.Render(strings.Repeat("─", inner)), c},
+		sideRow{},
+	)
 }
 
 // sidebarLayout is where the rows of the sidebar go in a column h rows high:
@@ -582,8 +596,12 @@ func (m *Model) sidebarLayout(inner, h int) (rows []sideRow, top int) {
 	most := max(4, h*48/100+2)
 	if len(rows) > most {
 		at := slices.IndexFunc(rows, func(r sideRow) bool { return r.c == m.chat })
+		end := at // the last row of the session shown
+		for end+1 < len(rows) && rows[end+1].c == m.chat {
+			end++
+		}
 		first := 2 // the heading stays
-		if at > first+most-6 {
+		if end >= first+most-2 {
 			first = min(at-2, len(rows)-(most-2))
 		}
 		rows = append(rows[:2:2], rows[first:first+most-2]...)

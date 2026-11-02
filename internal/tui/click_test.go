@@ -264,14 +264,14 @@ func TestClicksAboveAndInTheComposer(t *testing.T) {
 	}
 }
 
-// A click on a session in the column on the right shows it; one on its
+// A click on where a session in the sidebar stands shows it; one on its
 // head shows nothing.
-func TestClickOnASessionOnTheRight(t *testing.T) {
+func TestClickOnASessionOnTheLeft(t *testing.T) {
 	m, _, fix := threadWithSessions(t, 170, 46)
 	if clickOn(t, m, "RUNNING", 0); m.chat == fix {
 		t.Fatal("a click on the head of the column shows a session")
 	}
-	if clickOn(t, m, "FIX · WORKING", 0); m.chat != fix {
-		t.Fatal("a click on a session on the right shows it")
+	if clickOn(t, m, "● calls go test", 0); m.chat != fix {
+		t.Fatal("a click on a session on the left shows it")
 	}
 }
