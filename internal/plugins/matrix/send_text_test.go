@@ -6,8 +6,8 @@ import (
 )
 
 type recordingSender struct {
-	plain, formatted []string
-	bodies, html     []string
+	plain        []string
+	bodies, html []string
 }
 
 func (s *recordingSender) SendTo(_ context.Context, _, _, text string) error {

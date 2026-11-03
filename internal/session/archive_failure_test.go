@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -144,9 +145,9 @@ func TestReadyKeepsReportsWhileTasksRun(t *testing.T) {
 	}
 }
 
-// What a tool says on the way to an answer the thread handed on is heard in
-// the thread too.
-func TestSayingReachesThread(t *testing.T) {
+// What a tool says on the way to an answer the thread handed on is shown in
+// the session alone: the thread hears of a session through its tools only.
+func TestSayingStaysInSession(t *testing.T) {
 	var s *Service
 	s = service(t, &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
 		s.mu.Lock()
@@ -156,10 +157,18 @@ func TestSayingReachesThread(t *testing.T) {
 		return "done", nil
 	}})
 	_, thread, _ := s.Watch(t.Context(), ThreadID)
-	asked(t, s, "s1", "hi")
-	for _, e := range until(t, thread, Say) {
-		if e.Kind == Say && e.Text != "on my way" {
-			t.Fatalf("said %+v", e)
+	events := asked(t, s, "s1", "hi")
+	if !slices.ContainsFunc(events, func(e Event) bool { return e.Kind == Say && e.Text == "on my way" }) {
+		t.Fatalf("the session showed %s", kinds(events))
+	}
+	for {
+		select {
+		case e := <-thread:
+			if e.Kind == Say {
+				t.Fatalf("the thread was shown %+v", e)
+			}
+		default:
+			return
 		}
 	}
 }
