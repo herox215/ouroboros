@@ -778,6 +778,9 @@ The job saves the current conversation's project directory and the machine's IAN
 time zone. Recurring jobs keep their local wall-clock time across daylight-saving
 changes. There may be at most 32 jobs; recurring runs must be at least 15 minutes apart.
 The response includes the ID and up to three upcoming runs, with weekday and zone.
+`tools` (a list of tool names) limits the session of each run to those tools; leave it out, or
+give an empty list, for all the tools you allow. A name that is no tool is refused.
+The default archivist job gets the memory tools alone.
 `schedule_read` lists jobs; with `id`, it reads one job and its last ten run records.
 `schedule_update` with `action: "update"`, `id` and changed fields edits a job; `at`
 and `cron` replace each other. Set `paused: true` to pause, or `false` to resume.

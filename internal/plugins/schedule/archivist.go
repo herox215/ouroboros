@@ -16,6 +16,14 @@ const (
 	archivistCron = "0 4 * * *"
 )
 
+// archivistTools are the only tools of the archivist's session: the memory
+// tools its text names. A tool that is not there is left out of the session.
+var archivistTools = []string{"memory_search", "memory_read", "memory_merge", "memory_rewrite", "memory_split", "memory_scope", "memory_core", "memory_archive", "memory_undo", "memory_changes"}
+
+// seededTools is what the marker of the defaults says once the archivist
+// job has its tools, see migrateTools.
+const seededTools = "archivist tools\n"
+
 // archivistText is the instruction of the default job. Its session sees the
 // memory tools of the profile and nothing else to do, so the text names the
 // ones that tidy: the tools say the rest.
@@ -34,18 +42,21 @@ Leave alone what is fine; a pass that changes nothing is a good pass. Lose no me
 // happened, so a job the owner removes stays removed. The caller holds mu.
 func (s *scheduler) seedDefault(now time.Time) {
 	marker := s.path + ".defaults"
-	if _, err := os.Stat(marker); err == nil {
+	if b, err := os.ReadFile(marker); err == nil {
+		if string(b) != seededTools {
+			s.migrateTools(marker, now)
+		}
 		return
 	}
 	for _, job := range s.store.List() {
 		if job.Name == archivistName {
 			// The job is there and only the marker is missing: write it, and
 			// do not seed a second one.
-			s.markSeeded(marker)
+			s.migrateTools(marker, now)
 			return
 		}
 	}
-	job := store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never"}
+	job := store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never", Tools: archivistTools}
 	if _, err := s.store.Create(job, now); err != nil {
 		// A full store is not a decision of the owner: without a marker the
 		// next tick tries again, once a job has gone.
@@ -60,7 +71,23 @@ func (s *scheduler) seedDefault(now time.Time) {
 // markSeeded records that the default jobs were seeded, so that a job the
 // owner removes stays removed.
 func (s *scheduler) markSeeded(marker string) {
-	if err := os.WriteFile(marker, []byte("archivist\n"), 0600); err != nil {
+	if err := os.WriteFile(marker, []byte(seededTools), 0600); err != nil {
 		s.report("seed %q: %v", archivistName, err)
 	}
+}
+
+// migrateTools gives the archivist job that was seeded before jobs named
+// their tools the memory tools alone, once: a list the owner gives it later
+// stays. The caller holds mu.
+func (s *scheduler) migrateTools(marker string, now time.Time) {
+	for _, job := range s.store.List() {
+		if job.Name != archivistName || len(job.Tools) > 0 {
+			continue
+		}
+		if _, err := s.store.Update(job.ID, func(j *store.Job) error { j.Tools = archivistTools; return nil }, now); err != nil {
+			s.report("migrate %q: %v", archivistName, err)
+			return
+		}
+	}
+	s.markSeeded(marker)
 }

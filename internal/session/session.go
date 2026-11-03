@@ -223,8 +223,9 @@ type API interface {
 	Notify(ctx context.Context, name, text string) error
 	// RunScheduled starts generated, routed owner work; ctx controls its lifetime.
 	// The channel receives one terminal result and closes. With ask false,
-	// owner questions and approvals are unavailable.
-	RunScheduled(ctx context.Context, name, text, directory string, ask bool) (id string, result <-chan ScheduledResult, err error)
+	// owner questions and approvals are unavailable. With tools its answers
+	// get only the tools of the owner's agent named, without all of them.
+	RunScheduled(ctx context.Context, name, text, directory string, ask bool, tools ...string) (id string, result <-chan ScheduledResult, err error)
 	// Ask starts the answer to text in the session id and returns at once:
 	// what happens on the way is told to those who Watch it. It fails with
 	// ErrBusy while an answer is on its way in that session.
@@ -436,6 +437,9 @@ type session struct {
 	scheduled *scheduledRun
 	// Scheduled unattended sessions also forbid questions in task continuations.
 	denyOwner bool
+	// tools limits the answers of a scheduled session to the tools its job
+	// names, nil for all of them, see assistant.WithOnlyTools.
+	tools []string
 	// concernPictures keeps original request images for routing evidence while
 	// live. Images, like other image input, are intentionally not archived.
 	concernPictures []chat.Image
@@ -1050,6 +1054,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	ctx = workdir.With(ctx, se.directory)
 	scheduled := se.scheduled
 	denyOwner := se.denyOwner
+	if se.tools != nil {
+		ctx = assistant.WithOnlyTools(ctx, se.tools)
+	}
 	s.mu.Unlock()
 	if restartable {
 		ctx = WithRestart(ctx, func(exe string) {
