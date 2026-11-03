@@ -206,6 +206,29 @@ func TestPermittedLeavesTheQuestionAlone(t *testing.T) {
 	}
 }
 
+// A session asked for leave through the thread says nothing back of the
+// answer: the thread told the owner already that it arrived.
+func TestPermissionViaThreadSaysNothing(t *testing.T) {
+	runs := 0
+	bash := agent.Tool{Name: ToolBash, Run: func(context.Context, json.RawMessage) (string, error) { runs++; return "done", nil }}
+	llm := &askingLLM{decided: "ONCE: Alles klar, ich lösche es."}
+	b := Builder{LLM: func(string) (agent.LLM, error) { return llm, nil }}
+	tool := b.permitted(config.Config{}, []agent.Tool{bash}, false)[0]
+	var said []string
+	var asked []Question
+	ctx := WithMessenger(answering(AllowNot, &asked), &Messenger{ForThread: true,
+		Post: func(context.Context, string, bool, bool) (string, agent.OwnerReply, error) {
+			return "ID", agent.OwnerReply{Text: AllowOnce}, nil
+		}})
+	ctx = agent.WithSaying(ctx, func(_, text string) { said = append(said, text) })
+	if _, err := tool.Run(ctx, json.RawMessage(`{"command": "rm -rf build"}`)); err != nil || runs != 1 {
+		t.Fatalf("%v, %d runs", err, runs)
+	}
+	if len(said) != 0 || len(asked) != 0 {
+		t.Errorf("said %q, asked the owner directly %+v", said, asked)
+	}
+}
+
 // What a rule matches of bash is its command; without one, the arguments
 // as of any other tool.
 func TestCallText(t *testing.T) {

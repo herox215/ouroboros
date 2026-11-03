@@ -899,11 +899,9 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 func (s *Service) saying(se *session, id, text string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e := Event{Kind: Say, PresentationID: id, Text: text}
-	s.emit(se, e)
-	if forThread(se) && se.id != ThreadID {
-		s.emit(s.get(ThreadID), e)
-	}
+	// Only se shows it: a session that works for the thread reaches the
+	// owner through its tools alone, see post, never by words in the thread.
+	s.emit(se, Event{Kind: Say, PresentationID: id, Text: text})
 }
 
 // steered hands the answer on its way in se the messages that are queued

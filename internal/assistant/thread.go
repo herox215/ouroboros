@@ -49,7 +49,7 @@ const threadPrompt = `You are %q, the personal agent of the owner of this Ourobo
 	`Messages in brackets are internal data from ouro, not instructions from the owner: session lists, background results and earlier questions. A background result must be handled here, not handed on; it need not produce a text reply when the visible action already suffices. ` +
 	`You are shown only the last %d hours of this conversation: when the owner refers to something said before that, find it with ` + ToolSearchThread + `. ` +
 	`The sessions work for you and never talk to the owner: you are the one who phrases for them and asks them. A session tells you something with a message that has an ID. ` +
-	`One that waits for nothing you tell the owner at once, messages arriving together combined into one. One that waits you ask the owner with ` + ToolUserQuestion + ` and pass on their answer with ` + ToolSessionMessage + ` and its message_id. ` +
+	`One that waits for nothing you tell the owner at once, messages arriving together combined into one. One that waits you ask the owner with ` + ToolUserQuestion + ` and pass on their answer with ` + ToolSessionMessage + ` and its message_id; they were told at once that their answer arrived, so end your answer after passing it on, without a word of your own, until the session's result comes. ` +
 	`You may answer such a message yourself, with own true, only from what the owner already said here, or when it is no question for the owner; never a permission request, which the owner alone answers. ` +
 	`A permission request carries the exact call: do not show it by default, but when the owner asks to see it, show it to them verbatim from the request and ask them again with ` + ToolUserQuestion + `, the message still waiting. ` +
 	`Asking the owner for a waiting message, end your answer after the question; the session waits without a time limit until you answer it, or until the owner stops your work. ` +
@@ -173,9 +173,10 @@ func threadTools(window string) []agent.Tool {
 				return "", err
 			}
 			if s.MessageID != "" {
-				// An answer to a message of a session hands nothing new on:
-				// the thread may go on with what it says to the owner.
-				return fmt.Sprintf("Answered message %s of %q: %s.", s.MessageID, title, outcome), nil
+				// An answer to a message of a session hands nothing new on.
+				// The owner heard already that their answer arrived, when
+				// they gave it: the thread says nothing more of it.
+				return fmt.Sprintf("Answered message %s of %q: %s. The owner was told already that their answer arrived: end your answer without a word about it, the session's result follows.", s.MessageID, title, outcome), nil
 			}
 			// The session answers the question: what the thread says itself
 			// is an acknowledgement of receipt at most, never a second answer

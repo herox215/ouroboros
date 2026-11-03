@@ -175,11 +175,13 @@ func (b Builder) permitting(ctx context.Context, current func() (config.Config, 
 		}
 		decided, reply := ask.decide(ctx, p, tool, call.Call, answer)
 		// The owner hears at once that their answer arrived, in words of
-		// the conversation, before the call runs or is left.
-		switch decided {
-		case decidedOnce, decidedAlways:
+		// the conversation, before the call runs or is left. Asked through
+		// the thread, the thread said so itself when they answered.
+		switch {
+		case viaThread:
+		case decided == decidedOnce, decided == decidedAlways:
 			agent.Say(ctx, cmp.Or(reply, p.Yes))
-		case decidedNot:
+		case decided == decidedNot:
 			agent.Say(ctx, cmp.Or(reply, p.No))
 		}
 		switch decided {
