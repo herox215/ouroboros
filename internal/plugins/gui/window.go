@@ -39,6 +39,9 @@ type ChatEvent struct {
 	N        int                `json:"n"`
 	Own      bool               `json:"own"`
 	Question *ChatQuestion      `json:"question,omitempty"`
+	// Message is, of an Asked, the ID of the message the session waits for
+	// the thread to answer, "" for a question it asks the owner itself.
+	Message string `json:"message,omitempty"`
 	// Remembered is what takes back the memory of a SessionRemembered, as
 	// JSON, see Window.UndoRemembered.
 	Remembered string `json:"remembered,omitempty"`
@@ -524,7 +527,7 @@ func (p *Profile) events(events []plugin.SessionEvent) []ChatEvent {
 	return out
 }
 func (p *Profile) event(e plugin.SessionEvent) ChatEvent {
-	out := ChatEvent{Kind: e.Kind, Text: e.Text, Tool: e.Tool, Done: e.Done, At: e.At, CallID: e.CallID, N: e.N, Own: e.Own}
+	out := ChatEvent{Kind: e.Kind, Text: e.Text, Tool: e.Tool, Done: e.Done, At: e.At, CallID: e.CallID, N: e.N, Own: e.Own, Message: e.Message}
 	if e.Kind == plugin.SessionAsked && !e.Done {
 		q := e.AsQuestion()
 		out.Question = &ChatQuestion{Text: q.Question, Options: q.Options, Recommended: q.Recommended}

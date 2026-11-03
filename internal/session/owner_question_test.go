@@ -4,33 +4,51 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
+
+// waitingMessage is the ID of the message to the thread some session of s
+// waits for, once one does.
+func waitingMessage(t *testing.T, s *Service) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		for _, se := range s.sessions {
+			if se.waiting != "" && se.asked != nil {
+				id := se.waiting
+				s.mu.Unlock()
+				return id
+			}
+		}
+		s.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("no session waits for the thread")
+	return ""
+}
 
 func TestBackendOwnerQuestionStopsWithService(t *testing.T) {
 	s := service(t, &fakeAgent{})
-	_, live, err := s.Watch(t.Context(), ThreadID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	done := make(chan error, 1)
 	go func() {
 		_, err := s.OwnerQuestion(context.Background(), json.RawMessage(`{"question":"Connect?"}`))
 		done <- err
 	}()
-	until(t, live, Asked)
+	waitingMessage(t, s)
 	s.Close()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
 }
 
+// A backend approval is a permission request to the thread: the thread
+// asks the owner and passes on their answer with the message ID, which it
+// may not give itself.
 func TestBackendOwnerQuestion(t *testing.T) {
 	s := service(t, &fakeAgent{})
-	_, live, err := s.Watch(t.Context(), ThreadID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	done := make(chan string, 1)
 	go func() {
 		text, err := s.OwnerQuestion(t.Context(), json.RawMessage(`{"question":"Connect?","options":["Approve connection","Reject connection"]}`))
@@ -40,11 +58,11 @@ func TestBackendOwnerQuestion(t *testing.T) {
 			done <- text
 		}
 	}()
-	events := until(t, live, Asked)
-	if events[len(events)-1].AsQuestion().Question != "Connect?" {
-		t.Fatalf("%+v", events)
+	id := waitingMessage(t, s)
+	if _, _, err := s.answerMessage(t.Context(), id, "Approve connection", true); err == nil || !strings.Contains(err.Error(), "only the owner") {
+		t.Fatalf("own answer: %v", err)
 	}
-	if err := s.Steer(t.Context(), ThreadID, "Reject connection"); err != nil {
+	if _, _, err := s.answerMessage(t.Context(), id, "Reject connection", false); err != nil {
 		t.Fatal(err)
 	}
 	if text := <-done; text != "Reject connection" {

@@ -90,23 +90,17 @@ type checkedConcern struct {
 	threadRevision int
 }
 
-func (t threading) checkConcern(ctx context.Context, id, text string, pictures []chat.Image, pendingReply bool) (checkedConcern, assistant.TopicDecision, error) {
+func (t threading) checkConcern(ctx context.Context, id, text string, pictures []chat.Image) (checkedConcern, assistant.TopicDecision, error) {
 	if err := ctx.Err(); err != nil {
 		return checkedConcern{}, assistant.TopicDecision{}, err
 	}
 	s := t.s
 	s.mu.Lock()
 	allowed := false
-	if pendingReply {
-		thread := s.sessions[ThreadID]
-		allowed = thread != nil && len(thread.questions) > 0 && thread.questions[0].se.id == id && thread.questions[0].se.asked != nil
-	}
-	if !pendingReply {
-		for _, r := range s.routable() {
-			if r.id == id {
-				allowed = true
-				break
-			}
+	for _, r := range s.routable() {
+		if r.id == id {
+			allowed = true
+			break
 		}
 	}
 	if !allowed {
@@ -149,59 +143,6 @@ func (t threading) checkConcern(ctx context.Context, id, text string, pictures [
 	}
 }
 
-// replyToConcern checks the fast path for a question relayed into the shared
-// conversation. A topic change must reach the router instead of consuming an
-// unrelated pending question. Rejected or unavailable checks leave that wait
-// intact and let the thread resolve the new input normally.
-func (s *Service) replyToConcern(ctx context.Context, message queued) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	s.mu.Lock()
-	thread := s.sessions[ThreadID]
-	if thread == nil || len(thread.questions) == 0 || thread.questions[0].se.asked == nil {
-		s.mu.Unlock()
-		return false, nil
-	}
-	if thread.asked != nil {
-		// The thread itself waits for an answer, as one a tool it runs asks
-		// for, like a change of the model. It is what the owner answers:
-		// nothing else would end that wait, and it was asked last.
-		s.mu.Unlock()
-		return false, nil
-	}
-	question := thread.questions[0]
-	if question.se.backendQuestion {
-		// Backend approvals have no topical agent context to contaminate. Their
-		// caller validates the exact reply; never let a topic model block them.
-		answered := s.answerRelayedImages(message)
-		s.mu.Unlock()
-		return answered, nil
-	}
-	id := question.se.id
-	s.mu.Unlock()
-	checked, decision, err := (threading{s}).checkConcern(ctx, id, message.text, message.images, true)
-	if err != nil {
-		if ctx.Err() != nil {
-			return false, ctx.Err()
-		}
-		return false, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	thread = s.sessions[ThreadID]
-	if thread == nil || len(thread.questions) == 0 || thread.questions[0] != question || !checked.unchanged(s, id) {
-		return false, nil
-	}
-	if s.archive != nil {
-		s.archive.log("CheckTopic: reply continues session %s: %s", id, decision.Reason)
-	}
-	return s.answerRelayedImages(message), nil
-}
-
 // concernRevision ignores streaming tokens and tool progress: these must not
 // prevent a checked follow-up from steering ongoing work.
 func concernRevision(events []Event) int {
@@ -227,9 +168,4 @@ func (c checkedConcern) changed(s *Service, id string) string {
 		return "thread context"
 	}
 	return ""
-}
-
-// unchanged is called with s.mu held immediately before delivery.
-func (c checkedConcern) unchanged(s *Service, id string) bool {
-	return c.changed(s, id) == ""
 }

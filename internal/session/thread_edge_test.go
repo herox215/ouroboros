@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
 	"ouroboros/internal/openai"
 )
@@ -22,7 +20,7 @@ func TestSendCanceledWhileHanding(t *testing.T) {
 	before := topicSnapshot(s, se)
 	// Canceled at the fourth look: past the check of the concern and the
 	// start of hand, at the last look before delivery.
-	if _, _, err := (threading{s}).Send(&cancelsLate{Context: t.Context(), after: 3}, se.id, "add tests"); !errors.Is(err, context.Canceled) {
+	if _, _, err := (threading{s}).Send(&cancelsLate{Context: t.Context(), after: 3}, se.id, "add tests", "", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("sent: %v", err)
 	}
 	topicUnchanged(t, s, se, question, before)
@@ -42,26 +40,6 @@ func TestHandCanceled(t *testing.T) {
 	cancel()
 	if _, _, err := s.hand(ctx, "s1", "hi", nil, func() error { return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("handed: %v", err)
-	}
-}
-
-// A question the thread relays that was not asked yet is withdrawn quietly;
-// once the asked one is withdrawn, the next is asked.
-func TestWithdrawRelayedQuestions(t *testing.T) {
-	s := service(t, &fakeAgent{})
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	thread := s.get(ThreadID)
-	first, second, third := &session{id: "a"}, &session{id: "b"}, &session{id: "c"}
-	question := json.RawMessage(`{"question":"Allow?"}`)
-	thread.questions = []*relayed{{se: first, question: question, id: "asked"}, {se: second, question: question}, {se: third, question: question}}
-	s.withdraw(second)
-	if len(thread.questions) != 2 || len(thread.events) != 0 {
-		t.Fatalf("questions %d, events %+v", len(thread.questions), thread.events)
-	}
-	s.withdraw(first)
-	if len(thread.questions) != 1 || len(thread.events) != 2 || !thread.events[0].Done || thread.events[1].Kind != Asked || thread.events[1].Done {
-		t.Fatalf("questions %d, events %+v", len(thread.questions), thread.events)
 	}
 }
 
@@ -96,76 +74,6 @@ func TestConcernOfArchivedSession(t *testing.T) {
 	s.mu.Unlock()
 	if got != "" || !l.has("the original concern of session s1 cannot be read") {
 		t.Fatalf("concern %q, log %q", got, l.lines)
-	}
-}
-
-// relayedFixture is topicFixture with the question of the target relayed in
-// the thread.
-func relayedFixture(t *testing.T) (*Service, *fakeAgent, *session, chan queued) {
-	t.Helper()
-	s, a, se, question := topicFixture(t)
-	s.mu.Lock()
-	s.get(ThreadID).questions = []*relayed{{se: se, question: json.RawMessage(`{"question":"Add the redirect regression test?"}`)}}
-	s.mu.Unlock()
-	return s, a, se, question
-}
-
-// A reply to a relayed question is not taken for it when its request is
-// canceled, before or after the check, or when the question changed while it
-// was checked. Without a relayed question there is nothing to reply to.
-func TestReplyToConcernRefusals(t *testing.T) {
-	reply := queued{text: "yes"}
-	s := service(t, &fakeAgent{})
-	if answered, err := s.replyToConcern(t.Context(), reply); answered || err != nil {
-		t.Fatalf("without a question: %v %v", answered, err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if answered, err := s.replyToConcern(ctx, reply); answered || !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled: %v %v", answered, err)
-	}
-
-	s, a, _, _ := relayedFixture(t)
-	ctx, cancel = context.WithCancel(t.Context())
-	a.checkTopic = func(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
-		cancel()
-		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "same"}, nil
-	}
-	if answered, err := s.replyToConcern(ctx, reply); answered || !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled in the check: %v %v", answered, err)
-	}
-
-	s, a, _, _ = relayedFixture(t)
-	a.checkTopic = func(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
-		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "same"}, nil
-	}
-	// Canceled at the fourth look, once the check is done.
-	if answered, err := s.replyToConcern(&cancelsLate{Context: t.Context(), after: 3}, reply); answered || !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled after the check: %v %v", answered, err)
-	}
-
-	s, a, _, _ = relayedFixture(t)
-	a.checkTopic = func(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
-		s.mu.Lock()
-		s.get(ThreadID).questions = nil
-		s.mu.Unlock()
-		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "same"}, nil
-	}
-	if answered, err := s.replyToConcern(t.Context(), reply); answered || err != nil {
-		t.Fatalf("question gone: %v %v", answered, err)
-	}
-}
-
-// A reply that continues the relayed question is logged with the archive.
-func TestReplyToConcernLogged(t *testing.T) {
-	s, _, se, question := relayedFixture(t)
-	l := &logs{}
-	s.Archive(history.Open(t.TempDir()), l.log, func(string) string { return "" })
-	if answered, err := s.replyToConcern(t.Context(), queued{text: "yes"}); !answered || err != nil {
-		t.Fatalf("answered %v, %v", answered, err)
-	}
-	if got := <-question; got.text != "yes" || !l.has("CheckTopic: reply continues session "+se.id) {
-		t.Fatalf("reply %+v, log %q", got, l.lines)
 	}
 }
 

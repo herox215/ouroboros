@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/openai"
@@ -22,34 +21,13 @@ func TestTopicSendRejectsConcurrentThreadChange(t *testing.T) {
 		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "stale thread context"}, nil
 	}
 	before := topicSnapshot(s, se)
-	if _, _, err := (threading{s}).Send(context.Background(), se.id, "do it"); err == nil {
+	if _, _, err := (threading{s}).Send(context.Background(), se.id, "do it", "", false); err == nil {
 		t.Fatal("accepted stale thread evidence")
 	}
 	if checks != 3 {
 		t.Fatalf("unbounded or missing fresh verification: %d checks", checks)
 	}
 	topicUnchanged(t, s, se, question, before)
-}
-
-func TestTopicPendingQuestionOutlivesRosterWindow(t *testing.T) {
-	s, a, se, question := topicFixture(t)
-	s.mu.Lock()
-	for i := range se.events {
-		se.events[i].At = s.now().Add(-48 * time.Hour)
-	}
-	thread := s.get(ThreadID)
-	thread.questions = []*relayed{{se: se, question: json.RawMessage(`{"question":"Add the regression test?"}`)}}
-	s.mu.Unlock()
-	a.checkTopic = func(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
-		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "answer to the still pending question"}, nil
-	}
-	answered, err := s.replyToConcern(context.Background(), queued{text: "yes"})
-	if err != nil || !answered {
-		t.Fatalf("old pending question became unreachable: %t %v", answered, err)
-	}
-	if got := <-question; got.text != "yes" {
-		t.Fatalf("answer lost: %+v", got)
-	}
 }
 
 func TestTopicImageOnlyAnchorAndProposedImages(t *testing.T) {
@@ -71,7 +49,7 @@ func TestTopicImageOnlyAnchorAndProposedImages(t *testing.T) {
 		}
 		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "same pictured concern"}, nil
 	}
-	if _, _, err := (threading{s}).Send(context.Background(), se.id, "and this detail?"); err != nil {
+	if _, _, err := (threading{s}).Send(context.Background(), se.id, "and this detail?", "", false); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -100,7 +78,7 @@ func TestTopicSendTellsPendingQuestion(t *testing.T) {
 			pending = check.Pending
 			return assistant.TopicDecision{Disposition: assistant.TopicUnclear, Reason: "recorded"}, nil
 		}
-		(threading{s}).Send(context.Background(), se.id, "Ja")
+		(threading{s}).Send(context.Background(), se.id, "Ja", "", false)
 		if want := map[bool]string{true: "Run the tests and install?"}[waiting]; pending != want {
 			t.Errorf("waiting %t: pending %q, not %q", waiting, pending, want)
 		}

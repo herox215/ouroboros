@@ -57,7 +57,7 @@ func TestTopicSendReverifiesInFlightRequest(t *testing.T) {
 				if text != request {
 					return "acknowledged", nil
 				}
-				_, _, err := (threading{s}).Send(ctx, target.id, "")
+				_, _, err := (threading{s}).Send(ctx, target.id, "", "", false)
 				if corrective {
 					if err == nil || !strings.Contains(err.Error(), "new concern") {
 						done <- fmt.Errorf("corrective context not rejected: %v", err)
@@ -74,7 +74,7 @@ func TestTopicSendReverifiesInFlightRequest(t *testing.T) {
 					return "", nil
 				}
 				if !corrective {
-					_, _, err = (threading{s}).Send(ctx, weather.id, messages[0].Content)
+					_, _, err = (threading{s}).Send(ctx, weather.id, messages[0].Content, "", false)
 				}
 				done <- err
 				return "acknowledged", nil // no agent.End dependency

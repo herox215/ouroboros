@@ -104,9 +104,10 @@ func TestRunScheduledQuestions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			_ = live
 			if ask {
-				until(t, live, Asked)
-				if err := s.Steer(t.Context(), ThreadID, "Don't run it"); err != nil {
+				// The thread asks the owner and answers the message.
+				if _, _, err := s.answerMessage(t.Context(), waitingMessage(t, s), "Don't run it", false); err != nil {
 					t.Fatal(err)
 				}
 			}

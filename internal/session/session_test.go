@@ -110,13 +110,6 @@ func (a *fakeAgent) noted() []string {
 	return slices.Clone(a.notes)
 }
 
-// presentedAs is what each of the notes was presented as, see noted.
-func (a *fakeAgent) presentedAs() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return slices.Clone(a.presented)
-}
-
 func (a *fakeAgent) Forget(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

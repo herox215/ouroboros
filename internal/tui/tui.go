@@ -226,6 +226,9 @@ type Event struct {
 	N int
 	// Routed says of a message that the thread handed it on.
 	Routed bool
+	// Message is, of a question, the ID of the message the session waits
+	// for the thread to answer: the thread asks the owner, not the session.
+	Message string
 	// Remembered is what takes back the memory of a
 	// plugin.SessionRemembered, see Backend.UndoRemembered.
 	Remembered json.RawMessage

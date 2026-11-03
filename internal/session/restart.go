@@ -56,7 +56,12 @@ func AskRestart(ctx context.Context, exe string) bool {
 // cancelling work that would otherwise keep the new build waiting indefinitely.
 const restartGrace = time.Minute
 
-const restartQuestionHead = "[Not from the owner: a restart interrupted this unanswered question. Ask it again with user_question before continuing; no permission was granted.]\n"
+const restartQuestionHead = "[Not from the owner: a restart interrupted this unanswered question. Ask it again before continuing, with user_question, or with thread_message and wait true where you work for the thread; no permission was granted.]\n"
+
+// restartMessageHead is told a session whose thread_message with wait true
+// a restart interrupted, with its ID twice: it waits for the same message
+// again, which the thread may have answered in its mind already.
+const restartMessageHead = "[Not from the owner: a restart interrupted your wait for the thread's answer to message %s. Wait for it again before continuing: call thread_message with wait true, resume %q and the same message; no permission was granted.]\n"
 
 const restartThreadQuestionHead = "[Resume this pending question in the shared thread.]\n" + restartQuestionHead
 
@@ -89,6 +94,7 @@ func (p *process) scheduleRestart() {
 							if e := se.events[i]; e.Kind == Asked && !e.Done {
 								se.parked = slices.Clone(e.Args)
 								se.parkedRouted = forThread(se)
+								se.parkedMessage = se.waiting
 								break
 							}
 						}

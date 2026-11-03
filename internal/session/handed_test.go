@@ -55,7 +55,7 @@ func TestThreadTellsHandedAgainFromTheArchive(t *testing.T) {
 	events, _ := replay([]history.Record{
 		{Seq: 1, Answer: 1, Role: "user", Content: "go"},
 		{Seq: 2, Answer: 1, Role: "assistant", ToolCalls: []history.Call{
-			call("a", assistant.ToolSessionSend, `{"session":"abcd1234","text":"more"}`),
+			call("a", assistant.ToolSessionMessage, `{"session":"abcd1234","text":"more"}`),
 			call("b", assistant.ToolSessionNew, `{"text":"go"}`),
 			call("c", assistant.ToolSessionNew, `{"text":"go"}`),
 			call("d", assistant.ToolSessionState, `{"session":"abcd1234"}`),
@@ -91,11 +91,11 @@ func TestHandedBy(t *testing.T) {
 		result string
 		want   string
 	}{
-		{step(assistant.ToolSessionSend, `{"session":"s1"}`, ""), "", "s1"},
+		{step(assistant.ToolSessionMessage, `{"session":"s1"}`, ""), "", "s1"},
 		{step(assistant.ToolSessionState, `{"session":"s4"}`, ""), "", "s4"},
 		{step(assistant.ToolSessionStop, `{"session":"s5","job":1}`, ""), "", "s5"},
-		{step(assistant.ToolSessionSend, `[1]`, ""), "", ""},
-		{step(assistant.ToolSessionSend, `{"session":"s1"}`, "failed"), "", ""},
+		{step(assistant.ToolSessionMessage, `[1]`, ""), "", ""},
+		{step(assistant.ToolSessionMessage, `{"session":"s1"}`, "failed"), "", ""},
 		{step(assistant.ToolSessionNew, `{}`, ""), "Work started in the background in session s2. Briefly", "s2"},
 		{step(assistant.ToolSessionNew, `{}`, ""), "Work started in the background.", ""},
 		{step("bash", `{}`, ""), "in session s3.", ""},

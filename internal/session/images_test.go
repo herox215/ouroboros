@@ -137,7 +137,7 @@ func TestPendingQuestionImageReplies(t *testing.T) {
 }
 
 func TestImageReplyRelayedAndQueued(t *testing.T) {
-	for _, relay := range []bool{false, true} {
+	for _, relay := range []bool{false} { // a reply in the thread no longer answers a session: see answerMessage
 		t.Run(fmt.Sprint(relay), func(t *testing.T) {
 			s := service(t, &fakeAgent{})
 			ctx := WithMessageSource(t.Context(), MessageSource{Interface: "api"})
@@ -150,7 +150,6 @@ func TestImageReplyRelayedAndQueued(t *testing.T) {
 			if relay {
 				pending = make(chan queued, 1)
 				target.asked = pending
-				s.get(ThreadID).questions = []*relayed{{se: target}}
 				id = ThreadID
 			}
 			s.mu.Unlock()

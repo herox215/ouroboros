@@ -95,7 +95,7 @@ func TestTopicSendRefusesBeforeDelivery(t *testing.T) {
 				}
 				return tc.decision, tc.err
 			}
-			if _, _, err := (threading{s}).Send(context.Background(), se.id, "Change the billing export"); err == nil {
+			if _, _, err := (threading{s}).Send(context.Background(), se.id, "Change the billing export", "", false); err == nil {
 				t.Fatal("refused decision accepted")
 			}
 			if !called {
@@ -117,7 +117,7 @@ func TestTopicSendMissingAnchor(t *testing.T) {
 		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "not evidence"}, nil
 	}
 	before := topicSnapshot(s, se)
-	if _, _, err := (threading{s}).Send(context.Background(), se.id, "yes"); err == nil {
+	if _, _, err := (threading{s}).Send(context.Background(), se.id, "yes", "", false); err == nil {
 		t.Fatal("target without an anchor accepted")
 	}
 	topicUnchanged(t, s, se, question, before)
@@ -150,7 +150,7 @@ func TestTopicSendContinueUsesOriginalWordsAndEvidence(t *testing.T) {
 		}
 		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "same regression"}, nil
 	}
-	if _, _, err := (threading{s}).Send(context.Background(), handle(se.id), ""); err != nil {
+	if _, _, err := (threading{s}).Send(context.Background(), handle(se.id), "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -191,7 +191,7 @@ func TestTopicSendReturnsToStableOriginalConcern(t *testing.T) {
 		}
 		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "explicit return"}, nil
 	}
-	if _, _, err := (threading{s}).Send(context.Background(), se.id, back); err != nil {
+	if _, _, err := (threading{s}).Send(context.Background(), se.id, back, "", false); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -222,7 +222,7 @@ func TestTopicSendCancelledDoesNotDeliver(t *testing.T) {
 				return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "same concern"}, nil
 			}
 			before := topicSnapshot(s, se)
-			if _, _, err := (threading{s}).Send(ctx, se.id, "add tests"); err == nil {
+			if _, _, err := (threading{s}).Send(ctx, se.id, "add tests", "", false); err == nil {
 				t.Fatal("cancelled send accepted")
 			}
 			topicUnchanged(t, s, se, question, before)
@@ -240,7 +240,7 @@ func TestTopicSendRejectsConcurrentTargetChange(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := (threading{s}).Send(context.Background(), se.id, "add tests")
+		_, _, err := (threading{s}).Send(context.Background(), se.id, "add tests", "", false)
 		done <- err
 	}()
 	select {
@@ -302,7 +302,7 @@ func TestTopicRosterUsesArchivedOriginalConcern(t *testing.T) {
 		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "return to original concern"}, nil
 	}
 	const followup = "Back to the original login redirect: add tests"
-	if _, _, err := (threading{s}).Send(context.Background(), "kept", followup); err != nil {
+	if _, _, err := (threading{s}).Send(context.Background(), "kept", followup, "", false); err != nil {
 		t.Fatal(err)
 	}
 	if !called {

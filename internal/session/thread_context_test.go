@@ -3,83 +3,104 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"slices"
+	"strings"
 	"testing"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/assistant"
 )
 
-// The thread shows what a session said before its question: without it the
-// owner sees only a question that refers to the session's conversation.
-func TestThreadShowsWhatTheSessionSaidBeforeItsQuestion(t *testing.T) {
-	asks := json.RawMessage(`{"question":"Allow rebuild?","options":["Allow once","No"]}`)
-	s, gate, local, thread := questionFixture(t, asks)
-	s.mu.Lock()
-	s.emit(s.get("s1"), Event{Kind: Say, PresentationID: "said", Text: "Two tests fail in the build."})
-	s.mu.Unlock()
-	ask(t, s, "send s1 follow-up")
-	until(t, local, Queued)
-	until(t, thread, Handed)
-	close(gate)
-	question(t, local)
-	if _, ok := openQuestion(t, s); !ok {
-		t.Fatal("the question was not relayed")
-	}
-	events := until(t, thread, Asked)
-	said := slices.IndexFunc(events, func(e Event) bool {
-		return e.Kind == Say && e.Text == "Two tests fail in the build."
-	})
-	asked := slices.IndexFunc(events, func(e Event) bool { return e.Kind == Asked && !e.Done })
-	if said < 0 || asked < 0 || said > asked {
-		t.Fatalf("the thread did not show what the session said before its question: %+v", events)
-	}
-	if err := s.Steer(WithMessageSource(context.Background(), MessageSource{Interface: "tui"}), ThreadID, "Allow once"); err != nil {
+// A session that works for the thread asks the owner nothing itself: its
+// question goes to the thread as a message with an ID, and the answer the
+// thread gives with that ID is what the session goes on with.
+func TestRoutedQuestionGoesThroughTheThread(t *testing.T) {
+	var reports []string
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if strings.HasPrefix(text, backgroundHead) {
+			reports = append(reports, text)
+			return "noted", nil
+		}
+		return agent.AskOwner(ctx, json.RawMessage(`{"question":"A or B?","options":["A","B"]}`))
+	}}
+	s := service(t, a)
+	_, local, _ := s.Watch(t.Context(), "work")
+	if _, _, err := s.hand(t.Context(), "work", "decide", nil, func() error { return nil }); err != nil {
 		t.Fatal(err)
+	}
+	until(t, local, Asked)
+	s.mu.Lock()
+	id, permission := s.sessions["work"].waiting, s.sessions["work"].waitPermission
+	s.mu.Unlock()
+	if id == "" || permission {
+		t.Fatalf("waiting %q, permission %v", id, permission)
+	}
+	if _, _, err := s.answerMessage(t.Context(), "nonexistent", "B", false); err == nil {
+		t.Fatal("an unknown message was answered")
+	}
+	s.mu.Lock()
+	s.sessions["work"].waitPermission = true // as a permission request is
+	s.mu.Unlock()
+	if _, _, err := s.answerMessage(t.Context(), id, "B", true); err == nil {
+		t.Fatal("the thread answered a permission request itself")
+	}
+	if _, _, err := s.answerMessage(t.Context(), id, "B", false); err != nil {
+		t.Fatal(err)
+	}
+	if e := until(t, local, Answer); e[len(e)-1].Text != "B" {
+		t.Fatalf("answer %q", e[len(e)-1].Text)
+	}
+	s.answers.Wait()
+	if len(reports) == 0 || !strings.Contains(reports[0], "message "+id) || !strings.Contains(reports[0], "A or B?") {
+		t.Fatalf("thread was told %q", reports)
 	}
 }
 
-// What a tool says to the owner on its way is shown in the thread as it is
-// said: the question that follows it does not say it again.
-func TestThreadDoesNotShowWhatTheToolSaidTwice(t *testing.T) {
-	asks := json.RawMessage(`{"question":"Allow rebuild?","options":["Allow once","No"]}`)
-	const said = "I look at the failing test first."
-	gate := make(chan struct{})
-	a := dispatcher(make(chan string, 8), func(ctx context.Context, text string) (string, error) {
-		if text != "original" {
-			return "follow-up handled", nil
+// A wait a restart interrupted goes on under the same message ID, so that
+// the thread's answer with it arrives; stopping the thread ends a wait
+// without an answer.
+func TestThreadMessageResumesAndStops(t *testing.T) {
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if strings.HasPrefix(text, backgroundHead) {
+			return "noted", nil
 		}
-		select {
-		case <-gate:
-		case <-ctx.Done():
-			return "", ctx.Err()
+		m := assistant.MessengerOf(ctx)
+		if m == nil || m.Resume == nil {
+			return "no messenger", nil
 		}
-		if !agent.Say(ctx, said) {
-			return "", errors.New("nobody hears it")
+		if text == "stop" {
+			_, _, err := m.Post(ctx, "A or B?", true, false)
+			return "stopped", err
 		}
-		answer, err := agent.AskOwner(ctx, asks)
-		return "permission: " + answer, err
-	})
+		reply, err := m.Resume(ctx, "A or B?", "SAMEID01")
+		return reply.Text, err
+	}}
 	s := service(t, a)
-	_, local, _ := s.Watch(context.Background(), "s1")
-	_, thread, _ := s.Watch(context.Background(), ThreadID)
-	if err := s.Ask(WithMessageSource(context.Background(), MessageSource{Interface: "tui"}), "s1", "original"); err != nil {
+	_, local, _ := s.Watch(t.Context(), "work")
+	if _, _, err := s.hand(t.Context(), "work", "resume", nil, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	until(t, local, Message)
-	ask(t, s, "send s1 follow-up")
-	until(t, local, Queued)
-	until(t, thread, Handed)
-	close(gate)
-	question(t, local)
-	events := until(t, thread, Asked)
-	shown := 0
-	for _, e := range events {
-		if e.Kind == Say && e.Text == said {
-			shown++
-		}
+	if e := until(t, local, Asked); e[len(e)-1].Message != "SAMEID01" {
+		t.Fatalf("asked %+v", e[len(e)-1])
 	}
-	if shown != 1 {
-		t.Fatalf("the thread shows what the tool said %d times: %v", shown, kinds(events))
+	if _, _, err := s.answerMessage(t.Context(), "SAMEID01", "B", false); err != nil {
+		t.Fatal(err)
+	}
+	if e := until(t, local, Answer); e[len(e)-1].Text != "B" {
+		t.Fatalf("answer %q", e[len(e)-1].Text)
+	}
+	s.answers.Wait()
+	if _, _, err := s.hand(t.Context(), "work", "stop", nil, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	until(t, local, Asked)
+	s.mu.Lock()
+	s.stopThread()
+	s.mu.Unlock()
+	until(t, local, Canceled)
+	s.answers.Wait()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if se := s.sessions["work"]; se.waiting != "" || se.asked != nil {
+		t.Fatalf("still waits for %q", se.waiting)
 	}
 }

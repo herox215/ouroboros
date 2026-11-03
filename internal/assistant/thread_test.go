@@ -33,7 +33,7 @@ func (f *fakeThread) Stop(_ context.Context, id string, job int) (string, error)
 	return "stopped", f.err
 }
 
-func (f *fakeThread) Send(_ context.Context, id, text string) (string, string, error) {
+func (f *fakeThread) Send(_ context.Context, id, text, _ string, _ bool) (string, string, error) {
 	f.sent = append(f.sent, id+" "+text)
 	return "Fix", "the session answers it now", f.err
 }
@@ -57,7 +57,7 @@ func TestThreadHandsOn(t *testing.T) {
 	defer a.Stop()
 	thread := &fakeThread{}
 	ctx := WithThread(context.Background(), thread)
-	for _, call := range []string{`!session_send {"session":"s1","text":"more"}`, `!session_new {"text":"go","directory":"/p"}`} {
+	for _, call := range []string{`!session_message {"session":"s1","text":"more"}`, `!session_new {"text":"go","directory":"/p"}`} {
 		got, err := a.Ask(ctx, "thread", call, nil)
 		if err != nil || got == "" {
 			t.Fatalf("handoff must allow an acknowledgement: %q, %v", got, err)
@@ -77,7 +77,7 @@ func TestThreadHandsOn(t *testing.T) {
 		t.Fatalf("stop: %s, %q", got, thread.stopped)
 	}
 	thread.err = errTest
-	for _, call := range []string{`!session_send {"session":"s1"}`, `!session_new {}`, `!session_new [1]`, `!session_status {"session":"s1"}`, `!session_stop {"session":"s1"}`, `!session_stop [1]`, `!session_status [1]`} {
+	for _, call := range []string{`!session_message {"session":"s1"}`, `!session_new {}`, `!session_new [1]`, `!session_status {"session":"s1"}`, `!session_stop {"session":"s1"}`, `!session_stop [1]`, `!session_status [1]`} {
 		got, err := a.Ask(ctx, "thread", call, nil)
 		if got := result(t, got, err); !strings.HasPrefix(got, "error: ") {
 			t.Fatalf("%s: %s", call, got)
@@ -143,8 +143,8 @@ func TestThreadToolsRefuseMalformedArguments(t *testing.T) {
 	thread := &fakeThread{}
 	ctx := WithThread(context.Background(), thread)
 	for tool, args := range map[string]string{
-		ToolSessionSend:  `{"session":1}`,
-		ToolSearchThread: `{"query":1}`,
+		ToolSessionMessage: `{"session":1}`,
+		ToolSearchThread:   `{"query":1}`,
 	} {
 		found := false
 		for _, candidate := range threadTools("3 hours") {

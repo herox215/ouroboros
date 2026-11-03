@@ -687,7 +687,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	})
 	bot, core := a.withCore(ctx, contextID, inDirectory(ctx, bot))
 	to.memories = core
-	bot = a.withTopic(ctx, contextID, inThread(ctx, bot, cfg)) // after inThread, which has a prompt of its own
+	bot = a.withTopic(ctx, contextID, withMessenger(ctx, inThread(ctx, bot, cfg))) // after inThread, which has a prompt of its own
 	if ThreadOf(ctx) == nil {
 		bot = only(bot, OnlyTools(ctx))
 	}
@@ -1041,7 +1041,7 @@ func (a *Assistant) ContentsContext(ctx context.Context, contextID string) (Cont
 	if err != nil {
 		return c, err
 	}
-	c.System, c.Tools = inThread(ctx, inDirectory(ctx, bot), cfg).Prompt()
+	c.System, c.Tools = withMessenger(ctx, inThread(ctx, inDirectory(ctx, bot), cfg)).Prompt()
 	if bot.HasExtensions() {
 		if snapshot, ok := bot.Inspection(contextID); ok {
 			c.Messages = slices.Clone(snapshot.Messages)

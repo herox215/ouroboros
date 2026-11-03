@@ -291,7 +291,7 @@ func (u *ui) Watch(ctx context.Context, id string) ([]tui.Event, <-chan tui.Even
 
 // event is e as the UI shows it.
 func (u *ui) event(e plugin.SessionEvent) tui.Event {
-	shown := tui.Event{Kind: e.Kind, Text: e.Text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache, Routed: e.Routed}
+	shown := tui.Event{Kind: e.Kind, Text: e.Text, Done: e.Done, At: e.At, Context: e.Context, Cache: e.Cache, Routed: e.Routed, Message: e.Message}
 	if e.Kind == plugin.SessionStep {
 		s := e.AsStep()
 		shown.Tool, shown.Failed = s.Tool, s.Done && s.Err != nil

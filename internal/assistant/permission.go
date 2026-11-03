@@ -124,13 +124,28 @@ func (b Builder) permitting(ctx context.Context, current func() (config.Config, 
 	// The owner is asked in a sentence of the conversation, not with the
 	// call: they see the call itself when they ask for it.
 	ask := b.askingOf(cfg)
-	p := ask.phrase(ctx, tool, call.Call)
+	// A session that works for the thread asks the owner through it: a
+	// fresh instance of the model, which sees nothing of the session, tells
+	// what the call does, and ouro, not the session, sends the question.
+	messenger := MessengerOf(ctx)
+	viaThread := messenger != nil && messenger.ForThread
+	var p permission
+	if viaThread {
+		p = ask.summarize(ctx, tool, call.Call)
+	} else {
+		p = ask.phrase(ctx, tool, call.Call)
+	}
 	question := p.Question
 	askedBack := false // after an unclear answer, once
 	for range maxDetails + 1 {
 		asked, _ := json.Marshal(Question{Question: question, Options: []string{p.Once, p.Always, p.Not}}) // strings only: cannot fail
 		// Permission stays open until the owner decides or the caller cancels.
-		ownerReply, err := agent.AskOwnerReply(ctx, asked)
+		var ownerReply agent.OwnerReply
+		if viaThread {
+			_, ownerReply, err = messenger.Post(ctx, permissionMessage(question, p, tool, call.Call), true, true)
+		} else {
+			ownerReply, err = agent.AskOwnerReply(ctx, asked)
+		}
 		answer := ownerReply.Text
 		// Cancellation wins even if the callback returns a late approval.
 		if ctx.Err() != nil {

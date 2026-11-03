@@ -139,7 +139,7 @@ func TestAttachmentLimitsAndFailedDelivery(t *testing.T) {
 }
 
 func TestQueuedAndRelayedAttachmentMarker(t *testing.T) {
-	for _, relay := range []bool{false, true} {
+	for _, relay := range []bool{false} { // a reply in the thread no longer answers a session: see answerMessage
 		s := service(t, &fakeAgent{})
 		s.mu.Lock()
 		target := s.get("s1")
@@ -150,7 +150,6 @@ func TestQueuedAndRelayedAttachmentMarker(t *testing.T) {
 		if relay {
 			pending = make(chan queued, 1)
 			target.asked = pending
-			s.get(ThreadID).questions = []*relayed{{se: target}}
 			id = ThreadID
 		}
 		s.mu.Unlock()

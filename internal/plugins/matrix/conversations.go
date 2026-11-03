@@ -159,7 +159,7 @@ func (c *conversations) receive(ctx context.Context, conn connection, msg incomi
 		switch event.Kind {
 		case plugin.SessionAsked:
 			pending = nil
-			if !event.Done {
+			if !event.Done && event.Message == "" {
 				pending = event
 			}
 		case plugin.SessionMessage, plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled, plugin.SessionRestart, plugin.SessionRestarted:
@@ -301,6 +301,10 @@ func presented(e plugin.SessionEvent) string {
 		q := e.AsQuestion()
 		if q.Question == "" {
 			return ""
+		}
+		if e.Message != "" {
+			// The thread asks the owner for the session: nothing to answer here.
+			return "Waits for the thread to answer: " + q.Question
 		}
 		// A question reads here as a message of the conversation: it is
 		// answered in own words, which the agent reads.
