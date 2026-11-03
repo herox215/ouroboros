@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ func TestSeedArchivistOnce(t *testing.T) {
 	s, _, _ := fixture(t)
 	s.tick(context.Background())
 	jobs := s.store.List()
-	if len(jobs) != 1 || jobs[0].Name != archivistName || jobs[0].Cron != archivistCron || jobs[0].Ask != "never" {
+	if len(jobs) != 1 || jobs[0].Name != archivistName || jobs[0].Cron != archivistCron || jobs[0].Ask != "never" || !slices.Equal(jobs[0].Tools, archivistTools) {
 		t.Fatalf("seeded jobs: %+v", jobs)
 	}
 	if err := s.store.Remove(jobs[0].ID); err != nil {

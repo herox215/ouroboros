@@ -17,8 +17,10 @@ loads what it needs.
 
 The archivist runs as an ordinary scheduled job that the schedule plugin seeds
 once per profile ("Archive memories", daily at 04:00, no questions): its session
-tidies the memories with these three tools. A default job with the text of an
-earlier version is updated to the current text; one the owner edited stays.
+has these three tools alone (the job's `tools`) and tidies the memories with
+them. A default job with the text of an earlier version is updated to the
+current text; one the owner edited stays. The cadence is edited with
+`schedule_update` like that of any other job.
 
 These tools are owner-only, including direct-handler peer rejection. They
 require an authenticated conversation context. Source metadata is the trusted

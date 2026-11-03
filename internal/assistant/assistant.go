@@ -688,6 +688,9 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	bot, core := a.withCore(ctx, contextID, inDirectory(ctx, bot))
 	to.memories = core
 	bot = a.withTopic(ctx, contextID, inThread(ctx, bot, cfg)) // after inThread, which has a prompt of its own
+	if ThreadOf(ctx) == nil {
+		bot = only(bot, OnlyTools(ctx))
+	}
 	var unarchived bool
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {

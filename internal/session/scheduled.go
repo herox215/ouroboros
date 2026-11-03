@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"ouroboros/internal/a2a"
@@ -26,7 +27,8 @@ type scheduledRun struct {
 // caller must keep ctx alive until completion; canceling it stops the answer.
 // Exactly one result is sent to the buffered channel, which is then closed.
 // With ask false no owner questions (including tool approvals) are available.
-func (s *Service) RunScheduled(ctx context.Context, name, text, directory string, ask bool) (id string, result <-chan ScheduledResult, err error) {
+// With tools its answers get only those of the owner's agent's tools.
+func (s *Service) RunScheduled(ctx context.Context, name, text, directory string, ask bool, tools ...string) (id string, result <-chan ScheduledResult, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", nil, err
 	}
@@ -77,6 +79,9 @@ func (s *Service) RunScheduled(ctx context.Context, name, text, directory string
 	}
 	run := &scheduledRun{ctx: ctx, result: make(chan ScheduledResult, 1)}
 	se := &session{id: id, title: title, directory: directory, directed: true, watchers: map[chan Event]struct{}{}, scheduled: run, denyOwner: !ask}
+	if len(tools) > 0 {
+		se.tools = slices.Clone(tools)
+	}
 	s.effortOf(se)
 	s.sessions[id] = se
 	s.emit(se, Event{Kind: Title, Text: title})
