@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/home"
 	"ouroboros/internal/kernel"
 	store "ouroboros/internal/schedule"
@@ -16,8 +17,8 @@ type pluginSessions struct {
 	fake *fakeSessions
 }
 
-func (p pluginSessions) RunScheduled(ctx context.Context, name, text, directory string, ask bool) (string, <-chan plugin.ScheduledResult, error) {
-	return p.fake.RunScheduled(ctx, name, text, directory, ask)
+func (p pluginSessions) RunScheduled(ctx context.Context, name, text, directory string, ask bool, tools ...string) (string, <-chan plugin.ScheduledResult, error) {
+	return p.fake.RunScheduled(ctx, name, text, directory, ask, tools...)
 }
 
 func TestPluginCompositionAndKernelStop(t *testing.T) {
@@ -32,8 +33,14 @@ func TestPluginCompositionAndKernelStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeSessions{calls: make(chan invocation, 5)}
-	provider := plugin.NewService("fixture", func(*plugin.Context, struct{}) (struct{ Sessions plugin.Sessions }, error) {
-		return struct{ Sessions plugin.Sessions }{pluginSessions{fake: f}}, nil
+	provider := plugin.NewService("fixture", func(*plugin.Context, struct{}) (struct {
+		Sessions plugin.Sessions
+		Builder  assistant.Builder
+	}, error) {
+		return struct {
+			Sessions plugin.Sessions
+			Builder  assistant.Builder
+		}{Sessions: pluginSessions{fake: f}}, nil
 	})
 	k := kernel.New()
 	if err := k.Start(Plugin(dir), provider); err != nil {

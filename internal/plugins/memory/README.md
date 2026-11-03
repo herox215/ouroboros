@@ -20,7 +20,7 @@ root (import `ouroboros/internal/plugins/memory`). This plugin contributes:
 
 The archivist runs as an ordinary scheduled job that the schedule plugin seeds
 once per profile ("Archive memories", daily at 04:00, no questions): its session
-tidies the memories with the six tools above, every change carries its reason,
+has the memory tools alone (the job's `tools`), tidies the memories with the six tools above, every change carries its reason,
 and every change can be undone with `memory_undo`. The cadence is edited with
 `schedule_update` like that of any other job.
 

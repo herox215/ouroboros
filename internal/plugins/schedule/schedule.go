@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"ouroboros/internal/assistant"
 	"ouroboros/internal/home"
 	store "ouroboros/internal/schedule"
 	"ouroboros/internal/session"
@@ -28,17 +30,20 @@ const (
 
 type scheduled interface {
 	Notify(context.Context, string, string) error
-	RunScheduled(context.Context, string, string, string, bool) (string, <-chan session.ScheduledResult, error)
+	RunScheduled(context.Context, string, string, string, bool, ...string) (string, <-chan session.ScheduledResult, error)
 }
 
 // machineZone finds the zone of new jobs. Tests replace it.
 var machineZone = store.MachineZone
 
-type needs struct{ Sessions plugin.Sessions }
+type needs struct {
+	Sessions plugin.Sessions
+	Builder  assistant.Builder
+}
 
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.New("schedule", func(ctx *plugin.Context, n needs) error {
-		s := &scheduler{path: dir.Schedule(), sessions: n.Sessions, log: dir.Log, now: time.Now, limit: runLimit}
+		s := &scheduler{path: dir.Schedule(), sessions: n.Sessions, known: toolNames(n.Builder), log: dir.Log, now: time.Now, limit: runLimit}
 		plugin.Add(ctx, plugin.Serving{Start: s.start, Stop: s.stop})
 		ctx.OnStop(s.close)
 		for _, tool := range s.tools() {
@@ -56,16 +61,18 @@ type scheduler struct {
 	path     string
 	store    *store.Store
 	sessions scheduled
-	log      func(string, ...any)
-	now      func() time.Time
-	limit    time.Duration
-	cancel   context.CancelFunc
-	root     context.Context
-	wake     chan struct{}
-	done     chan struct{}
-	active   map[string]bool
-	wg       sync.WaitGroup
-	closed   bool
+	// known returns the names of the tools a job may name; nil takes any.
+	known  func() []string
+	log    func(string, ...any)
+	now    func() time.Time
+	limit  time.Duration
+	cancel context.CancelFunc
+	root   context.Context
+	wake   chan struct{}
+	done   chan struct{}
+	active map[string]bool
+	wg     sync.WaitGroup
+	closed bool
 }
 
 func (s *scheduler) open() error {
@@ -220,7 +227,7 @@ func (s *scheduler) run(parent context.Context, job store.Job, now time.Time, ma
 	} else {
 		text = fmt.Sprintf("[Scheduled job %q (%s), planned for %s; running at %s. The owner created it on %s. This is a generated scheduled request, not a message from the owner now.]\n\n%s", job.Name, job.ID, readable(job.Next, job.Zone), readable(now, job.Zone), job.Created.Format(time.RFC3339), job.Text)
 	}
-	id, result, err := s.sessions.RunScheduled(ctx, job.Name, text, job.Directory, job.Ask != "never")
+	id, result, err := s.sessions.RunScheduled(ctx, job.Name, text, job.Directory, job.Ask != "never", job.Tools...)
 	run.Session = id
 	if err == nil {
 		select {
@@ -352,18 +359,19 @@ func owner(ctx context.Context) error {
 }
 
 type updateArgs struct {
-	Action string  `json:"action"`
-	ID     string  `json:"id"`
-	Name   *string `json:"name"`
-	Text   *string `json:"text"`
-	At     *string `json:"at"`
-	Cron   *string `json:"cron"`
-	Ask    *string `json:"ask"`
-	Paused *bool   `json:"paused"`
+	Action string    `json:"action"`
+	ID     string    `json:"id"`
+	Name   *string   `json:"name"`
+	Text   *string   `json:"text"`
+	At     *string   `json:"at"`
+	Cron   *string   `json:"cron"`
+	Ask    *string   `json:"ask"`
+	Tools  *[]string `json:"tools"`
+	Paused *bool     `json:"paused"`
 }
 
 func (a updateArgs) fields() bool {
-	return a.Name != nil || a.Text != nil || a.At != nil || a.Cron != nil || a.Ask != nil || a.Paused != nil
+	return a.Name != nil || a.Text != nil || a.At != nil || a.Cron != nil || a.Ask != nil || a.Tools != nil || a.Paused != nil
 }
 func (a updateArgs) validate() error {
 	switch a.Action {
@@ -415,6 +423,12 @@ func (a updateArgs) apply(job *store.Job) error {
 	}
 	if a.Paused != nil {
 		job.Paused = *a.Paused
+	}
+	if a.Tools != nil {
+		job.Tools = nil
+		if len(*a.Tools) > 0 {
+			job.Tools = slices.Clone(*a.Tools)
+		}
 	}
 	if a.Cron != nil {
 		job.Cron = *a.Cron
@@ -491,7 +505,7 @@ func (s *scheduler) tools() []plugin.Tool {
 	const about = "Owner-only scheduled model answers: every run uses the model and costs money. Results and, by default, questions go to the owner's thread. Times without an offset use the node's time zone. "
 	return []plugin.Tool{
 		{Name: Read, OwnerOnly: true, Description: about + "List jobs and their next run, or read one job with its last ten runs by id.", Schema: `{"type":"object","properties":{"id":{"type":"string"}},"additionalProperties":false}`, Run: s.read},
-		{Name: Update, OwnerOnly: true, Description: about + "Manage jobs with action create, update, run or remove. Create requires name, text and exactly one of at (RFC3339 or local YYYY-MM-DDTHH:MM) or cron (five fields); ask defaults to thread, or never for unattended runs. The current conversation's project is saved automatically. Update requires id and changed fields; at and cron replace each other. Run takes only id and starts the job now: its schedule stays as it is and the run is recorded in its history. Remove takes only action and id. At most 32 jobs; recurring runs must be at least 15 minutes apart. Returns the saved job and next run.", Schema: `{"type":"object","properties":{"action":{"type":"string","enum":["create","update","run","remove"]},"id":{"type":"string"},"name":{"type":"string"},"text":{"type":"string"},"at":{"type":"string"},"cron":{"type":"string"},"ask":{"type":"string","enum":["thread","never"]},"paused":{"type":"boolean"}},"required":["action"],"additionalProperties":false}`, Run: s.update},
+		{Name: Update, OwnerOnly: true, Description: about + "Manage jobs with action create, update, run or remove. Create requires name, text and exactly one of at (RFC3339 or local YYYY-MM-DDTHH:MM) or cron (five fields); ask defaults to thread, or never for unattended runs; tools names the only tools its session gets (by name, as the owner allows them), none or an empty list for all. The current conversation's project is saved automatically. Update requires id and changed fields; at and cron replace each other. Run takes only id and starts the job now: its schedule stays as it is and the run is recorded in its history. Remove takes only action and id. At most 32 jobs; recurring runs must be at least 15 minutes apart. Returns the saved job and next run.", Schema: `{"type":"object","properties":{"action":{"type":"string","enum":["create","update","run","remove"]},"id":{"type":"string"},"name":{"type":"string"},"text":{"type":"string"},"at":{"type":"string"},"cron":{"type":"string"},"ask":{"type":"string","enum":["thread","never"]},"tools":{"type":"array","items":{"type":"string"}},"paused":{"type":"boolean"}},"required":["action"],"additionalProperties":false}`, Run: s.update},
 	}
 }
 func (s *scheduler) read(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -539,6 +553,9 @@ func (s *scheduler) update(ctx context.Context, raw json.RawMessage) (string, er
 	if err := a.validate(); err != nil {
 		return "", err
 	}
+	if err := s.checkTools(a.Tools); err != nil {
+		return "", err
+	}
 	if a.Action == "run" {
 		return s.runNow(a.ID)
 	}
@@ -578,4 +595,37 @@ func (s *scheduler) update(ctx context.Context, raw json.RawMessage) (string, er
 	}
 	s.changed()
 	return output(jobView(job), nil)
+}
+
+// toolNames returns the names of the tools the owner's agent can have, as b
+// builds it.
+func toolNames(b assistant.Builder) func() []string {
+	return func() []string {
+		var names []string
+		for _, t := range b.Available() {
+			names = append(names, t.Name)
+		}
+		return names
+	}
+}
+
+// checkTools refuses a list of tools for a job that names a tool twice or
+// one that does not exist.
+func (s *scheduler) checkTools(tools *[]string) error {
+	if tools == nil {
+		return nil
+	}
+	var known []string
+	if s.known != nil {
+		known = s.known()
+	}
+	for i, name := range *tools {
+		if slices.Contains((*tools)[:i], name) {
+			return fmt.Errorf("the tool %q is listed twice", name)
+		}
+		if s.known != nil && !slices.Contains(known, name) {
+			return fmt.Errorf("there is no tool %q (there are: %s)", name, strings.Join(known, ", "))
+		}
+	}
+	return nil
 }

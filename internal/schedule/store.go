@@ -39,18 +39,21 @@ var (
 // one-shot claim. Pausing preserves Next; resuming can therefore run late.
 // ID, Created, Next and Runs are managed by Store, not by change callbacks.
 type Job struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Text      string    `json:"text"`
-	At        string    `json:"at,omitempty"`
-	Cron      string    `json:"cron,omitempty"`
-	Zone      string    `json:"zone"`
-	Directory string    `json:"directory,omitempty"`
-	Ask       string    `json:"ask"`
-	Paused    bool      `json:"paused,omitempty"`
-	Created   time.Time `json:"created"`
-	Next      time.Time `json:"next"`
-	Runs      []Run     `json:"runs,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Text      string `json:"text"`
+	At        string `json:"at,omitempty"`
+	Cron      string `json:"cron,omitempty"`
+	Zone      string `json:"zone"`
+	Directory string `json:"directory,omitempty"`
+	Ask       string `json:"ask"`
+	// Tools are the tools the session of a run is offered, by name; none
+	// for all the owner allows.
+	Tools   []string  `json:"tools,omitempty"`
+	Paused  bool      `json:"paused,omitempty"`
+	Created time.Time `json:"created"`
+	Next    time.Time `json:"next"`
+	Runs    []Run     `json:"runs,omitempty"`
 }
 
 // Run is a bounded history entry. At is the planned time for claims; callers
@@ -93,7 +96,7 @@ func Open(path string) (*Store, error) {
 	return s, err
 }
 
-func clone(j Job) Job { j.Runs = slices.Clone(j.Runs); return j }
+func clone(j Job) Job { j.Runs, j.Tools = slices.Clone(j.Runs), slices.Clone(j.Tools); return j }
 
 func (s *Store) mutate(fn func(*[]Job) error) error {
 	s.mu.Lock()
