@@ -673,6 +673,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 			}
 			prev := to
 			prev.memories = before.memories
+			prev.topics, prev.loaded = a.topicsOf(contextID)
 			go a.reviewed(contextID, append(before.signals, follow), before.trail, a.reviewTools(cfg), prev)
 		}
 	}
@@ -685,9 +686,8 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		return messages
 	})
 	bot, core := a.withCore(ctx, contextID, inDirectory(ctx, bot))
-	bot, given := a.withTopic(ctx, contextID, text, bot)
-	to.memories = append(core, given...)
-	bot = inThread(ctx, bot, cfg)
+	to.memories = core
+	bot = a.withTopic(ctx, contextID, inThread(ctx, bot, cfg)) // after inThread, which has a prompt of its own
 	if ThreadOf(ctx) == nil {
 		bot = only(bot, OnlyTools(ctx))
 	}
@@ -719,6 +719,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		},
 		Step: func(s agent.Step) {
 			r.step(s)
+			a.loadedTopic(contextID, s)
 			if observe != nil {
 				observe(Step{ID: s.ID, Tool: s.Tool, Args: s.Args, Done: s.Done, Took: s.Took, Err: s.Err, Remark: s.Remark})
 			}
@@ -735,6 +736,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	if suggest == nil || trail == nil { // not reviewed, or canceled
 		return reply, err
 	}
+	to.topics, to.loaded = a.topicsOf(contextID)
 	a.keep(contextID, answered{time.Now(), signals, trail, task, to.memories})
 	if task {
 		return reply, err
@@ -771,7 +773,7 @@ func (a *Assistant) withCore(ctx context.Context, chat string, bot *agent.Agent)
 	store, err := a.builder.memories()
 	var core []memory.Entry
 	if err == nil {
-		core, err = store.Core(context.WithoutCancel(ctx)) // a stopped answer says so itself
+		core, err = store.CoreMemories(context.WithoutCancel(ctx)) // a stopped answer says so itself
 	}
 	if err != nil {
 		if a.log != nil {
@@ -844,7 +846,7 @@ func (a *Assistant) reviewed(chat string, signals []Signal, trail []string, tool
 	// is not shown as that of the answer.
 	ctx, cancel := context.WithTimeout(context.Background(), reviewTime)
 	defer cancel()
-	v, err := a.review(ctx, signals, trail, tools, to.memories)
+	v, err := a.review(ctx, signals, trail, tools, to)
 	log := func(format string, args ...any) {
 		if a.log != nil {
 			a.log("chat %s: "+format, append([]any{chat}, args...)...)
@@ -892,15 +894,10 @@ func (a *Assistant) reviewed(chat string, signals []Signal, trail []string, tool
 
 // learn keeps what the review of an answer in the conversation chat
 // remembers, as l says, and tells to of it. A core memory that does not fit
-// is kept as a global one, and one of the project of an answer without one
-// too.
+// is kept in general.
 func (a *Assistant) learn(ctx context.Context, chat string, l lesson, to review, log func(string, ...any)) {
 	if a.builder.memories == nil {
 		return
-	}
-	project := ""
-	if l.scope == "project" {
-		project = to.project
 	}
 	store, err := a.builder.memories()
 	var e, was memory.Entry
@@ -909,17 +906,17 @@ func (a *Assistant) learn(ctx context.Context, chat string, l lesson, to review,
 		if l.days > 0 {
 			expires = time.Now().AddDate(0, 0, l.days)
 		}
-		e, was, err = store.Remember(ctx, project, l.key, l.content, chat, l.scope == "core", expires)
+		e, was, err = store.Add(ctx, l.topic, l.key, l.content, chat, expires)
 		if errors.Is(err, memory.ErrCoreFull) {
-			// A core memory that the review corrects is not kept as a global
-			// one: that would take it out of every prompt, which is worse than
-			// the correction waiting until the core memories are merged.
+			// A core memory that the review corrects is not kept in general:
+			// that would take it out of every prompt, which is worse than the
+			// correction waiting until the core memories are merged.
 			if coreKey(ctx, store, l.key) {
 				log("the core memories are full: %q stays as it is, merge or shorten them first", l.key)
 				return
 			}
-			log("the core memories are full: %q is kept as a global memory", l.key)
-			e, was, err = store.Remember(ctx, "", l.key, l.content, chat, false, expires)
+			log("the core memories are full: %q is kept in general", l.key)
+			e, was, err = store.Add(ctx, memory.General, l.key, l.content, chat, expires)
 		}
 	}
 	if err != nil {
@@ -933,9 +930,9 @@ func (a *Assistant) learn(ctx context.Context, chat string, l lesson, to review,
 }
 
 // coreKey reports whether a core memory under key exists: what the review of
-// an answer corrects then is not kept as a global memory, see learn.
+// an answer corrects then is not kept in general, see learn.
 func coreKey(ctx context.Context, store *memory.Store, key string) bool {
-	core, err := store.Core(ctx)
+	core, err := store.CoreMemories(ctx)
 	return err == nil && slices.ContainsFunc(core, func(e memory.Entry) bool { return e.Key == key })
 }
 
@@ -1142,6 +1139,9 @@ func (a *Assistant) Note(ctx context.Context, contextID, text string) error {
 func (a *Assistant) Forget(contextID string) {
 	a.memory.Forget(contextID)
 	a.forget(contextID)
+	a.learning.Lock()
+	delete(a.topics, contextID) // it starts anew, with the topics as they are then
+	a.learning.Unlock()
 }
 
 // current returns the agent for the configuration as it is now, of the scope

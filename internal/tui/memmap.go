@@ -12,8 +12,8 @@ import (
 )
 
 // The memories are a star chart rather than a list: the mind in the middle,
-// its memories as stars around it, on an orbit for each scope — the core
-// ones closest, those of the project outermost — the orbit drawn as a faint
+// its memories as stars around it, on an orbit for each group — the core
+// ones closest, those of the other topics outermost — the orbit drawn as a faint
 // dotted ring. Each star is named beside it where the chart has room for
 // the name; the memory selected is always named, and the two lines below the
 // chart say what it holds. Enter reads it in full, as the list did.
@@ -34,8 +34,8 @@ const (
 	chartLabel
 	chartLabelSel
 	chartStarCore
-	chartStarGlobal
-	chartStarHere
+	chartStarGeneral
+	chartStarTopic
 	chartCentre
 )
 
@@ -166,7 +166,7 @@ func (c *chart) style(s chartStyle) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(ui.background).Background(accent).Bold(true)
 	case chartStarCore:
 		return lipgloss.NewStyle().Foreground(ui.text).Bold(true)
-	case chartStarGlobal, chartStarHere:
+	case chartStarGeneral, chartStarTopic:
 		return lipgloss.NewStyle().Foreground(accent)
 	case chartCentre:
 		return lipgloss.NewStyle().Foreground(ui.text).Bold(true)
@@ -174,14 +174,14 @@ func (c *chart) style(s chartStyle) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
-// starGlyph is the star of a scope: a filled one for the core memories,
-// which are given with every answer, a four-pointed one for the global
-// ones, and a hollow one for those of the project.
+// starGlyph is the star of a group: a filled one for the core memories,
+// which are given with every answer, a four-pointed one for the general
+// ones, and a hollow one for those of the other topics.
 func starGlyph(group int) rune {
 	switch group {
 	case groupCore:
 		return '✸'
-	case groupGlobal:
+	case groupGeneral:
 		return '✦'
 	}
 	return '✧'
@@ -192,7 +192,7 @@ func starStyle(group int) lipgloss.Style {
 	switch group {
 	case groupCore:
 		return lipgloss.NewStyle().Foreground(ui.text).Bold(true)
-	case groupGlobal:
+	case groupGeneral:
 		return lipgloss.NewStyle().Foreground(accent)
 	}
 	return lipgloss.NewStyle().Foreground(accent)
@@ -257,7 +257,7 @@ func (s *memoryScreen) chartView(m *Model, w, h, inner int, head []string, rows 
 		groups[g] = append(groups[g], i)
 	}
 	stars := make([][2]int, len(rows))
-	names := [groupCount]string{"core", "global", "here"}
+	names := [groupCount]string{"core", "general", "topics"}
 	for g := 0; g < groupCount; g++ {
 		idx := groups[g]
 		if len(idx) == 0 {
@@ -287,7 +287,7 @@ func (s *memoryScreen) chartView(m *Model, w, h, inner int, head []string, rows 
 				}
 			}
 			stars[i] = [2]int{x, y}
-			c.put(x, y, starGlyph(g), [...]chartStyle{chartStarCore, chartStarGlobal, chartStarHere}[g])
+			c.put(x, y, starGlyph(g), [...]chartStyle{chartStarCore, chartStarGeneral, chartStarTopic}[g])
 		}
 	}
 	c.put(cx, cy, '◉', chartCentre)
@@ -463,9 +463,6 @@ func (s *memoryScreen) chartFoot(m *Model, rows []plugin.Memory, inner int) []st
 	rule := lipgloss.NewStyle().Foreground(ui.line).Render(strings.Repeat("─", inner))
 	line := starStyle(g).Render(string(starGlyph(g))) + " " +
 		boldStyle.Render(e.Key) + mutedStyle.Render(" · "+holds(&e))
-	if e.Archived {
-		line += mutedStyle.Render(" · archived")
-	}
 	if age := s.age(e, m); age != "" {
 		line += mutedStyle.Render(" · " + age)
 	}

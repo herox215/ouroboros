@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/storage"
 )
@@ -28,7 +29,7 @@ func TestWriteFailsWhenTheWALIsGone(t *testing.T) {
 	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		t.Fatal(err)
 	}
-	e, err := s.Create(ctx, "", "first", "a fact", "test")
+	e, _, err := s.Add(ctx, General, "first", "a fact", "test", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,10 +45,10 @@ func TestWriteFailsWhenTheWALIsGone(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.Create(ctx, "", "second", "another fact", "test"); err == nil || !strings.Contains(err.Error(), "the memories keep nothing until ouro starts anew: the WAL ") {
+	if _, _, err := s.Add(ctx, General, "second", "another fact", "test", time.Time{}); err == nil || !strings.Contains(err.Error(), "the memories keep nothing until ouro starts anew: the WAL ") {
 		t.Fatalf("create = %v", err)
 	}
-	if got, err := s.Read(ctx, "", e.ID); err != nil || got.Key != "first" {
+	if got, err := s.Read(ctx, e.ID); err != nil || got.Key != "first" {
 		t.Fatalf("read %+v, %v", got, err)
 	}
 	log.SetOutput(io.Discard) // that the database is read-only
@@ -57,7 +58,7 @@ func TestWriteFailsWhenTheWALIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ro.Close()
-	if _, err := ro.Create(ctx, "", "third", "a third fact", "test"); err == nil || !strings.Contains(err.Error(), "the memories keep nothing until ouro starts anew: the database is read-only") {
+	if _, _, err := ro.Add(ctx, General, "third", "a third fact", "test", time.Time{}); err == nil || !strings.Contains(err.Error(), "the memories keep nothing until ouro starts anew: the database is read-only") {
 		t.Fatalf("create = %v", err)
 	}
 }

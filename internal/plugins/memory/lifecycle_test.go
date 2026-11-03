@@ -44,7 +44,7 @@ func TestPluginLazyInvocationAndRestart(t *testing.T) {
 		}
 	}
 	assertAbsent()
-	out := callTools(t, ts, context.Background(), "owner", Create, `{"key":"drink","content":"oolong tea"}`)
+	out := callTools(t, ts, context.Background(), "owner", Add, `{"topic":"drinks","key":"drink","content":"oolong tea"}`)
 	var entry store.Entry
 	if err := json.Unmarshal([]byte(out), &entry); err != nil {
 		t.Fatalf("create: %s: %v", out, err)
@@ -57,20 +57,20 @@ func TestPluginLazyInvocationAndRestart(t *testing.T) {
 	}
 	serving.Stop()
 	serving.Stop()
-	if out := callTools(t, ts, context.Background(), "owner", Search, "{}"); !strings.Contains(out, "store is stopped") {
+	if out := callTools(t, ts, context.Background(), "owner", Load, `{"topic":"drinks"}`); !strings.Contains(out, "store is stopped") {
 		t.Fatalf("reopened after stop: %s", out)
 	}
 	serving.Start()
-	if out := callTools(t, ts, context.Background(), "owner", Read, fmt.Sprintf(`{"id":%q}`, entry.ID)); !strings.Contains(out, "oolong tea") {
+	if out := callTools(t, ts, context.Background(), "owner", Load, `{"topic":"drinks"}`); !strings.Contains(out, "oolong tea") {
 		t.Fatal(out)
 	}
 	k.Stop()        // Frontends need not call Serving.Stop.
 	serving.Start() // A retained callback cannot revive a retired instance.
-	if out := callTools(t, ts, context.Background(), "owner", Search, "{}"); !strings.Contains(out, "store is stopped") {
+	if out := callTools(t, ts, context.Background(), "owner", Load, `{"topic":"drinks"}`); !strings.Contains(out, "store is stopped") {
 		t.Fatalf("reopened after kernel stop: %s", out)
 	}
 	ts, _ = start()
-	if out := callTools(t, ts, context.Background(), "owner", Read, fmt.Sprintf(`{"id":%q}`, entry.ID)); !strings.Contains(out, "oolong tea") {
+	if out := callTools(t, ts, context.Background(), "owner", Load, `{"topic":"drinks"}`); !strings.Contains(out, "oolong tea") {
 		t.Fatalf("restart lost memory: %s", out)
 	}
 }
@@ -83,7 +83,7 @@ func TestLazyStoreClosesAndConcurrentStop(t *testing.T) {
 			return s.run(ctx, raw, i)
 		}
 	}
-	callTools(t, ts, context.Background(), "owner", Search, "{}")
+	callTools(t, ts, context.Background(), "owner", Load, `{"topic":"drinks"}`)
 	opened := s.store
 	if opened == nil {
 		t.Fatal("invocation did not open store")
@@ -94,7 +94,7 @@ func TestLazyStoreClosesAndConcurrentStop(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			// Use a real conversation context, not just a reachable handler.
-			bot := agent.New(model{Search, "{}"}, "m", "", ts...)
+			bot := agent.New(model{Load, `{"topic":"drinks"}`}, "m", "", ts...)
 			out, err := bot.Respond(context.Background(), "owner", "search")
 			if err != nil || (out != "[]" && !strings.Contains(out, "store is stopped")) {
 				t.Errorf("concurrent invocation: %s %v", out, err)
@@ -111,7 +111,7 @@ func TestLazyStoreClosesAndConcurrentStop(t *testing.T) {
 		s.stop(true)
 	}()
 	wg.Wait()
-	if _, err := opened.Read(context.Background(), "", "missing"); err == nil || err == store.ErrNotFound {
+	if _, err := opened.Read(context.Background(), "missing"); err == nil || err == store.ErrNotFound {
 		t.Fatalf("old pool not closed: %v", err)
 	}
 	if s.store != nil {
@@ -157,11 +157,11 @@ func TestArchiveThatCannotBeOpened(t *testing.T) {
 	s := &lazyStore{dir: dir}
 	defer s.stop(true)
 	ts := lazyTools(s)
-	if out := callTools(t, ts, context.Background(), "owner", Search, "{}"); !strings.HasPrefix(out, "error:") || s.store != nil {
+	if out := callTools(t, ts, context.Background(), "owner", Load, `{"topic":"drinks"}`); !strings.HasPrefix(out, "error:") || s.store != nil {
 		t.Fatalf("searched in an archive that cannot be: %s", out)
 	}
 	os.Remove(dir)
-	if out := callTools(t, ts, context.Background(), "owner", Search, "{}"); out != "[]" || s.store == nil {
+	if out := callTools(t, ts, context.Background(), "owner", Load, `{"topic":"drinks"}`); out != "[]" || s.store == nil {
 		t.Fatalf("search once the archive can be: %s", out)
 	}
 }

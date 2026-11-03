@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"ouroboros/internal/memory"
-	"ouroboros/internal/workdir"
 )
 
 // memories is a store of memories in a directory of the test.
@@ -28,21 +27,23 @@ func opened(store *memory.Store) func() (*memory.Store, error) {
 	return func() (*memory.Store, error) { return store, nil }
 }
 
-// Only lines that start with REMEMBER:, a scope there is, a key and a
-// memory are remembered, at most maxLessons of them, and none longer than
+// Only lines that start with REMEMBER:, a topic, a bar, a key and a memory
+// are remembered, at most maxLessons of them, and none longer than
 // maxLearned; a CHANGE beside them is proposed all the same.
 func TestLessons(t *testing.T) {
 	reply := "CHANGE: Add\n  grep.\n" +
-		"- **REMEMBER:** project build: ouro is built with make build.\n" +
-		"REMEMBER: everywhere x: y\n" +
-		"REMEMBER: global : no key\n" +
-		"REMEMBER: global no colon\n" +
-		"REMEMBER: global " + strings.Repeat("k", memory.MaxKey+1) + ": too long a key\n" +
-		"REMEMBER: global long: " + strings.Repeat("x", maxLearned+1) + "\n" +
-		"REMEMBER: core style: short answers,\n  without headings.\n" +
-		"REMEMBER: global editor: vim\n" +
-		"REMEMBER: global shell: zsh\n"
-	want := []lesson{{"project", "build", "ouro is built with make build.", 0}, {"core", "style", "short answers, without headings.", 0}, {"global", "editor", "vim", 0}}
+		"- **REMEMBER:** ouro | build: ouro is built with make build.\n" +
+		"REMEMBER: no bar x: y\n" +
+		"REMEMBER:  | x: no topic\n" +
+		"REMEMBER: " + strings.Repeat("t", memory.MaxTopic+1) + " | x: too long a topic\n" +
+		"REMEMBER: general | : no key\n" +
+		"REMEMBER: general | no colon\n" +
+		"REMEMBER: general | " + strings.Repeat("k", memory.MaxKey+1) + ": too long a key\n" +
+		"REMEMBER: general | long: " + strings.Repeat("x", maxLearned+1) + "\n" +
+		"REMEMBER: core | style: short answers,\n  without headings.\n" +
+		"REMEMBER: My Tools | editor: vim\n" +
+		"REMEMBER: general | shell: zsh\n"
+	want := []lesson{{"ouro", "build", "ouro is built with make build.", 0}, {"core", "style", "short answers, without headings.", 0}, {"My Tools", "editor", "vim", 0}}
 	if got := lessons(reply); !slices.Equal(got, want) {
 		t.Errorf("lessons:\n%+v\nwant\n%+v", got, want)
 	}
@@ -54,18 +55,19 @@ func TestLessons(t *testing.T) {
 	}
 }
 
-// What a review remembers is kept at once, in the scope it names, and the
-// session is told; a CHANGE beside it is suggested as before.
+// What a review remembers is kept at once, in the topic it names, and the
+// session is told; a CHANGE beside it is suggested as before. The review is
+// told the topics.
 func TestReviewRemembers(t *testing.T) {
 	store := memories(t)
 	llm := &reviewLLM{failing: failedTools, reply: "CHANGE: Let read say which files are near.\n" +
-		"REMEMBER: project build: ouro is built with make build.\n" +
-		"REMEMBER: core style: short answers."}
+		"REMEMBER: ouro | build: ouro is built with make build.\n" +
+		"REMEMBER: core | style: short answers."}
 	a, log := recorded(t, ownerConfig(), llm)
 	a.builder = a.builder.WithMemories(opened(store))
 	got := make(chan Remembered, 2)
 	suggested := make(chan string, 1)
-	ctx := WithRemembered(workdir.With(context.Background(), "/p"), func(r Remembered) { got <- r })
+	ctx := WithRemembered(context.Background(), func(r Remembered) { got <- r })
 	ctx = WithReview(ctx, func(text string) { suggested <- text })
 	if _, err := a.Ask(ctx, "c", "go", nil); err != nil {
 		t.Fatal(err)
@@ -82,20 +84,20 @@ func TestReviewRemembers(t *testing.T) {
 	if <-suggested != "Let read say which files are near." {
 		t.Error("the change is not suggested beside")
 	}
-	if m := kept[0].Memory; m.Project != "/p" || m.Key != "build" || m.Source != "c" || kept[0].Was.ID != "" {
-		t.Errorf("project memory: %+v", kept[0])
+	if m := kept[0].Memory; m.Topic != "ouro" || m.Key != "build" || m.Source != "c" || kept[0].Was.ID != "" {
+		t.Errorf("ouro memory: %+v", kept[0])
 	}
-	if m := kept[1].Memory; m.Project != "" || !m.Core || m.Content != "short answers." {
+	if m := kept[1].Memory; m.Topic != memory.Core || m.Content != "short answers." {
 		t.Errorf("core memory: %+v", kept[1])
 	}
-	if !strings.Contains(llm.reviewed[0].Content, "REMEMBER:") {
-		t.Error("the review is not asked what to remember")
+	if !strings.Contains(llm.reviewed[0].Content, "REMEMBER:") || !strings.Contains(llm.reviewed[1].Content, "<topics>\ntopics: none yet\nloaded in this session: none\n</topics>") {
+		t.Errorf("the review is not asked what to remember of which topic:\n%s", llm.reviewed[1].Content)
 	}
 }
 
-// A memory of the project of an answer without one is global, a core one
-// that does not fit too, and one that cannot be kept is in the log only.
-// Without a store or WithRemembered nothing is kept or told.
+// A core memory that does not fit is kept in general, and one that cannot be
+// kept is in the log only. Without a store or WithRemembered nothing is kept
+// or told.
 func TestLearn(t *testing.T) {
 	store := memories(t)
 	a, log := recorded(t, ownerConfig(), &titleLLM{})
@@ -103,45 +105,45 @@ func TestLearn(t *testing.T) {
 	to := review{remembered: func(r Remembered) { told = append(told, r) }}
 	logf := func(format string, args ...any) { a.log("chat c: "+format, args...) }
 
-	a.learn(context.Background(), "c", lesson{"project", "build", "make build", 0}, to, logf)
-	if _, err := store.Search(context.Background(), "", "global", "build", 10); err != nil || len(told) != 0 {
+	a.learn(context.Background(), "c", lesson{"ouro", "build", "make build", 0}, to, logf)
+	if found, err := store.Load(context.Background(), "ouro", "", 10); err != nil || len(found) != 0 || len(told) != 0 {
 		t.Fatalf("kept without a store: %+v", told)
 	}
 	a.builder = a.builder.WithMemories(opened(store))
-	a.learn(context.Background(), "c", lesson{"project", "build", "make build", 0}, to, logf)
-	if len(told) != 1 || told[0].Memory.Project != "" {
-		t.Fatalf("a memory of no project: %+v", told)
+	a.learn(context.Background(), "c", lesson{"Ouro", "build", "make build", 0}, to, logf)
+	if len(told) != 1 || told[0].Memory.Topic != "Ouro" {
+		t.Fatalf("a memory of a new topic: %+v", told)
 	}
-	big, err := store.CreateCore(context.Background(), "big", strings.Repeat("x", memory.MaxCore), "owner")
+	big, _, err := store.Add(context.Background(), memory.Core, "big", strings.Repeat("x", memory.MaxCore), "owner", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.learn(context.Background(), "c", lesson{"core", "style", "short answers", 0}, to, logf)
-	if len(told) != 2 || told[1].Memory.Core || told[1].Memory.Key != "style" {
+	if len(told) != 2 || told[1].Memory.Topic != memory.General || told[1].Memory.Key != "style" {
 		t.Fatalf("a core memory that does not fit: %+v", told)
 	}
-	// A core memory that the review corrects is not kept as a global one,
-	// which would take it out of every prompt, and it is not cut either.
+	// A core memory that the review corrects is not kept in general, which
+	// would take it out of every prompt, and it is not cut either.
 	a.learn(context.Background(), "c", lesson{"core", "big", strings.Repeat("y", memory.MaxCore+100), 0}, to, logf)
 	if len(told) != 2 {
 		t.Fatalf("a full core memory was kept anyway: %+v", told)
 	}
-	if e, err := store.Read(context.Background(), "", big.ID); err != nil || e.Content != strings.Repeat("x", memory.MaxCore) {
+	if e, err := store.Read(context.Background(), big.ID); err != nil || e.Content != strings.Repeat("x", memory.MaxCore) {
 		t.Fatalf("the core memory changed: %+v, %v", e, err)
 	}
-	a.learn(context.Background(), "c", lesson{"global", "", "no key", 0}, to, logf)
+	a.learn(context.Background(), "c", lesson{"general", "", "no key", 0}, to, logf)
 	b, blog := recorded(t, ownerConfig(), &titleLLM{reply: "done"})
 	b.builder = b.builder.WithMemories(func() (*memory.Store, error) { return nil, errors.New("no store") })
-	b.learn(context.Background(), "c", lesson{"global", "editor", "vim", 0}, to, func(format string, args ...any) { b.log("chat c: "+format, args...) })
+	b.learn(context.Background(), "c", lesson{"general", "editor", "vim", 0}, to, func(format string, args ...any) { b.log("chat c: "+format, args...) })
 	if _, err := b.Ask(context.Background(), "c", "hi", nil); err != nil {
 		t.Fatal(err)
 	}
 	if lines := blog.take(); !slices.Contains(lines, `chat c: the memory "editor" is not kept: no store`) || !slices.Contains(lines, "chat c: the core memories cannot be read: no store") {
 		t.Fatalf("without a store:\n%s", strings.Join(lines, "\n"))
 	}
-	a.learn(context.Background(), "c", lesson{"global", "editor", "vim", 0}, review{}, logf)
+	a.learn(context.Background(), "c", lesson{"general", "editor", "vim", 0}, review{}, logf)
 	lines := log.take()
-	if len(told) != 2 || !slices.Contains(lines, `chat c: the core memories are full: "style" is kept as a global memory`) ||
+	if len(told) != 2 || !slices.Contains(lines, `chat c: the core memories are full: "style" is kept in general`) ||
 		!slices.Contains(lines, `chat c: the core memories are full: "big" stays as it is, merge or shorten them first`) ||
 		!slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, `chat c: the memory "" is not kept: `) }) ||
 		!slices.Contains(lines, `chat c: review: remembered "editor"`) {
@@ -165,7 +167,7 @@ func TestCoreInPrompt(t *testing.T) {
 		t.Fatalf("a prompt without core memories changed: %v", err)
 	}
 	for _, kv := range [][2]string{{"name", "Lu"}, {"style", "short answers"}} {
-		if _, err := store.CreateCore(context.Background(), kv[0], kv[1], "owner"); err != nil {
+		if _, _, err := store.Add(context.Background(), memory.Core, kv[0], kv[1], "owner", time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}

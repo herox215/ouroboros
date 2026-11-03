@@ -134,9 +134,9 @@ func (s *memoryScreen) saveEdit(m *Model) tea.Cmd {
 		return nil
 	}
 	e.saving, e.err = true, nil
-	project, id, version := e.e.Project, e.e.ID, e.e.Version
+	id, version := e.e.ID, e.e.Version
 	return func() tea.Msg {
-		saved, err := m.backend.SetMemory(m.ctx, project, id, version, key, content)
+		saved, err := m.backend.SetMemory(m.ctx, id, version, key, content)
 		return memorySavedMsg{saved, id, err}
 	}
 }

@@ -671,8 +671,8 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
-`history_sessions`), for [memories](#memories) (`memory_add`, `memory_update`,
-`memory_forget`, `memory_search`, `memory_read`), for owner-only [scheduled answers](#schedule)
+`history_sessions`), for [memories](#memories) (`memory_load`, `memory_add`,
+`memory_forget`), for owner-only [scheduled answers](#schedule)
 (`schedule_read`, `schedule_update`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
 `withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that reaches servers of the Model Context Protocol ([MCP servers](#mcp-servers)), one that builds and installs its own
 source ([`rebuild`](#updates)), one that asks you a question (`user_question`, see below) and one that hands tasks to
@@ -710,49 +710,62 @@ restart. A node that runs keeps answering peers as before while the file cannot 
 ### Memories
 
 The optional `memory` plugin gives the owner a persistent memory, separate from the
-conversation archive. `memory_add` records a fact or preference with its source conversation;
-`memory_update` changes an entry only at its expected version, and `memory_forget` removes it
-from the active store and its search index. The agent saves what the owner asks it to remember,
-or a lasting fact the owner told it, never what a tool, a web page or a peer said; stored content
-is data, never a higher-priority instruction. Peers cannot use these tools.
+conversation archive. Memories are kept by named **topic**, as `work`, `cooking` or the name of a
+project, each a set of memories under unique keys. A topic does not depend on the directory a
+conversation works in: the same memories are there in every conversation of the owner. Names
+compare case-insensitively, and a topic keeps the name it was created with. Peers cannot use
+these tools, and other profiles remain separate.
+
+There are three tools:
+
+- `memory_load` loads the memories of one topic in full: without `search` the most used and the
+  latest, with `search` those that have any of its words, the best match first; `count` caps them,
+  at most 20.
+- `memory_add` saves a memory under a key of a topic, with its source conversation. A topic of a new
+  name is created; the same key in a topic overwrites the memory, which is how a memory is corrected,
+  merged or shortened.
+- `memory_forget` deletes the memory of a key in a topic.
+
+The agent saves what the owner asks it to remember, or a lasting fact the owner told it, never what
+a tool, a web page or a peer said; stored content is data, never a higher-priority instruction.
+
+Two topics are fixed. **core** holds short facts about who the owner is and how they want
+answers: its memories are in the system prompt of every answer to the owner, the oldest first, and
+all of them together have at most 2,000 characters. A write that would make them more fails with an
+error the agent is told; it then shortens or forgets core memories first. **general** holds what
+concerns no topic of its own, and is where a memory without a topic goes.
+
+The system prompt of an answer to the owner holds the core memories and a list of the other topics,
+with how many memories each has. Nothing else is chosen for it in advance: there is no pre-selection
+by the words of a message. The agent loads a topic with `memory_load` when a request may depend on
+earlier agreements, preferences or conventions of its subject, and loads rather than guesses when
+in doubt. This is a tool-driven lookup, not a guarantee of automatic recall or a semantic/embedding search.
 
 ouro also learns by itself: the [review](#the-log) of an answer with signals may remember up to 3
 facts, of the owner's message or the follow-up, or a way that worked after another had failed. It
-does not keep a failure of the environment, that a tool does not work, an attempt that did not work
-out, or what concerns only one task. A memory of the same key in its scope is replaced, as what was
-said last holds. What it keeps is told in the chat at once, and `/undo` takes it back: see
-[Terminal UI](#terminal-ui). The log says `review: remembered "…"`.
+picks the topic of each from the list, or names a new one. It does not keep a failure of the
+environment, that a tool does not work, an attempt that did not work out, or what concerns only
+one task. A memory of the same key in its topic is replaced, as what was said last holds. What it keeps is
+told in the chat at once, and `/undo` takes it back: see [Terminal UI](#terminal-ui). The log says
+`review: remembered "…"`. The review may remember a state that will change, as what the owner works
+on now, for some days, at most 30: then it expires and is no longer loaded or listed.
 
-Memories are of three scopes, and of three layers. **Core** memories are short facts about who the owner is and how
-they want answers: they are in the system prompt of every answer to the owner, the oldest first,
-and all of them together have at most 2,000 characters. A write that would make them more fails;
-the agent then merges or shortens core memories with `memory_update`, and a memory the review would
-keep there is kept as a global one instead, unless it corrects a core memory: that one stays as it
-is until the core memories are merged. **Global** memories are available across projects,
-**project** memories with the trusted selected project directory; both are found with
-`memory_search`. Other profiles remain separate.
+The default scheduled job **Archive memories** (see [Schedule](#schedule)) tidies the memories once
+a day, at 4:00, with the same three tools: it goes through the topics of its prompt and loads each,
+merges memories that say the same (it adds the merged one under one key and forgets the others),
+joins topics that are nearly the same (it adds their memories into one and forgets them in the
+other), forgets what no longer holds and keeps core within its limit. A rewrite may not say more
+than its sources, and what is fine is left alone. A job whose text the owner changed keeps it; one
+with the default text of an earlier version gets the current one.
 
-The **core** goes into every prompt. A **topic**, a conversation other than the thread, is given
-more when it starts: up to 5 memories of its project at once, the most used first, and a line of the
-keys of the others, so that the agent knows what there is to search for. A moment later a small call
-of the LLM picks words from the first message, and up to 5 memories that have any of them are given
-from the next answer on. From then on the prompt of the topic stays the same, so that the provider
-can cache it; what the agent looks up later comes as the result of a tool. The thread is given only
-the core. Everything else is the **archive**, which only `memory_search` and `history_search` reach.
+There is no tool to undo a change. A memory that is overwritten or forgotten is kept for 30 days in
+the table `memory_history` of `history/ouroboros.sqlite`, with when and how it changed: a mistake
+can be restored from there by hand, with `memory_add`.
 
-The review may remember a state that will change, as what the owner works on now, for some days,
-at most 30: then it expires. Each memory counts how often a topic was given it and how often the agent
-read it or found it by words. One that was given 10 times and never used is given to no topic anymore,
-and the next tidying archives it, as it does one that expired. Nothing is deleted: `memory_search` still finds an
-archived memory, marked as such, and remembering it again takes it out of the archive. Once the owner
-left for 2 hours, the memories are tidied, and at most once a week the LLM looks for memories of one
-scope that say the same and merges them into one, of which the newer holds: the others are archived.
-The log says `memories: 2 archived, as they expired or were never used` and `memories: 3 merged into "…"`.
-
-`memory_search` retrieves short ranked full-text matches; `memory_read` reads an entry by ID.
-The tool description asks the agent to search when a request may depend on earlier preferences,
-agreements or project conventions, and to search rather than guess when in doubt. This is a
-tool-driven lookup, not a guarantee of automatic recall or a semantic/embedding search.
+Memories of earlier versions, which were bound to the project directory, are moved into topics once,
+when the store is first opened: core memories into core, global ones into general, and the memories
+of a project into a topic named after the last part of its directory, as `ouro` for
+`~/Projects/ouro`.
 
 Sessions, history and memories share `history/ouroboros.sqlite`. Forgetting a memory does not erase
 its earlier mentions from conversation history. Deleting a conversation does not silently delete

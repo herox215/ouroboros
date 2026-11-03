@@ -77,3 +77,30 @@ func TestArchivistToolsMigrated(t *testing.T) {
 		t.Fatalf("owner's list replaced: %v", got.Tools)
 	}
 }
+
+// The archivist that got the memory tools from before topics gets the
+// current ones once; a list the owner gives it after stays.
+func TestArchivistOldToolsMigrated(t *testing.T) {
+	s, _, _ := fixture(t)
+	if err := s.open(); err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.store.Create(store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never", Zone: "UTC", Tools: oldArchivistTools}, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.path+".defaults", []byte("archivist tools\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.tick(context.Background())
+	if got, _ := s.store.Get(job.ID); !slices.Equal(got.Tools, archivistTools) {
+		t.Fatalf("not migrated: %v", got.Tools)
+	}
+	if _, err := s.store.Update(job.ID, func(j *store.Job) error { j.Tools = oldArchivistTools; return nil }, s.now()); err != nil {
+		t.Fatal(err)
+	}
+	s.tick(context.Background())
+	if got, _ := s.store.Get(job.ID); !slices.Equal(got.Tools, oldArchivistTools) {
+		t.Fatalf("migrated twice: %v", got.Tools)
+	}
+}

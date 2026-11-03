@@ -3,14 +3,12 @@ package assistant
 import (
 	"context"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"ouroboros/internal/chat"
 	"ouroboros/internal/memory"
-	"ouroboros/internal/workdir"
 )
 
 // A review looks back on an answer that had signals, see Signal: the LLM of
@@ -64,19 +62,35 @@ func RememberedOf(ctx context.Context) func(Remembered) {
 }
 
 // review is what a review of an answer goes to: the suggestion to suggest,
-// a memory it keeps to remembered, which may be nil, and project is the
-// directory of the answer, "" for none, which a memory of the project is of.
-// memories are those the prompt of the answer had, as "key: content".
+// a memory it keeps to remembered, which may be nil. memories are those the
+// prompt of the answer had, as "key: content", topics the topics of the
+// memories it was given, see listing, and loaded the topics whose memories
+// its conversation loaded or added to.
 type review struct {
 	suggest    func(string)
 	remembered func(Remembered)
-	project    string
 	memories   []string
+	topics     string
+	loaded     []string
 }
 
 // reviewOf is what the review of an answer that runs with ctx goes to.
 func reviewOf(ctx context.Context, suggest func(string)) review {
-	return review{suggest, RememberedOf(ctx), workdir.Of(ctx), nil}
+	return review{suggest: suggest, remembered: RememberedOf(ctx)}
+}
+
+// topicsBlock is what the review of an answer is told of the topics of the
+// memories, in to.
+func topicsBlock(to review) string {
+	loaded := "none"
+	if len(to.loaded) > 0 {
+		loaded = strings.Join(to.loaded, ", ")
+	}
+	topics := to.topics
+	if topics == "" {
+		topics = "none yet"
+	}
+	return "topics: " + topics + "\nloaded in this session: " + loaded
 }
 
 // suggestedIntro starts what the agent is asked when the owner took a
@@ -169,12 +183,13 @@ const reviewPrompt = `You review how ouro, an agent program, gave one answer to 
 	`Never remember a failure of the environment, as a missing command or missing credentials; ` +
 	`that a tool does not work; an attempt that did not work out, as if it were a way to do it; ` +
 	`or what concerns only this one task. ` +
-	`For each, at most 3, write a line ` + remember + ` followed by a scope, a key, a colon and the memory. ` +
-	`The scope is core for a short fact about who the owner is or how they want answers, which goes into every prompt; ` +
-	`project for a fact of the project of the answer; global otherwise. ` +
-	`The key is a few words that name the fact: what is remembered under the same key is replaced. ` +
+	`For each, at most 3, write a line ` + remember + ` followed by a topic, a bar |, a key, a colon and the memory. ` +
+	`Memories are kept by named topic: pick one of the topics under topics, which also says those the session loaded, or name a new one, ` +
+	`as the project or subject the fact belongs to; core for a short fact about who the owner is or how they want answers, ` +
+	`which goes into every prompt; general when no topic fits. ` +
+	`The key is a few words that name the fact: what is remembered under the same key of a topic is replaced. ` +
 	`The memory is one sentence, in the language of the owner's message, as in: ` +
-	remember + ` project build: ouro is built with make build, not go build. ` +
+	remember + ` ouro | build: ouro is built with make build, not go build. ` +
 	`A memory of a state that will change, as what the owner works on now, ends with (for N days), N at most 30. ` +
 	`Under memories are those the agent was given in its prompt: when the owner corrected one, remember the correction under its key. ` +
 	`When a correction of style or of the way to do a task belongs to a skill under skills, which governs such tasks, ` +
@@ -190,10 +205,10 @@ type verdict struct {
 	lessons []lesson
 }
 
-// lesson is what a review remembers: under key, in scope, which is core,
-// global or project, see reviewPrompt; days is how long, 0 for good.
+// lesson is what a review remembers: under key, in topic, see reviewPrompt;
+// days is how long, 0 for good.
 type lesson struct {
-	scope, key, content string
+	topic, key, content string
 	days                int
 }
 
@@ -201,7 +216,7 @@ type lesson struct {
 // that had signals, and what to remember, with the lines of the log of it
 // and the tools of the agent. The call is part of no conversation; the
 // access of the agent is asked first, then its fallbacks.
-func (a *Assistant) review(ctx context.Context, signals []Signal, trail []string, tools toolsOf, memories []string) (verdict, error) {
+func (a *Assistant) review(ctx context.Context, signals []Signal, trail []string, tools toolsOf, to review) (verdict, error) {
 	_, cfg, err := a.current(false, "")
 	if err != nil {
 		return verdict{}, err
@@ -222,7 +237,8 @@ func (a *Assistant) review(ctx context.Context, signals []Signal, trail []string
 			"<log>\n" + strings.Join(bounded(trail, reviewTrail), "\n") + "\n</log>\n\n" +
 			"<signals>\n" + strings.Join(texts, "\n") + "\n</signals>\n\n" +
 			"<skills>\n" + tools.skills + "\n</skills>\n\n" +
-			"<memories>\n" + strings.Join(memories, "\n") + "\n</memories>"},
+			"<memories>\n" + strings.Join(to.memories, "\n") + "\n</memories>\n\n" +
+			"<topics>\n" + topicsBlock(to) + "\n</topics>"},
 	}, nil)
 	if err != nil {
 		return verdict{}, err
@@ -321,8 +337,8 @@ func first(reply, word string) string {
 var days = regexp.MustCompile(`\s*\(for (\d+) days?\)$`)
 
 // lessons is what the LLM remembers in reply, after remember: at most
-// maxLessons, each of a scope there is, a key and a memory of at most
-// maxLearned bytes. What is not is left out, not cut.
+// maxLessons, each of a topic, a key and a memory of at most maxLearned
+// bytes. What is not is left out, not cut.
 func lessons(reply string) []lesson {
 	var out []lesson
 	for _, block := range blocks(reply) {
@@ -330,15 +346,18 @@ func lessons(reply string) []lesson {
 		if !ok || len(out) == maxLessons {
 			continue
 		}
-		scope, rest, _ := strings.Cut(plain(rest), " ")
+		topic, rest, found := strings.Cut(plain(rest), "|")
+		if !found {
+			continue
+		}
 		key, content, _ := strings.Cut(rest, ":")
-		l := lesson{scope: scope, key: strings.TrimSpace(key), content: strings.TrimSpace(content)}
+		l := lesson{topic: strings.TrimSpace(topic), key: strings.TrimSpace(key), content: strings.TrimSpace(content)}
 		if m := days.FindStringSubmatchIndex(l.content); m != nil {
 			l.days, _ = strconv.Atoi(l.content[m[2]:m[3]]) // digits, but maybe too many: then 0, and no more than for good
 			l.days = min(l.days, maxDays)
 			l.content = l.content[:m[0]]
 		}
-		if slices.Contains([]string{"core", "global", "project"}, l.scope) && l.key != "" && len(l.key) <= memory.MaxKey && l.content != "" && len(l.content) <= maxLearned {
+		if l.topic != "" && len(l.topic) <= memory.MaxTopic && l.key != "" && len(l.key) <= memory.MaxKey && l.content != "" && len(l.content) <= maxLearned {
 			out = append(out, l)
 		}
 	}

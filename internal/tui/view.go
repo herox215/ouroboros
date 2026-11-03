@@ -881,7 +881,7 @@ func (m *Model) footerHint() string {
 	case screenJobs:
 		help = "↑↓ select · enter stop · esc back"
 	case screenMemory:
-		help = "↑↓ select · enter read · ctrl+e edit · tab archived · esc back"
+		help = "↑↓ select · enter read · ctrl+e edit · tab expired · esc back"
 		if m.memories.edit != nil {
 			help = "tab key/content · ctrl+s save · esc cancel"
 		} else if m.memories.detail != nil {

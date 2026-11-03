@@ -170,6 +170,7 @@ func (s *scheduler) tick(ctx context.Context) time.Duration {
 	}
 	now := s.now()
 	s.seedDefault(now)
+	s.upgradeDefault(now)
 	jobs, err := s.store.Claim(now)
 	if err != nil {
 		s.report("claim: %v", err)
