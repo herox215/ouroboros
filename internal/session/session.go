@@ -510,6 +510,10 @@ type session struct {
 	pictures []chat.Image
 	roster   string
 	told     int
+	// held are, of the thread, what its agent said on the way to the answer
+	// on its way, which it shows only if a question follows, as the question
+	// rests on those words, see along and release.
+	held []Event
 }
 
 // queued is a message that waits for the answer on its way to take it: one
@@ -869,6 +873,9 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 		_, reply, err := s.post(ctx, se, assistant.QuestionMessage(question), question, true, se.backendQuestion, "")
 		return reply, err
 	}
+	// What the thread said before it asks is shown with the question: the
+	// question rests on those words, see release.
+	s.release(se)
 	s.emit(se, Event{Kind: Asked, PresentationID: id, Args: question})
 	s.mu.Unlock()
 	var answer queued
@@ -1187,6 +1194,8 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	defer s.mu.Unlock()
 	se.cancel()
 	se.cancel = nil
+	// What no question followed is not shown at all, and not held on either.
+	se.held = nil
 	p := s.node
 	p.mu.Lock()
 	defer p.mu.Unlock()

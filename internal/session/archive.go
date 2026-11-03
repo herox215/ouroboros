@@ -399,7 +399,8 @@ func (s *Service) loadTasks(se *session) {
 func replay(records []history.Record) ([]Event, []chat.Message) {
 	var events []Event
 	var msgs []chat.Message
-	steps := map[string]Event{} // the calls of tools that started, by ID
+	steps := map[string]Event{}  // the calls of tools that started, by ID
+	asked := map[string]string{} // what the question a call put to the owner is shown as, by call ID
 	start := 0
 	var size int
 	var cache assistant.Cache
@@ -469,6 +470,12 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 				step := Event{Kind: Step, At: at, CallID: c.ID, Tool: c.Name, Args: args(c.Arguments)}
 				steps[c.ID] = step
 				events = append(events, step)
+				if c.Name == assistant.ToolUserQuestion {
+					// A question the agent put to the owner is shown again as
+					// it was, and what they answered comes with its result.
+					asked[c.ID] = id + ":" + c.ID
+					events = append(events, Event{Kind: Asked, PresentationID: asked[c.ID], At: at, Args: args(c.Arguments)})
+				}
 			}
 			msgs = append(msgs, m)
 		case "tool":
@@ -482,6 +489,13 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 				if to := handedBy(step, r.Content); to != "" {
 					events = append(events, Event{Kind: Handed, At: at, Text: to})
 				}
+			}
+			if shown, ok := asked[r.ToolCallID]; ok {
+				answer := Event{Kind: Asked, PresentationID: shown, At: at, Done: true}
+				if !strings.HasPrefix(r.Content, "error: ") {
+					answer.Text = answered(r.Content)
+				}
+				events = append(events, answer)
 			}
 		case "end":
 			if r.Statistics != nil {
@@ -506,6 +520,17 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 		}
 	}
 	return events, msgs
+}
+
+// answered is what the owner answered a question with, as the result of the
+// call that asked it has it: the answer alone, or the answer with where they
+// gave it.
+func answered(result string) string {
+	var reply agent.OwnerReply
+	if json.Unmarshal([]byte(result), &reply) == nil && reply.Text != "" {
+		return reply.Text
+	}
+	return result
 }
 
 // args are the arguments of a call as an event has them: as JSON, or as a

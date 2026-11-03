@@ -705,10 +705,28 @@ func (s *Service) quietly(ctx context.Context, se *session) context.Context {
 }
 
 // along tells e, of what the agent does on its way to the answer in se,
-// unless se is the thread, see quiet.
+// unless se is the thread, see quiet: there the words of the agent are held,
+// and shown only if a question follows them, see release.
 func (s *Service) along(se *session, e Event) {
 	if se.id != ThreadID {
 		s.add(se, e)
+		return
+	}
+	if e.Kind == Say {
+		s.mu.Lock()
+		se.held = append(se.held, e)
+		s.mu.Unlock()
+	}
+}
+
+// release shows the owner what the agent of the thread said before it asks
+// them something: the words the question rests on, which the thread shows
+// otherwise not, see along. s.mu is held.
+func (s *Service) release(se *session) {
+	held := se.held
+	se.held = nil
+	for _, e := range held {
+		s.emit(se, e)
 	}
 }
 
@@ -720,8 +738,31 @@ func handedOn(se *session, end Event) bool {
 }
 
 // quiet are of the events of the thread those that are shown: not what its
-// agent did on its way, its words along with handing on and the calls that
-// handed on.
+// agent did on its way, the calls that handed on, and not its words along
+// with handing on. The words of the answer that lead to a question are
+// shown, as the question rests on them, see release.
 func quiet(events []Event) []Event {
-	return slices.DeleteFunc(events, func(e Event) bool { return e.Kind == Say || e.Kind == Step })
+	// The words are shown up to the question that follows them: back from
+	// each of its own, over the calls of the answer that asked it, up to
+	// what came before that answer.
+	shown := make([]bool, len(events))
+	for i, e := range events {
+		if e.Kind != Asked || e.Done {
+			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			if k := events[j].Kind; k != Say && k != Step {
+				break
+			}
+			shown[j] = events[j].Kind == Say
+		}
+	}
+	kept := make([]Event, 0, len(events))
+	for i, e := range events {
+		if e.Kind == Step || e.Kind == Say && !shown[i] {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept
 }
