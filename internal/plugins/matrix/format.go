@@ -214,7 +214,7 @@ func (r *htmlRenderer) inline(n ast.Node) {
 		label := string(n.Label(r.source))
 		r.link(string(n.URL(r.source)), func() { r.write(escape([]byte(label))) })
 	case *ast.Image:
-		alt := string(n.Text(r.source))
+		alt := r.plain(n)
 		if alt == "" {
 			alt = string(n.Destination)
 		}
@@ -243,6 +243,23 @@ func (r *htmlRenderer) codeText(n ast.Node) {
 			r.codeText(c)
 		}
 	}
+}
+
+// plain is the text of the inlines of n, without their markup, as the alt
+// text of an image has it.
+func (r *htmlRenderer) plain(n ast.Node) string {
+	var b strings.Builder
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		switch c := c.(type) {
+		case *ast.Text:
+			b.Write(c.Segment.Value(r.source))
+		case *ast.String:
+			b.Write(c.Value)
+		default:
+			b.WriteString(r.plain(c))
+		}
+	}
+	return b.String()
 }
 
 // link writes label as a link to href, or the label alone when href is not a
