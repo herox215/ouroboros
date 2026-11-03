@@ -784,22 +784,22 @@ func TestOwnerUndoesWhatWasRemembered(t *testing.T) {
 		raw, _ := json.Marshal(plugin.Remembered{Memory: e, Was: was})
 		return raw
 	}
-	e, was, _ := store.Remember(ctx, "", "style", "short answers", "c", false, time.Time{})
-	again, before, _ := store.Remember(ctx, "", "style", "very short answers", "c", false, time.Time{})
+	e, was, _ := store.Add(ctx, memory.General, "style", "short answers", "c", time.Time{})
+	again, before, _ := store.Add(ctx, memory.General, "style", "very short answers", "c", time.Time{})
 	if err := o.UndoRemembered(args(again, before)); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := store.Read(ctx, "", e.ID); got.Content != "short answers" {
+	if got, _ := store.Read(ctx, e.ID); got.Content != "short answers" {
 		t.Fatalf("not as it was: %+v", got)
 	}
 	if err := o.UndoRemembered(args(again, before)); !errors.Is(err, plugin.ErrMemoryChanged) {
 		t.Fatalf("taken back twice: %v", err)
 	}
-	now, _ := store.Read(ctx, "", e.ID)
+	now, _ := store.Read(ctx, e.ID)
 	if err := o.UndoRemembered(args(now, was)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Read(ctx, "", e.ID); !errors.Is(err, memory.ErrNotFound) {
+	if _, err := store.Read(ctx, e.ID); !errors.Is(err, memory.ErrNotFound) {
 		t.Fatalf("a new memory is not forgotten: %v", err)
 	}
 	if err := o.UndoRemembered(json.RawMessage(`"nope"`)); err == nil {
@@ -831,24 +831,24 @@ func TestOwnerEditsAMemory(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	e, _, err := store.Remember(ctx, "", "style", "short answers", "c", false, time.Time{})
+	e, _, err := store.Add(ctx, memory.General, "style", "short answers", "c", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited, err := o.SetMemory(ctx, "", e.ID, e.Version, "style", "very short answers")
+	edited, err := o.SetMemory(ctx, e.ID, e.Version, "style", "very short answers")
 	if err != nil {
 		t.Fatalf("the owner's edit: %v", err)
 	}
 	if edited.Content != "very short answers" || edited.Version != e.Version+1 {
 		t.Fatalf("the edit did not land: %+v", edited)
 	}
-	if _, err := o.SetMemory(ctx, "", e.ID, e.Version, "style", "terse"); !errors.Is(err, plugin.ErrMemoryChanged) {
+	if _, err := o.SetMemory(ctx, e.ID, e.Version, "style", "terse"); !errors.Is(err, plugin.ErrMemoryChanged) {
 		t.Fatalf("an edit of what changed since should fail as a conflict: %v", err)
 	}
-	if _, err := o.SetMemory(ctx, "", "gone", 1, "style", "terse"); !errors.Is(err, memory.ErrNotFound) {
+	if _, err := o.SetMemory(ctx, "gone", 1, "style", "terse"); !errors.Is(err, memory.ErrNotFound) {
 		t.Fatalf("an edit of no memory: %v", err)
 	}
-	if _, err := o.SetMemory(ctx, "", e.ID, edited.Version, "", "terse"); err == nil {
+	if _, err := o.SetMemory(ctx, e.ID, edited.Version, "", "terse"); err == nil {
 		t.Fatal("a memory without a key was taken")
 	}
 	logged, _ := os.ReadFile(home.Dir(s.Home).Service().LogFile)
@@ -868,14 +868,14 @@ func TestOwnerListsTheMemories(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, _, err := store.Remember(ctx, "", "style", "short answers", "c", false, time.Time{}); err != nil {
+	if _, _, err := store.Add(ctx, memory.General, "style", "short answers", "c", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Remember(ctx, "", "name", "Lu", "c", false, time.Time{}); err != nil {
+	if _, _, err := store.Add(ctx, memory.General, "name", "Lu", "c", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	store.Close()
-	listed, err := o.Memories(ctx, "", false)
+	listed, err := o.Memories(ctx, false)
 	if err != nil || len(listed.Memories) != 2 || listed.Total != 2 || listed.Memories[0].Key == listed.Memories[1].Key {
 		t.Fatalf("the memories: %+v, %v", listed, err)
 	}
@@ -884,10 +884,10 @@ func TestOwnerListsTheMemories(t *testing.T) {
 	if err := os.WriteFile(home.Dir(bad.Home).History(), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := owner(t, bad).Memories(ctx, "", false); err == nil {
+	if _, err := owner(t, bad).Memories(ctx, false); err == nil {
 		t.Fatal("listed without a store")
 	}
-	if _, err := owner(t, bad).SetMemory(ctx, "", "id", 1, "style", "terse"); err == nil {
+	if _, err := owner(t, bad).SetMemory(ctx, "id", 1, "style", "terse"); err == nil {
 		t.Fatal("edited without a store")
 	}
 }

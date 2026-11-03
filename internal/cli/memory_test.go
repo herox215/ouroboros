@@ -15,7 +15,7 @@ import (
 func TestStandardMemoryTools(t *testing.T) {
 	s := clitest.Settings(t)
 	cfg := clitest.NodeConfig(s)
-	cfg.Tools = &config.Tools{H2A: config.Named("memory_add", "memory_update", "memory_forget", "memory_search", "memory_read")}
+	cfg.Tools = &config.Tools{H2A: config.Named("memory_load", "memory_add", "memory_forget")}
 	if err := config.Save(s.Home, cfg); err != nil {
 		t.Fatal(err)
 	}

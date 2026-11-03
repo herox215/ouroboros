@@ -121,17 +121,13 @@ type Backend interface {
 	// UndoRemembered takes back the memory the review of an answer kept,
 	// as the Args of a plugin.SessionRemembered tell it.
 	UndoRemembered(args json.RawMessage) error
-	// Memories returns what the agent of the node has remembered: the
-	// global ones, core ones among them, and those of project, the latest
-	// updated first. Archived and expired ones only if all is true.
-	Memories(ctx context.Context, project string, all bool) (plugin.MemoryListing, error)
-	MemoryChanges(ctx context.Context, limit int) ([]plugin.MemoryChange, error)
-	UndoMemoryChange(ctx context.Context, id int64) error
-	// SetMemory replaces the memory id of the project as the owner typed
-	// it: version is the one they read, and a memory that changed since
-	// fails with plugin.ErrMemoryChanged. It returns the memory as it is
-	// then.
-	SetMemory(ctx context.Context, project, id string, version int64, key, content string) (plugin.Memory, error)
+	// Memories returns what the agent of the node has remembered, of every
+	// topic, the latest updated first. Expired ones only if all is true.
+	Memories(ctx context.Context, all bool) (plugin.MemoryListing, error)
+	// SetMemory replaces the memory id as the owner typed it: version is
+	// the one they read, and a memory that changed since fails with
+	// plugin.ErrMemoryChanged. It returns the memory as it is then.
+	SetMemory(ctx context.Context, id string, version int64, key, content string) (plugin.Memory, error)
 	// Setup starts the setup of the node.
 	Setup() (Setup, error)
 	// Models lists the models of every access of the node, for the model
@@ -774,10 +770,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.jobsTicked(msg)
 	case memoriesMsg:
 		return m, m.memoriesLoaded(msg)
-	case changesMsg:
-		return m, m.changesLoaded(msg)
-	case changeUndoneMsg:
-		return m, m.changeUndone(msg)
 	case memorySavedMsg:
 		return m, m.memorySaved(msg)
 	case peersMsg:

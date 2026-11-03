@@ -3,6 +3,7 @@ package cli_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"ouroboros/internal/history"
 	"ouroboros/internal/home"
@@ -29,7 +30,7 @@ func TestSharedSessionHistoryMemoryStore(t *testing.T) {
 	if err := a.SetDirectory(history.Owner(who.Session), project); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := m.Create(ctx, project, "tests", "Run make check", who.Session)
+	entry, _, err := m.Add(ctx, "ouro", "tests", "Run make check", who.Session, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +50,7 @@ func TestSharedSessionHistoryMemoryStore(t *testing.T) {
 	if got, set, err := a.Directory(history.Owner(who.Session)); err != nil || !set || got != project {
 		t.Fatalf("project: %q, %v, %v", got, set, err)
 	}
-	hits, err := m.Search(ctx, project, "project", "make check", 5)
+	hits, err := m.Load(ctx, "ouro", "make check", 5)
 	if err != nil || len(hits) != 1 || hits[0].ID != entry.ID || hits[0].Source != who.Session {
 		t.Fatalf("memory: %+v, %v", hits, err)
 	}
@@ -60,13 +61,13 @@ func TestSharedSessionHistoryMemoryStore(t *testing.T) {
 	if err := a.Delete(history.Owner(who.Session)); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := m.Read(ctx, project, entry.ID); err != nil || got.Content != entry.Content {
+	if got, err := m.Read(ctx, entry.ID); err != nil || got.Content != entry.Content {
 		t.Fatalf("memory after session deletion: %+v, %v", got, err)
 	}
-	if err := m.Forget(ctx, project, entry.ID, entry.Version); err != nil {
+	if _, err := m.Forget(ctx, "ouro", entry.Key); err != nil {
 		t.Fatal(err)
 	}
-	hits, err = m.Search(ctx, project, "project", "make check", 5)
+	hits, err = m.Load(ctx, "ouro", "make check", 5)
 	if err != nil || len(hits) != 0 {
 		t.Fatalf("forgotten index: %+v, %v", hits, err)
 	}

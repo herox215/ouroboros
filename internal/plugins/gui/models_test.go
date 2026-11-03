@@ -153,7 +153,7 @@ func TestWindowUndoesRemembered(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	e, was, err := store.Remember(context.Background(), "", "style", "short answers", "c", false, time.Time{})
+	e, was, err := store.Add(context.Background(), memory.General, "style", "short answers", "c", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestWindowUndoesRemembered(t *testing.T) {
 	if err := w.UndoRemembered(1, shown.Remembered); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Read(context.Background(), "", e.ID); !errors.Is(err, memory.ErrNotFound) {
+	if _, err := store.Read(context.Background(), e.ID); !errors.Is(err, memory.ErrNotFound) {
 		t.Fatalf("not taken back: %v", err)
 	}
 }

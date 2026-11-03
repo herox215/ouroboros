@@ -217,3 +217,27 @@ func TestRunScheduledSocketResult(t *testing.T) {
 		t.Fatalf("result: %+v", out)
 	}
 }
+
+// A scheduled job's tools reach its answer through the socket; one without
+// tools limits nothing.
+func TestRunScheduledTools(t *testing.T) {
+	got := make(chan []string, 2)
+	a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if !strings.HasPrefix(text, backgroundHead) {
+			got <- assistant.OnlyTools(ctx)
+		}
+		return "done", nil
+	}}
+	s := service(t, a)
+	c := NewClient(serve(t, Handler(s)).dir)
+	for _, tools := range [][]string{{"memory_read"}, nil} {
+		_, result, err := c.RunScheduled(t.Context(), "job", "go", "", false, tools...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scheduledResult(t, result)
+		if only := <-got; fmt.Sprint(only) != fmt.Sprint(tools) {
+			t.Fatalf("tools %v, want %v", only, tools)
+		}
+	}
+}

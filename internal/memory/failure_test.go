@@ -137,7 +137,7 @@ func TestOpenFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec("CREATE VIEW memories AS SELECT 1 AS id")
+	_, err = db.Exec("CREATE VIEW topic_memories AS SELECT 1 AS id")
 	db.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -185,129 +185,97 @@ func TestNewOnTheCallersPool(t *testing.T) {
 	}
 }
 
-// An update or a deletion needs a version a memory can have and valid text:
-// a version below 1 conflicts before the memory is even looked for.
-func TestUpdateAndForgetRefuseWhatCannotBe(t *testing.T) {
+// An update needs the version a memory has and valid text.
+func TestUpdateRefusesWhatCannotBe(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	e, err := s.Create(ctx, "", "drink", "oolong", "owner")
+	e, _, err := s.Add(ctx, General, "drink", "oolong", "owner", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range []struct{ key, content, source string }{{"", "tea", "owner"}, {"drink", "", "owner"}, {"drink", "tea", ""}} {
-		if _, err := s.Update(ctx, "", e.ID, 1, a.key, a.content, a.source); err == nil {
+		if _, err := s.Update(ctx, e.ID, 1, a.key, a.content, a.source); err == nil {
 			t.Errorf("updated with %+v", a)
 		}
 	}
-	if _, err := s.Update(ctx, "", "missing", 0, "drink", "tea", "owner"); !errors.Is(err, ErrConflict) {
-		t.Errorf("update of version 0: %v", err)
+	if _, err := s.Update(ctx, e.ID, 2, "drink", "tea", "owner"); !errors.Is(err, ErrConflict) {
+		t.Errorf("update of a stale version: %v", err)
 	}
-	if err := s.Forget(ctx, "", "missing", 0); !errors.Is(err, ErrConflict) {
-		t.Errorf("forget of version 0: %v", err)
+	if _, err := s.Update(ctx, "missing", 1, "drink", "tea", "owner"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("update of a missing memory: %v", err)
 	}
-	if got, err := s.Read(ctx, "", e.ID); err != nil || got != e {
+	if _, err := s.Forget(ctx, General, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("forget of a missing memory: %v", err)
+	}
+	if got, err := s.Read(ctx, e.ID); err != nil || got != e {
 		t.Fatalf("refused changes changed the memory: %+v, %v", got, err)
 	}
 }
 
-// A deletion the database refuses leaves the memory and its index as they
-// were.
+// A deletion the database refuses leaves the memory, its index and the
+// history as they were.
 func TestForgetThatFailsKeepsTheMemory(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	e, err := s.Create(ctx, "", "drink", "oolong", "owner")
+	e, _, err := s.Add(ctx, General, "drink", "oolong", "owner", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`CREATE TRIGGER keep BEFORE DELETE ON memories BEGIN SELECT RAISE(ABORT,'kept'); END;`); err != nil {
+	if _, err := s.db.Exec(`CREATE TRIGGER keep BEFORE DELETE ON topic_memories BEGIN SELECT RAISE(ABORT,'kept'); END;`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Forget(ctx, "", e.ID, 1); err == nil || !strings.Contains(err.Error(), "kept") {
+	if _, err := s.Forget(ctx, General, "drink"); err == nil || !strings.Contains(err.Error(), "kept") {
 		t.Fatalf("forget: %v", err)
 	}
-	if hits, err := s.Search(ctx, "", "global", "oolong", 10); err != nil || len(hits) != 1 || hits[0].ID != e.ID {
+	if hits, err := s.Load(ctx, General, "oolong", 10); err != nil || len(hits) != 1 || hits[0].ID != e.ID {
 		t.Fatalf("after a failed forget: %+v, %v", hits, err)
+	}
+	if prev, err := s.Previous(ctx, 10); err != nil || len(prev) != 0 {
+		t.Fatalf("history after a failed forget: %+v, %v", prev, err)
 	}
 }
 
-// A query is at most 1024 bytes. Without a limit, a search finds 10
-// memories, and never more than MaxHits.
-func TestSearchLimits(t *testing.T) {
+// A search is at most 1024 bytes. Without a count, a load gives MaxHits
+// memories, and never more.
+func TestLoadLimits(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	for i := range MaxHits + 1 {
-		if _, err := s.Create(ctx, "", strings.Repeat("k", i+1), "token", "owner"); err != nil {
+		if _, _, err := s.Add(ctx, General, strings.Repeat("k", i+1), "token", "owner", time.Time{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.Search(ctx, "", "global", strings.Repeat("a", 1025), 10); err == nil {
-		t.Error("searched for a query of 1025 bytes")
+	if _, err := s.Load(ctx, General, strings.Repeat("a", 1025), 10); err == nil {
+		t.Error("searched for 1025 bytes")
 	}
-	if hits, err := s.Search(ctx, "", "global", strings.Repeat("a", 1024), 10); err != nil || len(hits) != 0 {
-		t.Errorf("a query of 1024 bytes: %+v, %v", hits, err)
+	if hits, err := s.Load(ctx, General, strings.Repeat("a", 1024), 10); err != nil || len(hits) != 0 {
+		t.Errorf("a search of 1024 bytes: %+v, %v", hits, err)
 	}
-	for limit, want := range map[int]int{-1: 10, 0: 10, 1: 1, MaxHits: MaxHits, MaxHits + 1: MaxHits} {
-		if hits, err := s.Search(ctx, "", "global", "token", limit); err != nil || len(hits) != want {
-			t.Errorf("limit %d: %d hits, %v; want %d", limit, len(hits), err, want)
+	for count, want := range map[int]int{-1: MaxHits, 0: MaxHits, 1: 1, MaxHits + 1: MaxHits} {
+		if hits, err := s.Load(ctx, General, "token", count); err != nil || len(hits) != want {
+			t.Errorf("count %d: %d hits, %v; want %d", count, len(hits), err, want)
 		}
 	}
 }
 
-// A search that is stopped, or that comes upon a row that is no memory,
-// fails instead of giving part of an answer.
-func TestSearchFails(t *testing.T) {
+// A load that is stopped, or that comes upon a row that is no memory, fails
+// instead of giving part of an answer.
+func TestLoadFails(t *testing.T) {
 	s := testStore(t)
 	stopped, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.Search(stopped, "", "global", "", 10); !errors.Is(err, context.Canceled) {
+	if _, err := s.Load(stopped, General, "", 10); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stopped: %v", err)
 	}
 	// SQLite keeps what it is given, also a version that is no number.
-	if _, err := s.db.Exec("INSERT INTO memories (" + columns + ") VALUES('bad','key','content','','x','t','t','owner',0,'',0,0,0)"); err != nil {
+	if _, err := s.db.Exec("INSERT INTO topic_memories (id,topic,topic_key,key,content,version,created,updated,source) VALUES('bad','general','general','key','content','x','t','t','owner')"); err != nil {
 		t.Fatal(err)
 	}
-	if hits, err := s.Search(context.Background(), "", "global", "", 10); err == nil {
-		t.Fatalf("searched over a row that is no memory: %+v", hits)
+	if hits, err := s.Load(context.Background(), General, "", 10); err == nil {
+		t.Fatalf("loaded a row that is no memory: %+v", hits)
 	}
-	if _, err := s.Read(context.Background(), "", "bad"); err == nil || errors.Is(err, ErrNotFound) {
+	if _, err := s.Read(context.Background(), "bad"); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("read a row that is no memory: %v", err)
-	}
-}
-
-// An update whose outcome cannot be told fails with why, and changes
-// nothing.
-func TestUpdateWhoseOutcomeIsUnknown(t *testing.T) {
-	dir := t.TempDir()
-	f := &faults{}
-	s, err := New(faultDB(t, dir, f))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	e, err := s.Create(ctx, "", "drink", "oolong", "owner")
-	if err != nil {
-		t.Fatal(err)
-	}
-	uncounted := errors.New("rows not counted")
-	f.affected = uncounted
-	if _, err := s.Update(ctx, "", e.ID, 1, "drink", "espresso", "owner"); !errors.Is(err, uncounted) {
-		t.Fatalf("uncounted update: %v", err)
-	}
-	f.affected = nil
-	unread := errors.New("not read")
-	f.query = func(query string) error {
-		if strings.HasPrefix(query, "SELECT 1 ") {
-			return unread
-		}
-		return nil
-	}
-	// A stale version: whether the memory is still there is asked for.
-	if _, err := s.Update(ctx, "", e.ID, 2, "drink", "espresso", "owner"); !errors.Is(err, unread) {
-		t.Fatalf("unread conflict: %v", err)
-	}
-	f.query = nil
-	if got, err := s.Read(ctx, "", e.ID); err != nil || got != e {
-		t.Fatalf("failed updates changed the memory: %+v, %v", got, err)
 	}
 }
 
@@ -337,7 +305,7 @@ func heldStores(t *testing.T, busySeen func()) (*Store, *Store, *sql.Tx) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { held.Rollback() })
-	if _, err := held.Exec("INSERT INTO memories (" + columns + ") VALUES('held','held','held','',1,'t','t','owner',0,'',0,0,0)"); err != nil {
+	if _, err := held.Exec("INSERT INTO topic_memories (id,topic,topic_key,key,content,version,created,updated,source) VALUES('held','general','general','held','held',1,'t','t','owner')"); err != nil {
 		t.Fatal(err)
 	}
 	return holder, waiter, held
@@ -356,7 +324,7 @@ func TestWriteWaitsForAnotherWriter(t *testing.T) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		_, err := waiter.Create(context.Background(), "", "drink", "oolong", "owner")
+		_, _, err := waiter.Add(context.Background(), General, "drink", "oolong", "owner", time.Time{})
 		done <- err
 	}()
 	select {
@@ -375,7 +343,7 @@ func TestWriteWaitsForAnotherWriter(t *testing.T) {
 	if took := seen[tries-1].Sub(seen[0]); took < (tries-1)*10*time.Millisecond {
 		t.Errorf("tried %d times in %s: it does not wait between the tries", tries, took)
 	}
-	hits, err := holder.Search(context.Background(), "", "global", "", 10)
+	hits, err := holder.Load(context.Background(), General, "", 10)
 	if err != nil || len(hits) != 2 {
 		t.Fatalf("both writes: %+v, %v", hits, err)
 	}
@@ -386,13 +354,13 @@ func TestWriteStopsWaitingWhenStopped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	holder, waiter, held := heldStores(t, cancel)
-	if _, err := waiter.Create(ctx, "", "drink", "oolong", "owner"); !errors.Is(err, context.Canceled) {
+	if _, _, err := waiter.Add(ctx, General, "drink", "oolong", "owner", time.Time{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("stopped while waiting: %v", err)
 	}
 	if err := held.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	if hits, err := holder.Search(context.Background(), "", "global", "", 10); err != nil || len(hits) != 0 {
+	if hits, err := holder.Load(context.Background(), General, "", 10); err != nil || len(hits) != 0 {
 		t.Fatalf("a stopped write was written: %+v, %v", hits, err)
 	}
 }
@@ -406,18 +374,13 @@ func TestListFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := s.Create(ctx, "", "drink", "oolong", "owner"); err != nil {
+	if _, _, err := s.Add(ctx, General, "drink", "oolong", "owner", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	unread := errors.New("not read")
 	for step, fails := range map[string]func(query string) bool{
-		"count": func(q string) bool {
-			return strings.HasPrefix(q, "SELECT count(*)") && !strings.Contains(q, "archived=1")
-		},
-		"hidden": func(q string) bool {
-			return strings.HasPrefix(q, "SELECT count(*)") && strings.Contains(q, "archived=1")
-		},
-		"rows": func(q string) bool { return !strings.HasPrefix(q, "SELECT count(*)") },
+		"count": func(q string) bool { return strings.HasPrefix(q, "SELECT count(*)") },
+		"rows":  func(q string) bool { return !strings.HasPrefix(q, "SELECT count(*)") },
 	} {
 		f.query = func(query string) error {
 			if fails(query) {
@@ -425,7 +388,7 @@ func TestListFails(t *testing.T) {
 			}
 			return nil
 		}
-		if l, err := s.List(ctx, "", false, 0); !errors.Is(err, unread) || len(l.Memories) != 0 || l.Total != 0 {
+		if l, err := s.List(ctx, false, 0); !errors.Is(err, unread) || len(l.Memories) != 0 || l.Total != 0 {
 			t.Errorf("%s: %+v, %v", step, l, err)
 		}
 	}

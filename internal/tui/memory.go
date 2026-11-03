@@ -1,8 +1,9 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
-	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -15,41 +16,41 @@ import (
 )
 
 // The memory screen is what the command /memory opens: the memories the
-// agent of the owner has collected, drawn as a star chart, grouped by where
-// they hold - the core ones, which go into every answer, on the innermost
-// orbit, the global ones, and those of the project the conversation is in on
-// the outermost. The one selected is named on the chart, with what it holds
-// below it; a narrow dialog falls back to a list. Enter reads the one
-// selected in full, tab shows the archived and expired ones too, and what is
-// typed filters the chart by key and content. Nothing here changes a memory.
+// agent of the owner has collected, drawn as a star chart, grouped by their
+// topic - the core ones, which go into every answer, on the innermost orbit,
+// the general ones, and those of the other topics on the outermost. The one
+// selected is named on the chart, with what it holds below it; a narrow
+// dialog falls back to a list, a group for each topic. Enter reads the one
+// selected in full, tab shows the expired ones too, and what is typed filters
+// the chart by key and content. Nothing here changes a memory.
 
 // The groups the memory screen lists, in the order it shows them.
 const (
 	groupCore = iota
-	groupGlobal
-	groupHere
+	groupGeneral
+	groupTopic
 )
 
 // groupCount is how many groups the screen lists.
 const groupCount = 3
 
 // groupOf says which group a memory belongs to: the core ones go into every
-// answer, those without a project hold anywhere, and the others in the
-// project the conversation is in.
+// answer, the general ones are loaded where they fit, and the others with
+// their topic.
 func groupOf(e plugin.Memory) int {
-	switch {
-	case e.Core:
+	switch strings.ToLower(e.Topic) {
+	case plugin.MemoryCore:
 		return groupCore
-	case e.Project == "":
-		return groupGlobal
+	case plugin.MemoryGeneral:
+		return groupGeneral
 	}
-	return groupHere
+	return groupTopic
 }
 
 // memoryScreen is the state of the memory screen.
 type memoryScreen struct {
 	listing   plugin.MemoryListing
-	all       bool  // the archived and expired ones are shown too
+	all       bool  // the expired ones are shown too
 	err       error // why the memories could not be read
 	loaded    bool  // the listing came since the screen was opened
 	asked     int   // how often it was asked for: an answer to an older question is dropped
@@ -62,14 +63,6 @@ type memoryScreen struct {
 	readLines int            // how many lines the memory that is read has, as the view last laid it out
 	edit      *memoryEdit    // the memory being edited, nil while none is
 	pick      string         // the id of a memory to select once the listing came, "" for none
-	// changes shows the changes of the archivist instead of the memories,
-	// see changesView.
-	changes      bool
-	changeLog    []plugin.MemoryChange
-	changeErr    error
-	changeLoaded bool
-	changeAt     int
-	undoAsk      int64 // the change whose undo waits for a second enter
 }
 
 // memoriesMsg is the memories of the node, on the way to the screen.
@@ -79,47 +72,6 @@ type memoriesMsg struct {
 	asked   int
 }
 
-// changesMsg is the changes of the archivist, on the way to the screen.
-type changesMsg struct {
-	changes []plugin.MemoryChange
-	err     error
-}
-
-// changeUndoneMsg is how taking back a change went.
-type changeUndoneMsg struct {
-	id  int64
-	err error
-}
-
-// loadChanges asks for the changes the archivist made to the memories.
-func (m *Model) loadChanges() tea.Cmd {
-	return func() tea.Msg {
-		changes, err := m.backend.MemoryChanges(m.ctx, 20)
-		return changesMsg{changes, err}
-	}
-}
-
-// changesLoaded shows the changes, unless the memory screen was left.
-func (m *Model) changesLoaded(msg changesMsg) tea.Cmd {
-	s := &m.memories
-	if m.screen != screenMemory {
-		return nil
-	}
-	s.changeLog, s.changeErr, s.changeLoaded = msg.changes, msg.err, true
-	s.changeAt = max(0, min(s.changeAt, len(msg.changes)-1))
-	return nil
-}
-
-// changeUndone says how taking back a change went and reads the log anew.
-func (m *Model) changeUndone(msg changeUndoneMsg) tea.Cmd {
-	if msg.err != nil {
-		m.setNotice(msg.err.Error(), true)
-	} else {
-		m.setNotice(fmt.Sprintf("change #%d undone", msg.id), false)
-	}
-	return m.loadChanges()
-}
-
 // openMemory opens the memories the agent has collected.
 func (m *Model) openMemory() tea.Cmd {
 	m.memories = memoryScreen{}
@@ -127,13 +79,13 @@ func (m *Model) openMemory() tea.Cmd {
 	return m.loadMemories()
 }
 
-// loadMemories asks for the memories of the project the conversation is in.
+// loadMemories asks for the memories of every topic.
 func (m *Model) loadMemories() tea.Cmd {
 	s := &m.memories
 	s.asked++
-	asked, all, project := s.asked, s.all, m.chat.directory
+	asked, all := s.asked, s.all
 	return func() tea.Msg {
-		listing, err := m.backend.Memories(m.ctx, project, all)
+		listing, err := m.backend.Memories(m.ctx, all)
 		return memoriesMsg{listing, err, asked}
 	}
 }
@@ -145,6 +97,15 @@ func (m *Model) memoriesLoaded(msg memoriesMsg) tea.Cmd {
 	if msg.asked != s.asked || m.screen != screenMemory {
 		return nil
 	}
+	// The memories of a topic stand together, the core ones first, then the
+	// general ones and the other topics by name; within a topic the latest
+	// updated first, as the node listed them.
+	slices.SortStableFunc(msg.listing.Memories, func(a, b plugin.Memory) int {
+		if c := cmp.Compare(groupOf(a), groupOf(b)); c != 0 {
+			return c
+		}
+		return strings.Compare(strings.ToLower(a.Topic), strings.ToLower(b.Topic))
+	})
 	s.listing, s.err, s.loaded = msg.listing, msg.err, true
 	s.sel = max(0, min(s.sel, len(s.rows())-1))
 	// A memory that was saved is selected where it is now, the latest
@@ -178,7 +139,7 @@ func (s *memoryScreen) rows() []plugin.Memory {
 
 // handleKey handles keys on the memory screen: what is typed filters the
 // list, up and down select a memory, enter reads it in full, tab shows the
-// archived and expired ones too, and esc takes back what is typed and then
+// expired ones too, and esc takes back what is typed and then
 // goes back to the chat.
 func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if s.edit != nil {
@@ -186,9 +147,6 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if s.detail != nil {
 		return s.readingKey(m, msg)
-	}
-	if s.changes {
-		return s.changesKey(m, msg)
 	}
 	rows := s.rows()
 	move := func(to int) { s.sel = max(0, min(to, len(rows)-1)) }
@@ -202,9 +160,6 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "ctrl+e": // a letter of its own, as a typed one filters the list
 		return s.openEdit(m, s.sel)
-	case "ctrl+r":
-		s.changes, s.changeAt, s.undoAsk = true, 0, 0
-		return m.loadChanges()
 	case "up":
 		move(s.sel - 1)
 	case "down":
@@ -219,7 +174,7 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		move(len(rows) - 1)
 	case "tab":
 		s.all, s.sel, s.top = !s.all, 0, 0
-		return m.loadMemories() // the archived and expired ones, or not
+		return m.loadMemories() // the expired ones, or not
 	case "enter":
 		if len(rows) > 0 {
 			s.open(s.sel)
@@ -238,96 +193,6 @@ func (s *memoryScreen) handleKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return nil
-}
-
-// changesKey handles keys on the changes of the archivist: up and down move,
-// enter asks once more and then takes the change back, and esc takes the
-// question back and then the log.
-func (s *memoryScreen) changesKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
-	rows := s.changeLog
-	// A move takes the question back: it asked about the change left.
-	move := func(to int) { s.changeAt, s.undoAsk = max(0, min(to, len(rows)-1)), 0 }
-	switch msg.String() {
-	case "esc":
-		if s.undoAsk != 0 {
-			s.undoAsk = 0
-		} else {
-			s.changes = false
-		}
-	case "ctrl+r":
-		s.changes = false
-	case "up":
-		move(s.changeAt - 1)
-	case "down":
-		move(s.changeAt + 1)
-	case "pgup":
-		move(s.changeAt - max(1, s.page))
-	case "pgdown":
-		move(s.changeAt + max(1, s.page))
-	case "home":
-		move(0)
-	case "end":
-		move(len(rows) - 1)
-	case "enter":
-		if s.changeAt >= len(rows) || rows[s.changeAt].Undone {
-			return nil
-		}
-		id := rows[s.changeAt].ID
-		if s.undoAsk != id {
-			s.undoAsk = id
-			return nil
-		}
-		s.undoAsk = 0
-		return func() tea.Msg {
-			return changeUndoneMsg{id: id, err: m.backend.UndoMemoryChange(m.ctx, id)}
-		}
-	}
-	return nil
-}
-
-// changesView shows the changes the archivist made, the newest first, with
-// the one selected marked, and what enter does with it.
-func (s *memoryScreen) changesView(m *Model, w, h, inner int) string {
-	head := []string{boldStyle.Render("Archivist changes") + mutedStyle.Render(fmt.Sprintf(" · %d", len(s.changeLog))), ""}
-	if s.changeErr != nil {
-		return s.box(m, w, h, inner, append(head, errStyle.Render("✗ The changes cannot be listed: "+s.changeErr.Error())))
-	}
-	if !s.changeLoaded {
-		return s.box(m, w, h, inner, append(head, m.spinner.View()+mutedStyle.Render(" reading the changes…")))
-	}
-	if len(s.changeLog) == 0 {
-		return s.box(m, w, h, inner, append(head, mutedStyle.Render("The archivist has changed nothing yet.")))
-	}
-	var lines []string
-	for i, c := range s.changeLog {
-		when := c.At
-		if t, err := time.Parse(time.RFC3339Nano, c.At); err == nil {
-			when = ago(t, m.now())
-		}
-		state := ""
-		if c.Undone {
-			state = " · undone"
-		}
-		line := fmt.Sprintf("#%d %s · %s · %s%s", c.ID, c.Action, when, short(c.Reason, max(8, inner-32)), state)
-		if i == s.changeAt {
-			line = lipgloss.NewStyle().Foreground(accent).Render("› ") + line
-		} else {
-			line = "  " + line
-		}
-		if c.Undone {
-			line = mutedStyle.Render(line)
-		}
-		lines = append(lines, line)
-	}
-	if s.undoAsk != 0 {
-		lines = append(lines, "", mutedStyle.Render(fmt.Sprintf("Enter again to undo change #%d; esc takes the question back.", s.undoAsk)))
-	} else {
-		lines = append(lines, "", mutedStyle.Render("enter undo · esc back"))
-	}
-	room := max(1, h-2-len(head))
-	top := max(0, min(s.changeAt, max(0, len(lines)-room)))
-	s.page = max(1, room)
-	return s.box(m, w, h, inner, append(head, lines[top:min(len(lines), top+room)]...))
 }
 
 // readingKey handles keys on a memory that is read in full: esc and enter go
@@ -364,9 +229,6 @@ func (s *memoryScreen) view(m *Model) (string, []hit) {
 	if s.edit != nil {
 		return s.editingView(m, w, h, inner), nil
 	}
-	if s.changes {
-		return s.changesView(m, w, h, inner), nil
-	}
 	if s.detail != nil {
 		return s.reading(m, w, h, inner), nil
 	}
@@ -389,21 +251,21 @@ func (s *memoryScreen) view(m *Model) (string, []hit) {
 		lines = append(lines, mutedStyle.Render(s.nothing()))
 	default:
 		rows := s.rows()
-		var counts [groupCount]int
+		counts := map[string]int{} // by the topic, folded
 		keyWidth := 0
 		for _, e := range rows {
-			counts[groupOf(e)]++
+			counts[strings.ToLower(e.Topic)]++
 			keyWidth = max(keyWidth, ansi.StringWidth(e.Key))
 		}
 		keyWidth = min(keyWidth, 24)
-		group := -1
+		topic := "\x00" // none yet
 		for i, e := range rows {
-			if g := groupOf(e); g != group {
-				group = g
+			if t := strings.ToLower(e.Topic); t != topic {
+				topic = t
 				if len(lines) > 0 {
 					lines = append(lines, "")
 				}
-				lines = append(lines, s.groupTitle(m, g, counts[g]))
+				lines = append(lines, s.groupTitle(groupOf(e), e.Topic, counts[t]))
 			}
 			if i == s.sel {
 				at = len(lines)
@@ -490,19 +352,14 @@ func (s *memoryScreen) box(m *Model, w, h, inner int, lines []string) string {
 }
 
 // groupTitle says what a group holds, with how many of the memories shown
-// are in it, and where those of the project hold.
-func (s *memoryScreen) groupTitle(m *Model, group, n int) string {
+// are in it; that of a topic names the topic.
+func (s *memoryScreen) groupTitle(group int, topic string, n int) string {
 	name, about := "Core", "given with every answer"
 	switch group {
-	case groupGlobal:
-		name, about = "Global", "remembered anywhere"
-	case groupHere:
-		name, about = "Here", "in this project"
-		if dir := m.chat.directory; dir != "" {
-			about = "in " + short(filepath.Base(dir), 40)
-		} else {
-			about = "no project selected: /cd names one"
-		}
+	case groupGeneral:
+		name, about = "General", "loaded when it fits"
+	case groupTopic:
+		name, about = "Topic "+short(topic, 40), "loaded with its topic"
 	}
 	return boldStyle.Render(name) + mutedStyle.Render(fmt.Sprintf(" · %d, %s", n, about))
 }
@@ -525,8 +382,8 @@ func (s *memoryScreen) summary() string {
 	}
 	parts := []string{fmt.Sprintf("%d remembered", s.listing.Total),
 		fmt.Sprintf("%c %d core", starGlyph(groupCore), counts[groupCore]),
-		fmt.Sprintf("%c %d global", starGlyph(groupGlobal), counts[groupGlobal]),
-		fmt.Sprintf("%c %d here", starGlyph(groupHere), counts[groupHere])}
+		fmt.Sprintf("%c %d general", starGlyph(groupGeneral), counts[groupGeneral]),
+		fmt.Sprintf("%c %d in topics", starGlyph(groupTopic), counts[groupTopic])}
 	if s.listing.Hidden > 0 {
 		parts = append(parts, fmt.Sprintf("%d hidden", s.listing.Hidden))
 	}
@@ -573,31 +430,29 @@ func ago(t, now time.Time) string {
 	return t.Format("Jan 2006")
 }
 
-// holds says where a memory holds.
+// holds says where a memory holds: in the core, the general topic, or the
+// topic it was kept in.
 func holds(e *plugin.Memory) string {
 	switch groupOf(*e) {
 	case groupCore:
 		return "core · given with every answer"
-	case groupGlobal:
-		return "global · remembered anywhere"
+	case groupGeneral:
+		return "general · loaded when it fits"
 	}
-	return "here · in " + short(filepath.Base(e.Project), 40) // a memory of no project is global
+	return "in topic " + short(e.Topic, 40)
 }
 
 // memoryAbout says what a memory is: when it was last written, how often it
-// was used and loaded, and whether it is archived or expired.
+// was used, and whether it is expired.
 func memoryAbout(e *plugin.Memory, now time.Time) string {
 	var parts []string
-	if e.Archived {
-		parts = append(parts, "archived")
-	}
 	if until, err := time.Parse(time.RFC3339, e.Expires); e.Expires != "" && err == nil && !until.After(now) {
 		parts = append(parts, "expired")
 	}
 	if t, err := time.Parse(time.RFC3339, e.Updated); err == nil {
 		parts = append(parts, "updated "+ago(t, now))
 	}
-	parts = append(parts, fmt.Sprintf("used %d× · loaded %d×", e.Used, e.Loaded))
+	parts = append(parts, fmt.Sprintf("used %d×", e.Used))
 	if e.Version > 1 {
 		parts = append(parts, fmt.Sprintf("v%d", e.Version))
 	}
