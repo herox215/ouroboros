@@ -487,13 +487,9 @@ func TestHandRefuses(t *testing.T) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.answerRelayed("a", MessageSource{}) {
-		t.Fatal("the thread asks no question")
-	}
 	delete(s.sessions, ThreadID)
-	s.answered(s.get("s1"), queued{})
 	s.busy()
-	if s.answerRelayed("a", MessageSource{}) || s.sessions[ThreadID] != nil {
+	if s.sessions[ThreadID] != nil {
 		t.Fatal("there is no thread")
 	}
 }

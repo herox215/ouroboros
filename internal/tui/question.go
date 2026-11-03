@@ -54,6 +54,13 @@ func (a *asking) unsent() {
 // answer is over. The question is part of the conversation, and so is what
 // the owner answered.
 func (c *conversation) ask(e Event) {
+	if !e.Done && e.Message != "" {
+		// The session waits for the thread, which asks the owner there:
+		// nothing to answer here.
+		c.add(entry{text: "Waits for the thread to answer message " + e.Message + ": " + e.Text, at: e.At, question: true})
+		c.asking = nil
+		return
+	}
 	if !e.Done {
 		c.add(entry{text: e.Text, at: e.At, question: true})
 		c.asking = &asking{question: e.Text, options: e.Options, recommended: e.Recommended,

@@ -373,7 +373,7 @@ func (t threading) Send(ctx context.Context, id, text, messageID string, own boo
 	// verifier failures and target changes are never retried here.
 	const attempts = 3
 	for attempt := 0; ; attempt++ {
-		checked, decision, err := t.checkConcern(ctx, id, words, pictures, false)
+		checked, decision, err := t.checkConcern(ctx, id, words, pictures)
 		if err != nil {
 			return "", "", err
 		}
@@ -590,18 +590,6 @@ func (s *Service) threadContext(ctx context.Context, se *session) context.Contex
 	return assistant.WithThread(ctx, threading{s})
 }
 
-// relayed is a question a session asks the owner on the way of an answer
-// that took a message the thread handed on: the thread asks it as its own,
-// one at a time, and what the owner says next there answers it.
-type relayed struct {
-	se       *session
-	question json.RawMessage
-	id       string // of the Asked of the thread
-	context  string // what the answer said before it asked, shown in the thread too
-	// contextID is the occurrence of the Say context is of, "" for none.
-	contextID string
-}
-
 // relay queues the complete result of a routed answer for the thread agent
 // to contextualize, rather than showing a topic answer verbatim. Stopped
 // answers are not reported. s.mu and the process lock are held.
@@ -650,67 +638,6 @@ func (s *Service) note(id, text string) {
 	}
 }
 
-// asking asks the owner in the thread the question an answer in se asks
-// them, if it took a message the thread handed on or has one waiting behind
-// its current tool: at once, unless the thread asks another one. s.mu is held.
-func (s *Service) asking(se *session, question json.RawMessage) {
-	if !forThread(se) {
-		return
-	}
-	thread := s.get(ThreadID)
-	contextID, context := saidBefore(thread, se)
-	thread.questions = append(thread.questions, &relayed{se: se, question: question, context: context, contextID: contextID})
-	if len(thread.questions) == 1 {
-		s.ask1(thread)
-	}
-}
-
-// saidKept is how much of what a session said before its question the thread
-// shows with it: enough for the owner to know what the question refers to.
-const saidKept = 1200
-
-// saidBefore is what the answer on its way in se said last before it asked
-// the owner, "" if it said nothing since the owner's message: the thread
-// shows it with the question, which alone would refer to what the owner
-// cannot see there.
-func saidBefore(thread, se *session) (id, text string) {
-	for _, e := range slices.Backward(se.events) {
-		switch e.Kind {
-		case Say:
-			text := strings.TrimSpace(e.Text)
-			if text == "" {
-				continue
-			}
-			if saidThere(thread, e) {
-				// The thread shows it already, right before the question:
-				// what a tool said, see saying, or what an earlier question
-				// of this answer came with. An older Say would come after it.
-				return "", ""
-			}
-			if len(text) > saidKept {
-				// What leads to the question is at the end.
-				text = "…" + strings.ToValidUTF8(text[len(text)-saidKept:], "")
-			}
-			return e.PresentationID, text
-		case Message, Task, Answer, Failed, Canceled:
-			return "", "" // the question's answer began here: what came before is another answer
-		}
-	}
-	return "", ""
-}
-
-// saidThere reports whether thread shows the Say e of se already: what a
-// tool said to the owner on the way goes there as it is said, see saying,
-// so that it does not come again with the question. s.mu is held.
-func saidThere(thread *session, e Event) bool {
-	if e.PresentationID == "" {
-		return false
-	}
-	return slices.ContainsFunc(thread.events, func(t Event) bool {
-		return t.Kind == Say && t.PresentationID == e.PresentationID
-	})
-}
-
 // forThread reports whether se works for the thread: the answer on its way
 // took a message the thread handed on, or one waits for it. s.mu is held.
 func forThread(se *session) bool {
@@ -721,91 +648,6 @@ func forThread(se *session) bool {
 // the queue of se. s.mu is held.
 func waitsForThread(se *session) bool {
 	return slices.ContainsFunc(se.queue, func(m queued) bool { return m.routed })
-}
-
-// withdraw takes back the question of se the thread relays, once nothing in
-// se works for the thread any more: it waits on in se alone. s.mu is held.
-func (s *Service) withdraw(se *session) {
-	thread := s.sessions[ThreadID]
-	if forThread(se) || thread == nil {
-		return
-	}
-	i := slices.IndexFunc(thread.questions, func(q *relayed) bool { return q.se == se })
-	if i < 0 {
-		return
-	}
-	q := thread.questions[i]
-	thread.questions = slices.Delete(thread.questions, i, i+1)
-	if i > 0 {
-		return // it was not asked yet
-	}
-	s.emit(thread, Event{Kind: Asked, PresentationID: q.id, Done: true})
-	if len(thread.questions) > 0 {
-		s.ask1(thread)
-	}
-}
-
-// ask1 asks the owner in thread the first of the questions it relays. s.mu
-// is held.
-func (s *Service) ask1(thread *session) {
-	q := thread.questions[0]
-	q.id = presentation.NewID()
-	if q.context != "" {
-		// As the Say of the session it is, so that a second question of the
-		// same answer does not bring it again, see saidThere.
-		id := q.contextID
-		if id == "" {
-			id = presentation.NewID()
-		}
-		s.emit(thread, Event{Kind: Say, PresentationID: id, Text: q.context})
-	}
-	s.emit(thread, Event{Kind: Asked, PresentationID: q.id, Args: q.question})
-}
-
-// answered ends the question of se the thread relays, once its wait is
-// over with answer, "" for none: one that was asked in the thread is told
-// to be over there, and what the owner answered is told to the agent of the
-// thread. The next question waits no more. s.mu is held.
-func (s *Service) answered(se *session, answer queued) {
-	thread := s.sessions[ThreadID]
-	if thread == nil {
-		return
-	}
-	i := slices.IndexFunc(thread.questions, func(q *relayed) bool { return q.se == se })
-	if i < 0 {
-		return
-	}
-	q := thread.questions[i]
-	thread.questions = slices.Delete(thread.questions, i, i+1)
-	if i > 0 {
-		return // it was not asked yet
-	}
-	s.emit(thread, Event{Kind: Asked, PresentationID: q.id, Done: true, Text: answer.text, Source: answer.source.Normalized()})
-	if answer.text != "" {
-		s.note(q.id, relayText(se, relayAsked, string(q.question)+"\n\n"+answer.text))
-	}
-	if len(thread.questions) > 0 {
-		s.ask1(thread)
-	}
-}
-
-// answerRelayed gives text, which the owner said in the thread, to the
-// question the thread asks them, and reports whether there is one. s.mu is
-// held.
-func (s *Service) answerRelayed(text string, source MessageSource) bool {
-	return s.answerRelayedImages(queued{text: text, source: source})
-}
-
-func (s *Service) answerRelayedImages(message queued) bool {
-	thread := s.sessions[ThreadID]
-	if thread == nil || len(thread.questions) == 0 || thread.questions[0].se.asked == nil {
-		return false
-	}
-	se := thread.questions[0].se
-	se.asked <- message
-	se.asked = nil
-	se.routed = true // the owner answered in the thread: it shows what comes of it
-	return true
 }
 
 // busy tells the thread how much works for it, see Working, once that
@@ -847,7 +689,7 @@ func (s *Service) stopThread() {
 			}
 		}
 		unroute(se, false)
-		s.withdraw(se)
+
 	}
 	s.busy()
 }

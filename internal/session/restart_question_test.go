@@ -115,7 +115,10 @@ func TestRestartDeadlineParksQuestionAcrossProfiles(t *testing.T) {
 		t.Fatal("deadline did not release restart")
 	}
 	waiting.answers.Wait()
-	if len(waitingAgent.notes) == 0 || !strings.Contains(waitingAgent.notes[len(waitingAgent.notes)-1], restartQuestionHead+string(question)) {
+	// The session waited for the thread: it is told to wait for the same
+	// message ID again, see restartMessageHead.
+	if len(waitingAgent.notes) == 0 || !strings.Contains(waitingAgent.notes[len(waitingAgent.notes)-1], "a restart interrupted your wait for the thread's answer to message ") ||
+		!strings.Contains(waitingAgent.notes[len(waitingAgent.notes)-1], string(question)) {
 		t.Fatalf("missing pending question: %q", waitingAgent.notes)
 	}
 	// Model the replacement image consuming the durable resume mark and asking

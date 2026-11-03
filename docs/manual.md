@@ -514,12 +514,19 @@ already streamed by the model keep their normal streaming effect.
   `user_question` and passes on your answer with `session_message` and that `message_id`, which skips the topic
   check. The thread answers such a message itself only with what you already said, or where it is no question for
   you, and says so; never a permission. A message with `wait: false` is a note the thread tells you at once.
-  The roster shows a conversation that waits as `waits for the thread to answer its message ID`.
+  The roster shows a conversation that waits as `waits for the thread to answer its message ID`; the TUI, the GUI
+  and Matrix show it there as waiting for the thread (`wartet auf den Thread`), with nothing to answer in that
+  conversation itself. `esc` or `/cancel` in the thread end the wait: the conversation goes on without an answer,
+  and nothing counts as allowed. A wait that a restart interrupts goes on in the new build under the same message ID
+  (`thread_message` with `resume`), so an answer the thread gives with it still arrives.
+  Approvals of the backend, like a new peer connection, and questions of scheduled runs go the same way: as
+  messages to the thread that only you answer.
 - **Permissions through the thread.** When a rule wants your leave for a call of such a conversation, a fresh
   instance of its model, which sees only the call and the project, writes what the call does, naming deleting,
   writing outside the project, network access and downloaded code; ouro, not the conversation, sends it to the
   thread, which asks you. Your answer goes back with the `message_id`, and ouro's code decides as before (once,
-  always, no, show the call). Allowed calls and yolo mode ask nothing.
+  always, no). The message carries the exact call: the thread does not show it unless you ask ("show me the command"),
+  then it shows it verbatim and asks again. Allowed calls and yolo mode ask nothing.
 - **Directly in a conversation.** Where you write in a conversation yourself, it keeps `user_question`, and may
   tell the thread with `thread_message` and `wait: false`. When such an answer ends, the thread gets an invisible
   note with your message and the answer, start and end of each, for your next message there. An answer that was

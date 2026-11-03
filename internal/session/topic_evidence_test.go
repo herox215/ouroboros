@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/openai"
@@ -29,27 +28,6 @@ func TestTopicSendRejectsConcurrentThreadChange(t *testing.T) {
 		t.Fatalf("unbounded or missing fresh verification: %d checks", checks)
 	}
 	topicUnchanged(t, s, se, question, before)
-}
-
-func TestTopicPendingQuestionOutlivesRosterWindow(t *testing.T) {
-	s, a, se, question := topicFixture(t)
-	s.mu.Lock()
-	for i := range se.events {
-		se.events[i].At = s.now().Add(-48 * time.Hour)
-	}
-	thread := s.get(ThreadID)
-	thread.questions = []*relayed{{se: se, question: json.RawMessage(`{"question":"Add the regression test?"}`)}}
-	s.mu.Unlock()
-	a.checkTopic = func(context.Context, assistant.TopicCheck) (assistant.TopicDecision, error) {
-		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "answer to the still pending question"}, nil
-	}
-	answered, err := s.replyToConcern(context.Background(), queued{text: "yes"})
-	if err != nil || !answered {
-		t.Fatalf("old pending question became unreachable: %t %v", answered, err)
-	}
-	if got := <-question; got.text != "yes" {
-		t.Fatalf("answer lost: %+v", got)
-	}
 }
 
 func TestTopicImageOnlyAnchorAndProposedImages(t *testing.T) {

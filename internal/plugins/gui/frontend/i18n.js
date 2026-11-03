@@ -32,6 +32,7 @@ const en = {
   'speaker.you': 'You',
   'speaker.tool': 'Tool',
   'speaker.question': 'Question',
+  'speaker.waitsThread': 'Waits for the thread',
   'speaker.answered': 'Answered',
   'speaker.queue': 'Queue',
   'speaker.status': 'Status',
@@ -57,6 +58,7 @@ const en = {
 
   // Where a session stands, as its events tell it.
   'phase.asked': 'asks you',
+  'phase.waitsThread': 'waits for the thread',
   'phase.calling': 'calls',
   'phase.ready': 'ready',
   'phase.thinking': 'thinks',
@@ -232,6 +234,7 @@ const de = {
   'speaker.you': 'Du',
   'speaker.tool': 'Tool',
   'speaker.question': 'Frage',
+  'speaker.waitsThread': 'Wartet auf den Thread',
   'speaker.answered': 'Beantwortet',
   'speaker.queue': 'Warteschlange',
   'speaker.status': 'Status',
@@ -256,6 +259,7 @@ const de = {
   'end.failed': 'Antwort fehlgeschlagen',
 
   'phase.asked': 'fragt dich',
+  'phase.waitsThread': 'wartet auf den Thread',
   'phase.calling': 'ruft',
   'phase.ready': 'bereit',
   'phase.thinking': 'denkt',

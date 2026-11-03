@@ -34,6 +34,10 @@ type Messenger struct {
 	// the answer. permission says that ouro asks whether a call may run:
 	// only the owner answers that.
 	Post func(ctx context.Context, text string, wait, permission bool) (id string, reply agent.OwnerReply, err error)
+	// Resume waits again for the answer to the message id, text, that a
+	// restart interrupted: the ID stays, so that an answer the thread gives
+	// with it still reaches the session.
+	Resume func(ctx context.Context, text, id string) (agent.OwnerReply, error)
 }
 
 type messengerKey struct{}
@@ -68,10 +72,12 @@ func threadMessage() agent.Tool {
 			"With wait false it is a progress note, a hint for the thread alone, or a result, and returns at once. " +
 			"With wait true, only when you work for the thread, it waits until the thread answers this message, without a time limit, and returns the answer: " +
 			"use it for what you need from the owner, with the reason and the options, as the thread asks them for you. " +
+			"The wait ends without an answer only when the owner stops the thread's work: then go on without it, and assume nothing was allowed. " +
 			"An answer the thread gives itself, rather than the owner, says so.",
 		Schema: `{"type":"object","properties":{` +
 			`"message":{"type":"string","description":"what to tell or ask the thread: self-contained, as it sees nothing of this conversation"},` +
-			`"wait":{"type":"boolean","description":"wait for the thread's answer; default false"}` +
+			`"wait":{"type":"boolean","description":"wait for the thread's answer; default false"},` +
+			`"resume":{"type":"string","description":"only after a restart interrupted a wait, as its note says: the ID of that message, to wait for its answer again under the same ID"}` +
 			`},"required":["message"]}`,
 		OwnerOnly: true,
 		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -82,6 +88,7 @@ func threadMessage() agent.Tool {
 			var a struct {
 				Message string `json:"message"`
 				Wait    bool   `json:"wait"`
+				Resume  string `json:"resume"`
 			}
 			if err := agent.Decode(ToolThreadMessage, raw, &a); err != nil {
 				return "", err
@@ -91,6 +98,16 @@ func threadMessage() agent.Tool {
 			}
 			if a.Wait && !m.ForThread {
 				return "", errors.New("the owner writes here directly: ask them with " + ToolUserQuestion + "; " + ToolThreadMessage + " only informs the thread, with wait false")
+			}
+			if a.Resume != "" {
+				if !a.Wait || m.Resume == nil {
+					return "", errors.New(ToolThreadMessage + `: "resume" goes with wait true, where you work for the thread`)
+				}
+				reply, err := m.Resume(ctx, a.Message, a.Resume)
+				if err != nil {
+					return "", err
+				}
+				return "The thread answered message " + a.Resume + ":\n\n" + reply.Text, nil
 			}
 			id, reply, err := m.Post(ctx, a.Message, a.Wait, false)
 			if err != nil {
@@ -173,9 +190,10 @@ func parsePermission(reply string, plain permission) permission {
 
 // permissionMessage is what ouro, not the session's model, tells the thread
 // to ask the owner whether a call may run.
-func permissionMessage(question string, p permission) string {
+func permissionMessage(question string, p permission, tool, call string) string {
 	return "Permission request, written by ouro, not by the session: " + question +
-		"\nOptions: " + strings.Join([]string{p.Once, p.Always, p.Not}, " / ")
+		"\nOptions: " + strings.Join([]string{p.Once, p.Always, p.Not}, " / ") +
+		"\nThe exact call, which the owner is not shown unless they ask to see it; then show it to them verbatim, in a code block:\n<call tool=\"" + tool + "\">\n" + clip(call, askingCall) + "\n</call>"
 }
 
 // QuestionMessage is a question of a tool to the owner, as the thread is

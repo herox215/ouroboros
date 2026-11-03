@@ -224,9 +224,11 @@ function transcript(bridge, profile, id, content, doc, active, setQuestion, onEv
         clearPartial();
         closeQuestion();
         const question = event.question;
-        message('question', t(event.done ? 'speaker.answered' : 'speaker.question'),
+        // A session that waits for the thread is asked nothing here: the
+        // thread asks the owner and answers its message.
+        message('question', t(event.done ? 'speaker.answered' : event.message ? 'speaker.waitsThread' : 'speaker.question'),
           question?.text || event.text || '', event.at);
-        if (!event.done && id.startsWith('owner/')) {
+        if (!event.done && !event.message && id.startsWith('owner/')) {
           setQuestion({ ...(question || { text: event.text || '', options: [] }), at: event.at });
         }
         break;
@@ -275,9 +277,9 @@ function sessionPhase(trace, running) {
         since = event.at || since;
         if (event.done) {
           question = '';
-          if (phase === 'asked') phase = 'thinking';
+          if (phase === 'asked' || phase === 'waits') phase = 'thinking';
         } else {
-          phase = 'asked';
+          phase = event.message ? 'waits' : 'asked';
           question = event.question?.text || '';
         }
         break;
@@ -310,6 +312,7 @@ function sessionPhase(trace, running) {
   // session that works.
   const live = !settled && running !== false;
   const word = phase === 'asked' ? t('phase.asked')
+    : phase === 'waits' ? t('phase.waitsThread')
     : phase === 'tool' ? (live ? t('phase.calling') : t('phase.ready'))
       : phase === 'thinking' ? (live ? t('phase.thinking') : t('phase.ready'))
         : phase === 'answering' ? (live ? t('phase.answering') : t('phase.ready'))

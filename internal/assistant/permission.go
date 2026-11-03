@@ -142,7 +142,7 @@ func (b Builder) permitting(ctx context.Context, current func() (config.Config, 
 		// Permission stays open until the owner decides or the caller cancels.
 		var ownerReply agent.OwnerReply
 		if viaThread {
-			_, ownerReply, err = messenger.Post(ctx, permissionMessage(question, p), true, true)
+			_, ownerReply, err = messenger.Post(ctx, permissionMessage(question, p, tool, call.Call), true, true)
 		} else {
 			ownerReply, err = agent.AskOwnerReply(ctx, asked)
 		}

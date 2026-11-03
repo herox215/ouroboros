@@ -147,6 +147,11 @@ type Event struct {
 	// Routed says of a Message or Queued that the thread handed it on: the
 	// thread shows what comes of the answer that takes it, see ThreadID.
 	Routed bool `json:"routed,omitempty"`
+	// Message is, of an Asked, the ID of the message to the thread the
+	// session waits for the thread to answer, see thread_message: the
+	// thread asks the owner, not the session. "" for a question the
+	// session asks the owner itself.
+	Message string `json:"message,omitempty"`
 	// Tool, Args, Done, Took, Err and Remark are of a Step: the call of
 	// Tool with Args, and once Done, how long it took, why it failed, if it
 	// did, and what the tool said of it for the owner. Args and Done are
@@ -449,6 +454,7 @@ type session struct {
 	asked           chan queued        // takes what the owner answers the question that answer waits for; nil without one
 	parked          json.RawMessage    // question to offer again after a restart deadline
 	parkedRouted    bool               // offer the parked question in the shared thread
+	parkedMessage   string             // the message to the thread the parked question waited for, see post
 	restart         string             // the binary a tool of that answer asked to start anew from
 	goOn            bool               // the session goes on by itself in that build, see GoOn
 	// resumed is when the last answer ended of a session that was loaded
@@ -481,13 +487,10 @@ type session struct {
 	// what comes of it, see relay. Tasks snapshot this bit at delegation;
 	// keeping it on the session between answers would route unrelated input.
 	routed bool
-	// questions are, of the thread, the questions of sessions it asks the
-	// owner, the first of them now; working is how much works for it, and
-	// own whether it answers itself, as Working told it last. said is what
-	// the owner said to the answer on its way, which the thread hands on as
-	// it is, see words, with the pictures of those messages. roster is the
-	// list of the sessions it was told last, told answers ago, see inThread.
-	questions []*relayed
+	// working is, of the thread, how much works for it, and own whether it
+	// answers itself, as Working told it last. said is what the owner said
+	// to the answer on its way, which the thread hands on as it is, see
+	// words, with the pictures of those messages.
 	// waiting is the ID of the message to the thread the answer on its way
 	// waits for the thread to answer, see post, "" for none; waitPermission
 	// says that it asks whether a call may run.
@@ -784,14 +787,6 @@ func (s *Service) steerMedia(ctx context.Context, id, text string, images []chat
 	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return ErrEmpty
 	}
-	// A reply in the shared conversation is not necessarily an answer to its
-	// outstanding question. Verify the concern before consuming that wait.
-	if id == ThreadID {
-		answered, err := s.replyToConcern(ctx, queued{text: text, images: images, hasAttachments: hasAttachments, source: chat.MessageSourceFrom(ctx)})
-		if err != nil || answered {
-			return err
-		}
-	}
 	s.mu.Lock()
 	if se, ok := s.sessions[id]; ok && se.cancel != nil {
 		defer s.mu.Unlock()
@@ -842,7 +837,6 @@ func (s *Service) Unsteer(_ context.Context, id string) (string, error) {
 	source := se.queue[last].source
 	se.queue = slices.Delete(se.queue, last, last+1)
 	s.emit(se, Event{Kind: Unqueued, Text: text, Source: source})
-	s.withdraw(se)
 	s.busy()
 	return text, nil
 }
@@ -861,16 +855,17 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 	asked := make(chan queued, 1)
 	se.asked = asked
 	id := presentation.NewID()
-	if m := s.messengerFor(se); m != nil && forThread(se) {
+	if se.backendQuestion || se.scheduled != nil || se.routed && s.messengerFor(se) != nil {
 		// A session that works for the thread asks the owner nothing
-		// itself: the thread asks them for it, see post.
+		// itself: the thread asks them for it, see post. So do an
+		// approval of the backend, which only the owner gives, and a
+		// scheduled run, whose questions go to the thread.
 		se.asked = nil
 		s.mu.Unlock()
-		_, reply, err := s.post(ctx, se, assistant.QuestionMessage(question), question, true, false)
+		_, reply, err := s.post(ctx, se, assistant.QuestionMessage(question), question, true, se.backendQuestion, "")
 		return reply, err
 	}
 	s.emit(se, Event{Kind: Asked, PresentationID: id, Args: question})
-	s.asking(se, question)
 	s.mu.Unlock()
 	var answer queued
 	select {
@@ -887,7 +882,6 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 		answer = <-asked // what the owner said just when ctx ended, if anything
 	}
 	s.emit(se, Event{Kind: Asked, PresentationID: id, Done: true, Text: answer.text, Source: answer.source.Normalized()})
-	s.answered(se, answer)
 	if answer.text == "" && len(answer.images) == 0 {
 		return agent.OwnerReply{}, ctx.Err()
 	}
@@ -1260,7 +1254,10 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	}
 	if len(se.parked) > 0 {
 		head := restartQuestionHead
-		if se.parkedRouted {
+		switch {
+		case se.parkedMessage != "":
+			head = fmt.Sprintf(restartMessageHead, se.parkedMessage, se.parkedMessage)
+		case se.parkedRouted:
 			head = restartThreadQuestionHead
 		}
 		if err := s.agent.Note(presentation.As(context.Background(), presentation.NewID()), se.id, head+string(se.parked)); err != nil && s.archive != nil {
@@ -1273,6 +1270,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		}
 		se.parked = nil
 		se.parkedRouted = false
+		se.parkedMessage = ""
 	}
 	se.goOn = false
 	// What was queued too late for this answer is the next message, unless

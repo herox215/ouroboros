@@ -33,23 +33,36 @@ func (s *Service) messengerFor(se *session) *assistant.Messenger {
 	if se.id == ThreadID || se.backendQuestion || se.scheduled != nil || se.denyOwner {
 		return nil
 	}
-	return &assistant.Messenger{ForThread: se.routed, Post: func(ctx context.Context, text string, wait, permission bool) (string, agent.OwnerReply, error) {
-		return s.post(ctx, se, text, nil, wait, permission)
-	}}
+	return &assistant.Messenger{ForThread: se.routed,
+		Post: func(ctx context.Context, text string, wait, permission bool) (string, agent.OwnerReply, error) {
+			return s.post(ctx, se, text, nil, wait, permission, "")
+		},
+		Resume: func(ctx context.Context, text, id string) (agent.OwnerReply, error) {
+			_, reply, err := s.post(ctx, se, text, nil, true, false, id)
+			return reply, err
+		}}
 }
 
 // post tells the thread text from se, and returns the ID of the message;
-// shownAs is how the session shows what it waits for, nil for text. With wait it waits until the thread answers it, see answerMessage, or ctx
-// ends: no time limit of its own. permission says that ouro asks whether a
-// call may run, which only the owner answers.
-func (s *Service) post(ctx context.Context, se *session, text string, shownAs json.RawMessage, wait, permission bool) (string, agent.OwnerReply, error) {
-	id := presentation.NewID()[:messageIDSize]
+// shownAs is how the session shows what it waits for, nil for text. With
+// wait it waits until the thread answers it, see answerMessage, or ctx ends:
+// no time limit of its own, as the thread stops it with the answers it
+// handed on, see stopThread. permission says that ouro asks whether a call
+// may run, or a backend whether it may go on, which only the owner answers.
+// resume is the ID of a message the thread was told before a restart, ""
+// for a new one: se waits for its answer again, and the thread is told
+// nothing anew.
+func (s *Service) post(ctx context.Context, se *session, text string, shownAs json.RawMessage, wait, permission bool, resume string) (string, agent.OwnerReply, error) {
+	id := cmp.Or(resume, presentation.NewID()[:messageIDSize])
 	what := "tells you this and waits for nothing"
 	if wait {
 		what = "waits for your answer: give it with session_message and message_id " + strconv.Quote(id)
 	}
 	if permission {
 		what += ". It is a permission request: ask the owner with user_question and pass on their answer as it is; never answer it yourself"
+	}
+	if resume != "" {
+		what += ". It sent this message before ouro started anew and waits for it again: if you answered it already, answer it once more"
 	}
 	s.mu.Lock()
 	title := cmp.Or(se.title, firstMessage(se.events))
@@ -74,7 +87,7 @@ func (s *Service) post(ctx context.Context, se *session, text string, shownAs js
 		question, _ = json.Marshal(assistant.Question{Question: text}) // strings only: cannot fail
 	}
 	shown := presentation.NewID()
-	s.emit(se, Event{Kind: Asked, PresentationID: shown, Args: question})
+	s.emit(se, Event{Kind: Asked, PresentationID: shown, Args: question, Message: id})
 	p := s.node
 	p.mu.Lock()
 	s.notify(report)
@@ -98,7 +111,7 @@ func (s *Service) post(ctx context.Context, se *session, text string, shownAs js
 	if answer.text == "" && len(answer.images) == 0 {
 		answer = <-asked // what came just when ctx ended, if anything
 	}
-	s.emit(se, Event{Kind: Asked, PresentationID: shown, Done: true, Text: answer.text, Source: answer.source.Normalized()})
+	s.emit(se, Event{Kind: Asked, PresentationID: shown, Done: true, Text: answer.text, Source: answer.source.Normalized(), Message: id})
 	if answer.text == "" && len(answer.images) == 0 {
 		return id, agent.OwnerReply{}, ctx.Err()
 	}

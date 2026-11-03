@@ -268,7 +268,7 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.step(e)
 	case plugin.SessionAsked:
 		c.ask(e)
-		if live && !e.Done && c != m.chat && !c.routed {
+		if live && !e.Done && e.Message == "" && c != m.chat && !c.routed {
 			m.setNotice(m.agentName()+" asks you in "+place(c), false)
 		}
 	case plugin.SessionCalling:
