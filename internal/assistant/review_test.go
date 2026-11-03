@@ -223,7 +223,7 @@ func TestBounded(t *testing.T) {
 func TestReviewFails(t *testing.T) {
 	tools := toolsOf{}
 	a := New(func() (config.Config, error) { return config.Config{}, errors.New("no config") }, Builder{}, discard)
-	if _, err := a.review(context.Background(), nil, nil, tools, nil); err == nil {
+	if _, err := a.review(context.Background(), nil, nil, tools, review{}); err == nil {
 		t.Error("reviewed without a configuration")
 	}
 	opened := 0 // the agent opens the access first, the review again
@@ -236,7 +236,7 @@ func TestReviewFails(t *testing.T) {
 		},
 		Tools: func() []agent.Tool { return nil },
 	}, discard)
-	if _, err := a.review(context.Background(), nil, nil, tools, nil); err == nil {
+	if _, err := a.review(context.Background(), nil, nil, tools, review{}); err == nil {
 		t.Error("reviewed without an access")
 	}
 	b, log := recorded(t, ownerConfig(), &titleLLM{err: errors.New("down")})

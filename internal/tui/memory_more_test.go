@@ -14,15 +14,15 @@ import (
 )
 
 // manyMemories are n memories of every group, the latest updated first, as
-// the node lists them.
-func manyMemories(at time.Time, project string, n int) []plugin.Memory {
+// the node lists them; those of no group of their own are of topic.
+func manyMemories(at time.Time, topic string, n int) []plugin.Memory {
 	var list []plugin.Memory
 	for i := 0; i < n; i++ {
 		updated := at.Add(-time.Duration(i) * time.Minute).Format(time.RFC3339)
 		list = append(list,
-			plugin.Memory{ID: fmt.Sprintf("c%d", i), Key: fmt.Sprintf("core%d", i), Content: "core holds", Core: true, Updated: updated},
-			plugin.Memory{ID: fmt.Sprintf("g%d", i), Key: fmt.Sprintf("global%d", i), Content: "global holds", Updated: updated},
-			plugin.Memory{ID: fmt.Sprintf("h%d", i), Key: fmt.Sprintf("here%d", i), Content: "here holds", Project: project, Updated: updated})
+			plugin.Memory{ID: fmt.Sprintf("c%d", i), Topic: "core", Key: fmt.Sprintf("core%d", i), Content: "core holds", Updated: updated},
+			plugin.Memory{ID: fmt.Sprintf("g%d", i), Topic: "general", Key: fmt.Sprintf("general%d", i), Content: "general holds", Updated: updated},
+			plugin.Memory{ID: fmt.Sprintf("h%d", i), Topic: topic, Key: fmt.Sprintf("topic%d", i), Content: "topic holds", Updated: updated})
 	}
 	return list
 }
@@ -37,8 +37,7 @@ func TestMemoryListPagesThroughManyMemories(t *testing.T) {
 	m, b := newModel(t)
 	at := time.Unix(1000, 0)
 	m.now = func() time.Time { return at }
-	m.chat.directory = "/home/lucas/Projects/ouroboros"
-	b.memories = plugin.MemoryListing{Total: 30, Memories: manyMemories(at, m.chat.directory, 10)}
+	b.memories = plugin.MemoryListing{Total: 30, Memories: manyMemories(at, "ouroboros", 10)}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
 
 	// Before the listing came, the dialog says it reads them.
@@ -64,7 +63,7 @@ func TestMemoryListPagesThroughManyMemories(t *testing.T) {
 		t.Fatalf("end selected %d", m.memories.sel)
 	}
 	view = ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "↑ more") || !strings.Contains(view, "Here · 10, in ouroboros") {
+	if !strings.Contains(view, "↑ more") || !strings.Contains(view, "topic9") || !strings.Contains(view, "topic holds") {
 		t.Fatalf("the end of the list:\n%s", view)
 	}
 	press(m, "pgup")
@@ -81,35 +80,44 @@ func TestMemoryListPagesThroughManyMemories(t *testing.T) {
 	// selected reads it, as enter does.
 	m.Update(keyOf(tea.KeyHome))
 	m.View()
-	if clickOn(t, m, "global0", 0); m.memories.sel != 1 || m.memories.detail != nil {
+	if clickOn(t, m, "core1", 0); m.memories.sel != 1 || m.memories.detail != nil {
 		t.Fatalf("a click should select, not read: %d", m.memories.sel)
 	}
-	if cmd := clickOn(t, m, "global0", 0); cmd != nil {
+	if cmd := clickOn(t, m, "core1", 0); cmd != nil {
 		m.Update(cmd())
 	}
-	if m.memories.detail == nil || m.memories.detail.Key != "global0" {
+	if m.memories.detail == nil || m.memories.detail.Key != "core1" {
 		t.Fatalf("a click on the one selected should read it: %+v", m.memories.detail)
 	}
 }
 
-// Without a project the memories of one say so in their title, and a memory
-// whose age is not known goes without one.
-func TestMemoryListWithoutProject(t *testing.T) {
+// The list has a group for each topic, named in its title, whatever case its
+// memories write it in, the core and general ones first; a memory whose age
+// is not known goes without one.
+func TestMemoryListGroupsByTopic(t *testing.T) {
 	m, b := newModel(t)
-	b.memories = plugin.MemoryListing{Total: 2, Memories: []plugin.Memory{
-		{Key: "build", Content: "make test runs the tests", Project: "/somewhere"},
-		{Key: "tea", Content: "oolong", Project: "/somewhere"},
+	b.memories = plugin.MemoryListing{Total: 4, Memories: []plugin.Memory{
+		{Key: "build", Content: "make test runs the tests", Topic: "ouroboros"},
+		{Key: "tea", Content: "oolong", Topic: "drinks"},
+		{Key: "gofmt", Content: "gofmt before a commit", Topic: "Ouroboros"},
+		{Key: "name", Content: "Lu", Topic: "general"},
 	}}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
 	m.Update(run(m, "/memory")())
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "no project selected: /cd names one") || strings.Contains(view, "just now") {
-		t.Fatalf("the list without a project:\n%s", view)
+	for _, want := range []string{"General · 1, loaded when it fits", "Topic drinks · 1, loaded with its topic", "Topic ouroboros · 2, loaded with its topic"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("%q is not in the list:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "just now") || strings.Index(view, "General") > strings.Index(view, "Topic drinks") ||
+		strings.Index(view, "Topic drinks") > strings.Index(view, "Topic ouroboros") {
+		t.Fatalf("the list by topic:\n%s", view)
 	}
 }
 
 // The space bar types a space into the filter, and a filter that holds
-// nothing says so; with the archived ones shown too, an empty store says
+// nothing says so; with the expired ones shown too, an empty store says
 // only that nothing is remembered.
 func TestMemoryFilterFindsNothing(t *testing.T) {
 	m, b := newModel(t)
@@ -141,7 +149,7 @@ func TestMemoryFilterFindsNothing(t *testing.T) {
 }
 
 // A memory read in full scrolls through what it holds by the keys, and says
-// where more is above it; its line says whether it is archived or expired.
+// where more is above it; its line says whether it is expired.
 func TestMemoryReadScrolls(t *testing.T) {
 	m, b := newModel(t)
 	at := time.Unix(1000, 0)
@@ -151,12 +159,12 @@ func TestMemoryReadScrolls(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
 	b.memories = plugin.MemoryListing{Total: 1, Memories: []plugin.Memory{{
-		Key: "long", Content: strings.Join(lines, "\n"), Archived: true,
+		Key: "long", Content: strings.Join(lines, "\n"),
 		Expires: at.Add(-time.Hour).Format(time.RFC3339),
 	}}}
 	m.Update(run(m, "/memory")())
 	press(m, "enter")
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "archived · expired") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "expired · used 0×") {
 		t.Fatalf("the memory read:\n%s", view)
 	}
 	press(m, "down", "down")
@@ -184,21 +192,21 @@ func TestMemoryReadScrolls(t *testing.T) {
 }
 
 // The chart names the memory selected even where the stars leave its name
-// no room, and says below it that it is archived.
+// no room, and says below it which group it is of.
 func TestMemoryChartCrowded(t *testing.T) {
 	m, b := newModel(t)
 	at := time.Unix(1000, 0)
 	m.now = func() time.Time { return at }
 	var list []plugin.Memory
 	for i := 0; i < 450; i++ {
-		list = append(list, plugin.Memory{Key: fmt.Sprintf("crowded%03d", i), Content: "holds", Core: i%3 == 0,
-			Project: [...]string{"", "", "/p"}[i%3], Archived: i == 0, Updated: at.Format(time.RFC3339)})
+		list = append(list, plugin.Memory{Key: fmt.Sprintf("crowded%03d", i), Content: "holds",
+			Topic: [...]string{"core", "general", "p"}[i%3], Updated: at.Format(time.RFC3339)})
 	}
 	b.memories = plugin.MemoryListing{Total: len(list), Memories: list}
 	m.Update(tea.WindowSizeMsg{Width: 64, Height: 21}) // the smallest chart there is
 	m.Update(run(m, "/memory")())
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "crowded000") || !strings.Contains(view, "· archive") {
+	if !strings.Contains(view, "crowded000") || !strings.Contains(view, "· core · given") {
 		t.Fatalf("the crowded chart:\n%s", view)
 	}
 }

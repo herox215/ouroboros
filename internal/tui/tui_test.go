@@ -88,14 +88,10 @@ type fakeBackend struct {
 	mcpChanges []plugin.MCPChange
 	status     Status
 	started    int
-	// memories is what /memory lists, of the project and with the archived
-	// ones asked for or not, as it last was.
-	memories      plugin.MemoryListing
-	memoryChanges []plugin.MemoryChange
-	changeErr     error
-	undoneChanges []int64
-	memoryProject string
-	memoryAll     bool
+	// memories is what /memory lists, with the expired ones asked for or
+	// not, as it last was.
+	memories  plugin.MemoryListing
+	memoryAll bool
 	// efforts are what the model takes, once effortsKnown says it is listed.
 	efforts      []string
 	effortsKnown bool
@@ -319,29 +315,15 @@ func (f *fakeBackend) StopService(ctx context.Context, id string) error {
 func (f *fakeBackend) StopJob(ctx context.Context, id string, n int) error {
 	return f.sessions.StopJob(ctx, id, n)
 }
-func (f *fakeBackend) Memories(_ context.Context, project string, all bool) (plugin.MemoryListing, error) {
-	f.memoryProject, f.memoryAll = project, all
+func (f *fakeBackend) Memories(_ context.Context, all bool) (plugin.MemoryListing, error) {
+	f.memoryAll = all
 	return f.memories, f.fail["memories"]
-}
-
-// MemoryChanges is the log of the fake, and UndoMemoryChange records what was
-// taken back; fail["undoMemory"] refuses one.
-func (f *fakeBackend) MemoryChanges(_ context.Context, _ int) ([]plugin.MemoryChange, error) {
-	return f.memoryChanges, f.changeErr
-}
-
-func (f *fakeBackend) UndoMemoryChange(_ context.Context, id int64) error {
-	if err := f.fail["undoMemory"]; err != nil {
-		return err
-	}
-	f.undoneChanges = append(f.undoneChanges, id)
-	return nil
 }
 
 // SetMemory is the store of the fake, as the dialog writes to it: the memory
 // is replaced if its version is the one read, and fails with
 // plugin.ErrMemoryChanged otherwise.
-func (f *fakeBackend) SetMemory(_ context.Context, project, id string, version int64, key, content string) (plugin.Memory, error) {
+func (f *fakeBackend) SetMemory(_ context.Context, id string, version int64, key, content string) (plugin.Memory, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.fail["setmemory"]; err != nil {
@@ -349,7 +331,7 @@ func (f *fakeBackend) SetMemory(_ context.Context, project, id string, version i
 	}
 	for i := range f.memories.Memories {
 		e := &f.memories.Memories[i]
-		if e.ID != id || e.Project != project {
+		if e.ID != id {
 			continue
 		}
 		if e.Version != version {

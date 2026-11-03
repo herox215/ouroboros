@@ -239,66 +239,41 @@ var ErrMemoryChanged = memory.ErrConflict
 // dialog lists it.
 type Memory = memory.Entry
 
+// MemoryCore is the topic of the memories that go into every prompt, and
+// MemoryGeneral the one of those that concern no topic of their own.
+const (
+	MemoryCore    = memory.Core
+	MemoryGeneral = memory.General
+)
+
 // MemoryListing is what Owner.Memories returns: the memories a dialog lists,
 // the latest updated first, and the counts beyond them.
 type MemoryListing = memory.Listing
 
-// Memories returns the memories the agent of the owner has collected: the
-// global ones, core ones among them, and those of the project, the latest
-// updated first. Archived and expired memories are left out unless all is
-// true, and the listing says how many of them there are. It reads the store
-// of the profile and changes nothing.
-func (o *Owner) Memories(ctx context.Context, project string, all bool) (MemoryListing, error) {
+// Memories returns the memories the agent of the owner has collected, those
+// of every topic, the latest updated first. Expired memories are left out
+// unless all is true, and the listing says how many of them there are. It
+// reads the store of the profile and changes nothing.
+func (o *Owner) Memories(ctx context.Context, all bool) (MemoryListing, error) {
 	store, err := memory.Open(o.home.History())
 	if err != nil {
 		return MemoryListing{}, err
 	}
 	defer store.Close()
-	return store.List(ctx, project, all, 0)
+	return store.List(ctx, all, 0)
 }
 
-// MemoryChange is one change the archivist made to the memories of the
-// profile, as a dialog lists it.
-type MemoryChange = memory.ChangeRecord
-
-// MemoryChanges returns the latest changes the archivist made to the
-// memories of the profile, the newest first. It reads the log and changes
-// nothing.
-func (o *Owner) MemoryChanges(ctx context.Context, limit int) ([]MemoryChange, error) {
-	store, err := memory.Open(o.home.History())
-	if err != nil {
-		return nil, err
-	}
-	defer store.Close()
-	return store.Changes(ctx, limit)
-}
-
-// UndoMemoryChange takes back the change id the archivist made, restoring
-// what it changed. It fails if the change was undone already or a memory it
-// touched changed since.
-func (o *Owner) UndoMemoryChange(ctx context.Context, id int64) error {
-	store, err := memory.Open(o.home.History())
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	if err = store.UndoChange(ctx, id); err == nil {
-		o.home.Log("the owner took back a change of the archivist: %d", id)
-	}
-	return err
-}
-
-// SetMemory replaces the memory id of the project, as the owner typed it in
-// a dialog: version is the one they read, and the store refuses the write
-// with ErrMemoryChanged if the memory changed since. It returns the memory
-// as it is then.
-func (o *Owner) SetMemory(ctx context.Context, project, id string, version int64, key, content string) (Memory, error) {
+// SetMemory replaces the memory id, as the owner typed it in a dialog:
+// version is the one they read, and the store refuses the write with
+// ErrMemoryChanged if the memory changed since. It returns the memory as it
+// is then.
+func (o *Owner) SetMemory(ctx context.Context, id string, version int64, key, content string) (Memory, error) {
 	store, err := memory.Open(o.home.History())
 	if err != nil {
 		return Memory{}, err
 	}
 	defer store.Close()
-	e, err := store.Update(ctx, project, id, version, key, content, "owner")
+	e, err := store.Update(ctx, id, version, key, content, "owner")
 	if err != nil {
 		return Memory{}, err
 	}

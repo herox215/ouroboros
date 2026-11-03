@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
 	store "ouroboros/internal/memory"
 	"ouroboros/internal/openai"
-	"ouroboros/internal/workdir"
 	"ouroboros/plugin"
 )
 
@@ -37,51 +37,113 @@ func callTools(t *testing.T, ts []plugin.Tool, ctx context.Context, session, nam
 	}
 	return out
 }
-func TestOwnerToolsAndTrustedSourceProject(t *testing.T) {
+
+func open(t *testing.T) *store.Store {
+	t.Helper()
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	ctx := workdir.With(context.Background(), "/project/a")
-	out := call(t, s, ctx, "trusted-session", Create, `{"key":"preference","content":"green tea","scope":"project"}`)
-	var e store.Entry
-	if err = json.Unmarshal([]byte(out), &e); err != nil {
-		t.Fatalf("create %q: %v", out, err)
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func load(t *testing.T, s *store.Store, args string) []store.Entry {
+	t.Helper()
+	out := call(t, s, context.Background(), "owner", Load, args)
+	var found []store.Entry
+	if err := json.Unmarshal([]byte(out), &found); err != nil {
+		t.Fatalf("load %s: %s: %v", args, out, err)
 	}
-	if e.Project != "/project/a" || e.Source != "trusted-session" || e.Version != 1 {
+	return found
+}
+
+// The plugin has the three tools load, add and forget, and no others.
+func TestThreeTools(t *testing.T) {
+	var names []string
+	for _, tool := range tools(nil) {
+		names = append(names, tool.Name)
+	}
+	if got := strings.Join(names, " "); got != Load+" "+Add+" "+Forget {
+		t.Fatalf("tools: %s", got)
+	}
+}
+
+// Add and load need no project directory: a topic of a new name is created,
+// the same key overwrites, the source is the trusted conversation, and
+// forget deletes.
+func TestAddLoadForgetWithoutDirectory(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	out := call(t, s, ctx, "trusted-session", Add, `{"topic":"Tea","key":"preference","content":"green tea"}`)
+	var e store.Entry
+	if err := json.Unmarshal([]byte(out), &e); err != nil {
+		t.Fatalf("add %q: %v", out, err)
+	}
+	if e.Topic != "Tea" || e.Source != "trusted-session" || e.Version != 1 {
 		t.Fatalf("untrusted metadata: %+v", e)
 	}
-	raw := `{"id":"` + e.ID + `","scope":"project"}`
-	out = call(t, s, ctx, "read-session", Read, raw)
-	if !strings.Contains(out, "green tea") {
-		t.Fatal(out)
+	if topics, err := s.Topics(ctx); err != nil || len(topics) != 1 || topics[0].Name != "Tea" || topics[0].Count != 1 {
+		t.Fatalf("new topic: %+v, %v", topics, err)
 	}
-	out = call(t, s, workdir.With(ctx, "/project/b"), "s", Read, raw)
-	if !strings.Contains(out, "not found") {
-		t.Fatalf("cross-project disclosure: %s", out)
-	}
-	out = call(t, s, workdir.With(ctx, "/project/b"), "s", Search, `{"query":"tea"}`)
-	if out != "[]" {
-		t.Fatalf("cross-project search: %s", out)
-	}
-	for _, bad := range []string{`{"key":"x","content":"y","project":"/evil"}`, `{"key":"x","content":"y","source_session":"forged"}`, `{"key":"x","content":"y","record":12}`} {
-		if got := call(t, s, ctx, "s", Create, bad); !strings.HasPrefix(got, "error:") {
+	for _, bad := range []string{`{"topic":"t","key":"x","content":"y","project":"/evil"}`, `{"topic":"t","key":"x","content":"y","source_session":"forged"}`, `{"topic":"t","key":"x","content":"y","record":12}`} {
+		if got := call(t, s, ctx, "s", Add, bad); !strings.HasPrefix(got, "error:") {
 			t.Fatalf("forged source/path accepted: %s", got)
 		}
 	}
-	out = call(t, s, ctx, "replacement-session", Update, `{"id":"`+e.ID+`","scope":"project","version":1,"key":"preference","content":"black tea"}`)
-	if err = json.Unmarshal([]byte(out), &e); err != nil || e.Source != "replacement-session" || e.Version != 2 {
-		t.Fatalf("update: %s %v", out, err)
+	out = call(t, s, ctx, "replacement-session", Add, `{"topic":"tea","key":"preference","content":"black tea"}`)
+	if err := json.Unmarshal([]byte(out), &e); err != nil || e.Source != "replacement-session" || e.Version != 2 || e.Topic != "Tea" {
+		t.Fatalf("overwrite: %s %v", out, err)
 	}
-	out = call(t, s, ctx, "s", Forget, `{"id":"`+e.ID+`","scope":"project","version":2}`)
-	if out != "Memory forgotten." {
+	if found := load(t, s, `{"topic":"TEA"}`); len(found) != 1 || found[0].Content != "black tea" {
+		t.Fatalf("load after overwrite: %+v", found)
+	}
+	if found := load(t, s, `{"topic":"tea","search":"black"}`); len(found) != 1 || found[0].Key != "preference" {
+		t.Fatalf("search: %+v", found)
+	}
+	if found := load(t, s, `{"topic":"other"}`); len(found) != 0 {
+		t.Fatalf("another topic: %+v", found)
+	}
+	if out = call(t, s, ctx, "s", Forget, `{"topic":"tea","key":"preference"}`); out != "Memory forgotten." {
 		t.Fatal(out)
 	}
+	if found := load(t, s, `{"topic":"tea"}`); len(found) != 0 {
+		t.Fatalf("forgotten memory loaded: %+v", found)
+	}
+	if out = call(t, s, ctx, "s", Forget, `{"topic":"tea","key":"preference"}`); !strings.HasPrefix(out, "error:") || !strings.Contains(out, "not found") {
+		t.Fatalf("forget twice: %s", out)
+	}
 }
+
+// What a tool cannot do is an error the model is told, and nothing is
+// changed; core has a budget.
+func TestToolsRefuseWhatTheyCannotDo(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	call(t, s, ctx, "owner", Add, `{"topic":"core","key":"name","content":"Lu"}`)
+	for _, tt := range []struct{ name, args, want string }{
+		{Add, `{"topic":"core","key":"long","content":"` + strings.Repeat("x", store.MaxCore) + `"}`, "core memories are full"},
+		{Add, `{"topic":"` + strings.Repeat("t", store.MaxTopic+1) + `","key":"k","content":"c"}`, "topic"},
+		{Add, `{"topic":"t","key":"","content":"c"}`, "memory key"},
+		{Add, `{"topic":"t","key":"k","content":""}`, "memory content"},
+		{Load, `{"topic":"t","search":"` + strings.Repeat("w", 1025) + `"}`, "1024 bytes"},
+		{Forget, `{"topic":"core","key":"missing"}`, "not found"},
+	} {
+		if got := call(t, s, ctx, "owner", tt.name, tt.args); !strings.HasPrefix(got, "error:") || !strings.Contains(got, tt.want) {
+			t.Errorf("%s %.80s: %q, want an error with %q", tt.name, tt.args, got, tt.want)
+		}
+	}
+	if core, err := s.CoreMemories(ctx); err != nil || len(core) != 1 || core[0].Content != "Lu" {
+		t.Fatalf("refused calls changed core: %+v, %v", core, err)
+	}
+	if topics, err := s.Topics(ctx); err != nil || len(topics) != 1 {
+		t.Fatalf("refused calls created topics: %+v, %v", topics, err)
+	}
+}
+
 func TestPeerAndMissingConversationRejected(t *testing.T) {
 	for _, tool := range tools(nil) {
-		if !tool.OwnerOnly || !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Description, "When in doubt") {
+		if !tool.OwnerOnly || !json.Valid([]byte(tool.Schema)) || !strings.Contains(tool.Description, "when in doubt") {
 			t.Fatalf("bad metadata: %+v", tool)
 		}
 		for _, ctx := range []context.Context{context.Background(), a2a.WithOrigin(context.Background(), a2a.Origin{}), a2a.WithOrigin(context.Background(), a2a.Origin{PublicKey: "peer"})} {
@@ -100,95 +162,24 @@ func TestPeerAndMissingConversationRejected(t *testing.T) {
 	}
 }
 
-// A memory is only in a scope the conversation can name: global, or the
-// trusted current project, which is an absolute path. What a tool cannot do
-// is an error the model is told, and nothing is changed.
-func TestToolsRefuseWhatTheyCannotDo(t *testing.T) {
-	s, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+// What a search of load finds counts as used; a load without one does not.
+func TestSearchCountsAsUsed(t *testing.T) {
+	s := open(t)
 	ctx := context.Background()
-	project := workdir.With(ctx, "/project/a")
-	var e store.Entry
-	if err := json.Unmarshal([]byte(call(t, s, ctx, "owner", Create, `{"key":"drink","content":"oolong"}`)), &e); err != nil {
-		t.Fatal(err)
-	}
-	id := `"id":"` + e.ID + `"`
-	for _, tt := range []struct {
-		ctx        context.Context
-		name, args string
-		want       string
-	}{
-		{workdir.With(ctx, "relative/project"), Search, `{}`, "current project must be an absolute trusted path"},
-		{ctx, Create, `{"key":"k","content":"c","scope":"project"}`, "no current project selected"},
-		{project, Create, `{"key":"k","content":"c","scope":"everywhere"}`, "scope must be global, core or project"},
-		{ctx, Create, `{"id":"x","key":"k","content":"c"}`, "create takes no ID or version"},
-		{ctx, Create, `{"version":1,"key":"k","content":"c"}`, "create takes no ID or version"},
-		{ctx, Update, `{` + id + `,"version":1,"key":"drink","content":"tea","scope":"project"}`, "no current project selected"},
-		{ctx, Forget, `{` + id + `,"version":1,"scope":"project"}`, "no current project selected"},
-		{ctx, Forget, `{"id":"missing","version":1}`, "memory not found"},
-		{ctx, Read, `{` + id + `,"scope":"project"}`, "no current project selected"},
-	} {
-		if got := call(t, s, tt.ctx, "owner", tt.name, tt.args); !strings.HasPrefix(got, "error:") || !strings.Contains(got, tt.want) {
-			t.Errorf("%s %s: %q, want an error with %q", tt.name, tt.args, got, tt.want)
-		}
-	}
-	if got, err := s.Read(ctx, "", e.ID); err != nil || got != e {
-		t.Fatalf("refused calls changed the memory: %+v, %v", got, err)
-	}
-}
-
-// A memory of scope core is global and a core one; read, update and forget
-// find it as a global one.
-func TestCoreScope(t *testing.T) {
-	s, err := store.Open(t.TempDir())
+	e, _, err := s.Add(ctx, "drinks", "drink", "oolong", "owner", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	ctx := workdir.With(context.Background(), "/project/a")
-	var e store.Entry
-	if err := json.Unmarshal([]byte(call(t, s, ctx, "owner", Create, `{"key":"name","content":"Lu","scope":"core"}`)), &e); err != nil {
-		t.Fatal(err)
-	}
-	if !e.Core || e.Project != "" {
-		t.Fatalf("core: %+v", e)
-	}
-	if out := call(t, s, ctx, "owner", Read, `{"id":"`+e.ID+`","scope":"core"}`); !strings.Contains(out, `"core":true`) {
-		t.Fatalf("read: %s", out)
-	}
-	if core, err := s.Core(ctx); err != nil || len(core) != 1 || core[0].ID != e.ID {
-		t.Fatalf("core: %+v, %v", core, err)
-	}
-}
-
-// What the agent reads, or finds by words, counts as used; a list of the
-// latest does not.
-func TestReadAndSearchCountAsUsed(t *testing.T) {
-	s, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ctx := context.Background()
-	e, err := s.Create(ctx, "", "drink", "oolong", "owner")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A list of the latest is no use of them.
 	for _, step := range []struct {
-		name, args string
-		used       int64
+		args string
+		used int64
 	}{
-		{Read, `{"id":"` + e.ID + `"}`, 1},
-		{Search, `{"query":"oolong"}`, 2},
-		{Search, `{}`, 2},
+		{`{"topic":"drinks"}`, 0},
+		{`{"topic":"drinks","search":"oolong"}`, 1},
 	} {
-		call(t, s, ctx, "owner", step.name, step.args)
-		if got, err := s.Read(ctx, "", e.ID); err != nil || got.Used != step.used || got.Version != 1 {
-			t.Fatalf("used after %s %s: %+v, %v", step.name, step.args, got, err)
+		load(t, s, step.args)
+		if got, err := s.Read(ctx, e.ID); err != nil || got.Used != step.used || got.Version != 1 {
+			t.Fatalf("used after %s: %+v, %v", step.args, got, err)
 		}
 	}
 }

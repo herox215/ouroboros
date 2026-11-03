@@ -13,37 +13,36 @@ import (
 	"ouroboros/plugin"
 )
 
-// /memory shows the memories the agent has collected, grouped by where they
-// hold, the latest updated first; typing filters them, enter reads the one
-// selected in full, and tab shows the archived and expired ones too.
+// /memory shows the memories the agent has collected, grouped by their
+// topic, the latest updated first; typing filters them, enter reads the one
+// selected in full, and tab shows the expired ones too.
 func TestMemoryDialog(t *testing.T) {
 	m, b := newModel(t)
 	at := time.Unix(1000, 0)
 	m.now = func() time.Time { return at }
-	m.chat.directory = "/home/lucas/Projects/ouroboros"
 	b.memories = plugin.MemoryListing{
 		Total:  3,
 		Hidden: 2,
 		Memories: []plugin.Memory{
-			{Key: "workflow", Content: "Changes go in a branch, as an MR against main", Core: true,
-				Updated: at.Add(-2 * time.Hour).Format(time.RFC3339), Used: 4, Loaded: 9, Version: 2},
-			{Key: "drink", Content: "oolong tea in the afternoon", Updated: at.Add(-48 * time.Hour).Format(time.RFC3339)},
-			{Key: "build", Content: "make test runs the tests", Project: m.chat.directory,
+			{Key: "build", Content: "make test runs the tests", Topic: "ouroboros",
 				Updated: at.Add(-time.Minute).Format(time.RFC3339)},
+			{Key: "workflow", Content: "Changes go in a branch, as an MR against main", Topic: "Core",
+				Updated: at.Add(-2 * time.Hour).Format(time.RFC3339), Used: 4, Version: 2},
+			{Key: "drink", Content: "oolong tea in the afternoon", Topic: "general", Updated: at.Add(-48 * time.Hour).Format(time.RFC3339)},
 		},
 	}
 
 	m.Update(run(m, "/memory")())
-	if m.screen != screenMemory || !m.inDialog() || b.memoryProject != m.chat.directory || b.memoryAll {
-		t.Fatalf("screen %v, dialog %v, asked for %q, all %v", m.screen, m.inDialog(), b.memoryProject, b.memoryAll)
+	if m.screen != screenMemory || !m.inDialog() || b.memoryAll {
+		t.Fatalf("screen %v, dialog %v, all %v", m.screen, m.inDialog(), b.memoryAll)
 	}
 	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{
-		"Memories · 3 remembered · ✸ 1 core · ✦ 1 global · ✧ 1 here · 2 hidden",
-		"· core ·", "· global ·", "· here ·",
+		"Memories · 3 remembered · ✸ 1 core · ✦ 1 general · ✧ 1 in topics · 2 hidden",
+		"· core ·", "· general ·", "· topics ·",
 		"workflow", "drink", "build",
 		"Changes go in a branch", "2h",
-		"tab archived",
+		"tab expired",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("%q is not in the chart:\n%s", want, view)
@@ -64,7 +63,7 @@ func TestMemoryDialog(t *testing.T) {
 	}
 	press(m, "enter")
 	view = ansi.Strip(m.View().Content)
-	for _, want := range []string{"drink · global · remembered anywhere", "updated 2d", "used 0× · loaded 0×", "oolong tea in the afternoon", "esc back"} {
+	for _, want := range []string{"drink · general · loaded when it fits", "updated 2d", "used 0×", "oolong tea in the afternoon", "esc back"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("%q is not in the memory:\n%s", want, view)
 		}
@@ -77,6 +76,10 @@ func TestMemoryDialog(t *testing.T) {
 	press(m, "enter")
 	if !strings.Contains(ansi.Strip(m.View().Content), "workflow · core · given with every answer") {
 		t.Fatalf("the core memory read:\n%s", m.View().Content)
+	}
+	press(m, "esc", "down", "down", "enter")
+	if !strings.Contains(ansi.Strip(m.View().Content), "build · in topic ouroboros") {
+		t.Fatalf("the memory of a topic read:\n%s", m.View().Content)
 	}
 	press(m, "esc", "esc")
 	if m.screen != screenChat {
@@ -101,10 +104,10 @@ func TestMemoryDialog(t *testing.T) {
 	}
 	press(m, "esc")
 
-	// Tab shows the archived and expired ones too.
+	// Tab shows the expired ones too.
 	m.Update(run(m, "/memory")())
 	m.Update(press(m, "tab")())
-	if !m.memories.all || !b.memoryAll || !strings.Contains(ansi.Strip(m.View().Content), "tab archived") {
+	if !m.memories.all || !b.memoryAll || !strings.Contains(ansi.Strip(m.View().Content), "tab expired") {
 		t.Fatalf("tab: all %v, asked %v:\n%s", m.memories.all, b.memoryAll, m.View().Content)
 	}
 }
@@ -184,18 +187,21 @@ func TestMemoryChartNamesThem(t *testing.T) {
 	m, b := newModel(t)
 	at := time.Unix(1000, 0)
 	m.now = func() time.Time { return at }
-	m.chat.directory = "/home/lucas/Projects/ouroboros"
 	keys := []string{"workflow", "answers", "drink", "music", "names", "build",
 		"minerva", "hooks", "tea", "piano", "windows", "gofmt"}
 	var list []plugin.Memory
 	for i, k := range keys {
+		topic := "ouroboros"
+		if i < 2 {
+			topic = "core"
+		}
 		list = append(list, plugin.Memory{Key: k, Content: "what " + k + " holds",
-			Updated: at.Format(time.RFC3339), Project: m.chat.directory, Core: i < 2})
+			Updated: at.Format(time.RFC3339), Topic: topic})
 	}
 	b.memories = plugin.MemoryListing{Total: len(list), Memories: list}
 	m.Update(run(m, "/memory")())
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "· core ·") || !strings.Contains(view, "· here ·") {
+	if !strings.Contains(view, "· core ·") || !strings.Contains(view, "· topics ·") {
 		t.Fatalf("the chart should name the orbits:\n%s", view)
 	}
 	for _, k := range keys {
@@ -258,8 +264,8 @@ func TestMemoryDialogEdits(t *testing.T) {
 	m.now = func() time.Time { return at }
 	stamp := at.Format(time.RFC3339)
 	b.memories = plugin.MemoryListing{Total: 2, Memories: []plugin.Memory{
-		{ID: "a", Key: "drink", Content: "oolong tea in the afternoon", Version: 3, Updated: stamp},
-		{ID: "b", Key: "build", Content: "make test runs the tests", Version: 1, Updated: stamp},
+		{ID: "a", Topic: "general", Key: "drink", Content: "oolong tea in the afternoon", Version: 3, Updated: stamp},
+		{ID: "b", Topic: "general", Key: "build", Content: "make test runs the tests", Version: 1, Updated: stamp},
 	}}
 	m.Update(run(m, "/memory")())
 
@@ -268,7 +274,7 @@ func TestMemoryDialogEdits(t *testing.T) {
 		t.Fatal("ctrl+e should edit the memory selected")
 	}
 	view := ansi.Strip(m.View().Content)
-	for _, want := range []string{"Edit memory · global · remembered anywhere", "drink", "oolong tea in the afternoon",
+	for _, want := range []string{"Edit memory · general · loaded when it fits", "drink", "oolong tea in the afternoon",
 		"tab key/content · ctrl+s save · esc cancel"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("%q is not in the edit:\n%s", want, view)
