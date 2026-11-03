@@ -181,7 +181,7 @@ changes nothing there. For work on a project, ask the thread: it starts a sessio
 Beside the thread, the sidebar follows the part of it in view, as in the demo: the part
 whose messages cross the middle of the history, or the newest one at its end. Each message
 of the owner opens a part; the sessions the thread started (`session_new`), handed a message
-to (`session_send`), looked at (`session_status`) or stopped (`session_stop`) on it, and those
+to (`session_message`), looked at (`session_status`) or stopped (`session_stop`) on it, and those
 whose result it reports there, belong to it, as the `handed` events of the thread tell: the thread
 hides the calls of its agent, so it tells those as events of their own, also when it is read
 back from the archive. Front ends that do not know the kind leave it out. The
@@ -469,7 +469,7 @@ your agent is thinking.
 
 - **Handing on.** The agent of the thread does none of the work itself. For each of your messages it decides which
   topic it continues, or whether it is a new one. It hands the message to the conversation of that topic with
-  `session_send`, or starts one for it with `session_new`. Then it acknowledges the handoff in a word or two at
+  `session_message`, or starts one for it with `session_new`. Then it acknowledges the handoff in a word or two at
   most, and its answer ends: that conversation answers, and only its result is the substantive answer. A complete
   answer to what was handed on, written before the result, is not shown. A message about several topics hands each its part. When it
   cannot tell which topic you mean, it asks you, about the topic. It answers itself only what the thread answers
@@ -498,7 +498,7 @@ your agent is thinking.
 - **What a conversation gets.** A message the thread hands on is a message of yours there: an answer to it starts,
   the answer on its way takes it as it would take what you queued, or it answers the question the conversation
   waits for. It is attributed to where you wrote it in the thread. It is your words as you wrote them: without
-  words of its own, `session_send` and `session_new` hand on what you said since the last answer of the thread.
+  words of its own, `session_message` and `session_new` hand on what you said since the last answer of the thread.
   The agent of the thread writes only the part of a message that belongs to the topic, or what your words mean
   where only the thread explains them, like your answer to a question it asked, in your voice. It never writes
   about you, the thread or other topics, nor sums up what the conversation said itself, which remembers it.
@@ -506,12 +506,24 @@ In the terminal UI, new complete answers arriving in the visible thread unfold q
 word-like chunks, rather than appearing all at once. Reopened history is not animated, and answers
 already streamed by the model keep their normal streaming effect.
 
-- **What comes back.** The answer of a conversation that took a message the thread handed on is shown in the
-  thread as the answer of your agent, and an answer that failed as one that failed. What such an answer asks you
-  on its way is asked in the thread, one question at a time, and what you say there next answers it; answered in
-  that conversation itself, it is over in the thread too. The agent of the thread is told all of it for its next
-  answer, and keeps it as what was shown, so that a restart does not show it anew. What you write in a
-  conversation yourself does not come back to the thread, and neither does an answer that was stopped. While another conversation is shown, the footer says that the thread answered
+- **What comes back.** The thread is the one agent that talks to you; a conversation that works on a message the
+  thread handed on is its sub-agent and never talks to you itself. Its final answer is a report to the thread,
+  which tells you what matters of it in its own words, and an answer that failed as one that failed.
+  What it needs from you on its way it sends to the thread with `thread_message` and `wait: true`, which returns a
+  message ID and waits, without a time limit, until the thread answers it or you stop it: the thread asks you with
+  `user_question` and passes on your answer with `session_message` and that `message_id`, which skips the topic
+  check. The thread answers such a message itself only with what you already said, or where it is no question for
+  you, and says so; never a permission. A message with `wait: false` is a note the thread tells you at once.
+  The roster shows a conversation that waits as `waits for the thread to answer its message ID`.
+- **Permissions through the thread.** When a rule wants your leave for a call of such a conversation, a fresh
+  instance of its model, which sees only the call and the project, writes what the call does, naming deleting,
+  writing outside the project, network access and downloaded code; ouro, not the conversation, sends it to the
+  thread, which asks you. Your answer goes back with the `message_id`, and ouro's code decides as before (once,
+  always, no, show the call). Allowed calls and yolo mode ask nothing.
+- **Directly in a conversation.** Where you write in a conversation yourself, it keeps `user_question`, and may
+  tell the thread with `thread_message` and `wait: false`. When such an answer ends, the thread gets an invisible
+  note with your message and the answer, start and end of each, for your next message there. An answer that was
+  stopped comes back to the thread in no way. While another conversation is shown, the footer says that
   (`answered in the thread · /thread`).
 - **Stopping.** `esc` and `/cancel` in the thread stop its answer and what the conversations work on for it.
 - **Where new ones work.** The thread has no project: it works in the workspace of ouro alone and does not take the

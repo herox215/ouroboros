@@ -22,7 +22,7 @@ func TestSendCanceledWhileHanding(t *testing.T) {
 	before := topicSnapshot(s, se)
 	// Canceled at the fourth look: past the check of the concern and the
 	// start of hand, at the last look before delivery.
-	if _, _, err := (threading{s}).Send(&cancelsLate{Context: t.Context(), after: 3}, se.id, "add tests"); !errors.Is(err, context.Canceled) {
+	if _, _, err := (threading{s}).Send(&cancelsLate{Context: t.Context(), after: 3}, se.id, "add tests", "", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("sent: %v", err)
 	}
 	topicUnchanged(t, s, se, question, before)

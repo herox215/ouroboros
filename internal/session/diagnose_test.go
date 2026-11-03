@@ -38,7 +38,7 @@ func TestThreadDiagnoses(t *testing.T) {
 		t.Fatal(err)
 	}
 	until(t, s1, Step)
-	if _, _, err := th.Send(ctx, "s1", "more"); err != nil {
+	if _, _, err := th.Send(ctx, "s1", "more", "", false); err != nil {
 		t.Fatal(err)
 	}
 	until(t, s1, Queued)

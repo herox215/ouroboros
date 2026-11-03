@@ -59,7 +59,7 @@ func dispatcher(told chan<- string, answer func(ctx context.Context, text string
 		told <- text
 		// What it does on its way is not shown.
 		say("handing it on")
-		observe(assistant.Step{Tool: assistant.ToolSessionSend})
+		observe(assistant.Step{Tool: assistant.ToolSessionMessage})
 		verb, rest, _ := strings.Cut(text, " ")
 		var err error
 		switch verb {
@@ -67,9 +67,9 @@ func dispatcher(told chan<- string, answer func(ctx context.Context, text string
 			_, err = thread.Start(ctx, rest, "")
 		case "send":
 			id, message, _ := strings.Cut(rest, " ")
-			_, _, err = thread.Send(ctx, id, message)
+			_, _, err = thread.Send(ctx, id, message, "", false)
 		case "pass":
-			_, _, err = thread.Send(ctx, rest, "")
+			_, _, err = thread.Send(ctx, rest, "", "", false)
 		default:
 			return "noted " + text, nil
 		}
@@ -295,102 +295,6 @@ func question(t *testing.T, live <-chan Event) []Event {
 		if !got[len(got)-1].Done {
 			return got
 		}
-	}
-}
-
-// What a session asks the owner on the way of an answer the thread handed a
-// message to is asked in the thread, one question at a time: what the owner
-// says there next answers it, and the thread is told both. A question the
-// owner answers in the session itself is over in the thread too, and one
-// the thread did not ask yet is never asked there. A question of the owner's
-// own answer is not asked in the thread.
-func TestThreadAsks(t *testing.T) {
-	told := make(chan string, 8)
-	asks := json.RawMessage(`{"question":"Which?","options":["a","b"],"recommended":"a"}`)
-	a := dispatcher(told, func(ctx context.Context, text string) (string, error) {
-		answer, err := agent.AskOwner(ctx, asks)
-		return "chose " + answer, err
-	})
-	s := service(t, a)
-	ctx := context.Background()
-	_, thread, _ := s.Watch(ctx, ThreadID)
-	_, s1, _ := s.Watch(ctx, "s1")
-	_, s2, _ := s.Watch(ctx, "s2")
-	for i, live := range []<-chan Event{s1, s2} {
-		id, text := fmt.Sprintf("s%d", i+1), []string{"first", "second"}[i]
-		if err := s.Ask(ctx, id, text); err != nil {
-			t.Fatal(err)
-		}
-		question(t, live)
-		s.mu.Lock()
-		routes := s.routable()
-		s.mu.Unlock()
-		if routes[0].id != id || routes[0].question != "Which?" || !routes[0].running {
-			t.Fatalf("routable %+v", routes)
-		}
-		s.Steer(ctx, id, "a")
-		until(t, live, Answer)
-	}
-	both := func(text string) {
-		t.Helper()
-		ask(t, s, "send s1 "+text)
-		<-told
-		question(t, s1)
-		ask(t, s, "send s2 "+text)
-		<-told
-		question(t, s2)
-	}
-
-	// Two sessions ask at once: the thread asks the first, and the second
-	// once the first is answered.
-	both("go")
-	got := question(t, thread)
-	if err := s.Steer(WithMessageSource(ctx, MessageSource{Interface: "tui"}), ThreadID, "b"); err != nil {
-		t.Fatal(err)
-	}
-	got = append(got, question(t, thread)...)
-	until(t, s1, Answer)
-	if err := s.Steer(ctx, "s2", "a"); err != nil { // in the session itself
-		t.Fatal(err)
-	}
-	until(t, s2, Answer)
-	got = append(got, working(t, thread)...)
-	lines := shown(got)
-	for _, want := range []string{"asked Which?", "answered b", "answer chose b", "answered a", "answer chose a"} {
-		if !slices.Contains(lines, want) {
-			t.Fatalf("the thread showed %q", lines)
-		}
-	}
-	if n := len(slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return l != "asked Which?" })); n != 2 {
-		t.Fatalf("the thread asked %d times: %q", n, lines)
-	}
-	notes := a.noted()
-	i := slices.IndexFunc(notes, func(n string) bool {
-		return strings.HasPrefix(n, `thread: [Session s1 "first" asked the owner, as you, and they answered. The question, then the answer:]`) &&
-			strings.HasSuffix(n, string(asks)+"\n\nb")
-	})
-	if i < 0 {
-		t.Fatalf("the thread was told %q", notes)
-	}
-	asked := got[slices.IndexFunc(got, func(e Event) bool { return e.Kind == Asked })]
-	if presented := a.presentedAs(); presented[i] != asked.PresentationID || asked.PresentationID == "" {
-		t.Fatalf("the question was shown as %q, and kept as %q", asked.PresentationID, presented[i])
-	}
-
-	// A question not asked in the thread yet ends there without a word.
-	both("again")
-	question(t, thread)
-	if err := s.Steer(ctx, "s2", "b"); err != nil {
-		t.Fatal(err)
-	}
-	until(t, s2, Answer)
-	if err := s.Steer(ctx, ThreadID, "a"); err != nil {
-		t.Fatal(err)
-	}
-	until(t, s1, Answer)
-	lines = shown(working(t, thread))
-	if !slices.Contains(lines, "answered a") || !slices.Contains(lines, "answer chose b") || slices.Contains(lines, "asked Which?") {
-		t.Fatalf("the thread showed %q", lines)
 	}
 }
 
@@ -704,7 +608,7 @@ func TestShaped(t *testing.T) {
 	long := strings.Repeat("x", relayKept-1) + "ä" + strings.Repeat("z", 100) + "ö" + strings.Repeat("y", relayKept-1)
 	short := relayText(se, relayAnswered, "fixed")
 	failed := relayText(se, relayFailed, "it broke]")
-	call := openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionSend, `{}`)}}
+	call := openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionMessage, `{}`)}}
 	tui := MessageSource{Interface: "tui"}
 	msgs := []openai.Message{
 		{Role: "user", Content: roster(config.DefaultThreadWindow, nil, "")},
@@ -738,7 +642,7 @@ func TestRecentOf(t *testing.T) {
 	msgs := []openai.Message{
 		{Role: "user", Content: sessions, At: old},
 		{Role: "user", Content: "fix it", At: old},
-		{Role: "assistant", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionSend, `{}`)}, At: old},
+		{Role: "assistant", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionMessage, `{}`)}, At: old},
 		{Role: "tool", ToolCallID: "c1", Content: "Handed on.", At: recent}, // its answer ended late
 		{Role: "user", Content: "and this", At: recent},
 		{Role: "user", Content: "now"}, // of the answer on its way
@@ -828,7 +732,7 @@ func TestThreadArchived(t *testing.T) {
 	arch.Append(history.Who{Session: ThreadID}, []openai.Message{
 		{Role: "user", Content: resumed(time.Now(), time.Now()) + roster(config.DefaultThreadWindow, nil, "")},
 		{Role: "user", Content: "fix it"},
-		{Role: "assistant", Content: "handing on", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionSend, `{}`)}},
+		{Role: "assistant", Content: "handing on", ToolCalls: []openai.ToolCall{call("c1", assistant.ToolSessionMessage, `{}`)}},
 		{Role: "tool", ToolCallID: "c1", Content: "Handed to the session s1"},
 	}, nil)
 	arch.Append(history.Who{Session: ThreadID}, []openai.Message{{Role: "user", Content: relayText(se, relayAnswered, "fixed")}}, nil)

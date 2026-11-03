@@ -488,9 +488,14 @@ type session struct {
 	// it is, see words, with the pictures of those messages. roster is the
 	// list of the sessions it was told last, told answers ago, see inThread.
 	questions []*relayed
-	working   int
-	own       bool
-	said      []string
+	// waiting is the ID of the message to the thread the answer on its way
+	// waits for the thread to answer, see post, "" for none; waitPermission
+	// says that it asks whether a call may run.
+	waiting        string
+	waitPermission bool
+	working        int
+	own            bool
+	said           []string
 	// writing is when the answer on its way told the last piece of what it
 	// writes, as long as nothing came after it; zero otherwise. Who starts to
 	// watch then is told that it writes, see Watch.
@@ -856,6 +861,14 @@ func (s *Service) ask(ctx context.Context, se *session, question json.RawMessage
 	asked := make(chan queued, 1)
 	se.asked = asked
 	id := presentation.NewID()
+	if m := s.messengerFor(se); m != nil && forThread(se) {
+		// A session that works for the thread asks the owner nothing
+		// itself: the thread asks them for it, see post.
+		se.asked = nil
+		s.mu.Unlock()
+		_, reply, err := s.post(ctx, se, assistant.QuestionMessage(question), question, true, false)
+		return reply, err
+	}
 	s.emit(se, Event{Kind: Asked, PresentationID: id, Args: question})
 	s.asking(se, question)
 	s.mu.Unlock()
@@ -1050,6 +1063,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	ctx = workdir.With(ctx, se.directory)
 	scheduled := se.scheduled
 	denyOwner := se.denyOwner
+	if m := s.messengerFor(se); m != nil {
+		ctx = assistant.WithMessenger(ctx, m)
+	}
 	s.mu.Unlock()
 	if restartable {
 		ctx = WithRestart(ctx, func(exe string) {
@@ -1194,6 +1210,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		s.emit(se, end)
 	}
 	forThread = se.routed
+	if !forThread {
+		s.toldDirect(se, end)
+	}
 	s.relay(se, end)
 	if scheduled != nil {
 		scheduled.stop()

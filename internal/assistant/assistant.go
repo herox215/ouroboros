@@ -687,7 +687,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 	bot, core := a.withCore(ctx, contextID, inDirectory(ctx, bot))
 	bot, given := a.withTopic(ctx, contextID, text, bot)
 	to.memories = append(core, given...)
-	bot = inThread(ctx, bot, cfg)
+	bot = withMessenger(ctx, inThread(ctx, bot, cfg))
 	var unarchived bool
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
 		Diagnostic: func(d agent.Diagnostic) {
@@ -1041,7 +1041,7 @@ func (a *Assistant) ContentsContext(ctx context.Context, contextID string) (Cont
 	if err != nil {
 		return c, err
 	}
-	c.System, c.Tools = inThread(ctx, inDirectory(ctx, bot), cfg).Prompt()
+	c.System, c.Tools = withMessenger(ctx, inThread(ctx, inDirectory(ctx, bot), cfg)).Prompt()
 	if bot.HasExtensions() {
 		if snapshot, ok := bot.Inspection(contextID); ok {
 			c.Messages = slices.Clone(snapshot.Messages)

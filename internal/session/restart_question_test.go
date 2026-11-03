@@ -15,13 +15,16 @@ import (
 )
 
 func TestRestartAcceptsPendingQuestionReplies(t *testing.T) {
-	for _, path := range []string{"thread reply", "handoff", "local reply"} {
+	for _, path := range []string{"handoff", "local reply"} {
 		t.Run(path, func(t *testing.T) {
 			question := json.RawMessage(`{"question":"Allow?","options":["Yes","No"]}`)
 			a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
 				if text == "build" {
 					AskRestart(ctx, "/new/ouro")
 					return "built", nil
+				}
+				if strings.HasPrefix(text, backgroundHead) {
+					return "noted", nil // the thread hears of the question
 				}
 				reply, err := agent.AskOwnerReply(ctx, question)
 				if err == nil && (reply.Text != "Yes" || reply.Source.Gateway != "matrix") {
@@ -48,8 +51,6 @@ func TestRestartAcceptsPendingQuestionReplies(t *testing.T) {
 			ctx := WithMessageSource(t.Context(), MessageSource{Interface: "api", Gateway: "matrix"})
 			var err error
 			switch path {
-			case "thread reply":
-				err = s.Steer(ctx, ThreadID, "Yes")
 			case "local reply":
 				err = s.Steer(ctx, "waiting", "Yes")
 			case "handoff":
@@ -83,7 +84,10 @@ func TestRestartAcceptsPendingQuestionReplies(t *testing.T) {
 func TestRestartDeadlineParksQuestionAcrossProfiles(t *testing.T) {
 	dir := t.TempDir()
 	question := json.RawMessage(`{"question":"Allow?","options":["Yes","No"]}`)
-	waitingAgent := &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+	waitingAgent := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if strings.HasPrefix(text, backgroundHead) {
+			return "noted", nil
+		}
 		reply, err := agent.AskOwner(ctx, question)
 		return reply, err
 	}}
@@ -128,9 +132,9 @@ func TestRestartDeadlineParksQuestionAcrossProfiles(t *testing.T) {
 	if err := next.archive.Append(history.Who{Session: "waiting"}, []openai.Message{{Role: "user", Content: strings.TrimPrefix(waitingAgent.notes[len(waitingAgent.notes)-1], "waiting: ")}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	_, thread, _ := next.Watch(t.Context(), ThreadID)
+	_, resumed, _ := next.Watch(t.Context(), "waiting")
 	next.GoOn()
-	until(t, thread, Asked)
+	until(t, resumed, Asked)
 	if err := next.Steer(t.Context(), "waiting", "No"); err != nil {
 		t.Fatal(err)
 	}

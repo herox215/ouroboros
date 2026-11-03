@@ -72,7 +72,7 @@ func TestTopicSendIgnoresStreamingProgress(t *testing.T) {
 		s.mu.Unlock()
 		return assistant.TopicDecision{Disposition: assistant.TopicContinue, Reason: "same concern"}, nil
 	}
-	_, result, err := (threading{s}).Send(context.Background(), se.id, "add tests")
+	_, result, err := (threading{s}).Send(context.Background(), se.id, "add tests", "", false)
 	if err != nil || !strings.Contains(result, "CheckTopic: continue (same concern)") {
 		t.Fatalf("progress invalidated continuation or missing audit reason: %q %v", result, err)
 	}

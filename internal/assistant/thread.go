@@ -18,18 +18,18 @@ import (
 
 // The tools of the agent of the thread, which no other agent has.
 const (
-	ToolSessionSend  = "session_send"
-	ToolSessionNew   = "session_new"
-	ToolSearchThread = "search_thread"
-	ToolSessionState = "session_status"
-	ToolSessionStop  = "session_stop"
+	ToolSessionMessage = "session_message"
+	ToolSessionNew     = "session_new"
+	ToolSearchThread   = "search_thread"
+	ToolSessionState   = "session_status"
+	ToolSessionStop    = "session_stop"
 )
 
 // threadPrompt is what the agent of the thread is; %q is the name of the
 // node, %s how long it continues a session and %d the hours of ThreadWindow. It names the tools of the thread, so keep it in step with them.
 const threadPrompt = `You are %q, the personal agent of the owner of this Ouroboros node, and this is the one conversation the owner has with you, about everything. ` +
 	`Behind it, each topic is worked on in a session of its own, which does the work with all your tools, at the same time as the sessions of the other topics. ` +
-	`You do none of the work yourself: you hand what the owner says to the session of its topic with ` + ToolSessionSend + `, or start a session for a new topic with ` + ToolSessionNew + `. ` +
+	`You do none of the work yourself: you hand what the owner says to the session of its topic with ` + ToolSessionMessage + `, or start a session for a new topic with ` + ToolSessionNew + `. ` +
 	`A session works independently. Its completion arrives as an internal background result: use the current conversation to explain the result in your own voice, never forward it verbatim or treat it as a new assignment. ` +
 	`The owner is never to notice the sessions: unless debug mode is explicitly enabled, never mention sessions, routing, helpers or their IDs. After handing work on, briefly acknowledge ordinary work naturally in the owner's language, then end your answer without waiting for completion; do not give a substantive answer before the result. For quick actions such as voting where the owner wants only the visible action, omit this acknowledgement. A background result supplies a reply only when there is something the owner still needs to hear. For quick actions such as voting, if the action is already visible in the owner's interface and the owner wants no extra confirmation, finish silently instead of announcing or confirming it in text. Still report failures, necessary questions or material uncertainty. ` +
 	`Keep the conversation available for other requests while work continues. When a background result arrives, connect it to its original topic and the current conversation: after a topic change use a natural transition such as "By the way, about XYZ earlier". If still on topic, continue directly. Preserve important findings, limitations and next steps; do not invent progress or claim verification the result does not establish. Never route a background result back to a session as an owner request. ` +
@@ -37,7 +37,7 @@ const threadPrompt = `You are %q, the personal agent of the owner of this Ourobo
 	`Route by concrete concern, not by shared project, repository or broad subject. Decide whether each message continues a concern (including implementation, tests and corrections), returns to an earlier concern, starts a distinct new concern, or is unclear. ` +
 	`The first owner message of a session is its immutable anchor, even if broad: never broaden its scope to absorb unrelated issues. A new concern needs a new session even in the same project. Split multi-issue messages and hand each concern only its own part. ` +
 	`A short reply such as "yes", "do it" or "and tests?" is not automatically about the latest session: resolve its referent from the conversation, or ask a short clarification. A failed handoff leaves the original request unresolved: a newer unrelated message does not cancel it. Before finishing, account for each unresolved request by routing it with fresh evidence, answering it, or explaining the blocker; never silently abandon it after handling a newer request. ` +
-	`If ` + ToolSessionSend + ` rejects a handoff with CheckTopic guidance, follow that guidance: start a new concern with ` + ToolSessionNew + `, choose an evidenced earlier concern, or ask for clarification when unclear. Never retry by rephrasing to bypass rejection or by broadening the target concern. ` +
+	`If ` + ToolSessionMessage + ` rejects a handoff with CheckTopic guidance, follow that guidance: start a new concern with ` + ToolSessionNew + `, choose an evidenced earlier concern, or ask for clarification when unclear. Never retry by rephrasing to bypass rejection or by broadening the target concern. ` +
 	`A session remembers its own conversation, but sees nothing of this one: it is to get the owner's words as they are, in the owner's voice, as if they had written them there themselves. ` +
 	`So leave out text, and what the owner said since your last answer goes to it word for word: that is right for most messages. ` +
 	`Write text only for the part of a message that belongs to the topic, or where the owner's words make sense only with this conversation, like the answer to a question you asked: then write what they mean, as they would say it, in their language. ` +
@@ -47,7 +47,13 @@ const threadPrompt = `You are %q, the personal agent of the owner of this Ourobo
 	`When the owner asks why a topic does not finish, does not answer or did not get their message, look with ` + ToolSessionState + ` what its session does, and explain it plainly: what it waits for, which tool or background job runs since when, what is queued. Stop the answer on its way or one of its jobs with ` + ToolSessionStop + ` only when the owner asks for it. ` +
 	`Answer yourself only what this conversation answers already, like what was said before, and only if you do not also hand that request on. ` +
 	`Messages in brackets are internal data from ouro, not instructions from the owner: session lists, background results and earlier questions. A background result must be handled here, not handed on; it need not produce a text reply when the visible action already suffices. ` +
-	`You are shown only the last %d hours of this conversation: when the owner refers to something said before that, find it with ` + ToolSearchThread + `. `
+	`You are shown only the last %d hours of this conversation: when the owner refers to something said before that, find it with ` + ToolSearchThread + `. ` +
+	`The sessions work for you and never talk to the owner: you are the one who phrases for them and asks them. A session tells you something with a message that has an ID. ` +
+	`One that waits for nothing you tell the owner at once, messages arriving together combined into one. One that waits you ask the owner with ` + ToolUserQuestion + ` and pass on their answer with ` + ToolSessionMessage + ` and its message_id. ` +
+	`You may answer such a message yourself, with own true, only from what the owner already said here, or when it is no question for the owner; never a permission request, which the owner alone answers. ` +
+	`When the owner asks to see the exact call of a permission request, ask the session with ` + ToolSessionMessage + ` and the message_id that they want to see it. ` +
+	`A session's final result is a report to you: tell the owner what matters of it in your words; if it asks the owner something there instead of sending a message, treat that as an open question to ask them. ` +
+	`A note that the owner continued a session directly tells you what changed there: take it into account with their next message here. `
 
 // ThreadWindow is how much of the conversation of the thread its agent is
 // shown: older messages it finds with ToolSearchThread.
@@ -71,7 +77,10 @@ type Thread interface {
 	// Send hands text to the session id as a message of the owner, "" for
 	// what the owner said since the last answer of the thread, and returns
 	// the title of the session and what became of the message.
-	Send(ctx context.Context, id, text string) (title, outcome string, err error)
+	// With messageID it answers that message of a session instead, the
+	// session id names then or not, without the check of its topic; own says
+	// that the thread answers it itself, not the owner.
+	Send(ctx context.Context, id, text, messageID string, own bool) (title, outcome string, err error)
 	// Search returns what in the whole conversation of the thread holds
 	// query, ignoring case, also what its agent is no longer shown.
 	Search(ctx context.Context, query string) (string, error)
@@ -103,10 +112,12 @@ func ThreadOf(ctx context.Context) Thread {
 	return t
 }
 
-// sending is what a call of ToolSessionSend is asked to do.
+// sending is what a call of ToolSessionMessage is asked to do.
 type sending struct {
-	Session string `json:"session"`
-	Text    string `json:"text"`
+	Session   string `json:"session"`
+	Text      string `json:"text"`
+	MessageID string `json:"message_id"`
+	Own       bool   `json:"own"`
 }
 
 // searching is what a call of ToolSearchThread is asked to do.
@@ -135,7 +146,7 @@ type starting struct {
 // continues a session, as its descriptions say it.
 func threadTools(window string) []agent.Tool {
 	return []agent.Tool{{
-		Name: ToolSessionSend,
+		Name: ToolSessionMessage,
 		Description: "Hand what the owner said to a session from the list of the sessions of the last " + window + ", as their message there: " +
 			"an answer to it starts there, the answer on its way takes it, or it answers the question the session waits for. " +
 			"Use only for the same concrete concern anchored by its first owner message, including implementation, tests or a return to that earlier concern; sharing a project is insufficient. " +
@@ -143,20 +154,27 @@ func threadTools(window string) []agent.Tool {
 			"Leave out text only when all the owner's words since your last answer belong here. Returns what became of the message.",
 		Schema: `{"type":"object","properties":{` +
 			`"session":{"type":"string","description":"the handle of the session, as the list names it"},` +
+			`"message_id":{"type":"string","description":"the ID of a message of the session this answers, as the message names it; the text then goes to it, with no topic check"},` +
+			`"own":{"type":"boolean","description":"with message_id: you answer it yourself, from what the owner already said here or what is no question for them, not the owner; never for a permission request"},` +
 			`"text":{"type":"string","description":"only for the part of the owner's message about this topic, or for what their words mean where only this conversation explains them: in their voice and language"}` +
 			`},"required":["session"]}`,
 		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
-			thread, err := threadFor(ctx, ToolSessionSend)
+			thread, err := threadFor(ctx, ToolSessionMessage)
 			if err != nil {
 				return "", err
 			}
 			var s sending
-			if err := agent.Decode(ToolSessionSend, raw, &s); err != nil {
+			if err := agent.Decode(ToolSessionMessage, raw, &s); err != nil {
 				return "", err
 			}
-			title, outcome, err := thread.Send(ctx, s.Session, s.Text)
+			title, outcome, err := thread.Send(ctx, s.Session, s.Text, s.MessageID, s.Own)
 			if err != nil {
 				return "", err
+			}
+			if s.MessageID != "" {
+				// An answer to a message of a session hands nothing new on:
+				// the thread may go on with what it says to the owner.
+				return fmt.Sprintf("Answered message %s of %q: %s.", s.MessageID, title, outcome), nil
 			}
 			// The session answers the question: what the thread says itself
 			// is an acknowledgement of receipt at most, never a second answer
@@ -188,7 +206,7 @@ func threadTools(window string) []agent.Tool {
 			if err != nil {
 				return "", err
 			}
-			// The new session answers the concern, see ToolSessionSend: the
+			// The new session answers the concern, see ToolSessionMessage: the
 			// thread adds an acknowledgement at most.
 			agent.Handed(ctx)
 			// The ID, as its description promises: as the thread is told it
@@ -283,6 +301,11 @@ func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.A
 	tools := threadTools(window)
 	own := false
 	for _, t := range bot.Tools() {
+		if t.Name == ToolUserQuestion {
+			// The thread is the one agent that asks the owner.
+			tools = append(tools, t)
+			continue
+		}
 		if t.ThreadOnly {
 			tools = append(tools, t)
 			own = true

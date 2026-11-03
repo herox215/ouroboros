@@ -56,7 +56,7 @@ func AskRestart(ctx context.Context, exe string) bool {
 // cancelling work that would otherwise keep the new build waiting indefinitely.
 const restartGrace = time.Minute
 
-const restartQuestionHead = "[Not from the owner: a restart interrupted this unanswered question. Ask it again with user_question before continuing; no permission was granted.]\n"
+const restartQuestionHead = "[Not from the owner: a restart interrupted this unanswered question. Ask it again before continuing, with user_question, or with thread_message and wait true where you work for the thread; no permission was granted.]\n"
 
 const restartThreadQuestionHead = "[Resume this pending question in the shared thread.]\n" + restartQuestionHead
 
