@@ -173,9 +173,12 @@ func threadTools(window string) []agent.Tool {
 				return "", err
 			}
 			if s.MessageID != "" {
-				// An answer to a message of a session hands nothing new on.
-				// The owner heard already that their answer arrived, when
-				// they gave it: the thread says nothing more of it.
+				// An answer to a message of a session hands nothing new on:
+				// the owner heard already that their answer arrived, when
+				// they gave it, and the session's result follows. So the
+				// thread says nothing of its own about it, also no note that
+				// it has nothing to say, see agent.Silent.
+				agent.Silent(ctx)
 				return fmt.Sprintf("Answered message %s of %q: %s. The owner was told already that their answer arrived: end your answer without a word about it, the session's result follows.", s.MessageID, title, outcome), nil
 			}
 			// The session answers the question: what the thread says itself

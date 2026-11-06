@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/agent"
 	"ouroboros/internal/config"
 	"ouroboros/internal/openai"
 	"ouroboros/internal/workdir"
@@ -213,5 +214,45 @@ func TestSessionNewNamesItsSession(t *testing.T) {
 	got, err := a.Ask(ctx, "thread", `!session_new {"text":"go"}`, nil)
 	if got := result(t, got, err); got != "Work started in the background in session s2." {
 		t.Fatalf("session_new: %s", got)
+	}
+}
+
+// noteLLM calls the tool note with args on the first message, and answers
+// with note on the second: a note in brackets, as a model writes one where
+// it is told to say nothing.
+type noteLLM struct {
+	calls   int
+	tool    string
+	args    string
+	note    string
+	waiting bool
+}
+
+func (l *noteLLM) Complete(_ context.Context, _ string, _ []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	l.calls++
+	if l.calls == 1 {
+		return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Type: "function", Function: openai.FunctionCall{Name: l.tool, Arguments: l.args}}}}, nil
+	}
+	return openai.Message{Content: l.note}, nil
+}
+
+// The answer the owner gave to a message of a session is handed on, and the
+// thread says nothing of its own about it: a note that it has nothing to say,
+// as models write one when they are told to be quiet, is no answer to the
+// owner either.
+func TestThreadAnswersAMessageSilently(t *testing.T) {
+	llm := &noteLLM{tool: ToolSessionMessage, args: `{"session":"s1","message_id":"M1","text":"ja, mach"}`,
+		note: "[Dies ist eine leere Antwort – der Eigentümer wurde informiert, dass seine Antwort angekommen ist.]"}
+	cfg, b := directNode(t)
+	b.LLM = func(string) (agent.LLM, error) { return llm, nil }
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	defer a.Stop()
+	thread := &fakeThread{}
+	got, err := a.Ask(WithThread(context.Background(), thread), "thread", "ja, mach", nil)
+	if err != nil || got != "" {
+		t.Fatalf("the thread said %q, %v", got, err)
+	}
+	if strings.Join(thread.sent, "|") != "s1 ja, mach" || llm.calls != 2 {
+		t.Fatalf("sent %q after %d calls", thread.sent, llm.calls)
 	}
 }
