@@ -1100,6 +1100,40 @@ func TestSilentSaysNothing(t *testing.T) {
 	}
 }
 
+// What the owner says meanwhile ends the silence: an answer that hands it on
+// says an acknowledgement of receipt again, see clearHanded.
+func TestSilentEndsWithWhatCameMeanwhile(t *testing.T) {
+	quiet := Tool{Name: "quiet", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Silent(ctx)
+		return "answered", nil
+	}}
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		Handed(ctx)
+		return "handed", nil
+	}}
+	calls := 0
+	llm := llmFunc(func([]openai.Message) openai.Message {
+		calls++
+		switch calls {
+		case 1:
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "1", Function: openai.FunctionCall{Name: "quiet", Arguments: "{}"}}}}
+		case 2:
+			return openai.Message{ToolCalls: []openai.ToolCall{{ID: "2", Function: openai.FunctionCall{Name: "hand", Arguments: "{}"}}}}
+		}
+		return openai.Message{Content: "I'll look into it."}
+	})
+	said := []openai.Message{{Role: "user", Content: "and fix the login"}}
+	ctx := WithMessageSteering(context.Background(), func() []openai.Message {
+		meanwhile := said
+		said = nil
+		return meanwhile
+	})
+	got, err := New(llm, "m", "sys", quiet, hand).Respond(ctx, "c", "yes, do it")
+	if err != nil || got != "I'll look into it." {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
 // A tool that did something besides hand the question on gives the answer
 // something of its own to say, which is kept: a message of two parts, one
 // answered from this conversation and one handed on, loses neither.

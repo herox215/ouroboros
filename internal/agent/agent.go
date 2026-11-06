@@ -264,8 +264,12 @@ func (a *Answer) onlyHanded() bool { return a.handed() && !a.mixed.Load() }
 // clearHanded makes the answer speak for itself again: what it took in
 // meanwhile, a result of a job or a word of the owner, is what it answers
 // now, and what it says is no early answer to the question its tools handed
-// on, see Handed.
-func (a *Answer) clearHanded() { a.handoffs.Store(0) }
+// on, see Handed. It may say an acknowledgement again of what its tools hand
+// on next, see Silent.
+func (a *Answer) clearHanded() {
+	a.handoffs.Store(0)
+	a.quiet.Store(false)
+}
 
 // Silent marks the answer of ctx as one whose question its tools handed on
 // and of which it says nothing of its own, not even an acknowledgement of
