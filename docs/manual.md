@@ -473,7 +473,9 @@ your agent is thinking.
   most, and its answer ends: that conversation answers, and only its result is the substantive answer. A complete
   answer to what was handed on, written before the result, is not shown. A message about several topics hands each its part. When it
   cannot tell which topic you mean, it asks you, about the topic. It answers itself only what the thread answers
-  already, like what was said before. Its words along the way and the calls with which it hands on are not shown;
+  already, like what was said before. An answer of yours that a conversation was waiting for goes to it without a
+  word of the thread's own: you are told that your answer arrived, and the thread says nothing of it, not even that
+  it has nothing to say. Its words along the way and the calls with which it hands on are not shown;
   `/context` shows them.
 - **Which conversations.** The agent of the thread is told which conversations there are to hand your messages
   to: those in which something happened in the last 3 hours, at most 30, the latest first, each with a handle of

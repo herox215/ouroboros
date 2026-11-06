@@ -1062,6 +1062,44 @@ func TestHandedAllowsAnAcknowledgementOnly(t *testing.T) {
 	}
 }
 
+// An answer that is silent says nothing of its own at all, not even an
+// acknowledgement of receipt or a note that it has nothing to say: what the
+// owner gave is read where it was handed to, see Silent.
+func TestSilentSaysNothing(t *testing.T) {
+	hand := Tool{Name: "hand", Schema: `{"type":"object"}`, Run: func(ctx context.Context, _ json.RawMessage) (string, error) {
+		if !Silent(ctx) {
+			t.Error("Silent outside of an answer")
+		}
+		return "handed", nil
+	}}
+	for _, tt := range []struct{ name, text string }{
+		{"an acknowledgement", "I'll look into it."},
+		{"a note that it is empty", "[This is an empty answer – the owner was told that theirs arrived.]"},
+		{"nothing", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			llm := &handLLM{said: []string{tt.text, "A fresh answer."}}
+			a := New(llm, "gpt", "alpha", hand)
+			if got, err := a.Respond(context.Background(), "c1", "hand me the login"); err != nil || got != "" {
+				t.Fatalf("got %q, %v", got, err)
+			}
+			if tt.text != "" {
+				for _, m := range a.memory.Conversation("c1") {
+					if strings.Contains(m.Content, tt.text) {
+						t.Fatal("what the owner was not shown is kept as said")
+					}
+				}
+			}
+			if got, err := a.Respond(context.Background(), "c1", "hi"); err != nil || got != "A fresh answer." {
+				t.Fatalf("the answer after: %q, %v", got, err)
+			}
+		})
+	}
+	if Silent(context.Background()) {
+		t.Fatal("Silent outside of an answer")
+	}
+}
+
 // A tool that did something besides hand the question on gives the answer
 // something of its own to say, which is kept: a message of two parts, one
 // answered from this conversation and one handed on, loses neither.

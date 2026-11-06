@@ -204,6 +204,7 @@ type Answer struct {
 	ended    atomic.Bool  // by End
 	handoffs atomic.Int64 // by Handed, see handed
 	mixed    atomic.Bool  // a tool did more than hand on, see Handed
+	quiet    atomic.Bool  // by Silent, see silent
 	// kept is what the tools of the round keep, see Keep.
 	keptMu sync.Mutex
 	kept   []chat.Message
@@ -265,6 +266,25 @@ func (a *Answer) onlyHanded() bool { return a.handed() && !a.mixed.Load() }
 // now, and what it says is no early answer to the question its tools handed
 // on, see Handed.
 func (a *Answer) clearHanded() { a.handoffs.Store(0) }
+
+// Silent marks the answer of ctx as one whose question its tools handed on
+// and of which it says nothing of its own, not even an acknowledgement of
+// receipt: what it answers is read where the question was handed to, as when
+// the owner answered a question a session asked. A further tool of the
+// answer that did something besides hand on gives it something of its own to
+// say all the same, see Handed. It reports whether ctx is of an answer.
+func Silent(ctx context.Context) bool {
+	a := AnswerOf(ctx)
+	if a == nil {
+		return false
+	}
+	a.quiet.Store(true)
+	a.handoffs.Add(1)
+	return true
+}
+
+// silent reports whether the answer says nothing of its own, see Silent.
+func (a *Answer) silent() bool { return a.quiet.Load() }
 
 // AnswerOf returns the answer a tool is run for under ctx, nil outside of
 // one.
@@ -649,8 +669,9 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		// An answer whose tools handed its question on says an
 		// acknowledgement of receipt at most: what it would answer itself
 		// would be given a second time by what the question was handed to,
-		// see Handed. What the owner said meanwhile is taken all the same.
-		if len(msg.ToolCalls) == 0 && answer.onlyHanded() && !acknowledgement(msg.Content) {
+		// see Handed. An answer that is silent says not even that, see
+		// Silent. What the owner said meanwhile is taken all the same.
+		if len(msg.ToolCalls) == 0 && answer.onlyHanded() && (answer.silent() || !acknowledgement(msg.Content)) {
 			if delivered, err := report(); err != nil {
 				return abandon(err)
 			} else if delivered {
