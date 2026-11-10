@@ -86,7 +86,7 @@ func userQuestion(heard ...func(context.Context, Question, string)) agent.Tool {
 			"Ask nothing you can find out yourself. " +
 			"It waits until the owner answers or the conversation is cancelled.",
 		Schema: `{"type":"object","properties":{` +
-			`"question":{"type":"string","description":"what you ask: one short, plain sentence in the language of the conversation, without code; it has to make sense without the options"},` +
+			`"question":{"type":"string","description":"what you ask: one short, plain sentence in the language of the conversation, without code; it has to make sense without the options, and may refer only to what the owner has been shown; if the decision needs more context than a sentence, end your answer with it instead"},` +
 			fmt.Sprintf(`"options":{"type":"array","items":{"type":"string"},"description":"%d to %d answers to choose from, each a few words on one line; leave out for a question only their own words answer"},`, MinOptions, MaxOptions) +
 			`"recommended":{"type":"string","description":"the option you would choose, exactly as in options; leave out without a preference"}` +
 			`},"required":["question"]}`,
@@ -99,12 +99,17 @@ func userQuestion(heard ...func(context.Context, Question, string)) agent.Tool {
 			if err != nil {
 				return "", err
 			}
+			last := lastAskedOf(ctx)
+			if last.repeats(q) {
+				return "", errors.New(repeatHint)
+			}
 			asked, _ := json.Marshal(q) // strings only: cannot fail
 			answer, err := agent.AskOwnerReply(ctx, asked)
 			if errors.Is(err, agent.ErrNoOwner) {
 				return "", errors.New("nobody can be asked here: put the question in your answer instead")
 			}
 			if err == nil {
+				last.remember(q, answer.Text)
 				for _, h := range heard {
 					h(ctx, q, answer.Text)
 				}

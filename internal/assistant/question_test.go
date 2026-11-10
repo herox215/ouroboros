@@ -9,6 +9,7 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/openai"
 )
 
 // A question is read as the agent wrote it, each option on one line: what
@@ -116,5 +117,69 @@ func TestUserQuestionAcknowledged(t *testing.T) {
 	}
 	if sent := llm.sent[0]; !strings.Contains(sent, "Welche Datenbank?\n(SQLite / Postgres)") || !strings.Contains(sent, "<answer>\nSQLite\n</answer>") || llm.prompts[0] != ackPrompt {
 		t.Errorf("sent %q", sent)
+	}
+}
+
+// A reply that is a question back gets no acknowledgement: it would promise
+// what the agent cannot do, and an option still gets one.
+func TestUserQuestionNoAckForQuestionBack(t *testing.T) {
+	llm := &askingLLM{decided: "Okay, then I'll explain it."}
+	for _, c := range []struct{ answer, said string }{
+		{"??", ""},
+		{"What is the problem with it?", ""},
+		{"SQLite", "Okay, then I'll explain it."},
+	} {
+		var said []string
+		ctx := agent.WithOwner(context.Background(), func(context.Context, json.RawMessage) (string, error) { return c.answer, nil })
+		ctx = agent.WithSaying(ctx, func(_, text string) { said = append(said, text) })
+		if _, err := userQuestion(asking{llm, "m"}.acknowledge).Run(ctx, json.RawMessage(`{"question":"Which?","options":["SQLite","Postgres"]}`)); err != nil || strings.Join(said, "|") != c.said {
+			t.Errorf("%q: %v, said %q", c.answer, err, said)
+		}
+	}
+}
+
+// scriptedCalls is an LLM that calls user_question with each of its
+// questions in turn, and ends with the results it saw.
+type scriptedCalls struct {
+	questions []string
+	results   []string
+}
+
+func (l *scriptedCalls) Complete(_ context.Context, _ string, msgs []openai.Message, _ []openai.Tool) (openai.Message, error) {
+	if last := msgs[len(msgs)-1]; last.Role == "tool" {
+		l.results = append(l.results, last.Content)
+	}
+	if len(l.questions) == 0 {
+		return openai.Message{Role: "assistant", Content: "done"}, nil
+	}
+	q := l.questions[0]
+	l.questions = l.questions[1:]
+	return openai.Message{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: q, Function: openai.FunctionCall{
+		Name: ToolUserQuestion, Arguments: `{"question":"` + q + `"}`}}}}, nil
+}
+
+// The same question asked again after the owner answered it with a question
+// is not asked: the agent is told to explain instead. A different question,
+// or one after a real answer, is asked.
+func TestUserQuestionRepeatGuard(t *testing.T) {
+	answers := []string{"What is the problem?", "Postgres", "SQLite"}
+	var asked []string
+	ctx := agent.WithOwner(context.Background(), func(_ context.Context, q json.RawMessage) (string, error) {
+		asked = append(asked, string(q))
+		a := answers[0]
+		answers = answers[1:]
+		return a, nil
+	})
+	llm := &scriptedCalls{questions: []string{
+		"How shall I solve the three points?",
+		"Do you like how I solve the three points?",
+		"Which database do you prefer?",
+		"Which database do you prefer then?",
+	}}
+	if _, err := agent.New(llm, "m", "sys", userQuestion()).Respond(ctx, "c", "go"); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 3 || len(llm.results) != 4 || !strings.Contains(llm.results[1], repeatHint) || strings.Contains(llm.results[3], repeatHint) {
+		t.Fatalf("asked %v, results %q", asked, llm.results)
 	}
 }
