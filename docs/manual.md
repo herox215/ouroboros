@@ -275,6 +275,7 @@ A message that starts with a slash takes two: `//etc` sends `/etc`.
 | `/session` | the conversations of the node in a dialog over the chat, the latest first, the one shown marked: type to filter the list, `↑` `↓` select, `enter` shows the one selected, `ctrl+d` twice deletes it, `tab` switches to the conversations of peers, `esc` takes back what is typed and then goes back; see [Sessions](#sessions) |
 | `/thread` | back to the thread, which the UI opens with: one conversation with your agent about everything, while behind it each topic is a conversation of its own and several work at once; see [The thread](#the-thread) |
 | `/cancel` | stop the answer that is on its way in the conversation shown, and the tasks its agent delegated |
+| `/peers` | the peers in a dialog, each with its ID, model and state as `list_peers` shows it (`connected`, `connection requested`, `not connected`, trusted but not reachable): `↑` `↓` select, `enter` opens the conversations with the one selected in `/session`, where they are read, stopped (`/jobs`, `/cancel`) and deleted, `esc` back |
 | `/jobs` | the commands the agent runs in the background for the answers on their way, in your conversations and in those of peers, each with where it runs and for how long, the list kept up to date: `↑` `↓` select, `enter` stops the one selected, `esc` back; see [Commands](#commands) |
 | `/setup` | run the setup; for a node that is set up it starts with its accesses: `enter` uses the one selected, `l` signs in to it again, `r` renames it, `d` removes it, the last row adds another one, see [Providers and accesses](#providers-and-accesses) |
 | `/context` | the next context, or the last actual prepared request with extensions, message by message: `↑` `↓` `pgup` `pgdn` `home` `end` scroll, `esc` back. `/` searches it: every match is marked as you type, without regard to case and across the ends of lines; `↑` `↓` go from match to match, `enter` keeps the search, `esc` ends it |
@@ -690,7 +691,7 @@ Firewall (ufw): `sudo ufw allow 41337/tcp && sudo ufw allow 41338/udp`
 
 ## Tools
 
-The agent has tools for peers (`list_peers`, `ask_peer`), for files (`read`, `write`, `edit`, `list`,
+The agent has tools for peers (`list_peers`, `ask_peer`, and `find_peer`, which takes a topic and returns the peer list with matching peers first, or with `peer` and `message` writes to one as `ask_peer` does; it is in the same lists `tools.a2a` / `tools.peers` as `ask_peer`, so a peer-started session has no right beyond them), for files (`read`, `write`, `edit`, `list`,
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
 `history_sessions`), for [memories](#memories) (`memory_load`, `memory_add`,
 `memory_forget`), for owner-only [scheduled answers](#schedule)
@@ -1381,7 +1382,7 @@ and no peer reaches it.
 | Category | Shows | Changes |
 |---|---|---|
 | The node | name, the description of the agent card, the access in use (what it is called and what tells it apart, like its endpoint or its account; never what it signs in with), model, the ID of the node, the model for peers, the fallbacks, the effort, the debug mode, the mode, the last run of the tests of a rebuild | the name and the description (empty is the default); the debug mode and the mode; the accesses in `/setup`, the models and fallbacks in `/model`, the effort in `/effort`, each opened from here |
-| The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it; how long the thread continues sessions (`thread_window`) | all of them |
+| The agents | the context provider and those this build has; whether your agent builds into ouro what a task needs (`self_improve`) or proposes it; how long the thread continues sessions (`thread_window`); how many tool rounds your agent makes for one answer to a peer (`peer_tool_max`, 1 to 100, default 30) | all of them |
 | Plugins | every plugin of this build: on or off, whether it runs now, and why one cannot be turned off | turn a plugin on or off |
 | Tools of your agent | `h2a`: whether all tools are allowed (`*`), and for each tool whether it is allowed, by its name or by `*`, with each of its settings below it and what holds where one is not set | all tools, each tool, each of its settings |
 | Tools for peers | `a2a`, the same; a tool for your agent alone, and one for a peer with a list of its own alone, is shown as such and cannot be allowed | the same |
@@ -1810,7 +1811,10 @@ message of that peer to go on. Both are kept per answer, as that is how long a q
   message is a new one, whatever it says.
 - **One budget for the whole task.** All messages your agent sends for one answer to you, and everything
   the peers send for them in turn, questions and answers and what they ask of other peers, are one task: at
-  most **16 messages** and **30 minutes**. The budget travels with every message and its answer, and each
+  most **16 messages** and **30 minutes**. Besides, `peer_tool_max` in the configuration (also in
+  `/settings`; 1 to 100, default 30, `config.DefaultPeerToolMax`) bounds the tool rounds, i.e. calls of the LLM,
+  your agent makes for one answer to a peer that addresses it. The message count stays for now as the
+  guard against loops between agents, next to the depth limit of 3 hops; The budget travels with every message and its answer, and each
   node takes the lower of what it knows and what it is told: a peer can spend it, but not fill it, and a
   request passed on to a third node starts no new one. When it is used up, nothing more is sent, and the
   agent is told to finish with what it has.

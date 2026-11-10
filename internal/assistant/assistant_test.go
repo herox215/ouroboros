@@ -28,10 +28,10 @@ func TestPick(t *testing.T) {
 	}{
 		{nil, ""},
 		{config.Named(), ""},
-		{config.Named(config.AllTools), "list_peers,ask_peer,answer_peer,tell_peer,ask_back"},
+		{config.Named(config.AllTools), "list_peers,ask_peer,answer_peer,tell_peer,ask_back,find_peer"},
 		{config.Named("ask_peer"), "ask_peer"},
 		{config.Named("ask_peer", "list_peers"), "list_peers,ask_peer"},
-		{config.Named(config.AllTools, "ask_peer"), "list_peers,ask_peer,answer_peer,tell_peer,ask_back"},
+		{config.Named(config.AllTools, "ask_peer"), "list_peers,ask_peer,answer_peer,tell_peer,ask_back,find_peer"},
 	}
 	for _, tt := range tests {
 		got, err := pick(all, tt.allowed, forOwner)
