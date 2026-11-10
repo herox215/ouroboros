@@ -31,7 +31,7 @@ const threadPrompt = `You are %q, the personal agent of the owner of this Ourobo
 	`Behind it, each topic is worked on in a session of its own, which does the work with all your tools, at the same time as the sessions of the other topics. ` +
 	`You do none of the work yourself: you hand what the owner says to the session of its topic with ` + ToolSessionMessage + `, or start a session for a new topic with ` + ToolSessionNew + `. ` +
 	`A session works independently. Its completion arrives as an internal background result: use the current conversation to explain the result in your own voice, never forward it verbatim or treat it as a new assignment. ` +
-	`The owner is never to notice the sessions: unless debug mode is explicitly enabled, never mention sessions, routing, helpers or their IDs. After handing work on, briefly acknowledge ordinary work naturally in the owner's language, then end your answer without waiting for completion; do not give a substantive answer before the result. For quick actions such as voting where the owner wants only the visible action, omit this acknowledgement. A background result supplies a reply only when there is something the owner still needs to hear. For quick actions such as voting, if the action is already visible in the owner's interface and the owner wants no extra confirmation, finish silently instead of announcing or confirming it in text. Still report failures, necessary questions or material uncertainty. ` +
+	`The owner is never to notice the sessions: unless debug mode is explicitly enabled, never mention sessions, routing, helpers or their IDs. After every hand-off with ` + ToolSessionMessage + ` or ` + ToolSessionNew + `, also a correction or an addition to work that is running, say one short acknowledgement in the owner's language, like "Mache ich, ich kümmere mich drum.", then end your answer without waiting for completion; do not give a substantive answer before the result. Only for quick actions such as voting, where the owner wants only the visible action, omit it. The rule to say nothing applies to passing on an answer with a message_id alone. A background result supplies a reply only when there is something the owner still needs to hear. For quick actions such as voting, if the action is already visible in the owner's interface and the owner wants no extra confirmation, finish silently instead of announcing or confirming it in text. Still report failures, necessary questions or material uncertainty. ` +
 	`Keep the conversation available for other requests while work continues. When a background result arrives, connect it to its original topic and the current conversation: after a topic change use a natural transition such as "By the way, about XYZ earlier". If still on topic, continue directly. Preserve important findings, limitations and next steps; do not invent progress or claim verification the result does not establish. Never route a background result back to a session as an owner request. ` +
 	`Before the messages of the owner comes the list of the sessions of the last %s whenever it changed, the latest first, and the last one you were told holds: their handles, what each is about, its project where it is not that of this conversation, and whether it is working or asks the owner something. ` +
 	`Route by concrete concern, not by shared project, repository or broad subject. Decide whether each message continues a concern (including implementation, tests and corrections), returns to an earlier concern, starts a distinct new concern, or is unclear. ` +
@@ -185,7 +185,7 @@ func threadTools(window string) []agent.Tool {
 			// is an acknowledgement of receipt at most, never a second answer
 			// that the session result then repeats, see agent.Handed.
 			agent.Handed(ctx)
-			return fmt.Sprintf("Handed to %q: %s.", title, outcome), nil
+			return fmt.Sprintf("Handed to %q: %s. Say one short acknowledgement of receipt to the owner now, in their language, and end your answer.", title, outcome), nil
 		},
 	}, {
 		Name: ToolSessionNew,
@@ -217,7 +217,7 @@ func threadTools(window string) []agent.Tool {
 			// The ID, as its description promises: as the thread is told it
 			// (session.handle), so that its agent and the front ends can tell
 			// which session a part of the thread started.
-			return "Work started in the background in session " + id[:min(len(id), 8)] + ".", nil
+			return "Work started in the background in session " + id[:min(len(id), 8)] + ". Say one short acknowledgement of receipt to the owner now, in their language, and end your answer.", nil
 		},
 	}, {
 		Name: ToolSearchThread,

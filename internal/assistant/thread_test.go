@@ -103,8 +103,8 @@ func TestThreadPrompt(t *testing.T) {
 		!strings.Contains(got, "Before the messages of the owner comes the list of the sessions of the last 3 hours whenever it changed") || !strings.Contains(got, "goes to it word for word") ||
 		!strings.Contains(got, "You are shown only the last 6 hours of this conversation: when the owner refers to something said before that, find it with search_thread. ") ||
 		!strings.Contains(got, "The thread has no project: session_new starts a session that names no directory in your workspace. ") ||
-		!strings.Contains(got, "briefly acknowledge ordinary work") || !strings.Contains(got, "only if you do not also hand that request on") ||
-		!strings.Contains(got, "omit this acknowledgement") || !strings.Contains(got, "A failed handoff leaves the original request unresolved") ||
+		!strings.Contains(got, "say one short acknowledgement in the owner's language") || !strings.Contains(got, "only if you do not also hand that request on") ||
+		!strings.Contains(got, "omit it. The rule to say nothing applies") || !strings.Contains(got, "A failed handoff leaves the original request unresolved") ||
 		!strings.Contains(got, "finish silently instead of announcing or confirming it in text") ||
 		!strings.Contains(got, "Still report failures, necessary questions or material uncertainty") ||
 		!strings.Contains(got, "it need not produce a text reply when the visible action already suffices") ||
@@ -212,7 +212,7 @@ func TestSessionNewNamesItsSession(t *testing.T) {
 	defer a.Stop()
 	ctx := WithThread(context.Background(), &fakeThread{})
 	got, err := a.Ask(ctx, "thread", `!session_new {"text":"go"}`, nil)
-	if got := result(t, got, err); got != "Work started in the background in session s2." {
+	if got := result(t, got, err); got != "Work started in the background in session s2. Say one short acknowledgement of receipt to the owner now, in their language, and end your answer." {
 		t.Fatalf("session_new: %s", got)
 	}
 }
