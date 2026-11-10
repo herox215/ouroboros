@@ -39,7 +39,7 @@ const MaxDelegates = 4
 // the owner alone, delegate among them, so that a helper hands nothing on),
 // the peers, whose budget of messages is that of one answer, and building
 // ouro anew.
-var notForHelpers = []string{toolListPeers, toolAskPeer, toolAnswer, toolTellPeer, toolAskBack, ToolRebuild, ToolTaskStop, ToolTaskTell}
+var notForHelpers = []string{toolListPeers, toolAskPeer, toolFindPeer, toolAnswer, toolTellPeer, toolAskBack, ToolRebuild, ToolTaskStop, ToolTaskTell}
 
 // helperPrompt is what a helper is; %q is the name of the node.
 const helperPrompt = `You are a helper of %q, the personal agent of the owner of this Ouroboros node, which gave you one task. ` +

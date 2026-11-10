@@ -57,7 +57,7 @@ const (
 
 // waiting are the tools that wait for someone else, not for ouro: how long
 // they take says nothing of ouro, and is not counted to the answer.
-var waiting = []string{ToolUserQuestion, toolAskPeer, toolAskBack}
+var waiting = []string{ToolUserQuestion, toolAskPeer, toolFindPeer, toolAskBack}
 
 // measures is what the record of an answer keeps for its signals.
 type measures struct {

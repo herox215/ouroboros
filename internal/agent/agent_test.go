@@ -1395,3 +1395,16 @@ func TestSteeringWhileAnswering(t *testing.T) {
 		t.Fatalf("remembered %q", said)
 	}
 }
+
+// WithMaxRounds bounds the calls of the LLM for an answer below the default.
+func TestWithMaxRoundsBoundsAnAnswer(t *testing.T) {
+	llm := &loopLLM{}
+	a := New(llm, "gpt", "sys", Tool{Name: "noop", Run: func(context.Context, json.RawMessage) (string, error) { return "", nil }})
+	ctx := WithMaxRounds(context.Background(), 5)
+	if _, err := a.Respond(ctx, "c1", "go"); !errors.Is(err, ErrTooManyToolCalls) || llm.calls != 5 {
+		t.Fatalf("err %v after %d calls", err, llm.calls)
+	}
+	if got := roundsOf(WithMaxRounds(context.Background(), 0)); got != maxRounds {
+		t.Fatalf("0 changes the bound: %d", got)
+	}
+}

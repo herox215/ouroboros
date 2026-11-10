@@ -21,6 +21,7 @@ func someSettings() Settings {
 		Name: "alpha", Access: "Example", About: "https://api.example/v1", Model: "gpt-4o", ID: "abc123def456",
 		Description: "Ouroboros instance named alpha", DescriptionDefault: true,
 		ThreadWindow:     "3h",
+		PeerToolMax:      30,
 		ContextProviders: []string{"compact"},
 		Plugins: []plugin.PluginState{
 			{Name: "base", On: true, Running: true, Fixed: "it runs the commands of ouro"},

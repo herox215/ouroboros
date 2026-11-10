@@ -81,3 +81,26 @@ func TestThreadWindowOfTheOwner(t *testing.T) {
 		t.Fatal("set the window of a broken configuration")
 	}
 }
+
+// peer_tool_max is shown with its default, saved, and refused when it is no
+// number from 1 to 100.
+func TestPeerToolMaxSetting(t *testing.T) {
+	o, dir, _ := built(t, config.Config{Name: "alpha", Model: "m", BaseURL: "http://x/v1"})
+	if s, err := o.Settings(nil, nil); err != nil || s.PeerToolMax != config.DefaultPeerToolMax {
+		t.Fatalf("absent: %d, %v", s.PeerToolMax, err)
+	}
+	if _, err := o.Change(plugin.Setting{Kind: plugin.SetPeerToolMax, Value: " 12 "}, tools(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := config.Load(dir); err != nil || cfg.PeerToolMax == nil || *cfg.PeerToolMax != 12 {
+		t.Fatalf("saved: %+v, %v", cfg.PeerToolMax, err)
+	}
+	for _, v := range []string{"0", "101", "many", ""} {
+		if _, err := o.Change(plugin.Setting{Kind: plugin.SetPeerToolMax, Value: v}, tools(), nil); err == nil {
+			t.Errorf("%q is accepted", v)
+		}
+	}
+	if cfg, _ := config.Load(dir); cfg.PeerRounds() != 12 {
+		t.Errorf("the old value stays: %d", cfg.PeerRounds())
+	}
+}

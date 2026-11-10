@@ -31,6 +31,7 @@ const name = "tui"
 type needs struct {
 	Console  *plugin.Console
 	Sessions plugin.Sessions
+	Network  *plugin.Network
 }
 
 // Plugin contributes the terminal UI as the command "tui" and as the front
@@ -45,7 +46,7 @@ type needs struct {
 // see Together.
 func Plugin(owner *plugin.Owner, profile func(*Profile)) plugin.Plugin {
 	return plugin.New(name, func(ctx *plugin.Context, n needs) error {
-		u := &ui{Owner: owner, ctx: ctx, sessions: n.Sessions}
+		u := &ui{Owner: owner, ctx: ctx, sessions: n.Sessions, network: n.Network}
 		const help = "chat with your agent in the terminal UI"
 		plugin.Add(ctx, plugin.Command{Name: name, Help: help, Run: func(c context.Context, _ []string) error {
 			if !n.Console.Interactive {
@@ -68,6 +69,7 @@ type ui struct {
 	*plugin.Owner
 	ctx      *plugin.Context // to read what the plugins contributed to the UI
 	sessions plugin.Sessions
+	network  *plugin.Network
 	profiles []*ui // the profiles of the node the UI shows, if it has several
 }
 
@@ -591,4 +593,26 @@ func (u *ui) Contacts() (tui.Contacts, error) {
 		return tui.Contacts{}, err
 	}
 	return tui.Contacts{Incoming: incoming, Outgoing: outgoing, Proposals: proposals, Suggestions: suggestions}, nil
+}
+
+// Nodes lists the peers as list_peers does: the nodes that are online, and
+// the trusted ones that are not, with the state of their connection. This
+// node itself is not one.
+func (u *ui) Nodes(ctx context.Context) ([]tui.PeerInfo, error) {
+	if u.network == nil {
+		return nil, errors.New("this node has no network")
+	}
+	found, err := u.network.Peers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	set, _ := u.Owner.Settings(nil, nil) // without a configuration no node is this one
+	var out []tui.PeerInfo
+	for _, p := range found {
+		if p.ID == set.ID {
+			continue
+		}
+		out = append(out, tui.PeerInfo{Name: p.Name, ID: p.ID, Model: p.Model, State: p.State.String(), About: p.About})
+	}
+	return out, nil
 }

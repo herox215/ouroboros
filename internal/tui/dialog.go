@@ -34,7 +34,7 @@ const memoryWidth = 84
 // stays as it is, also when the wheel turns.
 func (m *Model) inDialog() bool {
 	switch m.screen {
-	case screenSuggestions, screenEffort, screenMode, screenJobs, screenModel, screenHelp, screenKeys, screenSettings, screenSessions, screenMemory:
+	case screenSuggestions, screenEffort, screenMode, screenJobs, screenPeers, screenModel, screenHelp, screenKeys, screenSettings, screenSessions, screenMemory:
 		return true
 	}
 	return false

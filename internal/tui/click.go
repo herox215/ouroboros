@@ -101,6 +101,8 @@ func (m *Model) dialogView() (string, []hit) {
 		return m.mode.view(m)
 	case screenMemory:
 		return m.memories.view(m)
+	case screenPeers:
+		return m.peerList.view(m)
 	}
 	return m.jobs.view(m)
 }
