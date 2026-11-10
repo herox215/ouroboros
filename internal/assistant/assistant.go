@@ -133,11 +133,14 @@ const (
 	// questionHint is added for an owner whose agent may ask them on the way
 	// to its answer.
 	questionHint = `When you need the user to decide or to tell you something before you can go on, ask with ` + ToolUserQuestion +
-		` instead of ending your answer with the question: they answer with a key, and you go on in the same answer with what they said. ` +
+		` instead of ending your answer with the question, where the question makes sense from what they have been shown: they answer with a key, and you go on in the same answer with what they said. ` +
 		`Give the answers you expect as options, and none where only their own words answer. Ask nothing you can find out yourself. ` +
 		`Ask as a person does in a chat: one short, plain sentence in the language of the conversation, about what it is about, without code or commands; ` +
 		`the options, if any, a few words each. Some front ends show only the question, so it has to make sense without them: ` +
-		`the user may answer in their own words, and you read what they meant. `
+		`the user may answer in their own words, and you read what they meant. ` +
+		`A question may refer only to what the owner has been shown. When the decision needs more than a sentence of context, ` +
+		`end your answer with the context and the question instead. If they answer with a question or say they do not see what you mean, ` +
+		`end your answer and explain: never ask the same question again. `
 	// mandateHint says what a message of the owner is: a question is answered
 	// or discussed, not implemented, and what they did not ask for waits for
 	// their yes where it cannot be undone cheaply, a merge above all.

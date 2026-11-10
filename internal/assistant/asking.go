@@ -176,14 +176,15 @@ func (a asking) decide(ctx context.Context, p permission, tool, call, answer str
 const ackPrompt = `An assistant asked its owner a question and the owner answered. ` +
 	`Write what the assistant says back at once, before it goes on: a few words in the language of the answer, ` +
 	`as a person in a chat who heard it and goes on, like "Alles klar, dann nehme ich SQLite." or "Got it, I'll leave it then." ` +
-	`No question, no promise of what comes later beyond going on, no code. Answer with the words alone.`
+	`No question, no promise of what comes later beyond going on, no code, never "then I'll explain" or the like: you do not know what the assistant can do next. ` +
+	`If the answer is a question back or says the owner does not understand or cannot see what it is about, write nothing at all. Answer with the words alone.`
 
 // acknowledge says back to the owner that their answer to q arrived, in a
 // few words of the conversation; nothing without the LLM, or where it
 // cannot tell them.
 func (a asking) acknowledge(ctx context.Context, q Question, answer string) {
-	if a.llm == nil || strings.TrimSpace(answer) == "" {
-		return
+	if a.llm == nil || strings.TrimSpace(answer) == "" || backQuestion(q, answer) {
+		return // a question back is for the agent to react to, not to promise anything to
 	}
 	text := talkOf(ctx) + "<question>\n" + q.Question
 	if len(q.Options) > 0 {
