@@ -311,3 +311,43 @@ func TestJobsListParts(t *testing.T) {
 		t.Fatalf("the list:\n%s", list)
 	}
 }
+
+// /peers lists the peers with their state, and enter opens their
+// conversations in /session, filtered by the peer.
+func TestPeersDialog(t *testing.T) {
+	m, b := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	b.nodes = []PeerInfo{{Name: "bob", ID: "aaaaaaaaaaaa", Model: "m1", State: "connected", About: "knows Go"}, {Name: "eve", ID: "bbbbbbbbbbbb", State: "not connected"}}
+	m.screen = screenChat
+	msg := m.openPeers()()
+	m.Update(msg)
+	if m.screen != screenPeers {
+		t.Fatalf("screen %v", m.screen)
+	}
+	out := m.View().Content
+	for _, want := range []string{"bob", "connected", "knows Go", "eve", "not connected", "id aaaaaaaaaaaa"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+	press(m, "down")
+	press(m, "enter")
+	if m.screen != screenSessions || !m.sessions.peerTab || m.sessions.filter != "eve" {
+		t.Fatalf("screen %v tab %v filter %q", m.screen, m.sessions.peerTab, m.sessions.filter)
+	}
+}
+
+// A peer list that cannot be had is said, not hidden.
+func TestPeersDialogError(t *testing.T) {
+	m, b := newModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	b.fail = map[string]error{"nodes": errors.New("no network")}
+	m.Update(m.openPeers()())
+	if out := m.View().Content; !strings.Contains(out, "no network") {
+		t.Fatalf("%s", out)
+	}
+	press(m, "esc")
+	if m.screen != screenChat {
+		t.Fatalf("screen %v", m.screen)
+	}
+}

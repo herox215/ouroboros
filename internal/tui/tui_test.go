@@ -115,7 +115,8 @@ type fakeBackend struct {
 	switched  bool
 
 	// fail is what fails, by the name of the request.
-	fail map[string]error
+	fail  map[string]error
+	nodes []PeerInfo
 	// debug is what SetDebug was called with, in order, and modes what
 	// SetMode was.
 	debug []bool
@@ -299,6 +300,12 @@ func (f *fakeBackend) Peers(ctx context.Context) ([]plugin.SessionInfo, error) {
 		return nil, err
 	}
 	return f.peers, nil
+}
+func (f *fakeBackend) Nodes(ctx context.Context) ([]PeerInfo, error) {
+	if err := f.fail["nodes"]; err != nil {
+		return nil, err
+	}
+	return f.nodes, nil
 }
 func (f *fakeBackend) Jobs(ctx context.Context) ([]plugin.Job, error) {
 	if err := f.fail["jobs"]; err != nil {

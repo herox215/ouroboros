@@ -103,6 +103,9 @@ type Backend interface {
 	// Contents returns what the next call of the LLM in the session id is
 	// sent, message by message. With an error it returns what it has of it.
 	Contents(ctx context.Context, id string) ([]Message, error)
+	// Nodes lists the peers: the nodes that are online and the trusted ones
+	// that are not, with the state of their connection, as list_peers shows.
+	Nodes(ctx context.Context) ([]PeerInfo, error)
 	// Jobs lists the commands that run in the background for the answers
 	// on their way, in the sessions and in the conversations of peers.
 	Jobs(ctx context.Context) ([]plugin.Job, error)
@@ -251,6 +254,7 @@ const (
 	screenMode     // the modes of the node, for /mode
 	screenKeys     // the keys of the chat, for /keys and ctrl+k
 	screenJobs     // the commands that run in the background, for /jobs
+	screenPeers    // the peers of the node, for /peers
 	screenMemory   // what the agent has remembered, for /memory
 )
 
@@ -406,10 +410,11 @@ type Model struct {
 	plugins            pluginScreen // the screens the plugins contributed, and the one that is open
 	choice             int          // the action selected: accept or reject, or one of a screen
 
-	picker modelScreen  // the models of the accesses, for /model
-	effort effortScreen // the slider of the effort, for /effort
-	mode   modeScreen   // the modes of the node, for /mode
-	jobs   jobsScreen   // the commands that run in the background, for /jobs
+	picker   modelScreen  // the models of the accesses, for /model
+	effort   effortScreen // the slider of the effort, for /effort
+	mode     modeScreen   // the modes of the node, for /mode
+	jobs     jobsScreen   // the commands that run in the background, for /jobs
+	peerList peersScreen  // the peers of the node, for /peers
 
 	memories memoryScreen // what the agent has remembered, for /memory
 	// thoughtsHidden is whether what the model thought is hidden in the
@@ -766,6 +771,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.deleted(msg)
 	case jobsMsg:
 		return m, m.jobsLoaded(msg)
+	case peersListMsg:
+		m.peersListed(msg)
+		return m, nil
 	case jobsTick:
 		return m, m.jobsTicked(msg)
 	case memoriesMsg:
@@ -939,6 +947,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.mode.handleKey(m, msg)
 	case screenJobs:
 		return m.jobs.handleKey(m, msg)
+	case screenPeers:
+		return m.peerList.handleKey(m, msg)
 	case screenMemory:
 		return m.memories.handleKey(m, msg)
 	case screenHelp, screenKeys:
