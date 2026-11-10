@@ -30,8 +30,7 @@ const DraftHead = "[Not from the owner: you wrote the answer below, but more cam
 
 const (
 	maxContexts = 256               // conversations kept in memory
-	maxRounds   = 100               // LLM calls per answer; stops an agent that keeps calling tools
-	warnRounds  = maxRounds * 4 / 5 // LLM calls after which the LLM is told how many it has left
+	maxRounds   = 100 // LLM calls per answer; stops an agent that keeps calling tools, unless WithMaxRounds sets another
 	// askRounds are the LLM calls after which the LLM is told to ask the
 	// user rather than search on, if it has not found what it looks for:
 	// what it is to look for may not be clear, and the user knows.
@@ -151,7 +150,28 @@ type (
 	answerKey          struct{}
 	imagesKey          struct{}
 	remarkKey          struct{}
+	roundsKey          struct{}
 )
+
+// WithMaxRounds returns a context under which an answer makes at most n calls
+// of the LLM instead of the default of 100. n < 1 changes nothing.
+func WithMaxRounds(ctx context.Context, n int) context.Context {
+	if n < 1 {
+		return ctx
+	}
+	return context.WithValue(ctx, roundsKey{}, n)
+}
+
+// roundsOf is how many calls of the LLM the answer under ctx may make.
+func roundsOf(ctx context.Context) int {
+	if n, ok := ctx.Value(roundsKey{}).(int); ok {
+		return n
+	}
+	return maxRounds
+}
+
+// warnAfter is the call after which the LLM is told how many it has left.
+func warnAfter(limit int) int { return limit * 4 / 5 }
 
 // remark is what a tool says of its call for the owner.
 type remark struct {
@@ -602,13 +622,14 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		return len(texts) > 0, nil
 	}
 	nudged := false // an empty message was answered with emptyNote
-	for round := range maxRounds {
+	limit := roundsOf(ctx)
+	for round := range limit {
 		// An answer that was stopped while a tool ran asks the LLM no more.
 		if err := ctx.Err(); err != nil {
 			return abandon(err)
 		}
 		msgs := sent(ctx, append([]chat.Message{a.system}, history...))
-		if note := notes(round, int(spent.Load())); note != "" && msgs[len(msgs)-1].Role == "tool" {
+		if note := notes(round, limit, int(spent.Load())); note != "" && msgs[len(msgs)-1].Role == "tool" {
 			msgs = append(msgs, chat.Message{Role: "user", Content: note})
 		}
 		if p := a.extensions.provider; p != nil {
@@ -856,7 +877,7 @@ func Abandon(msgs []chat.Message) []chat.Message {
 // is only sent, not remembered: the next call tells the next numbers. The
 // results stay as they are remembered, and with them what the provider
 // cached of the conversation.
-func notes(round, spent int) string {
+func notes(round, limit, spent int) string {
 	var notes []string
 	if spent > Budget {
 		notes = append(notes, gathered(spent))
@@ -866,19 +887,19 @@ func notes(round, spent int) string {
 	if round == askRounds {
 		notes = append(notes, searching(round))
 	}
-	if round >= warnRounds {
-		notes = append(notes, remaining(round))
+	if round >= warnAfter(limit) {
+		notes = append(notes, remaining(round, limit))
 	}
 	return strings.Join(notes, "\n\n")
 }
 
 // remaining is what the LLM is told when round, counted from 0, is one of the
 // last calls of the LLM for an answer.
-func remaining(round int) string {
+func remaining(round, limit int) string {
 	return fmt.Sprintf("[Not from the user: this is call %d of at most %d of the LLM for this answer. "+
 		"Without an answer by then, it breaks off. Finish the work that is begun, "+
 		"and answer with what is done and what is still open: asked again, you go on from there.]",
-		round+1, maxRounds)
+		round+1, limit)
 }
 
 // searching is what the LLM is told when round, counted from 0, is

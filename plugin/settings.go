@@ -7,6 +7,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"ouroboros/internal/agent"
@@ -53,6 +54,9 @@ type Settings struct {
 	// ThreadWindow is how long the thread hands messages to a session, as
 	// the configuration has it, or the default where it says nothing of it.
 	ThreadWindow string
+	// PeerToolMax is how many tool rounds the agent makes for one answer to
+	// a peer, as the configuration has it, or the default.
+	PeerToolMax int
 	Plugins      []PluginState
 	// PluginsKept says why the plugins the configuration turns off run all
 	// the same, "" if they do not.
@@ -136,6 +140,7 @@ const (
 	SetImproves                           // On: build, off: propose
 	SetPeerList                           // Peer, On: a list of its own, as the one for peers; off: none
 	SetThreadWindow                       // Value: a duration like "3h"
+	SetPeerToolMax                        // Value: a number from 1 to config.MaxPeerToolMax
 )
 
 // Setting is one change the owner makes in the settings.
@@ -216,6 +221,7 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 		ContextProvider: cfg.ContextProvider,
 		Improves:        cfg.Improves(),
 		ThreadWindow:    threadWindow(cfg),
+		PeerToolMax:     cfg.PeerRounds(),
 		PluginsKept:     o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
 	}
@@ -381,7 +387,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the window of the thread"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the window of the thread", "the tool rounds for a peer"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -477,6 +483,16 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 		}
 		c.ThreadWindow = &value
 		return "saved: the thread reads it from its next message on", nil
+	case SetPeerToolMax:
+		n, err := strconv.Atoi(strings.TrimSpace(s.Value))
+		if err == nil {
+			err = config.ValidPeerToolMax(n)
+		}
+		if err != nil {
+			return "", fmt.Errorf("peer_tool_max is a number from 1 to %d", config.MaxPeerToolMax)
+		}
+		c.PeerToolMax = &n
+		return "saved: peers are answered with it from their next message on", nil
 	}
 	return "", fmt.Errorf("no such setting: %d", s.Kind)
 }

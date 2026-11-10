@@ -538,6 +538,11 @@ func rows(s Settings) []row {
 		editing("how long the thread continues a session, like 3h", s.ThreadWindow, func(v string) Setting {
 			return Setting{Kind: plugin.SetThreadWindow, Value: v}
 		}))
+	add(agentsSection, "Tool rounds for a peer", strconv.Itoa(s.PeerToolMax),
+		"how many tool rounds (calls of the LLM) your agent makes for one answer to a peer that asks it; 1 to 100, the default is 30",
+		editing("tool rounds per answer to a peer, a number", strconv.Itoa(s.PeerToolMax), func(v string) Setting {
+			return Setting{Kind: plugin.SetPeerToolMax, Value: v}
+		}))
 
 	if s.PluginsKept != "" {
 		out = append(out, row{section: pluginsSection, label: "Turned off", value: "none: all run",

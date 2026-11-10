@@ -21,3 +21,19 @@ func TestSettingsThreadWindow(t *testing.T) {
 		t.Fatalf("saved %+v", b.changes)
 	}
 }
+
+// The tool rounds for a peer are edited like the window: enter saves the
+// number typed.
+func TestSettingsPeerToolMax(t *testing.T) {
+	m, b := openSettings(t, someSettings())
+	pick(t, m, agentsSection, "Tool rounds for a peer", "change")
+	press(m, "enter")
+	if m.config.editing == nil || m.config.input.Value() != "30" {
+		t.Fatalf("editing %+v %q", m.config.editing, m.config.input.Value())
+	}
+	m.config.input.SetValue("12")
+	do(m)
+	if len(b.changes) != 1 || b.changes[0] != (Setting{Kind: plugin.SetPeerToolMax, Value: "12"}) {
+		t.Fatalf("saved %+v", b.changes)
+	}
+}

@@ -76,6 +76,10 @@ type Config struct {
 	// for the thread to hand messages to it, as a Go duration like "3h". A
 	// configuration that says nothing of it uses DefaultThreadWindow.
 	ThreadWindow *string `json:"thread_window,omitempty"`
+	// PeerToolMax is how many calls of the LLM, tool rounds, the agent of this
+	// node makes for one answer to a peer that addresses it. A configuration
+	// that says nothing of it uses DefaultPeerToolMax: see PeerRounds.
+	PeerToolMax *int `json:"peer_tool_max,omitempty"`
 	// PrivateKey is the base64 Ed25519 key that identifies this node to peers.
 	// It is generated on first use, so older configs may not have it yet.
 	// The ID of the node follows from it, see ID. Older configs also stored
@@ -425,6 +429,33 @@ func ValidThreadWindow(value string) error {
 	return nil
 }
 
+// DefaultPeerToolMax is how many tool rounds (calls of the LLM) the agent
+// makes for one answer to a peer, where the configuration says nothing of it.
+const DefaultPeerToolMax = 30
+
+// MaxPeerToolMax is the most peer_tool_max can be: the number of calls of the
+// LLM no answer exceeds.
+const MaxPeerToolMax = 100
+
+// PeerRounds is how many tool rounds the agent makes for one answer to a peer:
+// PeerToolMax, or DefaultPeerToolMax where the configuration has none that
+// holds.
+func (c Config) PeerRounds() int {
+	if c.PeerToolMax == nil || ValidPeerToolMax(*c.PeerToolMax) != nil {
+		return DefaultPeerToolMax
+	}
+	return *c.PeerToolMax
+}
+
+// ValidPeerToolMax reports whether n can be peer_tool_max: from 1 to
+// MaxPeerToolMax.
+func ValidPeerToolMax(n int) error {
+	if n < 1 || n > MaxPeerToolMax {
+		return fmt.Errorf("peer_tool_max is a number from 1 to %d", MaxPeerToolMax)
+	}
+	return nil
+}
+
 // Span names how long d is, for what the node tells the owner and its agents:
 // in whole hours or minutes where it is such, else as Go writes the duration,
 // like "3 hours", "90 minutes" or "1h30m".
@@ -528,6 +559,11 @@ func Load(dir string) (Config, error) {
 	}
 	if c.ThreadWindow != nil {
 		if err := ValidThreadWindow(*c.ThreadWindow); err != nil {
+			return c, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if c.PeerToolMax != nil {
+		if err := ValidPeerToolMax(*c.PeerToolMax); err != nil {
 			return c, fmt.Errorf("%s: %w", path, err)
 		}
 	}

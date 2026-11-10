@@ -67,6 +67,11 @@ func (p *Peers) Respond(ctx context.Context, contextID, text string) (string, er
 	if err != nil {
 		return "", err
 	}
+	// The tool rounds of one answer to a peer are bounded by peer_tool_max,
+	// as the configuration is now.
+	if cfg, err := p.config(); err == nil {
+		ctx = agent.WithMaxRounds(ctx, cfg.PeerRounds())
+	}
 	p.remember(ctx, contextID)
 	return bot.Run(ctx, contextID, text, agent.Observer{Diagnostic: func(d agent.Diagnostic) {
 		if p.log != nil {
