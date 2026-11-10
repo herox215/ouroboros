@@ -210,7 +210,7 @@ func TestCheckTopicImageAPIFailure(t *testing.T) {
 
 func TestCheckTopicStrictParsing(t *testing.T) {
 	for _, reply := range []string{
-		"", "not JSON", "```json\n{}\n```", "null", "[]",
+		"", "not JSON", "```json\n{}\n```", "Sure: {\"disposition\":\"other\",\"reason\":\"x\"}", "```json\n{\"disposition\":\"continue\",\"reason\":\"a\",\"x\":1}\n```", "null", "[]",
 		`{"disposition":"continue"}`, `{"reason":"same"}`,
 		`{"disposition":"continue","reason":""}`, `{"disposition":"continue","reason":" \n\t"}`,
 		`{"disposition":"CONTINUE","reason":"same"}`, `{"disposition":"other","reason":"same"}`,
@@ -221,7 +221,7 @@ func TestCheckTopicStrictParsing(t *testing.T) {
 		`{"disposition":"new","disposition":"continue","reason":"same"}`,
 		`{"Disposition":"continue","reason":"same"}`,
 		`{"disposition":"continue","reason":"same"} {}`,
-		`{"disposition":"continue","reason":"same"} trailing`,
+		`Both: {"disposition":"continue","reason":"same"} {"disposition":"new","reason":"other"}`,
 		`{"disposition":"continue","reason":"same",}`,
 		`{"disposition":"continue","reason":"same"`,
 		`{"disposition":"continue","reason":"same"]`,
@@ -235,6 +235,71 @@ func TestCheckTopicStrictParsing(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckTopicTolerantForm(t *testing.T) {
+	object := `{"disposition":"continue","reason":"same"}`
+	want := TopicDecision{Disposition: TopicContinue, Reason: "same"}
+	for name, reply := range map[string]string{
+		"fence":      "```json\n" + object + "\n```",
+		"bare fence": "```\n" + object + "\n```\n",
+		"leading":    "Here is my decision: " + object,
+		"trailing":   object + "\nHope that helps.",
+		"both":       "Decision:\n```json\n" + object + "\n```",
+		"whitespace": "\n  " + object + "  \n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			llm := &topicLLM{titleLLM: titleLLM{reply: reply}}
+			got, err := titled(topicTestConfig, llm).CheckTopic(context.Background(), TopicCheck{})
+			if err != nil || got != want || llm.calls != 1 {
+				t.Fatalf("got %+v, %v after %d calls", got, err, llm.calls)
+			}
+		})
+	}
+}
+
+func TestCheckTopicRepairAndLog(t *testing.T) {
+	var logged []string
+	llm := &repairLLM{replies: []string{"I think this continues." + strings.Repeat("x", 5000), `{"disposition":"new","reason":"Other."}`}}
+	a := New(func() (config.Config, error) { return topicTestConfig, nil }, Builder{
+		LLM:   func(string) (agent.LLM, error) { return llm, nil },
+		Tools: func() []agent.Tool { return nil },
+	}, func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) })
+	got, err := a.CheckTopic(context.Background(), TopicCheck{})
+	if err != nil || got.Disposition != TopicNew || llm.calls != 2 {
+		t.Fatalf("repair: %+v, %v after %d calls", got, err, llm.calls)
+	}
+	if last := llm.sent[len(llm.sent)-1]; last.Role != "user" || !strings.Contains(last.Content, "Return only the JSON object") {
+		t.Fatalf("repair instruction: %+v", last)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "too long") || !strings.Contains(logged[0], "5023 bytes") || len(logged[0]) > 500 {
+		t.Fatalf("log: %q", logged)
+	}
+
+	// A second invalid reply fails, with guidance and the reason logged.
+	logged = nil
+	llm = &repairLLM{replies: []string{"nope", `{"disposition":"maybe","reason":"x"}`}}
+	_, err = a.CheckTopic(context.Background(), TopicCheck{})
+	if err == nil || !strings.Contains(err.Error(), "invalid decision JSON") || !strings.Contains(err.Error(), "tell the owner") || llm.calls != 2 {
+		t.Fatalf("second failure: %v after %d calls", err, llm.calls)
+	}
+	if len(logged) != 2 || !strings.Contains(logged[0], "(json)") || !strings.Contains(logged[1], "(enum)") {
+		t.Fatalf("log: %q", logged)
+	}
+}
+
+// repairLLM answers with one reply after the other.
+type repairLLM struct {
+	replies []string
+	sent    []openai.Message
+	calls   int
+}
+
+func (l *repairLLM) Complete(ctx context.Context, model string, msgs []openai.Message, tools []openai.Tool) (openai.Message, error) {
+	l.sent = msgs
+	reply := l.replies[min(l.calls, len(l.replies)-1)]
+	l.calls++
+	return openai.Message{Role: "assistant", Content: reply}, nil
 }
 
 // These canned replies verify wiring and output handling, NOT model semantic
