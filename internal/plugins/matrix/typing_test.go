@@ -131,3 +131,17 @@ func TestThreadStopsTypingWhenItsWorkStops(t *testing.T) {
 		t.Fatal("the thread types while nothing works")
 	}
 }
+
+// A thread that handed on and ended its answer without a word, so that no
+// answer event follows, stops typing while the session goes on working.
+func TestThreadStopsTypingAfterSilentHandoff(t *testing.T) {
+	msg := plugin.SessionEvent{Kind: plugin.SessionMessage}
+	own := plugin.SessionEvent{Kind: plugin.SessionWorking, N: 2, Own: true}
+	handed := plugin.SessionEvent{Kind: plugin.SessionWorking, N: 1}
+	if !answering(plugin.ThreadID, []plugin.SessionEvent{msg, own}) {
+		t.Fatal("the thread does not type while it answers")
+	}
+	if answering(plugin.ThreadID, []plugin.SessionEvent{msg, own, handed}) {
+		t.Fatal("the thread types after it handed on silently")
+	}
+}

@@ -21,10 +21,18 @@ type typing map[*conversation]time.Time
 func answering(id string, events []plugin.SessionEvent) bool {
 	if id == plugin.ThreadID {
 		working, asking, owed, own := false, false, false, false
+		wasOwn := false
 		for _, e := range events {
 			switch e.Kind {
 			case plugin.SessionWorking:
 				working, own = e.N > 0, e.Own
+				// The thread's own answer ended without a word, as it does
+				// when it hands on silently: it owes nothing, and the work
+				// it handed on is background, not typing.
+				if wasOwn && !e.Own {
+					owed = false
+				}
+				wasOwn = e.Own
 			case plugin.SessionAsked:
 				asking = !e.Done
 			case plugin.SessionMessage:
