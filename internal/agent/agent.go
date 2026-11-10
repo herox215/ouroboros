@@ -29,7 +29,7 @@ const emptyNote = "[Your last message was empty, which is no answer: go on with 
 const DraftHead = "[Not from the owner: you wrote the answer below, but more came meanwhile, which follows it, and it did not reach the owner. Answer once, taking in both: only that answer reaches them.]\n\n"
 
 const (
-	maxContexts = 256               // conversations kept in memory
+	maxContexts = 256 // conversations kept in memory
 	maxRounds   = 100 // LLM calls per answer; stops an agent that keeps calling tools, unless WithMaxRounds sets another
 	// askRounds are the LLM calls after which the LLM is told to ask the
 	// user rather than search on, if it has not found what it looks for:

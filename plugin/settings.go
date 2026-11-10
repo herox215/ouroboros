@@ -57,7 +57,7 @@ type Settings struct {
 	// PeerToolMax is how many tool rounds the agent makes for one answer to
 	// a peer, as the configuration has it, or the default.
 	PeerToolMax int
-	Plugins      []PluginState
+	Plugins     []PluginState
 	// PluginsKept says why the plugins the configuration turns off run all
 	// the same, "" if they do not.
 	PluginsKept string
