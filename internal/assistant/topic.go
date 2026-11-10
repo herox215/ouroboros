@@ -48,6 +48,8 @@ const (
 	topicTimeout      = 30 * time.Second
 	topicImageLimit   = 4 // Per side; images are never truncated or discarded.
 	topicImageBytes   = 16 << 20
+	topicReplyLimit   = 4096 // Longest accepted reply of the model.
+	topicExcerpt      = 300  // Bytes of a rejected reply that go to the log.
 )
 
 const topicPrompt = `You independently verify whether an owner message belongs to a target conversation. ` +
@@ -115,7 +117,27 @@ func (a *Assistant) CheckTopic(ctx context.Context, check TopicCheck) (TopicDeci
 	if len(reply.ToolCalls) != 0 {
 		return TopicDecision{}, fmt.Errorf("topic check: unexpected tool calls")
 	}
-	return parseTopicDecision(reply.Content)
+	decision, err := parseTopicDecision(reply.Content)
+	if err == nil {
+		return decision, nil
+	}
+	a.logTopicFailure("first", reply.Content, err)
+	// One repair round: show the model its invalid reply and ask for the form.
+	msgs = append(msgs,
+		chat.Message{Role: "assistant", Content: topicBound(reply.Content, topicTextLimit)},
+		chat.Message{Role: "user", Content: "Your reply was not a valid decision. Return only the JSON object."})
+	repair, rerr := a.builder.withFallbacks(llm, cfg).Complete(chat.WithEffort(ctx, "low"), cfg.Model, msgs, nil)
+	if rerr != nil {
+		return TopicDecision{}, rerr
+	}
+	if len(repair.ToolCalls) != 0 {
+		return TopicDecision{}, fmt.Errorf("topic check: unexpected tool calls")
+	}
+	decision, err = parseTopicDecision(repair.Content)
+	if err != nil {
+		a.logTopicFailure("repair", repair.Content, err)
+	}
+	return decision, err
 }
 
 // topicValidateImages checks transport safety, not image decoding: callers
@@ -168,55 +190,118 @@ func topicEvidence(messages []chat.Message) []chat.Message {
 	return out
 }
 
-// parseTopicDecision rejects wrappers, unknown or duplicate keys, missing
-// fields, non-string values, invalid enums and trailing JSON, failing closed.
+// topicParseError is a reply that is no valid decision. Reason says why, for
+// the log only: fence, prose, too long, json, fields or enum.
+type topicParseError struct{ reason string }
+
+func (e *topicParseError) Error() string {
+	return "topic check: invalid decision JSON; do not resend the same message unchanged, " +
+		"and if it fails a second time tell the owner instead of retrying"
+}
+
+// parseTopicDecision takes the decision out of the reply and validates it. It
+// is tolerant of the form only: a surrounding Markdown fence and text around
+// the one top-level object are dropped, then parseTopicObject checks the
+// content strictly.
 func parseTopicDecision(text string) (TopicDecision, error) {
-	invalid := func() (TopicDecision, error) {
-		return TopicDecision{}, fmt.Errorf("topic check: invalid decision JSON")
+	if len(text) > topicReplyLimit {
+		return TopicDecision{}, &topicParseError{"too long"}
 	}
-	if len(text) > 4096 {
-		return invalid()
+	object, form := extractTopicObject(text)
+	decision, err := parseTopicObject(object)
+	if err != nil && form != "" && err.(*topicParseError).reason == "json" {
+		err = &topicParseError{form}
+	}
+	return decision, err
+}
+
+// extractTopicObject returns the first top-level JSON object of text, and
+// "fence" or "prose" when something had to be cut away to get it. Without an
+// object it returns the trimmed text for the strict check to reject.
+func extractTopicObject(text string) (object, form string) {
+	text = strings.TrimSpace(text)
+	if rest, ok := strings.CutPrefix(text, "```"); ok {
+		form = "fence"
+		rest = strings.TrimPrefix(rest, "json")
+		text = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest), "```"))
+	}
+	start := strings.IndexByte(text, '{')
+	if start < 0 {
+		return text, form
+	}
+	d := json.NewDecoder(strings.NewReader(text[start:]))
+	var raw json.RawMessage
+	if d.Decode(&raw) != nil {
+		return text, form
+	}
+	object = text[start : start+int(d.InputOffset())]
+	if strings.ContainsAny(text[:start]+text[start+len(object):], "{}") {
+		return text, form // Not a single object: the strict check rejects it.
+	}
+	if strings.TrimSpace(text[:start]) != "" || strings.TrimSpace(text[start+len(object):]) != "" {
+		form = "prose"
+	}
+	return object, form
+}
+
+// logTopicFailure writes why a reply was rejected and a bounded excerpt of it.
+func (a *Assistant) logTopicFailure(stage string, reply string, err error) {
+	if a.log == nil {
+		return
+	}
+	reason := "error"
+	if e, ok := err.(*topicParseError); ok {
+		reason = e.reason
+	}
+	a.log("topic check: %s reply rejected (%s), %d bytes: %q", stage, reason, len(reply), topicBound(reply, topicExcerpt))
+}
+
+// parseTopicObject rejects wrappers, unknown or duplicate keys, missing
+// fields, non-string values, invalid enums and trailing JSON, failing closed.
+func parseTopicObject(text string) (TopicDecision, error) {
+	invalid := func(reason string) (TopicDecision, error) {
+		return TopicDecision{}, &topicParseError{reason}
 	}
 	d := json.NewDecoder(strings.NewReader(text))
 	token, err := d.Token()
 	if err != nil || token != json.Delim('{') {
-		return invalid()
+		return invalid("json")
 	}
 	fields := make(map[string]string, 2)
 	for d.More() {
 		key, err := d.Token()
 		if err != nil {
-			return invalid()
+			return invalid("json")
 		}
 		name, ok := key.(string)
 		if !ok || (name != "disposition" && name != "reason") {
-			return invalid()
+			return invalid("fields")
 		}
 		if _, exists := fields[name]; exists {
-			return invalid()
+			return invalid("fields")
 		}
 		// Token, rather than decoding into string, also rejects JSON null.
 		value, err := d.Token()
 		str, ok := value.(string)
 		if err != nil || !ok {
-			return invalid()
+			return invalid("fields")
 		}
 		fields[name] = str
 	}
 	if token, err = d.Token(); err != nil || token != json.Delim('}') {
-		return invalid()
+		return invalid("json")
 	}
 	if _, err := d.Token(); err != io.EOF {
-		return invalid()
+		return invalid("json")
 	}
 	decision := TopicDecision{Disposition: fields["disposition"], Reason: fields["reason"]}
 	if len(fields) != 2 || strings.TrimSpace(decision.Reason) == "" {
-		return invalid()
+		return invalid("fields")
 	}
 	switch decision.Disposition {
 	case TopicContinue, TopicNew, TopicUnclear:
 		return decision, nil
 	default:
-		return invalid()
+		return invalid("enum")
 	}
 }
