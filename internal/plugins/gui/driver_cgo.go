@@ -22,14 +22,16 @@ var runWindow = wails.Run
 var quitWindow = runtime.Quit
 var emitWindow = runtime.EventsEmit
 
+// restartEffectDuration is how long the page has to paint that ouro starts
+// anew before the process is replaced: a stalled frontend must not block it.
 const restartEffectDuration = 700 * time.Millisecond
 
-func showWindow(ctx context.Context, page page) error {
+func showWindow(ctx context.Context, p *profile, name string) error {
 	frontend, err := fs.Sub(assets, "frontend")
 	if err != nil {
 		return err
 	}
-	window := newWindowContext(ctx, page)
+	window := newWindowContext(ctx, p, name)
 	defer window.Close()
 	done := make(chan struct{})
 	defer close(done)
@@ -41,9 +43,9 @@ func showWindow(ctx context.Context, page page) error {
 		Bind:        []interface{}{window},
 		// Cancellation must work even if the frontend never reaches DOM readiness.
 		OnStartup: func(app context.Context) {
-			// Give the frontend time to paint the transition before replacing
-			// the process. A stalled frontend must not block the restart.
-			window.OnRestart(func() {
+			window.onEmit(func(events []Event) { emitWindow(app, "ouro:events", events) })
+			window.onEnded(func() { emitWindow(app, "ouro:ended") })
+			window.onRestart(func() {
 				emitWindow(app, "ouro:restarting")
 				go func() {
 					timer := time.NewTimer(restartEffectDuration)
@@ -68,8 +70,8 @@ func showWindow(ctx context.Context, page page) error {
 	if err != nil {
 		return err
 	}
-	if exe, going, ok := window.Restart(); ok {
-		return handOver(exe, going)
+	if exe, ok := window.pendingRestart(); ok {
+		return handOver(exe)
 	}
 	return ctx.Err()
 }

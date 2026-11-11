@@ -227,7 +227,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 			Log:     trayLog(dir),
 		}),
 		tui.Plugin(owner, func(u *tui.Profile) { p.ui = u }),
-		gui.Plugin(owner, func(g *gui.Profile) { p.gui = g }),
+		gui.Plugin(owner),
 		updateplugin.Plugin(dir),
 	}, fixed)
 }

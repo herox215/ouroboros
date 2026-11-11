@@ -6,3 +6,4 @@
 /.mutation/
 /.agentify/
 /benchmarks/
+/internal/plugins/gui/web/node_modules/

@@ -1,11 +1,13 @@
-// The answers of the agent are markdown, as the models write it. The chat shows
-// them formatted, as the terminal UI does (internal/tui/markdown.go): headings,
-// emphasis, code, lists, quotes, tables and links, without the marks.
+// The answers of the thread are markdown, as the models write it. The window
+// shows them formatted, as the terminal UI does (internal/tui/markdown.go):
+// headings, emphasis, code, lists, quotes, tables and links, without the
+// marks. This is the renderer the window had in plain JavaScript, ported to
+// TypeScript without changing what it does.
 //
 // Nothing here makes HTML out of text: every node is built with createElement
 // and textContent, so that tags and attributes the model wrote stay text. A
-// link is not an anchor either, it shows its address after its label, as in the
-// terminal, so that no click leaves the window.
+// link is not an anchor either, it shows its address after its label, as in
+// the terminal, so that no click leaves the window.
 
 const FENCE = /^( {0,3})(`{3,}|~{3,})\s*([^`]*?)\s*$/;
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
@@ -16,32 +18,36 @@ const DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const SETEXT = /^ {0,3}(=+|-{2,})[ \t]*$/;
 const PUNCTUATION = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~';
 
-const blank = line => line.trim() === '';
-const indentOf = line => line.length - line.trimStart().length;
+const blank = (line: string): boolean => line.trim() === '';
+const indentOf = (line: string): number => line.length - line.trimStart().length;
 
-function element(doc, tag, className, text) {
+function element(doc: Document, tag: string, className?: string, text?: string): HTMLElement {
   const node = doc.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
 }
 
-function textNode(doc, text) {
+function textNode(doc: Document, text: string): Text {
   return doc.createTextNode(text);
 }
 
 // The index of the delimiter that closes the one at start, or -1. Code spans
 // and escapes in between are skipped.
-function closer(text, start, mark) {
+function closer(text: string, start: number, mark: string): number {
   const word = mark[0] === '_';
   for (let i = start + mark.length; i < text.length; i++) {
     const c = text[i];
-    if (c === '\\') { i++; continue; }
+    if (c === '\\') {
+      i++;
+      continue;
+    }
     if (c === '`') {
       let run = 1;
       while (text[i + run] === '`') run++;
       const end = text.indexOf('`'.repeat(run), i + run);
-      if (end >= 0) i = end + run - 1; else i += run - 1;
+      if (end >= 0) i = end + run - 1;
+      else i += run - 1;
       continue;
     }
     if (!text.startsWith(mark, i)) continue;
@@ -54,10 +60,13 @@ function closer(text, start, mark) {
 }
 
 // The end of the bracket that opens at start, or -1.
-function bracketEnd(text, start, open, close) {
+function bracketEnd(text: string, start: number, open: string, close: string): number {
   let depth = 0;
   for (let i = start; i < text.length; i++) {
-    if (text[i] === '\\') { i++; continue; }
+    if (text[i] === '\\') {
+      i++;
+      continue;
+    }
     if (text[i] === open) depth++;
     else if (text[i] === close && --depth === 0) return i;
   }
@@ -65,13 +74,13 @@ function bracketEnd(text, start, open, close) {
 }
 
 // The inline marks of text, appended to parent.
-function inline(text, parent, doc, bare = true) {
+function inline(text: string, parent: ParentNode, doc: Document, bare = true): void {
   let plain = '';
-  const flush = () => {
+  const flush = (): void => {
     if (plain) parent.append(textNode(doc, plain));
     plain = '';
   };
-  const wrap = (tag, inner, className) => {
+  const wrap = (tag: string, inner: string, className?: string): void => {
     flush();
     const node = element(doc, tag, className);
     inline(inner, node, doc, bare);
@@ -79,7 +88,7 @@ function inline(text, parent, doc, bare = true) {
   };
   // A mark without a closer after some opener has none after a later one
   // either, so that text full of lone stars is not scanned again and again.
-  const unclosed = new Map();
+  const unclosed = new Map<string, number>();
   let i = 0;
   while (i < text.length) {
     const c = text[i];
@@ -104,14 +113,18 @@ function inline(text, parent, doc, bare = true) {
       i += run;
       continue;
     }
-    if (c === '!' && text[i + 1] === '[' || c === '[') {
+    if ((c === '!' && text[i + 1] === '[') || c === '[') {
       const open = c === '!' ? i + 1 : i;
       const end = bracketEnd(text, open, '[', ']');
       if (end >= 0 && text[end + 1] === '(') {
         const stop = bracketEnd(text, end + 1, '(', ')');
         if (stop >= 0) {
           const label = text.slice(open + 1, end);
-          const target = text.slice(end + 2, stop).trim().replace(/^<(.*)>$/, '$1').replace(/\s+"[^"]*"$/, '');
+          const target = text
+            .slice(end + 2, stop)
+            .trim()
+            .replace(/^<(.*)>$/, '$1')
+            .replace(/\s+"[^"]*"$/, '');
           flush();
           if (c === '!') {
             parent.append(element(doc, 'span', 'md-muted', '[image: ' + label + '] ' + target));
@@ -151,7 +164,7 @@ function inline(text, parent, doc, bare = true) {
       else if (c !== '~') mark = c;
       const next = text[i + mark.length] ?? ' ';
       const inWord = c === '_' && /[\p{L}\p{N}]/u.test(text[i - 1] ?? ' ');
-      if (mark && !/\s/.test(next) && !inWord && !(unclosed.get(mark) <= i)) {
+      if (mark && !/\s/.test(next) && !inWord && !((unclosed.get(mark) ?? Infinity) <= i)) {
         const end = closer(text, i, mark);
         if (end < 0) unclosed.set(mark, i);
         if (end > i + mark.length) {
@@ -170,33 +183,50 @@ function inline(text, parent, doc, bare = true) {
   flush();
 }
 
-function splitRow(line) {
+function splitRow(line: string): string[] {
   let row = line.trim();
   if (row.startsWith('|')) row = row.slice(1);
   if (row.endsWith('|') && !row.endsWith('\\|')) row = row.slice(0, -1);
-  const cells = [];
+  const cells: string[] = [];
   let cell = '';
   for (let i = 0; i < row.length; i++) {
-    if (row[i] === '\\' && row[i + 1] === '|') { cell += '|'; i++; continue; }
+    if (row[i] === '\\' && row[i + 1] === '|') {
+      cell += '|';
+      i++;
+      continue;
+    }
     if (row[i] === '`') {
       const end = row.indexOf('`', i + 1);
-      if (end >= 0) { cell += row.slice(i, end + 1); i = end; continue; }
+      if (end >= 0) {
+        cell += row.slice(i, end + 1);
+        i = end;
+        continue;
+      }
     }
-    if (row[i] === '|') { cells.push(cell.trim()); cell = ''; continue; }
+    if (row[i] === '|') {
+      cells.push(cell.trim());
+      cell = '';
+      continue;
+    }
     cell += row[i];
   }
   cells.push(cell.trim());
   return cells;
 }
 
-function startsBlock(line, first = false) {
+function startsBlock(line: string, first = false): boolean {
   if (FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line)) return true;
   const item = ITEM.exec(line);
   if (!item || item[1].length > 3 || blank(item[4])) return false;
   return /^[-*+]$/.test(item[2]) || /^1[.)]$/.test(item[2]) || first;
 }
 
-function tableAt(lines, i) {
+interface Table {
+  head: string[];
+  align: string[];
+}
+
+function tableAt(lines: string[], i: number): Table | null {
   if (i + 1 >= lines.length || !lines[i].includes('|') || !DELIMITER.test(lines[i + 1])) return null;
   const head = splitRow(lines[i]);
   const align = splitRow(lines[i + 1]);
@@ -206,20 +236,28 @@ function tableAt(lines, i) {
 
 // The blocks of lines, appended to parent. In a tight list item a paragraph is
 // bare, without a block of its own.
-function blocks(lines, parent, doc, tight = false) {
+function blocks(lines: string[], parent: ParentNode, doc: Document, tight = false): void {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (blank(line)) { i++; continue; }
+    if (blank(line)) {
+      i++;
+      continue;
+    }
 
     const fence = FENCE.exec(line);
     if (fence) {
-      const [, indent, marks, info] = fence;
-      const body = [];
+      const indent = fence[1];
+      const marks = fence[2];
+      const info = fence[3] ?? '';
+      const body: string[] = [];
       i++;
       while (i < lines.length) {
         const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(lines[i]);
-        if (close && close[1][0] === marks[0] && close[1].length >= marks.length) { i++; break; }
+        if (close && close[1][0] === marks[0] && close[1].length >= marks.length) {
+          i++;
+          break;
+        }
         body.push(lines[i].replace(new RegExp('^ {0,' + indent.length + '}'), ''));
         i++;
       }
@@ -233,7 +271,7 @@ function blocks(lines, parent, doc, tight = false) {
     }
 
     if (/^( {4}|\t)/.test(line)) {
-      const body = [];
+      const body: string[] = [];
       while (i < lines.length && (blank(lines[i]) || /^( {4}|\t)/.test(lines[i]))) {
         body.push(lines[i].replace(/^( {4}|\t)/, ''));
         i++;
@@ -261,7 +299,7 @@ function blocks(lines, parent, doc, tight = false) {
     }
 
     if (QUOTE.test(line)) {
-      const body = [];
+      const body: string[] = [];
       while (i < lines.length && !blank(lines[i]) && (QUOTE.test(lines[i]) || !startsBlock(lines[i]))) {
         body.push(lines[i].replace(QUOTE, ''));
         i++;
@@ -281,7 +319,7 @@ function blocks(lines, parent, doc, tight = false) {
     const table = tableAt(lines, i);
     if (table) {
       const node = element(doc, 'table', 'md-table');
-      const row = (cells, tag, parentRow) => {
+      const row = (cells: string[], tag: string, parentRow: HTMLElement): void => {
         table.head.forEach((_, index) => {
           const cell = element(doc, tag);
           const align = table.align[index];
@@ -315,7 +353,11 @@ function blocks(lines, parent, doc, tight = false) {
     let level = 0;
     while (i < lines.length && !blank(lines[i])) {
       const setext = SETEXT.exec(lines[i]);
-      if (setext) { level = setext[1][0] === '=' ? 1 : 2; i++; break; }
+      if (setext) {
+        level = setext[1][0] === '=' ? 1 : 2;
+        i++;
+        break;
+      }
       if (startsBlock(lines[i]) || tableAt(lines, i)) break;
       text.push(lines[i].trim());
       i++;
@@ -329,15 +371,18 @@ function blocks(lines, parent, doc, tight = false) {
 }
 
 // The list that starts at lines[start], appended to parent; the index after it.
-function list(lines, start, parent, doc) {
+function list(lines: string[], start: number, parent: ParentNode, doc: Document): number {
   const first = ITEM.exec(lines[start]);
+  if (!first) return start + 1;
   const ordered = /\d/.test(first[2]);
   const bullet = first[2];
-  const same = marker => ordered ? /\d/.test(marker) && marker.slice(-1) === first[2].slice(-1) : marker === bullet;
+  const same = (marker: string): boolean =>
+    ordered ? /\d/.test(marker) && marker.slice(-1) === first[2].slice(-1) : marker === bullet;
   const node = element(doc, ordered ? 'ol' : 'ul', 'md-list');
   if (ordered && parseInt(first[2], 10) !== 1) node.setAttribute('start', String(parseInt(first[2], 10)));
-  const items = [];
-  let i = start, gap = false;
+  const items: { body: string[]; offset: number }[] = [];
+  let i = start;
+  let gap = false;
   while (i < lines.length) {
     const head = ITEM.exec(lines[i]);
     if (!head || !same(head[2]) || (items.length && indentOf(lines[i]) >= items[items.length - 1].offset)) break;
@@ -348,19 +393,32 @@ function list(lines, start, parent, doc) {
     let held = 0;
     while (i < lines.length) {
       const next = lines[i];
-      if (blank(next)) { held++; body.push(''); i++; continue; }
+      if (blank(next)) {
+        held++;
+        body.push('');
+        i++;
+        continue;
+      }
       if (indentOf(next) >= offset) {
         body.push(next.slice(offset));
         held = 0;
         i++;
         continue;
       }
-      if (held === 0 && !startsBlock(next, true) && !tableAt(lines, i)) { body.push(next.trim()); i++; continue; }
+      if (held === 0 && !startsBlock(next, true) && !tableAt(lines, i)) {
+        body.push(next.trim());
+        i++;
+        continue;
+      }
       break;
     }
-    while (body.length && blank(body[body.length - 1])) { body.pop(); held++; }
+    while (body.length && blank(body[body.length - 1])) {
+      body.pop();
+      held++;
+    }
     items.push({ body, offset });
-    const resumes = i < lines.length && ITEM.exec(lines[i]) && same(ITEM.exec(lines[i])[2]) && indentOf(lines[i]) < offset;
+    const nextItem = i < lines.length ? ITEM.exec(lines[i]) : null;
+    const resumes = !!nextItem && same(nextItem[2]) && indentOf(lines[i]) < offset;
     if (held > 0 && resumes) gap = true;
   }
   for (const { body } of items) {
@@ -380,19 +438,29 @@ function list(lines, start, parent, doc) {
 
 // The source cut to at most limit characters between two blocks, so that no
 // element is cut in the middle; a code block that is cut is closed.
-export function markdownPreview(source, limit) {
+export function markdownPreview(source: string, limit: number): string {
   if (source.length <= limit) return source;
   const lines = source.split('\n');
-  let used = 0, fence = null, cut = -1, before = 0, next = '';
-  const shown = [];
+  let used = 0;
+  let fence: string | null = null;
+  let cut = -1;
+  let before = 0;
+  let next = '';
+  const shown: string[] = [];
   for (const line of lines) {
-    if (used + line.length + 1 > limit) { next = line; break; }
+    if (used + line.length + 1 > limit) {
+      next = line;
+      break;
+    }
     shown.push(line);
     used += line.length + 1;
     const open = FENCE.exec(line);
     if (open && !fence) fence = open[2];
     else if (open && fence && open[2][0] === fence[0] && open[2].length >= fence.length && !open[3]) fence = null;
-    if (blank(line) && !fence) { cut = shown.length; before = used; }
+    if (blank(line) && !fence) {
+      cut = shown.length;
+      before = used;
+    }
   }
   if (cut > 0 && before >= limit / 2) return shown.slice(0, cut).join('\n').trimEnd();
   // Whole blocks or lines would show too little of it, as a long paragraph or
@@ -403,8 +471,26 @@ export function markdownPreview(source, limit) {
 }
 
 // The element that shows source as formatted text.
-export function renderMarkdown(source, doc = document) {
+export function renderMarkdown(source: string, doc: Document = document): HTMLElement {
   const root = element(doc, 'div', 'markdown');
   blocks(source.replace(/\r\n?/g, '\n').split('\n'), root, doc);
   return root;
+}
+
+/**
+ * Shows source as formatted text in node, and again whenever it changes: what
+ * an answer streaming in needs. Svelte calls it as an action:
+ *
+ *   <div use:markdown={entry.text}></div>
+ */
+export function markdown(node: HTMLElement, source: string): { update(next: string): void } {
+  let shown = source;
+  node.replaceChildren(...renderMarkdown(source).childNodes);
+  return {
+    update(next: string) {
+      if (next === shown) return;
+      shown = next;
+      node.replaceChildren(...renderMarkdown(next).childNodes);
+    },
+  };
 }

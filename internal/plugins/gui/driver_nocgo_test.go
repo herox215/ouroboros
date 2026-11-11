@@ -9,7 +9,7 @@ import (
 )
 
 func TestNativeBuildRequired(t *testing.T) {
-	err := showWindow(context.Background(), page{})
+	err := showWindow(context.Background(), &profile{}, "x")
 	if err == nil || !strings.Contains(err.Error(), "make build") {
 		t.Fatalf("native build hint: %v", err)
 	}
