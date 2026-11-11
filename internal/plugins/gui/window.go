@@ -3,6 +3,8 @@ package gui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,9 +39,12 @@ type Event struct {
 	Recommended string             `json:"recommended,omitempty"`
 }
 
-// Snapshot is what the thread told so far, when the window opens it.
+// Snapshot is a chronological page of the thread. Before is the exclusive raw
+// past-cache boundary for the next History call, not an index into Events.
 type Snapshot struct {
-	Events []Event `json:"events"`
+	Events  []Event `json:"events"`
+	Before  int     `json:"before"`
+	HasMore bool    `json:"has_more"`
 }
 
 // Window is the chat of the thread of one profile. It watches the very
@@ -55,6 +60,13 @@ type Window struct {
 
 	// lifecycle serializes opening the node with closing the window.
 	lifecycle sync.Mutex
+
+	// history serializes Open and History. Live events never change these raw
+	// indices; a reconnect replaces the cache and the caller resets its cursor.
+	history      sync.Mutex
+	past         []plugin.SessionEvent
+	cached       bool
+	initialState map[int]bool // raw events already supplied as the initial state prelude
 
 	mu       sync.Mutex
 	opened   bool
@@ -198,25 +210,147 @@ func (w *Window) ready() error {
 	return nil
 }
 
-// Open shows the thread of the window: what it told so far, and from now on
-// what it tells, until the stream ends. Opening again replaces the watch.
+// Open shows the newest-relative three-hour window of the thread, with compact
+// earlier state, and watches what it tells from now on. Opening again replaces
+// the watch and resets the history cache.
 func (w *Window) Open() (Snapshot, error) {
+	w.history.Lock()
+	defer w.history.Unlock()
 	if err := w.ready(); err != nil {
 		return Snapshot{}, err
 	}
 	w.noticeRestart(w.ctx)
+	// Do not serve a previous connection's cache if replacing the watch fails.
+	w.cached = false
+	w.past = nil
+	w.initialState = nil
 	past, err := w.watchThread()
 	if err != nil {
 		return Snapshot{}, err
 	}
-	events := make([]Event, 0, len(past))
-	for _, e := range past {
-		if e.Kind == plugin.SessionThought {
-			continue
-		}
-		events = append(events, w.event(e))
+	if err := w.ctx.Err(); err != nil {
+		return Snapshot{}, err
 	}
-	return Snapshot{Events: events}, nil
+	w.past = slices.Clone(past)
+	w.cached = true
+	page := w.page(len(w.past))
+	// Only the initial page needs state from before its transcript boundary.
+	prefix := w.initialEvents(page.Before)
+	page.Events = append(prefix, page.Events...)
+	return page, nil
+}
+
+// History returns the preceding three-hour page from the last successful Open.
+// It does not watch again or include live events. State already supplied in the
+// initial prelude is not repeated. Cursors belong to that Open; callers must
+// discard outstanding pages and reset the cursor on reconnect.
+func (w *Window) History(before int) (Snapshot, error) {
+	w.history.Lock()
+	defer w.history.Unlock()
+	if err := w.ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
+	if !w.cached {
+		return Snapshot{}, errors.New("history is not open")
+	}
+	if before < 0 || before > len(w.past) {
+		return Snapshot{}, fmt.Errorf("invalid history cursor: %d", before)
+	}
+	return w.page(before), nil
+}
+
+const historyWindow = 3 * time.Hour
+
+// historyEntry excludes watch-time state from the clock: an idle thread may
+// receive directory/effort state stamped now even though its last entry is old.
+func historyEntry(e plugin.SessionEvent) bool {
+	switch e.Kind {
+	case plugin.SessionThought, plugin.SessionTitle, plugin.SessionWorking,
+		plugin.SessionDirectory, plugin.SessionEffort, plugin.SessionTasks,
+		plugin.SessionQueued, plugin.SessionUnqueued, plugin.SessionRestart:
+		return false
+	}
+	return true
+}
+
+// page is called with history held and keeps raw boundaries even when thoughts
+// are filtered. Include the entry exactly at the cutoff and its whole turn.
+func (w *Window) page(before int) Snapshot {
+	start := 0
+	var newest time.Time
+	for _, e := range w.past[:before] {
+		if historyEntry(e) && e.At.After(newest) {
+			newest = e.At
+		}
+	}
+	if !newest.IsZero() {
+		cutoff := newest.Add(-historyWindow)
+		for i, e := range w.past[:before] {
+			if historyEntry(e) && !e.At.Before(cutoff) {
+				start = i
+				break
+			}
+		}
+		for start > 0 && w.past[start].Kind != plugin.SessionMessage {
+			start--
+		}
+	}
+	events := make([]Event, 0, before-start)
+	for i, e := range w.past[start:before] {
+		if e.Kind != plugin.SessionThought && !w.initialState[start+i] {
+			events = append(events, w.event(e))
+		}
+	}
+	return Snapshot{Events: events, Before: start, HasMore: start > 0}
+}
+
+// initialEvents reduces old state instead of replaying the old transcript.
+// Keep surviving queue entries, the open question, and latest scalar state in
+// their original order so applying the recent page produces the same state.
+func (w *Window) initialEvents(before int) []Event {
+	keep := make(map[int]bool)
+	latest := make(map[plugin.SessionKind]int)
+	var queue []int
+	question := -1
+	for i, e := range w.past[:before] {
+		switch e.Kind {
+		case plugin.SessionTitle, plugin.SessionWorking, plugin.SessionDirectory,
+			plugin.SessionEffort, plugin.SessionTasks:
+			latest[e.Kind] = i
+		case plugin.SessionQueued:
+			queue = append(queue, i)
+		case plugin.SessionUnqueued:
+			if len(queue) > 0 {
+				queue = queue[:len(queue)-1]
+			}
+		case plugin.SessionMessage:
+			if len(queue) > 0 {
+				queue = queue[1:]
+			}
+		case plugin.SessionAsked:
+			question = i
+			if e.Done {
+				question = -1
+			}
+		}
+	}
+	for _, i := range latest {
+		keep[i] = true
+	}
+	for _, i := range queue {
+		keep[i] = true
+	}
+	if question >= 0 {
+		keep[question] = true
+	}
+	w.initialState = keep
+	out := make([]Event, 0, len(keep))
+	for i := 0; i < before; i++ {
+		if keep[i] {
+			out = append(out, w.event(w.past[i]))
+		}
+	}
+	return out
 }
 
 // watchThread replaces the live watch with one on the thread, and starts

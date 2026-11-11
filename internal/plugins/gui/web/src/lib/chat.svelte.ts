@@ -49,6 +49,13 @@ export class Chat {
   #retrying = false;
   #disposed = false;
   #ends = 0;
+  #generation = 0;
+  #pending: WireEvent[] | null = null;
+  #before = 0;
+
+  hasMore = $state(false);
+  loadingOlder = $state(false);
+  historyError = $state('');
 
   state = $state<State | null>(null);
   entries = $state<Entry[]>([]);
@@ -89,8 +96,7 @@ export class Chat {
   async open(): Promise<void> {
     const ends = this.#ends;
     try {
-      const snapshot = await this.#link.bridge.Open();
-      this.replace(snapshot.events);
+      if (!(await this.snapshot())) return;
       // The stream may have ended while the snapshot was on its way, before
       // the page could show it as ready: that scroll would never move again.
       if (this.#ends !== ends) {
@@ -137,7 +143,65 @@ export class Chat {
     this.#disposed = true;
   }
 
+  /** A page is folded in isolation: old status events must never roll back
+   * live state. Existing entries (including in-flight answers) keep their IDs
+   * and objects. Turn-aligned pages need no cross-page answer folding. */
+  async loadOlder(): Promise<void> {
+    if (!this.hasMore || this.loadingOlder || this.#disposed || this.#pending) return;
+    const generation = this.#generation;
+    const before = this.#before;
+    this.loadingOlder = true;
+    this.historyError = '';
+    try {
+      const page = await this.#link.bridge.History(before);
+      if (generation !== this.#generation || this.#disposed) return;
+      if (page.before >= before || page.before < 0) throw new Error('History cursor did not advance');
+      const older = new Chat(this.#link, []);
+      older.#next = this.#next;
+      older.replace(page.events);
+      this.#next = older.#next;
+      // Historical questions are not actionable; only the current snapshot
+      // and live stream own the pending question state.
+      for (const entry of older.entries) {
+        if (entry.role === 'question') entry.open = false;
+        if (entry.streaming) entry.streaming = false;
+      }
+      this.entries = [...older.entries, ...this.entries];
+      this.#before = page.before;
+      this.hasMore = page.has_more;
+    } catch (error) {
+      if (generation === this.#generation) this.historyError = reason(error);
+    } finally {
+      if (generation === this.#generation) this.loadingOlder = false;
+    }
+  }
+
+  private async snapshot(): Promise<boolean> {
+    const generation = ++this.#generation;
+    this.loadingOlder = false;
+    this.historyError = '';
+    this.#pending = [];
+    try {
+      const snapshot = await this.#link.bridge.Open();
+      if (generation !== this.#generation || this.#disposed) return false;
+      this.replace(snapshot.events);
+      this.#before = snapshot.before;
+      this.hasMore = snapshot.has_more;
+      return true;
+    } finally {
+      if (generation === this.#generation) {
+        const pending = this.#pending ?? [];
+        this.#pending = null;
+        if (!this.#disposed) this.receive(pending);
+      }
+    }
+  }
+
   private receive(events: WireEvent[]): void {
+    if (this.#pending) {
+      this.#pending.push(...events);
+      return;
+    }
     for (const event of events) this.apply(event);
   }
 
@@ -171,8 +235,7 @@ export class Chat {
         await wait(delay);
         if (this.#disposed || this.status === 'restarting') return;
         try {
-          const snapshot = await this.#link.bridge.Open();
-          this.replace(snapshot.events);
+          if (!(await this.snapshot())) return;
           this.status = 'ready';
           this.error = '';
           return;

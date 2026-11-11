@@ -67,6 +67,8 @@ export function demoLink(): Link {
           });
         }
         return {
+          before: 0,
+          has_more: false,
           events: [
             { kind: 'message', text: 'Was hängt gerade?', at: new Date(Date.now() - 90000).toISOString() },
             {
@@ -76,6 +78,9 @@ export function demoLink(): Link {
             },
           ],
         };
+      },
+      async History() {
+        return { events: [], before: 0, has_more: false };
       },
       async Send(text: string) {
         send([{ kind: 'message', text, at: new Date().toISOString() }, { kind: 'working', n: 1, own: true }]);

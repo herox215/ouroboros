@@ -9,6 +9,7 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
+    "test:browser": "node tests/history.browser.mjs",
     "coverage": "vitest run --coverage"
   },
   "engines": {

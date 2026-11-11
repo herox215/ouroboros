@@ -59,6 +59,10 @@
     <Transcript
       entries={chat.entries}
       sending={chat.sending}
+      hasMore={chat.hasMore}
+      loadingOlder={chat.loadingOlder}
+      historyError={chat.historyError}
+      onolder={() => chat.loadOlder()}
       onanswer={async (text) => {
         await chat.send(text);
       }}
