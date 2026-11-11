@@ -208,6 +208,9 @@ func TestChangeEffort(t *testing.T) {
 	if err != nil || !strings.Contains(out, "high") || !strings.Contains(out, "next message") || asked != 0 {
 		t.Fatalf("out %q, asked %d, %v", out, asked, err)
 	}
+	if !strings.Contains(out, "an effort of its own keeps it") {
+		t.Fatalf("a conversation with an effort of its own is not said to keep it: %q", out)
+	}
 	if got, err := dir.Config(); err != nil || got.Effort != "high" {
 		t.Fatalf("config %+v, %v", got, err)
 	}
