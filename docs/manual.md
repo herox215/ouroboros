@@ -1161,7 +1161,7 @@ itself out of the tool settings, which are visible in configuration views.
 ### Commands of the node
 
 `command(command, model?, access?, scope?, session?)` runs one of the commands of the node by name. Which commands
-it runs is the owner's setting `commands`, by name; without it the tool offers `change_model` and `usage`:
+it runs is the owner's setting `commands`, by name; without it the tool offers `change_model`, `change_effort` and `usage`:
 
 | Command | Does |
 |---|---|
