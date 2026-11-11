@@ -1160,12 +1160,13 @@ itself out of the tool settings, which are visible in configuration views.
 
 ### Commands of the node
 
-`command(command, model?, access?, scope?, session?)` runs one of the commands of the node by name. Which commands
+`command(command, model?, effort?, access?, scope?, session?)` runs one of the commands of the node by name. Which commands
 it runs is the owner's setting `commands`, by name; without it the tool offers `change_model`, `change_effort` and `usage`:
 
 | Command | Does |
 |---|---|
 | `usage` | what `/usage` shows: the quota or balance of the accesses the sessions and the thread are answered through now, and of no other; and how many tokens the last call of the LLM sent with the context of a conversation, how many of those it had cached and how long the context is, of this conversation or the one `session` names |
+| `change_effort(effort, scope?)` | changes how much the model thinks from the next message on, like `/effort`; `effort` is `auto` (leave it to the model), `none`, `low`, `medium`, `high` or `max`, only those the model takes where models.dev lists it; `scope` is `node` (the default: the node, which every conversation without an effort of its own has) or `session` (this conversation alone). It does not ask you: the effort is cheap to undo |
 | `change_model(model, access?, scope?)` | changes the model the agent answers with from the next message on, after you approved it in the conversation; `scope` is `owner` (the default), `sessions`, `thread` or `peers`, and `access` defaults to the one the scope is answered through now. It asks only for a model the access offers, and applies only on **Apply change** |
 
 A `session` names the conversation whose context `usage` adds, by its ID, the start of it or its title; without it, that is the conversation the command runs in. A name that matches several or no conversation is an error that names the sessions.

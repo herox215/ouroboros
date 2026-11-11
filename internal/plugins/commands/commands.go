@@ -387,7 +387,7 @@ func changeEffort(ctx context.Context, owner *plugin.Owner, providers func() []p
 		}
 		return "", fmt.Errorf("no such effort %q: it is %s", effortName(effort), list(names))
 	}
-	scope := a.Scope
+	scope := strings.ToLower(strings.TrimSpace(a.Scope))
 	if scope == "" {
 		scope = "node"
 	}

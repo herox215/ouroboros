@@ -225,9 +225,10 @@ func TestChangeEffortInvalid(t *testing.T) {
 	dir, owner, _ := node(t)
 	cfg, _ := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil).Configure(json.RawMessage(`{}`))
 	for in, want := range map[string]string{
-		`{"command":"change_effort","effort":"huge"}`:                  "auto, none, low, medium, high, max",
-		`{"command":"change_effort"}`:                                  "needs an effort",
-		`{"command":"change_effort","effort":"low","scope":"nowhere"}`: "node or session",
+		`{"command":"change_effort","effort":"huge"}`:                      "auto, none, low, medium, high, max",
+		`{"command":"change_effort"}`:                                      "needs an effort",
+		`{"command":"change_effort","effort":"low","scope":"nowhere"}`:     "node or session",
+		`{"command":"change_effort","effort":" HIGH ","scope":" Nowhere"}`: "node or session",
 	} {
 		if _, err := cfg.Run(context.Background(), json.RawMessage(in)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v", in, err)
@@ -272,14 +273,13 @@ func TestChangeEffortSetting(t *testing.T) {
 // Where models.dev lists the model, only the efforts it takes are accepted,
 // and a refused one names them.
 func TestChangeEffortListed(t *testing.T) {
-	dir, owner, a := node(t)
+	dir, owner, _ := node(t)
 	q := quota()
 	q.Catalog = func(llm.Access) string { return "quota" }
 	listed := fmt.Sprintf(`{"at": %q, "providers": {"quota": {"old": {"efforts": ["low", "max"]}}}}`, time.Now().Format(time.RFC3339))
 	if err := os.WriteFile(dir.Catalog(), []byte(listed), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_ = a
 	providers := func() []plugin.Provider { return []plugin.Provider{q} }
 	_, err := changeEffort(context.Background(), owner, providers, nil, "", args{Effort: "high"})
 	if err == nil || !strings.Contains(err.Error(), "does not take") || !strings.Contains(err.Error(), "auto, low, max") {
