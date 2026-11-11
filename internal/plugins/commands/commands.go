@@ -292,10 +292,11 @@ func kilo(n int) string {
 	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
 
-// changeModel changes the model of the scope the arguments name, after the
-// owner approved it in this conversation: the model of the owner's scopes by
-// default, of the access they name or of the one the scope is answered
-// through now. Nothing changes without an explicit "Apply change".
+// changeModel changes the model of the scope the arguments name: the model of
+// the owner's scopes by default, of the access they name or of the one the
+// scope is answered through now. It does not ask the owner itself: the
+// permission rule for change_model in config.DefaultAsk does, like for any
+// other tool, and yolo mode skips it.
 func changeModel(ctx context.Context, owner *plugin.Owner, providers func() []plugin.Provider, a args) (string, error) {
 	model := strings.TrimSpace(a.Model)
 	if model == "" {
@@ -331,21 +332,6 @@ func changeModel(ctx context.Context, owner *plugin.Owner, providers func() []pl
 		"thread":   "the thread",
 		"peers":    "peers",
 	}[scope]
-	question, _ := json.Marshal(map[string]any{
-		"question":    fmt.Sprintf("Change the model of %s from %q to %q?\nThe access: %s. Nothing changes unless you apply it.", what, now.Model, model, label),
-		"options":     []string{"Apply change", "Reject change"},
-		"recommended": "Reject change",
-	})
-	answer, err := plugin.AskOwner(ctx, question)
-	if err != nil {
-		return "", fmt.Errorf("the model was not changed: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("the model was not changed: %w", err)
-	}
-	if answer != "Apply change" {
-		return "The model was not changed: the owner did not approve the change. The owner said: " + answer, nil
-	}
 	switch scope {
 	case "owner":
 		_, err = owner.SetModel(access, model)

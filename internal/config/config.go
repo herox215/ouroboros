@@ -247,7 +247,7 @@ func DefaultProtected() []string {
 
 // DefaultAsk are the calls the agent of the owner asks about unless the owner
 // says otherwise: what deletes for good, what reaches beyond the machine or
-// changes the system, what reads keys, ouro building itself anew, and typing
+// changes the system, what reads keys, ouro building itself anew, changing the model, and typing
 // into the pages of the browser, where forms are sent and people sign in.
 func DefaultAsk() []Rule {
 	return []Rule{
@@ -258,6 +258,7 @@ func DefaultAsk() []Rule {
 		{Tool: "bash", Match: `~/\.(ssh|gnupg|aws)|\.env\b`},
 		{Tool: "delete", Match: `.*`},
 		{Tool: "rebuild", Match: `.*`},
+		{Tool: "command", Match: `"command":"change_model"`},
 		{Tool: "browser", Match: `"action":"type"`},
 	}
 }

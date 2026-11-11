@@ -55,8 +55,8 @@ func answer(ctx context.Context, text string, asked *int) context.Context {
 	})
 }
 
-// change_model asks the owner before it changes anything, and applies only
-// on Apply change.
+// change_model changes the model without asking itself: the permission rule
+// of the tool does that, see config.DefaultAsk.
 func TestChangeModel(t *testing.T) {
 	dir, owner, a := node(t)
 	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil)
@@ -65,38 +65,13 @@ func TestChangeModel(t *testing.T) {
 		t.Fatalf("defaults: %+v, %v", cfg, err)
 	}
 	var asked int
-	var question string
-	ctx := agent.WithOwner(context.Background(), func(_ context.Context, q json.RawMessage) (string, error) {
-		asked++
-		question = string(q)
-		return "Apply change", nil
-	})
-	out, err := cfg.Run(ctx, json.RawMessage(`{"command":"change_model","model":"new"}`))
-	if err != nil || !strings.Contains(out, `"new"`) || asked != 1 {
+	out, err := cfg.Run(answer(context.Background(), "", &asked), json.RawMessage(`{"command":"change_model","model":"new"}`))
+	if err != nil || !strings.Contains(out, `"new"`) || asked != 0 {
 		t.Fatalf("out %q, asked %d, %v", out, asked, err)
-	}
-	if !strings.Contains(question, "Change the model of you") || !strings.Contains(question, "new") {
-		t.Fatalf("question %s", question)
 	}
 	got, err := dir.Config()
 	if err != nil || got.Model != "new" || got.Access != a.ID {
 		t.Fatalf("config %+v, %v", got, err)
-	}
-}
-
-// A rejected change leaves the model as it was.
-func TestChangeModelRejected(t *testing.T) {
-	dir, owner, _ := node(t)
-	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil)
-	cfg, _ := tl.Configure(json.RawMessage(`{}`))
-	var asked int
-	out, err := cfg.Run(answer(context.Background(), "Reject change", &asked),
-		json.RawMessage(`{"command":"change_model","model":"new"}`))
-	if err != nil || !strings.Contains(out, "not changed") || asked != 1 {
-		t.Fatalf("out %q, asked %d, %v", out, asked, err)
-	}
-	if got, _ := dir.Config(); got.Model != "old" {
-		t.Fatalf("model %q", got.Model)
 	}
 }
 
@@ -107,7 +82,7 @@ func TestChangeModelUnknown(t *testing.T) {
 	tl := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil)
 	cfg, _ := tl.Configure(json.RawMessage(`{}`))
 	var asked int
-	_, err := cfg.Run(answer(context.Background(), "Apply change", &asked),
+	_, err := cfg.Run(answer(context.Background(), "", &asked),
 		json.RawMessage(`{"command":"change_model","model":"nope"}`))
 	if err == nil || !strings.Contains(err.Error(), "does not offer") || !strings.Contains(err.Error(), "old, new") || asked != 0 {
 		t.Fatalf("err %v, asked %d", err, asked)
