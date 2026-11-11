@@ -25,8 +25,8 @@ func TestTerminalRestartAnimation(t *testing.T) {
 		t.Fatal("restart did not schedule a frame")
 	}
 	first := ansi.Strip(m.View().Content)
-	if !strings.Contains(first, "RESTARTING // PLEASE WAIT") || !m.View().AltScreen {
-		t.Fatalf("no terminal transition: %q", first)
+	if !strings.Contains(first, "Write a message") || !m.View().AltScreen {
+		t.Fatalf("the transition does not begin with the screen as it was: %q", first)
 	}
 	if duplicate := m.beginRestart("/other/ouro"); duplicate != nil || m.restarts != "/new/ouro" {
 		t.Fatal("duplicate restart reset the transition")
@@ -37,8 +37,9 @@ func TestTerminalRestartAnimation(t *testing.T) {
 			t.Fatal("quit before the last frame")
 		}
 	}
-	if first == ansi.Strip(m.View().Content) {
-		t.Fatal("ASCII frames did not change")
+	last := ansi.Strip(m.View().Content)
+	if strings.TrimSpace(last) != "━━━" || strings.Count(last, "\n") != 23 {
+		t.Fatalf("the screen did not collapse onto a line: %q", last)
 	}
 	_, cmd = m.Update(restartFrameMsg{})
 	if _, ok := cmd().(tea.QuitMsg); !ok || m.ctx.Err() == nil {
@@ -52,7 +53,7 @@ func TestTerminalRestartResizeAndProfile(t *testing.T) {
 	root.profiles.shown = 1 // A background profile restarting must still be visible.
 	root.Update(tea.WindowSizeMsg{Width: 20, Height: 4})
 	content := root.View().Content
-	if !strings.Contains(ansi.Strip(content), "0UR0B0R0S") && !strings.Contains(ansi.Strip(content), "OUROBOROS") {
+	if content != terra.restartView() {
 		t.Fatalf("profile restart hidden: %q", content)
 	}
 	for _, line := range strings.Split(content, "\n") {
@@ -66,6 +67,37 @@ func TestTerminalRestartResizeAndProfile(t *testing.T) {
 	root.Update(profileMsg{0, restartFrameMsg{}})
 	if terra.restartFrame != 2 {
 		t.Fatal("profile frame was not routed")
+	}
+}
+
+// The restart tears the screen more with every frame, and never beyond the
+// window: every frame has its rows and its width, whatever the size.
+func TestGlitchScreenKeepsTheWindow(t *testing.T) {
+	screen := strings.Repeat("\x1b[31mouro builds itself anew, 世界\x1b[0m and more\n", 30)
+	for _, size := range [][2]int{{80, 24}, {20, 4}, {1, 1}, {7, 40}} {
+		w, h := size[0], size[1]
+		torn := 0
+		for frame := 1; frame <= restartFrames; frame++ {
+			got := glitchScreen(screen, w, h, frame)
+			lines := strings.Split(got, "\n")
+			if len(lines) != h {
+				t.Fatalf("%dx%d frame %d has %d rows", w, h, frame, len(lines))
+			}
+			for _, line := range lines {
+				if ansi.StringWidth(line) != w {
+					t.Fatalf("%dx%d frame %d: a row of %d cells: %q", w, h, frame, ansi.StringWidth(line), line)
+				}
+			}
+			if got != glitchScreen(screen, w, h, 0) {
+				torn++
+			}
+		}
+		if w > 1 && torn < restartFrames/2 {
+			t.Fatalf("%dx%d: only %d frames are torn", w, h, torn)
+		}
+	}
+	if glitchScreen(screen, 0, 0, 3) != "" {
+		t.Fatal("a window of no size shows something")
 	}
 }
 
@@ -111,7 +143,7 @@ func TestRestartReachesTerminalOutput(t *testing.T) {
 	if _, err := program.Run(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ansi.Strip(output.String()), "RESTARTING // PLEASE WAIT") {
+	if !strings.Contains(ansi.Strip(output.String()), "━━━") {
 		t.Fatalf("no restart in terminal output: %q", output.String())
 	}
 	if m.restartFrame <= restartFrames {
