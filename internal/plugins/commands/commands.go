@@ -396,7 +396,7 @@ func changeEffort(ctx context.Context, owner *plugin.Owner, providers func() []p
 		if err := owner.SetEffort(effort); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("The effort of the node is %s from the next message on, in every conversation that has none of its own.", effortName(effort)), nil
+		return fmt.Sprintf("The effort of the node is %s from the next message on, in every conversation that has none of its own; a conversation with an effort of its own keeps it.", effortName(effort)), nil
 	case "session":
 		id := current
 		if sessions == nil || id == "" {
