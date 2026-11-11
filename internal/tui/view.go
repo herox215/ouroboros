@@ -546,19 +546,23 @@ func (m *Model) View() tea.View {
 		v.SetContent(m.restartView())
 		return v
 	}
+	v.SetContent(m.content())
+	return v
+}
+
+// content is what the window shows: the screen the UI is at, as the restart
+// tears it too.
+func (m *Model) content() string {
 	if m.onboard != nil {
-		v.SetContent(m.onboardView())
-		return v
+		return m.onboardView()
 	}
 	if m.splash.show {
-		v.SetContent(m.splash.view(m))
-		return v
+		return m.splash.view(m)
 	}
-	var body string
 	switch m.screen {
 	case screenSuggestions, screenHelp, screenKeys, screenModel, screenSettings, screenSessions, screenEffort, screenMode, screenJobs, screenPeers, screenMemory:
 		dialog, _ := m.dialogView()
-		body = m.overlay(dialog)
+		return m.overlay(dialog)
 	case screenPlugin, screenContext:
 		// A screen that takes the whole window keeps a line above and below it.
 		screen := m.context.view(m)
@@ -569,12 +573,9 @@ func (m *Model) View() tea.View {
 		if m.pendingRows() > 0 {
 			parts = append(parts, " "+m.suggestionRequests.pendingView(m, m.width-1))
 		}
-		body = lipgloss.JoinVertical(lipgloss.Left, parts...)
-	default:
-		body = m.withPreview(m.chatScreen())
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
-	v.SetContent(body)
-	return v
+	return m.withPreview(m.chatScreen())
 }
 
 // windowTitle is what the terminal shows in the title of its window: the node

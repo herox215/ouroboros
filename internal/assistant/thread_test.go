@@ -221,11 +221,10 @@ func TestSessionNewNamesItsSession(t *testing.T) {
 // with note on the second: a note in brackets, as a model writes one where
 // it is told to say nothing.
 type noteLLM struct {
-	calls   int
-	tool    string
-	args    string
-	note    string
-	waiting bool
+	calls int
+	tool  string
+	args  string
+	note  string
 }
 
 func (l *noteLLM) Complete(_ context.Context, _ string, _ []openai.Message, _ []openai.Tool) (openai.Message, error) {

@@ -14,7 +14,7 @@ import (
 // question the owner just answered with a question or confusion of their own.
 const repeatHint = "the owner did not understand the last question and answered it with a question of their own: " +
 	"do not ask it again in other words. End your answer now and explain in it what the question is about, " +
-	"with everything they need to decide, then ask it there."
+	"with everything they need to decide, then ask it there"
 
 // Words shared by two questions that make them the same question: at least
 // repeatShared of them, and repeatOverlap of the shorter question's words.
