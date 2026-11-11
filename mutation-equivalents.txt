@@ -20,6 +20,7 @@ internal/memory/archivist.go:121:59 CONDITIONALS_BOUNDARY  # the candidates come
 internal/memory/archivist.go:804:17 INVERT_LOGICAL  # with one of the sets empty no word is shared, and fewer than three shared words give 0 below all the same
 internal/memory/archivist.go:814:12 CONDITIONALS_BOUNDARY  # of two sets of the same size either is the smaller: least is the same
 internal/memory/list.go:28:25 CONDITIONALS_BOUNDARY  # a limit of exactly MaxList set to MaxList is the same limit
+internal/plugins/gui/window.go:368:23 INVERT_LOGICAL  # a call carries an error only once it ended: the session sets Err when it closes the call, so a step that is not done and names an error never comes
 internal/plugins/schedule/schedule.go:192:8 CONDITIONALS_BOUNDARY  # a delay equal to the one found is the same delay
 internal/plugins/schedule/schedule.go:196:11 CONDITIONALS_BOUNDARY  # a delay of exactly a millisecond raised to a millisecond stays the same
 internal/plugins/schedule/schedule.go:438:4 INVERT_LOOPCTRL  # Next fails only for a cron with no possible date, which has none from any other time either: going on fails again and adds no run
@@ -189,7 +190,6 @@ internal/desktop/tray/model_linux.go:64:71 CONDITIONALS_BOUNDARY  # the ring is 
 internal/desktop/tray/model_linux.go:65:43 CONDITIONALS_BOUNDARY  # the ring is drawn at 22 and 32 pixels only, and no sample of those lies exactly on this edge: the pixels TestModelAndProtocol pins stay the same
 internal/desktop/tray/model_linux.go:68:39 CONDITIONALS_BOUNDARY  # the ring is drawn at 22 and 32 pixels only, and no sample of those lies exactly on this edge: the pixels TestModelAndProtocol pins stay the same
 internal/desktop/tray/tray_linux.go:108:46 INVERT_LOGICAL  # a failed type assertion leaves owner "", so ok || owner != "" is false exactly when ok && owner != "" is
-internal/plugins/gui/window.go:202:9 INCREMENT_DECREMENT  # the token only tells the watches apart, and only a peer snapshot has 0: counted down from 0 it is as unique and never 0 either, and the front end only tests it for 0
 internal/matrix/client.go:170:4 INVERT_LOOPCTRL  # break leaves the switch, which ends the body of the loop: the next member is looked at either way
 internal/matrix/client.go:322:63 CONDITIONALS_BOUNDARY  # started is read from the wall clock in Run, which tests cannot set: no event can be made to carry exactly that millisecond, the only one the two forms treat differently
 internal/matrix/client.go:316:121 CONDITIONALS_BOUNDARY  # started is read from the wall clock in Run, which tests cannot set: no event can be made to carry exactly that millisecond, the only one the two forms treat differently

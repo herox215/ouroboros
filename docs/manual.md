@@ -15,7 +15,7 @@ ouro list                 # find nodes on the network
 ouro chat "ask beta …"    # one answer from your agent, for scripts; without a message → the terminal UI
 ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
-ouro gui                  # native Wails GUI: chat, create sessions, switch profiles
+ouro gui                  # the thread in a native window: chat and input only
 ouro stop
 ouro update               # build and install the newest main
 ouro rollback             # the build before the last update or rebuild again
@@ -90,7 +90,7 @@ twice: a correction of how you want answers, a path, a convention of a project. 
 with a faint line, like `✦ remembered: build: ouro is built with make build · /undo`; `/undo` takes back the last
 of them in the conversation shown. Where the answer took a message [the thread](#the-thread) handed on, the line
 is shown in the thread too, so that `/undo` takes it back there. Front ends get it as the session event `remembered`, whose `args` are what
-takes it back; the GUI shows the line with a button for it.
+takes it back; the terminal UI shows the line with `/undo`.
 What the model thinks before it writes comes in as the stream brings it, and the chat shows the last
 lines of it, faint, above the words of its round, under `· thought`; `ctrl+r` hides it again. A
 provider that keeps its thinking to itself, as the responses API of OpenAI does, sends none of it,
@@ -165,64 +165,50 @@ ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that o
 which keep working.
 
 The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
-It opens a Wails v2 window with the profile's thread, the same
-conversation the TUI shows first. Say what is to be done there; the node routes topics,
-relays questions and gathers results through its existing thread implementation.
-Of the thread the GUI shows the last six hours, as the TUI does and as its agent
-is told it; the archive keeps the rest. The GUI adds no routing of its own. Beside the thread there is no navigation of its own,
-as in the demo: no profile picker, search, new session or toggle; the profile is chosen at
-start (`ouro --profile NAME gui`). **Zum Thread** returns from an individual session.
-The status shows work in progress, questions and the number of active sessions the thread
-handed work to. **Stoppen** calls the same session cancellation as the TUI, including
-stopping the thread's delegated answers. Messages can still be sent while work runs.
+It opens a Wails v2 window that is just the thread: the conversation, the field to write in,
+and how the thread stands. There is no sidebar, no profile picker, no settings, no context
+rail and no view of other sessions; for those, use the terminal UI. `ouro --profile NAME gui`
+chooses the profile whose thread the window shows. With several profiles, `ouro gui` opens
+the first one; a profile whose GUI plugin is off has no such command. Switching happens by
+starting the window for another profile.
+
+The window shows what the thread tells, through the very service the terminal UI uses
+first: `Sessions.Watch` with `plugin.ThreadID`, the replay of what happened and the live
+events alike. It adds no routing of its own. What the owner writes stays literal, what the
+agent says and answers is rendered as markdown, and a call of a tool appears as the one line
+the plugin of the tool wants shown (`ToolLine`, and `ToolDetail` once the call ended), as in
+the terminal. A question the thread asks shows the answers to choose from; choosing one
+answers it. An answer still on its way grows in place. The status line says whether the
+thread is ready, working, waiting for an answer, offline, or starting anew, and **Stop**
+cancels its answer, including the answers it handed to other sessions. The field sends with
+Enter; Shift+Enter inserts a newline. Sending uses `Ask` and, while an answer is on its way
+(including while the thread waits for a question), `Steer`.
 `ouro gui [DIRECTORY]` takes a directory as `ouro tui [DIRECTORY]` does, but the window
 opens no session of its own: it shows the thread, which has no project, so the directory
 changes nothing there. For work on a project, ask the thread: it starts a session there.
-Beside the thread, the sidebar follows the part of it in view, as in the demo: the part
-whose messages cross the middle of the history, or the newest one at its end. Each message
-of the owner opens a part; the sessions the thread started (`session_new`), handed a message
-to (`session_message`), looked at (`session_status`) or stopped (`session_stop`) on it, and those
-whose result it reports there, belong to it, as the `handed` events of the thread tell: the thread
-hides the calls of its agent, so it tells those as events of their own, also when it is read
-back from the archive. Front ends that do not know the kind leave it out. The
-sidebar shows the time of the part and its sessions with their state, or **Noch keine**,
-refreshed every three seconds without reopening the conversation; a session opened from it
-keeps the part beside it. The context rail shows where those sessions stand, as `SessionTrace`
-reads them: the phase of the loop to the answer (thinking, calling a tool, writing the answer,
-asking the owner), the call on its way and what it does, the call it did last, and what comes
-next. Under that stand, a chart draws the calls over the time of the session in lanes of its
-most used tools, so that its rhythm and its mix show at a glance rather than every call as a
-line. Older messages fade out at the top while older ones are above. Opening a tool result
-also shows it in that rail, using the same lazy request and cache. It may stay beside the thread
-when returning from its session, labelled with its source; switching profiles clears it. The
-rail is a saved result, not a live browser view.
-`ouro --profile NAME gui` selects the initial profile. Switching is local to the window and does not
-change configuration. Profiles with the GUI plugin disabled are omitted. The window starts the
-node through the same sessions API as the TUI when needed, and releases nodes it started on close;
-running answers continue in the node.
-The gear button opens the settings, including **Darstellung**: **System** (the default),
-**Hell** or **Dunkel**. System follows changes to the OS appearance immediately. The choice
-is saved locally for the GUI across profiles and restarts.
-The frontend is plain HTML/CSS/JavaScript embedded in the executable: no Node, npm,
-Wails CLI, separate web server, or frontend build is needed. The Go binding supplies
-the profiles and session list (owner and peer conversations, newest first).
-The sidebar groups sessions by date. The GUI opens chats through the same session service as the TUI: owner sessions use
-`Watch`, peer conversations use `Read`, and live events update the selected chat. Tool results
-and arguments are not included in the GUI transcript payload; opening a tool call requests
-its saved result separately. Long texts show an 8,000-character preview until expanded.
-Create an owner session with **Neue Session**, or select an existing one to continue it.
-The message field sends with Enter; Shift+Enter inserts a newline. Sending uses `Ask`, and
-`Steer` while an answer is running (including replies to agent questions). Peer conversations
-remain read-only. Refresh reloads the session list. Like the TUI, opening an owner session
-restores it in the node and watches its events; when a tool asks ouro to start anew from a
-new build, the window closes, and the new process opens one again showing the profile and
-the session the window before showed. The same happens when the node starts anew without
-the watched session asking for it, as after a rebuild in another session, `ouro update` or
-a rebuild by a peer: once the live stream ends, the window opens the session again a few
-times over about half a minute, and a node that says it runs another image (`GET /instance`
-on its socket) makes the window start the binary that node runs. Where the window cannot
-close itself, it shows the whole session from the new node instead. A node that does not
-come back is reported once; the transcript stays. There are no configuration operations.
+
+The window starts the node through the same sessions API as the terminal UI when needed,
+and releases nodes it started on close; running answers continue in the node. When a tool
+asks ouro to start anew from a new build, the window closes, and the new process opens one
+again with the same arguments, and so the same profile. The same happens when the node
+starts anew without the watched session asking for it, as after a rebuild in another
+session, `ouro update` or a rebuild by a peer: once the live stream ends, the window opens
+the thread again a few times over about 20 seconds, and a node that says it runs another
+image (`GET /instance` on its socket) makes the window start the binary that node runs. A
+node that does not come back is reported once, with a button to try again; the transcript
+stays.
+
+The window follows the appearance of the desktop, light or dark, with the olive palette of
+the terminal UI, and speaks English or German as the browser does.
+
+The frontend is Svelte 5 and TypeScript, built by Vite into `internal/plugins/gui/frontend`,
+which the executable embeds; the sources are in `internal/plugins/gui/web`. The build output
+is committed, so building or running ouro needs neither Node nor pnpm. To change the
+window, run `make frontend` (Node and pnpm install the dependencies and build);
+`make test-frontend` checks and tests it, and `pnpm dev` serves `/demo.html`, a scripted
+thread for looking at the window in a browser. The Go side passes the thread's events on
+in the shape of `plugin.SessionEvent`, and the strict Content-Security-Policy of the page
+allows no inline scripts or styles.
 
 Native builds need CGO and the [Wails prerequisites](https://wails.io/docs/gettingstarted/installation/).
 On Linux the build uses GTK 3 and **WebKitGTK 4.1** (Debian/Ubuntu:
@@ -240,9 +226,9 @@ must likewise use `go build -tags production,webkit2_41 ./cmd/ouro`.
 `CGO_ENABLED=0 make build` still produces a headless binary, whose `gui` command explains
 that a native build is needed. Plain `go test` does not require desktop libraries; native
 GUI tests can also run with `go test -tags production,webkit2_41 ./internal/plugins/gui`.
-Frontend tests run with `node --test internal/plugins/gui/frontend_test.mjs`; Node is needed
-only for these tests, not to build or run ouro. `make test-gui` runs both native GUI
-and frontend tests.
+Frontend checks and tests run with `pnpm run check` and `pnpm test` in
+`internal/plugins/gui/web`; Node and pnpm are needed only to change or test the window,
+not to build or run ouro. `make test-gui` runs both native GUI and frontend tests.
 
 Other plugins add to the UI, see [Extending](#extending):
 
@@ -483,7 +469,7 @@ your agent is thinking.
   8 characters of its ID, its title, its project where it is not that of the thread, and whether it is working or
   asks you something. Older ones are left out, and the thread refuses to hand anything to them; one that asks you
   something or still works stays, so that you see it and can answer it. The window is set in `/settings` → The agents,
-  "Sessions the thread continues" (in the GUI: Settings → Thread), as `thread_window` in the configuration of the node: a duration like `3h`.
+  "Sessions the thread continues", as `thread_window` in the configuration of the node: a duration like `3h`.
 - **Little to read, and cached.** The agent of the thread only hands on, so it is sent little, and thinks little
   (`low`) unless you set its `/effort`. What it was sent stays as it was, and every call begins with all the call
   before sent, as the caches of providers want it: the list of the conversations comes before your message only
@@ -517,8 +503,8 @@ already streamed by the model keep their normal streaming effect.
   `user_question` and passes on your answer with `session_message` and that `message_id`, which skips the topic
   check. The thread answers such a message itself only with what you already said, or where it is no question for
   you, and says so; never a permission. A message with `wait: false` is a note the thread tells you at once.
-  The roster shows a conversation that waits as `waits for the thread to answer its message ID`; the TUI, the GUI
-  and Matrix show it there as waiting for the thread (`wartet auf den Thread`), with nothing to answer in that
+  The roster shows a conversation that waits as `waits for the thread to answer its message ID`; the TUI and
+  Matrix show it there as waiting for the thread (`wartet auf den Thread`), with nothing to answer in that
   conversation itself. `esc` or `/cancel` in the thread end the wait: the conversation goes on without an answer,
   and nothing counts as allowed. A wait that a restart interrupts goes on in the new build under the same message ID
   (`thread_message` with `resume`), so an answer the thread gives with it still arrives.
@@ -2517,12 +2503,12 @@ make hooks   # once per clone: the checks before every commit, the mutation test
 `make cover` only measures and prints the percentages; `make tools` builds the two tools ahead of time.
 
 The agent tool `check_sanity({})` runs the whole Go test suite without cached results,
-with race detection and statement coverage, followed by native GUI and JavaScript
-frontend tests. It reports named failures, skips and uncovered source ranges ranked
+with race detection and statement coverage, followed by native GUI and frontend
+tests. It reports named failures, skips and uncovered source ranges ranked
 by missing statements. Full logs and the coverage profile remain in the private
 temporary directory named in its result. The default overall timeout is eight
 minutes (`timeout_minutes`: 1–60). `gui: false` explicitly skips both GUI checks.
-Missing GUI libraries or Node are reported as problems, not silently skipped.
+Missing GUI libraries, Node or pnpm are reported as problems, not silently skipped.
 This uses the checkout the running binary was built from, not the conversation
 directory, and installs nothing. Coverage is raw (including test-helper packages),
 excludes subprocess execution and the separate tagged GUI run, and can be incomplete

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -286,46 +285,33 @@ func TestProfilesThatCannotStart(t *testing.T) {
 	}
 }
 
-// GUI profiles are joined without those that turned it off, including when
-// the first profile or every profile turned it off. Starting needs no display.
-func TestProfilesWithoutTheGUI(t *testing.T) {
-	for _, off := range [][]bool{{false, false}, {false, true}, {true, false}, {true, true}} {
-		t.Run(fmt.Sprint(off), func(t *testing.T) {
-			s := clitest.Settings(t)
-			terra, luna := twoProfiles(t, s)
-			for i, dir := range []home.Dir{terra, luna} {
-				if off[i] {
-					if err := config.Update(string(dir), func(c *config.Config) error {
-						c.Plugins = &config.Plugins{Off: []string{"gui"}}
-						return nil
-					}); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			app, err := cli.New(s, cli.Terminal{In: strings.NewReader(""), Out: &syncBuffer{}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			// A disabled GUI must reach the dispatcher, not demand a profile.
-			if off[0] {
-				if err := app.Run(context.Background(), []string{"gui"}); err == nil || strings.Contains(err.Error(), "the node has several profiles") {
-					t.Fatalf("disabled GUI: %v", err)
-				}
-				return
-			}
-			// The GUI of the first shows the second one only if that has
-			// it on: then a second one that cannot be read fails it. What to
-			// go on with is none, so that no window opens otherwise.
-			if err := os.WriteFile(filepath.Join(string(luna), "config.json"), []byte("{"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("OURO_RESUME", "{")
-			err = app.Run(context.Background(), []string{"gui"})
-			if err == nil || strings.Contains(err.Error(), "GUI profile 2") == off[1] || strings.Contains(err.Error(), "the session to go on with") != off[1] {
-				t.Fatalf("the GUI of Terra: %v", err)
-			}
-		})
+// The GUI is a command of the profile ouro runs for, not of the node: ouro
+// gui needs no profile even when there are several, and it opens the window of
+// the first one. A profile that turns the GUI off has no such command.
+func TestGUIOfTheFirstProfile(t *testing.T) {
+	s := clitest.Settings(t)
+	terra, _ := twoProfiles(t, s)
+	app, err := cli.New(s, cli.Terminal{In: strings.NewReader(""), Out: &syncBuffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The window cannot open here: what matters is that it is reached without
+	// naming a profile, and fails only for want of a native build.
+	if err := app.Run(context.Background(), []string{"gui"}); err == nil || !strings.Contains(err.Error(), "native Wails build") {
+		t.Fatalf("the GUI of Terra: %v", err)
+	}
+	if err := config.Update(string(terra), func(c *config.Config) error {
+		c.Plugins = &config.Plugins{Off: []string{"gui"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app, err = cli.New(s, cli.Terminal{In: strings.NewReader(""), Out: &syncBuffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run(context.Background(), []string{"gui"}); err == nil || strings.Contains(err.Error(), "native Wails build") {
+		t.Fatalf("a GUI the first profile turned off: %v", err)
 	}
 }
 

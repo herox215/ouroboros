@@ -241,13 +241,13 @@ func TestRunWithGUI(t *testing.T) {
 				nodeBody += "exit 3\n"
 			}
 			goTool := runnerScript(t, filepath.Join(toolchain, "go"), goBody)
-			runnerScript(t, filepath.Join(tools, "node"), nodeBody)
+			runnerScript(t, filepath.Join(tools, "pnpm"), strings.ReplaceAll(nodeBody, "node", "pnpm"))
 			report, err := Run(context.Background(), source, goTool, Options{GUI: tc.gui})
 			if err != nil {
 				t.Fatal(err)
 			}
 			gui := goTool + " test -json -count=1 -race -timeout=5m -tags=production,webkit2_41 ./internal/plugins/gui"
-			frontend := "node --test internal/plugins/gui/frontend_test.mjs"
+			frontend := "pnpm -C internal/plugins/gui/web test"
 			runnerContains(t, report, "$ "+gui+"\n", "$ "+frontend+"\n", "Statement coverage: 100.0%", tc.result)
 			calls := strings.Split(runnerRead(t, filepath.Join(source, "calls")), "\n")
 			if len(calls) != 4 || !strings.HasSuffix(calls[0], " ./...") || calls[1] != strings.TrimPrefix(gui, goTool+" ") || calls[2] != frontend {

@@ -10,7 +10,6 @@ import (
 	"ouroboros/internal/home"
 	"ouroboros/internal/node"
 	desktopplugin "ouroboros/internal/plugins/desktop"
-	"ouroboros/internal/plugins/gui"
 	nodeplugin "ouroboros/internal/plugins/node"
 	tuiplugin "ouroboros/internal/plugins/tui"
 )
@@ -26,7 +25,6 @@ import (
 type profile struct {
 	node    *nodeplugin.Profile
 	ui      *tuiplugin.Profile
-	gui     *gui.Profile
 	desktop *desktopplugin.Profile
 }
 
@@ -40,7 +38,6 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 	apps := map[home.Dir]*App{}
 	nodes := make([]*nodeplugin.Profile, len(dirs))
 	uis := make([]*tuiplugin.Profile, len(dirs))
-	guis := make([]*gui.Profile, 0, len(dirs))
 	desktops := make([]*desktopplugin.Profile, 0, len(dirs))
 	for i, dir := range dirs {
 		if cfg, err := dir.Config(); err == nil && cfg.PrivateKey != "" {
@@ -66,18 +63,12 @@ func newProfiles(s Settings, t Terminal) (*App, error) {
 		if p.desktop != nil {
 			desktops = append(desktops, p.desktop)
 		}
-		if p.gui != nil { // a profile may turn the GUI off
-			guis = append(guis, p.gui)
-		}
 	}
 	for _, n := range nodes[1:] {
 		nodes[0].Join(n)
 	}
 	if !slices.Contains(uis, nil) { // no profile turned the UI off
 		tuiplugin.Together(uis)
-	}
-	if len(guis) > 0 {
-		gui.Together(guis)
 	}
 	desktopplugin.Together(desktops)
 	first := apps[dirs[0]]

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <!-- The dev server injects the stylesheet into the page; the window itself
+       loads it as a file and keeps the strict policy of index.html. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Ouroboros · demo</title>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/demo.ts"></script>
+</body>
+</html>

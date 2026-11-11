@@ -65,9 +65,10 @@ choose explicitly in both module commands:
 "on-click": "ouro --profile PROFILE desktop open"
 ```
 
-Use an ID from `ouro profile` (or correctly shell-quote a name). The GUI still
-has its existing profile picker. Without an explicit profile a multi-profile
-installation rejects the command rather than silently displaying the wrong one.
+Use an ID from `ouro profile` (or correctly shell-quote a name). The window
+shows the thread of the profile it was started for. Without an explicit profile
+a multi-profile installation rejects the command rather than silently
+displaying the wrong one.
 If the desktop plugin was disabled, enable it using Ouroboros's plugin controls.
 
 ## macOS menu bar
@@ -76,7 +77,8 @@ On macOS, builds with cgo automatically show a native menu-bar icon while the
 node runs and the desktop plugin is enabled. Its menu shows the aggregate
 status, running session titles and “Open Ouroboros”. Status is refreshed every
 two seconds; waiting or unavailable status adds an attention mark. The GUI
-action uses the existing GUI and its profile picker.
+action opens the window, which shows the thread of the profile it was started
+for.
 
 A private child process owns the AppKit main thread; it exits when the node
 stops or its input pipe closes. No Dock icon, notifications, automatic startup,

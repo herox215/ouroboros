@@ -11,8 +11,8 @@ import (
 	"ouroboros/plugin"
 )
 
-// The UI wears the colors of the window of the GUI (see the style.css of
-// internal/plugins/gui/frontend): an olive guiPalette, light or dark as the
+// The UI wears the colors of the window of the GUI (see the app.css of
+// internal/plugins/gui/web): an olive guiPalette, light or dark as the
 // background of the terminal is. Once the terminal said which it is, the UI
 // paints its background and its text in the colors of that palette, so that
 // it looks as the window does, whatever theme the terminal has.
