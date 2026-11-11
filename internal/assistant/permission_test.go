@@ -103,6 +103,8 @@ func TestDefaultAsk(t *testing.T) {
 		{ToolBash, "npm install", false},
 		{"delete", `{"path":"~/x"}`, true},
 		{ToolRebuild, `{}`, true},
+		{"command", `{"command":"change_model","model":"x"}`, true},
+		{"command", `{"command":"usage"}`, false},
 		{"browser", `{"action":"type","element":3,"text":"hunter2"}`, true},
 		{"browser", `{"action":"click","element":3}`, false},
 		{"read", `{"path":"~/.env"}`, false},
