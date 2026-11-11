@@ -1,11 +1,12 @@
 // Package commands is the plugin that lets the agent run the commands of the
 // node by name, as the owner runs them with a slash in a front end.
 //
-// The commands are the ones this build has: change_model and usage. Which of
-// them the tool offers is the owner's setting, {"tool": "command", "commands":
-// ["usage"]}; without the setting it offers both. The tool is the owner's
-// alone, and for the thread alone: a peer changes neither the model nor reads
-// the owner's quota, and the sessions do not change what they run with.
+// The commands are the ones this build has: change_model, change_effort and
+// usage. Which of them the tool offers is the owner's setting, {"tool":
+// "command", "commands": ["usage"]}; without the setting it offers all of
+// them. The tool is the owner's alone, and for the thread alone: a peer
+// changes neither the model nor the effort nor reads the owner's quota, and
+// the sessions do not change what they run with.
 package commands
 
 import (
@@ -30,13 +31,14 @@ const Tool = "command"
 
 // settings are the settings of the tool: the commands it may run.
 type settings struct {
-	Commands *[]string `json:"commands" about:"the commands the tool may run, by name" unset:"change_model and usage"`
+	Commands *[]string `json:"commands" about:"the commands the tool may run, by name" unset:"change_model, change_effort and usage"`
 }
 
 // args are the arguments of a call of the tool, whatever command it runs.
 type args struct {
 	Command string `json:"command"`
 	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 	Access  string `json:"access,omitempty"`
 	Scope   string `json:"scope,omitempty"`
 	Session string `json:"session,omitempty"`
@@ -55,6 +57,12 @@ type needs struct {
 type usageSource interface {
 	List(context.Context) ([]session.Info, error)
 	ContextOf(context.Context, string) (session.ContextUsage, error)
+}
+
+// effortSetter is what change_effort reads of the sessions of the node: it
+// sets the effort of one session. The sessions of the node provide it.
+type effortSetter interface {
+	SetEffort(ctx context.Context, id, effort string) error
 }
 
 // command is one command the tool can run.
@@ -117,7 +125,7 @@ func tool(owner *plugin.Owner, providers func() []plugin.Provider, source usageS
 }
 
 // defaults are the commands the tool offers while the settings name none.
-func defaults() []string { return []string{"change_model", "usage"} }
+func defaults() []string { return []string{"change_model", "change_effort", "usage"} }
 
 // chosenNames are the commands the settings name, or the defaults.
 func chosenNames(s settings) ([]string, error) {
@@ -140,6 +148,14 @@ func registry(owner *plugin.Owner, providers func() []plugin.Provider, source us
 			about: "change the model the agent answers with from the next message on: model, and access and scope (owner, sessions, thread or peers) where they differ",
 			run: func(ctx context.Context, a args) (string, error) {
 				return changeModel(ctx, owner, providers, a)
+			},
+		},
+		{
+			name:  "change_effort",
+			about: "change how much the model thinks before it answers, from the next message on: effort (auto, none, low, medium, high or max, as far as the model takes them), and scope node (the default: the node, which every conversation without an effort of its own has) or session (this conversation alone)",
+			run: func(ctx context.Context, a args) (string, error) {
+				setter, _ := source.(effortSetter)
+				return changeEffort(ctx, owner, providers, setter, plugin.ContextID(ctx), a)
 			},
 		},
 		{
@@ -348,6 +364,74 @@ func changeModel(ctx context.Context, owner *plugin.Owner, providers func() []pl
 	return fmt.Sprintf("The agent answers %s with the model %q of the access %s from the next message on.", what, model, label), nil
 }
 
+// effortAuto is what the effort is called that leaves it to the model: the
+// stored value is "", and the front ends show it as auto.
+const effortAuto = "auto"
+
+// changeEffort changes the effort of the node, or of the conversation the
+// command runs in. It does not ask the owner: the effort is cheap to undo.
+// Where models.dev lists the model, only the efforts it takes are accepted,
+// as the slider of /effort offers them.
+func changeEffort(ctx context.Context, owner *plugin.Owner, providers func() []plugin.Provider, sessions effortSetter, current string, a args) (string, error) {
+	effort := strings.ToLower(strings.TrimSpace(a.Effort))
+	if effort == "" {
+		return "", fmt.Errorf("change_effort needs an effort: %s", list(effortNames(owner, providers)))
+	}
+	if effort == effortAuto {
+		effort = ""
+	}
+	names := effortNames(owner, providers)
+	if !slices.Contains(names, effortName(effort)) {
+		if _, known := owner.Efforts(providers()); known {
+			return "", fmt.Errorf("the model does not take the effort %q; it takes: %s", effortName(effort), list(names))
+		}
+		return "", fmt.Errorf("no such effort %q: it is %s", effortName(effort), list(names))
+	}
+	scope := strings.ToLower(strings.TrimSpace(a.Scope))
+	if scope == "" {
+		scope = "node"
+	}
+	switch scope {
+	case "node":
+		if err := owner.SetEffort(effort); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("The effort of the node is %s from the next message on, in every conversation that has none of its own.", effortName(effort)), nil
+	case "session":
+		id := current
+		if sessions == nil || id == "" {
+			return "", errors.New("there is no conversation to set the effort of")
+		}
+		if err := sessions.SetEffort(ctx, id, effort); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("The effort of this conversation is %s from the next message on.", effortName(effort)), nil
+	}
+	return "", fmt.Errorf("no such scope %q: it is node or session", scope)
+}
+
+// effortNames are the efforts change_effort accepts, "auto" first: those the
+// model takes where models.dev lists it, else the ones the owner chooses from.
+func effortNames(owner *plugin.Owner, providers func() []plugin.Provider) []string {
+	choices := plugin.Efforts
+	if takes, known := owner.Efforts(providers()); known {
+		choices = append([]string{""}, takes...)
+	}
+	names := make([]string, len(choices))
+	for i, e := range choices {
+		names[i] = effortName(e)
+	}
+	return names
+}
+
+// effortName is what an effort is called: "" is auto.
+func effortName(effort string) string {
+	if effort == "" {
+		return effortAuto
+	}
+	return effort
+}
+
 // checkModel fails if the access does not offer model, and names the ones it
 // does. It returns how the access is labeled.
 func checkModel(ctx context.Context, owner *plugin.Owner, providers []plugin.Provider, access, model string) (string, error) {
@@ -384,7 +468,8 @@ func schema(chosen []command) string {
 			"command": map[string]any{"type": "string", "enum": names, "description": "the command to run"},
 			"model":   map[string]any{"type": "string", "description": "change_model: the model to answer with from the next message on"},
 			"access":  map[string]any{"type": "string", "description": "change_model: the ID of the access that offers the model; the one the scope is answered through now by default"},
-			"scope":   map[string]any{"type": "string", "enum": []string{"owner", "sessions", "thread", "peers"}, "description": "change_model: whose model changes, the owner's by default"},
+			"scope":   map[string]any{"type": "string", "description": "change_model: whose model changes, one of owner (the default), sessions, thread or peers; change_effort: node (the default) or session"},
+			"effort":  map[string]any{"type": "string", "description": "change_effort: how much the model thinks before it answers: auto (leave it to the model), none, low, medium, high or max; the ones the model takes"},
 			"session": map[string]any{"type": "string", "description": "usage: the conversation to report the context of, by its ID, the start of it, or its title; the one the command runs in by default"},
 		},
 		"required":             []string{"command"},

@@ -3,10 +3,12 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/agent"
 	"ouroboros/internal/assistant"
@@ -176,5 +178,133 @@ func TestUsageOfASession(t *testing.T) {
 	}
 	if _, err := cfg.Run(context.Background(), json.RawMessage(`{"command":"usage","session":"nope"}`)); err == nil || !strings.Contains(err.Error(), "no session matches") {
 		t.Fatalf("unknown: %v", err)
+	}
+}
+
+// efforted records the efforts set in sessions.
+type efforted struct{ id, effort string }
+
+func (e *efforted) SetEffort(_ context.Context, id, effort string) error {
+	e.id, e.effort = id, effort
+	return nil
+}
+
+func (e *efforted) List(context.Context) ([]session.Info, error) { return nil, nil }
+
+func (e *efforted) ContextOf(context.Context, string) (session.ContextUsage, error) {
+	return session.ContextUsage{}, session.ErrNoSession
+}
+
+// change_effort sets the effort of the node, and "auto" leaves it to the
+// model; it needs no question to the owner.
+func TestChangeEffort(t *testing.T) {
+	dir, owner, _ := node(t)
+	cfg, err := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil).Configure(json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(cfg.Schema, "change_effort") || !strings.Contains(cfg.Schema, `"effort"`) {
+		t.Fatalf("defaults: %+v, %v", cfg, err)
+	}
+	var asked int
+	out, err := cfg.Run(answer(context.Background(), "", &asked), json.RawMessage(`{"command":"change_effort","effort":"high"}`))
+	if err != nil || !strings.Contains(out, "high") || !strings.Contains(out, "next message") || asked != 0 {
+		t.Fatalf("out %q, asked %d, %v", out, asked, err)
+	}
+	if got, err := dir.Config(); err != nil || got.Effort != "high" {
+		t.Fatalf("config %+v, %v", got, err)
+	}
+	if out, err = cfg.Run(context.Background(), json.RawMessage(`{"command":"change_effort","effort":"auto"}`)); err != nil || !strings.Contains(out, "auto") {
+		t.Fatalf("auto: %q, %v", out, err)
+	}
+	if got, _ := dir.Config(); got.Effort != "" {
+		t.Fatalf("effort %q", got.Effort)
+	}
+}
+
+// An unknown effort, a missing one and an unknown scope fail, naming what
+// there is, and change nothing.
+func TestChangeEffortInvalid(t *testing.T) {
+	dir, owner, _ := node(t)
+	cfg, _ := tool(owner, func() []plugin.Provider { return []plugin.Provider{quota()} }, nil).Configure(json.RawMessage(`{}`))
+	for in, want := range map[string]string{
+		`{"command":"change_effort","effort":"huge"}`:                      "auto, none, low, medium, high, max",
+		`{"command":"change_effort"}`:                                      "needs an effort",
+		`{"command":"change_effort","effort":"low","scope":"nowhere"}`:     "node or session",
+		`{"command":"change_effort","effort":" HIGH ","scope":" Nowhere"}`: "node or session",
+	} {
+		if _, err := cfg.Run(context.Background(), json.RawMessage(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: %v", in, err)
+		}
+	}
+	if got, _ := dir.Config(); got.Effort != "" {
+		t.Fatalf("effort %q", got.Effort)
+	}
+}
+
+// With the scope session the effort of the conversation the command runs in
+// changes, and the node's stays.
+func TestChangeEffortSession(t *testing.T) {
+	dir, owner, _ := node(t)
+	s := &efforted{}
+	providers := func() []plugin.Provider { return []plugin.Provider{quota()} }
+	cfg, _ := tool(owner, providers, s).Configure(json.RawMessage(`{}`))
+	out, err := changeEffort(context.Background(), owner, providers, s, "thread-1", args{Effort: "low", Scope: "session"})
+	if err != nil || !strings.Contains(out, "this conversation") || s.id != "thread-1" || s.effort != "low" {
+		t.Fatalf("out %q, %+v, %v", out, s, err)
+	}
+	if got, _ := dir.Config(); got.Effort != "" {
+		t.Fatalf("node effort %q", got.Effort)
+	}
+	if _, err := cfg.Run(context.Background(), json.RawMessage(`{"command":"change_effort","effort":"low","scope":"session"}`)); err == nil {
+		t.Fatal("no conversation: want an error")
+	}
+}
+
+// The setting can leave change_effort out.
+func TestChangeEffortSetting(t *testing.T) {
+	_, owner, _ := node(t)
+	cfg, err := tool(owner, func() []plugin.Provider { return nil }, nil).Configure(json.RawMessage(`{"commands":["usage"]}`))
+	if err != nil || !strings.Contains(cfg.Schema, `"enum":["usage"]`) {
+		t.Fatalf("%+v, %v", cfg, err)
+	}
+	if _, err := cfg.Run(context.Background(), json.RawMessage(`{"command":"change_effort","effort":"low"}`)); err == nil || !strings.Contains(err.Error(), "no such command") {
+		t.Fatalf("refused: %v", err)
+	}
+}
+
+// Where models.dev lists the model, only the efforts it takes are accepted,
+// and a refused one names them.
+func TestChangeEffortListed(t *testing.T) {
+	dir, owner, _ := node(t)
+	q := quota()
+	q.Catalog = func(llm.Access) string { return "quota" }
+	listed := fmt.Sprintf(`{"at": %q, "providers": {"quota": {"old": {"efforts": ["low", "max"]}}}}`, time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(dir.Catalog(), []byte(listed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	providers := func() []plugin.Provider { return []plugin.Provider{q} }
+	_, err := changeEffort(context.Background(), owner, providers, nil, "", args{Effort: "high"})
+	if err == nil || !strings.Contains(err.Error(), "does not take") || !strings.Contains(err.Error(), "auto, low, max") {
+		t.Fatalf("err %v", err)
+	}
+	if _, err := changeEffort(context.Background(), owner, providers, nil, "", args{Effort: "max"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// failing is a session service that refuses every effort.
+type failing struct{ efforted }
+
+func (failing) SetEffort(context.Context, string, string) error { return session.ErrNoEffort }
+
+// What cannot be set is reported: the node without a configuration, and a
+// session that refuses.
+func TestChangeEffortFails(t *testing.T) {
+	providers := func() []plugin.Provider { return nil }
+	bare := plugin.OwnerOf(home.Dir(t.TempDir()), nil)
+	if _, err := changeEffort(context.Background(), bare, providers, nil, "", args{Effort: "low"}); err == nil {
+		t.Fatal("unconfigured node: want an error")
+	}
+	_, owner, _ := node(t)
+	if _, err := changeEffort(context.Background(), owner, providers, failing{}, "x", args{Effort: "low", Scope: "session"}); err == nil {
+		t.Fatal("session: want an error")
 	}
 }
