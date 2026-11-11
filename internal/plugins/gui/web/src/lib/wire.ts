@@ -40,12 +40,15 @@ export interface State {
 /** What the thread told so far, when the window opens it. */
 export interface Snapshot {
   events: WireEvent[];
+  before: number;
+  has_more: boolean;
 }
 
 /** The bound methods of the Go window, window.go.gui.Window. */
 export interface Bridge {
   InitialState(): Promise<State>;
   Open(): Promise<Snapshot>;
+  History(before: number): Promise<Snapshot>;
   Send(text: string): Promise<void>;
   Stop(): Promise<void>;
 }

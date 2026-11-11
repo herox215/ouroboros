@@ -22,6 +22,7 @@ function script(open: () => Promise<Snapshot>, send: (text: string) => Promise<v
     bridge: {
       InitialState: async (): Promise<State> => ({ profile: 'Luna', thread: 'thread' }),
       Open: open,
+      History: async () => snapshot(),
       Send: send,
       Stop: async () => {},
     },
@@ -30,7 +31,7 @@ function script(open: () => Promise<Snapshot>, send: (text: string) => Promise<v
   return { link, events, ended, restarting };
 }
 
-const snapshot = (...events: WireEvent[]): Snapshot => ({ events });
+const snapshot = (...events: WireEvent[]): Snapshot => ({ events, before: 0, has_more: false });
 
 describe('Chat', () => {
   it('opens the thread and shows what it told, and where it stands', async () => {

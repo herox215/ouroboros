@@ -9,6 +9,7 @@ interface Runtime {
 interface WindowBindings {
   InitialState(): Promise<State>;
   Open(): Promise<Snapshot>;
+  History(before: number): Promise<Snapshot>;
   Send(text: string): Promise<void>;
   Stop(): Promise<void>;
 }
@@ -27,6 +28,7 @@ function wailsLink(): Link | null {
   const bridge: Bridge = {
     InitialState: () => bindings.InitialState(),
     Open: () => bindings.Open(),
+    History: (before) => bindings.History(before),
     Send: (text) => bindings.Send(text),
     Stop: () => bindings.Stop(),
   };
