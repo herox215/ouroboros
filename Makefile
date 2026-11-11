@@ -18,7 +18,7 @@ ifeq ($(shell uname -s),Darwin)
 export CGO_LDFLAGS += -framework UniformTypeIdentifiers
 endif
 
-.PHONY: build test test-gui cover install clean \
+.PHONY: build test test-gui frontend test-frontend cover install clean \
 	check fmt-check vet lint cover-check mutation tools hooks unhooks
 
 build:
@@ -30,10 +30,19 @@ vet:
 test: vet
 	go test -race -tags goolm ./...
 
-# Optional native GUI checks need the desktop libraries and Node for the frontend tests.
+# The window is built from internal/plugins/gui/web into internal/plugins/gui/frontend,
+# which is committed: building ouro itself needs no Node. Change the UI with
+# "make frontend", and check it with "make test-frontend".
+frontend:
+	cd internal/plugins/gui/web && pnpm install --frozen-lockfile && pnpm build
+
+test-frontend:
+	cd internal/plugins/gui/web && pnpm install --frozen-lockfile && pnpm run check && pnpm test
+
+# Optional native GUI checks need the desktop libraries; the frontend needs Node and pnpm.
 test-gui:
 	go test -race -tags "production,webkit2_41,goolm" ./internal/plugins/gui
-	node --test internal/plugins/gui/frontend_test.mjs
+	$(MAKE) test-frontend
 
 # Coverage including the end-to-end test, which runs the real binary. The unit
 # tests and that binary write into one directory; cover.out is both merged.

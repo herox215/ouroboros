@@ -66,10 +66,10 @@ func Run(ctx context.Context, source, goTool string, opts Options) (string, erro
 			failed = runCheck(ctx, source, goTool, []string{"test", "-json", "-count=1", "-race", "-timeout=5m", "-tags=production,webkit2_41", "./internal/plugins/gui"}, filepath.Join(dir, "gui-tests.json"), true, &report) || failed
 		}
 		if ctx.Err() == nil {
-			failed = runCheck(ctx, source, "node", []string{"--test", "internal/plugins/gui/frontend_test.mjs"}, filepath.Join(dir, "frontend.log"), false, &report) || failed
+			failed = runCheck(ctx, source, "pnpm", []string{"-C", "internal/plugins/gui/web", "test"}, filepath.Join(dir, "frontend.log"), false, &report) || failed
 		}
 	} else {
-		report.WriteString("Native GUI and JavaScript frontend tests explicitly skipped (gui=false).\n")
+		report.WriteString("Native GUI and frontend tests explicitly skipped (gui=false).\n")
 	}
 	if ctx.Err() != nil {
 		fmt.Fprintf(&report, "INCOMPLETE: %v; later checks were not run.\n", ctx.Err())
