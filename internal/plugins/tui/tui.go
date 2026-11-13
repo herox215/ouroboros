@@ -98,9 +98,14 @@ var show = func(ctx context.Context, m *tui.Model) error {
 		return ctx.Err()
 	}
 	// The program drives the frames of what moves on its own, and only those:
-	// an idle UI is drawn when something changes, and not before.
+	// an idle UI is drawn when something changes, and not before. The 60
+	// frames a second it flushes at by default are what a key waits for: the
+	// frame of the key is laid out in a millisecond or two and then stands
+	// until the next tick, so the echo of a key was up to 17 ms late. Twice
+	// that many ticks halves the wait, and costs nothing while nothing
+	// moves: a tick with no frame pending is a check and a lock.
 	m.Live()
-	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	_, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithFPS(120)).Run()
 	return err
 }
 
