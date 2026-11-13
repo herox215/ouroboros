@@ -1137,6 +1137,37 @@ func TestAdvanceCountsTheFramesOfTheNewestWord(t *testing.T) {
 	}
 }
 
+// A word that grows, or a space after it, is still the newest word; a word
+// after a space of any kind is a new one, and the first word of a new round
+// is new although the round before ended on as many words.
+func TestAdvanceKnowsANewWord(t *testing.T) {
+	c := &conversation{partial: "one tw"}
+	settle := func() {
+		for range settleFrames {
+			c.advance()
+		}
+	}
+	settle()
+	for _, grown := range []string{"one two", "one two ", "one two\n"} {
+		c.partial = grown
+		if f := c.advance(); f != settleFrames {
+			t.Fatalf("%q: frame %d, the word was not new", grown, f)
+		}
+	}
+	for _, next := range []string{"one two\nthree", "one two\nthree　four", "five"} {
+		c.partial = next
+		if f := c.advance(); f != 0 {
+			t.Fatalf("%q: frame %d, the word is new", next, f)
+		}
+		settle()
+	}
+	for s, want := range map[string]int{"": 0, " \n": 0, "a": 1, "a b": 3, "a b  ": 3, "ab\tcd": 4, "a　b": 5} {
+		if got := newestWord(s); got != want {
+			t.Errorf("newestWord(%q) = %d, want %d", s, got, want)
+		}
+	}
+}
+
 // With a filter the list makes room for the line it is typed on: it shows
 // two sessions fewer, cuts a long filter to the dialog, and says that nothing
 // has the filter only where nothing has it.

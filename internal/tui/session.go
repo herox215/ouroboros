@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -471,8 +472,8 @@ func answerTick(c *conversation) tea.Cmd {
 
 // thread is how far the newest word of the answer is drawn in.
 type thread struct {
-	words int // how many words the stream had when the chat last drew them
-	frame int // how many frames the newest of them has flickered for
+	newest int // where the newest word was when the chat last drew it, see newestWord
+	frame  int // how many frames it has flickered for
 }
 
 // settleFrames is how many frames of the chat a word flickers before it
@@ -483,12 +484,29 @@ const settleFrames = 3
 // at: a word the stream brings starts at the first, and the frames the chat
 // draws without a new one let the last of them come to rest.
 func (c *conversation) advance() int {
-	if w := len(strings.Fields(c.partial)); w != c.thread.words {
-		c.thread = thread{words: w}
+	if at := newestWord(c.partial); at != c.thread.newest {
+		c.thread = thread{newest: at}
 	} else if c.thread.frame < settleFrames {
 		c.thread.frame++
 	}
 	return c.thread.frame
+}
+
+// newestWord is where the newest word of s begins, one past its first byte,
+// and 0 while s has no word: a new word moves it, a word that grows does not.
+// It reads s from its end only as far as that word, so that a frame of a long
+// answer does not split the whole of it into words.
+func newestWord(s string) int {
+	s = strings.TrimRightFunc(s, unicode.IsSpace)
+	if s == "" {
+		return 0
+	}
+	i := strings.LastIndexFunc(s, unicode.IsSpace)
+	if i < 0 {
+		return 1
+	}
+	_, size := utf8.DecodeRuneInString(s[i:])
+	return i + size + 1
 }
 
 // short is text on one line, cut after n characters.

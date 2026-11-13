@@ -67,7 +67,7 @@ func TestStreamedAnswerMatchesTheWhole(t *testing.T) {
 			whole.chat.pending = true
 			whole.chat.partial = tt.answer
 			whole.Update(makeWindow(tt.width, 30))
-			whole.chat.thread = thread{words: len(strings.Fields(tt.answer)), frame: settleFrames}
+			whole.chat.thread = thread{newest: newestWord(tt.answer), frame: settleFrames}
 			whole.renderHistory(true)
 
 			streamed, _ := newModel(t)
@@ -76,7 +76,7 @@ func TestStreamedAnswerMatchesTheWhole(t *testing.T) {
 			streamed.Update(makeWindow(tt.width, 30))
 			for i := 1; i <= len(tt.answer); i++ {
 				streamed.chat.partial = tt.answer[:i]
-				streamed.chat.thread = thread{words: len(strings.Fields(streamed.chat.partial)), frame: settleFrames}
+				streamed.chat.thread = thread{newest: newestWord(streamed.chat.partial), frame: settleFrames}
 				streamed.renderHistory(false)
 			}
 			if got, want := ansiStrip(streamed.history.GetContent()), ansiStrip(whole.history.GetContent()); got != want {
@@ -138,7 +138,7 @@ func TestStreamedBlockMatchesTheWholeFrame(t *testing.T) {
 	m.chat.pending = true
 	m.chat.partial = "First.\n\n```go\none\n\ntwo\n```\n\nLast words."
 	width := m.transcriptWidth()
-	m.chat.thread = thread{words: len(strings.Fields(m.chat.partial)), frame: settleFrames}
+	m.chat.thread = thread{newest: newestWord(m.chat.partial), frame: settleFrames}
 	got := strings.Join(m.streamBlocks(m.chat, width), "\n\n")
 	head := boldStyle.Foreground(muted).Render(m.agentName() + " · writing …")
 	want := lipgloss.Wrap(head+"\n"+renderMarkdown(m.chat.partial, width), width, "") + mutedStyle.Render(" ▌")
