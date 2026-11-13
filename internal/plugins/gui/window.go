@@ -55,8 +55,11 @@ type Snapshot struct {
 type Window struct {
 	profile *profile
 	name    string
-	ctx     context.Context
-	cancel  context.CancelFunc
+	// source is the front end the owner talks through, as the node tells it:
+	// "gui" for the window, "web" for the page of the thread in a browser.
+	source string
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// lifecycle serializes opening the node with closing the window.
 	lifecycle sync.Mutex
@@ -87,7 +90,7 @@ func newWindow(p *profile, name string) *Window {
 
 func newWindowContext(ctx context.Context, p *profile, name string) *Window {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Window{profile: p, name: name, ctx: ctx, cancel: cancel, flush: defaultFlush}
+	return &Window{profile: p, name: name, source: "gui", ctx: ctx, cancel: cancel, flush: defaultFlush}
 }
 
 // InitialState names the profile of the window and the conversation it shows.
@@ -469,7 +472,11 @@ func (w *Window) Send(text string) error {
 	if err := w.ready(); err != nil {
 		return err
 	}
-	ctx := plugin.WithMessageSource(w.ctx, plugin.MessageSource{Interface: "gui"})
+	source := w.source
+	if source == "" {
+		source = "gui"
+	}
+	ctx := plugin.WithMessageSource(w.ctx, plugin.MessageSource{Interface: source})
 	err := w.profile.sessions.Ask(ctx, plugin.ThreadID, text)
 	if errors.Is(err, plugin.ErrBusy) {
 		return w.profile.sessions.Steer(ctx, plugin.ThreadID, text)

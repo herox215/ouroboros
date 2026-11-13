@@ -166,6 +166,10 @@ type Backend interface {
 	// "cyberpsycho": yolo and cyberpsycho exclude each other. Status says
 	// which one is on.
 	SetMode(mode string) error
+	// SetWebPassword makes password what the page of the thread on the
+	// network asks for, and "" what it has none: without one it is served to
+	// nobody. What is kept is a hash, never the password itself.
+	SetWebPassword(password string) error
 
 	// SetEffort makes effort, one of plugin.Efforts, how much the model
 	// thinks before it answers the owner in a session that has none of its

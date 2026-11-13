@@ -122,6 +122,8 @@ type fakeBackend struct {
 	// SetMode was.
 	debug []bool
 	modes []string
+	// webPassword is what SetWebPassword was called with, the last time.
+	webPassword string
 
 	// settings are what /settings shows; changes what the owner changed
 	// there, and done what a change answers with.
@@ -420,6 +422,11 @@ func (f *fakeBackend) SetThreadModel(access, model string) error {
 func (f *fakeBackend) SetModel(access, model string) (bool, error) {
 	f.set = append(f.set, access+" "+model)
 	return f.switched, f.fail["setmodel"]
+}
+
+func (f *fakeBackend) SetWebPassword(password string) error {
+	f.webPassword = password
+	return nil
 }
 
 func (f *fakeBackend) SetDebug(on bool) error {

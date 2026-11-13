@@ -69,6 +69,17 @@ type Settings struct {
 	// says that the configuration has none and the default holds.
 	Protected        []string
 	ProtectedDefault bool
+	// Web is the page of the thread on the network: the GUI in a browser.
+	Web WebSettings
+}
+
+// WebSettings is the page of the thread on the network as the owner sees it.
+type WebSettings struct {
+	Enabled bool
+	Port    int    // where it is served
+	User    string // what it asks for at its login, "" for none
+	// HasPassword says that it has a password; which one is never shown.
+	HasPassword bool
 }
 
 // PluginState is a plugin of this build as the owner sees it.
@@ -141,6 +152,9 @@ const (
 	SetPeerList                           // Peer, On: a list of its own, as the one for peers; off: none
 	SetThreadWindow                       // Value: a duration like "3h"
 	SetPeerToolMax                        // Value: a number from 1 to config.MaxPeerToolMax
+	SetWeb                                // On: the page of the thread is served to the network
+	SetWebUser                            // Value: the user the page asks for
+	SetWebPort                            // Value: a number from config.MinWebPort to config.MaxWebPort
 )
 
 // Setting is one change the owner makes in the settings.
@@ -224,6 +238,8 @@ func (o *Owner) Settings(tools []Tool, providers []ContextProvider) (Settings, e
 		PeerToolMax:     cfg.PeerRounds(),
 		PluginsKept:     o.plugins.kept, Protected: cfg.Protected(),
 		ProtectedDefault: cfg.Tools == nil || cfg.Tools.Protected == nil,
+		Web: WebSettings{Enabled: cfg.Web.Enabled, Port: cfg.Web.PortOr(),
+			User: cfg.Web.User, HasPassword: cfg.Web.Password != ""},
 	}
 	for _, p := range providers {
 		if !slices.Contains(s.ContextProviders, p.Name) {
@@ -387,7 +403,7 @@ func (o *Owner) Change(s Setting, tools []Tool, providers []ContextProvider) (st
 
 // String names a change for the log: what it changes, not to what.
 func (s Setting) String() string {
-	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the window of the thread", "the tool rounds for a peer"}[s.Kind]
+	what := [...]string{"the name", "the context provider", "the plugin", "all tools", "the tool", "the settings of the tool", "the protected paths", "the description", "the changes of ouro", "the own list of tools", "the window of the thread", "the tool rounds for a peer", "the page of the thread", "the user of the page", "the port of the page"}[s.Kind]
 	if s.Name != "" {
 		what += " " + s.Name
 	}
@@ -493,6 +509,29 @@ func (o *Owner) change(c *config.Config, s Setting, all []agent.Tool, providers 
 		}
 		c.PeerToolMax = &n
 		return "saved: peers are answered with it from their next message on", nil
+	case SetWeb:
+		c.Web.Enabled = s.On
+		if s.On && c.Web.User == "" {
+			return "", fmt.Errorf("the page asks for a user first: set one, and a password")
+		}
+		return "saved: the page is served while the node serves, from the next moment on", nil
+	case SetWebUser:
+		user := strings.TrimSpace(s.Value)
+		if err := config.ValidWebUser(user); err != nil {
+			return "", err
+		}
+		c.Web.User = user
+		return holdsNow, nil
+	case SetWebPort:
+		n, err := strconv.Atoi(strings.TrimSpace(s.Value))
+		if err == nil {
+			err = config.ValidWebPort(n)
+		}
+		if err != nil {
+			return "", fmt.Errorf("web.port is a number from %d to %d", config.MinWebPort, config.MaxWebPort)
+		}
+		c.Web.Port = n
+		return "saved: the page is served there from the next moment on", nil
 	}
 	return "", fmt.Errorf("no such setting: %d", s.Kind)
 }
