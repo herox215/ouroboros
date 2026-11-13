@@ -2069,6 +2069,7 @@ internal/tui         terminal UI (Bubble Tea), with the splash and the setup
   tui.go             the Model: what a key does, the input and its placeholder (New), and the clock that runs only while something moves
   view.go            what is drawn: the header (headerView), the chat and its line of context and cache (chatTitle), the footer (footerView)
   history.go         the lines of the conversation and the window on them: what stands, and the answer still on its way
+  stream.go          the answer that is being written: the blocks that stand, and the one that still grows
   question.go        the input (inputView), and a question of the agent in it
   commands.go        the slash commands of the UI and /help
   session.go         the conversations and the screen of /session
