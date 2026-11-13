@@ -127,10 +127,16 @@ func (m *Model) bottomRows() int {
 // chatHeight is how high the conversation is.
 func (m *Model) chatHeight() int { return max(1, m.height-m.headerHeight()-m.bottomRows()) }
 
-// pad fills s with spaces to w cells, cut to w if it is wider.
+// pad fills s with spaces to w cells, cut to w if it is wider. The width is
+// measured once: a line that fits, as all of the conversation does, is not
+// measured twice.
 func pad(s string, w int) string {
-	s = ansi.Truncate(s, w, "…")
-	return s + strings.Repeat(" ", max(0, w-lipgloss.Width(s)))
+	width := lipgloss.Width(s)
+	if width > w {
+		s = ansi.Truncate(s, w, "…")
+		width = lipgloss.Width(s)
+	}
+	return s + strings.Repeat(" ", max(0, w-width))
 }
 
 // spread puts left at the start and right at the end of w cells; left gives
@@ -156,7 +162,28 @@ func (m *Model) chatScreen() string {
 	if w := m.railWidth(); w > 0 {
 		columns = append(columns, m.railView(w, h))
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+	return joinColumns(m.height, columns...)
+}
+
+// joinColumns lays columns of h rows side by side: every one is as wide as it
+// is, and as high as the window, so that their rows join without measuring
+// them again, as JoinHorizontal would on every frame.
+func joinColumns(h int, columns ...string) string {
+	parts := make([][]string, len(columns))
+	for i, column := range columns {
+		parts[i] = strings.Split(column, "\n")
+	}
+	lines := make([]string, h)
+	for y := range lines {
+		var b strings.Builder
+		for _, part := range parts {
+			if y < len(part) {
+				b.WriteString(part[y])
+			}
+		}
+		lines[y] = b.String()
+	}
+	return strings.Join(lines, "\n")
 }
 
 // mainView is the column of the conversation: its head, the conversation

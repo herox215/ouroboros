@@ -25,7 +25,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 
@@ -400,6 +399,18 @@ type Model struct {
 	// streaming is whether the chat is on its clock for the answer that is
 	// being written: the pieces of it come per token and are drawn together.
 	streaming bool
+	// live is whether the program that shows the UI drives its own frames:
+	// the UI asks for one only while something on the screen moves. A UI
+	// that a test steps through does not, unless the test asks for one.
+	live bool
+	// animating is whether the clock of what moves on the screen is running.
+	animating bool
+	// lastFrame is the last view, kept while only what is not drawn yet changes:
+	// the pieces of the answer on its way come per token, and are drawn on the
+	// clock of the answer, not once for every piece.
+	lastFrame  tea.View
+	frameOK    bool
+	reuseFrame bool
 
 	suggestionRequests requestsScreen // reviews awaiting a decision
 	screen             screen
@@ -444,7 +455,7 @@ type Model struct {
 	terminalLight bool
 	appearance    string
 	input         textarea.Model
-	history       viewport.Model
+	history       historyView
 	glide         *glide     // the viewport on its way to a line, if one is
 	selected      *selection // what the mouse selected of the history
 	pressed       *spot      // where the mouse went down, before the drag began
@@ -497,9 +508,6 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 	input.MinHeight = 1
 	input.MaxContentHeight = 1 << 20 // the height below caps the room, not what is written
 
-	history := viewport.New()
-	history.KeyMap = viewport.KeyMap{} // keys go to the input; scrolling is handled explicitly
-
 	ctx, quit := context.WithCancel(context.Background())
 	m := &Model{
 		backend:     backend,
@@ -509,7 +517,6 @@ func New(backend Backend, screens []plugin.Screen, slashes []plugin.Slash) *Mode
 		chats:       map[string]*conversation{},
 		splash:      splashScreen{show: true},
 		input:       input,
-		history:     history,
 		spinner:     spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		soundClips:  map[string]soundClip{},
 		soundWanted: map[string]bool{},
@@ -577,7 +584,7 @@ func (m *Model) Init() tea.Cmd {
 		m.openSetup(true)
 	}
 	m.splash.animating = true
-	return tea.Batch(m.goOnline, m.loadContacts, m.loadSessions, m.watch(m.chat), tick(), m.spinner.Tick, tea.RequestBackgroundColor, tea.Raw(terminalQuery), splashTick())
+	return tea.Batch(m.goOnline, m.loadContacts, m.loadSessions, m.watch(m.chat), tick(), tea.RequestBackgroundColor, tea.Raw(terminalQuery), splashTick(), m.animate())
 }
 
 func splashTick() tea.Cmd {
@@ -621,14 +628,147 @@ func (m *Model) refresh() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// What only feeds the answer on its way changes what the next frame of
+	// the answer draws, not the frame that stands already.
+	m.reuseFrame = onlyFeedsTheAnswer(msg)
 	model, cmd := m.update(msg)
 	if m.profiles == nil {
 		if watch := m.watchRunning(); watch != nil {
 			cmd = tea.Batch(cmd, watch)
 		}
 		cmd = tea.Batch(cmd, m.soundWork())
+		if m.live {
+			cmd = tea.Batch(cmd, m.animate(), m.animateSplash())
+		}
 	}
 	return model, cmd
+}
+
+// onlyFeedsTheAnswer reports whether msg is a piece of an answer that is
+// being written: it is drawn on the answer's clock, not on its own.
+func onlyFeedsTheAnswer(msg tea.Msg) bool {
+	e, ok := msg.(eventMsg)
+	return ok && e.event.Kind == plugin.SessionAnswering
+}
+
+// Live starts the clock of what moves on the screen. The program that shows
+// the UI does; a UI that a test steps through only gets the frames the test
+// asks for, so that a test does not run a clock of its own.
+func (m *Model) Live() {
+	if m.profiles != nil {
+		for _, model := range m.profiles.models {
+			model.live = true
+		}
+		return
+	}
+	m.live = true
+}
+
+// advance draws the next frame of what moves on the screen, and asks for the
+// one after it only while something still moves: an idle UI has no clock.
+func (m *Model) advance() tea.Cmd {
+	m.ticks++
+	if a := &m.nameAnimation; a.active || !a.fading.IsZero() {
+		if a.active {
+			a.elapsed = m.now().Sub(a.start)
+			if a.elapsed >= nameSettle {
+				a.active, a.settled = false, true
+			}
+		}
+		if !a.active && a.faded(m.now()) == 0 {
+			a.fading = time.Time{}
+		}
+		m.renderHistory(false)
+	}
+	var tick tea.Cmd
+	m.spinner, tick = m.spinner.Update(spinner.TickMsg{ID: m.spinner.ID()})
+	if m.moving() {
+		m.animating = true
+		return tick
+	}
+	m.animating = false
+	return nil
+}
+
+// animate asks for the next frame of what moves on the screen, unless the
+// clock is running already. An idle UI has none: it is drawn when something
+// changes, and not before.
+func (m *Model) animate() tea.Cmd {
+	if !m.live || m.animating || !m.moving() {
+		return nil
+	}
+	m.animating = true
+	return m.spinner.Tick
+}
+
+// animateSplash asks for the next frame of the splash, or of the snake of
+// the setup while it curls or turns, unless its clock is running already.
+func (m *Model) animateSplash() tea.Cmd {
+	if !m.live || m.splash.animating {
+		return nil
+	}
+	if m.splash.show || m.onboard != nil && m.onboard.moving(m.now()) {
+		m.splash.animating = true
+		return splashTick()
+	}
+	return nil
+}
+
+// moving reports whether something on the screen moves by itself, so that the
+// UI needs a frame now: the spinner of a screen that waits for the node, the
+// pictures and dots of a session at work, a name that is still coming in, or
+// what a dialog draws moving. Everything else stands until something changes.
+func (m *Model) moving() bool {
+	if m.restartFrame > 0 {
+		return false // the frames of the restart carry themselves
+	}
+	if m.splash.show {
+		return false // the splash has its own clock
+	}
+	if m.onboard != nil {
+		return m.onboard.moving(m.now())
+	}
+	a := &m.nameAnimation
+	if a.active {
+		return true
+	}
+	if !a.fading.IsZero() && a.faded(m.now()) > 0 {
+		return true
+	}
+	switch m.screen {
+	case screenChat:
+		if m.streaming {
+			return false // the frames of the answer draw the chat already
+		}
+		if m.chat.awaiting != nil || m.waiting() != "" {
+			return true // the frame of the restart, or the picture of the wait
+		}
+		return m.sideWidth() > 0 && m.anyRunning()
+	case screenSessions:
+		return m.anyRunning()
+	case screenModel:
+		return m.picker.busy != ""
+	case screenSettings:
+		return len(m.config.rows) == 0 && m.config.err == nil
+	case screenMemory:
+		return !m.memories.loaded && m.memories.err == nil
+	case screenMode:
+		return modeNames[m.mode.at] == "cyberpsycho"
+	case screenEffort:
+		return true // the signals run through the mesh
+	}
+	return false
+}
+
+// anyRunning reports whether a session of the owner's works, besides the
+// thread: what the sidebar and the sessions list draw moving.
+func (m *Model) anyRunning() bool {
+	for _, c := range m.chats {
+		if c.contextID != plugin.ThreadID && c.peer == "" && c.busy() {
+			return true
+		}
+	}
+	return false
 }
 
 // watchRunning watches the sessions that run while the thread is shown, so
@@ -699,9 +839,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case splashMsg:
 		if m.onboard != nil {
 			m.frame(msg.at)
+		}
+		if m.splash.show {
+			return m, m.splash.update(msg.at)
+		}
+		if m.onboard != nil && m.onboard.moving(msg.at) {
+			m.splash.animating = true
 			return m, splashTick()
 		}
-		return m, m.splash.update(msg.at)
+		m.splash.animating = false
+		return m, nil
 	case connectedMsg:
 		return m, m.connected(msg)
 	case loginMsg:
@@ -805,19 +952,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setNotice(msg.done, false)
 		return m, m.refresh()
 	case spinner.TickMsg:
-		if msg.ID == m.spinner.ID() {
-			m.ticks++
-			if a := &m.nameAnimation; a.active || !a.fading.IsZero() {
-				a.elapsed = m.now().Sub(a.start)
-				if !a.active && a.faded(m.now()) == 0 {
-					a.fading = time.Time{}
-				}
-				m.renderHistory(false)
-			}
+		if msg.ID != m.spinner.ID() {
+			return m, nil // a tick of another spinner
 		}
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		return m, m.advance()
 	case revealMsg:
 		return m, m.revealFrame(msg)
 	case answerMsg:
@@ -825,6 +963,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streaming = false // the answer is over, or wrote nothing since
 			return m, nil
 		}
+		// The frames of the answer are the clock of the chat while it writes:
+		// the picture of the wait and the dots of the sessions move with it,
+		// so that no second clock runs beside it.
+		m.ticks++
 		following := m.followsEnd()
 		m.renderHistory(false)
 		var glide tea.Cmd
@@ -1142,10 +1284,7 @@ func (r *requestsScreen) apply(m *Model, trust Contacts) {
 // setup saved is there to start it with.
 func (m *Model) setup() tea.Cmd {
 	m.openSetup(!m.status.Configured)
-	if m.onboard == nil {
-		return nil
-	}
-	return m.splash.animate()
+	return nil // the snake of the setup moves on its own clock, see animateSplash
 }
 
 func (m *Model) send() tea.Cmd {

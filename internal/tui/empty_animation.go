@@ -13,12 +13,16 @@ import (
 // gradient of the splash flows through it, as it does through the title
 // there, and it shines, glitches, waves, floats, flares, flickers, beams
 // a torch over itself, is engraved by a laser, stands in rain or is encircled
-// by an ASCII snake. A visit of an
-// empty chat begins it anew, in a look picked by chance, and the first
-// message of the chat fades the name out behind it.
+// by an ASCII snake. A visit of an empty chat begins it anew, in a look picked
+// by chance, and it comes to rest after a few moments; the first message of
+// the chat fades the name out behind it.
 type nameAnimation struct {
-	look    nameLook
-	active  bool
+	look   nameLook
+	active bool
+	// settled is whether the name has come to rest in this chat: a visit
+	// moves it once, for a moment, and then it stands still, so that an
+	// empty chat that is looked at for long costs no frame.
+	settled bool
 	chat    *conversation // what it moves for: another chat or another name starts anew
 	tagline string
 	name    string
@@ -27,6 +31,10 @@ type nameAnimation struct {
 	// fading is when the first message came, while the name fades out.
 	fading time.Time
 }
+
+// nameSettle is how long the name moves when a chat is first shown. Tests
+// shorten it.
+var nameSettle = 4 * time.Second
 
 // nameFade is how long the name takes to fade out behind the first message.
 var nameFade = 450 * time.Millisecond
@@ -44,9 +52,15 @@ func (a *nameAnimation) faded(at time.Time) float64 {
 // that fills the viewport has no room for it.
 func (m *Model) behind(content string) string {
 	a := &m.nameAnimation
+	if a.chat != m.chat {
+		return content
+	}
 	left := a.faded(m.now())
+	if left == 0 {
+		return content
+	}
 	lines := strings.Split(content, "\n")
-	if left == 0 || a.chat != m.chat || len(lines) > m.history.Height() {
+	if len(lines) > m.history.Height() {
 		return content
 	}
 	name := strings.Split(drawNameAnimation(a.name, m.history.Width(), m.history.Height(), a.elapsed, m.light, a.look, left, a.tagline), "\n")
@@ -72,10 +86,10 @@ func (m *Model) syncNameAnimation() {
 		a.active = false
 		return
 	}
-	if a.active && a.chat == m.chat && a.name == m.agentName() {
+	if a.chat == m.chat && a.name == m.agentName() && (a.active || a.settled) {
 		return
 	}
-	a.active, a.chat, a.name = true, m.chat, m.agentName()
+	a.active, a.settled, a.chat, a.name = true, false, m.chat, m.agentName()
 	a.start, a.elapsed, a.fading = m.now(), 0, time.Time{}
 	a.tagline = emptyTaglines[pickEmptyTagline(len(emptyTaglines))]
 	a.look = nameLook(pickNameLook(int(nameLooks)))

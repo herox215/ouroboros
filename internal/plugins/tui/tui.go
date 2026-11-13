@@ -97,6 +97,9 @@ var show = func(ctx context.Context, m *tui.Model) error {
 		// starting it reads stdin while it is closed again.
 		return ctx.Err()
 	}
+	// The program drives the frames of what moves on its own, and only those:
+	// an idle UI is drawn when something changes, and not before.
+	m.Live()
 	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	return err
 }

@@ -120,10 +120,15 @@ func (m *Model) layout() {
 	m.context.size(m)
 }
 
-// renderHistory fills the history viewport with the conversation, the loop of
-// every answer included. Each message is headed as the GUI heads it, who
-// wrote it and when, its text below the head, and a blank line between two
-// of them.
+// renderHistory fills the history with the conversation, the loop of every
+// answer included. Each message is headed as the GUI heads it, who wrote it and
+// when, its text below the head, and a blank line between two of them.
+//
+// What an answer has written stays as it is: the lines of the entries that
+// cannot change anymore are drawn once and kept, and the lines of the answer
+// on its way, of what waits below it, are drawn on their own every time. A
+// frame of an answer therefore costs what the answer is, not what the whole
+// conversation is.
 func (m *Model) renderHistory(toBottom bool) {
 	c := m.chat
 	first := m.threadStart(c)
@@ -134,11 +139,7 @@ func (m *Model) renderHistory(toBottom bool) {
 			m.history.SetContent("")
 			return
 		}
-		art := emptyChat(m.agentName(), m.history.Width(), m.history.Height())
-		if a := &m.nameAnimation; a.active {
-			art = drawNameAnimation(m.agentName(), m.history.Width(), m.history.Height(), a.elapsed, m.light, a.look, 1, a.tagline)
-		}
-		m.history.SetContent(art)
+		m.history.SetContent(m.emptyArt())
 		m.stopGlide(&m.history)
 		m.history.GotoTop()
 		return
@@ -146,12 +147,12 @@ func (m *Model) renderHistory(toBottom bool) {
 	width := m.history.Width()
 	body := lipgloss.NewStyle().Width(width)
 	// What the agent says is markdown, and shown formatted. Every block is
-	// wrapped here and not by the viewport, which would measure all of the
-	// history on every step of scrolling.
+	// wrapped here and not by the history, which would measure all of it on
+	// every frame.
 	render := func(s string) string { return renderMarkdown(s, width) }
 	wrap := func(s string) string { return lipgloss.Wrap(s, width, "") }
-	summaries := c.summaries()
-	var cards []soundCard // the sound cards the blocks show, in their order
+	var summaries map[int]string // how many tools an answer used, by its last round
+	var cards []soundCard        // the sound cards the blocks show, in their order
 	// one adds what the chat shows of the entry i to blocks and says whether
 	// the last block there is the words of a round of an answer that is in,
 	// below which the line of its calls goes.
@@ -253,47 +254,91 @@ func (m *Model) renderHistory(toBottom bool) {
 		add(wrap(m.entryHead(e) + "\n" + text + more))
 		return blocks, false
 	}
-	// What an answer has written stays as it is: the entries that cannot
-	// change anymore are drawn once and kept, so that an answer on its way
-	// costs only its own words, however long the conversation is.
+	// The entries that cannot change anymore are drawn once and kept, with
+	// the lines they make: a frame of an answer only draws what is new.
 	settled, kept := c.settled(), c.shown.n
-	blocks := c.shown.blocks
-	cards = slices.Clone(c.shown.cards)
+	blocks, lines, cards := c.shown.blocks, c.shown.lines, slices.Clone(c.shown.cards)
 	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || c.shown.light != m.light || c.shown.sound != m.soundRev || kept > settled {
-		kept, blocks, cards = 0, nil, nil
+		kept, blocks, lines, cards = 0, nil, nil, nil
+	}
+	// The summaries of the entries that stay are read with them, once; a
+	// frame of the answer on its way reads only its own.
+	if kept < settled {
+		summaries = c.summaries()
+	} else {
+		summaries = c.summariesFrom(settled)
 	}
 	words := false // the last block is the words of a round of an answer that is in
+	was := len(blocks)
 	for i := kept; i < settled; i++ {
 		blocks, words = one(i, blocks, words)
 	}
-	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks, sound: m.soundRev, cards: slices.Clone(cards)}
-	blocks = slices.Clone(blocks)
+	lines = appendLines(lines, blocks[was:], was)
+	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks, lines: lines, sound: m.soundRev, cards: slices.Clone(cards)}
+	// What still changes is drawn on its own, every time: the rounds of the
+	// answer on its way, the words the model is still writing, and what waits
+	// for the answer to take it.
+	var tail []string
+	words = false
 	for i := settled; i < len(c.entries); i++ {
-		blocks, words = one(i, blocks, words)
+		tail, words = one(i, tail, words)
 	}
-	// The answer the model is still writing, as far as the stream has brought
-	// it; the Answer of the end replaces it with the whole of it.
 	if c.pending && c.partial != "" {
 		head := boldStyle.Foreground(muted).Render(m.agentName() + " · writing …")
-		blocks = append(blocks, wrap(head+"\n"+render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
+		tail = append(tail, wrap(head+"\n"+render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
 	}
-	// What waits for the answer on its way to take it comes last.
 	for i, text := range c.queued {
 		state := " · queued"
 		if i == len(c.queued)-1 {
 			state += ", ↑ takes it back"
 		}
 		head := boldStyle.Foreground(muted).Render(cmp.Or(c.peer, "You") + state)
-		blocks = append(blocks, mineBlock(head, lipgloss.NewStyle().Faint(true).Render(c.showLabels(c.labelled(text))), width))
+		tail = append(tail, mineBlock(head, lipgloss.NewStyle().Faint(true).Render(c.showLabels(c.labelled(text))), width))
 	}
 	m.soundCards = cards
-	content := m.behind(strings.Join(blocks, "\n\n"))
-	m.history.SetContent(content)
-	m.placeSoundCards(content)
+	m.history.SetLines(lines, appendLines(nil, tail, 0))
+	m.placeSoundCards(&m.history)
+	// The name of an empty chat is still behind the first message while it
+	// fades out: that is the one frame that draws the whole conversation.
+	if a := &m.nameAnimation; a.chat == c && !a.fading.IsZero() {
+		content := m.history.GetContent()
+		if behind := m.behind(content); behind != content {
+			m.history.SetContent(behind)
+		}
+	}
 	if toBottom {
 		m.stopGlide(&m.history) // the bottom is where it goes now
 		m.history.GotoBottom()
 	}
+}
+
+// appendLines adds the lines of blocks to lines, a blank line between two of
+// them, as the chat parts the blocks: at is the number of blocks that are in
+// lines already.
+func appendLines(lines, blocks []string, at int) []string {
+	for i, block := range blocks {
+		if at+i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, strings.Split(block, "\n")...)
+	}
+	return lines
+}
+
+// emptyArt is what an empty chat shows: the name of the agent, moving as far
+// as the animation of this visit has come, or resting once it is over.
+func (m *Model) emptyArt() string {
+	a := &m.nameAnimation
+	w, h := m.history.Width(), m.history.Height()
+	if a.chat == m.chat && a.name == m.agentName() {
+		if a.active {
+			return drawNameAnimation(m.agentName(), w, h, a.elapsed, m.light, a.look, 1, a.tagline)
+		}
+		if a.settled {
+			return emptyChat(m.agentName(), w, h, a.tagline)
+		}
+	}
+	return emptyChat(m.agentName(), w, h)
 }
 
 // exchangeOf is the message of the owner the entry i answers, by its index:
@@ -316,6 +361,7 @@ type rendered struct {
 	thoughts bool        // whether what the model thought was shown then
 	light    bool        // the palette the cached blocks were drawn in
 	blocks   []string    // what the chat shows of them, a block for every entry
+	lines    []string    // the blocks as lines, a blank line between two
 	sound    int         // the revision of the cards' look they were drawn with
 	cards    []soundCard // the sound cards of the blocks, in their order
 }
@@ -423,6 +469,13 @@ func thoughtBlock(text string, width int) string {
 // the rounds before it. The answer on its way is in it as far as it has
 // come.
 func (c *conversation) summaries() map[int]string {
+	return c.summariesFrom(0)
+}
+
+// summariesFrom is summaries of the entries from start on: the answer that is
+// still being written, once everything before it stands. A frame of it then
+// reads no answer that it cannot change anymore.
+func (c *conversation) summariesFrom(start int) map[int]string {
 	summaries := map[int]string{}
 	var calls []call
 	last := -1
@@ -432,7 +485,8 @@ func (c *conversation) summaries() map[int]string {
 		}
 		calls, last = nil, -1
 	}
-	for i, e := range c.entries {
+	for i := max(0, start); i < len(c.entries); i++ {
+		e := c.entries[i]
 		if e.asks() {
 			end()
 			continue
@@ -521,6 +575,9 @@ func (m *Model) entryHead(e entry) string {
 }
 
 func (m *Model) View() tea.View {
+	if m.reuseFrame && m.frameOK {
+		return m.lastFrame // the answer on its way is drawn on its clock
+	}
 	if m.profiles != nil {
 		for _, model := range m.profiles.models {
 			if model.restartFrame > 0 {
@@ -540,13 +597,16 @@ func (m *Model) View() tea.View {
 		v.BackgroundColor, v.ForegroundColor = ui.background, ui.text
 	}
 	if m.width == 0 {
+		m.lastFrame, m.frameOK = v, true
 		return v
 	}
 	if m.restartFrame > 0 {
 		v.SetContent(m.restartView())
+		m.lastFrame, m.frameOK = v, true
 		return v
 	}
 	v.SetContent(m.content())
+	m.lastFrame, m.frameOK = v, true
 	return v
 }
 

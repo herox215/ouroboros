@@ -230,7 +230,7 @@ func (m *Model) soundCard(path string, width int) string {
 // that comes next: a message that merely begins with ▶ would otherwise
 // take the place of a card, and every card after it would play the sound
 // of the one before.
-func (m *Model) placeSoundCards(content string) {
+func (m *Model) placeSoundCards(v *historyView) {
 	m.soundLines = map[int]string{}
 	var playable []string
 	for _, card := range m.soundCards {
@@ -238,8 +238,11 @@ func (m *Model) placeSoundCards(content string) {
 			playable = append(playable, card.path)
 		}
 	}
+	if len(playable) == 0 {
+		return
+	}
 	next := 0
-	for line, text := range strings.Split(content, "\n") {
+	for line, text := range strings.Split(v.GetContent(), "\n") {
 		if next == len(playable) {
 			break
 		}

@@ -206,4 +206,11 @@ func TestNameBehindAFullViewport(t *testing.T) {
 			t.Errorf("behind %d lines in %d rows the name shows: %v", lines, rows, !behind)
 		}
 	}
+	// The name is only behind its own chat.
+	was := m.chat
+	m.chat = m.conversation("other")
+	if got := m.behind("hello"); got != "hello" {
+		t.Errorf("the name is behind another chat: %q", got)
+	}
+	m.chat = was
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -541,7 +542,11 @@ func say(t *testing.T, m *Model, text string) tea.Cmd {
 // deliver runs cmd and the commands that follow it until none is left.
 func deliver(m *Model, cmd tea.Cmd) {
 	for cmd != nil {
-		_, cmd = m.Update(cmd())
+		msg := cmd()
+		if _, ok := msg.(spinner.TickMsg); ok {
+			return // the clock of the UI is not what a test drives
+		}
+		_, cmd = m.Update(msg)
 	}
 }
 
@@ -571,7 +576,7 @@ func drive(t *testing.T, m *Model, cmd tea.Cmd, done func() bool) {
 				for _, c := range msg {
 					start(c)
 				}
-			case nil, tickMsg, rewatchMsg, splashMsg:
+			case nil, tickMsg, rewatchMsg, splashMsg, spinner.TickMsg:
 			default:
 				_, c := m.Update(msg)
 				start(c)

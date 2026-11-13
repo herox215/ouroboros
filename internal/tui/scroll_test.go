@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -190,7 +189,7 @@ func TestGlideStopsWhenTheLineIsGone(t *testing.T) {
 
 // glideLines runs the frames of a glide one by one, at the times they are drawn,
 // and gives the line at the top after each.
-func glideLines(t *testing.T, m *Model, v *viewport.Model, cmd tea.Cmd) []int {
+func glideLines(t *testing.T, m *Model, v scroller, cmd tea.Cmd) []int {
 	t.Helper()
 	var lines []int
 	at := time.Now()

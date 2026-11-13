@@ -883,6 +883,7 @@ func TestRenderedEntriesAreKept(t *testing.T) {
 		t.Fatalf("an answer that is over is kept whole: %+v", c.shown)
 	}
 	c.shown.blocks[0] = "kept"
+	c.shown.lines[0] = "kept"
 	c.entries = append(c.entries, entry{mine: true, text: "three"})
 	c.pending = true
 	m.renderHistory(true)
