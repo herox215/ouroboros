@@ -776,10 +776,11 @@ func TestSetupScene(t *testing.T) {
 	if got, want := o.curled(start.Add(curlDuration/2)), curlFrom+(o.curl.to-curlFrom)*0.75; !near(got, want) || o.curl.to <= curlFrom {
 		t.Fatalf("half the time curls it to %v, want %v", got, want)
 	}
-	// Frames move the scene on.
-	at := start.Add(time.Second)
+	// Frames move the scene on while the snake curls, and only then: at rest
+	// it asks for no frame.
+	at := start.Add(50 * time.Millisecond)
 	if _, cmd := m.Update(splashMsg{at}); cmd == nil || o.at != at {
-		t.Fatal("the setup should be animated")
+		t.Fatal("the setup should be animated while the snake curls")
 	}
 	before := m.View().Content
 	m.Update(splashMsg{at.Add(200 * time.Millisecond)})
@@ -875,10 +876,6 @@ func TestInitOpensTheSetupOnlyWhenNeeded(t *testing.T) {
 		m.Init()
 		if m.onboard != nil || !m.splash.show || b.setups != 0 {
 			t.Fatalf("%+v: the splash should open", b)
-		}
-		// The frames of the splash are coming: the setup opened now uses them.
-		if cmd := m.splash.animate(); cmd != nil {
-			t.Fatal("a second line of frames")
 		}
 	}
 }
@@ -1105,17 +1102,13 @@ func TestSetupDialogCutsLongLines(t *testing.T) {
 	}
 }
 
-// The scene of the setup, as it is drawn: the sky drifts and twinkles behind
-// the snake, whose colors flow along its body, and the dialog lies in front
-// of them.
+// The scene of the setup, as it is drawn: the still sky behind the snake,
+// whose colors flow along its body, and the dialog in front of them. The
+// scene stands until the next page moves the snake, so one frame is enough.
 func TestGoldenSetupScene(t *testing.T) {
 	m, _, _ := onboard(t)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 26})
 	o := m.onboard
-	var b strings.Builder
-	for _, after := range []time.Duration{700 * time.Millisecond, 2300 * time.Millisecond} {
-		m.Update(splashMsg{o.opened.Add(after)})
-		fmt.Fprintf(&b, "--- %v\n%s\n", after, m.View().Content)
-	}
-	golden(t, "setup-scene", b.String())
+	m.Update(splashMsg{o.opened.Add(700 * time.Millisecond)})
+	golden(t, "setup-scene", m.View().Content)
 }

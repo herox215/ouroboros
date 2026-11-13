@@ -883,6 +883,7 @@ func TestRenderedEntriesAreKept(t *testing.T) {
 		t.Fatalf("an answer that is over is kept whole: %+v", c.shown)
 	}
 	c.shown.blocks[0] = "kept"
+	c.shown.lines[0] = "kept"
 	c.entries = append(c.entries, entry{mine: true, text: "three"})
 	c.pending = true
 	m.renderHistory(true)
@@ -1133,6 +1134,37 @@ func TestAdvanceCountsTheFramesOfTheNewestWord(t *testing.T) {
 	frames = append(frames, c.advance())
 	if want := []int{0, 1, 2, 3, 3, 0}; !slices.Equal(frames, want) {
 		t.Fatalf("frames %v, want %v", frames, want)
+	}
+}
+
+// A word that grows, or a space after it, is still the newest word; a word
+// after a space of any kind is a new one, and the first word of a new round
+// is new although the round before ended on as many words.
+func TestAdvanceKnowsANewWord(t *testing.T) {
+	c := &conversation{partial: "one tw"}
+	settle := func() {
+		for range settleFrames {
+			c.advance()
+		}
+	}
+	settle()
+	for _, grown := range []string{"one two", "one two ", "one two\n"} {
+		c.partial = grown
+		if f := c.advance(); f != settleFrames {
+			t.Fatalf("%q: frame %d, the word was not new", grown, f)
+		}
+	}
+	for _, next := range []string{"one two\nthree", "one two\nthree　four", "five"} {
+		c.partial = next
+		if f := c.advance(); f != 0 {
+			t.Fatalf("%q: frame %d, the word is new", next, f)
+		}
+		settle()
+	}
+	for s, want := range map[string]int{"": 0, " \n": 0, "a": 1, "a b": 3, "a b  ": 3, "ab\tcd": 4, "a　b": 5} {
+		if got := newestWord(s); got != want {
+			t.Errorf("newestWord(%q) = %d, want %d", s, got, want)
+		}
 	}
 }
 

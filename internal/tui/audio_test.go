@@ -344,3 +344,38 @@ func TestALineThatLooksLikeACardTakesNoSound(t *testing.T) {
 		t.Fatalf("the lines play %v, want %s then %s", played, first, second)
 	}
 }
+
+// While an answer is on its way, the cards of what stands and the card of
+// the question it answers each play their own sound: the lines that stand
+// are searched once, the lines still coming on every frame, and both count
+// from the top of the history.
+func TestSoundCardsPlayWhileAnAnswerStreams(t *testing.T) {
+	m, _ := newModel(t)
+	first, second := namedSound(t, "kick.wav"), namedSound(t, "snare.wav")
+	attached(m, first)
+	attached(m, second)
+	readSound(m, first)
+	readSound(m, second)
+	m.chat.pending = true
+	m.chat.partial = "▶ snare.wav is what a line of the answer says\n\nand more"
+	m.renderHistory(true)
+	m.renderHistory(true) // a second frame reads what stands from the cache
+	if len(m.chat.shown.buttons) != 1 || m.history.liveStart() == 0 {
+		t.Fatalf("the settled lines hold the buttons %+v, the live ones start at %d", m.chat.shown.buttons, m.history.liveStart())
+	}
+	lines := strings.Split(ansi.Strip(m.history.GetContent()), "\n")
+	var played []string
+	for line, text := range lines {
+		path, ok := m.soundLines[line]
+		if !ok {
+			continue
+		}
+		if !strings.Contains(text, filepath.Base(path)) || strings.Contains(text, "what a line") {
+			t.Fatalf("line %d plays %s but reads %q", line, path, text)
+		}
+		played = append(played, path)
+	}
+	if len(played) != 2 || played[0] != first || played[1] != second {
+		t.Fatalf("the lines play %v, want %s then %s", played, first, second)
+	}
+}

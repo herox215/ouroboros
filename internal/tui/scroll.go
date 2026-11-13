@@ -4,7 +4,6 @@ import (
 	"math"
 	"time"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -30,9 +29,17 @@ const (
 // scrollMsg is one frame of a glide, at the time it is drawn.
 type scrollMsg struct{ at time.Time }
 
+// scroller is what a glide carries: the history of the chat, or the context.
+type scroller interface {
+	YOffset() int
+	SetYOffset(int)
+	Height() int
+	TotalLineCount() int
+}
+
 // glide is a viewport on its way to a line of its content.
 type glide struct {
-	view     *viewport.Model
+	view     scroller
 	from     int       // the line at the top when the glide began
 	target   int       // the line of the content that is to be at the top
 	start    time.Time // when it began; the zero time until its first frame
@@ -42,7 +49,7 @@ type glide struct {
 // scrollBy asks the viewport v to move by lines and returns the frame that
 // carries it there; up is negative. A viewport that cannot go that way stays
 // where it is and needs no frame.
-func (m *Model) scrollBy(v *viewport.Model, lines int) tea.Cmd {
+func (m *Model) scrollBy(v scroller, lines int) tea.Cmd {
 	from := v.YOffset()
 	if m.glide != nil && m.glide.view == v {
 		// A wheel that is turned again adds to what the notch before it
@@ -58,7 +65,7 @@ func (m *Model) scrollBy(v *viewport.Model, lines int) tea.Cmd {
 // One chain of frames carries a glide: one that starts while another runs
 // takes its place and starts no second chain, which would move the viewport
 // twice a frame and make a spun wheel jump.
-func (m *Model) glideTo(v *viewport.Model, to int) tea.Cmd {
+func (m *Model) glideTo(v scroller, to int) tea.Cmd {
 	at := v.YOffset()
 	if to == at {
 		m.stopGlide(v) // it is there, or all of it is in sight already
@@ -82,11 +89,11 @@ func (m *Model) followsEnd() bool {
 
 // topLine is the last line of v that can be at the top of it: how far it
 // scrolls, 0 when all of it fits.
-func topLine(v *viewport.Model) int { return max(0, v.TotalLineCount()-v.Height()) }
+func topLine(v scroller) int { return max(0, v.TotalLineCount()-v.Height()) }
 
 // stopGlide ends a glide of the viewport v, so that one that is not shown
 // any more, or has moved on, is not carried on.
-func (m *Model) stopGlide(v *viewport.Model) {
+func (m *Model) stopGlide(v scroller) {
 	if m.glide != nil && m.glide.view == v {
 		m.glide = nil
 	}
@@ -120,7 +127,7 @@ func (m *Model) glideOn(now time.Time) bool {
 
 // wheel scrolls the viewport v by a step of the wheel, at once: a glide of
 // it ends there, and the hand takes over.
-func (m *Model) wheel(v *viewport.Model, msg tea.MouseWheelMsg) {
+func (m *Model) wheel(v scroller, msg tea.MouseWheelMsg) {
 	m.stopGlide(v)
 	v.SetYOffset(v.YOffset() + wheelLines(msg))
 }

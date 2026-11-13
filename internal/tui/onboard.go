@@ -234,6 +234,20 @@ func (o *onboarding) curled(at time.Time) float64 {
 	return o.curl.from + (o.curl.to-o.curl.from)*(1-(1-f)*(1-f))
 }
 
+// moving reports whether the scene changes by itself at the time at: the body
+// still curls, the end is still turning, or the spinner of a page that waits
+// for the node turns. A scene at rest asks for no frames: the sky stands, and
+// so does the snake until the next page moves it.
+func (o *onboarding) moving(at time.Time) bool {
+	if o.busy != "" {
+		return true
+	}
+	if !o.saved.IsZero() {
+		return at.Sub(o.saved) < turnAt+turnDuration
+	}
+	return o.curl.from != o.curl.to && at.Sub(o.curl.since) < curlDuration
+}
+
 // curlTo lets the body curl up to curl, from where it is now.
 func (o *onboarding) curlTo(curl float64) {
 	o.curl.from, o.curl.to, o.curl.since = o.curled(o.at), curl, o.at
@@ -676,15 +690,15 @@ func (m *Model) onboardView() string {
 	o := m.onboard
 	w, h := m.width, m.height
 	p := colors(m.light)
-	since := o.at.Sub(o.opened)
-	c := &canvas{w: w, h: h, cells: make([]cell, w*h), back: p.back, alpha: ramp(since, 0, fadeIn)}
-	drawStars(c, p, since)
+	// The sky stands: the stars twinkle no more than the night does, so that
+	// a scene at rest costs no frame. What moves is the snake, page by page.
+	c := &canvas{w: w, h: h, cells: make([]cell, w*h), back: p.back, alpha: 1}
+	drawStars(c, p, 0)
 	at, bright := o.pose(w, h)
 	for row, line := range poseCells(at, 1, false, w, h) {
 		for col, cl := range line {
 			if cl.dots != 0 {
-				hue := cl.along*0.9 - since.Seconds()*0.08
-				c.set(col, row, 0x2800+cl.dots, mix(p.back, p.gradient(hue), bright), false)
+				c.set(col, row, 0x2800+cl.dots, mix(p.back, p.gradient(cl.along*0.9), bright), false)
 			}
 		}
 	}

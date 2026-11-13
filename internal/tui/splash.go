@@ -20,22 +20,9 @@ type splashScreen struct {
 	animating bool
 }
 
-// animate makes the frames come unless they do already.
-func (s *splashScreen) animate() tea.Cmd {
-	if s.animating {
-		return nil
-	}
-	s.animating = true
-	return splashTick()
-}
-
 // update takes the frame at at: the splash goes on until it is over, and
-// then no frame follows.
+// then no frame follows. It is called while the splash is shown.
 func (s *splashScreen) update(at time.Time) tea.Cmd {
-	if !s.show {
-		s.animating = false
-		return nil
-	}
 	s.elapsed = at.Sub(s.start)
 	if s.elapsed >= splashDuration {
 		s.show, s.animating = false, false
