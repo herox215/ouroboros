@@ -82,6 +82,15 @@ func (v *historyView) TotalLineCount() int {
 	return n
 }
 
+// liveStart is the line of the history the lines still coming begin at: after
+// those that stand, and the blank line that parts the two.
+func (v *historyView) liveStart() int {
+	if len(v.settled) > 0 && len(v.live) > 0 {
+		return len(v.settled) + 1
+	}
+	return len(v.settled)
+}
+
 // line is the line i of the history, "" beyond its end.
 func (v *historyView) line(i int) string {
 	n := len(v.settled)

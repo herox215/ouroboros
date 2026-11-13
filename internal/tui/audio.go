@@ -230,7 +230,11 @@ func (m *Model) soundCard(path string, width int) string {
 // that comes next: a message that merely begins with ▶ would otherwise
 // take the place of a card, and every card after it would play the sound
 // of the one before.
-func (m *Model) placeSoundCards(v *historyView) {
+//
+// The buttons of the settled lines of v are given, found once when those lines
+// were drawn; only the lines still coming are searched here, so that a frame
+// of an answer does not read the whole conversation again.
+func (m *Model) placeSoundCards(v *historyView, settled []soundButton) {
 	m.soundLines = map[int]string{}
 	var playable []string
 	for _, card := range m.soundCards {
@@ -241,22 +245,45 @@ func (m *Model) placeSoundCards(v *historyView) {
 	if len(playable) == 0 {
 		return
 	}
+	buttons := soundButtons(settled[:len(settled):len(settled)], v.live, v.liveStart())
 	next := 0
-	for line, text := range strings.Split(v.GetContent(), "\n") {
+	for _, b := range buttons {
 		if next == len(playable) {
 			break
+		}
+		if namesCard(b.rest, filepath.Base(playable[next])) {
+			m.soundLines[b.line] = playable[next]
+			next++
+		}
+	}
+}
+
+// soundButton is a line of the history that begins with the button of a
+// sound: which line it is, and what follows the button.
+type soundButton struct {
+	line int
+	rest string
+}
+
+// soundButtons adds to buttons the lines that begin with the button of a
+// sound, of lines, whose first is the line at of the history.
+func soundButtons(buttons []soundButton, lines []string, at int) []soundButton {
+	for i, text := range lines {
+		// Most lines have no button at all, and are not stripped of their
+		// colors to tell: the lines of an answer are many.
+		if !strings.Contains(text, "▶") && !strings.Contains(text, "⏸") {
+			continue
 		}
 		plain := strings.TrimLeft(ansi.Strip(text), " ")
 		rest, ok := strings.CutPrefix(plain, "▶ ")
 		if !ok {
 			rest, ok = strings.CutPrefix(plain, "⏸ ")
 		}
-		if !ok || !namesCard(rest, filepath.Base(playable[next])) {
-			continue
+		if ok {
+			buttons = append(buttons, soundButton{line: at + i, rest: rest})
 		}
-		m.soundLines[line] = playable[next]
-		next++
 	}
+	return buttons
 }
 
 // namesCard reports whether the rest of a line after the button is the

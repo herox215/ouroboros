@@ -257,9 +257,9 @@ func (m *Model) renderHistory(toBottom bool) {
 	// The entries that cannot change anymore are drawn once and kept, with
 	// the lines they make: a frame of an answer only draws what is new.
 	settled, kept := c.settled(), c.shown.n
-	blocks, lines, cards := c.shown.blocks, c.shown.lines, slices.Clone(c.shown.cards)
+	blocks, lines, buttons, cards := c.shown.blocks, c.shown.lines, c.shown.buttons, slices.Clone(c.shown.cards)
 	if c.shown.first != first || c.shown.width != width || c.shown.thoughts == m.thoughtsHidden || c.shown.light != m.light || c.shown.sound != m.soundRev || kept > settled {
-		kept, blocks, lines, cards = 0, nil, nil, nil
+		kept, blocks, lines, buttons, cards = 0, nil, nil, nil, nil
 	}
 	// The summaries of the entries that stay are read with them, once; a
 	// frame of the answer on its way reads only its own.
@@ -273,8 +273,10 @@ func (m *Model) renderHistory(toBottom bool) {
 	for i := kept; i < settled; i++ {
 		blocks, words = one(i, blocks, words)
 	}
+	had := len(lines)
 	lines = appendLines(lines, blocks[was:], was)
-	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks, lines: lines, sound: m.soundRev, cards: slices.Clone(cards)}
+	buttons = soundButtons(buttons, lines[had:], had)
+	c.shown = rendered{first: first, n: settled, width: width, thoughts: !m.thoughtsHidden, light: m.light, blocks: blocks, lines: lines, buttons: buttons, sound: m.soundRev, cards: slices.Clone(cards)}
 	// What still changes is drawn on its own, every time: the rounds of the
 	// answer on its way, the words the model is still writing, and what waits
 	// for the answer to take it.
@@ -298,7 +300,7 @@ func (m *Model) renderHistory(toBottom bool) {
 	}
 	m.soundCards = cards
 	m.history.SetLines(lines, appendLines(nil, tail, 0))
-	m.placeSoundCards(&m.history)
+	m.placeSoundCards(&m.history, buttons)
 	// The name of an empty chat is still behind the first message while it
 	// fades out: that is the one frame that draws the whole conversation.
 	if a := &m.nameAnimation; a.chat == c && !a.fading.IsZero() {
@@ -356,15 +358,16 @@ func (c *conversation) exchangeOf(i int) int {
 // rendered are the entries of a conversation as the chat shows them, the
 // first n of them, wrapped for the width they were drawn at.
 type rendered struct {
-	first    int         // first entry inside the visible thread window
-	n        int         // of the entries, how many are in blocks
-	width    int         // the width of the chat they are wrapped for
-	thoughts bool        // whether what the model thought was shown then
-	light    bool        // the palette the cached blocks were drawn in
-	blocks   []string    // what the chat shows of them, a block for every entry
-	lines    []string    // the blocks as lines, a blank line between two
-	sound    int         // the revision of the cards' look they were drawn with
-	cards    []soundCard // the sound cards of the blocks, in their order
+	first    int           // first entry inside the visible thread window
+	n        int           // of the entries, how many are in blocks
+	width    int           // the width of the chat they are wrapped for
+	thoughts bool          // whether what the model thought was shown then
+	light    bool          // the palette the cached blocks were drawn in
+	blocks   []string      // what the chat shows of them, a block for every entry
+	lines    []string      // the blocks as lines, a blank line between two
+	buttons  []soundButton // the lines of them that begin with the button of a sound
+	sound    int           // the revision of the cards' look they were drawn with
+	cards    []soundCard   // the sound cards of the blocks, in their order
 }
 
 // settled is how many of the entries of c are shown as they will stay: all of
