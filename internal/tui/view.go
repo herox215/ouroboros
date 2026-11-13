@@ -284,8 +284,9 @@ func (m *Model) renderHistory(toBottom bool) {
 		tail, words = one(i, tail, words)
 	}
 	if c.pending && c.partial != "" {
-		head := boldStyle.Foreground(muted).Render(m.agentName() + " · writing …")
-		tail = append(tail, wrap(head+"\n"+render(threadIn(c.partial, c.advance())))+mutedStyle.Render(" ▌"))
+		tail = append(tail, m.streamBlocks(c, width)...)
+	} else {
+		c.stream = streamView{}
 	}
 	for i, text := range c.queued {
 		state := " · queued"

@@ -277,7 +277,7 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		c.partial += e.Text
 		if live && c == m.chat && !m.streaming { // from here the chat draws it
 			m.streaming = true
-			return answerTick()
+			return answerTick(c)
 		}
 	case plugin.SessionAnswer, plugin.SessionFailed, plugin.SessionCanceled:
 		c.end(e)
@@ -465,8 +465,8 @@ const answerFrame = time.Second / 20
 // answerMsg is a frame of the answer that is being written.
 type answerMsg struct{}
 
-func answerTick() tea.Cmd {
-	return tea.Tick(answerFrame, func(time.Time) tea.Msg { return answerMsg{} })
+func answerTick(c *conversation) tea.Cmd {
+	return tea.Tick(answerFrameFor(c), func(time.Time) tea.Msg { return answerMsg{} })
 }
 
 // thread is how far the newest word of the answer is drawn in.

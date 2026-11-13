@@ -310,6 +310,9 @@ type conversation struct {
 	// partial is the answer on its way, as far as the events of Answering
 	// brought it; the Answer of the end replaces it with the whole of it.
 	partial string
+	// stream is what of that answer stands already, rendered and kept, so
+	// that a frame draws only the block that is still growing.
+	stream streamView
 	// calling is how much of a call of a tool the model writes, like
 	// "3.2 KiB", as the events of Calling tell it; "" while it writes none.
 	calling   string
@@ -973,7 +976,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if following {
 			glide = m.glideTo(&m.history, topLine(&m.history))
 		}
-		return m, tea.Batch(answerTick(), glide)
+		return m, tea.Batch(answerTick(m.chat), glide)
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		return m, m.mouse(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
