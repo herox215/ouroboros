@@ -3,6 +3,8 @@ package tui
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -455,14 +457,16 @@ const (
 	singleSection    = "Tools of single peers"
 	protectedSection = "Protected paths"
 	gatewaysSection  = "Gateways"
+	webSection       = "The network"
 )
 
 // sections are the categories in the order the settings screen lists them.
-var sections = []string{nodeSection, agentsSection, pluginsSection, mcpSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
+var sections = []string{nodeSection, agentsSection, webSection, pluginsSection, mcpSection, ownerSection, peersSection, singleSection, gatewaysSection, protectedSection}
 
 // contents is what the list of categories says is in each.
 var contents = map[string]string{
 	gatewaysSection:  "external messaging access for this profile",
+	webSection:       "the GUI of ouro in a browser, on the network",
 	nodeSection:      "the name, the description, the LLM, the model, the effort",
 	agentsSection:    "the context provider, the debug mode, the thread window",
 	pluginsSection:   "which plugins are turned on",
@@ -476,6 +480,7 @@ var contents = map[string]string{
 // about is what an open category says of its lines.
 var about = map[string]string{
 	gatewaysSection:  "Allowlisted users are delegated this profile’s agent tools, INCLUDING permission answers, not just chat. Empty denies all.",
+	webSection:       "The page shows the thread of this profile, with the same tools your agent has: anyone who gets past its login acts as you do. It is served while the node serves, and asks for the user and the password below. Over a tailnet, reach it with tailscale serve, which gives it the certificate a browser and a phone ask for.",
 	nodeSection:      "The access and the models are changed with the setup and /model, the effort with /effort.",
 	agentsSection:    "A change holds from the next message, for you and for peers.",
 	pluginsSection:   "Plugins are part of the build. Turning one on or off holds once ouro starts anew: quit and start ouro, /stop and /start the node.",
@@ -544,6 +549,36 @@ func rows(s Settings) []row {
 			return Setting{Kind: plugin.SetPeerToolMax, Value: v}
 		}))
 
+	// The page of the thread on the network: the GUI in a browser.
+	page, pageNote := "off", "the GUI of ouro in a browser; it is served while the node serves"
+	pageToggle := set("turn on", Setting{Kind: plugin.SetWeb, On: true})
+	switch {
+	case !s.Web.Enabled:
+	case s.Web.User == "" || !s.Web.HasPassword:
+		page, pageNote = "on, but served to nobody", "a page without a user and a password is not served: set both below"
+		pageToggle = set("turn off", Setting{Kind: plugin.SetWeb})
+	default:
+		page, pageNote = webAddress(s.Web.Port), "the thread of this profile in a browser; it needs the node running"
+		pageToggle = set("turn off", Setting{Kind: plugin.SetWeb})
+	}
+	add(webSection, "Page of the thread", page, pageNote, pageToggle)
+	add(webSection, "User", cmp.Or(s.Web.User, "none"), "what the page asks for at its login",
+		editing("the user of the page", s.Web.User, func(v string) Setting { return Setting{Kind: plugin.SetWebUser, Value: v} }))
+	password, passwordAction := "not set", "set it"
+	if s.Web.HasPassword {
+		password, passwordAction = "set, hidden", "change it"
+	}
+	add(webSection, "Password", password, "kept as a hash, never as the password itself; empty takes it away",
+		action{passwordAction, func(m *Model) tea.Cmd {
+			return m.config.gatewayEdit(m, "the password of the page", "", true, func(v string) tea.Cmd {
+				return m.config.changeWebPassword(m, v)
+			})
+		}})
+	add(webSection, "Port", strconv.Itoa(s.Web.Port), "where the page is served: 1024 to 65535",
+		editing("the port of the page", strconv.Itoa(s.Web.Port), func(v string) Setting {
+			return Setting{Kind: plugin.SetWebPort, Value: v}
+		}))
+
 	if s.PluginsKept != "" {
 		out = append(out, row{section: pluginsSection, label: "Turned off", value: "none: all run",
 			note: "the plugins turned off cannot be, ouro could not start without them: " + s.PluginsKept, warn: true})
@@ -571,6 +606,28 @@ func rows(s Settings) []row {
 			set("use it", Setting{Kind: plugin.SetProtected, On: true}))
 	}
 	return out
+}
+
+// webAddress is where the page of the thread is reached in the network of
+// this host.
+func webAddress(port int) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "localhost"
+	}
+	return fmt.Sprintf("http://%s:%d/", host, port)
+}
+
+// changeWebPassword sets the password of the page, or takes it away with "".
+func (c *settingsScreen) changeWebPassword(m *Model, password string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.backend.SetWebPassword(password)
+		done := "saved: the page asks for it from now on"
+		if password == "" {
+			done = "saved: the page has no password, and is served to nobody"
+		}
+		return changedMsg{done: done, err: err}
+	}
 }
 
 // mcpRows are the MCP servers and their tools: a server with how it is, and

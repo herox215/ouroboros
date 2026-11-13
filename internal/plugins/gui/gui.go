@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"ouroboros/internal/home"
 	"ouroboros/plugin"
 )
 
@@ -19,12 +20,25 @@ type profile struct {
 	ctx      *plugin.Context // to read what the plugins contribute to a tool line
 }
 
-// Plugin contributes the window command. Like other front ends, it receives
-// the narrow owner capability from the frame, never as a kernel service.
-func Plugin(owner *plugin.Owner) plugin.Plugin {
+// Plugin contributes the window command, and the page of the thread on the
+// network while the node serves. Like other front ends, it receives the narrow
+// owner capability from the frame, never as a kernel service.
+func Plugin(owner *plugin.Owner, dir home.Dir) plugin.Plugin {
 	return plugin.New("gui", func(ctx *plugin.Context, n struct{ Sessions plugin.Sessions }) error {
 		p := &profile{status: owner.Status, sessions: n.Sessions, ctx: ctx}
 		plugin.Add(ctx, plugin.Command{Name: "gui", Help: "chat with the thread in a window", Run: p.run})
+		if owner == nil {
+			return nil // no owner to ask who the page is of
+		}
+		// The page runs where the node runs, not in a front end that ends
+		// with the terminal: only the node serving starts it.
+		front := newWebFront(dir, p)
+		serving, stop := context.WithCancel(context.Background())
+		ctx.OnStop(stop)
+		plugin.Add(ctx, plugin.Serving{
+			Start: func() { front.Serve(serving) },
+			Stop:  front.Close,
+		})
 		return nil
 	})
 }

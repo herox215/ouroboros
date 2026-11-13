@@ -318,7 +318,7 @@ func presented(e plugin.SessionEvent) string {
 // shown it: the thread is one conversation, wherever it is had. What a room
 // said, or what has no known interface, is "".
 func saidElsewhere(e plugin.SessionEvent) string {
-	where := map[string]string{"tui": "in the terminal", "gui": "in the app", "cli": "on the command line"}[e.Source.Interface]
+	where := map[string]string{"tui": "in the terminal", "gui": "in the app", "cli": "on the command line", "web": "in the browser"}[e.Source.Interface]
 	if e.Source.Interface == "api" && e.Source.Gateway != gatewayName {
 		where = "via " + cmp.Or(e.Source.Gateway, "the API")
 	}

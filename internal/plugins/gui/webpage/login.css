@@ -1,0 +1,129 @@
+/* The way into the page of the thread: one card, two fields, and the name of
+   the node, in the olive of the window (see web/src/app.css). */
+
+:root {
+  color-scheme: light dark;
+  --bg: #eae7e1;
+  --surface: #ffffff;
+  --field: #fdfcf9;
+  --text: #4d503b;
+  --muted: #828371;
+  --line: #cccec0;
+  --accent: #53583b;
+  --err: #873a29;
+  --err-bg: #fbefe9;
+  --err-line: #ddbbb0;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #20221d;
+    --surface: #282a24;
+    --field: #1b1d19;
+    --text: #d9d8c8;
+    --muted: #92947f;
+    --line: #3a3d33;
+    --accent: #c3c9a8;
+    --err: #f0b6a4;
+    --err-bg: #2e211c;
+    --err-line: #5b3a30;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+.card {
+  width: min(360px, 100%);
+  padding: 28px 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.brand {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.node {
+  margin: 4px 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.error {
+  margin: 0 0 16px;
+  padding: 9px 12px;
+  border: 1px solid var(--err-line);
+  border-radius: 9px;
+  background: var(--err-bg);
+  color: var(--err);
+  font-size: 13px;
+}
+
+.field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.field span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--field);
+  color: inherit;
+  font: inherit;
+}
+
+input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  width: 100%;
+  margin-top: 6px;
+  padding: 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:active {
+  opacity: 0.85;
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"ouroboros/internal/home"
 	"ouroboros/internal/kernel"
 	"ouroboros/plugin"
 )
@@ -23,7 +24,7 @@ func fakeProfile(name string) *profile {
 func TestCommand(t *testing.T) {
 	var ctx *plugin.Context
 	k := kernel.New()
-	if err := k.Start(sessionProvider(&fakeSessions{}), Plugin(nil), plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
+	if err := k.Start(sessionProvider(&fakeSessions{}), Plugin(nil, home.Dir(t.TempDir())), plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
 		ctx = c
 		return nil
 	})); err != nil {
