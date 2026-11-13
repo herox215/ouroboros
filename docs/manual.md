@@ -2066,8 +2066,9 @@ internal/plugins     the standard plugins, one package each: commands, setup dia
   update             the command update and the tool rebuild
 internal/kernel      plugin kernel: services, contributions, start order by declared dependencies
 internal/tui         terminal UI (Bubble Tea), with the splash and the setup
-  tui.go             the Model: what a key does, the input and its placeholder (New)
+  tui.go             the Model: what a key does, the input and its placeholder (New), and the clock that runs only while something moves
   view.go            what is drawn: the header (headerView), the chat and its line of context and cache (chatTitle), the footer (footerView)
+  history.go         the lines of the conversation and the window on them: what stands, and the answer still on its way
   question.go        the input (inputView), and a question of the agent in it
   commands.go        the slash commands of the UI and /help
   session.go         the conversations and the screen of /session
