@@ -85,7 +85,7 @@ func do(t *testing.T, client *http.Client, method, raw string, cookie *http.Cook
 // with the session of a login, and nothing else of the profile.
 func TestPicturesAreServedBehindTheLogin(t *testing.T) {
 	client, server, dir := pageFor(t)
-	name, err := pictures{dir: dir.Pictures()}.keep(picture(t))
+	name, _, err := pictures{dir: dir.Pictures()}.keep(picture(t))
 	if err != nil {
 		t.Fatal(err)
 	}

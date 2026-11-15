@@ -402,12 +402,13 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 	steps := map[string]Event{}  // the calls of tools that started, by ID
 	asked := map[string]string{} // what the question a call put to the owner is shown as, by call ID
 	var pictures []Event         // pictures the answer showed, kept before its text, which the archive writes after them
+	pictureAnswer := 0           // the answer the pictures in it belong to
 	start := 0
 	var size int
 	var cache assistant.Cache
 	flush := func() {
 		events = append(events, pictures...)
-		pictures = nil
+		pictures, pictureAnswer = nil, 0
 	}
 	for i, r := range records {
 		at := r.Time.Local()
@@ -424,7 +425,14 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 		case history.Picture:
 			// A picture is shown before the text of the answer it was shown
 			// in: the archive writes the whole answer at its end, so the
-			// picture waits for it, as it did when it was shown.
+			// picture waits for it, as it did when it was shown. One that
+			// belongs to another answer is written where it happened: the
+			// archive keeps a picture shown while the thread was idle under
+			// the answer that ended before it.
+			if r.Answer != pictureAnswer {
+				flush()
+				pictureAnswer = r.Answer
+			}
 			pictures = append(pictures, Event{Kind: Picture, At: at, Text: r.Content, Context: size, Cache: cache})
 		case history.Restarted:
 			events = append(events, Event{Kind: Restarted, PresentationID: id, At: at, Text: r.Content, Context: size, Cache: cache})
@@ -433,6 +441,12 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 			// resumed, and it is not shown again.
 			msgs = nil
 		case "user":
+			// A picture of an answer that ended before this one was shown
+			// before this message, not at the end of the answer it starts: it
+			// is written in the order it happened, and is shown in that order.
+			if pictureAnswer < r.Answer {
+				flush()
+			}
 			msgs = append(msgs, chat.Message{Role: "user", Content: r.Content, Source: r.Source, At: r.Time})
 			if strings.HasPrefix(unnoted(r.Content), backgroundHead) {
 				// An internal background result, not a message of the owner: it

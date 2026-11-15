@@ -41,29 +41,40 @@ func (s *Service) ShowPicture(_ context.Context, id, name string) error {
 		return ErrPicture
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	se := s.lookup(id)
 	if se == nil {
+		s.mu.Unlock()
 		return ErrNoSession
 	}
-	s.emit(se, Event{Kind: Picture, Text: name})
-	switch {
-	case se.id != ThreadID && forThread(se):
+	// Which conversations show the picture is read while the lock is held;
+	// nothing is written there: the archive is a database, and one that is busy
+	// would hold up Ask, Watch and Stop of every session in the node.
+	shown := []*session{se}
+	if se.id != ThreadID && forThread(se) {
 		// The session reaches the owner through the thread, and the thread is
 		// what the window shows: the picture is shown there, and kept with the
 		// thread, where it was seen.
-		thread := s.get(ThreadID)
-		s.keepPicture(thread, name)
-		s.emit(thread, Event{Kind: Picture, Text: name})
-	case se.id == ThreadID:
+		shown = append(shown, s.get(ThreadID))
+	}
+	s.mu.Unlock()
+	// The archive is written with the lock of no session held: one that is busy
+	// would otherwise hold up Ask, Watch and Stop of every session in the node.
+	// Then it is told, so that a front end that shows the picture can find it
+	// in the archive.
+	for _, se := range shown {
 		s.keepPicture(se, name)
 	}
+	s.mu.Lock()
+	for _, se := range shown {
+		s.emit(se, Event{Kind: Picture, Text: name})
+	}
+	s.mu.Unlock()
 	return nil
 }
 
 // keepPicture keeps name with the answer on its way in se, which need not be
 // archived yet: the front ends show the picture again once the conversation is
-// read from the archive. s.mu is held.
+// read from the archive. It is called with s.mu released.
 func (s *Service) keepPicture(se *session, name string) {
 	if s.archive == nil {
 		return

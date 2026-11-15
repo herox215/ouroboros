@@ -145,3 +145,25 @@ func TestShowPictureChecksIt(t *testing.T) {
 		t.Fatalf("an id that is none: %v", err)
 	}
 }
+
+// Read back, a picture shown while the thread was idle is where it was shown:
+// after the answer that ended before it, and before the message that asked for
+// the next one, not at the end of that answer.
+func TestPictureShownWhileIdleIsReadWhereItWasShown(t *testing.T) {
+	records := []history.Record{
+		{Seq: 1, Answer: 1, Role: "user", Content: "first"},
+		{Seq: 2, Answer: 1, Role: "assistant", Content: "one"},
+		{Seq: 3, Answer: 1, Role: "end", Outcome: history.Answered},
+		{Seq: 4, Answer: 1, Role: history.Picture, Content: pictureNameOf('e')},
+		{Seq: 5, Answer: 2, Role: "user", Content: "second"},
+		{Seq: 6, Answer: 2, Role: "assistant", Content: "two"},
+		{Seq: 7, Answer: 2, Role: "end", Outcome: history.Answered},
+	}
+	events, _ := replay(records)
+	if got := kinds(events); got != "message answer picture message answer" {
+		t.Fatalf("the archive shows %s", got)
+	}
+	if events[2].Text != pictureNameOf('e') {
+		t.Fatalf("the picture is shown as %q", events[2].Text)
+	}
+}

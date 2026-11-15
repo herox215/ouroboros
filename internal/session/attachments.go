@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ouroboros/internal/media"
 )
 
 // Attachment is a downloaded file, not model image input. Empty files are valid.
@@ -17,7 +19,9 @@ type Attachment struct {
 }
 
 const (
-	MaxAttachmentBytes    = 10 << 20
+	// MaxAttachmentBytes bounds a file the owner attaches or an agent sends:
+	// the same size a picture may be, see media.MaxPictureBytes.
+	MaxAttachmentBytes    = media.MaxPictureBytes
 	MaxAttachments        = 16
 	maxAttachmentMetadata = 4096
 )

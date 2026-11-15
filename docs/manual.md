@@ -195,6 +195,12 @@ answer it was shown in, so the thread shows it again when it is read, as long as
 is there. A picture is shown in the thread, also while the answer that made it works in a
 session of its own, which the window does not show.
 
+The terminal shows no picture: it writes a line where one was shown, with the name the
+window serves it under. The window is a provider of `gateway_send_image` while it is
+open, or while the page of the thread is served; with a window closed and the page off,
+a profile has no `gui` provider, and a gateway is the only one `gateway_send_image` can
+mean.
+
 `ouro gui [DIRECTORY]` takes a directory as `ouro tui [DIRECTORY]` does, but the window
 opens no session of its own: it shows the thread, which has no project, so the directory
 changes nothing there. For work on a project, ask the thread: it starts a session there.

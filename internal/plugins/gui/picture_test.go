@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/png"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"ouroboros/internal/chat"
 	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
+	"ouroboros/internal/media"
 	"ouroboros/plugin"
 )
 
@@ -89,7 +91,10 @@ func TestAPictureIsShownThroughTheGatewayTool(t *testing.T) {
 	if _, err := bot.Run(context.Background(), "s1", "show me", agent.Observer{}); err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions.shown) != 1 || sessions.shown[0].id != plugin.ThreadID || !pictureName.MatchString(sessions.shown[0].text) {
+	// The conversation the call was made in, not the thread the window shows:
+	// a session that works for the thread has its picture shown there by the
+	// session service, see session.ShowPicture.
+	if len(sessions.shown) != 1 || sessions.shown[0].id != "s1" || !pictureName.MatchString(sessions.shown[0].text) {
 		t.Fatalf("shown %+v", sessions.shown)
 	}
 	name := sessions.shown[0].text
@@ -107,13 +112,13 @@ func TestAPictureIsShownThroughTheGatewayTool(t *testing.T) {
 func TestPicturesKeepOneFilePerPicture(t *testing.T) {
 	store := pictures{dir: filepath.Join(t.TempDir(), "pictures")}
 	data := picture(t)
-	first, err := store.keep(data)
-	if err != nil {
-		t.Fatal(err)
+	first, created, err := store.keep(data)
+	if err != nil || !created {
+		t.Fatalf("kept %q, %v, %v", first, created, err)
 	}
-	second, err := store.keep(data)
-	if err != nil || first != second {
-		t.Fatalf("kept %q and %q, %v", first, second, err)
+	second, again, err := store.keep(data)
+	if err != nil || first != second || again {
+		t.Fatalf("kept %q and %q (%v), %v", first, second, again, err)
 	}
 	if entries, err := os.ReadDir(store.dir); err != nil || len(entries) != 1 || entries[0].Name() != first {
 		t.Fatalf("the directory holds %+v, %v", entries, err)
@@ -123,15 +128,15 @@ func TestPicturesKeepOneFilePerPicture(t *testing.T) {
 // What is no picture the browser shows is refused, as is what is too large.
 func TestPicturesRefuseWhatTheyCannot(t *testing.T) {
 	store := pictures{dir: t.TempDir()}
-	if _, err := store.keep(nil); err == nil {
+	if _, _, err := store.keep(nil); err == nil {
 		t.Fatal("an empty picture was kept")
 	}
-	if _, err := store.keep([]byte("<html>not a picture</html>")); err == nil {
+	if _, _, err := store.keep([]byte("<html>not a picture</html>")); err == nil {
 		t.Fatal("what is no picture was kept")
 	}
-	big := make([]byte, maxPictureBytes+1)
+	big := make([]byte, media.MaxPictureBytes+1)
 	copy(big, picture(t))
-	if _, err := store.keep(big); err == nil {
+	if _, _, err := store.keep(big); err == nil {
 		t.Fatal("a picture that is too large was kept")
 	}
 }
@@ -140,7 +145,7 @@ func TestPicturesRefuseWhatTheyCannot(t *testing.T) {
 // no path, and nothing that is not a file there.
 func TestPicturesServeOnlyThePictures(t *testing.T) {
 	store := pictures{dir: t.TempDir()}
-	name, err := store.keep(picture(t))
+	name, _, err := store.keep(picture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,5 +213,54 @@ func TestShowPictureAnswersWithTheName(t *testing.T) {
 	}
 	if told.Picture != sessions.shown[0].text || told.Bytes != len(data) {
 		t.Fatalf("told %+v, shown %+v", told, sessions.shown)
+	}
+}
+
+// A call that shows nothing leaves no picture behind: no file for a node that
+// cannot show one, and none for a conversation that is not there.
+func TestShowPictureLeavesNoFileBehind(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "shot.png")
+	if err := os.WriteFile(file, picture(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := &guard.Guard{Home: root, Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
+	// shown runs the tool of out once, and returns what showing the picture
+	// came to: the agent hands the error of a tool back to the model, not out.
+	shown := func(out plugin.GatewayOutput) error {
+		t.Helper()
+		var toolErr error
+		bot := agent.New(&showingLLM{}, "test", "show pictures", plugin.NewTool(plugin.GatewaySendImageTool, "show a picture", nil,
+			func(ctx context.Context, _ struct{}) (string, error) {
+				_, toolErr = out.SendImage(ctx, plugin.GatewayImageRequest{Path: file})
+				return "", toolErr
+			}))
+		if _, err := bot.Run(context.Background(), "s1", "show me", agent.Observer{}); err != nil {
+			t.Fatal(err)
+		}
+		return toolErr
+	}
+	empty := func(dir string) bool {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		return errors.Is(err, os.ErrNotExist) || (err == nil && len(entries) == 0)
+	}
+
+	// A sessions service that cannot show pictures at all.
+	store := pictures{dir: filepath.Join(root, "none", "pictures")}
+	if err := shown(pictureOutput(&fakeSessions{}, files, store)); err == nil || !strings.Contains(err.Error(), "cannot show pictures") {
+		t.Fatalf("a node without pictures: %v", err)
+	}
+	if !empty(store.dir) {
+		t.Fatalf("a node that cannot show a picture kept one in %s", store.dir)
+	}
+
+	// One that can, but whose conversation is gone.
+	store = pictures{dir: filepath.Join(root, "gone", "pictures")}
+	if err := shown(pictureOutput(&shownSessions{fakeSessions: &fakeSessions{}, err: plugin.ErrNoSession}, files, store)); !errors.Is(err, plugin.ErrNoSession) {
+		t.Fatalf("a conversation that is not there: %v", err)
+	}
+	if !empty(store.dir) {
+		t.Fatalf("a picture nothing shows was kept in %s", store.dir)
 	}
 }

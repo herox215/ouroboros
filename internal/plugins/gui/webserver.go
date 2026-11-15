@@ -168,6 +168,15 @@ func (w *webFront) stopServing(revoke bool) {
 	srv := w.srv
 	w.srv, w.port = nil, 0
 	w.mu.Unlock()
+	if srv == nil {
+		if revoke {
+			w.auth.RevokeAll()
+		}
+		return
+	}
+	// The page shows no picture from here on: only a window that is still open
+	// keeps the provider of gateway_send_image there, see pictureChannel.
+	w.profile.pictures.hide()
 	// The streams of the browsers first: a request that stays open would keep
 	// Shutdown waiting for its whole grace, and past it.
 	w.clients.closeAll()
@@ -228,6 +237,9 @@ func (w *webFront) reconcile(ctx context.Context) {
 	srv = w.srv
 	w.port = port
 	w.mu.Unlock()
+	// This page shows pictures now, also while a window of the profile is not
+	// open: gateway_send_image reaches the profile through it.
+	w.profile.pictures.show()
 	go func() {
 		err := srv.Serve(ln)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

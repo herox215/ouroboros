@@ -38,11 +38,11 @@ func TestCommand(t *testing.T) {
 	if len(plugin.All[plugin.FrontEnd](ctx)) != 0 {
 		t.Fatal("the GUI replaced the default front end")
 	}
-	// The window shows pictures through the neutral tool of the gateways,
-	// not through one of its own.
-	outputs := plugin.All[plugin.GatewayOutput](ctx)
-	if len(outputs) != 1 || outputs[0].Name != "gui" || outputs[0].SendImage == nil {
-		t.Fatalf("the window as a channel of pictures: %+v", outputs)
+	// The window shows pictures through the neutral tool of the gateways, not
+	// through one of its own, and only while it or the page of the thread
+	// shows them: a profile that shows neither is no channel of pictures.
+	if outputs := plugin.All[plugin.GatewayOutput](ctx); len(outputs) != 0 {
+		t.Fatalf("a profile without a window is a channel of pictures: %+v", outputs)
 	}
 }
 
@@ -96,5 +96,45 @@ func TestHandOver(t *testing.T) {
 	r, ok := errors.AsType[*plugin.Restarting](handOver("/new/ouro"))
 	if !ok || r.Exe != "/new/ouro" || !slices.Equal(r.Env, os.Environ()) {
 		t.Fatalf("handover: %+v, %v", r, ok)
+	}
+}
+
+// testContext is the context of a kernel that runs the plugins of a test: what
+// contributes a provider, and what reads them.
+func testContext(t *testing.T) *plugin.Context {
+	t.Helper()
+	var ctx *plugin.Context
+	k := kernel.New()
+	if err := k.Start(plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
+		ctx = c
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	return ctx
+}
+
+// The window is a provider of gateway_send_image while it is open, and not
+// before or after: a profile that shows no picture has no provider of its own.
+func TestTheWindowIsAProviderWhileItIsOpen(t *testing.T) {
+	ctx := testContext(t)
+	p := fakeProfile("Luna")
+	p.pictures = &pictureChannel{ctx: ctx, output: pictureOutput(&fakeSessions{}, nil, pictures{dir: t.TempDir()})}
+	if got := plugin.All[plugin.GatewayOutput](ctx); len(got) != 0 {
+		t.Fatalf("a profile without a window has %d providers: %+v", len(got), got)
+	}
+	old := show
+	t.Cleanup(func() { show = old })
+	show = func(context.Context, *profile, string) error {
+		if got := plugin.All[plugin.GatewayOutput](ctx); len(got) != 1 || got[0].Name != "gui" {
+			t.Fatalf("the open window is %d providers: %+v", len(got), got)
+		}
+		return nil
+	}
+	if err := p.run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := plugin.All[plugin.GatewayOutput](ctx); len(got) != 0 {
+		t.Fatalf("the window that closed left %d providers: %+v", len(got), got)
 	}
 }

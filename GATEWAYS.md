@@ -196,8 +196,13 @@ conversation, and has no destination. The profile keeps the picture in its
 `pictures` directory, named after the content, and the window and the page of
 the thread serve it under `/media/`, the page only behind its login. Only its
 name is kept with the answer, so the picture shows again when the thread is
-read, as long as the file is there. With both providers installed,
-`gateway_send_image` must name the one it means.
+read, as long as the file is there.
+
+The `gui` provider is there while a window of that profile is open, or while
+the page of the thread is served: a profile that shows neither has no provider
+of its own, and `gateway_send_image` stays unambiguous for a profile that has
+one gateway. With a window or the page open beside one, the tool must name the
+one it means. `gateway_list` says whether `gui` is there.
 
 The former `matrix_send_image` and `matrix_set_avatar` tools are no longer
 registered. Explicit owner-tool allowlists and tool-specific permission rules

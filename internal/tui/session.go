@@ -294,6 +294,10 @@ func (m *Model) apply(c *conversation, e Event, live bool) tea.Cmd {
 		if e.Text != "" {
 			c.jobs = strings.Split(e.Text, "\n")
 		}
+	case plugin.SessionPicture:
+		// The terminal shows no pictures: it says that one was shown, and
+		// leaves it to the window and the page to show it.
+		c.add(entry{picture: true, text: e.Text, at: e.At})
 	case plugin.SessionSuggestion:
 		c.add(entry{suggestion: true, text: e.Text, at: e.At})
 	case plugin.SessionRemembered:

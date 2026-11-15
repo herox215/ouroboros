@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"ouroboros/internal/guard"
+	"ouroboros/internal/media"
 	"ouroboros/internal/workdir"
 	"ouroboros/plugin"
 )
@@ -23,10 +24,6 @@ import (
 // directory of the profile, named after their content, so that the same
 // picture is kept once and a name never means another picture: the window
 // serves them, and keeps them past the answer they were shown in.
-
-// maxPictureBytes is how large a picture the window shows may be: as large as
-// one that goes through a gateway, 10 MiB.
-const maxPictureBytes = 10 << 20
 
 // mediaPath is where the window and the page of the thread serve the pictures.
 // It is the same path in both: they show the same app, and what the thread
@@ -41,67 +38,61 @@ var pictureName = regexp.MustCompile(`^[a-f0-9]{64}\.(png|jpe?g|gif|webp)$`)
 // pictures is the directory the pictures of the window are kept in.
 type pictures struct{ dir string }
 
-// keep writes data as a picture of the profile and returns its name: the
-// same data always gets the same name. What is no PNG, JPEG, GIF or WebP, or
-// larger than maxPictureBytes, is refused.
-func (p pictures) keep(data []byte) (string, error) {
+// keep writes data as a picture of the profile and returns its name, which the
+// same data always gets, and whether this call is what wrote it. What is no
+// PNG, JPEG, GIF or WebP, or larger than the pictures the gateways take, is
+// refused.
+func (p pictures) keep(data []byte) (string, bool, error) {
 	if len(data) == 0 {
-		return "", errors.New("the picture is empty")
+		return "", false, errors.New("the picture is empty")
 	}
-	if len(data) > maxPictureBytes {
-		return "", fmt.Errorf("the picture exceeds %d MiB", maxPictureBytes>>20)
+	if len(data) > media.MaxPictureBytes {
+		return "", false, fmt.Errorf("the picture exceeds %d MiB", media.MaxPictureBytes>>20)
 	}
-	ext, ok := pictureExt(data)
-	if !ok {
-		return "", errors.New("supported pictures are PNG, JPEG, GIF and WebP")
+	kind := media.Kind(data)
+	if kind == "" {
+		return "", false, errors.New("supported pictures are PNG, JPEG, GIF and WebP")
 	}
 	sum := sha256.Sum256(data)
-	name := hex.EncodeToString(sum[:]) + ext
+	name := hex.EncodeToString(sum[:]) + media.Ext(kind)
 	path := filepath.Join(p.dir, name)
 	if _, err := os.Stat(path); err == nil {
-		return name, nil
+		return name, false, nil
 	}
 	if err := os.MkdirAll(p.dir, 0o700); err != nil {
-		return "", err
+		return "", false, err
 	}
 	f, err := os.CreateTemp(p.dir, ".picture-*")
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp) // once it is renamed, there is nothing left to remove
 	if err := f.Chmod(0o600); err != nil {
 		f.Close()
-		return "", err
+		return "", false, err
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		return "", err
+		return "", false, err
 	}
 	if err := f.Close(); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return name, nil
+	return name, true, nil
 }
 
-// pictureExt names the extension of the picture in data, and reports whether
-// it is one the window shows. What the content is decides, not the name of
-// the file it came from.
-func pictureExt(data []byte) (string, bool) {
-	switch http.DetectContentType(data) {
-	case "image/png":
-		return ".png", true
-	case "image/jpeg":
-		return ".jpg", true
-	case "image/gif":
-		return ".gif", true
-	case "image/webp":
-		return ".webp", true
+// drop takes the picture name out of the profile. The caller knows that
+// nothing shows it, and that this call is what kept it: a picture another
+// answer shows is not dropped.
+func (p pictures) drop(name string) {
+	if !pictureName.MatchString(name) {
+		return
 	}
-	return "", false
+	_ = os.Remove(filepath.Join(p.dir, name))
 }
 
 // handler serves the pictures of the window under mediaPath, and nothing
@@ -125,24 +116,11 @@ func (p pictures) handler() http.Handler {
 			http.NotFound(rw, r)
 			return
 		}
-		rw.Header().Set("Content-Type", pictureType(name))
+		rw.Header().Set("Content-Type", media.KindOfName(name))
 		// The name is the content: what is under it never changes.
 		rw.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 		http.ServeContent(rw, r, name, info.ModTime(), f)
 	})
-}
-
-// pictureType is the media type of the picture name, which pictureName allows.
-func pictureType(name string) string {
-	switch filepath.Ext(name) {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	}
-	return "image/webp"
 }
 
 // pictureOutput offers the window as a channel for the pictures an agent
@@ -188,19 +166,23 @@ func showPicture(ctx context.Context, sessions plugin.Sessions, files *guard.Gua
 	if err != nil {
 		return "", err
 	}
-	name, err := store.keep(data)
+	shown, ok := sessions.(plugin.PictureSessions)
+	if !ok {
+		// Nothing would show the file: do not write one for it.
+		return "", errors.New("this node cannot show pictures in the window")
+	}
+	name, created, err := store.keep(data)
 	if err != nil {
 		return "", err
 	}
-	shown, ok := sessions.(plugin.PictureSessions)
-	if !ok {
-		return "", errors.New("this node cannot show pictures in the window")
-	}
-	// The window shows the thread, also while the answer that made the
-	// picture works in a session of its own, which the window does not show:
-	// there the picture appears, and there it is kept with the answer it was
-	// shown in.
-	if err := shown.ShowPicture(ctx, plugin.ThreadID, name); err != nil {
+	// The picture is shown in the conversation the call was made in. When that
+	// session works for the thread, the session service shows it there too,
+	// and keeps it with the thread, where the window shows it.
+	if err := shown.ShowPicture(ctx, id, name); err != nil {
+		if created {
+			// Nothing shows it: a file of up to 10 MiB would stay for no one.
+			store.drop(name)
+		}
 		return "", err
 	}
 	result, _ := json.Marshal(struct {
@@ -212,7 +194,7 @@ func showPicture(ctx context.Context, sessions plugin.Sessions, files *guard.Gua
 
 // readPicture reads the picture at path as far as the rules of files let the
 // tool read it: a regular file of a kind the window shows, of at most
-// maxPictureBytes.
+// media.MaxPictureBytes.
 func readPicture(ctx context.Context, files *guard.Guard, path string) ([]byte, error) {
 	if files == nil {
 		return nil, errors.New("the file access of the window is unavailable")
@@ -237,8 +219,8 @@ func readPicture(ctx context.Context, files *guard.Guard, path string) ([]byte, 
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("the picture must be a regular file")
 	}
-	if info.Size() > maxPictureBytes {
-		return nil, fmt.Errorf("the picture exceeds %d MiB", maxPictureBytes>>20)
+	if info.Size() > media.MaxPictureBytes {
+		return nil, fmt.Errorf("the picture exceeds %d MiB", media.MaxPictureBytes>>20)
 	}
-	return io.ReadAll(io.LimitReader(f, maxPictureBytes+1))
+	return io.ReadAll(io.LimitReader(f, media.MaxPictureBytes+1))
 }
