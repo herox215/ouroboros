@@ -52,6 +52,7 @@ func Plugin() plugin.Plugin {
 				}
 				type entry struct {
 					Name              string `json:"name"`
+					Available         bool   `json:"available"`
 					SendImage         bool   `json:"send_image"`
 					SendAudio         bool   `json:"send_audio"`
 					SetAvatar         bool   `json:"set_avatar"`
@@ -65,6 +66,7 @@ func Plugin() plugin.Plugin {
 				for _, p := range providers {
 					entries = append(entries, entry{
 						Name:              p.Name,
+						Available:         available(ctx, p),
 						SendImage:         p.SendImage != nil,
 						SendAudio:         p.SendAudio != nil,
 						SetAvatar:         p.SetAvatar != nil,
@@ -81,7 +83,7 @@ func Plugin() plugin.Plugin {
 		list.OwnerOnly = true
 		plugin.Add(pctx, list)
 
-		image := plugin.NewTool(plugin.GatewaySendImageTool, "Send an image through a gateway. Supply exactly one local path or positive 1-based image attachment index. Use gateway_list for provider capabilities and destination rules. Omit gateway only when exactly one provider supports sending images.",
+		image := plugin.NewTool(plugin.GatewaySendImageTool, "Send an image to the owner: through a gateway, or into the conversation itself, in the window of ouro. Supply exactly one local path or positive 1-based image attachment index. Use gateway_list for provider capabilities and destination rules. Omit gateway only when exactly one provider supports sending images.",
 			[]plugin.Param{{Name: "gateway", Description: "Exact provider name; optional only with one supporting provider", Optional: true}},
 			func(ctx context.Context, args imageArgs) (string, error) {
 				if err := owner(ctx); err != nil {
@@ -90,7 +92,7 @@ func Plugin() plugin.Plugin {
 				if err := validateInput(args.Path, args.Attachment, false); err != nil {
 					return "", err
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewaySendImageTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewaySendImageTool)
 				if err != nil {
 					return "", err
 				}
@@ -109,7 +111,7 @@ func Plugin() plugin.Plugin {
 				if args.Path == "" {
 					return "", errors.New("give the path of the audio file")
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewaySendAudioTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewaySendAudioTool)
 				if err != nil {
 					return "", err
 				}
@@ -131,7 +133,7 @@ func Plugin() plugin.Plugin {
 				if args.Path == "" && args.Attachment == 0 {
 					args.Attachment = 1
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewaySetAvatarTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewaySetAvatarTool)
 				if err != nil {
 					return "", err
 				}
@@ -164,7 +166,7 @@ func Plugin() plugin.Plugin {
 					}
 					seen[id] = true
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewayVotePollTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewayVotePollTool)
 				if err != nil {
 					return "", err
 				}
@@ -224,8 +226,15 @@ func outputs(ctx *plugin.Context) ([]plugin.GatewayOutput, error) {
 	return providers, nil
 }
 
-func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.GatewayOutput, error) {
-	providers, err := outputs(ctx)
+// available reports whether p can be used now: a provider that always can
+// says so with no Available. ctx is the call's: what can be used depends on
+// the conversation that calls.
+func available(ctx context.Context, p plugin.GatewayOutput) bool {
+	return p.Available == nil || p.Available(ctx)
+}
+
+func selectOutput(ctx context.Context, pctx *plugin.Context, name string, tool string) (plugin.GatewayOutput, error) {
+	providers, err := outputs(pctx)
 	if err != nil {
 		return plugin.GatewayOutput{}, err
 	}
@@ -254,17 +263,27 @@ func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.Gateway
 		if name != "" && p.Name != name {
 			continue
 		}
-		if supports(p) {
-			matches = append(matches, p)
-		} else if name != "" {
-			return plugin.GatewayOutput{}, fmt.Errorf("gateway %q does not support %s", name, capability)
+		if !supports(p) {
+			if name != "" {
+				return plugin.GatewayOutput{}, fmt.Errorf("gateway %q does not support %s", name, capability)
+			}
+			continue
 		}
+		if !available(ctx, p) {
+			if name != "" {
+				return plugin.GatewayOutput{}, fmt.Errorf("gateway %q is not available now", name)
+			}
+			continue
+		}
+		matches = append(matches, p)
 	}
 	if name != "" && len(matches) == 0 {
 		return plugin.GatewayOutput{}, fmt.Errorf("unknown gateway provider %q", name)
 	}
 	if len(matches) == 0 {
-		return plugin.GatewayOutput{}, fmt.Errorf("no gateway provider supports %s", capability)
+		// What is not there now cannot be meant: a window that is closed is no
+		// provider of the pictures it would show.
+		return plugin.GatewayOutput{}, fmt.Errorf("no gateway provider supports %s now", capability)
 	}
 	if len(matches) > 1 {
 		return plugin.GatewayOutput{}, fmt.Errorf("ambiguous gateway for %s; specify gateway", capability)

@@ -3,6 +3,10 @@
   import { markdown } from '../lib/markdown';
   import { t } from '../lib/i18n';
 
+  /** Where the window serves the pictures the agent shows: the same path in
+   * the native window and in the page of the thread. */
+  const pictures = '/media/';
+
   let {
     entry,
     sending = false,
@@ -46,6 +50,10 @@
       <p class="answered">{t('question.answered')} · {entry.answered}</p>
     {/if}
   </section>
+{:else if entry.role === 'picture'}
+  <figure class="picture">
+    <img src={pictures + entry.text} alt="" loading="lazy" decoding="async" />
+  </figure>
 {:else if entry.role === 'error'}
   <div class="error" role="alert">{entry.text}</div>
 {:else}

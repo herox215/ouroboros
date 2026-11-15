@@ -1,7 +1,6 @@
 package history
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 )
@@ -78,18 +77,7 @@ func (a *Archive) CompleteRestarts(processID string) (map[string]Record, error) 
 		return nil, err
 	}
 	for id, r := range completed {
-		var ordinal int
-		if err = tx.QueryRow("SELECT coalesce(max(seq),0)+1,coalesce(max(answer),0),coalesce(max(ordinal),0)+1 FROM history_records WHERE session_id=?", id).Scan(&r.Seq, &r.Answer, &ordinal); err != nil {
-			return nil, err
-		}
-		b, err := json.Marshal(r)
-		if err != nil {
-			return nil, err
-		}
-		if err = insertRecord(tx, id, ordinal, r, b); err != nil {
-			return nil, err
-		}
-		if _, err = tx.Exec("UPDATE history_sessions SET archived=1,modified=?,size=size+? WHERE id=?", r.Time.UnixNano(), len(b)+1, id); err != nil {
+		if r, err = appendRecord(tx, id, r); err != nil {
 			return nil, err
 		}
 		if _, err = tx.Exec("DELETE FROM history_restarts WHERE session_id=?", id); err != nil {

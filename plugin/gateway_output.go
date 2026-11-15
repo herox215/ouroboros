@@ -51,8 +51,15 @@ type GatewayOutput struct {
 	AudioDescription  string
 	AvatarDescription string
 	PollDescription   string
-	SendImage         func(context.Context, GatewayImageRequest) (string, error)
-	SendAudio         func(context.Context, GatewayAudioRequest) (string, error)
-	SetAvatar         func(context.Context, GatewayAvatarRequest) (string, error)
-	VotePoll          func(context.Context, GatewayPollVoteRequest) (string, error)
+	// Available says whether the provider can be used right now, nil for one
+	// that always can: a window of ouro shows a picture only while it is open,
+	// and the tool leaves out what is not there, so that a gateway that is
+	// there stays the only one it can mean. It is read when the tool is
+	// called, never kept, with the context of that call: a window shows the
+	// thread, and a picture of a conversation it does not show is not seen.
+	Available func(ctx context.Context) bool
+	SendImage func(context.Context, GatewayImageRequest) (string, error)
+	SendAudio func(context.Context, GatewayAudioRequest) (string, error)
+	SetAvatar func(context.Context, GatewayAvatarRequest) (string, error)
+	VotePoll  func(context.Context, GatewayPollVoteRequest) (string, error)
 }

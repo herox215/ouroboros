@@ -184,6 +184,12 @@ func (m *Model) renderHistory(toBottom bool) {
 			add(mutedStyle.Render("✦ " + strings.Join(lines, "\n  ") + " · /suggestions"))
 			return blocks, false
 		}
+		// The terminal cannot show a picture: it says that one was shown, so
+		// that the agent is not the only one to know.
+		if e.picture {
+			add(wrap(mutedStyle.Render("[picture: " + e.text + "]")))
+			return blocks, false
+		}
 		// What the review remembered is a faint line too, which /undo takes
 		// back, and so is the line that tells it is taken back.
 		if e.remembered != nil || e.undoes {

@@ -40,8 +40,14 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  // Never from a cache: the thread itself, and the way in.
-  if (url.pathname.startsWith('/api/') || url.pathname === '/login' || url.pathname === '/logout') return;
+  // Never from a cache: the thread itself, its pictures, and the way in.
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/media/') ||
+    url.pathname === '/login' ||
+    url.pathname === '/logout'
+  )
+    return;
   event.respondWith(
     fetch(request)
       .then((response) => {

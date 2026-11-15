@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"ouroboros/internal/chat"
+	"ouroboros/internal/media"
 )
 
 // ImageAPI optionally extends API with image input. Service and Client implement
@@ -49,9 +50,7 @@ func (s *Service) SteerImages(ctx context.Context, id, text string, images []cha
 func copyImages(images []chat.Image) ([]chat.Image, error) {
 	copied := make([]chat.Image, len(images))
 	for i, image := range images {
-		switch image.Type {
-		case "image/png", "image/jpeg", "image/gif", "image/webp":
-		default:
+		if !media.IsPicture(image.Type) {
 			return nil, ErrImage
 		}
 		if len(image.Data) == 0 {

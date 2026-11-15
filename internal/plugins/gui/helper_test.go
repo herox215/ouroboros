@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ouroboros/internal/openai"
+	"ouroboros/internal/session"
 	"ouroboros/plugin"
 )
 
@@ -93,10 +94,18 @@ func (s *tellingSessions) Instance(ctx context.Context) (plugin.NodeInstance, er
 	return s.instance(ctx)
 }
 
-// sessionProvider hands s to a plugin that needs the sessions service.
+// sessionProvider hands s to a plugin that needs the sessions service, and a
+// service of this process beside it: what tells the window that is open, see
+// windowShows.
 func sessionProvider(s plugin.Sessions) plugin.Plugin {
-	return plugin.NewService("sessions", func(*plugin.Context, struct{}) (struct{ Sessions plugin.Sessions }, error) {
-		return struct{ Sessions plugin.Sessions }{s}, nil
+	return plugin.NewService("sessions", func(*plugin.Context, struct{}) (struct {
+		Sessions plugin.Sessions
+		Service  *session.Service
+	}, error) {
+		return struct {
+			Sessions plugin.Sessions
+			Service  *session.Service
+		}{s, session.New(nil)}, nil
 	})
 }
 

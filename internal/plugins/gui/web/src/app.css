@@ -300,6 +300,19 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* A picture the agent showed: as large as it is, within the transcript. */
+.picture {
+  margin: 0;
+}
+
+.picture img {
+  display: block;
+  max-width: min(100%, 720px);
+  max-height: 70vh;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
 /* A question waits for the owner: its answers are the buttons to choose. */
 .question {
   padding: 14px 16px;

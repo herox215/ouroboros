@@ -130,6 +130,11 @@ const (
 	// by, is in Text. A front end can show beside the thread which sessions a
 	// part of it concerns; it says nothing to the owner by itself.
 	Handed Kind = "handed"
+	// Picture is a picture the agent shows the owner as the answer goes on,
+	// see ShowPicture: its name is in Text, as the front end that keeps it
+	// names the file. It is no message of the owner or of the agent: it is
+	// not sent to the model, and it is kept with the answer it was shown in.
+	Picture Kind = "picture"
 )
 
 // Event is one thing that happened in a session. It is plain data, written
@@ -403,8 +408,13 @@ type Service struct {
 	stop    context.CancelFunc
 	answers sync.WaitGroup // on their way
 
-	mu       sync.Mutex
-	sessions map[string]*session
+	mu sync.Mutex
+	// pictureMu keeps the pictures of ShowPicture in the order they were
+	// shown in: the archive is written with mu released, so two of them could
+	// otherwise be kept in one order and told in another, and a conversation
+	// that is read again would show them in the other.
+	pictureMu sync.Mutex
+	sessions  map[string]*session
 	// Archived concern anchors are read once; live sessions use their original
 	// Message event, which survives context compaction and model changes.
 	concernAnchors   map[string]string
@@ -452,6 +462,7 @@ type session struct {
 	id              string
 	events          []Event
 	watchers        map[chan Event]struct{}
+	watching        map[string]int     // the front ends that watch, by source
 	cancel          context.CancelFunc // of the answer on its way; nil without one
 	since           time.Time          // when that answer began
 	queue           []queued           // the messages that wait for that answer to take them
@@ -573,7 +584,7 @@ func (s *Service) process() *process {
 func (s *Service) get(id string) *session {
 	se := s.lookup(id)
 	if se == nil {
-		se = &session{id: id, watchers: map[chan Event]struct{}{}}
+		se = &session{id: id, watchers: map[chan Event]struct{}{}, watching: map[string]int{}}
 		s.effortOf(se) // set before anything was said in it
 		s.directoryOf(se)
 		if !se.directed && s.initialDirectory != "" && id != ThreadID {
@@ -598,9 +609,18 @@ func (s *Service) lookup(id string) *session {
 	return se
 }
 
+// unwatch drops one front end of source from se. s.mu is held.
+func (se *session) unwatch(source string) {
+	if se.watching[source] <= 1 {
+		delete(se.watching, source)
+		return
+	}
+	se.watching[source]--
+}
+
 // forget drops se once nothing is in it and nobody watches it. s.mu is held.
 func (s *Service) forget(se *session) {
-	if len(se.events) == 0 && len(se.watchers) == 0 && se.cancel == nil && len(se.tasks) == 0 && !se.efforted && !se.directed {
+	if len(se.events) == 0 && len(se.watchers) == 0 && len(se.watching) == 0 && se.cancel == nil && len(se.tasks) == 0 && !se.efforted && !se.directed {
 		delete(s.sessions, se.id)
 	}
 }
@@ -1418,6 +1438,13 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 	s.node.mu.Unlock()
 	live := make(chan Event, watchBuffer)
 	se.watchers[live] = struct{}{}
+	// Which front end watches is what a node tells an open window of ouro
+	// from one that is not, see Watching.
+	source := WatchSource(ctx)
+	if se.watching == nil {
+		se.watching = map[string]int{}
+	}
+	se.watching[source]++
 	context.AfterFunc(ctx, func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -1425,6 +1452,7 @@ func (s *Service) Watch(ctx context.Context, id string) ([]Event, <-chan Event, 
 			delete(se.watchers, live)
 			close(live)
 		}
+		se.unwatch(source)
 		s.forget(se)
 	})
 	past := slices.Clone(se.events)

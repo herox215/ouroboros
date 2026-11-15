@@ -213,7 +213,7 @@ func TestListingAndLateDiscovery(t *testing.T) {
 	}
 	plugin.Add(ctx, plugin.GatewayOutput{Name: "late", ImageDescription: "Image restrictions", AvatarDescription: "Public avatar restrictions", SendImage: imageOK})
 	got, err := tools["gateway_list"].Run(t.Context(), []byte(`{}`))
-	want := `[{"name":"late","send_image":true,"send_audio":false,"set_avatar":false,"image_description":"Image restrictions","audio_description":"","avatar_description":"Public avatar restrictions","vote_poll":false,"poll_description":""}]`
+	want := `[{"name":"late","available":true,"send_image":true,"send_audio":false,"set_avatar":false,"image_description":"Image restrictions","audio_description":"","avatar_description":"Public avatar restrictions","vote_poll":false,"poll_description":""}]`
 	if err != nil || got != want {
 		t.Fatalf("list: %s %v", got, err)
 	}
@@ -290,5 +290,51 @@ func TestBackendErrorForwarded(t *testing.T) {
 		if got, err := tools[name].Run(t.Context(), []byte(`{"attachment":1}`)); !errors.Is(err, want) || !strings.Contains(got, "detail") {
 			t.Fatalf("%s: %q %v", name, got, err)
 		}
+	}
+}
+
+// A provider that is not there now is no provider the tool can mean: a window
+// of ouro that is closed must not make a gateway ambiguous, and naming it says
+// that it is closed rather than that it does not exist.
+func TestAvailabilitySelectsAndExplains(t *testing.T) {
+	open := false
+	tools, _ := fixture(t,
+		plugin.GatewayOutput{Name: "matrix", SendImage: imageOK},
+		plugin.GatewayOutput{Name: "gui", SendImage: imageOK, Available: func(context.Context) bool { return open }},
+	)
+	send := func(raw string) (string, error) {
+		t.Helper()
+		return tools[plugin.GatewaySendImageTool].Run(t.Context(), []byte(raw))
+	}
+	// The one that is there is the only one it can mean.
+	if got, err := send(`{"attachment":1}`); err != nil || got != "image" {
+		t.Fatalf("dispatch beside a closed window: %q %v", got, err)
+	}
+	if got, err := send(`{"gateway":"matrix","attachment":1}`); err != nil || got != "image" {
+		t.Fatalf("the gateway by name: %q %v", got, err)
+	}
+	if _, err := send(`{"gateway":"gui","attachment":1}`); err == nil || !strings.Contains(err.Error(), "not available now") {
+		t.Fatalf("a gateway that is closed: %v", err)
+	}
+	list, err := tools["gateway_list"].Run(t.Context(), []byte(`{}`))
+	if err != nil || !strings.Contains(list, `"name":"gui","available":false`) || !strings.Contains(list, `"name":"matrix","available":true`) {
+		t.Fatalf("the list of a closed window: %s %v", list, err)
+	}
+	// Open, both are there, and the tool must be told which one it means.
+	open = true
+	if _, err := send(`{"attachment":1}`); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("two providers without a name: %v", err)
+	}
+	if got, err := send(`{"gateway":"gui","attachment":1}`); err != nil || got != "image" {
+		t.Fatalf("the window by name: %q %v", got, err)
+	}
+}
+
+// Nothing that is there now supports a capability: the tool says so, and says
+// that it is only now.
+func TestNothingAvailableSaysSo(t *testing.T) {
+	tools, _ := fixture(t, plugin.GatewayOutput{Name: "gui", SendImage: imageOK, Available: func(context.Context) bool { return false }})
+	if _, err := tools[plugin.GatewaySendImageTool].Run(t.Context(), []byte(`{"attachment":1}`)); err == nil || !strings.Contains(err.Error(), "supports sending images now") {
+		t.Fatalf("no provider that is there: %v", err)
 	}
 }

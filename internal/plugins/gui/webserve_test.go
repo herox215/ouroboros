@@ -28,7 +28,8 @@ func TestThePageListens(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	front := newWebFront(dir, fakeProfile("pythia"))
+	p := fakeProfile("pythia")
+	front := newWebFront(dir, p)
 	front.Serve()
 	defer front.Close()
 
@@ -36,6 +37,11 @@ func TestThePageListens(t *testing.T) {
 	text := waitFor(t, url, true)
 	if !strings.Contains(text, "Sign in") || !strings.Contains(text, "pythia") {
 		t.Fatalf("the login page says %q", text)
+	}
+	// A served page shows the pictures of the thread, and the provider says so:
+	// gateway_send_image reaches the profile through it.
+	if !front.serves() {
+		t.Fatal("a page that listens says it does not serve")
 	}
 
 	if err := config.Update(string(dir), func(c *config.Config) error {
@@ -45,6 +51,9 @@ func TestThePageListens(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, url, false)
+	if front.serves() {
+		t.Fatal("a page that is off says it serves")
+	}
 }
 
 // Stop stops the page: the watch it started ends with it, so that a port that
@@ -135,7 +144,7 @@ func TestMovingThePortKeepsTheSession(t *testing.T) {
 	waitFor(t, base+"/login", true)
 	client := stillClient()
 	res := signIn(t, client, base, "owner", "correct horse battery")
-	cookie := session(t, res)
+	cookie := sessionOf(t, res)
 	res.Body.Close()
 	if cookie == nil {
 		t.Fatalf("no session: %d", res.StatusCode)

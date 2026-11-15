@@ -10,6 +10,7 @@ export type Kind =
   | 'answering'
   | 'step'
   | 'asked'
+  | 'picture'
   | 'answer'
   | 'failed'
   | 'canceled'

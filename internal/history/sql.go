@@ -113,6 +113,24 @@ func (a *Archive) openArchive(create bool) (*sql.DB, error) {
 	}); err != nil {
 		return nil, err
 	}
+	// What a record is was only in its data before the role was a column of
+	// its own, which the queries that tell pictures from answers read: a
+	// database from before it gets it here, once.
+	if err = addColumns(tx, "history_records", []column{
+		{"role", "TEXT NOT NULL DEFAULT ''"},
+	}); err != nil {
+		return nil, err
+	}
+	if err = setRoleColumn(tx); err != nil {
+		return nil, err
+	}
+	// What tells a picture from an answer is asked of every append and every
+	// picture: the index is what keeps that from reading the whole
+	// conversation. It comes after the column, which a database from before it
+	// only gets above.
+	if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS history_records_role ON history_records(session_id,role)"); err != nil {
+		return nil, err
+	}
 	var done int
 	err = tx.QueryRow("SELECT count(*) FROM history_migrations WHERE name='legacy-v1'").Scan(&done)
 	if err != nil {
@@ -215,7 +233,8 @@ CREATE TABLE IF NOT EXISTS history_tasks(
 CREATE TABLE IF NOT EXISTS history_records(
  rowid INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES history_sessions(id),
  ordinal INTEGER NOT NULL, seq INTEGER NOT NULL, answer INTEGER NOT NULL,
- data TEXT NOT NULL, search_text TEXT NOT NULL, UNIQUE(session_id,ordinal)
+ data TEXT NOT NULL, search_text TEXT NOT NULL, role TEXT NOT NULL DEFAULT '',
+ UNIQUE(session_id,ordinal)
 );
 CREATE INDEX IF NOT EXISTS history_recent ON history_sessions(archived,deleted,modified DESC);
 CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(search_text,content='history_records',content_rowid='rowid',tokenize='trigram');
@@ -232,7 +251,26 @@ func insertRecord(tx *sql.Tx, id string, ordinal int, r Record, b []byte) error 
 	for _, c := range r.ToolCalls {
 		text += "\n" + c.Name + " " + c.Arguments
 	}
-	_, err := tx.Exec("INSERT INTO history_records(session_id,ordinal,seq,answer,data,search_text) VALUES(?,?,?,?,?,?)", id, ordinal, r.Seq, r.Answer, string(b), strings.ToLower(text))
+	_, err := tx.Exec("INSERT INTO history_records(session_id,ordinal,seq,answer,data,search_text,role) VALUES(?,?,?,?,?,?,?)",
+		id, ordinal, r.Seq, r.Answer, string(b), strings.ToLower(text), r.Role)
+	return err
+}
+
+// setRoleColumn fills the role of the records of a database from before the
+// column, once: what a record is was in its data alone, and the queries that
+// tell a picture from an answer need it beside them.
+func setRoleColumn(tx *sql.Tx) error {
+	var done int
+	if err := tx.QueryRow("SELECT count(*) FROM history_migrations WHERE name='record-role'").Scan(&done); err != nil {
+		return err
+	}
+	if done != 0 {
+		return nil
+	}
+	if _, err := tx.Exec("UPDATE history_records SET role=coalesce(json_extract(data,'$.role'),'') WHERE role=''"); err != nil {
+		return err
+	}
+	_, err := tx.Exec("INSERT INTO history_migrations(name) VALUES('record-role')")
 	return err
 }
 

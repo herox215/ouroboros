@@ -37,6 +37,7 @@ var codes = map[string]error{
 	"no_session": ErrNoSession,
 	"empty":      ErrEmpty,
 	"image":      ErrImage,
+	"picture":    ErrPicture,
 	"attachment": ErrAttachment,
 	"no_effort":  ErrNoEffort,
 	"no_project": ErrThreadProject,
@@ -76,6 +77,10 @@ type (
 	effortRequest struct {
 		ID     string `json:"id"`
 		Effort string `json:"effort"`
+	}
+	pictureRequest struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
 	}
 	unsteerResponse struct {
 		Text string `json:"text"`
@@ -179,6 +184,12 @@ func Handler(s *Service) http.Handler {
 			reply(w, nil, s.SetEffort(r.Context(), in.ID, in.Effort))
 		}
 	})
+	mux.HandleFunc("POST /picture", func(w http.ResponseWriter, r *http.Request) {
+		var in pictureRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.ShowPicture(r.Context(), in.ID, in.Name))
+		}
+	})
 	mux.HandleFunc("POST /delete", func(w http.ResponseWriter, r *http.Request) {
 		var in idRequest
 		if read(w, r, &in) {
@@ -245,7 +256,10 @@ func Handler(s *Service) http.Handler {
 		reply(w, struct{}{}, nil)
 	})
 	mux.HandleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) {
-		past, live, err := s.Watch(r.Context(), r.URL.Query().Get("id"))
+		// A front end says which one watches, see WithWatchSource: it is what
+		// tells an open window of ouro from one that is not.
+		ctx := WithWatchSource(r.Context(), r.URL.Query().Get("source"))
+		past, live, err := s.Watch(ctx, r.URL.Query().Get("id"))
 		if err != nil {
 			reply(w, nil, err)
 			return
@@ -437,6 +451,11 @@ func (c *Client) SetEffort(ctx context.Context, id, effort string) error {
 	return c.do(ctx, http.MethodPost, "/effort", effortRequest{id, effort}, nil)
 }
 
+// ShowPicture shows the picture name in the conversation id; see PictureAPI.
+func (c *Client) ShowPicture(ctx context.Context, id, name string) error {
+	return c.do(ctx, http.MethodPost, "/picture", pictureRequest{id, name}, nil)
+}
+
 // Delete removes the session id.
 func (c *Client) Delete(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/delete", idRequest{id}, nil)
@@ -519,7 +538,11 @@ func (c *Client) Contents(ctx context.Context, id string) ([]Line, error) {
 // Watch returns what happened in the session id and what happens from now
 // on, until ctx ends or the node stops.
 func (c *Client) Watch(ctx context.Context, id string) ([]Event, <-chan Event, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/watch?id="+url.QueryEscape(id), nil)
+	watch := "/watch?id=" + url.QueryEscape(id)
+	if source := WatchSource(ctx); source != "" {
+		watch += "&source=" + url.QueryEscape(source)
+	}
+	resp, err := c.request(ctx, http.MethodGet, watch, nil)
 	if err != nil {
 		return nil, nil, err
 	}

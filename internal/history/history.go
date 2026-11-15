@@ -192,11 +192,17 @@ func (a *Archive) append(who Who, msgs []chat.Message, answerErr error, presenta
 	if _, err = tx.Exec("INSERT INTO history_sessions(id) VALUES(?) ON CONFLICT(id) DO UPDATE SET deleted=0", id); err != nil {
 		return err
 	}
-	var seq, answer, ordinal int
-	if err = tx.QueryRow("SELECT coalesce(max(seq),0),coalesce(max(answer),0),coalesce(max(ordinal),0) FROM history_records WHERE session_id=?", id).Scan(&seq, &answer, &ordinal); err != nil {
+	var seq, ordinal int
+	if err = tx.QueryRow("SELECT coalesce(max(seq),0),coalesce(max(ordinal),0) FROM history_records WHERE session_id=?", id).Scan(&seq, &ordinal); err != nil {
 		return err
 	}
-	answer++
+	// The answer the conversation goes on with. The picture of it may be
+	// written already, see NotePicture, and carries its number: it is no answer
+	// of its own, and is not counted here.
+	var answer int
+	if err = tx.QueryRow("SELECT coalesce(max(answer),0)+1 FROM history_records WHERE session_id=? AND role<>?", id, Picture).Scan(&answer); err != nil {
+		return err
+	}
 	now := a.now().UTC()
 	var size int64
 	add := func(r Record) error {
@@ -877,37 +883,14 @@ func (a *Archive) NoteModel(id, model string) error {
 	}
 	// Open before the model is kept: a failed open then leaves neither the
 	// model nor the record that says where the conversation goes on.
-	db, err := a.database()
-	if err != nil {
+	if _, err := a.database(); err != nil {
 		return err
 	}
 	if err := a.SetModel(id, model); err != nil {
 		return err
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.Exec("INSERT INTO history_sessions(id) VALUES(?) ON CONFLICT(id) DO UPDATE SET deleted=0", id); err != nil {
-		return err
-	}
-	var seq, answer, ordinal int
-	if err = tx.QueryRow("SELECT coalesce(max(seq),0),coalesce(max(answer),0),coalesce(max(ordinal),0) FROM history_records WHERE session_id=?", id).Scan(&seq, &answer, &ordinal); err != nil {
-		return err
-	}
-	r := Record{Seq: seq + 1, Answer: answer, Time: a.now().UTC(), Role: ModelChanged, Content: model}
-	b, err := json.Marshal(r)
-	if err != nil {
-		return err
-	}
-	if err = insertRecord(tx, id, ordinal+1, r, b); err != nil {
-		return err
-	}
-	if _, err = tx.Exec("UPDATE history_sessions SET archived=1,modified=?,size=size+? WHERE id=?", r.Time.UnixNano(), len(b)+1, id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err := a.noteRecord(id, ModelChanged, model)
+	return err
 }
 
 // FirstUser returns the first message of the user in the archived conversation

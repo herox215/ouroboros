@@ -15,8 +15,9 @@ import (
 )
 
 // pageFor returns a page of the thread in a home dir that is enabled for the
-// user "owner" with the password "correct horse battery", and its server.
-func pageFor(t *testing.T) (*http.Client, *httptest.Server) {
+// user "owner" with the password "correct horse battery", its server, and the
+// dir of the profile.
+func pageFor(t *testing.T) (*http.Client, *httptest.Server, home.Dir) {
 	t.Helper()
 	dir := home.Dir(t.TempDir())
 	hash, err := web.Hash("correct horse battery")
@@ -30,7 +31,7 @@ func pageFor(t *testing.T) (*http.Client, *httptest.Server) {
 	front := newWebFront(dir, fakeProfile("pythia"))
 	server := httptest.NewServer(front.handler)
 	t.Cleanup(server.Close)
-	return stillClient(), server
+	return stillClient(), server, dir
 }
 
 // stillClient is a client that does not follow the redirect of a login, so
@@ -50,7 +51,7 @@ func signIn(t *testing.T, client *http.Client, base, user, password string) *htt
 }
 
 // session is the cookie of the login in res.
-func session(t *testing.T, res *http.Response) *http.Cookie {
+func sessionOf(t *testing.T, res *http.Response) *http.Cookie {
 	t.Helper()
 	for _, cookie := range res.Cookies() {
 		if cookie.Name == sessionCookie {
@@ -80,6 +81,36 @@ func do(t *testing.T, client *http.Client, method, raw string, cookie *http.Cook
 	return res
 }
 
+// The pictures the thread shows are the owner's: the page serves them only
+// with the session of a login, and nothing else of the profile.
+func TestPicturesAreServedBehindTheLogin(t *testing.T) {
+	client, server, dir := pageFor(t)
+	name, _, err := pictures{dir: dir.Pictures()}.keep(picture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := do(t, client, http.MethodGet, server.URL+mediaPath+name, nil, nil)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a picture without a login: %d", res.StatusCode)
+	}
+	res.Body.Close()
+	login := signIn(t, client, server.URL, "owner", "correct horse battery")
+	cookie := sessionOf(t, login)
+	login.Body.Close()
+	res = do(t, client, http.MethodGet, server.URL+mediaPath+name, cookie, nil)
+	if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "image/png" {
+		t.Fatalf("a picture with a login: %d, %q", res.StatusCode, res.Header.Get("Content-Type"))
+	}
+	if got := len(body(t, res)); got != len(picture(t)) {
+		t.Fatalf("served %d bytes", got)
+	}
+	res = do(t, client, http.MethodGet, server.URL+mediaPath+"nothing.png", cookie, nil)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("a picture that is none: %d", res.StatusCode)
+	}
+	res.Body.Close()
+}
+
 func body(t *testing.T, res *http.Response) string {
 	t.Helper()
 	defer res.Body.Close()
@@ -93,7 +124,7 @@ func body(t *testing.T, res *http.Response) string {
 // A page that nobody is signed in to sends the browser to the login, and its
 // API answers no browser at all.
 func TestPageNeedsALogin(t *testing.T) {
-	client, server := pageFor(t)
+	client, server, _ := pageFor(t)
 	// The files of the page are the same code for everyone, and the worker
 	// of a phone cannot cache them through a redirect.
 	if res, err := client.Get(server.URL + "/app.js"); err != nil || res.StatusCode != http.StatusOK {
@@ -121,7 +152,7 @@ func TestPageNeedsALogin(t *testing.T) {
 // The login asks for what the configuration keeps, and lets the browser in
 // with a cookie only when both are right.
 func TestLoginAndCookie(t *testing.T) {
-	client, server := pageFor(t)
+	client, server, _ := pageFor(t)
 	res := signIn(t, client, server.URL, "owner", "wrong password")
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a wrong password is answered %d", res.StatusCode)
@@ -129,7 +160,7 @@ func TestLoginAndCookie(t *testing.T) {
 	if text := body(t, res); !strings.Contains(text, "Wrong user or password") {
 		t.Fatalf("the form does not say what was wrong: %q", text)
 	}
-	if cookie := session(t, res); cookie != nil {
+	if cookie := sessionOf(t, res); cookie != nil {
 		t.Fatal("a wrong password got a session")
 	}
 
@@ -137,7 +168,7 @@ func TestLoginAndCookie(t *testing.T) {
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" {
 		t.Fatalf("the right password is answered %d to %q", res.StatusCode, res.Header.Get("Location"))
 	}
-	cookie := session(t, res)
+	cookie := sessionOf(t, res)
 	if cookie == nil || !cookie.HttpOnly || cookie.Value == "" {
 		t.Fatalf("no session cookie, or one a script reads: %v", res.Header.Values("Set-Cookie"))
 	}
@@ -156,9 +187,9 @@ func TestLoginAndCookie(t *testing.T) {
 // A change has to come from the page itself: the header is what a form of
 // another site cannot set.
 func TestSendNeedsThePage(t *testing.T) {
-	client, server := pageFor(t)
+	client, server, _ := pageFor(t)
 	res := signIn(t, client, server.URL, "owner", "correct horse battery")
-	cookie := session(t, res)
+	cookie := sessionOf(t, res)
 	if cookie == nil {
 		t.Fatalf("no session: %d", res.StatusCode)
 	}

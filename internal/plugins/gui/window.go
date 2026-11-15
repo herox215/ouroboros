@@ -359,7 +359,10 @@ func (w *Window) initialEvents(before int) []Event {
 // watchThread replaces the live watch with one on the thread, and starts
 // passing on what it tells. It reports what the thread told so far.
 func (w *Window) watchThread() ([]plugin.SessionEvent, error) {
-	ctx, cancel := context.WithCancel(w.ctx)
+	// The front end says which one watches: the node tells whether the window
+	// of ouro is open from it, and shows a picture in it while it is, see
+	// plugin.WithWatchSource.
+	ctx, cancel := context.WithCancel(plugin.WithWatchSource(w.ctx, w.source))
 	w.mu.Lock()
 	if w.watch != nil {
 		w.watch()

@@ -14,12 +14,13 @@ import (
 	"maunium.net/go/mautrix/crypto/attachment"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+
+	"ouroboros/internal/media"
 )
 
-// MaxMediaBytes bounds every image and audio file sent or received. It
-// leaves room for base64 encoding within the session socket's 16 MiB JSON
-// limit.
-const MaxMediaBytes = 10 * 1024 * 1024
+// MaxMediaBytes bounds every image and audio file sent or received: the same
+// size the front ends take, see media.MaxPictureBytes.
+const MaxMediaBytes = media.MaxPictureBytes
 
 // downloadImage uses the authenticated homeserver media endpoint, never an
 // arbitrary sender-provided HTTP URL. Authorization is checked by Run first.
@@ -28,10 +29,8 @@ func (c *Client) downloadImage(ctx context.Context, content *event.MessageEventC
 	if err != nil {
 		return Image{}, err
 	}
-	mime := http.DetectContentType(file.Data)
-	switch mime {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
-	default:
+	mime := media.Kind(file.Data)
+	if mime == "" {
 		return Image{}, errors.New("supported images are PNG, JPEG, GIF and WebP")
 	}
 	return Image{MIMEType: mime, Data: file.Data}, nil
@@ -109,10 +108,8 @@ func (c *Client) SendImageTo(ctx context.Context, room, expectedPeer, name strin
 	if len(data) == 0 || len(data) > MaxMediaBytes {
 		return errors.New("the image must be nonempty and at most 10 MiB")
 	}
-	mime := http.DetectContentType(data)
-	switch mime {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
-	default:
+	mime := media.Kind(data)
+	if mime == "" {
 		return errors.New("supported images are PNG, JPEG, GIF and WebP")
 	}
 	info := &event.FileInfo{MimeType: mime, Size: len(data)}

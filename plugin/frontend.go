@@ -121,8 +121,34 @@ type ImageSessions = session.ImageAPI
 // ReplyImageSessions optionally supports conversational replies with pictures.
 type ReplyImageSessions = session.ReplyImageAPI
 
+// PictureSessions optionally shows the pictures an agent makes in the chat of
+// a conversation, like a screenshot of what it did: the front end keeps the
+// file and shows it there, also when the conversation is read again.
+type PictureSessions = session.PictureAPI
+
+// The front ends that watch a session, as WithWatchSource tells them apart:
+// one that shows the thread in the window of ouro can show a picture in it,
+// see PictureSessions.
+const (
+	// SourceWindow is the window of ouro.
+	SourceWindow = session.SourceWindow
+	// SourcePage is the page of the thread in a browser.
+	SourcePage = session.SourcePage
+)
+
+// WithWatchSource says which front end watches the session that Watch is
+// called for. A node whose provider shows pictures asks how many windows of
+// ouro watch the thread, so a window that runs in a process of its own says it
+// here, and the plugin that keeps the pictures follows it.
+func WithWatchSource(ctx context.Context, source string) context.Context {
+	return session.WithWatchSource(ctx, source)
+}
+
 // ErrImage means an input picture is empty or has an unsupported media type.
 var ErrImage = session.ErrImage
+
+// ErrPicture means that a picture has no name a front end keeps pictures under.
+var ErrPicture = session.ErrPicture
 
 // MessageSource identifies the interface sending one owner message.
 type MessageSource = chat.MessageSource
@@ -203,6 +229,11 @@ const (
 	// the answer ended: its key and what it says in Text, and in Args what
 	// Owner.UndoRemembered takes back.
 	SessionRemembered = session.Remembered
+	// SessionPicture is a picture the agent shows the owner as the answer goes
+	// on, its name in Text, as the front end that keeps it names the file:
+	// see PictureSessions. It is no message: nothing of it is sent to the
+	// model.
+	SessionPicture = session.Picture
 	// SessionAsked is a question the agent asks the owner and waits for,
 	// see SessionEvent.AsQuestion: what the owner says next in the session,
 	// with Sessions.Steer, answers it. With Done the wait is over, and Text

@@ -32,6 +32,13 @@ describe('Line', () => {
     expect(container.querySelector('.agent code')?.textContent).toBe('code');
   });
 
+  it('shows a picture the agent showed from where the window serves it', () => {
+    const { container } = mount(line({ role: 'picture', text: 'abc.png' }));
+    const img = container.querySelector('.picture img') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('/media/abc.png');
+    expect(img.getAttribute('loading')).toBe('lazy');
+  });
+
   it('marks a call of a tool as done or failed', () => {
     const { container } = mount(line({ role: 'tool', text: 'bash · false', done: true, failed: true }));
     const tool = container.querySelector('.tool') as HTMLElement;

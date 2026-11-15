@@ -273,6 +273,9 @@ type entry struct {
 	// suggestion is what the review of the answer before it proposes to
 	// change of ouro: text is its line.
 	suggestion bool
+	// picture is a picture the agent showed as the answer went on: text is
+	// the name the window and the page serve it under.
+	picture bool
 	// remembered is what takes back a memory the review of the answer
 	// before it kept, see Backend.UndoRemembered: text is its line. It is
 	// nil for every other entry. undoes is the line that tells a memory is

@@ -68,6 +68,9 @@ func TestGoOn(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the session did not go on")
 	}
+	// The answer it went on with ended before the next image starts: only
+	// then is what it was told once what it goes on with.
+	next.answers.Wait()
 	next.GoOn()
 	select {
 	case got := <-told:
