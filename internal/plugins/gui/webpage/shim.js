@@ -70,6 +70,10 @@
   const listeners = { events: [], ended: [], restarting: [] };
   let stream = null;
   let connected = false; // the stream worked once, and what ends it is news
+  // lost is set while the page waits out a stream it gave up on: the app may
+  // have given up reconnecting by then, so the stream that comes back is what
+  // tells it to take the thread again.
+  let lost = false;
   let retry = 0; // the timer that opens another stream, 0 while none waits
   // webReopen is how long the page waits for a stream it lost: the node is
   // starting anew, or the proxy in front of it is away.
@@ -77,9 +81,10 @@
 
   // signedIn reports whether the node still knows this browser: one that
   // answers 401 is a login that ended, and one that does not answer at all, or
-  // answers what a proxy says while the node is away, is not.
+  // answers what a proxy says while the node is away, is not. It names the tab
+  // as every other request does, so it opens no window of its own.
   const signedIn = () =>
-    fetch('./api/initial', { credentials: 'same-origin' }).then(
+    fetch('./api/initial', { credentials: 'same-origin', headers: { 'X-Ouro-Client': client } }).then(
       (res) => res.status !== 401,
       () => true,
     );
@@ -107,13 +112,15 @@
       for (const listener of listeners.restarting) listener();
     });
     source.addEventListener('open', () => {
-      if (connected) {
-        // The stream dropped and is back. What it told in between is in the
-        // snapshot of an Open, so the page takes the thread again rather than
-        // carrying on with a gap in it.
+      if (connected || lost) {
+        // The stream dropped and is back, or a page that could not be reached
+        // is there again. What it told in between is in the snapshot of an
+        // Open, so the page takes the thread again rather than carrying on
+        // with a gap in it — or staying offline once its own retries ran out.
         for (const listener of listeners.ended) listener();
       }
       connected = true;
+      lost = false;
     });
     source.addEventListener('error', () => {
       // A stream that drops reconnects by itself. One the browser gives up on
@@ -131,6 +138,7 @@
         }
         source.close();
         stream = null;
+        lost = true;
         if (connected) {
           connected = false;
           for (const listener of listeners.ended) listener();

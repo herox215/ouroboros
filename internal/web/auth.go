@@ -230,7 +230,8 @@ func (s *Sessions) pruneLocked() {
 // Throttle holds a login up that fails over and over: a port in a network is
 // found by a scanner, and a password guessed by one. It counts the attempts of
 // one key — the address of the caller, the address and the name it tried, or
-// anything else that tells attempts apart — and blocks it after a few.
+// anything else that tells attempts apart — and blocks it after a few. A nil
+// Throttle counts nothing and lets every attempt go ahead.
 type Throttle struct {
 	mu       sync.Mutex
 	now      func() time.Time
@@ -260,6 +261,9 @@ type attempt struct {
 // reports how long key is held back for, and false while it is: the attempt
 // does not go ahead, and is not checked at all.
 func (t *Throttle) Start(key string) (time.Duration, bool) {
+	if t == nil { // no count: every attempt goes ahead
+		return 0, true
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.pruneLocked()
@@ -295,6 +299,9 @@ func (t *Throttle) Start(key string) (time.Duration, bool) {
 // as one of a key that another key holds up: it counts as neither a failure
 // nor an attempt.
 func (t *Throttle) Cancel(key string) {
+	if t == nil { // no count: every attempt goes ahead
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	a, ok := t.byKey[key]
@@ -313,6 +320,9 @@ func (t *Throttle) Cancel(key string) {
 // the failures in a row reach the limit. It returns how long key is blocked
 // for, zero while it is not.
 func (t *Throttle) Failed(key string) time.Duration {
+	if t == nil { // no count: every attempt goes ahead
+		return 0
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.pruneLocked()
@@ -346,6 +356,9 @@ func (t *Throttle) Failed(key string) time.Duration {
 
 // Cleared forgets the failures of key, after it signed in.
 func (t *Throttle) Cleared(key string) {
+	if t == nil { // no count: every attempt goes ahead
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.byKey, key)
