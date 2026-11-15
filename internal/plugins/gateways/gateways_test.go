@@ -300,7 +300,7 @@ func TestAvailabilitySelectsAndExplains(t *testing.T) {
 	open := false
 	tools, _ := fixture(t,
 		plugin.GatewayOutput{Name: "matrix", SendImage: imageOK},
-		plugin.GatewayOutput{Name: "gui", SendImage: imageOK, Available: func() bool { return open }},
+		plugin.GatewayOutput{Name: "gui", SendImage: imageOK, Available: func(context.Context) bool { return open }},
 	)
 	send := func(raw string) (string, error) {
 		t.Helper()
@@ -333,7 +333,7 @@ func TestAvailabilitySelectsAndExplains(t *testing.T) {
 // Nothing that is there now supports a capability: the tool says so, and says
 // that it is only now.
 func TestNothingAvailableSaysSo(t *testing.T) {
-	tools, _ := fixture(t, plugin.GatewayOutput{Name: "gui", SendImage: imageOK, Available: func() bool { return false }})
+	tools, _ := fixture(t, plugin.GatewayOutput{Name: "gui", SendImage: imageOK, Available: func(context.Context) bool { return false }})
 	if _, err := tools[plugin.GatewaySendImageTool].Run(t.Context(), []byte(`{"attachment":1}`)); err == nil || !strings.Contains(err.Error(), "supports sending images now") {
 		t.Fatalf("no provider that is there: %v", err)
 	}

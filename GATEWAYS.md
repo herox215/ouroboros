@@ -199,7 +199,9 @@ name is kept with the answer, so the picture shows again when the thread is
 read, as long as the file is there.
 
 The `gui` provider is available while a window of that profile is open, or
-while the page of the thread is served. A profile that shows neither offers
+while the page of the thread is served — and only for a call of the thread, or
+of a session that works for it: both show the thread, and a picture of another
+conversation would be seen by neither. A profile that shows neither offers
 nothing to show a picture in, and `gateway_send_image` stays unambiguous for a
 profile that has one gateway; with a window or the page open beside one, the
 tool must name the one it means. `gateway_list` says with `available` whether a

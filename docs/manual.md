@@ -197,8 +197,9 @@ session of its own, which the window does not show.
 
 The terminal shows no picture: it writes a line where one was shown, with the name the
 window serves it under. The window is a provider of `gateway_send_image`, available while
-a window of it is open or the page of the thread is served; with the window closed and the
-page off, it offers nothing to show a picture in, and a gateway is the only provider
+a window of it is open or the page of the thread is served, for the thread and the sessions
+that work for it; with the window closed and the page off, or for a conversation the thread
+does not show, it offers nothing to show a picture in, and a gateway is the only provider
 `gateway_send_image` can mean.
 
 `ouro gui [DIRECTORY]` takes a directory as `ouro tui [DIRECTORY]` does, but the window

@@ -31,6 +31,22 @@ func WatchSource(ctx context.Context) string {
 	return source
 }
 
+// ShowsThread reports whether a picture of the conversation id is seen where
+// the thread is: id is the thread, or a session that works for it, whose
+// pictures the thread shows too, see ShowPicture.
+func (s *Service) ShowsThread(id string) bool {
+	if id == ThreadID {
+		return true
+	}
+	if err := valid(id); err != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	se, ok := s.sessions[id]
+	return ok && forThread(se)
+}
+
 // Watching reports how many front ends of source watch the session id now: the
 // window of ouro is what tells a node that a picture can be shown in it, see
 // PictureAPI. A source of "" counts the front ends that do not say.

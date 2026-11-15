@@ -66,7 +66,7 @@ func Plugin() plugin.Plugin {
 				for _, p := range providers {
 					entries = append(entries, entry{
 						Name:              p.Name,
-						Available:         available(p),
+						Available:         available(ctx, p),
 						SendImage:         p.SendImage != nil,
 						SendAudio:         p.SendAudio != nil,
 						SetAvatar:         p.SetAvatar != nil,
@@ -92,7 +92,7 @@ func Plugin() plugin.Plugin {
 				if err := validateInput(args.Path, args.Attachment, false); err != nil {
 					return "", err
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewaySendImageTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewaySendImageTool)
 				if err != nil {
 					return "", err
 				}
@@ -111,7 +111,7 @@ func Plugin() plugin.Plugin {
 				if args.Path == "" {
 					return "", errors.New("give the path of the audio file")
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewaySendAudioTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewaySendAudioTool)
 				if err != nil {
 					return "", err
 				}
@@ -133,7 +133,7 @@ func Plugin() plugin.Plugin {
 				if args.Path == "" && args.Attachment == 0 {
 					args.Attachment = 1
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewaySetAvatarTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewaySetAvatarTool)
 				if err != nil {
 					return "", err
 				}
@@ -166,7 +166,7 @@ func Plugin() plugin.Plugin {
 					}
 					seen[id] = true
 				}
-				p, err := selectOutput(pctx, args.Gateway, plugin.GatewayVotePollTool)
+				p, err := selectOutput(ctx, pctx, args.Gateway, plugin.GatewayVotePollTool)
 				if err != nil {
 					return "", err
 				}
@@ -227,11 +227,14 @@ func outputs(ctx *plugin.Context) ([]plugin.GatewayOutput, error) {
 }
 
 // available reports whether p can be used now: a provider that always can
-// says so with no Available.
-func available(p plugin.GatewayOutput) bool { return p.Available == nil || p.Available() }
+// says so with no Available. ctx is the call's: what can be used depends on
+// the conversation that calls.
+func available(ctx context.Context, p plugin.GatewayOutput) bool {
+	return p.Available == nil || p.Available(ctx)
+}
 
-func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.GatewayOutput, error) {
-	providers, err := outputs(ctx)
+func selectOutput(ctx context.Context, pctx *plugin.Context, name string, tool string) (plugin.GatewayOutput, error) {
+	providers, err := outputs(pctx)
 	if err != nil {
 		return plugin.GatewayOutput{}, err
 	}
@@ -266,7 +269,7 @@ func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.Gateway
 			}
 			continue
 		}
-		if !available(p) {
+		if !available(ctx, p) {
 			if name != "" {
 				return plugin.GatewayOutput{}, fmt.Errorf("gateway %q is not available now", name)
 			}

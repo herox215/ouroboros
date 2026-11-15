@@ -59,3 +59,27 @@ func TestWatchSourceOfAPlainContext(t *testing.T) {
 		t.Fatalf("a plain context watches as %q", got)
 	}
 }
+
+// The window and the page show the thread: a picture is seen there when it is
+// one of the thread's, or of a session that works for it, and not otherwise.
+func TestShowsThreadIsTheThreadAndWhatWorksForIt(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	if !s.ShowsThread(ThreadID) {
+		t.Fatal("the thread is not shown where the thread is")
+	}
+	if s.ShowsThread("") || s.ShowsThread("no such id") {
+		t.Fatal("a conversation that is not there is shown")
+	}
+	s.mu.Lock()
+	se := s.get("s1")
+	s.mu.Unlock()
+	if s.ShowsThread("s1") {
+		t.Fatal("a session of its own is shown where the thread is")
+	}
+	s.mu.Lock()
+	se.routed = true
+	s.mu.Unlock()
+	if !s.ShowsThread("s1") {
+		t.Fatal("a session that works for the thread is not shown with it")
+	}
+}

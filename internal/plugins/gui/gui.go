@@ -27,6 +27,7 @@ type profile struct {
 // session, see session.Watching.
 type watchers interface {
 	Watching(id, source string) int
+	ShowsThread(id string) bool
 }
 
 // windowShows reports whether a window of ouro shows the thread now. The window
@@ -36,11 +37,17 @@ func windowShows(sessions watchers) bool {
 	return sessions != nil && sessions.Watching(plugin.ThreadID, plugin.SourceWindow) > 0
 }
 
-// shownBy is what the provider asks: a picture shown now would be seen by a
-// window of ouro that watches the thread, or by the page of it, which page
-// tells and is nil for a process that serves no page.
-func shownBy(sessions watchers, page func() bool) func() bool {
-	return func() bool { return windowShows(sessions) || (page != nil && page()) }
+// shownBy is what the provider asks: a picture the call of ctx shows now would
+// be seen by a window of ouro that watches the thread, or by the page of it,
+// which page tells and is nil for a process that serves no page. Both show the
+// thread alone: the conversation of the call is the thread, or works for it.
+func shownBy(sessions watchers, page func() bool) func(ctx context.Context) bool {
+	return func(ctx context.Context) bool {
+		if sessions == nil || !sessions.ShowsThread(plugin.ContextID(ctx)) {
+			return false
+		}
+		return windowShows(sessions) || (page != nil && page())
+	}
 }
 
 // Plugin contributes the window command, and the page of the thread on the

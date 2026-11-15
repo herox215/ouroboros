@@ -83,7 +83,7 @@ func TestAPictureIsShownThroughTheGatewayTool(t *testing.T) {
 	store := pictures{dir: dir.Pictures()}
 	files := &guard.Guard{Home: root, Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
 	sessions := &shownSessions{fakeSessions: &fakeSessions{}}
-	out := pictureOutput(sessions, files, store, func() bool { return true })
+	out := pictureOutput(sessions, files, store, func(context.Context) bool { return true })
 	bot := agent.New(&showingLLM{}, "test", "show pictures", plugin.NewTool(plugin.GatewaySendImageTool, "show a picture", nil,
 		func(ctx context.Context, _ struct{}) (string, error) {
 			return out.SendImage(ctx, plugin.GatewayImageRequest{Path: file})
@@ -172,7 +172,7 @@ func TestPicturesServeOnlyThePictures(t *testing.T) {
 // that can show it.
 func TestShowPictureNeedsAPathOrAnAttachment(t *testing.T) {
 	store := pictures{dir: t.TempDir()}
-	out := pictureOutput(&fakeSessions{}, nil, store, func() bool { return true })
+	out := pictureOutput(&fakeSessions{}, nil, store, func(context.Context) bool { return true })
 	if _, err := out.SendImage(context.Background(), plugin.GatewayImageRequest{}); err == nil || !strings.Contains(err.Error(), "either a path or an attachment") {
 		t.Fatalf("nothing to show: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestShowPictureAnswersWithTheName(t *testing.T) {
 	store := pictures{dir: filepath.Join(root, "pictures")}
 	files := &guard.Guard{Home: root, Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
 	sessions := &shownSessions{fakeSessions: &fakeSessions{}}
-	out := pictureOutput(sessions, files, store, func() bool { return true })
+	out := pictureOutput(sessions, files, store, func(context.Context) bool { return true })
 	var result string
 	bot := agent.New(&showingLLM{}, "test", "show pictures", plugin.NewTool(plugin.GatewaySendImageTool, "show a picture", nil,
 		func(ctx context.Context, _ struct{}) (string, error) {
@@ -248,7 +248,7 @@ func TestShowPictureLeavesNoFileBehind(t *testing.T) {
 
 	// A sessions service that cannot show pictures at all.
 	store := pictures{dir: filepath.Join(root, "none", "pictures")}
-	if err := shown(pictureOutput(&fakeSessions{}, files, store, func() bool { return true })); err == nil || !strings.Contains(err.Error(), "cannot show pictures") {
+	if err := shown(pictureOutput(&fakeSessions{}, files, store, func(context.Context) bool { return true })); err == nil || !strings.Contains(err.Error(), "cannot show pictures") {
 		t.Fatalf("a node without pictures: %v", err)
 	}
 	if !empty(store.dir) {
@@ -257,7 +257,7 @@ func TestShowPictureLeavesNoFileBehind(t *testing.T) {
 
 	// One that can, but whose conversation is gone.
 	store = pictures{dir: filepath.Join(root, "gone", "pictures")}
-	if err := shown(pictureOutput(&shownSessions{fakeSessions: &fakeSessions{}, err: plugin.ErrNoSession}, files, store, func() bool { return true })); !errors.Is(err, plugin.ErrNoSession) {
+	if err := shown(pictureOutput(&shownSessions{fakeSessions: &fakeSessions{}, err: plugin.ErrNoSession}, files, store, func(context.Context) bool { return true })); !errors.Is(err, plugin.ErrNoSession) {
 		t.Fatalf("a conversation that is not there: %v", err)
 	}
 	if !empty(store.dir) {
@@ -301,7 +301,7 @@ func TestAFailedCallKeepsThePictureAnotherShows(t *testing.T) {
 		release:      release,
 		err:          map[string]error{"gone": plugin.ErrNoSession},
 	}
-	out := pictureOutput(sessions, files, store, func() bool { return true })
+	out := pictureOutput(sessions, files, store, func(context.Context) bool { return true })
 	show := func(id string) error {
 		var toolErr error
 		bot := agent.New(&showingLLM{}, "test", "show pictures", plugin.NewTool(plugin.GatewaySendImageTool, "show a picture", nil,

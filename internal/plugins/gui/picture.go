@@ -42,8 +42,9 @@ type pictures struct{ dir string }
 // keep writes data as a picture of the profile and returns its name, which the
 // same data always gets, and whether this call is what wrote it. What is no
 // PNG, JPEG, GIF or WebP, or larger than the pictures the gateways take, is
-// refused.
-func (p pictures) keep(data []byte) (string, bool, error) {
+// refused. A picture that is kept is counted, see keeping, and the caller
+// tells how it ended with done.
+func (p pictures) keep(data []byte) (name string, created bool, err error) {
 	if len(data) == 0 {
 		return "", false, errors.New("the picture is empty")
 	}
@@ -55,8 +56,18 @@ func (p pictures) keep(data []byte) (string, bool, error) {
 		return "", false, errors.New("supported pictures are PNG, JPEG, GIF and WebP")
 	}
 	sum := sha256.Sum256(data)
-	name := hex.EncodeToString(sum[:]) + media.Ext(kind)
+	name = hex.EncodeToString(sum[:]) + media.Ext(kind)
 	path := filepath.Join(p.dir, name)
+	// The call is counted before it looks for the file: a call that failed
+	// takes away a file it wrote only while no other call keeps it, and one
+	// that found the file between that look and its count would lose it.
+	kept := name
+	p.keeping(kept)
+	defer func() {
+		if err != nil {
+			p.done(kept, false, false)
+		}
+	}()
 	if _, err := os.Stat(path); err == nil {
 		return name, false, nil
 	}
@@ -173,19 +184,19 @@ func (p pictures) handler() http.Handler {
 // thread the window shows. shown reports whether a window or the page shows
 // the thread now, which is what Available tells the tool: nothing else can
 // show a picture.
-func pictureOutput(sessions plugin.Sessions, files *guard.Guard, store pictures, shown func() bool) plugin.GatewayOutput {
-	available := func() bool { return shown == nil || shown() }
+func pictureOutput(sessions plugin.Sessions, files *guard.Guard, store pictures, shown func(context.Context) bool) plugin.GatewayOutput {
+	available := func(ctx context.Context) bool { return shown == nil || shown(ctx) }
 	return plugin.GatewayOutput{
 		Name:      "gui",
 		Available: available,
 		ImageDescription: "Shows the picture in the window of ouro, in the thread it shows. " +
 			"Destination is not used. It stays there while the thread is read, as long as the profile keeps it.",
 		SendImage: func(ctx context.Context, request plugin.GatewayImageRequest) (string, error) {
-			if !available() {
+			if !available(ctx) {
 				// The tool leaves out what is not there, and says so by name:
-				// no window of ouro is open, and the page of the thread is not
-				// served.
-				return "", errors.New("no window of ouro or page of the thread shows a picture now")
+				// no window of ouro is open, the page of the thread is not
+				// served, or this conversation is not the thread they show.
+				return "", errors.New("no window of ouro or page of the thread shows a picture of this conversation now")
 			}
 			return showPicture(ctx, sessions, files, store, request)
 		},
@@ -229,7 +240,6 @@ func showPicture(ctx context.Context, sessions plugin.Sessions, files *guard.Gua
 	if err != nil {
 		return "", err
 	}
-	store.keeping(name)
 	didShow := false
 	defer func() { store.done(name, created, didShow) }()
 	// The picture is shown in the conversation the call was made in. When that

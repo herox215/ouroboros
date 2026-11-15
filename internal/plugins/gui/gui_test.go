@@ -46,7 +46,7 @@ func TestCommand(t *testing.T) {
 	if len(outputs) != 1 || outputs[0].Name != "gui" || outputs[0].SendImage == nil {
 		t.Fatalf("the window as a channel of pictures: %+v", outputs)
 	}
-	if outputs[0].Available == nil || outputs[0].Available() {
+	if outputs[0].Available == nil || outputs[0].Available(context.Background()) {
 		t.Fatal("a profile without a window can show pictures")
 	}
 }
@@ -123,6 +123,11 @@ func testContext(t *testing.T) *plugin.Context {
 // thread, as the node's does.
 type fakeWatchers struct {
 	windows int
+	others  bool // a conversation other than the thread works for it
+}
+
+func (f fakeWatchers) ShowsThread(id string) bool {
+	return id == plugin.ThreadID || f.others
 }
 
 func (f fakeWatchers) Watching(id, source string) int {
@@ -137,14 +142,14 @@ func (f fakeWatchers) Watching(id, source string) int {
 // thread in the node, or the page of the thread served there.
 func TestTheWindowIsAProvider(t *testing.T) {
 	ctx := testContext(t)
-	out := pictureOutput(&fakeSessions{}, nil, pictures{dir: t.TempDir()}, func() bool { return false })
+	out := pictureOutput(&fakeSessions{}, nil, pictures{dir: t.TempDir()}, func(context.Context) bool { return false })
 	item := plugin.Add(ctx, out)
 	t.Cleanup(item.Remove)
 	outputs := plugin.All[plugin.GatewayOutput](ctx)
 	if len(outputs) != 1 || outputs[0].Name != "gui" {
 		t.Fatalf("the window as a channel of pictures: %+v", outputs)
 	}
-	if outputs[0].Available == nil || outputs[0].Available() {
+	if outputs[0].Available == nil || outputs[0].Available(context.Background()) {
 		t.Fatal("a window that is not open can show a picture")
 	}
 	if _, err := outputs[0].SendImage(context.Background(), plugin.GatewayImageRequest{Attachment: 1}); err == nil || !strings.Contains(err.Error(), "no window of ouro") {
@@ -161,21 +166,27 @@ func TestTheWindowIsAProvider(t *testing.T) {
 // windowShows is what a node tells from the front end that watches: the window
 // runs in a process of its own, and says so through the socket.
 func TestShownByAWindowOrThePage(t *testing.T) {
+	ctx := context.Background() // a call of no conversation the thread shows
 	page := false
-	shown := shownBy(fakeWatchers{windows: 1}, func() bool { return page })
-	if !shown() {
+	shown := shownBy(fakeWatchers{windows: 1, others: true}, func() bool { return page })
+	if !shown(ctx) {
 		t.Fatal("a window that watches the thread shows no picture")
 	}
-	shown = shownBy(fakeWatchers{}, func() bool { return page })
-	if shown() {
+	shown = shownBy(fakeWatchers{others: true}, func() bool { return page })
+	if shown(ctx) {
 		t.Fatal("a page that is off shows a picture")
 	}
 	page = true
-	if !shown() {
+	if !shown(ctx) {
 		t.Fatal("a served page shows no picture")
 	}
-	if shownBy(fakeWatchers{}, nil)() {
+	if shownBy(fakeWatchers{others: true}, nil)(ctx) {
 		t.Fatal("a process that shows nothing shows a picture")
+	}
+	// The window and the page show the thread: a conversation that does not
+	// work for it has its picture seen by neither.
+	if shownBy(fakeWatchers{windows: 1}, func() bool { return true })(ctx) {
+		t.Fatal("a picture of a conversation the thread does not show is shown")
 	}
 }
 
