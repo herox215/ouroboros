@@ -4,8 +4,6 @@ package gui
 
 import (
 	"context"
-	"embed"
-	"io/fs"
 	"time"
 
 	"github.com/wailsapp/wails/v2"
@@ -13,9 +11,6 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
-
-//go:embed frontend/*
-var assets embed.FS
 
 // Tests replace the native boundary without opening a desktop window.
 var runWindow = wails.Run
@@ -27,7 +22,7 @@ var emitWindow = runtime.EventsEmit
 const restartEffectDuration = 700 * time.Millisecond
 
 func showWindow(ctx context.Context, p *profile, name string) error {
-	frontend, err := fs.Sub(assets, "frontend")
+	frontend, err := frontendFiles()
 	if err != nil {
 		return err
 	}

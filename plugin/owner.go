@@ -27,6 +27,7 @@ import (
 	"ouroboros/internal/setup"
 	"ouroboros/internal/suggestion"
 	"ouroboros/internal/update"
+	"ouroboros/internal/web"
 )
 
 // Owner is what the owner of the node does at a front end and nowhere else:
@@ -283,6 +284,33 @@ func (o *Owner) SetMemory(ctx context.Context, id string, version int64, key, co
 
 // Status reports how the node is configured and whether it is running.
 func (o *Owner) Status() (NodeStatus, error) { return o.local.Status() }
+
+// SetWebPassword makes password what the page of the thread on the network
+// asks for, and "" what it has none: without one the page is not served, even
+// enabled. What is kept is an argon2id hash of it, never the password itself,
+// and the hash never leaves the node.
+func (o *Owner) SetWebPassword(password string) error {
+	hash := ""
+	if password != "" {
+		var err error
+		if hash, err = web.Hash(password); err != nil {
+			return err
+		}
+	}
+	err := config.Update(string(o.home), func(c *config.Config) error {
+		c.Web.Password = hash
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if hash == "" {
+		o.home.Log("the owner took the password of the page of the thread away")
+	} else {
+		o.home.Log("the owner set a password for the page of the thread")
+	}
+	return nil
+}
 
 // Appearances are how the terminal UI can look: as the background of the
 // terminal is, or light or dark whatever it is.

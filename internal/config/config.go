@@ -97,6 +97,9 @@ type Config struct {
 	// MCP are the MCP servers the agents may use, and their tools with them:
 	// see package config, mcp.go.
 	MCP *MCP `json:"mcp,omitempty"`
+	// Web is the page of the thread on the network, which asks for a user and
+	// a password on the way in: see Web.
+	Web Web `json:"web,omitzero"`
 }
 
 // What SelfImprove says.
