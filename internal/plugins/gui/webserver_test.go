@@ -253,6 +253,14 @@ func TestReapSparesATabWithAStream(t *testing.T) {
 		t.Fatal("a tab with a stream open was reaped")
 	}
 	cancel()
+	// The idle time counts from when the stream ended.
+	front.clients.reap(webIdle)
+	if front.clients.size() != 1 {
+		t.Fatal("a tab whose stream just ended was reaped")
+	}
+	client.mu.Lock()
+	client.last = time.Now().Add(-3 * webIdle)
+	client.mu.Unlock()
 	front.clients.reap(webIdle)
 	if front.clients.size() != 0 {
 		t.Fatal("a tab that said nothing for hours is kept")
@@ -301,21 +309,31 @@ func TestForgetDropsTheQueue(t *testing.T) {
 // The caller of a login is the address it came from, also behind the proxy of
 // the tailnet, where every request comes from the host itself.
 func TestCallerKeyNamesTheCaller(t *testing.T) {
-	named := func(remote, forwarded string) (string, string) {
+	named := func(remote string, forwarded ...string) (string, string) {
 		t.Helper()
 		request := httptest.NewRequest("POST", "/login", nil)
 		request.RemoteAddr = remote
-		if forwarded != "" {
-			request.Header.Set("X-Forwarded-For", forwarded)
+		for _, line := range forwarded {
+			request.Header.Add("X-Forwarded-For", line)
 		}
 		caller, key := callerKey(request, "owner")
-		if key != caller+"|owner" {
+		if caller != "" && key != caller+"|owner" {
 			t.Fatalf("the key %q is not the caller %q and the name", key, caller)
 		}
 		return caller, key
 	}
-	if got, _ := named("127.0.0.1:1234", ""); got != "127.0.0.1" {
-		t.Fatalf("a caller of the host is named %q", got)
+	// A request of the host that names no caller is everyone behind the
+	// proxy: it has no address of its own to count, only the name.
+	if got, key := named("127.0.0.1:1234"); got != "" || key != "127.0.0.1|owner" {
+		t.Fatalf("a caller of the host is named %q, with the key %q", got, key)
+	}
+	// A proxy that adds a line of its own puts it after the caller's.
+	if got, _ := named("127.0.0.1:1234", "203.0.113.9", "100.64.0.7"); got != "100.64.0.7" {
+		t.Fatalf("a forwarded line the caller wrote is used: %q", got)
+	}
+	// An address with a port is still the address.
+	if got, _ := named("127.0.0.1:1234", "100.64.0.7:41000"); got != "100.64.0.7" {
+		t.Fatalf("a forwarded address with a port is named %q", got)
 	}
 	// What the proxy appends is what it saw, and the last entry is its own.
 	if got, _ := named("127.0.0.1:1234", "100.64.0.7"); got != "100.64.0.7" {
@@ -326,7 +344,7 @@ func TestCallerKeyNamesTheCaller(t *testing.T) {
 	if got, _ := named("127.0.0.1:1234", "203.0.113.9, 100.64.0.7"); got != "100.64.0.7" {
 		t.Fatalf("a forwarded entry the caller wrote is used: %q", got)
 	}
-	if got, _ := named("127.0.0.1:1234", "not an address"); got != "127.0.0.1" {
+	if got, _ := named("127.0.0.1:1234", "not an address"); got != "" {
 		t.Fatalf("what is no address is taken for one: %q", got)
 	}
 	// What a request from the network says about its caller is not believed
@@ -351,7 +369,11 @@ func TestLoginHoldsUpAnAddressWhateverNameItTries(t *testing.T) {
 	}
 	front := newWebFront(dir, fakeProfile("pythia"))
 	front.callers = web.NewThrottle(2, time.Minute, time.Hour)
-	server := httptest.NewServer(front.handler)
+	// As behind the proxy of the tailnet, which says whom it came for.
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		r.Header.Set("X-Forwarded-For", "100.64.0.7")
+		front.handler.ServeHTTP(rw, r)
+	}))
 	defer server.Close()
 	client := stillClient()
 	for _, user := range []string{"owner", "nobody", "anyone"} {
@@ -363,4 +385,42 @@ func TestLoginHoldsUpAnAddressWhateverNameItTries(t *testing.T) {
 	if res.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("a spray of names is answered %d, not held up", res.StatusCode)
 	}
+}
+
+// A tab that was reloaded leaves its window behind with no stream on it. What
+// the thread tells does not keep that window: only the browser does.
+func TestReapTakesAWindowTheThreadAloneKeeps(t *testing.T) {
+	front := newWebFront(home.Dir(t.TempDir()), fakeProfile("pythia"))
+	request := httptest.NewRequest("GET", "/api/initial", nil)
+	request.Header.Set(clientHeader, strings.Repeat("b", 43))
+	client := front.client(httptest.NewRecorder(), request)
+	client.mu.Lock()
+	client.last = time.Now().Add(-2 * webIdle)
+	client.mu.Unlock()
+	client.broadcast(sseEvent{event: "events", data: []byte("[]")})
+	front.clients.reap(webIdle)
+	client.mu.Lock()
+	closed := client.closed
+	client.mu.Unlock()
+	if !closed {
+		t.Fatal("a window nobody looks at is kept because the thread spoke")
+	}
+}
+
+// Behind a proxy that names no caller, every caller shares the address of the
+// host: a spray of names from one of them must not hold the owner up.
+func TestLoginOfTheHostWithoutAnAddressCountsOnlyTheName(t *testing.T) {
+	request := httptest.NewRequest("POST", "/login", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	caller, _ := callerKey(request, "x")
+	if caller != "" {
+		t.Fatalf("the host is counted as a caller: %q", caller)
+	}
+	var none *web.Throttle
+	if _, ok := none.Start("anything"); !ok {
+		t.Fatal("no count held an attempt up")
+	}
+	none.Cancel("anything")
+	none.Failed("anything")
+	none.Cleared("anything")
 }

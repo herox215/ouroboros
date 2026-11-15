@@ -373,13 +373,22 @@ func (w *webFront) login(rw http.ResponseWriter, r *http.Request) {
 	// and each of them would cost the machine a hash. The address counts on its
 	// own too: a spray of names would otherwise start a fresh count with every
 	// name, and hash forever.
-	if wait, ok := w.callers.Start(caller); !ok {
+	//
+	// A request of the host that does not say whom it came for has no address
+	// of its own: every caller behind such a proxy would share one count, and
+	// any of them could hold the owner up with names that are not even theirs.
+	// Only the name is counted then.
+	callers := w.callers
+	if caller == "" {
+		callers = nil
+	}
+	if wait, ok := callers.Start(caller); !ok {
 		w.logf("the page of the thread: logins from %s are held up for %s", caller, wait.Round(time.Second))
 		w.showLogin(rw, user, "Too many attempts: wait a moment and try again.", http.StatusTooManyRequests)
 		return
 	}
 	if wait, ok := w.throttle.Start(key); !ok {
-		w.callers.Cancel(caller)
+		callers.Cancel(caller)
 		w.logf("the page of the thread: logins from %s are held up for %s", key, wait.Round(time.Second))
 		w.showLogin(rw, user, "Too many attempts: wait a moment and try again.", http.StatusTooManyRequests)
 		return
@@ -388,7 +397,7 @@ func (w *webFront) login(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Not a wrong password: the node cannot read itself, and neither
 		// counts.
-		w.callers.Cancel(caller)
+		callers.Cancel(caller)
 		w.throttle.Cancel(key)
 		w.showLogin(rw, user, "The node cannot read its configuration.", http.StatusInternalServerError)
 		return
@@ -399,13 +408,13 @@ func (w *webFront) login(rw http.ResponseWriter, r *http.Request) {
 	sameUser := subtle.ConstantTimeCompare([]byte(user), []byte(cfg.Web.User)) == 1
 	samePassword := web.VerifyContext(r.Context(), cfg.Web.Password, password)
 	if !sameUser || !samePassword {
-		w.callers.Failed(caller)
+		callers.Failed(caller)
 		w.throttle.Failed(key)
-		w.logf("the page of the thread: a login failed for %q from %s", user, caller)
+		w.logf("the page of the thread: a login failed for %q from %s", user, r.RemoteAddr)
 		w.showLogin(rw, user, "Wrong user or password.", http.StatusUnauthorized)
 		return
 	}
-	w.callers.Cleared(caller)
+	callers.Cleared(caller)
 	w.throttle.Cleared(key)
 	token, err := w.auth.Issue()
 	if err != nil {
@@ -456,9 +465,16 @@ func (w *webFront) setCookie(rw http.ResponseWriter, r *http.Request, name, valu
 // of the tailnet every request comes from the host itself, so what the proxy
 // says the caller was is used: otherwise a single address in the tailnet could
 // hold the page up for the owner by guessing their name.
+//
+// caller is empty when the request came from the host and the proxy did not
+// say for whom: the address of the host is everyone's then, and is not
+// counted on its own. key still names it with the name.
 func callerKey(r *http.Request, user string) (caller, key string) {
-	caller = callerAddress(r)
-	return caller, caller + "|" + user
+	address, known := callerAddress(r)
+	if known {
+		caller = address
+	}
+	return caller, address + "|" + user
 }
 
 // callerAddress is the address of whoever made the request: the one the
@@ -469,24 +485,38 @@ func callerKey(r *http.Request, user string) (caller, key string) {
 // httputil.ReverseProxy do, puts it last; what stands before it was written by
 // the caller, who may put another address there — the owner's, to hold them up
 // — or a text that is no address at all. So only the last entry is read, from
-// the host itself, and only when it is an address.
-func callerAddress(r *http.Request) string {
+// the host itself, and only when it is an address. A proxy may also add a
+// header line of its own rather than append to the caller's, so the last entry
+// is the last of the last line.
+//
+// known is false for a request of the host that names no address: the host is
+// the address of every caller of such a proxy.
+func callerAddress(r *http.Request) (address string, known bool) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	if !net.ParseIP(host).IsLoopback() {
-		return host
+		return host, true
 	}
-	forwarded := r.Header.Get("X-Forwarded-For")
-	last := forwarded
-	if i := strings.LastIndexByte(forwarded, ','); i >= 0 {
-		last = forwarded[i+1:]
+	lines := r.Header.Values("X-Forwarded-For")
+	if len(lines) == 0 {
+		return host, false
 	}
-	if ip := net.ParseIP(strings.TrimSpace(last)); ip != nil {
-		return ip.String()
+	last := lines[len(lines)-1]
+	if i := strings.LastIndexByte(last, ','); i >= 0 {
+		last = last[i+1:]
 	}
-	return host
+	last = strings.TrimSpace(last)
+	if ip := net.ParseIP(last); ip != nil {
+		return ip.String(), true
+	}
+	if h, _, err := net.SplitHostPort(last); err == nil {
+		if ip := net.ParseIP(h); ip != nil {
+			return ip.String(), true
+		}
+	}
+	return host, false
 }
 
 // initial is what the page shows before it opens the thread.
@@ -765,7 +795,9 @@ func (c *webClient) broadcast(message sseEvent) {
 	if c.closed {
 		return
 	}
-	c.last = time.Now()
+	// What the thread tells is not the browser doing something: a tab that
+	// was reloaded leaves its window behind, and an active thread would keep
+	// that window, and its watch, forever.
 	if len(c.subs) == 0 {
 		if len(c.queue) >= webQueued {
 			c.queue = c.queue[1:]
@@ -809,6 +841,8 @@ func (c *webClient) subscribe() (<-chan sseEvent, func()) {
 	return stream, func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		// The idle time of a browser counts from when its stream ended.
+		c.last = time.Now()
 		if _, ok := c.subs[stream]; ok {
 			delete(c.subs, stream)
 			close(stream)
