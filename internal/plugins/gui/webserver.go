@@ -64,7 +64,8 @@ type webFront struct {
 	profile  *profile
 	name     string
 	auth     *web.Sessions
-	throttle *web.Throttle
+	throttle *web.Throttle // a name, and the address it came from
+	callers  *web.Throttle // the address, whatever name it tries
 	clients  *webClients
 	handler  http.Handler
 	logf     func(format string, args ...any)
@@ -93,8 +94,11 @@ func newWebFront(dir home.Dir, p *profile) *webFront {
 		name:     name,
 		auth:     web.NewSessions(web.SessionTTL),
 		throttle: web.NewThrottle(5, time.Minute, 15*time.Minute),
-		clients:  newWebClients(),
-		logf:     dir.Log,
+		// More room than a name: an address that shares its network may try
+		// a few names, but a spray of them is what keeps the node hashing.
+		callers: web.NewThrottle(10, time.Minute, 15*time.Minute),
+		clients: newWebClients(),
+		logf:    dir.Log,
 	}
 	w.handler = w.routes()
 	return w
@@ -363,18 +367,29 @@ func (w *webFront) login(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, password := r.PostFormValue("user"), r.PostFormValue("password")
-	key := throttleKey(r, user)
-	// The attempt is counted before the password is hashed, not after: a dozen
-	// requests that run at once would otherwise all pass an empty count, and
-	// each of them would cost the machine a hash.
+	caller, key := callerKey(r, user)
+	// The attempts are counted before the password is hashed, not after: a
+	// dozen requests that run at once would otherwise all pass an empty count,
+	// and each of them would cost the machine a hash. The address counts on its
+	// own too: a spray of names would otherwise start a fresh count with every
+	// name, and hash forever.
+	if wait, ok := w.callers.Start(caller); !ok {
+		w.logf("the page of the thread: logins from %s are held up for %s", caller, wait.Round(time.Second))
+		w.showLogin(rw, user, "Too many attempts: wait a moment and try again.", http.StatusTooManyRequests)
+		return
+	}
 	if wait, ok := w.throttle.Start(key); !ok {
-		w.logf("the page of the thread: a login from %s is held up for %s", key, wait.Round(time.Second))
+		w.callers.Cancel(caller)
+		w.logf("the page of the thread: logins from %s are held up for %s", key, wait.Round(time.Second))
 		w.showLogin(rw, user, "Too many attempts: wait a moment and try again.", http.StatusTooManyRequests)
 		return
 	}
 	cfg, err := w.dir.Config()
 	if err != nil {
-		w.throttle.Cleared(key) // not a wrong password: the node cannot read itself
+		// Not a wrong password: the node cannot read itself, and neither
+		// counts.
+		w.callers.Cancel(caller)
+		w.throttle.Cancel(key)
 		w.showLogin(rw, user, "The node cannot read its configuration.", http.StatusInternalServerError)
 		return
 	}
@@ -382,13 +397,15 @@ func (w *webFront) login(rw http.ResponseWriter, r *http.Request) {
 	// at: a name that is wrong has to cost what a password that is wrong
 	// costs, or the login tells which name is the right one.
 	sameUser := subtle.ConstantTimeCompare([]byte(user), []byte(cfg.Web.User)) == 1
-	samePassword := web.Verify(cfg.Web.Password, password)
+	samePassword := web.VerifyContext(r.Context(), cfg.Web.Password, password)
 	if !sameUser || !samePassword {
+		w.callers.Failed(caller)
 		w.throttle.Failed(key)
-		w.logf("the page of the thread: a login failed for %q from %s", user, r.RemoteAddr)
+		w.logf("the page of the thread: a login failed for %q from %s", user, caller)
 		w.showLogin(rw, user, "Wrong user or password.", http.StatusUnauthorized)
 		return
 	}
+	w.callers.Cleared(caller)
 	w.throttle.Cleared(key)
 	token, err := w.auth.Issue()
 	if err != nil {
@@ -434,19 +451,25 @@ func (w *webFront) setCookie(rw http.ResponseWriter, r *http.Request, name, valu
 	})
 }
 
-// throttleKey names who tried a password: the address it came from, and the
-// user it tried. Behind a proxy of the tailnet every request comes from the
-// host itself, so what the proxy says the caller was is used for one that
-// comes from the host: otherwise a single address in the tailnet could hold
-// the page up for the owner by guessing their name.
-func throttleKey(r *http.Request, user string) string {
-	return callerAddress(r) + "|" + user
+// callerKey names who tried a password, for the two counts of the login: the
+// address it came from, and the address with the name it tried. Behind a proxy
+// of the tailnet every request comes from the host itself, so what the proxy
+// says the caller was is used: otherwise a single address in the tailnet could
+// hold the page up for the owner by guessing their name.
+func callerKey(r *http.Request, user string) (caller, key string) {
+	caller = callerAddress(r)
+	return caller, caller + "|" + user
 }
 
 // callerAddress is the address of whoever made the request: the one the
 // connection came from, unless that is this host, which is what a proxy of the
-// tailnet is, and then the one the proxy forwarded. A forwarded address is
-// believed only from the host itself, which a request from the network is not.
+// tailnet is, and then the one the proxy forwarded.
+//
+// A proxy that appends the address it saw, as tailscale serve, nginx and
+// httputil.ReverseProxy do, puts it last; what stands before it was written by
+// the caller, who may put another address there — the owner's, to hold them up
+// — or a text that is no address at all. So only the last entry is read, from
+// the host itself, and only when it is an address.
 func callerAddress(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -455,9 +478,13 @@ func callerAddress(r *http.Request) string {
 	if !net.ParseIP(host).IsLoopback() {
 		return host
 	}
-	forwarded, _, _ := strings.Cut(r.Header.Get("X-Forwarded-For"), ",")
-	if address := strings.TrimSpace(forwarded); address != "" {
-		return address
+	forwarded := r.Header.Get("X-Forwarded-For")
+	last := forwarded
+	if i := strings.LastIndexByte(forwarded, ','); i >= 0 {
+		last = forwarded[i+1:]
+	}
+	if ip := net.ParseIP(strings.TrimSpace(last)); ip != nil {
+		return ip.String()
 	}
 	return host
 }

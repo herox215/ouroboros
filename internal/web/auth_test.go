@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -114,5 +115,79 @@ func TestThrottleReservesParallelAttempts(t *testing.T) {
 	th.Cleared("host")
 	if _, ok := th.Start("host"); !ok {
 		t.Fatal("a cleared key is still held")
+	}
+}
+
+// A key that is blocked has failed as often as it may: once the block is over,
+// one attempt at a time gets through, not a burst of them.
+func TestThrottleLetsOneGuessThroughAfterABlock(t *testing.T) {
+	now := time.Now()
+	th := NewThrottle(2, time.Minute, time.Hour)
+	th.now = func() time.Time { return now }
+	for range 2 {
+		if _, ok := th.Start("host"); !ok {
+			t.Fatal("held up before the limit")
+		}
+		th.Failed("host")
+	}
+	now = now.Add(time.Minute + time.Second)
+	if _, ok := th.Start("host"); !ok {
+		t.Fatal("still blocked after the block")
+	}
+	if wait, ok := th.Start("host"); ok || wait <= 0 {
+		t.Fatalf("a second guess goes ahead beside the first: %v, %v", wait, ok)
+	}
+	if wait := th.Failed("host"); wait != 2*time.Minute {
+		t.Fatalf("the next block is %v, not twice the first", wait)
+	}
+}
+
+// A reservation that is taken back counts as neither an attempt nor a failure.
+func TestThrottleCancelReleasesAReservation(t *testing.T) {
+	th := NewThrottle(2, time.Minute, time.Hour)
+	th.Start("host")
+	th.Start("host")
+	if _, ok := th.Start("host"); ok {
+		t.Fatal("a third reservation goes ahead")
+	}
+	th.Cancel("host")
+	if _, ok := th.Start("host"); !ok {
+		t.Fatal("a cancelled reservation still counts")
+	}
+	th.Cancel("host")
+	th.Cancel("host")
+	if len(th.byKey) != 0 {
+		t.Fatalf("a key that never failed is kept: %+v", th.byKey)
+	}
+}
+
+// A spray of names must not be able to reset the count of the key it targets:
+// only a key nobody tried for a while is forgotten.
+func TestThrottlePruneKeepsCounts(t *testing.T) {
+	now := time.Now()
+	th := NewThrottle(3, time.Minute, time.Hour)
+	th.now = func() time.Time { return now }
+	for range 2 {
+		th.Start("victim")
+		th.Failed("victim")
+	}
+	for i := range 300 {
+		key := fmt.Sprintf("junk-%d", i)
+		th.Start(key)
+		th.Failed(key)
+	}
+	// The spray is in the map, and the victim is still one failure from its
+	// block: its count was not reset by any of them.
+	if len(th.byKey) < 256 {
+		t.Fatalf("the spray is pruned at once: %d keys", len(th.byKey))
+	}
+	if wait := th.Failed("victim"); wait != time.Minute {
+		t.Fatalf("the victim's failures were forgotten: %v", wait)
+	}
+	// A key nobody tried for a while is forgotten.
+	now = now.Add(2 * th.blockMax)
+	th.Start("other")
+	if _, ok := th.byKey["junk-0"]; ok {
+		t.Fatal("a key nobody tried for hours is kept")
 	}
 }

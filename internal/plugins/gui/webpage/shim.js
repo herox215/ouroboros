@@ -10,30 +10,15 @@
   // The name of this tab. A cookie is shared by every tab of one browser, and
   // one history cursor belongs to one tab, so the page picks a name per tab
   // and carries it in a header, or in the query of the stream, which is a
-  // request an EventSource makes and cannot give a header to.
-  const TAB = 'ouro_web_client';
-  const TAB_NAME = /^[A-Za-z0-9_-]{43}$/;
-
-  const tabID = () => {
-    let id = '';
-    try {
-      id = sessionStorage.getItem(TAB) || '';
-    } catch {
-      // No storage: every load of the page is a tab of its own.
-    }
-    if (TAB_NAME.test(id)) return id;
+  // request an EventSource makes and cannot give a header to. The name lives
+  // in this page alone and is not kept: a duplicated tab, and one opened from
+  // this one, copies what the page keeps, and would otherwise share the name
+  // — and the history cursor — with the tab it came from.
+  const client = (() => {
     const raw = new Uint8Array(32);
     crypto.getRandomValues(raw);
-    id = btoa(String.fromCharCode(...raw)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-    try {
-      sessionStorage.setItem(TAB, id);
-    } catch {
-      // No storage: the name lives as long as this page does.
-    }
-    return id;
-  };
-
-  const client = tabID();
+    return btoa(String.fromCharCode(...raw)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  })();
 
   const json = (body) => (body === undefined ? {} : { 'Content-Type': 'application/json' });
 
@@ -84,11 +69,29 @@
   // What the window tells, and where the app listens for it.
   const listeners = { events: [], ended: [], restarting: [] };
   let stream = null;
-  let connected = false;
+  let connected = false; // the stream worked once, and what ends it is news
+  let retry = 0; // the timer that opens another stream, 0 while none waits
+  // webReopen is how long the page waits for a stream it lost: the node is
+  // starting anew, or the proxy in front of it is away.
+  const webReopen = 5000;
+
+  // signedIn reports whether the node still knows this browser: one that
+  // answers 401 is a login that ended, and one that does not answer at all, or
+  // answers what a proxy says while the node is away, is not.
+  const signedIn = () =>
+    fetch('./api/initial', { credentials: 'same-origin' }).then(
+      (res) => res.status !== 401,
+      () => true,
+    );
 
   const open = () => {
-    stream = new EventSource('./api/events?client=' + encodeURIComponent(client));
-    stream.addEventListener('events', (message) => {
+    if (retry) {
+      clearTimeout(retry);
+      retry = 0;
+    }
+    const source = new EventSource('./api/events?client=' + encodeURIComponent(client));
+    stream = source;
+    source.addEventListener('events', (message) => {
       let batch;
       try {
         batch = JSON.parse(message.data);
@@ -97,13 +100,13 @@
       }
       if (Array.isArray(batch)) for (const listener of listeners.events) listener(batch);
     });
-    stream.addEventListener('ended', () => {
+    source.addEventListener('ended', () => {
       for (const listener of listeners.ended) listener();
     });
-    stream.addEventListener('restarting', () => {
+    source.addEventListener('restarting', () => {
       for (const listener of listeners.restarting) listener();
     });
-    stream.addEventListener('open', () => {
+    source.addEventListener('open', () => {
       if (connected) {
         // The stream dropped and is back. What it told in between is in the
         // snapshot of an Open, so the page takes the thread again rather than
@@ -112,11 +115,28 @@
       }
       connected = true;
     });
-    stream.addEventListener('error', () => {
+    source.addEventListener('error', () => {
       // A stream that drops reconnects by itself. One the browser gives up on
-      // for good is the login that is no longer there, which is what a 401
-      // does, and then the page asks for it again.
-      if (stream.readyState === EventSource.CLOSED) signedOut();
+      // for good is the login that ended (401) — and also a page that cannot
+      // be reached at all, which a node starting anew, or a proxy in front of
+      // it, answers with. Only the first is a reason to ask who is there: the
+      // other is waited out, with the page saying for itself that the thread
+      // is not there.
+      if (source.readyState !== EventSource.CLOSED || stream !== source) return;
+      void signedIn().then((known) => {
+        if (stream !== source) return; // another stream took over meanwhile
+        if (!known) {
+          signedOut();
+          return;
+        }
+        source.close();
+        stream = null;
+        if (connected) {
+          connected = false;
+          for (const listener of listeners.ended) listener();
+        }
+        if (!retry) retry = setTimeout(() => open(), webReopen);
+      });
     });
   };
 

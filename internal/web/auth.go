@@ -8,6 +8,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -63,6 +64,13 @@ func Hash(password string) (string, error) {
 // encoding verifies nothing, and neither does a password of one that is
 // empty: the page cannot be entered by a configuration that has no hash.
 func Verify(encoded, password string) bool {
+	return VerifyContext(context.Background(), encoded, password)
+}
+
+// VerifyContext is Verify for a caller that may be gone: one that gives up
+// while it waits for its turn to hash does not take the turn at all, so a
+// client that hung up does not keep the machine busy behind the others.
+func VerifyContext(ctx context.Context, encoded, password string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 5 || parts[0] != "argon2id" {
 		return false
@@ -106,7 +114,11 @@ func Verify(encoded, password string) bool {
 	if err != nil || len(key) == 0 || len(key) > 128 {
 		return false
 	}
-	verifySlots <- struct{}{}
+	select {
+	case verifySlots <- struct{}{}:
+	case <-ctx.Done():
+		return false
+	}
 	defer func() { <-verifySlots }()
 	got := argon2.IDKey([]byte(password), salt, timeCost, memory, uint8(threads), uint32(len(key)))
 	return subtle.ConstantTimeCompare(got, key) == 1
@@ -217,7 +229,8 @@ func (s *Sessions) pruneLocked() {
 
 // Throttle holds a login up that fails over and over: a port in a network is
 // found by a scanner, and a password guessed by one. It counts the attempts of
-// one key, the address of the caller, and blocks it after a few.
+// one key — the address of the caller, the address and the name it tried, or
+// anything else that tells attempts apart — and blocks it after a few.
 type Throttle struct {
 	mu       sync.Mutex
 	now      func() time.Time
@@ -238,6 +251,7 @@ type attempt struct {
 	failures int       // in a row, since the last success
 	waiting  int       // attempted, and not yet counted as failed
 	until    time.Time // blocked until, zero if not
+	at       time.Time // when it last tried, to forget a key nobody tries
 }
 
 // Start reserves one attempt of key, before the password is hashed. A guess
@@ -255,16 +269,44 @@ func (t *Throttle) Start(key string) (time.Duration, bool) {
 		a = &attempt{}
 		t.byKey[key] = a
 	}
+	a.at = now
 	if !a.until.IsZero() && now.Before(a.until) {
 		return a.until.Sub(now), false
 	}
-	if a.waiting >= t.limit {
+	switch {
+	case a.failures >= t.limit:
+		// The block is over, and the key has failed as often as it may: one
+		// attempt at a time from here on. A burst of parallel ones would
+		// otherwise get the whole limit through before the first of them is
+		// counted.
+		if a.waiting > 0 {
+			return t.block, false
+		}
+	case a.failures+a.waiting >= t.limit:
 		// As many guesses as the limit allows are on their way already: the
 		// next one waits until one of them is counted.
 		return t.block, false
 	}
 	a.waiting++
 	return 0, true
+}
+
+// Cancel takes back a reservation of Start that is not going to be checked,
+// as one of a key that another key holds up: it counts as neither a failure
+// nor an attempt.
+func (t *Throttle) Cancel(key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	a, ok := t.byKey[key]
+	if !ok {
+		return
+	}
+	if a.waiting > 0 {
+		a.waiting--
+	}
+	if a.waiting == 0 && a.failures == 0 {
+		delete(t.byKey, key)
+	}
 }
 
 // Failed counts one attempt of key that did not sign in, and blocks key once
@@ -279,6 +321,7 @@ func (t *Throttle) Failed(key string) time.Duration {
 		a = &attempt{}
 		t.byKey[key] = a
 	}
+	a.at = t.now()
 	if a.waiting > 0 {
 		a.waiting--
 	}
@@ -308,14 +351,17 @@ func (t *Throttle) Cleared(key string) {
 	delete(t.byKey, key)
 }
 
-// pruneLocked forgets the keys that are blocked no longer for a while.
+// pruneLocked forgets the keys nobody tried for a while, once there are many
+// of them. A key that is trying, or one that failed and is not blocked yet, is
+// never forgotten: its count is what holds the guesses back, and a spray of
+// names must not be able to reset it.
 func (t *Throttle) pruneLocked() {
 	if len(t.byKey) < 256 {
 		return
 	}
 	now := t.now()
 	for key, a := range t.byKey {
-		if a.until.IsZero() || now.After(a.until.Add(t.blockMax)) {
+		if a.waiting == 0 && now.Sub(a.at) > t.blockMax {
 			delete(t.byKey, key)
 		}
 	}

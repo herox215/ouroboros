@@ -298,22 +298,69 @@ func TestForgetDropsTheQueue(t *testing.T) {
 	}
 }
 
-// The key of a failed login is the caller, also behind the proxy of the
-// tailnet, where every request comes from the host itself.
-func TestThrottleKeyNamesTheCaller(t *testing.T) {
-	request := httptest.NewRequest("POST", "/login", nil)
-	request.RemoteAddr = "127.0.0.1:1234"
-	if got := throttleKey(request, "owner"); got != "127.0.0.1|owner" {
+// The caller of a login is the address it came from, also behind the proxy of
+// the tailnet, where every request comes from the host itself.
+func TestCallerKeyNamesTheCaller(t *testing.T) {
+	named := func(remote, forwarded string) (string, string) {
+		t.Helper()
+		request := httptest.NewRequest("POST", "/login", nil)
+		request.RemoteAddr = remote
+		if forwarded != "" {
+			request.Header.Set("X-Forwarded-For", forwarded)
+		}
+		caller, key := callerKey(request, "owner")
+		if key != caller+"|owner" {
+			t.Fatalf("the key %q is not the caller %q and the name", key, caller)
+		}
+		return caller, key
+	}
+	if got, _ := named("127.0.0.1:1234", ""); got != "127.0.0.1" {
 		t.Fatalf("a caller of the host is named %q", got)
 	}
-	request.Header.Set("X-Forwarded-For", "100.64.0.7, 127.0.0.1")
-	if got := throttleKey(request, "owner"); got != "100.64.0.7|owner" {
+	// What the proxy appends is what it saw, and the last entry is its own.
+	if got, _ := named("127.0.0.1:1234", "100.64.0.7"); got != "100.64.0.7" {
 		t.Fatalf("a caller behind the proxy is named %q", got)
 	}
-	// What a request from the network says about its caller is not believed:
-	// it would let one address pass for another, and block it.
-	request.RemoteAddr = "100.64.0.9:5555"
-	if got := throttleKey(request, "owner"); got != "100.64.0.9|owner" {
+	// A caller can write the entries before the one the proxy appended, to
+	// pass for another address or to hold the owner up. It is not believed.
+	if got, _ := named("127.0.0.1:1234", "203.0.113.9, 100.64.0.7"); got != "100.64.0.7" {
+		t.Fatalf("a forwarded entry the caller wrote is used: %q", got)
+	}
+	if got, _ := named("127.0.0.1:1234", "not an address"); got != "127.0.0.1" {
+		t.Fatalf("what is no address is taken for one: %q", got)
+	}
+	// What a request from the network says about its caller is not believed
+	// either: it would let one address pass for another, and block it.
+	if got, _ := named("100.64.0.9:5555", "203.0.113.9"); got != "100.64.0.9" {
 		t.Fatalf("a caller of the network is named %q", got)
+	}
+}
+
+// A spray of names from one address is held up as an address, and not only as
+// a name: otherwise every name starts a count of its own and the node hashes
+// for as long as the spray lasts.
+func TestLoginHoldsUpAnAddressWhateverNameItTries(t *testing.T) {
+	dir := home.Dir(t.TempDir())
+	hash, err := web.Hash("correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(string(dir), config.Config{Model: "m",
+		Web: config.Web{Enabled: true, User: "owner", Password: hash}}); err != nil {
+		t.Fatal(err)
+	}
+	front := newWebFront(dir, fakeProfile("pythia"))
+	front.callers = web.NewThrottle(2, time.Minute, time.Hour)
+	server := httptest.NewServer(front.handler)
+	defer server.Close()
+	client := stillClient()
+	for _, user := range []string{"owner", "nobody", "anyone"} {
+		res := signIn(t, client, server.URL, user, "wrong password")
+		res.Body.Close()
+	}
+	res := signIn(t, client, server.URL, "owner", "correct horse battery")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("a spray of names is answered %d, not held up", res.StatusCode)
 	}
 }
