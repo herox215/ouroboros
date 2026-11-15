@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,8 +70,7 @@ func Verify(encoded, password string) bool {
 	if parts[1] != "v="+strconv.Itoa(argon2.Version) {
 		return false
 	}
-	var memory uint32
-	var timeCost, threads uint8
+	var memory, timeCost, threads uint32
 	for _, field := range strings.Split(parts[2], ",") {
 		name, value, ok := strings.Cut(field, "=")
 		if !ok {
@@ -84,15 +84,17 @@ func Verify(encoded, password string) bool {
 		case "m":
 			memory = uint32(n)
 		case "t":
-			timeCost = uint8(n)
+			timeCost = uint32(n)
 		case "p":
-			threads = uint8(n)
+			threads = uint32(n)
 		default:
 			return false
 		}
 	}
 	// The parameters come from the file the owner keeps: bound them so that a
-	// damaged one costs seconds, not the machine.
+	// damaged one costs seconds, not the machine. They are bounded as the
+	// numbers the hash says, before they are narrowed to what argon2 takes: a
+	// "t=260" must not pass as the "t=4" a uint8 keeps of it.
 	if memory < 8 || memory > 1<<20 || timeCost < 1 || timeCost > 16 || threads < 1 || threads > 16 {
 		return false
 	}
@@ -104,8 +106,23 @@ func Verify(encoded, password string) bool {
 	if err != nil || len(key) == 0 || len(key) > 128 {
 		return false
 	}
-	got := argon2.IDKey([]byte(password), salt, uint32(timeCost), memory, threads, uint32(len(key)))
+	verifySlots <- struct{}{}
+	defer func() { <-verifySlots }()
+	got := argon2.IDKey([]byte(password), salt, timeCost, memory, uint8(threads), uint32(len(key)))
 	return subtle.ConstantTimeCompare(got, key) == 1
+}
+
+// verifySlots bounds how many passwords are hashed at the same time: one
+// argon2id run takes 64 MiB, and a login can be posted by anyone who reaches
+// the port. The throttle holds one address to a handful of guesses, and this
+// is the ceiling behind it, for the addresses and the keys it does not know.
+var verifySlots = make(chan struct{}, verifyParallel())
+
+// verifyParallel is how many hashes may run at once: as many as the machine
+// has processors, and never so many that the memory of it is gone.
+func verifyParallel() int {
+	n := runtime.GOMAXPROCS(0)
+	return min(max(n, 2), 8)
 }
 
 // SessionTTL is how long a browser that signed in stays signed in.
@@ -199,7 +216,7 @@ func (s *Sessions) pruneLocked() {
 }
 
 // Throttle holds a login up that fails over and over: a port in a network is
-// found by a scanner, and a password guessed by one. It counts the failures of
+// found by a scanner, and a password guessed by one. It counts the attempts of
 // one key, the address of the caller, and blocks it after a few.
 type Throttle struct {
 	mu       sync.Mutex
@@ -219,27 +236,40 @@ func NewThrottle(limit int, block, blockMax time.Duration) *Throttle {
 // attempt is what one key did.
 type attempt struct {
 	failures int       // in a row, since the last success
+	waiting  int       // attempted, and not yet counted as failed
 	until    time.Time // blocked until, zero if not
 }
 
-// Allowed reports whether key may try a password now.
-func (t *Throttle) Allowed(key string) bool {
+// Start reserves one attempt of key, before the password is hashed. A guess
+// that is on its way is not free: it keeps its place in the limit, so that
+// parallel requests cannot all pass while none of them has failed yet. It
+// reports how long key is held back for, and false while it is: the attempt
+// does not go ahead, and is not checked at all.
+func (t *Throttle) Start(key string) (time.Duration, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.pruneLocked()
+	now := t.now()
 	a, ok := t.byKey[key]
 	if !ok {
-		return true
+		a = &attempt{}
+		t.byKey[key] = a
 	}
-	if a.until.IsZero() || t.now().After(a.until) {
-		return true
+	if !a.until.IsZero() && now.Before(a.until) {
+		return a.until.Sub(now), false
 	}
-	_ = ok
-	return false
+	if a.waiting >= t.limit {
+		// As many guesses as the limit allows are on their way already: the
+		// next one waits until one of them is counted.
+		return t.block, false
+	}
+	a.waiting++
+	return 0, true
 }
 
-// Failed counts one failed attempt of key, and blocks it once the failures in
-// a row reach the limit. It returns how long key is blocked for, zero while it
-// is not.
+// Failed counts one attempt of key that did not sign in, and blocks key once
+// the failures in a row reach the limit. It returns how long key is blocked
+// for, zero while it is not.
 func (t *Throttle) Failed(key string) time.Duration {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -249,14 +279,16 @@ func (t *Throttle) Failed(key string) time.Duration {
 		a = &attempt{}
 		t.byKey[key] = a
 	}
+	if a.waiting > 0 {
+		a.waiting--
+	}
 	a.failures++
 	if a.failures < t.limit {
 		return 0
 	}
 	// The block doubles with every failure past the limit, up to blockMax.
-	steps := a.failures - t.limit
 	wait := t.block
-	for range steps {
+	for range a.failures - t.limit {
 		if wait >= t.blockMax {
 			break
 		}

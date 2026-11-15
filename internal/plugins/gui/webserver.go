@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,10 +22,17 @@ import (
 
 // The cookies the page keeps in the browser. The session is the one a login
 // won; the client tells the windows of the browsers apart, so that two of them
-// do not share one history cursor.
+// do not share one history cursor. A tab names itself: see clientHeader and
+// clientParam, and the cookie is only what a request without a name falls back
+// to.
 const (
 	sessionCookie = "ouro_web"
 	clientCookie  = "ouro_web_client"
+	// clientHeader is how the page names its tab on the requests of the app.
+	clientHeader = "X-Ouro-Client"
+	// clientParam is the same name in the query of the stream: an EventSource
+	// takes no header.
+	clientParam = "client"
 )
 
 const (
@@ -33,7 +41,8 @@ const (
 	// and this is what makes a change hold without the node starting anew.
 	webWatch = 2 * time.Second
 	// webIdle is how long a browser that did nothing keeps its window: each
-	// one holds the last three hours of the thread in memory.
+	// one holds the last three hours of the thread in memory. A browser with
+	// a stream open is not idle: its tab is still on the page.
 	webIdle = 2 * time.Hour
 	// webQueued is how many events a browser that is connected but behind
 	// keeps, and how many are held for one that reconnects.
@@ -60,9 +69,14 @@ type webFront struct {
 	handler  http.Handler
 	logf     func(format string, args ...any)
 
-	mu  sync.Mutex
-	ctx context.Context
-	srv *http.Server
+	mu sync.Mutex
+	// ctx is the watch that keeps the page in step with the configuration,
+	// nil while Serve is not running. done is closed once that watch has
+	// ended, so that a Stop is over before the next Serve starts listening.
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	srv    *http.Server
 	// port is where it serves, 0 while it does not.
 	port int
 }
@@ -87,41 +101,47 @@ func newWebFront(dir home.Dir, p *profile) *webFront {
 }
 
 // Serve keeps the page in step with the configuration: served while the owner
-// turned it on and gave it a user and a password, on the port it says.
-func (w *webFront) Serve(ctx context.Context) {
+// turned it on and gave it a user and a password, on the port it says. It
+// returns at once; Close ends what it started, and a later Serve listens anew.
+func (w *webFront) Serve() {
 	w.mu.Lock()
 	if w.ctx != nil {
 		w.mu.Unlock()
-		return
+		return // already watching
 	}
-	w.ctx = ctx
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	w.ctx, w.cancel, w.done = ctx, cancel, done
 	w.mu.Unlock()
-	go w.watch(ctx)
+	go w.watch(ctx, done)
 }
 
-// Close stops the page and every browser that is on it.
+// Close stops the page and every browser that is on it: the node stopped
+// serving. It waits for the watch that reconciles the page with the
+// configuration to end, so that a node that stops leaves nothing listening
+// behind, and a port for the next build is free.
 func (w *webFront) Close() {
 	w.mu.Lock()
-	srv := w.srv
-	w.srv, w.port = nil, 0
+	cancel, done := w.cancel, w.done
+	w.ctx, w.cancel, w.done = nil, nil, nil
 	w.mu.Unlock()
-	if srv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
+	if cancel != nil {
+		cancel()
 	}
-	w.clients.closeAll()
-	w.auth.RevokeAll()
+	if done != nil {
+		<-done
+	}
+	w.stopServing(true)
 }
 
 // watch reconciles the page with the configuration until ctx ends.
-func (w *webFront) watch(ctx context.Context) {
+func (w *webFront) watch(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(webWatch)
 	defer ticker.Stop()
-	defer w.Close()
 	sweep := 0
 	for {
-		w.reconcile()
+		w.reconcile(ctx)
 		sweep++
 		if sweep%30 == 0 {
 			w.clients.reap(webIdle)
@@ -134,8 +154,35 @@ func (w *webFront) watch(ctx context.Context) {
 	}
 }
 
+// stopServing ends the listener and the browsers that are on it. It signs the
+// browsers out only when asked to: turning the page off does, moving it to
+// another port does not, as a cookie is kept for the host, not for the port.
+func (w *webFront) stopServing(revoke bool) {
+	w.mu.Lock()
+	srv := w.srv
+	w.srv, w.port = nil, 0
+	w.mu.Unlock()
+	// The streams of the browsers first: a request that stays open would keep
+	// Shutdown waiting for its whole grace, and past it.
+	w.clients.closeAll()
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			// A browser that is still on a stream after the grace is cut off.
+			_ = srv.Close()
+		}
+	}
+	if revoke {
+		w.auth.RevokeAll()
+	}
+}
+
 // reconcile starts, stops or moves the page as the configuration says.
-func (w *webFront) reconcile() {
+func (w *webFront) reconcile(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	cfg, err := w.dir.Config()
 	if err != nil {
 		w.logf("the page of the thread: the configuration cannot be read: %v", err)
@@ -144,14 +191,14 @@ func (w *webFront) reconcile() {
 	want := cfg.Web.Ready()
 	port := cfg.Web.PortOr()
 	w.mu.Lock()
-	srv, serving, ctx := w.srv, w.port, w.ctx
+	srv, serving, watching := w.srv, w.port, w.ctx != nil
 	w.mu.Unlock()
-	if ctx == nil {
-		return // Serve was never called: nothing keeps this page in step
+	if !watching {
+		return // Stop was called: the page listens no more
 	}
 	if !want {
 		if srv != nil {
-			w.Close()
+			w.stopServing(true)
 			w.logf("the page of the thread is off")
 		}
 		return
@@ -160,7 +207,10 @@ func (w *webFront) reconcile() {
 		return
 	}
 	if srv != nil {
-		w.Close()
+		w.stopServing(false)
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -285,13 +335,6 @@ func (w *webFront) page(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// The id of this browser's window: a page that is opened a second time in
-	// another tab gets its own, so that one history cursor is one tab's.
-	if _, err := r.Cookie(clientCookie); err != nil {
-		if id, err := web.Token(); err == nil {
-			w.setCookie(rw, r, clientCookie, id, int((30 * 24 * time.Hour).Seconds()))
-		}
-	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.Header().Set("Cache-Control", "no-cache")
 	file, err := fsys.Open("index.html")
@@ -321,16 +364,26 @@ func (w *webFront) login(rw http.ResponseWriter, r *http.Request) {
 	}
 	user, password := r.PostFormValue("user"), r.PostFormValue("password")
 	key := throttleKey(r, user)
-	if !w.throttle.Allowed(key) {
+	// The attempt is counted before the password is hashed, not after: a dozen
+	// requests that run at once would otherwise all pass an empty count, and
+	// each of them would cost the machine a hash.
+	if wait, ok := w.throttle.Start(key); !ok {
+		w.logf("the page of the thread: a login from %s is held up for %s", key, wait.Round(time.Second))
 		w.showLogin(rw, user, "Too many attempts: wait a moment and try again.", http.StatusTooManyRequests)
 		return
 	}
 	cfg, err := w.dir.Config()
 	if err != nil {
+		w.throttle.Cleared(key) // not a wrong password: the node cannot read itself
 		w.showLogin(rw, user, "The node cannot read its configuration.", http.StatusInternalServerError)
 		return
 	}
-	if cfg.Web.User == "" || cfg.Web.Password == "" || user != cfg.Web.User || !web.Verify(cfg.Web.Password, password) {
+	// The password is hashed for every user, and only then is the name looked
+	// at: a name that is wrong has to cost what a password that is wrong
+	// costs, or the login tells which name is the right one.
+	sameUser := subtle.ConstantTimeCompare([]byte(user), []byte(cfg.Web.User)) == 1
+	samePassword := web.Verify(cfg.Web.Password, password)
+	if !sameUser || !samePassword {
 		w.throttle.Failed(key)
 		w.logf("the page of the thread: a login failed for %q from %s", user, r.RemoteAddr)
 		w.showLogin(rw, user, "Wrong user or password.", http.StatusUnauthorized)
@@ -383,13 +436,30 @@ func (w *webFront) setCookie(rw http.ResponseWriter, r *http.Request, name, valu
 
 // throttleKey names who tried a password: the address it came from, and the
 // user it tried. Behind a proxy of the tailnet every request comes from the
-// host itself, so the user is what tells attempts apart.
+// host itself, so what the proxy says the caller was is used for one that
+// comes from the host: otherwise a single address in the tailnet could hold
+// the page up for the owner by guessing their name.
 func throttleKey(r *http.Request, user string) string {
+	return callerAddress(r) + "|" + user
+}
+
+// callerAddress is the address of whoever made the request: the one the
+// connection came from, unless that is this host, which is what a proxy of the
+// tailnet is, and then the one the proxy forwarded. A forwarded address is
+// believed only from the host itself, which a request from the network is not.
+func callerAddress(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	return host + "|" + user
+	if !net.ParseIP(host).IsLoopback() {
+		return host
+	}
+	forwarded, _, _ := strings.Cut(r.Header.Get("X-Forwarded-For"), ",")
+	if address := strings.TrimSpace(forwarded); address != "" {
+		return address
+	}
+	return host
 }
 
 // initial is what the page shows before it opens the thread.
@@ -407,6 +477,9 @@ func (w *webFront) open(rw http.ResponseWriter, r *http.Request) {
 	if client == nil {
 		return
 	}
+	// What the thread told while no stream was open is in the snapshot this
+	// Open takes: a stream that replayed it afterward would show it twice.
+	client.forget()
 	snapshot, err := client.window.Open()
 	if err != nil {
 		fail(rw, err)
@@ -509,7 +582,10 @@ func (w *webFront) events(rw http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case message := <-messages:
+		case message, ok := <-messages:
+			if !ok {
+				return // the page is off, or this browser was let go
+			}
 			if err := writeEvent(rw, message); err != nil {
 				return
 			}
@@ -527,13 +603,22 @@ func (w *webFront) events(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeEvent writes one message of the stream.
+// writeEvent writes one message of the stream. An event of the stream is
+// dropped by EventSource when it carries no data line at all, so "ended" and
+// "restarting", which say everything with their name, get an empty one.
 func writeEvent(rw io.Writer, message sseEvent) error {
 	if _, err := fmt.Fprintf(rw, "event: %s\n", message.event); err != nil {
 		return err
 	}
+	lines := 0
 	for line := range strings.Lines(string(message.data)) {
+		lines++
 		if _, err := fmt.Fprintf(rw, "data: %s\n", strings.TrimSuffix(line, "\n")); err != nil {
+			return err
+		}
+	}
+	if lines == 0 {
+		if _, err := io.WriteString(rw, "data:\n"); err != nil {
 			return err
 		}
 	}
@@ -563,11 +648,17 @@ func fail(rw http.ResponseWriter, err error) {
 }
 
 // client is the window of the browser that made the request, or nil once the
-// reply says why there is none.
+// reply says why there is none. The page names its tab itself, and a request
+// that does not say which tab it is falls back to a cookie, or gets one.
 func (w *webFront) client(rw http.ResponseWriter, r *http.Request) *webClient {
-	id := ""
-	if cookie, err := r.Cookie(clientCookie); err == nil {
-		id = cookie.Value
+	id := r.Header.Get(clientHeader)
+	if !validClientID(id) {
+		id = r.URL.Query().Get(clientParam)
+	}
+	if !validClientID(id) {
+		if cookie, err := r.Cookie(clientCookie); err == nil {
+			id = cookie.Value
+		}
 	}
 	if !validClientID(id) {
 		token, err := web.Token()
@@ -607,10 +698,11 @@ type webClient struct {
 	window *Window
 	cancel context.CancelFunc
 
-	mu    sync.Mutex
-	subs  map[chan sseEvent]struct{}
-	queue []sseEvent
-	last  time.Time
+	mu     sync.Mutex
+	subs   map[chan sseEvent]struct{}
+	queue  []sseEvent
+	last   time.Time
+	closed bool
 }
 
 // newClient opens the window of the browser id.
@@ -643,6 +735,9 @@ func (w *webFront) newClient(id string) *webClient {
 func (c *webClient) broadcast(message sseEvent) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
 	c.last = time.Now()
 	if len(c.subs) == 0 {
 		if len(c.queue) >= webQueued {
@@ -659,11 +754,25 @@ func (c *webClient) broadcast(message sseEvent) {
 	}
 }
 
+// forget drops what was told while no stream was open: the snapshot of an Open
+// holds it already, and a stream that replayed it would show it twice.
+func (c *webClient) forget() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queue = nil
+}
+
 // subscribe starts a stream of what the window tells, with what it told while
-// no stream was open.
+// no stream was open. The stream is closed when the browser is let go, which
+// is what ends the request that reads it.
 func (c *webClient) subscribe() (<-chan sseEvent, func()) {
 	stream := make(chan sseEvent, webQueued)
 	c.mu.Lock()
+	if c.closed {
+		close(stream)
+		c.mu.Unlock()
+		return stream, func() {}
+	}
 	for _, message := range c.queue {
 		stream <- message
 	}
@@ -672,13 +781,30 @@ func (c *webClient) subscribe() (<-chan sseEvent, func()) {
 	c.mu.Unlock()
 	return stream, func() {
 		c.mu.Lock()
-		delete(c.subs, stream)
-		c.mu.Unlock()
+		defer c.mu.Unlock()
+		if _, ok := c.subs[stream]; ok {
+			delete(c.subs, stream)
+			close(stream)
+		}
 	}
 }
 
-// close ends the window of this browser.
+// close ends the window of this browser and the streams that are on it: a
+// stream that is left open would keep its request, and its goroutine, for as
+// long as the pings go through.
 func (c *webClient) close() {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	for stream := range c.subs {
+		close(stream)
+		delete(c.subs, stream)
+	}
+	c.queue = nil
+	c.mu.Unlock()
 	c.cancel()
 	c.window.Close()
 }
@@ -698,6 +824,11 @@ func (c *webClients) of(id string, make func() *webClient) *webClient {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	client, ok := c.byID[id]
+	if ok {
+		client.mu.Lock()
+		ok = !client.closed
+		client.mu.Unlock()
+	}
 	if !ok {
 		client = make()
 		c.byID[id] = client
@@ -708,15 +839,18 @@ func (c *webClients) of(id string, make func() *webClient) *webClient {
 	return client
 }
 
-// reap closes the windows of the browsers that did nothing for idle.
+// reap closes the windows of the browsers that did nothing for idle. A browser
+// that has a stream open did something, whether or not the thread told
+// anything: reaping it would take the tab's window away while its stream kept
+// pinging, and the tab would show nothing new until it was reloaded.
 func (c *webClients) reap(idle time.Duration) {
 	c.mu.Lock()
 	var stale []*webClient
 	for id, client := range c.byID {
 		client.mu.Lock()
-		last := client.last
+		quiet := !client.closed && len(client.subs) == 0 && time.Since(client.last) > idle
 		client.mu.Unlock()
-		if time.Since(last) > idle {
+		if quiet {
 			stale = append(stale, client)
 			delete(c.byID, id)
 		}

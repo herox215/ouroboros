@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
@@ -29,9 +30,13 @@ func pageFor(t *testing.T) (*http.Client, *httptest.Server) {
 	front := newWebFront(dir, fakeProfile("pythia"))
 	server := httptest.NewServer(front.handler)
 	t.Cleanup(server.Close)
-	client := server.Client()
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return client, server
+	return stillClient(), server
+}
+
+// stillClient is a client that does not follow the redirect of a login, so
+// that the cookie it sets can be read from the response itself.
+func stillClient() *http.Client {
+	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
 // signIn posts the form and returns the response.
@@ -162,4 +167,153 @@ func TestSendNeedsThePage(t *testing.T) {
 		t.Fatalf("a message without the header is answered %d", post.StatusCode)
 	}
 	post.Body.Close()
+}
+
+// An event of the stream is dropped by EventSource when it has no data line at
+// all: the two that say everything with their name need an empty one.
+func TestStreamEventsCarryData(t *testing.T) {
+	var out strings.Builder
+	if err := writeEvent(&out, sseEvent{event: "ended"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "data:") || !strings.Contains(got, "event: ended") {
+		t.Fatalf("an event without a body is written as %q", got)
+	}
+	out.Reset()
+	if err := writeEvent(&out, sseEvent{event: "events", data: []byte("[]")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "data: []") {
+		t.Fatalf("the body of an event is written as %q", got)
+	}
+}
+
+// A tab names itself, so that two tabs of one browser do not share one
+// history cursor: the header names it on the requests of the app, the query on
+// the stream, and a request that names no tab gets a window of its own.
+func TestEachTabNamesItself(t *testing.T) {
+	front := newWebFront(home.Dir(t.TempDir()), fakeProfile("pythia"))
+	tab := func(request *http.Request) *webClient {
+		t.Helper()
+		return front.client(httptest.NewRecorder(), request)
+	}
+	named := func(path, id string, header bool) *webClient {
+		t.Helper()
+		request := httptest.NewRequest("GET", path, nil)
+		if header {
+			request.Header.Set(clientHeader, id)
+		}
+		client := tab(request)
+		if client == nil {
+			t.Fatalf("no window for %q", path)
+		}
+		return client
+	}
+	first, second := strings.Repeat("a", 43), strings.Repeat("b", 43)
+	if client := named("/api/initial", first, true); client.id != first {
+		t.Fatalf("the header named the tab %q", client.id)
+	}
+	if client := named("/api/events?client="+second, "", false); client.id != second {
+		t.Fatalf("the query named the tab %q", client.id)
+	}
+	if front.clients.size() != 2 {
+		t.Fatalf("two tabs share a window: %d windows", front.clients.size())
+	}
+	// The same tab says the same name again, and keeps its window.
+	if client := named("/api/history?before=1", first, true); client.id != first {
+		t.Fatalf("the first tab is now %q", client.id)
+	}
+	if front.clients.size() != 2 {
+		t.Fatalf("a tab got a second window: %d", front.clients.size())
+	}
+	// A request that says nothing is named here, and told so in a cookie.
+	request := httptest.NewRequest("GET", "/api/initial", nil)
+	recorder := httptest.NewRecorder()
+	if client := front.client(recorder, request); client == nil || !validClientID(client.id) {
+		t.Fatalf("a request without a name got %v", client)
+	} else if cookie := recorder.Result().Cookies(); len(cookie) != 1 || cookie[0].Name != clientCookie {
+		t.Fatalf("a request without a name is told no name: %v", recorder.Header())
+	}
+}
+
+// A tab with a stream open is not idle, however quiet the thread is: reaping
+// it would take the window its stream is on away.
+func TestReapSparesATabWithAStream(t *testing.T) {
+	front := newWebFront(home.Dir(t.TempDir()), fakeProfile("pythia"))
+	request := httptest.NewRequest("GET", "/api/initial", nil)
+	request.Header.Set(clientHeader, strings.Repeat("a", 43))
+	client := front.client(httptest.NewRecorder(), request)
+	stream, cancel := client.subscribe()
+	defer cancel()
+	client.mu.Lock()
+	client.last = time.Now().Add(-3 * webIdle)
+	client.mu.Unlock()
+	front.clients.reap(webIdle)
+	if front.clients.size() != 1 {
+		t.Fatal("a tab with a stream open was reaped")
+	}
+	cancel()
+	front.clients.reap(webIdle)
+	if front.clients.size() != 0 {
+		t.Fatal("a tab that said nothing for hours is kept")
+	}
+	if _, ok := <-stream; ok {
+		t.Fatal("the stream of a tab that is let go is still open")
+	}
+}
+
+// Closing the page ends the streams of the browsers on it: a stream that stays
+// open keeps its request, and the goroutine that reads it, for good.
+func TestCloseEndsTheStreams(t *testing.T) {
+	front := newWebFront(home.Dir(t.TempDir()), fakeProfile("pythia"))
+	request := httptest.NewRequest("GET", "/api/initial", nil)
+	request.Header.Set(clientHeader, strings.Repeat("a", 43))
+	client := front.client(httptest.NewRecorder(), request)
+	stream, cancel := client.subscribe()
+	defer cancel()
+	front.clients.closeAll()
+	if _, ok := <-stream; ok {
+		t.Fatal("the stream of a closed page is still open")
+	}
+	if front.clients.size() != 0 {
+		t.Fatalf("%d windows are left after closing the page", front.clients.size())
+	}
+}
+
+// What the thread told while no stream was open is in the snapshot of an Open,
+// and is dropped with it: a stream that replayed it would show it twice.
+func TestForgetDropsTheQueue(t *testing.T) {
+	front := newWebFront(home.Dir(t.TempDir()), fakeProfile("pythia"))
+	request := httptest.NewRequest("GET", "/api/initial", nil)
+	request.Header.Set(clientHeader, strings.Repeat("a", 43))
+	client := front.client(httptest.NewRecorder(), request)
+	client.broadcast(sseEvent{event: "events", data: []byte("[]")})
+	client.forget()
+	stream, cancel := client.subscribe()
+	defer cancel()
+	select {
+	case message := <-stream:
+		t.Fatalf("an event the snapshot holds came again: %+v", message)
+	default:
+	}
+}
+
+// The key of a failed login is the caller, also behind the proxy of the
+// tailnet, where every request comes from the host itself.
+func TestThrottleKeyNamesTheCaller(t *testing.T) {
+	request := httptest.NewRequest("POST", "/login", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	if got := throttleKey(request, "owner"); got != "127.0.0.1|owner" {
+		t.Fatalf("a caller of the host is named %q", got)
+	}
+	request.Header.Set("X-Forwarded-For", "100.64.0.7, 127.0.0.1")
+	if got := throttleKey(request, "owner"); got != "100.64.0.7|owner" {
+		t.Fatalf("a caller behind the proxy is named %q", got)
+	}
+	// What a request from the network says about its caller is not believed:
+	// it would let one address pass for another, and block it.
+	request.RemoteAddr = "100.64.0.9:5555"
+	if got := throttleKey(request, "owner"); got != "100.64.0.9|owner" {
+		t.Fatalf("a caller of the network is named %q", got)
+	}
 }

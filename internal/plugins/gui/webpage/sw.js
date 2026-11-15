@@ -2,9 +2,10 @@
 // app while the tailnet is up. It caches what a build puts there and nothing
 // the node says: no message, no answer, no history.
 const CACHE = 'ouro-shell-v1';
+// The shell of the page is what the server answers on "/": there is no
+// "/index.html", and addAll takes the whole list or nothing at all.
 const SHELL = [
   './',
-  './index.html',
   './app.js',
   './app.css',
   './shim.js',
@@ -20,7 +21,7 @@ self.addEventListener('install', (event) => {
     caches
       .open(CACHE)
       .then((cache) => cache.addAll(SHELL.map((path) => new Request(path, { cache: 'reload' }))))
-      .catch(() => {})
+      .catch((error) => console.warn('the shell of the page is not kept for offline use', error))
       .then(() => self.skipWaiting()),
   );
 });
@@ -51,7 +52,7 @@ self.addEventListener('fetch', (event) => {
         return response;
       })
       .catch(() =>
-        caches.match(request).then((cached) => cached || caches.match('./index.html')).then((cached) => cached || Response.error()),
+        caches.match(request).then((cached) => cached || caches.match('./')).then((cached) => cached || Response.error()),
       ),
   );
 });

@@ -33,11 +33,12 @@ func Plugin(owner *plugin.Owner, dir home.Dir) plugin.Plugin {
 		// The page runs where the node runs, not in a front end that ends
 		// with the terminal: only the node serving starts it.
 		front := newWebFront(dir, p)
-		serving, stop := context.WithCancel(context.Background())
-		ctx.OnStop(stop)
 		plugin.Add(ctx, plugin.Serving{
-			Start: func() { front.Serve(serving) },
-			Stop:  front.Close,
+			Start: front.Serve,
+			// Stop is what turns the page off: the watch that reconciles it
+			// with the configuration ends with it, so that a node that stops
+			// does not serve, and hands its port to no one in particular.
+			Stop: front.Close,
 		})
 		return nil
 	})

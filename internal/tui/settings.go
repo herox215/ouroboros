@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -611,12 +612,19 @@ func rows(s Settings) []row {
 // webAddress is where the page of the thread is reached in the network of
 // this host.
 func webAddress(port int) string {
+	return fmt.Sprintf("http://%s:%d/", hostName(), port)
+}
+
+// hostName is the name of this host, read once: the rows are built anew on
+// every keystroke, and the name of the machine does not change while ouro
+// runs.
+var hostName = sync.OnceValue(func() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
-		host = "localhost"
+		return "localhost"
 	}
-	return fmt.Sprintf("http://%s:%d/", host, port)
-}
+	return host
+})
 
 // changeWebPassword sets the password of the page, or takes it away with "".
 func (c *settingsScreen) changeWebPassword(m *Model, password string) tea.Cmd {
