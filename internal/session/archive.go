@@ -401,9 +401,14 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 	var msgs []chat.Message
 	steps := map[string]Event{}  // the calls of tools that started, by ID
 	asked := map[string]string{} // what the question a call put to the owner is shown as, by call ID
+	var pictures []Event         // pictures the answer showed, kept before its text, which the archive writes after them
 	start := 0
 	var size int
 	var cache assistant.Cache
+	flush := func() {
+		events = append(events, pictures...)
+		pictures = nil
+	}
 	for i, r := range records {
 		at := r.Time.Local()
 		id := r.PresentationID
@@ -416,6 +421,11 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 			id = fmt.Sprintf("archive:%d", seq)
 		}
 		switch r.Role {
+		case history.Picture:
+			// A picture is shown before the text of the answer it was shown
+			// in: the archive writes the whole answer at its end, so the
+			// picture waits for it, as it did when it was shown.
+			pictures = append(pictures, Event{Kind: Picture, At: at, Text: r.Content, Context: size, Cache: cache})
 		case history.Restarted:
 			events = append(events, Event{Kind: Restarted, PresentationID: id, At: at, Text: r.Content, Context: size, Cache: cache})
 		case history.ModelChanged:
@@ -461,6 +471,7 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 			m := chat.Message{Role: "assistant", Content: r.Content, At: r.Time}
 			if len(r.ToolCalls) == 0 {
 				msgs = append(msgs, m)
+				flush()
 				events = append(events, Event{Kind: Answer, PresentationID: id, At: at, Text: r.Content})
 				continue
 			}
@@ -498,6 +509,7 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 				events = append(events, answer)
 			}
 		case "end":
+			flush()
 			if r.Statistics != nil {
 				size = r.Statistics.Context
 				var restored assistant.Cache
@@ -519,6 +531,7 @@ func replay(records []history.Record) ([]Event, []chat.Message) {
 			start = len(events)
 		}
 	}
+	flush()
 	return events, msgs
 }
 

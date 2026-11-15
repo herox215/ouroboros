@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
 	"ouroboros/internal/kernel"
 	"ouroboros/plugin"
@@ -24,7 +25,7 @@ func fakeProfile(name string) *profile {
 func TestCommand(t *testing.T) {
 	var ctx *plugin.Context
 	k := kernel.New()
-	if err := k.Start(sessionProvider(&fakeSessions{}), Plugin(nil, home.Dir(t.TempDir())), plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
+	if err := k.Start(sessionProvider(&fakeSessions{}), Plugin(nil, home.Dir(t.TempDir()), &guard.Guard{Home: t.TempDir(), Workspace: t.TempDir()}), plugin.New("spy", func(c *plugin.Context, _ struct{}) error {
 		ctx = c
 		return nil
 	})); err != nil {
@@ -36,6 +37,12 @@ func TestCommand(t *testing.T) {
 	}
 	if len(plugin.All[plugin.FrontEnd](ctx)) != 0 {
 		t.Fatal("the GUI replaced the default front end")
+	}
+	// The window shows pictures through the neutral tool of the gateways,
+	// not through one of its own.
+	outputs := plugin.All[plugin.GatewayOutput](ctx)
+	if len(outputs) != 1 || outputs[0].Name != "gui" || outputs[0].SendImage == nil {
+		t.Fatalf("the window as a channel of pictures: %+v", outputs)
 	}
 }
 

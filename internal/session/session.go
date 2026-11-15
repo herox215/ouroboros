@@ -130,6 +130,11 @@ const (
 	// by, is in Text. A front end can show beside the thread which sessions a
 	// part of it concerns; it says nothing to the owner by itself.
 	Handed Kind = "handed"
+	// Picture is a picture the agent shows the owner as the answer goes on,
+	// see ShowPicture: its name is in Text, as the front end that keeps it
+	// names the file. It is no message of the owner or of the agent: it is
+	// not sent to the model, and it is kept with the answer it was shown in.
+	Picture Kind = "picture"
 )
 
 // Event is one thing that happened in a session. It is plain data, written

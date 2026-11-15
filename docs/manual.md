@@ -181,8 +181,20 @@ the terminal. A question the thread asks shows the answers to choose from; choos
 answers it. An answer still on its way grows in place. The status line says whether the
 thread is ready, working, waiting for an answer, offline, or starting anew, and **Stop**
 cancels its answer, including the answers it handed to other sessions. The field sends with
-Enter; Shift+Enter inserts a newline. Sending uses `Ask` and, while an answer is on its way
-(including while the thread waits for a question), `Steer`.
+Enter; Shift+Enter inserts a newline. Sending is `Steer`: while the thread waits for an
+answer to its question, what is sent is that answer; while an answer is on its way, it is
+queued for it; otherwise it starts the answer. `Ask` would queue the answer to a question
+instead, and the thread would wait for one that never comes.
+
+A picture the agent shows appears in the transcript, as it does in the page of the thread:
+the window is a channel of `gateway_send_image`, beside the gateways, so that the same
+tool shows a picture in the window as in a chat of a gateway. The profile keeps it in its
+`pictures` directory, named after its content, and the window serves it under `/media/`;
+the page of the thread serves the same path behind its login. The picture is kept with the
+answer it was shown in, so the thread shows it again when it is read, as long as the file
+is there. A picture is shown in the thread, also while the answer that made it works in a
+session of its own, which the window does not show.
+
 `ouro gui [DIRECTORY]` takes a directory as `ouro tui [DIRECTORY]` does, but the window
 opens no session of its own: it shows the thread, which has no project, so the directory
 changes nothing there. For work on a project, ask the thread: it starts a session there.

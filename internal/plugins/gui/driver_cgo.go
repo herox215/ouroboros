@@ -34,7 +34,7 @@ func showWindow(ctx context.Context, p *profile, name string) error {
 		Title: "Ouroboros",
 		Width: 1180, Height: 780,
 		MinWidth: 360, MinHeight: 260,
-		AssetServer: &assetserver.Options{Assets: frontend},
+		AssetServer: &assetserver.Options{Assets: frontend, Handler: pictures{dir: p.dir.Pictures()}.handler()},
 		Bind:        []interface{}{window},
 		// Cancellation must work even if the frontend never reaches DOM readiness.
 		OnStartup: func(app context.Context) {

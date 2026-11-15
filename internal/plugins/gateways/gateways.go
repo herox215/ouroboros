@@ -81,7 +81,7 @@ func Plugin() plugin.Plugin {
 		list.OwnerOnly = true
 		plugin.Add(pctx, list)
 
-		image := plugin.NewTool(plugin.GatewaySendImageTool, "Send an image through a gateway. Supply exactly one local path or positive 1-based image attachment index. Use gateway_list for provider capabilities and destination rules. Omit gateway only when exactly one provider supports sending images.",
+		image := plugin.NewTool(plugin.GatewaySendImageTool, "Send an image to the owner: through a gateway, or into the conversation itself, in the window of ouro. Supply exactly one local path or positive 1-based image attachment index. Use gateway_list for provider capabilities and destination rules. Omit gateway only when exactly one provider supports sending images.",
 			[]plugin.Param{{Name: "gateway", Description: "Exact provider name; optional only with one supporting provider", Optional: true}},
 			func(ctx context.Context, args imageArgs) (string, error) {
 				if err := owner(ctx); err != nil {

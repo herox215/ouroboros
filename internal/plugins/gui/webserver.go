@@ -67,6 +67,7 @@ type webFront struct {
 	throttle *web.Throttle // a name, and the address it came from
 	callers  *web.Throttle // the address, whatever name it tries
 	clients  *webClients
+	media    http.Handler // the pictures of the window, behind the login
 	handler  http.Handler
 	logf     func(format string, args ...any)
 
@@ -98,6 +99,7 @@ func newWebFront(dir home.Dir, p *profile) *webFront {
 		// a few names, but a spray of them is what keeps the node hashing.
 		callers: web.NewThrottle(10, time.Minute, 15*time.Minute),
 		clients: newWebClients(),
+		media:   pictures{dir: dir.Pictures()}.handler(),
 		logf:    dir.Log,
 	}
 	w.handler = w.routes()
@@ -248,6 +250,8 @@ func (w *webFront) routes() http.Handler {
 	mux.HandleFunc("POST /api/send", w.guard(w.send))
 	mux.HandleFunc("POST /api/stop", w.guard(w.stop))
 	mux.HandleFunc("GET /api/events", w.guard(w.events))
+	// The pictures the thread shows are the owner's: only behind the login.
+	mux.Handle("GET "+mediaPath, w.guard(w.media.ServeHTTP))
 	for _, file := range pageFiles() {
 		mux.HandleFunc("GET "+file.path, w.file(file))
 	}

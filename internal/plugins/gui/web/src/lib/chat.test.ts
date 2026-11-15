@@ -69,6 +69,23 @@ describe('Chat', () => {
     expect(chat.entries[1].text).toBe('next round');
   });
 
+  it('shows a picture the agent showed, under the name the window serves it by', async () => {
+    const { link } = script(async () =>
+      snapshot(
+        { kind: 'message', text: 'take a screenshot' },
+        { kind: 'picture', text: 'a'.repeat(64) + '.png', at: '2026-01-01T10:00:00Z' },
+        { kind: 'answer', text: 'there' },
+      ),
+    );
+    const chat = new Chat(link);
+    await chat.start();
+    expect(chat.entries.map((entry) => [entry.role, entry.text])).toEqual([
+      ['owner', 'take a screenshot'],
+      ['picture', 'a'.repeat(64) + '.png'],
+      ['agent', 'there'],
+    ]);
+  });
+
   it('updates a call of a tool once it ended', async () => {
     const { link, events } = script(async () => snapshot());
     const chat = new Chat(link);

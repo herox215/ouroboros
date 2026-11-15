@@ -150,6 +150,11 @@ func TestReadyKeepsReportsWhileTasksRun(t *testing.T) {
 func TestSayingStaysInSession(t *testing.T) {
 	var s *Service
 	s = service(t, &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		if assistant.ThreadOf(ctx) != nil {
+			// The thread answers the report of the session, as it does: it
+			// says nothing of its own here, only the session does.
+			return "done", nil
+		}
 		s.mu.Lock()
 		s.sessions["s1"].routed = true
 		s.mu.Unlock()

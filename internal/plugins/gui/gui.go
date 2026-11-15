@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
 	"ouroboros/plugin"
 )
@@ -17,16 +18,21 @@ import (
 type profile struct {
 	status   func() (plugin.NodeStatus, error)
 	sessions plugin.Sessions
+	dir      home.Dir        // the profile, where the pictures of the window are kept
 	ctx      *plugin.Context // to read what the plugins contribute to a tool line
 }
 
 // Plugin contributes the window command, and the page of the thread on the
 // network while the node serves. Like other front ends, it receives the narrow
 // owner capability from the frame, never as a kernel service.
-func Plugin(owner *plugin.Owner, dir home.Dir) plugin.Plugin {
+func Plugin(owner *plugin.Owner, dir home.Dir, files *guard.Guard) plugin.Plugin {
 	return plugin.New("gui", func(ctx *plugin.Context, n struct{ Sessions plugin.Sessions }) error {
-		p := &profile{status: owner.Status, sessions: n.Sessions, ctx: ctx}
+		p := &profile{status: owner.Status, sessions: n.Sessions, dir: dir, ctx: ctx}
 		plugin.Add(ctx, plugin.Command{Name: "gui", Help: "chat with the thread in a window", Run: p.run})
+		// The window is a channel for the pictures an agent shows, as the
+		// gateways are: the shared gateway_send_image tool reaches it, so
+		// there is no tool of the window's own.
+		plugin.Add(ctx, pictureOutput(n.Sessions, files, pictures{dir: dir.Pictures()}))
 		if owner == nil {
 			return nil // no owner to ask who the page is of
 		}

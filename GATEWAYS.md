@@ -188,6 +188,17 @@ specify `destination` as the Matrix room ID. The backend binds that room to its
 allowed recipient and retains its encryption and membership checks. Unknown
 rooms are not accepted.
 
+The window of `ouro gui` is a provider too, named `gui`: the same
+`gateway_send_image` shows the picture in the thread the window shows, also
+while the answer that made it works in a session of its own. It takes a local
+PNG, JPEG, GIF or WebP of at most 10 MiB, or an attachment of the
+conversation, and has no destination. The profile keeps the picture in its
+`pictures` directory, named after the content, and the window and the page of
+the thread serve it under `/media/`, the page only behind its login. Only its
+name is kept with the answer, so the picture shows again when the thread is
+read, as long as the file is there. With both providers installed,
+`gateway_send_image` must name the one it means.
+
 The former `matrix_send_image` and `matrix_set_avatar` tools are no longer
 registered. Explicit owner-tool allowlists and tool-specific permission rules
 must be updated to the corresponding neutral names; include `gateway_list` for

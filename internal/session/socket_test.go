@@ -132,6 +132,19 @@ func TestClient(t *testing.T) {
 	if got := until(t, live, Canceled); kinds(got) != "message queued unqueued canceled" {
 		t.Fatalf("events %+v", got)
 	}
+	// A picture is shown by its name, and a name that is none is refused.
+	if err := c.ShowPicture(ctx, id, pictureNameOf('e')); err != nil {
+		t.Fatalf("picture: %v", err)
+	}
+	if got := until(t, live, Picture); got[len(got)-1].Text != pictureNameOf('e') {
+		t.Fatalf("picture %+v", got)
+	}
+	if err := c.ShowPicture(ctx, "", pictureNameOf('e')); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("picture of no session: %v", err)
+	}
+	if err := c.ShowPicture(ctx, id, "../x.png"); !errors.Is(err, ErrPicture) {
+		t.Fatalf("a path as a name: %v", err)
+	}
 	close(gate)
 	if _, err := c.Contents(ctx, ""); !errors.Is(err, ErrNoSession) {
 		t.Fatalf("contents of no session: %v", err)

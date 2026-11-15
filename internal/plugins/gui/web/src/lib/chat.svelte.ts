@@ -1,7 +1,7 @@
 import type { Link, State, WireEvent } from './wire';
 
 /** What a line of the transcript is. */
-export type Role = 'owner' | 'agent' | 'tool' | 'error' | 'note' | 'question';
+export type Role = 'owner' | 'agent' | 'tool' | 'error' | 'note' | 'question' | 'picture';
 
 /** One line of the transcript. */
 export interface Entry {
@@ -325,6 +325,12 @@ export class Chat {
         this.push({ role: 'tool', text: text || event.tool || '', tool: event.tool, callId: event.call_id, done: !!event.done, failed: !!event.failed, at: event.at });
         break;
       }
+      case 'picture':
+        // The agent showed a picture the window keeps and serves itself: the
+        // text is the name of the file, and the line is the same in the
+        // window and in the page of the thread.
+        this.push({ role: 'picture', text, at: event.at });
+        break;
       case 'asked': {
         if (event.done) {
           const open = this.entries.findLast((entry) => entry.role === 'question' && entry.open);

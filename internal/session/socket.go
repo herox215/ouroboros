@@ -37,6 +37,7 @@ var codes = map[string]error{
 	"no_session": ErrNoSession,
 	"empty":      ErrEmpty,
 	"image":      ErrImage,
+	"picture":    ErrPicture,
 	"attachment": ErrAttachment,
 	"no_effort":  ErrNoEffort,
 	"no_project": ErrThreadProject,
@@ -76,6 +77,10 @@ type (
 	effortRequest struct {
 		ID     string `json:"id"`
 		Effort string `json:"effort"`
+	}
+	pictureRequest struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
 	}
 	unsteerResponse struct {
 		Text string `json:"text"`
@@ -177,6 +182,12 @@ func Handler(s *Service) http.Handler {
 		var in effortRequest
 		if read(w, r, &in) {
 			reply(w, nil, s.SetEffort(r.Context(), in.ID, in.Effort))
+		}
+	})
+	mux.HandleFunc("POST /picture", func(w http.ResponseWriter, r *http.Request) {
+		var in pictureRequest
+		if read(w, r, &in) {
+			reply(w, nil, s.ShowPicture(r.Context(), in.ID, in.Name))
 		}
 	})
 	mux.HandleFunc("POST /delete", func(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +446,11 @@ func (c *Client) SetDirectory(ctx context.Context, id, path string) error {
 // SetEffort makes effort how much the model thinks in the session id.
 func (c *Client) SetEffort(ctx context.Context, id, effort string) error {
 	return c.do(ctx, http.MethodPost, "/effort", effortRequest{id, effort}, nil)
+}
+
+// ShowPicture shows the picture name in the conversation id; see PictureAPI.
+func (c *Client) ShowPicture(ctx context.Context, id, name string) error {
+	return c.do(ctx, http.MethodPost, "/picture", pictureRequest{id, name}, nil)
 }
 
 // Delete removes the session id.
