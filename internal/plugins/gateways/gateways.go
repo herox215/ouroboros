@@ -52,6 +52,7 @@ func Plugin() plugin.Plugin {
 				}
 				type entry struct {
 					Name              string `json:"name"`
+					Available         bool   `json:"available"`
 					SendImage         bool   `json:"send_image"`
 					SendAudio         bool   `json:"send_audio"`
 					SetAvatar         bool   `json:"set_avatar"`
@@ -65,6 +66,7 @@ func Plugin() plugin.Plugin {
 				for _, p := range providers {
 					entries = append(entries, entry{
 						Name:              p.Name,
+						Available:         available(p),
 						SendImage:         p.SendImage != nil,
 						SendAudio:         p.SendAudio != nil,
 						SetAvatar:         p.SetAvatar != nil,
@@ -224,6 +226,10 @@ func outputs(ctx *plugin.Context) ([]plugin.GatewayOutput, error) {
 	return providers, nil
 }
 
+// available reports whether p can be used now: a provider that always can
+// says so with no Available.
+func available(p plugin.GatewayOutput) bool { return p.Available == nil || p.Available() }
+
 func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.GatewayOutput, error) {
 	providers, err := outputs(ctx)
 	if err != nil {
@@ -254,17 +260,27 @@ func selectOutput(ctx *plugin.Context, name string, tool string) (plugin.Gateway
 		if name != "" && p.Name != name {
 			continue
 		}
-		if supports(p) {
-			matches = append(matches, p)
-		} else if name != "" {
-			return plugin.GatewayOutput{}, fmt.Errorf("gateway %q does not support %s", name, capability)
+		if !supports(p) {
+			if name != "" {
+				return plugin.GatewayOutput{}, fmt.Errorf("gateway %q does not support %s", name, capability)
+			}
+			continue
 		}
+		if !available(p) {
+			if name != "" {
+				return plugin.GatewayOutput{}, fmt.Errorf("gateway %q is not available now", name)
+			}
+			continue
+		}
+		matches = append(matches, p)
 	}
 	if name != "" && len(matches) == 0 {
 		return plugin.GatewayOutput{}, fmt.Errorf("unknown gateway provider %q", name)
 	}
 	if len(matches) == 0 {
-		return plugin.GatewayOutput{}, fmt.Errorf("no gateway provider supports %s", capability)
+		// What is not there now cannot be meant: a window that is closed is no
+		// provider of the pictures it would show.
+		return plugin.GatewayOutput{}, fmt.Errorf("no gateway provider supports %s now", capability)
 	}
 	if len(matches) > 1 {
 		return plugin.GatewayOutput{}, fmt.Errorf("ambiguous gateway for %s; specify gateway", capability)

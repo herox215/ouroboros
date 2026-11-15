@@ -12,7 +12,6 @@ import (
 	"ouroboros/internal/config"
 	"ouroboros/internal/home"
 	"ouroboros/internal/web"
-	"ouroboros/plugin"
 )
 
 // The page is served on the port the configuration names while it is enabled,
@@ -30,7 +29,6 @@ func TestThePageListens(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := fakeProfile("pythia")
-	p.pictures = &pictureChannel{ctx: testContext(t), output: pictureOutput(&fakeSessions{}, nil, pictures{dir: dir.Pictures()})}
 	front := newWebFront(dir, p)
 	front.Serve()
 	defer front.Close()
@@ -40,11 +38,10 @@ func TestThePageListens(t *testing.T) {
 	if !strings.Contains(text, "Sign in") || !strings.Contains(text, "pythia") {
 		t.Fatalf("the login page says %q", text)
 	}
-	// The page shows the pictures of the thread while it is served, as the
-	// window does while it is open: gateway_send_image reaches the profile
-	// through it.
-	if got := plugin.All[plugin.GatewayOutput](p.pictures.ctx); len(got) != 1 || got[0].Name != "gui" {
-		t.Fatalf("a served page is %d providers: %+v", len(got), got)
+	// A served page shows the pictures of the thread, and the provider says so:
+	// gateway_send_image reaches the profile through it.
+	if !front.serves() {
+		t.Fatal("a page that listens says it does not serve")
 	}
 
 	if err := config.Update(string(dir), func(c *config.Config) error {
@@ -54,8 +51,8 @@ func TestThePageListens(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, url, false)
-	if got := plugin.All[plugin.GatewayOutput](p.pictures.ctx); len(got) != 0 {
-		t.Fatalf("a page that is off left %d providers: %+v", len(got), got)
+	if front.serves() {
+		t.Fatal("a page that is off says it serves")
 	}
 }
 
@@ -147,7 +144,7 @@ func TestMovingThePortKeepsTheSession(t *testing.T) {
 	waitFor(t, base+"/login", true)
 	client := stillClient()
 	res := signIn(t, client, base, "owner", "correct horse battery")
-	cookie := session(t, res)
+	cookie := sessionOf(t, res)
 	res.Body.Close()
 	if cookie == nil {
 		t.Fatalf("no session: %d", res.StatusCode)

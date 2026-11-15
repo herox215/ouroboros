@@ -28,26 +28,29 @@ func (a *Archive) NotePicture(id, name string) error {
 	// A deleted conversation stays deleted: a picture is no reason to list it
 	// again, and a record of one would leave a conversation whose archive says
 	// it has an answer, and the picture at the start of the next one that takes
-	// its name.
+	// its name. One that is answering again is not deleted: the answer on its
+	// way brings it back, see append, and the picture is shown with it.
 	if _, err = tx.Exec("INSERT INTO history_sessions(id) VALUES(?) ON CONFLICT(id) DO NOTHING", id); err != nil {
 		return err
 	}
-	var deleted int
-	if err = tx.QueryRow("SELECT deleted FROM history_sessions WHERE id=?", id).Scan(&deleted); err != nil {
+	var deleted, answering int
+	if err = tx.QueryRow("SELECT deleted,answering FROM history_sessions WHERE id=?", id).Scan(&deleted, &answering); err != nil {
 		return err
 	}
 	if deleted != 0 {
-		return nil // nothing of it is kept: the conversation is gone
+		if answering == 0 {
+			return nil // nothing of it is kept: the conversation is gone
+		}
+		if _, err = tx.Exec("UPDATE history_sessions SET deleted=0 WHERE id=?", id); err != nil {
+			return err
+		}
 	}
 	// The answer the picture belongs to: the one on its way while the
 	// conversation answers, and otherwise the one that ended last, which the
 	// picture was shown after. What ends answers is no picture, so they are not
 	// counted here, see append.
-	var last, answering int
-	if err = tx.QueryRow("SELECT coalesce(max(answer),0) FROM history_records WHERE session_id=? AND json_extract(data,'$.role')<>?", id, Picture).Scan(&last); err != nil {
-		return err
-	}
-	if err = tx.QueryRow("SELECT answering FROM history_sessions WHERE id=?", id).Scan(&answering); err != nil {
+	var last int
+	if err = tx.QueryRow("SELECT coalesce(max(answer),0) FROM history_records WHERE session_id=? AND role<>?", id, Picture).Scan(&last); err != nil {
 		return err
 	}
 	answer := last

@@ -83,7 +83,7 @@ func TestAPictureIsShownThroughTheGatewayTool(t *testing.T) {
 	store := pictures{dir: dir.Pictures()}
 	files := &guard.Guard{Home: root, Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
 	sessions := &shownSessions{fakeSessions: &fakeSessions{}}
-	out := pictureOutput(sessions, files, store)
+	out := pictureOutput(sessions, files, store, func() bool { return true })
 	bot := agent.New(&showingLLM{}, "test", "show pictures", plugin.NewTool(plugin.GatewaySendImageTool, "show a picture", nil,
 		func(ctx context.Context, _ struct{}) (string, error) {
 			return out.SendImage(ctx, plugin.GatewayImageRequest{Path: file})
@@ -172,7 +172,7 @@ func TestPicturesServeOnlyThePictures(t *testing.T) {
 // that can show it.
 func TestShowPictureNeedsAPathOrAnAttachment(t *testing.T) {
 	store := pictures{dir: t.TempDir()}
-	out := pictureOutput(&fakeSessions{}, nil, store)
+	out := pictureOutput(&fakeSessions{}, nil, store, func() bool { return true })
 	if _, err := out.SendImage(context.Background(), plugin.GatewayImageRequest{}); err == nil || !strings.Contains(err.Error(), "either a path or an attachment") {
 		t.Fatalf("nothing to show: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestShowPictureAnswersWithTheName(t *testing.T) {
 	store := pictures{dir: filepath.Join(root, "pictures")}
 	files := &guard.Guard{Home: root, Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
 	sessions := &shownSessions{fakeSessions: &fakeSessions{}}
-	out := pictureOutput(sessions, files, store)
+	out := pictureOutput(sessions, files, store, func() bool { return true })
 	var result string
 	bot := agent.New(&showingLLM{}, "test", "show pictures", plugin.NewTool(plugin.GatewaySendImageTool, "show a picture", nil,
 		func(ctx context.Context, _ struct{}) (string, error) {
@@ -248,7 +248,7 @@ func TestShowPictureLeavesNoFileBehind(t *testing.T) {
 
 	// A sessions service that cannot show pictures at all.
 	store := pictures{dir: filepath.Join(root, "none", "pictures")}
-	if err := shown(pictureOutput(&fakeSessions{}, files, store)); err == nil || !strings.Contains(err.Error(), "cannot show pictures") {
+	if err := shown(pictureOutput(&fakeSessions{}, files, store, func() bool { return true })); err == nil || !strings.Contains(err.Error(), "cannot show pictures") {
 		t.Fatalf("a node without pictures: %v", err)
 	}
 	if !empty(store.dir) {
@@ -257,10 +257,89 @@ func TestShowPictureLeavesNoFileBehind(t *testing.T) {
 
 	// One that can, but whose conversation is gone.
 	store = pictures{dir: filepath.Join(root, "gone", "pictures")}
-	if err := shown(pictureOutput(&shownSessions{fakeSessions: &fakeSessions{}, err: plugin.ErrNoSession}, files, store)); !errors.Is(err, plugin.ErrNoSession) {
+	if err := shown(pictureOutput(&shownSessions{fakeSessions: &fakeSessions{}, err: plugin.ErrNoSession}, files, store, func() bool { return true })); !errors.Is(err, plugin.ErrNoSession) {
 		t.Fatalf("a conversation that is not there: %v", err)
 	}
 	if !empty(store.dir) {
 		t.Fatalf("a picture nothing shows was kept in %s", store.dir)
+	}
+}
+
+// blockingSessions is a sessions service whose ShowPicture waits until the
+// test lets it go, so that two calls of one picture overlap.
+type blockingSessions struct {
+	*fakeSessions
+	entered chan string
+	release chan struct{}
+	err     map[string]error
+}
+
+func (s *blockingSessions) ShowPicture(_ context.Context, id, _ string) error {
+	s.entered <- id
+	<-s.release
+	return s.err[id]
+}
+
+// Two calls of the same picture can run at once. One that fails afterwards must
+// not take away the file the other one showed.
+func TestAFailedCallKeepsThePictureAnotherShows(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "shot.png")
+	data := picture(t)
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := &guard.Guard{Home: root, Workspace: root, Protected: func() ([]string, error) { return nil, nil }}
+	store := pictures{dir: filepath.Join(root, "pictures")}
+	// The calls wait for each other, so that both have kept the picture before
+	// either of them is done with it.
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	sessions := &blockingSessions{
+		fakeSessions: &fakeSessions{},
+		entered:      entered,
+		release:      release,
+		err:          map[string]error{"gone": plugin.ErrNoSession},
+	}
+	out := pictureOutput(sessions, files, store, func() bool { return true })
+	show := func(id string) error {
+		var toolErr error
+		bot := agent.New(&showingLLM{}, "test", "show pictures", plugin.NewTool(plugin.GatewaySendImageTool, "show a picture", nil,
+			func(ctx context.Context, _ struct{}) (string, error) {
+				_, toolErr = out.SendImage(ctx, plugin.GatewayImageRequest{Path: file})
+				return "", toolErr
+			}))
+		if _, err := bot.Run(context.Background(), id, "show me", agent.Observer{}); err != nil {
+			return err
+		}
+		return toolErr
+	}
+	done := make(chan error, 2)
+	go func() { done <- show("gone") }()
+	if id := <-entered; id != "gone" {
+		t.Fatalf("the first call is %q", id)
+	}
+	go func() { done <- show("owner") }()
+	if id := <-entered; id != "owner" {
+		t.Fatalf("the second call is %q", id)
+	}
+	close(release)
+	// The two calls finish in either order.
+	var nothing, shown int
+	for range 2 {
+		switch err := <-done; {
+		case errors.Is(err, plugin.ErrNoSession):
+			nothing++
+		case err == nil:
+			shown++
+		default:
+			t.Fatalf("a call of the same picture: %v", err)
+		}
+	}
+	if nothing != 1 || shown != 1 {
+		t.Fatalf("%d calls showed nothing and %d showed it", nothing, shown)
+	}
+	if entries, err := os.ReadDir(store.dir); err != nil || len(entries) != 1 {
+		t.Fatalf("the picture of the call that showed it is gone: %v, %v", entries, err)
 	}
 }

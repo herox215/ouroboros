@@ -198,11 +198,13 @@ the thread serve it under `/media/`, the page only behind its login. Only its
 name is kept with the answer, so the picture shows again when the thread is
 read, as long as the file is there.
 
-The `gui` provider is there while a window of that profile is open, or while
-the page of the thread is served: a profile that shows neither has no provider
-of its own, and `gateway_send_image` stays unambiguous for a profile that has
-one gateway. With a window or the page open beside one, the tool must name the
-one it means. `gateway_list` says whether `gui` is there.
+The `gui` provider is available while a window of that profile is open, or
+while the page of the thread is served. A profile that shows neither offers
+nothing to show a picture in, and `gateway_send_image` stays unambiguous for a
+profile that has one gateway; with a window or the page open beside one, the
+tool must name the one it means. `gateway_list` says with `available` whether a
+provider can be used now, and naming one that cannot says that it is closed,
+not that it does not exist.
 
 The former `matrix_send_image` and `matrix_set_avatar` tools are no longer
 registered. Explicit owner-tool allowlists and tool-specific permission rules

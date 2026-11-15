@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"ouroboros/internal/guard"
 	"ouroboros/internal/media"
@@ -85,14 +86,57 @@ func (p pictures) keep(data []byte) (string, bool, error) {
 	return name, true, nil
 }
 
-// drop takes the picture name out of the profile. The caller knows that
-// nothing shows it, and that this call is what kept it: a picture another
-// answer shows is not dropped.
-func (p pictures) drop(name string) {
-	if !pictureName.MatchString(name) {
+// shownPictures are the pictures a call keeps right now, and whether an answer
+// has shown each. Two calls of the same picture can run at once — the name is
+// its content, so both find the same file — and the one that fails must not
+// take away the file the other one shows.
+var shownPictures = struct {
+	sync.Mutex
+	byPath map[string]*pictureUse
+}{byPath: map[string]*pictureUse{}}
+
+// pictureUse is what the calls of one picture are doing with it.
+type pictureUse struct {
+	kept  int  // calls that keep it, and are not done yet
+	shown bool // an answer has it, and the file stays
+}
+
+// keeping counts a call that keeps the picture name, before it is shown.
+func (p pictures) keeping(name string) {
+	path := filepath.Join(p.dir, name)
+	shownPictures.Lock()
+	defer shownPictures.Unlock()
+	use := shownPictures.byPath[path]
+	if use == nil {
+		use = &pictureUse{}
+		shownPictures.byPath[path] = use
+	}
+	use.kept++
+}
+
+// done tells how a call that keeps the picture name ended. shown says an answer
+// has it, and the file stays. One that failed takes the file away only when
+// this call wrote it and no other call of the same picture is still open — and
+// none has shown it.
+func (p pictures) done(name string, created, shown bool) {
+	path := filepath.Join(p.dir, name)
+	shownPictures.Lock()
+	defer shownPictures.Unlock()
+	use := shownPictures.byPath[path]
+	if use == nil {
 		return
 	}
-	_ = os.Remove(filepath.Join(p.dir, name))
+	use.kept--
+	if shown {
+		use.shown = true
+	}
+	if use.kept > 0 {
+		return
+	}
+	delete(shownPictures.byPath, path)
+	if created && !use.shown {
+		_ = os.Remove(path)
+	}
 }
 
 // handler serves the pictures of the window under mediaPath, and nothing
@@ -126,13 +170,23 @@ func (p pictures) handler() http.Handler {
 // pictureOutput offers the window as a channel for the pictures an agent
 // shows, beside the other gateways: the shared gateway_send_image tool reaches
 // it, with the same checks as the others, and the picture appears in the
-// thread the window shows.
-func pictureOutput(sessions plugin.Sessions, files *guard.Guard, store pictures) plugin.GatewayOutput {
+// thread the window shows. shown reports whether a window or the page shows
+// the thread now, which is what Available tells the tool: nothing else can
+// show a picture.
+func pictureOutput(sessions plugin.Sessions, files *guard.Guard, store pictures, shown func() bool) plugin.GatewayOutput {
+	available := func() bool { return shown == nil || shown() }
 	return plugin.GatewayOutput{
-		Name: "gui",
+		Name:      "gui",
+		Available: available,
 		ImageDescription: "Shows the picture in the window of ouro, in the thread it shows. " +
 			"Destination is not used. It stays there while the thread is read, as long as the profile keeps it.",
 		SendImage: func(ctx context.Context, request plugin.GatewayImageRequest) (string, error) {
+			if !available() {
+				// The tool leaves out what is not there, and says so by name:
+				// no window of ouro is open, and the page of the thread is not
+				// served.
+				return "", errors.New("no window of ouro or page of the thread shows a picture now")
+			}
 			return showPicture(ctx, sessions, files, store, request)
 		},
 	}
@@ -175,16 +229,19 @@ func showPicture(ctx context.Context, sessions plugin.Sessions, files *guard.Gua
 	if err != nil {
 		return "", err
 	}
+	store.keeping(name)
+	didShow := false
+	defer func() { store.done(name, created, didShow) }()
 	// The picture is shown in the conversation the call was made in. When that
 	// session works for the thread, the session service shows it there too,
 	// and keeps it with the thread, where the window shows it.
 	if err := shown.ShowPicture(ctx, id, name); err != nil {
-		if created {
-			// Nothing shows it: a file of up to 10 MiB would stay for no one.
-			store.drop(name)
-		}
+		// Nothing shows it: a file of up to 10 MiB would stay for no one, and
+		// a call that fails takes it away — see done, which leaves the file of
+		// a picture another call shows.
 		return "", err
 	}
+	didShow = true
 	result, _ := json.Marshal(struct {
 		Picture string `json:"picture"`
 		Bytes   int    `json:"bytes"`

@@ -126,6 +126,24 @@ type ReplyImageSessions = session.ReplyImageAPI
 // file and shows it there, also when the conversation is read again.
 type PictureSessions = session.PictureAPI
 
+// The front ends that watch a session, as WithWatchSource tells them apart:
+// one that shows the thread in the window of ouro can show a picture in it,
+// see PictureSessions.
+const (
+	// SourceWindow is the window of ouro.
+	SourceWindow = session.SourceWindow
+	// SourcePage is the page of the thread in a browser.
+	SourcePage = session.SourcePage
+)
+
+// WithWatchSource says which front end watches the session that Watch is
+// called for. A node whose provider shows pictures asks how many windows of
+// ouro watch the thread, so a window that runs in a process of its own says it
+// here, and the plugin that keeps the pictures follows it.
+func WithWatchSource(ctx context.Context, source string) context.Context {
+	return session.WithWatchSource(ctx, source)
+}
+
 // ErrImage means an input picture is empty or has an unsupported media type.
 var ErrImage = session.ErrImage
 

@@ -160,6 +160,14 @@ func (w *webFront) watch(ctx context.Context, done chan struct{}) {
 	}
 }
 
+// serves reports whether the page is served now: the pictures the thread shows
+// are shown there while it is, also when no window of ouro is open.
+func (w *webFront) serves() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.srv != nil
+}
+
 // stopServing ends the listener and the browsers that are on it. It signs the
 // browsers out only when asked to: turning the page off does, moving it to
 // another port does not, as a cookie is kept for the host, not for the port.
@@ -174,9 +182,6 @@ func (w *webFront) stopServing(revoke bool) {
 		}
 		return
 	}
-	// The page shows no picture from here on: only a window that is still open
-	// keeps the provider of gateway_send_image there, see pictureChannel.
-	w.profile.pictures.hide()
 	// The streams of the browsers first: a request that stays open would keep
 	// Shutdown waiting for its whole grace, and past it.
 	w.clients.closeAll()
@@ -237,9 +242,6 @@ func (w *webFront) reconcile(ctx context.Context) {
 	srv = w.srv
 	w.port = port
 	w.mu.Unlock()
-	// This page shows pictures now, also while a window of the profile is not
-	// open: gateway_send_image reaches the profile through it.
-	w.profile.pictures.show()
 	go func() {
 		err := srv.Serve(ln)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

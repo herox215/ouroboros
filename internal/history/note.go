@@ -38,15 +38,21 @@ func (a *Archive) noteRecord(id, role, content string) (Record, error) {
 // conversation's size and time are kept with it, so a caller that writes more
 // than one record updates them through this too.
 func appendRecord(tx *sql.Tx, id string, r Record) (Record, error) {
-	var seq, answer, ordinal int
-	if err := tx.QueryRow("SELECT coalesce(max(seq),0),coalesce(max(answer),0),coalesce(max(ordinal),0) FROM history_records WHERE session_id=?", id).Scan(&seq, &answer, &ordinal); err != nil {
+	var seq, ordinal int
+	if err := tx.QueryRow("SELECT coalesce(max(seq),0),coalesce(max(ordinal),0) FROM history_records WHERE session_id=?", id).Scan(&seq, &ordinal); err != nil {
 		return Record{}, err
 	}
 	r.Seq = seq + 1
 	if r.Answer == 0 {
-		// The answer the conversation is in, which is the one that ended last:
-		// pictures are kept under the answer on its way before it is written,
-		// see NotePicture, and name it themselves.
+		// The answer that ended last, which a record of its own belongs to —
+		// a marker is no answer of its own. A picture does not count here: it
+		// is kept under the answer on its way before that is written, see
+		// NotePicture, and would otherwise lend its number to a marker, and
+		// push the answer that follows one number further.
+		var answer int
+		if err := tx.QueryRow("SELECT coalesce(max(answer),0) FROM history_records WHERE session_id=? AND role<>?", id, Picture).Scan(&answer); err != nil {
+			return Record{}, err
+		}
 		r.Answer = answer
 	}
 	b, err := json.Marshal(r)

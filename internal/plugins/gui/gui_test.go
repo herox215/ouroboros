@@ -39,10 +39,15 @@ func TestCommand(t *testing.T) {
 		t.Fatal("the GUI replaced the default front end")
 	}
 	// The window shows pictures through the neutral tool of the gateways, not
-	// through one of its own, and only while it or the page of the thread
-	// shows them: a profile that shows neither is no channel of pictures.
-	if outputs := plugin.All[plugin.GatewayOutput](ctx); len(outputs) != 0 {
-		t.Fatalf("a profile without a window is a channel of pictures: %+v", outputs)
+	// through one of its own. It is contributed whether it is open or not, and
+	// says with Available whether a window or the page of the thread shows the
+	// thread now: a profile that shows neither is no channel of pictures.
+	outputs := plugin.All[plugin.GatewayOutput](ctx)
+	if len(outputs) != 1 || outputs[0].Name != "gui" || outputs[0].SendImage == nil {
+		t.Fatalf("the window as a channel of pictures: %+v", outputs)
+	}
+	if outputs[0].Available == nil || outputs[0].Available() {
+		t.Fatal("a profile without a window can show pictures")
 	}
 }
 
@@ -114,27 +119,74 @@ func testContext(t *testing.T) *plugin.Context {
 	return ctx
 }
 
-// The window is a provider of gateway_send_image while it is open, and not
-// before or after: a profile that shows no picture has no provider of its own.
-func TestTheWindowIsAProviderWhileItIsOpen(t *testing.T) {
+// fakeWatchers is a sessions service that tells which front ends watch the
+// thread, as the node's does.
+type fakeWatchers struct {
+	windows int
+}
+
+func (f fakeWatchers) Watching(id, source string) int {
+	if id == plugin.ThreadID && source == plugin.SourceWindow {
+		return f.windows
+	}
+	return 0
+}
+
+// The window is a provider of gateway_send_image, and tells with Available
+// whether a picture shown now would be seen: a window of ouro that watches the
+// thread in the node, or the page of the thread served there.
+func TestTheWindowIsAProvider(t *testing.T) {
 	ctx := testContext(t)
-	p := fakeProfile("Luna")
-	p.pictures = &pictureChannel{ctx: ctx, output: pictureOutput(&fakeSessions{}, nil, pictures{dir: t.TempDir()})}
-	if got := plugin.All[plugin.GatewayOutput](ctx); len(got) != 0 {
-		t.Fatalf("a profile without a window has %d providers: %+v", len(got), got)
+	out := pictureOutput(&fakeSessions{}, nil, pictures{dir: t.TempDir()}, func() bool { return false })
+	item := plugin.Add(ctx, out)
+	t.Cleanup(item.Remove)
+	outputs := plugin.All[plugin.GatewayOutput](ctx)
+	if len(outputs) != 1 || outputs[0].Name != "gui" {
+		t.Fatalf("the window as a channel of pictures: %+v", outputs)
 	}
-	old := show
-	t.Cleanup(func() { show = old })
-	show = func(context.Context, *profile, string) error {
-		if got := plugin.All[plugin.GatewayOutput](ctx); len(got) != 1 || got[0].Name != "gui" {
-			t.Fatalf("the open window is %d providers: %+v", len(got), got)
-		}
-		return nil
+	if outputs[0].Available == nil || outputs[0].Available() {
+		t.Fatal("a window that is not open can show a picture")
 	}
-	if err := p.run(context.Background(), nil); err != nil {
-		t.Fatal(err)
+	if _, err := outputs[0].SendImage(context.Background(), plugin.GatewayImageRequest{Attachment: 1}); err == nil || !strings.Contains(err.Error(), "no window of ouro") {
+		t.Fatalf("a picture shown without a window: %v", err)
 	}
-	if got := plugin.All[plugin.GatewayOutput](ctx); len(got) != 0 {
-		t.Fatalf("the window that closed left %d providers: %+v", len(got), got)
+	// A provider with no Available at all is always there, as the gateways are.
+	item.Remove()
+	plugin.Add(ctx, plugin.GatewayOutput{Name: "always", SendImage: func(context.Context, plugin.GatewayImageRequest) (string, error) { return "", nil }})
+	if got := plugin.All[plugin.GatewayOutput](ctx); len(got) != 1 || got[0].Available != nil {
+		t.Fatalf("a provider that is always there: %+v", got)
+	}
+}
+
+// windowShows is what a node tells from the front end that watches: the window
+// runs in a process of its own, and says so through the socket.
+func TestShownByAWindowOrThePage(t *testing.T) {
+	page := false
+	shown := shownBy(fakeWatchers{windows: 1}, func() bool { return page })
+	if !shown() {
+		t.Fatal("a window that watches the thread shows no picture")
+	}
+	shown = shownBy(fakeWatchers{}, func() bool { return page })
+	if shown() {
+		t.Fatal("a page that is off shows a picture")
+	}
+	page = true
+	if !shown() {
+		t.Fatal("a served page shows no picture")
+	}
+	if shownBy(fakeWatchers{}, nil)() {
+		t.Fatal("a process that shows nothing shows a picture")
+	}
+}
+
+func TestWindowShowsIsWhatTheNodeTells(t *testing.T) {
+	if windowShows(nil) {
+		t.Fatal("a process without sessions has an open window")
+	}
+	if windowShows(fakeWatchers{}) {
+		t.Fatal("a window that does not watch is open")
+	}
+	if !windowShows(fakeWatchers{windows: 1}) {
+		t.Fatal("a window that watches the thread is not open")
 	}
 }

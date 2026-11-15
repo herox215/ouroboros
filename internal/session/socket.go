@@ -256,7 +256,10 @@ func Handler(s *Service) http.Handler {
 		reply(w, struct{}{}, nil)
 	})
 	mux.HandleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) {
-		past, live, err := s.Watch(r.Context(), r.URL.Query().Get("id"))
+		// A front end says which one watches, see WithWatchSource: it is what
+		// tells an open window of ouro from one that is not.
+		ctx := WithWatchSource(r.Context(), r.URL.Query().Get("source"))
+		past, live, err := s.Watch(ctx, r.URL.Query().Get("id"))
 		if err != nil {
 			reply(w, nil, err)
 			return
@@ -535,7 +538,11 @@ func (c *Client) Contents(ctx context.Context, id string) ([]Line, error) {
 // Watch returns what happened in the session id and what happens from now
 // on, until ctx ends or the node stops.
 func (c *Client) Watch(ctx context.Context, id string) ([]Event, <-chan Event, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/watch?id="+url.QueryEscape(id), nil)
+	watch := "/watch?id=" + url.QueryEscape(id)
+	if source := WatchSource(ctx); source != "" {
+		watch += "&source=" + url.QueryEscape(source)
+	}
+	resp, err := c.request(ctx, http.MethodGet, watch, nil)
 	if err != nil {
 		return nil, nil, err
 	}

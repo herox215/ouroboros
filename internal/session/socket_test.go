@@ -512,3 +512,30 @@ func TestClientNamesItsProfile(t *testing.T) {
 		t.Fatalf("named %q", named)
 	}
 }
+
+// A window of ouro watches the thread through the socket, and the node tells
+// from the request which front end it is: that is how a picture is shown in a
+// window that runs in a process of its own.
+func TestWatchSourceTravelsOverTheSocket(t *testing.T) {
+	s := service(t, &fakeAgent{})
+	n := serve(t, Handler(s))
+	c := NewClient(n.dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, _, err := c.Watch(WithWatchSource(ctx, SourceWindow), ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for s.Watching(ThreadID, SourceWindow) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the node counts %d windows, not 1", s.Watching(ThreadID, SourceWindow))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	for s.Watching(ThreadID, SourceWindow) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the window that closed is still counted: %d", s.Watching(ThreadID, SourceWindow))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

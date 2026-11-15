@@ -40,6 +40,10 @@ func (s *Service) ShowPicture(_ context.Context, id, name string) error {
 	if !pictureName.MatchString(name) {
 		return ErrPicture
 	}
+	// One picture at a time: what is written and what is told stay in the same
+	// order, see pictureMu.
+	s.pictureMu.Lock()
+	defer s.pictureMu.Unlock()
 	s.mu.Lock()
 	se := s.lookup(id)
 	if se == nil {

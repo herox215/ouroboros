@@ -51,7 +51,7 @@ func signIn(t *testing.T, client *http.Client, base, user, password string) *htt
 }
 
 // session is the cookie of the login in res.
-func session(t *testing.T, res *http.Response) *http.Cookie {
+func sessionOf(t *testing.T, res *http.Response) *http.Cookie {
 	t.Helper()
 	for _, cookie := range res.Cookies() {
 		if cookie.Name == sessionCookie {
@@ -95,7 +95,7 @@ func TestPicturesAreServedBehindTheLogin(t *testing.T) {
 	}
 	res.Body.Close()
 	login := signIn(t, client, server.URL, "owner", "correct horse battery")
-	cookie := session(t, login)
+	cookie := sessionOf(t, login)
 	login.Body.Close()
 	res = do(t, client, http.MethodGet, server.URL+mediaPath+name, cookie, nil)
 	if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "image/png" {
@@ -160,7 +160,7 @@ func TestLoginAndCookie(t *testing.T) {
 	if text := body(t, res); !strings.Contains(text, "Wrong user or password") {
 		t.Fatalf("the form does not say what was wrong: %q", text)
 	}
-	if cookie := session(t, res); cookie != nil {
+	if cookie := sessionOf(t, res); cookie != nil {
 		t.Fatal("a wrong password got a session")
 	}
 
@@ -168,7 +168,7 @@ func TestLoginAndCookie(t *testing.T) {
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" {
 		t.Fatalf("the right password is answered %d to %q", res.StatusCode, res.Header.Get("Location"))
 	}
-	cookie := session(t, res)
+	cookie := sessionOf(t, res)
 	if cookie == nil || !cookie.HttpOnly || cookie.Value == "" {
 		t.Fatalf("no session cookie, or one a script reads: %v", res.Header.Values("Set-Cookie"))
 	}
@@ -189,7 +189,7 @@ func TestLoginAndCookie(t *testing.T) {
 func TestSendNeedsThePage(t *testing.T) {
 	client, server, _ := pageFor(t)
 	res := signIn(t, client, server.URL, "owner", "correct horse battery")
-	cookie := session(t, res)
+	cookie := sessionOf(t, res)
 	if cookie == nil {
 		t.Fatalf("no session: %d", res.StatusCode)
 	}

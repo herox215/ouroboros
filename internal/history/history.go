@@ -200,7 +200,7 @@ func (a *Archive) append(who Who, msgs []chat.Message, answerErr error, presenta
 	// written already, see NotePicture, and carries its number: it is no answer
 	// of its own, and is not counted here.
 	var answer int
-	if err = tx.QueryRow("SELECT coalesce(max(answer),0)+1 FROM history_records WHERE session_id=? AND json_extract(data,'$.role')<>?", id, Picture).Scan(&answer); err != nil {
+	if err = tx.QueryRow("SELECT coalesce(max(answer),0)+1 FROM history_records WHERE session_id=? AND role<>?", id, Picture).Scan(&answer); err != nil {
 		return err
 	}
 	now := a.now().UTC()
