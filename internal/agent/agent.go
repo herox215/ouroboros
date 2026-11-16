@@ -713,6 +713,13 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 			a.memory.remember(contextID, history)
 			return "", nil
 		}
+		// The tools run with the arguments as the model wrote them, so that
+		// the one that gets what cannot be read says what is wrong with them.
+		// What is remembered and shown is a message a server can read again:
+		// no round after this one fails for arguments that are no object, see
+		// argumentsAsObjects.
+		calls := msg.ToolCalls
+		msg.ToolCalls = argumentsAsObjects(calls)
 		history = append(history, msg)
 		if err := emit(msg); err != nil {
 			return abandon(err)
@@ -737,7 +744,7 @@ func (a *Agent) Run(ctx context.Context, contextID, text string, observe Observe
 		}
 		before := history[asked : len(history)-1]
 		toolCtx := withInputImages(ctx, history)
-		for _, call := range msg.ToolCalls {
+		for _, call := range calls {
 			result := repeated(call, before)
 			if result.Content == "" {
 				handoffs := answer.handoffs.Load()

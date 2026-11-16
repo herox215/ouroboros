@@ -11,7 +11,48 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"ouroboros/internal/chat"
 )
+
+// argumentsAsObjects returns calls with the arguments of every call that are
+// no JSON object replaced by "{}": a model writes them cut off, empty, or as a
+// list, and a server that reads the conversation again refuses the whole
+// request for them, so that the next round of the conversation fails too. The
+// tool ran with the arguments as they came and said what is wrong with them,
+// which is what the model reads in place of a result. The calls are cloned,
+// so that the ones the tools run with keep their arguments, and an object is
+// kept byte for byte, which a provider caches by. See argumentsAsObject.
+func argumentsAsObjects(calls []chat.ToolCall) []chat.ToolCall {
+	var fixed []chat.ToolCall
+	for i, call := range calls {
+		args := argumentsAsObject(call.Function.Arguments)
+		if args == call.Function.Arguments {
+			continue
+		}
+		if fixed == nil {
+			fixed = slices.Clone(calls)
+		}
+		fixed[i].Function.Arguments = args
+	}
+	if fixed == nil {
+		return calls
+	}
+	return fixed
+}
+
+// argumentsAsObject returns the arguments of a call as they are when they are
+// a JSON object, and "{}" when they are not: one that is no object, like a
+// string cut off in the middle of it, is nothing that can be read again by a
+// server, which refuses the whole request for it. The empty object stays the
+// arguments of nothing, and the result of the call says what went wrong.
+func argumentsAsObject(args string) string {
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(args), &object) != nil || object == nil {
+		return "{}" // "null" decodes into a nil object without an error
+	}
+	return args
+}
 
 // Tool is something the agent can do while it answers.
 type Tool struct {
