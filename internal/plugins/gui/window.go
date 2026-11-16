@@ -79,8 +79,7 @@ type Window struct {
 	flush    time.Duration
 	emit     func([]Event)
 	ended    func()
-	leave    func()
-	restarts string
+	notified func()
 	instance string
 }
 
@@ -93,10 +92,17 @@ func newWindowContext(ctx context.Context, p *profile, name string) *Window {
 	return &Window{profile: p, name: name, source: "gui", ctx: ctx, cancel: cancel, flush: defaultFlush}
 }
 
-// InitialState names the profile of the window and the conversation it shows.
+// InitialState names the profile of the window and the conversation it shows:
+// the profile as it is called now, also after it was renamed.
 func (w *Window) InitialState() State {
-	return State{Profile: w.name, Thread: "owner/" + plugin.ThreadID}
+	return State{Profile: w.profile.label(w.name), Thread: "owner/" + plugin.ThreadID}
 }
+
+// Assets names the build of the page the window shows. The page keeps the
+// name it came with and asks again once the node is back: another name means
+// another build, and the page loads itself anew so that a rebuild shows in the
+// window that stayed open.
+func (w *Window) Assets() string { return assetVersion() }
 
 // Close cancels pending watches and releases the node this window started.
 // Answers still on their way go on in the node.
@@ -131,36 +137,25 @@ func (w *Window) onEnded(ended func()) {
 	w.ended = ended
 }
 
-// onRestart tells the window what closes it once ouro is to start anew from
-// a new build: leave is called once.
-func (w *Window) onRestart(leave func()) {
+// onRestart tells the window what carries the news that ouro starts anew from
+// a new build: notify is called for every restart, also the one after a
+// restart it was called for already. The window itself stays open.
+func (w *Window) onRestart(notify func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.leave = leave
+	w.notified = notify
 }
 
-// restart takes the build a tool of the watched session asked ouro to start
-// anew from, or the one a node that started anew runs, and leaves the window
-// for it.
-func (w *Window) restart(exe string) {
+// restart tells the page that ouro starts anew: the node goes over into the
+// new build and the page opens the thread on it again. The window keeps its
+// process, its page and what it shows until the new snapshot comes.
+func (w *Window) restart() {
 	w.mu.Lock()
-	take := w.restarts == "" && w.leave != nil
-	if take {
-		w.restarts = exe
-	}
-	leave := w.leave
+	notify := w.notified
 	w.mu.Unlock()
-	if take {
-		leave()
+	if notify != nil {
+		notify()
 	}
-}
-
-// pendingRestart reports the build ouro starts anew from, ok false if no tool
-// asked for it.
-func (w *Window) pendingRestart() (exe string, ok bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.restarts, w.restarts != ""
 }
 
 // instances is what a sessions service tells of the image of ouro its node
@@ -170,10 +165,10 @@ type instances interface {
 }
 
 // noticeRestart compares the image the node of the profile runs with the one
-// the window saw before, and leaves the window for the build that runs once it
-// changed: the node started anew, as a rebuild in another session, ouro update
-// or a peer make it do, and no restart event of the thread told the window.
-// A service that cannot tell, or a node that does not answer, changes nothing.
+// the window saw before, and tells the page that ouro started anew once it
+// changed: a rebuild in another session, ouro update or a peer make the node
+// go over into a new build, and no restart event of the thread told the page.
+// A service that cannot tell, or a node that does not answer, tells nothing.
 func (w *Window) noticeRestart(ctx context.Context) {
 	tells, ok := w.profile.sessions.(instances)
 	if !ok {
@@ -187,8 +182,8 @@ func (w *Window) noticeRestart(ctx context.Context) {
 	before := w.instance
 	w.instance = now.ID
 	w.mu.Unlock()
-	if before != "" && before != now.ID && now.Executable != "" {
-		w.restart(now.Executable)
+	if before != "" && before != now.ID {
+		w.restart()
 	}
 }
 
@@ -420,7 +415,7 @@ func (w *Window) stream(gen int, ctx context.Context, live <-chan plugin.Session
 			case plugin.SessionThought:
 				continue
 			case plugin.SessionRestart:
-				w.restart(e.Text)
+				w.restart()
 				continue
 			}
 			batch = append(batch, w.event(e))
@@ -464,9 +459,10 @@ func (w *Window) end(gen int) {
 	}
 }
 
-// Send starts the answer to text in the thread or, while one is on its way,
-// gives it the text through Steer, just as the terminal front end does. This
-// is also how the owner answers a question the thread asks.
+// Send gives the thread text through Steer: that starts its answer or, while
+// one is on its way, hands it the text. This is also how the owner answers a
+// question the thread asks, and only Steer does that: Ask queues what the
+// thread is told while it answers, behind the very question it would answer.
 func (w *Window) Send(text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -480,11 +476,7 @@ func (w *Window) Send(text string) error {
 		source = "gui"
 	}
 	ctx := plugin.WithMessageSource(w.ctx, plugin.MessageSource{Interface: source})
-	err := w.profile.sessions.Ask(ctx, plugin.ThreadID, text)
-	if errors.Is(err, plugin.ErrBusy) {
-		return w.profile.sessions.Steer(ctx, plugin.ThreadID, text)
-	}
-	return err
+	return w.profile.sessions.Steer(ctx, plugin.ThreadID, text)
 }
 
 // Stop cancels the answer on its way in the thread. The node also stops the

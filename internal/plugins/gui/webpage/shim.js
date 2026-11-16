@@ -1,5 +1,5 @@
 // The host the page of the thread needs in a browser: what Wails is to the
-// window, this is to the same app.js. It binds the five methods of the window
+// window, this is to the same app.js. It binds the methods of the window
 // to the server of the node, and its events to the stream the node sends.
 //
 // Nothing of it is secret: the session cookie the browser carries is what
@@ -58,12 +58,33 @@
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
+  // What the page sends of an agent, see agentBody in webserver.go.
+  const agentBody = (id, change) => ({
+    id: String(id),
+    name: String((change && change.name) || ''),
+    description: String((change && change.description) || ''),
+    soul: String((change && change.soul) || ''),
+    access: String((change && change.access) || ''),
+    model: String((change && change.model) || ''),
+  });
+
   const bridge = {
     InitialState: () => get('./api/initial'),
     Open: () => post('./api/open'),
     History: (before) => get('./api/history?before=' + encodeURIComponent(String(before))),
     Send: (text) => post('./api/send', { text: String(text) }),
     Stop: () => post('./api/stop'),
+    Board: () => get('./api/board'),
+    Ticket: (id) => get('./api/ticket?id=' + encodeURIComponent(String(id))),
+    Sessions: () => get('./api/sessions'),
+    Session: (id) => get('./api/session?id=' + encodeURIComponent(String(id))),
+    Agents: () => get('./api/agents'),
+    UpdateAgent: (id, change) => post('./api/agent/update', agentBody(id, change)),
+    CreateAgent: (change) => post('./api/agent/create', agentBody('', change)),
+    DeleteAgent: (id) => post('./api/agent/delete', { id: String(id) }),
+    AgentModels: () => get('./api/agent/models'),
+    AgentJobs: () => get('./api/jobs'),
+    Assets: () => get('./assets').then((answer) => (answer && answer.version) || ''),
   };
 
   // What the window tells, and where the app listens for it.

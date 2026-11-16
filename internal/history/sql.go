@@ -97,12 +97,14 @@ func (a *Archive) openArchive(create bool) (*sql.DB, error) {
 		return nil, err
 	}
 	// A database from before the model of a session was kept, or before an
-	// answer on its way was marked, gets its column here: the schema above
+	// answer on its way was marked, or before the agent a session runs as
+	// was kept, gets its column here: the schema above
 	// creates a new one with it. The same holds for the columns of the
 	// report of a task that ended before the agent took it.
 	if err = addColumns(tx, "history_sessions", []column{
 		{"model", "TEXT"},
 		{"answering", "INTEGER NOT NULL DEFAULT 0"},
+		{"agent", "TEXT"},
 	}); err != nil {
 		return nil, err
 	}
@@ -216,7 +218,7 @@ CREATE TABLE IF NOT EXISTS history_sessions(
  id TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0,
  deleted INTEGER NOT NULL DEFAULT 0, modified INTEGER NOT NULL DEFAULT 0,
  size INTEGER NOT NULL DEFAULT 0, title TEXT, effort TEXT, model TEXT, directory TEXT,
- goon INTEGER NOT NULL DEFAULT 0, answering INTEGER NOT NULL DEFAULT 0
+ goon INTEGER NOT NULL DEFAULT 0, answering INTEGER NOT NULL DEFAULT 0, agent TEXT
 );
 CREATE TABLE IF NOT EXISTS history_restarts(
  session_id TEXT PRIMARY KEY REFERENCES history_sessions(id),
@@ -366,6 +368,8 @@ func metadataColumn(kind string) string {
 		return "directory"
 	case goOnSuffix:
 		return "goon"
+	case agentSuffix:
+		return "agent"
 	}
 	panic("unknown history metadata kind")
 }

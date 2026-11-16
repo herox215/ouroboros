@@ -20,9 +20,12 @@ import (
 
 // fakeAgent answers as its run says, "pong" without one.
 type fakeAgent struct {
-	mu         sync.Mutex
-	ready      error
-	model      string // the model of the node
+	mu    sync.Mutex
+	ready error
+	model string // the model of the node
+	// models are the models of the agents of the profile with one of their
+	// own in the sessions, by ID.
+	models     map[string]string
 	run        func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
 	size       int
 	cache      assistant.Cache
@@ -89,9 +92,12 @@ func (a *fakeAgent) Effort() string {
 	return a.effort
 }
 
-func (a *fakeAgent) Model(thread bool) string {
+func (a *fakeAgent) Model(thread bool, agent string) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if own, ok := a.models[agent]; ok && !thread {
+		return own
+	}
 	return a.model
 }
 
@@ -190,7 +196,7 @@ func TestAnswerIsTold(t *testing.T) {
 	if st := got[2].AsStep(); st.Err != nil || st.Done {
 		t.Fatalf("step %+v", st)
 	}
-	if list, _ := s.List(ctx); len(list) != 1 || list[0] != (Info{ID: "s1", Title: "where is a", Running: true, Last: got[3].At}) {
+	if list, _ := s.List(ctx); len(list) != 1 || list[0] != (Info{ID: "s1", Title: "where is a", Running: true, Last: got[3].At, Agent: "thread"}) {
 		t.Fatalf("list %+v", list)
 	}
 	close(gate)

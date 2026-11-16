@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"ouroboros/internal/agents"
 	store "ouroboros/internal/schedule"
 )
 
@@ -26,9 +27,10 @@ var archivistTools = []string{"memory_load", "memory_add", "memory_forget"}
 var oldArchivistTools = []string{"memory_search", "memory_read", "memory_merge", "memory_rewrite", "memory_split", "memory_scope", "memory_core", "memory_archive", "memory_undo", "memory_changes"}
 
 // seededTools is what the marker of the defaults says once the archivist
-// job has its current tools, see migrateTools. An earlier marker, also
-// "archivist tools\n" of the tools before topics, migrates them once more.
-const seededTools = "archivist topic tools\n"
+// job has its current tools and runs as the archivist, see migrateTools. An
+// earlier marker, also "archivist tools\n" of the tools before topics and
+// "archivist topic tools\n" of the job before agents, migrates it once more.
+const seededTools = "archivist topic tools, agent\n"
 
 // archivistText is the instruction of the default job. Its session sees the
 // memory tools of the profile, and the topics in its prompt, and nothing else
@@ -75,7 +77,7 @@ func (s *scheduler) seedDefault(now time.Time) {
 			return
 		}
 	}
-	job := store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never", Tools: archivistTools}
+	job := store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never", Tools: archivistTools, Agent: agents.Archivist}
 	if _, err := s.store.Create(job, now); err != nil {
 		// A full store is not a decision of the owner: without a marker the
 		// next tick tries again, once a job has gone.
@@ -113,14 +115,28 @@ func (s *scheduler) markSeeded(marker string) {
 
 // migrateTools gives the archivist job that was seeded before jobs named
 // their tools, or that has the memory tools from before topics, the current
-// memory tools alone, once: a list the owner gives it later stays. The
+// memory tools alone, and the job from before jobs ran as an agent the
+// archivist, once: a list or an agent the owner gives it later stays. The
 // caller holds mu.
 func (s *scheduler) migrateTools(marker string, now time.Time) {
 	for _, job := range s.store.List() {
-		if job.Name != archivistName || (len(job.Tools) > 0 && !slices.Equal(job.Tools, oldArchivistTools)) {
+		if job.Name != archivistName {
 			continue
 		}
-		if _, err := s.store.Update(job.ID, func(j *store.Job) error { j.Tools = archivistTools; return nil }, now); err != nil {
+		tools := len(job.Tools) == 0 || slices.Equal(job.Tools, oldArchivistTools)
+		agent := job.Agent == ""
+		if !tools && !agent {
+			continue
+		}
+		if _, err := s.store.Update(job.ID, func(j *store.Job) error {
+			if tools {
+				j.Tools = archivistTools
+			}
+			if agent {
+				j.Agent = agents.Archivist
+			}
+			return nil
+		}, now); err != nil {
 			s.report("migrate %q: %v", archivistName, err)
 			return
 		}

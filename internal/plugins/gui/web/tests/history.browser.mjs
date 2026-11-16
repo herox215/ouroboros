@@ -153,6 +153,23 @@ try {
   current = await state();
   assert.ok(current.height-current.top-current.viewport < 2, 'streaming height follows bottom');
 
+  // A small step up at the end is still within reach of it: the answer that
+  // goes on must not take the view back, and the step down again follows it.
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...rect, deltaX: 0, deltaY: -30 });
+  await settle();
+  const stepped = await state();
+  assert.ok(stepped.height-stepped.top-stepped.viewport > 20, `wheel up leaves the end: ${JSON.stringify(stepped)}`);
+  await evaluate(`__fixture.emit([{kind:'answering',text:' and more'.repeat(300)}])`);
+  await settle();
+  await anchorEqual(stepped, await state(), 'live output after a small step up');
+  assert.equal(await evaluate(`document.querySelector('.jump') !== null`), true, 'a step up stops following');
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', ...rect, deltaX: 0, deltaY: 100000 });
+  await settle();
+  await evaluate(`__fixture.emit([{kind:'answering',text:' and the end'.repeat(300)}])`);
+  await settle();
+  current = await state();
+  assert.ok(current.height-current.top-current.viewport < 2, `wheel down to the end follows again: ${JSON.stringify(current)}`);
+
   await evaluate(`document.querySelector('.transcript').focus()`);
   await send('Input.dispatchKeyEvent', { type:'keyDown', key:'Home', code:'Home', windowsVirtualKeyCode:36 });
   await send('Input.dispatchKeyEvent', { type:'keyUp', key:'Home', code:'Home', windowsVirtualKeyCode:36 });
@@ -179,7 +196,7 @@ try {
   current = await state();
   assert.ok(current.height-current.top-current.viewport < 2, 'End key jumps latest');
   assert.deepEqual(errors, [], 'no browser exceptions');
-  console.log('PASS: native History fixture; demand-only paging; two prepend anchors (<2px); virtualization up/down; jump/End; resize; live streaming follow and non-follow.');
+  console.log('PASS: native History fixture; demand-only paging; two prepend anchors (<2px); virtualization up/down; jump/End; resize; live streaming follow and non-follow; wheel away from the end and back.');
 } finally {
   socket?.close();
   browser.kill();

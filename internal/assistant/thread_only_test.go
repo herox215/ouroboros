@@ -65,12 +65,49 @@ func TestThreadOnlyTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper, err := b.helper(cfg, forHelpers(tools))
+	helper, err := threadHelper(b, cfg, forHelpers(tools))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A helper is not the thread: a thread-only tool is none of its tools.
 	if names := toolNames(helper); slices.Contains(names, "command") {
 		t.Errorf("a helper gets %v", names)
+	}
+}
+
+// The thread is told of the board where it has its tools, and only there;
+// they are no commands it runs itself, so they do not bring that hint.
+func TestThreadIsToldOfTheBoard(t *testing.T) {
+	cfg, _ := directNode(t)
+	quiet := func(context.Context, struct{}) (string, error) { return "", nil }
+	var tools []agent.Tool
+	for _, name := range []string{ToolTicketCreate, ToolTicketComment, ToolBoardRead} {
+		tool := agent.NewTool(name, "", nil, quiet)
+		tool.ThreadOnly = true
+		tools = append(tools, tool)
+	}
+	ctx := WithThread(context.Background(), &fakeThread{})
+	system, _ := inThread(ctx, agent.New(nil, "m", "prompt", tools...), cfg).Prompt()
+	if !strings.Contains(system, threadBoardHint) || strings.Contains(system, threadCommandsHint) {
+		t.Errorf("the thread with the board: %q", system)
+	}
+	if names := toolNames(inThread(ctx, agent.New(nil, "m", "prompt", tools...), cfg)); !slices.Contains(names, ToolTicketCreate) || !slices.Contains(names, ToolSessionNew) {
+		t.Errorf("the thread with the board answers with %v", names)
+	}
+	// Reading the board and commenting alone put nothing on it: no hint.
+	system, _ = inThread(ctx, agent.New(nil, "m", "prompt", tools[1:]...), cfg).Prompt()
+	if strings.Contains(system, threadBoardHint) || strings.Contains(system, threadCommandsHint) {
+		t.Errorf("the thread without ticket_create: %q", system)
+	}
+	command := agent.NewTool("command", "", nil, quiet)
+	command.ThreadOnly = true
+	system, _ = inThread(ctx, agent.New(nil, "m", "prompt", append(tools, command)...), cfg).Prompt()
+	if !strings.Contains(system, threadBoardHint) || !strings.Contains(system, threadCommandsHint) {
+		t.Errorf("the thread with the board and a command: %q", system)
+	}
+	for _, name := range []string{ToolTicketCreate, ToolTicketComment, ToolBoardRead, ToolSessionNew} {
+		if !strings.Contains(threadBoardHint, name) {
+			t.Errorf("the hint does not name %s", name)
+		}
 	}
 }

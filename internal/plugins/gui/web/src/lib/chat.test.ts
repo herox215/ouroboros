@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Chat } from './chat.svelte';
 import type { Link, Snapshot, State, Transport, WireEvent } from './wire';
 
@@ -9,7 +9,11 @@ interface Script {
   restarting: (() => void)[];
 }
 
-function script(open: () => Promise<Snapshot>, send: (text: string) => Promise<void> = async () => {}): Script {
+function script(
+  open: () => Promise<Snapshot>,
+  send: (text: string) => Promise<void> = async () => {},
+  assets?: () => Promise<string>,
+): Script {
   const events: ((batch: WireEvent[]) => void)[] = [];
   const ended: (() => void)[] = [];
   const restarting: (() => void)[] = [];
@@ -25,6 +29,7 @@ function script(open: () => Promise<Snapshot>, send: (text: string) => Promise<v
       History: async () => snapshot(),
       Send: send,
       Stop: async () => {},
+      ...(assets ? { Assets: assets } : {}),
     },
     transport,
   };
@@ -218,20 +223,95 @@ describe('Chat', () => {
     expect(chat.status).toBe('ready');
   });
 
-  it('starts anew, and does not reopen the thread by itself', async () => {
+  it('tells the restart, keeps the transcript, and opens the thread on the new node', async () => {
     let opens = 0;
-    const { link, ended, restarting } = script(async () => {
-      opens++;
-      return snapshot();
-    });
-    const chat = new Chat(link, [1]);
+    const sent: string[] = [];
+    const { link, ended, restarting } = script(
+      async () => {
+        opens++;
+        if (opens === 1) return snapshot({ kind: 'message', text: 'before' }, { kind: 'answer', text: 'old' });
+        if (opens === 2) throw new Error('still starting');
+        return snapshot({ kind: 'message', text: 'before' }, { kind: 'answer', text: 'new' });
+      },
+      async (text) => {
+        sent.push(text);
+      },
+    );
+    const chat = new Chat(link, [1, 1]);
     await chat.start();
+    expect(chat.entries.map((entry) => entry.text)).toEqual(['before', 'old']);
     restarting[0]();
     expect(chat.status).toBe('restarting');
+    expect(chat.busy).toBe(false);
+    // What was said stays readable while the node starts anew.
+    expect(chat.entries.map((entry) => entry.text)).toEqual(['before', 'old']);
+    // The end of the stream that follows the restart changes nothing.
     ended[0]();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(opens).toBe(1);
-    expect(chat.status).toBe('restarting');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(opens).toBe(3);
+    expect(chat.status).toBe('ready');
+    expect(chat.error).toBe('');
+    expect(chat.entries.map((entry) => entry.text)).toEqual(['before', 'new']);
+    await expect(chat.send('after the restart')).resolves.toBe(true);
+    expect(sent).toEqual(['after the restart']);
+  });
+
+  it('loads the page anew when the node comes back with another build', async () => {
+    let build = 'build-one';
+    const { link, restarting } = script(
+      async () => snapshot({ kind: 'answer', text: 'ok' }),
+      async () => {},
+      async () => build,
+    );
+    const reload = vi.fn();
+    link.reload = reload;
+    const chat = new Chat(link, [1]);
+    await chat.start();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // The build the page came with is no reason to load it again.
+    expect(reload).not.toHaveBeenCalled();
+    build = 'build-two';
+    restarting[0]();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(chat.status).toBe('ready');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the page when the node comes back with the build it had', async () => {
+    const { link, restarting } = script(
+      async () => snapshot({ kind: 'answer', text: 'ok' }),
+      async () => {},
+      async () => 'build-one',
+    );
+    const reload = vi.fn();
+    link.reload = reload;
+    const chat = new Chat(link, [1]);
+    await chat.start();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    restarting[0]();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(chat.status).toBe('ready');
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('ends offline after the last wait when the node does not come back from a restart', async () => {
+    let opens = 0;
+    const { link, restarting } = script(async () => {
+      opens++;
+      if (opens === 1) return snapshot({ kind: 'message', text: 'before' }, { kind: 'answer', text: 'old' });
+      throw new Error('still gone');
+    });
+    const chat = new Chat(link, [1, 1]);
+    await chat.start();
+    restarting[0]();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(opens).toBe(3);
+    expect(chat.status).toBe('offline');
+    expect(chat.entries.map((entry) => entry.text)).toEqual(['before', 'old']);
+    link.bridge.Open = async () => snapshot({ kind: 'answer', text: 'back' });
+    await chat.open();
+    expect(chat.status).toBe('ready');
+    expect(chat.entries.map((entry) => entry.text)).toEqual(['back']);
   });
 
   it('does not reconnect once the page is gone', async () => {

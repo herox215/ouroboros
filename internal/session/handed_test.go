@@ -3,10 +3,12 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
+	"ouroboros/internal/agents"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/history"
 )
@@ -19,7 +21,7 @@ func TestThreadTellsWhichSessionItStarted(t *testing.T) {
 		return "", ctx.Err()
 	}}
 	s := service(t, a)
-	id, err := threading{s}.Start(context.Background(), "go", "")
+	id, err := threading{s}.Start(context.Background(), "go", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,5 +133,48 @@ func TestThreadTellsReportedAsItTakesIt(t *testing.T) {
 	}
 	if strings.Join(kinds, " ") != "message:next handed:abcd1234" {
 		t.Fatalf("replayed %q", kinds)
+	}
+}
+
+// A session the thread starts runs as the agent it names, kept with it; an
+// ID no agent can have starts none. The thread runs as the agent of the
+// thread alone.
+func TestThreadStartsASessionAsAnAgent(t *testing.T) {
+	a := &fakeAgent{run: func(ctx context.Context, _ string, _ func(assistant.Step), _ func(string)) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	s := service(t, a)
+	id, err := threading{s}.Start(context.Background(), "go", "", "agent-2f288108")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	runsAs := s.get(id).agent
+	s.mu.Unlock()
+	if runsAs != "agent-2f288108" {
+		t.Fatalf("the session runs as %q", runsAs)
+	}
+	count := func() int {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.sessions)
+	}
+	before := count()
+	if _, err := (threading{s}).Start(context.Background(), "go", "", "helper"); !errors.Is(err, agents.ErrUnknown) {
+		t.Fatalf("a session as no agent: %v", err)
+	}
+	if count() != before {
+		t.Fatal("a session that started as no agent stays")
+	}
+	if err := s.SetAgent(context.Background(), ThreadID, agents.Archivist); !errors.Is(err, ErrThreadAgent) {
+		t.Fatalf("the thread as the archivist: %v", err)
+	}
+	if err := s.SetAgent(context.Background(), ThreadID, ""); err != nil {
+		t.Fatal(err)
+	}
+	// One with an answer on its way keeps its agent.
+	if err := s.SetAgent(context.Background(), id, agents.Thread); !errors.Is(err, ErrBusy) {
+		t.Fatalf("a busy session changed its agent: %v", err)
 	}
 }

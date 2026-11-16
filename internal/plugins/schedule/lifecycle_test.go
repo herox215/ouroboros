@@ -17,8 +17,8 @@ type pluginSessions struct {
 	fake *fakeSessions
 }
 
-func (p pluginSessions) RunScheduled(ctx context.Context, name, text, directory string, ask bool, tools ...string) (string, <-chan plugin.ScheduledResult, error) {
-	return p.fake.RunScheduled(ctx, name, text, directory, ask, tools...)
+func (p pluginSessions) RunScheduled(ctx context.Context, name, text, directory, as string, ask bool, tools ...string) (string, <-chan plugin.ScheduledResult, error) {
+	return p.fake.RunScheduled(ctx, name, text, directory, as, ask, tools...)
 }
 
 func TestPluginCompositionAndKernelStop(t *testing.T) {

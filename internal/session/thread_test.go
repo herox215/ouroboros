@@ -64,7 +64,7 @@ func dispatcher(told chan<- string, answer func(ctx context.Context, text string
 		var err error
 		switch verb {
 		case "new":
-			_, err = thread.Start(ctx, rest, "")
+			_, err = thread.Start(ctx, rest, "", "")
 		case "send":
 			id, message, _ := strings.Cut(rest, " ")
 			_, _, err = thread.Send(ctx, id, message, "", false)
@@ -391,19 +391,19 @@ func TestThreadStartsInItsProject(t *testing.T) {
 		t.Fatalf("the thread has a directory: %+v", past)
 	}
 	for directory, want := range map[string]string{"": "", other: other} {
-		id, err := start(ctx, "go", directory)
+		id, err := start(ctx, "go", directory, "")
 		if err != nil || directoryAt(t, s, id) != want {
 			t.Fatalf("%q: %s, %v", directory, id, err)
 		}
 	}
-	if _, err := start(ctx, " ", ""); !errors.Is(err, ErrEmpty) {
+	if _, err := start(ctx, " ", "", ""); !errors.Is(err, ErrEmpty) {
 		t.Fatalf("an empty task: %v", err)
 	}
-	if _, err := start(ctx, "go", "/no/such/directory"); err == nil {
+	if _, err := start(ctx, "go", "/no/such/directory", ""); err == nil {
 		t.Fatal("a session in a directory that is not")
 	}
 	a.ready = errTest
-	if _, err := start(ctx, "go", ""); !errors.Is(err, errTest) {
+	if _, err := start(ctx, "go", "", ""); !errors.Is(err, errTest) {
 		t.Fatalf("an agent that cannot answer: %v", err)
 	}
 	a.ready = nil
@@ -411,7 +411,7 @@ func TestThreadStartsInItsProject(t *testing.T) {
 		t.Fatalf("a session that could not start is kept: %+v", list)
 	}
 	s.Close()
-	if _, err := start(ctx, "go", ""); !errors.Is(err, ErrStopped) {
+	if _, err := start(ctx, "go", "", ""); !errors.Is(err, ErrStopped) {
 		t.Fatalf("a node that stops: %v", err)
 	}
 }
@@ -970,7 +970,7 @@ func TestThreadStartsOfPicturesAlone(t *testing.T) {
 	if err := s.askImages(ctx, ThreadID, "", []openai.Image{{Type: "image/png", Data: []byte("picture")}}, false); err != nil {
 		t.Fatal(err)
 	}
-	id, err := threading{s}.Start(ctx, "", "")
+	id, err := threading{s}.Start(ctx, "", "", "")
 	if err != nil || id == "" {
 		t.Fatalf("started %q, %v", id, err)
 	}

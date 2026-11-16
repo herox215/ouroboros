@@ -4,7 +4,6 @@ package gui
 
 import (
 	"context"
-	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -16,10 +15,6 @@ import (
 var runWindow = wails.Run
 var quitWindow = runtime.Quit
 var emitWindow = runtime.EventsEmit
-
-// restartEffectDuration is how long the page has to paint that ouro starts
-// anew before the process is replaced: a stalled frontend must not block it.
-const restartEffectDuration = 700 * time.Millisecond
 
 func showWindow(ctx context.Context, p *profile, name string) error {
 	frontend, err := frontendFiles()
@@ -40,19 +35,10 @@ func showWindow(ctx context.Context, p *profile, name string) error {
 		OnStartup: func(app context.Context) {
 			window.onEmit(func(events []Event) { emitWindow(app, "ouro:events", events) })
 			window.onEnded(func() { emitWindow(app, "ouro:ended") })
-			window.onRestart(func() {
-				emitWindow(app, "ouro:restarting")
-				go func() {
-					timer := time.NewTimer(restartEffectDuration)
-					defer timer.Stop()
-					select {
-					case <-timer.C:
-						quitWindow(app)
-					case <-done:
-					case <-ctx.Done():
-					}
-				}()
-			})
+			// A restart does not close the window: the page is told, and opens
+			// the thread on the node that runs anew by itself. The window goes
+			// on with its own build of the front end until it is closed.
+			window.onRestart(func() { emitWindow(app, "ouro:restarting") })
 			go func() {
 				select {
 				case <-ctx.Done():
@@ -64,9 +50,6 @@ func showWindow(ctx context.Context, p *profile, name string) error {
 	})
 	if err != nil {
 		return err
-	}
-	if exe, ok := window.pendingRestart(); ok {
-		return handOver(exe)
 	}
 	return ctx.Err()
 }

@@ -17,7 +17,7 @@ func TestRunScheduledDeadline(t *testing.T) {
 	}})
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	_, result, err := s.RunScheduled(ctx, "deadline", "wait", "", false)
+	_, result, err := s.RunScheduled(ctx, "deadline", "wait", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestRunScheduledFailureRelayed(t *testing.T) {
 		}
 		return "partial", failure
 	}})
-	_, result, err := s.RunScheduled(t.Context(), "failure", "go", "", false)
+	_, result, err := s.RunScheduled(t.Context(), "failure", "go", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestRunScheduledRejectsBeforeStarting(t *testing.T) {
 				s.node.successor = "new build"
 				want = ErrRestarting
 			}
-			id, result, err := s.RunScheduled(ctx, "job", text, directory, false)
+			id, result, err := s.RunScheduled(ctx, "job", text, directory, "", false)
 			if err == nil || want != nil && !errors.Is(err, want) || id != "" || result != nil {
 				t.Fatalf("%q %v %v", id, result, err)
 			}

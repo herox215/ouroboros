@@ -59,6 +59,7 @@ const (
 	modelSuffix     = ".model"
 	directorySuffix = ".directory"
 	goOnSuffix      = ".goon"
+	agentSuffix     = ".agent"
 )
 
 // The outcomes of an answer, in the record that ends it.
@@ -604,6 +605,9 @@ type Entry struct {
 	Modified time.Time
 	Size     int64
 	Title    string
+	// Agent is the agent of the profile the conversation runs as, "" for
+	// one from before that was kept, see SetAgent.
+	Agent string
 }
 
 // every returns the conversations of every party in the archive, the most
@@ -686,7 +690,8 @@ func (a *Archive) List() ([]Entry, error) {
 	var out []Entry
 	for _, s := range in {
 		_, title := a.describe(s.path)
-		out = append(out, Entry{listed(s), s.modified, s.size, title})
+		agent, _, _ := a.beside(a.id(s.path), agentSuffix)
+		out = append(out, Entry{listed(s), s.modified, s.size, title, agent})
 	}
 	return out, nil
 }
@@ -727,14 +732,14 @@ func (a *Archive) Delete(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec("UPDATE history_sessions SET deleted=1,archived=0,title=NULL,effort=NULL,directory=NULL,goon=0,size=0 WHERE id=? AND archived=1 AND deleted=0", id)
+	result, err := tx.Exec("UPDATE history_sessions SET deleted=1,archived=0,title=NULL,effort=NULL,directory=NULL,agent=NULL,goon=0,size=0 WHERE id=? AND archived=1 AND deleted=0", id)
 	if err != nil {
 		return err
 	}
 	n, _ := result.RowsAffected() // SQLite counts the rows of every statement
 	if n == 0 {
 		// Legacy Delete removed sidecars even when no answer existed.
-		if _, err = tx.Exec("UPDATE history_sessions SET deleted=1,title=NULL,effort=NULL,directory=NULL,goon=0 WHERE id=?", id); err != nil {
+		if _, err = tx.Exec("UPDATE history_sessions SET deleted=1,title=NULL,effort=NULL,directory=NULL,agent=NULL,goon=0 WHERE id=?", id); err != nil {
 			return err
 		}
 	}

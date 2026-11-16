@@ -75,12 +75,14 @@ body {
   outline-offset: 2px;
 }
 
+/* The column fills the window: the thread and the board use the same width,
+   so switching the view changes what is in it, not how wide it is. */
 .shell {
   height: 100vh;
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  max-width: 880px;
+  max-width: 1480px;
   margin: 0 auto;
   padding: 0 28px;
 }
@@ -114,7 +116,7 @@ body {
   text-overflow: ellipsis;
 }
 
-.profile:not(:empty)::before {
+.brand + .profile:not(:empty)::before {
   content: "·";
   margin-right: 10px;
   color: var(--line-strong);
@@ -147,7 +149,10 @@ body {
 .state[data-tone="waiting"] .led {
   background: var(--accent);
   opacity: 1;
-  animation: pulse 1.5s ease-in-out infinite;
+  /* In steps: the native window paints without the graphics card, and a
+     smooth pulse would have it paint the page sixty times a second for as
+     long as the thread works. */
+  animation: pulse 1.5s steps(4, jump-none) infinite;
 }
 
 .state[data-tone="waiting"] .led {
@@ -587,29 +592,16 @@ body {
   text-align: right;
 }
 
-/* The process is replaced by the build a tool asked for. */
-.veil {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-content: center;
-  background: var(--bg);
-  text-align: center;
-  font-family: var(--mono);
+/* The node goes over into a new build: a line that says so, while what was
+   said stays readable and the field waits. */
+.notice {
+  margin: 0 0 12px;
+  padding: 9px 13px;
   font-size: 13px;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  animation: veil-in 220ms ease both;
-}
-
-.veil p {
-  margin: 0;
-}
-
-@keyframes veil-in {
-  from {
-    opacity: 0;
-  }
+  color: var(--warn);
+  background: var(--warn-bg, transparent);
+  border: 1px solid var(--warn-line, var(--line));
+  border-radius: 10px;
 }
 
 .nowhere {
@@ -740,9 +732,614 @@ body {
   color: var(--accent);
 }
 
+
+/* What is hidden is not shown, whatever else says how it is laid out. */
+[hidden] {
+  display: none !important;
+}
+
+/* The window with a sidebar: the views on the left, open with their names or
+   folded to a rail of icons, and the column beside it. The width changes at
+   once, not in steps: the transcript measures its rows again on each. */
+.frame.with-sidebar {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.frame.with-sidebar > .shell {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar {
+  flex: none;
+  width: 196px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 10px;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.collapsed .sidebar {
+  width: 56px;
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding-left: 8px;
+}
+
+.collapsed .side-head {
+  justify-content: center;
+  padding-left: 0;
+}
+
+.collapsed .side-head .brand {
+  display: none;
+}
+
+.side-toggle {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.side-toggle:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.view-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.views {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.views button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.views button:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.views button[aria-pressed="true"] {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--accent-soft);
+}
+
+.collapsed .views button {
+  justify-content: center;
+  padding: 6px 0;
+}
+
+/* Folded, the names stay for whoever reads the page aloud. */
+.collapsed .view-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The board beside the thread: a lane a column, a card a ticket, and the
+   ticket that is open in a panel over the lanes on its right. */
+.board {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 0 12px;
+}
+
+.board-wait {
+  margin: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.lanes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(210px, 1fr));
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.lane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.lane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 13px 9px;
+}
+
+.lane-head h2 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.lane-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.lane-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.lane[data-column="ready"] .lane-dot,
+.lane[data-column="progress"] .lane-dot {
+  background: var(--accent);
+}
+
+.lane[data-column="blocked"] .lane-dot {
+  background: var(--warn);
+}
+
+.lane[data-column="done"] .lane-dot {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+}
+
+.lane-empty {
+  margin: 0;
+  padding: 4px 13px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 2px 8px 10px;
+  list-style: none;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 10px 12px 9px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.card:hover {
+  border-color: var(--line-strong);
+}
+
+.card[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.card-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.card-work,
+.run {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.card-work .led,
+.run.working .led {
+  background: var(--accent);
+  opacity: 1;
+  animation: board-pulse 1.6s steps(4, jump-none) infinite;
+}
+
+@keyframes board-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.card-reason {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--warn);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.card-told {
+  color: var(--accent);
+}
+
+.board-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 8px 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.board-pending {
+  color: var(--warn);
+}
+
+/* The ticket that is open. */
+.ticket {
+  position: absolute;
+  top: 18px;
+  right: 0;
+  bottom: 12px;
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.ticket-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  padding: 14px 16px 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ticket-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chip {
+  padding: 1px 9px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+}
+
+.chip[data-column="blocked"] {
+  color: var(--warn);
+  border-color: var(--warn-line);
+  background: var(--warn-bg);
+}
+
+.ticket-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-content: center;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ticket-close:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.ticket-head h2 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.ticket-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ticket-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 16px 18px 20px;
+}
+
+.ticket-part h3 {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ticket-part .markdown > :first-child {
+  margin-top: 0;
+}
+
+.ticket-part .markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.plain {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ticket-part.blocked {
+  padding: 12px 14px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-radius: 10px;
+}
+
+.ticket-part.blocked h3 {
+  color: var(--warn);
+}
+
+.ticket-from,
+.ticket-none {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.ticket-none {
+  margin: 0;
+}
+
+.ticket-part.result {
+  padding: 12px 14px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 10px;
+}
+
+.ticket-directory {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.runs,
+.notes {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runs {
+  gap: 6px;
+}
+
+.run {
+  flex-wrap: wrap;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.run-role {
+  font-weight: 550;
+}
+
+.run-agent {
+  color: var(--accent);
+  font-weight: 550;
+}
+
+.card-agent {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.run-session {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-how {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run.working .run-how {
+  color: var(--accent);
+}
+
+.notes {
+  gap: 12px;
+}
+
+.ticket-note {
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+  font-size: 13.5px;
+}
+
+.ticket-note[data-by="thread"] {
+  border-left-color: var(--accent);
+}
+
+.note-head {
+  display: flex;
+  gap: 10px;
+  margin: 0 0 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.note-by {
+  font-weight: 600;
+  color: var(--text);
+}
+
 @media (max-width: 640px) {
   .shell {
     padding: 0 14px;
+  }
+
+  /* On a phone a lane fills most of the width, and the next one shows at
+     its edge: the lanes are swiped through. */
+  .lanes {
+    grid-template-columns: repeat(5, 84%);
+    scroll-snap-type: x mandatory;
+  }
+
+  .lane {
+    scroll-snap-align: start;
+  }
+
+  .ticket {
+    top: 8px;
+    bottom: 8px;
+  }
+
+  /* On a phone the open sidebar lies over the view, and the rail keeps its
+     place beside it, so the column does not move when it opens. */
+  .frame.with-sidebar:not(.collapsed) {
+    padding-left: 56px;
+  }
+
+  .frame.with-sidebar:not(.collapsed) .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    box-shadow: var(--shadow);
   }
 
   .bubble {

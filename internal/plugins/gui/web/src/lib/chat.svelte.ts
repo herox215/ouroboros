@@ -52,6 +52,8 @@ export class Chat {
   #generation = 0;
   #pending: WireEvent[] | null = null;
   #before = 0;
+  /** The build of the page this window runs; empty until it is read. */
+  #assets = '';
 
   hasMore = $state(false);
   loadingOlder = $state(false);
@@ -78,10 +80,7 @@ export class Chat {
     const { transport } = this.#link;
     transport.onEvents((events) => this.receive(events));
     transport.onEnded(() => this.ended());
-    transport.onRestarting(() => {
-      this.status = 'restarting';
-      this.busy = false;
-    });
+    transport.onRestarting(() => this.restarting());
     try {
       this.state = await this.#link.bridge.InitialState();
     } catch (error) {
@@ -105,6 +104,7 @@ export class Chat {
       }
       this.status = 'ready';
       this.error = '';
+      void this.assets();
     } catch (error) {
       this.fail(error);
     }
@@ -219,11 +219,55 @@ export class Chat {
     this.error = reason(error);
   }
 
+  /** The build of the page the node serves, once the node answers again: the
+   * page kept the one it came with, and another one loads the page anew, so
+   * that a rebuild reaches the window that stayed open. */
+  private async assets(): Promise<void> {
+    const read = this.#link.bridge.Assets;
+    if (!read) return;
+    let version: string;
+    try {
+      version = await read();
+    } catch {
+      // A host that cannot say which build it serves says nothing.
+      return;
+    }
+    if (!version || this.#disposed) return;
+    if (this.#assets === '') {
+      this.#assets = version;
+      return;
+    }
+    if (this.#assets !== version) this.reload();
+  }
+
+  /** Loads the page of the new build: what is shown is what the node serves
+   * then, not what this page took with it. */
+  private reload(): void {
+    const { reload } = this.#link;
+    if (reload) {
+      reload();
+      return;
+    }
+    const where = globalThis.location;
+    if (where && typeof where.reload === 'function') where.reload();
+  }
+
+  /** The node goes over into a new build: the window stays open, what is
+   * shown stays readable, and the thread is opened again on the node that
+   * runs, as after a stream that ended. */
+  private restarting(): void {
+    this.status = 'restarting';
+    this.busy = false;
+    this.error = '';
+    void this.reconnect();
+  }
+
+  /** The live stream of the thread closed: the node starts anew, or it is
+   * gone. Either way the page opens the thread again until it answers. */
   private ended(): void {
     this.#ends++;
-    if (this.status === 'restarting') return;
-    this.status = 'offline';
     this.busy = false;
+    if (this.status !== 'restarting') this.status = 'offline';
     void this.reconnect();
   }
 
@@ -233,16 +277,20 @@ export class Chat {
     try {
       for (const delay of this.#delays) {
         await wait(delay);
-        if (this.#disposed || this.status === 'restarting') return;
+        if (this.#disposed) return;
         try {
           if (!(await this.snapshot())) return;
           this.status = 'ready';
           this.error = '';
+          void this.assets();
           return;
         } catch {
           // The node comes back after a rebuild; the next wait tries again.
         }
       }
+      // The node did not come back: what was shown stays, and the owner may
+      // try again, as after a connection that was lost.
+      if (!this.#disposed && this.status !== 'ready') this.status = 'offline';
     } finally {
       this.#retrying = false;
     }

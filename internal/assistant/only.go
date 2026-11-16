@@ -41,3 +41,29 @@ func only(bot *agent.Agent, names []string) *agent.Agent {
 	tools := slices.DeleteFunc(bot.Tools(), func(t agent.Tool) bool { return !slices.Contains(keep, t.Name) })
 	return bot.WithTools(tools...)
 }
+
+// ownKey is the key of the tools an answer has for itself, see WithOwnTools.
+type ownKey struct{}
+
+// WithOwnTools gives an answer that runs with ctx tools of its own, besides
+// those of the owner's agent: what only that answer is to do, like the tools
+// of a ticket for the session that works on it. They are no tools of the
+// agent: no other answer has them, and no helper.
+func WithOwnTools(ctx context.Context, tools []agent.Tool) context.Context {
+	return context.WithValue(ctx, ownKey{}, slices.Clone(tools))
+}
+
+// OwnTools are the tools an answer that runs with ctx has for itself, see
+// WithOwnTools.
+func OwnTools(ctx context.Context) []agent.Tool {
+	tools, _ := ctx.Value(ownKey{}).([]agent.Tool)
+	return tools
+}
+
+// own returns bot with tools besides its own, bot itself for none.
+func own(bot *agent.Agent, tools []agent.Tool) *agent.Agent {
+	if len(tools) == 0 {
+		return bot
+	}
+	return bot.WithTools(append(bot.Tools(), tools...)...)
+}

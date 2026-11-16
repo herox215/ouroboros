@@ -10,7 +10,7 @@ import (
 // scopeAgent answers with one model in the sessions and another in the thread.
 type scopeAgent struct{ fakeAgent }
 
-func (a *scopeAgent) Model(thread bool) string {
+func (a *scopeAgent) Model(thread bool, _ string) string {
 	if thread {
 		return "t1"
 	}
@@ -61,5 +61,25 @@ func TestModelForNotesOnlyChanges(t *testing.T) {
 	}
 	if records, _ := arch.Records(history.Owner("s1")); len(records) == 0 {
 		t.Fatal("the change was not noted")
+	}
+}
+
+// The model of a session is that of the agent it runs as, where that agent
+// has one of its own: as the session runs as it, or as the archive keeps it
+// while the session is not loaded. The thread answers with its own.
+func TestModelPerAgent(t *testing.T) {
+	a := &fakeAgent{model: "m1", models: map[string]string{"archivist": "small", "agent-0a1b2c3d": "large"}}
+	s, arch, _ := archived(t, a, t.TempDir(), time.Now())
+	t.Cleanup(s.Close)
+	if err := arch.SetAgent(history.Owner("s2"), "archivist"); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions["s3"] = &session{id: "s3", agent: "agent-0a1b2c3d", watchers: map[chan Event]struct{}{}}
+	for id, want := range map[string]string{"s2": "small", "s3": "large", "s4": "m1", ThreadID: "m1"} {
+		if got := s.model(id); got != want {
+			t.Errorf("%s answers with %q, want %q", id, got, want)
+		}
 	}
 }

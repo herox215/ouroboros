@@ -3,8 +3,6 @@ package gui
 import (
 	"context"
 	"errors"
-	"os"
-	"slices"
 	"strings"
 	"testing"
 
@@ -93,14 +91,6 @@ func TestRun(t *testing.T) {
 	failing := fakeProfile("error")
 	if err := failing.run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "window failed") {
 		t.Fatalf("window failure: %v", err)
-	}
-}
-
-// A restart starts the new binary with the environment of this process.
-func TestHandOver(t *testing.T) {
-	r, ok := errors.AsType[*plugin.Restarting](handOver("/new/ouro"))
-	if !ok || r.Exe != "/new/ouro" || !slices.Equal(r.Env, os.Environ()) {
-		t.Fatalf("handover: %+v, %v", r, ok)
 	}
 }
 

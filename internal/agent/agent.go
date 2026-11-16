@@ -495,6 +495,14 @@ func (a *Agent) WithSystem(system string) *Agent {
 	return &copy
 }
 
+// WithLLM returns a copy that answers with model through llm, for one
+// answer. Memory, the system prompt and the tools are shared.
+func (a *Agent) WithLLM(llm LLM, model string) *Agent {
+	copy := *a
+	copy.llm, copy.model = llm, model
+	return &copy
+}
+
 // WithTools returns a copy that may use tools alone, for one answer. Memory
 // and the system prompt are shared; concurrent conversations are unaffected.
 func (a *Agent) WithTools(tools ...Tool) *Agent {

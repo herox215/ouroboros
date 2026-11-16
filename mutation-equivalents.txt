@@ -14,6 +14,7 @@
 
 internal/a2a/channel.go:240:17 CONDITIONALS_BOUNDARY  # a reason of exactly maxReason bytes cut to maxReason bytes is the same reason
 internal/agent/agent.go:1219:33 CONDITIONALS_BOUNDARY  # lastUsed comes from a clock that only counts up: two conversations never have the same
+internal/board/board.go:357:43 CONDITIONALS_BOUNDARY  # with exactly MaxNotes notes none is over: deleting the first zero of them deletes none
 internal/kernel/kernel.go:429:10 INCREMENT_DECREMENT  # the ID only tells items apart: counted down it is as unique as counted up
 internal/memory/archivist.go:75:82 CONDITIONALS_BOUNDARY  # only a memory written exactly staleAfter before the pass, to the nanosecond, tells >= from >: the clock goes on between writing it and the pass
 internal/memory/archivist.go:121:59 CONDITIONALS_BOUNDARY  # the candidates come from a map by ID: no two have the same ID, and of two different IDs < and <= say the same
@@ -34,6 +35,7 @@ internal/schedule/cron.go:168:16 CONDITIONALS_BOUNDARY  # the day left out, Satu
 internal/schedule/cron.go:187:16 CONDITIONALS_BOUNDARY  # the one more day is 1 January 400 years on, where the zones follow their current rules: none changes its offset within a day of 1 January
 internal/schedule/cron.go:188:21 ARITHMETIC_BASE  # the offset at d instead of a day before still finds every change, on the day it falls in: only the day two after it is no longer looked at with the one before, and their runs are hours apart or both after the change, with the gaps on the clock that validateInterval checks
 internal/schedule/store.go:287:17 CONDITIONALS_BOUNDARY  # ten runs cut to their last ten are the same ten runs
+internal/session/scheduled.go:44:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes is the same title
 internal/update/update.go:109:14 CONDITIONALS_BOUNDARY  # the first 7 characters of a hash of 7 characters are the hash
 internal/plugins/files/files.go:263:24 CONDITIONALS_BOUNDARY  # a limit of exactly maxReadLines set to maxReadLines is the same limit
 internal/plugins/files/files.go:296:5 INVERT_LOOPCTRL  # at the end of the file reading on finds the end again, and the loop stops there
@@ -109,7 +111,7 @@ internal/tui/settings.go:978:58 INVERT_NEGATIVES  # the whole line is cut to the
 internal/tui/view.go:746:13 CONDITIONALS_BOUNDARY  # at the width of the mark the rest is cut to nothing, so the mark alone is the line either way
 internal/tui/view.go:331:33 CONDITIONALS_BOUNDARY  # where the first entry asks, the loop returns 0 for it; where it does not, the loop ends and returns 0: the same either way
 internal/tui/view.go:352:11 CONDITIONALS_BOUNDARY  # at the last frame every letter is settled anyway: a seed modulo settleFrames is never below settleFrames less settleFrames, so the word stands as it is
-internal/session/session.go:685:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
+internal/session/session.go:695:18 CONDITIONALS_BOUNDARY  # an answer always begins with at least one message, so inputs is never empty and both forms hold
 internal/storage/storage.go:233:17 ARITHMETIC_BASE  # 10/time.Millisecond is 0: the retries spin instead of sleeping, and the open still waits until the lock is free or the deadline passed
 internal/history/history.go:800:16 CONDITIONALS_BOUNDARY  # a title of exactly MaxTitle bytes cut to MaxTitle bytes stays as it is
 internal/a2a/dialog.go:145:61 CONDITIONALS_BOUNDARY  # a dialog that ended exactly dialogKept ago is forgotten with this request or with the next: no message tells the two apart
@@ -196,7 +198,7 @@ internal/matrix/client.go:316:121 CONDITIONALS_BOUNDARY  # started is read from 
 internal/matrix/client.go:457:116 CONDITIONALS_BOUNDARY  # started is read from the wall clock in Run, which tests cannot set: no event can be made to carry exactly that millisecond, the only one the two forms treat differently
 internal/matrix/client.go:466:42 CONDITIONALS_BOUNDARY  # only events not older than the start of Run wait for a retry: one is exactly 30000 ms old no sooner than 30 s into Run, and then for one millisecond of the wall clock, which tests cannot set
 internal/plugins/matrix/store.go:84:152 CONDITIONALS_BOUNDARY  # time.Since counts nanoseconds of a clock tests cannot set: no status can be read at exactly 15 s of age, the only age the two forms treat differently
-internal/session/session.go:700:18 CONDITIONALS_BOUNDARY  # the inputs always hold the message that began the answer, so the guard holds either way
+internal/session/session.go:710:18 CONDITIONALS_BOUNDARY  # the inputs always hold the message that began the answer, so the guard holds either way
 internal/session/thread.go:208:99 CONDITIONALS_BOUNDARY  # the content begins with the footer, which begins with a space: the head cannot match either way
 internal/tui/view.go:656:17 CONDITIONALS_BOUNDARY  # at exactly rows+2 the scroll puts back the title and the blank line it cut, so the lines are those they were
 internal/tui/view.go:656:23 ARITHMETIC_BASE  # where the smaller limit decides first, top is 2, the title and the blank line again, so the lines stay as they were until rows+2, where both forms cut alike

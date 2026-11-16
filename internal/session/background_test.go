@@ -18,7 +18,7 @@ func TestThreadBackgroundResultAfterTopicChange(t *testing.T) {
 		if thread := assistant.ThreadOf(ctx); thread != nil {
 			switch {
 			case text == "XYZ":
-				if _, err := thread.Start(ctx, "inspect XYZ", ""); err != nil {
+				if _, err := thread.Start(ctx, "inspect XYZ", "", ""); err != nil {
 					return "", err
 				}
 				return "Ich kümmere mich darum.", nil

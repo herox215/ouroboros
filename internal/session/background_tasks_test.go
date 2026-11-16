@@ -28,7 +28,7 @@ func TestThreadDelegatedContinuation(t *testing.T) {
 			a := &fakeAgent{run: func(ctx context.Context, text string, _ func(assistant.Step), _ func(string)) (string, error) {
 				if thread := assistant.ThreadOf(ctx); thread != nil {
 					if text == "XYZ" {
-						id, err := thread.Start(ctx, "inspect XYZ", "")
+						id, err := thread.Start(ctx, "inspect XYZ", "", "")
 						if err != nil {
 							return "", err
 						}

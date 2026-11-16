@@ -49,7 +49,7 @@ func TestRunScheduledGeneratedRouted(t *testing.T) {
 		return "job output", nil
 	}}
 	s := service(t, a)
-	id, result, err := s.RunScheduled(WithMessageSource(t.Context(), MessageSource{Interface: "gui"}), "daily", "stored task", directory, false)
+	id, result, err := s.RunScheduled(WithMessageSource(t.Context(), MessageSource{Interface: "gui"}), "daily", "stored task", directory, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestRunScheduledQuestions(t *testing.T) {
 			}}
 			s := service(t, a)
 			_, live, _ := s.Watch(t.Context(), ThreadID)
-			id, result, err := s.RunScheduled(t.Context(), "question", "go", "", ask)
+			id, result, err := s.RunScheduled(t.Context(), "question", "go", "", "", ask)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +157,7 @@ func TestRunScheduledCancellation(t *testing.T) {
 				api = NewClient(serve(t, Handler(s)).dir)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
-			_, result, err := api.RunScheduled(ctx, "cancel", "wait", "", false)
+			_, result, err := api.RunScheduled(ctx, "cancel", "wait", "", "", false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -182,7 +182,7 @@ func TestRunScheduledConcurrentCompletion(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, result, err := s.RunScheduled(t.Context(), "fast", "go", "", false)
+			_, result, err := s.RunScheduled(t.Context(), "fast", "go", "", "", false)
 			if err != nil {
 				t.Error(err)
 				return
@@ -198,7 +198,7 @@ func TestRunScheduledConcurrentCompletion(t *testing.T) {
 func TestRunScheduledReadiness(t *testing.T) {
 	notReady := errors.New("not ready")
 	s := service(t, &fakeAgent{ready: notReady})
-	if _, _, err := s.RunScheduled(t.Context(), "job", "go", "", false); !errors.Is(err, notReady) {
+	if _, _, err := s.RunScheduled(t.Context(), "job", "go", "", "", false); !errors.Is(err, notReady) {
 		t.Fatal(err)
 	}
 	if len(s.sessions) != 0 {
@@ -209,7 +209,7 @@ func TestRunScheduledReadiness(t *testing.T) {
 func TestRunScheduledSocketResult(t *testing.T) {
 	s := service(t, &fakeAgent{})
 	c := NewClient(serve(t, Handler(s)).dir)
-	_, result, err := c.RunScheduled(t.Context(), "socket", "go", "", false)
+	_, result, err := c.RunScheduled(t.Context(), "socket", "go", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestRunScheduledTools(t *testing.T) {
 	s := service(t, a)
 	c := NewClient(serve(t, Handler(s)).dir)
 	for _, tools := range [][]string{{"memory_read"}, nil} {
-		_, result, err := c.RunScheduled(t.Context(), "job", "go", "", false, tools...)
+		_, result, err := c.RunScheduled(t.Context(), "job", "go", "", "", false, tools...)
 		if err != nil {
 			t.Fatal(err)
 		}

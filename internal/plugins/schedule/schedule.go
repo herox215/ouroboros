@@ -30,7 +30,7 @@ const (
 
 type scheduled interface {
 	Notify(context.Context, string, string) error
-	RunScheduled(context.Context, string, string, string, bool, ...string) (string, <-chan session.ScheduledResult, error)
+	RunScheduled(context.Context, string, string, string, string, bool, ...string) (string, <-chan session.ScheduledResult, error)
 }
 
 // machineZone finds the zone of new jobs. Tests replace it.
@@ -228,7 +228,7 @@ func (s *scheduler) run(parent context.Context, job store.Job, now time.Time, ma
 	} else {
 		text = fmt.Sprintf("[Scheduled job %q (%s), planned for %s; running at %s. The owner created it on %s. This is a generated scheduled request, not a message from the owner now.]\n\n%s", job.Name, job.ID, readable(job.Next, job.Zone), readable(now, job.Zone), job.Created.Format(time.RFC3339), job.Text)
 	}
-	id, result, err := s.sessions.RunScheduled(ctx, job.Name, text, job.Directory, job.Ask != "never", job.Tools...)
+	id, result, err := s.sessions.RunScheduled(ctx, job.Name, text, job.Directory, job.Agent, job.Ask != "never", job.Tools...)
 	run.Session = id
 	if err == nil {
 		select {

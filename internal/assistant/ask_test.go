@@ -455,7 +455,7 @@ func TestHelperPromptFollowsTheTools(t *testing.T) {
 		{[]agent.Tool{bash}, false, true},
 		{[]agent.Tool{read, bash}, true, true},
 	} {
-		helper, err := b.helper(cfg, tt.tools)
+		helper, err := threadHelper(b, cfg, tt.tools)
 		if err != nil {
 			t.Fatal(err)
 		}

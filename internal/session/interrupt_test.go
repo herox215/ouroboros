@@ -115,7 +115,7 @@ func TestScheduledAnswerIsNotInterrupted(t *testing.T) {
 		return "done", nil
 	}})
 	s.Archive(history.Open(dir), func(string, ...any) {}, func(string) string { return "" })
-	if _, _, err := s.RunScheduled(context.Background(), "daily", "work", dir, false); err != nil {
+	if _, _, err := s.RunScheduled(context.Background(), "daily", "work", dir, "", false); err != nil {
 		t.Fatal(err)
 	}
 	<-started // the mark is written before the answer runs

@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
@@ -17,7 +16,13 @@ import (
 
 // profile is the window of one profile, handed to the frame alone.
 type profile struct {
-	status   func() (plugin.NodeStatus, error)
+	status func() (plugin.NodeStatus, error)
+	// rename calls the profile, and with it the agent of its thread, a new
+	// name; nil where the window has no owner to change it through.
+	rename func(name string) error
+	// models lists the accesses of the node with their models; nil where the
+	// window has no owner to ask.
+	models   func(ctx context.Context) ([]plugin.AccessModels, error)
 	sessions plugin.Sessions
 	dir      home.Dir        // the profile, where the pictures of the window are kept
 	ctx      *plugin.Context // to read what the plugins contribute to a tool line
@@ -61,6 +66,17 @@ func Plugin(owner *plugin.Owner, dir home.Dir, files *guard.Guard) plugin.Plugin
 		Service  *session.Service
 	}) error {
 		p := &profile{status: owner.Status, sessions: n.Sessions, dir: dir, ctx: ctx}
+		if owner != nil {
+			// The name is a setting like any other: changed as the settings of
+			// the terminal UI change it, so that it is checked the same way.
+			p.rename = func(name string) error {
+				_, err := owner.Change(plugin.Setting{Kind: plugin.SetName, Value: name}, nil, nil)
+				return err
+			}
+			p.models = func(c context.Context) ([]plugin.AccessModels, error) {
+				return owner.Models(c, plugin.All[plugin.Provider](ctx))
+			}
+		}
 		plugin.Add(ctx, plugin.Command{Name: "gui", Help: "chat with the thread in a window", Run: p.run})
 		// The window shows the pictures an agent makes, as the gateways show
 		// them: the shared gateway_send_image tool reaches it, so there is no
@@ -111,10 +127,3 @@ func (p *profile) run(ctx context.Context, args []string) error {
 
 // show is replaced by tests so command tests never open a desktop window.
 var show = showWindow
-
-// handOver returns the plugin.Restarting that starts exe: ouro starts anew
-// from the new build, with the same arguments, and so the window of the new
-// process opens again for the same profile.
-func handOver(exe string) error {
-	return &plugin.Restarting{Exe: exe, Env: os.Environ()}
-}

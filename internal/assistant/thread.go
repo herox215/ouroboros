@@ -87,8 +87,9 @@ type Thread interface {
 	Search(ctx context.Context, query string) (string, error)
 	// Start starts a session with text as its first message, "" for what
 	// the owner said since the last answer of the thread, in the project
-	// directory, "" for that of the thread, and returns its ID.
-	Start(ctx context.Context, text, directory string) (string, error)
+	// directory, "" for that of the thread, as the agent of the profile
+	// agent, "" for the agent of the thread, and returns its ID.
+	Start(ctx context.Context, text, directory, agent string) (string, error)
 	// State tells what the session id does now: whether an answer is on
 	// its way and since when, the tools that run in it, its background
 	// jobs, delegated tasks, queued messages and the question it waits for.
@@ -141,6 +142,7 @@ type stopping struct {
 type starting struct {
 	Text      string `json:"text"`
 	Directory string `json:"directory"`
+	Agent     string `json:"agent"`
 }
 
 // threadTools are the tools of the agent of the thread: window is how long it
@@ -196,7 +198,8 @@ func threadTools(window string) []agent.Tool {
 			"Leave out text only when all the owner's words since your last answer belong to this new concern, word for word.",
 		Schema: `{"type":"object","properties":{` +
 			`"text":{"type":"string","description":"only for the part of the owner's message about the new topic, or for what their words mean where only this conversation explains them: in their voice and language"},` +
-			`"directory":{"type":"string","description":"the absolute project directory of the session; leave it out for your workspace"}` +
+			`"directory":{"type":"string","description":"the absolute project directory of the session; leave it out for your workspace"},` +
+			`"agent":{"type":"string","description":"the ID of the agent the session runs as, of those listed; leave it out for yourself"}` +
 			`},"required":[]}`,
 		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			thread, err := threadFor(ctx, ToolSessionNew)
@@ -207,7 +210,7 @@ func threadTools(window string) []agent.Tool {
 			if err := agent.Decode(ToolSessionNew, raw, &s); err != nil {
 				return "", err
 			}
-			id, err := thread.Start(ctx, s.Text, s.Directory)
+			id, err := thread.Start(ctx, s.Text, s.Directory, s.Agent)
 			if err != nil {
 				return "", err
 			}
@@ -304,7 +307,7 @@ func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.A
 	// A tool the owner allowed for the thread alone is no work to hand on:
 	// the thread runs it itself, like the commands of the node.
 	tools := threadTools(window)
-	own := false
+	own, board := false, false
 	for _, t := range bot.Tools() {
 		if t.Name == ToolUserQuestion {
 			// The thread is the one agent that asks the owner.
@@ -313,10 +316,19 @@ func inThread(ctx context.Context, bot *agent.Agent, cfg config.Config) *agent.A
 		}
 		if t.ThreadOnly {
 			tools = append(tools, t)
-			own = true
+			// The tools of the board are the thread's, but putting a ticket
+			// on it is handing work on, not running a command itself.
+			if t.Name == ToolTicketCreate {
+				board = true
+			} else if t.Name != ToolTicketComment && t.Name != ToolBoardRead {
+				own = true
+			}
 		}
 	}
 	prompt := fmt.Sprintf(threadPrompt, cfg.Name, window, int(ThreadWindow.Hours()))
+	if board {
+		prompt += threadBoardHint
+	}
 	if own {
 		// The hint speaks of the thread's own tools: without one it would
 		// name tools that are not there.

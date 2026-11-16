@@ -43,7 +43,7 @@ func TestCanceledWhileTaken(t *testing.T) {
 	if err := s.Notify(&cancelsLate{Context: t.Context(), after: 1}, "n", "result"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("notify: %v", err)
 	}
-	if _, _, err := s.RunScheduled(&cancelsLate{Context: t.Context(), after: 1}, "job", "go", "", false); !errors.Is(err, context.Canceled) {
+	if _, _, err := s.RunScheduled(&cancelsLate{Context: t.Context(), after: 1}, "job", "go", "", "", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("scheduled: %v", err)
 	}
 	if len(s.sessions) != 0 {
@@ -57,7 +57,7 @@ func TestScheduledCanceledAsItBegins(t *testing.T) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}})
-	_, result, err := s.RunScheduled(&cancelsLate{Context: t.Context(), after: 2}, "job", "go", "", false)
+	_, result, err := s.RunScheduled(&cancelsLate{Context: t.Context(), after: 2}, "job", "go", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestScheduledStoppedByTheOwner(t *testing.T) {
 		<-ctx.Done()
 		return "partial", nil
 	}})
-	id, result, err := s.RunScheduled(t.Context(), "job", "go", "", false)
+	id, result, err := s.RunScheduled(t.Context(), "job", "go", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestScheduledTitle(t *testing.T) {
 	s := service(t, &fakeAgent{})
 	title := func(name string) string {
 		t.Helper()
-		id, result, err := s.RunScheduled(t.Context(), name, "go", "", false)
+		id, result, err := s.RunScheduled(t.Context(), name, "go", "", "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -140,7 +140,7 @@ func TestScheduledNotKept(t *testing.T) {
 			dir := t.TempDir()
 			s, arch, _ := archived(t, &fakeAgent{}, dir, time.Now())
 			breakArchive(t, arch, dir, sql)
-			if _, _, err := s.RunScheduled(t.Context(), "job", "go", "", false); err == nil || !strings.Contains(err.Error(), want) {
+			if _, _, err := s.RunScheduled(t.Context(), "job", "go", "", "", false); err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("started: %v", err)
 			}
 			if len(s.sessions) != 0 {
@@ -182,7 +182,7 @@ func TestScheduledSocketRefusals(t *testing.T) {
 		}
 	}
 	c := NewClient(serve(t, h).dir)
-	if _, _, err := c.RunScheduled(t.Context(), "job", " ", "", false); err == nil {
+	if _, _, err := c.RunScheduled(t.Context(), "job", " ", "", "", false); err == nil {
 		t.Fatal("empty scheduled answer started")
 	}
 }
@@ -209,7 +209,7 @@ func TestScheduledSocketFailure(t *testing.T) {
 		return "partial", errors.New("job failed")
 	}})
 	c := NewClient(serve(t, Handler(s)).dir)
-	_, result, err := c.RunScheduled(t.Context(), "job", "go", "", false)
+	_, result, err := c.RunScheduled(t.Context(), "job", "go", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,11 +237,11 @@ func TestScheduledClientReadsTheNode(t *testing.T) {
 		}
 	}))
 	c := NewClient(n.dir)
-	if _, _, err := c.RunScheduled(t.Context(), "garbage", "go", "", false); err == nil {
+	if _, _, err := c.RunScheduled(t.Context(), "garbage", "go", "", "", false); err == nil {
 		t.Fatal("read a start that is none")
 	}
 	for name, want := range map[string]error{"cut": io.ErrUnexpectedEOF, "canceled": context.Canceled, "deadline": context.DeadlineExceeded} {
-		_, result, err := c.RunScheduled(t.Context(), name, "go", "", false)
+		_, result, err := c.RunScheduled(t.Context(), name, "go", "", "", false)
 		if err != nil {
 			t.Fatal(err)
 		}

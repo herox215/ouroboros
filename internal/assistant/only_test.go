@@ -29,3 +29,26 @@ func TestOnlyTools(t *testing.T) {
 		t.Fatalf("delegate: %v", got)
 	}
 }
+
+// An answer has the tools of its own besides those it is limited to, also
+// where the limit leaves it none of the agent's; without any it is the agent.
+func TestOwnTools(t *testing.T) {
+	quiet := func(context.Context, struct{}) (string, error) { return "", nil }
+	bot := agent.New(promptLLM{}, "m", "", agent.NewTool("bash", "", nil, quiet), agent.NewTool("read", "", nil, quiet))
+	if got := OwnTools(context.Background()); got != nil {
+		t.Fatalf("tools of its own without any: %v", got)
+	}
+	if own(bot, OwnTools(context.Background())) != bot {
+		t.Fatal("an answer without tools of its own is not the agent")
+	}
+	mine := []agent.Tool{agent.NewTool("ticket_close", "", nil, quiet)}
+	ctx := WithOwnTools(context.Background(), mine)
+	mine[0].Name = "changed" // what is handed over is kept as it was
+	if got := toolNames(own(bot, OwnTools(ctx))); !slices.Equal(got, []string{"bash", "read", "ticket_close"}) {
+		t.Fatalf("with a tool of its own: %v", got)
+	}
+	limited := WithOnlyTools(ctx, []string{"ticket_close"})
+	if got := toolNames(own(only(bot, OnlyTools(limited)), OwnTools(limited))); !slices.Equal(got, []string{"ticket_close"}) {
+		t.Fatalf("limited to its own: %v", got)
+	}
+}
