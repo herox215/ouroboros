@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -454,4 +455,40 @@ func TestLoginOfTheHostWithoutAnAddressCountsOnlyTheName(t *testing.T) {
 	none.Cancel("anything")
 	none.Failed("anything")
 	none.Cleared("anything")
+}
+
+// The page asks which build the node serves: the window keeps the name it came
+// with, and another name after a restart is another build, which the page
+// loads itself anew. The name needs no login: it says nothing of the owner.
+func TestAssetsNameTheBuildOfThePage(t *testing.T) {
+	client, server, _ := pageFor(t)
+	res := do(t, client, http.MethodGet, server.URL+"/assets", nil, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("the build of the page without a login: %d", res.StatusCode)
+	}
+	var answer struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&answer); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if answer.Version == "" {
+		t.Fatal("the page names no build")
+	}
+	if answer.Version != assetVersion() {
+		t.Fatalf("the page names %q, its files are %q", answer.Version, assetVersion())
+	}
+	// The same files name the same build, however often they are asked.
+	res = do(t, client, http.MethodGet, server.URL+"/assets", nil, nil)
+	var again struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&again); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if again.Version != answer.Version {
+		t.Fatalf("the build of the page changed by itself: %q, then %q", answer.Version, again.Version)
+	}
 }

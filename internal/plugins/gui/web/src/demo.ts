@@ -1,7 +1,11 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
 import { Chat } from './lib/chat.svelte';
-import { demoLink } from './lib/demo';
+import { Board } from './lib/board.svelte';
+import { Sessions } from './lib/sessions.svelte';
+import { Agents } from './lib/agents.svelte';
+import { Jobs } from './lib/jobs.svelte';
+import { demoAgents, demoBoard, demoLink, demoSessions } from './lib/demo';
 import { locale, setLocale } from './lib/i18n';
 import './app.css';
 
@@ -12,5 +16,15 @@ document.documentElement.lang = locale();
 
 const target = document.getElementById('app');
 if (target) {
-  mount(App, { target, props: { chat: new Chat(demoLink()) } });
+  const agents = demoAgents();
+  mount(App, {
+    target,
+    props: {
+      chat: new Chat(demoLink()),
+      board: new Board(demoBoard()),
+      sessions: new Sessions(demoSessions()),
+      agents: new Agents(agents),
+      jobs: new Jobs(agents),
+    },
+  });
 }

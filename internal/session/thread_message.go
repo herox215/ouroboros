@@ -147,9 +147,11 @@ func (s *Service) answerMessage(ctx context.Context, id, text string, own bool) 
 	if own {
 		words = ownAnswer + words
 	}
-	se.asked <- queued{text: words, images: pictures, source: s.threadSource(), routed: true}
+	// Work that is apart takes the answer, but stays apart: the thread is
+	// told nothing of what comes of it, see RunWork.
+	se.asked <- queued{text: words, images: pictures, source: s.threadSource(), routed: !se.apart}
 	se.asked = nil
-	se.routed = true
+	se.routed = !se.apart
 	s.handed(se.id)
 	return cmp.Or(se.title, firstMessage(se.events)), "the session goes on with it", nil
 }

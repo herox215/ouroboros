@@ -318,6 +318,7 @@ func (s *Service) load(id string) *session {
 		s.effortOf(se)
 		s.modelOf(se)
 		s.directoryOf(se)
+		s.agentOf(se)
 		if title != "" {
 			se.events = append(se.events, Event{Kind: Title, Text: title})
 		}
@@ -365,6 +366,7 @@ func (s *Service) load(id string) *session {
 	s.effortOf(se)
 	s.modelOf(se)
 	s.directoryOf(se)
+	s.agentOf(se)
 	s.loadTasks(se)
 	return se
 }

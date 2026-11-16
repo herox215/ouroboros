@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/agents"
 	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
 	"ouroboros/internal/diagnosis"
@@ -258,6 +259,9 @@ type Builder struct {
 	// memories that go into the prompt of the agent of the owner, see
 	// WithMemories. May be nil.
 	memories func() (*memory.Store, error)
+	// agents names the agents of the profile an answer runs as, see
+	// WithAgents. May be nil: they have their default names then.
+	agents *agents.Store
 	// node is set by WithConfig.
 	node *node
 	// allow keeps a call the owner allowed for good, see WithAllowing. May
@@ -278,6 +282,13 @@ func (b Builder) WithSuggestions(store *suggestion.Store) Builder {
 // answer to the owner. It is asked for the store whenever it is needed.
 func (b Builder) WithMemories(memories func() (*memory.Store, error)) Builder {
 	b.memories = memories
+	return b
+}
+
+// WithAgents names the agents of the profile an answer runs as, see
+// WithAgent, by the names store keeps.
+func (b Builder) WithAgents(store *agents.Store) Builder {
+	b.agents = store
 	return b
 }
 
@@ -688,11 +699,24 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		}
 		return messages
 	})
-	bot, core := a.withCore(ctx, contextID, inDirectory(ctx, bot))
+	logf := func(format string, args ...any) {
+		if a.log != nil {
+			a.log("chat %s: "+format, append([]any{contextID}, args...)...)
+		}
+	}
+	who := a.builder.agentFor(AgentOf(ctx), cfg, logf)
+	bot, core := a.withCore(ctx, contextID, inDirectory(ctx, a.withModel(a.as(bot, who, cfg), who, cfg, logf)))
 	to.memories = core
-	bot = a.withTopic(ctx, contextID, withMessenger(ctx, inThread(ctx, bot, cfg))) // after inThread, which has a prompt of its own
+	// After inThread, which has a prompt and tools of its own.
+	threaded := inThread(ctx, bot, cfg)
+	if ThreadOf(ctx) != nil {
+		threaded = a.builder.delegating(threaded, who, cfg)
+	}
+	bot = a.withTopic(ctx, contextID, withMessenger(ctx, withSoul(threaded, who)))
 	if ThreadOf(ctx) == nil {
-		bot = only(bot, OnlyTools(ctx))
+		// The tools of the answer's own come after the limit, which is on
+		// those of the agent: a list that leaves none of them leaves these.
+		bot = own(only(bot, OnlyTools(ctx)), OwnTools(ctx))
 	}
 	var unarchived bool
 	reply, err := bot.Run(ctx, contextID, text, agent.Observer{
@@ -950,18 +974,23 @@ func (a *Assistant) Effort() string {
 	return cfg.Effort
 }
 
-// Model is the model the agents answer with in the scope thread tells: that
-// of the configuration of the scope, "" if it cannot be read.
-func (a *Assistant) Model(thread bool) string {
+// Model is the model the agent id answers with in the scope thread tells:
+// the model of its own the owner gave it, or else that of the configuration
+// of the scope; "" if it cannot be read. The thread is answered by the agent
+// of the thread, whatever id says.
+func (a *Assistant) Model(thread bool, id string) string {
 	cfg, err := a.config()
 	if err != nil {
 		return ""
 	}
 	if thread {
 		_, cfg.Model, _ = cfg.ThreadLLM()
-	} else {
-		_, cfg.Model, _ = cfg.SessionLLM()
+		return cfg.Model
 	}
+	if who := a.builder.agentFor(agents.Of(id), cfg, nil); who.ID != agents.Thread && who.OwnModel() {
+		return who.Model
+	}
+	_, cfg.Model, _ = cfg.SessionLLM()
 	return cfg.Model
 }
 

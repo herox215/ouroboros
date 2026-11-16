@@ -263,7 +263,18 @@ func (w *webFront) routes() http.Handler {
 	mux.HandleFunc("GET /api/history", w.guard(w.history))
 	mux.HandleFunc("POST /api/send", w.guard(w.send))
 	mux.HandleFunc("POST /api/stop", w.guard(w.stop))
+	mux.HandleFunc("GET /api/board", w.guard(w.board))
+	mux.HandleFunc("GET /api/ticket", w.guard(w.ticket))
+	mux.HandleFunc("GET /api/sessions", w.guard(w.sessions))
+	mux.HandleFunc("GET /api/session", w.guard(w.session))
+	mux.HandleFunc("GET /api/agents", w.guard(w.agents))
+	mux.HandleFunc("POST /api/agent/update", w.guard(w.updateAgent))
+	mux.HandleFunc("POST /api/agent/create", w.guard(w.createAgent))
+	mux.HandleFunc("POST /api/agent/delete", w.guard(w.deleteAgent))
+	mux.HandleFunc("GET /api/agent/models", w.guard(w.agentModels))
+	mux.HandleFunc("GET /api/jobs", w.guard(w.agentJobs))
 	mux.HandleFunc("GET /api/events", w.guard(w.events))
+	mux.HandleFunc("GET /assets", w.assets)
 	// The pictures the thread shows are the owner's: only behind the login.
 	mux.Handle("GET "+mediaPath, w.guard(w.media.ServeHTTP))
 	for _, file := range pageFiles() {
@@ -295,6 +306,17 @@ func pageFiles() []pageFile {
 		{path: "/icon-512.png", name: "icon-512.png", kind: "image/png", page: true},
 		{path: "/apple-touch-icon.png", name: "apple-touch-icon.png", kind: "image/png", page: true},
 	}
+}
+
+// assets tells the page which build of itself the node serves. The page kept
+// the name it came with and asks again when it reaches the node after a
+// restart: another name is another build, and the page loads itself anew so
+// that a rebuild shows without anyone reloading it by hand.
+func (w *webFront) assets(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set("Cache-Control", "no-cache")
+	reply(rw, struct {
+		Version string `json:"version"`
+	}{Version: assetVersion()})
 }
 
 // file serves one file of the page.
@@ -462,7 +484,7 @@ func (w *webFront) showLogin(rw http.ResponseWriter, user, problem string, statu
 	rw.WriteHeader(status)
 	_ = loginTemplate.Execute(rw, struct {
 		Name, User, Error string
-	}{w.name, user, problem})
+	}{w.profile.label(w.name), user, problem})
 }
 
 // setCookie keeps value in the browser, for maxAge seconds.
@@ -580,6 +602,157 @@ func (w *webFront) history(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(rw, snapshot)
+}
+
+// board shows the board of the profile, as the window does. It is the same
+// for every tab, so it needs no window of the tab that asks.
+func (w *webFront) board(rw http.ResponseWriter, _ *http.Request) {
+	board, err := w.profile.board()
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, board)
+}
+
+// ticket shows one ticket of the board in full.
+func (w *webFront) ticket(rw http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil {
+		http.Error(rw, "a ticket is named by its number", http.StatusBadRequest)
+		return
+	}
+	ticket, err := w.profile.ticket(id)
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, ticket)
+}
+
+// sessions lists the sessions of the profile, as the window does. It reads
+// them through the window of the tab that asks: the list belongs to the
+// sessions the node of this profile holds.
+func (w *webFront) sessions(rw http.ResponseWriter, r *http.Request) {
+	client := w.client(rw, r)
+	if client == nil {
+		return
+	}
+	list, err := client.window.Sessions()
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, list)
+}
+
+// session shows one session in full, with what happened in it lately.
+func (w *webFront) session(rw http.ResponseWriter, r *http.Request) {
+	client := w.client(rw, r)
+	if client == nil {
+		return
+	}
+	track, err := client.window.Session(r.URL.Query().Get("id"))
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, track)
+}
+
+// agents lists the agents of the profile, as the window does. They are the
+// same for every tab, so it needs no window of the tab that asks.
+func (w *webFront) agents(rw http.ResponseWriter, _ *http.Request) {
+	list, err := w.profile.agents()
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, list)
+}
+
+// agentJobs lists the jobs of the agents of the profile, as the window does.
+func (w *webFront) agentJobs(rw http.ResponseWriter, _ *http.Request) {
+	list, err := w.profile.agentJobs()
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, list)
+}
+
+// agentBody is what the page sends of an agent: which one, and what the
+// owner says of it.
+type agentBody struct {
+	ID string `json:"id"`
+	AgentChange
+}
+
+// readAgent reads what the page sends of an agent into body, and reports
+// whether it could; it answers the page itself where it could not. It
+// changes the agents of the node, so only the page itself sends it.
+func (w *webFront) readAgent(rw http.ResponseWriter, r *http.Request, body *agentBody) bool {
+	if !w.sameOrigin(rw, r) {
+		return false
+	}
+	// A soul is a few kilobytes at most, see agents.MaxSoul.
+	r.Body = http.MaxBytesReader(rw, r.Body, 128<<10)
+	if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+		http.Error(rw, "the agent cannot be read: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// updateAgent changes an agent of the profile, as the window does.
+func (w *webFront) updateAgent(rw http.ResponseWriter, r *http.Request) {
+	var body agentBody
+	if !w.readAgent(rw, r, &body) {
+		return
+	}
+	agent, err := w.profile.updateAgent(body.ID, body.AgentChange)
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, agent)
+}
+
+// createAgent makes an agent of the owner's, as the window does.
+func (w *webFront) createAgent(rw http.ResponseWriter, r *http.Request) {
+	var body agentBody
+	if !w.readAgent(rw, r, &body) {
+		return
+	}
+	agent, err := w.profile.createAgent(body.AgentChange)
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, agent)
+}
+
+// agentModels lists the models an agent may answer with, as the window does.
+func (w *webFront) agentModels(rw http.ResponseWriter, _ *http.Request) {
+	list, err := w.profile.agentModels()
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, list)
+}
+
+// deleteAgent removes an agent of the owner's, as the window does.
+func (w *webFront) deleteAgent(rw http.ResponseWriter, r *http.Request) {
+	var body agentBody
+	if !w.readAgent(rw, r, &body) {
+		return
+	}
+	if err := w.profile.deleteAgent(body.ID); err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, struct{}{})
 }
 
 // send starts the answer to what the owner typed, or steers the one on its

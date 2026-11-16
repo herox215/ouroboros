@@ -21,7 +21,7 @@ func TestRecoveryAndResearchPrompts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			helper, err := b.helper(cfg, tools)
+			helper, err := threadHelper(b, cfg, tools)
 			if err != nil {
 				t.Fatal(err)
 			}

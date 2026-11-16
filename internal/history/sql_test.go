@@ -245,6 +245,18 @@ func TestSQLAddsTheModelColumn(t *testing.T) {
 	}
 }
 
+// A database that predates the agent column gets it on the next open.
+func TestSQLAddsTheAgentColumn(t *testing.T) {
+	a := Open(prepared(t, "ALTER TABLE history_sessions DROP COLUMN agent"))
+	defer a.Close()
+	if err := a.SetAgent("owner/draft", "orchestrator"); err != nil {
+		t.Fatal(err)
+	}
+	if agent, ok, err := a.Agent("owner/draft"); err != nil || !ok || agent != "orchestrator" {
+		t.Fatalf("agent: %q, %v, %v", agent, ok, err)
+	}
+}
+
 // A model column that cannot be added fails the open, rather than leaving an
 // archive without it.
 func TestSQLCannotAddTheModelColumn(t *testing.T) {

@@ -296,3 +296,45 @@ func TestDefaultZoneIsStableName(t *testing.T) {
 		t.Fatalf("zone=%q", j.Zone)
 	}
 }
+
+// Read returns the jobs as they are kept, and changes nothing: a claim left
+// running stays so, unlike Open, which the scheduler alone calls.
+func TestRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "schedule.json")
+	if jobs, err := Read(path); err != nil || jobs != nil {
+		t.Fatalf("no file: %+v, %v", jobs, err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := once(epoch.Add(time.Hour))
+	j.Agent = "archivist"
+	j = mustCreate(t, s, j)
+	if _, err := s.Claim(epoch.Add(2 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := Read(path)
+	if err != nil || len(jobs) != 1 || jobs[0].ID != j.ID || jobs[0].Agent != "archivist" || len(jobs[0].Runs) != 1 || jobs[0].Runs[0].Status != "running" {
+		t.Fatalf("read: %+v, %v", jobs, err)
+	}
+	j.Agent = "helper"
+	if _, err := s.Create(j, epoch); err == nil || !strings.Contains(err.Error(), "no such agent") {
+		t.Fatalf("a job for no agent: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if jobs, err := Read(path); err != nil || jobs != nil {
+		t.Fatalf("an empty file: %+v, %v", jobs, err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err == nil {
+		t.Fatal("a broken file was read")
+	}
+	if _, err := Read(t.TempDir()); err == nil {
+		t.Fatal("a directory was read")
+	}
+}

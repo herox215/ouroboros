@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"ouroboros/internal/agents"
 	"ouroboros/internal/safefile"
 )
 
@@ -49,7 +50,10 @@ type Job struct {
 	Ask       string `json:"ask"`
 	// Tools are the tools the session of a run is offered, by name; none
 	// for all the owner allows.
-	Tools   []string  `json:"tools,omitempty"`
+	Tools []string `json:"tools,omitempty"`
+	// Agent is the agent of the profile the session of a run runs as, see
+	// agents: the agent of the thread for "".
+	Agent   string    `json:"agent,omitempty"`
 	Paused  bool      `json:"paused,omitempty"`
 	Created time.Time `json:"created"`
 	Next    time.Time `json:"next"`
@@ -131,6 +135,26 @@ func (s *Store) mutate(fn func(*[]Job) error) error {
 	}
 	s.jobs = jobs
 	return nil
+}
+
+// Read returns the jobs kept at path, in creation order, as they are now,
+// without opening the store: it changes nothing, and a window that is not the
+// scheduler reads them so. A missing file holds none.
+func Read(path string) ([]Job, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var jobs []Job
+	if len(b) > 0 {
+		if err = json.Unmarshal(b, &jobs); err != nil {
+			return nil, err
+		}
+	}
+	return jobs, nil
 }
 
 // List returns jobs in creation order, with detached histories.
@@ -234,6 +258,9 @@ func validate(j *Job, now time.Time, recalculate bool) error {
 	}
 	if j.Ask != "thread" && j.Ask != "never" {
 		return errors.New("ask must be thread or never")
+	}
+	if j.Agent != "" && !agents.Valid(j.Agent) {
+		return fmt.Errorf("%w: %q", agents.ErrUnknown, j.Agent)
 	}
 	if j.Zone == "" || j.Zone == "Local" {
 		var err error

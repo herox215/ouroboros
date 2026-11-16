@@ -65,6 +65,7 @@ import (
 	"ouroboros/internal/peers"
 	"ouroboros/internal/plugins/assistant"
 	"ouroboros/internal/plugins/base"
+	boardplugin "ouroboros/internal/plugins/board"
 	browserplugin "ouroboros/internal/plugins/browser"
 	chatgptplugin "ouroboros/internal/plugins/chatgpt"
 	claudecodeplugin "ouroboros/internal/plugins/claudecode"
@@ -204,6 +205,7 @@ func plugins(s Settings, t Terminal, p *profile) []plugin.Plugin {
 		historyplugin.Plugin(dir),
 		memoryplugin.Plugin(dir),
 		scheduleplugin.Plugin(dir),
+		boardplugin.Plugin(dir),
 		skillsplugin.Plugin(dir),
 		openaiplugin.Plugin(openaiplugin.Offer{BaseURL: s.BaseURL, APIKey: s.APIKey}),
 		deepseekplugin.Plugin(deepseekplugin.Options{APIKey: s.DeepSeekKey}),

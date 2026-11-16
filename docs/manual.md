@@ -15,7 +15,7 @@ ouro list                 # find nodes on the network
 ouro chat "ask beta …"    # one answer from your agent, for scripts; without a message → the terminal UI
 ouro ask <ID|name> "hi"   # write to a node directly; without a message → interactive
 ouro tui                  # same as ouro, kept for scripts
-ouro gui                  # the thread in a native window: chat and input only
+ouro gui                  # the thread and the board in a native window
 ouro stop
 ouro update               # build and install the newest main
 ouro rollback             # the build before the last update or rebuild again
@@ -165,12 +165,79 @@ ouro does not pick one: `ouro` and `ouro chat` fail and name the commands that o
 which keep working.
 
 The optional `gui` plugin contributes only the explicit `ouro gui` command, not a default front end.
-It opens a Wails v2 window that is just the thread: the conversation, the field to write in,
-and how the thread stands. There is no sidebar, no profile picker, no settings, no context
-rail and no view of other sessions; for those, use the terminal UI. `ouro --profile NAME gui`
+It opens a Wails v2 window with the thread: the conversation, the field to write in,
+and how the thread stands, and beside it [the board](#the-board). There is no sidebar, no
+profile picker, no settings, no context rail and no view of other sessions; for those, use
+the terminal UI. `ouro --profile NAME gui`
 chooses the profile whose thread the window shows. With several profiles, `ouro gui` opens
 the first one; a profile whose GUI plugin is off has no such command. Switching happens by
 starting the window for another profile.
+
+**Thread**, **Board**, **Sessions**, **Jobs** and **Agents** in the sidebar
+on the left of the window choose what it shows. The button at its top folds the sidebar to a rail of icons and opens it
+again; the window remembers which, and a narrow window starts folded. The board is a lane
+for each column, `new`, `ready`, `progress`, `blocked` and `done`, with a card for each
+ticket, the latest first: its number and title, the session that works on it and since when,
+why it is blocked, when it changed, and whether you were told of it. A click on a card opens
+the ticket in a panel over the lanes: why it does not go on, its result, what is to be done,
+its project, the sessions that worked on it and its notes, the latest first. `esc` or the
+cross closes it. Below the lanes the window says when the orchestrator looked last and what
+it did. The board is read only, and read again every few seconds while it is shown, from
+`board.json` of the profile; the thread goes on meanwhile, and what you typed into its field
+is still there when you come back. The page of the thread in a browser shows the same.
+
+**Agents** lists the agents of the profile. Every session runs as one of them, and its answers
+say who they are by it:
+
+- **The agent of the thread** talks with you in the thread, and is called as the profile is, as
+  `ouro profile` and the settings name it. Your own sessions and those your scheduled jobs start run
+  as it, unless they name another agent.
+- **The archivist** (`Archivist`) tidies the memories, in the job the schedule makes for it.
+- **The orchestrator** (`Orchestrator`) looks at the board when it changed. The sessions it
+  starts for tickets run as the agent it chooses for each, not as the orchestrator.
+
+  The archivist and the orchestrator are system agents of ouro, marked **System**: what they are
+  for is fixed and cannot be changed, and no other agent hands them a task with `delegate`. You
+  choose their name, their soul and their model. The list hides them until **Show system agents**
+  is ticked; the window remembers it.
+- **Your own agents**, which **New agent** makes: a name, what the agent is for, and its soul.
+  **Remove** takes one away again, after asking; the sessions and scheduled jobs that ran as it
+  run as the agent of the thread from then on. The three above cannot be removed.
+
+**Edit** changes the name of an agent, what it is for and its soul; Enter in a line saves, `esc`
+gives it up. Renaming the agent of the thread renames the profile, exactly as the name in the
+settings of the terminal UI does: the name is the node's on the network too, a name another
+profile of the node has is refused, and the agent of the thread is told its new name with the
+next message. The head of the window and the login of the page show the new name at once.
+Everything else is kept in `agents.json` of the profile; no two agents share a name, ignoring
+case, and a change holds from the next answer on. A session of any other agent is told that it
+is that agent, beside the agent of the thread, and what it is for, where you wrote it; what it is
+to do, its job or the look of the board tells it. **Sessions** says of each session which agent
+it runs as.
+
+- **What it is for** is one or two sentences, at most 300 characters, for the agent of the
+  thread and your own agents. An agent that hands a task on with [`delegate`](#tools) reads it of
+  every agent it may choose, and chooses by it: write there, for instance, that the agent of the
+  thread is for the thread alone and is to be given no task. The agent of the thread says what it
+  does while you wrote nothing.
+- **The model** is the one the agent answers with: as in the settings, or a model of its own,
+  chosen from those the accesses of the node offer, as the settings list them. An agent answers
+  with it from its next answer on, in its sessions, in its scheduled jobs and as a helper of
+  `delegate`; the fallbacks of the settings stand in after it, and an access that cannot be
+  reached leaves the agent on the model of the settings, which the log says. A session that runs
+  as an agent whose model changed starts its context anew, as after a change of the model in the
+  settings. The agent of the thread always answers with the models of the settings, the one of
+  the thread and the one of the sessions. A model that its access no longer lists stays the
+  agent's until you choose another.
+- **The soul** is who the agent is: its tone, its stance, how it works, at most 8000 characters,
+  over several lines. It ends the instructions of the agent wherever it works: in the thread
+  (the soul of the agent of the thread), in its sessions, in its scheduled jobs, and as a helper
+  of `delegate`. It shapes how the agent works, but sets none of the rules of ouro aside.
+
+**Jobs** lists the scheduled jobs that are still to run: each with the agent it runs as, when it
+runs, when it runs next and whether it is paused. It shows what is planned, not what came of it,
+which the sessions show; a job that runs once and ran is not listed. It is read only, again every
+few seconds while it is shown, from `schedule.json` of the profile.
 
 The window shows what the thread tells, through the very service the terminal UI uses
 first: `Sessions.Watch` with `plugin.ThreadID`, the replay of what happened and the live
@@ -207,15 +274,18 @@ opens no session of its own: it shows the thread, which has no project, so the d
 changes nothing there. For work on a project, ask the thread: it starts a session there.
 
 The window starts the node through the same sessions API as the terminal UI when needed,
-and releases nodes it started on close; running answers continue in the node. When a tool
-asks ouro to start anew from a new build, the window closes, and the new process opens one
-again with the same arguments, and so the same profile. The same happens when the node
-starts anew without the watched session asking for it, as after a rebuild in another
-session, `ouro update` or a rebuild by a peer: once the live stream ends, the window opens
-the thread again a few times over about 20 seconds, and a node that says it runs another
-image (`GET /instance` on its socket) makes the window start the binary that node runs. A
-node that does not come back is reported once, with a button to try again; the transcript
-stays.
+and releases nodes it started on close; running answers continue in the node. The window
+stays open when ouro starts anew from a new build: a tool that asks for it, a rebuild in
+another session, `ouro update` or a rebuild by a peer never close it, and the process of
+the window is the one it was opened with. The status line says that ouro starts anew and
+the field waits; what was said stays readable. The page opens the thread again on the node
+that runs, a few times over about 20 seconds: after a restart event the watched session
+tells, after the end of the live stream, or when a node that answers Open runs another
+image (`GET /instance` on its socket). The fresh snapshot replaces what was shown, the
+status is ready again, and the field works. A node that does not come back is reported with
+a button to try again; the transcript stays. Pictures, the board and everything else come
+from the new node, but the page itself is the build the window was opened with: a new
+frontend of the window shows only the next time the window is opened.
 
 The window follows the appearance of the desktop, light or dark, with the olive palette of
 the terminal UI, and speaks English or German as the browser does.
@@ -475,7 +545,9 @@ your agent is thinking.
 
 - **Handing on.** The agent of the thread does none of the work itself. For each of your messages it decides which
   topic it continues, or whether it is a new one. It hands the message to the conversation of that topic with
-  `session_message`, or starts one for it with `session_new`. Then it acknowledges the handoff in a word or two at
+  `session_message`, or starts one for it with `session_new`, as the agent whose description fits the topic, or
+  as itself where none does; it is told the agents with what each is for, and the system agents are none of
+  them. Then it acknowledges the handoff in a word or two at
   most, and its answer ends: that conversation answers, and only its result is the substantive answer. A complete
   answer to what was handed on, written before the result, is not shown. A message about several topics hands each its part. When it
   cannot tell which topic you mean, it asks you, about the topic. It answers itself only what the thread answers
@@ -554,6 +626,58 @@ already streamed by the model keep their normal streaming effect.
   restart like any conversation, shown as it was. `/session` does not list it, it is not named for a topic, and its
   agent has the tools of the thread alone, like the one that runs the commands of the node. The conversations it
   starts are listed there as any other.
+
+#### The board
+
+Besides handing a message to a conversation, the thread can put it on the **board** as a ticket. That is the
+way for real work: building or changing something in a project, a task of several steps, anything that should
+be thought through before it is done. Small things, like a lookup or a quick research, and what you say has to
+be fast, the thread still hands to a conversation; it decides which way a concern goes.
+
+- **The columns.** A ticket is in `new`, `ready`, `progress`, `blocked` or `done`. The thread creates it in `new`
+  (`ticket_create`), with a title, what you want and, where it knows it, the project directory.
+- **The orchestrator.** Every minute the node checks whether the board changed, and if it did, the orchestrator
+  looks at it once: a short conversation of its own that has only the tools of the board (`board_read`,
+  `ticket_start`, `ticket_move`, `ticket_comment`, `ticket_stop`, `ticket_status`, `thread_tell`). It does none
+  of the work and writes to no conversation. A check costs nothing; a look uses the model. What the
+  orchestrator changes itself does not make it look again.
+- **Refinement.** For a ticket in `new` the orchestrator starts a conversation that refines it: it works out
+  what exactly is to be done, reading the project, and writes that into the ticket (`ticket_update`). With
+  nothing open it closes its work (`ticket_close`), and the ticket is `ready`. With questions only you can
+  answer it blocks the ticket with them (`ticket_block`).
+- **Implementation.** For a ticket in `ready` the orchestrator starts another conversation, which implements
+  it: the ticket is in `progress` meanwhile, and `done` once that conversation closes it, with what it did.
+- **Only the ticket.** A conversation that works on a ticket is always a new one. It sees the ticket, not the
+  thread and not what the conversation before it read, and it talks to nobody: all it has to say goes into the
+  ticket (`ticket_comment`, `ticket_close`, `ticket_block`). The thread is not told of these conversations and
+  cannot hand them anything; `/session` lists them, titled with the number and title of their ticket. Only
+  what needs your leave, like a command a rule of `tools.ask` asks about, still reaches you through the thread.
+- **Blocked.** A ticket in `blocked` says why. When it asks you something, the orchestrator tells the thread,
+  the thread asks you, and writes your answer to the ticket as a comment (`ticket_comment`); with the next
+  look the orchestrator moves the ticket back and starts a new conversation for it. A conversation that ends
+  without closing or blocking its ticket leaves it blocked too, and so does one that runs longer than an hour
+  for a refinement or four for an implementation, and a node that starts anew while one works. The
+  orchestrator starts such a ticket again, at most twice, and tells the thread otherwise.
+- **Comments.** What you add to a ticket later, correct in it, or that you want it dropped, the thread writes
+  to it as a comment. A conversation that works on the ticket is told at once; otherwise the orchestrator sees
+  it with its next look, and reopens a ticket that is done, or drops one, as the comment asks.
+- **Done.** The orchestrator tells the thread of a ticket that is done, and the thread tells you what was done.
+- **Agents.** Every conversation of a ticket runs as an agent of the profile, which the orchestrator chooses
+  when it starts it (`ticket_start` with `agent`): the one whose description fits the ticket, or the agent of
+  the thread where none does. It is told the agents with what each is for, and keeps to what a description
+  says an agent is for and not for; the system agents work on no ticket. The board keeps which agent a
+  conversation runs as: the cards, the ticket in full and `/board` say it.
+- **Limits.** At most 3 conversations work on tickets at once, and one at a time implements in a project
+  directory, so that two do not change the same checkout; the others wait in `ready`. At most 12 conversations
+  work on one ticket one after the other. The board holds 128 tickets, and drops the one done longest for a
+  new one.
+- **In the window.** `ouro gui` and the page of the thread show the board as lanes of cards, and a ticket in
+  full on a click, see [the window](#terminal-ui).
+- **`/board`.** The terminal UI shows the board with `/board`: the columns with their tickets, when the
+  orchestrator looked last and what it said, and below one ticket in full, with the conversations that worked
+  on it and its notes; `next ticket` and `previous ticket` choose which. It is read only. The board is kept in
+  `board.json` of the profile. Turn the plugin `board` off to have the thread hand everything to conversations
+  as before, see [Plugins on and off](#plugins-on-and-off).
 
 ### Profiles
 
@@ -700,7 +824,7 @@ The agent has tools for peers (`list_peers`, `ask_peer`, and `find_peer`, which 
 `delete`, `search`), for the [history](#history) of its conversations (`history_search`, `history_read`,
 `history_sessions`), for [memories](#memories) (`memory_load`, `memory_add`,
 `memory_forget`), for owner-only [scheduled answers](#schedule)
-(`schedule_read`, `schedule_update`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
+(`schedule_read`, `schedule_update`), for the thread alone those of [the board](#the-board) (`ticket_create`, `ticket_comment`, `board_read`), one that loads a [skill](#skills) (`skill`) and, for you alone, three for the configuration (`get_config`, `propose_config`,
 `withdraw_proposal`), one that runs commands ([`bash`](#commands)), one that uses the web ([`browser`](#browser)), one that uses the apps of your computer ([`computer`](#computer)), one that reaches servers of the Model Context Protocol ([MCP servers](#mcp-servers)), one that builds and installs its own
 source ([`rebuild`](#updates)), one that asks you a question (`user_question`, see below) and one that hands tasks to
 helpers (`delegate`, see below). It calls them directly with structured arguments, see [Structured tool calls](#structured-tool-calls).
@@ -820,7 +944,8 @@ changes. There may be at most 32 jobs; recurring runs must be at least 15 minute
 The response includes the ID and up to three upcoming runs, with weekday and zone.
 `tools` (a list of tool names) limits the session of each run to those tools; leave it out, or
 give an empty list, for all the tools you allow. A name that is no tool is refused.
-The default archivist job gets the memory tools alone.
+The default archivist job gets the memory tools alone, and runs as the archivist, an agent of
+the profile of its own (see the window, **Agents**); a job you make runs as the agent of the thread.
 `schedule_read` lists jobs; with `id`, it reads one job and its last ten run records.
 `schedule_update` with `action: "update"`, `id` and changed fields edits a job; `at`
 and `cron` replace each other. Set `paused: true` to pause, or `false` to resume.
@@ -1460,7 +1585,7 @@ it is a model of another provider, see [Providers and accesses](#providers-and-a
 | `propose_config(path, value, reason)` | proposes one field to become `value`: `name`, `description`, `model`, `tools.h2a`, `tools.a2a` or `tools.protected`, with a sentence on why. The tool asks directly through the user-question interface, shows old and new values, and waits; only “Apply change” applies it |
 | `withdraw_proposal(id?)` | lists or removes legacy stored proposals only; new changes ask directly and are not queued |
 | `user_question(question, options?, recommended?)` | asks you `question` and waits for your answer, which it returns: with 2 to 6 `options` to choose from, one of them `recommended` if the agent has a preference, or without any, for you to write it |
-| `delegate(tasks, wait?)` | starts 1 to 4 tasks in the background, each done by a helper, and returns at once with their numbers; the report of each comes as a message once it ended. With `wait: true` it waits for them instead and returns what each ended with, as `{"answer": "…"}` or `{"error": "…"}` per task, in their order; such tasks have no numbers, `task_tell` and `task_stop` do not reach them, and they count against the 4 that run at once. A task is `{task, tools?}`: `tools` narrows what the helper may use |
+| `delegate(tasks, wait?)` | starts 1 to 4 tasks in the background, each done by a helper, and returns at once with their numbers; the report of each comes as a message once it ended. With `wait: true` it waits for them instead and returns what each ended with, as `{"answer": "…"}` or `{"error": "…"}` per task, in their order; such tasks have no numbers, `task_tell` and `task_stop` do not reach them, and they count against the 4 that run at once. A task is `{task, tools?, agent?}`: `tools` narrows what the helper may use, `agent` is the ID of the agent the helper is, the calling agent itself without it |
 
 **The agent can ask you on the way.** When it cannot go on without a decision of yours, it asks with
 `user_question` instead of guessing or ending its answer with the question, as its prompt tells it: the
@@ -1480,7 +1605,11 @@ chat says how many run (`2 tasks run · esc stops`); `ctrl+j` lists them next to
 report is a line in the chat (`◆ task 2 · find the callers ✓ 2m40s`, or `✗` and why it failed) and the agent
 takes it as it takes what you write: an answer on its way goes on with it after its current round, and
 otherwise an answer starts for it. What a helper reports is told to the agent as its report, not as what you
-said. A helper is an agent of yours, not a peer: it answers with the model, the access and the effort of the
+said. A helper is an agent of yours, not a peer: by default the agent that calls `delegate`, or the agent
+of the profile a task names, with that agent's name, what it is for and its soul, as **Agents** in the window of `ouro gui` sets them.
+`delegate` lists the agents of the profile with what each is for, so that the calling agent can give a task
+to the one made for it; one the profile does not have is refused, as are the archivist and the orchestrator,
+which are neither listed nor handed a task. Either way it answers with the model, the access and the effort of the
 conversation, with your tools as `tools.h2a` sets them up, under the same rules for paths and commands, and
 starts in the same workspace. It gets neither the tools to ask you, to reach peers, to build ouro or to change
 the configuration, nor `delegate`, so it hands nothing on. It sees only its task, nothing of the conversation,

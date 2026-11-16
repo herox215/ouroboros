@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"io/fs"
-	"os"
-	"slices"
 	"testing"
 	"time"
 
@@ -70,8 +68,8 @@ type emitted struct {
 	data []interface{}
 }
 
-// What the thread tells reaches the page as Wails events; a restart closes the
-// window for the build it names.
+// What the thread tells reaches the page as Wails events. A restart is told
+// too, and the window stays: the page opens the thread on the new node itself.
 func TestNativeWindowStreamsAndRestarts(t *testing.T) {
 	oldEmit, oldRun, oldQuit := emitWindow, runWindow, quitWindow
 	t.Cleanup(func() { emitWindow, runWindow, quitWindow = oldEmit, oldRun, oldQuit })
@@ -105,32 +103,27 @@ func TestNativeWindowStreamsAndRestarts(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("what the thread told did not reach the page")
 		}
-		live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/new/ouro"}
-		select {
-		case got := <-events:
-			if got.name != "ouro:restarting" {
-				t.Fatalf("event %q", got.name)
+		// Every restart is told, also the one after a told restart: the page
+		// reopens the thread on the node that runs anew each time.
+		for _, exe := range []string{"/new/ouro", "/other/ouro"} {
+			live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: exe}
+			select {
+			case got := <-events:
+				if got.name != "ouro:restarting" {
+					t.Fatalf("event %q", got.name)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("the restart for %s was not announced", exe)
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("the restart was not announced")
 		}
 		select {
 		case <-quit:
-			t.Fatal("the window closed before the effect could paint")
-		default:
-		}
-		select {
-		case <-quit:
-		case <-time.After(5 * time.Second):
-			t.Fatal("a restart did not close the window")
+			t.Fatal("a restart closed the window")
+		case <-time.After(50 * time.Millisecond):
 		}
 		return nil
 	}
-	r, ok := errors.AsType[*plugin.Restarting](showWindow(context.Background(), p, "Luna"))
-	if !ok || r.Exe != "/new/ouro" {
-		t.Fatalf("restart: %v", r)
-	}
-	if !slices.Equal(r.Env, os.Environ()) {
-		t.Fatalf("env: %v", r.Env)
+	if err := showWindow(context.Background(), p, "Luna"); err != nil {
+		t.Fatalf("restart: %v", err)
 	}
 }

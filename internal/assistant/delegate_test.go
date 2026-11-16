@@ -70,6 +70,7 @@ func tasks(texts ...string) json.RawMessage {
 		d.Tasks = append(d.Tasks, struct {
 			Task  string   `json:"task"`
 			Tools []string `json:"tools"`
+			Agent string   `json:"agent"`
 		}{Task: text})
 	}
 	raw, _ := json.Marshal(d)
@@ -105,6 +106,7 @@ func TestDelegateRefuses(t *testing.T) {
 		`{"tasks":[{"task":"a"},{"task":" "}]}`: "delegate: task 2 is empty",
 		`{"tasks":[{"task":"a","tools":["nope"]}]}`:        `delegate: task 1: a helper has no tool "nope" (there are: read)`,
 		`{"tasks":[{"task":"a","tools":["read","read"]}]}`: `delegate: task 1: the tool "read" is listed twice`,
+		`{"tasks":[{"task":"a","agent":"helper"}]}`:        `delegate: task 1: there is no agent "helper" (there are: thread)`,
 		`{"tasks":"a"}`: "",
 	} {
 		llm := newHelpers(1)
@@ -279,7 +281,7 @@ func TestOwnerDelegates(t *testing.T) {
 		}
 	}
 	prompt := answers[3].Answer
-	if !strings.HasPrefix(prompt, `You are a helper of "me", the personal agent of the owner`) ||
+	if !strings.HasPrefix(prompt, `You are "me", an agent of the owner of this Ouroboros node, and you are helping another instance of yourself with one task it gave you. Do it`) ||
 		!strings.HasSuffix(prompt, b.workspaceHint()) || strings.Contains(prompt, delegateHint) || strings.Contains(prompt, questionHint) {
 		t.Errorf("the prompt of a helper: %q", prompt)
 	}
@@ -310,7 +312,7 @@ func TestOwnerDelegates(t *testing.T) {
 	// Delegate alone, the first and only tool of the agent, is set up as well.
 	cfg.Tools = &config.Tools{H2A: config.Named(ToolDelegate)}
 	got, err = a.Ask(ctx, "chat", request(task{Task: "?system"}), nil)
-	if got := result(t, got, err); !strings.Contains(got, `You are a helper of \"me\"`) {
+	if got := result(t, got, err); !strings.Contains(got, `You are \"me\", an agent of the owner of this Ouroboros node, and you are helping`) {
 		t.Errorf("delegate alone: %s", got)
 	}
 }

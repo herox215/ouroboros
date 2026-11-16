@@ -103,7 +103,7 @@ func TestDirectToolInventories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper, err := b.helper(cfg, tools)
+	helper, err := threadHelper(b, cfg, tools)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestDirectCallsCannotReachUnlistedTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper, err := b.helper(cfg, note)
+	helper, err := threadHelper(b, cfg, note)
 	if err != nil {
 		t.Fatal(err)
 	}

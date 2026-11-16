@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/agents"
 	store "ouroboros/internal/schedule"
 	"ouroboros/internal/session"
 )
@@ -102,5 +103,69 @@ func TestArchivistOldToolsMigrated(t *testing.T) {
 	s.tick(context.Background())
 	if got, _ := s.store.Get(job.ID); !slices.Equal(got.Tools, oldArchivistTools) {
 		t.Fatalf("migrated twice: %v", got.Tools)
+	}
+}
+
+// The archivist job runs as the archivist: the seeded one at once, and the one
+// from before jobs ran as an agent once, with its tools as the owner left
+// them; an agent the owner gives it after stays. A job that names no agent
+// runs as the agent of the thread.
+func TestArchivistRunsAsTheArchivist(t *testing.T) {
+	s, f, _ := fixture(t)
+	s.tick(context.Background())
+	seeded := s.store.List()
+	if len(seeded) != 1 || seeded[0].Agent != agents.Archivist {
+		t.Fatalf("seeded: %+v", seeded)
+	}
+	if _, err := s.runNow(seeded[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	c := receive(t, f)
+	if c.agent != agents.Archivist {
+		t.Fatalf("the archivist job ran as %q", c.agent)
+	}
+	c.result <- session.ScheduledResult{Text: "done"}
+
+	if err := s.store.Remove(seeded[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	owned := []string{"memory_load"}
+	job, err := s.store.Create(store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never", Zone: "UTC", Tools: owned}, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.path+".defaults", []byte("archivist topic tools\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.tick(context.Background())
+	got, _ := s.store.Get(job.ID)
+	if got.Agent != agents.Archivist || !slices.Equal(got.Tools, owned) {
+		t.Fatalf("not migrated: %+v", got)
+	}
+	if b, err := os.ReadFile(s.path + ".defaults"); err != nil || string(b) != seededTools {
+		t.Fatalf("the marker: %q, %v", b, err)
+	}
+	if _, err := s.store.Update(job.ID, func(j *store.Job) error { j.Agent = agents.Thread; return nil }, s.now()); err != nil {
+		t.Fatal(err)
+	}
+	s.tick(context.Background())
+	if got, _ := s.store.Get(job.ID); got.Agent != agents.Thread {
+		t.Fatalf("the owner's agent replaced: %q", got.Agent)
+	}
+
+	plain, err := s.store.Create(store.Job{Name: "Morning", Text: "the calendar", Cron: "30 7 * * *", Zone: "UTC"}, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.runNow(plain.ID); err != nil {
+		t.Fatal(err)
+	}
+	c = receive(t, f)
+	if c.agent != "" {
+		t.Fatalf("a job of the owner ran as %q", c.agent)
+	}
+	c.result <- session.ScheduledResult{Text: "done"}
+	if _, err := s.store.Create(store.Job{Name: "x", Text: "y", Cron: "30 7 * * *", Zone: "UTC", Agent: "helper"}, s.now()); err == nil {
+		t.Fatal("a job for no agent was saved")
 	}
 }

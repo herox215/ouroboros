@@ -44,8 +44,12 @@ func (f *fakeThread) Search(_ context.Context, query string) (string, error) {
 	return "found " + query, f.err
 }
 
-func (f *fakeThread) Start(_ context.Context, text, directory string) (string, error) {
-	f.started = append(f.started, directory+" "+text)
+func (f *fakeThread) Start(_ context.Context, text, directory, agent string) (string, error) {
+	start := directory + " " + text
+	if agent != "" {
+		start += " as " + agent
+	}
+	f.started = append(f.started, start)
 	return "s2", f.err
 }
 

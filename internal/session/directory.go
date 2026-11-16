@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"ouroboros/internal/agents"
 	"ouroboros/internal/history"
 )
 
@@ -66,6 +68,42 @@ func (s *Service) SetDirectory(_ context.Context, id, path string) error {
 	}
 	se.directory, se.directed = directory, true
 	s.tell(se, s.directoryEvent(se))
+	return nil
+}
+
+// ErrThreadAgent is the error for the thread running as another agent than
+// the agent of the thread.
+var ErrThreadAgent = errors.New("the thread runs as the agent of the thread")
+
+// SetAgent makes the session id run as the agent of the profile agent, ""
+// for the agent of the thread, from its next answer on: one it has no answer
+// on its way in. An ID no agent can have is refused; whether the profile has
+// the agent, the one that starts the session knows, see agents.Valid.
+func (s *Service) SetAgent(_ context.Context, id, agent string) error {
+	if err := valid(id); err != nil {
+		return err
+	}
+	agent = agents.Of(agent)
+	if !agents.Valid(agent) {
+		return fmt.Errorf("%w: %q", agents.ErrUnknown, agent)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStopped
+	}
+	if id == ThreadID {
+		if agent != agents.Thread {
+			return ErrThreadAgent
+		}
+		return nil
+	}
+	se := s.get(id)
+	if se.cancel != nil || len(se.tasks) != 0 {
+		return ErrBusy
+	}
+	se.agent = agent
+	s.keepAgent(se)
 	return nil
 }
 
@@ -132,4 +170,28 @@ func (s *Service) directoryOf(se *session) {
 		s.archive.log("the directory of the session %s cannot be read: %v", se.id, err)
 	}
 	se.directory, se.directed = directory, ok
+}
+
+// keepAgent keeps which agent se runs as. s.mu is held.
+func (s *Service) keepAgent(se *session) {
+	if s.archive != nil {
+		if err := s.archive.SetAgent(history.Owner(se.id), agents.Of(se.agent)); err != nil {
+			s.archive.log("the agent of the session %s cannot be kept: %v", se.id, err)
+		}
+	}
+}
+
+// agentOf reads which agent se runs as from the archive: the agent of the
+// thread for the thread, and for a session that kept none. s.mu is held.
+func (s *Service) agentOf(se *session) {
+	if s.archive == nil || se.id == ThreadID {
+		return
+	}
+	agent, _, err := s.archive.Agent(history.Owner(se.id))
+	if err != nil {
+		s.archive.log("the agent of the session %s cannot be read: %v", se.id, err)
+	}
+	if agents.Valid(agent) {
+		se.agent = agent
+	}
 }

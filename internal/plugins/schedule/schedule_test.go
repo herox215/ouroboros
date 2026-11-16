@@ -48,6 +48,7 @@ func saved(t *testing.T, out string) view {
 type invocation struct {
 	ctx                   context.Context
 	name, text, directory string
+	agent                 string
 	ask                   bool
 	tools                 []string
 	result                chan session.ScheduledResult
@@ -63,9 +64,9 @@ func (f *fakeSessions) Notify(_ context.Context, name, text string) error {
 	return f.err
 }
 
-func (f *fakeSessions) RunScheduled(ctx context.Context, name, text, directory string, ask bool, tools ...string) (string, <-chan session.ScheduledResult, error) {
+func (f *fakeSessions) RunScheduled(ctx context.Context, name, text, directory, as string, ask bool, tools ...string) (string, <-chan session.ScheduledResult, error) {
 	r := make(chan session.ScheduledResult, 1)
-	f.calls <- invocation{ctx, name, text, directory, ask, tools, r}
+	f.calls <- invocation{ctx, name, text, directory, as, ask, tools, r}
 	return "scheduled-session", r, f.err
 }
 func receive(t *testing.T, f *fakeSessions) invocation {

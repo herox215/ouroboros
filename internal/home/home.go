@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"ouroboros/internal/agents"
 	"ouroboros/internal/config"
 	"ouroboros/internal/contacts"
 	"ouroboros/internal/credentials"
@@ -193,6 +194,12 @@ func (d Dir) Services() string { return d.path("services.json") }
 
 // Schedule is the profile-local file of scheduled owner jobs.
 func (d Dir) Schedule() string { return d.path("schedule.json") }
+
+// Board is where the node in d keeps the tickets of its board.
+func (d Dir) Board() string { return d.path("board.json") }
+
+// Agents keeps the names of the agents of the profile in d, see agents.
+func (d Dir) Agents() *agents.Store { return agents.Open(d.path("agents.json")) }
 
 // Skills is the directory of the skills the owner wrote for the agents of
 // the node, one directory per skill. The profiles share it.

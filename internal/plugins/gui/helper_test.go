@@ -30,9 +30,12 @@ type fakeSessions struct {
 	asks       []sent
 	steers     []sent
 	canceled   []string
-	askErr     error
 	steerErr   error
 	cancelErr  error
+	list       []plugin.SessionInfo
+	listErr    error
+	jobs       []plugin.Job
+	jobsErr    error
 }
 
 type sent struct{ id, text, source string }
@@ -62,11 +65,23 @@ func (s *fakeSessions) Watch(ctx context.Context, id string) ([]plugin.SessionEv
 	return s.past, s.live, nil
 }
 
+func (s *fakeSessions) List(context.Context) ([]plugin.SessionInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.list, s.listErr
+}
+
+func (s *fakeSessions) Jobs(context.Context) ([]plugin.Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jobs, s.jobsErr
+}
+
 func (s *fakeSessions) Ask(ctx context.Context, id, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.asks = append(s.asks, sent{id, text, openai.MessageSourceFrom(ctx).Interface})
-	return s.askErr
+	return nil
 }
 
 func (s *fakeSessions) Steer(ctx context.Context, id, text string) error {

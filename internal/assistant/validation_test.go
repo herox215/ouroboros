@@ -21,7 +21,7 @@ func TestFunctionValidationPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper, err := b.helper(cfg, []agent.Tool{browser})
+	helper, err := threadHelper(b, cfg, []agent.Tool{browser})
 	if err != nil {
 		t.Fatal(err)
 	}

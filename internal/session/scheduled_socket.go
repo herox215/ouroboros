@@ -11,6 +11,7 @@ type scheduledRequest struct {
 	Name      string   `json:"name"`
 	Text      string   `json:"text"`
 	Directory string   `json:"directory"`
+	Agent     string   `json:"agent,omitempty"`
 	Ask       bool     `json:"ask"`
 	Tools     []string `json:"tools,omitempty"`
 }
@@ -27,7 +28,7 @@ func (s *Service) serveScheduled(w http.ResponseWriter, r *http.Request) {
 	if !read(w, r, &in) {
 		return
 	}
-	id, result, err := s.RunScheduled(r.Context(), in.Name, in.Text, in.Directory, in.Ask, in.Tools...)
+	id, result, err := s.RunScheduled(r.Context(), in.Name, in.Text, in.Directory, in.Agent, in.Ask, in.Tools...)
 	if err != nil {
 		reply(w, nil, err)
 		return
@@ -51,8 +52,8 @@ func (s *Service) serveScheduled(w http.ResponseWriter, r *http.Request) {
 
 // RunScheduled starts scheduled work and keeps the request open until its
 // terminal result. Canceling ctx cancels the server-side answer as well.
-func (c *Client) RunScheduled(ctx context.Context, name, text, directory string, ask bool, tools ...string) (string, <-chan ScheduledResult, error) {
-	resp, err := c.request(ctx, http.MethodPost, "/run-scheduled", scheduledRequest{Name: name, Text: text, Directory: directory, Ask: ask, Tools: tools})
+func (c *Client) RunScheduled(ctx context.Context, name, text, directory, as string, ask bool, tools ...string) (string, <-chan ScheduledResult, error) {
+	resp, err := c.request(ctx, http.MethodPost, "/run-scheduled", scheduledRequest{Name: name, Text: text, Directory: directory, Agent: as, Ask: ask, Tools: tools})
 	if err != nil {
 		return "", nil, err
 	}

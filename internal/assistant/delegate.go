@@ -12,6 +12,7 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/agents"
 	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
 )
@@ -41,9 +42,12 @@ const MaxDelegates = 4
 // ouro anew.
 var notForHelpers = []string{toolListPeers, toolAskPeer, toolFindPeer, toolAnswer, toolTellPeer, toolAskBack, ToolRebuild, ToolTaskStop, ToolTaskTell}
 
-// helperPrompt is what a helper is; %q is the name of the node.
-const helperPrompt = `You are a helper of %q, the personal agent of the owner of this Ouroboros node, which gave you one task. ` +
-	`Do it, and go on until it is done. Your answer goes to that agent alone, which sees nothing of your work but your answer: ` +
+// helperPrompt is what a helper is: %q is the name of the agent it is, and
+// %s who gave it the task, see gaveBy. The rest of helperRules follows.
+const helperPrompt = `You are %q, an agent of the owner of this Ouroboros node, and you are helping %s with one task it gave you. `
+
+// helperRules is how a helper works, whichever agent it is.
+const helperRules = `Do it, and go on until it is done. Your answer goes to that agent alone, which sees nothing of your work but your answer: ` +
 	`make it complete in itself, with what you found, what you did and what is left, and keep it short. ` +
 	`Nobody can be asked: where the task leaves something open, decide what is reasonable and say so in your answer. `
 
@@ -78,7 +82,8 @@ func delegateTool() agent.Tool {
 		Schema: `{"type":"object","properties":{"tasks":{"type":"array","description":"what each helper is to do",` +
 			`"items":{"type":"object","properties":{` +
 			`"task":{"type":"string","description":"the task with all the context it needs: the helper sees nothing else"},` +
-			`"tools":{"type":"array","items":{"type":"string"},"description":"the tools of the helper, by name; leave out for all it may have"}` +
+			`"tools":{"type":"array","items":{"type":"string"},"description":"the tools of the helper, by name; leave out for all it may have"},` +
+			`"agent":{"type":"string","description":"the ID of the agent the helper is, of those listed; leave out for yourself"}` +
 			`},"required":["task"]}},` +
 			`"wait":{"type":"boolean","description":"wait for the tasks and return what each ended with in this same round, instead of returning at once with their numbers"}` +
 			`},"required":["tasks"]}`,
@@ -223,6 +228,9 @@ type delegation struct {
 	Tasks []struct {
 		Task  string   `json:"task"`
 		Tools []string `json:"tools"`
+		// Agent is the ID of the agent the helper is, "" for the one
+		// that calls delegate, see agents.
+		Agent string `json:"agent"`
 	} `json:"tasks"`
 }
 
@@ -280,14 +288,18 @@ func (b Builder) delegate(cfg config.Config, tools []agent.Tool) agent.Tool {
 			if err != nil {
 				return "", fmt.Errorf("%s: task %d: %w", ToolDelegate, i+1, err)
 			}
-			helper, err := b.helper(cfg, own)
+			as, err := b.helperAgent(ctx, cfg, t.Agent)
+			if err != nil {
+				return "", fmt.Errorf("%s: task %d: %w", ToolDelegate, i+1, err)
+			}
+			helper, err := b.helper(cfg, own, as, AgentOf(ctx))
 			if err != nil {
 				return "", err
 			}
 			// Each helper has a conversation of its own, which it forgets.
 			id, text := agent.ContextID(ctx)+"/"+ToolDelegate+"/"+a2a.NewID(), t.Task
 			tasks[i] = Task{Title: firstLine(strings.TrimSpace(text)), Run: func(ctx context.Context) (string, error) {
-				return inDirectory(ctx, helper).Respond(helping(ctx), id, text)
+				return inDirectory(ctx, helper).Respond(WithAgent(helping(ctx), as.ID), id, text)
 			}}
 		}
 		background := TasksOf(ctx)
@@ -479,11 +491,11 @@ func helping(ctx context.Context) context.Context {
 // memory of its own, and neither a context provider nor the
 // hooks of an answer, so that nothing of it is archived as a conversation
 // of the owner.
-func (b Builder) helper(cfg config.Config, tools []agent.Tool) (*agent.Agent, error) {
+func (b Builder) helper(cfg config.Config, tools []agent.Tool, as agents.Agent, caller string) (*agent.Agent, error) {
 	has := func(names ...string) bool {
 		return slices.ContainsFunc(tools, func(t agent.Tool) bool { return slices.Contains(names, t.Name) })
 	}
-	prompt := fmt.Sprintf(helperPrompt, cfg.Name) + validationHint + researchHint
+	prompt := fmt.Sprintf(helperPrompt, as.Name, b.gaveBy(as, caller, cfg)) + about(as) + helperRules + validationHint + researchHint
 	if has(fileTools...) {
 		prompt += filesHint
 	}
@@ -497,11 +509,53 @@ func (b Builder) helper(cfg config.Config, tools []agent.Tool) (*agent.Agent, er
 		prompt += exploreHint
 	}
 	prompt += machineHint(today()) + b.workspaceHint()
+	// The helper answers with the model of the agent it is, where it has
+	// one of its own that can be reached.
+	if llm, model, ok := b.llmOf(as, cfg, nil); ok {
+		return withSoul(agent.New(llm, model, prompt, tools...), as), nil
+	}
 	llm, err := b.LLM(cfg.Access)
 	if err != nil {
 		return nil, err
 	}
-	return agent.New(b.withFallbacks(llm, cfg), cfg.Model, prompt, tools...), nil
+	return withSoul(agent.New(b.withFallbacks(llm, cfg), cfg.Model, prompt, tools...), as), nil
+}
+
+// helperAgent is the agent id of the profile of cfg a helper is, the agent
+// the answer of ctx runs as for "". An agent the profile does not have is
+// refused, with the IDs of those it has, as is a reserved agent, which is
+// handed no task: a reserved agent that delegates hands on its own work.
+func (b Builder) helperAgent(ctx context.Context, cfg config.Config, id string) (agents.Agent, error) {
+	if id == "" {
+		return b.agentFor(AgentOf(ctx), cfg, nil), nil
+	}
+	if agents.Reserved(id) {
+		return agents.Agent{}, fmt.Errorf("%q is a system agent, which is handed no task", id)
+	}
+	list, err := b.agents.List(cfg.Name)
+	var ids []string
+	for _, a := range list {
+		if agents.Reserved(a.ID) {
+			continue
+		}
+		if a.ID == id {
+			return a, nil
+		}
+		ids = append(ids, a.ID)
+	}
+	if err != nil {
+		return agents.Agent{}, fmt.Errorf("the agents cannot be read: %w", err)
+	}
+	return agents.Agent{}, fmt.Errorf("there is no agent %q (there are: %s)", id, strings.Join(ids, ", "))
+}
+
+// gaveBy is who gave the helper as its task, as helperPrompt says it: the
+// agent caller, or another instance of as itself.
+func (b Builder) gaveBy(as agents.Agent, caller string, cfg config.Config) string {
+	if caller == as.ID {
+		return "another instance of yourself"
+	}
+	return strconv.Quote(b.agentFor(caller, cfg, nil).Name)
 }
 
 // remarkOf is what the owner is shown of how the tasks of a call of

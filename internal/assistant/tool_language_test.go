@@ -19,7 +19,7 @@ func TestToolDescriptionLanguagePrompts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper, err := b.helper(cfg, []agent.Tool{edit})
+	helper, err := threadHelper(b, cfg, []agent.Tool{edit})
 	if err != nil {
 		t.Fatal(err)
 	}

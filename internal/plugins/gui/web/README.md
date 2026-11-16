@@ -14,13 +14,25 @@ The window talks to the Go side through the bindings of `Window` (see
 comes as Wails events (`ouro:events`, `ouro:ended`, `ouro:restarting`); see
 `src/lib/bridge.ts` and `src/lib/wire.ts`.
 
+Beside the thread the window shows the board (see `board.go`): `Board` returns
+its lanes with a card a ticket, `Ticket` one ticket in full. Nothing of it
+comes as an event: `src/lib/board.svelte.ts` asks again every few seconds
+while the board is shown. `pnpm dev` has a scripted board too.
+
+Beside the board it lists the sessions (`sessions.go`), the agents of the
+profile (`agents.go`: `Agents`, `UpdateAgent`, `CreateAgent`, `DeleteAgent`)
+and the scheduled jobs (`jobs.go`: `AgentJobs`), read again while they are shown.
+
 ## History and scroll tests
 
 `Open` supplies a recent, turn-aligned window; `History(before)` supplies the
 preceding page from the same snapshot. `Chat.loadOlder` folds pages separately
 from live state. Transcript rows outside the viewport/overscan are replaced by
-spacers; mounted rows are measured with ResizeObserver. Scroll correction keeps
-an entry ID and pixel offset through prepends and measurement cascades.
+spacers; mounted rows are measured with ResizeObserver. Scroll correction moves
+the scroll position by what changed above the row the view shows, through
+prepends and measurement cascades, and does not write it otherwise: a write ends
+a wheel scroll that is on its way, as each piece of an answer streaming in below
+would. Scrolling up stops following the end until the owner scrolls down to it.
 
     pnpm test                 # includes paging state/cursor/race and geometry tests
     pnpm dev --port 5179      # leave running in another terminal
@@ -30,8 +42,9 @@ The browser test requires Node >=22 and `chromium` (override with `CHROMIUM`).
 `HISTORY_TEST_URL` overrides the dev URL. It injects harmless Wails fixtures
 before loading the real App; Send/Stop throw rather than contact a node. It
 checks demand-only history loading, two prepend anchors within 2px, bounded DOM
-rows while scrolling both ways, keyboard Home/End, jump-latest, resizing, and
-streaming both while following and while reading older messages. The dev test
+rows while scrolling both ways, keyboard Home/End, jump-latest, resizing,
+streaming both while following and while reading older messages, and a wheel
+step away from the end, and back to it, while an answer streams in. The dev test
 bypasses CSP only because Vite injects inline CSS; production CSP is unchanged.
 For the built assets, serve `../frontend` over HTTP, then run with
 `HISTORY_TEST_URL=http://127.0.0.1:PORT/ HISTORY_TEST_PRODUCTION=1`; this keeps

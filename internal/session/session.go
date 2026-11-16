@@ -25,6 +25,7 @@ import (
 
 	"ouroboros/internal/a2a"
 	"ouroboros/internal/agent"
+	"ouroboros/internal/agents"
 	"ouroboros/internal/assistant"
 	"ouroboros/internal/chat"
 	"ouroboros/internal/config"
@@ -212,6 +213,8 @@ type Info struct {
 	Last    time.Time `json:"last"`    // when the last Event happened
 	// Peer is the peer a conversation of a peer is with, see API.Peers.
 	Peer string `json:"peer,omitempty"`
+	// Agent is the agent of the profile the session runs as, see agents.
+	Agent string `json:"agent,omitempty"`
 }
 
 // Line is a message of the context of a session: who it is of, like
@@ -234,8 +237,9 @@ type API interface {
 	// RunScheduled starts generated, routed owner work; ctx controls its lifetime.
 	// The channel receives one terminal result and closes. With ask false,
 	// owner questions and approvals are unavailable. With tools its answers
-	// get only the tools of the owner's agent named, without all of them.
-	RunScheduled(ctx context.Context, name, text, directory string, ask bool, tools ...string) (id string, result <-chan ScheduledResult, err error)
+	// get only the tools of the owner's agent named, without all of them. It
+	// runs as the agent of the profile as names, the agent of the thread for "".
+	RunScheduled(ctx context.Context, name, text, directory, as string, ask bool, tools ...string) (id string, result <-chan ScheduledResult, err error)
 	// Ask starts the answer to text in the session id and returns at once:
 	// what happens on the way is told to those who Watch it. It fails with
 	// ErrBusy while an answer is on its way in that session.
@@ -401,8 +405,12 @@ type Service struct {
 	// holds from the next one on; nil uses config.DefaultThreadWindow. Set
 	// before serving clients.
 	ThreadWindow func() time.Duration
-	agent        Assistant
-	now          func() time.Time
+	// Apart reports whether the session id was work that is apart, see
+	// RunWork, for one the node only finds in its archive: the thread is not
+	// told of those either. Nil knows none. Set before serving clients.
+	Apart func(id string) bool
+	agent Assistant
+	now   func() time.Time
 
 	ctx     context.Context // of every answer: ends with Close
 	stop    context.CancelFunc
@@ -455,6 +463,14 @@ type session struct {
 	// tools limits the answers of a scheduled session to the tools its job
 	// names, nil for all of them, see assistant.WithOnlyTools.
 	tools []string
+	// apart says that the session is work a part of ouro started for itself,
+	// see RunWork: the thread is told nothing of it and hands it nothing.
+	// extra are the tools its answers have besides those of the owner's agent.
+	apart bool
+	extra []agent.Tool
+	// agent is the agent of the profile the session runs as, see agents:
+	// "" for the agent of the thread, as a session from before agents is.
+	agent string
 	// concernPictures keeps original request images for routing evidence while
 	// live. Images, like other image input, are intentionally not archived.
 	concernPictures []chat.Image
@@ -537,6 +553,7 @@ type queued struct {
 	source         MessageSource
 	generated      bool // backend input, not a message from an interface
 	routed         bool // handed on by the thread, or a task continuing that work
+	note           bool // told to work that is apart, see TellWork: it goes with that work
 	task           *Event
 }
 
@@ -587,6 +604,7 @@ func (s *Service) get(id string) *session {
 		se = &session{id: id, watchers: map[chan Event]struct{}{}, watching: map[string]int{}}
 		s.effortOf(se) // set before anything was said in it
 		s.directoryOf(se)
+		s.agentOf(se)
 		if !se.directed && s.initialDirectory != "" && id != ThreadID {
 			se.directory, se.directed = s.initialDirectory, true
 			s.keepDirectory(se)
@@ -655,6 +673,9 @@ func (s *Service) New(context.Context) (string, error) {
 		}
 	}
 	se.directed = true
+	// A session of the owner runs as the agent of the thread.
+	se.agent = agents.Thread
+	s.keepAgent(se)
 	return id, nil
 }
 
@@ -1092,6 +1113,8 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 	if se.tools != nil {
 		ctx = assistant.WithOnlyTools(ctx, se.tools)
 	}
+	ctx = assistant.WithOwnTools(ctx, se.extra)
+	ctx = assistant.WithAgent(ctx, agents.Of(se.agent))
 	s.mu.Unlock()
 	if restartable {
 		ctx = WithRestart(ctx, func(exe string) {
@@ -1238,7 +1261,7 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		s.emit(se, end)
 	}
 	forThread = se.routed
-	if !forThread {
+	if !forThread && !se.apart {
 		s.toldDirect(se, end)
 	}
 	s.relay(se, end)
@@ -1247,6 +1270,9 @@ func (s *Service) answer(ctx context.Context, se *session, text string, restarta
 		se.scheduled = nil
 		scheduled.result <- ScheduledResult{Text: reply, Err: err}
 		close(scheduled.result)
+		// What its starter told it too late goes with it: no answer of its
+		// own is for that.
+		se.queue = slices.DeleteFunc(se.queue, func(m queued) bool { return m.note })
 	}
 	if suggested != "" {
 		if assistant.Taken(suggested) {
@@ -1521,19 +1547,36 @@ func (s *Service) effort(se *session) string {
 	return s.agent.Effort()
 }
 
-// modeler is an agent that says which model it answers with in a scope: an
-// Assistant that cannot tell is one whose sessions are continued as they are.
+// modeler is an agent that says which model an agent of the profile answers
+// with in a scope: an Assistant that cannot tell is one whose sessions are
+// continued as they are.
 type modeler interface {
-	Model(thread bool) string
+	Model(thread bool, agent string) string
 }
 
-// model is the model the agent answers the session id with now, "" if it
-// cannot tell.
+// model is the model the agent answers the session id with now, as the agent
+// of the profile it runs as, "" if it cannot tell. s.mu is held.
 func (s *Service) model(id string) string {
 	if m, ok := s.agent.(modeler); ok {
-		return m.Model(id == ThreadID)
+		return m.Model(id == ThreadID, s.agentID(id))
 	}
 	return ""
+}
+
+// agentID is the agent of the profile the session id runs as: as it is kept
+// in the archive while it is not loaded. s.mu is held.
+func (s *Service) agentID(id string) string {
+	if se := s.sessions[id]; se != nil {
+		return agents.Of(se.agent)
+	}
+	if s.archive == nil || id == ThreadID {
+		return agents.Thread
+	}
+	agent, _, err := s.archive.Agent(history.Owner(id))
+	if err != nil {
+		s.archive.log("the agent of the session %s cannot be read: %v", id, err)
+	}
+	return agents.Of(agent)
 }
 
 // modelOf gives se the model it is kept with, if it is. s.mu is held.
@@ -1674,7 +1717,7 @@ func (s *Service) List(context.Context) ([]Info, error) {
 		}
 		if len(se.events) == 0 {
 			if se.efforted || se.directed {
-				list = append(list, Info{ID: se.id, Title: se.title})
+				list = append(list, Info{ID: se.id, Title: se.title, Agent: agents.Of(se.agent)})
 			}
 			continue
 		}
@@ -1682,7 +1725,7 @@ func (s *Service) List(context.Context) ([]Info, error) {
 		if len(title) > maxTitle {
 			title = strings.ToValidUTF8(title[:maxTitle], "")
 		}
-		list = append(list, Info{ID: se.id, Title: title, Running: se.cancel != nil, Last: se.events[len(se.events)-1].At})
+		list = append(list, Info{ID: se.id, Title: title, Running: se.cancel != nil, Last: se.events[len(se.events)-1].At, Agent: agents.Of(se.agent)})
 	}
 	if s.archive != nil {
 		entries, err := s.archive.List()
@@ -1700,7 +1743,7 @@ func (s *Service) List(context.Context) ([]Info, error) {
 					list[i].Title, list[i].Last = e.Title, e.Modified
 				}
 			} else {
-				list = append(list, Info{ID: id, Title: e.Title, Last: e.Modified})
+				list = append(list, Info{ID: id, Title: e.Title, Last: e.Modified, Agent: agents.Of(e.Agent)})
 			}
 		}
 	}

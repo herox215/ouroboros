@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import type { Entry } from '../lib/chat.svelte';
-  import { VirtualRows, type Anchor } from '../lib/virtual';
+  import { VirtualRows } from '../lib/virtual';
   import Line from './Line.svelte';
   import { t } from '../lib/i18n';
 
@@ -26,11 +26,11 @@
   let viewport = $state(600);
   let geometry = $state.raw(new VirtualRows([], new Map()));
   const heights = new Map<number, number>();
-  let pendingAnchor: Anchor | null = null;
+  let owed = 0;
   let revision = 0;
   let adjusting = false;
   let armed = false;
-  let scrollIntent = false;
+  let away = false;
   let dragging = false;
   let observer: ResizeObserver | undefined;
 
@@ -48,27 +48,27 @@
     viewport = scroller.clientHeight;
   }
 
-  // Keep an ID and its offset, not scrollHeight: new live output can arrive
-  // during paging, and measurements can change on either side of the viewport.
+  // The view follows what changed above the row it shows, and nothing else:
+  // new live output can arrive during paging, and measurements can change on
+  // either side of the viewport. The scroll position is moved by that much
+  // rather than set, and left alone when nothing above moved: writing it ends
+  // a wheel scroll that is still on its way, as every piece of an answer
+  // streaming in below would.
   async function layout(): Promise<void> {
     if (!scroller) return;
-    if (!following && !pendingAnchor) pendingAnchor = geometry.anchor(top);
     const current = ++revision;
     adjusting = true;
-    geometry = new VirtualRows(entries.map((entry) => entry.id), heights);
-    const restored = pendingAnchor && geometry.restore(pendingAnchor);
+    const next = new VirtualRows(entries.map((entry) => entry.id), heights);
+    const shift = following ? 0 : geometry.moved(top, next);
+    geometry = next;
+    // A layout that a later one overtakes has not moved the scroller yet.
+    owed = following ? 0 : owed + shift;
     if (following) top = Math.max(0, geometry.total - scroller.clientHeight);
-    else if (restored !== null) top = Math.max(0, restored);
+    else top = Math.max(0, top + shift);
     await tick();
     if (current !== revision || !scroller) return;
     if (following) scroller.scrollTop = scroller.scrollHeight;
-    else if (restored !== null) scroller.scrollTop = restored + inset();
-    // ResizeObserver runs after the DOM update and may discover several
-    // newly mounted rows. Keep the same visual anchor throughout that whole
-    // measurement cascade, rather than anchoring to an unmeasured estimate.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (revision === current) pendingAnchor = null;
-    }));
+    else if (Math.abs(owed) >= 0.5) { scroller.scrollTop += owed; owed = 0; }
     position();
     adjusting = false;
   }
@@ -81,23 +81,28 @@
     }
   }
 
+  function atEnd(): boolean {
+    return !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 56;
+  }
+
   function onscroll(): void {
     position();
     if (adjusting || !scroller) return;
     // Layout, clamping and ResizeObserver also generate scroll events. Only
-    // an owner scroll may switch off tail following; otherwise a growing last
-    // row can strand the viewport just above the bottom before it is measured.
-    if (scrollIntent || dragging) {
-      following = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 56;
-      scrollIntent = false;
-    }
+    // the owner switches off tail following, by scrolling up or by dragging;
+    // otherwise a growing last row can strand the viewport just above the
+    // bottom before it is measured. And once they scrolled up, no scroll
+    // event takes them back: the first one of a wheel scroll is still at the
+    // end, and so is the late one of the last time the view followed.
+    if (dragging) following = atEnd();
+    else if (!away && atEnd()) following = true;
     maybeOlder();
   }
 
   function jump(): void {
     following = true;
+    away = false;
     armed = false;
-    pendingAnchor = null;
     void layout();
   }
 
@@ -114,9 +119,8 @@
     // Native animated keyboard scrolling can be canceled by a height
     // correction from virtualization. Move deterministically instead.
     event.preventDefault();
-    pendingAnchor = null;
-    scrollIntent = true;
-    if (amount < 0) { following = false; armed = true; }
+    away = amount < 0;
+    if (away) { following = false; armed = true; }
     scroller.scrollTop += amount;
     onscroll();
   }
@@ -183,15 +187,14 @@
     bind:this={scroller}
     {onscroll}
     onwheel={(event) => {
-      pendingAnchor = null;
-      scrollIntent = true;
-      if (event.deltaY < 0) { following = false; armed = true; maybeOlder(); }
+      if (event.deltaY < 0) { away = true; following = false; armed = true; maybeOlder(); }
+      // At the end already, the wheel moves nothing and no scroll event says so.
+      else if (event.deltaY > 0) { away = false; if (atEnd()) following = true; }
     }}
     onpointerdown={(event) => {
       if (event.target !== scroller) return;
-      pendingAnchor = null;
       dragging = true;
-      scrollIntent = true;
+      away = false;
       armed = true;
     }}
     {onkeydown}

@@ -125,49 +125,43 @@ func TestStreamEndTellsOnce(t *testing.T) {
 	}
 }
 
-// A tool that asks ouro to start anew leaves the window once, with the build
-// it names, and no further restart event replaces it.
-func TestRestartLeavesOnce(t *testing.T) {
+// A tool that asks ouro to start anew tells the page, and the window stays:
+// nothing closes, and the page opens the thread on the new node itself. Every
+// restart is told, also the next one after a restart already told.
+func TestRestartIsToldAndKeepsTheWindow(t *testing.T) {
 	live := make(chan plugin.SessionEvent, 4)
 	s := &fakeSessions{live: live}
 	w := testWindow(t, s)
-	left := make(chan struct{}, 2)
-	w.onRestart(func() { left <- struct{}{} })
+	told := make(chan struct{}, 4)
+	w.onRestart(func() { told <- struct{}{} })
 	batches := make(chan []Event, 4)
 	w.onEmit(func(events []Event) { batches <- events })
 	if _, err := w.Open(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := w.pendingRestart(); ok {
-		t.Fatal("restarted before a tool asked for it")
+	restart := func(exe string) {
+		t.Helper()
+		live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: exe}
+		select {
+		case <-told:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("the restart for %s was not told", exe)
+		}
 	}
-	live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/new/ouro"}
-	select {
-	case <-left:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the window did not leave")
-	}
-	if exe, ok := w.pendingRestart(); !ok || exe != "/new/ouro" {
-		t.Fatalf("restart: %q %v", exe, ok)
-	}
+	restart("/new/ouro")
+	restart("/other/ouro")
 	// The event is not part of the transcript; the answer after it is, so
-	// that the stream clearly passed the second restart event too.
-	live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/other/ouro"}
+	// that the stream clearly passed both restart events.
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "done"}
 	collect(t, batches, 1)
-	select {
-	case <-left:
-		t.Fatal("left twice")
-	default:
-	}
-	if exe, _ := w.pendingRestart(); exe != "/new/ouro" {
-		t.Fatalf("second restart replaced the build: %q", exe)
+	if s.watches[0].Err() != nil {
+		t.Fatal("the restart ended the watch")
 	}
 }
 
-// Without a driver that closes the window there is nowhere to go on, and the
-// window stays rather than ending with a restart nobody handles.
-func TestNobodyClosesTheWindow(t *testing.T) {
+// A restart nobody listens to changes nothing: the window stays and goes on
+// showing the thread.
+func TestRestartWithoutAPageStays(t *testing.T) {
 	live := make(chan plugin.SessionEvent, 1)
 	s := &fakeSessions{live: live}
 	w := testWindow(t, s)
@@ -179,51 +173,58 @@ func TestNobodyClosesTheWindow(t *testing.T) {
 	live <- plugin.SessionEvent{Kind: plugin.SessionRestart, Text: "/new/ouro"}
 	live <- plugin.SessionEvent{Kind: plugin.SessionAnswer, Text: "done"}
 	collect(t, batches, 1)
-	if _, ok := w.pendingRestart(); ok {
-		t.Fatal("restarted without a window to close")
+	if s.watches[0].Err() != nil {
+		t.Fatal("the restart ended the watch")
 	}
 }
 
 // A node that started anew from another build, as a rebuild in another
-// session makes it do, is taken by the window even if no restart event of the
-// thread says so.
+// session makes it do, is told to the page even if no restart event of the
+// thread says so; the window stays, and the next Open shows the new node.
 func TestOpenNoticesANewNodeImage(t *testing.T) {
 	tells := &tellingSessions{fakeSessions: &fakeSessions{}}
 	tells.instance = func(context.Context) (plugin.NodeInstance, error) {
 		return plugin.NodeInstance{ID: "aaa"}, nil
 	}
 	w := testWindow(t, tells)
-	left := make(chan struct{}, 2)
-	w.onRestart(func() { left <- struct{}{} })
+	told := make(chan struct{}, 2)
+	w.onRestart(func() { told <- struct{}{} })
 	if _, err := w.Open(); err != nil { // the first image is only remembered
 		t.Fatal(err)
 	}
-	if _, err := w.Open(); err != nil { // and the same one changes nothing
+	if _, err := w.Open(); err != nil { // and the same one tells nothing
 		t.Fatal(err)
 	}
 	select {
-	case <-left:
-		t.Fatal("left for the same build")
+	case <-told:
+		t.Fatal("told of the same build")
 	default:
 	}
 	tells.instance = func(context.Context) (plugin.NodeInstance, error) {
 		return plugin.NodeInstance{ID: "bbb", Executable: "/new/ouro"}, nil
 	}
-	if _, err := w.Open(); err != nil {
+	// The node that answers Open is the one that runs anew: what it tells is
+	// the fresh snapshot the page shows, and the watch is the one on it.
+	tells.past = []plugin.SessionEvent{{Kind: plugin.SessionMessage, Text: "again"}, {Kind: plugin.SessionAnswer, Text: "new"}}
+	snapshot, err := w.Open()
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case <-left:
+	case <-told:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the window did not leave for the new build")
+		t.Fatal("the new build was not told")
 	}
-	if exe, ok := w.pendingRestart(); !ok || exe != "/new/ouro" {
-		t.Fatalf("restart: %q %v", exe, ok)
+	if len(snapshot.Events) != 2 || snapshot.Events[1].Text != "new" {
+		t.Fatalf("the snapshot of the new node: %+v", snapshot.Events)
+	}
+	if len(tells.watches) != 3 || tells.watches[2].Err() != nil {
+		t.Fatalf("the watch of the new node: %d watches", len(tells.watches))
 	}
 }
 
-// A node whose image cannot be read, that tells none, or that names no
-// binary changes nothing; nor does a service that cannot tell.
+// A node whose image cannot be read, or that tells none, changes nothing; nor
+// does a service that cannot tell.
 func TestNoticeRestartKeepsTheWindow(t *testing.T) {
 	for name, instance := range map[string]func(context.Context) (plugin.NodeInstance, error){
 		"error": func(context.Context) (plugin.NodeInstance, error) {
@@ -232,7 +233,6 @@ func TestNoticeRestartKeepsTheWindow(t *testing.T) {
 		"no id": func(context.Context) (plugin.NodeInstance, error) {
 			return plugin.NodeInstance{Executable: "/new/ouro"}, nil
 		},
-		"no binary": func(context.Context) (plugin.NodeInstance, error) { return plugin.NodeInstance{ID: "bbb"}, nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			tells := &tellingSessions{fakeSessions: &fakeSessions{}}
@@ -240,8 +240,8 @@ func TestNoticeRestartKeepsTheWindow(t *testing.T) {
 				return plugin.NodeInstance{ID: "aaa"}, nil
 			}
 			w := testWindow(t, tells)
-			left := 0
-			w.onRestart(func() { left++ })
+			told := 0
+			w.onRestart(func() { told++ })
 			if _, err := w.Open(); err != nil {
 				t.Fatal(err)
 			}
@@ -249,8 +249,8 @@ func TestNoticeRestartKeepsTheWindow(t *testing.T) {
 			if _, err := w.Open(); err != nil {
 				t.Fatal(err)
 			}
-			if _, ok := w.pendingRestart(); ok || left != 0 {
-				t.Fatalf("restarted: %v, leaves %d", ok, left)
+			if told != 0 {
+				t.Fatalf("told of a restart %d times", told)
 			}
 		})
 	}
@@ -261,33 +261,31 @@ func TestNoticeRestartKeepsTheWindow(t *testing.T) {
 	}
 }
 
-// Send starts the answer, and the message says the window sent it. While an
-// answer is on its way, the text goes to it instead.
-func TestSendAsksThenSteers(t *testing.T) {
+// Send gives the thread the text through Steer, and the message says the
+// window sent it: the node starts the answer with it, hands it to the one on
+// its way, or takes it as the answer to the question the thread asks. Send
+// never asks, which would queue the answer to a question behind it.
+func TestSendSteers(t *testing.T) {
 	s := &fakeSessions{}
 	w := testWindow(t, s)
 	if err := w.Send("  hello  "); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.asks) != 1 || s.asks[0] != (sent{plugin.ThreadID, "hello", "gui"}) {
-		t.Fatalf("asks: %+v", s.asks)
+	if len(s.steers) != 1 || s.steers[0] != (sent{plugin.ThreadID, "hello", "gui"}) {
+		t.Fatalf("steers: %+v", s.steers)
 	}
 	if s.opens != 1 {
 		t.Fatalf("the node was opened %d times", s.opens)
 	}
-	s.askErr = plugin.ErrBusy
-	if err := w.Send("next"); err != nil {
-		t.Fatal(err)
+	s.steerErr = errors.New("provider gone")
+	if err := w.Send("next"); !errors.Is(err, s.steerErr) || len(s.steers) != 2 {
+		t.Fatalf("a failed send: %v, %+v", err, s.steers)
 	}
-	if len(s.steers) != 1 || s.steers[0] != (sent{plugin.ThreadID, "next", "gui"}) {
-		t.Fatalf("steers: %+v", s.steers)
-	}
-	s.askErr = errors.New("provider gone")
-	if err := w.Send("third"); err == nil || len(s.steers) != 1 {
-		t.Fatalf("a failed ask steered: %v, %+v", err, s.steers)
-	}
-	if err := w.Send(" \n\t "); err == nil || len(s.asks) != 3 {
+	if err := w.Send(" \n\t "); err == nil || len(s.steers) != 2 {
 		t.Fatalf("an empty message was sent: %v", err)
+	}
+	if len(s.asks) != 0 {
+		t.Fatalf("the window asked: %+v", s.asks)
 	}
 	if s.opens != 1 {
 		t.Fatalf("the node was opened again: %d", s.opens)
@@ -297,8 +295,8 @@ func TestSendAsksThenSteers(t *testing.T) {
 func TestSendFailsWithoutANode(t *testing.T) {
 	s := &fakeSessions{openErr: errors.New("not set up")}
 	w := testWindow(t, s)
-	if err := w.Send("hello"); err == nil || len(s.asks) != 0 {
-		t.Fatalf("send: %v, asks %+v", err, s.asks)
+	if err := w.Send("hello"); err == nil || len(s.steers) != 0 {
+		t.Fatalf("send: %v, steers %+v", err, s.steers)
 	}
 	w2 := testWindow(t, s)
 	w2.cancel()

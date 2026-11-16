@@ -86,7 +86,7 @@ func (s *Service) routable() []routed {
 	seen := map[string]bool{ThreadID: true}
 	for _, se := range s.sessions {
 		seen[se.id] = true
-		if se.id == ThreadID || len(se.events) == 0 {
+		if se.id == ThreadID || len(se.events) == 0 || se.apart {
 			continue
 		}
 		list = append(list, routed{id: se.id, title: cmp.Or(se.title, se.events[0].Text), directory: se.directory,
@@ -99,7 +99,7 @@ func (s *Service) routable() []routed {
 		}
 		for _, e := range entries {
 			id, ok := strings.CutPrefix(e.ID, "owner/")
-			if !ok || seen[id] || e.Title == "" || now.Sub(e.Modified) > win {
+			if !ok || seen[id] || e.Title == "" || now.Sub(e.Modified) > win || s.Apart != nil && s.Apart(id) {
 				continue
 			}
 			kept := &session{id: id}
@@ -419,8 +419,9 @@ func (t threading) Search(_ context.Context, query string) (string, error) {
 
 // Start starts a session with text as its first message, "" for the words
 // of the owner, see words, in directory, "" for the workspace: the thread
-// has no project to pass on.
-func (t threading) Start(ctx context.Context, text, directory string) (string, error) {
+// has no project to pass on. It runs as agent, "" for the agent of the
+// thread.
+func (t threading) Start(ctx context.Context, text, directory, agent string) (string, error) {
 	s := t.s
 	text, pictures := s.words(text)
 	if strings.TrimSpace(text) == "" && len(pictures) == 0 {
@@ -432,6 +433,10 @@ func (t threading) Start(ctx context.Context, text, directory string) (string, e
 	}
 	if err := s.SetDirectory(ctx, id, directory); err != nil {
 		s.Delete(ctx, id) // nothing was said in it: it goes as it came
+		return "", err
+	}
+	if err := s.SetAgent(ctx, id, agent); err != nil {
+		s.Delete(ctx, id)
 		return "", err
 	}
 	if _, _, err := s.hand(ctx, id, text, pictures, func() error { return nil }); err != nil {
