@@ -505,7 +505,37 @@ func TestWindowGivesAgentsAModel(t *testing.T) {
 	}
 }
 
-// The page lists the models an agent may answer with behind the login.
+// The window gives an agent an effort beside its model, and neither the agent
+// of the thread nor an effort no model knows is taken.
+func TestWindowGivesAgentsAnEffort(t *testing.T) {
+	p, _ := renamable("pythia")
+	p.dir = home.Dir(t.TempDir())
+	w := newWindow(p, "pythia")
+	t.Cleanup(w.Close)
+
+	agent, err := w.UpdateAgent("archivist", AgentChange{Name: "Archivist", Effort: "high"})
+	if err != nil || agent.Effort != "high" {
+		t.Fatalf("the archivist with an effort: %+v, %v", agent, err)
+	}
+	if list, err := w.Agents(); err != nil || list[1].Effort != "high" {
+		t.Fatalf("the agents: %+v, %v", list, err)
+	}
+	if _, err := w.UpdateAgent("archivist", AgentChange{Name: "Archivist", Effort: "enormous"}); err == nil || !strings.Contains(err.Error(), "is none of") {
+		t.Fatalf("an effort no model knows: %v", err)
+	}
+	if _, err := w.UpdateAgent("thread", AgentChange{Name: "pythia", Effort: "low"}); err == nil || !strings.Contains(err.Error(), "effort of the settings") {
+		t.Fatalf("an effort of the agent of the thread: %v", err)
+	}
+	made, err := w.CreateAgent(AgentChange{Name: "Researcher", Effort: "low"})
+	if err != nil || made.Effort != "low" {
+		t.Fatalf("an agent made with an effort: %+v, %v", made, err)
+	}
+	// Back to the effort of the settings.
+	if agent, err := w.UpdateAgent(made.ID, AgentChange{Name: "Researcher"}); err != nil || agent.Effort != "" {
+		t.Fatalf("an agent back on the settings: %+v, %v", agent, err)
+	}
+}
+
 func TestPageListsTheModels(t *testing.T) {
 	dir := home.Dir(t.TempDir())
 	hash, err := web.Hash("correct horse battery")

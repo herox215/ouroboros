@@ -125,8 +125,10 @@ func Of(id string) string {
 // owner wrote them; "" for nothing. Access and Model are the model of its
 // own it answers with, through that access of the node, both "" for the
 // model of the settings: the agent of the thread always answers with those,
-// see config.Config.ThreadLLM and SessionLLM. Reserved says that it is kept
-// for the work of the system, see Reserved.
+// see config.Config.ThreadLLM and SessionLLM. Effort is how much the model
+// thinks when this agent answers, "" for the effort of the settings: the
+// agent of the thread has none of its own. Reserved says that it is kept for
+// the work of the system, see Reserved.
 type Agent struct {
 	ID          string `json:"id"`
 	Kind        string `json:"kind"`
@@ -135,11 +137,15 @@ type Agent struct {
 	Soul        string `json:"soul,omitempty"`
 	Access      string `json:"access,omitempty"`
 	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
 	Reserved    bool   `json:"reserved,omitempty"`
 }
 
 // OwnModel reports whether a answers with a model of its own, see Agent.
 func (a Agent) OwnModel() bool { return a.Access != "" && a.Model != "" }
+
+// OwnEffort reports whether a answers with an effort of its own, see Agent.
+func (a Agent) OwnEffort() bool { return a.Effort != "" }
 
 // About is what a is for: its description, or what a built-in agent is for
 // while the owner wrote none; always that of a reserved agent.
@@ -163,6 +169,10 @@ var ErrReserved = errors.New("what a system agent is for is fixed")
 // its own: it answers with the models of the settings.
 var ErrThreadModel = errors.New("the agent of the thread answers with the models of the settings")
 
+// ErrThreadEffort is the error for giving the agent of the thread an effort
+// of its own: it thinks as the settings say, or as the session says.
+var ErrThreadEffort = errors.New("the agent of the thread thinks with the effort of the settings or of its session")
+
 // entry is an agent as the file keeps it: of a built-in agent only what the
 // owner changed, Name "" for its default.
 type entry struct {
@@ -172,11 +182,12 @@ type entry struct {
 	Soul        string `json:"soul,omitempty"`
 	Access      string `json:"access,omitempty"`
 	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
 }
 
 // entryOf is a as the file keeps it.
 func entryOf(a Agent) entry {
-	return entry{ID: a.ID, Name: a.Name, Description: a.Description, Soul: a.Soul, Access: a.Access, Model: a.Model}
+	return entry{ID: a.ID, Name: a.Name, Description: a.Description, Soul: a.Soul, Access: a.Access, Model: a.Model, Effort: a.Effort}
 }
 
 // file is what the file of the agents holds: the built-in agents the owner
@@ -246,17 +257,20 @@ func (s *Store) Create(a Agent, taken ...string) (Agent, error) {
 }
 
 // Set changes the agent id to what a says: its name, its description and
-// its soul, and its model. The name of the agent of the thread is not kept
-// here, it is renamed with its profile: a.Name is left as it is for it, and
-// it takes no model. Any other name is none that taken holds or another agent
-// has, as for Create. A reserved agent takes no description: what it is for
-// is fixed.
+// its soul, its model and its effort. The name of the agent of the thread is
+// not kept here, it is renamed with its profile: a.Name is left as it is for
+// it, and it takes no model and no effort. Any other name is none that taken
+// holds or another agent has, as for Create. A reserved agent takes no
+// description: what it is for is fixed.
 func (s *Store) Set(id string, a Agent, taken ...string) error {
 	if Reserved(id) && strings.TrimSpace(a.Description) != "" {
 		return ErrReserved
 	}
 	if id == Thread && (strings.TrimSpace(a.Access) != "" || strings.TrimSpace(a.Model) != "") {
 		return ErrThreadModel
+	}
+	if id == Thread && strings.TrimSpace(a.Effort) != "" {
+		return ErrThreadEffort
 	}
 	a.ID, a.Kind = id, id
 	if !Builtin(id) {
@@ -332,8 +346,12 @@ func normalize(a *Agent) error {
 	a.Description = strings.TrimSpace(a.Description)
 	a.Soul = strings.TrimSpace(strings.ReplaceAll(a.Soul, "\r\n", "\n"))
 	a.Access, a.Model = strings.TrimSpace(a.Access), strings.TrimSpace(a.Model)
+	a.Effort = strings.TrimSpace(a.Effort)
 	if err := ValidName(a.Name); err != nil {
 		return err
+	}
+	if !slices.Contains(config.AllEfforts, a.Effort) {
+		return fmt.Errorf("effort %q is none of %s", a.Effort, strings.Join(config.AllEfforts[1:], ", "))
 	}
 	if (a.Access == "") != (a.Model == "") {
 		return errors.New("an agent has an access and a model of its own, or neither")
@@ -388,6 +406,7 @@ func (f file) list(thread string) []Agent {
 		if at := slices.IndexFunc(f.Agents, func(e entry) bool { return e.ID == id }); at >= 0 {
 			e := f.Agents[at]
 			a.Name, a.Description, a.Soul, a.Access, a.Model = cmp.Or(e.Name, a.Name), e.Description, e.Soul, e.Access, e.Model
+			a.Effort = e.Effort
 		}
 		if id == Thread {
 			a.Name = thread
@@ -395,7 +414,7 @@ func (f file) list(thread string) []Agent {
 		list = append(list, a)
 	}
 	for _, e := range f.custom() {
-		list = append(list, Agent{ID: e.ID, Kind: Custom, Name: e.Name, Description: e.Description, Soul: e.Soul, Access: e.Access, Model: e.Model})
+		list = append(list, Agent{ID: e.ID, Kind: Custom, Name: e.Name, Description: e.Description, Soul: e.Soul, Access: e.Access, Model: e.Model, Effort: e.Effort})
 	}
 	return list
 }
@@ -485,11 +504,11 @@ func (s *Store) read() (file, error) {
 
 // valid reports whether e can be an agent as the file keeps it.
 func valid(e entry) bool {
-	a := Agent{ID: e.ID, Name: e.Name, Description: e.Description, Soul: e.Soul, Access: e.Access, Model: e.Model}
+	a := Agent{ID: e.ID, Name: e.Name, Description: e.Description, Soul: e.Soul, Access: e.Access, Model: e.Model, Effort: e.Effort}
 	if Builtin(e.ID) && e.Name == "" {
 		a.Name = "Default"
 	}
-	if e.ID == Thread && (e.Name != "" || e.Access != "" || e.Model != "") {
+	if e.ID == Thread && (e.Name != "" || e.Access != "" || e.Model != "" || e.Effort != "") {
 		return false
 	}
 	before := a

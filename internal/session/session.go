@@ -1536,15 +1536,26 @@ func (s *Service) effortEvent(se *session) Event {
 }
 
 // effort is how much the model thinks in se now: as the owner set it, or as
-// the agent says.
+// the agent it runs as says, or as the node does.
 func (s *Service) effort(se *session) string {
 	s.mu.Lock()
 	effort, own := se.effort, se.efforted
+	agent := s.agentID(se.id)
 	s.mu.Unlock()
 	if own {
 		return effort
 	}
+	if e, ok := s.agent.(efforter); ok {
+		return e.EffortOf(agent)
+	}
 	return s.agent.Effort()
+}
+
+// efforter is an agent that says how much the model thinks where an agent of
+// the profile answers: an Assistant that cannot tell is one whose sessions
+// think as the node does.
+type efforter interface {
+	EffortOf(agent string) string
 }
 
 // modeler is an agent that says which model an agent of the profile answers

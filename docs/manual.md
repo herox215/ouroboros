@@ -229,6 +229,10 @@ it runs as.
   settings. The agent of the thread always answers with the models of the settings, the one of
   the thread and the one of the sessions. A model that its access no longer lists stays the
   agent's until you choose another.
+- **The effort** is how much the model thinks when this agent answers: as in the settings, or one
+  of its own, from `none` to `max`. An agent answers with it from its next answer on, in its
+  sessions and in its scheduled jobs; an effort you set for a session holds first. The agent of
+  the thread has none of its own: it thinks as the settings say, or as its session does.
 - **The soul** is who the agent is: its tone, its stance, how it works, at most 8000 characters,
   over several lines. It ends the instructions of the agent wherever it works: in the thread
   (the soul of the agent of the thread), in its sessions, in its scheduled jobs, and as a helper

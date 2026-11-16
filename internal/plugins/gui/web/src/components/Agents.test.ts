@@ -95,7 +95,7 @@ describe('Agents view', () => {
     expect(save.disabled).toBe(false);
     await fireEvent.submit(container.querySelector('form') as HTMLFormElement);
     await waitFor(() => expect(container.querySelector('.agent-soul')?.textContent).toContain('Calm.\nDry humour.'));
-    expect(bridge.changes).toEqual([['thread', { name: 'pythia', description: '', soul: 'Calm.\nDry humour.', access: '', model: '' }]]);
+    expect(bridge.changes).toEqual([['thread', { name: 'pythia', description: '', soul: 'Calm.\nDry humour.', access: '', model: '', effort: '' }]]);
     // The name stayed: nobody is told of a new one.
     expect(renamed).toEqual([]);
 
@@ -147,7 +147,7 @@ describe('Agents view', () => {
     await fireEvent.input(soul, { target: { value: 'Thorough.' } });
     await fireEvent.click(button(container, 'Create'));
     await waitFor(() => expect(container.querySelectorAll('.agent')).toHaveLength(2));
-    expect(bridge.changes).toEqual([['', { name: 'Researcher', description: 'Digs into sources.', soul: 'Thorough.', access: '', model: '' }]]);
+    expect(bridge.changes).toEqual([['', { name: 'Researcher', description: 'Digs into sources.', soul: 'Thorough.', access: '', model: '', effort: '' }]]);
     const made = container.querySelectorAll('.agent')[1] as HTMLElement;
     expect(made.querySelector('.agent-kind')?.textContent).toBe('Own agent');
     expect(made.querySelector('.agent-about')?.textContent).toBe('Digs into sources.');
@@ -221,7 +221,7 @@ describe('Agents view', () => {
     await fireEvent.input(form.querySelector('textarea') as HTMLTextAreaElement, { target: { value: 'Neat.' } });
     await fireEvent.submit(form);
     await waitFor(() => expect(container.querySelector('.agent-form')).toBeNull());
-    expect(bridge.changes).toEqual([['archivist', { name: 'Archivist', description: '', soul: 'Neat.', access: '', model: '' }]]);
+    expect(bridge.changes).toEqual([['archivist', { name: 'Archivist', description: '', soul: 'Neat.', access: '', model: '', effort: '' }]]);
   });
 
   it('gives an agent a model of an access, or that of the settings, and keeps one no access lists now', async () => {
@@ -266,14 +266,58 @@ describe('Agents view', () => {
     await fireEvent.change(select, { target: { value: 'openai-1\ngpt-5-mini' } });
     await fireEvent.submit(container.querySelector('form') as HTMLFormElement);
     await waitFor(() => expect(container.querySelector('.agent-form')).toBeNull());
-    expect(bridge.changes).toEqual([['archivist', { name: 'Archivist', description: '', soul: '', access: 'openai-1', model: 'gpt-5-mini' }]]);
+    expect(bridge.changes).toEqual([['archivist', { name: 'Archivist', description: '', soul: '', access: 'openai-1', model: 'gpt-5-mini', effort: '' }]]);
     expect(container.querySelectorAll('.agent')[1].querySelector('.agent-model')?.textContent).toContain('gpt-5-mini · OpenAI');
 
     await fireEvent.click(button(container, 'Edit', container.querySelectorAll('.agent')[1] as HTMLElement));
     await fireEvent.change(container.querySelector('select') as HTMLSelectElement, { target: { value: '' } });
     await fireEvent.submit(container.querySelector('form') as HTMLFormElement);
     await waitFor(() => expect(container.querySelector('.agent-form')).toBeNull());
-    expect(bridge.changes[1]).toEqual(['archivist', { name: 'Archivist', description: '', soul: '', access: '', model: '' }]);
+    expect(bridge.changes[1]).toEqual(['archivist', { name: 'Archivist', description: '', soul: '', access: '', model: '', effort: '' }]);
+  });
+
+  it('gives an agent an effort beside its model, and shows it on its card', async () => {
+    const bridge = bridgeOf([
+      { id: 'thread', kind: 'thread', name: 'pythia' },
+      { id: 'archivist', kind: 'archivist', name: 'Archivist', reserved: true, effort: 'minimal' },
+    ]);
+    const { container } = await shown(bridge);
+    await fireEvent.click(container.querySelector('.agents-system input') as HTMLInputElement);
+    const [thread, archivist] = [...container.querySelectorAll('.agent')] as HTMLElement[];
+    expect(archivist.querySelector('.agent-effort')?.textContent).toContain('minimal');
+    expect(thread.querySelector('.agent-effort')).toBeNull();
+
+    // The agent of the thread thinks as the settings say, or as its session does.
+    await fireEvent.click(button(container, 'Edit', thread));
+    expect(thread.querySelector('select')).toBeNull();
+    expect(thread.querySelector('.agent-form')?.textContent).toContain('has none of its own');
+    await fireEvent.click(button(container, 'Cancel', container.querySelector('form')!));
+
+    await fireEvent.click(button(container, 'Edit', archivist));
+    const effort = container.querySelector('#agent-effort-archivist') as HTMLSelectElement;
+    expect([...effort.options].map((option) => option.textContent?.trim())).toEqual([
+      'As in the settings',
+      'minimal (not offered now)',
+      'none',
+      'low',
+      'medium',
+      'high',
+      'max',
+    ]);
+    expect(effort.value).toBe('minimal');
+    await fireEvent.change(effort, { target: { value: 'high' } });
+    await fireEvent.submit(container.querySelector('form') as HTMLFormElement);
+    await waitFor(() => expect(container.querySelector('.agent-form')).toBeNull());
+    expect(bridge.changes[0]).toEqual(['archivist', { name: 'Archivist', description: '', soul: '', access: '', model: '', effort: 'high' }]);
+    expect(container.querySelectorAll('.agent')[1].querySelector('.agent-effort')?.textContent).toContain('high');
+
+    // Back to the effort of the settings.
+    await fireEvent.click(button(container, 'Edit', container.querySelectorAll('.agent')[1] as HTMLElement));
+    await fireEvent.change(container.querySelector('#agent-effort-archivist') as HTMLSelectElement, { target: { value: '' } });
+    await fireEvent.submit(container.querySelector('form') as HTMLFormElement);
+    await waitFor(() => expect(container.querySelector('.agent-form')).toBeNull());
+    expect(bridge.changes[1]).toEqual(['archivist', { name: 'Archivist', description: '', soul: '', access: '', model: '', effort: '' }]);
+    expect(container.querySelectorAll('.agent')[1].querySelector('.agent-effort')).toBeNull();
   });
 
   it('says why the models cannot be listed', async () => {

@@ -662,7 +662,7 @@ func (a *Assistant) Run(ctx context.Context, contextID, text string, observe fun
 		return "", err
 	}
 	if !chat.HasEffort(ctx) { // a session brings its own
-		ctx = chat.WithEffort(ctx, cfg.Effort)
+		ctx = chat.WithEffort(ctx, a.effortOf(AgentOf(ctx), cfg))
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -970,6 +970,27 @@ func (a *Assistant) Effort() string {
 	cfg, err := a.config()
 	if err != nil {
 		return ""
+	}
+	return cfg.Effort
+}
+
+// EffortOf is how much the model thinks when the agent id answers and the
+// conversation says nothing of it: the effort of its own the owner gave it,
+// or else that of the configuration; "" if the configuration cannot be read.
+// The thread is answered by the agent of the thread, whatever id says.
+func (a *Assistant) EffortOf(id string) string {
+	cfg, err := a.config()
+	if err != nil {
+		return ""
+	}
+	return a.effortOf(id, cfg)
+}
+
+// effortOf is how much the model thinks where the agent id answers, as
+// EffortOf says it, of the profile of cfg.
+func (a *Assistant) effortOf(id string, cfg config.Config) string {
+	if who := a.builder.agentFor(agents.Of(id), cfg, nil); who.ID != agents.Thread && who.OwnEffort() {
+		return who.Effort
 	}
 	return cfg.Effort
 }
