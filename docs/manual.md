@@ -267,12 +267,7 @@ hold for every window and terminal; a change holds from the next message on, wit
   is kept when the answer is left empty, and is never shown. **Rename** and **Remove** do what the
   setup does: the last access stays, and what answered through one that is removed goes on with
   another.
-- **Appearance** is how this window looks, kept in its storage: the **theme** of this window alone,
-  and how see-through the ground of it is. **Window background** sets that in percent, from 100 %
-  (opaque, as the window was) down to 20 %; every step shows at once and holds without a new
-  window, and **Opaque** takes the window back with one click. Only the ground lets the desktop
-  through: text, cards and fields stay opaque, so that all of it stays readable. A desktop that
-  does not compose its windows shows the window opaque.
+- **Appearance** is the theme of this window alone, kept in its storage.
 
 The window shows what the thread tells, through the very service the terminal UI uses
 first: `Sessions.Watch` with `plugin.ThreadID`, the replay of what happened and the live

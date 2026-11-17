@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { connect, repaint } from './bridge';
+import { connect } from './bridge';
 
 afterEach(() => vi.unstubAllGlobals());
 it('maps numeric History cursors to the native Window binding without converting them', async () => {
@@ -44,19 +44,4 @@ it('lists the jobs of the agents through the native Window binding, and none fro
 
 it('is no host outside the window', () => {
   expect(connect()).toBeNull();
-});
-
-it('asks the native window to paint its whole face anew, and asks nothing where there is none', async () => {
-  const Repaint = vi.fn(async () => {});
-  vi.stubGlobal('go', { gui: { Window: { Repaint } } });
-  repaint();
-  await Promise.resolve();
-  expect(Repaint).toHaveBeenCalledTimes(1);
-
-  // A page of the node in a browser, or a window from before this ask, has
-  // nothing to ask, and asking throws nothing.
-  vi.stubGlobal('go', { gui: { Window: {} } });
-  expect(() => repaint()).not.toThrow();
-  vi.stubGlobal('go', undefined);
-  expect(() => repaint()).not.toThrow();
 });

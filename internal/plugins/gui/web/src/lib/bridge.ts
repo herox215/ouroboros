@@ -65,9 +65,6 @@ interface WindowBindings {
   /** The build of the page, see window.go: a host from before it named one
    * has none. */
   Assets?(): string;
-  /** Paints the whole face of the window anew, see window.go: a host from
-   * before it could has none. */
-  Repaint?(): Promise<void>;
 }
 
 /** What a host that has no board answers when it is asked for one. */
@@ -160,21 +157,4 @@ function wailsHost(): Host | null {
  * looked at outside of it (a scratch page mounts the scripted thread). */
 export function connect(): Host | null {
   return wailsHost();
-}
-
-/** Asks the window to paint its whole face anew. A see-through ground is only
- * drawn where the webview thinks something changed, so a ground the page paints
- * anew would otherwise show the one before it over it, until the window is
- * resized. A page of the node in a browser, or a scratch page, has no native
- * window to ask, and asks nothing. */
-export function repaint(): void {
-  const call = (globalThis as unknown as Globals).go?.gui?.Window?.Repaint;
-  if (!call) return;
-  try {
-    void Promise.resolve(call()).catch(() => {
-      // The window went away between the paint and this ask.
-    });
-  } catch {
-    // A window that is gone cannot be asked to paint anew.
-  }
 }

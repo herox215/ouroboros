@@ -4,7 +4,6 @@
   import type { NodeOptions } from '../lib/nodeoptions.svelte';
   import type { Agents } from '../lib/agents.svelte';
   import ThemeOptions from './ThemeOptions.svelte';
-  import BackgroundOptions from './BackgroundOptions.svelte';
   import AccessOptions from './AccessOptions.svelte';
   import ModelOptions from './ModelOptions.svelte';
 
@@ -129,7 +128,6 @@
         <AccessOptions {node} />
       {:else}
         <ThemeOptions {themes} />
-        <BackgroundOptions {themes} />
       {/if}
     </div>
   </div>

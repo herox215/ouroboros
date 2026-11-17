@@ -5,8 +5,6 @@
 // is. Which theme the window wears, and the themes the owner made, are kept in
 // the storage of the window, as the sidebar is.
 
-import { repaint as repaintWindow } from './bridge';
-
 /** The colors a theme names, as #rrggbb. */
 export interface ThemeColors {
   /** The ground of the window. */
@@ -55,19 +53,10 @@ export const SYSTEM = 'system';
 
 export const THEME_KEY = 'ouro.theme';
 export const THEMES_KEY = 'ouro.themes';
-/** How much of the ground of the window is painted: 100 keeps it opaque, less
- * lets the desktop show through it. */
-export const OPACITY_KEY = 'ouro.opacity';
 
 /** The bounds of a theme the owner makes, and of how many are kept. */
 export const MAX_NAME = 48;
 export const MAX_THEMES = 64;
-
-/** The bounds of how see-through the ground of the window may be: an opaque
- * window, and one the desktop still shows enough of to be read and taken hold
- * of. */
-export const MAX_OPACITY = 100;
-export const MIN_OPACITY = 20;
 
 function theme(id: string, name: string, dark: boolean, c: [string, string, string, string, string, string, string, string, string, string]): Theme {
   const [bg, surface, field, text, muted, line, lineStrong, accent, err, warn] = c;
@@ -164,23 +153,14 @@ function alpha(color: string, share: number): string {
   return `rgb(${rgb(color).join(' ')} / ${Math.round(share * 100)}%)`;
 }
 
-/** An opacity as it is kept and shown: a whole number of percent within the
- * bounds, and opaque for anything that is none. */
-export function clampOpacity(percent: number): number {
-  const value = Math.round(Number.isFinite(percent) ? percent : MAX_OPACITY);
-  return Math.min(MAX_OPACITY, Math.max(MIN_OPACITY, value));
-}
-
-/** The custom properties of app.css a theme sets, by their names. Below an
- * opacity of 100 the ground alone keeps alpha: cards, fields and text stay
- * opaque, so that the window stays readable. */
-export function variables(theme: Theme, opacity: number = MAX_OPACITY): Record<string, string> {
+/** The custom properties of app.css a theme sets, by their names. */
+export function variables(theme: Theme): Record<string, string> {
   const c = theme.colors;
   const dark = theme.dark;
   const soft = dark ? 0.16 : 0.08;
   const edge = dark ? 0.45 : 0.32;
   return {
-    '--bg': opacity >= MAX_OPACITY ? c.bg : alpha(c.bg, opacity / 100),
+    '--bg': c.bg,
     '--surface': c.surface,
     '--field': c.field,
     '--text': c.text,
@@ -204,27 +184,16 @@ export function variables(theme: Theme, opacity: number = MAX_OPACITY): Record<s
 
 const VARIABLE_NAMES = Object.keys(variables(OUROBOROS_LIGHT));
 
-/** Dresses the page in theme, or in what app.css says for null, and paints the
- * ground of the window as see-through as opacity says. */
-export function paint(
-  theme: Theme | null,
-  root: HTMLElement | null = globalThis.document?.documentElement ?? null,
-  opacity: number = MAX_OPACITY,
-): void {
+/** Dresses the page in theme, or in what app.css says for null. */
+export function paint(theme: Theme | null, root: HTMLElement | null = globalThis.document?.documentElement ?? null): void {
   if (!root) return;
   for (const name of VARIABLE_NAMES) root.style.removeProperty(name);
   root.style.removeProperty('color-scheme');
   if (!theme) {
     delete root.dataset.theme;
-    // app.css says which olive the desktop shows, and only the ground of it
-    // is painted here, as see-through as it is to be.
-    if (opacity < MAX_OPACITY) {
-      const olive = desktopDark() ? OUROBOROS_DARK : OUROBOROS_LIGHT;
-      root.style.setProperty('--bg', alpha(olive.colors.bg, opacity / 100));
-    }
     return;
   }
-  for (const [name, value] of Object.entries(variables(theme, opacity))) root.style.setProperty(name, value);
+  for (const [name, value] of Object.entries(variables(theme))) root.style.setProperty(name, value);
   root.style.setProperty('color-scheme', theme.dark ? 'dark' : 'light');
   root.dataset.theme = theme.id;
 }
@@ -268,31 +237,15 @@ export class Themes {
   selected = $state<string>(SYSTEM);
   /** A theme shown in place of the one worn, while it is being edited. */
   preview = $state<Theme | null>(null);
-  /** How much of the ground of the window is painted, in percent. */
-  opacity = $state<number>(MAX_OPACITY);
 
   readonly #store: Storage | null;
   readonly #root: HTMLElement | null;
-  /** How the window is asked to paint its whole face anew, see repaint. */
-  readonly #ask: () => void;
-  /** The frame a repaint is asked for already, null while none is. */
-  #frame: number | null = null;
 
-  constructor(
-    store: Storage | null = storage(),
-    root: HTMLElement | null = globalThis.document?.documentElement ?? null,
-    ask: () => void = repaintWindow,
-  ) {
+  constructor(store: Storage | null = storage(), root: HTMLElement | null = globalThis.document?.documentElement ?? null) {
     this.#store = store;
     this.#root = root;
-    this.#ask = ask;
     this.#load();
     this.#paint();
-    // Where the window follows the desktop, the ground it paints is the olive
-    // of the desktop: it is painted anew when the desktop turns light or dark.
-    globalThis.window?.matchMedia?.('(prefers-color-scheme: dark)')?.addEventListener?.('change', () => {
-      if (this.shown === null && this.opacity < MAX_OPACITY) this.#paint();
-    });
   }
 
   /** Every theme there is to choose, those of ouro first. */
@@ -319,44 +272,6 @@ export class Themes {
     this.selected = id === SYSTEM || this.find(id) ? id : SYSTEM;
     this.#write(THEME_KEY, this.selected);
     this.#paint();
-  }
-
-  /** Paints the ground of the window as see-through as percent says, at once
-   * and in every theme, and remembers it: 100 is opaque with no alpha left. */
-  setOpacity(percent: number): void {
-    this.opacity = clampOpacity(percent);
-    this.#write(OPACITY_KEY, String(this.opacity));
-    this.#paint();
-  }
-
-  /** Paints the window opaque again, as it was before. */
-  resetOpacity(): void {
-    this.setOpacity(MAX_OPACITY);
-  }
-
-  /** Asks the window to paint its whole face anew, once a frame at most: a
-   * see-through ground is only drawn where the webview thinks something
-   * changed, so the ground painted before would stay over the new one until
-   * the window is resized. now asks at once, as the end of a drag wants it,
-   * instead of waiting for the next frame. A page without a native window
-   * asks nothing and throws nothing. */
-  repaint(now: boolean = false): void {
-    if (now) {
-      if (this.#frame !== null) globalThis.cancelAnimationFrame?.(this.#frame);
-      this.#frame = null;
-      this.#ask();
-      return;
-    }
-    if (this.#frame !== null) return;
-    const frame = globalThis.requestAnimationFrame;
-    if (!frame) {
-      this.#ask();
-      return;
-    }
-    this.#frame = frame(() => {
-      this.#frame = null;
-      this.#ask();
-    });
   }
 
   /** Shows theme in place of the one worn, until null takes it back. */
@@ -425,17 +340,10 @@ export class Themes {
     }
     const selected = this.#read(THEME_KEY);
     this.selected = selected && this.find(selected) ? selected : SYSTEM;
-    // What is kept and is no opacity the window can paint leaves it opaque.
-    const opacity = Number(this.#read(OPACITY_KEY));
-    this.opacity = opacity > 0 ? clampOpacity(opacity) : MAX_OPACITY;
   }
 
   #paint(): void {
-    paint(this.shown, this.#root, this.opacity);
-    // What the window shows is painted over the ground it showed before: the
-    // whole face is painted anew, so that the ground just painted is what the
-    // window shows, at once.
-    this.repaint();
+    paint(this.shown, this.#root);
   }
 
   #read(key: string): string | null {
