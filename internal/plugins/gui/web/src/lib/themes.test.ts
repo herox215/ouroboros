@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILTIN,
   COLOR_NAMES,
+  MAX_OPACITY,
   MAX_THEMES,
+  MIN_OPACITY,
+  OPACITY_KEY,
   OUROBOROS_DARK,
   OUROBOROS_LIGHT,
   SYSTEM,
@@ -199,6 +202,94 @@ describe('themes', () => {
     expect(themes.selected).toBe(SYSTEM);
     expect(new Themes(memory({ [THEMES_KEY]: '{not json' }), root()).custom).toEqual([]);
     expect(new Themes(memory({ [THEMES_KEY]: '{}' }), root()).custom).toEqual([]);
+  });
+
+  it('paint the ground of the window as see-through as it is set, and back', () => {
+    const store = memory({ [THEME_KEY]: 'nord' });
+    const page = root();
+    const themes = new Themes(store, page);
+    expect(themes.opacity).toBe(MAX_OPACITY);
+    expect(page.style.getPropertyValue('--bg')).toBe('#2e3440');
+
+    themes.setOpacity(50);
+    expect(store.data[OPACITY_KEY]).toBe('50');
+    expect(page.style.getPropertyValue('--bg')).toBe('rgb(46 52 64 / 50%)');
+    // Only the ground: cards, fields and text stay opaque and readable.
+    expect(page.style.getPropertyValue('--surface')).toBe('#3b4252');
+    expect(page.style.getPropertyValue('--text')).toBe('#eceff4');
+
+    themes.setOpacity(20);
+    expect(page.style.getPropertyValue('--bg')).toBe('rgb(46 52 64 / 20%)');
+    themes.resetOpacity();
+    expect(themes.opacity).toBe(MAX_OPACITY);
+    expect(store.data[OPACITY_KEY]).toBe('100');
+    expect(page.style.getPropertyValue('--bg')).toBe('#2e3440'); // no alpha left
+  });
+
+  it('keep the opacity within the bounds, and opaque for one that is none', () => {
+    const themes = new Themes(memory(), root());
+    themes.setOpacity(5);
+    expect(themes.opacity).toBe(MIN_OPACITY);
+    themes.setOpacity(180);
+    expect(themes.opacity).toBe(MAX_OPACITY);
+    themes.setOpacity(63.4);
+    expect(themes.opacity).toBe(63);
+    themes.setOpacity(Number.NaN);
+    expect(themes.opacity).toBe(MAX_OPACITY);
+  });
+
+  it('start as see-through as was kept, and opaque for what is none', () => {
+    const page = root();
+    const kept = new Themes(memory({ [THEME_KEY]: 'dracula', [OPACITY_KEY]: '40' }), page);
+    expect(kept.opacity).toBe(40);
+    expect(page.style.getPropertyValue('--bg')).toBe('rgb(33 34 44 / 40%)');
+    for (const value of ['x', '', '0', '-20']) {
+      expect(new Themes(memory({ [OPACITY_KEY]: value }), root()).opacity).toBe(MAX_OPACITY);
+    }
+    expect(new Themes(memory({ [OPACITY_KEY]: '75' }), root()).opacity).toBe(75);
+  });
+
+  it('paint the olive of the desktop through the system, and follow it', () => {
+    const oldMedia = globalThis.window?.matchMedia;
+    const listeners: (() => void)[] = [];
+    const query = (dark: boolean) =>
+      ({
+        matches: dark,
+        addEventListener: (_: string, listener: () => void) => listeners.push(listener),
+        removeEventListener: () => {},
+      }) as unknown as MediaQueryList;
+    try {
+      globalThis.window.matchMedia = (() => query(true)) as typeof window.matchMedia;
+      const page = root();
+      const themes = new Themes(memory(), page);
+      expect(page.style.getPropertyValue('--bg')).toBe(''); // app.css says it
+      themes.setOpacity(50);
+      expect(page.style.getPropertyValue('--bg')).toBe('rgb(32 34 29 / 50%)'); // the dark olive
+      expect(page.style.getPropertyValue('--text')).toBe(''); // the rest is app.css'
+
+      // The desktop turns light: the olive it shows through is the light one.
+      globalThis.window.matchMedia = (() => query(false)) as typeof window.matchMedia;
+      listeners.forEach((listener) => listener());
+      expect(page.style.getPropertyValue('--bg')).toBe('rgb(234 231 225 / 50%)');
+
+      themes.resetOpacity();
+      expect(page.style.getPropertyValue('--bg')).toBe('');
+      // A window that wears a theme of its own does not follow the desktop.
+      themes.select('nord');
+      globalThis.window.matchMedia = (() => query(true)) as typeof window.matchMedia;
+      listeners.forEach((listener) => listener());
+      expect(page.style.getPropertyValue('--bg')).toBe('#2e3440');
+    } finally {
+      if (oldMedia) globalThis.window.matchMedia = oldMedia;
+      else delete (globalThis.window as Partial<Window>).matchMedia;
+    }
+  });
+
+  it('paint no alpha for the system at an opacity of 100', () => {
+    const page = root();
+    paint(null, page, 100);
+    expect(page.style.getPropertyValue('--bg')).toBe('');
+    expect(page.dataset.theme).toBeUndefined();
   });
 
   it('go on without a storage, or with one that refuses', () => {

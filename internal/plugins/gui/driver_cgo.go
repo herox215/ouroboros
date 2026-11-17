@@ -8,6 +8,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -31,6 +32,19 @@ func showWindow(ctx context.Context, p *profile, name string) error {
 		MinWidth: 360, MinHeight: 260,
 		AssetServer: &assetserver.Options{Assets: frontend, Handler: pictures{dir: p.dir.Pictures()}.handler()},
 		Bind:        []interface{}{window},
+		// A window is transparent only from the moment it is made, so it is
+		// made see-through for good and the page decides how much of its
+		// ground it paints: the options hold how see-through it is, and a
+		// change of them needs no new window. The whole background colour is
+		// clear as well, so that no part of the window behind the webview is
+		// painted; the page paints everything that has to be read.
+		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},
+		Linux: &linux.Options{
+			WindowIsTranslucent: true,
+			// A non-nil Linux changes what wails would do alone, which is to
+			// leave the GPU to the webview never: it says so here as well.
+			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
+		},
 		// Cancellation must work even if the frontend never reaches DOM readiness.
 		OnStartup: func(app context.Context) {
 			window.onEmit(func(events []Event) { emitWindow(app, "ouro:events", events) })

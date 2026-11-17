@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 
 	"ouroboros/plugin"
 )
@@ -23,6 +24,18 @@ func TestNativeWindow(t *testing.T) {
 	runWindow = func(o *options.App) error {
 		if o.Width != 1180 || o.Height != 780 || len(o.Bind) != 1 {
 			t.Fatalf("options: %+v", o)
+		}
+		// The window is made see-through from its first moment, always: the
+		// page decides how much of its ground it paints.
+		if o.Linux == nil || !o.Linux.WindowIsTranslucent {
+			t.Fatalf("window is not translucent: %+v", o.Linux)
+		}
+		// A Linux of our own would change the GPU policy wails chose alone.
+		if o.Linux.WebviewGpuPolicy != linux.WebviewGpuPolicyNever {
+			t.Fatalf("webview gpu policy: %v", o.Linux.WebviewGpuPolicy)
+		}
+		if o.BackgroundColour == nil || o.BackgroundColour.A != 0 {
+			t.Fatalf("background colour: %+v", o.BackgroundColour)
 		}
 		if state := o.Bind[0].(*Window).InitialState(); state.Profile != "Luna" || state.Thread != "owner/"+plugin.ThreadID {
 			t.Fatalf("binding: %+v", state)
