@@ -6,11 +6,13 @@
   import SessionsView from './components/Sessions.svelte';
   import AgentsView from './components/Agents.svelte';
   import JobsView from './components/Jobs.svelte';
+  import OptionsView from './components/Options.svelte';
   import type { Chat } from './lib/chat.svelte';
   import type { Board } from './lib/board.svelte';
   import type { Sessions } from './lib/sessions.svelte';
   import type { Agents } from './lib/agents.svelte';
   import type { Jobs } from './lib/jobs.svelte';
+  import type { Themes } from './lib/themes.svelte';
   import type { AgentInfo } from './lib/wire';
 
   let {
@@ -19,18 +21,20 @@
     sessions = null,
     agents = null,
     jobs = null,
+    themes = null,
   }: {
     chat: Chat | null;
     board?: Board | null;
     sessions?: Sessions | null;
     agents?: Agents | null;
     jobs?: Jobs | null;
+    themes?: Themes | null;
   } = $props();
 
   /** What the window shows: the thread, or the board, the sessions and the
    * agents beside it. The thread goes on either way; that what else is shown
    * is read only while it is shown. */
-  type View = 'thread' | 'board' | 'sessions' | 'agents' | 'jobs';
+  type View = 'thread' | 'board' | 'sessions' | 'agents' | 'jobs' | 'options';
   let view = $state<View>('thread');
 
   /** The views sit in a sidebar on the left, open with their names or folded
@@ -81,7 +85,9 @@
       .filter(([, shown]) => shown)
       .map(([name]) => name),
   );
-  const sidebar = $derived(views.length > 1);
+  /** The options sit apart, at the foot of the sidebar. */
+  const options = $derived(!!themes);
+  const sidebar = $derived(views.length + (options ? 1 : 0) > 1);
 
   $effect(() => {
     if (!chat) return;
@@ -166,6 +172,10 @@
     {:else if name === 'jobs'}
       <circle cx="12" cy="12" r="8.5" />
       <path d="M12 7.5V12l3 2" />
+    {:else if name === 'options'}
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+      <circle cx="15" cy="7" r="2" />
+      <circle cx="9" cy="17" r="2" />
     {:else}
       <circle cx="9" cy="8.5" r="3.2" />
       <path d="M3 19.5c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" />
@@ -215,6 +225,16 @@
           >{@render icon(name)}<span class="view-name">{t(`view.${name}`)}</span></button>
         {/each}
       </nav>
+      {#if options}
+        <nav class="views views-foot" aria-label={t('options.label')}>
+          <button
+            type="button"
+            aria-pressed={view === 'options'}
+            title={collapsed ? t('view.options') : undefined}
+            onclick={() => choose('options')}
+          >{@render icon('options')}<span class="view-name">{t('view.options')}</span></button>
+        </nav>
+      {/if}
     </aside>
   {/if}
   <main class="shell" class:wide={view !== 'thread'}>
@@ -237,6 +257,8 @@
       <AgentsView {agents} onrenamed={renamed} />
     {:else if jobs && view === 'jobs'}
       <JobsView {jobs} {names} />
+    {:else if themes && view === 'options'}
+      <OptionsView {themes} />
     {:else}
       <Transcript
         entries={chat.entries}

@@ -75,6 +75,37 @@ body {
   outline-offset: 2px;
 }
 
+/* A choice wears the theme too: WebKitGTK draws a select as GTK does, in the
+   colors of the desktop, unless it is told not to. The arrow is drawn by two
+   gradients, so that it takes the color of the theme and needs no picture. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  color: var(--text);
+  background-color: var(--field);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 17px) 50%,
+    calc(100% - 12px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+select option,
+select optgroup {
+  color: var(--text);
+  background-color: var(--field);
+}
+
 /* The column fills the window: the thread and the board use the same width,
    so switching the view changes what is in it, not how wide it is. */
 .shell {
@@ -852,6 +883,13 @@ body {
   color: var(--text);
   font-weight: 600;
   background: var(--accent-soft);
+}
+
+/* The options at the foot of the sidebar, apart from the views. */
+.views-foot {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
 .collapsed .views button {

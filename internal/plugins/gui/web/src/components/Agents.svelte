@@ -599,9 +599,14 @@
     padding: 6px 10px;
     font: inherit;
     color: var(--text);
-    background: var(--field);
+    background-color: var(--field);
     border: 1px solid var(--line-strong);
     border-radius: 6px;
+  }
+
+  /* Room for the arrow app.css draws into a choice. */
+  select.agent-input {
+    padding-right: 30px;
   }
 
   .agent-soul-input {

@@ -6,6 +6,7 @@ import { Board } from './lib/board.svelte';
 import { Agents } from './lib/agents.svelte';
 import { Jobs } from './lib/jobs.svelte';
 import { Sessions } from './lib/sessions.svelte';
+import { SYSTEM, Themes } from './lib/themes.svelte';
 import { setLocale } from './lib/i18n';
 import type { BoardBridge, Link } from './lib/wire';
 
@@ -206,6 +207,26 @@ describe('App', () => {
     await fireEvent.click(again.container.querySelector('.side-toggle') as HTMLButtonElement);
     expect(localStorage.getItem('ouro.sidebar')).toBe('open');
     localStorage.removeItem('ouro.sidebar');
+  });
+
+  it('keeps the options at the foot of the sidebar, also where there is no other view', async () => {
+    const themes = new Themes(null, document.documentElement);
+    const { container } = render(App, { props: { chat: new Chat(link()), themes } });
+    await waitFor(() => expect(container.querySelector('.transcript')).not.toBeNull());
+    expect(pressed(container)).toEqual(['Thread:true', 'Options:false']);
+    const foot = container.querySelector('.views-foot button') as HTMLButtonElement;
+    await fireEvent.click(foot);
+    expect(pressed(container)).toEqual(['Thread:false', 'Options:true']);
+    expect(container.querySelector('section.prefs')).not.toBeNull();
+    expect((container.querySelector('.compose') as HTMLElement).hidden).toBe(true);
+
+    await fireEvent.click(container.querySelector('button[aria-label="Copy: Nord"]') as HTMLButtonElement);
+    expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#2e3440');
+    // Leaving the view leaves the theme that was being edited unworn.
+    await fireEvent.click(container.querySelector('.views button') as HTMLButtonElement);
+    expect(container.querySelector('section.prefs')).toBeNull();
+    expect(document.documentElement.style.getPropertyValue('--bg')).toBe('');
+    expect(themes.selected).toBe(SYSTEM);
   });
 
   it('offers no board where the host has none', async () => {
