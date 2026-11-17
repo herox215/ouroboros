@@ -123,12 +123,13 @@ func Of(id string) string {
 // for a built-in agent and Custom for one of the owner's, and Name is what
 // it is called now. Description is what it is for and Soul who it is, as the
 // owner wrote them; "" for nothing. Access and Model are the model of its
-// own it answers with, through that access of the node, both "" for the
-// model of the settings: the agent of the thread always answers with those,
-// see config.Config.ThreadLLM and SessionLLM. Effort is how much the model
-// thinks when this agent answers, "" for the effort of the settings: the
-// agent of the thread has none of its own. Reserved says that it is kept for
-// the work of the system, see Reserved.
+// own it answers with, through that access of the node, wherever it works:
+// both "" for the default of the settings, see config.Config.ThreadLLM and
+// SessionLLM, which an agent's own model overrides. Effort is how much the
+// model thinks when this agent answers, "" for the effort of the settings.
+// The agent of the thread is no exception: its own model answers the thread
+// and the sessions that run as it. Reserved says that it is kept for the work
+// of the system, see Reserved.
 type Agent struct {
 	ID          string `json:"id"`
 	Kind        string `json:"kind"`
@@ -164,14 +165,6 @@ var ErrBuiltin = errors.New("a built-in agent cannot be removed")
 
 // ErrReserved is the error for saying what a reserved agent is for.
 var ErrReserved = errors.New("what a system agent is for is fixed")
-
-// ErrThreadModel is the error for giving the agent of the thread a model of
-// its own: it answers with the models of the settings.
-var ErrThreadModel = errors.New("the agent of the thread answers with the models of the settings")
-
-// ErrThreadEffort is the error for giving the agent of the thread an effort
-// of its own: it thinks as the settings say, or as the session says.
-var ErrThreadEffort = errors.New("the agent of the thread thinks with the effort of the settings or of its session")
 
 // entry is an agent as the file keeps it: of a built-in agent only what the
 // owner changed, Name "" for its default.
@@ -259,18 +252,11 @@ func (s *Store) Create(a Agent, taken ...string) (Agent, error) {
 // Set changes the agent id to what a says: its name, its description and
 // its soul, its model and its effort. The name of the agent of the thread is
 // not kept here, it is renamed with its profile: a.Name is left as it is for
-// it, and it takes no model and no effort. Any other name is none that taken
-// holds or another agent has, as for Create. A reserved agent takes no
-// description: what it is for is fixed.
+// it. Any other name is none that taken holds or another agent has, as for
+// Create. A reserved agent takes no description: what it is for is fixed.
 func (s *Store) Set(id string, a Agent, taken ...string) error {
 	if Reserved(id) && strings.TrimSpace(a.Description) != "" {
 		return ErrReserved
-	}
-	if id == Thread && (strings.TrimSpace(a.Access) != "" || strings.TrimSpace(a.Model) != "") {
-		return ErrThreadModel
-	}
-	if id == Thread && strings.TrimSpace(a.Effort) != "" {
-		return ErrThreadEffort
 	}
 	a.ID, a.Kind = id, id
 	if !Builtin(id) {
@@ -508,7 +494,7 @@ func valid(e entry) bool {
 	if Builtin(e.ID) && e.Name == "" {
 		a.Name = "Default"
 	}
-	if e.ID == Thread && (e.Name != "" || e.Access != "" || e.Model != "" || e.Effort != "") {
+	if e.ID == Thread && e.Name != "" {
 		return false
 	}
 	before := a
