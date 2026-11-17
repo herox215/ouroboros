@@ -21,6 +21,20 @@ func TestInitialState(t *testing.T) {
 	}
 }
 
+// A window that is no native one has nothing to paint anew, and asking it does
+// nothing; a native window paints what it was told to paint anew.
+func TestRepaint(t *testing.T) {
+	w := newWindow(&profile{}, "Luna")
+	t.Cleanup(w.Close)
+	w.Repaint() // no window to paint: harmless
+	painted := 0
+	w.onRepaint(func() { painted++ })
+	w.Repaint()
+	if painted != 1 {
+		t.Fatalf("repaints: %d, want 1", painted)
+	}
+}
+
 // The window shows the very conversation the terminal UI shows first, with
 // the same watch.
 func TestOpenWatchesTheThread(t *testing.T) {

@@ -16,11 +16,13 @@ import (
 )
 
 func TestNativeWindow(t *testing.T) {
-	oldRun, oldQuit := runWindow, quitWindow
-	t.Cleanup(func() { runWindow, quitWindow = oldRun, oldQuit })
+	oldRun, oldQuit, oldRepaint := runWindow, quitWindow, repaintWindow
+	t.Cleanup(func() { runWindow, quitWindow, repaintWindow = oldRun, oldQuit, oldRepaint })
 	p := &profile{sessions: &fakeSessions{}}
 	quit := make(chan struct{}, 1)
 	quitWindow = func(context.Context) { quit <- struct{}{} }
+	painted := make(chan [4]uint8, 1)
+	repaintWindow = func(_ context.Context, r, g, b, a uint8) { painted <- [4]uint8{r, g, b, a} }
 	runWindow = func(o *options.App) error {
 		if o.Width != 1180 || o.Height != 780 || len(o.Bind) != 1 {
 			t.Fatalf("options: %+v", o)
@@ -46,6 +48,17 @@ func TestNativeWindow(t *testing.T) {
 			}
 		}
 		o.OnStartup(context.Background())
+		// The page asks for this after it painted another ground: the window
+		// paints its whole face anew, and what it paints is clear, as it is.
+		o.Bind[0].(*Window).Repaint()
+		select {
+		case got := <-painted:
+			if got != [4]uint8{0, 0, 0, 0} {
+				t.Fatalf("repaint colour: %v", got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the page could not ask the window to paint anew")
+		}
 		return nil
 	}
 	if err := showWindow(context.Background(), p, "Luna"); err != nil {

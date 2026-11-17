@@ -16,6 +16,7 @@ import (
 var runWindow = wails.Run
 var quitWindow = runtime.Quit
 var emitWindow = runtime.EventsEmit
+var repaintWindow = runtime.WindowSetBackgroundColour
 
 func showWindow(ctx context.Context, p *profile, name string) error {
 	frontend, err := frontendFiles()
@@ -53,6 +54,13 @@ func showWindow(ctx context.Context, p *profile, name string) error {
 			// the thread on the node that runs anew by itself. The window goes
 			// on with its own build of the front end until it is closed.
 			window.onRestart(func() { emitWindow(app, "ouro:restarting") })
+			// The page paints the ground of the window itself, and a see-through
+			// ground is drawn only where the webview thinks something changed:
+			// the page asks for this after it changed how see-through the ground
+			// is. Setting the background colour again is what makes wails paint
+			// the webview and the box behind it anew, and both stay clear, as
+			// the colour given is clear.
+			window.onRepaint(func() { repaintWindow(app, 0, 0, 0, 0) })
 			go func() {
 				select {
 				case <-ctx.Done():

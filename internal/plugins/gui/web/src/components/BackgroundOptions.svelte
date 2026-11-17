@@ -9,6 +9,12 @@
   function moved(event: Event): void {
     themes.setOpacity(Number((event.currentTarget as HTMLInputElement).value));
   }
+
+  /** The end of a drag: the window paints its whole face once more at once,
+   * so that the ground it shows is the one the slider left it at. */
+  function settled(): void {
+    themes.repaint(true);
+  }
 </script>
 
 <div class="prefs-head">
@@ -33,6 +39,7 @@
     step="5"
     value={themes.opacity}
     oninput={moved}
+    onchange={settled}
   />
   <output class="opacity-value" for="background-opacity">{themes.opacity} %</output>
 </div>

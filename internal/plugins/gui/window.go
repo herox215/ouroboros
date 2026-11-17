@@ -80,6 +80,7 @@ type Window struct {
 	emit     func([]Event)
 	ended    func()
 	notified func()
+	repaint  func()
 	instance string
 }
 
@@ -155,6 +156,29 @@ func (w *Window) restart() {
 	w.mu.Unlock()
 	if notify != nil {
 		notify()
+	}
+}
+
+// onRepaint tells the window how it paints its whole face anew: the native
+// window is see-through and its webview redraws only what it deems damaged, so
+// a ground the page painted anew would otherwise stay over the one before it
+// until the window is resized.
+func (w *Window) onRepaint(repaint func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.repaint = repaint
+}
+
+// Repaint paints the whole face of the window anew. The page asks for this
+// after it changed the ground it paints, at most once a frame, so that the new
+// ground shows at once instead of after the next resize. A window that is no
+// native one has nothing to paint anew, and asking it does nothing.
+func (w *Window) Repaint() {
+	w.mu.Lock()
+	repaint := w.repaint
+	w.mu.Unlock()
+	if repaint != nil {
+		repaint()
 	}
 }
 

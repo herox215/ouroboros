@@ -72,6 +72,17 @@ describe('Background options', () => {
     expect(value(container)).toBe('60 %');
   });
 
+  it('ask for the whole face of the window anew when the drag of the slider ends', async () => {
+    const asked: number[] = [];
+    const themes = new Themes(null, page(), () => asked.push(themes.opacity));
+    const { container } = render(BackgroundOptions, { props: { themes } });
+    await fireEvent.input(slider(container), { target: { value: '50' } });
+    await fireEvent.change(slider(container));
+    // At once, not a frame later: the frame the first ground asked for is
+    // dropped for this one.
+    expect(asked).toEqual([50]);
+  });
+
   it('sit in the appearance of the options, under the theme', () => {
     const themes = new Themes(null, page());
     const { container } = render(OptionsView, { props: { themes } });

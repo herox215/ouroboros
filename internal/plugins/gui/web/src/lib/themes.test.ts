@@ -226,6 +226,52 @@ describe('themes', () => {
     expect(page.style.getPropertyValue('--bg')).toBe('#2e3440'); // no alpha left
   });
 
+  it('ask the window to paint its whole face anew after another ground, once a frame', () => {
+    const globals = globalThis as { requestAnimationFrame?: unknown; cancelAnimationFrame?: unknown };
+    const oldFrame = globals.requestAnimationFrame;
+    const oldCancel = globals.cancelAnimationFrame;
+    const frames: (() => void)[] = [];
+    const asked: number[] = [];
+    try {
+      globals.requestAnimationFrame = (run: () => void) => frames.push(run);
+      globals.cancelAnimationFrame = (id: number) => void (frames[id - 1] = () => {});
+      const themes = new Themes(memory(), root(), () => asked.push(themes.opacity));
+      // The first ground a new window paints is painted anew as well.
+      expect(frames).toHaveLength(1);
+      frames.shift()!();
+      expect(asked).toEqual([MAX_OPACITY]);
+
+      // A drag of the slider asks once a frame, not once for every step.
+      themes.setOpacity(60);
+      themes.setOpacity(50);
+      themes.setOpacity(40);
+      expect(frames).toHaveLength(1);
+      frames.shift()!();
+      expect(asked).toEqual([MAX_OPACITY, 40]);
+
+      // The end of the drag asks at once, and drops the frame still waiting.
+      themes.setOpacity(30);
+      themes.repaint(true);
+      expect(asked).toEqual([MAX_OPACITY, 40, 30]);
+      frames.shift()!();
+      expect(asked).toEqual([MAX_OPACITY, 40, 30]);
+
+      // A window that counts no frames is asked at once.
+      globals.requestAnimationFrame = undefined;
+      themes.setOpacity(70);
+      expect(asked).toEqual([MAX_OPACITY, 40, 30, 70]);
+    } finally {
+      globals.requestAnimationFrame = oldFrame;
+      globals.cancelAnimationFrame = oldCancel;
+    }
+  });
+
+  it('ask no window where there is none, and go on without one', () => {
+    const themes = new Themes(memory(), root());
+    expect(() => themes.setOpacity(45)).not.toThrow();
+    expect(() => themes.repaint(true)).not.toThrow();
+  });
+
   it('keep the opacity within the bounds, and opaque for one that is none', () => {
     const themes = new Themes(memory(), root());
     themes.setOpacity(5);

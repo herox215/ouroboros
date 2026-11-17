@@ -5,6 +5,8 @@
 // is. Which theme the window wears, and the themes the owner made, are kept in
 // the storage of the window, as the sidebar is.
 
+import { repaint as repaintWindow } from './bridge';
+
 /** The colors a theme names, as #rrggbb. */
 export interface ThemeColors {
   /** The ground of the window. */
@@ -271,10 +273,19 @@ export class Themes {
 
   readonly #store: Storage | null;
   readonly #root: HTMLElement | null;
+  /** How the window is asked to paint its whole face anew, see repaint. */
+  readonly #ask: () => void;
+  /** The frame a repaint is asked for already, null while none is. */
+  #frame: number | null = null;
 
-  constructor(store: Storage | null = storage(), root: HTMLElement | null = globalThis.document?.documentElement ?? null) {
+  constructor(
+    store: Storage | null = storage(),
+    root: HTMLElement | null = globalThis.document?.documentElement ?? null,
+    ask: () => void = repaintWindow,
+  ) {
     this.#store = store;
     this.#root = root;
+    this.#ask = ask;
     this.#load();
     this.#paint();
     // Where the window follows the desktop, the ground it paints is the olive
@@ -321,6 +332,31 @@ export class Themes {
   /** Paints the window opaque again, as it was before. */
   resetOpacity(): void {
     this.setOpacity(MAX_OPACITY);
+  }
+
+  /** Asks the window to paint its whole face anew, once a frame at most: a
+   * see-through ground is only drawn where the webview thinks something
+   * changed, so the ground painted before would stay over the new one until
+   * the window is resized. now asks at once, as the end of a drag wants it,
+   * instead of waiting for the next frame. A page without a native window
+   * asks nothing and throws nothing. */
+  repaint(now: boolean = false): void {
+    if (now) {
+      if (this.#frame !== null) globalThis.cancelAnimationFrame?.(this.#frame);
+      this.#frame = null;
+      this.#ask();
+      return;
+    }
+    if (this.#frame !== null) return;
+    const frame = globalThis.requestAnimationFrame;
+    if (!frame) {
+      this.#ask();
+      return;
+    }
+    this.#frame = frame(() => {
+      this.#frame = null;
+      this.#ask();
+    });
   }
 
   /** Shows theme in place of the one worn, until null takes it back. */
@@ -396,6 +432,10 @@ export class Themes {
 
   #paint(): void {
     paint(this.shown, this.#root, this.opacity);
+    // What the window shows is painted over the ground it showed before: the
+    // whole face is painted anew, so that the ground just painted is what the
+    // window shows, at once.
+    this.repaint();
   }
 
   #read(key: string): string | null {
