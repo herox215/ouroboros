@@ -5,11 +5,15 @@ import { Board } from './lib/board.svelte';
 import { Sessions } from './lib/sessions.svelte';
 import { Agents } from './lib/agents.svelte';
 import { Jobs } from './lib/jobs.svelte';
+import { Themes } from './lib/themes.svelte';
 import { connect } from './lib/bridge';
 import { locale } from './lib/i18n';
 import './app.css';
 
 document.documentElement.lang = locale();
+// The theme is worn before the first paint, so that the window does not show
+// the olive of app.css for a moment first.
+const themes = new Themes();
 
 const target = document.getElementById('app');
 if (target) {
@@ -22,6 +26,7 @@ if (target) {
       sessions: host ? new Sessions(host.sessions) : null,
       agents: host ? new Agents(host.agents) : null,
       jobs: host ? new Jobs(host.agents) : null,
+      themes,
     },
   });
 }

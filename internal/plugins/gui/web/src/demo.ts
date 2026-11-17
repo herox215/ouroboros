@@ -5,6 +5,7 @@ import { Board } from './lib/board.svelte';
 import { Sessions } from './lib/sessions.svelte';
 import { Agents } from './lib/agents.svelte';
 import { Jobs } from './lib/jobs.svelte';
+import { Themes } from './lib/themes.svelte';
 import { demoAgents, demoBoard, demoLink, demoSessions } from './lib/demo';
 import { locale, setLocale } from './lib/i18n';
 import './app.css';
@@ -25,6 +26,7 @@ if (target) {
       sessions: new Sessions(demoSessions()),
       agents: new Agents(agents),
       jobs: new Jobs(agents),
+      themes: new Themes(),
     },
   });
 }

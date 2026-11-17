@@ -23,6 +23,14 @@ Beside the board it lists the sessions (`sessions.go`), the agents of the
 profile (`agents.go`: `Agents`, `UpdateAgent`, `CreateAgent`, `DeleteAgent`)
 and the scheduled jobs (`jobs.go`: `AgentJobs`), read again while they are shown.
 
+At the foot of the sidebar are the options: the theme of the window. A theme is
+ten colors and whether it is dark (`src/lib/themes.svelte.ts`); the rest of the
+palette of `app.css` is mixed from them and set as custom properties on the
+root. "System" sets nothing, so `app.css` follows the desktop. The built-in
+themes are well-known editor schemes; the owner's own themes, and which one is
+worn, are kept in `localStorage` (`ouro.theme`, `ouro.themes`), so each window
+or browser keeps its own. No binding is involved.
+
 ## History and scroll tests
 
 `Open` supplies a recent, turn-aligned window; `History(before)` supplies the
