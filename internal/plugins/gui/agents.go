@@ -40,6 +40,9 @@ type Agent struct {
 	// both "" for the model of the settings, see agents.Agent.
 	Access string `json:"access,omitempty"`
 	Model  string `json:"model,omitempty"`
+	// Effort is how much the model thinks when the agent answers, "" for
+	// the effort of the settings; the agent of the thread has none.
+	Effort string `json:"effort,omitempty"`
 	// Reserved says that the agent is kept for the work of the system, the
 	// archivist and the orchestrator: what it is for is fixed, and no agent
 	// hands it a task.
@@ -47,19 +50,21 @@ type Agent struct {
 }
 
 // AgentChange is what the owner says of an agent: its name, what it is for,
-// its soul and the model of its own, both "" for that of the settings. A
-// reserved agent takes no description, the agent of the thread no model.
+// its soul, the model of its own and its effort, both "" for those of the
+// settings. A reserved agent takes no description, the agent of the thread
+// no model and no effort.
 type AgentChange struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Soul        string `json:"soul"`
 	Access      string `json:"access"`
 	Model       string `json:"model"`
+	Effort      string `json:"effort"`
 }
 
 // agentOf is the agent change says.
 func agentOf(change AgentChange) agents.Agent {
-	return agents.Agent{Name: change.Name, Description: change.Description, Soul: change.Soul, Access: change.Access, Model: change.Model}
+	return agents.Agent{Name: change.Name, Description: change.Description, Soul: change.Soul, Access: change.Access, Model: change.Model, Effort: change.Effort}
 }
 
 // AccessModels are the models of an access of the node an agent may answer
@@ -194,7 +199,7 @@ func (p *profile) updateAgent(id string, change AgentChange) (Agent, error) {
 	if err := p.checkModel(next, now); err != nil {
 		return Agent{}, err
 	}
-	if id != threadAgent || next.Description != now.Description || next.Soul != now.Soul || next.Access != "" || next.Model != "" {
+	if id != threadAgent || next.Description != now.Description || next.Soul != now.Soul || next.Access != "" || next.Model != "" || next.Effort != "" {
 		if err := p.agentStore().Set(id, next, thread.Name); err != nil {
 			return Agent{}, err
 		}

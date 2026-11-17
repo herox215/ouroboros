@@ -13,6 +13,10 @@
   const MAX_DESCRIPTION = 300;
   const MAX_SOUL = 8000;
 
+  /** The efforts an agent may answer with, see config.Efforts: '' is that of
+   * the settings, and one the agent has that is none of these stays on. */
+  const EFFORTS = ['none', 'low', 'medium', 'high', 'max'];
+
   const list = $derived(agents.list ?? []);
 
   /** The system agents, the archivist and the orchestrator, are hidden until
@@ -47,7 +51,7 @@
   /** The agent being edited, NEW_AGENT for one being made, and what is typed
    * for it. */
   let editing = $state<string | null>(null);
-  const EMPTY: AgentChange = { name: '', description: '', soul: '', access: '', model: '' };
+  const EMPTY: AgentChange = { name: '', description: '', soul: '', access: '', model: '', effort: '' };
   let draft = $state<AgentChange>({ ...EMPTY });
   let field = $state<HTMLInputElement | null>(null);
   /** The agent the owner is asked whether to remove. */
@@ -64,7 +68,8 @@
       draft.description.trim() === (agent?.description ?? '') &&
       draft.soul.trim() === (agent?.soul ?? '') &&
       draft.access === (agent?.access ?? '') &&
-      draft.model === (agent?.model ?? '')
+      draft.model === (agent?.model ?? '') &&
+      draft.effort === (agent?.effort ?? '')
     );
   });
 
@@ -101,6 +106,10 @@
       !(agents.models ?? []).some((listed) => listed.access === draft.access && listed.models.includes(draft.model)),
   );
 
+  /** Whether the effort chosen is one the window does not offer: it stays a
+   * choice, as the agent has it. */
+  const effortUnlisted = $derived(draft.effort !== '' && !EFFORTS.includes(draft.effort));
+
   /** What the agent is for: what the owner wrote, or what a built-in agent
    * does, '' for neither; always the latter for a system agent. */
   function about(agent: AgentInfo): string {
@@ -135,6 +144,7 @@
       soul: agent.soul ?? '',
       access: agent.access ?? '',
       model: agent.model ?? '',
+      effort: agent.effort ?? '',
     });
   }
 
@@ -156,7 +166,7 @@
     }
     // What a system agent is for is fixed: it takes no description.
     const description = editedAgent?.reserved ? '' : draft.description.trim();
-    const change = { name: draft.name.trim(), description, soul: draft.soul.trim(), access: draft.access, model: draft.model };
+    const change = { name: draft.name.trim(), description, soul: draft.soul.trim(), access: draft.access, model: draft.model, effort: draft.effort };
     const was = editedAgent;
     const saved = editing === NEW_AGENT ? await agents.create(change) : await agents.update(editing, change);
     if (!saved) {
@@ -274,6 +284,29 @@
       {/if}
     {/if}
 
+    <label class="agent-label" for="agent-effort-{id || 'new'}">{t('agents.effort')}</label>
+    {#if kind === 'thread'}
+      <p class="agent-hint" id="agent-effort-{id || 'new'}">{t('agents.effort.thread')}</p>
+    {:else}
+      <select
+        id="agent-effort-{id || 'new'}"
+        class="agent-input"
+        value={draft.effort}
+        onchange={(event) => (draft.effort = (event.currentTarget as HTMLSelectElement).value)}
+        onkeydown={keydown}
+        disabled={agents.saving === id}
+      >
+        <option value="">{t('agents.effort.settings')}</option>
+        {#if effortUnlisted}
+          <option value={draft.effort}>{draft.effort} ({t('agents.effort.unlisted')})</option>
+        {/if}
+        {#each EFFORTS as effort (effort)}
+          <option value={effort}>{effort}</option>
+        {/each}
+      </select>
+      <p class="agent-hint">{t('agents.effort.hint')}</p>
+    {/if}
+
     {#if agents.changeError}
       <p class="agent-error" role="alert">{agents.changeError}</p>
     {/if}
@@ -336,6 +369,9 @@
               {/if}
               {#if modelText(agent)}
                 <p class="agent-model"><span class="agent-label">{t('agents.model')}</span> {modelText(agent)}</p>
+              {/if}
+              {#if agent.effort}
+                <p class="agent-effort"><span class="agent-label">{t('agents.effort')}</span> {agent.effort}</p>
               {/if}
               {#if agent.soul}
                 <p class="agent-soul"><span class="agent-label">{t('agents.soul')}</span> {agent.soul}</p>
@@ -509,11 +545,13 @@
   }
 
   .agent-soul .agent-label,
-  .agent-model .agent-label {
+  .agent-model .agent-label,
+  .agent-effort .agent-label {
     margin-right: 6px;
   }
 
-  .agent-model {
+  .agent-model,
+  .agent-effort {
     margin: 8px 0 0;
     font-size: 13px;
     overflow-wrap: anywhere;

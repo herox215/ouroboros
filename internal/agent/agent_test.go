@@ -683,6 +683,101 @@ func TestRepeatedCallIsNotRun(t *testing.T) {
 	}
 }
 
+// What a model writes as the arguments of a call, when it is no JSON object,
+// is remembered as "{}": a server that reads the conversation again refuses
+// the whole request for it, so that every round after the first fails as well.
+// The tool ran with the arguments as they came, so that its result says what
+// is wrong with them, and an object is kept as it is, byte for byte.
+func TestBrokenToolArgumentsAreStoredAsAnEmptyObject(t *testing.T) {
+	type lookArgs struct {
+		Path string `json:"path"`
+	}
+	for _, c := range []struct {
+		args    string
+		stored  string
+		invalid bool // the tool refused the arguments: it did not run
+	}{
+		{`{"path": "/x`, `{}`, true}, // cut off
+		{``, `{}`, true},
+		{`null`, `{}`, false}, // read as no argument at all
+		{`[1,2]`, `{}`, true},
+		{`"path"`, `{}`, true},
+		{`{"path": "/x"}`, `{"path": "/x"}`, false},
+	} {
+		t.Run(c.args, func(t *testing.T) {
+			var sent [][]openai.Message
+			llm := llmFunc(func(msgs []openai.Message) openai.Message {
+				sent = append(sent, slices.Clone(msgs))
+				if len(sent) == 1 {
+					return openai.Message{ToolCalls: []openai.ToolCall{{ID: "c1", Function: openai.FunctionCall{Name: "look", Arguments: c.args}}}}
+				}
+				return openai.Message{Content: "done"}
+			})
+			look := NewTool("look", "Looks something up.", []Param{{Name: "path", Description: "what to look at"}},
+				func(_ context.Context, args lookArgs) (string, error) { return "looked at " + args.Path, nil })
+			a := New(llm, "gpt", "sys", look)
+			if got, err := a.Respond(t.Context(), "c1", "look"); err != nil || got != "done" {
+				t.Fatalf("got %q, %v", got, err)
+			}
+			if len(sent) != 2 {
+				t.Fatalf("sent %d requests", len(sent))
+			}
+			// The round after the call reads the arguments as "{}", and the
+			// result of the call says what was wrong with the ones it got.
+			stored, result := "", ""
+			for _, m := range sent[1] {
+				if len(m.ToolCalls) > 0 {
+					stored = m.ToolCalls[0].Function.Arguments
+				}
+				if m.Role == "tool" {
+					result = m.Content
+				}
+			}
+			if stored != c.stored {
+				t.Errorf("the arguments of the next request are %q, want %q", stored, c.stored)
+			}
+			if got := strings.HasPrefix(result, "error: look: invalid arguments"); got != c.invalid {
+				t.Errorf("the result %q says invalid arguments: %v, want %v", result, got, c.invalid)
+			}
+			if c.args == `{"path": "/x"}` && result != "looked at /x" {
+				t.Errorf("the tool ran on %q: %q", c.args, result)
+			}
+			// What is remembered is what the next request reads: asked again,
+			// the conversation goes on instead of failing for the same call.
+			for _, m := range a.memory.history("c1") {
+				for _, call := range m.ToolCalls {
+					if call.Function.Arguments != c.stored {
+						t.Errorf("remembered the arguments %q, want %q", call.Function.Arguments, c.stored)
+					}
+				}
+			}
+			if remembered, _ := json.Marshal(a.memory.history("c1")); c.args != "" && c.args != c.stored && strings.Contains(string(remembered), c.args) {
+				t.Errorf("the history holds %q: %s", c.args, remembered)
+			}
+		})
+	}
+}
+
+// The arguments of a call that are no JSON object are stored as "{}", and the
+// ones that are an object are kept as they are: see argumentsAsObject.
+func TestArgumentsAsObject(t *testing.T) {
+	for args, want := range map[string]string{
+		`{"a": 1}`: "{\"a\": 1}", // byte for byte, a provider caches by it
+		`{}`:       "{}",
+		`null`:     "{}",
+		`[]`:       "{}",
+		`[1,2]`:    "{}",
+		`"a"`:      "{}",
+		`1`:        "{}",
+		``:         "{}",
+		`{"a": 1`:  "{}",
+	} {
+		if got := argumentsAsObject(args); got != want {
+			t.Errorf("argumentsAsObject(%q) = %q, want %q", args, got, want)
+		}
+	}
+}
+
 // llmFunc is an LLM that answers with a function of what it is sent.
 type llmFunc func([]openai.Message) openai.Message
 

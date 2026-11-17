@@ -198,6 +198,9 @@ export interface AgentInfo {
    * always answers with. */
   access?: string;
   model?: string;
+  /** The effort of its own the agent answers with: none for the effort of the
+   * settings, which the agent of the thread always answers with. */
+  effort?: string;
   /** The agent is kept for the work of the system: the archivist and the
    * orchestrator. What it is for is fixed, and no agent hands it a task. */
   reserved?: boolean;
@@ -211,6 +214,8 @@ export interface AgentChange {
   /** Both '' for the model of the settings. */
   access: string;
   model: string;
+  /** '' for the effort of the settings; the agent of the thread takes none. */
+  effort: string;
 }
 
 /** The models of an access of the node an agent may answer with, see

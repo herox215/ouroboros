@@ -3,9 +3,11 @@ package assistant
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"ouroboros/internal/agent"
+	"ouroboros/internal/agents"
 	"ouroboros/internal/config"
 	"ouroboros/internal/identity"
 	"ouroboros/internal/openai"
@@ -76,6 +78,36 @@ func TestModel(t *testing.T) {
 	}
 	broken := New(func() (config.Config, error) { return config.Config{Model: "max"}, errors.New("unreadable") }, Builder{}, discard)
 	if got := broken.Model(false, ""); got != "" {
+		t.Fatalf("an unreadable configuration: %q", got)
+	}
+}
+
+// An agent brings the effort the owner set for it, or else that of the
+// configuration; the agent of the thread thinks as the configuration does.
+func TestEffortOfAnAgent(t *testing.T) {
+	store := agents.Open(filepath.Join(t.TempDir(), "agents.json"))
+	if err := store.Set(agents.Archivist, agents.Agent{Name: "Archivist", Effort: "max"}, "me"); err != nil {
+		t.Fatal(err)
+	}
+	llm := &effortLLM{}
+	cfg := config.Config{Access: "a", Model: "m", Name: "me", PrivateKey: identity.Generate().Private(), Effort: "high"}
+	b := Builder{LLM: func(string) (agent.LLM, error) { return llm, nil }, Tools: func() []agent.Tool { return nil }, agents: store}
+	a := New(func() (config.Config, error) { return cfg, nil }, b, discard)
+	for id, want := range map[string]string{agents.Archivist: "max", agents.Thread: "high", "": "high", "agent-0a1b2c3d": "high"} {
+		if got := a.EffortOf(id); got != want {
+			t.Fatalf("the effort of %q: %q", id, got)
+		}
+	}
+	// A call as that agent thinks as much, unless the conversation brings an
+	// effort of its own.
+	a.Ask(WithAgent(context.Background(), agents.Archivist), "chat", "hi", nil)
+	own := openai.WithEffortOf(context.Background(), func() string { return "low" })
+	a.Ask(WithAgent(own, agents.Archivist), "chat", "again", nil)
+	if len(llm.efforts) != 2 || llm.efforts[0] != "max" || llm.efforts[1] != "low" {
+		t.Fatalf("efforts %q", llm.efforts)
+	}
+	broken := New(func() (config.Config, error) { return config.Config{}, errors.New("unreadable") }, b, discard)
+	if got := broken.EffortOf(agents.Archivist); got != "" {
 		t.Fatalf("an unreadable configuration: %q", got)
 	}
 }

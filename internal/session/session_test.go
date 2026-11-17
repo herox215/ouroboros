@@ -25,7 +25,10 @@ type fakeAgent struct {
 	model string // the model of the node
 	// models are the models of the agents of the profile with one of their
 	// own in the sessions, by ID.
-	models     map[string]string
+	models map[string]string
+	// efforts are the efforts of the agents of the profile with one of their
+	// own in the sessions, by ID.
+	efforts    map[string]string
 	run        func(ctx context.Context, text string, observe func(assistant.Step), say func(string)) (string, error)
 	size       int
 	cache      assistant.Cache
@@ -89,6 +92,17 @@ func (a *fakeAgent) CheckTopic(ctx context.Context, check assistant.TopicCheck) 
 func (a *fakeAgent) Effort() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.effort
+}
+
+// EffortOf is the effort of the agent of the profile, or that of the node for
+// an agent without one of its own.
+func (a *fakeAgent) EffortOf(agent string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if own, ok := a.efforts[agent]; ok {
+		return own
+	}
 	return a.effort
 }
 

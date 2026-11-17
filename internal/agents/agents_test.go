@@ -306,3 +306,51 @@ func TestOwnModel(t *testing.T) {
 		t.Fatalf("models no agent can have: %+v, %v", list, err)
 	}
 }
+
+// An agent thinks as much as the owner set for it, else as the node does; the
+// agent of the thread has no effort of its own.
+func TestOwnEffort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agents.json")
+	s := Open(path)
+	made, err := s.Create(Agent{Name: "Researcher", Effort: " high "})
+	if err != nil || made.Effort != "high" || !made.OwnEffort() {
+		t.Fatalf("an agent with an effort of its own: %+v, %v", made, err)
+	}
+	if err := s.Set(Archivist, Agent{Name: "Archivist", Effort: "low"}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := Open(path).List("pythia")
+	if err != nil || list[1].Effort != "low" || list[3].Effort != "high" || list[0].OwnEffort() {
+		t.Fatalf("the agents: %+v, %v", list, err)
+	}
+	for _, refused := range []Agent{
+		{Name: "Researcher", Effort: "enormous"},
+		{Name: "Researcher", Effort: "LOW"},
+	} {
+		if err := s.Set(made.ID, refused); err == nil || !strings.Contains(err.Error(), "is none of") {
+			t.Fatalf("set %+v: %v", refused, err)
+		}
+	}
+	if err := s.Set(Thread, Agent{Effort: "high"}); !errors.Is(err, ErrThreadEffort) {
+		t.Fatalf("an effort of the agent of the thread: %v", err)
+	}
+	// An agent without an effort is kept without one.
+	if err := s.Set(made.ID, Agent{Name: "Researcher"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set(Archivist, Agent{Name: "Archivist"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(path); err != nil || strings.Contains(string(b), `"effort"`) || !strings.Contains(string(b), `"Researcher"`) {
+		t.Fatalf("agents without an effort: %s, %v", b, err)
+	}
+	// A file from before efforts loads as it did; an effort no agent can
+	// have, and one of the agent of the thread, are left out.
+	if err := os.WriteFile(path, []byte(`{"agents":[{"id":"thread","effort":"high"},{"id":"archivist","name":"Mnemosyne"},{"id":"orchestrator","effort":"minimal"},{"id":"agent-0a1b2c3d","name":"Researcher","effort":"xhigh"},{"id":"agent-0a1b2c3e","name":"Reviewer","effort":"enormous"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.List("pythia")
+	if err != nil || len(list) != 4 || list[0].OwnEffort() || list[2].Effort != "minimal" || list[3].Effort != "xhigh" || list[3].Name != "Researcher" {
+		t.Fatalf("efforts no agent can have: %+v, %v", list, err)
+	}
+}

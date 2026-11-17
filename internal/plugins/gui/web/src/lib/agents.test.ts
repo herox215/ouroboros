@@ -48,9 +48,9 @@ describe('Agents', () => {
     expect(agents.list).toEqual([{ id: 'thread', kind: 'thread', name: 'pythia' }]);
     expect(agents.error).toBe('');
 
-    const changed = agents.update('thread', { name: 'Delphi', description: '', soul: 'Calm.', access: '', model: '' });
+    const changed = agents.update('thread', { name: 'Delphi', description: '', soul: 'Calm.', access: '', model: '', effort: '' });
     expect(agents.saving).toBe('thread');
-    expect(await changed).toEqual({ id: 'thread', kind: 'thread', name: 'Delphi', description: '', soul: 'Calm.', access: '', model: '' });
+    expect(await changed).toEqual({ id: 'thread', kind: 'thread', name: 'Delphi', description: '', soul: 'Calm.', access: '', model: '', effort: '' });
     expect(agents.saving).toBeNull();
     expect(agents.list?.[0].soul).toBe('Calm.');
     expect(agents.changeError).toBe('');
@@ -59,7 +59,7 @@ describe('Agents', () => {
   it('makes and removes agents of the owner', async () => {
     const agents = new Agents(bridgeOf());
     await agents.refresh();
-    const making = agents.create({ name: 'Researcher', description: 'Digs.', soul: 'Thorough.', access: '', model: '' });
+    const making = agents.create({ name: 'Researcher', description: 'Digs.', soul: 'Thorough.', access: '', model: '', effort: '' });
     expect(agents.saving).toBe(NEW_AGENT);
     const made = await making;
     expect(made?.kind).toBe('custom');
@@ -71,14 +71,14 @@ describe('Agents', () => {
     expect(agents.changeError).toBe('');
     expect(agents.list?.map((agent) => agent.name)).toEqual(['pythia']);
 
-    expect(await agents.create({ name: '', description: '', soul: '', access: '', model: '' })).toBeNull();
+    expect(await agents.create({ name: '', description: '', soul: '', access: '', model: '', effort: '' })).toBeNull();
     expect(agents.changeError).toContain('cannot be empty');
   });
 
   it('says why a change was refused and keeps the agent', async () => {
     const agents = new Agents(bridgeOf());
     await agents.refresh();
-    expect(await agents.update('thread', { name: 'hermes', description: '', soul: '', access: '', model: '' })).toBeNull();
+    expect(await agents.update('thread', { name: 'hermes', description: '', soul: '', access: '', model: '', effort: '' })).toBeNull();
     expect(agents.changeError).toContain('already');
     expect(agents.saving).toBeNull();
     expect(agents.list?.[0].name).toBe('pythia');
@@ -94,8 +94,8 @@ describe('Agents', () => {
       CreateAgent: refused,
       DeleteAgent: refused,
     });
-    const first = agents.update('thread', { name: 'Delphi', description: '', soul: '', access: '', model: '' });
-    expect(await agents.create({ name: 'Researcher', description: '', soul: '', access: '', model: '' })).toBeNull();
+    const first = agents.update('thread', { name: 'Delphi', description: '', soul: '', access: '', model: '', effort: '' });
+    expect(await agents.create({ name: 'Researcher', description: '', soul: '', access: '', model: '', effort: '' })).toBeNull();
     expect(agents.changeError).toBe('');
     release({ id: 'thread', kind: 'thread', name: 'Delphi' });
     expect((await first)?.name).toBe('Delphi');
@@ -119,7 +119,7 @@ describe('Agents', () => {
     await agents.refresh();
     expect(agents.error).toBe('the node does not answer');
     expect(agents.list?.[0].name).toBe('pythia');
-    expect(await agents.update('thread', { name: 'Delphi', description: '', soul: '', access: '', model: '' })).toBeNull();
+    expect(await agents.update('thread', { name: 'Delphi', description: '', soul: '', access: '', model: '', effort: '' })).toBeNull();
     expect(agents.changeError).toBe('not now');
   });
 
@@ -132,8 +132,8 @@ describe('Agents', () => {
       DeleteAgent: refused,
     });
     const reading = agents.refresh();
-    await agents.update('thread', { name: 'Delphi', description: '', soul: '', access: '', model: '' });
-    await agents.create({ name: 'Researcher', description: '', soul: '', access: '', model: '' });
+    await agents.update('thread', { name: 'Delphi', description: '', soul: '', access: '', model: '', effort: '' });
+    await agents.create({ name: 'Researcher', description: '', soul: '', access: '', model: '', effort: '' });
     release([{ id: 'thread', kind: 'thread', name: 'pythia' }]);
     await reading;
     expect(agents.list?.map((agent) => agent.name)).toEqual(['Delphi', 'Researcher']);
