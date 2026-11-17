@@ -323,6 +323,35 @@ func (s *Session) Save(model, name string) error {
 	return nil
 }
 
+// ErrNotSignedIn is the error of Keep before Login or Again accepted an
+// access.
+var ErrNotSignedIn = errors.New("sign in to a provider first")
+
+// Keep saves the access that Login or Again accepted, without the agents
+// answering through it: one the owner adds beside the others, or one signed
+// in to anew, which keeps its ID and with it what refers to it. What the
+// node answers with stays as it is; Pick and its kind change that. It
+// returns the access as it is saved.
+func (s *Session) Keep() (Access, error) {
+	if !s.signed {
+		return Access{}, ErrNotSignedIn
+	}
+	saved, err := s.book.Store.Put(s.chosen)
+	if err != nil {
+		return Access{}, err
+	}
+	s.chosen, s.signed = saved, false
+	// What the access listed before it was signed in to anew may be another
+	// account's: it is asked again.
+	s.forget(saved.ID)
+	cfg, err := s.home.Config()
+	if err != nil {
+		return Access{}, err
+	}
+	return Access{ID: saved.ID, Provider: saved.Provider, Name: saved.Name, Label: saved.Label(), About: saved.About,
+		Active: saved.ID == cfg.Access}, nil
+}
+
 // withTools returns cfg with what the agent may do written out, for the owner
 // to see and change: all of it for a new node, and what is protected for one
 // from before there were tools for files.

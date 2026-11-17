@@ -4,8 +4,19 @@
   import type { AgentChange, AgentInfo } from '../lib/wire';
   import { t, type Key } from '../lib/i18n';
   import { kindName } from '../lib/agentkind';
+  import type { NodeOptions } from '../lib/nodeoptions.svelte';
 
-  let { agents, onrenamed }: { agents: Agents; onrenamed?: (agent: AgentInfo) => void } = $props();
+  let {
+    agents,
+    node = null,
+    onrenamed,
+  }: {
+    agents: Agents;
+    /** The defaults of the options, which an agent without a model or an
+     * effort of its own answers with: named where they are known. */
+    node?: NodeOptions | null;
+    onrenamed?: (agent: AgentInfo) => void;
+  } = $props();
 
   /** The bounds of an agent, see agents.go: the name of a profile, what an
    * agent is for and its soul. */
@@ -89,6 +100,23 @@
    * not listed. */
   function accessLabel(access: string): string {
     return agents.models?.find((listed) => listed.access === access)?.label || access;
+  }
+
+  /** What an agent of kind answers with while it has no model of its own,
+   * as the options say: the default of the thread and of the sessions for the
+   * agent of the thread, which works in both, that of the sessions for any
+   * other; '' while the options are not known. */
+  function modelDefault(kind: string): string {
+    const scopes = node?.llms?.scopes;
+    if (!scopes) return '';
+    const named = (scope: string) => {
+      const llm = scopes.find((candidate) => candidate.scope === scope);
+      return llm ? `${llm.model} · ${node!.label(llm.access)}` : '';
+    };
+    if (kind === 'thread') {
+      return `${t('agents.default')} – ${t('models.scope.thread')}: ${named('thread')}, ${t('models.scope.sessions')}: ${named('sessions')}`;
+    }
+    return `${t('agents.default')}: ${named('sessions')}`;
   }
 
   /** The model the agent answers with, as its card says: '' for that of the
@@ -248,63 +276,61 @@
     <p class="agent-hint">{t('agents.soul.hint')}</p>
 
     <label class="agent-label" for="agent-model-{id || 'new'}">{t('agents.model')}</label>
-    {#if kind === 'thread'}
-      <p class="agent-hint" id="agent-model-{id || 'new'}">{t('agents.model.thread')}</p>
-    {:else}
-      <select
-        id="agent-model-{id || 'new'}"
-        class="agent-input"
-        value={choiceOf(draft.access, draft.model)}
-        onchange={(event) => choose((event.currentTarget as HTMLSelectElement).value)}
-        disabled={agents.saving === id}
-      >
-        <option value="">{t('agents.model.settings')}</option>
-        {#if unlisted}
-          <option value={choiceOf(draft.access, draft.model)}>{draft.model} · {accessLabel(draft.access)} ({t('agents.model.unlisted')})</option>
-        {/if}
-        {#each agents.models ?? [] as listed (listed.access)}
-          {#if listed.models.length > 0}
-            <optgroup label={listed.label || listed.access}>
-              {#each listed.models as model (model)}
-                <option value={choiceOf(listed.access, model)}>{model}</option>
-              {/each}
-            </optgroup>
-          {/if}
-        {/each}
-      </select>
-      {#if agents.modelsError}
-        <p class="agent-error" role="alert">{t('agents.model.unreadable')}: {agents.modelsError}</p>
-      {:else if !agents.models}
-        <p class="agent-hint" role="status">{t('agents.model.loading')}</p>
-      {:else}
-        {#each agents.models.filter((listed) => listed.error) as listed (listed.access)}
-          <p class="agent-hint">{listed.label || listed.access}: {listed.error}</p>
-        {/each}
-        <p class="agent-hint">{t('agents.model.hint')}</p>
+    <select
+      id="agent-model-{id || 'new'}"
+      class="agent-input"
+      value={choiceOf(draft.access, draft.model)}
+      onchange={(event) => choose((event.currentTarget as HTMLSelectElement).value)}
+      disabled={agents.saving === id}
+    >
+      <option value="">{t('agents.model.settings')}</option>
+      {#if unlisted}
+        <option value={choiceOf(draft.access, draft.model)}>{draft.model} · {accessLabel(draft.access)} ({t('agents.model.unlisted')})</option>
       {/if}
+      {#each agents.models ?? [] as listed (listed.access)}
+        {#if listed.models.length > 0}
+          <optgroup label={listed.label || listed.access}>
+            {#each listed.models as model (model)}
+              <option value={choiceOf(listed.access, model)}>{model}</option>
+            {/each}
+          </optgroup>
+        {/if}
+      {/each}
+    </select>
+    {#if agents.modelsError}
+      <p class="agent-error" role="alert">{t('agents.model.unreadable')}: {agents.modelsError}</p>
+    {:else if !agents.models}
+      <p class="agent-hint" role="status">{t('agents.model.loading')}</p>
+    {:else}
+      {#each agents.models.filter((listed) => listed.error) as listed (listed.access)}
+        <p class="agent-hint">{listed.label || listed.access}: {listed.error}</p>
+      {/each}
+      <p class="agent-hint">{t('agents.model.hint')}</p>
+    {/if}
+    {#if modelDefault(kind)}
+      <p class="agent-hint agent-default">{modelDefault(kind)}</p>
     {/if}
 
     <label class="agent-label" for="agent-effort-{id || 'new'}">{t('agents.effort')}</label>
-    {#if kind === 'thread'}
-      <p class="agent-hint" id="agent-effort-{id || 'new'}">{t('agents.effort.thread')}</p>
-    {:else}
-      <select
-        id="agent-effort-{id || 'new'}"
-        class="agent-input"
-        value={draft.effort}
-        onchange={(event) => (draft.effort = (event.currentTarget as HTMLSelectElement).value)}
-        onkeydown={keydown}
-        disabled={agents.saving === id}
-      >
-        <option value="">{t('agents.effort.settings')}</option>
-        {#if effortUnlisted}
-          <option value={draft.effort}>{draft.effort} ({t('agents.effort.unlisted')})</option>
-        {/if}
-        {#each EFFORTS as effort (effort)}
-          <option value={effort}>{effort}</option>
-        {/each}
-      </select>
-      <p class="agent-hint">{t('agents.effort.hint')}</p>
+    <select
+      id="agent-effort-{id || 'new'}"
+      class="agent-input"
+      value={draft.effort}
+      onchange={(event) => (draft.effort = (event.currentTarget as HTMLSelectElement).value)}
+      onkeydown={keydown}
+      disabled={agents.saving === id}
+    >
+      <option value="">{t('agents.effort.settings')}</option>
+      {#if effortUnlisted}
+        <option value={draft.effort}>{draft.effort} ({t('agents.effort.unlisted')})</option>
+      {/if}
+      {#each EFFORTS as effort (effort)}
+        <option value={effort}>{effort}</option>
+      {/each}
+    </select>
+    <p class="agent-hint">{t('agents.effort.hint')}</p>
+    {#if node?.llms}
+      <p class="agent-hint agent-default">{t('agents.default')}: {node.llms.effort || t('models.effort.auto')}</p>
     {/if}
 
     {#if agents.changeError}

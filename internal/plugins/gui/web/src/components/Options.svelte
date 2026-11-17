@@ -1,278 +1,135 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte';
   import { t, type Key } from '../lib/i18n';
-  import {
-    COLOR_NAMES,
-    MAX_NAME,
-    OUROBOROS_DARK,
-    OUROBOROS_LIGHT,
-    SYSTEM,
-    normalizeColor,
-    structuredCopy,
-    type ColorName,
-    type Theme,
-    type ThemeColors,
-    type Themes,
-  } from '../lib/themes.svelte';
+  import type { Themes } from '../lib/themes.svelte';
+  import type { NodeOptions } from '../lib/nodeoptions.svelte';
+  import type { Agents } from '../lib/agents.svelte';
+  import ThemeOptions from './ThemeOptions.svelte';
+  import AccessOptions from './AccessOptions.svelte';
+  import ModelOptions from './ModelOptions.svelte';
 
-  let { themes }: { themes: Themes } = $props();
+  let {
+    themes,
+    node = null,
+    agents = null,
+    onagents,
+  }: {
+    themes: Themes;
+    node?: NodeOptions | null;
+    /** The agents, whose own models go before the defaults. */
+    agents?: Agents | null;
+    onagents?: () => void;
+  } = $props();
 
-  /** The theme being edited: a copy, '' as its ID while it is a new one. */
-  let draft = $state<Theme | null>(null);
-  /** What is typed into the field of a color that is no color (yet). */
-  let typed = $state<Partial<Record<ColorName, string>>>({});
-  let nameField = $state<HTMLInputElement | null>(null);
-  let editorBox = $state<HTMLElement | null>(null);
-  /** The theme the owner is asked whether to remove. */
-  let removing = $state<string | null>(null);
-  let saveError = $state('');
+  /** The options in parts: what the node answers with and the accesses it
+   * answers through, which are those of the node and hold for every window,
+   * and how this window looks. A host without the options of the node shows
+   * the look alone. */
+  type Tab = 'models' | 'accesses' | 'appearance';
+  const tabs = $derived<Tab[]>(node ? ['models', 'accesses', 'appearance'] : ['appearance']);
 
-  const colorKey = (name: ColorName) => `themes.color.${name}` as Key;
+  /** The window remembers the part it showed, where it can. */
+  const TAB_KEY = 'ouro.options.tab';
 
-  async function open(theme: Theme): Promise<void> {
-    removing = null;
-    saveError = '';
-    typed = {};
-    draft = theme;
-    themes.show(theme);
-    await tick();
-    editorBox?.scrollIntoView?.({ block: 'nearest' });
-    nameField?.focus();
-  }
-
-  /** A new theme of the owner's in the colors of from. */
-  function fresh(from: Theme, name: string): Theme {
-    const theme = structuredCopy(from);
-    delete theme.builtin;
-    return { ...theme, id: '', name: name.slice(0, MAX_NAME) };
-  }
-
-  function create(): void {
-    void open(fresh(themes.current(), ''));
-  }
-
-  function copy(theme: Theme): void {
-    void open(fresh(theme, `${theme.name} (${t('themes.copy.suffix')})`));
-  }
-
-  function edit(theme: Theme): void {
-    void open(structuredCopy(theme));
-  }
-
-  function cancel(): void {
-    draft = null;
-    typed = {};
-    saveError = '';
-    themes.show(null);
-  }
-
-  /** The window shows each change at once. */
-  function changed(): void {
-    if (draft) themes.show(draft);
-  }
-
-  function setColor(name: ColorName, value: string): void {
-    if (!draft) return;
-    const color = normalizeColor(value);
-    if (color) {
-      draft.colors[name] = color;
-      delete typed[name];
-      changed();
-    } else {
-      typed[name] = value;
-    }
-  }
-
-  function submit(event: SubmitEvent): void {
-    event.preventDefault();
-    if (!draft || !draft.name.trim()) return;
+  function storedTab(): Tab | null {
     try {
-      themes.save({ ...structuredCopy(draft), name: draft.name.trim() });
-      draft = null;
-      typed = {};
-      saveError = '';
-    } catch (error) {
-      saveError = error instanceof Error ? error.message : String(error);
+      const stored = localStorage.getItem(TAB_KEY);
+      return stored === 'models' || stored === 'accesses' || stored === 'appearance' ? stored : null;
+    } catch {
+      return null;
     }
   }
 
-  function keydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      cancel();
+  let chosen = $state<Tab | null>(storedTab());
+  const tab = $derived(chosen && tabs.includes(chosen) ? chosen : tabs[0]);
+
+  function choose(next: Tab): void {
+    chosen = next;
+    try {
+      localStorage.setItem(TAB_KEY, next);
+    } catch {
+      // Not remembered, still shown.
     }
   }
 
-  function remove(theme: Theme): void {
-    themes.remove(theme.id);
-    removing = null;
+  const tabButtons: Partial<Record<Tab, HTMLButtonElement>> = {};
+
+  /** The arrow keys move between the parts, as in any tab list. */
+  function tabKey(event: KeyboardEvent): void {
+    const at = tabs.indexOf(tab);
+    let next = at;
+    if (event.key === 'ArrowRight') next = (at + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') next = (at - 1 + tabs.length) % tabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    choose(tabs[next]);
+    tabButtons[tabs[next]]?.focus();
   }
 
-  // A theme that is being edited is shown only while its editor is.
-  onDestroy(() => themes.show(null));
+  const tabKeyOf = (name: Tab) => `options.tab.${name}` as Key;
 
-  const invalid = $derived(COLOR_NAMES.some((name) => typed[name] !== undefined));
-  const worn = $derived(themes.selected);
+  // The options of the node are read whenever they are shown: another window,
+  // the terminal or the agent may have changed them.
+  $effect(() => {
+    if (node) void node.refresh();
+  });
 </script>
 
-{#snippet swatch(colors: ThemeColors)}
-  <span class="swatch" style:background={colors.bg} style:border-color={colors.line} aria-hidden="true">
-    <span class="swatch-card" style:background={colors.surface} style:border-color={colors.line}>
-      <span class="swatch-text" style:background={colors.text}></span>
-      <span class="swatch-text short" style:background={colors.muted}></span>
-      <span class="swatch-dots">
-        <span style:background={colors.accent}></span>
-        <span style:background={colors.warn}></span>
-        <span style:background={colors.err}></span>
-      </span>
-    </span>
-  </span>
-{/snippet}
-
-{#snippet card(theme: Theme | null)}
-  {@const id = theme?.id ?? SYSTEM}
-  <li class="theme" class:worn={worn === id}>
-    <button
-      type="button"
-      class="theme-pick"
-      aria-pressed={worn === id}
-      onclick={() => themes.select(id)}
-      disabled={draft !== null}
-    >
-      {#if theme}
-        {@render swatch(theme.colors)}
-      {:else}
-        <span class="swatch-split">
-          {@render swatch(OUROBOROS_LIGHT.colors)}
-          {@render swatch(OUROBOROS_DARK.colors)}
-        </span>
-      {/if}
-      <span class="theme-name">{theme?.name ?? t('themes.system')}</span>
-      <span class="theme-meta">
-        {#if worn === id}
-          <span class="theme-active">{t('themes.active')}</span>
-        {/if}
-        {theme ? (theme.dark ? t('themes.dark.tag') : t('themes.light.tag')) : t('themes.system.hint')}
-      </span>
-    </button>
-    {#if theme && draft === null}
-      {#if removing === theme.id}
-        <div class="theme-confirm" role="alertdialog" aria-label="{t('themes.remove')}: {theme.name}">
-          <p class="prefs-hint">{t('themes.remove.hint')}</p>
-          <div class="prefs-row">
-            <button type="button" class="prefs-button danger" onclick={() => remove(theme)}>{t('themes.remove')}</button>
-            <button type="button" class="prefs-button" onclick={() => (removing = null)}>{t('themes.cancel')}</button>
-          </div>
-        </div>
-      {:else}
-        <div class="theme-actions">
-          <button type="button" class="prefs-link" aria-label="{t('themes.copy')}: {theme.name}" onclick={() => copy(theme)}>
-            {t('themes.copy')}
-          </button>
-          {#if !theme.builtin}
-            <button type="button" class="prefs-link" aria-label="{t('themes.edit')}: {theme.name}" onclick={() => edit(theme)}>
-              {t('themes.edit')}
-            </button>
-            <button type="button" class="prefs-link" aria-label="{t('themes.remove')}: {theme.name}" onclick={() => (removing = theme.id)}>
-              {t('themes.remove')}
-            </button>
-          {/if}
-        </div>
-      {/if}
+{#snippet icon(name: Tab)}
+  <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+    {#if name === 'models'}
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" />
+    {:else if name === 'accesses'}
+      <circle cx="8" cy="12" r="3.5" />
+      <path d="M11.5 12H21M17 12v3.5M20 12v2.5" />
+    {:else}
+      <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-1.3-1-1.6-1-2.8 0-1 .8-1.7 1.8-1.7H17a3.5 3.5 0 0 0 3.5-3.5c0-4.2-3.8-7.3-8.5-7.3z" />
+      <circle cx="7.8" cy="11" r="1.1" />
+      <circle cx="10.5" cy="7.5" r="1.1" />
+      <circle cx="15" cy="7.8" r="1.1" />
     {/if}
-  </li>
+  </svg>
 {/snippet}
 
 <section class="prefs" aria-label={t('options.label')}>
   <div class="prefs-page">
-    <div class="prefs-head">
-      <h2 class="prefs-title">{t('themes.title')}</h2>
-      <button type="button" class="prefs-button primary" onclick={create} disabled={draft !== null}>{t('themes.new')}</button>
-    </div>
-    <p class="prefs-hint">{t('themes.hint')}</p>
-
-    {#if draft}
-      <form class="theme-editor" bind:this={editorBox} onsubmit={submit} aria-label={draft.id ? t('themes.edit.title') : t('themes.new.title')}>
-        <h3 class="prefs-sub">{draft.id ? t('themes.edit.title') : t('themes.new.title')}</h3>
-        <label class="prefs-label" for="theme-name">{t('themes.name')}</label>
-        <input
-          id="theme-name"
-          class="prefs-input"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          maxlength={MAX_NAME}
-          bind:value={draft.name}
-          bind:this={nameField}
-          onkeydown={keydown}
-        />
-        <label class="prefs-check">
-          <input type="checkbox" bind:checked={draft.dark} onchange={changed} onkeydown={keydown} />
-          {t('themes.dark')}
-        </label>
-        <p class="prefs-hint">{t('themes.dark.hint')}</p>
-
-        <span class="prefs-label">{t('themes.colors')}</span>
-        <div class="theme-colors">
-          {#each COLOR_NAMES as name (name)}
-            <div class="theme-color" class:bad={typed[name] !== undefined}>
-              <input
-                type="color"
-                class="theme-color-pick"
-                aria-label={t(colorKey(name))}
-                value={draft.colors[name]}
-                oninput={(event) => setColor(name, (event.currentTarget as HTMLInputElement).value)}
-                onkeydown={keydown}
-              />
-              <label class="theme-color-name" for="theme-color-{name}">{t(colorKey(name))}</label>
-              <input
-                id="theme-color-{name}"
-                class="prefs-input theme-color-hex"
-                type="text"
-                autocomplete="off"
-                spellcheck="false"
-                maxlength="7"
-                aria-invalid={typed[name] !== undefined}
-                value={typed[name] ?? draft.colors[name]}
-                oninput={(event) => setColor(name, (event.currentTarget as HTMLInputElement).value)}
-                onblur={() => delete typed[name]}
-                onkeydown={keydown}
-              />
-              {#if typed[name] !== undefined}
-                <span class="theme-color-error" role="alert">{t('themes.invalid')}</span>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        <p class="prefs-hint">{t('themes.preview')}</p>
-        {#if saveError}
-          <p class="prefs-error" role="alert">{saveError}</p>
-        {/if}
-        <div class="prefs-row">
-          <button type="submit" class="prefs-button primary" disabled={!draft.name.trim() || invalid}>{t('themes.save')}</button>
-          <button type="button" class="prefs-button" onclick={cancel}>{t('themes.cancel')}</button>
-        </div>
-      </form>
-    {/if}
-
-    <h3 class="prefs-sub">{t('themes.builtin')}</h3>
-    <ul class="theme-grid">
-      {@render card(null)}
-      {#each themes.all.filter((theme) => theme.builtin) as theme (theme.id)}
-        {@render card(theme)}
-      {/each}
-    </ul>
-
-    <h3 class="prefs-sub">{t('themes.custom')}</h3>
-    {#if themes.custom.length === 0}
-      <p class="prefs-hint">{t('themes.custom.empty')}</p>
-    {:else}
-      <ul class="theme-grid">
-        {#each themes.custom as theme (theme.id)}
-          {@render card(theme)}
+    {#if tabs.length > 1}
+      <!-- svelte-ignore a11y_interactive_supports_focus -->
+      <div class="tabs" role="tablist" aria-label={t('options.title')} tabindex="-1" onkeydown={tabKey}>
+        {#each tabs as name (name)}
+          <button
+            type="button"
+            role="tab"
+            id="prefs-tab-{name}"
+            class="tab"
+            aria-selected={tab === name}
+            aria-controls="prefs-panel-{name}"
+            tabindex={tab === name ? 0 : -1}
+            bind:this={tabButtons[name]}
+            onclick={() => choose(name)}
+          >{@render icon(name)}<span>{t(tabKeyOf(name))}</span></button>
         {/each}
-      </ul>
+      </div>
     {/if}
+
+    <div class="panel" role={tabs.length > 1 ? 'tabpanel' : undefined} id="prefs-panel-{tab}" aria-labelledby={tabs.length > 1 ? `prefs-tab-${tab}` : undefined}>
+      {#if node && tab !== 'appearance' && !node.list && !node.error}
+        <p class="prefs-hint" role="status">{t('options.loading')}</p>
+      {:else if node && tab !== 'appearance' && node.error && !node.list}
+        <p class="prefs-error" role="alert">{t('options.unreadable')}: {node.error}</p>
+        <div class="prefs-row">
+          <button type="button" class="prefs-button" onclick={() => node.refresh()}>{t('options.retry')}</button>
+        </div>
+      {:else if node && tab === 'models'}
+        <ModelOptions {node} agents={agents?.list ?? null} {onagents} />
+      {:else if node && tab === 'accesses'}
+        <AccessOptions {node} />
+      {:else}
+        <ThemeOptions {themes} />
+      {/if}
+    </div>
   </div>
 </section>
 
@@ -291,331 +148,61 @@
     max-width: 960px;
   }
 
-  .prefs-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .prefs-title {
-    margin: 0;
-    font-size: 1.1em;
-    font-weight: 600;
-  }
-
-  .prefs-sub {
-    margin: 14px 0 2px;
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  .prefs-hint {
-    margin: 0;
-    font-size: 12.5px;
-    color: var(--muted);
-  }
-
-  .prefs-error {
-    margin: 0;
-    font-size: 13px;
-    color: var(--err);
-  }
-
-  .prefs-label {
-    margin-top: 6px;
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  .prefs-input {
-    min-width: 0;
-    padding: 6px 10px;
-    font: inherit;
-    color: var(--text);
-    background-color: var(--field);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-  }
-
-  .prefs-input:focus {
-    border-color: var(--accent-line);
-    outline: none;
-  }
-
-  .prefs-check {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    margin-top: 6px;
-    font-size: 13.5px;
-    cursor: pointer;
-  }
-
-  .prefs-check input {
-    margin: 0;
-    accent-color: var(--accent);
-  }
-
-  .prefs-row {
+  .tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 4px;
-  }
-
-  .prefs-button {
-    flex: none;
-    padding: 5px 12px;
-    font: inherit;
-    font-size: 13px;
-    color: var(--text);
-    background: transparent;
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
-  }
-
-  .prefs-button:hover:not(:disabled) {
-    background: var(--accent-soft);
-  }
-
-  .prefs-button.primary {
-    color: var(--bg);
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-
-  .prefs-button.primary:hover:not(:disabled) {
-    background: var(--accent);
-    filter: brightness(1.06);
-  }
-
-  .prefs-button.danger {
-    color: var(--err);
-    border-color: var(--err-line);
-  }
-
-  .prefs-button:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-
-  .prefs-link {
-    padding: 2px 4px;
-    font: inherit;
-    font-size: 12px;
-    color: var(--muted);
-    background: transparent;
-    border: 0;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-
-  .prefs-link:hover {
-    color: var(--accent);
-    background: var(--accent-soft);
-  }
-
-  /* The themes to choose, a card each with a small window in its colors. */
-  .theme-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
-    gap: 10px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .theme {
-    display: flex;
-    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 10px;
+    padding: 4px;
+    width: fit-content;
+    max-width: 100%;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 10px;
-    overflow: hidden;
-    transition: border-color 120ms ease, box-shadow 120ms ease;
   }
 
-  .theme:hover {
-    border-color: var(--line-strong);
-  }
-
-  .theme.worn {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
-  }
-
-  .theme-pick {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    padding: 10px 10px 8px;
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 14px;
     font: inherit;
-    text-align: left;
-    color: var(--text);
+    font-size: 13.5px;
+    color: var(--muted);
     background: transparent;
     border: 0;
-    cursor: pointer;
-  }
-
-  .theme-pick:disabled {
-    cursor: default;
-  }
-
-  .swatch-split {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-  }
-
-  .swatch {
-    display: flex;
-    align-items: flex-end;
-    height: 64px;
-    padding: 10px 0 0 12px;
-    border: 1px solid;
     border-radius: 7px;
-    overflow: hidden;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
   }
 
-  .swatch-card {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    height: 100%;
-    padding: 8px 9px;
-    border: 1px solid;
-    border-right: 0;
-    border-bottom: 0;
-    border-radius: 6px 0 0 0;
+  .tab:hover {
+    color: var(--text);
   }
 
-  .swatch-text {
-    width: 72%;
-    height: 4px;
-    border-radius: 2px;
+  .tab[aria-selected='true'] {
+    color: var(--text);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
   }
 
-  .swatch-text.short {
-    width: 46%;
+  .tab-icon {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
-  .swatch-dots {
-    display: flex;
-    gap: 4px;
-    margin-top: auto;
-  }
-
-  .swatch-dots span {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-  }
-
-  .theme-name {
-    margin-top: 5px;
-    font-size: 13.5px;
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
-
-  .theme-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 2px 8px;
-    font-size: 11.5px;
-    color: var(--muted);
-  }
-
-  .theme-active {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .tab[aria-selected='true'] .tab-icon {
     color: var(--accent);
   }
 
-  .theme-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-    padding: 0 6px 6px;
-  }
-
-  .theme-confirm {
+  .panel {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 0 10px 10px;
-  }
-
-  /* The editor: the name, light or dark, and the ten colors. */
-  .theme-editor {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: 8px;
-    padding: 16px 18px;
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    border-radius: 10px;
-    box-shadow: var(--shadow);
-  }
-
-  .theme-editor .prefs-sub {
-    margin-top: 0;
-  }
-
-  .theme-colors {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 8px 16px;
-  }
-
-  .theme-color {
-    display: grid;
-    grid-template-columns: auto 1fr 92px;
-    align-items: center;
-    gap: 2px 10px;
-  }
-
-  .theme-color-pick {
-    width: 34px;
-    height: 30px;
-    padding: 2px;
-    background: var(--field);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  .theme-color-name {
-    font-size: 13px;
-  }
-
-  .theme-color-hex {
-    font-family: var(--mono);
-    font-size: 12.5px;
-  }
-
-  .theme-color.bad .theme-color-hex {
-    border-color: var(--err);
-  }
-
-  .theme-color-error {
-    grid-column: 2 / -1;
-    font-size: 12px;
-    color: var(--err);
+    gap: 8px;
   }
 </style>

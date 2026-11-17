@@ -220,19 +220,19 @@ it runs as.
   every agent it may choose, and chooses by it: write there, for instance, that the agent of the
   thread is for the thread alone and is to be given no task. The agent of the thread says what it
   does while you wrote nothing.
-- **The model** is the one the agent answers with: as in the settings, or a model of its own,
-  chosen from those the accesses of the node offer, as the settings list them. An agent answers
-  with it from its next answer on, in its sessions, in its scheduled jobs and as a helper of
-  `delegate`; the fallbacks of the settings stand in after it, and an access that cannot be
-  reached leaves the agent on the model of the settings, which the log says. A session that runs
-  as an agent whose model changed starts its context anew, as after a change of the model in the
-  settings. The agent of the thread always answers with the models of the settings, the one of
-  the thread and the one of the sessions. A model that its access no longer lists stays the
-  agent's until you choose another.
-- **The effort** is how much the model thinks when this agent answers: as in the settings, or one
-  of its own, from `none` to `max`. An agent answers with it from its next answer on, in its
-  sessions and in its scheduled jobs; an effort you set for a session holds first. The agent of
-  the thread has none of its own: it thinks as the settings say, or as its session does.
+- **The model** is the one the agent answers with: the default of the options, or a model of its
+  own, chosen from those the accesses of the node offer, which goes before the defaults wherever
+  the agent works. An agent answers with it from its next answer on, in its sessions, in its
+  scheduled jobs and as a helper of `delegate`, and the agent of the thread in the thread too; the
+  fallbacks stand in after it, and an access that cannot be reached leaves the agent on the
+  default of its scope, which the log says. Without one of its own the agent of the thread answers
+  in the thread with the default of the thread and in its sessions with that of the sessions, any
+  other agent with that of the sessions; the form names them. A session that runs as an agent
+  whose model changed starts its context anew, as after a change of a default. A model that its
+  access no longer lists stays the agent's until you choose another.
+- **The effort** is how much the model thinks when this agent answers: the effort of the options,
+  or one of its own, from `none` to `max`. An agent answers with it from its next answer on,
+  wherever it works; an effort you set for a session holds first.
 - **The soul** is who the agent is: its tone, its stance, how it works, at most 8000 characters,
   over several lines. It ends the instructions of the agent wherever it works: in the thread
   (the soul of the agent of the thread), in its sessions, in its scheduled jobs, and as a helper
@@ -242,6 +242,32 @@ it runs as.
 runs, when it runs next and whether it is paused. It shows what is planned, not what came of it,
 which the sessions show; a job that runs once and ran is not listed. It is read only, again every
 few seconds while it is shown, from `schedule.json` of the profile.
+
+**Options**, at the foot of the sidebar, has three parts. The first two are those of the node and
+hold for every window and terminal; a change holds from the next message on, without a restart.
+
+- **Models** holds the **defaults**: what is answered with where an agent has no model of its
+  own, as `/model` sets them in the terminal UI. The **default** answers you and everything below
+  that has no default of its own; the thread, the sessions and peers are each **like the
+  default** or have one of their own. A model or an effort an agent has of its own goes before
+  them, wherever it works, and each row names the agents that go before it: the agent of the
+  thread before the default of the thread, and every agent with a model of its own before that of
+  the sessions. Peers are answered by no agent of the profile. Below are the **effort**, for agents
+  without one of their own, and the **fallbacks**, in their order, which stand in for any model
+  that cannot answer: one is added from the models the accesses list and removed again with
+  **Remove**. **List again** asks the accesses for their models anew; one that does not answer is
+  named with why, and its models are those it listed the last time.
+- **Providers** lists the accesses of the node, each with its provider, its account or endpoint,
+  and what answers through it. **Add provider** signs in to a new access, beside the others, as the
+  setup does: the provider asks what it needs, one question after the other, and a page it opens
+  is opened in the browser of the desktop by the window, and shown as a link by the page in a
+  browser. The access is saved once the provider accepted it, without the node answering through
+  it; its models are offered to **use as the default** at once. **Sign in again** renews what an
+  access signs in with and keeps it, with what answers through it; a key the provider has already
+  is kept when the answer is left empty, and is never shown. **Rename** and **Remove** do what the
+  setup does: the last access stays, and what answered through one that is removed goes on with
+  another.
+- **Appearance** is the theme of this window alone, kept in its storage.
 
 The window shows what the thread tells, through the very service the terminal UI uses
 first: `Sessions.Watch` with `plugin.ThreadID`, the replay of what happened and the live

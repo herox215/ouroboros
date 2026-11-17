@@ -23,7 +23,17 @@ Beside the board it lists the sessions (`sessions.go`), the agents of the
 profile (`agents.go`: `Agents`, `UpdateAgent`, `CreateAgent`, `DeleteAgent`)
 and the scheduled jobs (`jobs.go`: `AgentJobs`), read again while they are shown.
 
-At the foot of the sidebar are the options: the theme of the window. A theme is
+At the foot of the sidebar are the options, in three parts. **Models** and
+**Providers** are those of the node (`providers.go`, `src/lib/nodeoptions.svelte.ts`):
+`Providers` and `LLMs` read the accesses and what each scope answers with,
+`SetLLM`, `ToggleFallback`, `SetEffort`, `RenameAccess` and `RemoveAccess`
+change them through the Owner, as the terminal UI does. Signing in to a provider
+is a dialog: `StartLogin` starts it, `LoginStep` waits a while for what the
+provider wants next (a question, a line, a page to open, or how it ended),
+`AnswerLogin` answers and `CancelLogin` gives it up. The page in a browser has
+the same calls as requests under `/api/` (`webproviders.go`).
+
+**Appearance** is the theme of the window. A theme is
 ten colors and whether it is dark (`src/lib/themes.svelte.ts`); the rest of the
 palette of `app.css` is mixed from them and set as custom properties on the
 root. "System" sets nothing, so `app.css` follows the desktop. The built-in
