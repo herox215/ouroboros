@@ -14,6 +14,7 @@
   import type { Jobs } from './lib/jobs.svelte';
   import type { Themes } from './lib/themes.svelte';
   import type { NodeOptions } from './lib/nodeoptions.svelte';
+  import type { Gateways } from './lib/gateways.svelte';
   import type { AgentInfo } from './lib/wire';
 
   let {
@@ -24,6 +25,7 @@
     jobs = null,
     themes = null,
     node = null,
+    gateways = null,
   }: {
     chat: Chat | null;
     board?: Board | null;
@@ -33,6 +35,8 @@
     themes?: Themes | null;
     /** The options of the node: the accesses and the models. */
     node?: NodeOptions | null;
+    /** The gateways of the profile: Matrix and the like. */
+    gateways?: Gateways | null;
   } = $props();
 
   /** What the window shows: the thread, or the board, the sessions and the
@@ -269,7 +273,7 @@
     {:else if jobs && view === 'jobs'}
       <JobsView {jobs} {names} />
     {:else if themes && view === 'options'}
-      <OptionsView {themes} {node} {agents} onagents={agents ? () => choose('agents') : undefined} />
+      <OptionsView {themes} {node} {gateways} {agents} onagents={agents ? () => choose('agents') : undefined} />
     {:else}
       <Transcript
         entries={chat.entries}

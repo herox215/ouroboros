@@ -345,6 +345,51 @@ export interface OptionsBridge {
   AgentModels(): Promise<AccessModels[]>;
 }
 
+/** A field of the form a gateway asks for, see GatewayFieldInfo in gateways.go.
+ * The value of a secret is always empty. */
+export interface GatewayField {
+  key: string;
+  label?: string;
+  kind: 'text' | 'secret' | 'list' | 'bool' | string;
+  value?: string;
+  list?: string[];
+  on?: boolean;
+  /** A public text under the field, never a value. */
+  hint?: string;
+}
+
+/** A gateway of the profile, see GatewayInfo: never a password or a token. */
+export interface GatewayInfo {
+  name: string;
+  title: string;
+  enabled: boolean;
+  homeserver?: string;
+  user_id?: string;
+  allowed_users: string[];
+  logged_in: boolean;
+  status?: string;
+  fields?: GatewayField[];
+}
+
+/** What the owner changes of a gateway, see GatewayChangeBody. An empty
+ * password keeps the login the gateway has. */
+export interface GatewayChange {
+  enabled: boolean;
+  homeserver?: string;
+  user_id?: string;
+  password?: string;
+  allowed_users?: string[];
+  logout?: boolean;
+  values?: Record<string, string>;
+  lists?: Record<string, string[]>;
+}
+
+/** The bound methods of the Go window behind the gateways, see gateways.go. */
+export interface GatewayBridge {
+  Gateways(): Promise<GatewayInfo[]>;
+  SaveGateway(name: string, change: GatewayChange): Promise<GatewayInfo[]>;
+}
+
 /** What the window is told while it watches: what the thread tells, and that
  * the stream ended or the process starts anew. */
 export interface Transport {
@@ -369,4 +414,6 @@ export interface Host extends Link {
   agents: AgentBridge;
   /** The options of the node: a host from before them has none. */
   options?: OptionsBridge;
+  /** The gateways of the profile: a host from before them has none. */
+  gateways?: GatewayBridge;
 }

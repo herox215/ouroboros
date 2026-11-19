@@ -7,6 +7,9 @@ import type {
   BoardBridge,
   BoardView,
   Bridge,
+  GatewayBridge,
+  GatewayChange,
+  GatewayInfo,
   Host,
   LLMList,
   LoginStep,
@@ -62,6 +65,10 @@ interface WindowBindings {
   LoginStep?(id: string): Promise<LoginStep>;
   AnswerLogin?(id: string, answer: string): Promise<void>;
   CancelLogin?(id: string): Promise<void>;
+  /** The gateways of the profile, see gateways.go: a host from before them
+   * has none. */
+  Gateways?(): Promise<GatewayInfo[]>;
+  SaveGateway?(name: string, change: GatewayChange): Promise<GatewayInfo[]>;
   /** The build of the page, see window.go: a host from before it named one
    * has none. */
   Assets?(): string;
@@ -99,6 +106,15 @@ function optionsOf(bindings: WindowBindings): OptionsBridge | undefined {
     AnswerLogin: (id, answer) => bindings.AnswerLogin?.(id, answer) ?? noOptions(),
     CancelLogin: (id) => bindings.CancelLogin?.(id) ?? noOptions(),
     AgentModels: () => bindings.AgentModels?.() ?? noOptions(),
+  };
+}
+
+/** The gateways, for a host that has them. */
+function gatewaysOf(bindings: WindowBindings): GatewayBridge | undefined {
+  if (!bindings.Gateways || !bindings.SaveGateway) return undefined;
+  return {
+    Gateways: () => bindings.Gateways?.() ?? noOptions(),
+    SaveGateway: (name, change) => bindings.SaveGateway?.(name, change) ?? noOptions(),
   };
 }
 
@@ -150,7 +166,7 @@ function wailsHost(): Host | null {
       runtime.EventsOn('ouro:restarting', () => handler());
     },
   };
-  return { bridge, transport, board, sessions, agents, options: optionsOf(bindings) };
+  return { bridge, transport, board, sessions, agents, options: optionsOf(bindings), gateways: gatewaysOf(bindings) };
 }
 
 /** What the page talks through: the native window, or none when the page is

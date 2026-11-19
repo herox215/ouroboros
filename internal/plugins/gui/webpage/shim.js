@@ -98,6 +98,10 @@
     LoginStep: (id) => post('./api/login/step', { id: String(id) }),
     AnswerLogin: (id, answer) => post('./api/login/answer', { id: String(id), answer: String(answer) }).then(() => undefined),
     CancelLogin: (id) => post('./api/login/cancel', { id: String(id) }).then(() => undefined),
+    // The gateways of the profile, see gateways.go. The password goes out in
+    // the one request that saves, and is kept nowhere.
+    Gateways: () => get('./api/gateways'),
+    SaveGateway: (name, change) => post('./api/gateway/save', { name: String(name), change: change || {} }),
     Assets: () => get('./assets').then((answer) => (answer && answer.version) || ''),
   };
 
