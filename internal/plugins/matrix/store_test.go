@@ -1,7 +1,9 @@
 package matrix
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"ouroboros/internal/home"
+	transport "ouroboros/internal/matrix"
 	"ouroboros/plugin"
 )
 
@@ -17,10 +21,12 @@ func TestSettingsValidation(t *testing.T) {
 	for _, c := range []plugin.GatewayChange{
 		{Homeserver: "http://example.org"},
 		{Homeserver: "http://192.0.2.1:8008"},
-		{Homeserver: "http://100.91.15.24:8008"},
-		{Homeserver: "http://100.91.15.23:8009"},
-		{Homeserver: "http://100.91.15.23:8008/path"},
-		{Homeserver: "http://user:pass@100.91.15.23:8008"},
+		{Homeserver: "http://100.91.15.23:8008"},
+		{Homeserver: "http://100.125.108.63:8008", Values: map[string]string{"allow_http": "false"}},
+		{Homeserver: "http://100.125.108.63:8008", Values: map[string]string{"allow_http": "yes"}},
+		{Homeserver: "http://100.125.108.63:8008?token=secret", Values: map[string]string{"allow_http": "true"}},
+		{Homeserver: "http://user:pass@100.125.108.63:8008", Values: map[string]string{"allow_http": "true"}},
+		{Homeserver: "ftp://100.125.108.63:8008", Values: map[string]string{"allow_http": "true"}},
 		{Homeserver: "http://localhost.example.org:8008"},
 		{Homeserver: "http://localhost:8008?token=secret"},
 		{Homeserver: "http://localhost:8008#fragment"},
@@ -41,14 +47,22 @@ func TestSettingsValidation(t *testing.T) {
 	if err != nil || c.Homeserver != "https://example.org" || c.UserID != "@luna:example.org" || !slices.Equal(c.AllowedUsers, []string{"@lucas:example.org"}) {
 		t.Fatalf("normalize: %+v %v", c, err)
 	}
-	for _, server := range []string{
-		"http://100.91.15.23:8008", "http://localhost:8008",
-		"http://127.0.0.1:8008", "http://[::1]:8008",
-	} {
+	for _, server := range []string{"http://localhost:8008", "http://127.0.0.1:8008", "http://[::1]:8008"} {
 		c, err := normalize(plugin.GatewayChange{Homeserver: server})
 		if err != nil || c.Homeserver != server {
 			t.Errorf("allowed homeserver %s: %+v %v", server, c, err)
 		}
+	}
+	// Plain HTTP elsewhere takes the explicit allowance, for that homeserver.
+	c, err = normalize(plugin.GatewayChange{Values: map[string]string{"homeserver": " http://100.125.108.63:8008/ ", "allow_http": "true"}})
+	if err != nil || c.Homeserver != "http://100.125.108.63:8008" || httpAllowance(c) != c.Homeserver {
+		t.Errorf("allowed tailnet homeserver: %+v %v", c, err)
+	}
+	// The refusal says nothing of the address; the log gets it.
+	_, err = normalize(plugin.GatewayChange{Homeserver: "http://100.125.108.63:8008"})
+	var refusal plugin.GatewayRefusal
+	if !errors.As(err, &refusal) || !errors.Is(err, transport.ErrServerRefused) || strings.Contains(refusal.Reason, "100.") {
+		t.Errorf("refusal: %v", err)
 	}
 	c, err = normalize(plugin.GatewayChange{Homeserver: " http://localhost:8008/ "})
 	if err != nil || c.Homeserver != "http://localhost:8008" {
@@ -203,11 +217,11 @@ func TestSnapshotStatus(t *testing.T) {
 	for _, field := range public.Fields {
 		values[field.Key] = field.Value + strings.Join(field.List, ",")
 	}
-	if values["homeserver"] != c.Homeserver || values["user_id"] != c.UserID || values["password"] != "" || values["allowed_users"] != "@owner:example.org" || len(values) != 4 {
+	if values["homeserver"] != c.Homeserver || values["user_id"] != c.UserID || values["password"] != "" || values["allowed_users"] != "@owner:example.org" || values["allow_http"] != "" || len(values) != 5 {
 		t.Fatalf("fields %v", values)
 	}
-	public.Fields[3].List[0] = "@eve:example.org"
-	if again, _ := s.snapshot(); again.Fields[3].List[0] != "@owner:example.org" || again.AllowedUsers[0] != "@owner:example.org" {
+	public.Fields[4].List[0] = "@eve:example.org"
+	if again, _ := s.snapshot(); again.Fields[4].List[0] != "@owner:example.org" || again.AllowedUsers[0] != "@owner:example.org" {
 		t.Fatal("the form shares its list with the settings")
 	}
 	// A status the node wrote long ago, or that cannot be read, says nothing.
@@ -244,5 +258,120 @@ func TestCreateKeepsTheStorePrivate(t *testing.T) {
 	}
 	if info, err := os.Stat(s.dir); err != nil || info.Mode().Perm() != 0700 {
 		t.Fatalf("mode %v %v", info.Mode().Perm(), err)
+	}
+}
+
+func TestHTTPAllowanceIsSavedForExactlyThatHomeserver(t *testing.T) {
+	const tailnet = "http://100.125.108.63:8008"
+	s := store{t.TempDir()}
+	var allowedAtLogin string
+	login := func(_ context.Context, _, httpAllowed, user, _ string) (loginResult, error) {
+		allowedAtLogin = httpAllowed
+		return loginResult{UserID: user, Token: "fixture-token", DeviceID: "device"}, nil
+	}
+	change := plugin.GatewayChange{Enabled: true, UserID: "@bot:example.org", Password: "fixture-password",
+		Values: map[string]string{"homeserver": tailnet, "allow_http": "true"}}
+	if err := s.change(context.Background(), change, login); err != nil {
+		t.Fatal(err)
+	}
+	if allowedAtLogin != tailnet {
+		t.Fatalf("login got the allowance %q", allowedAtLogin)
+	}
+	data, _ := os.ReadFile(s.path("settings.json"))
+	if !strings.Contains(string(data), `"http_allowed": "`+tailnet+`"`) || strings.Contains(string(data), "fixture-password") {
+		t.Fatalf("saved %s", data)
+	}
+	public, err := s.snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var box, homeserver plugin.GatewayField
+	for _, f := range public.Fields {
+		switch f.Key {
+		case "allow_http":
+			box = f
+		case "homeserver":
+			homeserver = f
+		}
+	}
+	if box.Kind != "bool" || !box.On || box.Hint == "" || homeserver.Hint == "" {
+		t.Fatalf("form %+v %+v", box, homeserver)
+	}
+	// Without the box the same homeserver is refused and nothing is replaced.
+	change.Password, change.Enabled = "", false
+	change.Values = map[string]string{"homeserver": tailnet, "allow_http": "false"}
+	if err := s.change(context.Background(), change, nil); !errors.Is(err, transport.ErrServerRefused) {
+		t.Fatalf("saved plain HTTP without the allowance: %v", err)
+	}
+	if c, _ := s.load(); c.HTTPAllowed != tailnet {
+		t.Fatalf("a refused change replaced the settings: %+v", c)
+	}
+	// Another homeserver does not inherit it: the box must be ticked again.
+	change.Values = map[string]string{"homeserver": "http://100.125.108.63:8009"}
+	if err := s.change(context.Background(), change, nil); !errors.Is(err, transport.ErrServerRefused) {
+		t.Fatalf("saved another homeserver on the old allowance: %v", err)
+	}
+	// HTTPS and loopback keep no allowance, and drop the login of another homeserver.
+	for _, server := range []string{"https://example.org", "http://127.0.0.1:8008"} {
+		change.Values = map[string]string{"homeserver": server, "allow_http": "true"}
+		if err := s.change(context.Background(), change, nil); err != nil {
+			t.Fatal(err)
+		}
+		if c, _ := s.load(); c.HTTPAllowed != "" && !strings.HasPrefix(server, "http://") || c.HTTPAllowed != server && strings.HasPrefix(server, "http://") {
+			t.Fatalf("allowance for %s: %+v", server, c)
+		}
+	}
+}
+
+func TestRefusedHomeserverIsLoggedWithoutCredentials(t *testing.T) {
+	dir := home.Dir(t.TempDir())
+	gateway, serving := startPlugin(t, dir, &testSessions{})
+	err := gateway.Save(context.Background(), plugin.GatewayChange{Homeserver: "http://user:pw@100.125.108.63:8008/base?token=secret#frag", UserID: "@bot:example.org", Password: "fixture-password"})
+	if err == nil {
+		t.Fatal("saved a homeserver with credentials")
+	}
+	err = gateway.Save(context.Background(), plugin.GatewayChange{Homeserver: "http://100.125.108.63:8008/base", UserID: "@bot:example.org", Password: "fixture-password"})
+	if err == nil {
+		t.Fatal("saved plain HTTP without the allowance")
+	}
+	// A refusal of anything else is not logged as one of the homeserver.
+	_ = gateway.Save(context.Background(), plugin.GatewayChange{UserID: "luna:example.org"})
+	serving.Start()
+	serving.Stop()
+	log, err := os.ReadFile(dir.Service().LogFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(log)
+	if !strings.Contains(text, `homeserver "http://100.125.108.63:8008/base" refused`) {
+		t.Fatalf("log %q", text)
+	}
+	if strings.Count(text, " refused: ") != 2 || strings.ContainsAny(text, "?#") && strings.Contains(text, "token") ||
+		strings.Contains(text, "pw") || strings.Contains(text, "secret") || strings.Contains(text, "fixture-password") {
+		t.Fatalf("log %q", text)
+	}
+}
+
+func TestSavedHomeserverRefusedAtStartIsLoggedRedacted(t *testing.T) {
+	dir := home.Dir(t.TempDir())
+	s := store{filepath.Join(dir.Gateways(), "matrix")}
+	// Settings of an older version: plain HTTP to a tailnet address, no allowance.
+	old := configuration{Enabled: true, Homeserver: "http://100.91.15.23:8008", UserID: "@bot:example.org", Token: "fixture-token", DeviceID: "BOT", Revision: "1"}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.save(old); err != nil {
+		t.Fatal(err)
+	}
+	_, serving := startPlugin(t, dir, &testSessions{})
+	serving.Start()
+	defer serving.Stop()
+	var text string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && !strings.Contains(text, "refused"); time.Sleep(20 * time.Millisecond) {
+		log, _ := os.ReadFile(dir.Service().LogFile)
+		text = string(log)
+	}
+	if !strings.Contains(text, `saved homeserver "http://100.91.15.23:8008" refused`) || strings.Contains(text, "fixture-token") {
+		t.Fatalf("log %q", text)
 	}
 }

@@ -151,3 +151,32 @@ func (w *webFront) cancelLogin(rw http.ResponseWriter, r *http.Request) {
 	}
 	answer(rw, struct{}{}, w.profile.cancelLogin(body.ID))
 }
+
+// gatewayBody is what the page sends to save a gateway.
+type gatewayBody struct {
+	Name   string            `json:"name"`
+	Change GatewayChangeBody `json:"change"`
+}
+
+// gateways lists the gateways of the profile with their settings.
+func (w *webFront) gateways(rw http.ResponseWriter, r *http.Request) {
+	list, err := w.profile.gatewayList(r.Context())
+	answer(rw, list, err)
+}
+
+// saveGateway saves what the owner changed of a gateway. The body holds a
+// password: it is read here and logged nowhere, and it is not kept.
+func (w *webFront) saveGateway(rw http.ResponseWriter, r *http.Request) {
+	if !w.sameOrigin(rw, r) {
+		return
+	}
+	r.Body = http.MaxBytesReader(rw, r.Body, 64<<10)
+	var body gatewayBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		// Not the error of the decoder: it may quote the body.
+		http.Error(rw, "the request cannot be read", http.StatusBadRequest)
+		return
+	}
+	list, err := w.profile.saveGateway(r.Context(), body.Name, body.Change)
+	answer(rw, list, err)
+}

@@ -25,7 +25,11 @@ type profile struct {
 	models func(ctx context.Context) ([]plugin.AccessModels, error)
 	// llms changes the accesses of the node and what its scopes answer with,
 	// see providers.go; nil where the window has no owner to ask.
-	llms     llmOwner
+	llms llmOwner
+	// gateways lists the gateways the plugins contribute, read when they are
+	// shown, see gateways.go; nil where the window has no owner to change
+	// them through.
+	gateways func() []plugin.Gateway
 	logins   logins // the sign-ins to providers on their way
 	sessions plugin.Sessions
 	dir      home.Dir        // the profile, where the pictures of the window are kept
@@ -81,6 +85,7 @@ func Plugin(owner *plugin.Owner, dir home.Dir, files *guard.Guard) plugin.Plugin
 				return owner.Models(c, plugin.All[plugin.Provider](ctx))
 			}
 			p.llms = ownerLLMs{Owner: owner, providers: func() []plugin.Provider { return plugin.All[plugin.Provider](ctx) }}
+			p.gateways = func() []plugin.Gateway { return plugin.All[plugin.Gateway](ctx) }
 		}
 		plugin.Add(ctx, plugin.Command{Name: "gui", Help: "chat with the thread in a window", Run: p.run})
 		// The window shows the pictures an agent makes, as the gateways show

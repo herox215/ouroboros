@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"ouroboros/internal/safefile"
@@ -11,7 +12,7 @@ import (
 )
 
 type loginResult struct{ UserID, Token, DeviceID string }
-type loginFunc func(context.Context, string, string, string) (loginResult, error)
+type loginFunc func(ctx context.Context, server, httpAllowed, user, password string) (loginResult, error)
 
 func (s store) change(ctx context.Context, change plugin.GatewayChange, login loginFunc) error {
 	change, err := normalize(change)
@@ -31,6 +32,10 @@ func (s store) change(ctx context.Context, change plugin.GatewayChange, login lo
 		return plugin.GatewayRefusal{Reason: "the saved Matrix settings cannot be read; repair them before saving"}
 	}
 	cfg := configuration{Enabled: change.Enabled, Homeserver: change.Homeserver, UserID: change.UserID, AllowedUsers: change.AllowedUsers}
+	// The allowance only means something for plain HTTP; HTTPS saves none.
+	if strings.HasPrefix(cfg.Homeserver, "http://") {
+		cfg.HTTPAllowed = httpAllowance(change)
+	}
 	if old.Homeserver == cfg.Homeserver && old.UserID == cfg.UserID {
 		cfg.Token = old.Token
 		cfg.DeviceID = old.DeviceID
@@ -42,7 +47,7 @@ func (s store) change(ctx context.Context, change plugin.GatewayChange, login lo
 	} else if change.Password != "" {
 		loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		result, err := login(loginCtx, cfg.Homeserver, cfg.UserID, change.Password)
+		result, err := login(loginCtx, cfg.Homeserver, cfg.HTTPAllowed, cfg.UserID, change.Password)
 		change.Password = ""
 		// Neither SDK error bodies nor the submitted password leave this boundary.
 		if err != nil {

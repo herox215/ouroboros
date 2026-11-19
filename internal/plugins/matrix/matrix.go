@@ -3,10 +3,12 @@ package matrix
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 
 	"ouroboros/internal/guard"
 	"ouroboros/internal/home"
+	transportpkg "ouroboros/internal/matrix"
 	"ouroboros/plugin"
 )
 
@@ -29,6 +31,9 @@ func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 			}
 			transport, err := newTransport(runCtx, cfg, s)
 			if err != nil {
+				if errors.Is(err, transportpkg.ErrServerRefused) {
+					dir.Log("matrix gateway: saved homeserver %q refused: %v", transportpkg.RedactServer(cfg.Homeserver), err)
+				}
 				return nil, err
 			}
 			return &sessionConnection{connection: transport, conversations: conversations, store: s, revision: cfg.Revision, live: running}, nil
@@ -36,7 +41,9 @@ func Plugin(dir home.Dir, files *guard.Guard) plugin.Plugin {
 		plugin.Add(ctx, plugin.Gateway{Name: "matrix", Title: "Matrix",
 			Settings: func(context.Context) (plugin.GatewaySettings, error) { return s.snapshot() },
 			Save: func(saveCtx context.Context, change plugin.GatewayChange) error {
-				return s.change(saveCtx, change, login)
+				err := s.change(saveCtx, change, login)
+				logRefusal(dir.Log, err)
+				return err
 			},
 		})
 		plugin.Add(ctx, plugin.Serving{Start: func() {

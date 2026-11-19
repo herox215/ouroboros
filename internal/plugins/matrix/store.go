@@ -21,9 +21,12 @@ type configuration struct {
 	Homeserver   string   `json:"homeserver"`
 	UserID       string   `json:"user_id"`
 	AllowedUsers []string `json:"allowed_users"`
-	Token        string   `json:"token,omitempty"`
-	DeviceID     string   `json:"device_id,omitempty"`
-	Revision     string   `json:"revision"`
+	// HTTPAllowed is the homeserver the owner allowed plain HTTP for: it holds
+	// only for exactly this URL and is empty for none.
+	HTTPAllowed string `json:"http_allowed,omitempty"`
+	Token       string `json:"token,omitempty"`
+	DeviceID    string `json:"device_id,omitempty"`
+	Revision    string `json:"revision"`
 }
 
 type connectionStatus struct {
@@ -68,7 +71,9 @@ func (s store) snapshot() (plugin.GatewaySettings, error) {
 	}
 	state := plugin.GatewaySettings{Name: "matrix", Title: "Matrix", Enabled: c.Enabled, Homeserver: c.Homeserver, UserID: c.UserID, AllowedUsers: c.AllowedUsers, LoggedIn: c.Token != ""}
 	state.Fields = []plugin.GatewayField{
-		{Key: "homeserver", Label: "Homeserver", Kind: "text", Value: c.Homeserver},
+		{Key: "homeserver", Label: "Homeserver", Kind: "text", Value: c.Homeserver, Hint: "HTTPS, or plain HTTP on this machine (127.0.0.1); HTTP elsewhere only when allowed below."},
+		{Key: "allow_http", Label: "Allow plain HTTP for this homeserver (the access token then travels unencrypted)", Kind: "bool", On: c.HTTPAllowed != "" && c.HTTPAllowed == c.Homeserver,
+			Hint: "The password at login and the access token afterwards are then sent unencrypted. Use it only in a network you trust, such as a tailnet."},
 		{Key: "user_id", Label: "User ID", Kind: "text", Value: c.UserID},
 		{Key: "password", Label: "Password", Kind: "secret"},
 		{Key: "allowed_users", Label: "Allowed user IDs", Kind: "list", List: append([]string(nil), c.AllowedUsers...)},
@@ -93,9 +98,45 @@ func userID(s string) bool {
 	i := strings.IndexByte(s, ':')
 	return strings.HasPrefix(s, "@") && i > 1 && i < len(s)-1 && !strings.ContainsAny(s, " \t\r\n")
 }
+
+// homeserverRefusal is the refusal of a homeserver URL. It is a
+// plugin.GatewayRefusal for the owner and carries the rejected value, which
+// the log shows redacted, to tell this check from every other refusal.
+type homeserverRefusal struct {
+	plugin.GatewayRefusal
+	homeserver string
+}
+
+func (e homeserverRefusal) Unwrap() error { return e.GatewayRefusal }
+func (e homeserverRefusal) Is(target error) bool {
+	return target == transport.ErrServerRefused
+}
+
+// logRefusal writes a refused homeserver to the log, without credentials,
+// query or fragment of the URL; any other error is not its business.
+func logRefusal(log func(string, ...any), err error) {
+	var refusal homeserverRefusal
+	if errors.As(err, &refusal) {
+		log("matrix gateway: homeserver %q refused: %s", transport.RedactServer(refusal.homeserver), refusal.Reason)
+	}
+}
+
+// httpAllowance is the homeserver of a normalized change that the owner
+// allowed plain HTTP for: the one it names, or none.
+func httpAllowance(change plugin.GatewayChange) string {
+	if change.Values["allow_http"] == "true" {
+		return change.Homeserver
+	}
+	return ""
+}
+
 func normalize(change plugin.GatewayChange) (plugin.GatewayChange, error) {
 	for key, value := range change.Values {
 		switch key {
+		case "allow_http":
+			if value != "true" && value != "false" {
+				return change, plugin.GatewayRefusal{Reason: "unknown value for allowing plain HTTP; use true or false"}
+			}
 		case "homeserver":
 			change.Homeserver = value
 		case "user_id":
@@ -115,8 +156,8 @@ func normalize(change plugin.GatewayChange) (plugin.GatewayChange, error) {
 	change.Homeserver = strings.TrimRight(strings.TrimSpace(change.Homeserver), "/")
 	change.UserID = strings.TrimSpace(change.UserID)
 	if change.Homeserver != "" {
-		if err := transport.ValidateServer(change.Homeserver); err != nil {
-			return change, plugin.GatewayRefusal{Reason: err.Error()}
+		if err := transport.ValidateServer(change.Homeserver, httpAllowance(change)); err != nil {
+			return change, homeserverRefusal{plugin.GatewayRefusal{Reason: err.Error()}, change.Homeserver}
 		}
 	}
 	if change.UserID != "" && !userID(change.UserID) {

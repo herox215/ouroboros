@@ -14,7 +14,7 @@ import (
 func TestLoginPersistsTokenNotPasswordAndKeepsOnEdit(t *testing.T) {
 	s := store{t.TempDir()}
 	change := plugin.GatewayChange{Enabled: true, Homeserver: "https://example.org", UserID: "@bot:example.org", Password: "do-not-save", AllowedUsers: []string{"@owner:example.org"}}
-	login := func(ctx context.Context, server, user, password string) (loginResult, error) {
+	login := func(ctx context.Context, server, httpAllowed, user, password string) (loginResult, error) {
 		if password != "do-not-save" || server != change.Homeserver || user != change.UserID {
 			t.Fatal("wrong login input")
 		}
@@ -69,10 +69,10 @@ func TestFailedLoginIsSanitizedAndDoesNotReplaceSettings(t *testing.T) {
 	}
 	change := plugin.GatewayChange{Enabled: true, Homeserver: "https://example.org", UserID: "@bot:example.org", Password: "secret"}
 	for _, login := range []loginFunc{
-		func(context.Context, string, string, string) (loginResult, error) {
+		func(context.Context, string, string, string, string) (loginResult, error) {
 			return loginResult{}, errors.New("secret echoed by server")
 		},
-		func(context.Context, string, string, string) (loginResult, error) {
+		func(context.Context, string, string, string, string) (loginResult, error) {
 			return loginResult{UserID: "@wrong:example.org", Token: "token", DeviceID: "device"}, nil
 		},
 	} {
@@ -88,7 +88,7 @@ func TestFailedLoginIsSanitizedAndDoesNotReplaceSettings(t *testing.T) {
 }
 
 func TestChangeSavesNothingItCannotUse(t *testing.T) {
-	refuse := func(context.Context, string, string, string) (loginResult, error) {
+	refuse := func(context.Context, string, string, string, string) (loginResult, error) {
 		t.Fatal("logged in for a change that cannot be saved")
 		return loginResult{}, nil
 	}
@@ -129,7 +129,7 @@ func TestChangeSavesNothingItCannotUse(t *testing.T) {
 
 func TestChangeKeepsTheLoginOfTheSameAccountOnly(t *testing.T) {
 	s := store{t.TempDir()}
-	login := func(_ context.Context, _, user, _ string) (loginResult, error) {
+	login := func(_ context.Context, _, _, user, _ string) (loginResult, error) {
 		return loginResult{UserID: user, Token: "token of " + user, DeviceID: "device"}, nil
 	}
 	change := plugin.GatewayChange{Enabled: true, Homeserver: "https://example.org", UserID: "@bot:example.org", Password: "secret"}
@@ -167,7 +167,7 @@ func TestChangeKeepsTheLoginOfTheSameAccountOnly(t *testing.T) {
 	for _, incomplete := range []loginResult{{UserID: "@bot:example.org", DeviceID: "device"}, {UserID: "@bot:example.org", Token: "token"}} {
 		result := incomplete
 		err := s.change(context.Background(), plugin.GatewayChange{Homeserver: "https://example.org", UserID: "@bot:example.org", Password: "secret"},
-			func(context.Context, string, string, string) (loginResult, error) { return result, nil })
+			func(context.Context, string, string, string, string) (loginResult, error) { return result, nil })
 		if err == nil {
 			t.Fatalf("accepted the login %+v", result)
 		}

@@ -3,18 +3,23 @@
   import type { Themes } from '../lib/themes.svelte';
   import type { NodeOptions } from '../lib/nodeoptions.svelte';
   import type { Agents } from '../lib/agents.svelte';
+  import type { Gateways } from '../lib/gateways.svelte';
   import ThemeOptions from './ThemeOptions.svelte';
   import AccessOptions from './AccessOptions.svelte';
   import ModelOptions from './ModelOptions.svelte';
+  import GatewayOptions from './GatewayOptions.svelte';
 
   let {
     themes,
     node = null,
+    gateways = null,
     agents = null,
     onagents,
   }: {
     themes: Themes;
     node?: NodeOptions | null;
+    /** The gateways of the profile; a host without them shows no such part. */
+    gateways?: Gateways | null;
     /** The agents, whose own models go before the defaults. */
     agents?: Agents | null;
     onagents?: () => void;
@@ -24,8 +29,8 @@
    * answers through, which are those of the node and hold for every window,
    * and how this window looks. A host without the options of the node shows
    * the look alone. */
-  type Tab = 'models' | 'accesses' | 'appearance';
-  const tabs = $derived<Tab[]>(node ? ['models', 'accesses', 'appearance'] : ['appearance']);
+  type Tab = 'models' | 'accesses' | 'gateways' | 'appearance';
+  const tabs = $derived<Tab[]>([...(node ? (['models', 'accesses'] as Tab[]) : []), ...(node && gateways ? (['gateways'] as Tab[]) : []), 'appearance']);
 
   /** The window remembers the part it showed, where it can. */
   const TAB_KEY = 'ouro.options.tab';
@@ -33,7 +38,7 @@
   function storedTab(): Tab | null {
     try {
       const stored = localStorage.getItem(TAB_KEY);
-      return stored === 'models' || stored === 'accesses' || stored === 'appearance' ? stored : null;
+      return stored === 'models' || stored === 'accesses' || stored === 'gateways' || stored === 'appearance' ? stored : null;
     } catch {
       return null;
     }
@@ -74,6 +79,9 @@
   $effect(() => {
     if (node) void node.refresh();
   });
+  $effect(() => {
+    if (node && gateways) void gateways.refresh();
+  });
 </script>
 
 {#snippet icon(name: Tab)}
@@ -84,6 +92,8 @@
     {:else if name === 'accesses'}
       <circle cx="8" cy="12" r="3.5" />
       <path d="M11.5 12H21M17 12v3.5M20 12v2.5" />
+    {:else if name === 'gateways'}
+      <path d="M4 5.5h16v10H12l-4.5 3.5v-3.5H4z" />
     {:else}
       <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-1.3-1-1.6-1-2.8 0-1 .8-1.7 1.8-1.7H17a3.5 3.5 0 0 0 3.5-3.5c0-4.2-3.8-7.3-8.5-7.3z" />
       <circle cx="7.8" cy="11" r="1.1" />
@@ -115,7 +125,9 @@
     {/if}
 
     <div class="panel" role={tabs.length > 1 ? 'tabpanel' : undefined} id="prefs-panel-{tab}" aria-labelledby={tabs.length > 1 ? `prefs-tab-${tab}` : undefined}>
-      {#if node && tab !== 'appearance' && !node.list && !node.error}
+      {#if node && tab === 'gateways' && gateways}
+        <GatewayOptions {gateways} />
+      {:else if node && tab !== 'appearance' && !node.list && !node.error}
         <p class="prefs-hint" role="status">{t('options.loading')}</p>
       {:else if node && tab !== 'appearance' && node.error && !node.list}
         <p class="prefs-error" role="alert">{t('options.unreadable')}: {node.error}</p>

@@ -286,6 +286,9 @@ func (w *webFront) routes() http.Handler {
 	mux.HandleFunc("POST /api/login/step", w.guard(w.loginStep))
 	mux.HandleFunc("POST /api/login/answer", w.guard(w.answerLogin))
 	mux.HandleFunc("POST /api/login/cancel", w.guard(w.cancelLogin))
+	// The gateways of the profile, see gateways.go.
+	mux.HandleFunc("GET /api/gateways", w.guard(w.gateways))
+	mux.HandleFunc("POST /api/gateway/save", w.guard(w.saveGateway))
 	mux.HandleFunc("GET /api/events", w.guard(w.events))
 	mux.HandleFunc("GET /assets", w.assets)
 	// The pictures the thread shows are the owner's: only behind the login.

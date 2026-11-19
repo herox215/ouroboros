@@ -7,6 +7,7 @@ import { Agents } from './lib/agents.svelte';
 import { Jobs } from './lib/jobs.svelte';
 import { Themes } from './lib/themes.svelte';
 import { NodeOptions } from './lib/nodeoptions.svelte';
+import { Gateways } from './lib/gateways.svelte';
 import { connect } from './lib/bridge';
 import { locale } from './lib/i18n';
 import './app.css';
@@ -34,6 +35,7 @@ if (target) {
       jobs: host ? new Jobs(host.agents) : null,
       themes,
       node,
+      gateways: host?.gateways ? new Gateways(host.gateways) : null,
     },
   });
 }

@@ -243,7 +243,7 @@ runs, when it runs next and whether it is paused. It shows what is planned, not 
 which the sessions show; a job that runs once and ran is not listed. It is read only, again every
 few seconds while it is shown, from `schedule.json` of the profile.
 
-**Options**, at the foot of the sidebar, has three parts. The first two are those of the node and
+**Options**, at the foot of the sidebar, has four parts. The first three are those of the node and
 hold for every window and terminal; a change holds from the next message on, without a restart.
 
 - **Models** holds the **defaults**: what is answered with where an agent has no model of its
@@ -267,6 +267,18 @@ hold for every window and terminal; a change holds from the next message on, wit
   is kept when the answer is left empty, and is never shown. **Rename** and **Remove** do what the
   setup does: the last access stays, and what answered through one that is removed goes on with
   another.
+- **Gateways** lists the gateways the plugins contribute, like Matrix, as **Settings → Gateways**
+  of the terminal UI does: each with whether it is signed in and its status, **Enabled**, and the
+  form it asks for. For Matrix these are the **homeserver** (HTTPS, or plain HTTP on this machine,
+  such as `http://127.0.0.1:8008`; plain HTTP on another host only with **Allow plain HTTP for this
+  homeserver** ticked, which holds for exactly that URL and sends the password at login and the
+  access token unencrypted), the **user ID** of the bot account, its **password** and
+  the **allowed users**, one per line; an empty list allows nobody. The password is write-only: it
+  is sent once to sign in, then dropped, and never stored, shown or logged; left empty it keeps the
+  login. **Save** holds at once, without a restart; **Sign out** drops the login. A refusal shows
+  the reason the gateway declares safe; anything else only says that the save failed. The part is
+  there only on a node that serves the window or the page. A homeserver the gateway refuses is
+  written to the log with scheme, host and path only, never with credentials, query or password.
 - **Appearance** is the theme of this window alone, kept in its storage.
 
 The window shows what the thread tells, through the very service the terminal UI uses
