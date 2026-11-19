@@ -29,6 +29,8 @@ type Credentials struct{ Homeserver, UserID, Token, DeviceID string }
 type Config struct {
 	Homeserver, UserID, Token, DeviceID, StateDir string
 	AllowedUsers                                  []string
+	// HTTPAllowed is the one homeserver the owner allowed plain HTTP for, see ValidateServer.
+	HTTPAllowed string
 }
 type Image struct {
 	MIMEType string
@@ -49,8 +51,9 @@ type Message struct {
 }
 
 // Login exchanges a password for device credentials. Passwords are never retained.
-func Login(ctx context.Context, homeserver, user, password string) (Credentials, error) {
-	if err := ValidateServer(homeserver); err != nil {
+// httpAllowed is the homeserver the owner allowed plain HTTP for, see ValidateServer.
+func Login(ctx context.Context, homeserver, httpAllowed, user, password string) (Credentials, error) {
+	if err := ValidateServer(homeserver, httpAllowed); err != nil {
 		return Credentials{}, err
 	}
 	// NewClient only parses the URL, which ValidateServer did.
@@ -65,20 +68,44 @@ func Login(ctx context.Context, homeserver, user, password string) (Credentials,
 	return Credentials{homeserver, string(resp.UserID), resp.AccessToken, string(resp.DeviceID)}, nil
 }
 
+// ErrServerRefused marks a homeserver URL ValidateServer refuses; test for it
+// with errors.Is rather than by the text of the message.
+var ErrServerRefused = errors.New("the Matrix homeserver is refused")
+
+// serverRefusal is the error of a refused homeserver: its text is what the
+// owner reads, it matches ErrServerRefused.
+type serverRefusal string
+
+func (e serverRefusal) Error() string        { return string(e) }
+func (e serverRefusal) Is(target error) bool { return target == ErrServerRefused }
+
 // ValidateServer checks the homeserver URL for both transport and settings.
-// HTTP is allowed on loopback and, by explicit owner authorization, only at
-// http://100.91.15.23:8008 on Tailscale. This is not a general exception for
-// Tailscale addresses, other ports or URL paths, and does not alter TLS verification.
-func ValidateServer(server string) error {
+// HTTPS is the rule. Plain HTTP is allowed on loopback and for the one
+// homeserver the owner explicitly allowed: httpAllowed must equal server
+// exactly, so another host, port or path stays refused. An empty httpAllowed
+// allows nothing. This does not alter TLS verification.
+func ValidateServer(server, httpAllowed string) error {
 	u, err := url.Parse(server)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("the Matrix homeserver must be a URL without credentials, query or fragment")
+		return serverRefusal("the Matrix homeserver must be a URL without credentials, query or fragment")
 	}
 	loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
-	if u.Scheme != "https" && !(u.Scheme == "http" && (loopback || server == "http://100.91.15.23:8008")) {
-		return errors.New("the Matrix homeserver must be HTTPS (HTTP is allowed only on loopback or the explicitly authorized http://100.91.15.23:8008 Tailscale endpoint)")
+	allowed := httpAllowed != "" && server == httpAllowed
+	if u.Scheme != "https" && !(u.Scheme == "http" && (loopback || allowed)) {
+		return serverRefusal("the Matrix homeserver must be HTTPS (plain HTTP only on this machine, or after allowing HTTP for this homeserver in the gateway settings)")
 	}
 	return nil
+}
+
+// RedactServer returns server as it may be logged: scheme, host and path,
+// without credentials, query or fragment. What does not parse as a URL with a
+// host is replaced, since nothing can be told of what it holds.
+func RedactServer(server string) string {
+	u, err := url.Parse(server)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "<unparsable>"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
 
 type cryptography interface {
@@ -104,7 +131,7 @@ type Client struct {
 }
 
 func New(cfg Config) (*Client, error) {
-	if err := ValidateServer(cfg.Homeserver); err != nil {
+	if err := ValidateServer(cfg.Homeserver, cfg.HTTPAllowed); err != nil {
 		return nil, err
 	}
 	if cfg.UserID == "" || cfg.Token == "" || cfg.DeviceID == "" || cfg.StateDir == "" {

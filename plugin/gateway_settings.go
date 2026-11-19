@@ -27,11 +27,13 @@ type GatewaySettings struct {
 }
 
 // GatewayField describes one public form field. Secret values are always empty
-// in snapshots. Kind is text, secret, list or bool.
+// in snapshots. Kind is text, secret, list or bool. Hint is a public text a
+// frontend shows under the field; it never holds a value.
 type GatewayField struct {
 	Key, Label, Kind, Value string
 	List                    []string
 	On                      bool
+	Hint                    string
 }
 
 // GatewayChange is supplied only by a local owner frontend. An empty password
