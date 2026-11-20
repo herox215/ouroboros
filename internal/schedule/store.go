@@ -53,7 +53,16 @@ type Job struct {
 	Tools []string `json:"tools,omitempty"`
 	// Agent is the agent of the profile the session of a run runs as, see
 	// agents: the agent of the thread for "".
-	Agent   string    `json:"agent,omitempty"`
+	Agent string `json:"agent,omitempty"`
+	// Memories is the fingerprint of the memories after the last pass of the
+	// archivist that ended well, see memory.Store.Fingerprint: empty before
+	// the first. The scheduler keeps it, not the owner.
+	Memories string `json:"memories,omitempty"`
+	// Checked is when the last pass of the archivist that ended well began:
+	// the conversations after it are those it has still to check the
+	// memories against. Zero before the first. The scheduler keeps it, not
+	// the owner.
+	Checked time.Time `json:"checked,omitzero"`
 	Paused  bool      `json:"paused,omitempty"`
 	Created time.Time `json:"created"`
 	Next    time.Time `json:"next"`

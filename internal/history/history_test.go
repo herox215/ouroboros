@@ -742,3 +742,11 @@ func TestEfforts(t *testing.T) {
 		t.Error("an effort that cannot be removed should fail")
 	}
 }
+
+func TestEntryParty(t *testing.T) {
+	mine := Entry{ID: Owner("abc")}
+	theirs := Entry{ID: "peer-" + strings.Repeat("a", 32) + "/abc"}
+	if !mine.Owner() || mine.Session() != "abc" || theirs.Owner() || theirs.Session() != "abc" {
+		t.Fatalf("owner %v %q, peer %v %q", mine.Owner(), mine.Session(), theirs.Owner(), theirs.Session())
+	}
+}

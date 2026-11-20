@@ -121,6 +121,57 @@ func TestUndoAndUpdate(t *testing.T) {
 	}
 }
 
+// The fingerprint changes with every change of the memories, and with
+// nothing else: counting a hit as used leaves it as it is.
+func TestFingerprint(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	fingerprint := func() string {
+		t.Helper()
+		p, err := s.Fingerprint(ctx)
+		if err != nil || p == "" {
+			t.Fatalf("fingerprint: %q, %v", p, err)
+		}
+		return p
+	}
+	last := fingerprint()
+	if fingerprint() != last {
+		t.Fatal("the fingerprint of the same memories differs")
+	}
+	steps := []struct {
+		name string
+		do   func() error
+	}{
+		{"add", func() error { _, _, err := s.Add(ctx, General, "tea", "oolong", "chat", time.Time{}); return err }},
+		{"overwrite", func() error { _, _, err := s.Add(ctx, General, "tea", "green", "chat", time.Time{}); return err }},
+		{"forget", func() error { _, err := s.Forget(ctx, General, "tea"); return err }},
+	}
+	for _, step := range steps {
+		if err := step.do(); err != nil {
+			t.Fatal(err)
+		}
+		now := fingerprint()
+		if now == last {
+			t.Fatalf("%s left the fingerprint as it was: %s", step.name, now)
+		}
+		last = now
+	}
+	e, _, err := s.Add(ctx, General, "tea", "oolong", "chat", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last = fingerprint()
+	if got, err := s.Load(ctx, General, "oolong", 0); err != nil || len(got) != 1 {
+		t.Fatalf("load: %+v, %v", got, err)
+	}
+	if got, _ := s.Read(ctx, e.ID); got.Used != 1 {
+		t.Fatalf("the hit is not counted: %+v", got)
+	}
+	if fingerprint() != last {
+		t.Fatal("counting a hit as used changed the fingerprint")
+	}
+}
+
 // The memories of directories move once to topics: core ones to core,
 // global ones to general, those of a directory to its base name; archived
 // ones stay behind.

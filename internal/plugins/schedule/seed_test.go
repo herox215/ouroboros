@@ -28,7 +28,7 @@ func TestSeedArchivistOnce(t *testing.T) {
 	}
 }
 
-// An archivist job with the default text from before memories had topics
+// An archivist job with a default text from before, with topics or without,
 // gets the current one; one whose text the owner changed keeps it.
 func TestUpgradeArchivistText(t *testing.T) {
 	s, _, _ := fixture(t)
@@ -44,9 +44,20 @@ func TestUpgradeArchivistText(t *testing.T) {
 		}
 	}
 	setText(jobs[0].ID, oldArchivistText)
+	topical, err := s.store.Create(store.Job{Name: archivistName, Text: topicArchivistText, Cron: archivistCron, Ask: "never"}, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	memorial, err := s.store.Create(store.Job{Name: archivistName, Text: memoryArchivistText, Cron: archivistCron, Ask: "never"}, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
 	owned, err := s.store.Create(store.Job{Name: archivistName, Text: "Tidy only the topic work.", Cron: archivistCron, Ask: "never"}, s.now())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if topical.Text == archivistText || oldArchivistText == archivistText || memorial.Text == archivistText {
+		t.Fatal("the default text did not change")
 	}
 	s.tick(context.Background())
 	for _, j := range s.store.List() {

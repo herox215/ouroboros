@@ -106,6 +106,37 @@ func TestArchivistOldToolsMigrated(t *testing.T) {
 	}
 }
 
+// The archivist that has the memory tools from before it read conversations
+// gets the history tools once; a list the owner chose stays.
+func TestArchivistHistoryToolsMigrated(t *testing.T) {
+	s, _, _ := fixture(t)
+	if err := s.open(); err != nil {
+		t.Fatal(err)
+	}
+	theirs := []string{"memory_load", "memory_add"}
+	old, err := s.store.Create(store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never", Zone: "UTC", Tools: topicArchivistTools, Agent: agents.Archivist}, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err := s.store.Create(store.Job{Name: archivistName, Text: archivistText, Cron: archivistCron, Ask: "never", Zone: "UTC", Tools: theirs, Agent: agents.Archivist}, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.path+".defaults", []byte("archivist topic tools, agent\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.tick(context.Background())
+	if got, _ := s.store.Get(old.ID); !slices.Equal(got.Tools, archivistTools) || len(got.Tools) != 5 {
+		t.Fatalf("not migrated: %v", got.Tools)
+	}
+	if got, _ := s.store.Get(owned.ID); !slices.Equal(got.Tools, theirs) {
+		t.Fatalf("owner's list replaced: %v", got.Tools)
+	}
+	if b, err := os.ReadFile(s.path + ".defaults"); err != nil || string(b) != seededTools {
+		t.Fatalf("the marker: %q, %v", b, err)
+	}
+}
+
 // The archivist job runs as the archivist: the seeded one at once, and the one
 // from before jobs ran as an agent once, with its tools as the owner left
 // them; an agent the owner gives it after stays. A job that names no agent
