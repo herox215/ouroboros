@@ -1,7 +1,9 @@
 # Messaging gateways
 
-Gateways are profile-local plugin contributions, not default frontends. Terminal
-and desktop settings discover plugin.Gateway contributions dynamically. Each
+Gateways are profile-local plugin contributions, not default frontends. The
+terminal UI (Settings → Gateways), the window (`ouro gui`) and the page of the
+node in a browser (Options → Gateways) discover plugin.Gateway contributions
+dynamically. Each
 supplies public settings, a schema-defined form and an owner-only save callback.
 Secret fields are write-only. Future transports can define their own text,
 secret, list and boolean fields without extending either frontend.
@@ -75,7 +77,8 @@ with the goolm build tag. Raw Go builds without that tag deliberately refuse
 Matrix operation rather than falling back to plaintext. The regular Makefile
 test targets also select goolm.
 
-Open **Settings → Gateways → Matrix** in the desired profile. Enter the HTTPS
+Open **Settings → Gateways → Matrix** in the terminal UI, or **Options → Gateways**
+in the window or the page, of the desired profile. Enter the HTTPS
 homeserver URL (plain HTTP is accepted without more on the loopback address, such as
 `http://127.0.0.1:8008`; on any other host only after you tick **Allow plain HTTP for this
 homeserver**, which holds for exactly that URL and which you have to tick again for another
