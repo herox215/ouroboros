@@ -369,7 +369,7 @@
       </button>
     </div>
 
-    <ul class="agent-list">
+    <ul class="card-grid">
       {#if editing === NEW_AGENT}
         <li class="agent" data-kind="new">
           <span class="agent-badge" aria-hidden="true">{initial(draft.name || '+')}</span>
@@ -455,7 +455,6 @@
     align-items: center;
     justify-content: flex-end;
     gap: 8px 16px;
-    max-width: 760px;
   }
 
   .agents-system {
@@ -471,16 +470,6 @@
   .agents-system input {
     margin: 0;
     accent-color: var(--accent);
-  }
-
-  .agent-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    max-width: 760px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
   }
 
   .agent {

@@ -1553,3 +1553,15 @@ select.prefs-input {
   color: var(--muted);
   background: transparent;
 }
+
+/* The card lists of the jobs, the agents and the memories: as many columns as
+   fit the column of the shell, one on a narrow window, and never wider than it. */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  align-items: start;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
