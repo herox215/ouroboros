@@ -254,6 +254,34 @@ export interface AgentBridge {
   AgentJobs(): Promise<AgentJob[]>;
 }
 
+/** A memory the agent of the owner collected, see Memory in memories.go. */
+export interface Memory {
+  id: string;
+  topic: string;
+  key: string;
+  content: string;
+  /** When it was changed last, in RFC 3339. */
+  updated: string;
+  /** When a memory of a state ends; none for never. */
+  expires?: string;
+}
+
+/** The memories that have not expired, the latest updated first, and the
+ * counts beyond them, see MemoryList in memories.go. */
+export interface MemoryList {
+  memories: Memory[];
+  /** How many memories there are, those expired included. */
+  total: number;
+  /** How many expired memories are left out. */
+  hidden: number;
+}
+
+/** The bound method of the Go window that lists the memories, see
+ * memories.go. */
+export interface MemoryBridge {
+  Memories(): Promise<MemoryList>;
+}
+
 /** A provider of this ouro to sign in with, see ProviderInfo in providers.go. */
 export interface ProviderInfo {
   name: string;
@@ -412,6 +440,7 @@ export interface Host extends Link {
   board: BoardBridge;
   sessions: SessionBridge;
   agents: AgentBridge;
+  memories: MemoryBridge;
   /** The options of the node: a host from before them has none. */
   options?: OptionsBridge;
   /** The gateways of the profile: a host from before them has none. */

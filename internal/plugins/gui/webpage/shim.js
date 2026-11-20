@@ -85,6 +85,7 @@
     DeleteAgent: (id) => post('./api/agent/delete', { id: String(id) }),
     AgentModels: () => get('./api/agent/models'),
     AgentJobs: () => get('./api/jobs'),
+    Memories: () => get('./api/memories'),
     // The options of the node, see webproviders.go.
     Providers: () => get('./api/providers'),
     LLMs: () => get('./api/llms'),

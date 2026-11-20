@@ -5,8 +5,9 @@ import { Board } from './lib/board.svelte';
 import { Sessions } from './lib/sessions.svelte';
 import { Agents } from './lib/agents.svelte';
 import { Jobs } from './lib/jobs.svelte';
+import { Memories } from './lib/memories.svelte';
 import { Themes } from './lib/themes.svelte';
-import { demoAgents, demoBoard, demoLink, demoOptions, demoSessions } from './lib/demo';
+import { demoAgents, demoBoard, demoLink, demoMemories, demoOptions, demoSessions } from './lib/demo';
 import { NodeOptions } from './lib/nodeoptions.svelte';
 import { locale, setLocale } from './lib/i18n';
 import './app.css';
@@ -27,6 +28,7 @@ if (target) {
       sessions: new Sessions(demoSessions()),
       agents: new Agents(agents),
       jobs: new Jobs(agents),
+      memories: new Memories(demoMemories()),
       themes: new Themes(),
       node: new NodeOptions(demoOptions()),
     },
