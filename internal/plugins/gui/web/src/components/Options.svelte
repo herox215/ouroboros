@@ -5,6 +5,7 @@
   import type { Agents } from '../lib/agents.svelte';
   import type { Gateways } from '../lib/gateways.svelte';
   import ThemeOptions from './ThemeOptions.svelte';
+  import BackgroundOptions from './BackgroundOptions.svelte';
   import AccessOptions from './AccessOptions.svelte';
   import ModelOptions from './ModelOptions.svelte';
   import GatewayOptions from './GatewayOptions.svelte';
@@ -140,6 +141,7 @@
         <AccessOptions {node} />
       {:else}
         <ThemeOptions {themes} />
+        <BackgroundOptions {themes} />
       {/if}
     </div>
   </div>

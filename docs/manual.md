@@ -286,7 +286,16 @@ hold for every window and terminal; a change holds from the next message on, wit
   the reason the gateway declares safe; anything else only says that the save failed. The part is
   there only on a node that serves the window or the page. A homeserver the gateway refuses is
   written to the log with scheme, host and path only, never with credentials, query or password.
-- **Appearance** is the theme of this window alone, kept in its storage.
+- **Appearance** is how this window looks, kept in its storage: the **theme** of this window alone,
+  and how see-through the ground of it is. **Window background** sets that in percent, from 100 %
+  (opaque, as the window was) down to 20 %; every step shows at once and holds without a new
+  window, and **Opaque** takes the window back with one click. Only the ground lets the desktop
+  through: text, cards and fields stay opaque, so that all of it stays readable. A desktop that
+  does not compose its windows shows the window opaque. On Linux the page is composed with the
+  GPU and its finished frames reach the window through shared memory, which the window says with
+  `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` where nothing else is said: painted in software, a
+  see-through page loses everything but what changed last (WebKitGTK 2.54), and frames handed
+  over as buffers of the GPU end a window on NVIDIA under Wayland.
 
 The window shows what the thread tells, through the very service the terminal UI uses
 first: `Sessions.Watch` with `plugin.ThreadID`, the replay of what happened and the live
