@@ -5,6 +5,7 @@ import { Chat } from './lib/chat.svelte';
 import { Board } from './lib/board.svelte';
 import { Agents } from './lib/agents.svelte';
 import { Jobs } from './lib/jobs.svelte';
+import { Memories } from './lib/memories.svelte';
 import { Sessions } from './lib/sessions.svelte';
 import { SYSTEM, Themes } from './lib/themes.svelte';
 import { setLocale } from './lib/i18n';
@@ -175,6 +176,33 @@ describe('App', () => {
     await fireEvent.click(buttons[1]);
     await vi.advanceTimersByTimeAsync(0);
     expect(container.querySelector('.row-agent')?.textContent).toBe('Mnemosyne');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(reads).toBe(3);
+  });
+
+  it('lists the memories in a view of their own, read only while it is shown', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const memories = new Memories(
+      {
+        Memories: async () => {
+          reads++;
+          return { memories: [{ id: 'm1', topic: 'core', key: 'Sprache', content: 'Deutsch', updated: new Date().toISOString() }], total: 1, hidden: 0 };
+        },
+      },
+      1000,
+    );
+    const { container } = render(App, { props: { chat: new Chat(link()), memories } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pressed(container)).toEqual(['Thread:true', 'Memories:false']);
+    expect(reads).toBe(0);
+    await fireEvent.click(container.querySelectorAll('.views button')[1]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector('.memory-key')?.textContent).toBe('Sprache');
+    expect((container.querySelector('.compose') as HTMLElement).hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(reads).toBe(3);
+    await fireEvent.click(container.querySelectorAll('.views button')[0]);
     await vi.advanceTimersByTimeAsync(5000);
     expect(reads).toBe(3);
   });

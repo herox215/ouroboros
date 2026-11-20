@@ -20,8 +20,9 @@ comes as an event: `src/lib/board.svelte.ts` asks again every few seconds
 while the board is shown. `pnpm dev` has a scripted board too.
 
 Beside the board it lists the sessions (`sessions.go`), the agents of the
-profile (`agents.go`: `Agents`, `UpdateAgent`, `CreateAgent`, `DeleteAgent`)
-and the scheduled jobs (`jobs.go`: `AgentJobs`), read again while they are shown.
+profile (`agents.go`: `Agents`, `UpdateAgent`, `CreateAgent`, `DeleteAgent`),
+the scheduled jobs (`jobs.go`: `AgentJobs`) and the memories of the agent, read only
+(`memories.go`: `Memories`), read again while they are shown.
 
 At the foot of the sidebar are the options, in three parts. **Models** and
 **Providers** are those of the node (`providers.go`, `src/lib/nodeoptions.svelte.ts`):

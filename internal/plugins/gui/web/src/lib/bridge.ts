@@ -13,6 +13,8 @@ import type {
   Host,
   LLMList,
   LoginStep,
+  MemoryBridge,
+  MemoryList,
   OptionsBridge,
   ProviderList,
   Scope,
@@ -52,6 +54,8 @@ interface WindowBindings {
   AgentModels?(): Promise<AccessModels[]>;
   /** The scheduled jobs: a host from before them has none. */
   AgentJobs?(): Promise<AgentJob[]>;
+  /** The memories: a host from before them has none. */
+  Memories?(): Promise<MemoryList>;
   /** The options of the node, see providers.go: a host from before them has
    * none of them. */
   Providers?(): Promise<ProviderList>;
@@ -85,6 +89,9 @@ const noAgents = () => Promise.reject(new Error('this ouro lists no agents'));
 
 /** What a host that lists no jobs of its agents answers when it is asked. */
 const noJobs = () => Promise.reject(new Error('this ouro lists no jobs'));
+
+/** What a host that lists no memories answers when it is asked. */
+const noMemories = () => Promise.reject(new Error('this ouro lists no memories'));
 
 /** What a host without the options of the node answers when it is asked. */
 const noOptions = () => Promise.reject(new Error('this ouro has no options of the node'));
@@ -153,6 +160,9 @@ function wailsHost(): Host | null {
     AgentModels: () => bindings.AgentModels?.() ?? noAgents(),
     AgentJobs: () => bindings.AgentJobs?.() ?? noJobs(),
   };
+  const memories: MemoryBridge = {
+    Memories: () => bindings.Memories?.() ?? noMemories(),
+  };
   const transport: Transport = {
     onEvents(handler) {
       runtime.EventsOn('ouro:events', (batch) => {
@@ -166,7 +176,7 @@ function wailsHost(): Host | null {
       runtime.EventsOn('ouro:restarting', () => handler());
     },
   };
-  return { bridge, transport, board, sessions, agents, options: optionsOf(bindings), gateways: gatewaysOf(bindings) };
+  return { bridge, transport, board, sessions, agents, memories, options: optionsOf(bindings), gateways: gatewaysOf(bindings) };
 }
 
 /** What the page talks through: the native window, or none when the page is

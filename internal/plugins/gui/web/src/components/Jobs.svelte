@@ -31,7 +31,7 @@
       <p>{t('jobs.empty.body')}</p>
     </div>
   {:else}
-    <ul class="job-list">
+    <ul class="card-grid">
       {#each list as job (job.id)}
         <li class="job" data-agent={job.agent} class:paused={job.paused}>
           <div class="job-head">
@@ -77,16 +77,6 @@
     flex-direction: column;
     padding: 18px 0 12px;
     overflow-y: auto;
-  }
-
-  .job-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    max-width: 760px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
   }
 
   .job {
