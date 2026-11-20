@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 
 	"ouroboros/plugin"
 )
@@ -17,12 +19,32 @@ import (
 func TestNativeWindow(t *testing.T) {
 	oldRun, oldQuit := runWindow, quitWindow
 	t.Cleanup(func() { runWindow, quitWindow = oldRun, oldQuit })
+	unsetenv(t, framesEnv)
 	p := &profile{sessions: &fakeSessions{}}
 	quit := make(chan struct{}, 1)
 	quitWindow = func(context.Context) { quit <- struct{}{} }
 	runWindow = func(o *options.App) error {
 		if o.Width != 1180 || o.Height != 780 || len(o.Bind) != 1 {
 			t.Fatalf("options: %+v", o)
+		}
+		// The window is made see-through from its first moment, always: the
+		// page decides how much of its ground it paints.
+		if o.Linux == nil || !o.Linux.WindowIsTranslucent {
+			t.Fatalf("window is not translucent: %+v", o.Linux)
+		}
+		// The page is composed, never painted in software: a see-through
+		// webview painted in software loses all but its last change. Wails
+		// names "always" OnDemand, see showWindow.
+		if o.Linux.WebviewGpuPolicy != linux.WebviewGpuPolicyOnDemand {
+			t.Fatalf("webview gpu policy: %v", o.Linux.WebviewGpuPolicy)
+		}
+		// The frames come through shared memory by the time the window is
+		// made, so that the window draws nothing with the GPU itself.
+		if got := os.Getenv(framesEnv); got != "1" {
+			t.Fatalf("%s = %q as the window is made", framesEnv, got)
+		}
+		if o.BackgroundColour == nil || o.BackgroundColour.A != 0 {
+			t.Fatalf("background colour: %+v", o.BackgroundColour)
 		}
 		if state := o.Bind[0].(*Window).InitialState(); state.Profile != "Luna" || state.Thread != "owner/"+plugin.ThreadID {
 			t.Fatalf("binding: %+v", state)
@@ -60,6 +82,31 @@ func TestNativeWindow(t *testing.T) {
 	runWindow = func(*options.App) error { return sentinel }
 	if err := showWindow(context.Background(), p, "Luna"); !errors.Is(err, sentinel) {
 		t.Fatalf("startup: %v", err)
+	}
+}
+
+// unsetenv takes name out of the environment for the length of the test.
+func unsetenv(t *testing.T, name string) {
+	t.Helper()
+	// Setenv is what puts back whatever was there once the test is over.
+	t.Setenv(name, "")
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An owner who said how the frames of the page reach the window keeps what
+// they said: the window says so only where nothing was said.
+func TestShareFramesKeepsWhatWasSaid(t *testing.T) {
+	unsetenv(t, framesEnv)
+	shareFrames()
+	if got := os.Getenv(framesEnv); got != "1" {
+		t.Fatalf("unset: %q", got)
+	}
+	t.Setenv(framesEnv, "0")
+	shareFrames()
+	if got := os.Getenv(framesEnv); got != "0" {
+		t.Fatalf("set by the owner: %q", got)
 	}
 }
 
