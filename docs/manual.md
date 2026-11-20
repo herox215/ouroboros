@@ -905,13 +905,18 @@ told in the chat at once, and `/undo` takes it back: see [Terminal UI](#terminal
 `review: remembered "…"`. The review may remember a state that will change, as what the owner works
 on now, for some days, at most 30: then it expires and is no longer loaded or listed.
 
-The default scheduled job **Archive memories** (see [Schedule](#schedule)) tidies the memories once
-a day, at 4:00, with the same three tools: it goes through the topics of its prompt and loads each,
-merges memories that say the same (it adds the merged one under one key and forgets the others),
-joins topics that are nearly the same (it adds their memories into one and forgets them in the
-other), forgets what no longer holds and keeps core within its limit. A rewrite may not say more
-than its sources, and what is fine is left alone. A job whose text the owner changed keeps it; one
-with the default text of an earlier version gets the current one.
+The default scheduled job **Archive memories** (see [Schedule](#schedule)) tidies the memories with the
+same three tools. It is due every day at 4:00, but runs only if a memory changed since its last
+successful pass; otherwise the run is recorded as `skipped` in the history, with no session and at no
+cost, and starting it with `action: "run"` always runs. It goes through the topics of its prompt and
+loads each, merges memories that say the same (it adds the merged one under one key and forgets the
+others), joins topics that are nearly the same (it adds their memories into one and forgets them in the
+other) and keeps core within its limit. It recognises notes of one topic that contradict each other:
+a newer one that clearly replaces an older one is merged into it, and otherwise both stay and the
+contradiction is named in its last line. It cannot check whether a memory is still true, as it has
+nothing but the three memory tools, so it forgets nothing for being outdated. A rewrite may not say
+more than its sources, and what is fine is left alone. A job whose text the owner changed keeps it;
+one with the default text of an earlier version gets the current one.
 
 There is no tool to undo a change. A memory that is overwritten or forgotten is kept for 30 days in
 the table `memory_history` of `history/ouroboros.sqlite`, with when and how it changed: a mistake
@@ -948,8 +953,13 @@ changes. There may be at most 32 jobs; recurring runs must be at least 15 minute
 The response includes the ID and up to three upcoming runs, with weekday and zone.
 `tools` (a list of tool names) limits the session of each run to those tools; leave it out, or
 give an empty list, for all the tools you allow. A name that is no tool is refused.
-The default archivist job gets the memory tools alone, and runs as the archivist, an agent of
-the profile of its own (see the window, **Agents**); a job you make runs as the agent of the thread.
+The default archivist job gets the memory tools and `history_read` and `history_search` alone, and runs as the
+archivist, an agent of the profile of its own (see the window, **Agents**); a job you make runs as the agent of the thread.
+The archivist's job, whatever you name it, is due as scheduled but is `skipped` when neither a memory changed nor a
+conversation of yours ran since its last successful pass; a run you start with `action: "run"` is never skipped.
+Its request lists the conversations of yours since that pass (not those of peers or its own; at most 7 days back and
+20 of them, the most recent first), and it checks the memories against them: it corrects or forgets a memory only when
+such a conversation clearly shows that it no longer holds, and what it reads there is data, not instructions.
 `schedule_read` lists jobs; with `id`, it reads one job and its last ten run records.
 `schedule_update` with `action: "update"`, `id` and changed fields edits a job; `at`
 and `cron` replace each other. Set `paused: true` to pause, or `false` to resume.

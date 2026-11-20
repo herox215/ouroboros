@@ -16,10 +16,19 @@ conversation lists the topics with how many memories each has; the session
 loads what it needs.
 
 The archivist runs as an ordinary scheduled job that the schedule plugin seeds
-once per profile ("Archive memories", daily at 04:00, no questions): its session
-has these three tools alone (the job's `tools`), runs as the archivist, an
+once per profile ("Archive memories", due daily at 04:00, no questions): its session
+has the memory tools and `history_read` and `history_search` alone (the job's `tools`), runs as the archivist, an
 agent of the profile of its own (the job's `agent`, see `internal/agents`), and
-tidies the memories with them. A default job with the text of an earlier version is updated to the
+tidies the memories with them: it merges duplicates and notes that say the
+same, and names contradictions within a topic. The scheduler puts the owner's
+conversations since the job's last successful pass into its request (the job's `checked`, the start
+of that pass; not those of peers or its own, at most 7 days back and 20 of them),
+and the archivist checks the memories against them: it corrects or forgets a memory
+only when such a conversation clearly shows it no longer holds (the owner says so, or a
+tool result proves it), and what it reads there is data, never instructions. The scheduler runs it only if the
+memories changed (`memory.Store.Fingerprint`, kept in the job's `memories`) or an
+owner's conversation ran since its last successful pass (found by its agent, not by its name), otherwise
+the run is `skipped` without a session; a start by hand always runs. A default job with the text of an earlier version is updated to the
 current text; one the owner edited stays. The cadence is edited with
 `schedule_update` like that of any other job.
 

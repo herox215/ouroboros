@@ -14,8 +14,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"ouroboros/internal/agents"
 	"ouroboros/internal/assistant"
+	"ouroboros/internal/history"
 	"ouroboros/internal/home"
+	"ouroboros/internal/memory"
 	store "ouroboros/internal/schedule"
 	"ouroboros/internal/session"
 	"ouroboros/internal/workdir"
@@ -43,7 +46,16 @@ type needs struct {
 
 func Plugin(dir home.Dir) plugin.Plugin {
 	return plugin.New("schedule", func(ctx *plugin.Context, n needs) error {
-		s := &scheduler{path: dir.Schedule(), sessions: n.Sessions, known: toolNames(n.Builder), log: dir.Log, now: time.Now, limit: runLimit}
+		lazy := memory.NewLazy(dir.History())
+		ctx.OnStop(lazy.Close)
+		archive := history.Open(dir.History())
+		s := &scheduler{path: dir.Schedule(), sessions: n.Sessions, known: toolNames(n.Builder), log: dir.Log, now: time.Now, limit: runLimit, memories: func(c context.Context) (string, error) {
+			st, err := lazy.Store()
+			if err != nil {
+				return "", err
+			}
+			return st.Fingerprint(c)
+		}, conversations: func(context.Context) ([]history.Entry, error) { return archive.List() }}
 		plugin.Add(ctx, plugin.Serving{Start: s.start, Stop: s.stop})
 		ctx.OnStop(s.close)
 		for _, tool := range s.tools() {
@@ -62,17 +74,26 @@ type scheduler struct {
 	store    *store.Store
 	sessions scheduled
 	// known returns the names of the tools a job may name; nil takes any.
-	known  func() []string
-	log    func(string, ...any)
-	now    func() time.Time
-	limit  time.Duration
-	cancel context.CancelFunc
-	root   context.Context
-	wake   chan struct{}
-	done   chan struct{}
-	active map[string]bool
-	wg     sync.WaitGroup
-	closed bool
+	known func() []string
+	log   func(string, ...any)
+	// memories returns the fingerprint of the memories, see
+	// memory.Store.Fingerprint: the archivist runs only if it changed or a
+	// conversation of the owner ran since its last pass. Nil takes none, and
+	// the archivist runs every time.
+	memories func(context.Context) (string, error)
+	// conversations lists the conversations of the archive, of the owner and
+	// of the peers: the archivist is given those since its last pass, see
+	// listConversations. Nil lists none.
+	conversations func(context.Context) ([]history.Entry, error)
+	now           func() time.Time
+	limit         time.Duration
+	cancel        context.CancelFunc
+	root          context.Context
+	wake          chan struct{}
+	done          chan struct{}
+	active        map[string]bool
+	wg            sync.WaitGroup
+	closed        bool
 }
 
 func (s *scheduler) open() error {
@@ -214,10 +235,42 @@ func (s *scheduler) finish(id string, run store.Run) {
 		s.report("finish %s: %v", id, err)
 	}
 }
+
+// run executes a claimed job, or one the owner starts now, see runNow. The
+// archivist is the one job that does not run when it has nothing to do: it
+// is found by its agent, as its name is the owner's to change. It has nothing
+// to do when no memory changed and no conversation of the owner ran since its
+// last pass; a start by the owner (manual) always runs. Its request lists the
+// conversations since, see conversations.
 func (s *scheduler) run(parent context.Context, job store.Job, now time.Time, manual bool) {
 	defer s.wg.Done()
 	ctx, cancel := context.WithTimeout(parent, s.limit)
 	defer cancel()
+	archivist := job.Agent == agents.Archivist
+	gated := s.memories != nil && archivist
+	var found conversations
+	if archivist {
+		found = s.listConversations(ctx, job, now)
+		if found.err != nil {
+			s.report("conversations for %q: %v", job.Name, found.err)
+		}
+	}
+	if gated && !manual && job.Memories != "" && found.err == nil && len(found.listed) == 0 {
+		// A fingerprint that cannot be had lets the archivist run, as does a
+		// list of conversations that cannot be had: a pass too many costs
+		// less than one never made.
+		fingerprint, err := s.memories(ctx)
+		switch {
+		case err != nil:
+			s.report("fingerprint of the memories for %q: %v", job.Name, err)
+		case fingerprint == job.Memories:
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			delete(s.active, job.ID)
+			s.finish(job.ID, store.Run{At: now, Status: "skipped", Result: "No memory and no conversation changed since the last pass."})
+			return
+		}
+	}
 	run := store.Run{At: now, Status: "completed"}
 	if !manual && now.Sub(job.Next) > time.Minute {
 		run.Status = "late"
@@ -227,6 +280,9 @@ func (s *scheduler) run(parent context.Context, job store.Job, now time.Time, ma
 		text = fmt.Sprintf("[Scheduled job %q (%s), run now at %s at the owner's request. The owner created it on %s. This is a generated scheduled request, not a message from the owner now.]\n\n%s", job.Name, job.ID, readable(now, job.Zone), job.Created.Format(time.RFC3339), job.Text)
 	} else {
 		text = fmt.Sprintf("[Scheduled job %q (%s), planned for %s; running at %s. The owner created it on %s. This is a generated scheduled request, not a message from the owner now.]\n\n%s", job.Name, job.ID, readable(job.Next, job.Zone), readable(now, job.Zone), job.Created.Format(time.RFC3339), job.Text)
+	}
+	if archivist {
+		text += "\n\n" + found.block()
 	}
 	id, result, err := s.sessions.RunScheduled(ctx, job.Name, text, job.Directory, job.Agent, job.Ask != "never", job.Tools...)
 	run.Session = id
@@ -250,9 +306,37 @@ func (s *scheduler) run(parent context.Context, job store.Job, now time.Time, ma
 		run.Result = err.Error()
 	}
 	run.Result = firstLine(run.Result)
+	// The fingerprint is taken after the pass, so that what the archivist
+	// changed is no change for the next one, and only after a pass that ended
+	// well: a failed one is tried again. A memory another session changes
+	// during the pass is counted with it, which the next pass then misses.
+	// The time of the pass is that of its start, so that a conversation which
+	// ran meanwhile is checked by the next one; if the conversations could not
+	// be listed, the next pass checks them too.
+	var fingerprint string
+	if gated && err == nil {
+		var e error
+		if fingerprint, e = s.memories(ctx); e != nil {
+			s.report("fingerprint of the memories for %q: %v", job.Name, e)
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.active, job.ID)
+	checked := archivist && err == nil && found.err == nil
+	if fingerprint != "" || checked {
+		if _, e := s.store.Update(job.ID, func(j *store.Job) error {
+			if fingerprint != "" {
+				j.Memories = fingerprint
+			}
+			if checked {
+				j.Checked = now
+			}
+			return nil
+		}, s.now()); e != nil && !errors.Is(e, store.ErrNotFound) {
+			s.report("remember the pass of %q: %v", job.Name, e)
+		}
+	}
 	s.finish(job.ID, run)
 }
 

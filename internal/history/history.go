@@ -610,6 +610,13 @@ type Entry struct {
 	Agent string
 }
 
+// Owner reports whether the conversation is the owner's, not a peer's.
+func (e Entry) Owner() bool { return strings.HasPrefix(e.ID, ownerDir+"/") }
+
+// Session is the name of the conversation, as the tools to read the archive
+// take it: the ID without the party.
+func (e Entry) Session() string { _, name, _ := strings.Cut(e.ID, "/"); return name }
+
 // every returns the conversations of every party in the archive, the most
 // recently changed first.
 func (a *Archive) every() ([]session, error) { return a.allSessions(true) }
