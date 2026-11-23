@@ -208,7 +208,7 @@ describe('Agents view', () => {
     expect(items.map((item) => !!item.querySelector('.agent-system'))).toEqual([false, true, true]);
     // The agent of the thread is for what the owner wrote, a system agent for what it is.
     expect(items[0].querySelector('.agent-about')?.textContent).toBe('The thread alone.');
-    expect(items[1].querySelector('.agent-about')?.textContent).toBe('Tidies the memories once a day, in its job.');
+    expect(items[1].querySelector('.agent-about')?.textContent).toBe('Tidies the memories and checks them against your conversations, only when something changed.');
     expect(items[2].querySelector('.agent-about')?.textContent).toContain('Looks at the board when it changed');
 
     await fireEvent.click(button(container, 'Edit', items[1]));
@@ -216,7 +216,7 @@ describe('Agents view', () => {
     // Only the agent of the thread is told that its name is that of the profile.
     expect(form.textContent).not.toContain('profile');
     expect(form.querySelectorAll('input.agent-input')).toHaveLength(1);
-    expect(form.querySelector('.agent-fixed')?.textContent).toBe('Tidies the memories once a day, in its job.');
+    expect(form.querySelector('.agent-fixed')?.textContent).toBe('Tidies the memories and checks them against your conversations, only when something changed.');
     expect(form.textContent).toContain('no other agent hands it a task');
     await fireEvent.input(form.querySelector('textarea') as HTMLTextAreaElement, { target: { value: 'Neat.' } });
     await fireEvent.submit(form);

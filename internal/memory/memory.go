@@ -489,6 +489,22 @@ func (s *Store) used(ctx context.Context, found []Entry) error {
 	})
 }
 
+// Fingerprint returns a text that is the same for the same memories and
+// differs as soon as one is added, overwritten, updated, undone or forgotten:
+// it holds how many memories there are, when the latest was updated and the
+// latest number of the history. Counting a hit as used changes nothing of it,
+// and neither does the history dropping what is older than KeepDays, as its
+// numbers only grow. It writes nothing.
+func (s *Store) Fingerprint(ctx context.Context) (string, error) {
+	var count, seq int64
+	var updated string
+	err := s.db.QueryRowContext(ctx, "SELECT (SELECT count(*) FROM topic_memories),(SELECT coalesce(max(updated),'') FROM topic_memories),(SELECT coalesce(max(seq),0) FROM memory_history)").Scan(&count, &updated, &seq)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d|%s|%d", count, updated, seq), nil
+}
+
 // CoreMemories returns the memories of Core that have not expired, the
 // oldest first: those that go into every prompt.
 func (s *Store) CoreMemories(ctx context.Context) ([]Entry, error) {
