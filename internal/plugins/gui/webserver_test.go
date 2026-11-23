@@ -20,6 +20,12 @@ import (
 // dir of the profile.
 func pageFor(t *testing.T) (*http.Client, *httptest.Server, home.Dir) {
 	t.Helper()
+	return pageOf(t, fakeProfile("pythia"))
+}
+
+// pageOf is pageFor with the profile p behind the page.
+func pageOf(t *testing.T, p *profile) (*http.Client, *httptest.Server, home.Dir) {
+	t.Helper()
 	dir := home.Dir(t.TempDir())
 	hash, err := web.Hash("correct horse battery")
 	if err != nil {
@@ -29,7 +35,7 @@ func pageFor(t *testing.T) (*http.Client, *httptest.Server, home.Dir) {
 		Web: config.Web{Enabled: true, User: "owner", Password: hash}}); err != nil {
 		t.Fatal(err)
 	}
-	front := newWebFront(dir, fakeProfile("pythia"))
+	front := newWebFront(dir, p)
 	server := httptest.NewServer(front.handler)
 	t.Cleanup(server.Close)
 	return stillClient(), server, dir

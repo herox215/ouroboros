@@ -254,6 +254,142 @@ export interface AgentBridge {
   AgentJobs(): Promise<AgentJob[]>;
 }
 
+/** A provider of this ouro to sign in with, see ProviderInfo in providers.go. */
+export interface ProviderInfo {
+  name: string;
+  title: string;
+}
+
+/** An access of the node, see AccessInfo in providers.go. What it signs in
+ * with is never part of it. */
+export interface AccessInfo {
+  id: string;
+  provider: string;
+  /** What the owner calls it, none for nothing; label is what it is shown as,
+   * about what tells it apart, like the account. */
+  name?: string;
+  label: string;
+  about?: string;
+  /** Its provider is not part of this ouro: its plugin is turned off. */
+  missing?: boolean;
+  /** The scopes that answer through it, see Scope, and 'fallback'. */
+  uses?: string[];
+}
+
+/** The providers and the accesses of the node, see ProviderList. */
+export interface ProviderList {
+  providers: ProviderInfo[];
+  accesses: AccessInfo[];
+}
+
+/** The scopes of the node: the owner, which the others follow until they have
+ * a model of their own, the thread, the sessions and peers. */
+export type Scope = 'owner' | 'thread' | 'sessions' | 'peers';
+
+/** What one scope answers with, see ScopeLLM: own says that the owner chose it
+ * for the scope; else it is what the owner is answered with. */
+export interface ScopeLLM {
+  scope: Scope;
+  access: string;
+  model: string;
+  own?: boolean;
+}
+
+/** What the scopes of the node answer with, see LLMList in providers.go. */
+export interface LLMList {
+  scopes: ScopeLLM[];
+  fallbacks: { access: string; model: string }[];
+  /** How much the model thinks before it answers the owner: '' for what the
+   * model does by itself. */
+  effort: string;
+  efforts: string[];
+  /** models.dev lists the model, and efforts are those it takes. */
+  efforts_known?: boolean;
+}
+
+/** What a provider asks while it signs in, see LoginQuestion. A secret it has
+ * is never sent: known says that an empty answer keeps it. */
+export interface LoginQuestion {
+  title: string;
+  text?: string[];
+  default?: string;
+  hint?: string;
+  secret?: boolean;
+  known?: boolean;
+}
+
+/** What a sign-in wants of the page, see LoginStep in providers.go. */
+export interface LoginStep {
+  kind: 'ask' | 'tell' | 'reject' | 'open' | 'done' | 'failed' | 'wait';
+  question?: LoginQuestion;
+  text?: string;
+  access?: AccessInfo;
+  models?: string[];
+  default?: string;
+}
+
+/** The bound methods of the Go window behind the options of the node, see
+ * providers.go; AgentModels lists the models of every access. */
+export interface OptionsBridge {
+  Providers(): Promise<ProviderList>;
+  LLMs(): Promise<LLMList>;
+  SetLLM(scope: Scope, access: string, model: string): Promise<LLMList>;
+  ToggleFallback(access: string, model: string): Promise<LLMList>;
+  SetEffort(effort: string): Promise<LLMList>;
+  RenameAccess(id: string, name: string): Promise<ProviderList>;
+  RemoveAccess(id: string): Promise<string>;
+  StartLogin(provider: string, again: string): Promise<string>;
+  LoginStep(id: string): Promise<LoginStep>;
+  AnswerLogin(id: string, answer: string): Promise<void>;
+  CancelLogin(id: string): Promise<void>;
+  AgentModels(): Promise<AccessModels[]>;
+}
+
+/** A field of the form a gateway asks for, see GatewayFieldInfo in gateways.go.
+ * The value of a secret is always empty. */
+export interface GatewayField {
+  key: string;
+  label?: string;
+  kind: 'text' | 'secret' | 'list' | 'bool' | string;
+  value?: string;
+  list?: string[];
+  on?: boolean;
+  /** A public text under the field, never a value. */
+  hint?: string;
+}
+
+/** A gateway of the profile, see GatewayInfo: never a password or a token. */
+export interface GatewayInfo {
+  name: string;
+  title: string;
+  enabled: boolean;
+  homeserver?: string;
+  user_id?: string;
+  allowed_users: string[];
+  logged_in: boolean;
+  status?: string;
+  fields?: GatewayField[];
+}
+
+/** What the owner changes of a gateway, see GatewayChangeBody. An empty
+ * password keeps the login the gateway has. */
+export interface GatewayChange {
+  enabled: boolean;
+  homeserver?: string;
+  user_id?: string;
+  password?: string;
+  allowed_users?: string[];
+  logout?: boolean;
+  values?: Record<string, string>;
+  lists?: Record<string, string[]>;
+}
+
+/** The bound methods of the Go window behind the gateways, see gateways.go. */
+export interface GatewayBridge {
+  Gateways(): Promise<GatewayInfo[]>;
+  SaveGateway(name: string, change: GatewayChange): Promise<GatewayInfo[]>;
+}
+
 /** What the window is told while it watches: what the thread tells, and that
  * the stream ended or the process starts anew. */
 export interface Transport {
@@ -276,4 +412,8 @@ export interface Host extends Link {
   board: BoardBridge;
   sessions: SessionBridge;
   agents: AgentBridge;
+  /** The options of the node: a host from before them has none. */
+  options?: OptionsBridge;
+  /** The gateways of the profile: a host from before them has none. */
+  gateways?: GatewayBridge;
 }

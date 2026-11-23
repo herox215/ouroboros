@@ -1,7 +1,9 @@
 # Messaging gateways
 
-Gateways are profile-local plugin contributions, not default frontends. Terminal
-and desktop settings discover plugin.Gateway contributions dynamically. Each
+Gateways are profile-local plugin contributions, not default frontends. The
+terminal UI (Settings → Gateways), the window (`ouro gui`) and the page of the
+node in a browser (Options → Gateways) discover plugin.Gateway contributions
+dynamically. Each
 supplies public settings, a schema-defined form and an owner-only save callback.
 Secret fields are write-only. Future transports can define their own text,
 secret, list and boolean fields without extending either frontend.
@@ -75,8 +77,15 @@ with the goolm build tag. Raw Go builds without that tag deliberately refuse
 Matrix operation rather than falling back to plaintext. The regular Makefile
 test targets also select goolm.
 
-Open **Settings → Gateways → Matrix** in the desired profile. Enter the HTTPS
-homeserver URL and full bot account ID (for example @ouro:example.org). Enter the
+Open **Settings → Gateways → Matrix** in the terminal UI, or **Options → Gateways**
+in the window or the page, of the desired profile. Enter the HTTPS
+homeserver URL (plain HTTP is accepted without more on the loopback address, such as
+`http://127.0.0.1:8008`; on any other host only after you tick **Allow plain HTTP for this
+homeserver**, which holds for exactly that URL and which you have to tick again for another
+homeserver, port or path: the password at login and the access token are then sent
+unencrypted, so use it only in a network you trust, such as a tailnet) and full bot account ID
+(for example @ouro:example.org). A refused homeserver is written to the log with its scheme,
+host and path only, never with credentials, query or password. Enter the
 password to sign in, add allowed full user IDs (such as @lucas:example.org),
 enable the gateway and save. An empty allowlist allows nobody. The homeserver
 must support password login; SSO-only login is not implemented.

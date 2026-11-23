@@ -273,6 +273,22 @@ func (w *webFront) routes() http.Handler {
 	mux.HandleFunc("POST /api/agent/delete", w.guard(w.deleteAgent))
 	mux.HandleFunc("GET /api/agent/models", w.guard(w.agentModels))
 	mux.HandleFunc("GET /api/jobs", w.guard(w.agentJobs))
+	// The options: the accesses of the node and what its scopes answer with,
+	// see providers.go.
+	mux.HandleFunc("GET /api/providers", w.guard(w.providers))
+	mux.HandleFunc("GET /api/llms", w.guard(w.llms))
+	mux.HandleFunc("POST /api/llm", w.guard(w.setLLM))
+	mux.HandleFunc("POST /api/fallback", w.guard(w.toggleFallback))
+	mux.HandleFunc("POST /api/effort", w.guard(w.setEffort))
+	mux.HandleFunc("POST /api/access/rename", w.guard(w.renameAccess))
+	mux.HandleFunc("POST /api/access/remove", w.guard(w.removeAccess))
+	mux.HandleFunc("POST /api/login/start", w.guard(w.startLogin))
+	mux.HandleFunc("POST /api/login/step", w.guard(w.loginStep))
+	mux.HandleFunc("POST /api/login/answer", w.guard(w.answerLogin))
+	mux.HandleFunc("POST /api/login/cancel", w.guard(w.cancelLogin))
+	// The gateways of the profile, see gateways.go.
+	mux.HandleFunc("GET /api/gateways", w.guard(w.gateways))
+	mux.HandleFunc("POST /api/gateway/save", w.guard(w.saveGateway))
 	mux.HandleFunc("GET /api/events", w.guard(w.events))
 	mux.HandleFunc("GET /assets", w.assets)
 	// The pictures the thread shows are the owner's: only behind the login.

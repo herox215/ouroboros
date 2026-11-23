@@ -37,11 +37,12 @@ type Agent struct {
 	Description string `json:"description,omitempty"`
 	Soul        string `json:"soul,omitempty"`
 	// Access and Model are the model of its own the agent answers with,
-	// both "" for the model of the settings, see agents.Agent.
+	// wherever it works, both "" for the defaults of the settings, see
+	// agents.Agent.
 	Access string `json:"access,omitempty"`
 	Model  string `json:"model,omitempty"`
 	// Effort is how much the model thinks when the agent answers, "" for
-	// the effort of the settings; the agent of the thread has none.
+	// the effort of the settings.
 	Effort string `json:"effort,omitempty"`
 	// Reserved says that the agent is kept for the work of the system, the
 	// archivist and the orchestrator: what it is for is fixed, and no agent
@@ -51,8 +52,7 @@ type Agent struct {
 
 // AgentChange is what the owner says of an agent: its name, what it is for,
 // its soul, the model of its own and its effort, both "" for those of the
-// settings. A reserved agent takes no description, the agent of the thread
-// no model and no effort.
+// settings. A reserved agent takes no description.
 type AgentChange struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -199,7 +199,10 @@ func (p *profile) updateAgent(id string, change AgentChange) (Agent, error) {
 	if err := p.checkModel(next, now); err != nil {
 		return Agent{}, err
 	}
-	if id != threadAgent || next.Description != now.Description || next.Soul != now.Soul || next.Access != "" || next.Model != "" || next.Effort != "" {
+	// Renaming the agent of the thread alone renames its profile, below:
+	// nothing of it is kept in the file of the agents then.
+	kept := Agent{Description: now.Description, Soul: now.Soul, Access: now.Access, Model: now.Model, Effort: now.Effort}
+	if id != threadAgent || (Agent{Description: next.Description, Soul: next.Soul, Access: next.Access, Model: next.Model, Effort: next.Effort}) != kept {
 		if err := p.agentStore().Set(id, next, thread.Name); err != nil {
 			return Agent{}, err
 		}

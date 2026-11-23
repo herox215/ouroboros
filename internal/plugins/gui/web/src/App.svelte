@@ -13,6 +13,8 @@
   import type { Agents } from './lib/agents.svelte';
   import type { Jobs } from './lib/jobs.svelte';
   import type { Themes } from './lib/themes.svelte';
+  import type { NodeOptions } from './lib/nodeoptions.svelte';
+  import type { Gateways } from './lib/gateways.svelte';
   import type { AgentInfo } from './lib/wire';
 
   let {
@@ -22,6 +24,8 @@
     agents = null,
     jobs = null,
     themes = null,
+    node = null,
+    gateways = null,
   }: {
     chat: Chat | null;
     board?: Board | null;
@@ -29,6 +33,10 @@
     agents?: Agents | null;
     jobs?: Jobs | null;
     themes?: Themes | null;
+    /** The options of the node: the accesses and the models. */
+    node?: NodeOptions | null;
+    /** The gateways of the profile: Matrix and the like. */
+    gateways?: Gateways | null;
   } = $props();
 
   /** What the window shows: the thread, or the board, the sessions and the
@@ -108,9 +116,16 @@
   });
 
   $effect(() => {
-    // The board, the sessions and the jobs name the agents they run as.
-    if (!agents || (view !== 'agents' && view !== 'sessions' && view !== 'jobs' && view !== 'board')) return;
+    // The board, the sessions and the jobs name the agents they run as, and
+    // the options those that go before the defaults.
+    if (!agents || (view !== 'agents' && view !== 'sessions' && view !== 'jobs' && view !== 'board' && view !== 'options')) return;
     void agents.refresh();
+  });
+
+  $effect(() => {
+    // The agents name the defaults of the options an agent without a model of
+    // its own answers with.
+    if (node && view === 'agents') void node.refresh();
   });
 
   $effect(() => {
@@ -254,11 +269,11 @@
     {:else if sessions && view === 'sessions'}
       <SessionsView {sessions} {names} />
     {:else if agents && view === 'agents'}
-      <AgentsView {agents} onrenamed={renamed} />
+      <AgentsView {agents} {node} onrenamed={renamed} />
     {:else if jobs && view === 'jobs'}
       <JobsView {jobs} {names} />
     {:else if themes && view === 'options'}
-      <OptionsView {themes} />
+      <OptionsView {themes} {node} {gateways} {agents} onagents={agents ? () => choose('agents') : undefined} />
     {:else}
       <Transcript
         entries={chat.entries}

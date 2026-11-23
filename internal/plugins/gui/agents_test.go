@@ -487,8 +487,13 @@ func TestWindowGivesAgentsAModel(t *testing.T) {
 	if err != nil || made.Model != "gpt-5" {
 		t.Fatalf("an agent made with a model: %+v, %v", made, err)
 	}
-	if _, err := w.UpdateAgent("thread", AgentChange{Name: "pythia", Access: "openai-1", Model: "gpt-5"}); err == nil || !strings.Contains(err.Error(), "models of the settings") {
-		t.Fatalf("a model of the agent of the thread: %v", err)
+	// The agent of the thread takes a model of its own as well, and gives it
+	// back: then it answers with the defaults of the settings again.
+	if agent, err := w.UpdateAgent("thread", AgentChange{Name: "pythia", Access: "openai-1", Model: "gpt-5"}); err != nil || agent.Model != "gpt-5" || agent.Name != "pythia" {
+		t.Fatalf("a model of the agent of the thread: %+v, %v", agent, err)
+	}
+	if agent, err := w.UpdateAgent("thread", AgentChange{Name: "pythia"}); err != nil || agent.Model != "" || agent.Access != "" {
+		t.Fatalf("the agent of the thread back on the settings: %+v, %v", agent, err)
 	}
 	p.models = func(context.Context) ([]plugin.AccessModels, error) { return nil, errors.New("not set up") }
 	if _, err := w.AgentModels(); err == nil || !strings.Contains(err.Error(), "not set up") {
@@ -523,8 +528,11 @@ func TestWindowGivesAgentsAnEffort(t *testing.T) {
 	if _, err := w.UpdateAgent("archivist", AgentChange{Name: "Archivist", Effort: "enormous"}); err == nil || !strings.Contains(err.Error(), "is none of") {
 		t.Fatalf("an effort no model knows: %v", err)
 	}
-	if _, err := w.UpdateAgent("thread", AgentChange{Name: "pythia", Effort: "low"}); err == nil || !strings.Contains(err.Error(), "effort of the settings") {
-		t.Fatalf("an effort of the agent of the thread: %v", err)
+	if agent, err := w.UpdateAgent("thread", AgentChange{Name: "pythia", Effort: "low"}); err != nil || agent.Effort != "low" {
+		t.Fatalf("an effort of the agent of the thread: %+v, %v", agent, err)
+	}
+	if agent, err := w.UpdateAgent("thread", AgentChange{Name: "pythia"}); err != nil || agent.Effort != "" {
+		t.Fatalf("the agent of the thread back on the settings: %+v, %v", agent, err)
 	}
 	made, err := w.CreateAgent(AgentChange{Name: "Researcher", Effort: "low"})
 	if err != nil || made.Effort != "low" {

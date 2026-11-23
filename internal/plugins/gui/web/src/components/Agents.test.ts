@@ -245,17 +245,20 @@ describe('Agents view', () => {
     expect(archivist.querySelector('.agent-model')?.textContent).toContain('legacy · old-1');
     expect(thread.querySelector('.agent-model')).toBeNull();
 
-    // The agent of the thread answers with the models of the settings.
+    // The agent of the thread takes a model of its own as any other.
     await fireEvent.click(button(container, 'Edit', thread));
-    expect(container.querySelector('select')).toBeNull();
-    expect(container.querySelector('.agent-form')?.textContent).toContain('models of the settings');
-    await fireEvent.click(button(container, 'Cancel', container.querySelector('form')!));
+    const own = container.querySelector('#agent-model-thread') as HTMLSelectElement;
+    await waitFor(() => expect(own.querySelectorAll('optgroup')).toHaveLength(1));
+    await fireEvent.change(own, { target: { value: 'openai-1\ngpt-5' } });
+    await fireEvent.submit(container.querySelector('form') as HTMLFormElement);
+    await waitFor(() => expect(container.querySelector('.agent-form')).toBeNull());
+    expect(bridge.changes.shift()).toEqual(['thread', { name: 'pythia', description: '', soul: '', access: 'openai-1', model: 'gpt-5', effort: '' }]);
 
     await fireEvent.click(button(container, 'Edit', archivist));
     const select = container.querySelector('select') as HTMLSelectElement;
     await waitFor(() => expect(select.querySelectorAll('optgroup')).toHaveLength(1));
     expect([...select.options].map((option) => option.textContent?.trim())).toEqual([
-      'As in the settings',
+      'Default of the options',
       'legacy · old-1 (not offered now)',
       'gpt-5',
       'gpt-5-mini',
@@ -287,16 +290,17 @@ describe('Agents view', () => {
     expect(archivist.querySelector('.agent-effort')?.textContent).toContain('minimal');
     expect(thread.querySelector('.agent-effort')).toBeNull();
 
-    // The agent of the thread thinks as the settings say, or as its session does.
+    // The agent of the thread takes an effort of its own as any other.
     await fireEvent.click(button(container, 'Edit', thread));
-    expect(thread.querySelector('select')).toBeNull();
-    expect(thread.querySelector('.agent-form')?.textContent).toContain('has none of its own');
-    await fireEvent.click(button(container, 'Cancel', container.querySelector('form')!));
+    await fireEvent.change(container.querySelector('#agent-effort-thread') as HTMLSelectElement, { target: { value: 'low' } });
+    await fireEvent.submit(container.querySelector('form') as HTMLFormElement);
+    await waitFor(() => expect(container.querySelector('.agent-form')).toBeNull());
+    expect(bridge.changes.shift()).toEqual(['thread', { name: 'pythia', description: '', soul: '', access: '', model: '', effort: 'low' }]);
 
     await fireEvent.click(button(container, 'Edit', archivist));
     const effort = container.querySelector('#agent-effort-archivist') as HTMLSelectElement;
     expect([...effort.options].map((option) => option.textContent?.trim())).toEqual([
-      'As in the settings',
+      'Default of the options',
       'minimal (not offered now)',
       'none',
       'low',

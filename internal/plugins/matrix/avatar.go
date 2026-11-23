@@ -56,10 +56,10 @@ func avatarTool(s store, files *guard.Guard) plugin.Tool {
 				return "", errors.New("the Matrix avatar exceeds 5 MiB")
 			}
 			latest, err := s.load()
-			if err != nil || latest.Revision != cfg.Revision || latest.Token != cfg.Token || latest.UserID != cfg.UserID || latest.Homeserver != cfg.Homeserver || !latest.Enabled {
+			if err != nil || latest.Revision != cfg.Revision || latest.Token != cfg.Token || latest.UserID != cfg.UserID || latest.Homeserver != cfg.Homeserver || latest.HTTPAllowed != cfg.HTTPAllowed || !latest.Enabled {
 				return "", errors.New("the Matrix settings changed; retry with the current account")
 			}
-			client, err := transport.New(transport.Config{Homeserver: cfg.Homeserver, UserID: cfg.UserID, Token: cfg.Token, DeviceID: cfg.DeviceID, StateDir: s.path("devices")})
+			client, err := transport.New(transport.Config{Homeserver: cfg.Homeserver, HTTPAllowed: cfg.HTTPAllowed, UserID: cfg.UserID, Token: cfg.Token, DeviceID: cfg.DeviceID, StateDir: s.path("devices")})
 			if err != nil {
 				return "", errors.New("the Matrix login is incomplete or invalid")
 			}

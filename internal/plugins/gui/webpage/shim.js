@@ -66,6 +66,7 @@
     soul: String((change && change.soul) || ''),
     access: String((change && change.access) || ''),
     model: String((change && change.model) || ''),
+    effort: String((change && change.effort) || ''),
   });
 
   const bridge = {
@@ -84,6 +85,23 @@
     DeleteAgent: (id) => post('./api/agent/delete', { id: String(id) }),
     AgentModels: () => get('./api/agent/models'),
     AgentJobs: () => get('./api/jobs'),
+    // The options of the node, see webproviders.go.
+    Providers: () => get('./api/providers'),
+    LLMs: () => get('./api/llms'),
+    SetLLM: (scope, access, model) => post('./api/llm', { scope: String(scope), access: String(access || ''), model: String(model || '') }),
+    ToggleFallback: (access, model) => post('./api/fallback', { access: String(access), model: String(model) }),
+    SetEffort: (effort) => post('./api/effort', { effort: String(effort || '') }),
+    RenameAccess: (id, name) => post('./api/access/rename', { id: String(id), name: String(name || '') }),
+    RemoveAccess: (id) => post('./api/access/remove', { id: String(id) }).then((answer) => (answer && answer.note) || ''),
+    StartLogin: (provider, again) =>
+      post('./api/login/start', { provider: String(provider || ''), again: String(again || '') }).then((answer) => answer.id),
+    LoginStep: (id) => post('./api/login/step', { id: String(id) }),
+    AnswerLogin: (id, answer) => post('./api/login/answer', { id: String(id), answer: String(answer) }).then(() => undefined),
+    CancelLogin: (id) => post('./api/login/cancel', { id: String(id) }).then(() => undefined),
+    // The gateways of the profile, see gateways.go. The password goes out in
+    // the one request that saves, and is kept nowhere.
+    Gateways: () => get('./api/gateways'),
+    SaveGateway: (name, change) => post('./api/gateway/save', { name: String(name), change: change || {} }),
     Assets: () => get('./assets').then((answer) => (answer && answer.version) || ''),
   };
 

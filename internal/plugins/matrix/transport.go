@@ -8,12 +8,12 @@ import (
 	"ouroboros/plugin"
 )
 
-func login(ctx context.Context, server, user, password string) (loginResult, error) {
-	result, err := transport.Login(ctx, server, user, password)
+func login(ctx context.Context, server, httpAllowed, user, password string) (loginResult, error) {
+	result, err := transport.Login(ctx, server, httpAllowed, user, password)
 	return loginResult{UserID: result.UserID, Token: result.Token, DeviceID: result.DeviceID}, err
 }
 func newTransport(_ context.Context, cfg configuration, s store) (connection, error) {
-	client, err := transport.New(transport.Config{Homeserver: cfg.Homeserver, UserID: cfg.UserID, Token: cfg.Token, DeviceID: cfg.DeviceID, StateDir: filepath.Join(s.dir, "devices"), AllowedUsers: cfg.AllowedUsers})
+	client, err := transport.New(transport.Config{Homeserver: cfg.Homeserver, HTTPAllowed: cfg.HTTPAllowed, UserID: cfg.UserID, Token: cfg.Token, DeviceID: cfg.DeviceID, StateDir: filepath.Join(s.dir, "devices"), AllowedUsers: cfg.AllowedUsers})
 	if err != nil {
 		return nil, err
 	}
