@@ -22,7 +22,19 @@ type profile struct {
 	rename func(name string) error
 	// models lists the accesses of the node with their models; nil where the
 	// window has no owner to ask.
-	models   func(ctx context.Context) ([]plugin.AccessModels, error)
+	models func(ctx context.Context) ([]plugin.AccessModels, error)
+	// llms changes the accesses of the node and what its scopes answer with,
+	// see providers.go; nil where the window has no owner to ask.
+	llms llmOwner
+	// gateways lists the gateways the plugins contribute, read when they are
+	// shown, see gateways.go; nil where the window has no owner to change
+	// them through.
+	gateways func() []plugin.Gateway
+	// memories lists the memories the agent of the owner collected, the ones
+	// that have not expired, see memories.go; nil where the window has no
+	// owner to ask.
+	memories func(ctx context.Context) (plugin.MemoryListing, error)
+	logins   logins // the sign-ins to providers on their way
 	sessions plugin.Sessions
 	dir      home.Dir        // the profile, where the pictures of the window are kept
 	ctx      *plugin.Context // to read what the plugins contribute to a tool line
@@ -76,6 +88,9 @@ func Plugin(owner *plugin.Owner, dir home.Dir, files *guard.Guard) plugin.Plugin
 			p.models = func(c context.Context) ([]plugin.AccessModels, error) {
 				return owner.Models(c, plugin.All[plugin.Provider](ctx))
 			}
+			p.llms = ownerLLMs{Owner: owner, providers: func() []plugin.Provider { return plugin.All[plugin.Provider](ctx) }}
+			p.gateways = func() []plugin.Gateway { return plugin.All[plugin.Gateway](ctx) }
+			p.memories = func(c context.Context) (plugin.MemoryListing, error) { return owner.Memories(c, false) }
 		}
 		plugin.Add(ctx, plugin.Command{Name: "gui", Help: "chat with the thread in a window", Run: p.run})
 		// The window shows the pictures an agent makes, as the gateways show

@@ -906,3 +906,95 @@ func TestEfforts(t *testing.T) {
 	}
 	c.Wait()
 }
+
+// Keep adds an access beside the one the node answers through, and saves an
+// access signed in to anew under its ID; neither changes what the node
+// answers with.
+func TestKeep(t *testing.T) {
+	s := session(t)
+	ctx := context.Background()
+	first := signedIn(t, s, "one", "good-1", "one-large")
+	if _, err := s.Keep(); !errors.Is(err, ErrNotSignedIn) {
+		t.Fatalf("kept what was saved already: %v", err)
+	}
+	if err := s.Rename(first.ID, "Private"); err != nil {
+		t.Fatal(err)
+	}
+	// The models it listed are asked for again once it is signed in to anew.
+	if err := os.WriteFile(s.home.Models(), []byte(`{"`+first.ID+`":["old"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Login(ctx, "two", token("good-2")); err != nil {
+		t.Fatal(err)
+	}
+	added, err := s.Keep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.ID == "" || added.ID == first.ID || added.Provider != "two" || added.Active || added.About != "account good-2" {
+		t.Fatalf("added %+v", added)
+	}
+	if _, err := s.Keep(); !errors.Is(err, ErrNotSignedIn) {
+		t.Fatalf("kept twice: %v", err)
+	}
+
+	if _, err := s.Again(ctx, first.ID, token("good-3")); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.Keep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != first.ID || again.Label != "Private" || !again.Active {
+		t.Fatalf("signed in again %+v", again)
+	}
+	if kept, _ := s.book.Store.Get(first.ID); kept.Secrets()[0] != "good-3" {
+		t.Fatalf("not replaced: %+v", kept)
+	}
+	if b, _ := os.ReadFile(s.home.Models()); strings.Contains(string(b), "old") {
+		t.Fatalf("the models of the access before are kept: %s", b)
+	}
+	cfg, err := s.home.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Access != first.ID || cfg.Model != "one-large" {
+		t.Fatalf("the node answers with %s of %s", cfg.Model, cfg.Access)
+	}
+	if list, _ := s.Accesses(); len(list) != 2 {
+		t.Fatalf("accesses %+v", list)
+	}
+}
+
+// Keep fails with the store of the accesses, and with the configuration it
+// reads after saving.
+func TestKeepFails(t *testing.T) {
+	s := session(t)
+	ctx := context.Background()
+	signedIn(t, s, "one", "good-1", "one-large")
+	store := filepath.Join(string(s.home.Root()), credentials.FileName)
+
+	if _, err := s.Login(ctx, "two", token("good-2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(string(s.home), "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Keep(); err == nil {
+		t.Fatal("kept without reading the configuration")
+	}
+
+	if _, err := s.Login(ctx, "two", token("good-3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Keep(); err == nil {
+		t.Fatal("kept without a store")
+	}
+}

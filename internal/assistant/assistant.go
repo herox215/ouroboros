@@ -989,27 +989,30 @@ func (a *Assistant) EffortOf(id string) string {
 // effortOf is how much the model thinks where the agent id answers, as
 // EffortOf says it, of the profile of cfg.
 func (a *Assistant) effortOf(id string, cfg config.Config) string {
-	if who := a.builder.agentFor(agents.Of(id), cfg, nil); who.ID != agents.Thread && who.OwnEffort() {
+	if who := a.builder.agentFor(agents.Of(id), cfg, nil); who.OwnEffort() {
 		return who.Effort
 	}
 	return cfg.Effort
 }
 
 // Model is the model the agent id answers with in the scope thread tells:
-// the model of its own the owner gave it, or else that of the configuration
-// of the scope; "" if it cannot be read. The thread is answered by the agent
-// of the thread, whatever id says.
+// the model of its own the owner gave it, or else the default of the
+// configuration for the scope; "" if it cannot be read. The thread is
+// answered by the agent of the thread, whatever id says.
 func (a *Assistant) Model(thread bool, id string) string {
 	cfg, err := a.config()
 	if err != nil {
 		return ""
 	}
 	if thread {
+		id = agents.Thread
+	}
+	if who := a.builder.agentFor(agents.Of(id), cfg, nil); who.OwnModel() {
+		return who.Model
+	}
+	if thread {
 		_, cfg.Model, _ = cfg.ThreadLLM()
 		return cfg.Model
-	}
-	if who := a.builder.agentFor(agents.Of(id), cfg, nil); who.ID != agents.Thread && who.OwnModel() {
-		return who.Model
 	}
 	_, cfg.Model, _ = cfg.SessionLLM()
 	return cfg.Model

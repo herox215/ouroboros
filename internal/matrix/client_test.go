@@ -48,7 +48,7 @@ func TestLogin(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"user_id": "@bot:test", "access_token": "fixture-token", "device_id": "BOT"})
 	}))
 	defer server.Close()
-	cred, err := Login(context.Background(), server.URL, "@bot:test", "fixture-password")
+	cred, err := Login(context.Background(), server.URL, "", "@bot:test", "fixture-password")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,19 +64,19 @@ func TestLoginFailures(t *testing.T) {
 		json.NewEncoder(w).Encode(answer)
 	}))
 	defer server.Close()
-	if _, err := Login(context.Background(), "http://matrix.example", "@bot:test", "fixture-password"); err == nil {
+	if _, err := Login(context.Background(), "http://matrix.example", "", "@bot:test", "fixture-password"); err == nil {
 		t.Fatal("logged in over plain HTTP to another host")
 	}
 	// A homeserver can echo the request: its error must not reach the owner.
 	status, answer = http.StatusForbidden, map[string]any{"errcode": "M_FORBIDDEN", "error": "wrong password fixture-password"}
-	if _, err := Login(context.Background(), server.URL, "@bot:test", "fixture-password"); err == nil || strings.Contains(err.Error(), "fixture-password") {
+	if _, err := Login(context.Background(), server.URL, "", "@bot:test", "fixture-password"); err == nil || strings.Contains(err.Error(), "fixture-password") {
 		t.Fatalf("failed login: %v", err)
 	}
 	status = http.StatusOK
 	for _, missing := range []string{"user_id", "access_token", "device_id"} {
 		answer = map[string]any{"user_id": "@bot:test", "access_token": "fixture-token", "device_id": "BOT"}
 		delete(answer, missing)
-		if cred, err := Login(context.Background(), server.URL, "@bot:test", "fixture-password"); err == nil {
+		if cred, err := Login(context.Background(), server.URL, "", "@bot:test", "fixture-password"); err == nil {
 			t.Fatalf("accepted a login without %s: %+v", missing, cred)
 		}
 	}
@@ -341,30 +341,62 @@ func TestSendChecksTheRoomAroundEncryption(t *testing.T) {
 	}
 }
 func TestServerValidation(t *testing.T) {
-	for _, server := range []string{
-		"http://matrix.example", "https://user:pass@example.org", "https://example.org?token=secret",
-		"http://192.0.2.1:8008", "http://100.91.15.24:8008", "http://100.91.15.23:8009", "http://100.91.15.23",
-		"http://100.91.15.23:80", "http://100.91.15.23:08008", "http://100.91.15.23:8008/path",
-		"http://100.91.15.23:8008?token=secret", "http://100.91.15.23:8008#fragment",
-		"http://user:pass@100.91.15.23:8008", "http://100.91.15.23.example.org:8008", "ftp://100.91.15.23:8008", "http://localhost.example.org:8008", "ftp://localhost:8008",
-		"http://localhost:8008?token=secret", "http://localhost:8008#fragment",
-		"http://user:pass@localhost:8008", "https://example.org#fragment", "https://",
+	const tailnet = "http://100.125.108.63:8008"
+	for _, c := range []struct{ server, allowed string }{
+		{"http://matrix.example", ""}, {"https://user:pass@example.org", ""}, {"https://example.org?token=secret", ""},
+		{"http://192.0.2.1:8008", ""}, {"http://100.91.15.23:8008", ""},
+		// The allowance is bound to exactly one homeserver URL.
+		{tailnet, "http://100.125.108.63:8009"}, {tailnet, "http://100.125.108.63"}, {tailnet, tailnet + "/path"},
+		{tailnet + "/path", tailnet}, {"http://100.125.108.64:8008", tailnet},
+		// Credentials, query and fragment stay refused with a matching allowance.
+		{"http://user:pass@h:8008", "http://user:pass@h:8008"}, {tailnet + "?token=secret", tailnet + "?token=secret"},
+		{tailnet + "#fragment", tailnet + "#fragment"},
+		{"ftp://h:8008", "ftp://h:8008"}, {"ftp://localhost:8008", ""}, {"http://localhost.example.org:8008", ""},
+		{"http://localhost:8008?token=secret", ""}, {"http://localhost:8008#fragment", ""},
+		{"http://user:pass@localhost:8008", ""}, {"https://example.org#fragment", ""}, {"https://", ""}, {"http://", "http://"},
 	} {
-		if ValidateServer(server) == nil {
-			t.Errorf("accepted unsafe server %s", server)
+		err := ValidateServer(c.server, c.allowed)
+		if err == nil {
+			t.Errorf("accepted unsafe server %s (allowed %q)", c.server, c.allowed)
+			continue
+		}
+		if !errors.Is(err, ErrServerRefused) || strings.Contains(err.Error(), "100.") || strings.Contains(err.Error(), "pass") {
+			t.Errorf("refusal of %s is not a clean ErrServerRefused: %v", c.server, err)
 		}
 	}
-	for _, server := range []string{
-		"https://matrix.example", "http://100.91.15.23:8008",
-		"http://localhost:8008", "http://127.0.0.1:8008", "http://[::1]:8008",
+	for _, c := range []struct{ server, allowed string }{
+		{"https://matrix.example", ""}, {"https://matrix.example", tailnet}, {tailnet, tailnet},
+		{"http://localhost:8008", ""}, {"http://127.0.0.1:8008", ""}, {"http://[::1]:8008", ""},
 	} {
-		if err := ValidateServer(server); err != nil {
-			t.Errorf("rejected allowed server %s: %v", server, err)
+		if err := ValidateServer(c.server, c.allowed); err != nil {
+			t.Errorf("rejected allowed server %s (allowed %q): %v", c.server, c.allowed, err)
 		}
 		// Construction exercises the transport entry point without making requests.
-		c := testClient(t, server)
-		if err := c.Close(); err != nil {
+		cl, err := New(Config{Homeserver: c.server, HTTPAllowed: c.allowed, UserID: "@bot:test", Token: "fixture-token", DeviceID: "BOT", StateDir: t.TempDir()})
+		if err != nil {
 			t.Fatal(err)
+		}
+		if err := cl.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := New(Config{Homeserver: tailnet, UserID: "@bot:test", Token: "fixture-token", DeviceID: "BOT", StateDir: t.TempDir()}); !errors.Is(err, ErrServerRefused) {
+		t.Errorf("New without allowance: %v", err)
+	}
+}
+
+func TestRedactServer(t *testing.T) {
+	for server, want := range map[string]string{
+		"http://user:pw@h:1/?token=x#frag": "http://h:1/",
+		"https://example.org/base":         "https://example.org/base",
+		"http://100.125.108.63:8008":       "http://100.125.108.63:8008",
+		"not a url":                        "<unparsable>",
+		"http://%zz":                       "<unparsable>",
+		"":                                 "<unparsable>",
+	} {
+		got := RedactServer(server)
+		if got != want || strings.ContainsAny(got, "?#@") && got != "<unparsable>" {
+			t.Errorf("RedactServer(%q) = %q, want %q", server, got, want)
 		}
 	}
 }

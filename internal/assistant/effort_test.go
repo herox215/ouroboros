@@ -83,7 +83,7 @@ func TestModel(t *testing.T) {
 }
 
 // An agent brings the effort the owner set for it, or else that of the
-// configuration; the agent of the thread thinks as the configuration does.
+// configuration; so does the agent of the thread.
 func TestEffortOfAnAgent(t *testing.T) {
 	store := agents.Open(filepath.Join(t.TempDir(), "agents.json"))
 	if err := store.Set(agents.Archivist, agents.Agent{Name: "Archivist", Effort: "max"}, "me"); err != nil {
@@ -105,6 +105,12 @@ func TestEffortOfAnAgent(t *testing.T) {
 	a.Ask(WithAgent(own, agents.Archivist), "chat", "again", nil)
 	if len(llm.efforts) != 2 || llm.efforts[0] != "max" || llm.efforts[1] != "low" {
 		t.Fatalf("efforts %q", llm.efforts)
+	}
+	if err := store.Set(agents.Thread, agents.Agent{Effort: "low"}, "me"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.EffortOf(agents.Thread); got != "low" {
+		t.Fatalf("the effort of the agent of the thread: %q", got)
 	}
 	broken := New(func() (config.Config, error) { return config.Config{}, errors.New("unreadable") }, b, discard)
 	if got := broken.EffortOf(agents.Archivist); got != "" {

@@ -7,7 +7,17 @@ import type {
   BoardBridge,
   BoardView,
   Bridge,
+  GatewayBridge,
+  GatewayChange,
+  GatewayInfo,
   Host,
+  LLMList,
+  LoginStep,
+  MemoryBridge,
+  MemoryList,
+  OptionsBridge,
+  ProviderList,
+  Scope,
   SessionBridge,
   SessionInfo,
   SessionTrack,
@@ -44,6 +54,25 @@ interface WindowBindings {
   AgentModels?(): Promise<AccessModels[]>;
   /** The scheduled jobs: a host from before them has none. */
   AgentJobs?(): Promise<AgentJob[]>;
+  /** The memories: a host from before them has none. */
+  Memories?(): Promise<MemoryList>;
+  /** The options of the node, see providers.go: a host from before them has
+   * none of them. */
+  Providers?(): Promise<ProviderList>;
+  LLMs?(): Promise<LLMList>;
+  SetLLM?(scope: Scope, access: string, model: string): Promise<LLMList>;
+  ToggleFallback?(access: string, model: string): Promise<LLMList>;
+  SetEffort?(effort: string): Promise<LLMList>;
+  RenameAccess?(id: string, name: string): Promise<ProviderList>;
+  RemoveAccess?(id: string): Promise<string>;
+  StartLogin?(provider: string, again: string): Promise<string>;
+  LoginStep?(id: string): Promise<LoginStep>;
+  AnswerLogin?(id: string, answer: string): Promise<void>;
+  CancelLogin?(id: string): Promise<void>;
+  /** The gateways of the profile, see gateways.go: a host from before them
+   * has none. */
+  Gateways?(): Promise<GatewayInfo[]>;
+  SaveGateway?(name: string, change: GatewayChange): Promise<GatewayInfo[]>;
   /** The build of the page, see window.go: a host from before it named one
    * has none. */
   Assets?(): string;
@@ -60,6 +89,41 @@ const noAgents = () => Promise.reject(new Error('this ouro lists no agents'));
 
 /** What a host that lists no jobs of its agents answers when it is asked. */
 const noJobs = () => Promise.reject(new Error('this ouro lists no jobs'));
+
+/** What a host that lists no memories answers when it is asked. */
+const noMemories = () => Promise.reject(new Error('this ouro lists no memories'));
+
+/** What a host without the options of the node answers when it is asked. */
+const noOptions = () => Promise.reject(new Error('this ouro has no options of the node'));
+
+/** The options of the node, for a host that has them: one that has none
+ * shows the options of the window alone. */
+function optionsOf(bindings: WindowBindings): OptionsBridge | undefined {
+  if (!bindings.Providers || !bindings.LLMs) return undefined;
+  return {
+    Providers: () => bindings.Providers?.() ?? noOptions(),
+    LLMs: () => bindings.LLMs?.() ?? noOptions(),
+    SetLLM: (scope, access, model) => bindings.SetLLM?.(scope, access, model) ?? noOptions(),
+    ToggleFallback: (access, model) => bindings.ToggleFallback?.(access, model) ?? noOptions(),
+    SetEffort: (effort) => bindings.SetEffort?.(effort) ?? noOptions(),
+    RenameAccess: (id, name) => bindings.RenameAccess?.(id, name) ?? noOptions(),
+    RemoveAccess: (id) => bindings.RemoveAccess?.(id) ?? noOptions(),
+    StartLogin: (provider, again) => bindings.StartLogin?.(provider, again) ?? noOptions(),
+    LoginStep: (id) => bindings.LoginStep?.(id) ?? noOptions(),
+    AnswerLogin: (id, answer) => bindings.AnswerLogin?.(id, answer) ?? noOptions(),
+    CancelLogin: (id) => bindings.CancelLogin?.(id) ?? noOptions(),
+    AgentModels: () => bindings.AgentModels?.() ?? noOptions(),
+  };
+}
+
+/** The gateways, for a host that has them. */
+function gatewaysOf(bindings: WindowBindings): GatewayBridge | undefined {
+  if (!bindings.Gateways || !bindings.SaveGateway) return undefined;
+  return {
+    Gateways: () => bindings.Gateways?.() ?? noOptions(),
+    SaveGateway: (name, change) => bindings.SaveGateway?.(name, change) ?? noOptions(),
+  };
+}
 
 interface Globals {
   go?: { gui?: { Window?: WindowBindings } };
@@ -96,6 +160,9 @@ function wailsHost(): Host | null {
     AgentModels: () => bindings.AgentModels?.() ?? noAgents(),
     AgentJobs: () => bindings.AgentJobs?.() ?? noJobs(),
   };
+  const memories: MemoryBridge = {
+    Memories: () => bindings.Memories?.() ?? noMemories(),
+  };
   const transport: Transport = {
     onEvents(handler) {
       runtime.EventsOn('ouro:events', (batch) => {
@@ -109,7 +176,7 @@ function wailsHost(): Host | null {
       runtime.EventsOn('ouro:restarting', () => handler());
     },
   };
-  return { bridge, transport, board, sessions, agents };
+  return { bridge, transport, board, sessions, agents, memories, options: optionsOf(bindings), gateways: gatewaysOf(bindings) };
 }
 
 /** What the page talks through: the native window, or none when the page is

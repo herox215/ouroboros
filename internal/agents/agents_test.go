@@ -288,8 +288,16 @@ func TestOwnModel(t *testing.T) {
 			t.Fatalf("set %+v", refused)
 		}
 	}
-	if err := s.Set(Thread, Agent{Access: "openai-1", Model: "gpt-5"}); !errors.Is(err, ErrThreadModel) {
+	// The agent of the thread takes a model of its own as any other, and
+	// keeps the name of its profile.
+	if err := s.Set(Thread, Agent{Name: "ignored", Access: "openai-1", Model: "gpt-5"}); err != nil {
 		t.Fatalf("a model of the agent of the thread: %v", err)
+	}
+	if a, err := Open(path).Get(Thread, "pythia"); err != nil || !a.OwnModel() || a.Model != "gpt-5" || a.Name != "pythia" {
+		t.Fatalf("the agent of the thread: %+v, %v", a, err)
+	}
+	if err := s.Set(Thread, Agent{}); err != nil {
+		t.Fatal(err)
 	}
 	// Back to the model of the settings.
 	if err := s.Set(made.ID, Agent{Name: "Researcher"}); err != nil {
@@ -298,17 +306,24 @@ func TestOwnModel(t *testing.T) {
 	if a, err := s.Get(made.ID, "pythia"); err != nil || a.OwnModel() || a.Access != "" {
 		t.Fatalf("an agent back on the settings: %+v, %v", a, err)
 	}
-	// A model of the agent of the thread, or half of one, is no agent.
+	// Half of a model is no agent, and nor is a name kept for the agent of
+	// the thread, which is called as its profile.
 	if err := os.WriteFile(path, []byte(`{"agents":[{"id":"thread","access":"a","model":"m"},{"id":"archivist","model":"m"},{"id":"orchestrator","access":"a","model":"m"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if list, err := s.List("pythia"); err != nil || list[0].OwnModel() || list[1].Model != "" || list[2].Model != "m" {
-		t.Fatalf("models no agent can have: %+v, %v", list, err)
+	if list, err := s.List("pythia"); err != nil || !list[0].OwnModel() || list[1].Model != "" || list[2].Model != "m" {
+		t.Fatalf("models of the agents: %+v, %v", list, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"agents":[{"id":"thread","name":"kept","access":"a","model":"m"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := s.List("pythia"); err != nil || list[0].OwnModel() || list[0].Name != "pythia" {
+		t.Fatalf("an agent of the thread with a name: %+v, %v", list, err)
 	}
 }
 
-// An agent thinks as much as the owner set for it, else as the node does; the
-// agent of the thread has no effort of its own.
+// An agent thinks as much as the owner set for it, else as the node does; so
+// does the agent of the thread.
 func TestOwnEffort(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agents.json")
 	s := Open(path)
@@ -331,8 +346,14 @@ func TestOwnEffort(t *testing.T) {
 			t.Fatalf("set %+v: %v", refused, err)
 		}
 	}
-	if err := s.Set(Thread, Agent{Effort: "high"}); !errors.Is(err, ErrThreadEffort) {
+	if err := s.Set(Thread, Agent{Effort: "high"}); err != nil {
 		t.Fatalf("an effort of the agent of the thread: %v", err)
+	}
+	if a, _ := s.Get(Thread, "pythia"); a.Effort != "high" {
+		t.Fatalf("the agent of the thread: %+v", a)
+	}
+	if err := s.Set(Thread, Agent{}); err != nil {
+		t.Fatal(err)
 	}
 	// An agent without an effort is kept without one.
 	if err := s.Set(made.ID, Agent{Name: "Researcher"}); err != nil {
@@ -345,12 +366,12 @@ func TestOwnEffort(t *testing.T) {
 		t.Fatalf("agents without an effort: %s, %v", b, err)
 	}
 	// A file from before efforts loads as it did; an effort no agent can
-	// have, and one of the agent of the thread, are left out.
+	// have is left out, one of the agent of the thread is kept.
 	if err := os.WriteFile(path, []byte(`{"agents":[{"id":"thread","effort":"high"},{"id":"archivist","name":"Mnemosyne"},{"id":"orchestrator","effort":"minimal"},{"id":"agent-0a1b2c3d","name":"Researcher","effort":"xhigh"},{"id":"agent-0a1b2c3e","name":"Reviewer","effort":"enormous"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	list, err = s.List("pythia")
-	if err != nil || len(list) != 4 || list[0].OwnEffort() || list[2].Effort != "minimal" || list[3].Effort != "xhigh" || list[3].Name != "Researcher" {
+	if err != nil || len(list) != 4 || list[0].Effort != "high" || list[2].Effort != "minimal" || list[3].Effort != "xhigh" || list[3].Name != "Researcher" {
 		t.Fatalf("efforts no agent can have: %+v, %v", list, err)
 	}
 }

@@ -2,7 +2,29 @@
 // (pnpm dev). The window itself never uses it: connect picks it only when no
 // Wails host is there and the bundle is a dev build.
 
-import type { AgentBridge, AgentChange, AgentInfo, AgentJob, BoardBridge, Card, Link, SessionBridge, SessionInfo, SessionTrack, Ticket, WireEvent } from './wire';
+import type {
+  AccessInfo,
+  AccessModels,
+  AgentBridge,
+  AgentChange,
+  AgentInfo,
+  AgentJob,
+  BoardBridge,
+  Card,
+  Link,
+  LLMList,
+  LoginStep,
+  Memory,
+  MemoryBridge,
+  OptionsBridge,
+  ProviderInfo,
+  ProviderList,
+  SessionBridge,
+  SessionInfo,
+  SessionTrack,
+  Ticket,
+  WireEvent,
+} from './wire';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -282,7 +304,7 @@ export function demoSessions(): SessionBridge {
 export function demoAgents(): AgentBridge {
   const after = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
   let list: AgentInfo[] = [
-    { id: 'thread', kind: 'thread', name: 'pythia', soul: 'Ruhig, knapp, mit trockenem Humor.' },
+    { id: 'thread', kind: 'thread', name: 'pythia', soul: 'Ruhig, knapp, mit trockenem Humor.', access: 'claude-1', model: 'opus' },
     { id: 'archivist', kind: 'archivist', name: 'Archivist', reserved: true },
     { id: 'orchestrator', kind: 'orchestrator', name: 'Orchestrator', reserved: true },
     {
@@ -375,6 +397,135 @@ export function demoAgents(): AgentBridge {
     },
     async AgentJobs() {
       return jobs;
+    },
+  };
+}
+
+/** The scripted memories: four topics, the core one among them. */
+export function demoMemories(): MemoryBridge {
+  const ago = (hours: number) => new Date(Date.now() - hours * 3600_000).toISOString();
+  const memories: Memory[] = [
+    { id: 'm1', topic: 'core', key: 'Sprache', content: 'Der Besitzer schreibt auf Deutsch und möchte Antworten auf Deutsch.', updated: ago(30) },
+    { id: 'm2', topic: 'core', key: 'Arbeitsweise', content: 'Knapp antworten.\nErst prüfen, dann behaupten.', updated: ago(5) },
+    { id: 'm3', topic: 'general', key: 'Editor', content: 'Nutzt Neovim im Terminal.', updated: ago(70) },
+    { id: 'm4', topic: 'heimnetz', key: 'Router', content: 'Fritzbox 7590 unter 192.168.178.1; DHCP-Bereich ab .20.', updated: ago(200) },
+    { id: 'm5', topic: 'heimnetz', key: 'NAS', content: 'Läuft unter dem Namen „vault“, Backups nachts um 3 Uhr.', updated: ago(210) },
+    { id: 'm6', topic: 'matrix', key: 'Raum', content: 'Der Thread antwortet im Raum „ouro“.', updated: ago(90) },
+  ];
+  return {
+    async Memories() {
+      return { memories, total: memories.length + 2, hidden: 2 };
+    },
+  };
+}
+
+/** The options of a scripted node: two accesses, a third provider to sign in
+ * with, and a sign-in that asks for a key and is saved. */
+export function demoOptions(): OptionsBridge {
+  const providers: ProviderInfo[] = [
+    { name: 'openai', title: 'OpenAI' },
+    { name: 'claude-code', title: 'Claude Code' },
+    { name: 'deepseek', title: 'DeepSeek' },
+    { name: 'compatible', title: 'OpenAI-compatible API' },
+  ];
+  let accesses: AccessInfo[] = [
+    { id: 'openai-1', provider: 'openai', label: 'OpenAI', about: 'api.openai.com' },
+    { id: 'claude-1', provider: 'claude-code', name: 'Work', label: 'Work', about: 'lucas@example.test' },
+    { id: 'deepseek-1', provider: 'deepseek', label: 'DeepSeek', about: 'api.deepseek.com' },
+  ];
+  let llms: LLMList = {
+    scopes: [
+      { scope: 'owner', access: 'claude-1', model: 'sonnet' },
+      { scope: 'sessions', access: 'claude-1', model: 'sonnet' },
+      { scope: 'thread', access: 'openai-1', model: 'gpt-5', own: true },
+      { scope: 'peers', access: 'claude-1', model: 'sonnet' },
+    ],
+    fallbacks: [{ access: 'openai-1', model: 'gpt-5-mini' }],
+    effort: 'medium',
+    efforts: ['', 'low', 'medium', 'high', 'max'],
+    efforts_known: true,
+  };
+  const models: AccessModels[] = [
+    { access: 'openai-1', label: 'OpenAI', provider: 'openai', models: ['gpt-5', 'gpt-5-mini', 'o3'] },
+    { access: 'claude-1', label: 'Work', provider: 'claude-code', models: ['sonnet', 'opus', 'haiku'] },
+    { access: 'deepseek-1', label: 'DeepSeek', provider: 'deepseek', models: [], error: 'it did not answer in time' },
+  ];
+  const uses = (): ProviderList => {
+    const by: Record<string, string[]> = {};
+    for (const s of llms.scopes) if (s.scope === 'owner' || s.own) (by[s.access] ??= []).push(s.scope);
+    for (const f of llms.fallbacks) if (!(by[f.access] ??= []).includes('fallback')) by[f.access].push('fallback');
+    return { providers, accesses: accesses.map((a) => ({ ...a, uses: by[a.id] })) };
+  };
+  const owner = () => llms.scopes[0];
+  let steps: LoginStep[] = [];
+  let login = '';
+  return {
+    async Providers() {
+      return uses();
+    },
+    async LLMs() {
+      return llms;
+    },
+    async SetLLM(scope, access, model) {
+      await wait(250);
+      llms = {
+        ...llms,
+        scopes: llms.scopes.map((s) =>
+          s.scope === scope
+            ? access
+              ? { scope, access, model, own: scope !== 'owner' }
+              : { scope, access: owner().access, model: owner().model }
+            : scope === 'owner' && !s.own
+              ? { ...s, access, model }
+              : s,
+        ),
+      };
+      return llms;
+    },
+    async ToggleFallback(access, model) {
+      const at = llms.fallbacks.findIndex((f) => f.access === access && f.model === model);
+      llms = { ...llms, fallbacks: at >= 0 ? llms.fallbacks.filter((_, i) => i !== at) : [...llms.fallbacks, { access, model }] };
+      return llms;
+    },
+    async SetEffort(effort) {
+      llms = { ...llms, effort };
+      return llms;
+    },
+    async RenameAccess(id, name) {
+      accesses = accesses.map((a) => (a.id === id ? { ...a, name, label: name || providers.find((p) => p.name === a.provider)!.title } : a));
+      return uses();
+    },
+    async RemoveAccess(id) {
+      await wait(400);
+      accesses = accesses.filter((a) => a.id !== id);
+      return '';
+    },
+    async StartLogin(provider) {
+      login = `login-${Date.now()}`;
+      const title = providers.find((p) => p.name === provider)?.title ?? provider;
+      steps = [{ kind: 'ask', question: { title: 'API key', text: [`The key of your ${title} account.`], secret: true, hint: 'sk-…' } }];
+      return login;
+    },
+    async LoginStep(id) {
+      if (id !== login) throw new Error('the sign-in is over: start it again');
+      await wait(400);
+      return steps.shift() ?? { kind: 'wait' };
+    },
+    async AnswerLogin(_id, answer) {
+      if (!answer.startsWith('sk-')) {
+        steps.push({ kind: 'reject', text: 'API key rejected' }, { kind: 'ask', question: { title: 'API key', secret: true, hint: 'sk-…' } });
+        return;
+      }
+      const access: AccessInfo = { id: `access-${accesses.length + 1}`, provider: 'deepseek', label: 'DeepSeek', about: 'second account' };
+      accesses = [...accesses, access];
+      steps.push({ kind: 'tell', text: 'Checking the key …' }, { kind: 'done', access, models: ['deepseek-chat', 'deepseek-reasoner'], default: 'deepseek-chat' });
+    },
+    async CancelLogin() {
+      login = '';
+    },
+    async AgentModels() {
+      await wait(500);
+      return models;
     },
   };
 }

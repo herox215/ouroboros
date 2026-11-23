@@ -212,8 +212,8 @@ func TestDelegateToAnAgent(t *testing.T) {
 
 // An agent with a model of its own answers with it, in its sessions and as a
 // helper, through its access; one whose access cannot be reached answers with
-// the model of the settings, and says so. The thread always answers with the
-// model of the settings.
+// the model of the settings, and says so. An agent without one answers with
+// the default of the settings for its scope.
 func TestAgentAnswersWithItsModel(t *testing.T) {
 	cfg, b := directNode(t)
 	store := agents.Open(filepath.Join(t.TempDir(), "agents.json"))
@@ -265,6 +265,43 @@ func TestAgentAnswersWithItsModel(t *testing.T) {
 		return strings.Contains(line, "the access gone of the agent "+made.ID+" cannot be reached")
 	}) {
 		t.Fatalf("logged %q", logged)
+	}
+}
+
+// The agent of the thread with a model of its own answers with it wherever it
+// works: in the thread, over the default of the thread, and in the sessions
+// that run as it, over the default of the sessions.
+func TestAgentOfTheThreadAnswersWithItsModel(t *testing.T) {
+	cfg, b := directNode(t)
+	cfg.ThreadAccess, cfg.ThreadModel = cfg.Access, "gpt-4.1"
+	store := agents.Open(filepath.Join(t.TempDir(), "agents.json"))
+	a := New(func() (config.Config, error) { return cfg, nil }, b.WithAgents(store), discard)
+	ask := func(ctx context.Context, text string) string {
+		t.Helper()
+		got, err := a.Ask(ctx, "chat", text, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	thread := WithThread(context.Background(), &fakeThread{})
+	if got := ask(thread, "hi"); !strings.HasPrefix(got, "[gpt-4.1] ") {
+		t.Fatalf("the thread by default answered %q", got)
+	}
+	if a.Model(true, "") != "gpt-4.1" || a.Model(false, agents.Thread) != "gpt-4o" {
+		t.Fatalf("the defaults: %q %q", a.Model(true, ""), a.Model(false, agents.Thread))
+	}
+	if err := store.Set(agents.Thread, agents.Agent{Access: cfg.Access, Model: "o3-mini"}, cfg.Name); err != nil {
+		t.Fatal(err)
+	}
+	if got := ask(thread, "hi"); !strings.HasPrefix(got, "[o3-mini] ") {
+		t.Fatalf("the thread answered %q", got)
+	}
+	if got := ask(context.Background(), "hi"); !strings.HasPrefix(got, "[o3-mini] ") {
+		t.Fatalf("a session as the agent of the thread answered %q", got)
+	}
+	if a.Model(true, "agent-00000000") != "o3-mini" || a.Model(false, agents.Thread) != "o3-mini" {
+		t.Fatalf("the models: %q %q", a.Model(true, ""), a.Model(false, agents.Thread))
 	}
 }
 

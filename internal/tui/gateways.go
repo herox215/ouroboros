@@ -134,6 +134,7 @@ func (c *settingsScreen) gatewayPage(m *Model) []row {
 		}
 		for _, f := range fields {
 			label, value := cmp.Or(f.Label, f.Key), d.Values[f.Key]
+			shownAt := len(out)
 			switch f.Kind {
 			case "bool":
 				out = append(out, row{label: label, value: value, actions: []action{{"Toggle", func(m *Model) tea.Cmd { d.Values[f.Key] = strconv.FormatBool(d.Values[f.Key] != "true"); return nil }}}})
@@ -151,6 +152,9 @@ func (c *settingsScreen) gatewayPage(m *Model) []row {
 				out = append(out, editRow(label, strings.Join(d.Lists[f.Key], ", "), func(v string) { d.Lists[f.Key] = gatewayList(v) }))
 			default:
 				out = append(out, editRow(label, value, func(v string) { d.Values[f.Key] = v }))
+			}
+			if f.Hint != "" && out[shownAt].note == "" {
+				out[shownAt].note = f.Hint
 			}
 		}
 		return append(out,

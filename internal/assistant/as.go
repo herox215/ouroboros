@@ -90,13 +90,13 @@ func (a *Assistant) withModel(bot *agent.Agent, who agents.Agent, cfg config.Con
 }
 
 // llmOf is the LLM and the model who answers with where the owner gave it a
-// model of its own: through its access, with the fallbacks of cfg after it.
-// It reports false for the agent of the thread, which answers with the
-// models of the settings, for an agent without a model of its own, and for
-// one whose access cannot be reached, which is told to log: such an agent
-// answers with the model of the settings.
+// model of its own: through its access, with the fallbacks of cfg after it,
+// in the thread as in the sessions that run as it. It reports false for an
+// agent without a model of its own, and for one whose access cannot be
+// reached, which is told to log: such an agent answers with the default of
+// the settings for its scope.
 func (b Builder) llmOf(who agents.Agent, cfg config.Config, log func(format string, args ...any)) (agent.LLM, string, bool) {
-	if who.ID == agents.Thread || !who.OwnModel() {
+	if !who.OwnModel() {
 		return nil, "", false
 	}
 	llm, err := b.LLM(who.Access)

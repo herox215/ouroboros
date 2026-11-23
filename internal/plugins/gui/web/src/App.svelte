@@ -6,13 +6,17 @@
   import SessionsView from './components/Sessions.svelte';
   import AgentsView from './components/Agents.svelte';
   import JobsView from './components/Jobs.svelte';
+  import MemoriesView from './components/Memories.svelte';
   import OptionsView from './components/Options.svelte';
   import type { Chat } from './lib/chat.svelte';
   import type { Board } from './lib/board.svelte';
   import type { Sessions } from './lib/sessions.svelte';
   import type { Agents } from './lib/agents.svelte';
   import type { Jobs } from './lib/jobs.svelte';
+  import type { Memories } from './lib/memories.svelte';
   import type { Themes } from './lib/themes.svelte';
+  import type { NodeOptions } from './lib/nodeoptions.svelte';
+  import type { Gateways } from './lib/gateways.svelte';
   import type { AgentInfo } from './lib/wire';
 
   let {
@@ -21,20 +25,29 @@
     sessions = null,
     agents = null,
     jobs = null,
+    memories = null,
     themes = null,
+    node = null,
+    gateways = null,
   }: {
     chat: Chat | null;
     board?: Board | null;
     sessions?: Sessions | null;
     agents?: Agents | null;
     jobs?: Jobs | null;
+    /** The memories of the agent, read only. */
+    memories?: Memories | null;
     themes?: Themes | null;
+    /** The options of the node: the accesses and the models. */
+    node?: NodeOptions | null;
+    /** The gateways of the profile: Matrix and the like. */
+    gateways?: Gateways | null;
   } = $props();
 
   /** What the window shows: the thread, or the board, the sessions and the
    * agents beside it. The thread goes on either way; that what else is shown
    * is read only while it is shown. */
-  type View = 'thread' | 'board' | 'sessions' | 'agents' | 'jobs' | 'options';
+  type View = 'thread' | 'board' | 'sessions' | 'agents' | 'memories' | 'jobs' | 'options';
   let view = $state<View>('thread');
 
   /** The views sit in a sidebar on the left, open with their names or folded
@@ -80,6 +93,7 @@
         ['sessions', !!sessions],
         ['jobs', !!jobs],
         ['agents', !!agents],
+        ['memories', !!memories],
       ] as const
     )
       .filter(([, shown]) => shown)
@@ -108,15 +122,28 @@
   });
 
   $effect(() => {
-    // The board, the sessions and the jobs name the agents they run as.
-    if (!agents || (view !== 'agents' && view !== 'sessions' && view !== 'jobs' && view !== 'board')) return;
+    // The board, the sessions and the jobs name the agents they run as, and
+    // the options those that go before the defaults.
+    if (!agents || (view !== 'agents' && view !== 'sessions' && view !== 'jobs' && view !== 'board' && view !== 'options')) return;
     void agents.refresh();
+  });
+
+  $effect(() => {
+    // The agents name the defaults of the options an agent without a model of
+    // its own answers with.
+    if (node && view === 'agents') void node.refresh();
   });
 
   $effect(() => {
     if (!jobs || view !== 'jobs') return;
     jobs.start();
     return () => jobs.stop();
+  });
+
+  $effect(() => {
+    if (!memories || view !== 'memories') return;
+    memories.start();
+    return () => memories.stop();
   });
 
   /** The names of the agents by ID, as they were read last. */
@@ -172,6 +199,9 @@
     {:else if name === 'jobs'}
       <circle cx="12" cy="12" r="8.5" />
       <path d="M12 7.5V12l3 2" />
+    {:else if name === 'memories'}
+      <path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4-6.5 4v-16a1 1 0 0 1 1-1z" />
+      <path d="M9.5 8h5M9.5 11h3" />
     {:else if name === 'options'}
       <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
       <circle cx="15" cy="7" r="2" />
@@ -254,11 +284,13 @@
     {:else if sessions && view === 'sessions'}
       <SessionsView {sessions} {names} />
     {:else if agents && view === 'agents'}
-      <AgentsView {agents} onrenamed={renamed} />
+      <AgentsView {agents} {node} onrenamed={renamed} />
     {:else if jobs && view === 'jobs'}
       <JobsView {jobs} {names} />
+    {:else if memories && view === 'memories'}
+      <MemoriesView {memories} />
     {:else if themes && view === 'options'}
-      <OptionsView {themes} />
+      <OptionsView {themes} {node} {gateways} {agents} onagents={agents ? () => choose('agents') : undefined} />
     {:else}
       <Transcript
         entries={chat.entries}
