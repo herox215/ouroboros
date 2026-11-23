@@ -42,6 +42,16 @@ it('lists the jobs of the agents through the native Window binding, and none fro
   await expect(connect()!.agents.AgentJobs()).rejects.toThrow('this ouro lists no jobs');
 });
 
+it('lists the memories through the native Window binding, and none from a window before them', async () => {
+  const memories = { memories: [{ id: 'm1', topic: 'core', key: 'k', content: 'c', updated: '2026-11-20T08:00:00Z' }], total: 1, hidden: 0 };
+  const Memories = vi.fn(async () => memories);
+  vi.stubGlobal('go', { gui: { Window: { Memories } } });
+  vi.stubGlobal('runtime', { EventsOn: vi.fn() });
+  expect(await connect()!.memories.Memories()).toBe(memories);
+  vi.stubGlobal('go', { gui: { Window: {} } });
+  await expect(connect()!.memories.Memories()).rejects.toThrow('this ouro lists no memories');
+});
+
 it('is no host outside the window', () => {
   expect(connect()).toBeNull();
 });

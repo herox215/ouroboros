@@ -273,6 +273,7 @@ func (w *webFront) routes() http.Handler {
 	mux.HandleFunc("POST /api/agent/delete", w.guard(w.deleteAgent))
 	mux.HandleFunc("GET /api/agent/models", w.guard(w.agentModels))
 	mux.HandleFunc("GET /api/jobs", w.guard(w.agentJobs))
+	mux.HandleFunc("GET /api/memories", w.guard(w.memories))
 	// The options: the accesses of the node and what its scopes answer with,
 	// see providers.go.
 	mux.HandleFunc("GET /api/providers", w.guard(w.providers))
@@ -690,6 +691,16 @@ func (w *webFront) agents(rw http.ResponseWriter, _ *http.Request) {
 // agentJobs lists the jobs of the agents of the profile, as the window does.
 func (w *webFront) agentJobs(rw http.ResponseWriter, _ *http.Request) {
 	list, err := w.profile.agentJobs()
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	reply(rw, list)
+}
+
+// memories lists the memories of the profile, as the window does.
+func (w *webFront) memories(rw http.ResponseWriter, r *http.Request) {
+	list, err := w.profile.memoryList(r.Context())
 	if err != nil {
 		fail(rw, err)
 		return

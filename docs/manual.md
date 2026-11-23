@@ -173,7 +173,7 @@ chooses the profile whose thread the window shows. With several profiles, `ouro 
 the first one; a profile whose GUI plugin is off has no such command. Switching happens by
 starting the window for another profile.
 
-**Thread**, **Board**, **Sessions**, **Jobs** and **Agents** in the sidebar
+**Thread**, **Board**, **Sessions**, **Jobs**, **Agents** and **Memories** in the sidebar
 on the left of the window choose what it shows. The button at its top folds the sidebar to a rail of icons and opens it
 again; the window remembers which, and a narrow window starts folded. The board is a lane
 for each column, `new`, `ready`, `progress`, `blocked` and `done`, with a card for each
@@ -242,6 +242,13 @@ it runs as.
 runs, when it runs next and whether it is paused. It shows what is planned, not what came of it,
 which the sessions show; a job that runs once and ran is not listed. It is read only, again every
 few seconds while it is shown, from `schedule.json` of the profile.
+
+**Memories** lists what the agent has kept of you and your environment, one plain entry for each
+memory: its key, its text, its topic and when it changed last, the latest first. A chip for each topic
+(`core` first, then `general`) with the number of its memories narrows the list, and the search field
+looks in the topic, the key and the text. It is read only, again every few seconds while it is shown;
+edit a memory in the terminal UI with `/memory`. Expired memories are left out, and the list says how
+many; it holds the latest 200.
 
 **Options**, at the foot of the sidebar, has four parts. The first three are those of the node and
 hold for every window and terminal; a change holds from the next message on, without a restart.

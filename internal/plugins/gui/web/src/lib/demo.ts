@@ -14,6 +14,8 @@ import type {
   Link,
   LLMList,
   LoginStep,
+  Memory,
+  MemoryBridge,
   OptionsBridge,
   ProviderInfo,
   ProviderList,
@@ -395,6 +397,24 @@ export function demoAgents(): AgentBridge {
     },
     async AgentJobs() {
       return jobs;
+    },
+  };
+}
+
+/** The scripted memories: four topics, the core one among them. */
+export function demoMemories(): MemoryBridge {
+  const ago = (hours: number) => new Date(Date.now() - hours * 3600_000).toISOString();
+  const memories: Memory[] = [
+    { id: 'm1', topic: 'core', key: 'Sprache', content: 'Der Besitzer schreibt auf Deutsch und möchte Antworten auf Deutsch.', updated: ago(30) },
+    { id: 'm2', topic: 'core', key: 'Arbeitsweise', content: 'Knapp antworten.\nErst prüfen, dann behaupten.', updated: ago(5) },
+    { id: 'm3', topic: 'general', key: 'Editor', content: 'Nutzt Neovim im Terminal.', updated: ago(70) },
+    { id: 'm4', topic: 'heimnetz', key: 'Router', content: 'Fritzbox 7590 unter 192.168.178.1; DHCP-Bereich ab .20.', updated: ago(200) },
+    { id: 'm5', topic: 'heimnetz', key: 'NAS', content: 'Läuft unter dem Namen „vault“, Backups nachts um 3 Uhr.', updated: ago(210) },
+    { id: 'm6', topic: 'matrix', key: 'Raum', content: 'Der Thread antwortet im Raum „ouro“.', updated: ago(90) },
+  ];
+  return {
+    async Memories() {
+      return { memories, total: memories.length + 2, hidden: 2 };
     },
   };
 }

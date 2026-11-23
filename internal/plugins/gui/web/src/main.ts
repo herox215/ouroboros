@@ -5,6 +5,7 @@ import { Board } from './lib/board.svelte';
 import { Sessions } from './lib/sessions.svelte';
 import { Agents } from './lib/agents.svelte';
 import { Jobs } from './lib/jobs.svelte';
+import { Memories } from './lib/memories.svelte';
 import { Themes } from './lib/themes.svelte';
 import { NodeOptions } from './lib/nodeoptions.svelte';
 import { Gateways } from './lib/gateways.svelte';
@@ -33,6 +34,7 @@ if (target) {
       sessions: host ? new Sessions(host.sessions) : null,
       agents,
       jobs: host ? new Jobs(host.agents) : null,
+      memories: host ? new Memories(host.memories) : null,
       themes,
       node,
       gateways: host?.gateways ? new Gateways(host.gateways) : null,
